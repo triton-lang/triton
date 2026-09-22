@@ -6,7 +6,7 @@ import inspect
 import hashlib
 import json
 from functools import cached_property
-from typing import Dict, Tuple, List, Optional
+from typing import Any, Dict, Tuple, List, Optional
 
 from .. import knobs
 from .jit import KernelInterface, JITFunction
@@ -46,6 +46,21 @@ class Autotuner(KernelInterface):
         if restore_value is not None:
             self.restore_value = list(restore_value)
 
+        # `key`, `reset_to_zero` and `restore_value` are all documented as lists of
+        # argument names. A name that is not one is silently dropped from the tuning
+        # key by `run()`, so a typo makes the kernel tune once and never re-tune.
+        for param, names in (("key", self.keys), ("reset_to_zero", self.reset_to_zero), ("restore_value",
+                                                                                         self.restore_value)):
+            unknown = [name for name in names if name not in self.arg_names]
+            if unknown:
+                raise ValueError(f"{param} contains names that are not kernel arguments: "
+                                 f"{', '.join(unknown)}. Valid argument names are: {', '.join(self.arg_names)}.")
+
+        # Populated by the default pre_hook when `restore_value` is set. Initialized here
+        # because a user-supplied pre_hook replaces that default while the default
+        # post_hook, which reads this, stays installed.
+        self.restore_copies: Dict[str, Any] = {}
+
         # Hook to reset or restore for required tensors
         self.pre_hook = lambda kwargs, reset_only=False: 0
         self.post_hook = lambda kwargs, exception: 0
@@ -58,9 +73,14 @@ class Autotuner(KernelInterface):
 
             def _pre_hook(kwargs, reset_only=False):
                 for name in self.reset_to_zero:
-                    kwargs[name].zero_()
+                    if kwargs[name] is not None:
+                        kwargs[name].zero_()
                 if not reset_only:
-                    self.restore_copies = {name: kwargs[name].clone() for name in self.restore_value}
+                    self.restore_copies = {
+                        name: kwargs[name].clone()
+                        for name in self.restore_value
+                        if kwargs[name] is not None
+                    }
 
             self.pre_hook = _pre_hook
 
@@ -70,8 +90,8 @@ class Autotuner(KernelInterface):
         elif len(self.restore_value) > 0:
 
             def _post_hook(kwargs, exception):
-                for name in self.restore_value:
-                    kwargs[name].copy_(self.restore_copies[name])
+                for name, value in self.restore_copies.items():
+                    kwargs[name].copy_(value)
                 self.restore_copies = {}
 
             self.post_hook = _post_hook
@@ -224,20 +244,39 @@ class Autotuner(KernelInterface):
                 used_cached_result = False
                 pruned_configs = self.prune_configs(kwargs)
 
-                def benchmark():
-                    bench_start = time.time()
-                    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
-                    bench_end = time.time()
-                    self.bench_time = bench_end - bench_start
-                    self.cache[key] = builtins.min(timings, key=timings.get)
-                    full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
-                    self.pre_hook(full_nargs, reset_only=True)
-                    self.configs_timings = timings
-
-                if self.cache_results:
-                    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                if len(pruned_configs) == 1:
+                    # Match single-config autotune behavior: no benchmarking is needed.
+                    self.cache[key] = pruned_configs[0]
+                    used_cached_result = True
                 else:
-                    benchmark()
+
+                    def benchmark():
+                        bench_start = time.time()
+                        timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                        bench_end = time.time()
+                        self.bench_time = bench_end - bench_start
+                        self.cache[key] = builtins.min(timings, key=timings.get)
+                        full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
+                        self.pre_hook(full_nargs, reset_only=True)
+                        self.configs_timings = timings
+
+                    if self.cache_results:
+                        used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                    else:
+                        benchmark()
+
+                    if knobs.autotuning.listener is not None:
+                        jit_fn = self.fn
+                        while not isinstance(jit_fn, JITFunction):
+                            jit_fn = jit_fn.fn
+                        knobs.autotuning.listener(
+                            fn=jit_fn,
+                            key=key,
+                            best_config=self.cache[key],
+                            configs_timings=self.configs_timings,
+                            duration=getattr(self, 'bench_time', None) if not used_cached_result else None,
+                            cache_hit=used_cached_result,
+                        )
 
             config = self.cache[key]
         else:
@@ -267,7 +306,11 @@ class Autotuner(KernelInterface):
         if self.perf_model:
             top_k = self.configs_top_k
             if isinstance(top_k, float) and top_k <= 1.0:
-                top_k = int(len(self.configs) * top_k)
+                # Keep at least one config: a small fraction over a small config
+                # set rounds down to zero, which would prune everything and crash
+                # the later min() on an empty set. early_config_prune already
+                # guarantees at least one config; mirror that here.
+                top_k = max(1, int(len(pruned_configs) * top_k))
             elif not isinstance(top_k, int):
                 # Slice index must be an integer
                 raise TypeError("Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
@@ -360,6 +403,7 @@ class Config:
         res.append(f"num_ctas: {self.num_ctas}")
         res.append(f"num_stages: {self.num_stages}")
         res.append(f"maxnreg: {self.maxnreg}")
+        res.append(f"ir_override: {self.ir_override}")
         return ", ".join(res)
 
     def __hash__(self):
@@ -473,7 +517,7 @@ def heuristics(values):
         def kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
             ...
     :param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
-                   each such function takes a list of positional arguments as input.
+                   each such function takes a dict of all the arguments passed to the kernel, keyed by argument name, as input.
     :type values: dict[str, Callable[[dict[str, Any]], Any]]
     """
 

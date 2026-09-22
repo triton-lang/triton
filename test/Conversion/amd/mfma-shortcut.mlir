@@ -1,5 +1,5 @@
-// RUN: triton-opt %s --tritongpu-reduce-data-duplication --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch="gfx942" -split-input-file | FileCheck %s --check-prefix=GFX942
-// RUN: triton-opt %s --tritongpu-reduce-data-duplication --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch="gfx950" -split-input-file | FileCheck %s --check-prefix=GFX950
+// RUN: triton-opt %s --tritongpu-reduce-data-duplication --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch="gfx942" -split-input-file | FileCheck %s --check-prefix=GFX942
+// RUN: triton-opt %s --tritongpu-reduce-data-duplication --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch="gfx950" -split-input-file | FileCheck %s --check-prefix=GFX950
 
 #mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>
 #dotop = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth=4}>

@@ -2,6 +2,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/Casting.h"
 #include <tuple>
 
 namespace mlir {
@@ -235,5 +236,111 @@ FailureOr<WmmaIntrinsic> WmmaIntrinsic::get(int version, unsigned mDim,
   auto [symbol, k, kBase] = *match;
   return WmmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType,
                        dElemType);
+}
+
+//===----------------------------------------------------------------------===//
+// Wmma scale intrinsic query key
+//===----------------------------------------------------------------------===//
+
+using WmmaScaleKey =
+    std::tuple<int /*version*/, unsigned /*mDim*/, unsigned /*nDim*/,
+               TypeID /*dElemType*/, unsigned /*isScale16*/,
+               WmmaScaleIntrinsic::IntrinsicFamily>;
+
+using WmmaScaleMapValue = std::tuple<StringRef /*symbol*/, unsigned /*kDim*/>;
+using WmmaScaleMap =
+    llvm::DenseMap<WmmaScaleKey, SmallVector<WmmaScaleMapValue, 4>>;
+
+class WmmaScaleDatabase {
+public:
+  static const WmmaScaleMap &get(MLIRContext *context) {
+    static WmmaScaleDatabase db(context);
+    return db.wmmaScaleMap;
+  }
+
+private:
+  explicit WmmaScaleDatabase(MLIRContext *context);
+
+  WmmaScaleMap wmmaScaleMap;
+};
+
+WmmaScaleDatabase::WmmaScaleDatabase(MLIRContext *context) {
+#define TRITON_WMMA_SCALE_v(v, m, n, dET, isScale16, intrinsicFamily, symbol,  \
+                            kDim)                                              \
+  {                                                                            \
+    /*key=*/{v, m, n, dET.getTypeID(), unsigned(isScale16), intrinsicFamily},  \
+    /*value=*/{                                                                \
+      {symbol, kDim},                                                          \
+    }                                                                          \
+  }
+  Builder b(context);
+  auto f32T = b.getF32Type();
+
+  // Reference: llvm/include/llvm/IR/IntrinsicsAMDGPU.td
+  wmmaScaleMap = {
+      TRITON_WMMA_SCALE_v(3, 16, 16, f32T, 0u /*isScale16*/,
+                          WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
+                          "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4", 128),
+      TRITON_WMMA_SCALE_v(3, 16, 16, f32T, 1u /*isScale16*/,
+                          WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
+                          "llvm.amdgcn.wmma.scale16.f32.16x16x128.f8f6f4", 128),
+      TRITON_WMMA_SCALE_v(3, 32, 16, f32T, 0u /*isScale16*/,
+                          WmmaScaleIntrinsic::IntrinsicFamily::F4,
+                          "llvm.amdgcn.wmma.scale.f32.32x16x128.f4", 128),
+      TRITON_WMMA_SCALE_v(3, 32, 16, f32T, 1u,
+                          WmmaScaleIntrinsic::IntrinsicFamily::F4,
+                          "llvm.amdgcn.wmma.scale16.f32.32x16x128.f4", 128),
+  };
+}
+
+static std::pair<unsigned, unsigned>
+kBaseForWmmaScale(Type aElemType, Type bElemType, unsigned mDim, unsigned nDim,
+                  unsigned kDim) {
+  constexpr unsigned warpSize = 32;
+  unsigned packedKA = llvm::isa<Float4E2M1FNType>(aElemType) ? kDim / 2 : kDim;
+  unsigned packedKB = llvm::isa<Float4E2M1FNType>(bElemType) ? kDim / 2 : kDim;
+  unsigned depthA = warpSize / mDim;
+  unsigned depthB = warpSize / nDim;
+  return {packedKA / depthA, packedKB / depthB};
+}
+
+// 32×16 F4 scale WMMA only when both operands are FP4.
+static WmmaScaleIntrinsic::IntrinsicFamily
+getIntrinsicFamily(Type aElemType, Type bElemType, unsigned mDim) {
+  const bool isFp4A = llvm::isa<Float4E2M1FNType>(aElemType);
+  const bool isFp4B = llvm::isa<Float4E2M1FNType>(bElemType);
+  return (isFp4A && isFp4B && mDim == 32)
+             ? WmmaScaleIntrinsic::IntrinsicFamily::F4
+             : WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4;
+}
+
+//===----------------------------------------------------------------------===//
+// Wmma scale intrinsic selection
+//===----------------------------------------------------------------------===//
+
+FailureOr<WmmaScaleIntrinsic>
+WmmaScaleIntrinsic::get(int version, unsigned mDim, unsigned nDim,
+                        Type aElemType, Type bElemType, Type dElemType,
+                        bool isScale16, bool isTransposed) {
+  const auto intrinsicFamily = getIntrinsicFamily(aElemType, bElemType, mDim);
+  const WmmaScaleMap &wmmaScaleMap =
+      WmmaScaleDatabase::get(dElemType.getContext());
+  WmmaScaleKey key = {
+      version,        mDim, nDim, dElemType.getTypeID(), isScale16 ? 1u : 0u,
+      intrinsicFamily};
+  auto it = wmmaScaleMap.find(key);
+  if (it == wmmaScaleMap.end())
+    return failure();
+
+  auto &values = it->second;
+  assert(values.size() == 1);
+  auto [symbol, kDim] = values.back();
+  auto [kBaseA, kBaseB] =
+      kBaseForWmmaScale(aElemType, bElemType, mDim, nDim, kDim);
+  // On asymmetric and transposed we swap the operands, layouts and kBase.
+  if (isTransposed && mDim != nDim)
+    std::swap(kBaseA, kBaseB);
+  return WmmaScaleIntrinsic(symbol, mDim, nDim, kDim, kBaseA, kBaseB,
+                            dElemType);
 }
 } // namespace mlir

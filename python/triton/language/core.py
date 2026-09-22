@@ -4,19 +4,20 @@ import math
 from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
-from functools import partial, wraps, cached_property
+from functools import wraps, cached_property
 import typing
-from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
+from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 import builtins
 from .. import knobs
+from .._instrumentation import is_enabled
 from ..runtime.jit import JITCallable
 import inspect
 
 from .._C.libtriton import ir
 from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth, _tuple_create
 
-T = TypeVar('T')
+T = TypeVar('T', bound=Callable)
 
 TRITON_BUILTIN = "__triton_builtin__"
 
@@ -33,7 +34,6 @@ def must_use_result(x, s=True):
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
-    assert callable(fn)
 
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -61,7 +61,6 @@ def _tensor_member_fn(fn: T) -> T:
     Unfortunately you still need to add a type stub to the body of class tensor
     in order for pytype to know about it.
     """
-    assert callable(fn)
     orig_sig = inspect.signature(fn)
     # Does fn take args other than _semantic, _generator, and the tensor itself?
     has_args = len(orig_sig.parameters.keys() - {"_semantic", "_generator"}) > 1
@@ -123,6 +122,18 @@ def is_builtin(fn) -> bool:
 
 @builtin
 def to_tensor(x, _semantic=None):
+    """
+    Converts a Python scalar into a 0-dimensional :code:`tensor`.
+
+    If :code:`x` is already a :code:`tensor` it is returned unchanged. The result
+    dtype is inferred from the value: a Python :code:`bool` becomes
+    :code:`tl.int1`, an :code:`int` becomes the smallest of :code:`tl.int32`,
+    :code:`tl.uint32`, :code:`tl.int64`, or :code:`tl.uint64` that can represent
+    it, and a :code:`float` becomes :code:`tl.float32` (or :code:`tl.float64` when
+    it is outside the :code:`float32` range).
+
+    :param x: any numeric value.
+    """
     return _semantic.to_tensor(x)
 
 
@@ -369,7 +380,7 @@ def _unwrap_if_constexpr(o):
 def _normalize_tuple(t):
     normalized_tuple = _unwrap_if_constexpr(t)
     if isinstance(normalized_tuple, (list, builtins.tuple)):
-        normalized_tuple = tuple(normalized_tuple)
+        normalized_tuple = tuple(_normalize_tuple(x) for x in normalized_tuple)
     return normalized_tuple
 
 
@@ -666,7 +677,7 @@ _DtypeClass = dtype
 
 class pointer_type(dtype):
 
-    def __init__(self, element_ty: dtype, address_space: int = 1, const: bool = False):
+    def __init__(self, element_ty: dtype, address_space: str = "global", const: bool = False):
         element_ty = _unwrap_if_constexpr(element_ty)
         if not isinstance(element_ty, dtype):
             raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
@@ -676,7 +687,9 @@ class pointer_type(dtype):
         self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), self.address_space)
+        # const pointers live in the constant address space.
+        address_space = "constant" if self.const else self.address_space
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), address_space)
 
     def __str__(self):
         return self.name
@@ -1162,10 +1175,13 @@ class tensor(base_value):
     def cast(self, dtype, fp_downcast_rounding=None, bitcast=False) -> tensor:
         ...
 
-    def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="") -> tensor:
+    def store(self, value, mask=None, *, cache_modifier="", eviction_policy="") -> tensor:
         ...
 
-    def advance(self, offsets) -> tensor:
+    def atomic_load(self, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
+    def atomic_store(self, value, mask=None, sem=None, scope=None) -> tensor:
         ...
 
     def atomic_cas(self, cmp, val, sem=None, scope=None) -> tensor:
@@ -1189,13 +1205,22 @@ class tensor(base_value):
     def atomic_or(self, val, mask=None, sem=None, scope=None) -> tensor:
         ...
 
+    def atomic_poll(self, expected_value, sem="acquire", scope="gpu", timeout_ns=None) -> tensor:
+        ...
+
     def atomic_xor(self, val, mask=None, sem=None, scope=None) -> tensor:
         ...
 
     def exp(self) -> tensor:
         ...
 
+    def exp2(self) -> tensor:
+        ...
+
     def log(self) -> tensor:
+        ...
+
+    def log2(self) -> tensor:
         ...
 
     def cos(self) -> tensor:
@@ -1207,10 +1232,22 @@ class tensor(base_value):
     def sqrt(self) -> tensor:
         ...
 
+    def sqrt_rn(self) -> tensor:
+        ...
+
     def rsqrt(self) -> tensor:
         ...
 
     def abs(self) -> tensor:
+        ...
+
+    def erf(self) -> tensor:
+        ...
+
+    def floor(self) -> tensor:
+        ...
+
+    def ceil(self) -> tensor:
         ...
 
     def reduce(self, axis, combine_fn, keep_dims=False) -> tensor:
@@ -1231,7 +1268,7 @@ class tensor(base_value):
     def sigmoid(self) -> tensor:
         ...
 
-    def softmax(self, dim=None, keep_dims=False, ieee_rounding=False) -> tensor:
+    def softmax(self, dim=None, *, keep_dims=None, ieee_rounding=False) -> tensor:
         ...
 
     def ravel(self) -> tensor:
@@ -1258,10 +1295,10 @@ class tensor(base_value):
     def reduce_or(self, axis=None, keep_dims=False) -> tensor:
         ...
 
-    def cumsum(self, axis=0, reverse=False) -> tensor:
+    def cumsum(self, axis=0, reverse=False, dtype=None) -> tensor:
         ...
 
-    def cumprod(self, axis=0, reverse=False) -> tensor:
+    def cumprod(self, axis=0, reverse=False, dtype=None) -> tensor:
         ...
 
     def sort(self, dim: constexpr = None, descending: constexpr = CONSTEXPR_0) -> tensor:
@@ -1429,7 +1466,7 @@ class tensor_descriptor_base(base_value):
 
         :note: Offset must be a multiple of 16-bytes
         """
-        return _semantic.descriptor_load(self, offsets, "", "")
+        return _semantic.descriptor_load(self, offsets, _CachePolicy())
 
     @builtin
     def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
@@ -1584,11 +1621,51 @@ def _wrap_init_args(x):
     return constexpr(x)
 
 
+if TYPE_CHECKING:
+    from typing_extensions import dataclass_transform
+else:
+
+    def dataclass_transform(**kwargs):
+        return lambda obj: obj
+
+
+_AGGREGATE_MISSING = object()
+
+
+def _resolve_aggregate_fields(cls):
+    all_annotations = {}
+    all_defaults = {}
+    # Inherit from oldest first, so child overrides parent
+    for base in reversed(cls.__mro__[1:]):
+        if base is base_value or base is object:
+            continue
+        if not getattr(base, "__triton_aggregate__", False):
+            raise TypeError(f"Aggregates can only inherit from other aggregates, but got non-aggregate base: {base}")
+        all_annotations.update(inspect.get_annotations(base))
+        all_defaults.update(getattr(base, "__aggregate_defaults__", {}))
+
+    # Add cls's own fields, resolving string annotations via typing.get_type_hints.
+    own_names = inspect.get_annotations(cls)
+    hints = typing.get_type_hints(cls)
+    for name in own_names:
+        all_annotations[name] = hints[name]
+        val = cls.__dict__.get(name, _AGGREGATE_MISSING)
+        if val is _AGGREGATE_MISSING:
+            continue
+        # Skip descriptors and methods - only plain values are defaults
+        if not callable(val) or isinstance(val, base_value):
+            all_defaults[name] = val
+    return all_annotations, all_defaults
+
+
+@dataclass_transform(eq_default=False)
 def _aggregate(cls):
-    field_annotations = typing.get_type_hints(cls)
-    field_names = builtins.tuple(field_annotations.keys())
+    all_annotations, all_defaults = _resolve_aggregate_fields(cls)
+
     init = cls.__dict__.get("__init__", None)
+
     if init is None:
+        field_names = builtins.tuple(all_annotations.keys())
 
         def init(self, *args, **kwargs):
             if len(args) > len(field_names):
@@ -1602,6 +1679,8 @@ def _aggregate(cls):
                     value = args[index]
                 elif name in kwargs:
                     value = kwargs.pop(name)
+                elif name in all_defaults:
+                    value = all_defaults[name]
                 else:
                     raise TypeError(f"{cls.__name__}.__init__() missing required argument: '{name}'")
 
@@ -1618,7 +1697,7 @@ def _aggregate(cls):
     class aggregate_value(base_value):
         __triton_builtin__ = True
         __triton_aggregate__ = True
-        __annotations__ = field_annotations
+        __annotations__ = all_annotations
 
         @classmethod
         def _get_instance(this_cls):
@@ -1627,6 +1706,9 @@ def _aggregate(cls):
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
+            # Track init phase so __setattr__ accepts writes during __init__
+            # but rejects post-construction mutation.
+            object.__setattr__(instance, "_aggregate_init_complete", False)
             extra_kwargs = {}
             if isinstance(init, JITCallable):
                 # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
@@ -1639,43 +1721,57 @@ def _aggregate(cls):
             init(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
-            for name in field_names:
+            for name in all_annotations.keys():
                 if not hasattr(instance, name):
                     raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
 
+            # Lock further attribute assignment after __init__.
+            object.__setattr__(instance, "_aggregate_init_complete", True)
             return instance
 
-        # Only allow setting attributes defined in the class annotations.
+        # Only allow setting annotated attributes during __init__, and
+        # only for attributes defined in the class annotations.
         def __setattr__(self, name, value):
-            if name not in field_annotations:
+            if name not in all_annotations:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
-            if not isinstance(value, field_annotations[name]):
-                raise TypeError(f"Expected {field_annotations[name]} for attribute '{name}', got {type(value)}")
+            if not isinstance(value, all_annotations[name]):
+                raise TypeError(f"Expected {all_annotations[name]} for attribute '{name}', got {type(value)}")
+            if getattr(self, "_aggregate_init_complete", False):
+                raise AttributeError(f"cannot assign to field '{name}' on immutable aggregate {cls.__name__}; "
+                                     f"use aggregate_replace() to construct a modified copy")
             super().__setattr__(name, value)
 
         def _set_name(self, builder: ir.builder, name: str) -> None:
-            for key_name in field_names:
+            for key_name in all_annotations.keys():
                 getattr(self, key_name)._set_name(builder, f"{name}.{key_name}")
 
         def _flatten_ir(self, handles: List[ir.value]) -> None:
-            for name in field_names:
+            for name in all_annotations.keys():
                 getattr(self, name)._flatten_ir(handles)
 
         @property
         def type(self):
-            return _aggregate_type(aggregate_value, [(name, getattr(self, name).type) for name in field_names])
+            return _aggregate_type(aggregate_value,
+                                   [(name, getattr(self, name).type) for name in all_annotations.keys()])
 
     hash_attrs = [init]
 
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
-            if name != "__init__":
-                setattr(aggregate_value, name, member)
+            if name == "__init__":
+                continue
+            # __annotate__ is a Python 3.14+ internal; exclude from hash and
+            # don't copy it onto the aggregate value type.
+            if name == "__annotate__":
+                continue
+            # Don't override aggregate infrastructure methods inherited from
+            # processed parent aggregates (e.g. __new__, __setattr__, _flatten_ir)
+            if name in aggregate_value.__dict__:
+                continue
+            setattr(aggregate_value, name, member)
 
-            # Exclude the members with names from hash:
-            #  * __init__ - added above.
-            #  * __annotate_func__ - isn't user facing.
-            if name not in {"__init__", "__annotate_func__"}:
+            # Exclude __annotate_func__ from hash — isn't user facing (Python 3.14+).
+            if name != "__annotate_func__":
                 hash_attrs.append(member)
 
     aggregate_value.hash_attrs = hash_attrs
@@ -1683,170 +1779,39 @@ def _aggregate(cls):
     aggregate_value.__module__ = cls.__module__
     aggregate_value.__qualname__ = cls.__qualname__
     aggregate_value.__doc__ = cls.__doc__
+    # Preserve the original class location for inspect.getsource on Python 3.13+.
+    if "__firstlineno__" in cls.__dict__:
+        aggregate_value.__firstlineno__ = cls.__firstlineno__
+    aggregate_value.__aggregate_fields__ = builtins.tuple(all_annotations.keys())
+    aggregate_value.__aggregate_defaults__ = dict(all_defaults)
 
     return aggregate_value
 
 
-def _is_block_ptr(value) -> bool:
-    return isinstance(value, base_value) and getattr(value, "__triton_block_ptr__", False)
+def aggregate_replace(instance, **changes):
+    """Create a copy of an aggregate instance with specified fields replaced.
 
+    Similar to dataclasses.replace() — returns a new instance of the same
+    aggregate type with the given fields updated and all other fields copied
+    from the original instance.
 
-def _as_list_like(values):
-    normalized = _normalize_tuple(values)
-    if isinstance(normalized, (list, builtins.tuple, tuple)):
-        return list(normalized)
-    return [normalized]
+    :param instance: The aggregate instance to copy
+    :param changes: Keyword arguments for fields to replace
+    :return: A new aggregate instance with the specified changes
+    """
+    if not getattr(type(instance), "__triton_aggregate__", False):
+        raise TypeError(f"aggregate_replace() expects an aggregate instance, got {type(instance)}")
 
+    field_names = type(instance).__aggregate_fields__
+    for name in changes:
+        if name not in field_names:
+            raise TypeError(f"{type(instance).__name__} has no field '{name}'")
 
-def _canonicalize_block_ptr_static_tuple(values, name: str, *, positive: bool = False) -> tuple:
-    converted = []
-    for value in _as_list_like(values):
-        value = _unwrap_if_constexpr(value)
-        if not isinstance(value, int):
-            raise ValueError(f"Expected `{name}` to contain only integers")
-        if positive and value <= 0:
-            raise ValueError(f"Expected `{name}` to contain only positive integers")
-        converted.append(constexpr(value))
-    return tuple(converted)
+    kwargs = {name: getattr(instance, name) for name in field_names}
+    kwargs.update(changes)
 
+    return type(instance)(**kwargs)
 
-def _canonicalize_block_ptr_dynamic_tuple(values, name: str, _semantic) -> tuple:
-    converted = []
-    for value in _as_list_like(values):
-        value = _semantic.to_tensor(value)
-        if value.shape:
-            raise ValueError(f"Expected `{name}` entries to be scalar tensors")
-        if not value.dtype.is_int():
-            raise ValueError(f"Expected `{name}` entries to be integers")
-        if value.dtype != int64:
-            value = _semantic.cast(value, int64)
-        converted.append(value)
-    return tuple(converted)
-
-
-def _canonicalize_block_ptr_boundary_check(boundary_check, rank: int) -> builtins.tuple[int, ...]:
-    checked = set()
-    if boundary_check is None:
-        return checked
-
-    for dim in _as_list_like(boundary_check):
-        dim = _unwrap_if_constexpr(dim)
-        if not isinstance(dim, int) or not (0 <= dim < rank):
-            raise ValueError(f"Expected `boundary_check` to contain dimensions in [0, {rank})")
-        checked.add(dim)
-    if len(checked) != len(boundary_check):
-        raise ValueError("Duplicate dimension in `boundary_check`")
-    return checked
-
-
-@_aggregate
-class _block_ptr:
-    base: tensor
-    shape: tuple
-    strides: tuple
-    offsets: tuple
-    block_shape: tuple
-    order: tuple
-
-    __triton_block_ptr__ = True
-
-    def __init__(self, base, shape, strides, offsets, block_shape, order, _semantic=None):
-        if not base.type.is_ptr() or base.type.is_block():
-            raise ValueError("Expected `base` to be a scalar pointer type")
-        if isinstance(base.type.element_ty, block_type):
-            raise ValueError("Expected `base` to point to a scalar element type")
-
-        self.base = base
-        self.shape = _canonicalize_block_ptr_dynamic_tuple(shape, "shape", _semantic)
-        self.strides = _canonicalize_block_ptr_dynamic_tuple(strides, "strides", _semantic)
-        self.offsets = _canonicalize_block_ptr_dynamic_tuple(offsets, "offsets", _semantic)
-        self.block_shape = _canonicalize_block_ptr_static_tuple(block_shape, "block_shape", positive=True)
-        self.order = _canonicalize_block_ptr_static_tuple(order, "order")
-
-        rank = len(self.block_shape)
-        if rank == 0:
-            raise ValueError("Expected `make_block_ptr` to describe at least one dimension")
-        for field_name, field_value in (("shape", self.shape), ("strides", self.strides), ("offsets", self.offsets),
-                                        ("order", self.order)):
-            if len(field_value) != rank:
-                raise ValueError(
-                    f"Expected `shape`, `strides`, `offsets`, `block_shape`, and `order` to have the same length; "
-                    f"`{field_name}` has length {len(field_value)} but expected {rank}")
-        order_values = [_unwrap_if_constexpr(value) for value in self.order]
-        if sorted(order_values) != list(builtins.range(rank)):
-            raise ValueError(f"Expected `order` to be a permutation of 0..{rank - 1}")
-
-    def _tile_shape(self):
-        return [_unwrap_if_constexpr(extent) for extent in self.block_shape]
-
-    def _materialize(self, boundary_check=(), _semantic=None):
-        tile_shape = self._tile_shape()
-        checked_dims = _canonicalize_block_ptr_boundary_check(boundary_check, len(tile_shape))
-        ptrs = self.base
-        mask = None
-        for dim, extent in enumerate(tile_shape):
-            coord = add(self.offsets[dim], arange(0, extent, _semantic=_semantic), _semantic=_semantic)
-            for _ in builtins.range(dim):
-                coord = expand_dims(coord, 0, _semantic=_semantic)
-            for _ in builtins.range(dim + 1, len(tile_shape)):
-                coord = expand_dims(coord, -1, _semantic=_semantic)
-            coord = broadcast_to(coord, tile_shape, _semantic=_semantic)
-            ptrs = add(ptrs, mul(coord, self.strides[dim], _semantic=_semantic), _semantic=_semantic)
-            if dim in checked_dims:
-                valid = _semantic.and_(_semantic.greater_equal(coord, 0), _semantic.less_than(coord, self.shape[dim]))
-                mask = valid if mask is None else _semantic.and_(mask, valid)
-        return ptrs, mask
-
-    def advance(self, offsets, _semantic=None):
-        new_offsets = []
-        offsets = _canonicalize_block_ptr_dynamic_tuple(offsets, "offsets", _semantic)
-        if len(offsets) != len(self.offsets):
-            raise ValueError(f"Expected `offsets` to have length {len(self.offsets)} but received {len(offsets)}")
-        for old_offset, delta in zip(self.offsets, offsets):
-            new_offsets.append(add(old_offset, delta, _semantic=_semantic))
-        return _block_ptr(self.base, self.shape, self.strides, tuple(new_offsets), self.block_shape, self.order,
-                          _semantic=_semantic)
-
-    def load(self, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
-             volatile=False, _semantic=None):
-        if mask is not None or other is not None:
-            raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
-
-        padding_option = _unwrap_if_constexpr(padding_option)
-        cache_modifier = _unwrap_if_constexpr(cache_modifier)
-        eviction_policy = _unwrap_if_constexpr(eviction_policy)
-        volatile = _unwrap_if_constexpr(volatile)
-        if padding_option is None:
-            padding_option = ""
-        ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
-
-        if padding_option == "":
-            generated_other = None
-        elif padding_option == "zero":
-            generated_other = 0
-        elif padding_option == "nan":
-            if self.base.dtype.element_ty.is_int():
-                raise ValueError("Padding option `nan` is not supported for integer block pointers")
-            generated_other = float("nan")
-        else:
-            raise ValueError(f"Padding option {padding_option} not supported")
-
-        return load(ptrs, mask=mask, other=generated_other, cache_modifier=cache_modifier,
-                    eviction_policy=eviction_policy, volatile=volatile, _semantic=_semantic)
-
-    def store(self, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _semantic=None):
-        if mask is not None:
-            raise ValueError("`mask` argument cannot be specified for storing block pointers")
-
-        cache_modifier = _unwrap_if_constexpr(cache_modifier)
-        eviction_policy = _unwrap_if_constexpr(eviction_policy)
-        ptrs, mask = self._materialize(boundary_check, _semantic=_semantic)
-        return store(ptrs, value, mask=mask, cache_modifier=cache_modifier, eviction_policy=eviction_policy,
-                     _semantic=_semantic)
-
-
-_block_ptr.__triton_block_ptr__ = True
-_block_ptr.dtype = property(lambda self: self.base.dtype)
 
 # -----------------------
 # SPMD Programming Model
@@ -2042,21 +2007,17 @@ def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     :type input: Tensor
     :param other: The second input tensor.
     :type other: Tensor
-    :param can_reorder: Compiler hint. If true, the compiler is
-        allowed to reorder elements while concatenating inputs.  Only use if the
-        order does not matter (e.g., result is only used in reduction ops).
+    :param can_reorder: Ignored.
     :type can_reorder: bool
-    :param dim: The dimension to concatenate along (used when can_reorder is False).
+    :param dim: The dimension to concatenate along.
     :type dim: int
     """
-    if can_reorder:
-        return _semantic.cat(input, other, can_reorder)
-
     rank = len(input.shape)
     assert rank == len(other.shape), f"tensors must have the same rank, got {rank} and {len(other.shape)}"
     dim = _wrap_axis(_unwrap_if_constexpr(dim), rank)
-    assert all(input.shape[i] == other.shape[i] for i in builtins.range(rank) if i !=
-               dim), f"tensor dims must match except in the concat dimension {dim}, got {input.shape} and {other.shape}"
+    assert all(input.shape[i] == other.shape[i] for i in builtins.range(rank)), (
+        f"tl.cat requires tensors of the same shape, got "
+        f"{[_unwrap_if_constexpr(s) for s in input.shape]} and {[_unwrap_if_constexpr(s) for s in other.shape]}")
 
     # Join introduces a new minor dim; move it before the concat dim and merge.
     c = join(input, other, _semantic=_semantic)
@@ -2189,6 +2150,7 @@ def reshape(input, *shape, can_reorder=False, _semantic=None, _generator=None):
         reshape(x, 32, 32)
     """
     shape = _shape_check_impl(_unwrap_iterable(shape))
+    can_reorder = _unwrap_if_constexpr(can_reorder)
     if len(shape) == 0:
         return _unsplat(input, _semantic=_semantic, _generator=_generator)
     return _semantic.reshape(input, shape, can_reorder)
@@ -2264,7 +2226,7 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
 
 
 @builtin
-def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=float32,
+def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=None,
         _semantic=None):
     """
     Returns the matrix product of two blocks.
@@ -2288,7 +2250,11 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
       the device does not have Tensor Cores or the inputs are not of dtype f32,
       this option is ignored. For devices that do have tensor cores, the
       default precision is tf32.
-    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Available options for amd: :code:`"ieee"`, (CDNA3 only) :code:`"tf32"`.
+    :type input_precision: string. Available options for nvidia:
+      :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`,
+      :code:`"bf16x3"`, :code:`"bf16x6"`. Default: :code:`"tf32"`.
+      Available options for amd: :code:`"ieee"`, :code:`"bf16x3"`,
+      :code:`"bf16x6"`, (CDNA3 only) :code:`"tf32"`.
     :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32".
       Only one of :code:`input_precision` and :code:`allow_tf32` can be
       specified (i.e. at least one must be :code:`None`).
@@ -2370,8 +2336,13 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :param rhs_k_pack: If false, the rhs tensor is packed into uint8 along N dimension.
     :type rhs_k_pack: bool, optional
     """
-    out_dtype = _unwrap_if_constexpr(out_dtype)
+    lhs_format = _unwrap_if_constexpr(lhs_format)
+    rhs_format = _unwrap_if_constexpr(rhs_format)
     acc = _unwrap_if_constexpr(acc)
+    fast_math = _unwrap_if_constexpr(fast_math)
+    out_dtype = _unwrap_if_constexpr(out_dtype)
+    lhs_k_pack = _unwrap_if_constexpr(lhs_k_pack)
+    rhs_k_pack = _unwrap_if_constexpr(rhs_k_pack)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
     return _semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, lhs_k_pack,
                                 rhs_k_pack, out_dtype)
@@ -2382,9 +2353,52 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
 # -----------------------
 
 
+@dataclass(frozen=True)
+class _CachePolicy:
+    """Target-neutral cache hints for Triton and Gluon memory operations."""
+
+    cache_modifier: str = "none"
+    eviction_policy: str = "evict_normal"
+
+    def __post_init__(self):
+        cache_modifier = _unwrap_if_constexpr(self.cache_modifier)
+        eviction_policy = _unwrap_if_constexpr(self.eviction_policy)
+        if not isinstance(cache_modifier, str):
+            raise TypeError("cache_modifier must be a string")
+        if not isinstance(eviction_policy, str):
+            raise TypeError("eviction_policy must be a string")
+        cache_modifier = cache_modifier.removeprefix(".")
+        object.__setattr__(self, "cache_modifier", cache_modifier)
+        object.__setattr__(self, "eviction_policy", eviction_policy)
+        if cache_modifier not in {"none", "ca", "cg", "wb", "cs", "wt", "cv"}:
+            raise ValueError(f"Unsupported cache modifier {cache_modifier!r}")
+        if eviction_policy not in {"evict_normal", "evict_first", "evict_last"}:
+            raise ValueError(f"Unsupported eviction policy {eviction_policy!r}")
+
+    @property
+    def type(self):
+        return constexpr_type(self)
+
+    def mangle(self) -> str:
+        return f"CP_{self.cache_modifier}_{self.eviction_policy}_CP"
+
+    def _to_ir(self, builder):
+        return builder.get_cache_policy(self.cache_modifier, self.eviction_policy)
+
+
+def _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy):
+    cache_modifier = _unwrap_if_constexpr(cache_modifier)
+    eviction_policy = _unwrap_if_constexpr(eviction_policy)
+    cache_policy = _unwrap_if_constexpr(cache_policy)
+    if cache_policy is not None:
+        assert eviction_policy is None, "cache_policy and eviction_policy are mutually exclusive"
+        assert cache_modifier is None, "cache_policy and cache_modifier are mutually exclusive"
+        return cache_policy
+    return _CachePolicy(cache_modifier or "none", eviction_policy or "evict_normal")
+
+
 @builtin
-def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", cache_modifier="", eviction_policy="",
-         volatile=False, _semantic=None):
+def load(pointer, mask=None, other=None, *, cache_modifier="", eviction_policy="", volatile=False, _semantic=None):
     """
     Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
 
@@ -2392,32 +2406,20 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
             this case:
 
             - `mask` and `other` must also be scalars,
-            - `other` is implicitly typecast to `pointer.dtype.element_ty`, and
-            - `boundary_check` and `padding_option` must be empty.
+            - `other` is implicitly typecast to `pointer.dtype.element_ty`.
 
         (2) If `pointer` is an N-dimensional tensor of pointers, an
             N-dimensional tensor is loaded.  In this case:
 
             - `mask` and `other` are implicitly broadcast to `pointer.shape`,
-            - `other` is implicitly typecast to `pointer.dtype.element_ty`, and
-            - `boundary_check` and `padding_option` must be empty.
-
-        (3) If `pointer` is a block pointer defined by `make_block_ptr`, a
-            tensor is loaded.  In this case:
-
-            - `mask` and `other` must be `None`, and
-            - `boundary_check` and `padding_option` can be specified to control the behavior of out-of-bound access.
+            - `other` is implicitly typecast to `pointer.dtype.element_ty`.
 
     :param pointer: Pointer to the data to be loaded
     :type pointer: `triton.PointerType`, or block of `dtype=triton.PointerType`
     :param mask: if `mask[idx]` is false, do not load the data at address `pointer[idx]`
-        (must be `None` with block pointers)
     :type mask: Block of `triton.int1`, optional
-    :param other: if `mask[idx]` is false, return `other[idx]`
+    :param other: if `mask[idx]` is false, return `other[idx]`. If `other` is `None`, the masked-out value is undefined.
     :type other: Block, optional
-    :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
-    :type boundary_check: tuple of ints, optional
-    :param padding_option: should be one of {"", "zero", "nan"}, the padding value to use while out of bounds. "" means an undefined value.
     :param cache_modifier: changes cache option in NVIDIA PTX
     :type cache_modifier: str, optional, should be one of {"", ".ca", ".cg", ".cv"}, where ".ca" stands for
         cache at all levels, ".cg" stands for cache at global level (cache in L2 and below, not L1),
@@ -2428,11 +2430,6 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :param volatile: changes volatile option in NVIDIA PTX
     :type volatile: bool, optional
     """
-    if _is_block_ptr(pointer):
-        return pointer.load(mask=mask, other=other, boundary_check=boundary_check, padding_option=padding_option,
-                            cache_modifier=cache_modifier, eviction_policy=eviction_policy, volatile=volatile,
-                            _semantic=_semantic)
-
     # `mask` and `other` can be constexpr
     mask = _unwrap_if_constexpr(mask)
     other = _unwrap_if_constexpr(other)
@@ -2440,12 +2437,9 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
         mask = _semantic.to_tensor(mask)
     if other is not None:
         other = _semantic.to_tensor(other)
-    padding_option = _unwrap_if_constexpr(padding_option)
-    cache_modifier = _unwrap_if_constexpr(cache_modifier)
-    eviction_policy = _unwrap_if_constexpr(eviction_policy)
     volatile = _unwrap_if_constexpr(volatile)
-    return _semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
-                          volatile)
+    cache_policy = _normalize_cache_policy(None, cache_modifier, eviction_policy)
+    return _semantic.load(pointer, mask, other, cache_policy, volatile)
 
 
 @builtin
@@ -2464,27 +2458,19 @@ def store_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[cons
 
 @_tensor_member_fn
 @builtin
-def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", eviction_policy="", _semantic=None):
+def store(pointer, value, mask=None, *, cache_modifier="", eviction_policy="", _semantic=None):
     """
     Store a tensor of data into memory locations defined by `pointer`.
 
         (1) If `pointer` is a single element pointer, a scalar is stored.  In
             this case:
 
-            - `mask` must also be scalar, and
-            - `boundary_check` and `padding_option` must be empty.
+            - `mask` must also be scalar.
 
         (2) If `pointer` is an N-dimensional tensor of pointers, an
             N-dimensional block is stored.  In this case:
 
-            - `mask` is implicitly broadcast to `pointer.shape`, and
-            - `boundary_check` must be empty.
-
-        (3) If `pointer` is a block pointer defined by `make_block_ptr`, a block
-            of data is stored.  In this case:
-
-            - `mask` must be None, and
-            - `boundary_check` can be specified to control the behavior of out-of-bound access.
+            - `mask` is implicitly broadcast to `pointer.shape`.
 
     `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
 
@@ -2494,8 +2480,6 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     :type value: Block
     :param mask: If `mask[idx]` is false, do not store `value[idx]` at `pointer[idx]`
     :type mask: Block of triton.int1, optional
-    :param boundary_check: tuple of integers, indicating the dimensions which should do the boundary check
-    :type boundary_check: tuple of ints, optional
     :param cache_modifier: changes cache option in NVIDIA PTX
     :type cache_modifier: str, optional, should be one of {"", ".wb", ".cg", ".cs", ".wt"}, where ".wb" stands for
         cache write-back all coherent levels, ".cg" stands for cache global, ".cs" stands for cache streaming, ".wt"
@@ -2503,34 +2487,21 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional, should be one of {"", "evict_first", "evict_last"}
     """
-    if _is_block_ptr(pointer):
-        return pointer.store(value, mask=mask, boundary_check=boundary_check, cache_modifier=cache_modifier,
-                             eviction_policy=eviction_policy, _semantic=_semantic)
-
     # `value` can be constexpr
     value = _semantic.to_tensor(value)
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         mask = _semantic.to_tensor(mask)
-    cache_modifier = _unwrap_if_constexpr(cache_modifier)
-    eviction_policy = _unwrap_if_constexpr(eviction_policy)
-    return _semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy)
+    cache_policy = _normalize_cache_policy(None, cache_modifier, eviction_policy)
+    return _semantic.store(pointer, value, mask, cache_policy)
 
 
 @builtin
 def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _semantic=None):
     """
-    Returns a pointer to a block in a parent tensor
-
-    :param base: The base pointer to the parent tensor
-    :param shape: The shape of the parent tensor
-    :param strides: The strides of the parent tensor
-    :param offsets: The offsets to the block
-    :param block_shape: The shape of the block
-    :param order: The order of the original data format
+    Block pointers have been removed. Use a tensor descriptor instead.
     """
-    warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
-    return _block_ptr(base, shape, strides, offsets, block_shape, order, _semantic=_semantic)
+    raise NotImplementedError("Block pointers have been removed in favor of the tensor descriptor API")
 
 
 @must_use_result(
@@ -2545,9 +2516,7 @@ def advance(base, offsets, _semantic=None):
     :param base: the block pointer to advance
     :param offsets: the offsets to advance, a tuple by dimension
     """
-    if _is_block_ptr(base):
-        return base.advance(offsets, _semantic=_semantic)
-    raise ValueError("`tl.advance` only supports block pointers created by `tl.make_block_ptr`")
+    raise NotImplementedError("Block pointers have been removed in favor of the tensor descriptor API")
 
 
 @builtin
@@ -2616,6 +2585,58 @@ def make_tensor_descriptor(
 # -----------------------
 
 
+@_tensor_member_fn
+@builtin
+def atomic_load(pointer, mask=None, sem=None, scope=None, _semantic=None):
+    """
+    Atomically loads from the memory locations specified by :code:`pointer`.
+
+    :param pointer: The memory locations to load from.
+    :type pointer: Block of dtype=triton.PointerDType
+    :param mask: If :code:`mask[idx]` is false, the corresponding load is not
+        performed and the result is unspecified.
+    :type mask: Block of triton.int1, optional
+    :param sem: Specifies the memory semantics. Acceptable values are
+        "acquire" (default) and "relaxed".
+    :type sem: str, optional
+    :param scope: Defines the scope of threads that observe the synchronizing
+        effect. Acceptable values are "gpu" (default), "cta", and "sys".
+    :type scope: str, optional
+    """
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
+    return _semantic.atomic_load(pointer, mask, sem, scope)
+
+
+@_tensor_member_fn
+@builtin
+def atomic_store(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
+    """
+    Atomically stores :code:`val` into the memory locations specified by
+    :code:`pointer`.
+
+    :param pointer: The memory locations to store to.
+    :type pointer: Block of dtype=triton.PointerDType
+    :param val: The values to store.
+    :type val: Block of dtype=pointer.dtype.element_ty
+    :param mask: If :code:`mask[idx]` is false, the corresponding store is not
+        performed.
+    :type mask: Block of triton.int1, optional
+    :param sem: Specifies the memory semantics. Acceptable values are
+        "release" (default) and "relaxed".
+    :type sem: str, optional
+    :param scope: Defines the scope of threads that observe the synchronizing
+        effect. Acceptable values are "gpu" (default), "cta", and "sys".
+    :type scope: str, optional
+    """
+    val = _semantic.to_tensor(val)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
+    return _semantic.atomic_store(pointer, val, mask, sem, scope)
+
+
 def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
@@ -2656,6 +2677,43 @@ def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None):
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     return _semantic.atomic_cas(pointer, cmp, val, sem, scope)
+
+
+@_tensor_member_fn
+@builtin
+def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, _semantic=None):
+    """
+    Wait until the value at :code:`pointer` equals :code:`expected_value`.
+
+    This will spin-wait on each specified pointer until either its value equals
+    the expected value, or the operation times out. The block waits for all polls to
+    finish. Timed-out elements return false and acquire no results.
+
+    :param pointer: A pointer, or block of pointers, to 16-, 32-, or 64-bit integers.
+    :type pointer: triton.PointerDType
+    :param expected_value: The value that ends each polling loop, broadcast to
+        the shape of :code:`pointer`.
+    :type expected_value: pointer.dtype.element_ty
+    :param sem: Specifies whether a successful poll has acquire semantics.
+        Acceptable values are "acquire" (default) and "relaxed".
+    :type sem: str, optional
+    :param scope: Defines the scope of threads that observe the synchronizing
+        effect of the poll. Acceptable values are "gpu" (default), "cta"
+        (cooperative thread array, thread block), and "sys" (system).
+    :type scope: str, optional
+    :param timeout_ns: Shared polling time budget for the entire operation, measured
+        in nanoseconds by the GPU global timer. If omitted, polling has no timeout.
+        Each element is loaded at least once, even with a zero timeout.
+    :type timeout_ns: int, optional
+    :return: A boolean with the shape of :code:`pointer`, true for each element
+        whose expected value was observed and false if its timeout expired first.
+    :rtype: triton.language.tensor
+    """
+    expected_value = _semantic.to_tensor(expected_value)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    timeout_ns = _unwrap_if_constexpr(timeout_ns)
+    return _semantic.atomic_poll(pointer, expected_value, sem, scope, timeout_ns)
 
 
 @_tensor_member_fn
@@ -2763,12 +2821,60 @@ def where(condition, x, y, _semantic=None):
     return _semantic.where(condition, x, y)
 
 
+@builtin
+def expect_zero(x, mask, _semantic=None):
+    """
+    Mark values that are expected to have underflowed to zero.
+
+    In regular compilation this preserves :code:`x`. Debug builds assert that
+    :code:`x` is zero wherever :code:`mask` is true. Under FPSAN this becomes
+    :code:`where(mask, 0, x)` so sanitized execution observes the intended
+    floating-point underflow.
+
+    :param x: values to preserve outside FPSAN mode.
+    :param mask: positions where :code:`x` is expected to be zero.
+    """
+    x = _unwrap_if_constexpr(x)
+    mask = _semantic.to_tensor(mask)
+    if is_enabled(_semantic.builder.options, "fpsan"):
+        return _semantic.where(mask, 0, x)
+    if _semantic.builder.options.debug:
+        x_tensor = _semantic.to_tensor(x)
+        zero = _semantic.to_tensor(0)
+        cond = _semantic.or_(_semantic.equal(x_tensor, zero), _semantic.not_(mask))
+        _semantic.device_assert(cond, "expect_zero expected x == 0 where mask is true", None)
+    return x
+
+
 # -----------------------
 # Math
 # -----------------------
 
 
+def _add_binary_op_docstr(name: str, op: str) -> Callable[[T], T]:
+
+    def _decorator(func: T) -> T:
+        func.__doc__ = f"""
+    Computes the element-wise {name} of :code:`x` and :code:`y`.
+
+    This is the function form of the :code:`{op}` operator.
+
+    :param x: the first input tensor
+    :type x: Block
+    :param y: the second input tensor
+    :type y: Block
+    :param sanitize_overflow: insert an integer-overflow check when overflow
+        sanitization is enabled at compile time; set to :code:`False` to emit
+        plain wrapping arithmetic. Ignored for floating-point operands.
+    :type sanitize_overflow: bool
+    """
+        return func
+
+    return _decorator
+
+
 @builtin
+@_add_binary_op_docstr("sum", "+")
 def add(x, y, sanitize_overflow: constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
@@ -2776,6 +2882,7 @@ def add(x, y, sanitize_overflow: constexpr = True, _semantic=None):
 
 
 @builtin
+@_add_binary_op_docstr("difference", "-")
 def sub(x, y, sanitize_overflow: constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
@@ -2783,6 +2890,7 @@ def sub(x, y, sanitize_overflow: constexpr = True, _semantic=None):
 
 
 @builtin
+@_add_binary_op_docstr("product", "*")
 def mul(x, y, sanitize_overflow: constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
@@ -2803,10 +2911,8 @@ def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _semantic=None):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    y = _promote_bfloat16_to_float32(y, _semantic=_semantic)
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
     return _semantic.minimum(x, y, propagate_nan)
 
@@ -2825,10 +2931,8 @@ def maximum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _semantic=None):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    y = _promote_bfloat16_to_float32(y, _semantic=_semantic)
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
     return _semantic.maximum(x, y, propagate_nan)
 
@@ -2854,9 +2958,6 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _semantic=N
     x = _semantic.to_tensor(x)
     min = _semantic.to_tensor(min)
     max = _semantic.to_tensor(max)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    min = _promote_bfloat16_to_float32(min, _semantic=_semantic)
-    max = _promote_bfloat16_to_float32(max, _semantic=_semantic)
 
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
 
@@ -2893,7 +2994,7 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
     :type {tie_break_arg}: bool"""
         if dtype_arg is not None:
             docstr += f"""
-    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. This is useful for preventing data overflows. If not specified, integer and bool dtypes are upcasted to :code:`tl.int32` and float dtypes are upcasted to at least :code:`tl.float32`.
+    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. This is useful for preventing data overflows. If not specified, signed integer dtypes narrower than 32 bits are upcasted to :code:`tl.int32`, while unsigned integer and bool dtypes narrower than 32 bits are upcasted to :code:`tl.uint32`. Other dtypes are kept as-is.
     :type {dtype_arg}: tl.dtype"""
 
         func.__doc__ = docstr.format(name=name)
@@ -2961,16 +3062,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
 
 
 @builtin
-def _promote_bfloat16_to_float32(t, _semantic=None):
-    scalar_ty = t.type.scalar
-
-    # hardware doesn't support FMAX, FMIN, CMP for bfloat16
-    if scalar_ty is bfloat16:
-        return t.to(float32, _semantic=_semantic)
-    return t
-
-
-@builtin
 def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=None):
     axis = _unwrap_if_constexpr(axis)
     n = input.shape[axis]
@@ -3008,7 +3099,7 @@ def _add_scan_docstr(name: str, dtype_arg: str = None) -> Callable[[T], T]:
 
         if dtype_arg is not None:
             docstr += f"""
-    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. If not specified, small integer types (< 32 bits) are upcasted to prevent overflow. Note that :code:`tl.bfloat16` inputs are automatically promoted to :code:`tl.float32`.
+    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. If not specified, signed integer dtypes narrower than 32 bits are upcasted to :code:`tl.int32`, while unsigned integer and bool dtypes narrower than 32 bits are upcasted to :code:`tl.uint32`. Other dtypes are kept as-is.
     :type {dtype_arg}: tl.dtype"""
 
         func.__doc__ = docstr.format(name=name)
@@ -3051,6 +3142,7 @@ def associative_scan(input, axis, combine_fn, reverse=False, _semantic=None, _ge
             builder.create_scan_ret(*handles)
 
     axis = _unwrap_if_constexpr(axis)
+    reverse = _unwrap_if_constexpr(reverse)
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
     return _semantic.associative_scan(input, axis, make_combine_region, reverse)
@@ -3132,7 +3224,7 @@ def map_elementwise(
         :return: one tensor or a tuple of tensors, depending on the mapped function.
     '''
     # Build the block for the nested region first to discover the return types
-    assert pack >= 1
+    assert pack >= 1, f"pack must be >= 1, got {pack}"
     in_scalar_tys = [t.type.scalar for t in args]
     builder = _semantic.builder
     block = builder.new_block()
@@ -3187,7 +3279,18 @@ def debug_barrier(_semantic=None):
 @builtin
 def multiple_of(input, values, _semantic=None):
     """
-    Let the compiler know that the values in :code:`input` are all multiples of :code:`value`.
+    Let the compiler know that ``values[d]`` is the largest power of two that
+    divides the first element of every contiguous group along dimension ``d``
+    of :code:`input` (see :func:`max_contiguous` for the definition of contiguous
+    group). ``values`` must have one entry per dimension of :code:`input`.
+
+    For a 1D input with contiguity 1, this is equivalent to saying that every
+    element of :code:`input` is a multiple of ``values[0]``. For example, if
+    :code:`values` is ``[16]`` and :code:`input` is ``[64, 80, 96, 112]``, the
+    hint is valid because 16 divides 64.
+
+    This hint enables alignment-dependent optimizations such as vectorized
+    memory accesses.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -3203,7 +3306,19 @@ def multiple_of(input, values, _semantic=None):
 @builtin
 def max_contiguous(input, values, _semantic=None):
     """
-    Let the compiler know that the `value` first values in :code:`input` are contiguous.
+    Let the compiler know that the elements of :code:`input` along dimension
+    ``d`` form contiguous groups of length ``values[d]``. ``values`` must have
+    one entry per dimension of :code:`input` and each entry must be a power of
+    two.
+
+    A 1D array of ``N`` elements with contiguity ``C`` is viewed as ``N/C``
+    runs of ``C`` integers each, where the integers in a run are
+    sequentially contiguous. For example, if :code:`values` is ``[4]``, the
+    array ``[0, 1, 2, 3, 8, 9, 10, 11]`` satisfies the hint because it
+    consists of two runs of 4 contiguous values.
+
+    Together with :func:`multiple_of`, this hint enables vectorized loads and
+    stores of contiguous, aligned regions.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -3219,10 +3334,14 @@ def max_contiguous(input, values, _semantic=None):
 @builtin
 def max_constancy(input, values, _semantic=None):
     """
-    Let the compiler know that the `value` first values in :code:`input` are constant.
+    Let the compiler know that the elements of :code:`input` along dimension
+    ``d`` form constant groups of length ``values[d]``. ``values`` must have
+    one entry per dimension of :code:`input` and each entry must be a power of
+    two.
 
-    e.g. if :code:`values` is [4], then each group of 4 values in :code:`input` should all be equal,
-    for example [0, 0, 0, 0, 1, 1, 1, 1].
+    A 1D array of ``N`` elements with constancy ``C`` is viewed as ``N/C``
+    runs of ``C`` identical values. For example, if :code:`values` is ``[4]``,
+    the array ``[0, 0, 0, 0, 1, 1, 1, 1]`` satisfies the hint.
     """
     if isinstance(values, constexpr):
         values = [values]
@@ -3310,10 +3429,11 @@ def device_print(prefix, *args, hex=False, _semantic=None):
 
     :param prefix: a prefix to print before the values. This is required to be a string literal.
     :param args: the values to print. They can be any tensor or scalar.
-    :param hex: print all values as hex instead of decimal
+    :param hex: print integers in hexadecimal and floating-point values in hexadecimal floating-point notation
     '''
     import string
     prefix = _unwrap_if_constexpr(prefix)
+    hex = _unwrap_if_constexpr(hex)
     assert isinstance(prefix, str), f"{prefix} is not string"
     b_ascii = True
     for ch in prefix:
@@ -3361,6 +3481,13 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
         where the function is inline assembly.
 
         The input tensors :code:`args` are implicitly broadcasted to the same shape.
+
+        In Gluon, :code:`args` may also contain shared or tensor memory
+        descriptors. Each descriptor contributes one :code:`i32` address per
+        invocation, independently of :code:`pack`, and does not participate in
+        broadcasting. Descriptor operands require :code:`is_pure=False`; the
+        assembly conservatively reads and writes the descriptor views, and
+        accesses must remain within their logical elements.
 
         :code:`dtype` can be a tuple of types, in which case the output is a
         tuple of tensors.
@@ -3458,22 +3585,12 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
     dtype = typing.cast(Sequence[_DtypeClass], dtype)
 
     res_tys = dtype
-    if dispatch_args := [_semantic.to_tensor(arg) for arg in args]:
-        bin_op_type_checking = partial(
-            _semantic.binary_op_type_checking_impl,
-            arithmetic_check=False,
-            allow_lhs_ptr=True,
-            allow_rhs_ptr=True,
-        )
-        broadcast_arg = dispatch_args[0]
-        # Get the broadcast shape over all the arguments
-        for item in dispatch_args:
-            _, broadcast_arg = bin_op_type_checking(item, broadcast_arg)
-        if broadcast_arg.shape:
-            # Change the shape of each argument based on the broadcast shape
-            for i, item in enumerate(dispatch_args):
-                dispatch_args[i], _ = bin_op_type_checking(item, broadcast_arg)
-            res_tys = [broadcast_arg.type.with_element_ty(dt) for dt in dtype]
+    dispatch_args = [_semantic.to_inline_asm_operand(arg) for arg in args]
+    tensor_args = _semantic.broadcast_tensors(*(arg for arg in dispatch_args if isinstance(arg, tensor)))
+    if tensor_args:
+        res_tys = [tensor_args[0].type.with_element_ty(dt) for dt in dtype]
+        tensors = iter(tensor_args)
+        dispatch_args = [next(tensors) if isinstance(arg, tensor) else arg for arg in dispatch_args]
     handles = [t.handle for t in dispatch_args]
     builder = _semantic.builder
     call = builder.create_inline_asm(asm, constraints, handles, [ty.to_ir(builder) for ty in res_tys], is_pure, pack)
@@ -3543,7 +3660,8 @@ class range(base_value):
         :code:`triton.jit` functions. In addition, it allows user to pass extra attributes to the compiler.
     :param arg1: the start value.
     :param arg2: the end value.
-    :param step: the step value.
+    :param step: the step value. A negative step is supported only when it is a
+        :code:`constexpr`; a runtime (non-:code:`constexpr`) step must be positive.
     :param num_stages: pipeline the loop into this many stages (so there are
         :code:`num_stages` iterations of the loop in flight at once).
 
@@ -3737,8 +3855,8 @@ def builtin_max(*args, propagate_nan=_NOTHING, _semantic=None):
     is_constexpr = all(not isinstance(x, base_value) for x in args)
     if is_constexpr:
         assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin max"
-        assert not any(math.isnan(x) for x in args)
-        assert not any(is_negative_zero(x) for x in args)
+        assert not any(math.isnan(x) for x in args), "constexpr max does not support NaN values"
+        assert not any(is_negative_zero(x) for x in args), "constexpr max does not support negative zero"
         return constexpr(builtins.max(_unwrap_if_constexpr(args)))
 
     if propagate_nan is _NOTHING:
@@ -3761,8 +3879,8 @@ def builtin_min(*args, propagate_nan=_NOTHING, _semantic=None):
     is_constexpr = all(not isinstance(x, base_value) for x in args)
     if is_constexpr:
         assert propagate_nan is _NOTHING, "propagate_nan is not supported on builtin min"
-        assert not any(math.isnan(x) for x in args)
-        assert not any(is_negative_zero(x) for x in args)
+        assert not any(math.isnan(x) for x in args), "constexpr min does not support NaN values"
+        assert not any(is_negative_zero(x) for x in args), "constexpr min does not support negative zero"
         return constexpr(builtins.min(_unwrap_if_constexpr(args)))
 
     if propagate_nan is _NOTHING:

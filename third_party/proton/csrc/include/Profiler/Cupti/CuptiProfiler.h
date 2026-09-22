@@ -5,16 +5,18 @@
 
 namespace proton {
 
-class CuptiProfiler : public GPUProfiler<CuptiProfiler> {
+class CuptiProfiler final : public GPUProfiler<CuptiProfiler> {
 public:
-  CuptiProfiler();
-  virtual ~CuptiProfiler();
+  ~CuptiProfiler() override;
 
 private:
+  friend class Singleton<CuptiProfiler>;
+
+  CuptiProfiler();
+
   struct CuptiProfilerPimpl;
 
-  virtual void
-  doSetMode(const std::vector<std::string> &modeAndOptions) override;
+  void doSetMode(const std::vector<std::string> &modeAndOptions) override;
 };
 
 } // namespace proton

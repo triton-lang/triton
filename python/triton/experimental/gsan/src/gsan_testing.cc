@@ -1,7 +1,9 @@
 #include "python/triton/experimental/gsan/src/GSan.h"
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include <array>
 #include <cstdint>
@@ -10,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace py = pybind11;
+namespace py = nanobind;
 
 namespace {
 
@@ -18,6 +20,7 @@ struct PyScalarClock {
   uint32_t epoch = 0;
   uint32_t threadId = 0;
   gsan::AtomicScope scope = gsan::AtomicScope::NonAtomic;
+  bool isRelease = false;
 };
 
 struct PyShadowCell {
@@ -25,6 +28,23 @@ struct PyShadowCell {
   PyScalarClock writeClock;
   uint32_t numReads = 0;
 };
+
+bool scalarClockEquals(const PyScalarClock &lhs, const PyScalarClock &rhs) {
+  return lhs.epoch == rhs.epoch && lhs.threadId == rhs.threadId &&
+         lhs.scope == rhs.scope && lhs.isRelease == rhs.isRelease;
+}
+
+bool shadowCellEquals(const PyShadowCell &lhs, const PyShadowCell &rhs) {
+  if (lhs.numReads != rhs.numReads ||
+      !scalarClockEquals(lhs.writeClock, rhs.writeClock)) {
+    return false;
+  }
+  for (size_t i = 0; i < lhs.readClocks.size(); ++i) {
+    if (!scalarClockEquals(lhs.readClocks[i], rhs.readClocks[i]))
+      return false;
+  }
+  return true;
+}
 
 struct PyGlobalState {
   uintptr_t reserveBase = 0;
@@ -85,7 +105,8 @@ std::string scalarClockStr(const PyScalarClock &c) {
   std::ostringstream oss;
   oss << "ScalarClock(epoch=" << static_cast<uint64_t>(c.epoch)
       << ", thread_id=" << static_cast<uint64_t>(c.threadId)
-      << ", scope=" << atomicScopeStr(c.scope) << ")";
+      << ", scope=" << atomicScopeStr(c.scope)
+      << ", is_release=" << (c.isRelease ? "True" : "False") << ")";
   return oss.str();
 }
 
@@ -151,6 +172,7 @@ PyScalarClock toPyScalarClock(const gsan::ScalarClock &clock) {
   out.epoch = clock.epoch;
   out.threadId = static_cast<uint16_t>(clock.threadId);
   out.scope = clock.scope;
+  out.isRelease = clock.isRelease;
   return out;
 }
 
@@ -194,8 +216,9 @@ PyGSanThreadState decodeThreadStateBytes(const char *bytes, size_t size,
                                          uint16_t clockBufferSize) {
   const size_t stride = threadStateStrideBytes(numThreads, clockBufferSize);
   if (size < stride) {
-    throw py::value_error("decode_thread_state expected at least " +
-                          std::to_string(stride) + " bytes");
+    auto msg = "decode_thread_state expected at least " +
+               std::to_string(stride) + " bytes";
+    throw py::value_error(msg.c_str());
   }
 
   PyGSanThreadState out;
@@ -228,7 +251,7 @@ PyGSanThreadState decodeThreadStateBytes(const char *bytes, size_t size,
 
 } // namespace
 
-void init_gsan_testing(py::module &&m) {
+void init_gsan_testing(py::module_ &m) {
   m.doc() = "GSan testing helpers";
 
   py::enum_<gsan::AtomicScope>(m, "AtomicScope")
@@ -242,32 +265,34 @@ void init_gsan_testing(py::module &&m) {
            [](gsan::AtomicScope scope) { return atomicScopeStr(scope); });
 
   py::class_<PyScalarClock>(m, "ScalarClock")
-      .def(py::init(
-               [](uint64_t epoch, uint64_t threadId, gsan::AtomicScope scope) {
-                 PyScalarClock out;
-                 out.epoch = static_cast<uint32_t>(epoch);
-                 out.threadId = static_cast<uint32_t>(threadId);
-                 out.scope = scope;
-                 return out;
-               }),
-           py::arg("epoch"), py::arg("thread_id"), py::arg("scope"))
-      .def_property_readonly(
+      .def(py::new_([](uint64_t epoch, uint64_t threadId,
+                       gsan::AtomicScope scope, bool isRelease) {
+             auto *self = new PyScalarClock();
+             self->epoch = static_cast<uint32_t>(epoch);
+             self->threadId = static_cast<uint32_t>(threadId);
+             self->scope = scope;
+             self->isRelease = isRelease;
+             return self;
+           }),
+           py::arg("epoch"), py::arg("thread_id"), py::arg("scope"),
+           py::arg("is_release") = false)
+      .def_prop_ro(
           "epoch",
           [](const PyScalarClock &c) { return static_cast<uint64_t>(c.epoch); })
-      .def_property_readonly("thread_id",
-                             [](const PyScalarClock &c) {
-                               return static_cast<uint64_t>(c.threadId);
-                             })
-      .def_property_readonly("scope",
-                             [](const PyScalarClock &c) { return c.scope; })
-      .def_property_readonly(
+      .def_prop_ro("thread_id",
+                   [](const PyScalarClock &c) {
+                     return static_cast<uint64_t>(c.threadId);
+                   })
+      .def_prop_ro("scope", [](const PyScalarClock &c) { return c.scope; })
+      .def_prop_ro(
           "scope_name",
           [](const PyScalarClock &c) { return atomicScopeName(c.scope); })
+      .def_prop_ro("is_release",
+                   [](const PyScalarClock &c) { return c.isRelease; })
       .def(
           "__eq__",
           [](const PyScalarClock &lhs, const PyScalarClock &rhs) {
-            return lhs.epoch == rhs.epoch && lhs.threadId == rhs.threadId &&
-                   lhs.scope == rhs.scope;
+            return scalarClockEquals(lhs, rhs);
           },
           py::is_operator())
       .def("__str__", [](const PyScalarClock &c) { return scalarClockStr(c); })
@@ -275,70 +300,64 @@ void init_gsan_testing(py::module &&m) {
            [](const PyScalarClock &c) { return scalarClockStr(c); });
 
   py::class_<PyShadowCell>(m, "ShadowCell")
-      .def_property_readonly(
-          "read_clocks",
-          [](const PyShadowCell &cell) { return cell.readClocks; })
-      .def_property_readonly(
-          "write_clock",
-          [](const PyShadowCell &cell) { return cell.writeClock; })
-      .def_property_readonly("num_reads",
-                             [](const PyShadowCell &cell) {
-                               return static_cast<uint64_t>(cell.numReads);
-                             })
+      .def_prop_ro("read_clocks",
+                   [](const PyShadowCell &cell) { return cell.readClocks; })
+      .def_prop_ro("write_clock",
+                   [](const PyShadowCell &cell) { return cell.writeClock; })
+      .def_prop_ro("num_reads",
+                   [](const PyShadowCell &cell) {
+                     return static_cast<uint64_t>(cell.numReads);
+                   })
+      .def(
+          "__eq__",
+          [](const PyShadowCell &lhs, const PyShadowCell &rhs) {
+            return shadowCellEquals(lhs, rhs);
+          },
+          py::is_operator())
       .def("__str__",
            [](const PyShadowCell &cell) { return shadowCellStr(cell); })
       .def("__repr__",
            [](const PyShadowCell &cell) { return shadowCellStr(cell); });
 
   py::class_<PyGlobalState>(m, "GlobalState")
-      .def_property_readonly(
-          "reserve_base", [](const PyGlobalState &s) { return s.reserveBase; })
-      .def_property_readonly(
-          "globals_base", [](const PyGlobalState &s) { return s.globalsBase; })
-      .def_property_readonly("rng_seed",
-                             [](const PyGlobalState &s) { return s.rngSeed; })
-      .def_property_readonly("num_sms",
-                             [](const PyGlobalState &s) { return s.numSms; })
-      .def_property_readonly(
-          "num_devices", [](const PyGlobalState &s) { return s.numDevices; })
-      .def_property_readonly(
-          "num_threads", [](const PyGlobalState &s) { return s.numThreads; })
-      .def_property_readonly(
-          "clock_buffer_size",
-          [](const PyGlobalState &s) { return s.clockBufferSize; })
+      .def_prop_ro("reserve_base",
+                   [](const PyGlobalState &s) { return s.reserveBase; })
+      .def_prop_ro("globals_base",
+                   [](const PyGlobalState &s) { return s.globalsBase; })
+      .def_prop_ro("rng_seed", [](const PyGlobalState &s) { return s.rngSeed; })
+      .def_prop_ro("num_sms", [](const PyGlobalState &s) { return s.numSms; })
+      .def_prop_ro("num_devices",
+                   [](const PyGlobalState &s) { return s.numDevices; })
+      .def_prop_ro("num_threads",
+                   [](const PyGlobalState &s) { return s.numThreads; })
+      .def_prop_ro("clock_buffer_size",
+                   [](const PyGlobalState &s) { return s.clockBufferSize; })
       .def("__str__", [](const PyGlobalState &s) { return globalStateStr(s); })
       .def("__repr__",
            [](const PyGlobalState &s) { return globalStateStr(s); });
 
   py::class_<PyGSanThreadState>(m, "ThreadState")
-      .def_property_readonly(
-          "globals_ptr",
-          [](const PyGSanThreadState &s) { return s.globalsPtr; })
-      .def_property_readonly(
-          "reserve_base",
-          [](const PyGSanThreadState &s) { return s.reserveBase; })
-      .def_property_readonly(
-          "num_reads", [](const PyGSanThreadState &s) { return s.numReads; })
-      .def_property_readonly(
+      .def_prop_ro("globals_ptr",
+                   [](const PyGSanThreadState &s) { return s.globalsPtr; })
+      .def_prop_ro("reserve_base",
+                   [](const PyGSanThreadState &s) { return s.reserveBase; })
+      .def_prop_ro("num_reads",
+                   [](const PyGSanThreadState &s) { return s.numReads; })
+      .def_prop_ro(
           "clock_buffer_dirty",
           [](const PyGSanThreadState &s) { return s.clockBufferDirty; })
-      .def_property_readonly(
-          "clock_buffer_head",
-          [](const PyGSanThreadState &s) { return s.clockBufferHead; })
-      .def_property_readonly(
-          "thread_id", [](const PyGSanThreadState &s) { return s.threadId; })
-      .def_property_readonly(
-          "num_threads",
-          [](const PyGSanThreadState &s) { return s.numThreads; })
-      .def_property_readonly(
-          "clock_buffer_size",
-          [](const PyGSanThreadState &s) { return s.clockBufferSize; })
-      .def_property_readonly(
-          "vector_clock",
-          [](const PyGSanThreadState &s) { return s.vectorClock; })
-      .def_property_readonly(
-          "clock_buffer",
-          [](const PyGSanThreadState &s) { return s.clockBuffer; })
+      .def_prop_ro("clock_buffer_head",
+                   [](const PyGSanThreadState &s) { return s.clockBufferHead; })
+      .def_prop_ro("thread_id",
+                   [](const PyGSanThreadState &s) { return s.threadId; })
+      .def_prop_ro("num_threads",
+                   [](const PyGSanThreadState &s) { return s.numThreads; })
+      .def_prop_ro("clock_buffer_size",
+                   [](const PyGSanThreadState &s) { return s.clockBufferSize; })
+      .def_prop_ro("vector_clock",
+                   [](const PyGSanThreadState &s) { return s.vectorClock; })
+      .def_prop_ro("clock_buffer",
+                   [](const PyGSanThreadState &s) { return s.clockBuffer; })
       .def("__str__",
            [](const PyGSanThreadState &s) { return threadStateStr(s); })
       .def("__repr__",
@@ -384,14 +403,15 @@ void init_gsan_testing(py::module &&m) {
   m.def(
       "decode_global_state",
       [](py::bytes data) -> PyGlobalState {
-        std::string bytes = data;
-        if (bytes.size() < static_cast<ssize_t>(sizeof(gsan::GlobalState))) {
-          throw py::value_error("decode_global_state expected at least " +
-                                std::to_string(sizeof(gsan::GlobalState)) +
-                                " bytes");
+        const char *raw = data.c_str();
+        size_t len = data.size();
+        if (len < sizeof(gsan::GlobalState)) {
+          auto msg = "decode_global_state expected at least " +
+                     std::to_string(sizeof(gsan::GlobalState)) + " bytes";
+          throw py::value_error(msg.c_str());
         }
         gsan::GlobalState state{};
-        std::memcpy(&state, bytes.data(), sizeof(state));
+        std::memcpy(&state, raw, sizeof(state));
         return toPyGlobalState(state);
       },
       py::arg("data"),
@@ -400,15 +420,16 @@ void init_gsan_testing(py::module &&m) {
   m.def(
       "decode_shadow_cell",
       [](py::bytes data) -> PyShadowCell {
-        std::string bytes = data;
-        if (bytes.size() < static_cast<ssize_t>(sizeof(gsan::ShadowCell))) {
-          throw py::value_error("decode_shadow_cell expected at least " +
-                                std::to_string(sizeof(gsan::ShadowCell)) +
-                                " bytes");
+        const char *raw = data.c_str();
+        size_t len = data.size();
+        if (len < sizeof(gsan::ShadowCell)) {
+          auto msg = "decode_shadow_cell expected at least " +
+                     std::to_string(sizeof(gsan::ShadowCell)) + " bytes";
+          throw py::value_error(msg.c_str());
         }
 
         gsan::ShadowCell cell{};
-        std::memcpy(&cell, bytes.data(), sizeof(cell));
+        std::memcpy(&cell, raw, sizeof(cell));
         return toPyShadowCell(cell);
       },
       py::arg("data"),
@@ -418,8 +439,7 @@ void init_gsan_testing(py::module &&m) {
       "decode_thread_state",
       [](py::bytes data, uint64_t numThreads,
          uint64_t clockBufferSize) -> PyGSanThreadState {
-        std::string bytes = data;
-        return decodeThreadStateBytes(bytes.data(), bytes.size(),
+        return decodeThreadStateBytes(data.c_str(), data.size(),
                                       static_cast<uint16_t>(numThreads),
                                       static_cast<uint16_t>(clockBufferSize));
       },

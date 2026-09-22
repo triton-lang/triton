@@ -6,7 +6,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
@@ -24,6 +24,53 @@ namespace {
 //===----------------------------------------------------------------------===//
 // assignLatencies
 //===----------------------------------------------------------------------===//
+
+bool hasLoopCarriedAccumulatorCycle(ttng::MMAv5OpInterface mma,
+                                    scf::ForOp forOp) {
+  Value start = mma.getAccDep();
+  Value target = mma.getToken();
+  if (!start || !target)
+    return false;
+
+  // Follow the accumulator dependency backwards, mapping loop block arguments
+  // to their yielded values. A cross-MMA cycle is found when the recurrence
+  // returns to this MMA through another MMA.
+  SmallVector<std::pair<Value, bool>> worklist = {{start, false}};
+  // Following all operands may reach the same value along paths that differ in
+  // whether another MMA was crossed. Track those states separately so that a
+  // visit before crossing another MMA does not suppress a visit after crossing
+  // one.
+  DenseSet<Value> seenBeforeAnotherMMA;
+  DenseSet<Value> seenAfterAnotherMMA;
+  while (!worklist.empty()) {
+    auto [current, crossedAnotherMMA] = worklist.pop_back_val();
+    DenseSet<Value> &seen =
+        crossedAnotherMMA ? seenAfterAnotherMMA : seenBeforeAnotherMMA;
+    if (!seen.insert(current).second)
+      continue;
+    if (current == target) {
+      if (crossedAnotherMMA)
+        return true;
+      continue;
+    }
+
+    if (auto arg = dyn_cast<BlockArgument>(current)) {
+      if (arg.getOwner() == forOp.getBody() && arg.getArgNumber() > 0)
+        worklist.emplace_back(forOp.getYieldedValues()[arg.getArgNumber() - 1],
+                              crossedAnotherMMA);
+      continue;
+    }
+
+    Operation *def = current.getDefiningOp();
+    if (!def || !forOp->isAncestor(def))
+      continue;
+    crossedAnotherMMA |=
+        isa<ttng::MMAv5OpInterface>(def) && def != mma.getOperation();
+    for (Value operand : getNestedOperands(def))
+      worklist.emplace_back(operand, crossedAnotherMMA);
+  }
+  return false;
+}
 
 // Return true if the preconditions for pipelining the loop are met.
 bool preCondition(scf::ForOp forOp) {
@@ -107,8 +154,16 @@ public:
         return false;
       }
     }
-    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
+    if (auto loadOp = dyn_cast<tt::DescriptorLoadLikeOpInterface>(op)) {
+      auto descTy = cast<tt::TensorDescType>(loadOp.getDesc().getType());
+      if (descTy.getSharedLayout() && !canPipelineTMALoad(op)) {
+        LDBG("TMA load " << *op
+                         << " has a per-stage allocation that is not aligned "
+                            "for pipelining");
+        return false;
+      }
       return true;
+    }
     if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
       LDBG("Load " << *op << " cannot have shared encoding");
       return false;
@@ -212,6 +267,8 @@ public:
                                cantWarpSpec)))
               mmaSelfLatency[mma] = 0;
           }
+          if (hasLoopCarriedAccumulatorCycle(mma, forOp))
+            opLatency.erase(&op);
         }
       }
     }
@@ -291,7 +348,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
       [&](Operation *op, Operation *finalUser, int distance) {
         if (!seen.insert(op).second || excluded.count(op))
           return;
-        if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+        if (isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op)) {
           if (!AssignLoadLatencies::isPipeliningBeneficial(
                   op, finalUser, axisInfoAnalysis, filterSmall))
             return;
@@ -329,13 +386,11 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
         }
       };
 
-  bool seenDot = false;
   for (Operation &op : forOp.getBody()->without_terminator()) {
     // Arbitrary heuristic. TMEMStoreOp is included to keep logic consistent
     // with legacy code when we weren't hoisting tmem allocas.
     if (!isa<mlir::triton::DotOpInterface, ttng::TMEMStoreOp>(op))
       continue;
-    seenDot = true;
     seen.clear();
     dfs(&op, &op, 0);
   }
@@ -344,7 +399,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
   // that are not directly used by dot ops.
   if (pipelineWithoutDot) {
     for (Operation &op : forOp.getBody()->without_terminator()) {
-      if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
+      if (!isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op))
         dfs(&op, &op, 0);
     }
   }

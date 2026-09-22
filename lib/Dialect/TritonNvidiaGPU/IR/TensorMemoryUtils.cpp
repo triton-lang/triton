@@ -83,6 +83,9 @@ int getContextualMaxNReg(Operation *op) {
       unsigned idx = op->getParentRegion()->getRegionNumber();
       if (auto actRegisters = partitions.getParentOp().getActualRegisters())
         return (*actRegisters)[1 + idx];
+      if (auto requestedRegisters =
+              partitions.getParentOp().getRequestedRegisters())
+        return (*requestedRegisters)[idx];
       return {};
     }
 
@@ -117,22 +120,16 @@ int getContextualMaxNReg(Operation *op) {
 }
 
 FailureOr<TMemLdStEncodingInfo>
-lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
+lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
               std::function<InFlightDiagnostic()> emitError,
               bool unpacked = false) {
   // We will fill in the returned value recursively (if it exists)
 
   // Remove broadcasting in the registers
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
-  if (!removeBroadcastSrc.isIdentity()) {
-    auto prmtCvt = removeBroadcastSrc.apply(cvt);
-    auto info = lowerTMemLdSt(prmtCvt, maxnreg, bitwidth, isScales, emitError,
-                              unpacked);
-    if (failed(info))
-      return failure();
-    info->broadcast = std::move(removeBroadcastSrc);
-    return info;
-  }
+  if (!removeBroadcastSrc.isIdentity())
+    return lowerTMemLdSt(removeBroadcastSrc.apply(cvt), maxnreg, bitwidth,
+                         emitError, unpacked);
   auto *ctx = cvt.getInDimNames().begin()->getContext();
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
   auto kReg = S("register");
@@ -140,16 +137,8 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   auto kRow = S("row");
   auto kCol = S("col");
   if (bitwidth < 32) {
-    LinearLayout quot;
-    int bestContig = 1;
-    for (int contig = 1; bitwidth * contig <= 32; contig *= 2) {
-      auto maybeQuot =
-          divideLeft(cvt, LinearLayout::identity1D(contig, kReg, kCol));
-      if (!maybeQuot)
-        break;
-      quot = *maybeQuot;
-      bestContig = contig;
-    }
+    auto [bestContig, quot] =
+        factorMaximalIdentityPrefix(cvt, kReg, kCol, 32 / bitwidth);
     bool padding = false;
     int newBitwidth = bitwidth;
     if (bestContig > 1) {
@@ -171,7 +160,9 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
       // to fill a full 32b register, e.g., colN = 1 and colStride != 1 or when
       // bitwidth == 8 (this happens with scales with K=1).
       // These two cases are mostly supported for testing purposes.
-      unpacked = bitwidth == 16;
+      // A padded TMEM value occupies one physical column, so an unpacked
+      // store would overwrite the adjacent column.
+      unpacked = false;
       quot = *maybeQuot;
       padding = true;
       newBitwidth = 32;
@@ -186,8 +177,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
     if (unpacked) {
       quot = LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth) * quot;
     }
-    auto info = lowerTMemLdSt(quot, maxnreg, newBitwidth, isScales, emitError,
-                              unpacked);
+    auto info = lowerTMemLdSt(quot, maxnreg, newBitwidth, emitError, unpacked);
     if (failed(info))
       return failure();
     if (bestContig > 1) {
@@ -236,19 +226,6 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
       auto row = reps.getBasis(kLane, 4, kRow);
       auto col = reps.getBasis(kLane, 4, kCol);
       secondHalfOffset = (row << 16) | col;
-      if (*secondHalfOffset == 0) {
-        // Workaround for ptxas bug, we cannot use secondHalfOffset = 0 to write
-        // only 16 elements. We use secondHalfOffset = 1 instead and we pad the
-        // allocation.
-        if (!isScales) {
-          if (emitError) {
-            emitError()
-                << "Only supported for scales as we pad the allocation.";
-          }
-          return failure();
-        }
-        secondHalfOffset = 1;
-      }
       // We "quotient it out", meaning we remove the last basis from reps
       auto basis = reps.getBases();
       basis[kLane][4] = {0, 0};
@@ -313,9 +290,54 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   cvt = LinearLayout(std::move(bases), cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
 
-  bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());
   int bitwidth = memTy.getElementTypeBitWidth();
-  return lowerTMemLdSt(cvt, maxnreg, bitwidth, isScales, emitError);
+  return lowerTMemLdSt(cvt, maxnreg, bitwidth, emitError);
+}
+
+bool supportsTMemLoadReduce(RankedTensorType regTy, MemDescType memTy,
+                            int maxnreg,
+                            std::function<InFlightDiagnostic()> emitError) {
+  auto encodingInfo = computeTMemLdStEncodingInfo(regTy, memTy, maxnreg);
+  if (failed(encodingInfo)) {
+    if (emitError)
+      emitError() << "failed to compute TMEM encoding info";
+    return false;
+  }
+
+  if (encodingInfo->unpacked) {
+    if (emitError)
+      emitError() << "tmem_load reduction requires packed format "
+                     "(unpacked=false)";
+    return false;
+  }
+
+  auto kReg = StringAttr::get(regTy.getContext(), "register");
+  constexpr int dimM = 0, dimN = 1;
+  auto regDims =
+      toLinearEncoding(regTy).basesPerDim(kReg, /*skipBroadcast=*/true);
+
+  // The fused ld.red instruction reduces the values that are already local to a
+  // thread, so the N axis must live entirely in this thread's registers,
+  // otherwise the N reduction would be partial and need cross-lane/warp/CTA
+  // combining.
+  if (regDims[dimN] != toLinearLayout(regTy).getOutDimSizes().begin()[dimN]) {
+    if (emitError)
+      emitError() << "tmem_load reduction with N dimension sharded across "
+                     "threads is not supported.";
+    return false;
+  }
+
+  // regDims[dimM] is the number of distinct M coordinates a single thread holds
+  // across its registers. Require it to be 1, so each thread owns exactly one M
+  // row.
+  if (regDims[dimM] != 1) {
+    if (emitError)
+      emitError() << "tmem_load reduction with multiple M rows per thread is "
+                     "not supported.";
+    return false;
+  }
+
+  return true;
 }
 
 } // namespace mlir::triton::nvidia_gpu

@@ -180,6 +180,9 @@ class GPUDriver(DriverBase):
         device_interface = self.get_device_interface()
         if stream is None:
             return torch.zeros(size, dtype=torch.int8, device=device)
+        if stream == 0:
+            with device_interface.stream(device_interface.default_stream(device)):
+                return torch.zeros(size, dtype=torch.int8, device=device)
         launch_stream = device_interface.ExternalStream(stream, device=device)
         with device_interface.stream(launch_stream):
             scratch = torch.zeros(size, dtype=torch.int8, device=device)

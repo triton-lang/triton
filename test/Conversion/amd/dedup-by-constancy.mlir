@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s
+// RUN: triton-opt %s --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s
 
 // CHECK-LABEL: dedup_by_constancy_mfma
 // CHECK-COUNT-2: llvm.icmp "slt"

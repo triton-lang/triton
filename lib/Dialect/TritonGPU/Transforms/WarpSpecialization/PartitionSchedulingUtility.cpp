@@ -1,6 +1,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/PartitionSchedulingUtility.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 #include <iomanip>
 #include <sstream>
@@ -26,6 +26,8 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &stream, Flags flags) {
       strs.push_back("SFU");
     if (flags & Flags::VIEW)
       strs.push_back("VIEW");
+    if (flags & Flags::CLC)
+      strs.push_back("CLC");
   }
   for (size_t i = 0; i < strs.size(); i++) {
     if (i != 0)
@@ -43,9 +45,9 @@ Flags getNodeFlags(Node *node) {
     if (op->hasAttr("store"))
       return Flags::STORE;
 
-    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
+    if (isa<tt::DescriptorLoadLikeOpInterface>(op))
       return Flags::LOAD;
-    if (isa<tt::DescriptorStoreOp, tt::DescriptorScatterOp>(op))
+    if (isa<tt::DescriptorStoreLikeOpInterface>(op))
       return Flags::STORE;
     if (isa<ttng::MMAv5OpInterface>(op) || op->hasAttr("mma"))
       return Flags::MMA;
@@ -53,6 +55,8 @@ Flags getNodeFlags(Node *node) {
       return Flags::TMEM;
     if (isa<math::Exp2Op>(op))
       return Flags::SFU;
+    if (isa<ttng::CLCTryCancelSyncOp>(op))
+      return Flags::CLC;
     if (isViewOp(op))
       return Flags::VIEW;
   }
@@ -60,7 +64,7 @@ Flags getNodeFlags(Node *node) {
 }
 
 size_t computeCost(Operation *op) {
-  if (auto mma = dyn_cast<nvidia_gpu::TCGen5MMAOp>(op)) {
+  if (auto mma = dyn_cast<nvidia_gpu::MMAv5OpInterface>(op)) {
     auto a = mma.getA();
     auto b = mma.getB();
     auto a_shape = a.getType().getShape();

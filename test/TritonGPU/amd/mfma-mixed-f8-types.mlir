@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm="arch=gfx950" | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm="gfx-arch=gfx950" | FileCheck %s
 
 // Test bf8_fp8 with non-transposed layout.
 // A=bf8, B=fp8 -> intrinsic mfma.bf8.fp8, operands passed as (A, B)

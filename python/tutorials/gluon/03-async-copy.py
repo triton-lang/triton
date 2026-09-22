@@ -50,7 +50,7 @@ def memcpy_1d_cpasync_kernel(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr):
     smem = gl.allocate_shared_memory(gl.float32, [XBLOCK], layout=smem_layout)
 
     # Issue the async copy.
-    cp.async_copy_global_to_shared(smem, in_ptr + offsets, mask=mask)
+    cp.async_load(smem, in_ptr + offsets, mask=mask)
     # `commit_group` puts all previously issued async copies into a group.
     cp.commit_group()
 
@@ -165,8 +165,8 @@ def elementwise_add_cpasync_kernel(  #
         mask = (xoffs < xnumel)[:, None] & (yoffs < ynumel)[None, :]
 
         # Issue loads for both A and B tiles.
-        cp.async_copy_global_to_shared(a_smem, a_ptrs + ystride_a * yoffs[None, :], mask=mask)
-        cp.async_copy_global_to_shared(b_smem, b_ptrs + ystride_b * yoffs[None, :], mask=mask)
+        cp.async_load(a_smem, a_ptrs + ystride_a * yoffs[None, :], mask=mask)
+        cp.async_load(b_smem, b_ptrs + ystride_b * yoffs[None, :], mask=mask)
         # Commit both loads to the same group.
         cp.commit_group()
         # Wait until both loads are complete!
@@ -261,10 +261,10 @@ def issue_loads(copy_idx, a_smem, b_smem, a_ptrs, ystride_a, b_ptrs, xmask, ynum
     # are fewer blocks to copy than `num_buffers-1`.
     yoffs = copy_idx * YBLOCK + y_idx
     mask = xmask & (yoffs < ynumel)[None, :]
-    cp.async_copy_global_to_shared(a_smem.index(copy_idx % num_buffers),  #
-                                   a_ptrs + ystride_a * yoffs[None, :], mask)
-    cp.async_copy_global_to_shared(b_smem.index(copy_idx % num_buffers),  #
-                                   b_ptrs + ystride_b * yoffs[None, :], mask)
+    cp.async_load(a_smem.index(copy_idx % num_buffers),  #
+                  a_ptrs + ystride_a * yoffs[None, :], mask)
+    cp.async_load(b_smem.index(copy_idx % num_buffers),  #
+                  b_ptrs + ystride_b * yoffs[None, :], mask)
     cp.commit_group()
     return copy_idx + 1
 

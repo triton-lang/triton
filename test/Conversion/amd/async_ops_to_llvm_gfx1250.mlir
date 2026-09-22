@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx1250 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 8, order = [1, 0]}>
@@ -310,10 +310,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK-NEXT: %[[OOB_LDS:.*]] = llvm.inttoptr %[[NEG1]] :
     // CHECK-NEXT: %[[LDS_PTR:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[OOB_LDS]]
     // CHECK-NEXT: rocdl.global.load.async.to.lds{{.*}} %{{.*}}, %[[LDS_PTR]],
-    // CHECK: llvm.cond_br
-    // CHECK: llvm.store
-    // CHECK-NEXT: llvm.br
+
+    // CHECK: %[[INV_MASK:.*]] = llvm.icmp "ne" %{{.*}}, %{{.*}} : i1
+    // CHECK: %[[OTHER_NEG1:.*]] = llvm.mlir.constant(2147483647 : i32)
+    // CHECK-NEXT: %[[OTHER_OOB_LDS:.*]] = llvm.inttoptr %[[OTHER_NEG1]] :
+    // CHECK-NEXT: %[[OTHER_LDS_PTR:.*]] = llvm.select %[[INV_MASK]], %{{.*}}, %[[OTHER_OOB_LDS]]
+    // CHECK: llvm.store %{{.*}}, %[[OTHER_LDS_PTR]]
     %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<4x32x!tt.ptr<f32>, #blocked> -> <4x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }
+
+// -----
+
+// Test async_copy_local_to_global with 16-bit data type.
+// On gfx1250, 16-bit stores are not directly supported, so they should be split into two 8-bit stores.
+// sizePerThread = [1] with f16 (16-bit) should generate two b8 stores per element.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {ttg.target = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 2048 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: async_copy_local_to_global_16bit_split
+  tt.func public @async_copy_local_to_global_16bit_split(%dst: tensor<128x!tt.ptr<f16>, #blocked>,
+                                                          %smem: !ttg.memdesc<128xf16, #shared, #smem, mutable>) {
+    // Each thread stores 1 element (16 bits), split into 2 x 8-bit stores
+    // CHECK-COUNT-2: llvm.amdgcn.global.store.async.from.lds.b8
+    // CHECK-NOT: llvm.amdgcn.global.store.async.from.lds
+    %0 = amdg.async_copy_local_to_global %smem, %dst : !ttg.memdesc<128xf16, #shared, #smem, mutable> -> tensor<128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----

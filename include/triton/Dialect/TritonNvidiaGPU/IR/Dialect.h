@@ -30,6 +30,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/Support/ErrorHandling.h"
 
 // TritonNvidiaGPU depends on Triton
@@ -37,6 +38,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/Types.h.inc"
@@ -57,6 +59,25 @@ LogicalResult verifyMMAv5Op(Operation *op);
 
 namespace mlir::triton::nvidia_gpu {
 
+struct PackedArithTypeInfo {
+  llvm::StringLiteral suffix;
+  unsigned lanes, registerBits;
+  char kind;
+
+  bool isFP4() const { return suffix == "e2m1x4"; }
+  unsigned storageLanes() const { return isFP4() ? lanes / 2 : lanes; }
+};
+
+struct PackedArithInstructionSpec {
+  const PackedArithTypeInfo *result;
+  SmallVector<const PackedArithTypeInfo *, 3> operands;
+  StringRef modifiers;
+  unsigned operandSuffixes;
+};
+
+PackedArithInstructionSpec getPackedArithInstructionSpec(PackedArithOp op);
+unsigned getPackedArithFp4Axis(PackedArithOp op);
+
 constexpr static char AttrTwoCTAsName[] = "ttng.two-ctas";
 
 inline bool getModuleTwoCTAs(ModuleOp mod) {
@@ -68,8 +89,15 @@ inline bool getModuleTwoCTAs(Operation *op) {
   return getModuleTwoCTAs(op->getParentOfType<ModuleOp>());
 }
 
+// Returns the required ordering of repeated TMEM scale blocks for one
+// tcgen05 scaled-MMA operand.
+TensorMemoryScalesBlockRepOrder getTensorMemoryScalesBlockRepOrder(
+    Operation *op, bool isA, ScaleDotElemType aType, ScaleDotElemType bType,
+    Type aScaleElemType, Type bScaleElemType);
+
 struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
   StringRef getName() const final { return "<TensorMemory>"; }
+  SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
 struct TMemAllocation {
@@ -117,7 +145,8 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
-uint32_t getTMemSubSliceOffset(gpu::MemDescType memDescType, int32_t nOffset);
+uint32_t getTMemSubSliceOffset(gpu::MemDescType memDescType, int32_t offset,
+                               int32_t dim);
 
 SmallVector<gpu::DistributedEncodingTrait>
 getTmemCompatibleLayouts(gpu::MemDescType memType, unsigned numWarps,
@@ -141,6 +170,20 @@ getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps);
 std::optional<LinearLayout>
 getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
                                 unsigned numWarps);
+
+SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs);
+
+// Compact encoding of a CTA multicast group for a given broadcast mask:
+// `fixedBits` selects the CTA-id bits that identify the group leader, and
+// `pattern` is the recipient bitset for leader CTA 0 before shifting to the
+// current group.
+struct TMAMulticastMaskEncoding {
+  uint32_t fixedBits;
+  uint32_t pattern;
+};
+
+TMAMulticastMaskEncoding getTMAMulticastMaskEncoding(int numCTAs,
+                                                     uint16_t broadcastBits);
 
 } // namespace mlir::triton::nvidia_gpu
 

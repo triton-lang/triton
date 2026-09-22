@@ -6,9 +6,13 @@
 #blocked2d_4 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 #blocked2d_8 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
 #blocked2d_16 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 4], order = [0, 1]}>
+#blocked2d_alt_8 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [8, 1], order = [0, 1]}>
+#blocked2d_alt_8_t = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 8], order = [1, 0]}>
 #blocked_tmem = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 2], warpsPerCTA = [4, 2], order = [0, 1]}>
 #shared_1d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared_bf16 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#shared_f32 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 32}>
 #bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
@@ -77,6 +81,40 @@ tt.func @large_tensor_computation(%arg0: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @local_load_store
+tt.func @local_load_store(%arg0: i32) {
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<16x128xbf16, #shared_bf16, #smem, mutable>
+  ttg.warp_specialize(%arg0, %alloc)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0({{.*}}) num_warps(1)
+  partition0(%arg1: i32, %arg2: !ttg.memdesc<16x128xbf16, #shared_bf16, #smem, mutable>) num_warps(4) {
+    // CHECK: ttg.local_load {{.*}} -> tensor<16x128xbf16, #{{.*}}>
+    %0 = ttg.local_load %arg2 : !ttg.memdesc<16x128xbf16, #shared_bf16, #smem, mutable> -> tensor<16x128xbf16, #blocked2d_4>
+    ttg.local_store %0, %arg2 : tensor<16x128xbf16, #blocked2d_4> -> !ttg.memdesc<16x128xbf16, #shared_bf16, #smem, mutable>
+    ttg.warp_return
+  } : (i32, !ttg.memdesc<16x128xbf16, #shared_bf16, #smem, mutable>) -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @local_load_tmem_alloc
+tt.func @local_load_tmem_alloc(%arg0: i32) {
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<64x64xf32, #shared_f32, #smem, mutable>
+  ttg.warp_specialize(%arg0, %alloc)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0({{.*}}) num_warps(4)
+  partition0(%arg1: i32, %arg2: !ttg.memdesc<64x64xf32, #shared_f32, #smem, mutable>) num_warps(8) {
+    %0 = ttg.local_load %arg2 : !ttg.memdesc<64x64xf32, #shared_f32, #smem, mutable> -> tensor<64x64xf32, #blocked_tmem>
+    %1 = ttng.tmem_alloc %0 : (tensor<64x64xf32, #blocked_tmem>) -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory>
+    "use"(%1) : (!ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory>) -> ()
+    ttg.warp_return
+  } : (i32, !ttg.memdesc<64x64xf32, #shared_f32, #smem, mutable>) -> ()
+  tt.return
+}
+
 // CHECK-LABEL: @medium_tensor_computation
 tt.func @medium_tensor_computation(%arg0: i32) {
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
@@ -133,6 +171,23 @@ tt.func @register_use_heuristic() {
     %cst = arith.constant dense<0> : tensor<128x64xi32, #blocked2d_4>
     ttg.warp_return
   } : () -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @convert_layout_in_partition
+tt.func @convert_layout_in_partition(%arg0: i32) {
+  ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0({{.*}}) num_warps(1)
+  partition0(%arg1: i32) num_warps(8) {
+    %0 = tt.splat %arg1 : i32 -> tensor<128x2xi32, #blocked2d_8>
+    %1 = ttg.convert_layout %0 : tensor<128x2xi32, #blocked2d_8> -> tensor<128x2xi32, #blocked2d_alt_8>
+    %2 = tt.trans %1 {order = array<i32: 1, 0>} : tensor<128x2xi32, #blocked2d_alt_8> -> tensor<2x128xi32, #blocked2d_alt_8_t>
+    "use"(%2) : (tensor<2x128xi32, #blocked2d_alt_8_t>) -> ()
+    ttg.warp_return
+  } : (i32) -> ()
   tt.return
 }
 

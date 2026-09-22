@@ -44,9 +44,13 @@ _DLManagedTensor._fields_ = [
     ("deleter", _DLManagedTensorDeleter),
 ]
 
-_PyCapsule_New = ctypes.pythonapi.PyCapsule_New
-_PyCapsule_New.restype = ctypes.py_object
-_PyCapsule_New.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
+_PyCapsuleNew = ctypes.PYFUNCTYPE(
+    ctypes.py_object,
+    ctypes.c_void_p,
+    ctypes.c_char_p,
+    ctypes.c_void_p,
+)
+_PyCapsule_New = _PyCapsuleNew(("PyCapsule_New", ctypes.pythonapi))
 
 # Keep the ctypes-owned metadata alive until PyTorch drops the imported tensor.
 _DLPACK_STATE: dict[int, object] = {}

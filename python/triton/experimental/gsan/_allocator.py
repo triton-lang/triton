@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import functools
+import gc
+from enum import IntEnum
 from pathlib import Path
 from types import ModuleType
+from typing import Literal, overload
 
 from triton.runtime import driver as runtime_driver
 from triton.runtime.build import compile_module_from_file
 
 _THIS_DIR = Path(__file__).resolve().parent
 _GSAN_SOURCE_PATH = _THIS_DIR / "src" / "GSanAllocator.cc"
+
+
+class ShareableHandleType(IntEnum):
+    POSIX_FILE_DESCRIPTOR = 0x1
+    FABRIC = 0x8
 
 
 @functools.lru_cache()
@@ -40,6 +48,73 @@ def get_allocator():
     return CUDAPluggableAllocator(so_name, "gsanMalloc", "gsanFree")
 
 
+def configure(
+    *,
+    device_ranks: dict[int, int] | None = None,
+    num_devices: int | None = None,
+    rng_seed: int | None = None,
+    clock_buffer_size: int | None = None,
+    handle_type: ShareableHandleType | None = None,
+) -> None:
+    """Configures the process-local GSan state.
+
+    GSan keeps one allocator configuration per process. Call this before the
+    allocator initializes runtime state, or before calling :func:`freeze_config`.
+    Once frozen, later calls to :func:`configure` raise ``RuntimeError``.
+
+    Args:
+        device_ranks (dict[int, int], optional): Mapping from local CUDA device index to the
+            logical GSan device id. This enables gsan to be used with multi-node nvlink domains,
+            or simply processes with different CUDA_VISIBLE_DEVICES settings. Each value must be
+            unique and in ``[0, num_devices)``. If None, defaults to a 1:1 mapping from device
+            index to device id.
+        num_devices (int, optional): Total number of logical GSan devices in the topology. If
+            None, defaults to the number of visible CUDA devices.
+        rng_seed (int, optional): Optional seed for GSan's stochastic read-clock sampling. Use this
+            to make sampling decisions reproducible across runs when debugging sanitizer behavior.
+            If omitted, GSan first checks ``TRITON_GSAN_SEED`` and otherwise generates a random
+            seed when the allocator runtime state is initialized.
+        clock_buffer_size (int, optional): When doing an atomic release operation, GSan uses a
+            circular buffer to record what memory accesses have been released. If the writing CTA
+            has done more release writes than there are circular buffer entries, then the atomic
+            flag cannot be read and you will need to increase the buffer size. If omitted, GSan
+            first checks ``TRITON_GSAN_CLOCK_BUFFER_SIZE`` and otherwise defaults to 1024.
+        handle_type (ShareableHandleType, optional): Type of shareable handle requested for GSan
+            allocations. If omitted, GSan uses fabric handles when ``PYTORCH_CUDA_ALLOC_CONF``
+            contains ``fabric_handles:True`` and otherwise uses POSIX file descriptors.
+    """
+    _load_gsan_module().configure(device_ranks, num_devices, rng_seed, clock_buffer_size, handle_type)
+
+
+def freeze_config() -> None:
+    """Prevents later `configure(...)` calls from changing allocator configuration."""
+    _load_gsan_module().freeze_config()
+
+
+def has_live_allocations() -> bool:
+    """Return whether the GSan allocation reserve has outstanding allocations.
+
+    This includes memory retained by caching allocators. The query does not
+    initialize GSan runtime state or freeze its configuration.
+    """
+    return _load_gsan_module().has_live_allocations()
+
+
+def reset() -> None:
+    """Reset GSan runtime state after all GSan allocations have been released.
+
+    Runs garbage collection if allocations remain. If any are still live,
+    raises ``AssertionError`` without resetting the runtime or stream clocks.
+    """
+    from . import _stream_sync
+
+    module = _load_gsan_module()
+    if module.has_live_allocations():
+        gc.collect()
+    module.reset()
+    _stream_sync._reset_caches()
+
+
 def create_mem_pool():
     from torch.cuda.memory import MemPool
     return MemPool(get_allocator().allocator())
@@ -67,6 +142,139 @@ def get_global_state_pointer() -> int:
     return _load_gsan_module().get_global_state_pointer()
 
 
+def get_device_rank(device: int) -> int:
+    return _load_gsan_module().get_device_rank(device)
+
+
 def get_runtime_state_layout(device: int) -> dict[str, int]:
     module = _load_gsan_module()
     return module.get_runtime_state_layout(device)
+
+
+@overload
+def export_allocation_handles(
+    ptr: int,
+    handle_type: Literal[ShareableHandleType.POSIX_FILE_DESCRIPTOR],
+) -> tuple[int, int, int]:
+    ...
+
+
+@overload
+def export_allocation_handles(
+    ptr: int,
+    handle_type: Literal[ShareableHandleType.FABRIC],
+) -> tuple[bytes, bytes, int]:
+    ...
+
+
+def export_allocation_handles(ptr, handle_type):
+    module = _load_gsan_module()
+    return module.export_allocation_handles(ptr, handle_type)
+
+
+def export_allocation_memhandle_regions(ptr: int) -> tuple[int, int, int, int]:
+    module = _load_gsan_module()
+    return module.export_allocation_memhandle_regions(ptr)
+
+
+@overload
+def import_allocation_handles(
+    real_handle: int,
+    shadow_handle: int,
+    alloc_size: int,
+    device: int,
+    handle_type: Literal[ShareableHandleType.POSIX_FILE_DESCRIPTOR],
+) -> int:
+    ...
+
+
+@overload
+def import_allocation_handles(
+    real_handle: bytes,
+    shadow_handle: bytes,
+    alloc_size: int,
+    device: int,
+    handle_type: Literal[ShareableHandleType.FABRIC],
+) -> int:
+    ...
+
+
+def import_allocation_handles(
+    real_handle,
+    shadow_handle,
+    alloc_size,
+    device,
+    handle_type,
+):
+    module = _load_gsan_module()
+    return module.import_allocation_handles(
+        real_handle,
+        shadow_handle,
+        alloc_size,
+        device,
+        handle_type,
+    )
+
+
+@overload
+def export_runtime_state_handle(
+    device: int,
+    handle_type: Literal[ShareableHandleType.POSIX_FILE_DESCRIPTOR],
+) -> tuple[int, int]:
+    ...
+
+
+@overload
+def export_runtime_state_handle(
+    device: int,
+    handle_type: Literal[ShareableHandleType.FABRIC],
+) -> tuple[bytes, int]:
+    ...
+
+
+def export_runtime_state_handle(device, handle_type):
+    module = _load_gsan_module()
+    return module.export_runtime_state_handle(device, handle_type)
+
+
+@overload
+def import_runtime_state_handle(
+    handle: int,
+    alloc_size: int,
+    peer_device: int,
+    device: int,
+    handle_type: Literal[ShareableHandleType.POSIX_FILE_DESCRIPTOR],
+) -> None:
+    ...
+
+
+@overload
+def import_runtime_state_handle(
+    handle: bytes,
+    alloc_size: int,
+    peer_device: int,
+    device: int,
+    handle_type: Literal[ShareableHandleType.FABRIC],
+) -> None:
+    ...
+
+
+def import_runtime_state_handle(
+    handle,
+    alloc_size,
+    peer_device,
+    device,
+    handle_type,
+):
+    module = _load_gsan_module()
+    module.import_runtime_state_handle(
+        handle,
+        alloc_size,
+        peer_device,
+        device,
+        handle_type,
+    )
+
+
+def free_allocation(ptr: int, device: int) -> None:
+    gsan_free(ptr, device, size=0, stream=0)

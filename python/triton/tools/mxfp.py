@@ -54,26 +54,10 @@ class MXFP4Tensor:
         E = ((data >> 1) & 0x3).type(dtype)
         M = (data & 0x1).type(dtype)
 
-        # The MXF4 E2M1 spec defines 0bS000 as zero
-        value = torch.zeros_like(S)
-        is_zero = (E == 0) & (M == 0)
-        non_zero_mask = ~is_zero
-        if non_zero_mask.any():
-            S_nz = S[non_zero_mask]
-            E_nz = E[non_zero_mask]
-            M_nz = M[non_zero_mask]
-
-            sign = torch.pow(-1, S_nz)
-            # Normal and subnormal handling for the exponent and mantissa
-            exponent = torch.where(E_nz == 0, E_nz, E_nz - 1)
-            mantissa = torch.where(E_nz == 0, M_nz * 0.5, 1.0 + M_nz * 0.5)
-            value_nz = sign * torch.pow(2, exponent) * mantissa
-
-            value[non_zero_mask] = value_nz
-
-        # For zeros, the values must remain zero with the correct sign
-        value[is_zero & (S == 1)] *= -1
-        return value.type(torch.float32)
+        is_subnormal = E == 0
+        exponent = torch.where(is_subnormal, E, E - 1)
+        mantissa = torch.where(is_subnormal, M * 0.5, 1.0 + M * 0.5)
+        return (1.0 - 2.0 * S) * torch.pow(2.0, exponent) * mantissa
 
     def _from_float(self, values):
         """
@@ -230,6 +214,13 @@ class MXFP4Tensor:
         return data.type(torch.uint8)
 
 
+def fp8e8m0_to_float32(scale):
+    """Decode raw E8M0 scale bytes as float32."""
+    scale = scale.view(torch.uint8)
+    bits = (scale.to(torch.int32) << 23).clamp_min(0x00400000)
+    return bits.masked_fill(scale == 255, 0x7FC00000).view(torch.float32)
+
+
 class MXScaleTensor:
 
     def __init__(self, data=None, size=None, device=None):
@@ -268,14 +259,7 @@ class MXScaleTensor:
 
     def to(self, dtype):
         assert dtype == torch.float32, "Currently only float32 is supported for f8e8m0 to float conversion"
-        data = self.data.type(dtype)
-        is_nan = (data == 255)
-        e_biased = data.clone()
-        e_biased[is_nan] = 0
-        e = e_biased - 127
-        value = torch.pow(2.0, e)
-        value[is_nan] = torch.nan
-        return value.type(dtype)
+        return fp8e8m0_to_float32(self.data)
 
     def _from_float(self, values):
         """
@@ -286,16 +270,10 @@ class MXScaleTensor:
         Parameters:
         - values: A torch tensor of float32 numbers to convert to E8M0 format.
         """
-        result = torch.empty_like(values, dtype=torch.uint8, device=self.device)
-
         is_invalid = torch.isnan(values) | torch.isinf(values) | (values <= 0)
-        result[is_invalid] = 255
-
-        valid_values = values[~is_invalid]
+        valid_values = torch.where(is_invalid, torch.ones_like(values), values)
         e = torch.floor(torch.log2(valid_values))
         e_biased = e + 127
         e_biased_int = e_biased.type(torch.int32)
         e_biased_clamped = torch.clamp(e_biased_int, 0, 254)
-        result[~is_invalid] = e_biased_clamped.type(torch.uint8)
-
-        return result
+        return torch.where(is_invalid, 255, e_biased_clamped.type(torch.uint8))

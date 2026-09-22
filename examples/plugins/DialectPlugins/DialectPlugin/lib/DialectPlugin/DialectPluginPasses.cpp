@@ -93,7 +93,10 @@ struct ConvertPluginGPUToLLVMPass
     mlir::triton::plugin::populatePluginGPUOpPatterns(typeConverter, patterns,
                                                       tritonTargetInfo, 1);
     auto convTarget = PluginLLVMConversionTarget(*context);
-    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+    ConversionConfig config;
+    config.allowPatternRollback = false;
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns),
+                                      config)))
       return signalPassFailure();
   }
 };

@@ -40,6 +40,11 @@ def TritonGPUAllocateWarpGroups : Pass<"tritongpu-allocate-warp-groups", "mlir::
     the total number of needed warps, then attaches the range of warp IDs to
     each warpgroup function.
   }];
+
+  let options = [
+    Option<"instrumented", "instrumented", "bool", /*default*/"false",
+           "whether later instrumentation will insert assert-like ops">
+  ];
 }
 
 def CanonicalizeLLVMIR : Pass<"canonicalize-llvm-ir", "mlir::LLVM::LLVMFuncOp"> {

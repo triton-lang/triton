@@ -2,9 +2,9 @@
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -12,23 +12,79 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
-using mlir::triton::AMD::DppCtrl;
-using mlir::triton::AMD::ISAFamily;
+using mlir::triton::amdgpu::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 
+namespace mlir::LLVM::AMD {
+
+FailureOr<triton::CacheModifier> getCacheModifier(Attribute cachePolicy) {
+  if (!cachePolicy)
+    return triton::CacheModifier::NONE;
+  auto policy = dyn_cast<triton::CachePolicyAttr>(cachePolicy);
+  if (!policy)
+    return failure();
+  return policy.getCacheModifier();
+}
+
 namespace {
+
 enum class ShflKind : uint32_t {
   bfly = 0,
   up = 1,
-  down = 2,
-  idx = 3,
+  idx = 2,
 };
-} // namespace
 
-namespace mlir::LLVM::AMD {
-static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
-                               ISAFamily isaFamily, Value val, Value i,
-                               int strideInt, ShflKind mode, Value clamp) {
+Value emitDpp(Location loc, RewriterBase &rewriter, Value old, Value src,
+              DppCtrl dppCtrl, uint32_t rowMask = 0xf, uint32_t bankMask = 0xf,
+              bool boundCtrl = true) {
+  return ROCDL::DPPUpdateOp::create(
+      rewriter, loc, src.getType(), old, src,
+      rewriter.getI32IntegerAttr(static_cast<uint32_t>(dppCtrl)),
+      rewriter.getI32IntegerAttr(rowMask), rewriter.getI32IntegerAttr(bankMask),
+      rewriter.getBoolAttr(boundCtrl));
+}
+
+Value emitPermlaneX16Xor(Location loc, RewriterBase &rewriter, Value val,
+                         uint32_t rowMask) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // PermlaneX16 reads the opposite 16-lane half of a 32-lane wave. It uses a
+  // 16-nibble selector to choose the source lane within that half.
+  // We use it to perform a shuffleXor with mask `rowMask ^ 16`.
+  assert(rowMask < 16 && "Expected a cross-row shuffleXor");
+  auto buildSelectorMask = [&](unsigned startLane) {
+    uint32_t sel = 0;
+    for (unsigned lane = 0; lane < 8; ++lane)
+      sel |= ((startLane + lane) ^ rowMask) << (lane * 4);
+    return sel;
+  };
+  Value loSel = b.i32_val(buildSelectorMask(0));
+  Value hiSel = b.i32_val(buildSelectorMask(8));
+  return ROCDL::PermlaneX16Op::create(rewriter, loc, val.getType(), val, val,
+                                      loSel, hiSel, true, false);
+}
+
+Value emitPermlaneSwapXor(Location loc, RewriterBase &rewriter, Value val,
+                          uint32_t laneMask) {
+  assert((laneMask == 16 || laneMask == 32) && "Expected a power of 2 mask");
+  assert(val.getType().isInteger(32) && "permlane_swap operates on i32 values");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MLIRContext *ctx = rewriter.getContext();
+  const char *intrinsic = laneMask == 32 ? "llvm.amdgcn.permlane32.swap"
+                                         : "llvm.amdgcn.permlane16.swap";
+  Type retTy = struct_ty({i32_ty, i32_ty});
+  Value f = b.false_val();
+  Value perm = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, retTy,
+                                               ValueRange{val, val, f, f})
+                   ->getResult(0);
+  Value v0 = b.extract_val(i32_ty, perm, 0);
+  Value v1 = b.extract_val(i32_ty, perm, 1);
+  Value isOriginalVal = b.icmp_eq(v0, val);
+  return b.select(isOriginalVal, v1, v0);
+}
+
+Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
+                        ISAFamily isaFamily, Value val, Value i, int strideInt,
+                        ShflKind mode, Value clamp) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
@@ -82,104 +138,89 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
   };
 
   switch (mode) {
-  case ShflKind::bfly:
-    if (strideInt > 16 || (strideInt & (strideInt - 1)) != 0) {
-      // Non-power-of-2 masks or strides > 16 cannot use DPP or ds_swizzle.
-      // Fall back to ds_bpermute with an XOR lane index.
-      Value lineId = b.xor_(laneId, b.i32_val(strideInt));
-      return bpermute(lineId);
-    } else if (strideInt == 16) {
-      if (isRDNA(isaFamily)) {
-        // Lane i in the upper 16 lanes reads the value from lane i in the lower
-        // 16 lanes and vice versa.
-        Value select_lo = b.i32_val(0x76543210);
-        Value select_hi = b.i32_val(0xfedcba98);
-        return ROCDL::PermlaneX16Op::create(rewriter, loc, valType, val, val,
-                                            select_lo, select_hi, true, false);
-      } else {
-        Value offset = b.i32_val(0x401F);
-        return ROCDL::DsSwizzleOp::create(rewriter, loc, valType, val, offset);
+  case ShflKind::bfly: {
+    // We have the following tools to decompose shuffleXor into DPP primitives.
+    // On CDNA:
+    //  - xor by 15  : reflect the lanes within each group of 16 lanes,
+    //  - xor by 8   : right rotate by 8 within each group of 16 lanes,
+    //  - xor by 7   : reflect the lanes within each group of 8 lanes,
+    //  - xor by 1-3 : perform a permutation within each group of 4 lanes.
+    // On RDNA:
+    //  - xor by 1-15 : row_xmask does exactly this.
+    //
+    // On RDNA, we also have permlanex16 which can perform xor by 16-31.
+    // On CDNA, one can see that any shuffleXor with `mask` in [1, 15] can
+    // be implemented using at most 2 DPP instructions by mapping the upper bits
+    // of `mask` to the `xor by 7` and `xor by 8` instructions.
+    uint32_t mask = strideInt;
+    if (mask == 0)
+      return val;
+    assert(mask < iWarpSize &&
+           "shuffle_xor expects a mask within the wave size");
+
+    auto makeDppCtrl = [](DppCtrl base, uint32_t arg) {
+      return static_cast<DppCtrl>(llvm::to_underlying(base) + arg);
+    };
+    auto makeQuadPermCtrl = [](uint32_t quadMask) {
+      DppCtrl ctrl = DppCtrl::QUAD_PERM_FIRST;
+      uint32_t ctrlBits = llvm::to_underlying(ctrl);
+      for (unsigned lane = 0; lane < 4; ++lane)
+        ctrlBits |= (lane ^ quadMask) << (lane * 2);
+      return static_cast<DppCtrl>(ctrlBits);
+    };
+    bool usePermlaneSwap = isaFamily == ISAFamily::CDNA4 && (mask & 0x30);
+
+    if (triton::amdgpu::isRDNA(isaFamily) || isaFamily == ISAFamily::GFX1250) {
+      if (mask < 16)
+        return emitDpp(loc, rewriter, val, val,
+                       makeDppCtrl(DppCtrl::ROW_XMASK0, mask));
+      else if (mask < 32)
+        return emitPermlaneX16Xor(loc, rewriter, val, mask & 0xf);
+    } else if ((triton::amdgpu::isCDNA(isaFamily) ||
+                isaFamily == ISAFamily::GCN5_1) &&
+               (mask < 16 || usePermlaneSwap)) {
+      Value result = val;
+      uint32_t highBitsDppBasis = 0;
+
+      if (mask & 4)
+        highBitsDppBasis ^= 7;
+      if (mask & 8)
+        highBitsDppBasis ^= 8;
+
+      uint32_t quadMask = (mask & 0xf) ^ highBitsDppBasis;
+
+      if (highBitsDppBasis) {
+        DppCtrl highBitsDppCtrl;
+        switch (highBitsDppBasis) {
+        case 0x7:
+          highBitsDppCtrl = DppCtrl::ROW_HALF_MIRROR;
+          break;
+        case 0x8:
+          highBitsDppCtrl = makeDppCtrl(DppCtrl::ROW_ROR0, 8);
+          break;
+        case 0xf:
+          highBitsDppCtrl = DppCtrl::ROW_MIRROR;
+          break;
+        }
+        result = emitDpp(loc, rewriter, result, result, highBitsDppCtrl);
       }
+
+      if (quadMask) {
+        result =
+            emitDpp(loc, rewriter, result, result, makeQuadPermCtrl(quadMask));
+      }
+
+      if (usePermlaneSwap) {
+        if (mask & 16)
+          result = emitPermlaneSwapXor(loc, rewriter, result, 16);
+        if (mask & 32)
+          result = emitPermlaneSwapXor(loc, rewriter, result, 32);
+      }
+      return result;
     } else {
-      if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
-                               ISAFamily::CDNA4, ISAFamily::RDNA3,
-                               ISAFamily::RDNA4, ISAFamily::GFX1250},
-                              isaFamily)) {
-        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3/RDNA4/GFX1250 right
-        // now, so we fallback to ds_swizzle for other architectures.
-        //
-        // This map facilates the butterfly shuffle pattern for a stride less
-        // than 16. The pattern stride is the key of the map.
-        DenseMap<short, unsigned int> masks{
-            {16, 0x401F}, {8, 0x201F}, {4, 0x101F}, {2, 0x081F}, {1, 0x041F}};
-        Value offset = b.i32_val(masks[strideInt]);
-        return ROCDL::DsSwizzleOp::create(rewriter, loc, valType, val, offset);
-      }
-
-      auto createDppOpWithoutBoundCtrl = [&](Value &old, Value &src,
-                                             uint32_t dppCtrl, uint32_t rowMask,
-                                             uint32_t bankMask) {
-        return ROCDL::DPPUpdateOp::create(rewriter, loc, valType, old, src,
-                                          rewriter.getI32IntegerAttr(dppCtrl),
-                                          rewriter.getI32IntegerAttr(rowMask),
-                                          rewriter.getI32IntegerAttr(bankMask),
-                                          rewriter.getBoolAttr(false));
-      };
-
-      const int allRows = 0xf;
-      const int allBanks = 0xf;
-
-      switch (strideInt) {
-      case 1: {
-        // quad_perm: 1, 0, 3, 2
-        uint32_t dppCtrl = static_cast<uint32_t>(DppCtrl::QUAD_PERM_FIRST);
-        std::array<uint32_t, 4> mask = {1, 0, 3, 2};
-        for (int i = 0; i < mask.size(); i++) {
-          dppCtrl |= mask[i] << (i * 2);
-        }
-        return createDppOpWithoutBoundCtrl(val, val, dppCtrl, allRows,
-                                           allBanks);
-      }
-      case 2: {
-        // quad_perm: 2, 3, 0, 1
-        uint32_t dppCtrl = static_cast<uint32_t>(DppCtrl::QUAD_PERM_FIRST);
-        std::array<uint32_t, 4> mask = {2, 3, 0, 1};
-        for (int i = 0; i < mask.size(); i++) {
-          dppCtrl |= mask[i] << (i * 2);
-        }
-        return createDppOpWithoutBoundCtrl(val, val, dppCtrl, allRows,
-                                           allBanks);
-      }
-      case 4: {
-        // row_shr:4 bank_mask: 0xa
-        auto ret = createDppOpWithoutBoundCtrl(
-                       val, val, 4 + static_cast<uint32_t>(DppCtrl::ROW_SHR0),
-                       allRows, 0xa)
-                       .getRes();
-
-        // row_shl:4 bank_mask: 0x5
-        return createDppOpWithoutBoundCtrl(
-            ret, val, 4 + static_cast<uint32_t>(DppCtrl::ROW_SHL0), allRows,
-            0x5);
-      }
-      case 8: {
-        // row_shr:8 bank_mask: 0xc
-        auto ret = createDppOpWithoutBoundCtrl(
-                       val, val, 8 + static_cast<uint32_t>(DppCtrl::ROW_SHR0),
-                       allRows, 0xc)
-                       .getRes();
-
-        // row_shl:8 bank_mask: 0x3
-        return createDppOpWithoutBoundCtrl(
-            ret, val, 8 + static_cast<uint32_t>(DppCtrl::ROW_SHL0), allRows,
-            0x3);
-      }
-      default:
-        assert(false &&
-               "bfly shfl with stride >= 16 should not be handled by dpp.");
-      }
+      return bpermute(b.xor_(laneId, b.i32_val(mask)));
     }
-    break;
+  }
   case ShflKind::up: {
     Value mask = b.icmp_slt(laneId, i);
     Value delta = b.sub(laneId, i);
@@ -195,9 +236,9 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
   return Value();
 }
 
-static Value shuffleCommon(Location loc, RewriterBase &rewriter,
-                           ISAFamily isaFamily, Value val, Value i,
-                           int strideInt, ShflKind mode, Value clamp) {
+Value shuffleCommon(Location loc, RewriterBase &rewriter, ISAFamily isaFamily,
+                    Value val, Value i, int strideInt, ShflKind mode,
+                    Value clamp) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // To shuffle pointers, convert them to i64.
   Type valTy = val.getType();
@@ -209,6 +250,8 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter,
     result = b.inttoptr(valTy, result);
   return result;
 }
+
+} // namespace
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  ISAFamily isaFamily) {
@@ -356,8 +399,11 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 //   - Group 1: CTAs {2,3,6,7} (fixed bits = 0b010)
 // For CTA 5 (0b101): groupOffset = 0b101 & 0b010 = 0 => ctaMask = 0b00110011
 // For CTA 7 (0b111): groupOffset = 0b111 & 0b010 = 2 => ctaMask = 0b11001100
+// If the group does not fit into `maxMaskPopcount` mask bits it is split into
+// equally sized subgroups, see below.
 Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value groupId,
-                           const LinearLayout &regLayout) {
+                           const LinearLayout &regLayout,
+                           unsigned maxMaskPopcount) {
   TritonLLVMOpBuilder b(loc, rewriter);
 
   auto kBlock = StringAttr::get(rewriter.getContext(), "block");
@@ -368,48 +414,75 @@ Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value groupId,
     return Value();
   }
 
+  assert(maxMaskPopcount > 0 && "expected a non-zero multicast mask limit");
+
+  // A communication group spans 2^(number of free bits) CTAs, so we can only
+  // keep floor(log2(limit)) free bits. Dropping the highest free bits turns
+  // them into subgroup selectors.
+  // Example: freeVarMask = 0b1101 describes CTAs {0,1,4,5,8,9,12,13}; with a
+  // limit of 5 we keep bits 0 and 2 so bit 3 selects {0,1,4,5} or {8,9,12,13}.
+  int maxFreeBits = llvm::Log2_32(maxMaskPopcount);
+  int multicastFreeVarMask = freeVarMask;
+  while (llvm::popcount<uint32_t>(multicastFreeVarMask) > maxFreeBits)
+    multicastFreeVarMask ^= llvm::bit_floor<uint32_t>(multicastFreeVarMask);
+
+  if (multicastFreeVarMask != freeVarMask) {
+    unsigned numSharingCTAs = 1u << llvm::popcount<uint32_t>(freeVarMask);
+    unsigned numMulticastCTAs = 1u << maxFreeBits;
+    emitRemark(loc) << "Multicast group contains " << numSharingCTAs
+                    << " workgroups, exceeding the hardware limit of "
+                    << maxMaskPopcount << " set mask bits; splitting it into "
+                    << "subgroups of " << numMulticastCTAs
+                    << " workgroups. A cluster layout sharing data "
+                    << "among at most " << numMulticastCTAs
+                    << " workgroups may perform better.";
+  }
+
   // Construct the groupMask with 1s at all positions representing CTAs in the
-  // communication group. We start with 0b1 and iterate over free bits. For
-  // every free bit at position k, we copy the current pattern 2^k positions
+  // (sub)group. We start with 0b1 and iterate over the retained free bits. For
+  // every retained bit at position k, we copy the current pattern 2^k positions
   // higher.
-  // Example for freeVarMask = 0b101, x = non determined yet:
-  //   Initial:          groupMask = 0bxxxxxxx1 (positions {0})
-  //   Bit 0 (free):     groupMask = 0bxxxxxx11 (positions {0,1})
-  //   Bit 1 (non-free): groupMask = 0bxxxx0011 (positions {0,1})
-  //   Bit 2 (free):     groupMask = 0b00110011 (positions {0,1,4,5})
+  // Example for multicastFreeVarMask = 0b101, x = non determined yet:
+  //   Initial:              groupMask = 0bxxxxxxx1 (positions {0})
+  //   Bit 0 (retained):     groupMask = 0bxxxxxx11 (positions {0,1})
+  //   Bit 1 (not retained): groupMask = 0bxxxx0011 (positions {0,1})
+  //   Bit 2 (retained):     groupMask = 0b00110011 (positions {0,1,4,5})
   int groupMask = 1;
   for (int log2 = 0; log2 < regLayout.getInDimSizeLog2(kBlock); log2++) {
-    if (!(freeVarMask & (1 << log2)))
+    if (!(multicastFreeVarMask & (1 << log2)))
       continue;
     groupMask = groupMask | (groupMask << (1 << log2));
   }
-  // If all bits are set we broadcast to all CTAs so return the group mask.
-  if (freeVarMask == regLayout.getInDimSize(kBlock) - 1) {
+  // If all bits are retained we broadcast to all CTAs so return the group mask.
+  if (multicastFreeVarMask == regLayout.getInDimSize(kBlock) - 1) {
     return b.i32_val(groupMask);
   }
-  // The non-free bits set in the ctaId determine the group offset. For every
-  // non-free bit set at position k, we shift the groupMask by 2^k positions.
-  // This can be conviniently computed by masking the ctaId with the inverse
-  // of the freeVarMask.
-  // Example1: freeVarMask = 0b101
-  //   ~freeVarMask  = 0b010
-  //   shiftAmount   = 0b101 & 0b010 = 0b000 (no shift needed)
-  //   blockMask     = 0b110011 << 0 = 0b00110011
-  // Example2: freeVarMask = 0b101, ctaId = 0b111 (cta 7)
-  //   ~freeVarMask  = 0b010
-  //   shiftAmount   = 0b111 & 0b010 = 0b010 (shift by 2)
-  //   blockMask     = 0b110011 << 2 = 0b11001100
-  Value shiftAmount = b.and_(groupId, b.i32_val(~freeVarMask));
+  // The bits not retained (non-free bits plus subgroup selectors) set in the
+  // ctaId determine the group offset. For every such bit set at position k, we
+  // shift the groupMask by 2^k positions. This can be conveniently computed by
+  // masking the ctaId with the inverse of multicastFreeVarMask. Note that this
+  // never carries into a retained position because the shift amount and the
+  // groupMask cover disjoint bits.
+  // Example1: multicastFreeVarMask = 0b101
+  //   ~multicastFreeVarMask = 0b010
+  //   shiftAmount           = 0b101 & 0b010 = 0b000 (no shift needed)
+  //   blockMask             = 0b110011 << 0 = 0b00110011
+  // Example2: multicastFreeVarMask = 0b101, ctaId = 0b111 (cta 7)
+  //   ~multicastFreeVarMask = 0b010
+  //   shiftAmount           = 0b111 & 0b010 = 0b010 (shift by 2)
+  //   blockMask             = 0b110011 << 2 = 0b11001100
+  Value shiftAmount = b.and_(groupId, b.i32_val(~multicastFreeVarMask));
   Value ctaMask = b.shl(b.i32_val(groupMask), shiftAmount);
   return ctaMask;
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, Value multicastMask,
-             triton::CacheModifier cm, bool forceNoAliasAsyncLoads) {
-  return triton::amdgpu::MaskedLoadOp::create(rewriter, loc, elemTy, ptr, pred,
-                                              falseVal, multicastMask, cm,
-                                              forceNoAliasAsyncLoads)
+             triton::CacheModifier cm, bool isVolatile,
+             bool forceNoAliasAsyncLoads) {
+  return triton::amdgpu::MaskedLoadOp::create(
+             rewriter, loc, elemTy, ptr, pred, falseVal, multicastMask, cm,
+             isVolatile, forceNoAliasAsyncLoads)
       .getResult();
 }
 
@@ -552,6 +625,92 @@ static int32_t getCtrlBitsForCacheModifierOnRDNA3(triton::CacheModifier cm,
   return aux;
 }
 
+// Create the auxiliary/cache policy value for GFX12 family
+// ROCDL::RawPtrBufferLoad/StoreOp Vector Memory instructions (Flat, Global,
+// Scratch, and Buffer). These instructions have 2 control bits for scope and 3
+// control bits for temporal hint:
+// - SCOPE[1:0] System Cache level:
+//    0 CU  Coherent among all CU/WG threads in L1 cache
+//    1 SE  Coherent among all clients (threads) sharing a SE-cache(L2)
+//    2 DEV Coherent among all threads on the same device
+//    3 SYS Coherent in system
+// - TH[2:0] Temporal Hint for load:
+//    0 RT    regular temporal for both near and far caches
+//    1 NT    non-temporal (re-use not expected) for both near and far caches
+//    2 HT    High-priority temporal for both near and far caches
+//    3 LU    Last-use (non-temporal AND discard dirty if it hits)
+//    4 NT_RT non-temporal for near cache(s) and regular for far caches
+//    5 RT_NT regular for near cache(s) and non-temporal for far caches
+//    6 NT_HT non-temporal for near cache(s) and high-priority for far caches
+//    7       reserved
+// - TH[2:0] Temporal Hint for store:
+//    0 RT    regular temporal for both near and far caches
+//    1 NT    non-temporal (re-use not expected) for both near and far caches
+//    2 HT    High-priority temporal for both near and far caches
+//    3 WB    Same as "HT", but also overrides wr-rinse in far cache
+//    4 NT_RT non-temporal for near cache(s) and regular for far caches
+//    5 RT_NT regular for near cache(s) and non-temporal for far caches
+//    6 NT_HT non-temporal for near cache(s) and HT for far caches
+//    7 NT_WB non-temporal for near cache(s) and WB for far cache
+//
+// See detailed bit mapping of control bits of CPol enum
+// in llvm source code: llvm/lib/Target/AMDGPU/SIDefines.h
+//
+// Mapping between
+// -------+-----+-------+----+-
+// Op     | cm  | SCOPE | TH |
+// -------+-----+-------+----+-
+// Load   | .ca |  CU   | RT |
+//        | .cg |  DEV  | RT |
+//        | .cs |  CU   | NT |
+//        | .cv |  SYS  | LU | on gfx1250, this combination bypasses all caches
+// -------+-----+-------+----+-
+// Store  | .wb |  CU   | RT |
+//        | .cg |  DEV  | RT |
+//        | .cs |  CU   | NT |
+//        | .wt |  SYS  | RT | behavior for gfx12
+//        | .wt |  SYS  | WB | behavior for gfx1250, bypasses all caches
+// -------+-----+-------+----+-
+static int32_t getCtrlBitsForCacheModifierOn_GFX12(triton::CacheModifier cm,
+                                                   bool isLoad,
+                                                   bool cacheBypassAvailable) {
+  const int scopeShift = 3;
+  const int scopeCU = 0 << scopeShift;
+  const int scopeDev = 2 << scopeShift;
+  const int scopeSys = 3 << scopeShift;
+  const int THRegular = 0;
+  const int THNonTemp = 1;
+  const int THLastUse = 3;
+  const int THWriteBack = 3;
+  int aux = -1;
+  switch (cm) {
+  case triton::CacheModifier::CA:
+    aux = scopeCU | THRegular;
+    break;
+  case triton::CacheModifier::CG:
+    aux = scopeDev | THRegular;
+    break;
+  case triton::CacheModifier::CS:
+    aux = scopeCU | THNonTemp;
+    break;
+  case triton::CacheModifier::CV:
+    assert(isLoad);
+    aux = scopeSys | THLastUse;
+    break;
+  case triton::CacheModifier::WB:
+    assert(!isLoad);
+    aux = scopeCU | THRegular;
+    break;
+  case triton::CacheModifier::WT:
+    assert(!isLoad);
+    aux = scopeSys | (cacheBypassAvailable ? THWriteBack : THRegular);
+    break;
+  default:
+    aux = 0;
+  }
+  return aux;
+}
+
 static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
   return 0;
 }
@@ -567,11 +726,16 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
     triton::CacheModifier cm, bool isLoad,
     const mlir::triton::AMD::TargetInfo &targetInfo) {
   switch (targetInfo.getISAFamily()) {
-  case triton::AMD::ISAFamily::CDNA3:
-  case triton::AMD::ISAFamily::CDNA4:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
     return getCtrlBitsForCacheModifierOn_CDNA3_CDNA4(cm, isLoad);
-  case triton::AMD::ISAFamily::RDNA3:
+  case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
     return getCtrlBitsForCacheModifierOnRDNA3(cm, isLoad);
+  case ISAFamily::RDNA4:
+    return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ false);
+  case ISAFamily::GFX1250:
+    return getCtrlBitsForCacheModifierOn_GFX12(cm, isLoad, /*$ bypass*/ true);
   default:
     return getDefaultCtrlBitsForCacheModifier(cm);
   }
@@ -610,11 +774,8 @@ unsigned getContiguity(Value ptr, Value offset,
   // FIXME (Alex): this should not be needed anymore because it's done inside
   // getContiguity, but we have an order issues with LL, so we keep this
   // until the LL order issue is fixed
-  auto linearLayout = triton::gpu::toLinearLayout(tensorTy);
-  auto llAttr = triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(),
-                                                     std::move(linearLayout));
   auto order = triton::gpu::getOrder(tensorTy);
-  auto contigPerThread = llAttr.getContigPerThread();
+  auto contigPerThread = triton::gpu::getContigPerThread(tensorTy);
   assert(order[0] < contigPerThread.size() &&
          "Unexpected contigPerThread size");
   contiguity = std::min(contiguity, contigPerThread[order[0]]);
@@ -662,8 +823,7 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
 
 bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
                                       const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp,
-                                      unsigned vecSize) {
+                                      unsigned threadsPerWarp) {
   auto kReg = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   auto kOffset = StringAttr::get(ctx, "offset");
@@ -702,7 +862,7 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
     // Without scattering support, padding can only be inserted at warp
     // boundaries. This means minInterval must be a multiple of (vectorSize *
     // warpSize) which becomes vectorSize <= minInterval / warpSize.
-    if (!targetInfo.supportsDirectToLDSScattering())
+    if (!targetInfo.supportsDirectToLdsScatter())
       maxAllowedVecSize = paddedEnc.getMinInterval() / targetInfo.getWarpSize();
 
     vectorSize = std::min(vectorSize, maxAllowedVecSize);
@@ -716,12 +876,8 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   }
 
   // Following checks are specific to architectures not supporting scattering
-  if (targetInfo.supportsDirectToLDSScattering())
+  if (targetInfo.supportsDirectToLdsScatter())
     return true;
-
-  // Must support the full vector width; splitting would cause strided writes.
-  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth))
-    return false;
 
   // Compute the blocked -> shared linear layout to check preconditions
   LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
@@ -744,20 +900,47 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
-  if (vectorSize != contig) {
-    LDBG("Load vectorization ("
-         << vectorSize << ") and contiguity (" << contig
-         << ") do not match resulting in strided writes");
+  // The reg->shared layout can only write `contig` consecutive elements
+  // coalesced into LDS. A load narrower than `contig` would leave gaps between
+  // lanes and produce strided writes, so we cannot lower it here.
+  if (vectorSize < contig) {
+    LDBG("Load vectorization (" << vectorSize << ") smaller than contiguity ("
+                                << contig << ") resulting in strided writes");
+    return false;
+  }
+  // If the requested load is wider than what the layout can write coalesced,
+  // reduce it so that each load instruction writes exactly one coalesced chunk.
+  // The lowering then emits multiple (narrower) direct-to-LDS loads.
+  vectorSize = contig;
+
+  // The reduced width must still be a supported direct-to-LDS load width.
+  if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth)) {
+    LDBG("coalesced load width (" << vectorSize
+                                  << ") is not a supported direct-to-LDS load");
     return false;
   }
 
   if (!canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
-                                        targetInfo.getWarpSize(), vectorSize)) {
+                                        targetInfo.getWarpSize())) {
     LDBG("Does not write coalesced into LDS");
     return false;
   }
 
   return true;
+}
+
+// For a region iter arg of an scf.for, return the yield operand that feeds it
+// on the back-edge. Returns {} if the parent isn't scf.for or the arg is the
+// induction variable.
+static Value resolveLoopBackedge(BlockArgument bbArg) {
+  auto forOp = dyn_cast<scf::ForOp>(bbArg.getOwner()->getParentOp());
+  if (!forOp)
+    return {};
+  auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  int iterArgIdx = bbArg.getArgNumber() - forOp.getNumInductionVars();
+  if (iterArgIdx < 0 || iterArgIdx >= (int)yieldOp.getNumOperands())
+    return {};
+  return yieldOp.getOperand(iterArgIdx);
 }
 
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
@@ -778,6 +961,37 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
       }
     }
   }
+
+  // Cross-iteration: for each op in the forward slice (including dotOp itself)
+  // that is consumed by a scf.yield, resolve to the corresponding iter arg and
+  // check that iter arg's forward slice for a dot.
+  fwdSlices.insert(dotOp);
+  for (Operation *op : fwdSlices) {
+    for (Value result : op->getResults()) {
+      for (OpOperand &use : result.getUses()) {
+        auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner());
+        if (!yieldOp)
+          continue;
+        auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp());
+        if (!forOp)
+          continue;
+        BlockArgument nextIterArg =
+            forOp.getRegionIterArg(use.getOperandNumber());
+        SetVector<Operation *> argFwdSlices;
+        getForwardSlice(nextIterArg, &argFwdSlices, fwdOpt);
+        for (Operation *argOp : argFwdSlices) {
+          auto dOp = dyn_cast<tt::DotOpInterface>(argOp);
+          if (!dOp || dOp == dotOp)
+            continue;
+          Value dotOperand = (opIdx == 0) ? dOp.getA() : dOp.getB();
+          if (dotOperand == nextIterArg ||
+              (dotOperand.getDefiningOp() &&
+               argFwdSlices.contains(dotOperand.getDefiningOp())))
+            return true;
+        }
+      }
+    }
+  }
   return false;
 }
 
@@ -790,13 +1004,44 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   bwdOpt.filter = isInSameRegion;
   SetVector<Operation *> bwdSlices;
   Operation *opA = dotOp.getA().getDefiningOp();
-  if (!opA)
-    return false;
-  (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
-  if (llvm::find_if(bwdSlices, [](Operation *op) {
-        return isa<tt::DotOpInterface>(op);
-      }) != bwdSlices.end())
-    return true;
+  if (opA) {
+    (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
+    if (llvm::find_if(bwdSlices, [](Operation *op) {
+          return isa<tt::DotOpInterface>(op);
+        }) != bwdSlices.end())
+      return true;
+  }
+
+  // Cross-iteration: if operand A (or its backward slice) touches a block
+  // arg, resolve via the yield back-edge and check the backward slice of
+  // the yielded value for a dot (mirrors the intra-iteration check above).
+  SmallVector<BlockArgument, 4> bbArgs;
+  if (auto bbArg = dyn_cast<BlockArgument>(dotOp.getA())) {
+    bbArgs.push_back(bbArg);
+  } else if (opA) {
+    bwdSlices.insert(opA);
+    for (Operation *sliceOp : bwdSlices)
+      for (Value operand : sliceOp->getOperands())
+        if (auto bbArg = dyn_cast<BlockArgument>(operand))
+          bbArgs.push_back(bbArg);
+  }
+
+  for (BlockArgument bbArg : bbArgs) {
+    Value yieldVal = resolveLoopBackedge(bbArg);
+    if (!yieldVal)
+      continue;
+    Operation *yieldDef = yieldVal.getDefiningOp();
+    if (!yieldDef)
+      continue;
+    SetVector<Operation *> yieldBwdSlices;
+    (void)getBackwardSlice(yieldDef, &yieldBwdSlices, bwdOpt);
+    yieldBwdSlices.insert(yieldDef);
+    if (llvm::find_if(yieldBwdSlices, [&dotOp](Operation *op) {
+          return isa<tt::DotOpInterface>(op) && op != dotOp;
+        }) != yieldBwdSlices.end())
+      return true;
+  }
+
   return false;
 }
 
@@ -820,7 +1065,7 @@ Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
 
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
-                                    ISAFamily isaFamily, Value scale) {
+                                    ISAFamily isaFamily) {
   assert((isa<triton::gpu::Fp4ToFpOp, triton::amdgpu::ScaledUpcastFp4Op>(op)) &&
          "Expected Fp4ToFpOp or ScaledUpcastFp4Op");
   Location loc = op->getLoc();
@@ -871,25 +1116,8 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
     Value res_75 = ROCDL::CvtPkF32Fp8Op::create(
         rewriter, loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 1));
     SmallVector<Value> pkVals{res_20, res_64, res_31, res_75};
-    if (scale) {
-      // pack 2 values together to help llvm backend codegen
-      Value scaleF32 =
-          b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-      Type v2f32 = vec_ty(f32_ty, 2);
-      Value pkScale = b.undef(v2f32);
-      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(0));
-      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(1));
-      Type v2i32 = vec_ty(i32_ty, 2);
-      for (unsigned i = 0; i < 4; i++) {
-        Value pkScaled = b.fmul(pkScale, b.bitcast(pkVals[i], v2f32));
-        pkVals[i] = (b.bitcast(pkScaled, v2i32));
-      }
-    } else {
-      // bitcast to v2i32
-      for (unsigned i = 0; i < 4; i++) {
-        pkVals[i] = b.bitcast(pkVals[i], vec_ty(i32_ty, 2));
-      }
-    }
+    for (Value &value : pkVals)
+      value = b.bitcast(value, vec_ty(i32_ty, 2));
     Value e0 = b.extract_element(pkVals[0], b.i32_val(0));
     Value e1 = b.extract_element(pkVals[2], b.i32_val(0));
     Value e2 = b.extract_element(pkVals[0], b.i32_val(1));

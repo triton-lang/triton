@@ -80,8 +80,6 @@ struct ClipAsyncCopySizePerThread
   LogicalResult matchAndRewrite(AsyncCopyGlobalToLocalOp copyOp,
                                 PatternRewriter &rewriter) const override {
     Value src = copyOp.getSrc();
-    Value mask = copyOp.getMask();
-    Value other = copyOp.getOther();
     auto srcTy = cast<RankedTensorType>(src.getType());
     auto dstTy = cast<MemDescType>(copyOp.getResult().getType());
     auto blockedEnc = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
@@ -91,7 +89,6 @@ struct ClipAsyncCopySizePerThread
     auto sharedEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
     if (!sharedEnc)
       return failure();
-    auto sharedVec = sharedEnc.getVec();
 
     // obtain max contiguous copy size
     // Note this can be further optimized, as copyContigSize can be even
@@ -148,14 +145,11 @@ struct CoalesceCheapAsyncCopyGlobalToLocal
   LogicalResult matchAndRewrite(AsyncCopyGlobalToLocalOp copyOp,
                                 PatternRewriter &rewriter) const override {
     Value src = copyOp.getSrc();
-    Value mask = copyOp.getMask();
-    Value other = copyOp.getOther();
     RankedTensorType srcTy = cast<RankedTensorType>(src.getType());
     auto dstTy = cast<MemDescType>(copyOp.getResult().getType());
     int numWarps = triton::gpu::lookupNumWarps(copyOp);
     auto mod = copyOp->getParentOfType<ModuleOp>();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    int numCTAs = triton::gpu::getNumCTAs(dstTy.getEncoding());
     int64_t size = srcTy.getNumElements();
     // Assume the expensive copies are already coalesced.
     // Skip dtype smaller than 32 bits to avoid problems with contiguity.
@@ -163,7 +157,6 @@ struct CoalesceCheapAsyncCopyGlobalToLocal
         dstTy.getElementTypeBitWidth() < 32)
       return failure();
     auto shapePerCTA = triton::gpu::getShapePerCTA(dstTy);
-    auto cgaLayout = triton::gpu::getCGALayout(dstTy.getEncoding());
 
     auto newEnc = coalescedAsyncCopyMap[copyOp];
     if (newEnc == nullptr || newEnc == srcTy.getEncoding())
@@ -189,7 +182,6 @@ struct CoalesceAsyncCopyPass
       auto dstTy = cast<MemDescType>(copyOp.getResult().getType());
       int numWarps = triton::gpu::lookupNumWarps(copyOp);
       int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(m);
-      int numCTAs = triton::gpu::getNumCTAs(dstTy.getEncoding());
       auto cgaLayout = triton::gpu::getCGALayout(dstTy.getEncoding());
       auto shapePerCTA = triton::gpu::getShapePerCTA(dstTy);
       coalescedAsyncCopyMap[copyOp] =

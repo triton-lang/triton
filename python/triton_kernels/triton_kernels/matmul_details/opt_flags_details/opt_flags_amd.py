@@ -10,7 +10,7 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
     # block_n:
     n_cu = torch.cuda.get_device_properties(0).multi_processor_count
     if n is not None:
-        if n <= 128 and (n & (n - 1)) == 0:
+        if 0 < n <= 128 and (n & (n - 1)) == 0:
             block_n = n
         else:
             max_n = 64 if get_cdna_version() == 4 else 256
@@ -23,8 +23,11 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
     if get_rdna_version() in (3, 4) and block_m == 64:
         block_n = 256
 
-    # block_k needs to match the cacheline size (128B)
-    block_k = int(128 // min(lhs_width, rhs_width))
+    # Match a 128B cacheline, accounting for widened unscaled FP8 operands.
+    if precision_config.a_mx_scale is None and precision_config.b_mx_scale is None:
+        block_k = int(128 // max(lhs_width, rhs_width))
+    else:
+        block_k = int(128 // min(lhs_width, rhs_width))
 
     # TODO: block_k = 128 seems to work better for now.
     #       perhaps due to increased number of k loops to pipeline

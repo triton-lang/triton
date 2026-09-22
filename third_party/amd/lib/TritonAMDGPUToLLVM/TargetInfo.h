@@ -1,26 +1,32 @@
 #ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TARGETINFO_H_
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TARGETINFO_H_
 
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-#include "llvm/TargetParser/TargetParser.h"
-#include <string>
+#include "llvm/TargetParser/AMDGPUTargetParser.h"
+#include <optional>
 
 namespace mlir::triton::AMD {
+void registerTargetInfo();
+
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  explicit TargetInfo(std::string arch) : arch(std::move(arch)) {}
+  explicit TargetInfo(std::optional<StringRef> arch) : targetFeatures(arch) {}
 
   llvm::AMDGPU::IsaVersion getIsaVersion() const;
 
-  StringRef getArch() const { return arch; }
-  ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
+  StringRef getArch() const { return targetFeatures.getArch(); }
+  amdgpu::ISAFamily getISAFamily() const {
+    return targetFeatures.getISAFamily();
+  }
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
   int getWarpSize() const;
 
   int getSharedMemorySize() const;
+
+  int getSharedMemoryBanks() const override;
 
   size_t getSharedMemoryPartitionSize() const override;
 
@@ -33,33 +39,37 @@ public:
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
 
+  Value getGlobalTimer(RewriterBase &rewriter, Location loc) const override;
+
+  StringRef getAtomicSyncScope(MemSyncScope scope) const override;
+
+  Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Type valueTy, Value pred,
+                    MemSyncScope scope) const override;
+
+  void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Value value, Value pred, MemSyncScope scope) const override;
+
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
-  void clusterBarrier(Location loc, RewriterBase &rewriter) const override;
+  void clusterBarrier(Location loc, RewriterBase &rewriter,
+                      Operation *sourceOp) const override;
 
   void warpSync(Location loc, RewriterBase &rewriter) const override;
 
   void storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                    std::optional<Value> ctaId, Value val,
-                    Value pred) const override;
+                    Value ctaId, Value val, Value pred) const override;
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                    std::optional<Value> ctaId, Type elemTy, Value pred,
+                    Value ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;
 
-  // Describes the parameters of ds_read_tr for a particular data type
-  struct LDSTransLoadParams {
-    // Number of lanes that cooperate in the instruction
-    unsigned numLanesInShuffleGroup;
-    // Number of bits that each lane reads per issued instruction
-    unsigned instBitWidth;
-    // Number of elements that the instruction needs to be contiguous in LDS
-    unsigned tileSize;
-    // Whether B8 types require double contiguity (for certain architectures)
-    bool needsDoubleB8Contiguity;
-  };
+  // Describes the parameters of ds_read_tr for a particular data type.
+  using LDSTransLoadParams = amdgpu::TargetFeatures::LDSTransLoadParams;
   // Get the ds_read_tr parameters for the instruction that operates on the
-  // element granularty specified by bitWidth
-  std::optional<LDSTransLoadParams> queryLDSTransLoadParams(int bitWidth) const;
+  // element granularity specified by bitWidth. Returns candidates ordered from
+  // largest (most restrictive) to smallest, so the lowering can try the more
+  // profitable instruction first and fall back.
+  SmallVector<LDSTransLoadParams> queryLDSTransLoadParams(int bitWidth) const;
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
@@ -77,10 +87,8 @@ public:
                   ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                  triton::ReduceOp op,
-                  unsigned reduceLaneIdMask) const override;
-
-  std::string getMulhiFuncName(Type resultElementTy) const override;
+                  triton::ReduceOp op, unsigned reduceLaneIdMask,
+                  unsigned broadcastLaneIdMask) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,
@@ -101,10 +109,12 @@ public:
   bool supportBitwidth16Elementwise() const override;
   bool supportBitwidth32Elementwise() const override;
 
+  unsigned getReductionTreeArity(Operation *combinerOp) const override;
+
   // Returns true if the target supports per lane addresses into LDS for
   // direct-to-lds loads. Some architectures (e.g. GFX9) do not support
   // scattering and instead have to write warp coalesced into LDS
-  bool supportsDirectToLDSScattering() const;
+  bool supportsDirectToLdsScatter() const;
 
   // Some architectures (GFX9) require alias information on direct-to-lds loads
   // and loads from LDS so LLVM does not add conservative waits between those
@@ -115,7 +125,12 @@ public:
   bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const;
   bool supportsBufferLoadToLocal() const;
 
+  // Whether this target uses asyncmark/wait_asyncmark intrinsics for
+  // async memory ops synchronization instead of waitcnt-based intrinsics waits.
+  bool useAsyncMarks() const;
+
   bool supportsMultiCTALaunch() const;
+  unsigned getMaxMulticastMaskPopcount() const;
   bool supportsTDM() const;
   bool supportsClusterLoadBitWidth(int biwWidth) const;
 
@@ -129,6 +144,7 @@ public:
   // type restrictions for BUFFER_ATOMIC_ADD_{F32,F64} and
   // BUFFER_ATOMIC_PK_ADD_{F16,BF16}:
   //   - CDNA3 (gfx942): no BUFFER_ATOMIC_PK_ADD_BF16
+  //   - RDNA3: BUFFER_ATOMIC_ADD_F32 only
   //   - RDNA4: no BUFFER_ATOMIC_ADD_F64
   //   - CDNA4, GFX1250: all float types supported (GFX1250 adds PK_ADD_BF16)
   bool supportsBufferAtomicFadd(mlir::Type elementType) const;
@@ -141,16 +157,23 @@ public:
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
   bool supportsHwScaledUpcast() const;
+  bool supportsHwScaledDowncast() const;
 
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;
+
+  // Returns the hardware-specific tiles for shared memory loads and stores.
+  // The returned pair is in the format {LoadTile, StoreTile}.
+  std::pair<mlir::triton::gpu::LocalMemOpTile,
+            mlir::triton::gpu::LocalMemOpTile>
+  getSharedLdStTiles(int32_t vecBitwidth) const override;
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   ArrayRef<bool> isSigned, RewriterBase &rewriter,
                   bool useStdErr) const;
 
-  std::string arch;
+  amdgpu::TargetFeatures targetFeatures;
 };
 } // namespace mlir::triton::AMD
 

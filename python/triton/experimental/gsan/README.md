@@ -1,4 +1,4 @@
-# *GSan \- Concurrency Sanitizer for Global Memory**
+# **GSan \- Concurrency Sanitizer for Global Memory**
 
 # **1\. Introduction**
 

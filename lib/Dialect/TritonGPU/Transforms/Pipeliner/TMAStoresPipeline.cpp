@@ -16,14 +16,17 @@ struct TMAStore {
   mlir::TypedValue<RankedTensorType> src;
 };
 
-static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
+static SmallVector<TMAStore> getTMAStores(LoopLikeOpInterface loop) {
   SmallVector<TMAStore> tmaStores;
 
-  forOp.getBody()->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
+  assert((isa<scf::ForOp, scf::WhileOp>(loop)) &&
+         "expected a For or While loop");
+  auto body = &loop.getLoopRegions().back()->front();
+  body->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
     if (auto storeOp = dyn_cast<tt::DescriptorStoreLikeOpInterface>(op)) {
       tmaStores.push_back({storeOp, storeOp.getDesc(), storeOp.getSrc()});
       // Don't walk into nested loops.
-    } else if (isa<scf::ForOp>(op)) {
+    } else if (isa<scf::ForOp, scf::WhileOp>(op)) {
       return WalkResult::skip();
     }
     return WalkResult::advance();
@@ -32,8 +35,27 @@ static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
   return tmaStores;
 }
 
-static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
-  OpBuilder builder(forOp);
+static bool hasAcquireOrReleaseSemantic(tt::MemSemantic sem) {
+  return sem != tt::MemSemantic::RELAXED;
+}
+
+static bool hasAcquireOrReleaseOp(LoopLikeOpInterface loop) {
+  bool hasAcquireOrRelease = false;
+  loop->walk([&](Operation *op) {
+    if (auto atomic = dyn_cast<tt::AtomicOpInterface>(op)) {
+      hasAcquireOrRelease =
+          hasAcquireOrReleaseSemantic(atomic.getMemSemantic());
+    } else if (auto atomicPoll = dyn_cast<tt::AtomicPollOp>(op)) {
+      hasAcquireOrRelease = hasAcquireOrReleaseSemantic(atomicPoll.getSem());
+    }
+    return hasAcquireOrRelease ? WalkResult::interrupt()
+                               : WalkResult::advance();
+  });
+  return hasAcquireOrRelease;
+}
+
+static Value createAlloc(LoopLikeOpInterface loop, const TMAStore &store) {
+  OpBuilder builder(loop);
   RankedTensorType ty = store.src.getType();
   auto encoding =
       triton::nvidia_gpu::getEncodingFromDescriptor(store.op, ty, store.desc);
@@ -47,15 +69,13 @@ static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
   return alloc;
 }
 
-static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
-                               Value alloc) {
+static void createTMAAsyncCopy(const TMAStore &store, Value alloc) {
   OpBuilder builder(store.op);
   Location loc = store.op->getLoc();
-  RankedTensorType ty = store.src.getType();
 
-  // Put wait before the local_store make the store truly async. We know
-  // that we are the only user of the CopyLocalToGlobal.
-  ttng::TMAStoreWaitOp::create(builder, loc, 0);
+  // Put wait before the local_store to make the store truly async. We only
+  // need the TMA read from the allocation to complete before reusing it.
+  ttng::TMAStoreWaitOp::create(builder, loc, 0, /*read_only=*/true);
   ttg::LocalStoreOp::create(builder, loc, store.src, alloc);
   ttng::FenceAsyncSharedOp::create(builder, loc, false);
   auto desc = store.desc;
@@ -67,22 +87,26 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
                                    reduceOp.getIndices(), alloc);
   } else {
     auto scatterOp = cast<tt::DescriptorScatterOp>(store.op);
-    ttng::AsyncTMAScatterOp::create(builder, loc, desc, scatterOp.getXOffsets(),
+    Value xOffsets =
+        ttng::sextI16ToI32Indices(scatterOp.getXOffsets(), builder, loc);
+    ttng::AsyncTMAScatterOp::create(builder, loc, desc, xOffsets,
                                     scatterOp.getYOffset(), alloc);
   }
 
   store.op->erase();
 }
 
-static void lowerTMADescriptorCreation(scf::ForOp forOp) {
+static void lowerTMADescriptorCreation(LoopLikeOpInterface loop) {
   // Use max_stage=3 to double buffer the descriptor.
   triton::CoarseSchedule schedule(3);
-  triton::lowerTMADescriptors(forOp, schedule);
+  triton::lowerTMADescriptors(loop, schedule);
 }
 
-bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
-  SmallVector<TMAStore> tmaStores = getTMAStores(forOp);
+bool mlir::triton::pipelineTMAStores(LoopLikeOpInterface loop) {
+  SmallVector<TMAStore> tmaStores = getTMAStores(loop);
   if (tmaStores.empty())
+    return false;
+  if (hasAcquireOrReleaseOp(loop))
     return false;
 
   DenseMap<Operation *, Value> storeToAlloc;
@@ -96,7 +120,7 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
     auto key = std::make_pair(srcTy.getShape(), srcTy.getElementType());
     Value &alloc = allocs[key];
     if (!alloc) {
-      alloc = createAlloc(forOp, store);
+      alloc = createAlloc(loop, store);
     }
     storeToAlloc[store.op] = alloc;
   }
@@ -105,21 +129,22 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
     return !triton::isHostSideDescriptor(store.desc);
   });
   for (const TMAStore &store : tmaStores) {
-    createTMAAsyncCopy(forOp, store, storeToAlloc[store.op]);
+    createTMAAsyncCopy(store, storeToAlloc[store.op]);
   }
 
   // Deallocate shared memory buffers.
-  OpBuilder builder(forOp);
-  builder.setInsertionPointAfter(forOp);
-  ttng::TMAStoreWaitOp::create(builder, forOp->getLoc(), 0);
+  OpBuilder builder(loop);
+  builder.setInsertionPointAfter(loop);
+  ttng::TMAStoreWaitOp::create(builder, loop->getLoc(), 0,
+                               /*read_only=*/false);
   for (auto it : storeToAlloc) {
-    ttg::LocalDeallocOp::create(builder, forOp->getLoc(), it.second);
+    ttg::LocalDeallocOp::create(builder, loop->getLoc(), it.second);
   }
 
   if (hasDeviceSideTMA) {
     // This is a bit coarse as it would multibuffer any descriptor in the loop
     // but it likely to not have a big impact.
-    lowerTMADescriptorCreation(forOp);
+    lowerTMADescriptorCreation(loop);
   }
   return true;
 }

@@ -1,5 +1,5 @@
-// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx942 | FileCheck --check-prefixes=COMMON,GFX942 %s
-// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx950 | FileCheck --check-prefixes=COMMON,GFX950 %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck --check-prefixes=COMMON,GFX942 %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck --check-prefixes=COMMON,GFX950 %s
 
 //  CHECK-LABEL: f16_to_f32
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -40,12 +40,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+//  CHECK-LABEL: f32_to_bf16
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @f32_to_bf16(%arg0: tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>) {
+    // GFX942-NOT: llvm.fptrunc
+    // GFX942: llvm.trunc %{{.+}} : i32 to i16
+    // GFX942-NEXT: llvm.bitcast %{{.+}} : i16 to bf16
+    // GFX950-COUNT-4: llvm.fptrunc %{{.+}} : vector<2xf32> to vector<2xbf16>
+    %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
+
+    // Two fp32 are packed into two bf16 (RTZ) with a single v_perm_b32, so the
+    // 8 elements per thread produce 4 perms rather than per-halfword moves.
+    // COMMON-COUNT-4: llvm.call_intrinsic "llvm.amdgcn.perm"
+    // COMMON-NOT: llvm.call_intrinsic "llvm.amdgcn.perm"
+    %1 = tt.fp_to_fp %arg0, rounding = rtz : tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
+    tt.return
+  }
+}
+
+// -----
+
+//  CHECK-LABEL: f32_to_bf16_single_value
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @f32_to_bf16_single_value(%arg0: tensor<1x128xf32, #blocked>) {
+    // A lone element cannot be paired, so it falls back to the scalar path.
+    // COMMON-NOT: llvm.call_intrinsic "llvm.amdgcn.perm"
+    %0 = tt.fp_to_fp %arg0, rounding = rtz : tensor<1x128xf32, #blocked> -> tensor<1x128xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 //  CHECK-LABEL: f32_to_f16_single_value
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @f32_to_f16_single_value(%arg0: tensor<1x128xf32, #blocked>) {
-    // COMMON: llvm.fptrunc %{{.+}} : f32 to f16
-    // COMMON-NOT: llvm.fptrunc
+    // GFX950: llvm.fptrunc %{{.+}} : vector<2xf32> to vector<2xf16>
+    // GFX950-NOT: llvm.fptrunc
+    // GFX942: llvm.fptrunc %{{.+}} : f32 to f16
+    // GFX942: llvm.fptrunc %{{.+}} : f32 to f16
+    // GFX942-NOT: llvm.fptrunc
     %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<1x128xf32, #blocked> -> tensor<1x128xf16, #blocked>
     // COMMON: rocdl.cvt.pkrtz
     // COMMON-NOT: rocdl.cvt.pkrtz
@@ -206,5 +243,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX950-NOT: rocdl.cvt.scalef32.pk.f16.bf8
     %2 = tt.fp_to_fp %arg1, rounding = rtz : tensor<8x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
     tt.return
+  }
+}
+
+// -----
+
+// COMMON-LABEL: test_scalar_conversion
+// COMMON: llvm.return
+tt.func @test_scalar_conversion(%arg0: f32) -> f8E4M3FN {
+  %0 = tt.fp_to_fp %arg0, rounding = rtne : f32 -> f8E4M3FN
+  tt.return %0 : f8E4M3FN
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // COMMON-LABEL: @bf16_to_fp16
+  // GFX942: llvm.fptrunc {{.*}} : f32 to f16
+  // GFX950: llvm.fptrunc {{.*}} : vector<2xf32> to vector<2xf16>
+  // COMMON: rocdl.cvt.pkrtz
+  tt.func private @bf16_to_fp16(%arg: bf16) -> (f16, f16) {
+    %rn = tt.fp_to_fp %arg : bf16 -> f16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : bf16 -> f16
+    tt.return %rn, %rz : f16, f16
+  }
+
+  // COMMON-LABEL: @fp16_to_bf16
+  // COMMON: llvm.fpext {{.*}} : f16 to f32
+  // GFX942: llvm.add
+  // GFX942: llvm.trunc {{.*}} : i32 to i16
+  // GFX950: llvm.fptrunc {{.*}} : vector<2xf32> to vector<2xbf16>
+  // COMMON: llvm.fpext {{.*}} : f16 to f32
+  // COMMON: llvm.lshr
+  // COMMON: llvm.trunc {{.*}} : i32 to i16
+  tt.func private @fp16_to_bf16(%arg: f16) -> (bf16, bf16) {
+    %rn = tt.fp_to_fp %arg : f16 -> bf16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : f16 -> bf16
+    tt.return %rn, %rz : bf16, bf16
   }
 }

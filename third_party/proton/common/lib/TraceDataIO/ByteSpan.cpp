@@ -1,12 +1,12 @@
 #include "TraceDataIO/ByteSpan.h"
+#include "Utility/Errors.h"
 
 using namespace proton;
 
 ByteSpan::ByteSpan(const uint8_t *data, size_t size)
     : dataPtr(data), dataSize(size), pos(0) {
   if (data == nullptr && size > 0) {
-    throw std::invalid_argument(
-        "Data pointer cannot be null for non-zero size");
+    throw makeInvalidArgument("Data pointer cannot be null for non-zero size");
   }
 }
 
@@ -74,4 +74,4 @@ void ByteSpan::seek(size_t position) {
 }
 
 BufferException::BufferException(const std::string &message)
-    : std::runtime_error(message) {}
+    : std::out_of_range(prefixErrorMessage(message)) {}

@@ -63,7 +63,9 @@ LogicalResult lowerLdStMatrix(
 // where for ctaId, it sets as 1's the positions that are in the same broadcast
 // group
 Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
-                             uint16_t broadcastBits);
+                             uint16_t broadcastBits, Value ctaId = {});
+
+uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy);
 
 // Returns the lead CTA predicate for this barrier layout when lowering through
 // cluster scope. Returns std::nullopt for CTA-local lowering.

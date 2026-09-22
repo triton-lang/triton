@@ -1,4 +1,6 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-block-pingpong="num-stages=4" | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-block-pingpong="num-stages=4" | FileCheck %s --enable-var-scope
+
+// CHECK: [[$MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
@@ -10,35 +12,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK: scf.for
   // CHECK-NEXT: rocdl.s.barrier
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster1
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: ttg.async_wait
   // CHECK-NEXT: rocdl.s.setprio 1
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Memory Cluster1
   // CHECK: ttg.local_load
   // CHECK: ttg.async_copy_global_to_local
   // CHECK: ttg.async_commit_group
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
-  // CHECK-NEXT: amdg.memory_counter_wait ds(0)
+  // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: rocdl.s.barrier
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$MMRA_TAG]]}
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster2
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK: ttg.async_wait
   // CHECK-NEXT: rocdl.s.setprio 1
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Memory Cluster2
   // CHECK: ttg.local_load
   // CHECK: ttg.async_copy_global_to_local
   // CHECK: ttg.async_commit_group
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
-  // CHECK-NEXT: amdg.memory_counter_wait ds(0)
+  // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: scf.yield
 
   tt.func @chained_dots_async_loads(%arg0: tensor<64x16x!tt.ptr<f16>, #blocked>, %arg1: i32, %arg2: i32, %arg3: !ttg.async.token, %arg4: tensor<128x16xf32, #mma>, %arg5: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, %arg6: i32, %arg7: tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %arg8: tensor<128x16xf32, #mma>, %arg9: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg10: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %arg11: i32, %arg12: i32, %arg13: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>) -> tensor<128x16xf32, #mma> {
@@ -83,33 +86,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NOT: rocdl.s
   // CHECK: scf.for
   // CHECK: rocdl.s.barrier
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster1
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: rocdl.s.setprio 1
   // Memory Cluster1
   // CHECK: ttg.local_store
   // CHECK: ttg.local_load
   // CHECK: tt.load
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
-  // CHECK-NEXT: amdg.memory_counter_wait ds(0)
+  // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: rocdl.s.barrier
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: llvm.fence syncscope("workgroup") acquire {llvm.mmra = [[$MMRA_TAG]]}
+  // CHECK-NEXT: rocdl.sched.barrier none
   // Compute Cluster2
   // CHECK: tt.dot
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: rocdl.s.setprio 1
   // Memory Cluster2
   // CHECK: ttg.local_store
   // CHECK: ttg.local_load
   // CHECK: tt.load
-  // CHECK-NEXT: rocdl.sched.barrier 0
+  // CHECK-NEXT: rocdl.sched.barrier none
   // CHECK-NEXT: rocdl.s.setprio 0
-  // CHECK-NEXT: amdg.memory_counter_wait ds(0)
+  // CHECK-NEXT: llvm.fence syncscope("workgroup") release {llvm.mmra = [[$MMRA_TAG]]}
   // CHECK-NEXT: scf.yield
 
   tt.func @chained_dots_tt_loads(%arg0: tensor<64x16xf16, #blocked>, %arg1: tensor<64x16x!tt.ptr<f16>, #blocked>, %arg2: i32, %arg3: i32, %arg4: tensor<128x16xf32, #mma>, %arg5: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, %arg6: i32, %arg7: tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %arg8: tensor<128x16xf32, #mma>, %arg9: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg10: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %arg11: i32, %arg12: i32, %arg13: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>) -> tensor<128x16xf32, #mma> {

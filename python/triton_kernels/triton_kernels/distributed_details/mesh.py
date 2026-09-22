@@ -150,8 +150,9 @@ class SymmetricMemoryPool:
 
         BLOCK_N = 32
         BLOCK_M = 32
-        n_bytes_topk = n_tokens_global * n_expts_act * 4  # topk logits (float32): pessimistic estimate
-        n_bytes_topk += n_tokens_global * n_expts_act * 2  # topk indx (int16)
+        TOPK_ALIGNMENT = 128
+        n_bytes_topk = self.align_up(n_tokens_global * n_expts_act * 4, TOPK_ALIGNMENT)  # topk logits (float32)
+        n_bytes_topk += self.align_up(n_tokens_global * n_expts_act * 2, TOPK_ALIGNMENT)  # topk indx (int16)
         cdiv = lambda x, y: (x + y - 1) // y
         num_blocks_m = cdiv(n_tokens_global, BLOCK_M)
         num_blocks_n = cdiv(n_expts_tot, BLOCK_N)
@@ -160,7 +161,7 @@ class SymmetricMemoryPool:
         n_bytes_dp_to_ep = n_tokens_global * n_expts_act * d_input * elem_size
         n_bytes_ep_to_dp = (n_tokens_global // self.mesh.world_size) * n_expts_act * d_model * elem_size
 
-        offset = self._reserve_region("topk", n_bytes_topk, 128, 0)
+        offset = self._reserve_region("topk", n_bytes_topk, TOPK_ALIGNMENT, 0)
         offset = self._reserve_region("ep_to_dp", n_bytes_ep_to_dp, 128, offset)
         offset = self._reserve_region("dp_to_ep", n_bytes_dp_to_ep, 128, offset)
         self._initialize(device=device)

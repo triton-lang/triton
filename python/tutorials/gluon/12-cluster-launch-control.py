@@ -33,7 +33,6 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton.experimental.gluon.nvidia.blackwell import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import tma, mbarrier, fence_async_shared, clc
-from triton.language.core import _aggregate as aggregate
 
 
 def is_blackwell():
@@ -56,7 +55,7 @@ t7 = importlib.import_module("07-persistence")
 # changed ClcTileScheduler interface to support dynamic scheduling.
 
 
-@aggregate
+@gluon.aggregate
 class ClcTileScheduler:
     has_work: gl.tensor
     tile_id: gl.tensor
@@ -77,7 +76,7 @@ class ClcTileScheduler:
 
     @gluon.jit
     def try_cancel(self) -> None:
-        clc.try_cancel(self.clc_result_buf, self.barrier, multicast=True)
+        clc.try_cancel(self.clc_result_buf, self.barrier)
         mbarrier.expect(self.barrier, 16)
 
     @gluon.jit
@@ -94,7 +93,7 @@ class ClcTileScheduler:
 # so we can directly compare the benifits of dynamic scheduling.
 
 
-@aggregate
+@gluon.aggregate
 class StaticTileScheduler:
     has_work: gl.tensor
     tile_id: gl.tensor
@@ -177,7 +176,7 @@ def persistent_matmul_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, Sche
         c, mma = mma.take_result()
         c_smem.store(c.to(dtype))
         fence_async_shared()
-        tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+        tma.async_store(c_desc, [off_m, off_n], c_smem)
         tma.store_wait(pendings=0)
         scheduler = scheduler.advance()
 

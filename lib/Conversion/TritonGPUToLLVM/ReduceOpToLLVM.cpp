@@ -13,7 +13,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
@@ -42,13 +44,7 @@ public:
     // Remove block as we don't currently support it
     LinearLayout regLl = triton::gpu::toLinearLayout(helper.getSrcTy());
     // Remove broadcasting in registers as SliceLayout removes them
-    auto removeBroadcast = actionRemoveBroadcastedRegs(regLl);
-    if (!removeBroadcast.isIdentity()) {
-      regLl = removeBroadcast.apply(regLl);
-      for (auto &vals : accs) {
-        vals = removeBroadcast.apply(vals);
-      }
-    }
+    regLl = regLl.removeZeroBasesAlongDim(str_attr("register"));
 
     // First reduce all the values along axis within each thread.
     std::tie(regLl, accs) =
@@ -79,7 +75,7 @@ public:
 
       // Emit a barrier if we are reusing the shmem
       if (i > 0) {
-        sync(rewriter, loc, lastCvtCrossesCTAs);
+        sync(rewriter, loc, lastCvtCrossesCTAs, op);
       }
       accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
       lastCvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
@@ -99,7 +95,7 @@ public:
       auto outputLayout = triton::gpu::toLinearLayout(resultTy);
       if (regLl != outputLayout) {
         // Reuse the shmem
-        sync(rewriter, loc, lastCvtCrossesCTAs);
+        sync(rewriter, loc, lastCvtCrossesCTAs, op);
         accs =
             convertLayoutValues(loc, rewriter, op, regLl, outputLayout, accs);
       }
@@ -112,18 +108,28 @@ public:
 private:
   const TargetInfoBase &targetInfo;
 
-  SmallVector<Value>
-  treeReduceBinary(Location loc, ConversionPatternRewriter &rewriter,
-                   Region &combineOp,
-                   SmallVector<SmallVector<Value>> values) const {
-    // The number of elements is always a power of two
-    assert(llvm::isPowerOf2_64(values.size()) && !values.empty());
+  // Reduce values using a tree of the given arity. Arity=3 generates
+  // combine(combine(a, b), c) groups that LLVM folds into ternary
+  // instructions (e.g. v_maximum3_f32 on AMD).
+  SmallVector<Value> treeReduce(Location loc,
+                                ConversionPatternRewriter &rewriter,
+                                Region &combineOp,
+                                SmallVector<SmallVector<Value>> values,
+                                unsigned arity) const {
+    assert(!values.empty() && arity >= 2);
     while (values.size() > 1) {
       SmallVector<SmallVector<Value>> next;
-      for (size_t i = 0; i + 1 < values.size(); i += 2) {
-        SmallVector<Value> acc = values[i];
-        accumulate(loc, rewriter, combineOp, acc, values[i + 1]);
-        next.push_back(std::move(acc));
+      for (size_t i = 0; i < values.size(); i += arity) {
+        size_t remaining = values.size() - i;
+        size_t groupSize = std::min(static_cast<size_t>(arity), remaining);
+        if (groupSize == 1) {
+          next.push_back(std::move(values[i]));
+        } else {
+          SmallVector<Value> acc = std::move(values[i]);
+          for (size_t j = 1; j < groupSize; ++j)
+            accumulate(loc, rewriter, combineOp, acc, values[i + j]);
+          next.push_back(std::move(acc));
+        }
       }
       values = std::move(next);
     }
@@ -148,15 +154,15 @@ private:
     auto operands = adaptor.getOperands();
     SmallVector<SmallVector<Value>> srcValues(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      srcValues[i] = unpackLLElements(loc, operands[i], rewriter);
+      srcValues[i] = unpackUniqueTensorElements(loc, operands[i], rewriter);
     }
     return srcValues;
   }
 
-  void sync(ConversionPatternRewriter &rewriter, Location loc,
-            bool crossCTA) const {
+  void sync(ConversionPatternRewriter &rewriter, Location loc, bool crossCTA,
+            Operation *sourceOp) const {
     if (crossCTA) {
-      targetInfo.clusterBarrier(loc, rewriter);
+      targetInfo.clusterBarrier(loc, rewriter, sourceOp);
     } else {
       targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
     }
@@ -271,6 +277,9 @@ private:
     Region &combineRegion =
         vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
 
+    Operation &combinerOp = combineRegion.front().front();
+    unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
+
     // Perform a tree reduction
     unsigned numOperands = accs.size();
     SmallVector<SmallVector<Value>> reduced(numOperands);
@@ -286,7 +295,7 @@ private:
         vals.push_back(std::move(cur));
       }
       auto acc =
-          treeReduceBinary(loc, rewriter, combineRegion, std::move(vals));
+          treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
       for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }
@@ -304,7 +313,7 @@ private:
 
     // Update layout killing the axis bases along registers
     layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, axis, kReg);
-    layout = actionRemoveBroadcastedRegs(layout).apply(layout);
+    layout = layout.removeZeroBasesAlongDim(kReg);
     return {std::move(layout), std::move(accs)};
   }
 
@@ -317,9 +326,13 @@ private:
     auto kLane = str_attr("lane");
     const auto &laneBases = layout.getBases().lookup(kLane);
     unsigned reduceLaneIdMask = 0;
+    unsigned broadcastLaneIdMask = 0;
     for (unsigned bit = 0; bit < laneBases.size(); ++bit) {
       if (laneBases[bit][op.getAxis()] != 0) {
         reduceLaneIdMask |= 1u << bit;
+      } else if (llvm::all_of(laneBases[bit],
+                              [](int32_t x) { return x == 0; })) {
+        broadcastLaneIdMask |= 1u << bit;
       }
     }
     if (reduceLaneIdMask == 0) {
@@ -332,7 +345,7 @@ private:
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         acc[i] = accs[i][reg];
       }
-      warpReduce(op, reduceLaneIdMask, acc, rewriter);
+      warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, acc, rewriter);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         accs[i][reg] = acc[i];
       }
@@ -344,7 +357,7 @@ private:
   }
 
   void warpReduce(triton::ReduceOp op, unsigned reduceLaneIdMask,
-                  SmallVector<Value> &acc,
+                  unsigned broadcastLaneIdMask, SmallVector<Value> &acc,
                   ConversionPatternRewriter &rewriter) const {
     // No reduction to do
     if (reduceLaneIdMask == 0)
@@ -355,8 +368,8 @@ private:
     assert(reduceLaneIdMask < warpSize &&
            "expected reduce lane ID mask to be strictly less than warp size");
     // Try to use the redux op if it is supported by the target
-    if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op,
-                              reduceLaneIdMask)) {
+    if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op, reduceLaneIdMask,
+                              broadcastLaneIdMask)) {
       return;
     }
     // Not that it matters a lot, but a more reasonble iteration order would be
@@ -380,13 +393,9 @@ private:
     Location loc = op.getLoc();
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      if (auto resultTy =
-              dyn_cast<RankedTensorType>(op.getResult()[i].getType())) {
-        results[i] = packLLElements(loc, getTypeConverter(), accs[i], rewriter,
-                                    resultTy);
-      } else {
-        results[i] = accs[i].front();
-      }
+      results[i] =
+          packUniqueTensorElements(loc, getTypeConverter(), accs[i], rewriter,
+                                   op.getResult()[i].getType());
     }
     rewriter.replaceOp(op, results);
   }
@@ -413,20 +422,21 @@ private:
       auto elemTy = op.getElementTypes()[i];
       auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
       auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
-      Value packed =
-          packLLElements(loc, getTypeConverter(), inVals[i], rewriter, srcTy);
+      Value packed = packUniqueTensorElements(loc, getTypeConverter(),
+                                              inVals[i], rewriter, srcTy);
       auto srcTensor =
           UnrealizedConversionCastOp::create(rewriter, loc, srcTy, packed)
               .getResult(0);
       auto cvt =
           triton::gpu::ConvertLayoutOp::create(rewriter, loc, dstTy, srcTensor);
+      triton::nvidia_gpu::copyClusterBarrierMbarOffset(op, cvt);
       cvt->setAttr("allocation.offset",
                    IntegerAttr::get(offsetTy, baseOffset + smemBaseOffsets[i]));
       Type packedDstTy = getTypeConverter()->convertType(dstTy);
       auto packedDst = UnrealizedConversionCastOp::create(
                            rewriter, loc, packedDstTy, cvt.getResult())
                            .getResult(0);
-      outVals[i] = unpackLLElements(loc, packedDst, rewriter);
+      outVals[i] = unpackUniqueTensorElements(loc, packedDst, rewriter);
     }
     return outVals;
   }
@@ -461,12 +471,17 @@ private:
     });
     SmallVector<int64_t> offsets(op.getNumOperands());
     int64_t offset = 0;
+    int numBanks = targetInfo.getSharedMemoryBanks();
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       unsigned idx = indices[i];
       offsets[idx] = offset;
       auto inputTy = op.getInputTypes()[idx];
+      auto vecBitwidth = triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout,
+                                                         getBitwidth(inputTy));
+      auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
       auto bytes = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout,
-                                                 getBitwidth(inputTy)) *
+                                                 getBitwidth(inputTy), numBanks,
+                                                 srcTile, dstTile) *
                    (getBitwidth(inputTy) / 8);
       offset += bytes;
     }

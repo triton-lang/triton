@@ -5,6 +5,7 @@ import triton
 import ctypes
 import sys
 from triton import knobs
+from triton._instrumentation import is_enabled
 from triton.runtime.build import compile_module_from_file
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
@@ -120,6 +121,7 @@ class CudaUtils(object):
         self.get_current_device = mod.get_current_device
         self.set_current_device = mod.set_current_device
         self.get_default_stream = mod.get_default_stream
+        self.is_stream_capturing = mod.is_stream_capturing
         self.get_device_capability = mod.get_device_capability
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
@@ -277,9 +279,11 @@ class CudaLauncher(object):
         signature = {idx: value for idx, value in src.signature.items()}
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
 
-        self.gsan_enabled = "gsan" in getattr(metadata, "instrumentation_mode", "")
+        self.gsan_enabled = is_enabled(metadata, "gsan")
         if self.gsan_enabled:
             signature["_gsan_globals_ptr"] = "*i8"
+            signature["_gsan_stream_clock_ptr"] = "*i32"
+            signature["_gsan_kernel_id"] = "i64"
 
         launcher = triton.runtime.driver.active.utils.launch
         expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
@@ -322,17 +326,20 @@ class CudaLauncher(object):
 
         kernel_args = args
         if self.gsan_enabled:
+            if active_driver.utils.is_stream_capturing(stream):
+                raise RuntimeError("GSan does not support CUDA graph capture")
+
             import triton.experimental.gsan._allocator as gsan_allocator
+            import triton.experimental.gsan._stream_sync as gsan_stream_sync
             device = triton.runtime.driver.active.get_current_device()
-            gsan_state_ptr = gsan_allocator.get_global_state_pointer() + device * GSAN_PER_DEVICE_STATE_STRIDE
-            kernel_args = (*args, gsan_state_ptr)
+            device_rank = gsan_allocator.get_device_rank(device)
+            gsan_state_ptr = gsan_allocator.get_global_state_pointer() + device_rank * GSAN_PER_DEVICE_STATE_STRIDE
+            stream_clock, kernel_id = gsan_stream_sync.get_launch_stream_clock(device, stream)
+            kernel_args = (*args, gsan_state_ptr, stream_clock, kernel_id)
 
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
                     profile_scratch, self.arg_annotations, self.kernel_signature, kernel_args)
-        if self.gsan_enabled:
-            import triton.experimental.gsan._stream_sync as gsan_stream_sync
-            gsan_stream_sync.synchronize_launch_stream(device)
 
 
 class CudaDriver(GPUDriver):
@@ -340,44 +347,27 @@ class CudaDriver(GPUDriver):
     def __init__(self):
         self.utils = CudaUtils()  # TODO: make static
         self.launcher_cls = CudaLauncher
-        self.get_device_capability = self._get_device_capability
-        self.get_current_stream = self._get_current_stream
-        self.get_current_device = self._get_current_device
-        self.set_current_device = self._set_current_device
-
-    @staticmethod
-    def _get_loaded_torch():
-        torch = sys.modules.get("torch")
-        if torch is None:
-            return None
-        return torch
+        if sys.modules.get("torch") is not None:
+            super().__init__()
+        else:
+            self.get_device_capability = self._get_device_capability
+            self.get_current_stream = self._get_current_stream
+            self.get_current_device = self._get_current_device
+            self.set_current_device = self._set_current_device
 
     def _get_device_capability(self, device):
-        torch = self._get_loaded_torch()
-        if torch is not None:
-            return torch.cuda.get_device_capability(device)
         return self.utils.get_device_capability(device)
 
     def _get_current_stream(self, device):
-        torch = self._get_loaded_torch()
-        if torch is not None:
-            return torch.cuda.current_stream(device).cuda_stream
         # The CUDA driver API does not expose PyTorch's notion of the current
         # stream. In torch-free launches we fall back to the device's default
         # stream after making that device's primary context current.
         return self.utils.get_default_stream(device)
 
     def _get_current_device(self):
-        torch = self._get_loaded_torch()
-        if torch is not None:
-            return torch.cuda.current_device()
         return self.utils.get_current_device()
 
     def _set_current_device(self, device):
-        torch = self._get_loaded_torch()
-        if torch is not None:
-            torch.cuda.set_device(device)
-            return
         self.utils.set_current_device(device)
 
     def get_current_target(self):

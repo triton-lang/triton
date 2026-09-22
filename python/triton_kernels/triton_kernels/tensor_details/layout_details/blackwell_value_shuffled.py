@@ -1,0 +1,290 @@
+import math
+from dataclasses import dataclass
+
+import torch
+import triton
+import triton.language as tl
+
+from triton_kernels.tensor_details.layout_details import strided
+from .base import Layout, LayoutTransformation
+from .blackwell_value import BlackwellMXValueLayoutTransformation, unswizzle_mxfp4
+from .torch_utils import repack
+
+
+# ------------------- Blackwell MX4 Value Shuffled Layout -------------------
+@dataclass(frozen=True)
+class BlackwellMX4ValueShuffledLayout(Layout):
+    """
+    Shuffled weight layout for MX4 matmul on Blackwell GPUs.
+
+    Physical packed storage for mxfp4 is column-major with shape [E, K_packed, N],
+    where K_packed = K // 2 (two FP4 values per byte).
+
+    Baseline TMA loads operate on the swapped view [E, N, K_packed] with block
+    shape [block_n, packed_block_k], then the kernel transposes to
+    [packed_block_k, block_n].
+
+    This layout pre-arranges those tiles so each tile is contiguous in memory,
+    matching the baseline's post-transpose format [block_n, packed_block_k].
+    We use a 5D layout:
+    [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
+
+    The inner dimensions [tile_n, tile_k_packed] match the baseline TMA block
+    shape after swapping, so no transpose is needed after TMA load.
+    """
+    block_k: int = 128
+    block_n: int = 256
+
+    @property
+    def name(self):
+        return "BLACKWELL_MX4_VALUE_SHUFFLED"
+
+    def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
+        return BlackwellMX4ValueShuffledTransformation(shape, is_fp4, block_k=self.block_k, block_n=self.block_n)
+
+    def swizzle_block_shape(self, block_shape):
+        """
+        Convert block shape for TMA descriptor.
+
+        Logical block shape is [1, block_k, block_n]. For this layout we want
+        TMA to load [1, 1, 1, tile_n, packed_block_k] from the shuffled buffer.
+        This matches the inner dimensions of our 5D layout.
+        """
+        if len(block_shape) != 3:
+            raise ValueError(f"Expected 3D block_shape, got {len(block_shape)}D: {block_shape}")
+        _, block_k, block_n = block_shape
+        if block_k != self.block_k:
+            raise ValueError(f"block_k={block_k} does not match layout block_k={self.block_k}")
+        # Return block_k un-halved; make_dense_tma will halve it for FP4 packing
+        return [1, 1, 1, block_n, block_k]
+
+
+# ------------------- Blackwell MX4 Value Shuffled Transformation -------------------
+@dataclass(frozen=True)
+class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
+    """Transformation for the shuffled MX4 weight layout."""
+
+    block_k: int = 128
+    block_n: int = 256
+
+    @property
+    def storage_shape(self) -> list[int]:
+        if not self.is_fp4:
+            raise ValueError("BlackwellMX4ValueShuffledLayout only supports fp4 values")
+        if self.shape[-2] % 2:
+            raise ValueError(f"FP4 packing dimension -2 must have an even size, got {self.shape[-2]}")
+        E = math.prod(self.shape[:-2])
+        K_packed = self.shape[-2] // 2
+        N = self.shape[-1]
+        tile_k_packed, tile_n, _, _, num_tiles_k, num_tiles_n = self._compute_params(K_packed, N)
+        return [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
+
+    def _compute_params(self, K_packed, N):
+        """Compute tiling parameters from the physical shape."""
+        tile_k_packed = self.block_k // 2
+        tile_n = self.block_n
+
+        # 128 is the TMA alignment requirement in bytes.
+        align_k = math.lcm(128, tile_k_packed)
+        padded_K_packed = ((K_packed + align_k - 1) // align_k) * align_k
+        num_tiles_k = padded_K_packed // tile_k_packed
+        num_tiles_n = (N + tile_n - 1) // tile_n
+        padded_N = num_tiles_n * tile_n
+
+        return tile_k_packed, tile_n, padded_K_packed, padded_N, num_tiles_k, num_tiles_n
+
+    def swizzle_data(self, data: torch.Tensor) -> torch.Tensor:
+        """Convert canonical [..., K, N_packed] bytes to shuffled 5D storage."""
+        return self._convert_data(data, inverse=False, major_dim=-1)
+
+    def unswizzle_data(self, data: torch.Tensor) -> torch.Tensor:
+        """Convert shuffled 5D storage back to canonical packed bytes."""
+        return self._convert_data(data, inverse=True, major_dim=-1)
+
+    def convert_data(self, data, destination: LayoutTransformation, *, out=None):
+        if (isinstance(destination, BlackwellMXValueLayoutTransformation) and self.is_fp4 and data.device.type == "cuda"
+                and data.dtype == torch.uint8 and list(data.shape) == self.storage_shape):
+            if out is None:
+                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, device=data.device,
+                                          dtype=data.dtype)
+            # Only logical bytes are written; plain Blackwell padding is unspecified.
+            return self._convert_data(data, inverse=True, major_dim=-2, out=out)
+        if (data.device.type != "cuda" or data.dtype != torch.uint8
+                or not isinstance(destination, strided.StridedLayoutTransformation)
+                or destination.order[0] < len(self.shape) - 2):
+            return super().convert_data(data, destination, out=out)
+        return self._convert_data(data, inverse=True, major_dim=destination.order[0], out=out)
+
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
+        if (isinstance(source, BlackwellMXValueLayoutTransformation) and self.is_fp4 and data.device.type == "cuda"
+                and data.dtype == torch.uint8 and list(data.shape) == source.storage_shape):
+            # Blackwell values already pack K; only their physical tiling changes.
+            return self._convert_data(data, inverse=False, major_dim=-2, out=out)
+        if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4
+                or not source._can_convert_fp4(data)):
+            return super()._convert_data_from(data, source, out=out)
+        return self._convert_data(data, inverse=False, major_dim=source.order[0], out=out)
+
+    def _convert_data(self, data: torch.Tensor, inverse: bool, major_dim: int, out=None) -> torch.Tensor:
+        storage_shape = self.storage_shape
+        # Preserve the canonical path's even-N packing requirement.
+        if self.shape[-1] % 2:
+            raise ValueError(f"FP4 packing dimension -1 must have an even size, got {self.shape[-1]}")
+        if data.device.type != "cuda" or data.dtype != torch.uint8:
+            return self._unswizzle_data_torch(data) if inverse else self._swizzle_data_torch(data)
+
+        if inverse:
+            return unswizzle_mxfp4(data, self.shape, major_dim, out=out, block_shape=(self.block_k // 2, self.block_n))
+
+        if out is None:
+            out = torch.empty(storage_shape, dtype=data.dtype, device=data.device)
+        E, num_tiles_k, num_tiles_n, tile_n, tile_k = storage_shape
+        K_pad, N_pad = num_tiles_k * tile_k, num_tiles_n * tile_n
+        block_k, block_n = 64, 128
+        pack_k = major_dim % len(self.shape) == len(self.shape) - 2
+        grid_k = triton.cdiv(K_pad, block_k)
+        grid_n = triton.cdiv(N_pad, 2 * block_n)
+        grid = (E * grid_k * grid_n, )
+        if grid[0] > 0:
+            with torch.cuda.device(data.device):
+                _convert_shuffled_mxfp4[grid](
+                    data,
+                    out,
+                    tuple(self.shape),
+                    tuple(storage_shape),
+                    data.stride(),
+                    out.stride(),
+                    GRID_K=grid_k,
+                    GRID_N=grid_n,
+                    PACK_K=pack_k,
+                    BLOCK_K=block_k,
+                    BLOCK_N=block_n,
+                    num_warps=4 if pack_k else 8,
+                )
+        return out
+
+    def _swizzle_data_torch(self, data: torch.Tensor) -> torch.Tensor:
+        """
+        Convert data from canonical [..., K, N_packed] to 5D shuffled layout.
+
+        Target layout: [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
+        This matches the baseline TMA block shape [block_n, packed_block_k] after swapping.
+        """
+        data = repack(data, -1, -2, True)
+        E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed = self.storage_shape
+        K_packed, N = data.shape[-2:]
+        data = data.reshape(E, K_packed, N)
+        padded_K_packed = num_tiles_k * tile_k_packed
+        padded_N = num_tiles_n * tile_n
+
+        # Pad to tile boundaries if needed (in original [E, K_packed, N] space)
+        if K_packed != padded_K_packed or N != padded_N:
+            padded = torch.zeros((E, padded_K_packed, padded_N), dtype=data.dtype, device=data.device)
+            padded[:, :K_packed, :N] = data
+            data = padded
+
+        # Transpose to swapped view: [E, K_packed, N] -> [E, N, K_packed]
+        data = data.transpose(1, 2).contiguous()
+
+        # [E, N, K_packed] -> [E, num_tiles_n, tile_n, num_tiles_k, tile_k_packed]
+        data = data.view(E, num_tiles_n, tile_n, num_tiles_k, tile_k_packed)
+
+        # Permute to [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
+        # This puts K tiles first (for inner loop locality) and arranges
+        # inner dims as [tile_n, tile_k_packed] to match baseline TMA block.
+        data = data.permute(0, 3, 1, 2, 4).contiguous()
+        return self._validate_storage_shape(data)
+
+    def _unswizzle_data_torch(self, data: torch.Tensor) -> torch.Tensor:
+        """
+        Convert data from shuffled back to canonical [..., K, N_packed].
+
+        Input layout: [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
+        """
+        E = data.shape[0]
+        leading_shape = self.shape[:-2]
+        # Recover original shape from self.shape (the logical shape passed to convert_layout)
+        orig_K_packed = self.shape[-2] // 2
+        orig_N = self.shape[-1]
+        tile_k_packed, tile_n, padded_K_packed, padded_N, num_tiles_k, num_tiles_n = \
+            self._compute_params(orig_K_packed, orig_N)
+
+        # Inverse of permute(0, 3, 1, 2, 4) is permute(0, 2, 3, 1, 4)
+        # [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed] ->
+        # [E, num_tiles_n, tile_n, num_tiles_k, tile_k_packed]
+        data = data.permute(0, 2, 3, 1, 4).contiguous()
+
+        # Back to swapped view [E, padded_N, padded_K_packed]
+        data = data.view(E, padded_N, padded_K_packed)
+
+        # Transpose back to physical [E, padded_K_packed, padded_N]
+        data = data.transpose(1, 2).contiguous()
+
+        # Trim padding back to original shape
+        data = data[:, :orig_K_packed, :orig_N].contiguous()
+        data = repack(data, -2, -1, True)
+        if not leading_shape:
+            return data.squeeze(0)
+        return data.reshape(*leading_shape, data.shape[-2], data.shape[-1])
+
+
+@triton.jit
+def _convert_shuffled_mxfp4(
+    Strided,
+    Shuffled,
+    SHAPE: tl.constexpr,
+    SHUFFLED_SHAPE: tl.constexpr,
+    STRIDED_STRIDES: tl.constexpr,
+    SHUFFLED_STRIDES: tl.constexpr,
+    GRID_K: tl.constexpr,
+    GRID_N: tl.constexpr,
+    PACK_K: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    K_PACKED: tl.constexpr = SHAPE[-2] // 2
+    N_PACKED: tl.constexpr = SHAPE[-1] // 2
+    TILE_K: tl.constexpr = SHUFFLED_SHAPE[-1]
+    TILE_N: tl.constexpr = SHUFFLED_SHAPE[-2]
+    K_PAD: tl.constexpr = SHUFFLED_SHAPE[1] * TILE_K
+    N_PAD: tl.constexpr = SHUFFLED_SHAPE[2] * TILE_N
+    pid = tl.program_id(0).to(tl.int64)
+    batch = pid // (GRID_K * GRID_N)
+    k = (pid // GRID_N % GRID_K) * BLOCK_K + tl.arange(0, BLOCK_K)
+    n = (pid % GRID_N) * BLOCK_N + tl.arange(0, BLOCK_N)
+
+    # Keep leading strides instead of flattening a possibly noncontiguous input.
+    batch_offset = tl.full((), 0, tl.int64)
+    batch_index = batch
+    for axis in tl.static_range(len(SHAPE) - 3, -1, -1):
+        batch_offset += (batch_index % SHAPE[axis]) * STRIDED_STRIDES[axis]
+        batch_index //= SHAPE[axis]
+    if PACK_K:
+        strided_even = Strided + batch_offset + k[:, None] * STRIDED_STRIDES[-2] + 2 * n[None, :] * STRIDED_STRIDES[-1]
+        strided_odd = strided_even + STRIDED_STRIDES[-1]
+    else:
+        strided_even = Strided + batch_offset + 2 * k[:, None] * STRIDED_STRIDES[-2] + n[None, :] * STRIDED_STRIDES[-1]
+        strided_odd = strided_even + STRIDED_STRIDES[-2]
+
+    shuffled_k = k // TILE_K * SHUFFLED_STRIDES[1] + k % TILE_K * SHUFFLED_STRIDES[4]
+    mask = (k[:, None] < K_PACKED) & (n[None, :] < N_PACKED)
+
+    a = tl.load(strided_even, mask, other=0)
+    b = tl.load(strided_odd, mask, other=0)
+    if PACK_K:
+        even_n, odd_n = 2 * n, 2 * n + 1
+        shuffled_even = Shuffled + batch * SHUFFLED_STRIDES[0] + shuffled_k[:, None] + \
+            (even_n // TILE_N * SHUFFLED_STRIDES[2] + even_n % TILE_N * SHUFFLED_STRIDES[3])[None, :]
+        shuffled_odd = Shuffled + batch * SHUFFLED_STRIDES[0] + shuffled_k[:, None] + \
+            (odd_n // TILE_N * SHUFFLED_STRIDES[2] + odd_n % TILE_N * SHUFFLED_STRIDES[3])[None, :]
+        tl.store(shuffled_even, a, (k[:, None] < K_PAD) & (even_n[None, :] < N_PAD))
+        tl.store(shuffled_odd, b, (k[:, None] < K_PAD) & (odd_n[None, :] < N_PAD))
+    else:
+        # Transposing a 2x2 group of FP4 nibbles is its own inverse.
+        lo = (a & 0x0F) | ((b & 0x0F) << 4)
+        hi = (a >> 4) | (b & 0xF0)
+        values = tl.join(lo, hi).reshape((BLOCK_K, 2 * BLOCK_N))
+        cols = pid % GRID_N * (2 * BLOCK_N) + tl.arange(0, 2 * BLOCK_N)
+        offsets = batch * SHUFFLED_STRIDES[0] + shuffled_k[:, None] + (cols // TILE_N * SHUFFLED_STRIDES[2] +
+                                                                       cols % TILE_N * SHUFFLED_STRIDES[3])[None, :]
+        tl.store(Shuffled + offsets, values, (k[:, None] < K_PAD) & (cols[None, :] < N_PAD))

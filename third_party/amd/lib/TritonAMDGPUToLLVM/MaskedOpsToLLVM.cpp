@@ -10,7 +10,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include <tuple>
 
 using namespace mlir;
@@ -39,6 +39,7 @@ public:
     std::tie(volatileFlag, nonTmpFlag) =
         mlir::LLVM::AMD::getCacheModifierFlagsForLoadStore(
             cacheMod, mlir::LLVM::AMD::MemoryOp::Load);
+    volatileFlag |= loadOp.getIsVolatile();
 
     auto createLoadWithAttrs = [&](Location loadLoc) -> Value {
       int vecBits = 0;
@@ -48,8 +49,11 @@ public:
         vecBits = elemTy.getIntOrFloatBitWidth();
       }
       assert(vecBits != 0);
-      // We can only multicast for 32, 64, 128 bit load size (hw limitation)
-      if (multicastMask && targetInfo.supportsClusterLoadBitWidth(vecBits)) {
+      bool supportsClusterLoad =
+          targetInfo.supportsClusterLoadBitWidth(vecBits);
+      // The cluster load intrinsic cannot represent LLVM volatile semantics,
+      // so use a regular load for volatile accesses.
+      if (multicastMask && supportsClusterLoad && !loadOp.getIsVolatile()) {
         std::string intrinsic =
             "llvm.amdgcn.cluster.load.b" + std::to_string(vecBits);
         auto cacheModBits = LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
@@ -63,7 +67,7 @@ public:
             rewriter, loc, intrinsic, {resTy},
             {ptr, b.i32_val(cacheModBits), multicastMask});
         return b.bitcast(clusterLoadOp->getResult(0), elemTy);
-      } else if (multicastMask) {
+      } else if (multicastMask && !supportsClusterLoad) {
         loadOp.emitRemark()
             << "Multicast with bit width " << vecBits << " is not supported on "
             << targetInfo.getArch() << " falling back to regular load";
@@ -87,8 +91,7 @@ public:
     }
 
     Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterLoad =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *afterLoad = currentBlock->splitBlock(rewriter.getInsertionPoint());
     afterLoad->addArgument({elemTy}, {loc});
 
     Block *trueBlock = rewriter.createBlock(afterLoad);
@@ -151,14 +154,13 @@ public:
     bool useDirectStore = mlir::matchPattern(mask, mlir::m_One());
 
     if (useDirectStore) {
-      auto llvmStoreOp = createStoreWithAttrs(loc);
+      createStoreWithAttrs(loc);
       rewriter.eraseOp(storeOp);
       return success();
     }
 
     Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterStore =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *afterStore = currentBlock->splitBlock(rewriter.getInsertionPoint());
     Block *trueBlock = rewriter.createBlock(afterStore);
     rewriter.setInsertionPointToEnd(currentBlock);
     LLVM::CondBrOp::create(rewriter, loc, mask, trueBlock, afterStore);
@@ -167,7 +169,7 @@ public:
     // LLVM::StoreOp | 0         | 0       | (cg) global store
     //               | 0         | 1       | (cs) global store nt
     //               | 1         | 0/1     | (wt) global store sc0 sc1
-    auto llvmStoreOp = createStoreWithAttrs(loc);
+    createStoreWithAttrs(loc);
     LLVM::BrOp::create(rewriter, loc, afterStore);
     rewriter.setInsertionPointToStart(afterStore);
     rewriter.eraseOp(storeOp);

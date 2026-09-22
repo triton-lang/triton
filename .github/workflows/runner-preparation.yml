@@ -48,15 +48,21 @@ jobs:
         run: |
           GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
           REPO_NAME="${{ github.repository }}"
-          # ID of integration-tests workflow
-          WORKFLOW_ID="11678186"
+          # Workflow file for integration tests
+          WORKFLOW_FILE="ci.yml"
 
           # Fetch the last run time of this workflow
           LAST_RUN=$(curl -s \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$REPO_NAME/actions/workflows/$WORKFLOW_ID/runs?branch=main&status=success&per_page=1" \
+            "https://api.github.com/repos/$REPO_NAME/actions/workflows/$WORKFLOW_FILE/runs?branch=main&event=push&status=success&per_page=1" \
             | jq -r '.workflow_runs[0].updated_at')
+
+          if [ "$LAST_RUN" = "null" ]; then
+            echo "No successful post-submit run found; will run CI."
+            echo "n_hours_since_last_run=true" >> $GITHUB_ENV
+            exit 0
+          fi
 
           # Convert to timestamp
           LAST_RUN_TS=$(date -d "$LAST_RUN" +%s)
@@ -95,11 +101,11 @@ jobs:
         if: env.enable_integration == 'true'
         run: |
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
-            echo '::set-output name=matrix-NVIDIA::[{"name":"nvidia-a100","runner_type":"nvidia-a100","runs_on":["nvidia-a100"]},{"name":"nvidia-h100","runner_type":"nvidia-h100","runs_on":["nvidia-h100"]},{"name":"nvidia-gb200","runner_type":"nvidia-gb200","runs_on":{"group":"gb200-runner-set"}}]'
-            echo '::set-output name=matrix-AMD::[["self-hosted", "gfx90a"], ["amd-gfx942"], ["amd-gfx950"]]'
-            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
+            echo 'matrix-NVIDIA=[{"name":"nvidia-a100","runner_type":"nvidia-a100","runs_on":["nvidia-a100"]},{"name":"nvidia-h100","runner_type":"nvidia-h100","runs_on":["nvidia-h100"]},{"name":"nvidia-gb200","runner_type":"nvidia-gb200","runs_on":{"group":"gb200-runner-set"}}]' >> "$GITHUB_OUTPUT"
+            echo 'matrix-AMD=[["self-hosted", "gfx90a"], ["amd-gfx942"], ["amd-gfx950"]]' >> "$GITHUB_OUTPUT"
+            echo 'matrix-MACOS=[["macos-latest"]]' >> "$GITHUB_OUTPUT"
           else
-            echo '::set-output name=matrix-NVIDIA::[{"name":"ubuntu-latest","runner_type":"ubuntu-latest","runs_on":"ubuntu-latest"}]'
-            echo '::set-output name=matrix-AMD::["ubuntu-latest"]'
-            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
+            echo 'matrix-NVIDIA=[{"name":"ubuntu-latest","runner_type":"ubuntu-latest","runs_on":"ubuntu-latest"}]' >> "$GITHUB_OUTPUT"
+            echo 'matrix-AMD=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'matrix-MACOS=[["macos-latest"]]' >> "$GITHUB_OUTPUT"
           fi

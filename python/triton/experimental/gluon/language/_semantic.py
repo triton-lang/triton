@@ -4,7 +4,9 @@ from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout, CoalescedLayout, SharedLinearLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
+from triton._C.libtriton import ir
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
+from triton.runtime.jit import BoundConstexprFunction, ConstexprFunction
 
 TensorTy = TypeVar("TensorTy")
 
@@ -103,6 +105,59 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def __init__(self, builder: GluonOpBuilder):
         self.builder = builder
+
+    def to_inline_asm_operand(self, arg):
+        from .nvidia.blackwell import tensor_memory_descriptor
+
+        arg = ttgl._unwrap_if_constexpr(arg)
+        if isinstance(arg, (ttgl.shared_memory_descriptor, tensor_memory_descriptor)):
+            return arg
+        return self.to_tensor(arg)
+
+    def inline_asm(self, asm, constraints, args, result_types, is_pure):
+        asm = ttgl._unwrap_if_constexpr(asm)
+        constraints = ttgl._unwrap_if_constexpr(constraints)
+        result_types = ttgl._unwrap_if_constexpr(result_types)
+        is_pure = ttgl._unwrap_if_constexpr(is_pure)
+        multiple_outputs = not isinstance(result_types, ttgl.base_type)
+        if not multiple_outputs:
+            result_types = (result_types, )
+        result_types = tuple(ttgl._unwrap_if_constexpr(ty) for ty in result_types)
+        args = tuple(self.to_inline_asm_operand(arg) for arg in args)
+
+        def tensor_count(ty):
+            if isinstance(ty, ttgl.distributed_type):
+                _check(not isinstance(ty.layout, (AutoLayout, CoalescedLayout)),
+                       lambda: "inline_asm requires explicit distributed tensor layouts")
+            else:
+                _check(isinstance(ty, ttgl.dtype), lambda: "inline_asm requires scalar or distributed result types")
+            return self.builder.get_total_elems_per_thread(ty.to_ir(self.builder))
+
+        output_counts = [tensor_count(ty) for ty in result_types]
+        input_counts = [tensor_count(arg.type) if isinstance(arg, ttgl.tensor) else 1 for arg in args]
+        counts = output_counts + input_counts
+        if isinstance(asm, (ConstexprFunction, BoundConstexprFunction)):
+            groups = []
+            cursor = 0
+            for count in counts:
+                groups.append(tuple(f"${i}" for i in range(cursor, cursor + count)))
+                cursor += count
+            asm = asm(tuple(groups[:len(output_counts)]), tuple(groups[len(output_counts):]))
+        _check(isinstance(asm, str), lambda: "inline_asm expects a string or constexpr function returning a string",
+               TypeError)
+        if not isinstance(constraints, str):
+            _check(
+                len(constraints) == len(counts),
+                lambda: "inline_asm requires one constraint per output and input group")
+            constraints = ",".join(
+                ttgl._unwrap_if_constexpr(constraint)
+                for constraint, count in zip(constraints, counts)
+                for _ in range(count))
+
+        call = self.builder.create_threadwise_inline_asm(asm, constraints, [arg.handle for arg in args],
+                                                         [ty.to_ir(self.builder) for ty in result_types], is_pure)
+        results = tuple(self.tensor(call.get_result(i), ty) for i, ty in enumerate(result_types))
+        return results if multiple_outputs else results[0]
 
     def _wrap_handle_infer_layout(self, handle, scalar_ty, shape):
         if shape == []:
@@ -275,7 +330,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                lambda: f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match")
         self.builder.create_local_store(mem_desc.handle, value.handle)
 
-    def shared_gather(self, mem_desc, indices, axis):
+    def _check_int_indices_and_normalize_axis(self, mem_desc, indices, axis):
         _check(isinstance(indices, ttgl.tensor),
                lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
         _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
@@ -284,29 +339,74 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             lambda: f"indices rank must match memdesc rank: got {len(indices.shape)} and {mem_desc.rank}")
         _check(0 <= axis < mem_desc.rank, lambda: f"axis {axis} is out of bounds for memdesc rank {mem_desc.rank}")
         _check(indices.dtype.is_int(), lambda: f"indices must have integer dtype, got {indices.dtype}")
+        return axis
+
+    def _broadcast_shared_scatter_operands(self, mem_desc, values, indices, mask=None):
+        _check(isinstance(values, ttgl.tensor), lambda: f"expected 'values' to be a tensor, but got a {type(values)}")
+        _check(
+            values.dtype == mem_desc.dtype,
+            lambda: f"values element type must match destination element type: got {values.dtype} and {mem_desc.dtype}")
+
+        if mask is None:
+            values, indices = self.broadcast_tensors(values, indices)
+            return values, indices, None
+
+        values, indices, mask = self.broadcast_tensors(values, indices, mask)
+        _check(mask.dtype == ttgl.int1, lambda: f"mask must have boolean dtype, got {mask.dtype}")
+
+        return values, indices, mask
+
+    def shared_gather(self, mem_desc, indices, axis):
+        axis = self._check_int_indices_and_normalize_axis(mem_desc, indices, axis)
 
         ret_ty = ttgl.distributed_type(mem_desc.dtype, indices.shape, indices.type.layout)
         handle = self.builder.create_local_gather(ret_ty.to_ir(self.builder), mem_desc.handle, indices.handle, axis)
         return ttgl.tensor(handle, ret_ty)
 
     def shared_scatter(self, mem_desc, values, indices, axis):
-        _check(isinstance(indices, ttgl.tensor),
-               lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
-        _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
-        _check(isinstance(values, ttgl.tensor), lambda: f"expected 'values' to be a tensor, but got a {type(values)}")
-        _check(
-            len(indices.shape) == mem_desc.rank,
-            lambda: f"indices rank must match memdesc rank: got {len(indices.shape)} and {mem_desc.rank}")
-        _check(0 <= axis < mem_desc.rank, lambda: f"axis {axis} is out of bounds for memdesc rank {mem_desc.rank}")
-        _check(indices.dtype.is_int(), lambda: f"indices must have integer dtype, got {indices.dtype}")
-        _check(values.shape == indices.shape,
-               lambda: f"values must have the same shape as indices: got {values.shape} and {indices.shape}")
-        _check(values.type.layout == indices.type.layout, lambda: "values must have the same layout as indices")
-        _check(
-            values.dtype == mem_desc.dtype,
-            lambda: f"values element type must match destination element type: got {values.dtype} and {mem_desc.dtype}")
+        axis = self._check_int_indices_and_normalize_axis(mem_desc, indices, axis)
+        values, indices, _ = self._broadcast_shared_scatter_operands(mem_desc, values, indices)
 
         self.builder.create_local_scatter(mem_desc.handle, values.handle, indices.handle, axis)
+
+    def _get_shared_atomic_scatter_rmw_op(self, op, dtype):
+        if op == "add":
+            _check(dtype.is_int() or dtype.is_floating(), lambda: f"atomic_scatter_add does not support dtype {dtype}")
+            return ir.ATOMIC_OP.FADD if dtype.is_floating() else ir.ATOMIC_OP.ADD
+
+        if op in ("max", "min"):
+            _check(dtype.is_int(), lambda: f"atomic_scatter_{op} does not support dtype {dtype}")
+            if dtype.is_int_unsigned():
+                return ir.ATOMIC_OP.UMAX if op == "max" else ir.ATOMIC_OP.UMIN
+            return ir.ATOMIC_OP.MAX if op == "max" else ir.ATOMIC_OP.MIN
+
+        if op in ("and", "or", "xor"):
+            _check(dtype.is_int(), lambda: f"atomic_scatter_{op} does not support dtype {dtype}")
+            return {
+                "and": ir.ATOMIC_OP.AND,
+                "or": ir.ATOMIC_OP.OR,
+                "xor": ir.ATOMIC_OP.XOR,
+            }[op]
+
+        if op == "xchg":
+            _check(dtype.is_int() or dtype.is_floating(), lambda: f"atomic_scatter_xchg does not support dtype {dtype}")
+            return ir.ATOMIC_OP.XCHG
+
+        raise ValueError(f"unknown atomic scatter rmw op {op}")
+
+    def shared_atomic_scatter_rmw(self, mem_desc, op, values, indices, axis, mask):
+        axis = self._check_int_indices_and_normalize_axis(mem_desc, indices, axis)
+        values, indices, mask = self._broadcast_shared_scatter_operands(mem_desc, values, indices, mask)
+
+        mask_handle = mask.handle if mask is not None else None
+        rmw_op = self._get_shared_atomic_scatter_rmw_op(op, values.dtype)
+        handle = self.builder.create_local_atomic_scatter_rmw(rmw_op, mem_desc.handle, values.handle, indices.handle,
+                                                              mask_handle, axis)
+        ret_ty = ttgl.distributed_type(mem_desc.dtype, values.shape, values.type.layout)
+        return ttgl.tensor(handle, ret_ty)
+
+    def shared_atomic_scatter_add(self, mem_desc, values, indices, axis, mask):
+        return self.shared_atomic_scatter_rmw(mem_desc, "add", values, indices, axis, mask)
 
     def bank_conflicts(self, distr_ty, shared_ty):
         if not isinstance(distr_ty, ttgl.distributed_type):
@@ -502,13 +602,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         layout_attr = layout._to_ir(self.builder)
         handle = self.builder.create_histogram(input.handle, num_bins, mask, layout_attr)
         return self.wrap_tensor(handle, ttgl.int32, [num_bins], layout)
-
-    def cat(self, lhs: TensorTy, rhs: TensorTy, can_reorder: bool, layout) -> TensorTy:
-        _check(layout is not None, lambda: "cat requires a destination layout")
-        _check(can_reorder, lambda: "current implementation of `cat` always may reorder elements")
-        _check(len(lhs.shape) == 1, lambda: "cat requires a rank-1 input")
-        ret_type = ttgl.distributed_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]], layout)
-        return self.tensor(self.builder.create_cat(lhs.handle, rhs.handle, ret_type.to_ir(self.builder)), ret_type)
 
     def gather(self, src: TensorTy, index: TensorTy, axis: int) -> TensorTy:
         _check(isinstance(src.type, ttgl.distributed_type), lambda: f"expected distributed_type but got: {src.type!r}")

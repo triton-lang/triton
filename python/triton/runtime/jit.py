@@ -10,7 +10,7 @@ import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Generic, Iterable, Optional, TypeVar, overload, Dict, Any, Tuple
+from typing import Callable, Concatenate, Generic, Iterable, Optional, ParamSpec, TYPE_CHECKING, TypeVar, overload, Dict, Any, Tuple
 
 from triton.backends import BaseBackend
 from types import ModuleType
@@ -27,6 +27,9 @@ GLUON_MODULE = "triton.experimental.gluon.language"
 INDENT_PATTERN = re.compile(r"^(?P<indent>[ \t]*)def\s+\w+\s*\(", re.MULTILINE)
 
 T = TypeVar("T")
+P = ParamSpec("P")
+R = TypeVar("R")
+U = TypeVar("U")
 
 # -----------------------------------------------------------------------------
 # Dependencies Finder
@@ -92,14 +95,8 @@ class DependenciesFinder(ast.NodeVisitor):
     def ret(self):
         return self.hasher.hexdigest()
 
-    def _is_triton_builtin(self, node, func):
-        if inspect.isbuiltin(node.func):
-            return True
-        module = getattr(func, "__module__", "")
-        return module.startswith(TRITON_MODULE)
-
     def _update_hash(self, func):
-        assert isinstance(func, JITCallable)
+        func_key = func.cache_key
         # Merge our used_global_vals with those of the called function,
         # after checking that all overlapping values are consistent.
         for k in self.used_global_vals.keys() & func.used_global_vals.keys():
@@ -112,7 +109,6 @@ class DependenciesFinder(ast.NodeVisitor):
                 )
         self.used_global_vals.update(func.used_global_vals)
         # update hash
-        func_key = func.cache_key
         func_key += str(getattr(func, "noinline", False))
         self.hasher.update(func_key.encode("utf-8"))
 
@@ -165,12 +161,10 @@ class DependenciesFinder(ast.NodeVisitor):
             return None
 
         def name_lookup(name):
-            val = self.globals.get(name, None)
-            if val is not None:
-                return val, self.globals
-            val = self.nonlocals.get(name, None)
-            if val is not None:
-                return val, self.nonlocals
+            if name in self.nonlocals:
+                return self.nonlocals[name], self.nonlocals
+            if name in self.globals:
+                return self.globals[name], self.globals
             return None, None
 
         val, var_dict = name_lookup(node.id)
@@ -192,14 +186,18 @@ class DependenciesFinder(ast.NodeVisitor):
         lhs_name = getattr(lhs, "__name__", "")
         if lhs is None or lhs_name in self.supported_modules:
             return None
-        ret = getattr(lhs, node.attr)
+        ret = getattr(lhs, node.attr, None)
         self.record_reference(ret)
         return ret
 
     def visit_FunctionDef(self, node):
         # Save the local name, which may hide the global name.
         self.local_names = {arg.arg for arg in node.args.args}
-        self.generic_visit(node)
+        for child in ast.iter_child_nodes(node):
+            self.visit(child)
+            # Keyword-only parameters shadow globals in the body, but not in defaults.
+            if child is node.args and node.args.kwonlyargs:
+                self.local_names.update(arg.arg for arg in node.args.kwonlyargs)
 
     def visit_arguments(self, node):
         # The purpose of this function is to visit everything in `arguments`
@@ -234,13 +232,17 @@ class DependenciesFinder(ast.NodeVisitor):
         visit_defaults(node.defaults)
 
     def visitAssnTarget(self, node):
-        # Target is either a single string, or a list of strings (if the assn
-        # target is a tuple).
+        # Target is either a single string, or a (possibly nested) list of strings if the assign target is a tuple.
         target = self.visit(node)
-        if isinstance(target, list):
-            self.local_names |= set(target)
-        else:
-            self.local_names.add(target)
+
+        def _add(t):
+            if isinstance(t, list):
+                for sub in t:
+                    _add(sub)
+            else:
+                self.local_names.add(t)
+
+        _add(target)
 
     def visit_Assign(self, node):
         if len(node.targets) != 1:
@@ -424,10 +426,21 @@ def create_function_from_signature(sig, kparams, backend):
             else:
                 specialization.append(f"{ret}")
 
-    # compute argument string for a given parameter
-    arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
+    # compute argument strings, preserving the keyword-only separator
+    arg_list = []
+    has_star = False
+    for name, param in sig.parameters.items():
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            arg_list.append(f"*{name}")
+            has_star = True
+            continue
+        if param.kind == inspect.Parameter.KEYWORD_ONLY and not has_star:
+            arg_list.append("*")
+            has_star = True
+        arg_list.append(name if param.default is inspect.Parameter.empty else f"{name}=default_{name}")
+
     func_body = f"""
-def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
+def dynamic_func({", ".join(arg_list + ["**options"])}):
     params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
     specialization = [{','.join(specialization)}]
     return params, specialization, options
@@ -523,9 +536,11 @@ class JITCallable:
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
             from triton.language.core import constexpr
-            self.hash += str([(name, val)
-                              for (name, _), (val, _) in self.used_global_vals.items()
-                              if isinstance(val, constexpr)])
+            constexpr_globals = [(name, val)
+                                 for (name, _), (val, _) in self.used_global_vals.items()
+                                 if isinstance(val, constexpr)]
+            constexpr_globals.sort(key=lambda item: (item[0], repr(item[1])))
+            self.hash += str(constexpr_globals)
             self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
 
@@ -537,7 +552,6 @@ class JITCallable:
     # Our unit tests do this, for example.
     def parse(self):
         tree = ast.parse(self._src)
-        assert isinstance(tree, ast.Module)
         assert len(tree.body) == 1
         assert isinstance(tree.body[0], ast.FunctionDef)
         return tree
@@ -581,6 +595,19 @@ class JitFunctionInfo:
     jit_function: JITFunction
 
 
+def _replace_jit_callables(obj):
+    if isinstance(obj, list):
+        return [_replace_jit_callables(arg) for arg in obj]
+    elif is_namedtuple(obj):
+        results = [_replace_jit_callables(arg) for arg in obj]
+        return obj.__class__(*results)
+    elif isinstance(obj, tuple):
+        return tuple(_replace_jit_callables(arg) for arg in obj)
+    elif isinstance(obj, JITCallable):
+        return obj.cache_key
+    return obj
+
+
 def compute_cache_key(kernel_key_cache, specialization, options):
     key = (tuple(specialization), str(options))
     cache_key = kernel_key_cache.get(key, None)
@@ -588,19 +615,7 @@ def compute_cache_key(kernel_key_cache, specialization, options):
         return cache_key
 
     # Replace JITCallable objects with their hash, so the cache key will change if the src is updated
-    def replace_callables(obj):
-        if isinstance(obj, list):
-            return [replace_callables(arg) for arg in obj]
-        elif is_namedtuple(obj):
-            results = [replace_callables(arg) for arg in obj]
-            return obj.__class__(*results)
-        elif isinstance(obj, tuple):
-            return tuple(replace_callables(arg) for arg in obj)
-        elif isinstance(obj, JITCallable):
-            return obj.cache_key
-        return obj
-
-    cache_key = str(replace_callables(specialization)) + str(options)
+    cache_key = str(_replace_jit_callables(specialization)) + str(options)
     kernel_key_cache[key] = cache_key
     return cache_key
 
@@ -718,6 +733,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
+        kwargs["fpsan_homomorphic_casts"] = knobs.compilation.fpsan_homomorphic_casts
 
         # parse options
         device = driver.active.get_current_device()
@@ -759,7 +775,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         if not warmup:
             # canonicalize grid
-            assert grid is not None
             if callable(grid):
                 grid = grid(bound_args)
             grid_size = len(grid)
@@ -787,14 +802,17 @@ class JITFunction(JITCallable, KernelInterface[T]):
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self._repr = repr
         self.launch_metadata = launch_metadata
-        # Register for simple deserialization of JITFunction constants
-        _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                raise TypeError(f"JIT functions do not support **{param.name} parameters")
             dns = i in do_not_specialize or param.name in do_not_specialize
             dns_oa = i in do_not_specialize_on_alignment or param.name in do_not_specialize_on_alignment
             self.params.append(KernelParam(i, param, dns, dns_oa))
+
+        # Register for simple deserialization of JITFunction constants
+        _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
 
         # cache of just-in-time compiled kernels
         self.device_caches = defaultdict(self.create_binder)
@@ -888,7 +906,12 @@ class JITFunction(JITCallable, KernelInterface[T]):
                 self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, target, device, constexprs,
                                 options, [attrs], warmup)
 
-            kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
+            def cleanup_compile(future_kernel):
+                # On failure, remove the unresolved placeholder so its Future does not retain compiler locals.
+                if kernel_cache.get(key) is future_kernel:
+                    del kernel_cache[key]
+
+            kernel = async_mode.submit(cache_key, async_compile, finalize_compile, cleanup_compile)
             kernel_cache[key] = kernel
         else:
             kernel = self.compile(src, target=target, options=options.__dict__)
@@ -897,8 +920,22 @@ class JITFunction(JITCallable, KernelInterface[T]):
                             [attrs], warmup)
         return kernel
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self: "JITFunction[Callable[P, R]]", *args: P.args, **kwargs: P.kwargs) -> R:
         raise RuntimeError("Cannot call @triton.jit'd outside of the scope of a kernel")
+
+    if TYPE_CHECKING:
+
+        @overload
+        def __get__(self, instance: None, owner: Optional[type] = None) -> "JITFunction[T]":
+            ...
+
+        @overload
+        def __get__(self: "JITFunction[Callable[Concatenate[U, P], R]]", instance: Any,
+                    owner: Optional[type] = None) -> Callable[P, R]:
+            ...
+
+        def __get__(self, instance, owner=None):
+            ...
 
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__qualname__})"
@@ -958,7 +995,6 @@ def jit(
     """
 
     def decorator(fn: T) -> JITFunction[T]:
-        assert callable(fn)
         if knobs.runtime.interpret:
             from .interpreter import InterpretedFunction
             return InterpretedFunction(fn, version=version, do_not_specialize=do_not_specialize,
@@ -1113,7 +1149,7 @@ class BoundConstexprFunction(JITCallable):
         return self.__func__(self.__self__, *args, **kwargs)
 
 
-class ConstexprFunction(JITCallable):
+class ConstexprFunction(JITCallable, Generic[T]):
 
     def __init__(self, fn):
         super().__init__(fn)
@@ -1123,6 +1159,10 @@ class ConstexprFunction(JITCallable):
         if obj is not None:
             return BoundConstexprFunction(obj, self)
         return self
+
+    @overload
+    def __call__(self: "ConstexprFunction[Callable[P, R]]", *args: P.args, **kwargs: P.kwargs) -> R:
+        ...
 
     def __call__(self, *args, _semantic=None, **kwargs):
         from triton.language.core import _unwrap_if_constexpr, constexpr
@@ -1143,7 +1183,7 @@ class ConstexprFunction(JITCallable):
         return constexpr(res)
 
 
-def constexpr_function(fn):
+def constexpr_function(fn: T) -> ConstexprFunction[T]:
     """
     Wraps an arbitrary Python function so that it can be called at
     compile-time on constexpr arguments in a Triton function and

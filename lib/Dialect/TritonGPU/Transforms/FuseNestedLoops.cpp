@@ -709,9 +709,6 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   Value curI = fused.getRegionIterArg(1);
   Value i;
 
-  auto lenInnersIt =
-      ValueRange(fused.getRegionIterArgs()).begin() + lenInnersStartIdx;
-
   ArrayRef<BlockArgument> ivars = fused.getRegionIterArgs().slice(ivarStartIdx);
   auto bodyOutsIt =
       ValueRange(fused.getRegionIterArgs()).begin() + innerOutsStartIdx;
@@ -886,33 +883,36 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   //   epilogue(i)
   Logue &epilogue = logues.back();
 
-  // The only possible use of an epilogue output is the yield.
+  // The only external uses of epilogue outputs are in the outer yield.
+  auto epilogueOutputs = epilogue.getOutputs();
   auto outerYield = cast<scf::YieldOp>(outer.getBody()->getTerminator());
-  SmallVector<Value> usedIterArgs;
-  for (Value output : epilogue.getOutputs()) {
-    for (OpOperand &use : output.getUses()) {
-      if (use.getOwner() == outerYield) {
-        usedIterArgs.push_back(fused.getRegionIterArgs().drop_front(
-            outerArgsStartIdx)[use.getOperandNumber()]);
-      }
-    }
+
+  SmallVector<unsigned> positions;
+  SmallVector<Value> thenValues, elseValues;
+  for (auto [pos, value] : llvm::enumerate(outerYield.getOperands())) {
+    if (!llvm::is_contained(epilogueOutputs, value))
+      continue;
+    positions.push_back(pos);
+    thenValues.push_back(value);
+    elseValues.push_back(fused.getRegionIterArg(outerArgsStartIdx + pos));
   }
 
   auto epilogueCond =
       arith::CmpIOp::create(b, arith::CmpIPredicate::eq, T,
                             arith::SubIOp::create(b, innerLen, intTyCst(1)));
   auto epilogueIf =
-      scf::IfOp::create(b, epilogue.getOutputTypes(), epilogueCond);
+      scf::IfOp::create(b, ValueRange(thenValues).getTypes(), epilogueCond);
 
   Block *thenBlock = b.createBlock(&epilogueIf.getThenRegion());
   epilogue.moveBefore(thenBlock, thenBlock->end());
 
   b.setInsertionPointToEnd(thenBlock);
-  scf::YieldOp::create(b, epilogue.getOutputs());
+  scf::YieldOp::create(b, thenValues);
   b.createBlock(&epilogueIf.getElseRegion());
-  scf::YieldOp::create(b, usedIterArgs);
-  epilogue.replaceAllUsesWith(epilogueIf.getResults(),
-                              epilogueIf.getThenRegion());
+  scf::YieldOp::create(b, elseValues);
+  for (auto [result, position] :
+       llvm::zip_equal(epilogueIf.getResults(), positions))
+    outerYield->setOperand(position, result);
 
   // T = 0 if T == (inner_len - 1) else T + 1
   b.setInsertionPointToEnd(fused.getBody());
@@ -1011,17 +1011,22 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   // Update the parent's loop to the fused loop. Set the new stage count to the
   // max stage count of the inner loops.
   int numStages = 1;
-  if (auto stageAttr = outer->getAttrOfType<IntegerAttr>(kNumStagesAttrName))
+  bool hasNumStages = false;
+  if (auto stageAttr = outer->getAttrOfType<IntegerAttr>(kNumStagesAttrName)) {
+    hasNumStages = true;
     numStages = stageAttr.getInt();
+  }
   for (InnerLoop &loop : innerLoops) {
     if (auto stageAttr =
-            loop.op->getAttrOfType<IntegerAttr>(kNumStagesAttrName))
+            loop.op->getAttrOfType<IntegerAttr>(kNumStagesAttrName)) {
+      hasNumStages = true;
       numStages = std::max<int>(numStages, stageAttr.getInt());
+    }
     loop.op.erase();
   }
   outer.erase();
   parent->loop = fused;
-  if (numStages > 1)
+  if (hasNumStages)
     fused->setAttr(kNumStagesAttrName, b.getI32IntegerAttr(numStages));
 }
 
@@ -1103,11 +1108,14 @@ static void optimizeEpilogueDependencies(scf::ForOp outerLoop,
 }
 
 // Crudely match llvm.assume(ub > lb) or llvm.assume(lb < ub).
-static LogicalResult matchPositiveTripCount(scf::ForOp loop) {
+static LogicalResult matchPositiveTripCount(scf::ForOp loop,
+                                            mlir::DominanceInfo &domInfo) {
   for (Operation *user : loop.getUpperBound().getUsers()) {
     if (auto cmp = dyn_cast<arith::CmpIOp>(user)) {
-      if (llvm::none_of(cmp->getUsers(),
-                        [](Operation *op) { return isa<LLVM::AssumeOp>(op); }))
+      if (llvm::none_of(cmp->getUsers(), [&](Operation *op) {
+            return isa<LLVM::AssumeOp>(op) &&
+                   domInfo.properlyDominates(op, loop);
+          }))
         continue;
       if (cmp.getPredicate() == (loop.getUnsignedCmp()
                                      ? arith::CmpIPredicate::ugt
@@ -1137,7 +1145,7 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
   ImplicitLocOpBuilder b(loc, outerLoop);
 
   // Check if the inner loop is known to execute at least once.
-  if (succeeded(matchPositiveTripCount(innerLoop))) {
+  if (succeeded(matchPositiveTripCount(innerLoop, domInfo))) {
     innerLoop->setAttr(kMustExecuteAttrName, b.getUnitAttr());
     return success();
   }
@@ -1157,12 +1165,11 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
   // Mark the inner loop.
   innerLoop->setAttr(kMustExecuteAttrName, b.getUnitAttr());
 
-  // Speculate on whether the length of the inner loop is zero.
-  Value lenInner = computeNumIters(b, innerLoop);
-  auto zeroAttr = IntegerAttr::get(lenInner.getType(), 0);
-  Value innerLoopEmpty =
-      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, lenInner,
-                            arith::ConstantOp::create(b, zeroAttr));
+  // SCF for loops have positive steps, so inverted bounds are empty too.
+  auto predicate = innerLoop.getUnsignedCmp() ? arith::CmpIPredicate::uge
+                                              : arith::CmpIPredicate::sge;
+  Value innerLoopEmpty = arith::CmpIOp::create(
+      b, predicate, innerLoop.getLowerBound(), innerLoop.getUpperBound());
   auto ifOp = scf::IfOp::create(b, outerLoop.getResultTypes(), innerLoopEmpty);
 
   // In the `then` branch, the inner loop does not execute. Clone the loop nest
@@ -1180,7 +1187,7 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
 
   // Move the loop nest into the `else` branch.
   outerLoop.replaceAllUsesWith(ifOp.getResults());
-  Block *block = b.createBlock(&ifOp.getElseRegion());
+  b.createBlock(&ifOp.getElseRegion());
   outerLoop->remove();
   b.insert(outerLoop);
   scf::YieldOp::create(b, outerLoop.getResults());
@@ -1196,6 +1203,9 @@ static LogicalResult preprocessLoopNest(const LoopNest &nest,
   scf::ForOp &innerLoop = nest.root->children.front()->loop;
 
   moveLoopInvariantCode(outerLoop);
+  // LICM might have hoisted the inner loop
+  if (innerLoop->getBlock() != outerLoop.getBody())
+    return failure();
   optimizeEpilogueDependencies(outerLoop, innerLoop, domInfo);
   return speculateInnerLoopLength(outerLoop, innerLoop, domInfo);
 }

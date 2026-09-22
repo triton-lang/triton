@@ -17,8 +17,8 @@ long as the libtriton.so is linked to the plugin and the Triton include passes a
 
 ## Example 1: Developing a custom pass and running triton-opt to inspect the modified IR
 ``` bash
-export LLVM_BUILD_SHARED_LIBS=1;  make dev-install-llvm
-TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so triton-opt -tritongpu-plugin test/Plugins/test-plugin.mlir
+export TRITON_EXT_ENABLED=1;  make dev-install-llvm
+TRITON_PLUGIN_PATHS=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so triton-opt -tritongpu-plugin test/Plugins/test-plugin.mlir
 ```
 ``` MLIR
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:80"} {
@@ -85,7 +85,7 @@ Running same code but loading the plugin library also produces the same results 
 pass manager it is not inserted into the compiler pass pipeline:
 
 ``` bash
-TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.py
+TRITON_PLUGIN_PATHS=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.py
 ```
 
 ``` MLIR
@@ -103,6 +103,8 @@ Finally, if we both load the plugin at runtime and insert the pass pipeline hook
 ``` python
 import torch
 import os
+import hashlib
+import pathlib
 
 import triton
 import triton.language as tl
@@ -151,7 +153,7 @@ if __name__ == '__main__':
     h = kernel[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])
 
-    if "TRITON_PASS_PLUGIN_PATH" in os.environ:
+    if "TRITON_PLUGIN_PATHS" in os.environ:
       knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
     h = kernel[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])
@@ -163,7 +165,7 @@ if __name__ == '__main__':
 ```
 
 ``` bash
-TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.py
+TRITON_PLUGIN_PATHS=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.py
 ```
 
 Shows the pass ran and modified the kernel name but only after the hook is set. Any kernels before the hook or after the hook is unset are left unchanged.
@@ -236,6 +238,8 @@ inserted pass.
 ``` python
 import torch
 import os
+import hashlib
+import pathlib
 import sys
 
 import triton
@@ -263,8 +267,8 @@ def get_hash():
     return hashlib.sha256(get_key().encode('utf-8')).hexdigest()
 
 def dump_stages_hook(self=None, stages=None, options=None, language=None, capability=None):
-  if all(arg is None for arg in (stages, options, language, capability)):
-      return get_key(), get_hash()
+    if all(arg is None for arg in (stages, options, language, capability)):
+        return get_key(), get_hash()
     source_code = "# This is generated from Triton compiler.py"
     source_code = (
         source_code
@@ -277,10 +281,10 @@ def dump_stages_hook(self=None, stages=None, options=None, language=None, capabi
 
     with open("compiler_override.py", "w") as file:
         file.write(source_code)
-  return get_key(), get_hash()
+    return get_key(), get_hash()
 def override_stages(self=None, stages=None, options=None, language=None, capability=None):
-  if all(arg is None for arg in (stages, options, language, capability)):
-      return get_key(), get_hash()
+    if all(arg is None for arg in (stages, options, language, capability)):
+        return get_key(), get_hash()
     if language != Language.TRITON:
         return
     full_name = "compiler_override.py"
@@ -330,7 +334,7 @@ if __name__ == '__main__':
             if "add_loop_unroll" in line:
                 outfile.write("\n        passes.plugin.add_plugin(pm)\n")
             outfile.write(line)
-    if "TRITON_PASS_PLUGIN_PATH" in os.environ:
+    if "TRITON_PLUGIN_PATHS" in os.environ:
       knobs.runtime.add_stages_inspection_hook = override_stages
     h = kernel2[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])

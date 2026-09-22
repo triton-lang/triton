@@ -7,7 +7,9 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna4
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4, is_hip_gfx1250
+
+FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
 
 def matching_int(dtype):
@@ -269,6 +271,7 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     ('float8e4b8', 'float16'),
 
     ('float8e5b16', 'float32'),
+    ('float8e5b16', 'bfloat16'),
     ('float8e5b16', 'float16'),
 ])
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
@@ -283,6 +286,8 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
     elif is_hip():
+        if src_dtype in FP8_DTYPES and is_hip_rdna3():
+            pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
         if  (src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4())):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
         if  src_dtype == 'float8e4b15':
@@ -290,8 +295,8 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
             with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
-        if src_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_rdna4()):
-            pytest.skip(f"{src_dtype} is not supported on AMDGPU CDNA2 and RDNA4")
+        if src_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
+            pytest.skip(f"{src_dtype} is not supported on current AMD GPU")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {
@@ -343,8 +348,10 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
 
     if is_hip():
-        if dst_dtype in ('float8e4b8', 'float8e5b16') and (is_hip_cdna2() or is_hip_rdna4()):
-            pytest.skip(f"{dst_dtype} is not supported on AMDGPU CDNA2 and RDNA4")
+        if dst_dtype in FP8_DTYPES and is_hip_rdna3():
+            pytest.skip(f"{dst_dtype} is not supported on AMDGPU RDNA3")
+        if dst_dtype in ('float8e4b8', 'float8e5b16') and is_hip_cdna2():
+            pytest.skip(f"{dst_dtype} is not supported on current AMD GPU")
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias)
     stuff = {
@@ -373,7 +380,10 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
         if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
 
-    if mode in ('inf', '-inf') and is_hip_rdna4():
+    if dst_dtype in FP8_DTYPES and is_hip_rdna3():
+        pytest.skip(f"{dst_dtype} is not supported on AMDGPU RDNA3")
+
+    if mode in ('inf', '-inf') and (is_hip_rdna4() or is_hip_gfx1250()):
         pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX12")
 
     converter = {
@@ -423,3 +433,28 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
         assert(torch.all(torch.isnan(dst)))
     else:
         torch.testing.assert_close(dst, torch.full_like(dst, expected_result))
+
+
+@pytest.mark.parametrize("src_dtype", ['float8e4b8', 'float8e5b16'])
+@pytest.mark.parametrize("dst_dtype", ['float16', 'bfloat16', 'float32'])
+def test_typeconvert_upcast_fnuz_nan(src_dtype, dst_dtype, device):
+    # 0x80 is the single NaN encoding in the fnuz fp8 formats; upcasting it must yield NaN.
+    if not is_hip():
+        pytest.skip("fnuz fp8 is an AMD format")
+    if is_hip_rdna3():
+        pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
+    if is_hip_cdna2():
+        pytest.skip(f"{src_dtype} is not supported on current AMD GPU")
+
+    tl_src = getattr(tl, src_dtype)
+    tl_dst = getattr(tl, dst_dtype)
+
+    # -128 as a signed int8 is the 0x80 bit pattern.
+    BLOCK_SIZE = 4096
+    src = torch.full((BLOCK_SIZE,), -128, dtype=torch.int8, device=device)
+    dst = launch_type_convert_triton(src, tl_src, tl_dst, device=device, BLOCK_SIZE=BLOCK_SIZE)
+
+    torch_dst = {tl.float16: torch.float16, tl.bfloat16: torch.bfloat16,
+                 tl.float32: torch.float32}[tl_dst]
+    assert torch.all(torch.isnan(dst.view(torch_dst))), \
+        f"fnuz {src_dtype} NaN byte 0x80 -> {dst_dtype} should be NaN, got {dst[0].item():#x}"

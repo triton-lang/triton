@@ -1,4 +1,5 @@
 add_triton_library(TritonInstrumentTransforms
+  PrepareConSanCaptures.cpp
   GlobalSanitizer.cpp
   ConcurrencySanitizer.cpp
   FpSanitizer.cpp
@@ -9,6 +10,7 @@ add_triton_library(TritonInstrumentTransforms
   LINK_LIBS PUBLIC
   MLIRTransforms
   MLIRTransformUtils
+  TritonAnalysis
   TritonIR
   TritonGPUIR
   TritonNvidiaGPUIR

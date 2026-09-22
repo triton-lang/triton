@@ -1,4 +1,5 @@
 #include "Context/Shadow.h"
+#include "Utility/Errors.h"
 
 #include <stdexcept>
 #include <thread>
@@ -7,7 +8,8 @@ namespace proton {
 
 void ShadowContextSource::initializeThreadContext() {
   if (!threadContextInitialized[this]) {
-    threadContextStack[this] = *mainContextStack;
+    threadContextStack.erase(this);
+    threadContextStack.emplace(this, *mainContextStack);
     threadContextInitialized[this] = true;
   }
 }
@@ -29,10 +31,10 @@ size_t ShadowContextSource::getDepth() {
 
 void ShadowContextSource::exitScope(const Scope &scope) {
   if (threadContextStack[this].empty()) {
-    throw std::runtime_error("Context stack is empty");
+    throw makeLogicError("Context stack is empty");
   }
   if (threadContextStack[this].back() != scope) {
-    throw std::runtime_error("Context stack is not balanced");
+    throw makeLogicError("Context stack is not balanced");
   }
   threadContextStack[this].pop_back();
 }

@@ -30,15 +30,43 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/Support/MathExtras.h"
 
 #include "Utility.h"
+#include <type_traits>
 
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace ttg = mlir::triton::gpu;
 
+void mlir::triton::NVIDIA::createFenceMBarrierInitReleaseCluster(
+    OpBuilder &builder, Location loc, Value pred) {
+  PTXBuilder ptxBuilder;
+  auto &fence = *ptxBuilder.create("fence.mbarrier_init.release.cluster");
+  fence().predicate(pred);
+  ptxBuilder.launch(builder, loc, void_ty(builder.getContext()));
+}
+
 namespace {
+template <typename OpTy>
+struct GridDependencyOpConversion : public ConvertOpToLLVMPattern<OpTy> {
+  using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    PTXBuilder ptxBuilder;
+    if constexpr (std::is_same_v<OpTy, triton::GridDependencyWaitOp>)
+      (*ptxBuilder.create("griddepcontrol.wait"))();
+    else
+      (*ptxBuilder.create("griddepcontrol.launch_dependents"))();
+    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(rewriter.getContext()));
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 Value getElectWarp0OrThread0(const NVIDIA::TargetInfo &targetInfo,
                              TritonLLVMOpBuilder &b) {
   if (targetInfo.getComputeCapability() >= 90) {
@@ -47,6 +75,47 @@ Value getElectWarp0OrThread0(const NVIDIA::TargetInfo &targetInfo,
     auto tid = getThreadId(*b.builder, b.loc);
     return b.icmp_eq(tid, b.i32_val(0));
   }
+}
+
+struct FromCTALowering {
+  Value pred;
+  Value barrierPtr;
+  Value multicastMask;
+};
+
+FromCTALowering getFromCTALowering(Location loc,
+                                   ConversionPatternRewriter &rewriter,
+                                   Value barrierPtr, uint32_t fromCTA,
+                                   bool supportsMBarrierMulticast) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  uint32_t broadcastMask =
+      (triton::gpu::lookupNumCTAs(rewriter) - 1) & ~fromCTA;
+  Type i32Ty = rewriter.getIntegerType(32);
+
+  Value id = getThreadId(rewriter, loc);
+  Value pred =
+      supportsMBarrierMulticast
+          ? b.icmp_eq(id, b.i32_val(0))
+          : b.icmp_ult(id, b.i32_val(1u << llvm::popcount(broadcastMask)));
+  Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32Ty);
+  Value sourceCTA = b.and_(ctaId, b.i32_val(broadcastMask));
+  pred = b.and_(pred, b.icmp_eq(sourceCTA, b.i32_val(0)));
+
+  if (supportsMBarrierMulticast)
+    return {pred, barrierPtr,
+            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastMask)};
+
+  Value peerOffset = b.i32_val(0);
+  unsigned srcBit = 0;
+  for (uint32_t mask = broadcastMask; mask; mask &= mask - 1, ++srcBit) {
+    unsigned dstBit = llvm::countr_zero(mask);
+    Value bit = b.and_(id, b.i32_val(1u << srcBit));
+    peerOffset = b.or_(peerOffset, b.shl(bit, b.i32_val(dstBit + 24 - srcBit)));
+  }
+  Value barrierInt = b.ptrtoint(i32Ty, barrierPtr);
+  Value peerBarrierInt = b.xor_(barrierInt, peerOffset);
+  Value peerBarrierPtr = b.inttoptr(barrierPtr.getType(), peerBarrierInt);
+  return {pred, peerBarrierPtr, {}};
 }
 
 struct FenceAsyncSharedOpConversion
@@ -79,17 +148,11 @@ struct FenceMBarrierInitReleaseClusterOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    // Only one thread needs to issue the fence, just like mbarrier.init.
-    Value tid = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(tid, b.i32_val(0));
+    // The fence only orders initializations issued by the same thread.
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
 
-    PTXBuilder ptxBuilder;
-    auto &fence = *ptxBuilder.create("fence.mbarrier_init.release.cluster");
-    fence().predicate(pred);
-    auto voidTy = void_ty(op->getContext());
-    ptxBuilder.launch(rewriter, loc, voidTy);
+    NVIDIA::createFenceMBarrierInitReleaseCluster(rewriter, loc, pred);
 
     rewriter.eraseOp(op);
     return success();
@@ -187,7 +250,12 @@ struct InvalBarrierOpConversion
 
 struct BarrierExpectConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::BarrierExpectOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  bool supportsMBarrierMulticast;
+  BarrierExpectConversion(LLVMTypeConverter &typeConverter,
+                          PatternBenefit benefit,
+                          bool supportsMBarrierMulticast)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        supportsMBarrierMulticast(supportsMBarrierMulticast) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::BarrierExpectOp op, OpAdaptor adaptor,
@@ -198,45 +266,46 @@ struct BarrierExpectConversion
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
-    // If several CTAs cast to the same barrier, that barrier will receive all
-    // the bytes from its broadcast group
-    auto numCTAs = triton::gpu::lookupNumCTAs(rewriter);
-    auto expectedBytes = op.getSize() * (numCTAs / barrierTy.getNumElements());
+    // Because this operation can signal other partitions we need to synchronize
+    // the current partition first.
+    ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
 
-    auto id = getThreadId(rewriter, loc);
-    Value basePred = b.icmp_eq(id, b.i32_val(0));
-    basePred = b.and_(basePred, adaptor.getPred());
-    auto leaderCTAPred =
-        LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy);
-    bool crossCluster = leaderCTAPred.has_value();
-    Value leaderPred =
-        leaderCTAPred ? b.and_(basePred, *leaderCTAPred) : basePred;
-    Value leaderBarrierPtr = LLVM::NVIDIA::getLeaderAddress(
+    // The partition-relative thread ID lowers the same or marginally better
+    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
+    Value id = getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(id, b.i32_val(0));
+    bool isCrossClusterBarrier =
+        LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
+    Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
+    Value multicastMask;
+    if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
+      FromCTALowering lowering =
+          getFromCTALowering(loc, rewriter, smemObj.getBase(), *fromCTA,
+                             supportsMBarrierMulticast);
+      pred = lowering.pred;
+      barrierPtr = lowering.barrierPtr;
+      multicastMask = lowering.multicastMask;
+      isCrossClusterBarrier = true;
+    }
+    pred = b.and_(pred, adaptor.getPred());
 
     ::mlir::triton::PTXBuilder expectPtxBuilder;
     const std::string expectPtx =
-        "@$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], " +
-        std::to_string(expectedBytes) + ";";
+        "@$0 mbarrier.arrive.expect_tx." +
+        std::string(isCrossClusterBarrier ? "shared::cluster" : "shared::cta") +
+        std::string(multicastMask ? ".multicast::cluster::32b" : "") +
+        ".b64 _, [$1], " + std::to_string(op.getSize()) +
+        std::string(multicastMask ? ", $2" : "") + ";";
     auto &expectOp = *expectPtxBuilder.create(expectPtx);
-    expectOp({expectPtxBuilder.newOperand(leaderPred, "b"),
-              expectPtxBuilder.newOperand(leaderBarrierPtr, "r")},
-             /*onlyAttachMLIRArgs=*/true);
+    SmallVector<PTXBuilder::Operand *, 3> operands = {
+        expectPtxBuilder.newOperand(pred, "b"),
+        expectPtxBuilder.newOperand(barrierPtr, "r")};
+    if (multicastMask)
+      operands.push_back(expectPtxBuilder.newOperand(multicastMask, "r"));
+    expectOp(operands, /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(op->getContext());
     expectPtxBuilder.launch(rewriter, loc, voidTy);
-
-    if (crossCluster) {
-      // Non-leader CTAs still contribute one arrival to the lead CTA barrier.
-      auto nonLeaderPred = b.and_(basePred, b.xor_(leaderPred, b.true_val()));
-      ::mlir::triton::PTXBuilder arrivePtxBuilder;
-      const std::string arrivePtx =
-          "@$0 mbarrier.arrive.shared::cluster.b64 _, [$1], 1;";
-      auto &arriveOp = *arrivePtxBuilder.create(arrivePtx);
-      arriveOp({arrivePtxBuilder.newOperand(nonLeaderPred, "b"),
-                arrivePtxBuilder.newOperand(leaderBarrierPtr, "r")},
-               /*onlyAttachMLIRArgs=*/true);
-      arrivePtxBuilder.launch(rewriter, loc, voidTy);
-    }
 
     rewriter.eraseOp(op);
     return success();
@@ -265,7 +334,7 @@ struct WaitBarrierOpConversion
     auto pred = adaptor.getPred();
     if (auto leaderPred =
             LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
-      pred = b.and_(pred, *leaderPred);
+      pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
 
     bool predicated = pred && !matchPattern(pred, m_NonZero());
     std::string ptx;
@@ -333,7 +402,12 @@ struct WaitBarrierOpConversion
 
 struct ArriveBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ArriveBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  bool supportsMBarrierMulticast;
+  ArriveBarrierOpConversion(LLVMTypeConverter &typeConverter,
+                            PatternBenefit benefit,
+                            bool supportsMBarrierMulticast)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        supportsMBarrierMulticast(supportsMBarrierMulticast) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
@@ -350,31 +424,51 @@ struct ArriveBarrierOpConversion
     // accesses which doesn't have a MemBar equivalent :/
     ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
 
+    // The partition-relative thread ID lowers the same or marginally better
+    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
     Value id = getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(id, b.i32_val(0));
-    if (op.getPred())
-      pred = b.and_(pred, adaptor.getPred());
 
-    bool isCrossCluster =
-        LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy)
-            .has_value();
-
+    bool isCrossClusterBarrier =
+        op.isMulticast() || LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
+    Value multicastMask;
+    if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
+      FromCTALowering lowering =
+          getFromCTALowering(loc, rewriter, smemObj.getBase(), *fromCTA,
+                             supportsMBarrierMulticast && !op.isMulticast());
+      pred = lowering.pred;
+      barrierPtr = lowering.barrierPtr;
+      multicastMask = lowering.multicastMask;
+      isCrossClusterBarrier = true;
+    }
+    if (op.getPred())
+      pred = b.and_(pred, adaptor.getPred());
     // TODO: Add phase result as needed.
     std::stringstream ptxAsm;
     ptxAsm << "@$0 mbarrier.arrive."
-           << (isCrossCluster ? "shared::cluster" : "shared::cta")
-           << ".b64 _, [$1]";
+           << (isCrossClusterBarrier ? "shared::cluster" : "shared::cta");
+    if (op.isMulticast() || multicastMask)
+      ptxAsm << ".multicast::cluster::32b";
+    ptxAsm << ".b64 _, [$1]";
     if (op.getCount() > 1) {
       ptxAsm << ", " << op.getCount();
     }
+    if (op.isMulticast() || multicastMask)
+      ptxAsm << ", $2";
     ptxAsm << ";";
 
     PTXBuilder ptxBuilder;
-    SmallVector<PTXBuilder::Operand *, 2> operands = {
+    SmallVector<PTXBuilder::Operand *, 3> operands = {
         ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(barrierPtr, "r")};
+    if (op.isMulticast()) {
+      multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+          loc, rewriter, static_cast<uint16_t>(op.getMulticastCTA()));
+    }
+    if (multicastMask)
+      operands.push_back(ptxBuilder.newOperand(multicastMask, "r"));
 
     auto arriveOp = *ptxBuilder.create(ptxAsm.str());
     arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
@@ -417,7 +511,7 @@ struct CLCTryCancelOpConversion
 
     std::string ptxAsm = "@$2 clusterlaunchcontrol.try_cancel.async.shared::cta"
                          ".mbarrier::complete_tx::bytes";
-    if (op.getMulticast())
+    if (numCTAs > 1)
       ptxAsm += ".multicast::cluster::all";
     ptxAsm += ".b128 [$0], [$1];";
 
@@ -560,14 +654,21 @@ struct CLCGetProgramIdOpConversion
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
+  bool supportsMBarrierMulticast = targetInfo.getComputeCapability() == 107;
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
+  patterns.add<
+      GridDependencyOpConversion<triton::GridDependencyWaitOp>,
+      GridDependencyOpConversion<triton::GridDependencyLaunchDependentsOp>>(
+      typeConverter, benefit);
   patterns.add<FenceMBarrierInitReleaseClusterOpConversion>(typeConverter,
                                                             benefit);
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(
       typeConverter, benefit, targetInfo);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
-  patterns.add<BarrierExpectConversion>(typeConverter, benefit);
-  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<BarrierExpectConversion>(typeConverter, benefit,
+                                        supportsMBarrierMulticast);
+  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit,
+                                          supportsMBarrierMulticast);
   patterns.add<CLCTryCancelOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCLoadResultOpConversion>(typeConverter, benefit, targetInfo);
   patterns.add<CLCIsCanceledOpConversion>(typeConverter, benefit, targetInfo);

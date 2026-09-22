@@ -24,7 +24,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 #include <numeric>
 
@@ -36,8 +36,11 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
+
+#include <cmath>
 
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.cpp.inc"
 
@@ -49,7 +52,46 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-static constexpr int numTmemRows = 128;
+LogicalResult
+CachePolicyAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                        triton::CacheModifier cacheModifier,
+                        CacheEvictionPriority l1, CacheEvictionPriority primary,
+                        CacheEvictionPriority secondary, FloatAttr fraction,
+                        IntegerAttr prefetchSize) {
+  using Priority = CacheEvictionPriority;
+  if (cacheModifier != triton::CacheModifier::NONE && l1 != Priority::NONE)
+    return emitError()
+           << "cache modifier cannot be combined with an L1 eviction priority";
+
+  if (primary == Priority::NO_ALLOCATE)
+    return emitError() << "invalid L2 primary eviction priority '"
+                       << stringifyCacheEvictionPriority(primary) << "'";
+
+  if (primary != Priority::NONE) {
+    if (secondary == Priority::NONE || !fraction)
+      return emitError() << "L2 policy requires l2_secondary and l2_fraction";
+    if (secondary != Priority::EVICT_FIRST &&
+        secondary != Priority::EVICT_UNCHANGED)
+      return emitError() << "invalid L2 secondary eviction priority '"
+                         << stringifyCacheEvictionPriority(secondary) << "'";
+    double value = fraction.getValueAsDouble();
+    if (!fraction.getType().isF32() || !std::isfinite(value) || value <= 0.0 ||
+        value > 1.0)
+      return emitError() << "L2 fraction must be a finite f32 in (0, 1]";
+  } else if (secondary != Priority::NONE || fraction) {
+    return emitError() << "l2_secondary and l2_fraction require l2_primary";
+  }
+
+  if (prefetchSize) {
+    int64_t size = prefetchSize.getInt();
+    if (!prefetchSize.getType().isInteger(32) ||
+        (size != 64 && size != 128 && size != 256))
+      return emitError() << "L2 prefetch size must be 64, 128, or 256";
+  }
+  return success();
+}
+
+namespace {
 
 FailureOr<gpu::CGAEncodingAttr> parseCGALayoutRankTwo(AsmParser &parser) {
   Attribute attr;
@@ -64,17 +106,36 @@ void printCGALayoutRankTwo(AsmPrinter &printer, gpu::CGAEncodingAttr cgaAttr) {
   gpu::printCGAAttr(printer, cgaAttr);
 }
 
+} // namespace
+
+TensorMemoryScalesBlockRepOrder getTensorMemoryScalesBlockRepOrder(
+    Operation *op, bool isA, ScaleDotElemType aType, ScaleDotElemType bType,
+    Type aScaleElemType, Type bScaleElemType) {
+  ModuleOp mod = op->getParentOfType<ModuleOp>();
+  auto targetAttr = mod->getAttrOfType<StringAttr>(gpu::AttrTargetName);
+  bool isRubin = targetAttr && targetAttr.getValue() == "cuda:107";
+  // Rubin NVFP4 uses different orders for A and B:
+  // A scales must advance along K before the next M tile, while B scales keep
+  // the default order that advances along N before the next K tile.
+  bool isRubinNVFP4xNVFP4 = isRubin && aType == ScaleDotElemType::E2M1 &&
+                            bType == ScaleDotElemType::E2M1 &&
+                            isa<Float8E4M3FNType>(aScaleElemType) &&
+                            isa<Float8E4M3FNType>(bScaleElemType);
+  return (isRubinNVFP4xNVFP4 && isA)
+             ? TensorMemoryScalesBlockRepOrder::K_THEN_MN
+             : TensorMemoryScalesBlockRepOrder::MN_THEN_K;
+}
+
 TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   auto *ctx = memDescType.getContext();
   auto S = [&](StringRef str) { return StringAttr::get(ctx, str); };
   auto kRow = S("row");
   auto kCol = S("col");
-  // Remove multibuffering if present
-  auto shape = memDescType.getShape().take_back(2);
-  auto ll = toLinearLayout(shape, memDescType.getEncoding());
+  // Remove multibuffering if present and preserve any tensor-memory subview.
+  auto ll = toLinearLayout(memDescType);
   auto bitwidth = memDescType.getElementTypeBitWidth();
   int nRow = ll.getInDimSize(kRow);
-  int nCol = ll.getInDimSize(kCol) / (32 / bitwidth);
+  int nCol = llvm::divideCeil(ll.getInDimSize(kCol) * bitwidth, 32);
   // If we have just one 16xcol block per warp, we don't allocate 128 rows
   // we use 64 rows instead.
   // We could generalise this to when we have more zeros in the layout, but
@@ -90,14 +151,26 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   return {nRow, nCol};
 }
 
-uint32_t getTMemSubSliceOffset(MemDescType memDescType, int32_t nOffset) {
+uint32_t getTMemSubSliceOffset(MemDescType memDescType, int32_t offset,
+                               int32_t dim) {
+  auto layoutShape =
+      dropPipeliningDim(memDescType.getAllocShape(), memDescType.getEncoding());
+  if (memDescType.getRank() == 3 && dim == 0) {
+    auto layout = toLinearLayout(layoutShape, memDescType.getEncoding());
+    auto colDim = StringAttr::get(memDescType.getContext(), "col");
+    return offset * llvm::divideCeil(layout.getInDimSize(colDim) *
+                                         memDescType.getElementTypeBitWidth(),
+                                     32);
+  }
+
+  dim -= memDescType.getRank() - layoutShape.size();
   auto llInv = toLinearLayout(memDescType).pseudoinvert();
   auto dimNames = llvm::to_vector(llInv.getInDimNames());
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
   logicalOffsets.reserve(dimNames.size());
   for (auto dim : dimNames)
     logicalOffsets.push_back({dim, 0});
-  logicalOffsets.back().second = nOffset;
+  logicalOffsets[dim].second = offset;
 
   auto rowCol = llInv.apply(logicalOffsets);
   uint32_t bitwidth = memDescType.getElementTypeBitWidth();
@@ -160,18 +233,9 @@ getDistributedLayoutForTmemLdSt(const LinearLayout &ll, TMemAccessAtom atom,
   auto *ctx = dims[0].getContext();
   // This code is dual to the one in lowerTMemLdSt
   if (bitwidth != 32) {
-    // TODO move this to a helper function
     auto kReg = StringAttr::get(ctx, "register");
-    LinearLayout quot;
-    int bestContig = 1;
-    for (int contig = 1; bitwidth * contig <= 32; contig *= 2) {
-      auto maybeQuot = divideLeft(
-          ll, LinearLayout::identity1D(contig, rowColDims[1], dims[1]));
-      if (!maybeQuot)
-        break;
-      quot = *maybeQuot;
-      bestContig = contig;
-    }
+    auto [bestContig, quot] =
+        factorMaximalIdentityPrefix(ll, rowColDims[1], dims[1], 32 / bitwidth);
 
     // Pack contiguous elements
     // This works to pack b8 or b16 into b32 but also b8 into b16 and recurse
@@ -204,7 +268,9 @@ getDistributedLayoutForTmemLdSt(const LinearLayout &ll, TMemAccessAtom atom,
       // Software padding with just one column
       return getDistributedLayoutForTmemLdSt(ll, atom, numWarps, 32);
     } else {
-      assert(false && "Should not happen");
+      // This can fail for fp4_padded layouts as we don't support implicit
+      // padding and unpadding upon load yet.
+      return std::nullopt;
     }
   }
   // getTileLayout returns the layout for a bitwidth of 32
@@ -317,7 +383,7 @@ getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
          "numWarps must be a power of 2 and >= 4");
   assert(atom != TMemAccessAtom::I16x32bx2 &&
          "This layout is inferred sometimes for the 32x32b atom");
-  auto ll = toLinearLayout(memType.getShape(), memType.getEncoding());
+  auto ll = toLinearLayout(memType);
   auto bitwidth = memType.getElementTypeBitWidth();
   return getDistributedLayoutForTmemLdSt(ll, atom, numWarps, bitwidth);
 }
@@ -325,15 +391,6 @@ getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
 DistributedEncodingTrait getDefaultLayoutForTmemLdSt(gpu::MemDescType memType,
                                                      unsigned numWarps) {
   auto *ctx = memType.getContext();
-  bool prefer16x256 =
-      triton::tools::getBoolEnv("TRITON_PREFER_TMEM_16x256_LAYOUT");
-  if (prefer16x256) {
-    auto layout = getDistributedLayoutForTmemLdSt(
-        memType, TMemAccessAtom::I16x256b, numWarps);
-    if (layout) {
-      return LinearEncodingAttr::get(ctx, std::move(*layout));
-    }
-  }
   auto layout = getDistributedLayoutForTmemLdSt(
       memType, TMemAccessAtom::I32x32b, numWarps);
   assert(layout);
@@ -413,11 +470,10 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
   return succeeded(computeTMemLdStEncodingInfo(tensorType, memType, maxnreg));
 }
 
-LogicalResult
-TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                                 unsigned blockM, unsigned blockN,
-                                 unsigned colStride,
-                                 gpu::CGAEncodingAttr cgaLayout, bool twoCTAs) {
+LogicalResult TensorMemoryEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, unsigned blockM,
+    unsigned blockN, unsigned colStride, gpu::CGAEncodingAttr cgaLayout,
+    bool twoCTAs, bool fp4Padded) {
   if (cgaLayout.getRank() != 2) {
     return emitError() << "CGALayout must have rank 2";
   }
@@ -444,12 +500,17 @@ TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "colStride must be 1, 2, or 4 but got "
                        << "but got " << colStride;
   }
+  if (fp4Padded && colStride != 1) {
+    return emitError() << "fp4Padded tensor memory layout requires colStride "
+                          "1 but got "
+                       << colStride;
+  }
   return success();
 }
 
 LogicalResult TensorMemoryScalesEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
-    gpu::CGAEncodingAttr cgaLayout) {
+    gpu::CGAEncodingAttr cgaLayout, TensorMemoryScalesBlockRepOrder) {
   if (cgaLayout.getRank() != 2) {
     return emitError() << "CGALayout must have rank 2";
   }
@@ -490,21 +551,82 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
 #include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
 
 //===----------------------------------------------------------------------===//
+// TensorDescIm2ColType Printer/Parser
+//===----------------------------------------------------------------------===//
+// Format: !ttng.tensordesc_im2col<64x128xf16>
+//         !ttng.tensordesc_im2col<64x128xf16, #shared>
+Type TensorDescIm2ColType::parse(AsmParser &parser) {
+  if (failed(parser.parseLess()))
+    return Type();
+
+  SmallVector<int64_t> shape;
+  if (failed(parser.parseDimensionList(shape, /*allowDynamic=*/false)))
+    return Type();
+
+  Type elementType;
+  if (failed(parser.parseType(elementType)))
+    return Type();
+
+  Attribute sharedLayout;
+  if (succeeded(parser.parseOptionalComma())) {
+    if (failed(parser.parseAttribute(sharedLayout)))
+      return Type();
+  }
+
+  if (failed(parser.parseGreater()))
+    return Type();
+
+  Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
+  return TensorDescIm2ColType::getChecked(loc, parser.getContext(), shape,
+                                          elementType, sharedLayout);
+}
+
+void TensorDescIm2ColType::print(AsmPrinter &printer) const {
+  printer << "<";
+  for (auto dim : getShape())
+    printer << dim << "x";
+  printer << getElementType();
+  if (getSharedLayout())
+    printer << ", " << getSharedLayout();
+  printer << ">";
+}
+
+//===----------------------------------------------------------------------===//
 // TensorDescIm2ColType Verifier
 //===----------------------------------------------------------------------===//
 LogicalResult
 TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
-                             RankedTensorType blockType) {
-  // blockType must be rank 2 for im2col mode
-  if (blockType.getRank() != 2) {
+                             ArrayRef<int64_t> shape, Type elementType,
+                             Attribute sharedLayout) {
+  if (shape.size() != 2) {
     return emitError()
-           << "TensorDescIm2ColType requires rank-2 blockType, got rank "
-           << blockType.getRank();
+           << "TensorDescIm2ColType requires rank-2 shape, got rank "
+           << shape.size();
   }
   return success();
 }
 
 namespace {
+//===----------------------------------------------------------------------===//
+// Cache Policy Interface
+//===----------------------------------------------------------------------===//
+class TritonNvidiaGPUCachePolicyInterface
+    : public triton::DialectCachePolicyInterface {
+public:
+  using DialectCachePolicyInterface::DialectCachePolicyInterface;
+
+  LogicalResult verifyCachePolicy(
+      Attribute cachePolicy, triton::CachePolicyOperation operation,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+    auto policy = dyn_cast<CachePolicyAttr>(cachePolicy);
+    if (!policy)
+      return emitError() << "unsupported NVIDIA cache policy attribute "
+                         << cachePolicy;
+    return triton::verifyCacheModifier(policy.getCacheModifier(), operation,
+                                       emitError);
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Verify Tensor/MemDesc Layout Interface
 //===----------------------------------------------------------------------===//
@@ -576,6 +698,7 @@ void TritonNvidiaGPUDialect::initialize() {
 #define GET_TYPEDEF_LIST
 #include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
       >();
+  addInterfaces<TritonNvidiaGPUCachePolicyInterface>();
   addInterfaces<TritonNvidiaGPUVerifyTensorLayoutInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonInlinerInterface>();

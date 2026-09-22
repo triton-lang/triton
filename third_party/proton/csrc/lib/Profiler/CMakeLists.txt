@@ -4,7 +4,10 @@ add_proton_library(ProtonProfiler
   Graph.cpp
   Cupti/CuptiPCSampling.cpp
   Cupti/CuptiProfiler.cpp
+  RocprofSDK/RocprofSDKPCSampling.cpp
+  RocprofSDK/RocprofSDKPCSamplingSourceLocations.cpp
   RocTracer/RoctracerProfiler.cpp
+  RocprofSDK/RocprofSDKProfiler.cpp
   Instrumentation/InstrumentationProfiler.cpp
   Instrumentation/Metadata.cpp
 )

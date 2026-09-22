@@ -19,12 +19,15 @@ jobs:
         config: ${{ fromJson(inputs.matrix) }}
     env:
       RUNNER_TYPE: ${{ matrix.config.runner_type }}
+      NUM_GPUS: ${{ matrix.config.runner_type == 'nvidia-gb200' && '2' || '1' }}
+      WARMUP_MAX_PROCS: ${{ matrix.config.runner_type == 'nvidia-a100' && '96' || '112' }}
       TRITON_BUILD_WITH_CCACHE: "true"
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
       TRITON_DISABLE_LINE_INFO: 1
       PROTON_SKIP_PC_SAMPLING_TEST: 1
       PYTHON: "python3"
+      PYTEST_ADDOPTS: "-p triton._compile_warmup"
       CCACHE_COMPRESS: "true"
     steps:
       - name: Checkout
@@ -34,31 +37,35 @@ jobs:
       - name: Compute cache keys
         id: cache-key
         run: |
-          llvm_file="cmake/llvm-hash.txt"
+          llvm_file="cmake/llvm-info.json"
           nvidia_file="cmake/nvidia-toolchain-version.json"
+          amd_file="cmake/amd-llvm-info.json"
           json_file="cmake/json-version.txt"
 
           # Check if files exist before proceeding
-          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$amd_file" || ! -f "$json_file" ]]; then
             echo "Error: Required dependency files are missing."
             exit 1
           fi
 
           # Process the files if they exist
-          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "amd=$(sha256sum $amd_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
-      - name: Cache build dependencies
-        uses: actions/cache@v4
+      - name: Restore build dependencies cache
+        id: restore-build-deps-cache
+        uses: actions/cache/restore@v6
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
+            ~/.triton/amd
             ~/.triton/json
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-amd-${{ steps.cache-key.outputs.amd }}-json-${{ steps.cache-key.outputs.json }}
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -69,8 +76,7 @@ jobs:
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-      - name: Setup Python environment for GB200
-        if: ${{ startsWith(matrix.config.runner_type, 'nvidia-gb200') }}
+      - name: Setup Python environment for NVIDIA self-hosted runners
         run: |
           echo "/venv/bin" >> $GITHUB_PATH
           echo "VIRTUAL_ENV=/venv" >> $GITHUB_ENV
@@ -88,17 +94,28 @@ jobs:
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
+      - name: Log ConSan performance
+        if: ${{ matrix.config.runner_type == 'nvidia-gb200' }}
+        timeout-minutes: 8
+        env:
+          PYTEST_ADDOPTS: ""
+        run: python3 -m pytest -n 0 -s -vv python/test/microbenchmark/consan_performance.py
+      - name: Warm Triton compile cache
+        run: |
+          trace_dir="$RUNNER_TEMP/triton-ci-compile-trace"
+          echo "TRITON_CI_COMPILE_TRACE_DIR=$trace_dir" >> "$GITHUB_ENV"
+          export TRITON_CI_COMPILE_TRACE_DIR="$trace_dir"
+          warmup_procs=$(nproc)
+          if (( warmup_procs > WARMUP_MAX_PROCS )); then
+            warmup_procs=$WARMUP_MAX_PROCS
+          fi
+          make WARMUP_PROCS="$warmup_procs" test-warmup
       - name: Run triton tests
         run: make NUM_PROCS=24 test-unit
-      - name: Run gluon tests
-        run: make NUM_PROCS=24 test-gluon
-      - name: Run gsan tests
-        run: make NUM_PROCS=24 test-gsan
-      - name: Run interpreter tests
-        if: ${{ matrix.config.runner_type == 'nvidia-h100' }}
-        run: make test-interpret
+      - name: Run gsan and interpreter tests
+        run: make -j2 NUM_PROCS=24 test-gsan test-interpret
       - name: Run regression tests
-        run: make test-regression
+        run: TRITON_TEST_NUM_GPUS="$NUM_GPUS" make test-regression
       - name: Run microbenchmark tests
         # Microbenchmark never fail but running them gives us an easy way to track performance changes.
         run: make test-microbenchmark
@@ -106,6 +123,10 @@ jobs:
         run: make test-cpp
       - name: Run Proton tests
         run: make test-proton
+      - name: Run gluon tests
+        run: make NUM_PROCS=24 NUM_GPUS="$NUM_GPUS" test-gluon
+      - name: Verify compile warmup completeness
+        run: python3 -m triton._test_runner report --require-complete
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -113,3 +134,13 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
+      - name: Save build dependencies cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/amd
+            ~/.triton/json
+          key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}

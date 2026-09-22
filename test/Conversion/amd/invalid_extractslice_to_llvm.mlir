@@ -1,4 +1,4 @@
-// RUN: triton-opt -split-input-file %s --convert-triton-amdgpu-to-llvm='arch=gfx942' -verify-diagnostics
+// RUN: triton-opt -split-input-file %s --convert-triton-amdgpu-to-llvm='gfx-arch=gfx942' -verify-diagnostics
 
 // Invalid size
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -29,6 +29,18 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
   tt.func @invalid_offset_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
     // expected-error @+1 {{invalid offset at dimension 1}}
     %1 = amdg.extract_slice %arg0 [0,128] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// Invalid negative offset
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @negative_offset(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
+    // expected-error @+1 {{offset must be non-negative at dimension 0}}
+    %1 = amdg.extract_slice %arg0 [-1,0] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
     tt.return
   }
 }

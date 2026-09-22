@@ -234,8 +234,8 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
         mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
 
         with pl.scope("tma_loads_issue"):
-            tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a)
-            tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b)
+            tma.async_load(a_desc, [off_m, k], bar, a)
+            tma.async_load(b_desc, [k, off_n], bar, b)
 
         with pl.scope("tma_loads_wait"):
             mbarrier.wait(bar, phase=phase)
@@ -262,7 +262,7 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
 
     c_smem = gl.allocate_shared_memory(dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc.to(dtype))
-    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.async_store(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
 
     pl.exit_scope("blocked_matmul_pipelined_kernel")

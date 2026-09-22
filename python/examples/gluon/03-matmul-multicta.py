@@ -17,7 +17,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 )
 from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.language.core import _aggregate as aggregate
 
 
 def is_blackwell():
@@ -168,7 +167,7 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
     return major, minor
 
 
-@aggregate
+@gluon.aggregate
 class Counter:
     index: gl.tensor
     phase: gl.tensor
@@ -188,7 +187,7 @@ class Counter:
         return Counter(index, phase, self.num_barriers)
 
 
-@aggregate
+@gluon.aggregate
 class ClcTileSchedulerConsumer:
     has_work: gl.tensor
     tile_id: gl.tensor
@@ -290,7 +289,7 @@ class ClcTileSchedulerConsumer:
         )
 
 
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor
@@ -345,8 +344,8 @@ def matmul_clc_partition(p):
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
         # 16: clc.try_cancel has a `.b128` modifier
-        mbarrier.expect(barrier, 16)
-        clc.try_cancel(result, barrier, multicast=True)
+        mbarrier.expect(barrier, 16, from_cta=0x0)
+        clc.try_cancel(result, barrier)
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)
         has_work = clc_res.is_canceled()
@@ -383,8 +382,8 @@ def matmul_load_partition(p):
             mbarrier.wait(p.load_empty_bars.index(state.index), state.phase, pred=pred)
             bar = p.load_ready_bars.index(state.index)
             mbarrier.expect(bar, p.a_desc.nbytes_per_cta + p.b_desc.nbytes_per_cta)
-            tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index), multicast=True)
-            tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index), multicast=True)
+            tma.async_load(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index), multicast=True)
+            tma.async_load(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index), multicast=True)
             state = state.next()
         scheduler = scheduler.step(i)
         i += 1
@@ -448,7 +447,7 @@ def matmul_epilogue_partition(p):
             acc = acc_sub.load().to(dtype)
             tma.store_wait(pendings=SUBTILE_STAGES - 1)
             acc_smem.store(acc)
-            tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
+            tma.async_store(p.c_desc, [off_m, off_n + SPLIT_TILE_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
         # Signal that the accumulator slot can be reused only after all stores are done.
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index))
@@ -484,8 +483,16 @@ def _matmul_kernel(
     dtype: gl.constexpr = a_desc.dtype
     a_bufs = gl.allocate_shared_memory(dtype, [STAGES] + a_desc.block_shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(dtype, [STAGES] + b_desc.block_shape, b_desc.layout)
+    tmem_layout: gl.constexpr = TensorMemoryLayout(
+        [BLOCK_SIZE_M, BLOCK_N // get_split_dim(CGA_LAYOUT, 1)],
+        col_stride=1,
+        cga_layout=CGA_LAYOUT,
+        two_ctas=TWO_CTAS,
+    )
+    acc_bufs = allocate_tensor_memory(gl.float32, [ACC_STAGES, BLOCK_M, BLOCK_N], tmem_layout)
     # Number of CTAs that will arrive on the barrier from a tcgen05_commit after an MMA instruction
-    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count([a_bufs.index(0), b_bufs.index(0)], multicast=True)
+    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count([a_bufs.index(0), b_bufs.index(0)], multicast=True,
+                                                                two_ctas=acc_bufs.index(0).type.layout.two_ctas)
 
     # Equiv. consumed_barrier. Barrier TCGEN05 MMA -> Load TMA
     load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
@@ -495,13 +502,6 @@ def _matmul_kernel(
         mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
         mbarrier.init(load_ready_bars.index(i), count=1)
 
-    tmem_layout: gl.constexpr = TensorMemoryLayout(
-        [BLOCK_SIZE_M, BLOCK_N // get_split_dim(CGA_LAYOUT, 1)],
-        col_stride=1,
-        cga_layout=CGA_LAYOUT,
-        two_ctas=TWO_CTAS,
-    )
-    acc_bufs = allocate_tensor_memory(gl.float32, [ACC_STAGES, BLOCK_M, BLOCK_N], tmem_layout)
     # Equiv. store_done_barrier. Barrier Store TMA -> TCGEN05 MMA
     acc_empty_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=TWO_CTAS)
     # Equiv. mma_done_barrier. Barrier TCGEN05 MMA -> Store TMA
@@ -512,15 +512,15 @@ def _matmul_kernel(
 
     clc_barriers = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     clc_planar_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
-    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=TWO_CTAS)
+    cga_layout: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
+    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout)
+    clc_consumed_bars = gl.allocate_shared_memory(gl.int64, [ACC_STAGES, 1], clc_layout)
     for i in gl.static_range(ACC_STAGES):
         mbarrier.init(clc_barriers.index(i), count=1)
         mbarrier.init(clc_planar_ready_bars.index(i), count=1)
         # Every partition but itself arrives on the barrier
         mbarrier.init(clc_consumed_bars.index(i), count=N_PARTITIONS - 1)
 
-    cga_layout: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
-    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout)
     clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2], clc_layout)
     clc_planar_pid_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 1], clc_layout)
 
@@ -681,6 +681,7 @@ def matmul(a, b):
 @pytest.mark.parametrize("EPILOGUE_SIZE_N", [32])
 @pytest.mark.parametrize("SUBTILE_STAGES", [4])
 @pytest.mark.parametrize("M, N, K", [(100, 200, 200)])
+@pytest.mark.enable_warmup(min_capability=10)
 def test_matmul_matches_torch(
     M,
     N,

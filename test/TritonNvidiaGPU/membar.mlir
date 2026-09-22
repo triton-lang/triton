@@ -14,6 +14,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
   }
+
+  // Tensor-map creation only synchronizes a warp; other shared writes stay pending.
+  // CHECK-LABEL: tensormap_create_before_shared_load
+  tt.func @tensormap_create_before_shared_load(%desc: !tt.ptr<i8>, %src: !tt.ptr<i16>, %size: i32, %data: tensor<128xi32, #blocked0>) -> tensor<128xi32, #blocked0> {
+    %c256 = arith.constant 256 : i32
+    %c1 = arith.constant 1 : i32
+    // CHECK: ttg.local_alloc
+    // CHECK-NEXT: ttng.tensormap_create
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %mem = ttg.local_alloc %data : (tensor<128xi32, #blocked0>) -> !ttg.memdesc<128xi32, #shared0, #smem>
+    ttng.tensormap_create %desc, %src, [%c256], [%size], [], [%c1] {elem_type = 3 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 2 : i32} : (!tt.ptr<i8>, !tt.ptr<i16>, i32, i32, i32) -> ()
+    %loaded = ttg.local_load %mem : !ttg.memdesc<128xi32, #shared0, #smem> -> tensor<128xi32, #blocked0>
+    tt.return %loaded : tensor<128xi32, #blocked0>
+  }
+}
+
+// -----
+
+#writer = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#reader = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:80"} {
+  // A register-only histogram leaves the shared write pending.
+  // CHECK-LABEL: single_warp_histogram_before_shared_load
+  tt.func @single_warp_histogram_before_shared_load(%input: tensor<64xi32, #writer>) -> (tensor<2xi32, #writer>, tensor<64xi32, #reader>) {
+    // CHECK: ttg.local_alloc
+    // CHECK-NEXT: {{.*}} = tt.histogram
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = ttg.local_load
+    %mem = ttg.local_alloc %input : (tensor<64xi32, #writer>) -> !ttg.memdesc<64xi32, #shared, #smem>
+    %hist = tt.histogram %input : tensor<64xi32, #writer> -> tensor<2xi32, #writer>
+    %loaded = ttg.local_load %mem : !ttg.memdesc<64xi32, #shared, #smem> -> tensor<64xi32, #reader>
+    tt.return %hist, %loaded : tensor<2xi32, #writer>, tensor<64xi32, #reader>
+  }
 }
 
 // -----
@@ -86,7 +123,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @tma_load(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: i32) -> tensor<128x64xf16, #blocked0> {
+  tt.func public @tma_load(%arg0: !tt.tensordesc<128x64xf16, #shared>, %arg1: i32) -> tensor<128x64xf16, #blocked0> {
 		// CHECK-LABEL: tma_load
 		// CHECK: local_dealloc
 		// CHECK-NEXT: local_alloc
@@ -96,7 +133,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   	%cst = arith.constant dense<0> : tensor<128x64xi64, #blocked0>
   	%alloc = ttg.local_alloc %cst : (tensor<128x64xi64, #blocked0>) -> !ttg.memdesc<128x64xi64, #shared1, #smem, mutable>
   	ttg.local_dealloc %alloc : !ttg.memdesc<128x64xi64, #shared1, #smem, mutable>
-    %l = tt.descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked0>
+    %l = tt.descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked0>
     tt.return %l : tensor<128x64xf16, #blocked0>
   }
 }
@@ -114,11 +151,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 //       CHECK-NEXT: ttg.local_dealloc
 //       CHECK-NEXT: ttg.barrier local
 //       CHECK-NEXT: ttg.local_alloc
-  tt.func public @tma_store(%arg0: !tt.tensordesc<tensor<128x256xf32, #nvmma32>>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked0>) {
+  tt.func public @tma_store(%arg0: !tt.tensordesc<128x256xf32, #nvmma32>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked0>) {
     %cst = arith.constant dense<0> : tensor<128x64xi64, #blocked0>
     %alloc = ttg.local_alloc %cst : (tensor<128x64xi64, #blocked0>) -> !ttg.memdesc<128x64xi64, #shared0, #smem, mutable>
     ttg.local_dealloc %alloc : !ttg.memdesc<128x64xi64, #shared0, #smem, mutable>
-    tt.descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.tensordesc<tensor<128x256xf32, #nvmma32>>, tensor<128x256xf32, #blocked0>
+    tt.descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.tensordesc<128x256xf32, #nvmma32>, tensor<128x256xf32, #blocked0>
     tt.return
   }
 }
@@ -145,7 +182,10 @@ tt.func @wait_after_mma(
 ) {
   %phase = arith.constant 0 : i32
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-  // CHECK: ttng.tc_gen5_mma
+  // The fused MMA's leading barrier also synchronizes the preceding wait.
+  // CHECK: ttg.async_wait
+  ttg.async_wait {num = 0 : i32}
+  // CHECK-NEXT: ttng.tc_gen5_mma
   ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
      !ttg.memdesc<128x128xf16, #shared, #smem>,
      !ttg.memdesc<128x128xf16, #shared1, #smem>,
@@ -157,4 +197,35 @@ tt.func @wait_after_mma(
   tt.return
 }
 
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @inline_asm_no_memdesc_effects
+  tt.func @inline_asm_no_memdesc_effects(%data: tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked> {
+    // CHECK: ttg.local_alloc
+    %mem = ttg.local_alloc %data : (tensor<128xi32, #blocked>) -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK-NEXT: ttg.inline_asm
+    ttg.inline_asm "// access descriptor" {constraints = "r", pure = false} %mem : (!ttg.memdesc<128xi32, #shared, #smem, mutable>) -> ()
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}}ttg.local_load
+    %value = ttg.local_load %mem : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #blocked>
+    tt.return %value : tensor<128xi32, #blocked>
+  }
+
+  // CHECK-LABEL: @elementwise_inline_asm_memdesc_effects
+  tt.func @elementwise_inline_asm_memdesc_effects(%data: tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked> {
+    %mem = ttg.local_alloc %data : (tensor<128xi32, #blocked>) -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: {{.*}}tt.elementwise_inline_asm
+    %unused = tt.elementwise_inline_asm "mov.u32 $0, 0;" {constraints = "=r,r", packed_element = 1 : i32, pure = false} %mem : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> i32
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}}ttg.local_load
+    %value = ttg.local_load %mem : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #blocked>
+    tt.return %value : tensor<128xi32, #blocked>
+  }
 }

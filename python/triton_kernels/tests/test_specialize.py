@@ -1,13 +1,23 @@
 import importlib
+import inspect
+import types
 
+import pytest
 import torch
-from triton_kernels.specialize import cacheable, specialize
 import triton
 import triton.language as tl
+from triton.experimental import gluon
+import triton.experimental.gluon.language as gl
+from triton_kernels.specialize import ClosureArg, FnSpecs, SpecializationModule, cacheable, specialize
 
 
 @triton.jit
 def identity(x):
+    return x
+
+
+@gluon.jit
+def gluon_identity(x):
     return x
 
 
@@ -16,6 +26,41 @@ def template_kernel(o, fn: tl.constexpr):
     cst = 1.0
     cst = fn(cst)
     tl.store(o, cst)
+
+
+@gluon.jit
+def gluon_template_kernel(o, fn: gl.constexpr, fn_args):
+    cst = fn(1.0, *fn_args)
+    gl.store(o, cst)
+
+
+@triton.jit
+def triton_dialect_template_kernel(o, fn: tl.constexpr, fn_args):
+    cst = fn(1.0, *fn_args)
+    tl.store(o, cst)
+
+
+@pytest.mark.parametrize(
+    "template_fn,specialized_fn,lang_module",
+    [
+        (triton_dialect_template_kernel, identity, "tl"),
+        (gluon_template_kernel, gluon_identity, "gl"),
+    ],
+)
+def test_specialization_module_preserves_dialect(template_fn, specialized_fn, lang_module):
+    specializations = SpecializationModule(
+        f"specialized_{lang_module}_kernel",
+        kernels=[("kernel", template_fn)],
+        closure_args={"fn": ClosureArg("fn", "fn_args")},
+    )
+
+    module = specializations.get(fn=FnSpecs("identity", specialized_fn))
+
+    assert isinstance(module, types.ModuleType)
+    # GluonJITFunction subclasses JITFunction, so exact class equality is required here.
+    assert module.kernel.__class__ is template_fn.__class__
+    assert module.kernel.is_gluon() == template_fn.is_gluon()
+    assert f"fn: {lang_module}.constexpr = {specialized_fn.__name__}" in module.kernel.src
 
 
 def retrieve_fn(module, name):
@@ -71,11 +116,13 @@ def test_cacheable(device, fresh_triton_cache, monkeypatch):
 
     # check line info in ttir
     ttir = k.asm["ttir"]
+    source, start_line = inspect.getsourcelines(template_kernel.fn)
+    store_line = start_line + next(i for i, line in enumerate(source) if "tl.store" in line)
     loc = None
     for line in ttir.split("\n"):
         if loc and loc in line:
             assert "test_specialize.py" in line
-            assert ":18:5" in line
+            assert f":{store_line}:5" in line
         if "store" in line:
             loc = line.split("(", 1)[1].split(")", 1)[0]
     assert loc is not None, f"Expected to find a store instruction with location info, got: {ttir}"

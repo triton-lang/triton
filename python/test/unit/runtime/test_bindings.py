@@ -3,8 +3,25 @@ import triton.language as tl
 
 import torch
 import math
+import pytest
 
 _BLOCK_SIZE = 16
+
+
+def test_llvm_ir_to_bitcode():
+    from triton._C.libtriton import llvm
+
+    bitcode = llvm.to_bitcode("define void @kernel() { ret void }")
+    assert isinstance(bitcode, bytes)
+    assert bitcode.startswith(b"BC\xc0\xde")
+    assert b"\x00" in bitcode
+
+
+def test_llvm_ir_to_bitcode_reports_invalid_ir():
+    from triton._C.libtriton import llvm
+
+    with pytest.raises(RuntimeError, match="failed to parse LLVM IR.*expected top-level entity"):
+        llvm.to_bitcode("invalid LLVM IR")
 
 
 @triton.jit
@@ -26,7 +43,9 @@ def add_kernel(
     mask = offsets < n_elements
     x = tl.load(in_ptr0 + offsets, mask=mask)
     y = tl.load(in_ptr1 + offsets, mask=mask)
-    output = add_helper(x, y)
+    x2d = x[None, :]
+    x1d = tl.reshape(x2d, [BLOCK_SIZE])
+    output = add_helper(x1d, y)
     tl.store(out_ptr + offsets, output, mask=mask)
 
 
@@ -56,8 +75,16 @@ def test_module_walk(device):
             assert 0 == op.get_int_attr("start")
             assert _BLOCK_SIZE == op.get_int_attr("end")
         if name == "arith.constant":
-            val = op.get_int_attr("value")
-            assert val is None or isinstance(val, int)
+            val = op.get_constant_value()
+            assert isinstance(val, int)
+        if name == "tt.expand_dims":
+            shape = op.get_result(0).get_shape()
+            assert shape == [1, _BLOCK_SIZE]
+        if name == "tt.reshape":
+            in_shape = op.get_operand(0).get_shape()
+            out_shape = op.get_result(0).get_shape()
+            assert in_shape == [1, _BLOCK_SIZE]
+            assert out_shape == [_BLOCK_SIZE]
 
     kernel = add_kernel
     args = [

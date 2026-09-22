@@ -1,0 +1,16 @@
+#include "Backend/Backend.h"
+#include <vector>
+
+// Forward declarations of registration hooks for backends
+@BACKEND_REGISTRATION_HOOKS_FORWARD_DECLS@
+
+namespace proton {
+
+const std::vector<BackendRegistration> &getBackendRegistrations() {
+  static const std::vector<BackendRegistration> registrations = {
+      @BACKEND_REGISTRATION_HOOKS@
+  };
+  return registrations;
+}
+
+} // namespace proton

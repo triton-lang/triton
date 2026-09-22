@@ -37,8 +37,8 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         B = math.prod(leading_shape)
         ALIGN_K_SCALE = 8
         ALIGN_N = 32
-        K_SCALE_pad = math.ceil(K_SCALE / ALIGN_K_SCALE) * ALIGN_K_SCALE
-        N_pad = math.ceil(N / ALIGN_N) * ALIGN_N
+        K_SCALE_pad = (K_SCALE + (ALIGN_K_SCALE - 1)) // ALIGN_K_SCALE * ALIGN_K_SCALE
+        N_pad = (N + (ALIGN_N - 1)) // ALIGN_N * ALIGN_N
         object.__setattr__(self, "leading_shape", leading_shape)
         object.__setattr__(self, "B", B)
         object.__setattr__(self, "ALIGN_K_SCALE", ALIGN_K_SCALE)
@@ -48,29 +48,32 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         object.__setattr__(self, "K_SCALE", K_SCALE)
         object.__setattr__(self, "N", N)
 
+    @property
+    def storage_shape(self) -> list[int]:
+        return [self.B, self.K_SCALE_pad * NON_K_PRESHUFFLE_BLOCK_SIZE, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE]
+
     def swizzle_data(self, data):
-        assert data.stride(-1) == 1
+        assert data.numel() == 0 or data.stride(-1) == 1
         # re-pack as column-major
         data = repack(data, -1, -2, self.is_fp4)
         data = data.mT.contiguous().mT
         data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_SCALE_pad - self.K_SCALE))
         data = data.transpose(-1, -2)
-        data = data.view(-1, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, 2, 16, self.K_SCALE_pad // 8, 2, 4, 1)
+        data = data.view(self.B, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, 2, 16, self.K_SCALE_pad // 8, 2, 4, 1)
         data = data.permute(0, 1, 4, 6, 3, 5, 2, 7).contiguous()
-        data = data.reshape(self.B, self.N_pad // 32, self.K_SCALE_pad * 32)
+        data = data.reshape(self.B, self.storage_shape[2], self.storage_shape[1])
         data = data.transpose(-1, -2)
         assert data.stride(-2) == 1
-        return data
+        return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = data.transpose(-1, -2)
-        data = data.view(-1, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, self.K_SCALE_pad // 8, 4, 16, 2, 2, 1)
+        data = data.view(self.B, self.N_pad // NON_K_PRESHUFFLE_BLOCK_SIZE, self.K_SCALE_pad // 8, 4, 16, 2, 2, 1)
         data = data.permute(0, 1, 6, 4, 2, 5, 3, 7)
         data = data.reshape(*self.leading_shape, self.N_pad, self.K_SCALE_pad)
         data = data.transpose(-1, -2)[..., :self.K_SCALE, :self.N]
         data = repack(data, -2, -1, self.is_fp4)
         data = data.contiguous()
-        assert data.stride(-1) == 1
         return data
 
 

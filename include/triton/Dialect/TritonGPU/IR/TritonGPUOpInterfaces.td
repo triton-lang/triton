@@ -4,9 +4,10 @@
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 
-def UpcastFpOpInterface : OpInterface<"UpcastFpOpInterface"> {
+def CastFpOpInterface : OpInterface<"CastFpOpInterface"> {
     let description = [{
-        This interface is for operations that upcast floating-point numbers.
+        This interface is for operations that cast floating-point numbers,
+        either upcasting or downcasting.
     }];
 
     let cppNamespace = "::mlir::triton::gpu";
@@ -41,5 +42,44 @@ def InferMemDescTypeOpWithLayoutEquivalence : InferTypeOpAdaptorBase<[{
     });
   }
 }]>;
+
+def MBarrierOpInterface : OpInterface<"MBarrierOpInterface"> {
+  let description = [{
+    Interface for operations that use mbarrier synchronization primitives.
+    Returns the barrier memdesc operand (or null if absent), allowing
+    backend-agnostic barrier identification without direct dialect dependencies.
+  }];
+
+  let verify = [{
+    return ::mlir::triton::gpu::verifyMBarrierOpInterface($_op);
+  }];
+
+  let cppNamespace = "::mlir::triton::gpu";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Return the barrier memdesc operand, or null if absent.",
+      /*retType=*/"::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
+      /*methodName=*/"getBarrier",
+      /*args=*/(ins),
+      /*methodBody=*/[{}],
+      /*defaultImplementation=*/[{
+        return {};
+      }]
+    >,
+    InterfaceMethod<
+      /*desc=*/"Return all barrier memdesc operands.",
+      /*retType=*/"::llvm::SmallVector<::mlir::Value>",
+      /*methodName=*/"getBarriers",
+      /*args=*/(ins),
+      /*methodBody=*/[{}],
+      /*defaultImplementation=*/[{
+        if (::mlir::Value barrier = $_op.getBarrier())
+          return {barrier};
+        return {};
+      }]
+    >
+  ];
+}
 
 #endif // TRITONGPU_OP_INTERFACES

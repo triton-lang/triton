@@ -110,7 +110,13 @@ def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
   let assemblyFormat = "attr-dict";
 }
 
-def NVGPU_LoadAcquireOp : NVGPU_Op<"ld_acquire", [MemoryEffects<[MemRead]>]> {
+def NVGPU_WarpGroupBarrierIdOp : NVGPU_Op<"warp_group_barrier_id"> {
+  let summary = "Get the named barrier ID for the current warp group";
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict";
+}
+
+def NVGPU_LoadAcquireOp : NVGPU_Op<"ld_acquire", [MemoryEffects<[MemRead, MemWrite]>]> {
   let arguments = (
     ins LLVM_PointerGlobal:$addr,
     Optional<I1>:$mask,

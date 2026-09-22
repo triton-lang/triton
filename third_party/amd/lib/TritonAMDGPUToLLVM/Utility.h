@@ -3,7 +3,6 @@
 
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -11,23 +10,43 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include <cstdint>
 
 namespace mlir::LLVM::AMD {
+
+// Decode the target-independent compatibility payload accepted by Triton
+// memory operations. Target-specific cache policy attributes are rejected.
+FailureOr<triton::CacheModifier> getCacheModifier(Attribute cachePolicy);
+
+// Here is a partial definition of DppCtrl enums. For the complete definition,
+// please check:
+// https://github.com/llvm/llvm-project/blob/8c75290/llvm/lib/Target/AMDGPU/SIDefines.h#L939
+enum class DppCtrl : uint32_t {
+  QUAD_PERM_FIRST = 0,
+  ROW_SHL0 = 0x100,
+  ROW_SHR0 = 0x110,
+  ROW_ROR0 = 0x120,
+  ROW_MIRROR = 0x140,
+  ROW_HALF_MIRROR = 0x141,
+  BCAST15 = 0x142,
+  BCAST31 = 0x143,
+  ROW_XMASK0 = 0x160,
+};
 
 enum class MemoryOp { Load, Store };
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 mlir::triton::amdgpu::ISAFamily isaFamily =
+                     mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
-                mlir::triton::AMD::ISAFamily isaFamily =
-                    mlir::triton::AMD::ISAFamily::Unknown);
+                mlir::triton::amdgpu::ISAFamily isaFamily =
+                    mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 mlir::triton::amdgpu::ISAFamily isaFamily =
+                     mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 mlir::triton::amdgpu::ISAFamily isaFamily =
+                     mlir::triton::amdgpu::ISAFamily::Unknown);
 
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
               Value selector);
@@ -35,9 +54,11 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
-// Emit the cta multicast mask for a given cta id based on the src layout
+// Emit the cta multicast mask for a given cta id based on the src layout.
+// Groups sharing data among more than maxMaskPopcount CTAs are split into
+// smaller subgroups because the hardware would otherwise drop the multicast.
 Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value blockId,
-                           const LinearLayout &cvt);
+                           const LinearLayout &cvt, unsigned maxMaskPopcount);
 
 std::pair<bool, bool>
 getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
@@ -50,7 +71,7 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, Value multicastMask,
              triton::CacheModifier cm = triton::CacheModifier::NONE,
-             bool forceNoAliasAsyncLoads = false);
+             bool isVolatile = false, bool forceNoAliasAsyncLoads = false);
 
 // Stores to shared or global memory with predication.
 // forceNoAliasAsyncLoads=true adds alias information to the llvm.store to
@@ -89,11 +110,10 @@ unsigned getVectorSize(Value ptr, Value offset,
 Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 
 // Returns true if we can perform coalesced write from the source encoding to
-// the destination encoding for a given vec size.
+// the destination encoding.
 bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
                                       const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp,
-                                      unsigned vecSize);
+                                      unsigned threadsPerWarp);
 
 // Returns true if we can load directly from global |srcTy| to shared memory
 // |dstEnc| for the given target.
@@ -104,12 +124,10 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
                         ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize);
 
-// Check if the result of this tl.dot is used as opA or opB of another tl.dot
-// in the same region
+// Check if the result of this tl.dot is used as opA or opB of another tl.dot.
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
 
-// Check if the opA of this tl.dot is the result of another tl.dot
-// in the same region
+// Check if the opA of this tl.dot is the result of another tl.dot.
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 
 // Branchless fp8 -> f32 via multiply trick.
@@ -119,12 +137,9 @@ Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
 
 // Software implementation of converting an 8-element vector of MXFP4 elements
 // to a wider type: BF16 or FP16 for target before CDNA4.
-// for CDNA3, we have optimized sequence that can combine scale during the
-// conversion
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
-                                    mlir::triton::AMD::ISAFamily isaFamily,
-                                    Value scale = nullptr);
+                                    mlir::triton::amdgpu::ISAFamily isaFamily);
 
 template <typename ConvertOp>
 SmallVector<Value, 4>
@@ -222,21 +237,18 @@ upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc, ArrayRef<Value> xVals,
 //
 // 3) for `opSel` used in the rocdl.cvt.scale.pk8
 //
-// From the SP guide, the `opSel` is defined as:
+// Scale selection for v_cvt_scale_pk8 is driven by opSel and four Vscale bytes.
+// For the modes used here, byte 0 holds the local lane's scale. For F4/F6
+// opSel=0, lanes 0..15 read byte 0 and lanes 16..31 read byte 1, so
+// crossLaneScale (when present) is packed into byte 1. For F8, opSel=0 uses
+// byte 0 for both lane halves when the scale layout is lane^16-broadcast;
+// otherwise opSel=8 selects Block16 mode and byte 1 supplies the lane^16 scale.
 //
-// OPSEL[0:2]  |  Lane0..15 of SRC0         | Lane16..31 of SRC0
-// -----------------------------------------------------------
-// 000         |  Lane0..15 of Vscale[7:0]  | <-- same
-//
-// which means if OPSEL is zero, hardware requires every lane and lane+16 share
-// the same scale. In the meantime, as comments for parameter `inputVals`,
-// `lane` and `lane+16` hold one row of input tile,
-//
-// In the end, `opSel` is zero.
 template <typename ConvertOp>
 SmallVector<Value, 8> upcast8xMxfp8fp4_HW(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> inputVals, int idx,
-                                          ArrayRef<Value> scales) {
+                                          ArrayRef<Value> scales, int scaleIdx,
+                                          Value crossLaneScale = Value()) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   bool toFp16 = (std::is_same_v<ConvertOp, ROCDL::CvtPkScalePk8F16Fp8Op> ||
@@ -256,15 +268,18 @@ SmallVector<Value, 8> upcast8xMxfp8fp4_HW(RewriterBase &rewriter, Location loc,
       fromFP4 ? b.bitcast(packedVec, i32_ty)
               : b.bitcast(packedVec, vec_ty(i32_ty, packedSize / sizeof(int)));
 
+  assert(scaleIdx >= 0 && scaleIdx < static_cast<int>(scales.size()));
+  Value localScale = scales[scaleIdx];
+  Value partnerScale = crossLaneScale ? crossLaneScale : localScale;
+  unsigned scaleSel = !fromFP4 && crossLaneScale ? 8 : 0;
   Value packedScale = b.undef(vec_ty(i8_ty, 4));
-  auto scaleIdx = fromFP4 ? (idx + idx) : idx;
-  for (int ii : llvm::seq(4))
-    packedScale =
-        b.insert_element(packedScale, scales[scaleIdx], b.i32_val(ii));
+  packedScale = b.insert_element(packedScale, localScale, b.i32_val(0));
+  if (fromFP4 || crossLaneScale)
+    packedScale = b.insert_element(packedScale, partnerScale, b.i32_val(1));
   Value scaleInt32 = b.bitcast(packedScale, i32_ty);
-  auto res = ConvertOp::create(rewriter, loc, resType, packedVec, scaleInt32,
-                               /*opSel*/ 0)
-                 .getRes();
+  auto res =
+      ConvertOp::create(rewriter, loc, resType, packedVec, scaleInt32, scaleSel)
+          .getRes();
   Value elements = b.bitcast(res, vec_ty(resElemType, 8));
 
   SmallVector<Value, 8> results;

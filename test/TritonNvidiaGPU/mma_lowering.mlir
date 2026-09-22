@@ -127,3 +127,54 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: tcgen5_no_matching_commit_descs
+  tt.func @tcgen5_no_matching_commit_descs(
+    %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
+    %barrierPred: i1,
+    %a: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+    %b: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
+    %c: !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    %accUse = arith.constant false
+    %pred = arith.constant true
+    // CHECK: ttng.tc_gen5_mma %arg2, %arg3, %arg4, %false, %true {is_async}
+    // CHECK: ttng.tc_gen5_commit %arg0, %arg1 descs %arg2, %arg3
+    ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred {is_async} :
+       !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_commit %barrier, %barrierPred descs %a, %b : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>
+    tt.return
+  }
+
+  // CHECK-LABEL: tcgen5_stop_at_mismatched_commit_descs
+  tt.func @tcgen5_stop_at_mismatched_commit_descs(
+    %barrier1: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
+    %barrier2: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
+    %barrier3: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
+    %barrierPred: i1,
+    %a: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+    %b: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
+    %c: !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>) {
+    %accUse = arith.constant false
+    %pred = arith.constant true
+    // CHECK: ttng.tc_gen5_mma %arg4, %arg5, %arg6, %false, %true, %arg0[%arg3] {is_async, multicast}
+    // CHECK: ttng.tc_gen5_commit %arg1, %arg3
+    // CHECK: ttng.tc_gen5_commit %arg2, %arg3 descs %arg4, %arg5
+    ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred {is_async, multicast} :
+       !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_commit %barrier1, %barrierPred descs %a, %b : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>
+    ttng.tc_gen5_commit %barrier2, %barrierPred : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
+    ttng.tc_gen5_commit %barrier3, %barrierPred descs %a, %b : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>
+    tt.return
+  }
+}

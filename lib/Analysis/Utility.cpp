@@ -15,15 +15,23 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/SmallSet.h"
 
 namespace mlir {
 
 using namespace triton;
 using namespace triton::gpu;
+
+bool triton::canUseWarpBallotHistogram(HistogramOp op) {
+  int numBins = op.getType().getNumElements();
+  // Limit ballot and reduction overhead relative to shared-memory atomics.
+  return !hasCrossCTAScratch(op) && numBins <= 2 &&
+         numBins * gpu::lookupNumWarps(op) <= 4;
+}
 
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
@@ -80,7 +88,7 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 
 bool ReduceOpHelper::isReduceWithinCTA() {
   // TODO: Support reduce across CTAS
-  // Layout optimization passes such as PlanCTAPass and
+  // Layout optimization passes such as AssignCGALayoutsPass and
   // RemoveLayoutConversionPass should avoid cross-CTA reduction
   return getCTASplitNum(srcEncoding)[axis] == 1;
 }
@@ -105,7 +113,8 @@ bool ReduceOpHelper::isAssociative() {
   return !hasNoAssociativeOp;
 }
 
-unsigned ReduceOpHelper::getScratchSizeInBytes() {
+unsigned ReduceOpHelper::getScratchSizeInBytes(
+    GetNumScratchElemsFn numScratchElemsGetter) {
   auto kLane = StringAttr::get(op.getContext(), "lane");
 
   auto isReduced = [axis = axis](const LinearLayout &layout) {
@@ -124,8 +133,13 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
     // BaseOffsets in the lowering.
     int bytes = 0;
     for (auto inputTy : op.getInputTypes()) {
-      auto nelem =
-          getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
+      unsigned nelem = 0;
+      if (numScratchElemsGetter) {
+        nelem = numScratchElemsGetter(regLl, tmpLl, getBitwidth(inputTy));
+      } else {
+        nelem =
+            getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
+      }
       bytes += nelem * (getBitwidth(inputTy) / 8);
     }
     bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);
@@ -266,25 +280,19 @@ ColumnAction ReduceOpHelper::moveAxisBasesToFront(const LinearLayout &layout,
                                                   int axis, bool isVectorized) {
   auto *ctx = layout.getOutDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
-  const auto &bases = layout.getBases().lookup(kReg);
-  if (bases.empty())
-    return ColumnAction::identity(kReg, bases.size());
+  size_t numBases = layout.getInDimSizeLog2(kReg);
+  if (numBases == 0)
+    return ColumnAction::identity(kReg, numBases);
+  auto outDims = llvm::to_vector(layout.getOutDimNames());
+  uint64_t axisBases = getInputBasisMask(layout, kReg, {outDims[axis]});
 
   // We keep the first basis where it is if it's vectorized to pack it without
-  // PRMT/MOV, and then we move the rest of the bases that don't move the axis
-  // to the front after it
-  SmallVector<size_t> perm;
-  if (isVectorized)
-    perm.push_back(0);
-  SmallVector<size_t> back;
-  for (size_t i = isVectorized ? 1 : 0; i < bases.size(); ++i) {
-    if (bases[i][axis] != 0)
-      perm.push_back(i);
-    else
-      back.push_back(i);
-  }
-  perm.append(back.begin(), back.end());
-  return ColumnAction(perm, kReg, bases.size());
+  // PRMT/MOV, and then stably move the other axis bases to the front.
+  auto permutation = llvm::to_vector(llvm::seq<size_t>(numBases));
+  std::stable_partition(
+      permutation.begin() + isVectorized, permutation.end(),
+      [&](size_t i) { return axisBases & (uint64_t{1} << i); });
+  return ColumnAction(permutation, kReg, numBases);
 }
 
 LinearLayout
@@ -328,63 +336,45 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
   auto &laneBases = bases[kLane];
   auto &warpBases = bases[kWarp];
   auto &blockBases = bases[kBlock];
+  auto outDims = llvm::to_vector(layout.getOutDimNames());
+  uint64_t warpAxisBases = getInputBasisMask(layout, kWarp, {outDims[axis]});
+  uint64_t blockAxisBases = getInputBasisMask(layout, kBlock, {outDims[axis]});
+  uint64_t allLaneBases = llvm::maskTrailingOnes<uint64_t>(laneBases.size());
+  uint64_t zeroLaneBases =
+      allLaneBases & ~getInputBasisMask(layout, kLane, outDims);
+  unsigned totalAxisBases =
+      llvm::popcount(warpAxisBases) + llvm::popcount(blockAxisBases);
 
-  auto collectAxisBases = [&](ArrayRef<std::vector<int32_t>> bases) {
-    SmallVector<unsigned> out;
-    for (unsigned i = 0; i < bases.size(); ++i) {
-      if (bases[i][axis] != 0)
-        out.push_back(i);
-    }
-    return out;
+  auto swapAxisBasesIntoLanes = [&](uint64_t availableLanes,
+                                    bool includeBlock) {
+    auto swapSelectedBases = [&](auto &srcBases, uint64_t selectedBases) {
+      while (selectedBases && availableLanes) {
+        unsigned srcIdx = llvm::countr_zero(selectedBases);
+        unsigned laneIdx = llvm::countr_zero(availableLanes);
+        std::swap(laneBases[laneIdx], srcBases[srcIdx]);
+        selectedBases &= selectedBases - 1;
+        availableLanes &= availableLanes - 1;
+      }
+    };
+    swapSelectedBases(warpBases, warpAxisBases);
+    if (includeBlock)
+      swapSelectedBases(blockBases, blockAxisBases);
+    return LinearLayout(std::move(bases), outDims);
   };
-
-  SmallVector<unsigned> warpAxisBases = collectAxisBases(warpBases);
-  SmallVector<unsigned> blockAxisBases = collectAxisBases(blockBases);
-
-  SmallVector<unsigned> zeroLaneBases;
-  for (unsigned i = 0; i < laneBases.size(); ++i) {
-    if (llvm::all_of(laneBases[i], [](int32_t v) { return v == 0; }))
-      zeroLaneBases.push_back(i);
-  }
-
-  auto axisSize = to_vector(layout.getOutDimSizes())[axis];
-  auto totalAxisBases = warpAxisBases.size() + blockAxisBases.size();
 
   // First try to place all warp/block axis bases into lane bases that are
   // currently zero. If we can do this we will be able to perform the full
   // reduction with just one convert_layout
-  if (zeroLaneBases.size() >= totalAxisBases) {
-    unsigned laneIdx = 0;
-    for (unsigned idx : warpAxisBases) {
-      std::swap(laneBases[zeroLaneBases[laneIdx]], warpBases[idx]);
-      ++laneIdx;
-    }
-    for (unsigned idx : blockAxisBases) {
-      std::swap(laneBases[zeroLaneBases[laneIdx]], blockBases[idx]);
-      ++laneIdx;
-    }
-    return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
-  }
+  if (llvm::popcount(zeroLaneBases) >= totalAxisBases)
+    return swapAxisBasesIntoLanes(zeroLaneBases, /*includeBlock=*/true);
 
   // If we can fit all the bases inside the lane dimension, we can perform the
   // reduction with two convert_layouts
   // The first cvt to move the relevant bases to the lane dimension
   // The second to move all the bases we moved out of the lane dimension back to
   // their original positions
-  if (warpAxisBases.size() + blockAxisBases.size() <= laneBases.size()) {
-    assert(totalAxisBases <= laneBases.size() &&
-           "unexpected lane base count for axis layout");
-    unsigned laneIdx = 0;
-    for (unsigned idx : warpAxisBases) {
-      std::swap(laneBases[laneIdx], warpBases[idx]);
-      ++laneIdx;
-    }
-    for (unsigned idx : blockAxisBases) {
-      std::swap(laneBases[laneIdx], blockBases[idx]);
-      ++laneIdx;
-    }
-    return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
-  }
+  if (totalAxisBases <= laneBases.size())
+    return swapAxisBasesIntoLanes(allLaneBases, /*includeBlock=*/true);
 
   // Assumptions (easily relaxed if AMD needs it)
   // We assume that
@@ -397,16 +387,8 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
   assert(blockBases.size() <= laneBases.size());
   assert(warpBases.size() + blockBases.size() <= 2 * laneBases.size());
 
-  // Otherwise, fit as many warp bases as possible into the lane dimension
-  unsigned laneIdx = 0;
-  for (unsigned idx : warpAxisBases) {
-    std::swap(laneBases[laneIdx], warpBases[idx]);
-    ++laneIdx;
-    if (laneIdx >= laneBases.size())
-      break;
-  }
-
-  return LinearLayout(std::move(bases), to_vector(layout.getOutDimNames()));
+  // Otherwise, fit as many warp bases as possible into the lane dimension.
+  return swapAxisBasesIntoLanes(allLaneBases, /*includeBlock=*/false);
 }
 
 LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
@@ -414,7 +396,6 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
   auto *ctx = srcTy.getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
-  auto kWarp = StringAttr::get(ctx, "warp");
 
   auto reduced = toLinearLayout(srcTy);
   reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
@@ -551,14 +532,14 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   return elementSizeInBytes * getScratchSizeInElems();
 }
 
-static SmallVector<DecomposedWarpConversion::TranspositionInfo>
-getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
-                          std::vector<std::vector<int32_t>> &regBases,
-                          int bitwidth);
+static void computeTranspositionSelectors(
+    SmallVector<DecomposedWarpConversion::TranspositionInfo>
+        &mixedTranspositions,
+    std::vector<std::vector<int32_t>> &regBases, int nPack);
 
 DecomposedWarpConversion
-getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
-                                  RankedTensorType dstTy, int bitwidth) {
+getWarpLayoutConvertDecomposition(const LinearLayout &srcLayout,
+                                  const LinearLayout &dstLayout, int bitwidth) {
   // Two layouts, ll_src and ll_dst, representing the same tensor can be
   // viewed as surjections of GF(2) vector spaces:
   //
@@ -568,7 +549,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // matrix with zero columns possibly inserted. A layout conversion can be
   // viewed as a map P': H_src -> H_dst which factors ll_src = ll_dst \circ P'.
   //
-  // For a conversion not needing data movement between different warps, we
+  // For permutation cases not needing data movement between different warps, we
   // choose the following representation, where P is a permutation matrix and
   // K_1 and K_2 are (possibly trivial) spaces meant to ensure equally sized
   // lane and register dimensions between layouts:
@@ -587,31 +568,29 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // subsequences of consecutive lane bits from cycles involving both bit types.
   // Further explanation of this method is below.
   //
-  // The decomposition is performed in three stages. First, we compute the
+  // For permutations, the decomposition has three stages. First, we compute the
   // permutation matrix `P` by using `invertAndCompose` to generate a skeleton
   // and then fill in any zero columns. Second, we walk the cycles of `P` to
   // factor out mixed transpositions to build `mixedTranspositions`, `pReg`, and
   // `pLane`. Finally, we determine any selectors needed for byte permute
   // instructions in place of `selp` instructions when packing registers.
 
-  // We remove any broadcasting in the register dimensions of the layouts before
-  // forming the permutation `P` as the components of the decomposition directly
-  // inform the number of emitted instructions, and leaving broadcasting in
-  // would unnecessarily inflate the count.
-  auto srcLayout = toLinearLayout(srcTy);
-  auto dstLayout = toLinearLayout(dstTy);
-  auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
-  auto removeBroadcastDst = actionRemoveBroadcastedRegs(dstLayout);
-  srcLayout = removeBroadcastSrc.apply(srcLayout);
-  dstLayout = removeBroadcastDst.apply(dstLayout);
+  assert(actionRemoveBroadcastedRegs(srcLayout).isIdentity() &&
+         actionRemoveBroadcastedRegs(dstLayout).isIdentity() &&
+         "expected layouts without broadcasted registers");
 
   // We want to describe the conversion from `srcLayout` to `dstLayout` as a
   // permutation. Since this requires that each input dimension have the same
   // size in each of the layouts, we first pad the lane and register dimensions
   // with zero vectors if needed.
-  auto *ctx = srcTy.getContext();
+  auto *ctx = srcLayout.getInDimNames().begin()->getContext();
   StringAttr kReg = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  auto conversion = dstLayout.invertAndCompose(srcLayout);
+  uint32_t ownerLaneMask =
+      getOutputBasisMask(conversion, {kWarp, kBlock}, kLane);
 
   // Determine the target sizes of the register and lane dimensions for padding.
   int nSrcRegBases = srcLayout.getInDimSizeLog2(kReg);
@@ -625,25 +604,17 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   auto outDimNames = llvm::to_vector(srcLayout.getOutDimNames());
   auto S = srcLayout.sublayout(inDimNames, outDimNames);
   auto T = dstLayout.sublayout(inDimNames, outDimNames);
-  // Conditionally pad.
-  if (nSrcRegBases != nDstRegBases || nSrcLaneBases != nDstLaneBases) {
-    auto padWithZeros = [&](const LinearLayout &ll) {
-      auto newBases = ll.getBases();
-      auto padDim = [&](StringAttr dim, int dimSize) {
-        auto &dimBases = newBases[dim];
-        dimBases.reserve(dimSize);
-        for (int i = ll.getInDimSizeLog2(dim); i < dimSize; ++i)
-          dimBases.emplace_back(outDimNames.size(), 0);
-      };
-      padDim(kReg, nRegBases);
-      padDim(kLane, nLaneBases);
-      // Surjectivity is not expected in general since we do not consider
-      // the 'warp' and 'block' dimensions of the original layouts.
-      return LinearLayout(std::move(newBases), ll.getOutDims(),
-                          /*requireSurjective=*/false);
-    };
-    S = padWithZeros(S);
-    T = padWithZeros(T);
+  S = S.resizeInDim(kReg, 1 << nRegBases).resizeInDim(kLane, 1 << nLaneBases);
+  T = T.resizeInDim(kReg, 1 << nRegBases).resizeInDim(kLane, 1 << nLaneBases);
+
+  // Project out source lane bits selected by warp/CTA coordinates.
+  if (ownerLaneMask) {
+    auto bases = S.getBases();
+    for (auto [bit, basis] : llvm::enumerate(bases[kLane]))
+      if (ownerLaneMask & (uint32_t{1} << bit))
+        std::fill(basis.begin(), basis.end(), 0);
+    S = LinearLayout(std::move(bases), S.getOutDims(),
+                     /*requireSurjective=*/false);
   }
 
   // We compute T^transpose \circ S, which serves as a skeleton for `P`, then
@@ -677,16 +648,17 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     pBases[inDim][srcIdx][dstDimIdx] = 1 << dstIdx;
   }
 
-  // We walk the cycles of `P` to build the bases for `pReg` and `pLane` while
-  // factoring out mixed transpositions from cycles that include both register
-  // and lane basis vectors. `pReg` and `pLane` themselves only have one input
-  // and output dimension each.
-  LinearLayout::BasesT pRegBases, pLaneBases;
+  // Walk the cycles of `P`, building the register permutation and inverse
+  // lane map while factoring out mixed register/lane transpositions.
+  LinearLayout::BasesT pRegBases;
+  auto shuffleBases =
+      conversion.sublayout({kReg, kLane, kWarp, kBlock}, kLane).getBases();
   auto &regBases = pRegBases[kReg];
-  auto &laneBases = pLaneBases[kLane];
+  auto &laneBases = shuffleBases[kLane];
   regBases.resize(nRegBases, {0});
-  laneBases.resize(nLaneBases, {0});
-  SmallVector<std::pair<int, int>> mixedTranspositions;
+  shuffleBases[kReg].assign(nRegBases, {0});
+  laneBases.assign(nLaneBases, {0});
+  SmallVector<DecomposedWarpConversion::TranspositionInfo> mixedTranspositions;
 
   llvm::BitVector visited(nRegBases + nLaneBases, false);
   auto flatIdx = [&](StringAttr dim, int32_t index) {
@@ -715,12 +687,9 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
       // indicates a contiguous subsequence of lane basis vectors. Note that the
       // transposition does not commute with the other two cycles.
       //
-      // The following variables are used to track the start and end points of
-      // such subsequences.
+      // Track the start of each lane subsequence.
       int32_t /*r_m*/ regStartIdx = -1;
       int32_t /*l_j*/ laneStartIdx = -1;
-      int32_t /*l_k*/ laneEndIdx = -1;
-      int32_t /*r_i*/ regEndIdx = -1;
 
       do {
         // Determine the next basis vector in the current cycle.
@@ -734,29 +703,26 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
             nextIdx = llvm::Log2_32(nextVal);
           }
         }
-        // Set a `pReg` or `pLane` vector, or mark an r->l or l->r transition.
+        // Record a register edge, an inverse lane edge, or a mixed transition.
         if (currDim == kReg && nextDim == kReg) {
           regBases[currIdx][0] = 1 << nextIdx;
         } else if (currDim == kLane && nextDim == kLane) {
-          laneBases[currIdx][0] = 1 << nextIdx;
+          laneBases[nextIdx][0] = (1u << currIdx) & ~ownerLaneMask;
         } else if (currDim == kReg && nextDim == kLane) {
           regStartIdx = currIdx;
           laneStartIdx = nextIdx;
         } else {
-          regEndIdx = nextIdx;
-          laneEndIdx = currIdx;
-        }
-        // If a subsequence of the form (.. r_m l_j .. l_k r_i ..) has been
-        // found, perform the prescribed factorization.
-        if (regEndIdx >= 0) {
+          // Factor (.. r_m l_j .. l_k r_i ..) at this l_k -> r_i edge.
           // Assign r_m to map to r_i as in (.. r_m r_i ..).
-          regBases[regStartIdx][0] = 1 << regEndIdx;
-          // Assign l_k to map to l_j as in (l_j .. l_k).
-          laneBases[laneEndIdx][0] = 1 << laneStartIdx;
-          // Record (r_i l_j) as a factor.
-          mixedTranspositions.emplace_back(regEndIdx, laneStartIdx);
-          // Reset the auxiliary variables.
-          regStartIdx = laneStartIdx = laneEndIdx = regEndIdx = -1;
+          regBases[regStartIdx][0] = 1 << nextIdx;
+          // Padded endpoints need no lane predicate when warp/CTA selects
+          // source lanes. Omit their artificial closing edge as well.
+          int srcLane = ownerLaneMask && nextIdx >= nDstRegBases ? -1 : currIdx;
+          int dstLane =
+              ownerLaneMask && regStartIdx >= nSrcRegBases ? -1 : laneStartIdx;
+          if (srcLane >= 0 && dstLane >= 0)
+            laneBases[dstLane][0] = 1 << srcLane;
+          mixedTranspositions.push_back({nextIdx, srcLane, dstLane});
         }
 
         currDim = nextDim;
@@ -770,33 +736,31 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   int m = mixedTranspositions.size();
   int nPackPrelim = llvm::Log2_32(std::clamp(32 / bitwidth, 1, 4));
   int nPack = std::min(nPackPrelim, nRegBases - m);
-  auto processedTranspos =
-      getTranspositionSelectors(mixedTranspositions, regBases, nPack);
+  computeTranspositionSelectors(mixedTranspositions, regBases, nPack);
 
   auto pReg = LinearLayout(std::move(pRegBases), {{kReg, 1 << nRegBases}},
                            /*requireSurjective=*/true);
-  auto pLane = LinearLayout(std::move(pLaneBases), {{kLane, 1 << nLaneBases}},
-                            /*requireSurjective=*/true);
-  return {std::move(pReg), std::move(pLane), std::move(processedTranspos),
-          nPack};
+  for (const auto &t : mixedTranspositions)
+    if (t.srcLane >= 0)
+      shuffleBases[kReg][t.regBit][0] ^= 1u << t.srcLane;
+  auto shuffleMap =
+      LinearLayout(std::move(shuffleBases), {{kLane, 1 << nLaneBases}},
+                   /*requireSurjective=*/false);
+  return {std::move(pReg), std::move(shuffleMap),
+          std::move(mixedTranspositions), nPack};
 }
 
-static SmallVector<DecomposedWarpConversion::TranspositionInfo>
-getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
-                          std::vector<std::vector<int32_t>> &regBases,
-                          int nPack) {
+static void computeTranspositionSelectors(
+    SmallVector<DecomposedWarpConversion::TranspositionInfo>
+        &mixedTranspositions,
+    std::vector<std::vector<int32_t>> &regBases, int nPack) {
   // When possible, we fuse permutations of 'low' register bits together
   // with a mixed transposition, resulting in byte permute instructions instead
   // of `select` instructions. After processing, no low register bits appear in
-  // the returned list of mixed transpositions.
+  // the mixed transpositions.
 
-  SmallVector<DecomposedWarpConversion::TranspositionInfo> ret;
-  ret.reserve(mixedTranspositions.size());
-  if (nPack == 0) {
-    for (auto &t : mixedTranspositions)
-      ret.push_back(DecomposedWarpConversion::TranspositionInfo{t});
-    return ret;
-  }
+  if (nPack == 0)
+    return;
   // This algorithm performs further algebraic processing.
   //
   // Suppose nPack > 0 and for simplicity that P is a cycle. We are given an
@@ -865,8 +829,8 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
   };
 
   llvm::SmallSet<int32_t, 6> pairedRegBits;
-  for (auto [rBit, lBit] : mixedTranspositions)
-    pairedRegBits.insert(rBit);
+  for (const auto &t : mixedTranspositions)
+    pairedRegBits.insert(t.regBit);
 
   // A low bit in a mixed transposition must be replaced by a high bit. The
   // choice of high bit can affect instruction count. If the first high bit
@@ -874,8 +838,8 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
   // choice. We reorder the transpositions to guarantee this during processing.
   // This also guarantees the correct ordering for the lowering algorithm.
   auto next = [&](int b) { return llvm::Log2_32(regBases[b][0]); };
-  auto nextHighFree = [&](auto p) {
-    int curr = p.first;
+  auto nextHighFree = [&](const auto &t) {
+    int curr = t.regBit;
     do {
       if (curr >= nPack)
         return true;
@@ -916,9 +880,8 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     return potentialPartner;
   };
 
-  for (auto p : mixedTranspositions) {
-    int rBit = p.first;
-    int lBit = p.second;
+  for (auto &info : mixedTranspositions) {
+    int rBit = info.regBit;
     SmallVector<int> cycle;
     int currBit = rBit;
     do {
@@ -973,18 +936,16 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     auto [topPreSel, botPreSel] = generateSelectors(head, tail, preShufLoBits);
     regBases[tail][0] = 1 << head;
 
-    DecomposedWarpConversion::TranspositionInfo info;
-    info.transposition = {partnerBit, lBit};
+    info.regBit = partnerBit;
     info.topPreSel = topPreSel;
     info.botPreSel = botPreSel;
     info.topPostSel = topPostSel;
     info.botPostSel = botPostSel;
-
-    ret.push_back(info);
   }
-  if (nPack == 2 && regBases[0][0] == 2 && regBases[1][0] == 1 && ret.size()) {
+  if (nPack == 2 && regBases[0][0] == 2 && regBases[1][0] == 1 &&
+      !mixedTranspositions.empty()) {
     // If (r0 r1) remains in pReg, fold it into a mixed transposition.
-    auto &t = ret.front();
+    auto &t = mixedTranspositions.front();
     for (int lowBit : {0, 1, 0}) {
       t.topPreSel = permuteSelector(t.topPreSel, lowBit);
       t.botPreSel = permuteSelector(t.botPreSel, lowBit);
@@ -992,7 +953,6 @@ getTranspositionSelectors(SmallVector<std::pair<int, int>> &mixedTranspositions,
     regBases[0][0] = 1;
     regBases[1][0] = 2;
   }
-  return ret;
 }
 
 SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
@@ -1048,13 +1008,9 @@ unsigned ScanLoweringHelper::getAxisThreadStride() {
   auto encoding = getEncoding();
   auto ll = encoding.getLinearLayout();
   auto kThread = StringAttr::get(encoding.getContext(), "lane");
-  const auto &bases = ll.getBases().lookup(kThread);
-  unsigned axis = getAxis();
-  for (unsigned i = 0; i < bases.size(); ++i) {
-    if (bases[i][axis] != 0)
-      return 1 << i;
-  }
-  return 1;
+  auto outDims = llvm::to_vector(ll.getOutDimNames());
+  uint64_t bases = getInputBasisMask(ll, kThread, {outDims[getAxis()]});
+  return bases ? uint64_t{1} << llvm::countr_zero(bases) : 1;
 }
 
 unsigned ScanLoweringHelper::getAxisBlockStride() {
@@ -1164,6 +1120,9 @@ bool supportMMA(triton::DotOp op, int version) {
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
   auto aElemTy = op.getA().getType().getElementType();
   auto bElemTy = op.getB().getType().getElementType();
+  if (aElemTy.isF32() && bElemTy.isF32() &&
+      op.getInputPrecision() != InputPrecision::TF32)
+    return false;
   if (version == 5) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V5"))
       return false;
@@ -1190,8 +1149,13 @@ bool supportMMA(triton::DotOp op, int version) {
     if (k < 256 / aElemTy.getIntOrFloatBitWidth())
       return false;
     if (!(retShapePerCTA[rank - 2] % 64 == 0 &&
-          retShapePerCTA[rank - 1] % 16 == 0))
+          retShapePerCTA[rank - 1] % 8 == 0))
       return false;
+    if (aElemTy.isF64() || bElemTy.isF64() ||
+        retType.getElementType().isF64()) {
+      // tcgen05.mma doesn't support F64.
+      return false;
+    }
     return true;
   }
   if (version == 3) {
@@ -1210,7 +1174,7 @@ bool supportMMA(triton::DotOp op, int version) {
     if (rank == 3)
       return false;
     if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
-          retShapePerCTA[rank - 1] % 16 == 0 &&
+          retShapePerCTA[rank - 1] % 8 == 0 &&
           (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy) ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {
@@ -1224,8 +1188,15 @@ bool supportMMA(triton::DotOp op, int version) {
     }
   }
   if (aElemTy.isF32() && bElemTy.isF32()) {
-    return op.getInputPrecision() == InputPrecision::TF32 && version >= 2;
+    assert(op.getInputPrecision() == InputPrecision::TF32);
+    return version >= 2;
   }
+  return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
+}
+
+bool supportMMA(triton::DotOpInterface op, int version) {
+  if (auto dotOp = dyn_cast<triton::DotOp>(op.getOperation()))
+    return supportMMA(dotOp, version);
   return supportMMA(op.getA(), version) && supportMMA(op.getB(), version);
 }
 
@@ -1246,41 +1217,6 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-// We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
-// under the common dimensions. The idea here is that if we have a
-// transformation that's the identity on kBlock, we don't need to use
-// distributed shared memory. If it's also the identity on kWarp, we can
-// transfer via warp-shuffles, and if it's the identity on kLane just have to
-// reorder the registers.
-LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
-  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(srcTy_);
-  auto dstTy = cast<triton::gpu::TensorOrMemDesc>(dstTy_);
-  LinearLayout srcLayout = toLinearLayout(srcTy);
-  LinearLayout dstLayout = toLinearLayout(dstTy);
-  auto sDims = to_vector(srcLayout.getInDimNames());
-  auto dDims = to_vector(dstLayout.getInDimNames());
-  SmallVector<StringAttr> dims;
-  for (int i = 0; i < std::min(sDims.size(), dDims.size()); ++i) {
-    auto srcDim = sDims[sDims.size() - i - 1];
-    auto dstDim = dDims[dDims.size() - i - 1];
-    if (srcDim != dstDim) {
-      break;
-    }
-    dims.push_back(srcDim);
-  }
-
-  auto comp = dstLayout.invertAndCompose(srcLayout);
-  // We try to quotient by the slowers moving subspace first
-  for (auto dim : dims) {
-    auto quotient = comp.quotient(dim);
-    if (!quotient.has_value()) {
-      break;
-    }
-    comp = *quotient;
-  }
-  return comp;
-}
-
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
@@ -1289,22 +1225,38 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   return outDims.empty() || ArrayRef(outDims) == ArrayRef({kRegister});
 }
 
-bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
-  auto layout = minimalCvtLayout(srcTy, dstTy);
+bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
+  bool forceWarpShuffle = op.getForceWarpShuffle();
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
+  if (!forceWarpShuffle && cvtReordersRegisters(srcTy, dstTy))
+    return false;
   MLIRContext *ctx = srcTy.getContext();
   auto kRegister = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
-  if (to_vector(layout.getOutDimNames()) ==
-      SmallVector<StringAttr, 2>{kRegister, kLane}) {
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, 32);
-    return (factors.mixedTranspositions.size() < 2);
+  auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+  auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+  bool canShuffle = isPermutationMatrixLayout(srcLayout) &&
+                    isPermutationMatrixLayout(dstLayout);
+  if (canShuffle) {
+    auto kWarp = StringAttr::get(ctx, "warp");
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto conversion =
+        invertAndComposeLocal(srcLayout, dstLayout, {kWarp, kBlock});
+    canShuffle = conversion.isIdentityOnOutDim(kWarp) &&
+                 conversion.isIdentityOnOutDim(kBlock) &&
+                 conversion.sublayoutIsZero({kWarp, kBlock}, kRegister);
   }
-  return false;
+  assert((!forceWarpShuffle || canShuffle) &&
+         "force_warp_shuffle requires a supported shuffle decomposition");
+  return forceWarpShuffle ||
+         (canShuffle &&
+          getWarpLayoutConvertDecomposition(srcLayout, dstLayout, 32)
+                  .mixedTranspositions.size() < 2);
 }
 
-bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
-  return !cvtReordersRegisters(srcTy, dstTy) &&
-         !cvtNeedsWarpShuffle(srcTy, dstTy);
+bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op) {
+  return !cvtReordersRegisters(op.getSrc().getType(), op.getType()) &&
+         !cvtNeedsWarpShuffle(op);
 }
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
@@ -1316,15 +1268,15 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
 
 bool isCvtDimSync(const triton::LinearLayout &srcLayout,
                   const triton::LinearLayout &dstLayout, StringAttr dim) {
-  // We can use a dimension-level sync when the conversion is trivial over that
-  // dimension and there is no broadcasting over it.
+  // We can use a dimension-level sync when the conversion can be realized
+  // without moving values across that dimension.
   auto *ctx = srcLayout.getInDimNames().begin()->getContext();
   auto kWarp = StringAttr::get(ctx, "warp");
   auto kBlock = StringAttr::get(ctx, "block");
   assert(srcLayout.hasInDim(dim) && dstLayout.hasInDim(dim) &&
          "expected dim to be present in both layouts");
-  auto comp = dstLayout.invertAndCompose(srcLayout);
   if (dim == kWarp) {
+    auto comp = dstLayout.invertAndCompose(srcLayout);
     // We check that it's trivial over block and warps and that
     // there is no broadcasting over warp, as if there is, we'll
     // deduplicate the writes and the reads will read from data
@@ -1335,7 +1287,90 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
            dstLayout.getFreeVariableMasks()[dim] == 0;
   } else {
     assert(dim == kBlock);
-    return comp.isTrivialOver(dim);
+    return invertAndComposeLocal(srcLayout, dstLayout, {kBlock})
+        .isIdentityOnOutDim(dim);
   }
 }
+
+namespace triton {
+
+BarrierStages getAtomicBarrierStages(MemSemantic semantic,
+                                     bool hasResultBarrier) {
+  BarrierStages stages;
+  stages.beforeMemoryEffects = semantic == MemSemantic::RELEASE ||
+                               semantic == MemSemantic::ACQUIRE_RELEASE;
+  stages.afterMemoryEffects =
+      !hasResultBarrier && (semantic == MemSemantic::ACQUIRE ||
+                            semantic == MemSemantic::ACQUIRE_RELEASE);
+  stages.betweenMemoryEffects = hasResultBarrier;
+  return stages;
+}
+
+std::optional<int32_t> getAtomicResultShuffleMask(Value result) {
+  if (result.use_empty())
+    return 0;
+
+  int32_t laneMask, warpMask, blockMask;
+  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+    auto masks = gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+    auto *ctx = result.getContext();
+    laneMask = masks.lookup(StringAttr::get(ctx, "lane"));
+    warpMask = masks.lookup(StringAttr::get(ctx, "warp"));
+    blockMask = masks.lookup(StringAttr::get(ctx, "block"));
+  } else {
+    auto *op = result.getDefiningOp();
+    laneMask = gpu::TritonGPUDialect::getThreadsPerWarp(
+                   op->getParentOfType<ModuleOp>()) -
+               1;
+    warpMask = gpu::lookupNumWarps(op) - 1;
+    blockMask = gpu::lookupNumCTAs(op) - 1;
+  }
+  if (warpMask || blockMask)
+    return std::nullopt;
+  return laneMask;
+}
+
+bool atomicResultHasCTABroadcast(Operation *op) {
+  if (op->getNumResults() != 1 || op->getResult(0).use_empty())
+    return false;
+  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  if (!tensorTy)
+    return gpu::lookupNumCTAs(op) > 1;
+  auto kBlock = StringAttr::get(op->getContext(), "block");
+  return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
+}
+
+} // namespace triton
+
+namespace triton::nvidia_gpu {
+
+static bool atomicNeedsClusterBarrier(Operation *op) {
+  if (isa<AtomicPollOp>(op))
+    return gpu::lookupNumCTAs(op) != 1;
+  auto atomic = dyn_cast<AtomicOpInterface>(op);
+  if (!atomic || gpu::lookupNumCTAs(op) == 1)
+    return false;
+
+  auto stages = getAtomicBarrierStages(atomic.getMemSemantic(),
+                                       atomicResultHasCTABroadcast(op));
+  return stages.hasBarrier();
+}
+
+bool needsClusterBarrier(Operation *op) {
+  if (isa<ClusterBarrierOp>(op))
+    return true;
+  if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
+                         gpu::toLinearLayout(cvt.getType()), kBlock);
+  }
+  if (auto reduce = dyn_cast<ReduceOp>(op))
+    return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (isa<HistogramOp>(op))
+    return hasCrossCTAScratch(op);
+  return atomicNeedsClusterBarrier(op);
+}
+
+} // namespace triton::nvidia_gpu
+
 } // namespace mlir

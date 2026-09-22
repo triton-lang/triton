@@ -22,6 +22,8 @@ getEncodingFromDescriptor(Operation *op, RankedTensorType tensorType,
 
 bool hasCGABroadcast(gpu::MemDescType memDescType);
 
+Value sextI16ToI32Indices(Value indices, OpBuilder &builder, Location loc);
+
 inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
                                              ArrayRef<int64_t> shapePerCTA,
                                              bool packedSize,
@@ -32,17 +34,18 @@ inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
       mmaEnc.getFp4Padded(), mmaEnc.getTransposed(), packedSize, mode);
 }
 
-inline SmallVector<int64_t>
-getTMABlockShape(RankedTensorType ty, bool packedSize, gpu::TMAMode mode) {
-  auto shapePerCTA = gpu::getShapePerCTA(ty);
-  return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize, mode);
-}
-
 inline SmallVector<int64_t> getTMABlockShape(triton::gpu::MemDescType ty,
                                              bool packedSize,
                                              gpu::TMAMode mode) {
   auto shapePerCTA = gpu::getShapePerCTA(ty);
   return getTMABlockShape(ty.getEncoding(), shapePerCTA, packedSize, mode);
+}
+
+inline SmallVector<int64_t> getTMABlockShape(triton::TensorDescInterface ty,
+                                             bool packedSize,
+                                             gpu::TMAMode mode) {
+  auto shapePerCTA = gpu::getShapePerCTA(ty.getSharedLayout(), ty.getShape());
+  return getTMABlockShape(ty.getSharedLayout(), shapePerCTA, packedSize, mode);
 }
 
 FailureOr<int> getTMASwizzleMode(Location loc, triton::TensorDescInterface ty);

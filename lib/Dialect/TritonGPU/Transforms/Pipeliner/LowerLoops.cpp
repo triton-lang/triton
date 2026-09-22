@@ -65,12 +65,10 @@ bool mustLoadToRegisters(Operation *op) {
     return true;
 
   Attribute loadEncoding;
-  if (auto descLoad = dyn_cast<DescriptorLoadOp>(op)) {
-    loadEncoding = nvidia_gpu::getEncodingFromDescriptor(op, descLoad.getType(),
+  if (auto descLoad = dyn_cast<DescriptorLoadLikeOpInterface>(op)) {
+    auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
+    loadEncoding = nvidia_gpu::getEncodingFromDescriptor(op, tensorType,
                                                          descLoad.getDesc());
-  } else if (auto descGather = dyn_cast<DescriptorGatherOp>(op)) {
-    loadEncoding = nvidia_gpu::getEncodingFromDescriptor(
-        op, descGather.getType(), descGather.getDesc());
   }
   return loadEncoding && (loadEncoding != alloc.getType().getEncoding());
 }
@@ -88,7 +86,7 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   // uses will become direct uses of the async load.
   // TODO: This is overly conservative, we may need to restrict to cases where
   // local_alloc is used by a dot product and has correct encoding.
-  if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+  if (isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op)) {
     DenseSet<Operation *> allocUsers;
     for (Operation *topLevelUser : topLevelUsers) {
       if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(topLevelUser)) {
@@ -108,7 +106,9 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   for (Operation *topLevelUser : topLevelUsers) {
     int _useStage = schedule[topLevelUser].first;
     CoarseSchedule::Cluster _useCluster = schedule[topLevelUser].second;
-    if (*_useCluster > *defCluster) {
+    // This adds an *extra* buffer, so only bump already-pipelined loads:
+    // stageDiff 0 -> 1 would create a never-prefetched single-buffered copy.
+    if (*_useCluster > *defCluster && _useStage > defStage) {
       // Check if we need extra buffer due to unusual execution order
       // The issue occurs when users of the load are scheduled in a later
       // cluster, which happens when conditional code gets moved to epilogue
@@ -157,7 +157,6 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                      Value insertIdx, Value extractIdx, int contiguity,
                      CoarseSchedule &schedule) {
   OpBuilderForStage builder(loadOp.getLoc(), forOp, schedule);
-  Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
 
   Operation *firstUse = getFirstUseOfPipelinedOp({loadOp}, forOp, schedule);
   assert(firstUse && "LoadOp has no users");
@@ -168,12 +167,11 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   Value src = loadOp.getPtr();
   Value mask = loadOp.getMask();
   Value other = loadOp.getOther();
-  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
 
   // Create async copy
   Value view = createSingleBufferView(builder, alloc, insertIdx);
   Operation *copy = ttg::AsyncCopyGlobalToLocalOp::create(
-      builder, src, view, mask, other, loadOp.getCache(), loadOp.getEvict(),
+      builder, src, view, mask, other, loadOp.getCachePolicyAttr(),
       loadOp.getIsVolatile(), contiguity);
   Operation *commit =
       ttg::AsyncCommitGroupOp::create(builder, copy->getResult(0));
@@ -210,16 +208,12 @@ void createTMAAsyncCopy(
     function_ref<void(OpBuilderForStage &, Value, Value, Value, Value)>
         createCopy) {
   OpBuilderForStage builder(loadOp->getLoc(), forOp, schedule);
-  Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
 
   Operation *firstUse = getFirstUseOfPipelinedOp({loadOp}, forOp, schedule);
   assert(firstUse && "LoadOp has no users");
-  Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
 
   builder.setInsertionPoint(loadOp);
   builder.setStageCluster(schedule[loadOp]);
-  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
 
   // Create async copy
   Value view = createSingleBufferView(builder, alloc, insertIdx);
@@ -255,15 +249,17 @@ void createTMAAsyncGather(scf::ForOp forOp, tt::DescriptorGatherOp gatherOp,
                           Value alloc, Value insertIdx, Value extractIdx,
                           Value barrier, Operation *waitOp,
                           CoarseSchedule &schedule) {
-  return createTMAAsyncCopy(forOp, gatherOp, gatherOp.getDesc(), alloc,
-                            insertIdx, extractIdx, barrier, waitOp, schedule,
-                            [&](OpBuilderForStage &builder, Value desc,
-                                Value barrier, Value view, Value pred) {
-                              ttng::AsyncTMAGatherOp::create(
-                                  builder, gatherOp.getLoc(), desc,
-                                  gatherOp.getXOffsets(), gatherOp.getYOffset(),
-                                  barrier, view, pred);
-                            });
+  return createTMAAsyncCopy(
+      forOp, gatherOp, gatherOp.getDesc(), alloc, insertIdx, extractIdx,
+      barrier, waitOp, schedule,
+      [&](OpBuilderForStage &builder, Value desc, Value barrier, Value view,
+          Value pred) {
+        Value xOffsets = ttng::sextI16ToI32Indices(gatherOp.getXOffsets(),
+                                                   builder, gatherOp.getLoc());
+        ttng::AsyncTMAGatherOp::create(builder, gatherOp.getLoc(), desc,
+                                       xOffsets, gatherOp.getYOffset(), barrier,
+                                       view, pred);
+      });
 }
 
 struct AsyncLoad {
@@ -445,7 +441,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   // Only visit the top level ops, we do not support pipelining conditional
   // loads for now
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+    if (isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op)) {
       int stageDiff = getDefUseStageDiff(&op, forOp, schedule);
       if (stageDiff == 0) {
         // Don't care about non-pipelined loads. Scalar loads will be converted
@@ -485,7 +481,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
           contiguity = vec;
         }
       }
-      if (canUseAsyncCp || isTMALoad(&op)) {
+      bool canUseTMA = isTMALoad(&op) && canPipelineTMALoad(&op);
+      if (canUseAsyncCp || canUseTMA) {
         if (loadRequiresAdditionalBuffer(&op)) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
@@ -495,15 +492,22 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         asyncLoad.contiguity = contiguity;
         asyncLoad.sharedEncoding = sharedEncoding;
       } else if (stageDiff > 1) {
-        // Distance-1 loads can in most cases be pipelined in registers without
-        // any performance degradation, as the schedule will usually reorder the
-        // user and the producer so there is no liverange overlap, and no copy
-        // needed.
-        op.emitRemark() << "Pipelining load that cannot use vectorized "
-                           "copy. This will likely "
-                           "lead to pipelining in registers and severe "
-                           "performance degradation.";
+        if (isTMALoad(&op)) {
+          op.emitRemark()
+              << "Not pipelining TMA load because the per-stage shared-memory "
+                 "allocation size is not a multiple of the 128-byte TMA "
+                 "alignment.";
+        } else {
+          op.emitRemark() << "Pipelining load that cannot use vectorized "
+                             "copy. This will likely "
+                             "lead to pipelining in registers and severe "
+                             "performance degradation.";
+        }
       }
+      // Otherwise, stageDiff == 1. Distance-1 loads can generally be pipelined
+      // in registers without any performance degradation because the schedule
+      // will usually reorder the producer and user so that their live ranges do
+      // not overlap and no copy is needed.
     }
   }
 
@@ -961,9 +965,6 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 
 scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
                     CoarseSchedule &schedule) {
-  auto isLoadToBePipelined = [&](Operation *op) {
-    return schedule[mma].first > schedule[op].first;
-  };
   Value alloc = mma.getAccumulator();
 
   int mmaSelfLatency = getSelfLatencyFromAttr(mma.getOperation());
@@ -1059,7 +1060,7 @@ void lowerLoop(scf::ForOp forOp,
   }
   scf::ForOp newForOp = lowerMMAs(forOp, schedule);
   newForOp = lowerLoads(newForOp, schedule, axisInfoAnalysis);
-  newForOp = lowerTMADescriptors(newForOp, schedule);
+  newForOp = cast<scf::ForOp>(lowerTMADescriptors(newForOp, schedule));
   schedule.serialize(newForOp);
 }
 

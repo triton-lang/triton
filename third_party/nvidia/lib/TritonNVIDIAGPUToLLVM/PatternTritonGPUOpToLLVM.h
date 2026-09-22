@@ -15,9 +15,13 @@ void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      PatternBenefit benefit,
                                      NVIDIA::TargetInfo &info);
 
+void createFenceMBarrierInitReleaseCluster(OpBuilder &builder, Location loc,
+                                           Value pred);
+
 void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
-                                      PatternBenefit benefit);
+                                      PatternBenefit benefit,
+                                      const NVIDIA::TargetInfo &targetInfo);
 
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfo &targetInfo,
@@ -27,6 +31,7 @@ void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     const TargetInfo &targetInfo,
                                     RewritePatternSet &patterns,
+                                    ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                     PatternBenefit benefit);
 
 void populateConvertLayoutOpToLLVMOptimizedPatterns(
@@ -44,6 +49,7 @@ void populateElementwiseOpToLLVMPatterns(
 
 void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
+                                   const TargetInfo &targetInfo,
                                    PatternBenefit benefit);
 
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
@@ -70,7 +76,8 @@ void populateClampFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 
 void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
-                                      PatternBenefit benefit);
+                                      PatternBenefit benefit,
+                                      const TargetInfo &targetInfo);
 
 void populateTensorMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                          RewritePatternSet &patterns,

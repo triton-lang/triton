@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --tritongpu-reduce-data-duplication --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch="gfx1100" -split-input-file | FileCheck %s
+// RUN: triton-opt %s --tritongpu-reduce-data-duplication --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch="gfx1100" -split-input-file | FileCheck %s
 
 #wmmaT = #ttg.amd_wmma<{version = 1, ctaLayout = {warp = []}, isTranspose = true}>
 #dotop0 = #ttg.dot_op<{opIdx = 0, parent = #wmmaT, kWidth=16}>

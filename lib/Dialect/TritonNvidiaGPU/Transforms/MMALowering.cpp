@@ -3,6 +3,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -58,8 +59,8 @@ struct TCGen5MMAScaleSharedToTmemConversion
 
   // Create a tmem_copy of scales from shared memory to tmem. `rows` is the M or
   // N of the MMA operation (for LHS or RHS respectively).
-  bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter,
-                        int rows) const {
+  bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter, int rows,
+                        TensorMemoryScalesBlockRepOrder blockRepOrder) const {
     Location loc = operand.getOwner()->getLoc();
     MLIRContext *context = operand.getOwner()->getContext();
     Attribute tensorMemorySpace = TensorMemorySpaceAttr::get(context);
@@ -70,21 +71,18 @@ struct TCGen5MMAScaleSharedToTmemConversion
     // Distribute the scales across the rows of the MMA operation.
     SmallVector<int64_t> shape = {rows, numElems / rows};
     Attribute scaleEncoding =
-        TensorMemoryScalesEncodingAttr::get(context, CGALayout);
+        TensorMemoryScalesEncodingAttr::get(context, CGALayout, blockRepOrder);
     Type scaleAType =
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
     auto tmemAlloc = TMEMAllocOp::create(rewriter, loc, scaleAType, Value());
-    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc,
-                       /*barrier*/ Value());
+    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc);
     operand.set(tmemAlloc);
     return true;
   }
 
   LogicalResult matchAndRewrite(TCGen5MMAScaledOp op,
                                 PatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    MLIRContext *context = op->getContext();
     auto aScaleType = op.getAScale().getType();
     auto bScaleType = op.getBScale().getType();
     if (aScaleType.getShape() != aScaleType.getAllocShape() ||
@@ -94,12 +92,22 @@ struct TCGen5MMAScaleSharedToTmemConversion
     }
     int blockM = op.getBlockM();
     int blockN = op.getBlockN();
+    auto aScaleBlockRepOrder = getTensorMemoryScalesBlockRepOrder(
+        op, /*isA=*/true, op.getAType(), op.getBType(),
+        aScaleType.getElementType(), bScaleType.getElementType());
+    auto bScaleBlockRepOrder = getTensorMemoryScalesBlockRepOrder(
+        op, /*isA=*/false, op.getAType(), op.getBType(),
+        aScaleType.getElementType(), bScaleType.getElementType());
     bool anyChanged = false;
     if (isa<ttg::SharedMemorySpaceAttr>(aScaleType.getMemorySpace())) {
-      anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM);
+      anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM,
+                                    aScaleBlockRepOrder) ||
+                   anyChanged;
     }
     if (isa<ttg::SharedMemorySpaceAttr>(bScaleType.getMemorySpace())) {
-      anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter, blockN);
+      anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter, blockN,
+                                    bScaleBlockRepOrder) ||
+                   anyChanged;
     }
     return LogicalResult::success(anyChanged);
   }
@@ -120,15 +128,19 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
   SmallVector<Value> commitPredicates;
   auto mmaPred = mmaOp.getPredicate();
   Operation *nextOp = mmaOp->getNextNode();
+  SmallVector<Value> mmaDescs = mmaOp.getCompletionDescs();
 
   while (nextOp) {
     if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
       // If the mma predicate is true, or mma and commit ops use the same
-      // predicate, it is safe to merge them
-      if (isConstTrue(mmaPred) || mmaPred == commit.getPred()) {
-        commitOps.push_back(commit);
-        commitPredicates.push_back(commit.getPred());
-      }
+      // predicate, it is safe to merge them. Otherwise, keep commit order by
+      // not merging later commits across this one.
+      if (!isConstTrue(mmaPred) && mmaPred != commit.getPred())
+        break;
+      if (!llvm::equal(mmaDescs, commit.getDescs()))
+        break;
+      commitOps.push_back(commit);
+      commitPredicates.push_back(commit.getPred());
     } else if (!isPure(nextOp)) {
       // Only move commits across pure ops. We also bail here when encountering
       // another MMAv5 op.
@@ -182,20 +194,21 @@ public:
   LogicalResult matchAndRewrite(MMAv5OpInterface op,
                                 PatternRewriter &rewriter) const override {
     auto [commitOps, predicates] = collectCommitOpsAfter(op);
-    if (commitOps.size() == 0) {
+    if (commitOps.empty()) {
       return llvm::failure();
     }
     for (auto [commit, pred] : llvm::zip(commitOps, predicates)) {
       if (!pred) {
         pred = arith::ConstantIntOp::create(rewriter, op.getLoc(), true, 1);
       }
-      if (!moveDefiningOpsBefore(commit.getBarrier(), op) ||
+      Value barrier = commit.getBarrier();
+      if (!moveDefiningOpsBefore(barrier, op) ||
           !moveDefiningOpsBefore(pred, op)) {
         // Give up merging a commit if its defining ops cannot be moved above
         // the mma op.
-        continue;
+        break;
       }
-      op.addCompletionBarrier(commit.getBarrier(), pred);
+      op.addCompletionBarrier(barrier, pred);
       rewriter.eraseOp(commit);
     }
     return success();

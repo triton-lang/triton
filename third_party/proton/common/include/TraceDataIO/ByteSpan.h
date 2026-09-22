@@ -8,7 +8,7 @@
 
 namespace proton {
 
-class BufferException : public std::runtime_error {
+class BufferException : public std::out_of_range {
 public:
   explicit BufferException(const std::string &message);
 };

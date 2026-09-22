@@ -6,7 +6,17 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import triton
-from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, SymmetricMemoryPool
+from triton.testing import cuda_graph_without_gc
+from triton_kernels.distributed import (
+    _convert_dp_to_ep,
+    _convert_ep_to_dp,
+    convert_dp_to_ep,
+    convert_ep_to_dp,
+    make_expt_dict_uniform,
+    make_expt_dict_random,
+    make_expt_assignment,
+    SymmetricMemoryPool,
+)
 from triton_kernels.distributed_details.mesh import Mesh
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
@@ -66,7 +76,7 @@ def _distributed_worker(rank, fn, world_size, kwargs):
 
 
 @pytest.fixture
-def distributed_launcher(request):
+def distributed_launcher(request, monkeypatch):
     n_gpus = getattr(request, "param", None)
     if not torch.cuda.is_available():
         pytest.skip("CUDA required for distributed GPU test")
@@ -75,9 +85,11 @@ def distributed_launcher(request):
 
     master_port = _get_free_tcp_port()
 
-    os.environ["WORLD_SIZE"] = str(n_gpus)
-    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
-    os.environ.setdefault("MASTER_PORT", str(master_port))
+    monkeypatch.setenv("WORLD_SIZE", str(n_gpus))
+    if "MASTER_ADDR" not in os.environ:
+        monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
+    if "MASTER_PORT" not in os.environ:
+        monkeypatch.setenv("MASTER_PORT", str(master_port))
 
     def launch(fn, **kwargs):
         mp.spawn(
@@ -89,6 +101,76 @@ def distributed_launcher(request):
 
     launch.world_size = n_gpus
     return launch
+
+
+# ------------------------------------------------------------
+# conversion kernels
+# ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kernel", [_convert_dp_to_ep, _convert_ep_to_dp], ids=["dp_to_ep", "ep_to_dp"])
+@pytest.mark.parametrize("large_operand", ["src", "dst"])
+def test_convert_large_strides(kernel, large_operand, device):
+    n_rows = 5
+    # The final row is 2**32 elements from the base, which overflows an int32 offset calculation.
+    overflow_stride = 1 << 30
+    values = torch.arange(1, n_rows + 1, dtype=torch.uint8, device=device).reshape(n_rows, 1)
+    small = torch.empty_strided(values.shape, (2, 1), dtype=values.dtype, device=device)
+    small.copy_(values)
+
+    storage = torch.empty((n_rows - 1) * overflow_stride + 1, dtype=torch.uint8, device=device)
+    large = torch.as_strided(storage, values.shape, (overflow_stride, 1))
+    large.zero_()
+    if large_operand == "src":
+        large.copy_(values)
+        src = large
+        dst = torch.empty_strided(values.shape, (2, 1), dtype=values.dtype, device=device)
+    else:
+        src, dst = small, large
+
+    expt_filter = torch.ones((1, 1), dtype=torch.int32, device=device)
+    expt_indx = torch.zeros((n_rows, 1), dtype=torch.int32, device=device)
+    row_indx = torch.arange(n_rows, dtype=torch.int32, device=device).reshape(n_rows, 1)
+
+    if kernel is _convert_dp_to_ep:
+        kernel[(n_rows, )](
+            (dst, ),
+            dst.stride(0),
+            src,
+            src.stride(0),
+            src.shape[1],
+            expt_filter,
+            expt_filter.stride(0),
+            expt_indx,
+            expt_indx.stride(0),
+            row_indx,
+            row_indx.stride(0),
+            n_rows,
+            SRC_RANK=0,
+            N_EXPT_ACT=1,
+            N_RANKS=1,
+            BLOCK=1,
+            num_warps=1,
+        )
+    else:
+        kernel[(n_rows, )](
+            (dst, ),
+            dst.stride(0),
+            src,
+            src.stride(0),
+            src.shape[1],
+            expt_filter,
+            expt_filter.stride(0),
+            expt_indx,
+            row_indx,
+            n_rows,
+            BLOCK=1,
+            SRC_RANK=0,
+            N_RANKS=1,
+            num_warps=1,
+        )
+
+    assert torch.equal(dst, values)
 
 
 # ------------------------------------------------------------
@@ -232,7 +314,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     g = torch.cuda.CUDAGraph()
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
-        with torch.cuda.graph(g):
+        with cuda_graph_without_gc(g):
             y_dp_local_tri_graph = run_moe()
 
     g.replay()

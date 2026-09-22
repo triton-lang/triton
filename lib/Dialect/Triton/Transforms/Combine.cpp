@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -100,9 +101,13 @@ public:
     if (splatCond != condSelect)
       return failure();
 
-    rewriter.replaceOpWithNewOp<LoadOp>(
-        op, loadOp.getPtr(), loadOp.getMask(), /*other=*/falseValue,
-        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+    if (!loadOp.getResult().hasOneUse() ||
+        !DominanceInfo().properlyDominates(falseValue, loadOp))
+      return failure();
+
+    rewriter.modifyOpInPlace(
+        loadOp, [&] { loadOp.getOtherMutable().assign(falseValue); });
+    rewriter.replaceOp(op, loadOp.getResult());
     return success();
   }
 };
@@ -117,6 +122,17 @@ private:
     return false;
   }
 
+  /// Return true if \p op broadcasts only along \p axis, false otherwise.
+  static bool isBroadcastAlongAxis(BroadcastOp op, unsigned axis) {
+    auto srcShape = op.getSrc().getType().getShape();
+    auto dstShape = op.getType().getShape();
+    for (unsigned i = 0; i < srcShape.size(); ++i) {
+      if ((srcShape[i] != dstShape[i]) != (i == axis))
+        return false;
+    }
+    return true;
+  }
+
 public:
   CombineBroadcastMulReducePattern(MLIRContext *context)
       : RewritePattern(ReduceOp::getOperationName(), 1, context) {}
@@ -126,12 +142,13 @@ public:
     auto reduceOp = llvm::dyn_cast<ReduceOp>(op);
     if (!reduceOp)
       return failure();
+    if (cast<RankedTensorType>(reduceOp.getOperand(0).getType()).getRank() != 3)
+      return failure();
+    // We must be reducing along the middle dim.
+    if (reduceOp.getAxis() != 1)
+      return failure();
     // only support reduce with simple addition
-    Region &combineOp = reduceOp.getCombineOp();
-    bool isReduceAdd = combineOp.hasOneBlock() &&
-                       combineOp.front().getOperations().size() == 2 &&
-                       isAddF32(&*combineOp.front().getOperations().begin());
-    if (!isReduceAdd)
+    if (!isAddF32(reduceOp.getSingleCombiner()))
       return failure();
     // operand of reduce has to be mul
     auto mulOp = reduceOp.getOperand(0).getDefiningOp<arith::MulFOp>();
@@ -144,35 +161,35 @@ public:
     auto broadcastRhsOp = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
     if (!broadcastRhsOp)
       return failure();
-    // broadcast operand is expand dims
-    auto expandLhsOp = broadcastLhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
-    if (!expandLhsOp)
-      return failure();
-    auto expandRhsOp = broadcastRhsOp.getSrc().getDefiningOp<ExpandDimsOp>();
-    if (!expandRhsOp)
-      return failure();
-    // get not-broadcast dimensions
-    int expandLhsAxis = expandLhsOp.getAxis();
-    int expandRhsAxis = expandRhsOp.getAxis();
-    if (expandLhsAxis != 2 || expandRhsAxis != 0)
+    // The first operand must be broadcasted from (M, K, 1) to (M, K, N), and
+    // the second operand must go from (1, K, N) to (M, K, N).
+    if (!isBroadcastAlongAxis(broadcastLhsOp, 2) ||
+        !isBroadcastAlongAxis(broadcastRhsOp, 0))
       return failure();
     auto broadcastLhsShape =
         cast<ShapedType>(broadcastLhsOp.getType()).getShape();
     auto broadcastRhsShape =
-        cast<ShapedType>(broadcastLhsOp.getType()).getShape();
+        cast<ShapedType>(broadcastRhsOp.getType()).getShape();
     if (broadcastLhsShape[2] < 16 || broadcastRhsShape[0] < 16)
       return failure();
     Type newAccType = RankedTensorType::get(
         {broadcastLhsShape[0], broadcastRhsShape[2]},
         cast<ShapedType>(broadcastLhsOp.getSrc().getType()).getElementType());
     rewriter.setInsertionPoint(op);
+    Value lhs = ReshapeOp::create(
+        rewriter, op->getLoc(),
+        broadcastLhsOp.getSrc().getType().getShape().drop_back(),
+        broadcastLhsOp.getSrc());
+    Value rhs = ReshapeOp::create(
+        rewriter, op->getLoc(),
+        broadcastRhsOp.getSrc().getType().getShape().drop_front(),
+        broadcastRhsOp.getSrc());
     auto newAcc =
         SplatOp::create(rewriter, op->getLoc(), newAccType,
                         arith::ConstantOp::create(rewriter, op->getLoc(),
                                                   rewriter.getF32FloatAttr(0)));
-    rewriter.replaceOpWithNewOp<DotOp>(op, expandLhsOp.getSrc(),
-                                       expandRhsOp.getSrc(), newAcc,
-                                       InputPrecision::TF32, 0);
+    rewriter.replaceOpWithNewOp<DotOp>(op, lhs, rhs, newAcc,
+                                       InputPrecision::IEEE, 0);
     return success();
   }
 };

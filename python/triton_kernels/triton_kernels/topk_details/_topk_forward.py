@@ -38,6 +38,7 @@ def key_to_indx(indx, N_EXPTS_PAD: tl.constexpr):
 @triton.jit
 def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
                    BLOCK_N: tl.constexpr):
+    N_EXPTS_ACT_PAD: tl.constexpr = triton.next_power_of_2(N_EXPTS_ACT)
     x_nbits: tl.constexpr = X.dtype.element_ty.primitive_bitwidth
     x_utype: tl.constexpr = tl.dtype(f"uint{x_nbits}")
     if x_nbits < 16:
@@ -59,7 +60,11 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     x = tl.load(X_ptrs, mask=(mask_m & mask_n), other=float("-inf"))
     x = fpval_to_key(x.to(x_utype, bitcast=True))
     x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
-    acc = tl.topk(x, N_EXPTS_ACT, dim=1)
+    # Valid packed keys are nonzero because their index key is nonzero. Mask
+    # padding to zero so it cannot be selected when FPSan payloads sort below
+    # the floating-point -inf sentinel.
+    x = tl.where(mask_n, x, 0)
+    acc = tl.topk(x, N_EXPTS_ACT_PAD, dim=1)
 
     # subsequent iterations:
     for _i in (tl.static_range if loop_iterations <= 4 else range)(loop_iterations):
@@ -69,7 +74,7 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
         x = tl.load(X_ptrs, mask=mask_m, other=float("-inf"))
         x = fpval_to_key(x.to(x_utype, bitcast=True))
         x = (x.to(x_ultype) << 16) | indx_to_key(offs_x_n, N_EXPTS_PAD)[None, :]
-        acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT, dim=1))
+        acc = tl.maximum(acc, tl.topk(x, N_EXPTS_ACT_PAD, dim=1))
 
     # sort packed (value_key, index_key) descending:
     # this keeps outputs ordered by gate value and uses smaller expert index for ties
@@ -87,13 +92,13 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
 @triton.jit
 def _topk_forward(X, stride_xm,  # inputs
                   PeerYvs, PeerYis, stride_ym,  # topk values/indices
-                  USE_PROVIDED_INDX: tl.constexpr, PeerBits, stride_rm: tl.constexpr,
-                  stride_rn: tl.constexpr,  # bitmatrix
+                  USE_PROVIDED_INDX: tl.constexpr, PeerBits, stride_rm, stride_rn,  # bitmatrix
                   n_rows, n_expts_tot,  # shape
                   dst_offs_m, APPLY_SOFTMAX: tl.constexpr,  # constant
                   BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
 
     N_PEERS: tl.constexpr = len(PeerYvs)
+    N_EXPTS_ACT_PAD: tl.constexpr = triton.next_power_of_2(N_EXPTS_ACT)
 
     pid = tl.program_id(0)
     if isinstance(n_rows, tl.tensor) and n_rows.dtype.is_ptr():
@@ -109,39 +114,39 @@ def _topk_forward(X, stride_xm,  # inputs
 
     # load logits
     offs_m = pid * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_y_n = tl.arange(0, N_EXPTS_ACT)
+    offs_y_n = tl.arange(0, N_EXPTS_ACT_PAD)
+    mask_y_n = offs_y_n < N_EXPTS_ACT
     mask_m = offs_m[:, None] < n_rows
     if USE_PROVIDED_INDX:
         tl.static_assert(len(PeerYis) == 1)
         Yi_ptrs = PeerYis[0] + (dst_offs_m + offs_m[:, None]) * stride_ym + offs_y_n[None, :]
-        y_indices = tl.load(Yi_ptrs, mask=mask_m)
+        y_indices = tl.load(Yi_ptrs, mask=mask_m & mask_y_n[None, :], other=0)
         Xv_ptrs = X + offs_m[:, None] * stride_xm + y_indices
-        y_values = tl.load(Xv_ptrs, mask=mask_m)
+        y_values = tl.load(Xv_ptrs, mask=mask_m & mask_y_n[None, :], other=float("-inf"))
     else:
         y_values, y_indices = streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m,  #
                                              N_EXPTS_PAD, N_EXPTS_ACT, BLOCK_N)
 
     # normalize selected values
     if APPLY_SOFTMAX:
-        y_values = tl.softmax(y_values.to(tl.float32), dim=1, keep_dims=True).to(x_dtype)
+        y_values = tl.where(mask_y_n[None, :], y_values, float("-inf"))
+        y_values = tl.softmax(y_values.to(tl.float32), dim=1).to(x_dtype)
 
     # write back
     for rank in tl.static_range(N_PEERS):
         Yv_ptrs = PeerYvs[rank] + (dst_offs_m + offs_m[:, None]) * stride_ym + offs_y_n[None, :]
-        tl.store(Yv_ptrs, y_values, mask=mask_m)
+        tl.store(Yv_ptrs, y_values, mask=mask_m & mask_y_n[None, :])
     if not USE_PROVIDED_INDX:
         for rank in tl.static_range(N_PEERS):
             Yi_ptrs = PeerYis[rank] + (dst_offs_m + offs_m[:, None]) * stride_ym + offs_y_n[None, :]
-            tl.store(Yi_ptrs, y_indices, mask=mask_m)
+            tl.store(Yi_ptrs, y_indices, mask=mask_m & mask_y_n[None, :])
 
     # pack into bitmatrix
     y_div = y_indices // 32
-    y_rem = y_indices % 32
-    loop_iterations = N_EXPTS_PAD // BLOCK_N
-    for i in range(loop_iterations):
-        offs_r_n = tl.arange(0, BLOCK_N // 32) + i * (BLOCK_N // 32)
-        y2 = tl.where(y_div[:, :, None] == offs_r_n[None, None, :], (1 << y_rem)[:, :, None], 0)
+    y_rem = (y_indices % 32).to(tl.uint32)
+    for word_idx in range(tl.cdiv(n_expts_tot, 32)):
+        y2 = tl.where(mask_y_n[None, :] & (y_div == word_idx), 1 << y_rem, 0)
         r = tl.reduce_or(y2, axis=1)
         for rank in tl.static_range(N_PEERS):
-            BitsPtrs = PeerBits[rank] + (dst_offs_m + offs_m[:, None]) * stride_rm + offs_r_n[None, :] * stride_rn
-            tl.store(BitsPtrs, r, mask=mask_m)
+            BitsPtrs = PeerBits[rank] + (dst_offs_m + offs_m) * stride_rm + word_idx * stride_rn
+            tl.store(BitsPtrs, r, mask=offs_m < n_rows)

@@ -1,13 +1,25 @@
-#include <stddef.h>
-#include <stdint.h>
+#pragma once
 
-#ifdef __CUDACC__
+#if defined(__CUDA__) && defined(__clang__)
+#define GSAN_DEVICE __attribute__((device))
+#define GSAN_HOST_DEVICE __attribute__((host)) __attribute__((device))
+#elif defined(__CUDACC__)
+#define GSAN_DEVICE __device__
 #define GSAN_HOST_DEVICE __host__ __device__
 #else
+#define GSAN_DEVICE
 #define GSAN_HOST_DEVICE
 #endif
 
 namespace gsan {
+
+using size_t = __SIZE_TYPE__;
+using int16_t = __INT16_TYPE__;
+using int64_t = __INT64_TYPE__;
+using uint8_t = __UINT8_TYPE__;
+using uint16_t = __UINT16_TYPE__;
+using uint32_t = __UINT32_TYPE__;
+using uintptr_t = __UINTPTR_TYPE__;
 
 // Reserve 1 PiB, should be big enough for a while :)
 static constexpr size_t kReserveSize = 1ull << 40;
@@ -31,6 +43,9 @@ struct alignas(4) ScalarClock {
   epoch_t epoch;
   thread_id_t threadId : 12; // Supports 4096 threads
   AtomicScope scope : 2;
+  // For a release write, the epoch is actually an index into the thread's
+  // circular clock buffer where the full vector clock is stored.
+  bool isRelease : 1;
 };
 static constexpr int kMaxThreads = 1 << 12;
 static_assert(sizeof(ScalarClock) == 4);
@@ -69,10 +84,12 @@ struct ThreadState {
   // monotonic counter, used for stochastic read clock updates
   uint32_t numReads;
 
+  uint32_t gdcWaitCalled : 1;
+
   // Index to head of the circular clock buffer, plus a bit to mark if the
   // vector clock has changed since the last clock buffer write (to allow reuse)
   uint32_t clockBufferDirty : 1;
-  uint32_t clockBufferHead : 31;
+  uint32_t clockBufferHead : 30;
 
   // Reader-writer lock controlling access to the vector clock and clock buffer
   uint32_t lock;
@@ -84,10 +101,69 @@ struct ThreadState {
   epoch_t vectorClock[];
 };
 
+static constexpr int kMaxAtomicShadowCells = 3;
+
+struct AtomicEventState {
+  ThreadState *threadState;
+  ShadowCell *cells[kMaxAtomicShadowCells];
+  uint8_t numCells;
+};
+
+static constexpr int kMaxClusterCTAs = 16;
+static constexpr int kClusterBarrierScratchBytes = 128;
+
+struct alignas(16) ClusterBarrierState {
+  uint32_t lock;
+  uint32_t arrivalCount;
+  uint32_t publicationCount;
+  uint32_t generation;
+  uint32_t registrationGeneration;
+  thread_id_t threadIds[kMaxClusterCTAs];
+  epoch_t tokens[kMaxClusterCTAs];
+};
+static_assert(sizeof(ClusterBarrierState) <= kClusterBarrierScratchBytes);
+
+struct MBarrierPublishedClock {
+  // An immutable snapshot whose publisher has not advanced its epoch. A wait
+  // must exclude that thread's current epoch when acquiring the snapshot.
+  thread_id_t threadId;
+  epoch_t token;
+};
+static_assert(sizeof(MBarrierPublishedClock) == 4);
+
+struct MBarrierPhaseState {
+  // One-based generation tag. The initially completed phase 1 has tag zero.
+  uint32_t generation;
+  uint32_t complete;
+  MBarrierPublishedClock clocks[kMaxClusterCTAs];
+};
+static_assert(sizeof(MBarrierPhaseState) == 72);
+
+static constexpr uint32_t kEmptyMBarrierKey = 0xffffffffu;
+
+struct alignas(16) MBarrierState {
+  // Key uniquely identifying the barrier. kEmptyMBarrierKey represents empty.
+  uint32_t key;
+  uint32_t lock;
+  uint32_t expectedCount;
+  uint32_t pendingCount;
+  // Number of completed phases. The active phase has this zero-based index.
+  uint32_t generation;
+  MBarrierPhaseState phases[2];
+};
+static_assert(sizeof(MBarrierState) == 176);
+
+struct alignas(16) MBarrierTable {
+  uint32_t lock;
+  uint32_t capacity;
+  MBarrierState states[];
+};
+static_assert(sizeof(MBarrierTable) == 16);
+
 // Place the thread state for each device at a fixed stride for ease of
 // address calculation.
 static constexpr uintptr_t kPerDeviceStateStride = 1ull << 30;
-static constexpr uintptr_t kMaxGPUs = 16;
+static constexpr uintptr_t kMaxGPUs = 32;
 static constexpr uintptr_t kGlobalsReserveSize =
     kPerDeviceStateStride * kMaxGPUs;
 
@@ -116,6 +192,10 @@ inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress) {
 inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
                                            uintptr_t reserveBase) {
   return getReserveBaseFromAddress(addr) == reserveBase;
+}
+
+inline GSAN_HOST_DEVICE bool isAtomicScope(AtomicScope scope) {
+  return scope != AtomicScope::NonAtomic;
 }
 
 } // namespace gsan

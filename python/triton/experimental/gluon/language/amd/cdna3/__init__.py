@@ -4,14 +4,18 @@ from typing import TYPE_CHECKING
 from triton import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
-from ..._core import builtin, _unwrap_if_constexpr
+from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
+from .._layouts import AMDMFMALayout
+from .._ops import _scaled_upcast, get_scaled_upcast_fp4_scale_layout
+from ..._semantic import _check
 
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
     "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or",
-    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma"
+    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast",
+    "get_scaled_upcast_fp4_scale_layout"
 ]
 
 _atomic_op_str_to_op = {
@@ -27,6 +31,8 @@ def _verify_buffer_ops(ptr, offsets, mask=None, other=None):
     assert isinstance(offsets.type, ttgl.distributed_type), "expected offsets type to be a distributed_type"
     assert offsets.dtype.is_int32() or offsets.dtype.is_uint32(), "offsets element type must be int32 or uint32"
 
+    mask = _unwrap_if_constexpr(mask)
+    other = _unwrap_if_constexpr(other)
     if other is not None:
         assert mask is not None, "when other is not None, mask should not be None"
 
@@ -103,7 +109,7 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
         offsets (tensor): Offsets tensor for the load operation.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
-        cache_modifier (str): Cache modifier specifier. Defaults to "".
+        cache (str, optional): Cache modifier specifier. Defaults to ``None``.
     """
     _verify_buffer_ops(ptr, offsets, mask, other)
 
@@ -119,6 +125,7 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
 
     other = other.handle if other is not None else ir.value()
     mask = mask.handle if mask is not None else ir.value()
+    cache = _unwrap_if_constexpr(cache)
     cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
     ret_ty = offsets.type.with_element_ty(ptr.type.scalar.element_ty)
@@ -132,16 +139,18 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
     """
     AMD buffer store a tensor directly to global memory via a scalar base pointer and a tensor of
     offsets instead of a tensor of pointers.
+
     Args:
         stored_value (tensor to be stored): The tensor to be stored to global memory.
         ptr (pointer to scalar): Global memory scalar base pointer to store to.
         offsets (tensor): Offsets tensor for the store operation.
         mask (tensor, optional): Mask tensor for predicated store. Defaults to None.
-        cache_modifier (str): Cache modifier specifier. Defaults to "".
+        cache (str, optional): Cache modifier specifier. Defaults to ``None``.
     """
     _verify_buffer_ops(ptr, offsets, mask)
 
     offsets_shape = offsets.shape
+    mask = _unwrap_if_constexpr(mask)
     if mask is None:
         offsets, stored_value = _semantic.broadcast_tensors(offsets, stored_value)
     else:
@@ -150,27 +159,76 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
         raise ValueError(f"Expected `offsets` argument to have shape {offsets.shape} but got {offsets_shape}")
 
     mask = mask.handle if mask is not None else ir.value()
+    cache = _unwrap_if_constexpr(cache)
     cache_modifier = _semantic._str_to_store_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
 
 
+# Attribute that carries `cd_regclass` on the dot op; read by the MFMA lowering.
+_CD_REGCLASS_ATTR = "amdg.cd_regclass"
+
+
+def _check_cd_regclass(cd_regclass, acc):
+    """Validate `cd_regclass` ("a" = AGPRs, "v" = VGPRs, None) for an MFMA on `acc`, and return it unwrapped."""
+    cd_regclass = _unwrap_if_constexpr(cd_regclass)
+    if cd_regclass is not None:
+        _check(cd_regclass in ("a", "v"), lambda: f"cd_regclass must be None, 'a' or 'v', got {cd_regclass!r}")
+        _check(isinstance(acc.type.layout, AMDMFMALayout),
+               lambda: f"cd_regclass requires an accumulator with AMDMFMALayout, got {acc.type.layout}")
+    return cd_regclass
+
+
+def _set_cd_regclass(handle, cd_regclass, semantic):
+    """Record a checked `cd_regclass` on the dot op that defines `handle`."""
+    if cd_regclass is not None:
+        handle.set_attr(_CD_REGCLASS_ATTR, semantic.builder.get_string_attr(cd_regclass))
+
+
 @builtin
-def mfma(a, b, acc, _semantic: GluonSemantic = None):
+def mfma(a, b, acc, cd_regclass=None, _semantic: GluonSemantic = None):
     """
-    Computes matrix-multiplication of a * b + acc using AMD native matrix core units.
+    Computes matrix multiplication ``a * b + acc`` using AMD native matrix core units.
+
     Args:
         a (tensor): The first operand of mfma.
         b (tensor): The second operand of mfma.
         acc (tensor): The accumulator tensor.
+        cd_regclass (str, optional): Experimental. Register class for the accumulator input (C)
+            and result (D) of the MFMA instructions: ``"a"`` for AGPRs or ``"v"`` for VGPRs.
+            Requires an ``AMDMFMALayout`` accumulator. ``None`` (default) leaves the choice to
+            the compiler.
     """
     assert acc is not None, "acc is required"
     ret_type = acc.type
     acc = ttgl._unwrap_if_constexpr(acc)
 
+    cd_regclass = _check_cd_regclass(cd_regclass, acc)
     handle = _semantic.dot(a, b, acc, input_precision=knobs.language.fp32_default, max_num_imprecise_acc=None,
                            out_dtype=acc.dtype).handle
+    _set_cd_regclass(handle, cd_regclass, _semantic)
     return ttgl.tensor(handle, ret_type)
+
+
+@builtin
+def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
+    """
+    Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
+    CDNA3 scaled-upcast op.
+
+    CDNA3 lowers this through the software-emulated scaled-upcast path; it
+    does not use native hardware scaled-upcast instructions.
+
+    The ``scale`` tensor must use raw E8M0 payload in ``int8`` or ``uint8``, and must
+    already have the expanded output shape and scaled-upcast result layout.
+    For fp4 inputs, that is the canonical unpacked layout implied by ``src``
+    and ``axis``. ``elem_type`` must be ``fp16`` or ``bf16``.
+    """
+    axis = _unwrap_if_constexpr(axis)
+    elem_type = _unwrap_if_constexpr(elem_type)
+    assert scale.dtype in (int8, uint8), \
+        f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
+    return _scaled_upcast(src, scale, elem_type, axis, _semantic)
 
 
 """

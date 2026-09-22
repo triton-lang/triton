@@ -1,3 +1,4 @@
+#include "PartitionAttrs.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -105,13 +106,32 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
 
           // init iter args
           {
-            size_t idx = 0;
-            for (auto operand : forOp.getInitArgs()) {
+            for (size_t idx = 0; idx < forOp.getInitArgs().size(); ++idx) {
               auto iter_arg_node = node->getDefines()[idx + 1];
               operands[std::make_pair(op, idx + 3)] =
                   InputPort(iter_arg_node, 0);
-              idx++;
             }
+          }
+
+          for (auto &region : op->getRegions())
+            for (auto &block : region)
+              for (auto &op : block)
+                visitOperation(node, &op);
+
+        } else if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
+          auto node = graph->addNode(op, 0, 0);
+          nodes[op] = node;
+
+          // Create one recurrence node per loop-carried argument.
+          for (int idx = 0; idx < whileOp.getInits().size(); ++idx) {
+            auto beforeArg = whileOp.getBeforeArguments()[idx];
+            auto argNode = node->addNode(beforeArg, 2, 1);
+            node->addDefines(argNode);
+            operands[std::make_pair(op, idx)] = InputPort(argNode, 0);
+            values.emplace_back(OutputPort(argNode, 0), beforeArg);
+            values.emplace_back(OutputPort(argNode, 0),
+                                whileOp.getAfterArguments()[idx]);
+            values.emplace_back(OutputPort(argNode, 0), whileOp.getResult(idx));
           }
 
           for (auto &region : op->getRegions())
@@ -157,15 +177,20 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
               for (auto &op : block)
                 visitOperation(node, &op);
 
+        } else if (isa<scf::ConditionOp>(op)) {
+          assert(isa<scf::WhileOp>(op->getParentOp()));
+          auto node = graph->addNode(op, 1, 0);
+          nodes[op] = node;
+          operands[std::make_pair(op, 0)] = InputPort(node, 0);
         } else if (isa<scf::YieldOp>(op)) {
 
-          if (auto forOp = dyn_cast<scf::ForOp>(op->getParentOp())) {
-            // map operands to yield in a for op to the iter arg nodes
-            auto for_node = nodes[op->getParentOp()];
-            for (size_t idx = 0; idx < op->getNumOperands(); idx++) {
-              auto block_arg_node =
-                  for_node->getDefines()[idx + 1]; // skip iter arg
-              operands[std::make_pair(op, idx)] = InputPort(block_arg_node, 1);
+          if (auto loop = dyn_cast<LoopLikeOpInterface>(op->getParentOp())) {
+            size_t offset = isa<scf::ForOp>(loop.getOperation());
+            auto loopNode = nodes[op->getParentOp()];
+            for (size_t idx = 0; idx < op->getNumOperands(); ++idx) {
+              auto blockArgNode =
+                  loopNode->getDefines()[idx + offset]; // skip iter arg
+              operands[std::make_pair(op, idx)] = InputPort(blockArgNode, 1);
             }
 
           } else if (auto ifOp = dyn_cast<scf::IfOp>(op->getParentOp())) {
@@ -218,17 +243,19 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
   graph->walk([&](Node *node) {
     if (node->isOp()) {
       auto op = node->getOp();
-      if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+      if (isa<tt::DescriptorLoadLikeOpInterface>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
       }
+      if (isa<ttng::CLCTryCancelSyncOp>(op))
+        node->setDataValue(0);
       if (isa<ttng::TMEMLoadOp>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
         node->setDataValue(1);
         values.push_back({node, 1});
       }
-      if (isa<nvidia_gpu::TCGen5MMAOp>(op)) {
+      if (isa<nvidia_gpu::TCGen5MMAOp, nvidia_gpu::TCGen5MMAScaledOp>(op)) {
         node->setDataValue(0);
         values.push_back({node, 0});
       }
@@ -377,6 +404,12 @@ bool isTMEM(Node *node) {
   return flags & Flags::TMEM;
 }
 
+bool isCLC(Node *node) {
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
+  return flags & Flags::CLC;
+}
+
 bool hasEligibleMemoryOps(Graph *graph) {
   bool found = false;
   graph->walk([&](Node *node) {
@@ -402,13 +435,13 @@ bool isCostlySFU(Node *node) {
   return (flags & Flags::SFU) && partition->getCost() > 256;
 }
 
-bool isForIterArg(Node *node) {
+bool isLoopBlockArg(Node *node) {
   if (node->isOp())
     return false;
   auto blockArg = dyn_cast<BlockArgument>(node->getValue());
   if (!blockArg)
     return false;
-  return isa<scf::ForOp>(blockArg.getOwner()->getParentOp());
+  return isa<scf::ForOp, scf::WhileOp>(blockArg.getOwner()->getParentOp());
 }
 
 bool isIfResult(Node *node) {
@@ -421,6 +454,13 @@ bool isIfResult(Node *node) {
 }
 
 SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
+    // CLC issue and response allocation belong to the same partition.
+    {"clc_local_alloc",
+     [](Edge edge) {
+       return node_isa<ttng::CLCTryCancelSyncOp>(edge.getFromNode()) &&
+              node_isa<ttg::LocalAllocOp>(edge.getToNode());
+     }},
+
     // load followed by local alloc in same partition
     {"load_local_alloc",
      [](Edge edge) {
@@ -428,12 +468,18 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
          return false;
        }
 
-       if (node_isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
-               edge.getFromNode())) {
-         // require layouts to match for TMA load + alloc
+       if (node_isa<tt::DescriptorLoadLikeOpInterface>(edge.getFromNode())) {
          auto load = edge.getFromNode()->getOp();
          auto alloc = cast<ttg::LocalAllocOp>(edge.getToNode()->getOp());
-         return getSharedEncoding(load) == alloc.getType().getEncoding();
+         auto loadEnc = getSharedEncoding(load);
+         auto allocEnc = alloc.getType().getEncoding();
+         if (loadEnc == allocEnc)
+           return true;
+
+         auto loadLayoutEnc = cast<ttg::LayoutEncodingTrait>(loadEnc);
+         auto allocLayoutEnc = cast<ttg::LayoutEncodingTrait>(allocEnc);
+         return ttg::areLayoutsEquivalent(alloc.getType().getShape(),
+                                          loadLayoutEnc, allocLayoutEnc);
        }
 
        if (node_isa<tt::LoadOp>(edge.getFromNode())) {
@@ -460,7 +506,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        if (!isView(edge.getToNode())) {
          return false;
        }
-       auto from = getNodeFlags(edge.getFromNode());
        auto to = getNodeFlags(edge.getToNode());
        if (!(to & Flags::VIEW)) {
          return false;
@@ -485,24 +530,23 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
          return false;
        }
        auto from = getNodeFlags(edge.getFromNode());
-       auto to = getNodeFlags(edge.getToNode());
        if (!(from & Flags::VIEW)) {
          return false;
        }
        return true;
      }},
 
-    // for op iter arg placed in same partition as op that produces
+    // loop block arg placed in same partition as op that produces
     // its value in the loop body (if it is not a token)
-    {"for_op_iter_arg",
+    {"loop_block_arg",
      [](Edge edge) {
        auto from = edge.getFromNode();
        auto to = edge.getToNode();
        if (from->getParent() != to->getParent())
          // skip if not both in the loop body
          return false;
-       if (!isForIterArg(to))
-         // skip is not to an iter arg
+       if (!isLoopBlockArg(to))
+         // skip if not to a loop block arg
          return false;
        if (isa<AsyncTokenType>(to->getValue().getType()))
          // skip if a token type
@@ -510,14 +554,13 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return true;
      }},
 
-    // for op iter arg placed in same partition as op that consumes
+    // loop block arg placed in same partition as op that consumes
     // its value (if it is a token)
-    {"for_op_iter_arg_token",
+    {"loop_block_arg_token",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
-       if (!isForIterArg(from))
-         // skip if not from an iter arg
+       if (!isLoopBlockArg(from))
+         // skip if not from a loop block arg
          return false;
        if (!isa<AsyncTokenType>(from->getValue().getType()))
          // skip if not a token
@@ -577,7 +620,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"tmem_load",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        return node_isa<ttng::TMEMLoadOp>(from);
      }},
 
@@ -660,7 +702,6 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
     {"load_epilog",
      [](Edge edge) {
        auto from = edge.getFromNode();
-       auto to = edge.getToNode();
        if (!isLoad(from))
          return false;
 
@@ -689,6 +730,16 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
 };
 
 SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
+    // The CLC owns a dedicated worker partition.
+    {"clc",
+     [](Edge edge) {
+       auto from = edge.getFromNode();
+       auto to = edge.getToNode();
+       return (node_isa<ttng::CLCTryCancelSyncOp>(from) &&
+               node_isa<ttg::LocalAllocOp>(to)) ||
+              isCLC(from) == isCLC(to);
+     }},
+
     // don't merge manual partitions
     {"manual",
      [](Edge edge) {
@@ -1003,7 +1054,6 @@ void propagatePartitions(Graph *graph, std::string funcName,
     while (!nodes.empty()) {
       // try propagating partitions forward to nodes with no partition
       int start_size = nodes.size();
-      bool changed = false;
       for (auto node : nodes) {
         for (auto edge : node->getInEdges()) {
           if (!edge.getFromNode())
@@ -1220,6 +1270,11 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cast<scf::YieldOp>(forOp.getBody()->getTerminator())
           ->setAttr(kPartitionAttrName, partitionsAttr);
+    } else if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
+      whileOp.getBefore().front().getTerminator()->setAttr(kPartitionAttrName,
+                                                           partitionsAttr);
+      whileOp.getAfter().front().getTerminator()->setAttr(kPartitionAttrName,
+                                                          partitionsAttr);
     } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       ifOp.thenYield()->setAttr(kPartitionAttrName, partitionsAttr);
       if (!ifOp.getElseRegion().empty()) {
@@ -1278,12 +1333,16 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
             setPartitionOutputsAttr(parentOp, blockArg.getArgNumber() - 1,
                                     forOp.getResultTypes().size(), node);
           }
+        } else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
+          assert(blockArg.getOwner() == &whileOp.getBefore().front());
+          setPartitionOutputsAttr(parentOp, blockArg.getArgNumber(),
+                                  whileOp.getResultTypes().size(), node);
         } else {
           assert(false);
         }
       } else if (auto result = dyn_cast<OpResult>(value)) {
         auto op = result.getOwner();
-        if (isa<scf::ForOp>(op)) {
+        if (isa<scf::ForOp, scf::WhileOp>(op)) {
           // do nothing (handled by block arg)
         } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
           // result of an if
@@ -1366,10 +1425,13 @@ void assignPartitionIds(Graph *graph) {
   SmallVector<Partition *> store_partitions;
   SmallVector<Partition *> mma_partitions;
   SmallVector<Partition *> load_partitions;
+  SmallVector<Partition *> clc_partitions;
   SmallVector<Partition *> other_partitions;
 
   for (auto partition : graph->getPartitions()) {
-    if (partition->getFlags() & Flags::STORE)
+    if (partition->getFlags() & Flags::CLC)
+      clc_partitions.push_back(partition);
+    else if (partition->getFlags() & Flags::STORE)
       store_partitions.push_back(partition);
     else if (partition->getFlags() & Flags::MMA)
       mma_partitions.push_back(partition);
@@ -1396,6 +1458,10 @@ void assignPartitionIds(Graph *graph) {
     idx++;
   }
   for (auto partition : load_partitions) {
+    partition->id = idx;
+    idx++;
+  }
+  for (auto partition : clc_partitions) {
     partition->id = idx;
     idx++;
   }
@@ -1435,6 +1501,46 @@ void assignPartitionsForOpsWithNoUse(Graph *graph) {
   });
 }
 
+// Assign the While's partitions to every operation in its before region.
+void assignWhileBeforePartitions(scf::WhileOp whileOp, Graph *graph) {
+  const auto &partitions = graph->getRoot()->getPartitions();
+
+  Region &before = whileOp.getBefore();
+  graph->walk([&](Node *node) {
+    Region *region = node->isOp() ? node->getOp()->getParentRegion()
+                                  : node->getValue().getParentRegion();
+    if (region == &before || before.isAncestor(region))
+      node->addPartitions(partitions);
+  });
+}
+
+// Assign CLC response consumers to all partitions
+void assignCLCConsumers(scf::WhileOp whileOp, Graph *graph) {
+  SmallVector<Node *> stack;
+  graph->walk([&](Node *node) {
+    if (!node->isOp())
+      return;
+    auto load = dyn_cast<ttng::CLCLoadResultOp>(node->getOp());
+    if (!load || load->getParentOfType<scf::WhileOp>() != whileOp)
+      return;
+    auto alloc = load.getSrc().getDefiningOp<ttg::LocalAllocOp>();
+    if (alloc && alloc.getSrc().getDefiningOp<ttng::CLCTryCancelSyncOp>())
+      stack.push_back(node);
+  });
+
+  const auto &partitions = graph->getRoot()->getPartitions();
+  while (!stack.empty()) {
+    Node *node = stack.pop_back_val();
+    node->addPartitions(partitions);
+    for (Node *parent = node->getParent(); parent; parent = parent->getParent())
+      parent->addPartitions(partitions);
+    if (isLoopBlockArg(node))
+      continue;
+    for (Edge edge : node->getOutEdges())
+      stack.push_back(edge.getToNode());
+  }
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1448,8 +1554,9 @@ struct PartitionScheduling
   void runOnOperation() override {
     // find ops to partition
     SmallVector<Operation *> ops;
-    getOperation().walk([&](scf::ForOp op) {
-      if (op->hasAttr(kWarpSpecializeAttrName))
+    getOperation().walk([&](Operation *op) {
+      if (isa<scf::ForOp, scf::WhileOp>(op) &&
+          op->hasAttr(kWarpSpecializeAttrName))
         ops.push_back(op);
     });
 
@@ -1459,6 +1566,12 @@ struct PartitionScheduling
       analyze(idx, op);
       if (hasPartition(op))
         cloneMultiPartitionDataOps(op);
+      if (auto loop = dyn_cast<LoopLikeOpInterface>(op);
+          loop && loop->hasAttr(kPartitionStagesAttrName) &&
+          failed(verifyPartitionedLoop(loop))) {
+        signalPassFailure();
+        return;
+      }
       idx++;
     }
   }
@@ -1504,6 +1617,12 @@ private:
     // partitions)
     duplicateCheapOps(graph.get(), key, vis_info);
     visualize(key, "final", "final", graph.get(), vis_info);
+
+    if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
+      assignWhileBeforePartitions(whileOp, graph.get());
+      if (whileOp->hasAttr(kWarpSpecializeAttrName))
+        assignCLCConsumers(whileOp, graph.get());
+    }
 
     LLVM_DEBUG({
       llvm::errs() << "\nfinal partitions:\n";
@@ -1587,7 +1706,13 @@ private:
       // rewrite results
       for (auto newOp : newOps) {
         auto oldOp = mapping[newOp];
-        for (auto &use : oldOp->getUses()) {
+        // use.set() below unlinks the use from oldOp's use-chain while we
+        // are iterating that same chain, so without early-increment
+        // iteration only the first matching use is visited. The remaining
+        // same-partition users would keep pointing at the old
+        // multi-partition op, which insert-aref cannot handle (see the
+        // FIXME at the top of this function).
+        for (auto &use : llvm::make_early_inc_range(oldOp->getUses())) {
           auto user = use.getOwner();
           assert(user);
           auto userPartitions = getPartitionIds(user);

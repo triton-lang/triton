@@ -55,10 +55,20 @@ void Canonicalize::runOnOperation() {
   // patterns.
   LoadOp::getCanonicalizationPatterns(patterns, ctx);
   StoreOp::getCanonicalizationPatterns(patterns, ctx);
+  AtomicStoreOp::getCanonicalizationPatterns(patterns, ctx);
   BroadcastOp::getCanonicalizationPatterns(patterns, ctx);
   ExpandDimsOp::getCanonicalizationPatterns(patterns, ctx);
+  ReshapeOp::getCanonicalizationPatterns(patterns, ctx);
+  IntToPtrOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializeOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializePartitionsOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::BarrierExpectOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::ArriveBarrierOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::WaitBarrierOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::AsyncTMACopyGlobalToLocalOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::AsyncTMAGatherOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::TCGen5CommitOp::getCanonicalizationPatterns(patterns, ctx);
+  ttng::TMEMStoreOp::getCanonicalizationPatterns(patterns, ctx);
 
   (void)applyPatternsGreedily(getOperation(), std::move(patterns));
 }

@@ -5,6 +5,7 @@ import runpy
 import traceback
 from .profile import start, finalize, _select_backend
 from .flags import flags
+from triton._C.libproton import proton as libproton
 
 
 def parse_arguments():
@@ -16,7 +17,7 @@ def parse_arguments():
 """, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-n", "--name", type=str, help="Name of the profiling session")
     parser.add_argument("-b", "--backend", type=str, help="Profiling backend", default=None,
-                        choices=["cupti", "roctracer", "instrumentation"])
+                        choices=libproton.get_available_profilers())
     parser.add_argument("-c", "--context", type=str, help="Profiling context", default="shadow",
                         choices=["shadow", "python"])
     parser.add_argument("-m", "--mode", type=str, help="Profiling mode", default=None)
@@ -71,7 +72,7 @@ def do_setup_and_execute(target_args):
 def run_profiling(args, target_args):
     backend = args.backend if args.backend else _select_backend()
 
-    start(args.name, context=args.context, data=args.data, backend=backend, hook=args.hook)
+    start(args.name, context=args.context, data=args.data, backend=backend, mode=args.mode, hook=args.hook)
 
     exitcode = do_setup_and_execute(target_args)
 

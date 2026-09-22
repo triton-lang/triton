@@ -6,7 +6,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/Sys/GetEnv.h"
 
 namespace ttg = mlir::triton::gpu;
 
@@ -45,12 +46,15 @@ public:
     auto accTMemEncoding = dyn_cast<TensorMemoryEncodingAttr>(
         tcGen5MMAOp.getD().getType().getEncoding());
     auto cgaLayout = triton::gpu::getCGALayout(srcLayout);
-    // TMem encoding for A operand is the same as for D (Acc), but packed for
-    // bitwidth=16
+    // TMem encoding for A operand is the same as for D (Acc), with colStride 1,
+    // i.e. densely packed in TMEM.
     unsigned elemBitWidth =
         lhs.getType().getElementType().getIntOrFloatBitWidth();
-    // We don't currently support fp8 (not sure if we can)
-    if (elemBitWidth != 16 && elemBitWidth != 32) {
+    if (!llvm::is_contained({8, 16, 32}, elemBitWidth)) {
+      return failure();
+    }
+    // Padded fp4 operand cannot be trivially promoted to TMEM.
+    if (isFp4Padded(lhs.getType().getEncoding())) {
       return failure();
     }
     const unsigned colStride = 1;

@@ -256,6 +256,19 @@ def test_passing_tuple_with_constexpr(device):
     torch.testing.assert_close(x, expected_x, rtol=0, atol=0)
 
 
+def test_passing_tuple_with_mixed_constexpr_and_non_constexpr_values(device):
+
+    @triton.jit
+    def kernel(out_ptr, values):
+        tl.static_assert(values[1].type == tl.constexpr_type(3))
+        tl.store(out_ptr, tl.load(values[0]) + values[1])
+
+    x = torch.tensor([8], dtype=torch.int32, device=device)
+    out = torch.empty_like(x)
+    kernel[(1, )](out, (x, tl.constexpr(3)))
+    assert out.item() == 11
+
+
 @triton.jit
 def _nested_tuple_kernel(x):
     # This creates a new scope, which will force a copy of liveins. It's
@@ -383,3 +396,74 @@ def test_tuple_constexpr_function():
         tl.static_assert(passthrough_constexpr(TrivialTuple(0)).foo == 0)
 
     kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+def test_constexpr_tuple_arg_unpack(device):
+    """A Python tuple passed as tl.constexpr must support unpacking
+    (`d0, d1, d2 = shape`) in both value positions (arithmetic) and
+    shape positions (tl.zeros / tl.full / tl.reshape)."""
+
+    @triton.jit
+    def kernel_value(out_ptr, shape: tl.constexpr):
+        d0: tl.constexpr
+        d1: tl.constexpr
+        d2: tl.constexpr
+        d0, d1, d2 = shape
+        x = tl.full((1, ), d0 * 100 + d1 * 10 + d2, dtype=tl.int32)
+        tl.store(out_ptr + tl.arange(0, 1), x)
+
+    @triton.jit
+    def kernel_shape(out_ptr, shape: tl.constexpr):
+        d0: tl.constexpr
+        d1: tl.constexpr
+        d0, d1 = shape
+        x = tl.full((d0, d1), 1.0, dtype=tl.float32)
+        x = tl.reshape(x, (d0 * d1, ))
+        tl.store(out_ptr + tl.arange(0, d0 * d1), x)
+
+    out = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel_value[(1, )](out, shape=(8, 4, 2))
+    assert out.item() == 842
+
+    out = torch.zeros(4, dtype=torch.float32, device=device)
+    kernel_shape[(1, )](out, shape=(2, 2))
+    assert out.sum().item() == 4.0
+
+
+@pytest.mark.interpreter
+def test_constexpr_nested_tuple_arg_unpack(device):
+    """A nested Python tuple passed as tl.constexpr must support nested unpacking
+    (`(d0, d1), d2 = shape`) without crashing."""
+
+    @triton.jit
+    def kernel_nested(out_ptr, shape: tl.constexpr):
+        d0: tl.constexpr
+        d1: tl.constexpr
+        d2: tl.constexpr
+        (d0, d1), d2 = shape
+        x = tl.full((1, ), d0 * 100 + d1 * 10 + d2, dtype=tl.int32)
+        tl.store(out_ptr + tl.arange(0, 1), x)
+
+    out = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel_nested[(1, )](out, shape=((8, 4), 2))
+    assert out.item() == 842
+
+
+@pytest.mark.interpreter
+def test_constexpr_tuple_arg_subscript(device):
+    """Subscripting a tl.constexpr Python-tuple argument must yield a
+    constexpr value (not a stripped Python int), so it can be used where
+    constexpr is required (e.g. tl.reshape shape, tl.full shape)."""
+
+    @triton.jit
+    def kernel(out_ptr, shape: tl.constexpr):
+        v = shape[0] * 100 + shape[1] * 10 + shape[2]
+        x = tl.full((1, ), v, dtype=tl.int32)
+        # use subscript value as a constexpr shape element too
+        x = tl.reshape(x, (shape[0] // shape[0], ))
+        tl.store(out_ptr + tl.arange(0, 1), x)
+
+    out = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel[(1, )](out, shape=(8, 4, 2))
+    assert out.item() == 842

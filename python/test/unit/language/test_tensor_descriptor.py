@@ -7,7 +7,7 @@ import triton.language as tl
 from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3
+from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton import CompilationError
 
@@ -257,6 +257,7 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK, device):
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.skip("CTAs is unsupported for these cards")
@@ -322,6 +323,7 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devic
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.skip("CTAs is unsupported for these cards")
@@ -815,8 +817,8 @@ def batched_gemm_2d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
 def test_tensor_descriptor_batched_gemm_2d_tma(device):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
 
-    if is_hip():
-        # Insufficient share memory for the larger block size
+    if is_hip() or is_sm12x():
+        # Insufficient shared memory for the larger block size on HIP and sm120
         BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64
 
     if is_interpreter():
@@ -836,7 +838,9 @@ def test_tensor_descriptor_batched_gemm_2d_tma(device):
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
         # TODO: should only need num_stages * 3 descriptors per SM
-        assert size == 128 * 3 * (num_stages + 1) * grid[0]
+        # sm12x has no async dot, so its pipeline is one stage shorter -> one fewer buffer.
+        num_desc_buffers = num_stages if is_sm12x() else num_stages + 1
+        assert size == 128 * 3 * num_desc_buffers * grid[0]
         assert align == 128
         assert stream == 0
         return torch.empty(size, dtype=torch.int8, device=device)
@@ -919,8 +923,8 @@ def batched_gemm_3d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
 def test_tensor_descriptor_batched_gemm_3d_tma(device):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
 
-    if is_hip():
-        # Insufficient share memory for the larger block size
+    if is_hip() or is_sm12x():
+        # Insufficient shared memory for the larger block size on HIP and sm120
         BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 64
 
     if is_interpreter():
@@ -965,7 +969,7 @@ def test_tensor_descriptor_batched_gemm_3d_tma(device):
 
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("ndim", [3, 4, 5])
-@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128, 1024])
 def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK, device):
 
     @triton.jit
@@ -1309,6 +1313,8 @@ def mxfp8_mxfp4_matmul_tma(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
+@pytest.mark.enable_warmup(min_capability=9, priority=1)
+@pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (8192, 8192, 8192)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
                                                        (128, 256, 256)])
@@ -1376,8 +1382,9 @@ def torch_gather_rows(input, idx, y, block_y):
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
+@pytest.mark.parametrize("idx_dtype", [torch.int32, torch.int16])
 @pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
-def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
+def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, idx_dtype, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.skip()
 
@@ -1388,7 +1395,7 @@ def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
         input = torch.arange(X * Y, dtype=dtype, device=device).reshape(X, Y)
     output = torch.empty((BLOCK_X, BLOCK_Y), dtype=dtype, device=device)
 
-    idx = torch.randint(BLOCK_X, (BLOCK_X, ), dtype=torch.int32, device=device)
+    idx = torch.randint(BLOCK_X, (BLOCK_X, ), dtype=idx_dtype, device=device)
 
     def alloc_fn(size: int, align: int, steam):
         return torch.empty(size, dtype=torch.int8, device=device)
@@ -1475,9 +1482,10 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
+@pytest.mark.parametrize("idx_dtype", [torch.int32, torch.int16])
 @pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
 @pytest.mark.skipif(is_sm12x(), reason="TMA Scatter is not supported on sm120")
-def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
+def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, idx_dtype, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.skip()
 
@@ -1485,7 +1493,7 @@ def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     input = torch.arange(BLOCK_X * BLOCK_Y, dtype=dtype, device=device).reshape(BLOCK_X, BLOCK_Y)
     output = torch.zeros((X, Y), dtype=dtype, device=device)
 
-    idx = torch.randperm(BLOCK_X, dtype=torch.int32, device=device)
+    idx = torch.randperm(BLOCK_X, dtype=idx_dtype, device=device)
 
     def alloc_fn(size: int, align: int, steam):
         return torch.empty(size, dtype=torch.int8, device=device)
@@ -1549,6 +1557,7 @@ REDUCE_SKIP_HIP_CDNA3 = [
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("descriptor", ["host", "device"])
 @pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128), (512, 32), (1, 1024)])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK, N_BLOCK, device):
     is_native = is_cuda() and torch.cuda.get_device_capability()[0] >= 9
     if not is_native:
@@ -1623,13 +1632,44 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
     fallback_supported = dtype in FALLBACK_SUPPORTED_REDUCE_DTYPES[kind]
     supported = native_supported if is_native else fallback_supported
     if not supported:
+        if is_compile_warmup():
+            pytest.skip("unsupported descriptor reduction cannot be compiled")
         with pytest.raises(CompilationError):
             kernel[(grid_m, grid_n)](out_desc, out, inp, M, N, M_BLOCK, N_BLOCK, kind, num_ctas=num_ctas)
         return
 
-    expect = REDUCE_OP[kind](inp, out)
+    expect = out if is_compile_warmup() else REDUCE_OP[kind](inp, out)
     kernel[(grid_m, grid_n)](out_desc, out, inp, M, N, M_BLOCK, N_BLOCK, kind, num_ctas=num_ctas)
     torch.testing.assert_close(expect, unwrap_tensor(out), check_dtype=False)
+
+
+@pytest.mark.interpreter()
+def test_host_tensor_descriptor_round_f32_to_tf32(device):
+
+    @triton.jit
+    def kernel(out_ptr, desc):
+        block = desc.load([0, 0])
+        idx = tl.arange(0, 16)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    def round_to_tf32(x: torch.Tensor) -> torch.Tensor:
+        bits = x.view(torch.int32).to(torch.int64) & 0xFFFFFFFF
+        exp_mask = 0x7F800000
+        is_special = (bits & exp_mask) == exp_mask
+        round_bias = ((bits >> 13) & 1) + 0x00000FFF
+        rounded = (bits + round_bias) & 0xFFFFE000
+        return (torch.where(is_special, bits, rounded) & 0xFFFFFFFF).to(torch.int32).view(torch.float32)
+
+    torch.manual_seed(17)
+    inp = torch.randn((1, 16), device=device, dtype=torch.float32)
+    # a tie that rounds to even, one that rounds up, a mantissa that carries out, and the specials
+    inp[0, :6] = torch.tensor(
+        [1.0 + 2.0**-11, 1.0 + 2.0**-10 + 2.0**-11, 2.0 - 2.0**-23,
+         float("nan"), float("inf"), -3.0])
+    out = torch.empty_like(inp)
+    desc = TensorDescriptor.from_tensor(inp, [1, 16], round_f32_to_tf32=True)
+    kernel[(1, )](out, desc)
+    torch.testing.assert_close(out, round_to_tf32(inp), rtol=0, atol=0, equal_nan=True)
 
 
 @pytest.mark.interpreter()

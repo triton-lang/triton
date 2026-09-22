@@ -91,82 +91,82 @@ def umulhi(x, y, _semantic=None):
     return core.tensor(_semantic.builder.create_umulhi(x.handle, y.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("exponential")
-@core._tensor_member_fn
 def exp(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_exp(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("exponential (base 2)")
-@core._tensor_member_fn
 def exp2(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_exp2(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("natural logarithm")
-@core._tensor_member_fn
 def log(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_log(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("logarithm (base 2)")
-@core._tensor_member_fn
 def log2(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_log2(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("cosine")
-@core._tensor_member_fn
 def cos(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_cos(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("sine")
-@core._tensor_member_fn
 def sin(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_sin(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("fast square root")
-@core._tensor_member_fn
 def sqrt(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_sqrt(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32"])
 @_add_math_1arg_docstr("precise square root (rounding to nearest wrt the IEEE standard)")
-@core._tensor_member_fn
 def sqrt_rn(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_precise_sqrt(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("inverse square root")
-@core._tensor_member_fn
 def rsqrt(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_rsqrt(x.handle), x.type)
@@ -192,12 +192,26 @@ def abs(x, _semantic=None):
 
 
 @core.builtin
-@_add_math_2arg_docstr("fast division")
-def fdiv(x, y, ieee_rounding=False, _semantic=None):
+def fdiv(x, y, ieee_rounding=False, approx=False, _semantic=None):
+    """
+    Computes the element-wise division of :code:`x` by :code:`y`.
+
+    :param x: the numerator
+    :param y: the denominator
+    :param ieee_rounding: if True, use IEEE round-to-nearest division.
+    :param approx: if True, allow approximate division for float32 operands.
+        On NVIDIA, this uses ``div.approx.f32``, with a maximum error of 2 ULP
+        for denominator magnitudes in [2**-126, 2**126]. Results outside this
+        range may differ from full-range division. On AMD, this uses
+        ``llvm.amdgcn.fdiv.fast``, with a maximum error of 2.5 ULP and no support
+        for denormal inputs or results. Cannot be combined with
+        ``ieee_rounding=True``.
+    """
     ieee_rounding = core._unwrap_if_constexpr(ieee_rounding)
+    approx = core._unwrap_if_constexpr(approx)
     x = _semantic.to_tensor(x)
     y = _semantic.to_tensor(y)
-    return _semantic.fdiv(x, y, ieee_rounding)
+    return _semantic.fdiv(x, y, ieee_rounding, approx)
 
 
 @core.builtin
@@ -210,28 +224,28 @@ def div_rn(x, y, _semantic=None):
     return core.tensor(_semantic.builder.create_precise_divf(x.handle, y.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("error function")
-@core._tensor_member_fn
 def erf(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_erf(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("floor")
-@core._tensor_member_fn
 def floor(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_floor(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_check_dtype(dtypes=["fp32", "fp64"])
 @_add_math_1arg_docstr("ceil")
-@core._tensor_member_fn
 def ceil(x, _semantic=None):
     x = _semantic.to_tensor(x)
     return core.tensor(_semantic.builder.create_ceil(x.handle), x.type)

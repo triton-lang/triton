@@ -5,6 +5,9 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
+from triton._internal_testing import is_compile_warmup
+
+pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
 
 def test_chained_matmul(device):
@@ -129,7 +132,8 @@ def test_vecmat(device):
     AB = A_broadcasted * B
     C_ref = np.sum(AB, axis=2)
 
-    np.testing.assert_allclose(C_ref, C_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
+    if not is_compile_warmup():
+        np.testing.assert_allclose(C_ref, C_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
 @pytest.mark.parametrize("type",

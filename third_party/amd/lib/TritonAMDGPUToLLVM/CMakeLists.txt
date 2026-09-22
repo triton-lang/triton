@@ -18,19 +18,19 @@ add_triton_library(TritonAMDGPUToLLVM
     LoadStoreOpToLLVM.cpp
     GCNAsmFormat.cpp
     HistogramOpToLLVM.cpp
+    Membar.cpp
     TritonGPUToLLVM.cpp
     BuiltinFuncToLLVM.cpp
     Utility.cpp
     TargetInfo.cpp
-    TargetUtils.cpp
     SPMDOpToLLVM.cpp
-    SchedInstructions.cpp
     Fp4ToFpOpToLLVM.cpp
     MembarUtility.cpp
     ScalarizePackedFOps.cpp
     TDMUtility.cpp
     BarrierOpToLLVM.cpp
     WarpIdOpToLLVM.cpp
+    ConvertFpCastOpToLLVM.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen
@@ -39,7 +39,10 @@ add_triton_library(TritonAMDGPUToLLVM
     LINK_LIBS PUBLIC
     MLIRReconcileUnrealizedCasts
     TritonGPUToLLVM
+    TritonInstrumentToLLVM
     TritonAMDGPUIR
+    TritonAMDAnalysis
+    TritonAMDUtils
     LLVMCore
     LLVMPasses
     LLVMSupport

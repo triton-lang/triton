@@ -82,7 +82,6 @@ import triton
 import torch
 import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
-from triton.language.core import _aggregate as aggregate
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
@@ -217,7 +216,7 @@ def test_tcgen05_copy_nvmma_shared(M, N, TMEM_BLOCK_N, dtype, swizzle):
 # TMA for the epilogue store also reduces contention for the TMA pipe.
 
 
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor
@@ -255,15 +254,15 @@ def matmul_accumulate_load_partition(p):
         # Issue the async TMA load for the C tile.
         mbarrier.wait(p.c_empty_bar, c_phase)
         mbarrier.expect(p.c_ready_bar, p.c_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(p.c_desc, [off_m, off_n], p.c_ready_bar, p.c_buf)
+        tma.async_load(p.c_desc, [off_m, off_n], p.c_ready_bar, p.c_buf)
         c_phase ^= 1
         # Inner loop loads.
         for k in range(0, K, BLOCK_K):
             bar = p.load_ready_bars.index(state.index)
             mbarrier.wait(p.load_empty_bars.index(state.index), state.phase)
             mbarrier.expect(bar, p.a_desc.block_type.nbytes + p.b_desc.block_type.nbytes)
-            tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
-            tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
+            tma.async_load(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
+            tma.async_load(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
             state = state.next()
 
 
@@ -418,8 +417,8 @@ def test_matmul_accumulate(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, dtyp
 # which can be implicitly pipelined with the `tcgen05_mma_scaled` instruction:
 #
 # ```python
-# tma.async_copy_global_to_shared(a_scale_desc, ..., bar, a_scale_buf)
-# tma.async_copy_global_to_shared(b_scale_desc, ..., bar, b_scale_buf)
+# tma.async_load(a_scale_desc, ..., bar, a_scale_buf)
+# tma.async_load(b_scale_desc, ..., bar, b_scale_buf)
 # mbarrier.wait(bar, phase)
 #
 # tcgen05_copy(a_scale_buf, a_scale_tmem)

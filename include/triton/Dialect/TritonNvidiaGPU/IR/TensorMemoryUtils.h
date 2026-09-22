@@ -21,7 +21,6 @@ struct TMemLdStEncodingInfo {
   ColumnAction perm;
   int numRegsPerMessage;
   std::optional<uint32_t> secondHalfOffset;
-  std::optional<ColumnAction> broadcast = std::nullopt;
   bool unpacked = false;
   unsigned vec = 1;
   bool padding = false;
@@ -29,6 +28,18 @@ struct TMemLdStEncodingInfo {
 
 FailureOr<TMemLdStEncodingInfo>
 computeTMemLdStEncodingInfo(RankedTensorType regTy, gpu::MemDescType memTy,
+                            int maxnreg,
+                            std::function<InFlightDiagnostic()> emitError = {});
+
+// Check whether a tmem_load with register layout `regTy` reading from `memTy`
+// can be supported with a fused reduction along the N dimension. This is the
+// case when the layout is packed, the per-thread register bases span the full N
+// axis and do not advance M. In other words, each thread owns one M coordinate
+// and all N values for that coordinate; N is not split across lanes/warps/CTAs,
+// and a thread does not hold multiple M rows for this fused reduction.
+// `maxnreg` is the contextual register limit and when `emitError` is provided,
+// a diagnostic describing the first failing condition is emitted.
+bool supportsTMemLoadReduce(RankedTensorType regTy, gpu::MemDescType memTy,
                             int maxnreg,
                             std::function<InFlightDiagnostic()> emitError = {});
 

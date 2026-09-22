@@ -1,8 +1,9 @@
 import argparse
 import contextlib
+import hashlib
+import io
 import json
 import os
-import io
 import platform
 import re
 import shutil
@@ -11,9 +12,11 @@ import sys
 import sysconfig
 import tarfile
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
@@ -36,13 +39,14 @@ def get_cmake_dir():
     return cmake_dir
 
 
-@dataclass
+@dataclass(frozen=True)
 class BuildHelperArgs:
     cache_path: str
     offline_build: bool
     llvm_system_suffix: Optional[str]
     llvm_syspath: Optional[str]
     json_syspath: Optional[str]
+    amd_codegen_path: Optional[str]
     ptxas_path: Optional[str]
     ptxas_blackwell_path: Optional[str]
     cuobjdump_path: Optional[str]
@@ -52,12 +56,10 @@ class BuildHelperArgs:
     cupti_include_path: Optional[str]
     cupti_lib_path: Optional[str]
     cupti_lib_blackwell_path: Optional[str]
-    cuda_stdlib_path: Optional[str]
 
-
-def _normalize_bool(value: str, default: str = "") -> bool:
-    effective_value = value if value is not None else default
-    return effective_value.upper() in ["ON", "1", "YES", "TRUE", "Y"]
+    @cached_property
+    def archives_path(self):
+        return os.path.join(self.cache_path, "archives")
 
 
 def _normalize_optional(value: str) -> Optional[str]:
@@ -65,6 +67,46 @@ def _normalize_optional(value: str) -> Optional[str]:
         return None
     value = value.strip()
     return value if value else None
+
+
+# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
+def check_env_flag(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
+
+
+def find_therock_rocm_include_dir() -> Optional[str]:
+    """Find the ROCm include directory from a TheRock Python installation.
+
+    `rocm-sdk path --root` is the public CLI for locating the expanded devel
+    package. It also initializes that package on first use, so callers do not
+    need to run `rocm-sdk init` separately.
+    """
+    rocm_sdk = Path(sys.executable).with_name("rocm-sdk")
+    if not rocm_sdk.is_file():
+        rocm_sdk = shutil.which("rocm-sdk")
+    if rocm_sdk is None:
+        return None
+    try:
+        # Run the caller venv's rocm-sdk entry point in isolated mode so pip's
+        # temporary PEP 517 import path cannot shadow its installed packages.
+        root = subprocess.check_output(
+            [sys.executable, "-I", str(rocm_sdk), "path", "--root"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    if not root:
+        return None
+
+    include_dir = Path(root) / "include"
+    required_headers = [
+        include_dir / "hip" / "hip_runtime.h",
+        include_dir / "rocprofiler-sdk" / "fwd.h",
+    ]
+    if not all(header.is_file() for header in required_headers):
+        return None
+    return str(include_dir)
 
 
 def _normalize_optional_path(value: str) -> Optional[str]:
@@ -89,6 +131,53 @@ def open_url(url):
     request = urllib.request.Request(url, None, headers)
     # Set timeout to 300 seconds to prevent the request from hanging forever.
     return urllib.request.urlopen(request, timeout=300)
+
+
+def _download_file_with_curl(curl: str, url: str, path: str, label: str):
+    print(f"{label}:", file=sys.stdout, flush=True)
+    command = [
+        curl,
+        "--fail",
+        "--location",
+        "--show-error",
+        "--continue-at",
+        "-",
+        "--output",
+        path,
+        "--url",
+        url,
+    ]
+    hostname = urllib.parse.urlparse(url).hostname
+    if hostname is not None and hostname.endswith(".blob.core.windows.net"):
+        # Anonymous Azure Blob requests default to 2009-09-19, which ignores Range requests.
+        command.extend(["--header", "x-ms-version: 2011-08-18"])
+    subprocess.run(
+        command,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+        check=True,
+    )
+
+
+def _download_file_with_urllib(url: str, path: str, label: str):
+    with open(path, "wb") as file:
+        with open_url(url) as response:
+            progress_reader = DownloadProgressReader(response, label)
+            shutil.copyfileobj(progress_reader, file)
+
+
+def _download_file(url: str, path: str, label: str):
+    curl = shutil.which("curl")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    if curl is not None:
+        _download_file_with_curl(curl, url, path, label)
+    else:
+        _download_file_with_urllib(url, path, label)
+
+
+def _get_archive_path(download_dir: str, url: str):
+    archive_name = os.path.basename(urllib.parse.urlparse(url).path)
+    return os.path.join(download_dir, archive_name)
 
 
 def _format_byte_count(num_bytes: int) -> str:
@@ -167,34 +256,52 @@ class DownloadProgressReader:
         return getattr(self.response, name)
 
 
-def _download_file(url: str, label: str):
-    file_bytes = io.BytesIO()
-    with open_url(url) as response:
-        progress_reader = DownloadProgressReader(response, label)
-        shutil.copyfileobj(progress_reader, file_bytes)
-    file_bytes.seek(0)
-    return file_bytes
-
-
-def _download_and_extract(url, download_dir, label):
-    label = f"downloading {label}"
-    os.makedirs(download_dir, exist_ok=True)
+def _extract_archive(archive_path, download_dir):
     with contextlib.ExitStack() as stack:
-        if url.endswith(".zip"):
-            # unzip requires random access, so download the entire file
-            file_bytes = stack.enter_context(_download_file(url, label))
-            file = stack.enter_context(zipfile.ZipFile(file_bytes, "r"))
+        if archive_path.endswith(".zip"):
+            file = stack.enter_context(zipfile.ZipFile(archive_path, "r"))
             file.extractall(path=download_dir)
         else:
-            # tar files can be streamed directly into untar
-            response = stack.enter_context(open_url(url))
-            progress_reader = DownloadProgressReader(response, label)
-            file = stack.enter_context(tarfile.open(fileobj=progress_reader, mode="r|*"))
+            file = stack.enter_context(tarfile.open(archive_path, mode="r:*"))
             # Use extractall without filter for Python version < 3.12 compatibility
             if hasattr(tarfile, "data_filter"):
                 file.extractall(path=download_dir, filter="data")
             else:
                 file.extractall(path=download_dir)
+
+
+def _validate_sha256(archive_path, url, expected_sha256):
+    if expected_sha256 is None:
+        return
+    digest = hashlib.sha256()
+    with open(archive_path, "rb") as file:
+        while chunk := file.read(io.DEFAULT_BUFFER_SIZE):
+            digest.update(chunk)
+    actual_sha256 = digest.hexdigest()
+    if actual_sha256 == expected_sha256:
+        return
+    message = (f"LLVM download from {url} failed checksum validation. "
+               f"Expected SHA256 {expected_sha256}, got {actual_sha256}.")
+    if check_env_flag("TRITON_UNSAFE_DISABLE_SHA_CHECK"):
+        print(f"WARNING: {message}", file=sys.stderr)
+        return
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(archive_path)
+    raise RuntimeError(message)
+
+
+def _download_and_extract(url, download_dir, label, archives_path, expected_sha256=None):
+    keep_archive = check_env_flag("TRITON_CACHE_DEPENDENCY_DOWNLOADS")
+    archive_path = _get_archive_path(archives_path, url)
+    if not (keep_archive and os.path.exists(archive_path)):
+        _download_file(url, archive_path, f"downloading {label}")
+    _validate_sha256(archive_path, url, expected_sha256)
+    with contextlib.suppress(Exception):
+        shutil.rmtree(download_dir)
+    os.makedirs(download_dir, exist_ok=True)
+    _extract_archive(archive_path, download_dir)
+    if not keep_archive:
+        os.remove(archive_path)
 
 
 def update_symlink(link_path, source_path):
@@ -214,6 +321,32 @@ def update_symlink(link_path, source_path):
 # --- third party packages -----
 
 
+@dataclass(frozen=True)
+class DependencyArchive:
+    source_url: str
+    mirror_path: str
+    sha256sum: Optional[str] = None
+
+    @property
+    def filename(self):
+        return self.mirror_path.rsplit("/", 1)[-1]
+
+    @property
+    def url(self):
+        # Prefer OAI-internal blobstore, if available. Never fall back to public
+        # storage after a mirror failure.
+        base = os.environ.get("OAIARTIFACTS_BASE_URL", "").rstrip("/")
+        if not base:
+            return self.source_url
+        parsed = urllib.parse.urlsplit(base)
+        if (parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username is not None
+                or parsed.password is not None or parsed.query or parsed.fragment
+                or not parsed.path.endswith("/oaiartifacts")):
+            raise ValueError("OAIARTIFACTS_BASE_URL must be an HTTP(S) URL ending in /oaiartifacts")
+        base = base.removesuffix("/oaiartifacts")
+        return f"{base}/{self.mirror_path}"
+
+
 @dataclass
 class Package:
     package: str
@@ -223,14 +356,31 @@ class Package:
     lib_flag: str
     syspath_var_name: str
     sym_name: Optional[str] = None
+    sha256sum: Optional[str] = None
 
 
-def get_json_package_info():
+def get_json_archive():
     json_version_path = os.path.join(get_base_dir(), "cmake", "json-version.txt")
     with open(json_version_path, "r") as json_version_file:
         version = json_version_file.read().strip()
-    url = f"https://github.com/nlohmann/json/releases/download/{version}/include.zip"
-    return Package("json", "", url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
+    return DependencyArchive(f"https://github.com/nlohmann/json/releases/download/{version}/include.zip",
+                             f"oaiartifacts/wheels/triton_wheel/json/json-{version}-include.zip")
+
+
+def get_json_package_info():
+    return Package("json", "", get_json_archive().url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
+
+
+def get_llvm_archive(system_suffix, llvm_info=None):
+    if llvm_info is None:
+        llvm_info_path = os.path.join(get_base_dir(), "cmake", "llvm-info.json")
+        with open(llvm_info_path, "r") as llvm_info_file:
+            llvm_info = json.load(llvm_info_file)
+    rev = llvm_info["llvm_hash"][:8]
+    build_number = llvm_info["build_number"]
+    filename = f"llvm-{rev}-{system_suffix}-{build_number}.tar.gz"
+    return DependencyArchive(f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{filename}",
+                             f"triton-llvm/{filename}", llvm_info["sha256sum"][system_suffix])
 
 
 def is_linux_os(os_id):
@@ -241,7 +391,7 @@ def is_linux_os(os_id):
     return False
 
 
-def get_llvm_package_info(helper_args: BuildHelperArgs):
+def get_llvm_system_suffix(helper_args: BuildHelperArgs):
     system = platform.system()
     try:
         arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
@@ -272,20 +422,62 @@ def get_llvm_package_info(helper_args: BuildHelperArgs):
             print(
                 f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
             )
-            return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+            return None
     else:
         print(
             f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
         )
+        return None
+    return system_suffix
+
+
+def get_llvm_package_info(helper_args: BuildHelperArgs):
+    system_suffix = get_llvm_system_suffix(helper_args)
+    if system_suffix is None:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
-    llvm_hash_path = os.path.join(get_base_dir(), "cmake", "llvm-hash.txt")
-    with open(llvm_hash_path, "r") as llvm_hash_file:
-        rev = llvm_hash_file.read(8)
-    name = f"llvm-{rev}-{system_suffix}"
+    archive = get_llvm_archive(system_suffix)
+    name = archive.filename.removesuffix(".tar.gz")
     # Create a stable symlink that doesn't include revision
     sym_name = f"llvm-{system_suffix}"
-    url = f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz"
-    return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH", sym_name=sym_name)
+
+    return Package(
+        "llvm",
+        name,
+        archive.url,
+        "LLVM_INCLUDE_DIRS",
+        "LLVM_LIBRARY_DIR",
+        "LLVM_SYSPATH",
+        sym_name=sym_name,
+        sha256sum=archive.sha256sum,
+    )
+
+
+def get_amd_codegen_package_info(helper_args: BuildHelperArgs):
+    system_suffix = get_llvm_system_suffix(helper_args)
+    if system_suffix is None:
+        raise RuntimeError("AMD code generation is unavailable for this platform; set TRITON_AMD_CODEGEN_PATH")
+
+    amd_llvm_info_path = os.path.join(get_base_dir(), "cmake", "amd-llvm-info.json")
+    with open(amd_llvm_info_path, "r") as amd_llvm_info_file:
+        amd_llvm_info = json.load(amd_llvm_info_file)
+
+    revision = amd_llvm_info["llvm_hash"][:8]
+    build_number = amd_llvm_info["build_number"]
+    name = f"amd-codegen-{revision}-{system_suffix}-{build_number}"
+    archive = DependencyArchive(
+        f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz",
+        f"triton-llvm/{name}.tar.gz",
+        amd_llvm_info.get("sha256sum", {}).get(system_suffix),
+    )
+    return Package(
+        "amd",
+        name,
+        archive.url,
+        "",
+        "",
+        "",
+        sha256sum=archive.sha256sum,
+    )
 
 
 def _get_syspath_override(package_syspath_var_name: str, helper_args: BuildHelperArgs) -> Optional[str]:
@@ -312,9 +504,7 @@ def _get_thirdparty_package_cmake_vars(package: Package, helper_args: BuildHelpe
     if helper_args.offline_build and not input_defined:
         raise RuntimeError(f"Requested an offline build but {package.syspath_var_name} is not set")
     if not helper_args.offline_build and not input_defined and not input_compatible:
-        with contextlib.suppress(Exception):
-            shutil.rmtree(package_root_dir)
-        _download_and_extract(package.url, package_root_dir, package.name)
+        _download_and_extract(package.url, package_root_dir, package.name, helper_args.archives_path, package.sha256sum)
         # write version url to package_dir
         with open(os.path.join(package_dir, "version.txt"), "w") as file:
             file.write(package.url)
@@ -366,6 +556,127 @@ def write_thirdparty_cmake_vars(output: str, packages: list[str], helper_args: B
 # --- nvidia toolchain helpers -----
 
 
+def amd_codegen_library_name():
+    if sys.platform == "win32":
+        return "triton_amd_codegen.dll"
+    if sys.platform == "darwin":
+        return "libtriton_amd_codegen.dylib"
+    return "libtriton_amd_codegen.so"
+
+
+def download_codegen_llvm(backend: str, llvm_info: dict, helper_args: BuildHelperArgs):
+    # This SDK has its own pin and cache. Never consult llvm-info.json or
+    # LLVM_SYSPATH, which configure Triton's core LLVM rather than this backend.
+    system_suffix = get_llvm_system_suffix(helper_args)
+    bootstrap = llvm_info.get("bootstrap_llvm", {})
+    checksum = bootstrap.get("sha256sum", {}).get(system_suffix)
+    if checksum is None:
+        raise RuntimeError(
+            f"Missing {backend} code-generation artifact and bootstrap LLVM checksum for {system_suffix}")
+    revision = llvm_info["llvm_hash"][:8]
+    name = f"llvm-{revision}-{system_suffix}-{bootstrap['build_number']}"
+    package_root = os.path.join(helper_args.cache_path, backend, "llvm")
+    llvm_path = os.path.join(package_root, name)
+    llvm_config = os.path.join(llvm_path, "lib", "cmake", "llvm", "LLVMConfig.cmake")
+    if not os.path.isfile(llvm_config):
+        if helper_args.offline_build:
+            raise RuntimeError(f"Requested an offline build but {backend} bootstrap LLVM is missing from {llvm_path}")
+        archive = get_llvm_archive(system_suffix, {**bootstrap, "llvm_hash": llvm_info["llvm_hash"]})
+        _download_and_extract(archive.url, package_root, name, helper_args.archives_path, archive.sha256sum)
+    if not os.path.isfile(llvm_config):
+        raise RuntimeError(f"Cannot find independently pinned {backend} LLVM configuration at {llvm_config}")
+    return llvm_path
+
+
+def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
+    llvm_path = download_codegen_llvm("amd", amd_llvm_info, helper_args)
+    revision = f'{amd_llvm_info["llvm_hash"]}-{amd_llvm_info["build_number"]}'
+    system_suffix = get_llvm_system_suffix(helper_args)
+    source_path = os.path.join(get_base_dir(), "third_party", "amd", "backend", "codegen")
+    checkout_hash = hashlib.sha256(os.path.realpath(source_path).encode()).hexdigest()[:12]
+    build_path = os.path.join(helper_args.cache_path, "amd",
+                              f"codegen-bootstrap-{revision}-{system_suffix}-{checkout_hash}")
+    install_path = os.path.join(build_path, "install")
+    llvm_cmake_path = os.path.join(llvm_path, "lib", "cmake", "llvm")
+    command = [
+        "cmake",
+        "-G",
+        "Ninja",
+        "-S",
+        source_path,
+        "-B",
+        build_path,
+        f"-DLLVM_DIR={llvm_cmake_path}",
+        f"-DCMAKE_INSTALL_PREFIX={install_path}",
+        f"-DTRITON_AMD_LLVM_REVISION={revision}",
+        "-DCMAKE_BUILD_TYPE=Release",
+    ]
+    ninja_path = shutil.which("ninja")
+    if ninja_path is not None:
+        command.append(f"-DCMAKE_MAKE_PROGRAM={ninja_path}")
+    if sys.platform != "win32":
+        clang = os.path.join(llvm_path, "bin", "clang")
+        clangxx = os.path.join(llvm_path, "bin", "clang++")
+        if os.path.isfile(clang) and os.path.isfile(clangxx):
+            command.extend([f"-DCMAKE_C_COMPILER={clang}", f"-DCMAKE_CXX_COMPILER={clangxx}"])
+    if sys.platform == "darwin":
+        sdk = os.environ.get("SDKROOT", "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+        linker = "/Library/Developer/CommandLineTools/usr/bin/ld"
+        if os.path.isdir(sdk):
+            command.extend([
+                f"-DCMAKE_OSX_SYSROOT={sdk}",
+                f"-DCMAKE_CXX_FLAGS=-isystem{sdk}/usr/include/c++/v1",
+            ])
+        if os.path.isfile(linker):
+            linker_flag = f"-fuse-ld={linker}"
+            command.extend([
+                f"-DCMAKE_EXE_LINKER_FLAGS={linker_flag}",
+                f"-DCMAKE_SHARED_LINKER_FLAGS={linker_flag}",
+            ])
+    subprocess.check_call(command)
+    subprocess.check_call(["cmake", "--build", build_path, "--config", "Release", "--target", "triton_amd_codegen"])
+    subprocess.check_call(["cmake", "--install", build_path, "--config", "Release"])
+    return os.path.join(install_path, "lib", amd_codegen_library_name())
+
+
+def download_and_copy_amd_codegen(helper_args: BuildHelperArgs):
+    if helper_args.amd_codegen_path is not None:
+        return
+
+    library = amd_codegen_library_name()
+    amd_llvm_info_path = os.path.join(get_base_dir(), "cmake", "amd-llvm-info.json")
+    with open(amd_llvm_info_path, "r") as amd_llvm_info_file:
+        amd_llvm_info = json.load(amd_llvm_info_file)
+
+    package = get_amd_codegen_package_info(helper_args)
+    if package.sha256sum is None:
+        # Until standalone artifacts are published, use the SDK pinned in this
+        # backend's manifest, regardless of Triton's core LLVM configuration.
+        source_path = build_amd_codegen(amd_llvm_info, helper_args)
+    else:
+        package_root = os.path.join(helper_args.cache_path, package.package)
+        source_path = os.path.join(package_root, package.name, "lib", library)
+        if not os.path.isfile(source_path):
+            if helper_args.offline_build:
+                raise RuntimeError(f"Requested an offline build but AMD code generation is missing from {source_path}")
+            _download_and_extract(package.url, package_root, package.name, helper_args.archives_path, package.sha256sum)
+
+    if not os.path.isfile(source_path):
+        raise RuntimeError(f"Cannot find AMD code generation at {source_path}; set TRITON_AMD_CODEGEN_PATH")
+
+    destination_path = os.path.join(get_base_dir(), "third_party", "amd", "backend", "lib", library)
+    if os.path.isfile(destination_path):
+        source_stat = os.stat(source_path)
+        destination_stat = os.stat(destination_path)
+        if (source_stat.st_size == destination_stat.st_size
+                and source_stat.st_mtime_ns == destination_stat.st_mtime_ns):
+            return
+
+    os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+    print(f"copy {source_path} to {destination_path} ...")
+    shutil.copy2(source_path, destination_path)
+
+
 def download_and_copy(name, src_func, dst_path, override_path, version, url_func, helper_args: BuildHelperArgs):
     if helper_args.offline_build:
         return
@@ -390,7 +701,7 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
         assert curr_version is not None, f"No version information for {dst_path}"
         download = download or curr_version.group(1) != version
     if download:
-        _download_and_extract(url, tmp_path, name)
+        _download_and_extract(url, tmp_path, name, helper_args.archives_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f"copy {src_path} to {dst_path} ...")
     if os.path.isdir(src_path):
@@ -400,128 +711,119 @@ def download_and_copy(name, src_func, dst_path, override_path, version, url_func
         shutil.copy(src_path, dst_path)
 
 
-def download_and_copy_dependencies(helper_args: BuildHelperArgs):
+@dataclass(frozen=True)
+class NvidiaToolchainPackage:
+    name: str
+    component: str
+    version: str
+    src_path: str
+    dst_path: str
+    override_attr: str
+
+    def archive(self, system, arch):
+        filename = f"{self.component}-{system}-{arch}-{self.version}-archive.tar.xz"
+        path = f"{self.component}/{system}-{arch}/{filename}"
+        url = f"https://developer.download.nvidia.com/compute/cuda/redist/{path}"
+        return DependencyArchive(url, f"nvidia-cuda-redist/{path}")
+
+
+def get_nvidia_toolchain_packages():
     nvidia_version_path = os.path.join(get_base_dir(), "cmake", "nvidia-toolchain-version.json")
     with open(nvidia_version_path, "r") as nvidia_version_file:
-        # parse this json file to get the version of the nvidia toolchain
-        nvidia_toolchain_version = json.load(nvidia_version_file)
+        versions = json.load(nvidia_version_file)
+    exe = sysconfig.get_config_var("EXE")
+    crt = "cuda_crt" if int(versions["cudacrt"].split(".")[0]) >= 13 else "cuda_nvcc"
+    return [
+        NvidiaToolchainPackage(
+            name="nvcc",
+            component="cuda_nvcc",
+            version=versions["ptxas"],
+            src_path=f"bin/ptxas{exe}",
+            dst_path="bin/ptxas",
+            override_attr="ptxas_path",
+        ),
+        # Blackwell needs a separate ptxas because this version has Hopper bugs.
+        NvidiaToolchainPackage(
+            name="nvcc-blackwell",
+            component="cuda_nvcc",
+            version=versions["ptxas-blackwell"],
+            src_path=f"bin/ptxas{exe}",
+            dst_path="bin/ptxas-blackwell",
+            override_attr="ptxas_blackwell_path",
+        ),
+        NvidiaToolchainPackage(
+            name="cuobjdump",
+            component="cuda_cuobjdump",
+            version=versions["cuobjdump"],
+            src_path=f"bin/cuobjdump{exe}",
+            dst_path="bin/cuobjdump",
+            override_attr="cuobjdump_path",
+        ),
+        NvidiaToolchainPackage(
+            name="nvdisasm",
+            component="cuda_nvdisasm",
+            version=versions["nvdisasm"],
+            src_path=f"bin/nvdisasm{exe}",
+            dst_path="bin/nvdisasm",
+            override_attr="nvdisasm_path",
+        ),
+        NvidiaToolchainPackage(
+            name="nvcc-crt",
+            component=crt,
+            version=versions["cudacrt"],
+            src_path="include",
+            dst_path="include",
+            override_attr="cudacrt_path",
+        ),
+        NvidiaToolchainPackage(
+            name="cudart",
+            component="cuda_cudart",
+            version=versions["cudart"],
+            src_path="include",
+            dst_path="include",
+            override_attr="cudart_path",
+        ),
+        NvidiaToolchainPackage(
+            name="cupti",
+            component="cuda_cupti",
+            version=versions["cupti"],
+            src_path="include",
+            dst_path="include",
+            override_attr="cupti_include_path",
+        ),
+        NvidiaToolchainPackage(
+            name="cupti",
+            component="cuda_cupti",
+            version=versions["cupti"],
+            src_path="lib",
+            dst_path="lib/cupti",
+            override_attr="cupti_lib_path",
+        ),
+        NvidiaToolchainPackage(
+            name="cupti-blackwell",
+            component="cuda_cupti",
+            version=versions["cupti-blackwell"],
+            src_path="lib",
+            dst_path="lib/cupti-blackwell",
+            override_attr="cupti_lib_blackwell_path",
+        ),
+    ]
 
-    exe_extension = sysconfig.get_config_var("EXE")
-    download_and_copy(
-        name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-        dst_path="bin/ptxas",
-        override_path=helper_args.ptxas_path,
-        version=nvidia_toolchain_version["ptxas"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
 
-    # We download a separate ptxas for blackwell, since there are some bugs when using it for hopper
-    download_and_copy(
-        name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-        dst_path="bin/ptxas-blackwell",
-        override_path=helper_args.ptxas_blackwell_path,
-        version=nvidia_toolchain_version["ptxas-blackwell"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
-    download_and_copy(
-        name="cuobjdump",
-        src_func=lambda system, arch, version:
-        f"cuda_cuobjdump-{system}-{arch}-{version}-archive/bin/cuobjdump{exe_extension}",
-        dst_path="bin/cuobjdump",
-        override_path=helper_args.cuobjdump_path,
-        version=nvidia_toolchain_version["cuobjdump"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/{system}-{arch}/cuda_cuobjdump-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
-    download_and_copy(
-        name="nvdisasm",
-        src_func=lambda system, arch, version:
-        f"cuda_nvdisasm-{system}-{arch}-{version}-archive/bin/nvdisasm{exe_extension}",
-        dst_path="bin/nvdisasm",
-        override_path=helper_args.nvdisasm_path,
-        version=nvidia_toolchain_version["nvdisasm"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/{system}-{arch}/cuda_nvdisasm-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
-    crt = "crt" if int(nvidia_toolchain_version["cudacrt"].split(".")[0]) >= 13 else "nvcc"
-    download_and_copy(
-        name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_{crt}-{system}-{arch}-{version}-archive/include",
-        dst_path="include",
-        override_path=helper_args.cudacrt_path,
-        version=nvidia_toolchain_version["cudacrt"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_{crt}/{system}-{arch}/cuda_{crt}-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
-    download_and_copy(
-        name="cudart",
-        src_func=lambda system, arch, version: f"cuda_cudart-{system}-{arch}-{version}-archive/include",
-        dst_path="include",
-        override_path=helper_args.cudart_path,
-        version=nvidia_toolchain_version["cudart"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/{system}-{arch}/cuda_cudart-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
-    download_and_copy(
-        name="cuda-stdlib",
-        src_func=lambda system, arch, version: f"cuda_cccl-{system}-{arch}-{version}-archive/include/cccl/cuda",
-        dst_path="include/cuda",
-        override_path=helper_args.cuda_stdlib_path,
-        version=nvidia_toolchain_version["cuda-stdlib"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cccl/{system}-{arch}/cuda_cccl-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
-    download_and_copy(
-        name="cuda-stdlib",
-        src_func=lambda system, arch, version: f"cuda_cccl-{system}-{arch}-{version}-archive/include/cccl/nv",
-        dst_path="include/nv",
-        override_path=helper_args.cuda_stdlib_path,
-        version=nvidia_toolchain_version["cuda-stdlib"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cccl/{system}-{arch}/cuda_cccl-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
-    download_and_copy(
-        name="cupti",
-        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/include",
-        dst_path="include",
-        override_path=helper_args.cupti_include_path,
-        version=nvidia_toolchain_version["cupti"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
-    download_and_copy(
-        name="cupti",
-        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
-        dst_path="lib/cupti",
-        override_path=helper_args.cupti_lib_path,
-        version=nvidia_toolchain_version["cupti"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
-    download_and_copy(
-        name="cupti",
-        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
-        dst_path="lib/cupti-blackwell",
-        override_path=helper_args.cupti_lib_blackwell_path,
-        version=nvidia_toolchain_version["cupti-blackwell"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
-        helper_args=helper_args,
-    )
+def download_and_copy_dependencies(helper_args: BuildHelperArgs):
+    download_and_copy_amd_codegen(helper_args)
+
+    for package in get_nvidia_toolchain_packages():
+        download_and_copy(
+            name=package.name,
+            src_func=lambda system, arch, version, package=package:
+            f"{package.archive(system, arch).filename.removesuffix('.tar.xz')}/{package.src_path}",
+            dst_path=package.dst_path,
+            override_path=getattr(helper_args, package.override_attr),
+            version=package.version,
+            url_func=lambda system, arch, version, package=package: package.archive(system, arch).url,
+            helper_args=helper_args,
+        )
 
 
 def add_common_args(parser: argparse.ArgumentParser):
@@ -530,6 +832,7 @@ def add_common_args(parser: argparse.ArgumentParser):
     parser.add_argument("--triton-llvm-system-suffix", default="", help="Override LLVM system suffix")
     parser.add_argument("--llvm-syspath", default="", help="Path override for LLVM_SYSPATH")
     parser.add_argument("--json-syspath", default="", help="Path override for JSON_SYSPATH")
+    parser.add_argument("--triton-amd-codegen-path", default="", help="Path override for TRITON_AMD_CODEGEN_PATH")
     parser.add_argument("--triton-ptxas-path", default="", help="Path override for TRITON_PTXAS_PATH")
     parser.add_argument(
         "--triton-ptxas-blackwell-path",
@@ -548,24 +851,26 @@ def add_common_args(parser: argparse.ArgumentParser):
     parser.add_argument("--triton-cupti-lib-path", default="", help="Path override for TRITON_CUPTI_LIB_PATH")
     parser.add_argument("--triton-cupti-lib-blackwell-path", default="",
                         help="Path override for TRITON_CUPTI_LIB_BLACKWELL_PATH")
-    parser.add_argument("--triton-cuda-stdlib-path", default="", help="Path override for TRITON_CUDA_STDLIB_PATH")
 
 
 def normalize_parsed_args(parsed_args) -> BuildHelperArgs:
     return BuildHelperArgs(
-        cache_path=_normalize_required_path(parsed_args.triton_cache_path,
-                                            "TRITON_CACHE_PATH"), offline_build=parsed_args.triton_offline_build,
+        cache_path=_normalize_required_path(parsed_args.triton_cache_path, "TRITON_CACHE_PATH"),
+        offline_build=parsed_args.triton_offline_build,
         llvm_system_suffix=_normalize_optional(parsed_args.triton_llvm_system_suffix),
-        llvm_syspath=_normalize_optional_path(parsed_args.llvm_syspath), json_syspath=_normalize_optional_path(
-            parsed_args.json_syspath), ptxas_path=_normalize_optional_path(parsed_args.triton_ptxas_path),
+        llvm_syspath=_normalize_optional_path(parsed_args.llvm_syspath),
+        json_syspath=_normalize_optional_path(parsed_args.json_syspath),
+        amd_codegen_path=_normalize_optional_path(parsed_args.triton_amd_codegen_path),
+        ptxas_path=_normalize_optional_path(parsed_args.triton_ptxas_path),
         ptxas_blackwell_path=_normalize_optional_path(parsed_args.triton_ptxas_blackwell_path),
         cuobjdump_path=_normalize_optional_path(parsed_args.triton_cuobjdump_path),
-        nvdisasm_path=_normalize_optional_path(parsed_args.triton_nvdisasm_path), cudacrt_path=_normalize_optional_path(
-            parsed_args.triton_cudacrt_path), cudart_path=_normalize_optional_path(parsed_args.triton_cudart_path),
+        nvdisasm_path=_normalize_optional_path(parsed_args.triton_nvdisasm_path),
+        cudacrt_path=_normalize_optional_path(parsed_args.triton_cudacrt_path),
+        cudart_path=_normalize_optional_path(parsed_args.triton_cudart_path),
         cupti_include_path=_normalize_optional_path(parsed_args.triton_cupti_include_path),
         cupti_lib_path=_normalize_optional_path(parsed_args.triton_cupti_lib_path),
         cupti_lib_blackwell_path=_normalize_optional_path(parsed_args.triton_cupti_lib_blackwell_path),
-        cuda_stdlib_path=_normalize_optional_path(parsed_args.triton_cuda_stdlib_path))
+    )
 
 
 def main(argv=None):
@@ -598,6 +903,8 @@ def main(argv=None):
         download_and_copy_dependencies(helper_args)
     elif parsed_args.command == "write_thirdparty_cmake_vars":
         write_thirdparty_cmake_vars(output=parsed_args.output, packages=parsed_args.packages, helper_args=helper_args)
+    if os.path.exists(helper_args.archives_path) and not check_env_flag("TRITON_CACHE_DEPENDENCY_DOWNLOADS"):
+        shutil.rmtree(helper_args.archives_path)
 
 
 if __name__ == "__main__":

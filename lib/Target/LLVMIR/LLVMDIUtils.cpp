@@ -96,7 +96,8 @@ LLVM::DITypeAttr LLVMDIUtils::convertStructType(MLIRContext *context,
       mlir::StringAttr::get(context, "struct"), fileAttr, /*line=*/line,
       /*scope=*/fileAttr, /*baseType=*/nullptr, mlir::LLVM::DIFlags::Zero,
       sizeInBits, /*alignInBits=*/0, /*dataLocation=*/nullptr, /*rank=*/nullptr,
-      /*allocated=*/nullptr, /*associated=*/nullptr, elTypes);
+      /*allocated=*/nullptr, /*associated=*/nullptr, /*identifier=*/nullptr,
+      /*discriminator=*/nullptr, elTypes);
 }
 
 LLVM::DITypeAttr LLVMDIUtils::convertArrayType(MLIRContext *context,
@@ -116,7 +117,8 @@ LLVM::DITypeAttr LLVMDIUtils::convertArrayType(MLIRContext *context,
       mlir::StringAttr::get(context, "array"), fileAttr, /*line=*/line,
       /*scope=*/fileAttr, /*baseType=*/baseType, mlir::LLVM::DIFlags::Zero,
       sizeInBits, /*alignInBits=*/0, /*dataLocation=*/nullptr, /*rank=*/nullptr,
-      /*allocated=*/nullptr, /*associated=*/nullptr, elTypes);
+      /*allocated=*/nullptr, /*associated=*/nullptr, /*identifier=*/nullptr,
+      /*discriminator=*/nullptr, elTypes);
 }
 
 std::optional<unsigned> LLVMDIUtils::calcBitWidth(mlir::Type type) {
@@ -126,7 +128,6 @@ std::optional<unsigned> LLVMDIUtils::calcBitWidth(mlir::Type type) {
     auto vectorType = dyn_cast<mlir::VectorType>(type);
     llvm::ArrayRef<int64_t> shape = vectorType.getShape();
     mlir::Type elementType = vectorType.getElementType();
-    llvm::ArrayRef<bool> scalableDims = vectorType.getScalableDims();
     unsigned size = 1;
     for (auto i : shape) {
       size *= i;

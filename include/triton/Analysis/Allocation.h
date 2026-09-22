@@ -1,12 +1,15 @@
 #ifndef TRITON_ANALYSIS_ALLOCATION_H
 #define TRITON_ANALYSIS_ALLOCATION_H
 
+#include "triton/Analysis/CallGraph.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
 
 #include <limits>
+#include <optional>
 
 namespace mlir {
 
@@ -19,12 +22,28 @@ using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
+unsigned getAtomicResultScratchSize(Value result);
+
+/// Returns whether an operation uses scratch memory across CTAs.
+bool hasCrossCTAScratch(Operation *op);
+
+/// For atomic-result scratch, returns the CTA bits broadcast from
+/// each group leader. Physical scratch owners have these bits clear.
+/// Scalar results are broadcast from CTA0 across all CTAs.
+/// Callers check whether scratch has been allocated.
+std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op);
+
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
-                                       int bitwidth);
+                                       int bitwidth, int numBanks = 32,
+                                       gpu::LocalMemOpTile srcTile = {},
+                                       gpu::LocalMemOpTile dstTile = {});
 
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                       RankedTensorType dstTy);
+                                       RankedTensorType dstTy,
+                                       int numBanks = 32,
+                                       gpu::LocalMemOpTile srcTile = {},
+                                       gpu::LocalMemOpTile dstTile = {});
 
 } // namespace triton
 
@@ -126,6 +145,13 @@ public:
         bufferIds.insert(buffer->id);
     }
     return bufferIds;
+  }
+
+  /// Returns the current function's entry arguments aliased by a value.
+  ArrayRef<unsigned> getAliasedArgumentIndices(Value value) const {
+    auto it = argumentAliases.find(value);
+    return it == argumentAliases.end() ? ArrayRef<unsigned>{}
+                                       : it->second.getArrayRef();
   }
 
   /// Returns the scratch buffer id of the given value.
@@ -234,6 +260,7 @@ private:
   OpScratchMapT opVirtual;
   ValueBufferMapT valueBuffer;
   AliasBufferMapT aliasBuffer;
+  DenseMap<Value, llvm::SmallSetVector<unsigned, 2>> argumentAliases;
   BufferSetT bufferSet;
   size_t sharedMemorySize = 0;
 

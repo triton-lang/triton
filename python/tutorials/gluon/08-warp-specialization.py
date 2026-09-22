@@ -28,7 +28,6 @@ from functools import partial
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
-from triton.language.core import _aggregate as aggregate
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia.blackwell import (
@@ -104,7 +103,7 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 # mbarrier.arrive(bar, count=1)
 #
 # mbarrier.wait(bar, phase=0)  # in partition B
-# tma.async_copy_shared_to_global(desc, [0, 0], smem)
+# tma.async_store(desc, [0, 0], smem)
 # ```
 #
 # A fence is needed somewhere between the shared memory store and the TMA store.
@@ -115,7 +114,7 @@ if __name__ == "__main__" and not is_hopper_or_newer():
 #
 # mbarrier.wait(bar, phase=0)
 # fence_async_shared()
-# tma.async_copy_global_to_shared(desc, [0, 0], bar, smem)
+# tma.async_load(desc, [0, 0], bar, smem)
 # ```
 #
 # A fence is needed somewhere between the shared memory load and the TMA load.
@@ -149,8 +148,8 @@ def load_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr):
         # signal the operand buffers as ready when they complete.
         yoff = i * YBLOCK
         mbarrier.expect(load_ready_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
-        tma.async_copy_global_to_shared(a_desc, [xoff, yoff], load_ready_bar, a_buf)
-        tma.async_copy_global_to_shared(b_desc, [xoff, yoff], load_ready_bar, b_buf)
+        tma.async_load(a_desc, [xoff, yoff], load_ready_bar, a_buf)
+        tma.async_load(b_desc, [xoff, yoff], load_ready_bar, b_buf)
 
 
 @gluon.jit
@@ -175,7 +174,7 @@ def store_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr)
         # Wait for the compute partition to produce c.
         mbarrier.wait(c_ready_bar, phase)
         yoff = i * YBLOCK
-        tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_buf)
+        tma.async_store(c_desc, [xoff, yoff], c_buf)
 
         tma.store_wait(outstanding_stores)
         c_empty_bar = c_empty_bars.index((i - outstanding_stores) % num_buffers)
@@ -185,7 +184,7 @@ def store_partition(descs, barriers, buffers, xoff, numel, YBLOCK: gl.constexpr)
         mbarrier.arrive(c_empty_bar, count=1, pred=i >= outstanding_stores)
 
     # Since we waited for the last value of c, all the other partitions have
-    # exited by now. We just need to wait the stores to complete.
+    # exited by now. We just need the final stores to complete.
     tma.store_wait(0)
 
 
@@ -385,7 +384,7 @@ if __name__ == "__main__":
 
 
 # Helper class for passing arguments around partitions.
-@aggregate
+@gluon.aggregate
 class PartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor
@@ -402,7 +401,7 @@ class PartitionArgs:
 
 
 # Counter abstraction for tracking barrier index and phase.
-@aggregate
+@gluon.aggregate
 class Counter:
     index: gl.tensor
     phase: gl.tensor
@@ -444,8 +443,8 @@ def matmul_load_partition(p, SchedulerImpl: gl.constexpr):
             bar = ready_bars.index(state.index)
             mbarrier.wait(empty_bars.index(state.index), state.phase)
             mbarrier.expect(bar, p.a_desc.block_type.nbytes + p.b_desc.block_type.nbytes)
-            tma.async_copy_global_to_shared(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
-            tma.async_copy_global_to_shared(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
+            tma.async_load(p.a_desc, [off_m, k], bar, p.a_bufs.index(state.index))
+            tma.async_load(p.b_desc, [k, off_n], bar, p.b_bufs.index(state.index))
             state = state.next()
 
 
@@ -533,7 +532,7 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
             if i == 0:
                 mbarrier.arrive(acc_empty_bars.index(acc_state.index), count=1)
             fence_async_shared()
-            tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + SPLIT_N * i], acc_smem)
+            tma.async_store(p.c_desc, [off_m, off_n + SPLIT_N * i], acc_smem)
     # Overlap the last store with the wait, then wait for the last store here.
     tma.store_wait(pendings=0)
 

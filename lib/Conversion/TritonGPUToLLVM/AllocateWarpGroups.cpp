@@ -1,5 +1,9 @@
 #include "mlir/IR/BuiltinOps.h"
+#include "triton/Analysis/CallGraph.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu {
@@ -10,6 +14,27 @@ namespace mlir::triton::gpu {
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+
+constexpr int32_t kMinRegisters = 24;
+constexpr int32_t kMinRegistersForAssertOrPrint = 32;
+
+static bool regionUsesAssertOrPrint(Region &region) {
+  return region
+      .walk([](Operation *op) {
+        return isa<AssertOp, PrintOp>(op) ? WalkResult::interrupt()
+                                          : WalkResult::advance();
+      })
+      .wasInterrupted();
+}
+
+static int32_t minRegistersForRegion(Region &region, bool instrumented,
+                                     int32_t minRegisters) {
+  // Work around an NVIDIA driver bug: regions that may call device system
+  // functions such as assert or print need at least 32 registers.
+  return instrumented || regionUsesAssertOrPrint(region)
+             ? std::max(minRegisters, kMinRegistersForAssertOrPrint)
+             : minRegisters;
+}
 
 // Given a `ttg.warp_specialize` with a certain number of existing warps, pad it
 // with extra warps until it has the same number of full warp groups as the
@@ -61,12 +86,47 @@ static void padToMaxWarpGroups(WarpSpecializeOp op, int numExtraWarpGroups) {
   partitions.erase();
 }
 
+static LogicalResult annotateWarpIdOffsets(ModuleOp mod) {
+  triton::CallGraph<int> callGraph(mod);
+  DenseMap<FunctionOpInterface, int> offsets;
+  for (auto root : callGraph.getRoots())
+    offsets[root] = 0;
+
+  LogicalResult result = success();
+  callGraph.walk(
+      [&](CallOpInterface call, FunctionOpInterface callee) {
+        auto caller = call->getParentOfType<FunctionOpInterface>();
+        int start = getWarpGroupStartWarpId(call->getBlock())
+                        .value_or(offsets.lookup(caller));
+        // Equal-sized partitions can share a helper when their starts have
+        // the same remainder modulo the helper's warp count.
+        int offset = start % lookupNumWarps(callee);
+        auto [it, inserted] = offsets.try_emplace(callee, offset);
+        if (!inserted && it->second != offset) {
+          call.emitError("callee is used with incompatible warp ID offsets");
+          result = failure();
+        }
+      },
+      [](FunctionOpInterface) {});
+  if (failed(result))
+    return failure();
+
+  Builder b(mod.getContext());
+  for (auto [func, offset] : offsets)
+    if (!isKernel(func))
+      func->setAttr(AttrWarpIdOffsetName, b.getI32IntegerAttr(offset));
+  return success();
+}
+
 namespace {
 struct AllocateWarpGroups
     : public mlir::triton::gpu::impl::TritonGPUAllocateWarpGroupsBase<
           AllocateWarpGroups> {
+  using TritonGPUAllocateWarpGroupsBase::TritonGPUAllocateWarpGroupsBase;
+
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+    bool laterInstrumentation = instrumented.getValue();
 
     // First determine the maximum number of extra warps.
     int maxExtraWarps = 0;
@@ -104,6 +164,9 @@ struct AllocateWarpGroups
       }
       op.setWarpGroupStartIds(startIds);
     });
+
+    if (failed(annotateWarpIdOffsets(mod)))
+      return signalPassFailure();
 
     Builder b(&getContext());
     mod->setAttr("ttg.total-num-warps",
@@ -157,8 +220,11 @@ struct AllocateWarpGroups
       // Group the partitions into warpgroups.
       SmallVector<WarpGroupPartition> orderedPartitions;
       for (auto [startId, partition, estRegs, numWarps] :
-           llvm::zip(startIds, op.getPartitionRegions(), *regsAttr, arr))
-        orderedPartitions.push_back({startId, partition, estRegs, numWarps});
+           llvm::zip(startIds, op.getPartitionRegions(), *regsAttr, arr)) {
+        int minRegs = minRegistersForRegion(*partition, laterInstrumentation,
+                                            std::max(estRegs, kMinRegisters));
+        orderedPartitions.push_back({startId, partition, minRegs, numWarps});
+      }
       llvm::sort(orderedPartitions,
                  [&](auto lhs, auto rhs) { return lhs.startId < rhs.startId; });
 
@@ -192,7 +258,8 @@ struct AllocateWarpGroups
       int leftover = registerBudget / (baseNumWarps * threadsPerWarp);
       // Round down to the nearest multiple of 8.
       leftover = leftover / 8 * 8;
-      if (leftover < 24)
+      if (leftover < minRegistersForRegion(op.getDefaultRegion(),
+                                           laterInstrumentation, kMinRegisters))
         return; // too few registers
 
       // Generate setmaxnreg in each partition according to its warp group.

@@ -3,6 +3,7 @@
 #include "NVGPUToLLVM/Passes.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "cublas_instance.h"
+#include "lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
@@ -12,11 +13,13 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
 #include <dlfcn.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
-namespace py = pybind11;
+namespace py = nanobind;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
@@ -109,9 +112,7 @@ public:
   }
 
   void copyHostToDevice(uint64_t dst, const py::bytes &src) {
-    std::string payload = src;
-    check(cuMemcpyHtoD(static_cast<CUdeviceptr>(dst), payload.data(),
-                       payload.size()),
+    check(cuMemcpyHtoD(static_cast<CUdeviceptr>(dst), src.c_str(), src.size()),
           "cuMemcpyHtoD");
   }
 
@@ -119,15 +120,13 @@ public:
     std::string payload(size, '\0');
     check(cuMemcpyDtoH(payload.data(), static_cast<CUdeviceptr>(src), size),
           "cuMemcpyDtoH");
-    return py::bytes(payload);
+    return py::bytes(payload.c_str(), payload.size());
   }
 
   void synchronize() { check(cuCtxSynchronize(), "cuCtxSynchronize"); }
 };
 
-} // namespace
-
-void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
+void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
   using namespace mlir::triton;
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
@@ -136,6 +135,15 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
           pm.addPass(mlir::triton::createAllocateSharedMemoryNvPass(
               capability, ptxVersion));
         });
+  m.def("add_set_minimum_shared_memory",
+        [](mlir::PassManager &pm, int32_t minimumSize) {
+          mlir::triton::SetMinimumSharedMemoryOptions options;
+          options.minimumSize = minimumSize;
+          pm.addPass(mlir::triton::createSetMinimumSharedMemory(options));
+        });
+  ADD_PASS_OPTION_WRAPPER_2("add_membar",
+                            mlir::triton::createTritonNvidiaGPUMembar, int32_t,
+                            int32_t);
   m.def("add_to_llvmir",
         [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
           pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
@@ -143,26 +151,59 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
         });
 }
 
-static std::unique_ptr<mlir::Pass>
+std::unique_ptr<mlir::Pass>
 createTritonGPUFenceInsertionWrapper(int32_t capability) {
   ttng::TritonGPUFenceInsertionOptions options;
   options.computeCapability = capability;
   return ttng::createTritonGPUFenceInsertion(options);
 }
 
-static std::unique_ptr<mlir::Pass>
+std::unique_ptr<mlir::Pass>
 createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
   ttng::TritonGPUProxyFenceInsertionOptions options;
   options.computeCapability = capability;
   return ttng::createTritonGPUProxyFenceInsertion(options);
 }
 
-void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
+std::unique_ptr<mlir::Pass>
+createTritonNvidiaGPUHoistMBarrierLifecycleWrapper(int32_t capability) {
+  ttng::TritonNvidiaGPUHoistMBarrierLifecyclePassOptions options;
+  options.computeCapability = capability;
+  return ttng::createTritonNvidiaGPUHoistMBarrierLifecyclePass(options);
+}
+
+std::unique_ptr<mlir::Pass>
+createInitializeWSClusterBarriersWrapper(int32_t capability,
+                                         int32_t ptxVersion) {
+  mlir::triton::InitializeWSClusterBarriersOptions options;
+  options.computeCapability = capability;
+  options.ptxVersion = ptxVersion;
+  return mlir::triton::createInitializeWSClusterBarriers(options);
+}
+
+void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
+  ADD_PASS_WRAPPER_0("add_assign_cga_layouts",
+                     ttng::createTritonNvidiaGPUAssignCGALayoutsPass);
+  ADD_PASS_WRAPPER_0("add_optimize_cta_locality",
+                     ttng::createTritonNvidiaGPUOptimizeCTALocalityPass);
+  ADD_PASS_WRAPPER_0("add_to_clc", ttng::createTritonNvidiaGPUToCLCPass);
+  ADD_PASS_WRAPPER_0("add_lower_clc", ttng::createTritonNvidiaGPULowerCLCPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
                      createTritonGPUFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
                      createTritonGPUProxyFenceInsertionWrapper, int32_t);
+  ADD_PASS_WRAPPER_1("add_hoist_mbarrier_lifecycle",
+                     createTritonNvidiaGPUHoistMBarrierLifecycleWrapper,
+                     int32_t);
+  ADD_PASS_WRAPPER_0("add_tmem_barrier_insertion",
+                     ttng::createTritonNvidiaGPUTMemBarrierInsertionPass);
+  ADD_PASS_WRAPPER_0("add_tmem_wait_insertion",
+                     ttng::createTritonNvidiaGPUTMemWaitInsertionPass);
+  ADD_PASS_WRAPPER_0(
+      "add_cluster_barrier_mbar_allocator",
+      ttng::createTritonNvidiaGPUClusterBarrierMbarAllocatorPass);
+  ADD_PASS_WRAPPER_0("add_tmem_load_reduce",
+                     ttng::createTritonNvidiaGPUFuseTMEMLoadReducePass);
   ADD_PASS_WRAPPER_0("add_tma_lowering",
                      ttng::createTritonNvidiaGPUTMALoweringPass);
   ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
@@ -173,6 +214,9 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      ttng::createTritonNvidiaGPUCheckMatmulTwoCTAPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVM);
+  ADD_PASS_WRAPPER_2("add_initialize_ws_cluster_barriers",
+                     createInitializeWSClusterBarriersWrapper, int32_t,
+                     int32_t);
   ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",
                      mlir::triton::createConvertWarpSpecializeToLLVM);
   ADD_PASS_WRAPPER_0("add_allocate_tensor_memory",
@@ -188,7 +232,7 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
   ttng::registerConSanNVIDIAHooks();
 }
 
-void init_triton_nvidia_passes_nvws(py::module &&m) {
+void init_triton_nvidia_passes_nvws(py::module_ &m) {
   ADD_PASS_WRAPPER_0("add_lower_warp_group",
                      mlir::triton::createNVWSLowerWarpGroup);
   ADD_PASS_WRAPPER_0("add_lower_aref", mlir::triton::createNVWSLowerAref);
@@ -198,18 +242,18 @@ void init_triton_nvidia_passes_nvws(py::module &&m) {
                      mlir::triton::createNVWSInsertTmemAref);
 }
 
-void init_triton_hopper_passes(py::module &&m) {
+void init_triton_hopper_passes(py::module_ &m) {
   // Meta's autoWS
   ADD_PASS_OPTION_WRAPPER_2("add_hopper_warpspec",
                             mlir::createNVGPUWarpSpecialization, int, bool);
 }
 
-static void checkMatmulConstraints(const std::string &A_dtype,
-                                   const std::string &B_dtype,
-                                   const std::string &C_dtype,
-                                   const std::vector<int> &A_shape,
-                                   const std::vector<int> &B_shape,
-                                   const std::vector<int> &C_shape) {
+void checkMatmulConstraints(const std::string &A_dtype,
+                            const std::string &B_dtype,
+                            const std::string &C_dtype,
+                            const std::vector<int> &A_shape,
+                            const std::vector<int> &B_shape,
+                            const std::vector<int> &C_shape) {
   if (A_dtype != B_dtype || A_dtype != C_dtype) {
     throw std::runtime_error("Data types do not match.");
   }
@@ -252,12 +296,19 @@ static void checkMatmulConstraints(const std::string &A_dtype,
   }
 }
 
-void init_triton_nvidia(py::module &&m) {
+} // namespace
+
+void init_triton_nvidia(py::module_ &m) {
+  mlir::triton::NVIDIA::registerTargetInfo();
   auto passes = m.def_submodule("passes");
-  init_triton_nvidia_passes_nvws(passes.def_submodule("nvws"));
-  init_triton_nvidia_passes_ttgpuir(passes.def_submodule("ttgpuir"));
-  init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
-  init_triton_hopper_passes(passes.def_submodule("hopper"));
+  auto nvws_m = passes.def_submodule("nvws");
+  init_triton_nvidia_passes_nvws(nvws_m);
+  auto ttgpuir_m = passes.def_submodule("ttgpuir");
+  init_triton_nvidia_passes_ttgpuir(ttgpuir_m);
+  auto ttnvgpuir_m = passes.def_submodule("ttnvgpuir");
+  init_triton_nvidia_passes_ttnvgpuir(ttnvgpuir_m);
+  auto hopper_m = passes.def_submodule("hopper");
+  init_triton_hopper_passes(hopper_m);
 
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {
@@ -268,16 +319,6 @@ void init_triton_nvidia(py::module &&m) {
     mlir::registerNVVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
-  });
-
-  // Set short point option, this needs to be set before setting the data
-  // layout.
-  m.def("set_short_ptr", []() {
-    auto options = llvm::cl::getRegisteredOptions();
-    const char *flag = "nvptx-short-ptr";
-    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
-    assert(shortPtr);
-    shortPtr->setValue(true);
   });
 
   // TODO: could be done in python if we had a generic interface to set metadata
@@ -312,29 +353,29 @@ void init_triton_nvidia(py::module &&m) {
   auto cublas = m.def_submodule("cublas");
 
   py::class_<CublasLtInstance>(cublas, "CublasLt")
-      .def(py::init<>([&](py::object &workspace) {
-        auto wrk_ptr = workspace.attr("data_ptr")().cast<uint64_t>();
-        auto wrk_size = workspace.attr("numel")().cast<size_t>() *
-                        workspace.attr("element_size")().cast<size_t>();
+      .def(py::new_([](py::object workspace) {
+        auto wrk_ptr = py::cast<uint64_t>(workspace.attr("data_ptr")());
+        auto wrk_size = py::cast<size_t>(workspace.attr("numel")()) *
+                        py::cast<size_t>(workspace.attr("element_size")());
         return new CublasLtInstance(wrk_ptr, wrk_size);
       }))
       .def("matmul",
            [](CublasLtInstance &self, py::object &A, py::object &B,
               py::object &C) {
-             auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
-             auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
-             auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
+             auto A_ptr = py::cast<uint64_t>(A.attr("data_ptr")());
+             auto B_ptr = py::cast<uint64_t>(B.attr("data_ptr")());
+             auto C_ptr = py::cast<uint64_t>(C.attr("data_ptr")());
 
-             auto A_shape = A.attr("shape").cast<std::vector<int>>();
-             auto B_shape = B.attr("shape").cast<std::vector<int>>();
-             auto C_shape = C.attr("shape").cast<std::vector<int>>();
+             auto A_shape = py::cast<std::vector<int>>(A.attr("shape"));
+             auto B_shape = py::cast<std::vector<int>>(B.attr("shape"));
+             auto C_shape = py::cast<std::vector<int>>(C.attr("shape"));
 
              auto A_dtype =
-                 A.attr("dtype").attr("__str__")().cast<std::string>();
+                 py::cast<std::string>(A.attr("dtype").attr("__str__")());
              auto B_dtype =
-                 B.attr("dtype").attr("__str__")().cast<std::string>();
+                 py::cast<std::string>(B.attr("dtype").attr("__str__")());
              auto C_dtype =
-                 C.attr("dtype").attr("__str__")().cast<std::string>();
+                 py::cast<std::string>(C.attr("dtype").attr("__str__")());
 
              checkMatmulConstraints(A_dtype, B_dtype, C_dtype, A_shape, B_shape,
                                     C_shape);
@@ -363,24 +404,24 @@ void init_triton_nvidia(py::module &&m) {
       .def("gemm",
            [](CublasLtInstance &self, py::object &A, py::object &B,
               py::object &C, py::object &D, float alpha, float beta) {
-             auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
-             auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
-             auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
-             auto D_ptr = D.attr("data_ptr")().cast<uint64_t>();
+             auto A_ptr = py::cast<uint64_t>(A.attr("data_ptr")());
+             auto B_ptr = py::cast<uint64_t>(B.attr("data_ptr")());
+             auto C_ptr = py::cast<uint64_t>(C.attr("data_ptr")());
+             auto D_ptr = py::cast<uint64_t>(D.attr("data_ptr")());
 
-             auto A_shape = A.attr("shape").cast<std::vector<int>>();
-             auto B_shape = B.attr("shape").cast<std::vector<int>>();
-             auto C_shape = C.attr("shape").cast<std::vector<int>>();
-             auto D_shape = D.attr("shape").cast<std::vector<int>>();
+             auto A_shape = py::cast<std::vector<int>>(A.attr("shape"));
+             auto B_shape = py::cast<std::vector<int>>(B.attr("shape"));
+             auto C_shape = py::cast<std::vector<int>>(C.attr("shape"));
+             auto D_shape = py::cast<std::vector<int>>(D.attr("shape"));
 
              auto A_dtype =
-                 A.attr("dtype").attr("__str__")().cast<std::string>();
+                 py::cast<std::string>(A.attr("dtype").attr("__str__")());
              auto B_dtype =
-                 B.attr("dtype").attr("__str__")().cast<std::string>();
+                 py::cast<std::string>(B.attr("dtype").attr("__str__")());
              auto C_dtype =
-                 C.attr("dtype").attr("__str__")().cast<std::string>();
+                 py::cast<std::string>(C.attr("dtype").attr("__str__")());
              auto D_dtype =
-                 D.attr("dtype").attr("__str__")().cast<std::string>();
+                 py::cast<std::string>(D.attr("dtype").attr("__str__")());
 
              checkMatmulConstraints(A_dtype, B_dtype, D_dtype, A_shape, B_shape,
                                     D_shape);
@@ -414,21 +455,21 @@ void init_triton_nvidia(py::module &&m) {
       .def("block_scaled_matmul_mxfp8",
            [](CublasLtInstance &self, py::object &A, py::object &B,
               py::object &output, py::object &scale_A, py::object &scale_B) {
-             auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
-             auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
-             auto output_ptr = output.attr("data_ptr")().cast<uint64_t>();
-             auto scale_A_ptr = scale_A.attr("data_ptr")().cast<uint64_t>();
-             auto scale_B_ptr = scale_B.attr("data_ptr")().cast<uint64_t>();
+             auto A_ptr = py::cast<uint64_t>(A.attr("data_ptr")());
+             auto B_ptr = py::cast<uint64_t>(B.attr("data_ptr")());
+             auto output_ptr = py::cast<uint64_t>(output.attr("data_ptr")());
+             auto scale_A_ptr = py::cast<uint64_t>(scale_A.attr("data_ptr")());
+             auto scale_B_ptr = py::cast<uint64_t>(scale_B.attr("data_ptr")());
 
-             auto A_shape = A.attr("shape").cast<std::vector<int>>();
-             auto B_shape = B.attr("shape").cast<std::vector<int>>();
+             auto A_shape = py::cast<std::vector<int>>(A.attr("shape"));
+             auto B_shape = py::cast<std::vector<int>>(B.attr("shape"));
 
              auto A_dtype =
-                 A.attr("dtype").attr("__str__")().cast<std::string>();
+                 py::cast<std::string>(A.attr("dtype").attr("__str__")());
              auto B_dtype =
-                 B.attr("dtype").attr("__str__")().cast<std::string>();
+                 py::cast<std::string>(B.attr("dtype").attr("__str__")());
              auto output_dtype =
-                 output.attr("dtype").attr("__str__")().cast<std::string>();
+                 py::cast<std::string>(output.attr("dtype").attr("__str__")());
 
              // Only support MXFP8: FP8 E4M3 inputs, FP16 output
              if (A_dtype != "torch.float8_e4m3fn" ||
@@ -455,19 +496,19 @@ void init_triton_nvidia(py::module &&m) {
                                            py::object &output,
                                            py::object &scale_A,
                                            py::object &scale_B) {
-        auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
-        auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
-        auto output_ptr = output.attr("data_ptr")().cast<uint64_t>();
-        auto scale_A_ptr = scale_A.attr("data_ptr")().cast<uint64_t>();
-        auto scale_B_ptr = scale_B.attr("data_ptr")().cast<uint64_t>();
+        auto A_ptr = py::cast<uint64_t>(A.attr("data_ptr")());
+        auto B_ptr = py::cast<uint64_t>(B.attr("data_ptr")());
+        auto output_ptr = py::cast<uint64_t>(output.attr("data_ptr")());
+        auto scale_A_ptr = py::cast<uint64_t>(scale_A.attr("data_ptr")());
+        auto scale_B_ptr = py::cast<uint64_t>(scale_B.attr("data_ptr")());
 
-        auto A_shape = A.attr("shape").cast<std::vector<int>>();
-        auto B_shape = B.attr("shape").cast<std::vector<int>>();
+        auto A_shape = py::cast<std::vector<int>>(A.attr("shape"));
+        auto B_shape = py::cast<std::vector<int>>(B.attr("shape"));
 
-        auto A_dtype = A.attr("dtype").attr("__str__")().cast<std::string>();
-        auto B_dtype = B.attr("dtype").attr("__str__")().cast<std::string>();
+        auto A_dtype = py::cast<std::string>(A.attr("dtype").attr("__str__")());
+        auto B_dtype = py::cast<std::string>(B.attr("dtype").attr("__str__")());
         auto output_dtype =
-            output.attr("dtype").attr("__str__")().cast<std::string>();
+            py::cast<std::string>(output.attr("dtype").attr("__str__")());
 
         // NVFP4: uint8 packed FP4 inputs (2 elements per byte), FP8 E4M3
         // scales, FP16 output

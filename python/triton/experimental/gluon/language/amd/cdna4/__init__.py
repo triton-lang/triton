@@ -1,28 +1,40 @@
 from triton.runtime.jit import constexpr_function
-from triton._C.libtriton.gluon_ir import get_amd_mfma_scale_layout as _get_mfma_scale_layout
+from triton._C.libtriton.gluon_ir import (
+    get_amd_mfma_scale_layout as _get_mfma_scale_layout,
+    compute_amd_efficient_padded_shared_layout as _compute_efficient_padded_shared_layout,
+)
 
-from ..._core import builtin
+from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
-from .._ops import _mma_scaled
-from ..cdna3 import _buffer_atomic_rmw_impl
+from .._ops import _load_shared_fp4_repacked, _mma_scaled, _scaled_upcast, scaled_downcast
+from ..cdna3 import _buffer_atomic_rmw_impl, _check_cd_regclass, _set_cd_regclass
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
 
-__all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "get_mfma_scale_layout"]
+__all__ = [
+    *__cdna3_all,
+    "async_copy",
+    "mfma_scaled",
+    "scaled_upcast",
+    "scaled_downcast",
+    "load_shared_fp4_repacked",
+    "get_mfma_scale_layout",
+    "compute_efficient_padded_shared_layout",
+]
 
 
 @builtin
-def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None):
+def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, cd_regclass=None, _semantic=None):
     """
     AMD Scaled MFMA operation.
 
-    ```
-    c = a * a_scale @ b * b_scale + acc
-    ```
+    .. code-block:: text
 
-    `a` and `b` use microscaling formats described in
+        c = a * a_scale @ b * b_scale + acc
+
+    ``a`` and ``b`` use microscaling formats described in
     "OCP Microscaling Formats (MX) Specification":
     https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf.
     Currently supported only on CDNA4 hardware.
@@ -30,11 +42,16 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     Args:
         a (tensor): The operand A to be multiplied.
         a_scale (Optional[tensor]): Scale factor for operand A.
-        a_format (str): Format of the operand A. Available formats: `e2m1`, `e4m3`, `e5m2`.
+        a_format (str): Format of operand A. Available formats: ``e2m1``,
+            ``e4m3``, ``e5m2``.
         b (tensor): The operand B to be multiplied.
         b_scale (Optional[tensor]): Scale factor for operand B.
-        b_format (str): Format of the operand B. Available formats: `e2m1`, `e4m3`, `e5m2`.
+        b_format (str): Format of operand B. Available formats: ``e2m1``,
+            ``e4m3``, ``e5m2``.
         acc (tensor): Accumulator tensor.
+        cd_regclass (str, optional): Experimental. Register class for the accumulator input (C)
+            and result (D) of the scaled MFMA instructions, as for ``mfma``: ``"a"`` for AGPRs or
+            ``"v"`` for VGPRs. ``None`` (default) leaves the choice to the compiler.
     """
     layout = acc.type.layout
     assert isinstance(layout, AMDMFMALayout), "Expected layout to be an instance of AMDMFMALayout"
@@ -43,10 +60,48 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert (isinstance(b.type.layout, DotOperandLayout) and b.type.layout.parent == layout), \
             "Expected rhs layout to be a DotOperandLayout with parent matching MFMA layout"
 
-    assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
-    assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
+    a_format = _unwrap_if_constexpr(a_format)
+    b_format = _unwrap_if_constexpr(b_format)
+    a_scale = _unwrap_if_constexpr(a_scale)
+    b_scale = _unwrap_if_constexpr(b_scale)
+    assert a_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format}"
+    assert b_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format}"
 
-    return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)
+    cd_regclass = _check_cd_regclass(cd_regclass, acc)
+    ret = _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)
+    _set_cd_regclass(ret.handle, cd_regclass, _semantic)
+    return ret
+
+
+@builtin
+def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
+    """
+    Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
+    CDNA4 scaled-upcast op.
+
+    The ``scale`` tensor must use raw E8M0 payload in ``int8`` or ``uint8``, and must
+    already have the expanded output shape and scaled-upcast result layout.
+    For fp4 inputs, that is the canonical unpacked layout implied by ``src``
+    and ``axis``. ``elem_type`` must be ``fp16`` or ``bf16``.
+    """
+    axis = _unwrap_if_constexpr(axis)
+    elem_type = _unwrap_if_constexpr(elem_type)
+    assert scale.dtype in (int8, uint8), \
+        f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
+    return _scaled_upcast(src, scale, elem_type, axis, _semantic)
+
+
+@builtin
+def load_shared_fp4_repacked(mem_desc, layout, _semantic=None):
+    """
+    Load M/N-packed fp4 bytes from shared memory into a K-packed MFMA dot operand layout.
+
+    The source shared memory descriptor must contain ``int8`` or ``uint8`` packed fp4
+    values. The destination shape is inferred from the source shape and dot
+    operand index in ``layout``.
+    """
+    layout = _unwrap_if_constexpr(layout)
+    return _load_shared_fp4_repacked(mem_desc, layout, _semantic, parent_type=AMDMFMALayout)
 
 
 def _get_mfma_scale_layout_impl(*args, **kwargs):
@@ -58,14 +113,14 @@ _get_mfma_scale_layout_impl.__triton_builtin__ = True
 
 @constexpr_function
 def get_mfma_scale_layout(dot_operand_layout, shape, scale_factor=32):
-    """ Get the scale layout for MFMA scaled operands.
+    """Get the scale layout for MFMA scaled operands.
 
     Args:
         dot_operand_layout (DotOperandLayout): The dot operand layout.
         shape (List[int]): The shape of the scale tensor.
         scale_factor (int): The scale factor.
-    Return:
-        layout (DistributedLinearLayout): The scale layout.
+    Returns:
+        DistributedLinearLayout: The scale layout.
     """
     assert scale_factor == 32, "Only scale factor 32 is supported for CDNA4 Scaled MFMA"
     op_idx = dot_operand_layout.operand_index
@@ -75,6 +130,56 @@ def get_mfma_scale_layout(dot_operand_layout, shape, scale_factor=32):
     tiles_per_warp = parent.tiles_per_warp
     warps_per_cta = parent.warps_per_cta
     return _get_mfma_scale_layout_impl(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
+
+
+def _compute_efficient_padded_shared_layout_impl(*args, **kwargs):
+    return _compute_efficient_padded_shared_layout(*args, **kwargs)
+
+
+_compute_efficient_padded_shared_layout_impl.__triton_builtin__ = True
+
+
+@constexpr_function
+def compute_efficient_padded_shared_layout(dot_operand_layout, shape, dtype, is_k_contig=True):
+    """Compute an efficient padded shared layout that avoids bank conflicts.
+
+    Args:
+        dot_operand_layout (DotOperandLayout): The layout for the dot operand
+            that will be copied to shared memory with padding. Must have an
+            AMDMFMALayout v4 (CDNA4) parent.
+        shape (List[int]): Shared memory tile shape for the dot operand —
+            ``[BM, BK]`` for operand A or ``[BK, BN]`` for operand B.
+        dtype (dtype): Element type of the tensor that will live in this
+            shared memory allocation (e.g. ``ttgl.float16``, ``ttgl.float8e4nv``).
+            Only types with bitwidth in {4, 8, 16} are supported. For packed
+            fp4 (two values per byte), pass ``ttgl.uint8`` — at the LDS level
+            4-bit shares the 8-bit padding pattern.
+        is_k_contig (bool): K is the contiguous dim in shared memory.
+    Returns:
+        The layout, or ``None`` if the input falls outside the supported set.
+        Common reasons for ``None``: ``k_width`` not in {4, 8, 16}; element
+        bitwidth not in {4, 8, 16}; or an MFMA instruction shape or kWidth
+        combination not handled by the underlying algorithm.
+    """
+    parent = dot_operand_layout.parent
+    assert isinstance(parent, AMDMFMALayout), \
+        "Expected dot operand's parent to be an AMDMFMALayout"
+    assert parent.version == 4, \
+        "compute_efficient_padded_shared_layout only supports MFMA v4 (CDNA4)"
+    return _compute_efficient_padded_shared_layout_impl(
+        dot_operand_layout.operand_index,
+        dot_operand_layout.k_width,
+        parent.version,
+        list(parent.warps_per_cta),
+        list(parent.instr_shape),
+        parent.transposed,
+        list(parent.tiles_per_warp),
+        parent.element_bitwidth,
+        list(parent.cga_layout),
+        list(shape),
+        dtype.primitive_bitwidth,
+        is_k_contig,
+    )
 
 
 """

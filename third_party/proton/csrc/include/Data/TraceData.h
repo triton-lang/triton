@@ -2,14 +2,19 @@
 #define PROTON_DATA_TRACE_DATA_H_
 
 #include "Data.h"
+#include <functional>
 #include <memory>
+#include <thread>
 #include <unordered_map>
 
 namespace proton {
 
 class TraceData : public Data {
 public:
-  TraceData(const std::string &path, ContextSource *contextSource = nullptr);
+  using TimestampOffsetProvider = std::function<int64_t()>;
+
+  TraceData(const std::string &path, ContextSource *contextSource = nullptr,
+            TimestampOffsetProvider timestampOffsetProvider = {});
   virtual ~TraceData();
 
   std::string toJsonString(size_t phase) const override;
@@ -41,10 +46,15 @@ private:
   }
 
   void dumpChromeTrace(std::ostream &os, size_t phase) const;
+  size_t getCurrentThreadTraceId();
 
   PhaseStore<Trace> tracePhases;
   // ScopeId -> EventId
   std::unordered_map<size_t, size_t> scopeIdToEventId;
+  // ThreadId -> TraceId
+  std::unordered_map<std::thread::id, uint64_t> threadIdToTraceId;
+  uint64_t nextThreadTraceId = 0;
+  TimestampOffsetProvider timestampOffsetProvider;
 };
 
 } // namespace proton
