@@ -314,12 +314,14 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
 @pytest.mark.parametrize("warp_specialize", [False, True])
 @pytest.mark.parametrize("persistent, conditional, K", [(False, False, 512), (True, False, 64), (True, False, 512),
                                                         (True, True, 512)])
-def test_tma_matmul_two_ctas_specialization(num_ctas, warp_specialize, persistent, conditional, K, device):
+@pytest.mark.parametrize("split_epilogue", [False, True])
+def test_tma_matmul_two_ctas_specialization(num_ctas, warp_specialize, persistent, conditional, K, split_epilogue,
+                                            device):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
     def kernel(A, B, C, X, M, K, BM: tl.constexpr, PERSISTENT: tl.constexpr, CONDITIONAL: tl.constexpr,
-               WS: tl.constexpr):
+               WS: tl.constexpr, SPLIT: tl.constexpr):
         for tile in tl.range(tl.program_id(0), M // BM, tl.num_programs(0), flatten=True, warp_specialize=WS
                              and PERSISTENT):
             acc = tl.full((BM, 128), 0, tl.float32)
@@ -330,7 +332,13 @@ def test_tma_matmul_two_ctas_specialization(num_ctas, warp_specialize, persisten
                 if CONDITIONAL:
                     if k % 2 == 0:
                         X.store([tile * BM, 0], acc)
-            C.store([tile * BM, 0], acc.to(tl.float16))
+            if SPLIT:
+                split = tl.reshape(acc, (BM, 2, 64)).permute(0, 2, 1)
+                c0, c1 = tl.split(split)
+                C.store([tile * BM, 0], c0.to(tl.float16))
+                C.store([tile * BM, 64], c1.to(tl.float16))
+            else:
+                C.store([tile * BM, 0], acc.to(tl.float16))
 
     BM = 128 * num_ctas
     M = 8 * BM
@@ -341,10 +349,10 @@ def test_tma_matmul_two_ctas_specialization(num_ctas, warp_specialize, persisten
     x = torch.empty((M, 128), device=device, dtype=torch.float32)
     args = [
         TensorDescriptor.from_tensor(t, shape)
-        for t, shape in [(a, [BM, 64]), (b, [128, 64]), (c, [BM, 128]), (x, [BM, 128])]
+        for t, shape in [(a, [BM, 64]), (b, [128, 64]), (c, [BM, 64 if split_epilogue else 128]), (x, [BM, 128])]
     ]
     compiled = kernel[(1 if persistent else M // BM, )](*args, M, K, BM, persistent, conditional, warp_specialize,
-                                                        num_ctas=num_ctas, num_stages=3, num_warps=4)
+                                                        split_epilogue, num_ctas=num_ctas, num_stages=3, num_warps=4)
     if is_compile_warmup():
         return
     torch.testing.assert_close(c, a @ b.T, atol=0.01, rtol=0.01)
