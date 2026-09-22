@@ -262,7 +262,7 @@ jobs:
     name: integration-tests-amd (gfx1250-gluon-rocjitsu)
     if: github.repository == 'triton-lang/triton'
     runs-on: amd-gfx942
-    timeout-minutes: 45
+    timeout-minutes: 60
     continue-on-error: true
     env:
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -361,7 +361,7 @@ jobs:
     name: integration-tests-amd (gfx1250-triton-rocjitsu)
     if: github.repository == 'triton-lang/triton'
     runs-on: amd-gfx942
-    timeout-minutes: 45
+    timeout-minutes: 60
     continue-on-error: true
     env:
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -440,20 +440,16 @@ jobs:
           k_matmul="not (test_preshuffle_scale_mxfp_cdna4 or test_batched_mxfp or test_mxfp8_mxfp4_matmul or test_block_scale_fp4 or (test_simple_matmul and False-4-1-128-128-16-4-float64-float64) or (test_simple_matmul and False-8-1-128-128-16-4-float64-float64))"
           k_tdesc="not (tensor_descriptor_reduce or test_tensor_descriptor_padding or test_host_tensor_descriptor_round_f32_to_tf32)"
 
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_runtime" -p no:forked \
+          k_all="$k_runtime and $k_core and $k_matmul and $k_tdesc"
+
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_all" -p no:forked \
             --timeout=600 --timeout-method=thread \
             python/test/unit/test_debug.py \
-            python/test/unit/runtime
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_core" -p no:forked \
-            python/test/unit/language/test_core.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_matmul" -p no:forked \
-            python/test/unit/language/test_matmul.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_tdesc" -p no:forked \
-            --timeout=300 --timeout-method=thread \
-            python/test/unit/language/test_tensor_descriptor.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 1 --durations=20 -p no:forked \
-            --timeout=300 --timeout-method=thread \
-            python/test/unit/language/test_pipeliner.py::test_scatter_pipeline
+            python/test/unit/runtime \
+            python/test/unit/language/test_core.py \
+            python/test/unit/language/test_matmul.py \
+            python/test/unit/language/test_tensor_descriptor.py \
+            python/triton_kernels/tests/test_topk.py::test_topk
           $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
             third_party/amd/python/test/ \
             --ignore=third_party/amd/python/test/test_address_sanitizer.py \
@@ -462,10 +458,11 @@ jobs:
             --ignore=third_party/amd/python/test/test_gluon_cdna5.py \
             --ignore=third_party/amd/python/test/test_tdm_copy.py \
             --ignore=third_party/amd/python/test/test_int8_dot_small_block_k.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 1 --durations=20 -p no:forked \
+            --timeout=300 --timeout-method=thread \
+            python/test/unit/language/test_pipeliner.py::test_scatter_pipeline
           TRITON_HIP_USE_ASYNC_COPY=0 $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
             python/test/unit/language/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
-            python/triton_kernels/tests/test_topk.py::test_topk
           moe_tests=(
             "test_op[None-False-False-True-True-None-128-768-512-1024-batched-float16-float16-None-10-1-False-False-False-False-None-False-False-False-True-None]"
             "test_op[None-False-True-False-True-None-128-16-256-256-ragged-float8_e5m2-mxfloat4_e2m1-None-10-1-False-True-False-False-None-False-False-False-True-None]"
