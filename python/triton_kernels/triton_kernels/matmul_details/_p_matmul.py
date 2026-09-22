@@ -317,7 +317,8 @@ def _p_matmul(
 
         XMxScalePtrs = None
         if is_x_microscaled and stride_x_mx_z is not None: # x is mx but not using TMA
-            offs_m = off_m + tl.arange(0, BLOCK_M)
+            if X_TMA_MODE is not None:
+                offs_m = off_m + tl.arange(0, BLOCK_M)
             XMxScalePtrs = XMxScale + off_x_z.to(index_type) * stride_x_mx_z
             if GatherIndx is None:
                 XMxScalePtrs += slice_off_m * stride_x_mx_m
