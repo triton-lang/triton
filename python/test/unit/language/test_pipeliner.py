@@ -5,7 +5,7 @@ import torch
 import triton
 import triton.language as tl
 
-from test_compile_only import block_sparse_matmul_kernel, running_sum_matmul_kernel
+from test_compile_only import running_sum_matmul_kernel
 
 from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_gfx1250
 
@@ -620,6 +620,38 @@ def test_conditional_store_pipeline(num_stages, device):
     assert torch.equal(output, expected)
 
 
+@triton.jit
+def block_sparse_matmul_kernel(  #
+        A_ptr, B_ptr, C_ptr, Sparsity_ptr,  #
+        M, N, K,  #
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,  #
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+        NUM_STAGES: tl.constexpr):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+    a_ptrs = A_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
+    b_ptrs = B_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    zero_tile = tl.zeros((BLOCK_K, BLOCK_N), dtype=tl.float16)
+    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
+        nnz = tl.load(Sparsity_ptr + k)
+        a = tl.load(a_ptrs)
+        if nnz != 0:
+            b = tl.load(b_ptrs)
+        else:
+            b = zero_tile
+        acc = tl.dot(a, b, acc)
+        a_ptrs += BLOCK_K * stride_ak
+        b_ptrs += BLOCK_K * stride_bk
+    c_ptrs = C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+    tl.store(c_ptrs, acc.to(tl.float16))
+
+
 @pytest.mark.parametrize("num_stages", [1, 2, 3])
 def test_block_sparse_matmul_pipeline(num_stages, device):
     """Check a pipelined matmul with runtime branches for absent B tiles."""
@@ -654,7 +686,8 @@ def test_block_sparse_matmul_pipeline(num_stages, device):
 
 
 @pytest.mark.parametrize("num_stages", [1, 2, 3])
-def test_running_sum_matmul_pipeline(num_stages, device):
+@pytest.mark.parametrize("conditional", [False, True])
+def test_running_sum_matmul_pipeline(num_stages, conditional, device):
     """Check a pipelined matmul whose B operand is a loop-carried running sum."""
     check_capabilities()
 
@@ -665,12 +698,13 @@ def test_running_sum_matmul_pipeline(num_stages, device):
     a = torch.randn(M, K, device=device, dtype=torch.float16) * 0.1
     b = torch.randn(K, N, device=device, dtype=torch.float16) * 0.1
 
-    # Reference: running sum of B tiles along K, multiplied by the
-    # corresponding A slice.
+    # Reference: running sum of B tiles along K, optionally reusing the
+    # preceding tile on odd iterations, multiplied by the corresponding A slice.
     ref = torch.zeros(M, N, device=device, dtype=torch.float32)
     b_running = torch.zeros(BLOCK_K, N, device=device, dtype=torch.float16)
     for k_blk in range(num_k_blocks):
-        b_tile = b[k_blk * BLOCK_K:(k_blk + 1) * BLOCK_K, :]
+        b_blk = k_blk - 1 if conditional and k_blk % 2 else k_blk
+        b_tile = b[b_blk * BLOCK_K:(b_blk + 1) * BLOCK_K, :]
         b_running = b_running + b_tile
         a_tile = a[:, k_blk * BLOCK_K:(k_blk + 1) * BLOCK_K].float()
         ref += a_tile @ b_running.float()
@@ -685,5 +719,5 @@ def test_running_sum_matmul_pipeline(num_stages, device):
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-        NUM_STAGES=num_stages)
+        NUM_STAGES=num_stages, CONDITIONAL=conditional)
     torch.testing.assert_close(c, ref, atol=1e-3, rtol=1e-3)

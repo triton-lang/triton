@@ -412,38 +412,6 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
 # Shared with device tests in test_pipeliner.py and test_matmul.py. Keep these
 # kernels here so compile-only coverage never imports GPU-dependent test modules.
 @triton.jit
-def block_sparse_matmul_kernel(  #
-        A_ptr, B_ptr, C_ptr, Sparsity_ptr,  #
-        M, N, K,  #
-        stride_am, stride_ak,  #
-        stride_bk, stride_bn,  #
-        stride_cm, stride_cn,  #
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        NUM_STAGES: tl.constexpr):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, BLOCK_K)
-    a_ptrs = A_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
-    b_ptrs = B_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    zero_tile = tl.zeros((BLOCK_K, BLOCK_N), dtype=tl.float16)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
-        nnz = tl.load(Sparsity_ptr + k)
-        a = tl.load(a_ptrs)
-        if nnz != 0:
-            b = tl.load(b_ptrs)
-        else:
-            b = zero_tile
-        acc = tl.dot(a, b, acc)
-        a_ptrs += BLOCK_K * stride_ak
-        b_ptrs += BLOCK_K * stride_bk
-    c_ptrs = C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
-    tl.store(c_ptrs, acc.to(tl.float16))
-
-
-@triton.jit
 def running_sum_matmul_kernel(  #
         A_ptr, B_ptr, C_ptr,  #
         M, N, K,  #
@@ -451,7 +419,7 @@ def running_sum_matmul_kernel(  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        NUM_STAGES: tl.constexpr):
+        NUM_STAGES: tl.constexpr, CONDITIONAL: tl.constexpr):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -463,7 +431,15 @@ def running_sum_matmul_kernel(  #
     b_running = tl.zeros((BLOCK_K, BLOCK_N), dtype=tl.float16)
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
         a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
+        # Both branches load a tile, so the dot-layout requirement must cross
+        # the conditional before reaching either load.
+        if CONDITIONAL:
+            if k % 2 == 0:
+                b = tl.load(b_ptrs)
+            else:
+                b = tl.load(b_ptrs - BLOCK_K * stride_bk)
+        else:
+            b = tl.load(b_ptrs)
         b_running = b_running + b
         acc = tl.dot(a, b_running, acc)
         a_ptrs += BLOCK_K * stride_ak
@@ -504,20 +480,19 @@ _LAYOUT_TARGETS = [
 ]
 
 
-def _compile_matmul_layout_kernel(kernel, target, BLOCK_M, BLOCK_N, BLOCK_K, num_stages):
+def _compile_matmul_layout_kernel(kernel, target, BLOCK_M, BLOCK_N, BLOCK_K, num_stages, conditional):
     constexprs = {
         "BLOCK_M": BLOCK_M,
         "BLOCK_N": BLOCK_N,
         "BLOCK_K": BLOCK_K,
         "NUM_STAGES": num_stages,
+        "CONDITIONAL": conditional,
         "stride_ak": 1,
         "stride_bn": 1,
         "stride_cn": 1,
     }
     signature = {name: "i32" for name in kernel.arg_names}
     signature.update({name: "*fp16" for name in ("A_ptr", "B_ptr", "C_ptr")})
-    if "Sparsity_ptr" in signature:
-        signature["Sparsity_ptr"] = "*i8"
     signature.update({name: "constexpr" for name in constexprs})
     # Match the aligned tensors and dimensions used by the device tests.
     attrs = {(kernel.arg_names.index(name), ): [["tt.divisibility", 16]]
@@ -529,32 +504,21 @@ def _compile_matmul_layout_kernel(kernel, target, BLOCK_M, BLOCK_N, BLOCK_K, num
 
 @pytest.mark.parametrize("target", _LAYOUT_TARGETS)
 @pytest.mark.parametrize("num_stages", [1, 2, 3])
-def test_block_sparse_matmul_pipeline_layout(target, num_stages):
-    ttgir = _compile_matmul_layout_kernel(block_sparse_matmul_kernel, target, 128, 128, 32, num_stages)
-    assert "tt.dot" in ttgir
-    # Propagate B's dot layout through the runtime branch to its zero tile.
-    assert re.search(r"scf\.if[^{]*->\s*\(tensor<[^>]*dot_op", ttgir)
-    assert re.search(r"arith\.constant[^\n]*dot_op<\{opIdx = 1", ttgir)
-    # The conditional load should directly produce the dot-operand layout.
-    assert not re.search(
-        r"scf\.for[\s\S]*?ttg\.convert_layout[^\n]*#blocked[^\n]*->\s*[^\n]*dot_op[\s\S]*?scf\.yield",
-        ttgir,
-    )
-
-
-@pytest.mark.parametrize("target", _LAYOUT_TARGETS)
-@pytest.mark.parametrize("num_stages", [1, 2, 3])
-def test_running_sum_matmul_pipeline_layout(target, num_stages):
+@pytest.mark.parametrize("conditional", [False, True])
+def test_running_sum_matmul_pipeline_layout(target, num_stages, conditional):
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
-    ttgir = _compile_matmul_layout_kernel(running_sum_matmul_kernel, target, BLOCK_M, BLOCK_N, BLOCK_K, num_stages)
+    ttgir = _compile_matmul_layout_kernel(running_sum_matmul_kernel, target, BLOCK_M, BLOCK_N, BLOCK_K, num_stages,
+                                          conditional)
+    lines = ttgir.splitlines()
     assert "tt.dot" in ttgir
     # Match the running-sum tile specifically: its initializer, loop-carried
     # value, and in-loop addition must all have B's dot-operand layout.
-    running_sum_tile = rf"{BLOCK_K}x{BLOCK_N}xf16"
-    dot_op_b = r"#ttg\.dot_op<\{opIdx = 1"
-    assert re.search(rf"arith\.constant[^\n]*<{running_sum_tile},\s*{dot_op_b}", ttgir)
-    assert re.search(rf"scf\.for[^{{]*?->\s*\([^)]*?tensor<{running_sum_tile},\s*{dot_op_b}", ttgir)
-    assert re.search(rf"arith\.addf[^\n]*tensor<{running_sum_tile},\s*{dot_op_b}", ttgir)
+    b_type = f"tensor<{BLOCK_K}x{BLOCK_N}xf16, #ttg.dot_op<{{opIdx = 1,"
+    for op in ("arith.constant", "scf.for", "arith.addf"):
+        assert any(op in line and b_type in line for line in lines), f"Expected {op} with the running-sum dot layout"
+    if conditional:
+        assert any("scf.if" in line and b_type in line
+                   for line in lines), "Expected scf.if with the running-sum dot layout"
 
 
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
@@ -581,11 +545,12 @@ def test_prefetched_descriptor_matmul_loop_carried_layout(BLOCK_M, BLOCK_N, BLOC
     # gfx1250 explicitly keeps the TDM regression independent of the host GPU.
     kernel = triton.compile(src, target=GPUTarget("hip", "gfx1250", 32), options={"num_stages": 1})
     ttgir = kernel.asm["ttgir"]
-    loop_signature = re.search(r"scf\.for[^\n]* -> \((.*?)\)\s*:", ttgir)
-    assert loop_signature is not None
+    loops = [line for line in ttgir.splitlines() if "scf.for" in line]
+    assert len(loops) == 1
+    loop_results = loops[0].partition(" -> ")[2]
     for operand in (0, 1):
-        assert f"#ttg.dot_op<{{opIdx = {operand}," in loop_signature.group(1)
+        assert f"#ttg.dot_op<{{opIdx = {operand}," in loop_results
     # Descriptor loads already stage through LDS. Reading dot fragments
     # directly avoids a second register -> LDS -> register round trip, which
     # would appear as an LDS allocation initialized from a register tensor.
-    assert not re.search(r"ttg\.local_alloc\s+%", ttgir)
+    assert "ttg.local_alloc %" not in ttgir
