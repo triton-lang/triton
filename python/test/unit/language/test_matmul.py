@@ -5,6 +5,7 @@ import triton
 import triton.language as tl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 import re
+from test_compile_only import _prefetched_descriptor_matmul_kernel
 from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_gfx1250, is_rubin, is_blackwell
 
 pytestmark = pytest.mark.enable_warmup
@@ -1591,56 +1592,20 @@ def test_nvfp4_ue5m3_matmul():
         assert "kind::mxf4nvf4.block_scale.block16" in kernel.asm["ptx"]
 
 
-@triton.jit
-def _prefetched_descriptor_matmul_kernel(A, B, C, M, N, K, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-                                         BLOCK_K: tl.constexpr):
-    off_m = tl.program_id(0) * BLOCK_M
-    off_n = tl.program_id(1) * BLOCK_N
-    a_desc = tl.make_tensor_descriptor(A, [M, K], [K, 1], [BLOCK_M, BLOCK_K])
-    # Store B as [N, K], matching the K-contiguous weights in the TLX GEMM.
-    b_desc = tl.make_tensor_descriptor(B, [N, K], [K, 1], [BLOCK_N, BLOCK_K])
-    a = a_desc.load([off_m, 0])
-    b = b_desc.load([off_n, 0]).T
-    acc = tl.zeros([BLOCK_M, BLOCK_N], tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K)):
-        # Carry prefetched register tiles across the backedge, as in the TLX
-        # TDM GEMM. Descriptor bounds checking zero-fills the unused last pair.
-        next_k = (k + 1) * BLOCK_K
-        next_a = a_desc.load([off_m, next_k])
-        next_b = b_desc.load([off_n, next_k]).T
-        acc = tl.dot(a, b, acc)
-        a = next_a
-        b = next_b
-    rows = off_m + tl.arange(0, BLOCK_M)
-    cols = off_n + tl.arange(0, BLOCK_N)
-    tl.store(C + rows[:, None] * N + cols[None, :], acc.to(tl.float16))
-
-
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250 TDM loads")
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
 @pytest.mark.parametrize("k_tiles", [1, 8])
-def test_prefetched_descriptor_matmul_loop_carried_layout(BLOCK_M, BLOCK_N, BLOCK_K, k_tiles, device):
-    # A descriptor load already goes through LDS. Propagating the dot layouts
-    # through the iter_args lets it read the WMMA fragments directly, avoiding
-    # a second register -> LDS -> register round trip before each dot.
+def test_prefetched_descriptor_matmul_correctness(BLOCK_M, BLOCK_N, BLOCK_K, k_tiles, device):
+    # Exercise one iteration and repeated use of the prefetched loop-carried tiles.
     torch.manual_seed(42)
     M, N, K = 2 * BLOCK_M, 2 * BLOCK_N, k_tiles * BLOCK_K
     a = torch.randn((M, K), device=device, dtype=torch.float16)
     b = torch.randn((N, K), device=device, dtype=torch.float16)
     c = torch.empty((M, N), device=device, dtype=torch.float16)
     # Disable automatic pipelining to isolate layout propagation.
-    kernel = _prefetched_descriptor_matmul_kernel[(M // BLOCK_M, N // BLOCK_N)](a, b, c, M, N, K, BLOCK_M, BLOCK_N,
-                                                                                BLOCK_K, num_stages=1)
+    _prefetched_descriptor_matmul_kernel[(M // BLOCK_M, N // BLOCK_N)](a, b, c, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                                                       num_stages=1)
     if is_compile_warmup():
         return
     ref = (a.float() @ b.float().T).half()
     torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
-
-    ttgir = kernel.asm["ttgir"]
-    loop_signature = re.search(r"scf\.for[^\n]* -> \((.*?)\)\s*:", ttgir)
-    assert loop_signature is not None
-    for operand in (0, 1):
-        assert f"#ttg.dot_op<{{opIdx = {operand}," in loop_signature.group(1)
-    # Initializing an LDS allocation from a register tensor is how the
-    # unfused layout conversions appear after AMD's dot-operand lowering.
-    assert not re.search(r"ttg\.local_alloc\s+%", ttgir)
