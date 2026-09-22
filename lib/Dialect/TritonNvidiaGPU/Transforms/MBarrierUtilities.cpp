@@ -83,7 +83,7 @@ bool requiresCrossCTAMBarrierInitSync(
         bool crossCTA = false;
         if (isa<ttng::MMAv5OpInterface, ttng::TCGen5CommitOp>(op))
           crossCTA = hasTCGen5CommitCrossCTA(op);
-        else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
+        else if (auto tma = dyn_cast<ttng::AsyncLoadOpInterface>(op))
           crossCTA = tma.getMulticast();
         else if (isa<ttng::CLCTryCancelOp>(op))
           crossCTA = true;

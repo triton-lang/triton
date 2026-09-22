@@ -1140,6 +1140,14 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttng::TCGen5CommitOp>(barrier, pred, descs);
            })
 
+      .def("create_async_bulk_copy_global_to_local",
+           [](GluonOpBuilder &self, Value dst, Value src, int32_t numBytes,
+              Value barrier, Value pred, bool multicast) {
+             multicast &=
+                 ttng::hasCGABroadcast(cast<ttg::MemDescType>(dst.getType()));
+             self.create<ttng::AsyncBulkCopyGlobalToLocalOp>(
+                 dst, src, numBytes, barrier, pred, multicast);
+           })
       .def(
           "create_async_tma_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,

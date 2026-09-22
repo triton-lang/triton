@@ -5794,3 +5794,51 @@ def test_compute_efficient_padded_shared_layout_invalid_returns_none():
 
     # fp32 has bitwidth 32, outside the supported {4, 8, 16}.
     assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_op, [128, 64], ttgl.float32) is None
+
+
+@gluon.jit
+def _bulk_codegen_kernel(src, out, pred):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [4096], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, 10240, pred=pred)
+    hopper.bulk.async_load(smem, src, 10240, bar, pred=pred)
+    hopper.mbarrier.wait(bar, phase=0, pred=pred)
+    offsets = ttgl.arange(0, 4096, layout)
+    ttgl.store(out + offsets, smem.load(layout), (offsets < 2560) & pred)
+    hopper.mbarrier.invalidate(bar)
+
+
+@pytest.mark.parametrize("capability", [90, 100, 103])
+def test_bulk_async_load_codegen(capability):
+    source = gluon.GluonASTSource(_bulk_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    compiled = triton.compile(source, target=GPUTarget("cuda", capability, 32))
+    ptx = compiled.asm["ptx"]
+    assert ptx.count("cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes") == 1
+    assert re.search(r"@%?\w+ cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes.*(0x2800|10240)", ptx)
+    assert "mbarrier.try_wait.parity" in ptx
+
+
+@pytest.mark.parametrize("capability,ptx_version,message", [
+    (80, 86, "compute capability 9.0"),
+    (90, 85, "PTX 8.6"),
+])
+def test_bulk_async_load_unsupported_target(capability, ptx_version, message, capfd):
+    source = gluon.GluonASTSource(_bulk_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    with pytest.raises(RuntimeError):
+        triton.compile(source, target=GPUTarget("cuda", capability, 32), options={"ptx_version": ptx_version})
+    assert message in capfd.readouterr().err
+
+
+def test_bulk_async_load_requires_compile_time_count():
+
+    @gluon.jit
+    def kernel(src, num_bytes):
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.bulk.async_load(smem, src, num_bytes, bar)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*i32", "num_bytes": "i32"}, {})
+    with pytest.raises(CompilationError, match="num_bytes must be a compile-time integer"):
+        triton.compile(source, target=GPUTarget("cuda", 90, 32))

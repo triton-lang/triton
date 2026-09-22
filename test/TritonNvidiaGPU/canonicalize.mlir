@@ -115,3 +115,14 @@ tt.func @false_tmem_store_keeps_token(%value: tensor<128x128xf32, #data>, %mem: 
   tt.return %token : !ttg.async.token
 }
 }
+
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // BARRIER-LABEL: @false_bulk_copy
+  // BARRIER-NEXT: tt.return
+  tt.func @false_bulk_copy(%src: !tt.ptr<i32>, %dst: !ttg.memdesc<16xi32, #local_barrier, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>) {
+    %false = arith.constant false
+    ttng.async_bulk_copy_global_to_local %src, %dst, 48, %bar, %false : !tt.ptr<i32>, !ttg.memdesc<16xi32, #local_barrier, #smem, mutable>, !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
+    tt.return
+  }
+}

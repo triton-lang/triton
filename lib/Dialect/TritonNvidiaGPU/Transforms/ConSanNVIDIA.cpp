@@ -33,7 +33,8 @@ Value getLeaderCTAPredicate(ImplicitLocOpBuilder &b, uint32_t broadcastMask) {
 uint32_t getBlockBroadcastMask(Type type) {
   auto memDescTy = cast<ttg::MemDescType>(type);
   auto kBlock = StringAttr::get(type.getContext(), "block");
-  return toLinearLayout(memDescTy).getFreeVariableMasks().lookup(kBlock);
+  return toLinearLayoutIgnoringPadding(memDescTy).getFreeVariableMasks().lookup(
+      kBlock);
 }
 
 } // namespace
@@ -41,7 +42,8 @@ uint32_t getBlockBroadcastMask(Type type) {
 class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
 public:
   bool isTMAOp(Operation *op) const override {
-    return isa<ttng::TMAOpInterface, ttng::AsyncSharedStoreOp>(op);
+    return isa<ttng::TMAOpInterface, ttng::AsyncSharedStoreOp,
+               ttng::AsyncBulkCopyGlobalToLocalOp>(op);
   }
 
   bool isCLCOp(Operation *op) const override {
@@ -121,7 +123,7 @@ public:
       if (fromCTA)
         mask = ~*fromCTA & (ttg::lookupNumCTAs(op) - 1);
     }
-    if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+    if (auto loadOp = dyn_cast<ttng::AsyncLoadOpInterface>(op)) {
       if (loadOp.getMulticast())
         mask = getBlockBroadcastMask(loadOp.getResult().getType());
     }
@@ -226,6 +228,13 @@ public:
           {loadOp.getBarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
            /*txCount=*/-txCount});
+    }
+    if (auto copyOp = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op)) {
+      info->pred = copyOp.getPred();
+      info->barriers.push_back(
+          {copyOp.getBarrier(), nullptr, /*count=*/0,
+           MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
+           /*txCount=*/-static_cast<int>(copyOp.getNumBytes())});
     }
     if (auto storeOp = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
       info->barriers.push_back(

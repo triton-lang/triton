@@ -19,9 +19,9 @@ def TMAOpInterface : OpInterface<"TMAOpInterface"> {
   ];
 }
 
-def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterface]> {
+def AsyncLoadOpInterface : OpInterface<"AsyncLoadOpInterface"> {
   let description = [{
-    Common interface for asynchronous TMA operations that write shared memory.
+    Common interface for asynchronous global-to-shared loads with barrier completion.
   }];
 
   let cppNamespace = "::mlir::triton::nvidia_gpu";
@@ -48,6 +48,10 @@ def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterfa
       /*methodName=*/"getMulticast",
       /*args=*/(ins)>,
   ];
+}
+
+def TMALoadLikeOpInterface : OpInterface<"TMALoadLikeOpInterface", [TMAOpInterface, AsyncLoadOpInterface]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
 }
 
 def TMAStoreLikeOpInterface : OpInterface<"TMAStoreLikeOpInterface", [TMAOpInterface]> {

@@ -457,3 +457,23 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!bar = !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>
+!dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @linear_bulk_range
+  tt.func @linear_bulk_range(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    // CHECK: tt.make_range {end = 16 : i32, start = 0 : i32}
+    // CHECK: arith.constant dense<12>
+    // CHECK: arith.cmpi ult
+    // CHECK: arith.andi
+    // CHECK: tt.addptr
+    // CHECK: tti.experimental_gsan_tensor_access {{.*}}, false,
+    // CHECK-NEXT: ttng.async_bulk_copy_global_to_local
+    ttng.async_bulk_copy_global_to_local %src, %dst, 48, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}

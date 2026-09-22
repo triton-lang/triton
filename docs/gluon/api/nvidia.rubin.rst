@@ -9,6 +9,7 @@ NVIDIA Rubin
     :template: autosummary/gluon-module.rst
 
     async_copy
+    bulk
     clc
     cluster
     mbarrier
