@@ -1248,6 +1248,58 @@ def test_math_divide_op(expr, num_ctas, device):
     _test_binary(dtype, dtype, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("approx", [False, True])
+@pytest.mark.parametrize("reciprocal", [False, True])
+def test_fdiv_approx(approx, reciprocal, device):
+
+    @triton.jit
+    def kernel(X, Y, Z, APPROX: tl.constexpr, RECIPROCAL: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        x = 1.0 if RECIPROCAL else tl.load(X + offsets)
+        y = tl.load(Y + offsets)
+        tl.store(Z + offsets, tl.fdiv(x, y, approx=APPROX))
+
+    rng = RandomState(0)
+    # Keep inputs and results normal for both approximate backends.
+    x = rng.uniform(0.5, 2, 128).astype(np.float32)
+    x[::2] *= -1
+    y = rng.uniform(0.5, 2, 128).astype(np.float32)
+    y = np.ldexp(y, np.linspace(-125, 124, y.size).astype(np.int32))
+    y[0], y[-1] = 2.0**-126, 2.0**126
+    x[-1] = 1.0
+    y[::2] *= -1
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(np.empty_like(x), device=device)
+    compiled = kernel[(1, )](x_tri, y_tri, z_tri, approx, reciprocal, x.size)
+    expected = (np.float32(1.0) if reciprocal else x) / y
+    # AMD's 2.5 ULP bound allows 3 ULP against a rounded reference.
+    maxulp = 3 if approx and is_hip() else 2
+    np.testing.assert_array_max_ulp(to_numpy(z_tri), expected, maxulp=maxulp)
+    if is_cuda() and not is_interpreter():
+        assert ("div.approx.f32" if approx else "div.full.f32") in compiled.asm["ptx"]
+    if approx and is_hip() and not is_interpreter():
+        assert "llvm.amdgcn.fdiv.fast" in compiled.asm["llir"]
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype, ieee_rounding, error", [
+    ("float32", True, "approx and ieee_rounding cannot both be True"),
+    ("float64", False, "approx division requires float32 operands"),
+])
+def test_fdiv_approx_invalid_mode(dtype, ieee_rounding, error, device):
+
+    @triton.jit
+    def kernel(X, IEEE: tl.constexpr):
+        x = tl.load(X)
+        tl.store(X, tl.fdiv(x, x, ieee_rounding=IEEE, approx=True))
+
+    x = to_triton(np.ones(1, dtype=dtype), device=device)
+    with pytest.raises((triton.CompilationError, InterpreterError), match=error):
+        kernel[(1, )](x, ieee_rounding)
+
+
 # -------------
 # test precise math
 # -------------
@@ -1654,6 +1706,41 @@ def test_atomic_load_store(dtype, scalar, ordered, device):
             assert ptx.count("fence.acq_rel.gpu;") == 2 * ordered
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA PTX")
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.int32, torch.int64])
+@pytest.mark.parametrize("mask_group", [0, 2, 16])
+def test_atomic_load_store_coalesced(dtype, mask_group, device):
+
+    @triton.jit
+    def kernel(src, dst, MASK_GROUP: tl.constexpr):
+        offsets = tl.arange(0, 2048)
+        if MASK_GROUP:
+            mask = offsets // MASK_GROUP % 2 == 0
+        else:
+            mask = None
+        value = tl.atomic_load(src + offsets, mask=mask, sem="acquire")
+        tl.atomic_store(dst + offsets, value, mask=mask, sem="release")
+
+    src = (torch.arange(2048, device=device) % 127 - 63).to(dtype)
+    dst = torch.full_like(src, -1)
+    offsets = torch.arange(2048, device=device)
+    mask = offsets // mask_group % 2 == 0 if mask_group else torch.ones_like(offsets, dtype=torch.bool)
+    expected = torch.where(mask, src, dst)
+
+    compiled = kernel[(1, )](src, dst, mask_group)
+
+    assert torch.equal(dst, expected)
+    bit_width = dtype.itemsize * 8
+    vec = 128 // bit_width
+    if mask_group:
+        vec = min(vec, mask_group)
+    word_bits = max(bit_width, min(32, vec * bit_width))
+    words = vec * bit_width // word_bits
+    suffix = f".v{words}" if words > 1 else ""
+    assert f"ld.relaxed.gpu.global{suffix}.b{word_bits}" in compiled.asm["ptx"]
+    assert f"st.relaxed.gpu.global{suffix}.b{word_bits}" in compiled.asm["ptx"]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", ["relaxed", "acquire"])
 @pytest.mark.parametrize("scope", ["cta", "gpu", "sys"])
@@ -1672,7 +1759,8 @@ def test_atomic_poll(dtype, bit_width, sem, scope, device):
     assert out.item() == 1
     if is_cuda():
         ptx = compiled.asm["ptx"]
-        assert ptx.count(f"ld.relaxed.{scope}.global.b{bit_width}") == 1
+        # Loop unswitching can duplicate the load with a false predicate.
+        assert f"ld.relaxed.{scope}.global.b{bit_width}" in ptx
         fence_sem = "acq_rel" if torch.cuda.get_device_capability()[0] < 9 else "acquire"
         assert ptx.count(f"fence.{fence_sem}.{scope};") == (sem == "acquire")
         assert "%globaltimer" not in ptx
@@ -1729,7 +1817,7 @@ def test_atomic_poll_timeout(initial_value, expected, device):
     assert out.item() == expected
     if is_cuda():
         ptx = compiled.asm["ptx"]
-        assert ptx.count("ld.relaxed.gpu.global.b32") == 1
+        assert "ld.relaxed.gpu.global.b32" in ptx
         fence_sem = "acq_rel" if torch.cuda.get_device_capability()[0] < 9 else "acquire"
         assert ptx.count(f"fence.{fence_sem}.gpu;") == 1
         assert ptx.count("%globaltimer") == 2
@@ -4758,6 +4846,41 @@ def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_dtype, scale_factor
         return
     expected = 2.0**-112 if normal_type == "bf16" and scale_dtype == torch.uint8 else 0.0
     torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("rhs", [False, True])
+@pytest.mark.parametrize("mma_nonk_size", [16, 32])
+def test_dot_tf32_special_values(rhs, mma_nonk_size, device):
+    if not is_hip_cdna3():
+        pytest.skip("XF32 instructions require CDNA3")
+
+    @triton.jit
+    def kernel(A, B, C):
+        offsets = tl.arange(0, 32)[:, None] * 32 + tl.arange(0, 32)[None, :]
+        a = tl.load(A + offsets)
+        b = tl.load(B + offsets)
+        tl.store(C + offsets, tl.dot(a, b, input_precision="tf32"))
+
+    # Include signaling NaNs whose payload would disappear at TF32 precision,
+    # and subnormals that must survive with the default denormal mode.
+    bits = torch.tensor([
+        0x7f800001, 0x7f801fff, 0x7fa00000, 0x7fc00000, 0xff800001, 0xff801fff, 0xffa00000, 0xffc00000, 0x7f800000,
+        0xff800000, 0x00000000, 0x80000000, 0x00002000, 0x80002000, 0x007fe000, 0x807fe000, 0x00800000, 0x80800000,
+        0x3f800000, 0xbf800000, 0x40600000, 0xc0600000
+    ], dtype=torch.uint32, device=device)
+    values = bits.view(torch.float32)
+    a = torch.zeros((32, 32), device=device)
+    a[:len(values), 0] = values
+    b = torch.ones((32, 32), device=device)
+    expected = values[:, None].expand(-1, 32)
+    if rhs:
+        a, b = b.mT.contiguous(), a.mT.contiguous()
+        expected = expected.mT
+    actual = torch.empty((32, 32), device=device)
+    kernel[(1, )](a, b, actual, matrix_instr_nonkdim=mma_nonk_size)
+    if not is_compile_warmup():
+        actual = actual[:, :len(values)] if rhs else actual[:len(values), :]
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 
 @pytest.mark.interpreter

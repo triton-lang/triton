@@ -194,7 +194,7 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
   mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
                                               targetInfo, benefit);
   mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
-      typeConverter, targetInfo, patterns, benefit);
+      typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
   mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(typeConverter,
                                                             patterns, benefit);
   mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,

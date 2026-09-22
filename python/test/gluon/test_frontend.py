@@ -2138,6 +2138,7 @@ def math_kernel():
     ttgl.floor(a)
     ttgl.ceil(a)
     ttgl.fma(a, b, c)
+    ttgl.fdiv(a, b, approx=True)
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -2175,6 +2176,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %14 = math.floor %cst_0 : tensor<16x16xf32, #blocked>
     %15 = math.ceil %cst_0 : tensor<16x16xf32, #blocked>
     %16 = math.fma %cst_0, %cst_2, %cst_4 : tensor<16x16xf32, #blocked>
+    %17 = tt.approx_divf %cst_0, %cst_2 : tensor<16x16xf32, #blocked>
     tt.return
   }
 }
@@ -4068,6 +4070,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+def test_amd_mfma_cd_regclass(target):
+
+    @gluon.jit
+    def kernel():
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[4, 1], instr_shape=[32, 32, 8],
+                                                             transposed=True)
+
+        a = ttgl.full([64, 32], 1.0, ttgl.float32, layout=ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout,
+                                                                                k_width=8))
+        b = ttgl.full([32, 64], 2.0, ttgl.float32, layout=ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout,
+                                                                                k_width=8))
+
+        acc = ttgl.full([64, 64], 0.0, ttgl.float32, layout=mfma_layout)
+        ttgl.amd.cdna3.mfma(a, b, acc, cd_regclass="a")
+
+    module_text = run_parser(kernel, target=target).str_nodebug()
+    assert re.search(r'tt\.dot .*\{amdg\.cd_regclass = "a"\}', module_text)
+
+
 @gluon.jit
 def slice_kernel():
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
@@ -4135,6 +4157,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   }
 }
 """)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
+def test_amd_mfma_scaled_cd_regclass(target):
+
+    @gluon.jit
+    def kernel():
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
+                                                             warps_per_cta=[1, 1])
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=16)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16)
+
+        a = ttgl.full([16, 64], 0x11, ttgl.uint8, a_layout)
+        b = ttgl.full([64, 16], 0x22, ttgl.uint8, b_layout)
+        acc = ttgl.full([16, 16], 0, ttgl.float32, mfma_layout)
+        ttgl.amd.cdna4.mfma_scaled(a, None, 'e2m1', b, None, 'e2m1', acc, cd_regclass="v")
+
+    module_text = run_parser(kernel, *make_args(num_warps=1), target=target).str_nodebug()
+    assert re.search(r'tt\.dot_scaled .*amdg\.cd_regclass = "v"', module_text)
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
@@ -4294,12 +4335,13 @@ def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype):
 ], ids=["cdna3", "cdna4", "cdna5"])
 def test_amd_scaled_upcast_fp4_compact_scale_cdna(target, threads_per_warp, expect_layout):
     scaled_upcast = _get_amd_scaled_upcast(target)
+    get_scaled_upcast_fp4_scale_layout = _get_amd_scaled_upcast_fp4_scale_layout(target)
 
     @gluon.jit
     def kernel(THREADS_PER_WARP: ttgl.constexpr, EXPECT_LAYOUT: ttgl.constexpr):
         packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], THREADS_PER_WARP, [1, 1], [1, 0])
         src = ttgl.full([16, 32], 0x11, ttgl.uint8, packed_layout)
-        scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(src, 32, ttgl.bfloat16, axis=1)
+        scale_layout: ttgl.constexpr = get_scaled_upcast_fp4_scale_layout(src, 32, ttgl.bfloat16, axis=1)
         ttgl.static_assert(scale_layout == EXPECT_LAYOUT)
         scale = ttgl.full([16, 2], 0x02, ttgl.uint8, scale_layout)
         scaled_upcast(src, scale, ttgl.bfloat16, axis=1)
@@ -4341,12 +4383,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 """)
 
 
-def _get_amd_scaled_upcast(target):
+def _get_amd_arch(target):
     if target == HIP_TARGET_CDNA3:
-        return ttgl.amd.cdna3.scaled_upcast
+        return ttgl.amd.cdna3
     if target == HIP_TARGET_CDNA4:
-        return ttgl.amd.cdna4.scaled_upcast
-    return ttgl.amd.cdna5.scaled_upcast
+        return ttgl.amd.cdna4
+    if target == HIP_TARGET_CDNA5:
+        return ttgl.amd.cdna5
+    raise ValueError(f"Unsupported AMD target: {target}")
+
+
+def _get_amd_scaled_upcast(target):
+    return _get_amd_arch(target).scaled_upcast
+
+
+def _get_amd_scaled_upcast_fp4_scale_layout(target):
+    return _get_amd_arch(target).get_scaled_upcast_fp4_scale_layout
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])

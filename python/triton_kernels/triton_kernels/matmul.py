@@ -535,7 +535,7 @@ def matmul(a, b, bias,
         available_sms = target_info.num_sms() - opt_flags.idle_sms
         grid = min(opt_flags.occupancy_target * available_sms, grid)
     # canonicalize storage
-    has_scatter_tma = has_scatter and out_matmul.element_size() <= 4 and target_info.has_tma_gather()
+    has_scatter_tma = has_scatter and out_matmul.element_size() <= 4 and target_info.has_tma_scatter()
     c = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     a = Tensor(_canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data), dtype=a.dtype, shape=a.shape, shape_max=a.shape_max)
     b_storage_ndim = 5 if b_is_shuffled else 3

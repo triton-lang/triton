@@ -18,6 +18,26 @@ from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
 
 
+@pytest.mark.parametrize("backend, options_type, arch", [
+    ("amd", "HIPOptions", "gfx950"),
+    ("nvidia", "CUDAOptions", "sm90"),
+])
+def test_extern_libs_hash_contents(backend, options_type, arch, tmp_path):
+    compiler = importlib.import_module(f"triton.backends.{backend}.compiler")
+    library = tmp_path / "custom.bc"
+    library.write_bytes(b"original library")
+    options = getattr(compiler, options_type)(arch=arch, extern_libs={"custom": str(library)})
+    try:
+        original = options.hash()
+        assert options.hash() == original
+        library.write_bytes(b"modified library")
+        # File hashes are memoized per process. Start cold, as in a new invocation.
+        compiler.file_hash.cache_clear()
+        assert options.hash() != original
+    finally:
+        compiler.file_hash.cache_clear()
+
+
 def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
     fresh_knobs.cache.dir = str(tmp_path)
     manager = FileCacheManager("key")

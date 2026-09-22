@@ -154,7 +154,7 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
         x = ttgl.load(x_ptr + x_offsets)
 
         if COMPACT_SCALE:
-            scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(
+            scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_scaled_upcast_fp4_scale_layout(
                 x, SCALE_FACTOR, ttgl.bfloat16, axis=1)
             scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
         else:
@@ -4369,6 +4369,7 @@ def tdm_gather_multi_cta_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_
     idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
+    inp_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET], clamp_bounds=True)
     ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem)
     ttgl.amd.cdna5.tdm.async_wait(0)
 

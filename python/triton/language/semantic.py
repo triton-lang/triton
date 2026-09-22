@@ -326,13 +326,20 @@ class TritonSemantic(Generic[TensorTy]):
                 return self.tensor(self.builder.create_udiv(input.handle, other.handle), input.type)
         raise TypeError(f"unexpected type {input_scalar_ty}")
 
-    def fdiv(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number, ieee_rounding: bool) -> TensorTy:
+    def fdiv(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number, ieee_rounding: bool,
+             approx: bool = False) -> TensorTy:
+        if ieee_rounding and approx:
+            raise ValueError("approx and ieee_rounding cannot both be True")
         input_scalar_ty = input.type.scalar
         other_scalar_ty = other.type.scalar
         if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
             raise TypeError("both operands of fdiv must have floating scalar type")
         input, other = self.binary_op_type_checking_impl(input, other, False, False, False, True)
-        if ieee_rounding:
+        if approx:
+            if not input.type.scalar.is_fp32():
+                raise ValueError("approx division requires float32 operands")
+            ret = self.builder.create_approx_divf(input.handle, other.handle)
+        elif ieee_rounding:
             ret = self.builder.create_precise_divf(input.handle, other.handle)
         else:
             ret = self.builder.create_fdiv(input.handle, other.handle)
@@ -1221,14 +1228,15 @@ class TritonSemantic(Generic[TensorTy]):
         ptr_ty = ptr.type.scalar
         elt_ty = ptr_ty.element_ty
 
+        # Cast to target data type
+        val = self.cast(val, elt_ty)
+
         # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
         if elt_ty == tl.int1:
             elt_ty = tl.int8
             ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
             ptr = self.cast(ptr, ptr_ty)
-
-        # Cast to target data type
-        val = self.cast(val, elt_ty)
+            val = self.cast(val, elt_ty)
 
         # Build IR
         if mask is None:

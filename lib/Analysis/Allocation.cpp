@@ -94,6 +94,12 @@ static unsigned getResultBroadcastScratchSize(Value result) {
   return elems * std::max(8u, bitWidth) / 8;
 }
 
+unsigned getAtomicResultScratchSize(Value result) {
+  if (getAtomicResultShuffleMask(result))
+    return 0;
+  return getResultBroadcastScratchSize(result);
+}
+
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes();
@@ -107,6 +113,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     return helper.getScratchSizeInBytes();
   }
   if (auto histogram = dyn_cast<HistogramOp>(op)) {
+    if (canUseWarpBallotHistogram(histogram) && gpu::lookupNumWarps(op) == 1)
+      return 0;
     auto dstTy = histogram.getType();
     int threadsPerWarp = gpu::TritonGPUDialect::getThreadsPerWarp(
         op->getParentOfType<ModuleOp>());
@@ -132,7 +140,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (isa<gpu::LocalAtomicScatterRMWOp>(op) || isa<AtomicOpInterface>(op)) {
     if (op->getNumResults() == 0)
       return 0;
-    return getResultBroadcastScratchSize(op->getResult(0));
+    return getAtomicResultScratchSize(op->getResult(0));
   }
   if (isa<ttng::TensormapCreateOp>(op)) {
     constexpr int32_t kTMASize = 128;

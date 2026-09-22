@@ -22,6 +22,8 @@ using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
+unsigned getAtomicResultScratchSize(Value result);
+
 /// Returns whether an operation uses scratch memory across CTAs.
 bool hasCrossCTAScratch(Operation *op);
 

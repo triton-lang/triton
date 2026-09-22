@@ -50,6 +50,8 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
 
 namespace mlir::triton {
 
+class ModuleAxisInfoAnalysis;
+
 // The address of the descriptor's logical origin in its memory space.
 Value getMemDescAddress(RewriterBase &rewriter, Location loc,
                         const LLVMTypeConverter *typeConverter,
@@ -731,6 +733,12 @@ Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter);
 std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
+
+/// Choose a legal atomic load/store width using pointer alignment/contiguity
+/// and mask constancy.
+unsigned getAtomicLoadStoreVectorSize(Value ptr, Value mask,
+                                      ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                      const TargetInfoBase &targetInfo);
 
 /// Emit `bodyBuilder` inline when `pred` is null. Otherwise, emit it only when
 /// `pred` is true and merge its results with `falseValues` in a continuation

@@ -360,6 +360,7 @@ static std::optional<std::string> lldInvoke(const char *inPath,
 }
 
 void init_triton_amd(py::module_ &m) {
+  mlir::triton::AMD::registerTargetInfo();
   m.doc() = "Python bindings to the AMD Triton backend";
   init_triton_amd_loader(m);
 
