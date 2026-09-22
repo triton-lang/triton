@@ -89,7 +89,9 @@ static LogicalResult lowerSite(ttng::CLCTryCancelSyncOp issue) {
   yield.getResultsMutable().append(nextPhase);
 
   builder.setInsertionPoint(issue);
-  auto expect = ttng::BarrierExpectOp::create(builder, loc, barrier, 16, pred);
+  Value bytes = arith::ConstantIntOp::create(builder, loc, 16, 32);
+  auto expect =
+      ttng::BarrierExpectOp::create(builder, loc, barrier, bytes, pred);
   expect.setFromCTAAttr(builder.getI32IntegerAttr(0));
   ttng::CLCTryCancelOp::create(builder, loc, response, barrier);
 

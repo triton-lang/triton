@@ -59,6 +59,15 @@ LogicalResult verifyMMAv5Op(Operation *op);
 
 namespace mlir::triton::nvidia_gpu {
 
+// Physical ranges of a linear bulk copy, derived from the canonical layout.
+// Source ranges are packed by increasing CTA id, omitting broadcast bits.
+struct BulkCopyLayout {
+  unsigned bytesPerCTA;
+  unsigned splitMask;
+  unsigned broadcastMask;
+};
+FailureOr<BulkCopyLayout> getBulkCopyLayout(gpu::MemDescType type);
+
 struct PackedArithTypeInfo {
   llvm::StringLiteral suffix;
   unsigned lanes, registerBits;

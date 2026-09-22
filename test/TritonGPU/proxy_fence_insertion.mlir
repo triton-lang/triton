@@ -1784,7 +1784,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
     %page = ttg.memdesc_index %buffer[%c1] : !ttg.memdesc<2x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<64xi32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    ttng.barrier_expect %bar, 256, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %bulk_bytes_1 = arith.constant 256 : i32
+    ttng.barrier_expect %bar, %bulk_bytes_1, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     // CHECK: ttng.fence_async_shared {bCluster = false}
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%c0] %page, %bar, %true : !tt.tensordesc<64xi32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64xi32, #shared, #smem, mutable>
