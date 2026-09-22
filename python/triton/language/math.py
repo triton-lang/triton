@@ -85,8 +85,8 @@ def _add_math_3arg_docstr(name: str) -> core.Callable[[T], T]:
 @_check_dtype(dtypes=["int32", "int64", "uint32", "uint64"])
 @_add_math_2arg_docstr("most significant N bits of the 2N-bit product")
 def umulhi(x, y, _semantic=None):
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
+    x = core._unwrap_if_constexpr(x)
+    y = core._unwrap_if_constexpr(y)
     x, y = core.binary_op_type_legalization(x, y, _semantic)
     return core.tensor(_semantic.builder.create_umulhi(x.handle, y.handle), x.type)
 
@@ -209,8 +209,8 @@ def fdiv(x, y, ieee_rounding=False, approx=False, _semantic=None):
     """
     ieee_rounding = core._unwrap_if_constexpr(ieee_rounding)
     approx = core._unwrap_if_constexpr(approx)
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
+    x = core._unwrap_if_constexpr(x)
+    y = core._unwrap_if_constexpr(y)
     return _semantic.fdiv(x, y, ieee_rounding, approx)
 
 
@@ -218,8 +218,8 @@ def fdiv(x, y, ieee_rounding=False, approx=False, _semantic=None):
 @_check_dtype(dtypes=["fp32"])
 @_add_math_2arg_docstr("precise division (rounding to nearest wrt the IEEE standard)")
 def div_rn(x, y, _semantic=None):
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
+    x = core._unwrap_if_constexpr(x)
+    y = core._unwrap_if_constexpr(y)
     x, y = core.binary_op_type_legalization(x, y, _semantic)
     return core.tensor(_semantic.builder.create_precise_divf(x.handle, y.handle), x.type)
 
@@ -254,10 +254,8 @@ def ceil(x, _semantic=None):
 @core.builtin
 @_add_math_3arg_docstr("fused multiply-add")
 def fma(x, y, z, _semantic=None):
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
-    z = _semantic.to_tensor(z)
-    x, y = core.binary_op_type_legalization(x, y, _semantic)
-    z, x = core.binary_op_type_legalization(z, x, _semantic)
-    z, y = core.binary_op_type_legalization(z, y, _semantic)
+    x = core._unwrap_if_constexpr(x)
+    y = core._unwrap_if_constexpr(y)
+    z = core._unwrap_if_constexpr(z)
+    x, y, z = _semantic.ternary_op_type_checking_impl(x, y, z)
     return core.tensor(_semantic.builder.create_fma(x.handle, y.handle, z.handle), x.type)
