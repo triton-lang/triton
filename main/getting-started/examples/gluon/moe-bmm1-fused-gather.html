@@ -162,6 +162,15 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">triton_kernels.testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">alloc_rand</span><span class="p">,</span> <span class="n">assert_close</span><span class="p">,</span> <span class="n">convert_layout</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">triton_kernels.topk</span><span class="w"> </span><span class="kn">import</span> <span class="n">topk</span>
 
+
+<span class="k">def</span><span class="w"> </span><span class="nf">is_cuda</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="ow">and</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">"cuda"</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">is_rubin</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()</span> <span class="o">==</span> <span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">7</span><span class="p">)</span>
+
+
 <span class="c1"># ===-----------------------------------------------------------------------===#</span>
 <span class="c1"># Device Code</span>
 <span class="c1"># ===-----------------------------------------------------------------------===#</span>
@@ -916,6 +925,7 @@
         <span class="o">*</span><span class="p">,</span>
         <span class="n">layout_block_shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">cga_layout</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+        <span class="n">fp4_padded</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
 <span class="p">):</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">triton.experimental.gluon.nvidia.hopper</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
 
@@ -935,13 +945,20 @@
     <span class="n">rank</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">layout_shape</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">t</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">FP4</span><span class="p">:</span>
         <span class="k">assert</span> <span class="n">rank</span> <span class="o">==</span> <span class="mi">5</span>
-        <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="p">(</span>
-            <span class="n">swizzle_byte_width</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span>
-            <span class="n">element_bitwidth</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
-            <span class="n">rank</span><span class="o">=</span><span class="n">rank</span><span class="p">,</span>
-            <span class="n">fp4_padded</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-            <span class="n">cga_layout</span><span class="o">=</span><span class="n">cga_layout</span><span class="p">,</span>
-        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">fp4_padded</span><span class="p">:</span>
+            <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="p">(</span>
+                <span class="n">swizzle_byte_width</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span>
+                <span class="n">element_bitwidth</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
+                <span class="n">rank</span><span class="o">=</span><span class="n">rank</span><span class="p">,</span>
+                <span class="n">fp4_padded</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                <span class="n">cga_layout</span><span class="o">=</span><span class="n">cga_layout</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span>
+                <span class="n">layout_shape</span><span class="p">,</span>
+                <span class="n">gl</span><span class="o">.</span><span class="n">uint8</span><span class="p">,</span>
+                <span class="n">cga_layout</span><span class="o">=</span><span class="n">cga_layout</span><span class="p">,</span>
+            <span class="p">)</span>
     <span class="k">elif</span> <span class="n">t</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">UINT8</span><span class="p">:</span>
         <span class="k">assert</span> <span class="n">rank</span> <span class="o">==</span> <span class="mi">5</span>
         <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="p">(</span>
@@ -959,10 +976,9 @@
         <span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">assert</span> <span class="n">t</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span>
-        <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="p">(</span>
-            <span class="n">swizzle_byte_width</span><span class="o">=</span><span class="n">layout_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
-            <span class="n">element_bitwidth</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
-            <span class="n">rank</span><span class="o">=</span><span class="n">rank</span><span class="p">,</span>
+        <span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span>
+            <span class="n">layout_shape</span><span class="p">,</span>
+            <span class="n">gl</span><span class="o">.</span><span class="n">float8e4nv</span><span class="p">,</span>
             <span class="n">cga_layout</span><span class="o">=</span><span class="n">cga_layout</span><span class="p">,</span>
         <span class="p">)</span>
     <span class="k">return</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">ptr</span><span class="p">,</span> <span class="n">shape</span><span class="p">,</span> <span class="n">strides</span><span class="p">,</span> <span class="n">desc_block_shape</span><span class="p">,</span> <span class="n">layout</span><span class="p">)</span>
@@ -973,6 +989,7 @@
     <span class="n">BLOCK_M</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span>
     <span class="n">BLOCK_N</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">256</span>
     <span class="n">BLOCK_K</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span>
+    <span class="n">FP4_PADDED</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
 
     <span class="n">NUM_CTAS</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
     <span class="n">X_NUM_BUFS</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span>
@@ -1194,9 +1211,16 @@
 
 <span class="k">def</span><span class="w"> </span><span class="nf">select_kernel_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">KernelConfig</span><span class="p">:</span>
     <span class="n">p</span> <span class="o">=</span> <span class="n">_select_best_batch_config</span><span class="p">(</span><span class="n">slice_size</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">p</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">p</span>
-    <span class="k">return</span> <span class="n">KernelConfig</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">p</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">KernelConfig</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">is_rubin</span><span class="p">():</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">replace</span><span class="p">(</span>
+            <span class="n">p</span><span class="p">,</span>
+            <span class="n">FP4_PADDED</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+            <span class="n">BLOCK_K</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+            <span class="n">ACC_NUM_BUFS</span><span class="o">=</span><span class="mi">2</span> <span class="k">if</span> <span class="n">slice_size</span> <span class="o">&gt;=</span> <span class="mi">384</span> <span class="k">else</span> <span class="n">p</span><span class="o">.</span><span class="n">ACC_NUM_BUFS</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">return</span> <span class="n">p</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">matmul</span><span class="p">(</span>
@@ -1261,6 +1285,7 @@
         <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_K</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_N</span><span class="p">),</span>
         <span class="c1"># Sharded weight tiles use the physical [1, 1, 1, N, K/2] MX4 shuffled block layout.</span>
         <span class="n">cga_layout</span><span class="o">=</span><span class="nb">tuple</span><span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">basis</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">0</span><span class="p">)</span> <span class="k">for</span> <span class="n">basis</span> <span class="ow">in</span> <span class="n">acc_cga_layout</span><span class="p">),</span>
+        <span class="n">fp4_padded</span><span class="o">=</span><span class="n">p</span><span class="o">.</span><span class="n">FP4_PADDED</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="n">scale_desc</span> <span class="o">=</span> <span class="n">make_tensor_descriptor</span><span class="p">(</span>
         <span class="n">b_mx_scales</span><span class="p">,</span>
