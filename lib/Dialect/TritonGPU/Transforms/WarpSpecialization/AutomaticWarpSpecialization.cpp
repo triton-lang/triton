@@ -94,10 +94,11 @@ std::unique_ptr<Pass> createVerifyWarpSpecializationPartitionsPass() {
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
-  // Automatic warp specialization does not yet synchronize two-CTA TMEM reuse.
-  if (triton::nvidia_gpu::getModuleTwoCTAs(getOperation()))
-    return;
-
+  getOperation().walk([](Operation *op) {
+    if (op->hasAttr(kWarpSpecializeAttrName) &&
+        hasUnsupportedTwoCTAAccumulatorReads(op))
+      op->removeAttr(kWarpSpecializeAttrName);
+  });
   OpPassManager pm;
   auto addPassWithPartitionVerifier = [&](std::unique_ptr<Pass> pass) {
     pm.addPass(std::move(pass));
