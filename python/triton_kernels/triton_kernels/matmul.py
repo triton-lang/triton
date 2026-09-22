@@ -418,23 +418,6 @@ def matmul(a, b, bias,
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
         (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
-    if (can_use_tma and b.dtype == FP4 and a.dtype.bitwidth == 8
-            and target_info.cuda_capability_geq(10, 0)
-            and isinstance(b.storage.layout, StridedLayout)
-            and (a_has_mx or b_scale is None or b_scale.storage.data.dtype != torch.float8_e4m3fn)):
-        # Mixed FP8/FP4 uses the padded 16U4_ALIGN16B tensor map, which needs
-        # 128 logical values along the contiguous axis and 32-byte alignment.
-        # The NVFP4-to-BF16 fallback does not use this padded descriptor.
-        b_data = b.storage.data
-        b_strides = b_data.stride()
-        b_contiguous_dim = b_strides.index(1)
-        can_use_tma = (
-            b_data.shape[b_contiguous_dim] % 64 == 0
-            and b_data.data_ptr() % 32 == 0
-            and all(stride * b_data.element_size() % 32 == 0
-                    for dim, stride in enumerate(b_strides) if dim != b_contiguous_dim)
-        )
-
     if b_scale is not None and isinstance(b_scale.storage.layout, StridedLayout) and b_scale.storage.data.stride()[-1] != 1:
         # In this case, we need to transpose b_scale. Then the reduction dim
         # becomes the last dim that will be divided by 32. This to be a multiple
