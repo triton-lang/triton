@@ -192,12 +192,26 @@ def abs(x, _semantic=None):
 
 
 @core.builtin
-@_add_math_2arg_docstr("fast division")
-def fdiv(x, y, ieee_rounding=False, _semantic=None):
+def fdiv(x, y, ieee_rounding=False, approx=False, _semantic=None):
+    """
+    Computes the element-wise division of :code:`x` by :code:`y`.
+
+    :param x: the numerator
+    :param y: the denominator
+    :param ieee_rounding: if True, use IEEE round-to-nearest division.
+    :param approx: if True, allow approximate division for float32 operands.
+        On NVIDIA, this uses ``div.approx.f32``, with a maximum error of 2 ULP
+        for denominator magnitudes in [2**-126, 2**126]. Results outside this
+        range may differ from full-range division. On AMD, this uses
+        ``llvm.amdgcn.fdiv.fast``, with a maximum error of 2.5 ULP and no support
+        for denormal inputs or results. Cannot be combined with
+        ``ieee_rounding=True``.
+    """
     ieee_rounding = core._unwrap_if_constexpr(ieee_rounding)
+    approx = core._unwrap_if_constexpr(approx)
     x = _semantic.to_tensor(x)
     y = _semantic.to_tensor(y)
-    return _semantic.fdiv(x, y, ieee_rounding)
+    return _semantic.fdiv(x, y, ieee_rounding, approx)
 
 
 @core.builtin
