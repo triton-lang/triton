@@ -82,14 +82,9 @@ bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
                   triton::amdgpu::AsyncCopyMbarrierArriveOp,
                   triton::amdgpu::WaitBarrierOp>(op))
       return true;
-    // An async copy that carries an mbarrier operand sends an LDS atomic
-    // arrive when it completes, so it takes part in mbarrier synchronization
-    // exactly like AsyncCopyMbarrierArriveOp above. The mbarrier already
-    // orders these accesses across the whole workgroup, so a ttg.barrier
-    // between two such ops synchronizes nothing. Ops without a barrier
-    // operand are ordered by their async wait instead and are not covered
-    // here -- an async wait counter is per wave and cannot order accesses
-    // between waves.
+    // A copy carrying an mbarrier arrives on it once complete, so the mbarrier
+    // already orders it workgroup-wide. Copies without one are ordered by an
+    // async wait, whose counter is per wave, so they are not covered here.
     if (auto mbarrierOp = llvm::dyn_cast<triton::gpu::MBarrierOpInterface>(op))
       return mbarrierOp.getBarrier() != nullptr;
     return false;
