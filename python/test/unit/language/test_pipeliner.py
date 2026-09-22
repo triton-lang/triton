@@ -670,7 +670,7 @@ def test_block_sparse_matmul_pipeline(num_stages, device):
     num_k_blocks = K // BLOCK_K
     a = torch.randn(M, K, device=device, dtype=torch.float16)
     b = torch.randn(K, N, device=device, dtype=torch.float16)
-    sparsity = (torch.rand(num_k_blocks, device=device) > 0.3).to(torch.int8)
+    sparsity = (torch.arange(num_k_blocks, device=device) % 2).to(torch.int8)
 
     # Reference: zero out the rows of B for blocks marked absent and matmul.
     b_ref = b.clone()
@@ -682,19 +682,23 @@ def test_block_sparse_matmul_pipeline(num_stages, device):
     c = torch.empty((M, N), device=device, dtype=torch.float16)
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
     handler = block_sparse_matmul_kernel[grid](
-        a, b_ref, c, sparsity,  #
+        a, b, c, sparsity,  #
         M, N, K,  #
         a.stride(0), a.stride(1),  #
-        b_ref.stride(0), b_ref.stride(1),  #
+        b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
         NUM_STAGES=num_stages)
-    torch.testing.assert_close(c, ref, atol=1e-1, rtol=1e-1)
+    torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
 
     # The runtime ``if`` lowers to an ``scf.if`` whose result feeds the dot.
     ttgir = handler.asm["ttgir"]
     assert "scf.if" in ttgir
     assert any(op in ttgir for op in ("tt.dot", "ttng.warp_group_dot", "ttng.tc_gen5_mma"))
+    # WGMMA and tcgen05 use shared-memory B operands, so dot_op layout checks
+    # only apply to kernels using tt.dot.
+    if "tt.dot" not in ttgir:
+        return
 
     # The dot-operand layout requirement must propagate backward through the
     # region-branching control flow:
@@ -771,12 +775,12 @@ def test_running_sum_matmul_pipeline(num_stages, device):
     # Reference: running sum of B tiles along K, multiplied by the
     # corresponding A slice.
     ref = torch.zeros(M, N, device=device, dtype=torch.float32)
-    b_running = torch.zeros(BLOCK_K, N, device=device, dtype=torch.float32)
+    b_running = torch.zeros(BLOCK_K, N, device=device, dtype=torch.float16)
     for k_blk in range(num_k_blocks):
-        b_tile = b[k_blk * BLOCK_K:(k_blk + 1) * BLOCK_K, :].float()
+        b_tile = b[k_blk * BLOCK_K:(k_blk + 1) * BLOCK_K, :]
         b_running = b_running + b_tile
         a_tile = a[:, k_blk * BLOCK_K:(k_blk + 1) * BLOCK_K].float()
-        ref += a_tile @ b_running
+        ref += a_tile @ b_running.float()
     ref = ref.to(torch.float16)
 
     c = torch.empty((M, N), device=device, dtype=torch.float16)
@@ -789,7 +793,7 @@ def test_running_sum_matmul_pipeline(num_stages, device):
         c.stride(0), c.stride(1),  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
         NUM_STAGES=num_stages)
-    torch.testing.assert_close(c, ref, atol=1e-1, rtol=1e-1)
+    torch.testing.assert_close(c, ref, atol=1e-3, rtol=1e-3)
 
     # Verify backward layout propagation through the loop-carried iter_arg:
     #   * the zero-tile constant initializer should be in the dot-operand
@@ -803,6 +807,10 @@ def test_running_sum_matmul_pipeline(num_stages, device):
     # not silently match unrelated dot-operand tensors in the IR.
     ttgir = handler.asm["ttgir"]
     assert any(op in ttgir for op in ("tt.dot", "ttng.warp_group_dot", "ttng.tc_gen5_mma"))
+    # WGMMA and tcgen05 use shared-memory B operands, so dot_op layout checks
+    # only apply to kernels using tt.dot.
+    if "tt.dot" not in ttgir:
+        return
     running_sum_tile = rf"{BLOCK_K}x{BLOCK_N}xf16"
     dot_op_b = r"#ttg\.dot_op<\{opIdx = 1"
     assert re.search(rf"arith\.constant[^\n]*<{running_sum_tile},\s*{dot_op_b}",
