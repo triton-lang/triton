@@ -1090,6 +1090,8 @@ public:
     if (failed(runPipeline(pm, m)))
       return signalPassFailure();
 
+    bool loweredArefs = false;
+    m.walk([&](ArefCreateOp) { loweredArefs = true; });
     mlir::RewritePatternSet patterns(context);
     patterns.add<LowerArefCreate>(context, numStages);
     GreedyRewriteConfig config;
@@ -1097,6 +1099,20 @@ public:
     config.enableFolding(false);
     if (applyPatternsGreedily(m, std::move(patterns), config).failed())
       signalPassFailure();
+
+    if (loweredArefs && nvidia_gpu::getModuleTwoCTAs(m)) {
+      m.walk([&](triton::FuncOp func) {
+        // A warp-specialization join is CTA-local. Before destroying the
+        // aref barriers, also wait for the peer CTA's final read releases.
+        for (Operation &op : func.getBody().front()) {
+          if (isa<InvalBarrierOp>(op)) {
+            OpBuilder builder(&op);
+            ClusterBarrierOp::create(builder, op.getLoc(), /*relaxed=*/false);
+            break;
+          }
+        }
+      });
+    }
 
     // Hoist all poison ops to the top of function from nvws.wg regions.
     // They are unannotated and will trip subsequent passes, same to hoist.
