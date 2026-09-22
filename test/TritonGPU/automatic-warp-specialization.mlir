@@ -478,15 +478,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [2, 0]], twoCTAs = true>
 module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // Keep the regular MMA self-dependency when automatic specialization is skipped.
-  // CLEAN-LABEL: @two_cta_no_auto_warp_specialization
-  // CLEAN-NOT: ttg.warp_specialize
-  // BASE: ttng.tc_gen5_mma {{.*}}tt.self_latency = 1 : i32
-  // BASE: tt.warp_specialize
-  // PIPELINE: ttng.arrive_barrier
-  // PIPELINE: ttng.wait_barrier
+  // Two-CTA specialization uses pair-local TMA readiness and TMEM release barriers.
+  // CLEAN-LABEL: @two_cta_auto_warp_specialization
+  // CLEAN: ttg.warp_specialize
+  // CLEAN: ttng.wait_barrier
+  // CLEAN: ttng.tc_gen5_mma {{.*}}two_ctas
   // CLEAN: tt.return
-  tt.func @two_cta_no_auto_warp_specialization(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
+  tt.func @two_cta_auto_warp_specialization(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
     %true = arith.constant true
     %false = arith.constant false
     %c0 = arith.constant 0 : i32
@@ -506,6 +504,50 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
         scf.yield %load : !ttg.async.token
       } else {
         scf.yield %mma : !ttg.async.token
+      }
+      scf.yield %done : !ttg.async.token
+    } {tt.warp_specialize, tt.num_stages = 3 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+#blockedA = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#blockedB = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 0]]}>
+#blockedC = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [2, 0]]}>
+#sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1], [0, 0]]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [2, 0]], twoCTAs = true>
+module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Multiple readers including a conditional read retain ordinary pipelining.
+  // CLEAN-LABEL: @two_cta_conditional_read_fallback
+  // CLEAN-NOT: ttg.warp_specialize
+  // BASE: ttng.tc_gen5_mma {{.*}}tt.self_latency = 1 : i32
+  // CLEAN: tt.return
+  tt.func @two_cta_conditional_read_fallback(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
+    %true = arith.constant true
+    %false = arith.constant false
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %acc, %init = ttng.tmem_alloc : () -> (!ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %last = scf.for %i = %c0 to %n step %c1 iter_args(%tok = %init) -> !ttg.async.token : i32 {
+      %av = tt.descriptor_load %a[%c0, %c0] : !tt.tensordesc<512x64xf16, #sharedA> -> tensor<512x64xf16, #blockedA>
+      %as = ttg.local_alloc %av : (tensor<512x64xf16, #blockedA>) -> !ttg.memdesc<512x64xf16, #sharedA, #smem, mutable>
+      %bv = tt.descriptor_load %b[%c0, %c0] : !tt.tensordesc<64x128xf16, #sharedB> -> tensor<64x128xf16, #blockedB>
+      %bs = ttg.local_alloc %bv : (tensor<64x128xf16, #blockedB>) -> !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>
+      %mma = ttng.tc_gen5_mma %as, %bs, %acc[%tok], %false, %true {two_ctas} : !ttg.memdesc<512x64xf16, #sharedA, #smem, mutable>, !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>, !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %extra, %extra_token = ttng.tmem_load %acc[%mma] : !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<512x128xf32, #blockedC>
+      "use"(%extra) : (tensor<512x128xf32, #blockedC>) -> ()
+      %odd = arith.andi %i, %c1 : i32
+      %read = arith.cmpi eq, %odd, %c0 : i32
+      %done = scf.if %read -> !ttg.async.token {
+        %v, %load = ttng.tmem_load %acc[%extra_token] : !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<512x128xf32, #blockedC>
+        "use"(%v) : (tensor<512x128xf32, #blockedC>) -> ()
+        scf.yield %load : !ttg.async.token
+      } else {
+        scf.yield %extra_token : !ttg.async.token
       }
       scf.yield %done : !ttg.async.token
     } {tt.warp_specialize, tt.num_stages = 3 : i32}
