@@ -92,7 +92,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   // CHECK-LABEL: tt.func @mbarrier_release_acquire
   tt.func @mbarrier_release_acquire(%phase: i32, %pred: i1) {
-    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 2240 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i8>
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 192 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i8>
     // CHECK-NEXT: tti.experimental_gsan_mbarrier_table_init %[[SCRATCH]], 1 : <i8>
     // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #mbarrier_pair, #smem, mutable>
@@ -195,7 +195,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100"} {
   // CHECK-LABEL: tt.func @mbarrier_multicast_partial_wait
   tt.func @mbarrier_multicast_partial_wait(%desc: !tt.tensordesc<256x128xf16, #tma_partial>, %wait_pred: i1) {
-    // CHECK: tti.experimental_gsan_mbarrier_table_init %[[SCRATCH:.*]],
+    // CHECK: tti.experimental_gsan_mbarrier_table_init %[[SCRATCH:.*]], {{.*}}tensorMaps = true
     %true = arith.constant true
     %zero = arith.constant 0 : i32
     %signal = ttg.local_alloc : () -> !ttg.memdesc<256x128xf16, #tma_partial, #smem, mutable>

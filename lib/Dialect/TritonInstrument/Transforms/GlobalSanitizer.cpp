@@ -42,7 +42,8 @@ static constexpr const char kDisableSetMaxRegisterAttr[] =
     "tti.disable_setmaxregister";
 static constexpr int64_t kGSanClusterBarrierScratchBytes = 128;
 static constexpr int64_t kGSanMBarrierTableHeaderBytes = 16;
-static constexpr int64_t kGSanMBarrierRecordBytes = 2224;
+static constexpr int64_t kGSanMBarrierRecordBytes = 176;
+static constexpr int64_t kGSanMBarrierProxyBytes = 2048;
 
 static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op,
                                    Value maps) {
@@ -478,13 +479,16 @@ public:
           mapScratch.try_emplace(func, scratch);
         }
         if (instrumentMBarriers) {
-          int64_t scratchBytes = kGSanMBarrierTableHeaderBytes +
-                                 mBarrierCapacity * kGSanMBarrierRecordBytes;
+          int64_t scratchBytes =
+              kGSanMBarrierTableHeaderBytes +
+              mBarrierCapacity *
+                  (kGSanMBarrierRecordBytes +
+                   (instrumentMaps ? kGSanMBarrierProxyBytes : 0));
           Value scratch = createThirdPartyScratchAlloc(
               b, func.getLoc(), gsanStatePtrTy, scratchBytes,
               /*alignment=*/16, /*sharedClusterState=*/true);
-          ExperimentalGSanMBarrierTableInitOp::create(b, func.getLoc(), scratch,
-                                                      mBarrierCapacity);
+          ExperimentalGSanMBarrierTableInitOp::create(
+              b, func.getLoc(), scratch, mBarrierCapacity, instrumentMaps);
           if (ttg::lookupNumCTAs(module) > 1)
             ttng::ClusterBarrierOp::create(b, func.getLoc(), /*relaxed=*/true);
           else

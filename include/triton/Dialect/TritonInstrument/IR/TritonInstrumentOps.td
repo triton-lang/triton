@@ -170,7 +170,8 @@ def TTI_ExperimentalGSanMBarrierTableInitOp
     Initializes GSan's internal mbarrier table, used to sequence memory accesses
     through cluster mbarriers. This operation is internal to GSan instrumentation.
   }];
-  let arguments = (ins TT_Ptr:$scratch, I32Attr:$capacity);
+  let arguments = (ins TT_Ptr:$scratch, I32Attr:$capacity,
+                       DefaultValuedAttr<BoolAttr, "false">:$tensorMaps);
   let assemblyFormat = "$scratch `,` $capacity attr-dict `:` type($scratch)";
 }
 

@@ -341,7 +341,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32
   // CHECK-LABEL: llvm.func @mbarrier_release_acquire
   // CHECK: %[[TABLE_ELECT:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[TABLE_CTA:.*]] = nvg.cluster_id
-  // CHECK: llvm.call @__triton_gsan_mbarrier_table_init(%[[TABLE:.*]], %{{.*}}, %{{.*}}) : (!llvm.ptr, i32, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_mbarrier_table_init(%[[TABLE:.*]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, i32, i32, i32) -> ()
   // CHECK: %[[INIT_ELECT:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[INIT_LEADER_CTA:.*]] = nvg.cluster_id
   // CHECK: %[[INIT_CTA:.*]] = nvg.cluster_id
@@ -370,7 +370,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32
   // CHECK: %[[WAIT_PRED:.*]] = llvm.and %[[WAIT_OP_PRED]], %[[WAIT_IS_LEADER]] : i1
   // CHECK: %[[WAIT_CTA:.*]] = nvg.cluster_id
   // CHECK: %[[WAIT_PRED_I32:.*]] = llvm.zext %[[WAIT_PRED]] : i1 to i32
-  // CHECK: llvm.call @__triton_gsan_mbarrier_wait(%{{.*}}, %{{.*}}, %{{.*}}, %[[WAIT_PRED_I32]], %[[WAIT_CTA]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_mbarrier_wait(%{{.*}}, %{{.*}}, %{{.*}}, %[[WAIT_PRED_I32]], %[[WAIT_CTA]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32, !llvm.ptr, i32) -> ()
   tt.func @mbarrier_release_acquire(%phase: i32, %pred: i1) {
     %barrier = ttg.local_alloc {allocation.offset = 64 : i32} : () -> !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>

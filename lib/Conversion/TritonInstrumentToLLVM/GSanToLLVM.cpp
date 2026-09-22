@@ -96,7 +96,7 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty,
               i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanMBarrierTableInitRuntimeFn) {
-    argTys = {ptr_ty(ctx), i32_ty, i32_ty};
+    argTys = {ptr_ty(ctx), i32_ty, i32_ty, i32_ty};
   } else if (funcName == kGSanMBarrierInitRuntimeFn) {
     argTys = {ptr_ty(ctx), i32_ty, i32_ty, i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanMBarrierArriveRuntimeFn) {
@@ -104,8 +104,8 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
               i32_ty,      i32_ty,      i32_ty,      i32_ty,
               ptr_ty(ctx), i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanMBarrierWaitRuntimeFn) {
-    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty,      i32_ty, i32_ty,
-              ptr_ty(ctx), i32_ty,      i32_ty, ptr_ty(ctx), i32_ty};
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty,      i32_ty,
+              i32_ty,      ptr_ty(ctx), i32_ty, ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanTensorMapAccessRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
@@ -1301,7 +1301,8 @@ struct GSanMBarrierTableInitOpConversion
         rewriter, kGSanMBarrierTableInitRuntimeFn);
     Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
     b.call(runtimeFunc, ValueRange{scratch, b.zext(i32_ty, pred),
-                                   b.i32_val(op.getCapacity())});
+                                   b.i32_val(op.getCapacity()),
+                                   b.i32_val(op.getTensorMaps())});
     rewriter.eraseOp(op);
     return success();
   }
@@ -1436,7 +1437,7 @@ struct GSanMBarrierWaitOpConversion
                adaptor.getMaps()
                    ? castToGenericPointer(rewriter, loc, adaptor.getMaps())
                    : b.inttoptr(ptr_ty(rewriter.getContext()), b.i64_val(0)),
-               tt::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc), ctaRank,
+               tt::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc),
                sourceLoc.file, sourceLoc.line});
     rewriter.eraseOp(op);
     return success();

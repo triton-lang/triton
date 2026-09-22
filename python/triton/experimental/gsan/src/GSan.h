@@ -158,9 +158,8 @@ struct MBarrierPhaseState {
   uint32_t generation;
   uint32_t complete;
   MBarrierPublishedClock clocks[kMaxClusterCTAs];
-  ProxyClock proxyClocks[kMaxClusterCTAs];
 };
-static_assert(sizeof(MBarrierPhaseState) == 1096);
+static_assert(sizeof(MBarrierPhaseState) == 72);
 
 static constexpr uint32_t kEmptyMBarrierKey = 0xffffffffu;
 
@@ -174,11 +173,18 @@ struct alignas(16) MBarrierState {
   uint32_t generation;
   MBarrierPhaseState phases[2];
 };
-static_assert(sizeof(MBarrierState) == 2224);
+static_assert(sizeof(MBarrierState) == 176);
+
+// Appended to each barrier record only in kernels that track tensor maps.
+struct MBarrierProxyState {
+  ProxyClock phases[2][kMaxClusterCTAs];
+};
+static_assert(sizeof(MBarrierProxyState) == 2048);
 
 struct alignas(16) MBarrierTable {
   uint32_t lock;
   uint32_t capacity;
+  uint32_t recordStride;
   MBarrierState states[];
 };
 static_assert(sizeof(MBarrierTable) == 16);

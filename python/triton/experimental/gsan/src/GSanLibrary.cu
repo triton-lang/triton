@@ -662,12 +662,27 @@ GSAN_DEVICE void updateTensorMapState(TensorMapState *state, unsigned region,
   clusterLockRelease(state->lock);
 }
 
-GSAN_DEVICE void initMBarrierTable(void *scratch, uint32_t capacity) {
+GSAN_DEVICE MBarrierState *mbarrierRecord(MBarrierTable *table,
+                                          uint32_t index) {
+  auto *records = reinterpret_cast<char *>(table->states);
+  return reinterpret_cast<MBarrierState *>(records +
+                                           index * table->recordStride);
+}
+
+GSAN_DEVICE MBarrierProxyState *mbarrierProxyState(MBarrierState *barrier) {
+  return reinterpret_cast<MBarrierProxyState *>(barrier + 1);
+}
+
+GSAN_DEVICE void initMBarrierTable(void *scratch, uint32_t capacity,
+                                   bool tensorMaps) {
   auto *table = reinterpret_cast<MBarrierTable *>(scratch);
   table->capacity = capacity;
+  table->recordStride =
+      sizeof(MBarrierState) + (tensorMaps ? sizeof(MBarrierProxyState) : 0);
   for (uint32_t i = 0; i < capacity; ++i) {
-    table->states[i].key = kEmptyMBarrierKey;
-    table->states[i].lock = 0;
+    auto *state = mbarrierRecord(table, i);
+    state->key = kEmptyMBarrierKey;
+    state->lock = 0;
   }
   __scoped_atomic_store_n(&table->lock, 0, __ATOMIC_RELEASE,
                           __MEMORY_SCOPE_DEVICE);
@@ -678,7 +693,7 @@ GSAN_DEVICE MBarrierState *getMBarrierState(MBarrierTable *table, uint32_t key,
   MBarrierState *empty = nullptr;
   clusterLockAcquire(table->lock);
   for (uint32_t i = 0; i < table->capacity; ++i) {
-    auto *state = &table->states[i];
+    auto *state = mbarrierRecord(table, i);
     if (state->key == key) {
       clusterLockRelease(table->lock);
       return state;
@@ -713,8 +728,9 @@ GSAN_DEVICE void initMBarrier(void *scratch, uint32_t offset,
     barrier->phases[bank].complete = bank;
     for (int source = 0; source < kMaxClusterCTAs; ++source) {
       barrier->phases[bank].clocks[source] = {};
-      for (auto &epoch : barrier->phases[bank].proxyClocks[source])
-        epoch = 0;
+      if (table->recordStride > sizeof(MBarrierState))
+        for (auto &epoch : mbarrierProxyState(barrier)->phases[bank][source])
+          epoch = 0;
     }
   }
   clusterLockRelease(barrier->lock);
@@ -754,13 +770,18 @@ GSAN_DEVICE void recordMBarrierArrival(GlobalState *globals, void *scratch,
       phase->complete = 0;
       for (int source = 0; source < kMaxClusterCTAs; ++source) {
         phase->clocks[source] = {};
-        for (auto &epoch : phase->proxyClocks[source])
-          epoch = 0;
+        if (maps)
+          for (auto &epoch :
+               mbarrierProxyState(barrier)->phases[generation & 1][source])
+            epoch = 0;
       }
     }
     if (publishClock) {
       phase->clocks[sourceRank] = published;
-      mergeProxyClock(phase->proxyClocks[sourceRank], proxyClock);
+      if (maps)
+        mergeProxyClock(
+            mbarrierProxyState(barrier)->phases[generation & 1][sourceRank],
+            proxyClock);
     }
     assert_msg(loc, count > 0 && count <= barrier->pendingCount,
                "Invalid GSan mbarrier arrival count");
@@ -777,8 +798,7 @@ GSAN_DEVICE void recordMBarrierArrival(GlobalState *globals, void *scratch,
 GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
                                       uint32_t offset, uint32_t ownerRank,
                                       uint32_t waitPhase, TensorMapState *maps,
-                                      unsigned region, unsigned ctaRank,
-                                      Location loc) {
+                                      unsigned region, Location loc) {
   assert_msg(loc, waitPhase < 2, "Invalid GSan mbarrier wait phase");
   auto *table = reinterpret_cast<MBarrierTable *>(scratch);
   auto *barrier = getMBarrierState(
@@ -794,7 +814,11 @@ GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
              "GSan mbarrier wait observed an incomplete phase");
   for (int source = 0; source < kMaxClusterCTAs; ++source)
     clocks[source] = phase.clocks[source];
-  mergeProxyClock(proxyClock, phase.proxyClocks[ctaRank]);
+  // Native mbarrier waits operate on the waiting CTA's local barrier. Only
+  // that CTA's acquisitions can be inherited by its other execution regions.
+  if (maps)
+    mergeProxyClock(proxyClock,
+                    mbarrierProxyState(barrier)->phases[waitPhase][ownerRank]);
   clusterLockRelease(barrier->lock);
 
   if (maps) {
@@ -856,6 +880,12 @@ GSAN_DEVICE void recordRead(ThreadState *state, ShadowCell *cell,
   }
 }
 
+GSAN_DEVICE void invalidateTensorMap(ShadowCell *cell, Location loc) {
+  assert_msg(loc, cell->tensorMapVersion < 0xfffffffeu,
+             "GSan tensor-map version overflowed");
+  cell->tensorMapVersion = (cell->tensorMapVersion | 1u) + 1;
+}
+
 GSAN_DEVICE void doWrite(ThreadState *state, ShadowCell *cell, Location loc) {
   // Check WAR
   for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {
@@ -868,9 +898,7 @@ GSAN_DEVICE void doWrite(ThreadState *state, ShadowCell *cell, Location loc) {
                             loc, "Write after write race detected");
   // Update write
   cell->writeClock = makeScalarClock(state, AtomicScope::NonAtomic);
-  assert_msg(loc, cell->tensorMapVersion < 0xfffffffeu,
-             "GSan tensor-map version overflowed");
-  cell->tensorMapVersion = (cell->tensorMapVersion | 1u) + 1;
+  invalidateTensorMap(cell, loc);
 }
 
 GSAN_DEVICE void writeRange(ThreadState *state, uintptr_t write_addr,
@@ -1376,10 +1404,7 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
 
     for (uint8_t i = 0; i < event->numCells; ++i) {
       event->cells[i]->writeClock = newWriteClock;
-      auto &version = event->cells[i]->tensorMapVersion;
-      assert_msg(loc, version < 0xfffffffeu,
-                 "GSan tensor-map version overflowed");
-      version = (version | 1u) + 1;
+      invalidateTensorMap(event->cells[i], loc);
     }
 
     if (hasRelease(sem))
@@ -1511,10 +1536,12 @@ __triton_gsan_cluster_barrier_sync(void *globalState, void *scratch, int pred,
       ctaRank, loc);
 }
 
-extern "C" GSAN_DEVICE void
-__triton_gsan_mbarrier_table_init(void *scratch, int pred, unsigned capacity) {
+extern "C" GSAN_DEVICE void __triton_gsan_mbarrier_table_init(void *scratch,
+                                                              int pred,
+                                                              unsigned capacity,
+                                                              int tensorMaps) {
   if (pred)
-    gsan::initMBarrierTable(scratch, capacity);
+    gsan::initMBarrierTable(scratch, capacity, tensorMaps != 0);
 }
 
 extern "C" GSAN_DEVICE void
@@ -1545,15 +1572,15 @@ __triton_gsan_mbarrier_arrive(void *globalState, void *scratch, unsigned offset,
 extern "C" GSAN_DEVICE void
 __triton_gsan_mbarrier_wait(void *globalState, void *scratch, unsigned offset,
                             int pred, unsigned ownerRank, unsigned phase,
-                            void *maps, unsigned region, unsigned ctaRank,
-                            const char *file, unsigned line) {
+                            void *maps, unsigned region, const char *file,
+                            unsigned line) {
   if (!pred)
     return;
   auto loc = gsan::Location{file, line};
   gsan::acquireMBarrierPhase(reinterpret_cast<gsan::GlobalState *>(globalState),
                              scratch, offset, ownerRank, phase,
                              reinterpret_cast<gsan::TensorMapState *>(maps),
-                             region, ctaRank, loc);
+                             region, loc);
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_tensor_map_state(void *scratch,
