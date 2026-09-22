@@ -372,7 +372,9 @@ Value createSingleBufferView(ImplicitLocOpBuilder &b, Value alloc,
   return ttg::MemDescIndexOp::create(b, b.getLoc(), viewType, alloc, index);
 }
 
-void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
+void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc,
+                          const ConSanTargetHooks &hooks,
+                          bool hasAsyncProxyFenceTracking) {
   auto allocType = cast<ttg::MemDescType>(alloc.getType());
   SmallVector<Value> leaves;
   unsigned storeRank = allocType.getRank();
@@ -419,7 +421,16 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
   }
   if (isTensorMemory)
     ttng::TMEMWaitOp::create(b, b.getLoc(), ttng::TMEMWaitKind::STORE);
-  ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
+  // Conservatively finish poisoning across all CTAs before first use, which
+  // may access a peer's allocation.
+  bool multipleCTAs = ttg::lookupNumCTAs(b) > 1;
+  if (multipleCTAs)
+    hooks.createInitClusterBarrier(b);
+  else
+    ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
+  // Order the acquired poison stores, including peers', before async accesses.
+  if (!isTensorMemory && hasAsyncProxyFenceTracking)
+    ttng::FenceAsyncSharedOp::create(b, /*bCluster=*/multipleCTAs);
 }
 
 bool canInitializeAllocation(Value alloc) {
@@ -977,14 +988,9 @@ private:
       ImplicitLocOpBuilder b(op->getLoc(), op);
       b.setInsertionPointAfter(op);
       Value alloc = op->getResult(0);
-      if (canInitializeAllocation(alloc)) {
-        initializeAllocation(b, alloc);
-        auto allocType = cast<ttg::MemDescType>(alloc.getType());
-        bool isShared =
-            isa<ttg::SharedMemorySpaceAttr>(allocType.getMemorySpace());
-        if (isShared && auxData.hasAsyncProxyFenceTracking)
-          ttng::FenceAsyncSharedOp::create(b, /*bCluster=*/false);
-      }
+      if (canInitializeAllocation(alloc))
+        initializeAllocation(b, alloc, hooks,
+                             auxData.hasAsyncProxyFenceTracking);
     }
   }
 
