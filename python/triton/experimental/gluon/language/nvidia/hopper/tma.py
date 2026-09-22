@@ -495,6 +495,8 @@ def load_tensor_descriptor(storage, shape, strides, block_shape, dtype, layout, 
 
     Stream ordering is required in addition to this acquire. Importing a map
     does not transfer ownership of either its storage or its backing tensor.
+    With programmatic dependent launch, call ``gdc_wait()`` before importing
+    a descriptor written by the predecessor.
     """
     storage = _descriptor_storage(storage, _semantic)
     block_shape = ttgl._unwrap_shape(block_shape)

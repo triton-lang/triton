@@ -101,6 +101,11 @@ fence workaround. Once acquired, a descriptor can be reused by that CTA without
 another acquire while its contents remain unchanged. These APIs use GPU scope
 and are intended for producers and consumers on the same device.
 
+With programmatic dependent launch (PDL), call ``gdc_wait()`` before importing
+the producer's descriptor. Launching the dependent kernel early does not by
+itself make the descriptor ready. A wait after an earlier import does not
+refresh that import; acquire again after the dependency is satisfied.
+
 Typing and packed formats
 -------------------------
 
@@ -125,8 +130,18 @@ selecting unrelated allocations with the current ``ragged_tma`` API.
 Sanitizers
 ----------
 
-GSan instruments reads and writes of the complete 128-byte descriptor as well
-as TMA payload accesses. Its FP4 bounds use packed-byte units. ConSan accounts
+GSan checks publication and acquisition of the complete 128-byte descriptor,
+as well as TMA payload accesses. Each consuming CTA must acquire the current
+version. Republishing a map or writing its storage with ordinary instrumented
+stores or atomics invalidates earlier acquisitions. Generic writes also require
+a new proxy release. Acquisition in a different CTA or an earlier kernel does
+not satisfy this check. Within a CTA, the checker propagates acquisitions across
+warp-specialization entry/exit and mbarrier release/acquire handoffs.
+
+The checker retains up to 64 distinct map addresses per CTA per launch and
+reports capacity exhaustion explicitly. It uses GSan's existing stream and PDL
+dependency tracking; general CUDA event tracking and graph capture remain
+unsupported. Its FP4 bounds use packed-byte units. ConSan accounts
 for the producer's shared staging storage and the consumer's shared-memory TMA
 operations. Sanitizers still require their usual instrumented allocation and
 execution setup; an uninstrumented external producer is outside that coverage.

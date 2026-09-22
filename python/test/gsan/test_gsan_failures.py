@@ -919,3 +919,243 @@ def test_published_tensor_map_race(kind):
         marker="hopper.tma.publish_tensor_descriptor" if kind == "publication" else "hopper.tma.async_load",
         error="Write after read race detected" if kind == "publication" else "Read after write race detected",
     )
+
+
+@gluon.jit
+def _tensor_map_load(desc, output):
+    tile = gl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, desc.nbytes_per_cta)
+    hopper.tma.async_load(desc, [0, 0], bar, tile)
+    hopper.mbarrier.wait(bar, 0)
+    hopper.mbarrier.invalidate(bar)
+    regs: gl.constexpr = gl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=desc.layout.cga_layout)
+    rows = gl.arange(0, 16, gl.SliceLayout(1, regs))
+    cols = gl.arange(0, 64, gl.SliceLayout(0, regs))
+    gl.store(output + rows[:, None] * 64 + cols[None, :], tile.load(regs))
+
+
+@gluon.jit
+def _tensor_map_republish(storage, template, first, second, output, FRESH: gl.constexpr, RAW: gl.constexpr):
+    layout: gl.constexpr = gl.NVMMASharedLayout(128, 16, rank=2)
+    hopper.tma.publish_tensor_descriptor(storage, template, first, [16, 64], [64, 1])
+    desc = hopper.tma.load_tensor_descriptor(storage, [16, 64], [64, 1], [16, 64], gl.float16, layout)
+    _tensor_map_load(desc, output)
+    if RAW:
+        # Even a same-value generic write invalidates the proxy publication.
+        word = (storage + 124).cast(gl.pointer_type(gl.int32))
+        if RAW == 2:
+            gl.atomic_xchg(word, gl.load(word), sem="relaxed")
+        else:
+            gl.store(word, gl.load(word))
+    else:
+        hopper.tma.publish_tensor_descriptor(storage, template, second, [16, 64], [64, 1])
+    if FRESH:
+        # An acquire refreshes the map for existing handles too.
+        hopper.tma.load_tensor_descriptor(storage, [16, 64], [64, 1], [16, 64], gl.float16, layout)
+    # The first transfer is complete, so this isolates descriptor acquisition.
+    _tensor_map_load(desc, output + 1024)
+
+
+@gluon.jit
+def _tensor_map_publish(storage, template, data):
+    hopper.tma.publish_tensor_descriptor(storage, template, data, [16, 64], [64, 1])
+    tl.extra.cuda.gdc_launch_dependents()
+
+
+@gluon.jit
+def _tensor_map_copy(source, destination):
+    offsets = gl.arange(0, 128, layout=gl.BlockedLayout([1], [32], [4], [0]))
+    gl.store(destination + offsets, gl.load(source + offsets))
+
+
+@gluon.jit
+def _tensor_map_consume(storage, output, PDL: gl.constexpr = False):
+    if PDL:
+        tl.extra.cuda.gdc_wait()
+    layout: gl.constexpr = gl.NVMMASharedLayout(128, 16, rank=2)
+    desc = hopper.tma.load_tensor_descriptor(storage, [16, 64], [64, 1], [16, 64], gl.float16, layout)
+    _tensor_map_load(desc, output + gl.program_id(0) * 1024)
+
+
+@gluon.jit(noinline=True)
+def _tensor_map_consume_noinline(storage, output):
+    _tensor_map_consume(storage, output)
+
+
+@gluon.jit
+def _tensor_map_pdl_publish(storage, template, data):
+    hopper.tma.publish_tensor_descriptor(storage + 128 * gl.program_id(0), template, data, [16, 64], [64, 1])
+    tl.extra.cuda.gdc_launch_dependents()
+
+
+@gluon.jit
+def _tensor_map_pdl_consume(storage, output, EARLY: gl.constexpr):
+    if not EARLY:
+        tl.extra.cuda.gdc_wait()
+    layout: gl.constexpr = gl.NVMMASharedLayout(128, 16, rank=2)
+    # Neighboring producer CTAs exercise the existing inter-SM launch clocks.
+    pointer = storage + 128 * ((gl.program_id(0) + 1) % gl.num_programs(0))
+    desc = hopper.tma.load_tensor_descriptor(pointer, [16, 64], [64, 1], [16, 64], gl.float16, layout)
+    if EARLY:
+        tl.extra.cuda.gdc_wait()
+    _tensor_map_load(desc, output + 1024 * gl.program_id(0))
+
+
+@gluon.jit
+def _tensor_map_other_cta(storage, output, ready):
+    layout: gl.constexpr = gl.NVMMASharedLayout(128, 16, rank=2)
+    # The first import is removed before instrumentation in the negative case.
+    desc = hopper.tma.load_tensor_descriptor(storage, [16, 64], [64, 1], [16, 64], gl.float16, layout)
+    if gl.program_id(0) == 0:
+        desc = hopper.tma.load_tensor_descriptor(storage, [16, 64], [64, 1], [16, 64], gl.float16, layout)
+        gl.atomic_xchg(ready, 1, sem="release")
+    else:
+        gl.atomic_poll(ready, 1, sem="acquire")
+    _tensor_map_load(desc, output + gl.program_id(0) * 1024)
+
+
+@gluon.jit
+def _tensor_map_idle():
+    pass
+
+
+@gluon.jit
+def _tensor_map_ws_acquire(storage, desc, output, bar, ACQUIRE_HERE: gl.constexpr, EARLY: gl.constexpr):
+    if ACQUIRE_HERE:
+        if EARLY:
+            hopper.mbarrier.arrive(bar, count=1)
+        desc = hopper.tma.load_tensor_descriptor(storage, [16, 64], [64, 1], [16, 64], gl.float16, desc.layout)
+        if not EARLY:
+            hopper.mbarrier.arrive(bar, count=1)
+    else:
+        hopper.mbarrier.wait(bar, 0)
+        _tensor_map_load(desc, output)
+
+
+@gluon.jit
+def _tensor_map_ws(storage, output, HANDOFF: gl.constexpr, EARLY: gl.constexpr = False, CTAS: gl.constexpr = 1,
+                   NOINLINE: gl.constexpr = False):
+    layout: gl.constexpr = gl.NVMMASharedLayout(128, 16, rank=2, cga_layout=[] if CTAS == 1 else [[0, 0]])
+    if HANDOFF:
+        # Each CTA transfers its own acquisition between its execution regions.
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        # This first import is removed in the handoff test. Both regions retain
+        # the same descriptor pointer, and only the publishing region acquires.
+        desc = hopper.tma.load_tensor_descriptor(storage, [16, 64], [64, 1], [16, 64], gl.float16, layout)
+        gl.warp_specialize([
+            (_tensor_map_ws_acquire, (storage, desc, output, bar, True, EARLY)),
+            (_tensor_map_ws_acquire, (storage, desc, output, bar, False, EARLY)),
+        ], [4])
+        hopper.mbarrier.invalidate(bar)
+    elif NOINLINE:
+        gl.warp_specialize([(_tensor_map_idle, ()), (_tensor_map_consume_noinline, (storage, output))], [4])
+    else:
+        gl.warp_specialize([(_tensor_map_idle, ()), (_tensor_map_consume, (storage, output, False))], [4])
+
+
+def _without_tensor_map_acquire(kernel, directory, *, first_only=False):
+    """Remove typed fences before GSan; retain ordinary operations and locations."""
+    source = kernel.asm["ttgir"]
+    lines = source.splitlines()
+    count = 0
+    kept = []
+    for line in lines:
+        if "ttng.tensormap_fenceproxy_acquire " in line and (count == 0 or not first_only):
+            count += 1
+        else:
+            kept.append(line)
+    assert count > 0
+    path = Path(directory) / "missing-tensor-map-acquire.ttgir"
+    path.write_text("\n".join(kept) + "\n")
+    return triton.compile(str(path), options={"instrumentation_mode": "gsan", "num_ctas": kernel.metadata.num_ctas})
+
+
+def _run_tensor_map_protocol(case):
+    import tempfile
+    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
+
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool), tempfile.TemporaryDirectory() as directory:
+        first = torch.full((16, 64), 1, device="cuda", dtype=torch.float16)
+        second = torch.full_like(first, 2)
+        storage = torch.empty(128, device="cuda", dtype=torch.uint8)
+        output = torch.empty((2, 16, 64), device="cuda", dtype=torch.float16)
+        layout = gl.NVMMASharedLayout(128, 16, rank=2)
+        template = GluonTensorDescriptor.from_tensor(first, [16, 64], layout)
+        if case in ("pdl_grid", "pdl_early"):
+            storage = torch.empty(128 * 128, device="cuda", dtype=torch.uint8)
+            output = torch.empty((128, 16, 64), device="cuda", dtype=torch.float16)
+            _tensor_map_pdl_publish[(128, )](storage, template, first)
+            _tensor_map_pdl_consume[(128, )](storage, output, case == "pdl_early", launch_pdl=True)
+            torch.testing.assert_close(output, first.expand_as(output))
+        elif case in ("stale", "fresh", "raw_write", "raw_atomic"):
+            _tensor_map_republish[(1, )](storage, template, first, second, output, case == "fresh",
+                                         2 if case == "raw_atomic" else int(case == "raw_write"))
+            torch.testing.assert_close(output[0], first)
+            torch.testing.assert_close(output[1], second)
+        else:
+            _tensor_map_publish[(1, )](storage, template, first)
+            if case == "raw_copy":
+                destination = torch.empty_like(storage)
+                _tensor_map_copy[(1, )](storage, destination)
+                storage = destination
+            if case == "raw_copy":
+                _tensor_map_consume[(2, )](storage, output)
+            elif case == "other_cta":
+                ready = torch.zeros((), device="cuda", dtype=torch.int32)
+                kernel = _tensor_map_other_cta.warmup(storage, output, ready, grid=(2, ), instrumentation_mode="")
+                kernel = _without_tensor_map_acquire(kernel, directory, first_only=True)
+                kernel[(2, 1, 1)](storage, output, ready)
+            elif case in ("missing", "previous_kernel"):
+                if case == "previous_kernel":
+                    _tensor_map_consume[(2, )](storage, output)
+                kernel = _tensor_map_consume.warmup(storage, output, False, grid=(2, ), instrumentation_mode="")
+                kernel = _without_tensor_map_acquire(kernel, directory)
+                kernel[(2, 1, 1)](storage, output)
+            elif case in ("worker", "worker_noinline", "handoff", "cluster_handoff", "early_handoff"):
+                if case not in ("worker", "worker_noinline"):
+                    ctas = 2 if case == "cluster_handoff" else 1
+                    kernel = _tensor_map_ws.warmup(storage, output, True, case == "early_handoff", ctas, grid=(1, ),
+                                                   num_ctas=ctas, instrumentation_mode="")
+                    kernel = _without_tensor_map_acquire(kernel, directory, first_only=True)
+                    kernel[(1, 1, 1)](storage, output)
+                else:
+                    _tensor_map_ws[(1, )](storage, output, False, NOINLINE=case == "worker_noinline")
+                torch.testing.assert_close(output[0], first)
+            else:
+                for data in (first, second, first):
+                    _tensor_map_publish[(1, )](storage, template, data)
+                    _tensor_map_consume[(2, )](storage, output, case == "pdl", launch_pdl=case == "pdl")
+                    torch.testing.assert_close(output, data.expand_as(output))
+        torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize(
+    "case", ["fresh", "ordered", "pdl", "pdl_grid", "worker", "worker_noinline", "handoff", "cluster_handoff"])
+def test_tensor_map_proxy_protocol_valid(case):
+    result = run_in_process(_run_tensor_map_protocol, (case, ))
+    print(result.driver_stderr_output)
+    assert result.exc is None, (result.exc, result.driver_stderr_output)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("case", [
+    "stale", "raw_write", "raw_atomic", "raw_copy", "missing", "previous_kernel", "early_handoff", "other_cta",
+    "pdl_early"
+])
+def test_tensor_map_proxy_protocol_invalid(case):
+    result = run_in_process(_run_tensor_map_protocol, (case, ))
+    print(result.driver_stderr_output)
+    assert isinstance(result.exc, RuntimeError), (result.exc, result.driver_stderr_output)
+    error = "proxy release after its last write" if case.startswith(
+        "raw_") else "acquiring its current version in this CTA"
+    if case == "pdl_early":
+        error = "Read after write race detected"
+    assert error in result.driver_stderr_output
+    assert "GSanLibrary.cu" not in result.driver_stderr_output
+    assert Path(__file__).name in result.driver_stderr_output

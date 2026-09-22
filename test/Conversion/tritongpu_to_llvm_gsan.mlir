@@ -358,7 +358,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32
   // CHECK: %[[RECIPIENTS:.*]] = llvm.shl %[[ONE]], %[[LEADER_RANK]] : i32
   // CHECK: %[[ARRIVE_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-NEXT: %[[PUBLISH:.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT: llvm.call @__triton_gsan_mbarrier_arrive(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[RECIPIENTS]], %[[ARRIVE_COUNT]], %[[ARRIVE_CTA]], %[[PUBLISH]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_mbarrier_arrive(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[RECIPIENTS]], %[[ARRIVE_COUNT]], %[[ARRIVE_CTA]], %[[PUBLISH]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32, !llvm.ptr, i32) -> ()
   // CHECK: %[[WAIT_ELECT:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[WAIT_WARP_ELECT:.*]] = llvm.and %{{.*}}, %[[WAIT_ELECT]] : i1
   // CHECK: %[[WAIT_OP_PRED:.*]] = llvm.and %[[WAIT_WARP_ELECT]], %{{.*}} : i1
@@ -370,7 +370,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32
   // CHECK: %[[WAIT_PRED:.*]] = llvm.and %[[WAIT_OP_PRED]], %[[WAIT_IS_LEADER]] : i1
   // CHECK: %[[WAIT_CTA:.*]] = nvg.cluster_id
   // CHECK: %[[WAIT_PRED_I32:.*]] = llvm.zext %[[WAIT_PRED]] : i1 to i32
-  // CHECK: llvm.call @__triton_gsan_mbarrier_wait(%{{.*}}, %{{.*}}, %{{.*}}, %[[WAIT_PRED_I32]], %[[WAIT_CTA]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_mbarrier_wait(%{{.*}}, %{{.*}}, %{{.*}}, %[[WAIT_PRED_I32]], %[[WAIT_CTA]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()
   tt.func @mbarrier_release_acquire(%phase: i32, %pred: i1) {
     %barrier = ttg.local_alloc {allocation.offset = 64 : i32} : () -> !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #mbarrier_pair, #smem, mutable>
@@ -400,7 +400,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
   // CHECK: %[[SOURCE_PRED_I32:.*]] = llvm.zext %[[SOURCE_PRED]] : i1 to i32
   // CHECK: %[[SIGNAL_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-NEXT: %[[NO_PUBLISH:.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-NEXT: llvm.call @__triton_gsan_mbarrier_arrive(%{{.*}}, %{{.*}}, %{{.*}}, %[[SOURCE_PRED_I32]], %{{.*}}, %[[SIGNAL_COUNT]], %[[ARRIVE_CTA]], %[[NO_PUBLISH]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_mbarrier_arrive(%{{.*}}, %{{.*}}, %{{.*}}, %[[SOURCE_PRED_I32]], %{{.*}}, %[[SIGNAL_COUNT]], %[[ARRIVE_CTA]], %[[NO_PUBLISH]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32, !llvm.ptr, i32) -> ()
   tt.func @mbarrier_two_cta_source_predicate(%pred: i1) {
     %scratch = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 192 : i32, shared_cluster_state, third_party_allocation, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i8>
     %barrier = ttg.local_alloc {allocation.offset = 64 : i32} : () -> !ttg.memdesc<1xi64, #mbarrier_local, #smem, mutable>
