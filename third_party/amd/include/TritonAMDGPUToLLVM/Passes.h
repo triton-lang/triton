@@ -36,7 +36,7 @@ void runScalarizePackedFOpsPass(llvm::Function &F);
 namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz, bool cuMode);
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertBuiltinFuncToLLVMPass(StringRef gfxArch, bool ftz);
 

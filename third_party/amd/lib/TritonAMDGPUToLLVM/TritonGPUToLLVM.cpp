@@ -71,9 +71,10 @@ public:
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
-  explicit ConvertTritonAMDGPUToLLVM(StringRef gfxArch, bool ftz) {
+  explicit ConvertTritonAMDGPUToLLVM(StringRef gfxArch, bool ftz, bool cuMode) {
     this->gfxArch = gfxArch.str();
     this->ftz = ftz;
+    this->cuMode = cuMode;
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -86,7 +87,8 @@ struct ConvertTritonAMDGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    AMD::TargetInfo targetInfo(this->gfxArch.getValue());
+    AMD::TargetInfo targetInfo(this->gfxArch.getValue(),
+                               this->cuMode.getValue());
     if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::Unknown) {
       mod.emitError("unsupported target: '") << this->gfxArch.getValue() << "'";
       return signalPassFailure();
@@ -270,8 +272,8 @@ private:
 namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz) {
-  return std::make_unique<ConvertTritonAMDGPUToLLVM>(gfxArch, ftz);
+createConvertTritonAMDGPUToLLVMPass(StringRef gfxArch, bool ftz, bool cuMode) {
+  return std::make_unique<ConvertTritonAMDGPUToLLVM>(gfxArch, ftz, cuMode);
 }
 
 } // namespace mlir::triton

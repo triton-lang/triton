@@ -154,3 +154,33 @@ def test_cu_mode_autotune_configs_compile_and_launch():
     dst = torch.empty_like(src)
     _autotuned_double[(1, )](src, dst, 64)
     torch.testing.assert_close(dst, src * 2)
+
+
+@triton.jit
+def _cross_warp_sum(src, dst, BLOCK: tl.constexpr):
+    offs = tl.arange(0, BLOCK)
+    total = tl.sum(tl.load(src + offs))
+    tl.store(dst + offs, tl.zeros([BLOCK], tl.float32) + total)
+
+
+@pytest.mark.parametrize("cu_mode", [False, True])
+def test_cross_warp_reduction_is_correct(cu_mode):
+    """Exercise the barrier lowering this change affects.
+
+    A reduction wider than one wave exchanges partial results through LDS and
+    synchronises with ttg.barrier, which is the op whose lowering cu_mode now
+    switches on RDNA. Compiling is not enough here: the point is that waves
+    still observe each other's data under the tagged lowering.
+    """
+    BLOCK = 1024
+    src = torch.rand(BLOCK, device="cuda", dtype=torch.float32)
+    dst = torch.empty_like(src)
+
+    handle = _cross_warp_sum[(1, )](src, dst, BLOCK=BLOCK, num_warps=8, cu_mode=cu_mode)
+    asm = handle.asm["amdgcn"]
+
+    # Guard the premise: without a barrier the test says nothing about waves
+    # observing each other.
+    assert "s_barrier" in asm
+    assert _wgp_mode(asm) == (CU if cu_mode else WGP)
+    torch.testing.assert_close(dst, src.sum().expand(BLOCK), rtol=1e-4, atol=1e-4)

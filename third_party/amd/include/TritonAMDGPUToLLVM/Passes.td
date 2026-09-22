@@ -34,7 +34,7 @@ def AllocateAMDGPUSharedMemory : Pass<"allocate-amdgpu-shared-memory", "mlir::Mo
 
 def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert TritonGPU to LLVM";
-    let constructor = "mlir::triton::createConvertTritonAMDGPUToLLVMPass(\"\", /*ftz=*/true)";
+    let constructor = "mlir::triton::createConvertTritonAMDGPUToLLVMPass(\"\", /*ftz=*/true, /*cuMode=*/false)";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
@@ -50,6 +50,9 @@ def ConvertTritonAMDGPUToLLVM : Pass<"convert-triton-amdgpu-to-llvm", "mlir::Mod
                "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
         Option<"ftz", "ftz", "bool", /*default*/"true",
                "flush denorms for math functions">,
+        Option<"cuMode", "cu-mode", "bool", /*default*/"false",
+               "the kernel runs in CU (non-WGP) wavefront execution mode, so a "
+               "work-group shares a single vector L0 cache">,
     ];
 }
 
