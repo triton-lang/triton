@@ -420,12 +420,12 @@ void createTMABarrierAndWait(
       sizeInBytes +=
           loadSize * getIntOrFloatOrPtrBitWidth(tensorTy.getElementType()) / 8;
       needsClusterBarrier |=
-          twoCTAs && (mustLoadToRegisters(op) ||
-                      hasNonMMAUsers(*op->getUsers().begin()));
+          twoCTAs &&
+          (mustLoadToRegisters(op) || hasNonMMAUsers(*op->getUsers().begin()));
     }
 
-    Value barrierAlloc = triton::createBarrierAlloc(
-        forOp, numBuffers, /*arriveCount=*/1, twoCTAs);
+    Value barrierAlloc = triton::createBarrierAlloc(forOp, numBuffers,
+                                                    /*arriveCount=*/1, twoCTAs);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
@@ -1084,7 +1084,8 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   nextIndex = sinkValueRedefinition(rewriter, index, nextIndex, readBlock);
   auto yield = forOp.getBody()->getTerminator();
   yield->setOperand(firstArg, nextIndex);
-  nextPhase = sinkValueRedefinition(rewriter, phase, nextPhase, load->getBlock());
+  nextPhase =
+      sinkValueRedefinition(rewriter, phase, nextPhase, load->getBlock());
   yield->setOperand(firstArg + 1, nextPhase);
   Value didRead =
       sinkValueRedefinition(rewriter, vFalse, vTrue, load->getBlock());
