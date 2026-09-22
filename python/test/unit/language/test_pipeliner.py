@@ -616,3 +616,67 @@ def test_conditional_store_pipeline(num_stages, device):
     # Expected output: [1, 2, 3, 4, ..., N]
     expected = torch.arange(1, N + 1, dtype=torch.int32, device=device)
     assert torch.equal(output, expected)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires Hopper or newer")
+@pytest.mark.parametrize("num_stages", [1, 2, 3])
+@pytest.mark.parametrize("wait_in_loop", [False, True])
+def test_pipeline_gdc_wait(num_stages, wait_in_loop, device):
+
+    @triton.jit
+    def producer(X, SIZE: tl.constexpr):
+        tl.extra.cuda.gdc_launch_dependents()
+        # Delay the store to expose loads that cross the consumer's wait.
+        value = tl.inline_asm_elementwise(
+            "nanosleep.u32 1000000; mov.u32 $0, 1;",
+            constraints="=r",
+            args=[],
+            dtype=tl.int32,
+            is_pure=False,
+            pack=1,
+        )
+        tl.store(X + tl.arange(0, SIZE), value.to(tl.float32))
+
+    @triton.jit
+    def consumer(X, W, Y, K, WAIT_IN_LOOP: tl.constexpr):
+        m = tl.arange(0, 64)
+        n = tl.arange(0, 128)
+        k = tl.arange(0, 32)
+        xp = X + m[:, None] * K + k[None, :]
+        wp = W + k[:, None] * 128 + n[None, :]
+        acc = tl.zeros((64, 128), tl.float32)
+        if not WAIT_IN_LOOP:
+            tl.extra.cuda.gdc_wait()
+        for _ in range(tl.cdiv(K, 32)):
+            w = tl.load(wp)
+            if WAIT_IN_LOOP:
+                tl.extra.cuda.gdc_wait()
+            x = tl.load(xp).to(tl.bfloat16)
+            acc += tl.dot(x, w)
+            xp += 32
+            wp += 32 * 128
+        tl.store(Y + m[:, None] * 128 + n[None, :], acc)
+
+    m, n, k = 64, 128, 64
+    x = torch.zeros((m, k), dtype=torch.float32, device=device)
+    w = torch.ones((k, n), dtype=torch.bfloat16, device=device)
+    y = torch.empty((m, n), dtype=torch.float32, device=device)
+
+    def launch():
+        x.zero_()
+        producer[(1, )](x, m * k, num_warps=4, launch_pdl=False)
+        return consumer[(1, )](x, w, y, k, wait_in_loop, num_warps=4, num_stages=num_stages, launch_pdl=True)
+
+    compiled = launch()
+    torch.cuda.synchronize()
+    # Waiting before the loop must still allow its loads to be pipelined.
+    if not wait_in_loop and num_stages > 1:
+        assert "async_copy_global_to_local" in compiled.asm["ttgir"]
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        launch()
+    expected = torch.full_like(y, k)
+    for _ in range(20):
+        graph.replay()
+        torch.testing.assert_close(y, expected, rtol=0, atol=0)
