@@ -1,6 +1,6 @@
 """Linear asynchronous bulk copies (without a tensor map)."""
 
-from ..._core import builtin, uint32, uint64, _unwrap_if_constexpr
+from ..._core import builtin, uint64, _unwrap_if_constexpr
 from ... import _core as ttgl
 from ..._semantic import _check
 
@@ -25,7 +25,7 @@ def async_load(smem, pointer, num_bytes, barrier, pred=True, multicast=False, _s
     the same range. With ``multicast=True``, one
     representative CTA issues each copy to its replicas and their barriers.
 
-    ``num_bytes`` is a positive scalar integer multiple of 16, no larger than
+    ``num_bytes`` is a positive compile-time multiple of 16, no larger than
     ``smem.nbytes_per_cta``. Only that prefix is copied. Compiler dependencies
     and ConSan conservatively cover the entire destination view, so use a
     sliced view when independently reusing other parts of an allocation.
@@ -49,15 +49,13 @@ def async_load(smem, pointer, num_bytes, barrier, pred=True, multicast=False, _s
     Args:
         smem: Destination shared-memory descriptor.
         pointer: Scalar global-memory pointer.
-        num_bytes: Scalar integer byte count, possibly determined at runtime.
+        num_bytes: Compile-time integer byte count.
         barrier: Completion mbarrier.
         pred: Scalar predicate. Defaults to True.
         multicast: Multicast to replicated CTAs. Defaults to False.
     """
-    num_bytes = _semantic.to_tensor(num_bytes)
-    _check(num_bytes.type.is_int() and num_bytes.type.primitive_bitwidth <= 32,
-           lambda: "num_bytes must be a scalar integer of at most 32 bits")
-    num_bytes = _semantic.cast(num_bytes, uint32)
+    num_bytes = _unwrap_if_constexpr(num_bytes)
+    _check(isinstance(num_bytes, int), lambda: "num_bytes must be a compile-time integer")
     pointer = _semantic.to_tensor(pointer)
     pred = _semantic.to_tensor(pred)
     _check(pointer.type.is_ptr(), lambda: "pointer must be a scalar global-memory pointer")
@@ -68,13 +66,5 @@ def async_load(smem, pointer, num_bytes, barrier, pred=True, multicast=False, _s
         disabled = pred.__invert__(_semantic=_semantic)
         ttgl.device_assert(disabled.__or__(aligned, _semantic=_semantic),
                            "bulk.async_load source must be 16-byte aligned", _semantic=_semantic)
-        positive = num_bytes.__gt__(0, _semantic=_semantic)
-        multiple = num_bytes.__mod__(16, _semantic=_semantic).__eq__(0, _semantic=_semantic)
-        in_bounds = num_bytes.__le__(smem.nbytes_per_cta, _semantic=_semantic)
-        valid_size = positive.__and__(multiple, _semantic=_semantic).__and__(in_bounds, _semantic=_semantic)
-        ttgl.device_assert(disabled.__or__(valid_size, _semantic=_semantic),
-                           "bulk.async_load byte count must be a positive multiple of 16 within the destination view",
-                           _semantic=_semantic)
-    _semantic.builder.create_async_bulk_copy_global_to_local(smem.handle, pointer.handle,
-                                                             num_bytes.handle, barrier.handle, pred.handle,
-                                                             _unwrap_if_constexpr(multicast))
+    _semantic.builder.create_async_bulk_copy_global_to_local(smem.handle, pointer.handle, num_bytes, barrier.handle,
+                                                             pred.handle, _unwrap_if_constexpr(multicast))

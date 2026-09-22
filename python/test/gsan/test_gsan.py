@@ -2145,8 +2145,8 @@ def test_explicit_graph_storage_survives_executable_close(with_gsan):
 
 
 @gluon.jit
-def _bulk_shadow_kernel(src, out, take_copy, WORDS, OFFSET: gl.constexpr, CGA: gl.constexpr, BLOCK: gl.constexpr,
-                        MULTICAST: gl.constexpr):
+def _bulk_shadow_kernel(src, out, take_copy, WORDS: gl.constexpr, OFFSET: gl.constexpr, CGA: gl.constexpr,
+                        BLOCK: gl.constexpr, MULTICAST: gl.constexpr):
     layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=CGA)
     shared: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=CGA)
     smem = gl.allocate_shared_memory(gl.int32, [BLOCK], shared, gl.full((BLOCK, ), -1, gl.int32, layout))

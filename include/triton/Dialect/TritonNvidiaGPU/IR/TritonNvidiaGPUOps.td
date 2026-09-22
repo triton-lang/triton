@@ -342,16 +342,15 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
   let hasCanonicalizeMethod = 1;
   let arguments = (ins
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$alloc,
-    I32:$size,
+    I32Attr:$size,
     I1:$pred,
     OptionalAttr<I32Attr>:$fromCTA,
     UnitAttr:$per_warp
   );
 
   let builders = [
-    OpBuilder<(ins "Value":$alloc, "Value":$size, "Value":$pred), [{
-      build($_builder, $_state, alloc, size, pred,
-            /*fromCTA=*/IntegerAttr(),
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$size, "Value":$pred), [{
+      build($_builder, $_state, alloc, size, pred, /*fromCTA=*/IntegerAttr(),
             /*per_warp=*/false);
     }]>
   ];
@@ -528,7 +527,7 @@ def TTNG_AsyncBulkCopyGlobalToLocalOp : TTNG_Op<"async_bulk_copy_global_to_local
   let description = [{
     Gluon-only operation. Copies numBytes bytes per CTA, guarded by the scalar
     predicate, using cp.async.bulk with mbarrier completion. Source and
-    destination addresses must be 16-byte aligned. The runtime byte count is a
+    destination addresses must be 16-byte aligned. The compile-time byte count is a
     positive multiple of 16 within the contiguous physical destination view.
     Source tiles are packed in increasing CTA-id order, omitting broadcast
     bits, with a stride of the full per-CTA destination capacity. This is a
@@ -542,7 +541,7 @@ def TTNG_AsyncBulkCopyGlobalToLocalOp : TTNG_Op<"async_bulk_copy_global_to_local
   let arguments = (ins
     Arg<TTG_MemDescType, "", AsyncSharedWrite>:$dst,
     Arg<TT_Ptr, "", [MemRead<GlobalMemory>]>:$src,
-    I32:$numBytes,
+    I32Attr:$numBytes,
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
     I1:$pred,
     UnitAttr:$multicast

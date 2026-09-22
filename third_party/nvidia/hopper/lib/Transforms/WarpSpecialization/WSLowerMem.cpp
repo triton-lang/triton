@@ -204,10 +204,8 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
   auto prodBarrier =
       getBarrierForPipelineStage(builder, barrierAlloc, bufferIdx);
   auto pred = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 1, 1);
-  auto bytes = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(
-      loc, sizeInBytes, 32);
-  builder.createWithAsyncTaskIds<ttng::BarrierExpectOp>(loc, prodBarrier, bytes,
-                                                        pred);
+  builder.createWithAsyncTaskIds<ttng::BarrierExpectOp>(loc, prodBarrier,
+                                                        sizeInBytes, pred);
 
   // Convert all the producers to async_tma_copy_global_to_local
   Operation *copy = nullptr;
