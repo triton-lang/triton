@@ -263,7 +263,6 @@ jobs:
     if: github.repository == 'triton-lang/triton'
     runs-on: amd-gfx942
     timeout-minutes: 60
-    continue-on-error: true
     env:
       TRITON_BUILD_WITH_CCACHE: "true"
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
@@ -362,7 +361,6 @@ jobs:
     if: github.repository == 'triton-lang/triton'
     runs-on: amd-gfx942
     timeout-minutes: 60
-    continue-on-error: true
     env:
       TRITON_BUILD_WITH_CCACHE: "true"
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
