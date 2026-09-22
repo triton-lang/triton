@@ -11,40 +11,36 @@ __all__ = ["async_load"]
 def async_load(smem, pointer, num_bytes, barrier, pred=True, multicast=False, _semantic=None):
     """Copy contiguous global-memory ranges to shared memory asynchronously.
 
-    Requires NVIDIA compute capability 9.0 or newer and PTX 8.6 or newer.
-    ``pointer`` and ``pred`` must be scalars. Each CTA copies a contiguous
-    physical shared-memory range; both addresses must be 16-byte aligned.
-    Layouts are interpreted through their canonical linear mapping. The copy
-    preserves physical byte order: it does not swizzle or gather source data.
-    Views with holes or intervening padding are not supported.
+    Requires compute capability 9.0+ and PTX 8.6+. ``pointer`` and ``pred``
+    are scalars; both copy addresses must be 16-byte aligned. Each CTA copies
+    a contiguous physical range, preserving byte order without swizzling or
+    gathering. Layouts use their canonical linear mapping; views with holes
+    or intervening padding are unsupported.
 
-    Source ranges use full-capacity strides in increasing CTA-id order, with
-    replicated CTA bits omitted. Tile ``i`` starts at byte offset
+    ``num_bytes`` is a positive compile-time multiple of 16, at most
+    ``smem.nbytes_per_cta``. Source tile ``i`` starts at byte offset
     ``i * smem.nbytes_per_cta`` from ``pointer``, even for partial copies.
-    Only ``num_bytes`` bytes are read from each range. Replicated CTAs read
-    the same range. With ``multicast=True``, one
-    representative CTA issues each copy to its replicas and their barriers.
+    Tiles follow increasing CTA-id order with replicated bits omitted:
+    replicas read the same range, or one representative multicasts to them
+    and their barriers when ``multicast=True``.
 
-    ``num_bytes`` is a positive compile-time multiple of 16, no larger than
-    ``smem.nbytes_per_cta``. Only that prefix is copied. Compiler dependencies
-    and ConSan conservatively cover the entire destination view, so use a
-    sliced view when independently reusing other parts of an allocation.
+    Only the ``num_bytes`` prefix is copied, but compiler dependencies and
+    ConSan cover the entire destination view. Use sliced views to reuse
+    other parts of the allocation independently.
 
-    ``barrier`` must contain a separate completion barrier in each CTA,
-    as returned by ``mbarrier.allocate_mbarrier()``. Shared logical barriers
-    spanning multiple CTAs are not supported by this instruction.
-    Initialize ``barrier`` and call ``mbarrier.expect(barrier, num_bytes)``
-    before issuing the copy. Wait on its current phase before reading or
-    reusing the destination, modifying the source, or invalidating the barrier.
-    When predicating the copy, predicate the expectation consistently. The
-    wait makes the copied bytes visible to ordinary shared-memory accesses.
-    Before a multicast write, synchronize the cluster after prior accesses to
-    its destination, including reads by other CTAs in a previous iteration.
-    A per-CTA completion wait does not join the other CTAs' readers.
-    Global writes made through the generic proxy must also be made visible to
-    the asynchronous proxy before the copy (see PTX ``fence.proxy.async``).
-    GSan records the source read at issue time; it does not currently detect
-    all source modifications that race with the pending asynchronous copy.
+    Use separate completion barriers in each CTA, as returned by
+    ``mbarrier.allocate_mbarrier()``; shared logical barriers are unsupported.
+    Initialize the barrier, then call ``mbarrier.expect(barrier, num_bytes)``
+    with the same predicate as the copy. Wait on its current phase before
+    reading or reusing the destination, modifying the source, or invalidating
+    the barrier. This wait makes the copy visible to ordinary shared accesses.
+    Before a multicast write, join the cluster after prior destination
+    accesses, including other CTAs' reads from a previous iteration;
+    per-CTA completion waits do not join those readers.
+
+    Make generic-proxy global writes visible to the asynchronous proxy
+    before copying (see PTX ``fence.proxy.async``). GSan records source reads
+    at issue time and may miss modifications racing with the pending copy.
 
     Args:
         smem: Destination shared-memory descriptor.
