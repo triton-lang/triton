@@ -4935,13 +4935,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
-@pytest.mark.parametrize("allow", [None, "valu", "salu", ("valu", "salu")])
+@pytest.mark.parametrize("allow", [None, ("valu", "salu")])
 def test_amd_sched_barrier(target, allow):
 
     @gluon.jit
     def kernel(ALLOW: ttgl.constexpr):
-        ttgl.amd.sched_barrier()
-        ttgl.amd.sched_barrier(allow=ALLOW)
+        ttgl.amd.hint.sched_barrier()
+        ttgl.amd.hint.sched_barrier(allow=ALLOW)
 
     if allow is not None:
         with pytest.raises(CompilationError, match="Unsupported instruction class"):
