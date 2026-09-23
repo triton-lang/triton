@@ -782,7 +782,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
   const auto &instrMap = isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
-  if (instrMap.find(mmaType) == instrMap.end())
+  if (!instrMap.contains(mmaType))
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
 
@@ -816,7 +816,7 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   TensorCoreType mmaType =
       getMmaTypeDotScaled(op, aTensorTy, bTensorTy, dTensorTy);
-  if (mmaInstrPtxScaled.find(mmaType) == mmaInstrPtxScaled.end())
+  if (!mmaInstrPtxScaled.contains(mmaType))
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
 

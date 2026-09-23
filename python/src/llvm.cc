@@ -1022,7 +1022,7 @@ void init_triton_llvm(py::module_ &m) {
       // Mark linked-in functions as internal because backends use external
       // linkage as a signifier of kernel functions.
       for (llvm::Function &fn : dstMod->functions()) {
-        if (externalFns.count(fn.getName().str())) {
+        if (externalFns.contains(fn.getName().str())) {
           fn.setLinkage(llvm::GlobalValue::InternalLinkage);
         }
       }

@@ -127,7 +127,7 @@ tt::CoarseSchedule::splitClusterBefore(Operation *op, scf::ForOp forOp) {
 
 // Check if op a will show up before op b in the final unrolled code.
 bool tt::CoarseSchedule::isOpBefore(Operation *a, Operation *b) const {
-  assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
+  assert(opToStageAndCluster.contains(a) && opToStageAndCluster.contains(b) &&
          "Operations must be in the schedule");
   auto [aStage, aCluster] = opToStageAndCluster.lookup(a);
   auto [bStage, bCluster] = opToStageAndCluster.lookup(b);
@@ -142,14 +142,14 @@ bool tt::CoarseSchedule::isOpBefore(Operation *a, Operation *b) const {
 
 bool tt::CoarseSchedule::isOpInEarlierCluster(Operation *a,
                                               Operation *b) const {
-  assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
+  assert(opToStageAndCluster.contains(a) && opToStageAndCluster.contains(b) &&
          "Operations must be in the schedule");
   return clusters.isBefore(opToStageAndCluster.lookup(a).second,
                            opToStageAndCluster.lookup(b).second);
 }
 
 bool tt::CoarseSchedule::isOpInSameCluster(Operation *a, Operation *b) const {
-  assert(opToStageAndCluster.count(a) && opToStageAndCluster.count(b) &&
+  assert(opToStageAndCluster.contains(a) && opToStageAndCluster.contains(b) &&
          "Operations must be in the schedule");
   return opToStageAndCluster.lookup(a).second ==
          opToStageAndCluster.lookup(b).second;
