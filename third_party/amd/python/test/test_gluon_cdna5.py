@@ -146,7 +146,6 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
     def scaled_upcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
                                  SCALE_FACTOR: ttgl.constexpr, COMPACT_SCALE: ttgl.constexpr):
         packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0])
-        compact_layout: ttgl.constexpr = ttgl.BlockedLayout([1, BLOCK_K // SCALE_FACTOR], [8, 4], [4, 1], [1, 0])
         unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
 
         offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, packed_layout))
@@ -155,7 +154,8 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
         x = ttgl.load(x_ptr + x_offsets)
 
         if COMPACT_SCALE:
-            scale_layout: ttgl.constexpr = compact_layout
+            scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_scaled_upcast_fp4_scale_layout(
+                x, SCALE_FACTOR, ttgl.bfloat16, axis=1)
             scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
         else:
             scale_layout: ttgl.constexpr = unpacked_layout
@@ -1161,9 +1161,9 @@ def get_test_mxfp_variants():
     # Add non-square test cases
     [(32, 64, 128), (64, 32, 128)])
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
 @pytest.mark.parametrize("scale_factor", [16, 32])
-@pytest.mark.parametrize("with_a_scale, with_b_scale", itertools.product([True, False], repeat=2))
+@pytest.mark.parametrize("with_a_scale, with_b_scale", list(itertools.product([True, False], repeat=2)))
 def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor,
                          with_a_scale, with_b_scale):
     instr_m, instr_n = wmma_shape
@@ -1271,7 +1271,7 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
 @pytest.mark.parametrize("scale_factor", [16, 32])
 @pytest.mark.parametrize("ctas_per_cga", [(2, 1), (1, 2), (2, 2), (4, 1), (2, 4)])
 def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor, ctas_per_cga):
@@ -1362,7 +1362,7 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
 @pytest.mark.parametrize("scale_factor", [16, 32])
 def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor):
 
@@ -1782,13 +1782,13 @@ def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM
     if ASYNC_LOAD_TYPE in {"DEVICE_TDM", "HOST_TDM"}:
         pattern = {"tensor_load_to_lds", "s_wait_tensorcnt 0x0"}
     else:
-        ASYNC_LOAD_TYPE == "ASYNC_COPY"
+        assert ASYNC_LOAD_TYPE == "ASYNC_COPY"
         pattern = {"global_load_async_to_lds", "s_wait_asynccnt 0x0"}
     for p in pattern:
         assert re.search(p, amdgcn), f"Can't find {p} in amdgcn"
 
 
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(2, 2), (32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
 @pytest.mark.parametrize("NUM_BUFFERS", [2])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "DEVICE_TDM", "HOST_TDM", "DEVICE_TDM_PARTITIONED"])
@@ -4369,6 +4369,7 @@ def tdm_gather_multi_cta_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_
     idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
+    inp_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET], clamp_bounds=True)
     ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem)
     ttgl.amd.cdna5.tdm.async_wait(0)
 

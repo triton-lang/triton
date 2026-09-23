@@ -142,6 +142,34 @@ TEST(Analysis, BufferRegionViewPreservesSubviewProvenance) {
   EXPECT_EQ(physicalRegions.size(), 1);
 }
 
+TEST(Analysis, BufferRegionFootprintUnknownIsNotEmpty) {
+  MLIRContext context;
+  context.getOrLoadDialect<triton::gpu::TritonGPUDialect>();
+  Attribute space = triton::gpu::SharedMemorySpaceAttr::get(&context);
+  triton::BufferRegionView view{
+      {0, 8, {{0, triton::AddressSet::fromRange(0, 8)}}}};
+  view.allocationFrame = 1;
+  triton::BufferRegionFootprint known{space, triton::RegionInfo({view})};
+  triton::BufferRegionFootprint uninitialized{space, {}};
+  triton::BufferRegionFootprint unknown{
+      space, triton::RegionInfo::getPessimisticValueState()};
+  triton::BufferRegionFootprint noCandidates{
+      space, triton::RegionInfo(triton::RegionInfo::ViewList{})};
+
+  const triton::BufferRegionFootprint *incomplete[] = {nullptr, &uninitialized,
+                                                       &unknown, &noCandidates};
+  for (const auto *footprint : incomplete) {
+    EXPECT_TRUE(triton::mayOverlap(footprint, &known));
+    EXPECT_TRUE(triton::mayOverlap(&known, footprint));
+  }
+
+  view.region = {};
+  triton::BufferRegionFootprint empty{space, triton::RegionInfo({view})};
+  EXPECT_FALSE(triton::mayOverlap(&empty, &known));
+  EXPECT_FALSE(triton::mayOverlap(&known, &empty));
+  EXPECT_TRUE(triton::mayOverlap(&empty, &unknown));
+}
+
 namespace {
 
 uint64_t toBits(const llvm::SmallBitVector &mask) {

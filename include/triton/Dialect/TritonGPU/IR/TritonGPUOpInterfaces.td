@@ -50,6 +50,10 @@ def MBarrierOpInterface : OpInterface<"MBarrierOpInterface"> {
     backend-agnostic barrier identification without direct dialect dependencies.
   }];
 
+  let verify = [{
+    return ::mlir::triton::gpu::verifyMBarrierOpInterface($_op);
+  }];
+
   let cppNamespace = "::mlir::triton::gpu";
 
   let methods = [

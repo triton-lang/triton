@@ -69,14 +69,20 @@ LogicalResult checkPk8ScaleType(Operation *op, RankedTensorType scaleTy) {
          << elemTy;
 }
 
-// Materialize an E8M0 scale register as the f32 value 2^scale.
+// Software multiplication needs the numeric scale, unlike hardware conversions
+// that read only its exponent field.
 Value scaleToF32(RewriterBase &rewriter, Location loc, Value scale,
                  bool preShifted) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (preShifted)
-    return b.bitcast(
+  Value value;
+  if (preShifted) {
+    value = b.bitcast(
         b.shl(b.zext(i32_ty, b.bitcast(scale, i16_ty)), b.i32_val(16)), f32_ty);
-  return b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+  } else {
+    Value bits = b.shl(b.zext(i32_ty, scale), b.i32_val(23));
+    value = b.bitcast(b.umax(bits, b.i32_val(0x00400000)), f32_ty);
+  }
+  return b.fma(value, b.f32_val(0.0), value);
 }
 
 // Returns true if the scale layout gives lane `j` and lane `j^16` the same

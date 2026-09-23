@@ -293,6 +293,8 @@ struct TensormapCreateOpConversion
                                    op.getSwizzleMode());
     tensormap_replace_fill_mode(loc, ctx, rewriter, smemBase, op.getFillMode());
     rewriter.setInsertionPointToStart(continuationBlock);
+    // Make thread zero's field updates visible to the collective copy.
+    LLVM::NVIDIA::createSyncWarp(loc, rewriter);
     tensormap_cp_fenceproxy(loc, ctx, rewriter, adaptor.getDescPtr(), smemBase);
     rewriter.eraseOp(op);
     return success();

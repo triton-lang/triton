@@ -102,6 +102,19 @@ struct LocalLoadOpPattern : public OpConversionPattern<LocalLoadOp> {
   }
 };
 
+struct ConvertLayoutOpPattern : public OpConversionPattern<ConvertLayoutOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = getTypeConverter()->convertType(op.getType());
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, resultType,
+                                                 adaptor.getSrc());
+    return success();
+  }
+};
+
 class RelayoutTritonGPU
     : public triton::impl::RelayoutTritonGPUBase<RelayoutTritonGPU> {
 public:
@@ -142,6 +155,9 @@ public:
     target.addDynamicallyLegalOp<LocalLoadOp>([&](Operation *op) {
       return TritonGPUConversionTarget::isDynamicallyLegal(op, typeConverter);
     });
+    target.addDynamicallyLegalOp<ConvertLayoutOp>([&](Operation *op) {
+      return TritonGPUConversionTarget::isDynamicallyLegal(op, typeConverter);
+    });
     // rewrite patterns
     RewritePatternSet patterns(context);
     // add rules
@@ -149,6 +165,7 @@ public:
         // clang-format off
         GatherScatterOpPattern<ttng::AsyncTMAGatherOp>,
         GatherScatterOpPattern<ttng::AsyncTMAScatterOp>,
+        ConvertLayoutOpPattern,
         LocalLoadOpPattern,
         TMEMLoadOpPattern,
         TMEMStoreOpPattern,

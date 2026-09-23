@@ -8,7 +8,7 @@ from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
 from .._ops import _load_shared_fp4_repacked, _mma_scaled, _scaled_upcast, scaled_downcast
-from ..cdna3 import _buffer_atomic_rmw_impl, _convert_e8m0_scale_to_bf16
+from ..cdna3 import _buffer_atomic_rmw_impl, _check_cd_regclass, _set_cd_regclass
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
@@ -26,7 +26,7 @@ __all__ = [
 
 
 @builtin
-def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None):
+def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, cd_regclass=None, _semantic=None):
     """
     AMD Scaled MFMA operation.
 
@@ -49,6 +49,9 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
         b_format (str): Format of operand B. Available formats: ``e2m1``,
             ``e4m3``, ``e5m2``.
         acc (tensor): Accumulator tensor.
+        cd_regclass (str, optional): Experimental. Register class for the accumulator input (C)
+            and result (D) of the scaled MFMA instructions, as for ``mfma``: ``"a"`` for AGPRs or
+            ``"v"`` for VGPRs. ``None`` (default) leaves the choice to the compiler.
     """
     layout = acc.type.layout
     assert isinstance(layout, AMDMFMALayout), "Expected layout to be an instance of AMDMFMALayout"
@@ -64,7 +67,10 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert a_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format}"
     assert b_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format}"
 
-    return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)
+    cd_regclass = _check_cd_regclass(cd_regclass, acc)
+    ret = _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)
+    _set_cd_regclass(ret.handle, cd_regclass, _semantic)
+    return ret
 
 
 @builtin
@@ -76,14 +82,12 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
     The ``scale`` tensor must use raw E8M0 payload in ``int8`` or ``uint8``, and must
     already have the expanded output shape and scaled-upcast result layout.
     For fp4 inputs, that is the canonical unpacked layout implied by ``src``
-    and ``axis``. ``elem_type`` must be ``fp16`` or ``bf16``. CDNA4 converts
-    those bytes to the internal ``bf16`` scale form expected by the AMD op.
+    and ``axis``. ``elem_type`` must be ``fp16`` or ``bf16``.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _unwrap_if_constexpr(elem_type)
     assert scale.dtype in (int8, uint8), \
         f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
-    scale = _convert_e8m0_scale_to_bf16(scale, _semantic=_semantic)
     return _scaled_upcast(src, scale, elem_type, axis, _semantic)
 
 

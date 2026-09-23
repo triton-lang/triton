@@ -18,6 +18,26 @@ from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
 
 
+@pytest.mark.parametrize("backend, options_type, arch", [
+    ("amd", "HIPOptions", "gfx950"),
+    ("nvidia", "CUDAOptions", "sm90"),
+])
+def test_extern_libs_hash_contents(backend, options_type, arch, tmp_path):
+    compiler = importlib.import_module(f"triton.backends.{backend}.compiler")
+    library = tmp_path / "custom.bc"
+    library.write_bytes(b"original library")
+    options = getattr(compiler, options_type)(arch=arch, extern_libs={"custom": str(library)})
+    try:
+        original = options.hash()
+        assert options.hash() == original
+        library.write_bytes(b"modified library")
+        # File hashes are memoized per process. Start cold, as in a new invocation.
+        compiler.file_hash.cache_clear()
+        assert options.hash() != original
+    finally:
+        compiler.file_hash.cache_clear()
+
+
 def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
     fresh_knobs.cache.dir = str(tmp_path)
     manager = FileCacheManager("key")
@@ -1032,19 +1052,25 @@ def test_async_compile_error(fresh_triton_cache):
     def fn(x: tl.constexpr):
         tl.static_assert(x == 2)
 
-    with pytest.raises(triton.compiler.errors.CompileTimeAssertionFailure):
-        with (
-                ThreadPoolExecutor(2) as pool,
-                triton.AsyncCompileMode(pool),
-        ):
-            assert triton.runtime._async_compile.active_mode.get() is not None
-            fn.warmup(1, grid=(1, ))
+    with (
+            ThreadPoolExecutor(2) as pool,
+            triton.AsyncCompileMode(pool),
+    ):
+        assert triton.runtime._async_compile.active_mode.get() is not None
+        fn.warmup(1, grid=(1, ))
 
-            assert len(fn.device_caches[0][0]) == 1
+        assert len(fn.device_caches[0][0]) == 1
+        # Resolving the queued kernel reports the compilation failure. The
+        # mode must not resolve the failed FutureKernel again on exit.
+        with pytest.raises(triton.compiler.errors.CompileTimeAssertionFailure):
+            fn[(1, )](1)
 
     # After the AsyncCompileMode context manager exits, the active mode should
     # be set to None again, even if there was an error.
     assert triton.runtime._async_compile.active_mode.get() is None
+    # A failed Future would otherwise retain its exception traceback and the
+    # compiler objects reachable through it.
+    assert len(fn.device_caches[0][0]) == 0
 
 
 def test_higher_order_kernel(device, fresh_triton_cache, capsys):

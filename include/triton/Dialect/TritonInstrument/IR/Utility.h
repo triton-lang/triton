@@ -78,12 +78,15 @@ inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message);
+// Strides are in elements; an empty list uses contiguous column-major storage.
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType,
                                     bool currentCTAOnly = false,
-                                    Value storeMask = nullptr);
+                                    Value storeMask = nullptr,
+                                    ArrayRef<int64_t> strides = {});
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                              RankedTensorType tensorType);
+                              RankedTensorType tensorType,
+                              ArrayRef<int64_t> strides = {});
 gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
                              int64_t sizeInBytes, int64_t alignment,
@@ -158,7 +161,7 @@ struct AuxDataMap {
   struct RegionToValueMap {
     DenseMap<Region *, ValueType> values;
     ValueType at(Region *region) {
-      if (values.find(region) == values.end()) {
+      if (!values.contains(region)) {
         assert(false && "Region not found in AuxDataMap");
       }
       return values[region];
@@ -185,6 +188,8 @@ struct AuxDataMap {
   //   P = base-thread columns used by commit and proxy state, power-of-two
   //       padded.
   //   F = mbarrier phase parity slots, with extent 2.
+  //   V = visibility mask width: 32 bits for at most 32 logical threads,
+  //       otherwise 64 bits.
   //
   // Storage notation:
   //   tensor  = distributed tensor value.
@@ -201,7 +206,7 @@ struct AuxDataMap {
   // current arrival count, and bits [41..61] hold a signed tx-count.
   RegionToValueMap barrierStates;
 
-  // scratch, <Cbuf x B x Cmask x i64>
+  // scratch, <Cbuf x B x Cmask x iV>
   // Per-memory-type write frontier. Bit i means logical ConSan thread i can see
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
@@ -210,21 +215,22 @@ struct AuxDataMap {
   // Per-memory-type buffer/barrier/phase map for writes that a barrier tracks.
   RegionToValueMap writeTracking[numMemTypes];
 
-  // scratch, <Cbuf x B x Cthr x T x Cmask x i64>
+  // scratch, <Cbuf x B x Cthr x T x Cmask x iV>
   // Per-memory-type read frontier. For each buffer and logical thread lane, the
-  // i64 value is a bitmask of reads visible to that lane's thread.
+  // value is a bitmask of reads visible to that lane's thread.
   RegionToValueMap readVisibility[numMemTypes];
 
-  // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
+  // scratch, <Cbuf x B x Cbar x K x Cmask x F x iV>
   // Per-memory-type buffer/barrier/phase map for read visibility masks that a
   // barrier tracks.
   RegionToValueMap readTracking[numMemTypes];
 
   // scratch, <Cbuf x B x Cthr x P x Cmask x i64>
   // Generic-proxy shared-memory accesses visible to each base thread. The low
-  // 16 bits contain source base-thread ids that have accessed the buffer; bits
-  // [16..31] contain the subset covered by fence.proxy.async on the path to
-  // that consumer. CTA dimensions distinguish source and consumer CTAs.
+  // 16 bits contain source base-thread ids that have written the buffer; bits
+  // [16..31] track readers. The high 32 bits contain the respective subsets
+  // covered by fence.proxy.async on the path to that consumer. CTA dimensions
+  // distinguish source and consumer CTAs.
   RegionToValueMap proxyAccessVisibility;
 
   // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
@@ -236,9 +242,12 @@ struct AuxDataMap {
   // Per-commit-kind outstanding commit counters for shared-memory buffers.
   // Entries are 0 for none, -1 for staged but uncommitted, and positive for a
   // committed access with an outstanding-group distance.
+  // With async-copy mbarriers, -2 retains a completed copy's issuer for later
+  // barrier arrivals. Visibility distinguishes completed from pending copies.
   // Just one C dimension as ampere async_copy, WGMMA and TMA store are
   // intra-CTA.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
+  bool hasAsyncCopyMbarriers = false;
 
   // State-lane plans and analysis-derived runtime-base, state-mask, and CTA
   // cases for each memdesc. bufferRegions preserves the ordered region list

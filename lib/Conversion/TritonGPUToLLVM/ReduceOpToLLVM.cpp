@@ -15,6 +15,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
@@ -325,9 +326,13 @@ private:
     auto kLane = str_attr("lane");
     const auto &laneBases = layout.getBases().lookup(kLane);
     unsigned reduceLaneIdMask = 0;
+    unsigned broadcastLaneIdMask = 0;
     for (unsigned bit = 0; bit < laneBases.size(); ++bit) {
       if (laneBases[bit][op.getAxis()] != 0) {
         reduceLaneIdMask |= 1u << bit;
+      } else if (llvm::all_of(laneBases[bit],
+                              [](int32_t x) { return x == 0; })) {
+        broadcastLaneIdMask |= 1u << bit;
       }
     }
     if (reduceLaneIdMask == 0) {
@@ -340,7 +345,7 @@ private:
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         acc[i] = accs[i][reg];
       }
-      warpReduce(op, reduceLaneIdMask, acc, rewriter);
+      warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, acc, rewriter);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         accs[i][reg] = acc[i];
       }
@@ -352,7 +357,7 @@ private:
   }
 
   void warpReduce(triton::ReduceOp op, unsigned reduceLaneIdMask,
-                  SmallVector<Value> &acc,
+                  unsigned broadcastLaneIdMask, SmallVector<Value> &acc,
                   ConversionPatternRewriter &rewriter) const {
     // No reduction to do
     if (reduceLaneIdMask == 0)
@@ -363,8 +368,8 @@ private:
     assert(reduceLaneIdMask < warpSize &&
            "expected reduce lane ID mask to be strictly less than warp size");
     // Try to use the redux op if it is supported by the target
-    if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op,
-                              reduceLaneIdMask)) {
+    if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op, reduceLaneIdMask,
+                              broadcastLaneIdMask)) {
       return;
     }
     // Not that it matters a lot, but a more reasonble iteration order would be

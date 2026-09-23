@@ -38,7 +38,7 @@ public:
 
   /// Retrieves the data associated with a function
   T *getFuncData(FunctionOpInterface funcOp) {
-    if (funcMap.count(funcOp)) {
+    if (funcMap.contains(funcOp)) {
       return &funcMap[funcOp];
     }
     return nullptr;
@@ -110,7 +110,7 @@ private:
     });
     // Find roots
     moduleOp.walk([&](FunctionOpInterface funcOp) {
-      if (!visited.count(funcOp)) {
+      if (!visited.contains(funcOp)) {
         roots.push_back(funcOp);
       }
     });
@@ -122,7 +122,7 @@ private:
   void doWalk(FunctionOpInterface funcOp,
               DenseSet<FunctionOpInterface> &visited, UpdateEdgeFn updateEdgeFn,
               UpdateNodeFn updateNodeFn) {
-    if (visited.count(funcOp)) {
+    if (!visited.insert(funcOp).second) {
       llvm::report_fatal_error("Cycle detected in call graph");
     }
     if constexpr (UpdateNodeOrder == WalkOrder::PreOrder) {

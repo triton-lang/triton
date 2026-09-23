@@ -449,3 +449,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @preserve_mma_input_initialization
+  // CHECK: %[[A:.+]] = ttng.tmem_alloc %arg0
+  // CHECK: ttng.tc_gen5_mma %[[A]],
+  tt.func @preserve_mma_input_initialization(
+      %a: tensor<128x128xf16, #blocked>,
+      %b: !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>) -> tensor<128x128xf32, #blocked> {
+    %false = arith.constant false
+    %true = arith.constant true
+    %input = ttng.tmem_alloc %a : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory>
+    %acc, %tok = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %mma = ttng.tc_gen5_mma %input, %b, %acc[%tok], %false, %true : !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %result, %load_tok = ttng.tmem_load %acc[%mma] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %result : tensor<128x128xf32, #blocked>
+  }
+}

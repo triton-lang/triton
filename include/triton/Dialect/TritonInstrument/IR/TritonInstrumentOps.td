@@ -302,16 +302,70 @@ def TTI_ExperimentalGSanTensorAccessOp
   }];
 }
 
+def TTI_ExperimentalGSanAtomicLoadOp
+    : TTI_Op<"experimental_gsan_atomic_load", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsAndResultShape,
+  SameLoadStoreOperandsAndResultEncoding,
+  TypesMatchWith<"result matches ptr type", "ptr", "result",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic load";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:`
+    functional-type(operands, $result)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicStoreOp
+    : TTI_Op<"experimental_gsan_atomic_store", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsShape,
+  SameLoadStoreOperandsEncoding,
+  TypesMatchWith<"value type matches ptr type", "ptr", "value",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic store";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$value,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `,` $value (`,` $mask^)? attr-dict `:`
+    type($ptr)
+  }];
+}
+
 def TTI_ExperimentalGSanAtomicPollOp
-    : TTI_Op<"experimental_gsan_atomic_poll"> {
+    : TTI_Op<"experimental_gsan_atomic_poll", [
+        SameOperandsEncoding,
+        TypesMatchWith<"matched type matches pointer shape", "ptr", "matched",
+                       "getI1SameShape($_self)">
+      ]> {
   let summary = "Instrument a completed atomic poll for GSan";
   let description = [{
     Records the successful read performed by an atomic poll after the hardware
     polling loop has completed.
   }];
   let arguments = (ins
-    Arg<TT_Ptr, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-    I1:$matched,
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_BoolLike:$matched,
     TT_MemSemanticAttr:$sem,
     TT_MemSyncScopeAttr:$scope
   );

@@ -47,7 +47,7 @@ static Block::iterator findEarlyInsertionPoint(Block *block, tt::LoadOp load) {
     }
 
     // Break at atomic, barrier and loop ops.
-    if (isa<tt::AtomicRMWOp, tt::AtomicCASOp, tt::AtomicPollOp, gpu::BarrierOp,
+    if (isa<tt::AtomicOpInterface, tt::AtomicPollOp, gpu::BarrierOp,
             ttg::BarrierOp, scf::ForOp, scf::WhileOp>(&op)) {
       insertPoint = Block::iterator(&op);
     }
