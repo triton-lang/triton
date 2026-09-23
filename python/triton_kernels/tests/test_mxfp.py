@@ -130,6 +130,8 @@ def test_mxfp4_tile_upcast_scale_boundaries(dst_dtype, device):
         tensor.shape[1],
         scale.shape[1],
         {torch.float16: tl.float16, torch.bfloat16: tl.bfloat16, torch.float32: tl.float32}[dst_dtype],
+        # A ptxas bug causes this test to fail with fusion disabled on Hopper.
+        enable_fp_fusion=True,
     )
     torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
