@@ -2771,7 +2771,12 @@ def test_umulhi(dtype_str, device):
     if not is_interpreter() and is_cuda():
         assert f"mul.hi.u{np_dtype.itemsize * 8}" in compiled.asm["ptx"]
     elif not is_interpreter() and is_hip():
-        assert "v_mul_hi_u32" in compiled.asm["amdgcn"]
+        # gfx1250 multiplies 64-bit operands natively instead of decomposing
+        # the wide product into 32-bit multiply-high instructions.
+        if np_dtype.itemsize == 8 and is_hip_gfx1250():
+            assert "v_mad_nc_u64_u32" in compiled.asm["amdgcn"]
+        else:
+            assert "v_mul_hi_u32" in compiled.asm["amdgcn"]
 
 
 @pytest.mark.parametrize("masked", [False, True])
