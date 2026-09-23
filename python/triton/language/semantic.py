@@ -95,11 +95,9 @@ class TritonSemantic(Generic[TensorTy]):
         #     Supported PTX op: add, sub, mul, fma, neg, abs, min, max, tanh, ex2, setp
         if a_ty.is_fp16() or b_ty.is_fp16():
             return tl.float16
-        # 5) return bf16 only if both operands are of bf16
-        if a_ty.is_bf16() and b_ty.is_bf16():
-            return tl.bfloat16
+        # 5) preserve bf16 with bf16 or fp8; use fp32 with integers
         if a_ty.is_bf16() or b_ty.is_bf16():
-            return tl.float32
+            return tl.bfloat16 if a_ty.is_floating() and b_ty.is_floating() else tl.float32
         # 6) return fp16 if operands are different fp8
         if a_ty.is_fp8() and b_ty.is_fp8():
             return a_ty if a_ty == b_ty else tl.float16

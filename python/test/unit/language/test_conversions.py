@@ -31,6 +31,7 @@ def type_convert_triton(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.const
 
     x = tl.load(src + idxs)
     y = x.to(dst.dtype.element_ty, fp_downcast_rounding=rounding)
+    tl.static_assert(y.dtype == dst.dtype.element_ty)
     tl.store(dst + idxs, y)
 
 
@@ -259,7 +260,7 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
     ('float8e5', 'float32'),
 
     ('float8e4b15', 'float16'),
-    # ('float8e4b15', 'bfloat16'), # Unsupported conversion from f8E4M3B11FNUZ to bf16
+    ('float8e4b15', 'bfloat16'),
     ('float8e4b15', 'float32'),
 
     ('float8e4nv', 'float16'),
