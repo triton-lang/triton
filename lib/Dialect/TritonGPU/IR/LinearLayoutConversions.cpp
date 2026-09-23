@@ -1911,6 +1911,10 @@ namespace mlir {
 // it only needs to reorder registers.
 triton::LinearLayout minimalCvtLayout(const triton::LinearLayout &srcLayout,
                                       const triton::LinearLayout &dstLayout) {
+  // Inverting a non-injective layout can choose a different hardware owner.
+  if (srcLayout == dstLayout)
+    return triton::LinearLayout::empty();
+
   auto srcDims = llvm::to_vector(srcLayout.getInDimNames());
   auto dstDims = llvm::to_vector(dstLayout.getInDimNames());
   SmallVector<StringAttr> commonDims;
