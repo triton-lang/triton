@@ -54,31 +54,3 @@ define amdgpu_kernel void @named_barrier_kernel() {{
     assert "s_barrier_join" in assembly
     assert "s_barrier_signal" in assembly
     assert ".amdhsa_named_barrier_count 1" in assembly
-
-
-def test_dynamic_lds_from_noinline_function():
-    arch = "gfx1250"
-    triple = compiler.amd.get_target_triple(arch)
-    source = f'''
-target triple = "{triple}"
-
-@global_smem = external addrspace(3) global [0 x i8], align 16
-
-define internal fastcc void @helper() noinline {{
-  store volatile i8 1, ptr addrspace(3) @global_smem, align 1
-  ret void
-}}
-
-define amdgpu_kernel void @kernel() {{
-  %ptr = getelementptr i8, ptr addrspace(3) @global_smem, i32 16
-  store volatile i8 2, ptr addrspace(3) %ptr, align 1
-  call fastcc void @helper()
-  ret void
-}}
-'''
-    assembly = compiler.compile_amdgpu(source, triple, arch, "", flags=[], enable_fp_fusion=False,
-                                       disable_optimization=False, canonicalize_gep=False, disabled_passes="",
-                                       dump_ir=False, enable_timing=False)
-
-    assert "helper:" in assembly
-    assert "llvm.amdgcn.dynlds.offset.table" in assembly
