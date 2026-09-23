@@ -278,8 +278,32 @@ void convertOpResultsFromLayouts(Operation *op,
   }
 }
 
-SmallVector<unsigned> getDotCGASplit(ArrayRef<int64_t> shape,
-                                     unsigned numCTAs) {
+bool preferTwoCTALayout(triton::DotOp dot) {
+  if (dot.getType().getRank() != 2 || ttg::lookupNumCTAs(dot) < 2)
+    return false;
+  auto module = dot->getParentOfType<ModuleOp>();
+  auto target = module->getAttrOfType<StringAttr>(ttg::AttrTargetName);
+  if (!target || !target.getValue().starts_with("cuda:"))
+    return false;
+  int cc = getNVIDIAComputeCapability(module);
+  if (cc < 100 || cc >= 120)
+    return false;
+  auto isDescriptorLoaded = [](Value value) {
+    while (Operation *op = value.getDefiningOp()) {
+      if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op))
+        value = cvt.getSrc();
+      else if (auto trans = dyn_cast<triton::TransOp>(op))
+        value = trans.getSrc();
+      else
+        return isa<triton::DescriptorLoadOp>(op);
+    }
+    return false;
+  };
+  return isDescriptorLoaded(dot.getA()) && isDescriptorLoaded(dot.getB());
+}
+
+SmallVector<unsigned> getDotCGASplit(ArrayRef<int64_t> shape, unsigned numCTAs,
+                                     bool preferTwoCTA) {
   int rank = shape.size();
   SmallVector<unsigned> ctaSplit(rank, 1);
   // Split independent batches first.
@@ -293,6 +317,16 @@ SmallVector<unsigned> getDotCGASplit(ArrayRef<int64_t> shape,
   constexpr unsigned kPreferredChunkSize = 128;
   constexpr unsigned kMinChunkSize = 64;
   auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
+
+  if (preferTwoCTA) {
+    // Split N between pairs, while adjacent CTAs cooperate along M. Prefer
+    // two N partitions when each CTA retains a useful, legal MMAv5 tile.
+    unsigned splitM = std::max(2u, numCTAs / 2);
+    unsigned splitN = numCTAs / splitM;
+    if (m / splitM >= kMinChunkSize && m / splitM <= kPreferredChunkSize &&
+        n / splitN >= kMinChunkSize && n / splitN <= 256)
+      return {splitM, splitN};
+  }
 
   unsigned splitM = 1;
   unsigned splitN = numCTAs;
@@ -323,10 +357,14 @@ void assignDotCGALayout(triton::DotOp dot) {
   auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
   auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-  auto ctaSplit = getDotCGASplit(dTy.getShape(), ttg::getNumCTAs(dLayout));
+  bool preferTwoCTA = preferTwoCTALayout(dot);
+  auto ctaSplit =
+      getDotCGASplit(dTy.getShape(), ttg::getNumCTAs(dLayout), preferTwoCTA);
   SmallVector<unsigned> ctaOrder;
   for (unsigned dim = dTy.getRank(); dim > 0; --dim)
     ctaOrder.push_back(dim - 1);
+  if (preferTwoCTA)
+    std::swap(ctaOrder[0], ctaOrder[1]);
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
