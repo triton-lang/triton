@@ -4935,6 +4935,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
+@pytest.mark.parametrize("allow", [None, "valu", "salu", ("valu", "salu")])
+def test_amd_sched_barrier(target, allow):
+
+    @gluon.jit
+    def kernel(ALLOW: ttgl.constexpr):
+        ttgl.amd.sched_barrier()
+        ttgl.amd.sched_barrier(allow=ALLOW)
+
+    if allow is not None:
+        with pytest.raises(CompilationError, match="Unsupported instruction class"):
+            run_parser(kernel, *make_args(allow), target=target)
+        return
+
+    module = run_parser(kernel, *make_args(allow), target=target)
+    ir_str = anonymize_ir(module.str_nodebug())
+    ir_str = re.sub(r'("ttg\.threads-per-warp"\s*=\s*)\d{2}', r'\1...', ir_str)
+    expecttest.assert_expected_inline(
+        ir_str, """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    rocdl.sched.barrier none
+    rocdl.sched.barrier none
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
 def test_amd_warp_pipeline(target):
 
     @gluon.jit
