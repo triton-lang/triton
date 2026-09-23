@@ -5,8 +5,6 @@
 // RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-tmem-wait-insertion -tritoninstrument-concurrency-sanitizer -gluon-canonicalize -cse --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=CONSAN
 // RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=NO-CONSAN
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv='compute-capability=89 ptx-version=81' --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=89 ptx-version=81' -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefix=SM89
-// RUN: split-file %s %t
-// RUN: triton-opt %t/fp8.mlir --allocate-shared-memory-nv='compute-capability=70 ptx-version=81' --triton-nvidia-gpu-membar --convert-triton-gpu-to-llvm='compute-capability=70 ptx-version=81' -reconcile-unrealized-casts | FileCheck %s --check-prefix=SM70
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -3918,19 +3916,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-//--- fp8.mlir
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // SM89-LABEL: @fp32_to_fp8e5_rtne
   // SM89-NOT: cvt.rz.f16.f32
   // SM89: cvt.rn.satfinite.e5m2x2.f32
   // CHECK-LABEL: @fp32_to_fp8e5_rtne
-  // CHECK: cvt.rz.f16.f32
-  // CHECK: llvm.fpext
-  // CHECK: llvm.fcmp "une"
-  // CHECK: llvm.or
-  // CHECK: llvm.inline_asm {{.*}}min.f16x2
+  // CHECK-NOT: llvm.fpext
+  // CHECK-NOT: llvm.fcmp
+  // CHECK: llvm.inline_asm
+  // CHECK-SAME: add.u32 x0, $1, 0xffff;
+  // CHECK-SAME: lop3.b32 x0, $1, x0, 0x10000, 0xf8;
+  // CHECK-SAME: cvt.rz.f16x2.f32 h0, x1, x0;
+  // CHECK-SAME: cvt.rz.f16x2.f32 h1, x3, x2;
+  // CHECK-SAME: min.f16x2
   // CHECK-SAME: prmt.b32 $0, a0, a1, 0x7531;
+  // CHECK-SAME: "=r,r,r,r,r"
+  // CHECK-NOT: llvm.inline_asm
+  // CHECK-NOT: llvm.fpext
+  // CHECK-NOT: llvm.fcmp
   // CHECK: llvm.return
   tt.func private @fp32_to_fp8e5_rtne(%in: tensor<128xf32, #blocked>) -> tensor<128xf8E5M2, #blocked> {
     %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xf32, #blocked> -> tensor<128xf8E5M2, #blocked>
@@ -3938,13 +3942,6 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
   }
 
   // CHECK-LABEL: @fp16_to_fp8e5_rtne
-  // SM70-LABEL: @fp16_to_fp8e5_rtne
-  // SM70-NOT: min.f16x2
-  // SM70: vmin2.u32.u32.u32 a0, a0, maxval, a0;
-  // SM70-SAME: vmin2.u32.u32.u32 a1, a1, maxval, a1;
-  // SM70-SAME: prmt.b32 $0, a0, a1, 0x7531;
-  // SM70-NOT: min.f16x2
-  // SM70: llvm.return
   // CHECK-NOT: llvm.fpext
   // CHECK: llvm.inline_asm
   // CHECK-SAME: set.nan.f16x2.f16x2 n0, a0, a0;
@@ -3973,7 +3970,6 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
   }
 }
 
-//--- remaining.mlir
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {

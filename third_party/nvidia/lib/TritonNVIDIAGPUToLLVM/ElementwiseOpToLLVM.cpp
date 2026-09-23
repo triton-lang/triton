@@ -27,45 +27,69 @@ struct Fp8ConversionDesc {
   size_t numElements;
 };
 
-static Fp8ConversionDesc Fp16_to_Fp8E5M2_RTNE(int computeCapability) {
+static Fp8ConversionDesc Fp_to_Fp8E5M2_RTNE(int computeCapability,
+                                            bool fromFp32) {
   if (computeCapability >= 89)
-    return {"cvt.rn.satfinite.e5m2x2.f16x2 $0, $1; \n\t", 32, 16, 2};
+    return {fromFp32 ? "cvt.rn.satfinite.e5m2x2.f32 $0, $2, $1;"
+                     : "cvt.rn.satfinite.e5m2x2.f16x2 $0, $1;",
+            32, 16, 2};
+
+  std::string ptx = R"({
+.reg .b32 h<2>, a<2>, n<2>, t<2>, maxval;
+)";
+  if (fromFp32) {
+    // Preserve which side of an E5M2 midpoint each input lies on before
+    // truncating to FP16. Every midpoint has its low 20 FP32 bits clear, and
+    // FP16 truncation discards at most 16 bits there (the smallest midpoint
+    // is 2^-17). Jam the low 16 bits into bit 16: u |= (u + 0xffff) & 0x10000.
+    // This preserves final E5M2 rounding, not general FP16 round-to-odd.
+    ptx += R"(.reg .b32 x<4>;
+add.u32 x0, $1, 0xffff;
+add.u32 x1, $2, 0xffff;
+add.u32 x2, $3, 0xffff;
+add.u32 x3, $4, 0xffff;
+lop3.b32 x0, $1, x0, 0x10000, 0xf8;
+lop3.b32 x1, $2, x1, 0x10000, 0xf8;
+lop3.b32 x2, $3, x2, 0x10000, 0xf8;
+lop3.b32 x3, $4, x3, 0x10000, 0xf8;
+cvt.rz.f16x2.f32 h0, x1, x0;
+cvt.rz.f16x2.f32 h1, x3, x2;
+)";
+  } else {
+    ptx += R"(mov.b32 h0, $1;
+mov.b32 h1, $2;
+)";
+  }
 
   // Work on two FP16 magnitudes per register. set.nan produces 1.0 (0x3c00)
   // for NaNs and zero otherwise. ORing this into a saturated 0x7b00 produces
   // NaN 0x7f00, without changing the other half.
-  std::string ptx = "{\n"
-                    ".reg .b32 a<2>, n<2>, t<2>, maxval;\n"
-                    "and.b32 a0, $1, 0x7fff7fff;\n"
-                    "and.b32 a1, $2, 0x7fff7fff;\n"
-                    "set.nan.f16x2.f16x2 n0, a0, a0;\n"
-                    "set.nan.f16x2.f16x2 n1, a1, a1;\n"
-                    "mov.b32 maxval, 0x7b007b00;\n";
   // min without .NaN maps NaNs to the finite operand too; n restores them.
-  if (computeCapability >= 80)
-    ptx += "min.f16x2 a0, a0, maxval;\n"
-           "min.f16x2 a1, a1, maxval;\n";
-  else
-    ptx += "vmin2.u32.u32.u32 a0, a0, maxval, a0;\n"
-           "vmin2.u32.u32.u32 a1, a1, maxval, a1;\n";
-
+  //
   // Their shared exponent bias makes this work for subnormals as well.
   // Add 0x7f + retained LSB per half to round ties to even. Clamping first
   // prevents overflow, so neither addition can carry between halves.
-  ptx += "shr.b32 t0, a0, 8;\n"
-         "shr.b32 t1, a1, 8;\n"
-         "and.b32 t0, t0, 0x00010001;\n"
-         "and.b32 t1, t1, 0x00010001;\n"
-         "add.u32 a0, a0, 0x007f007f;\n"
-         "add.u32 a1, a1, 0x007f007f;\n"
-         "add.u32 a0, a0, t0;\n"
-         "add.u32 a1, a1, t1;\n"
-         "or.b32 a0, a0, n0;\n"
-         "or.b32 a1, a1, n1;\n"
-         "lop3.b32 a0, a0, $1, 0x80008000, 0xf8;\n"
-         "lop3.b32 a1, a1, $2, 0x80008000, 0xf8;\n"
-         "prmt.b32 $0, a0, a1, 0x7531;\n"
-         "}";
+  ptx += R"(and.b32 a0, h0, 0x7fff7fff;
+and.b32 a1, h1, 0x7fff7fff;
+set.nan.f16x2.f16x2 n0, a0, a0;
+set.nan.f16x2.f16x2 n1, a1, a1;
+mov.b32 maxval, 0x7b007b00;
+min.f16x2 a0, a0, maxval;
+min.f16x2 a1, a1, maxval;
+shr.b32 t0, a0, 8;
+shr.b32 t1, a1, 8;
+and.b32 t0, t0, 0x00010001;
+and.b32 t1, t1, 0x00010001;
+add.u32 a0, a0, 0x007f007f;
+add.u32 a1, a1, 0x007f007f;
+add.u32 a0, a0, t0;
+add.u32 a1, a1, t1;
+or.b32 a0, a0, n0;
+or.b32 a1, a1, n1;
+lop3.b32 a0, a0, h0, 0x80008000, 0xf8;
+lop3.b32 a1, a1, h1, 0x80008000, 0xf8;
+prmt.b32 $0, a0, a1, 0x7531;
+})";
   return {ptx, 32, 32, 4};
 }
 
@@ -218,8 +242,6 @@ static const Fp8ConversionDesc Bf16_to_Fp8E4M3Nv = {
 // Fp32 (x2) -> Fp8 (x2) (packed)
 static const Fp8ConversionDesc Fp32_to_Fp8E4M3Nv = {
     "cvt.rn.satfinite.e4m3x2.f32  $0, $2, $1; \n", 32, 16, 2};
-static const Fp8ConversionDesc Fp32_to_Fp8E5M2 = {
-    "cvt.rn.satfinite.e5m2x2.f32 $0, $2, $1; \n", 32, 16, 2};
 
 /* ----- Packed integer to BF16 ------ */
 static const std::string S8_to_Bf16 =
@@ -397,20 +419,6 @@ struct FpToFpOpConversion
     return builder.launch(rewriter, loc, f16_ty, false);
   }
 
-  static Value convertFp32ToFp16RTO(Location loc,
-                                    ConversionPatternRewriter &rewriter,
-                                    Value v) {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value half = convertFp32ToFp16(loc, rewriter, v, RoundingMode::RTZ);
-    // Round the intermediate to odd to avoid double rounding: every E5M2
-    // midpoint has an even FP16 encoding, and exact midpoints stay unchanged.
-    Value inexact =
-        LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, v,
-                             convertFp16ToFp32(loc, rewriter, half));
-    Value bits = b.or_(b.bitcast(half, i16_ty), b.zext(i16_ty, inexact));
-    return b.bitcast(bits, f16_ty);
-  }
-
   std::pair<ConverterT, size_t>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
@@ -434,7 +442,7 @@ struct FpToFpOpConversion
              Fp8E5M2_to_Fp16(computeCapability >= 89)},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTNE}, Fp16_to_Fp8E4M3Nv},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             Fp16_to_Fp8E5M2_RTNE(computeCapability)},
+             Fp_to_Fp8E5M2_RTNE(computeCapability, /*fromFp32=*/false)},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp16_to_Fp8E5M2_RTZ},
             // F8 -> BF16
             // mul{.rnd}.bf16 and mul{.rnd}.bf16x2 requires sm_90 or higher.
@@ -458,7 +466,8 @@ struct FpToFpOpConversion
                  : Bf16_to_Fp8E4M3Nv},
             // F32 -> F8
             {{F32TyID, F8E4M3TyID, RoundingMode::RTNE}, Fp32_to_Fp8E4M3Nv},
-            {{F32TyID, F8E5M2TyID, RoundingMode::RTNE}, Fp32_to_Fp8E5M2},
+            {{F32TyID, F8E5M2TyID, RoundingMode::RTNE},
+             Fp_to_Fp8E5M2_RTNE(computeCapability, /*fromFp32=*/true)},
         };
     std::tuple<TypeID, TypeID, RoundingMode> key = {
         srcTy.getTypeID(), dstTy.getTypeID(),
@@ -560,8 +569,9 @@ struct FpToFpOpConversion
                           roundingMode == RoundingMode::RTNE;
     bool useFP16IntermediateSrc =
         (srcElementType.isF32() &&
-         (!(computeCapability >= 89 &&
-            (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(dstElementType))) ||
+         (!(llvm::isa<Float8E5M2Type>(dstElementType) ||
+            (computeCapability >= 89 &&
+             llvm::isa<Float8E4M3FNType>(dstElementType))) ||
           roundingMode.value() == RoundingMode::RTZ)) ||
         (useSoftwareFp8 && srcElementType.isBF16());
     bool isDstFP32 = dstElementType.isF32();
@@ -579,8 +589,6 @@ struct FpToFpOpConversion
           // BF16 is exact in FP16 throughout E5M2's nonzero rounding range.
           v = convertFp32ToFp16(loc, rewriter, b.fpext(f32_ty, v),
                                 RoundingMode::RTNE);
-        } else if (useSoftwareFp8) {
-          v = convertFp32ToFp16RTO(loc, rewriter, v);
         } else {
           v = convertFp32ToFp16(loc, rewriter, v, RoundingMode::RTZ);
         }

@@ -335,9 +335,12 @@ def test_typeconvert_fp8_rounding_edges(src_dtype, src_type, dst_dtype, dst_type
     else:
         levels = torch.arange(max_code + 1, dtype=torch.uint8, device=device).view(dst_dtype).float()
         midpoints = (levels[:-1] + levels[1:]) / 2
-        infinity = torch.full_like(midpoints, float("inf"))
-        values = torch.cat((torch.nextafter(midpoints, -infinity), midpoints,
-                            torch.nextafter(midpoints, infinity), levels,
+        # Exercise adjacent FP32 values and the carry into bit 16 used by the
+        # software E5M2 conversion, including its subnormal midpoints.
+        offsets = torch.tensor([-0x10001, -0x10000, -0xffff, -1, 0, 1, 0xffff, 0x10000, 0x10001],
+                               dtype=torch.int32, device=device)
+        neighbors = (midpoints.view(torch.int32)[:, None] + offsets).flatten().view(torch.float32)
+        values = torch.cat((neighbors, levels,
                             torch.tensor([float("inf"), float("nan"), torch.finfo(src_dtype).max], device=device)))
         values = torch.cat((values, -values))
         values = torch.cat((values, torch.zeros(-values.numel() % BLOCK_SIZE, device=device)))
