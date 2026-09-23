@@ -14,7 +14,7 @@ def sched_barrier(allow=None, _semantic=None):
     Args:
         allow (str or tuple[str, ...], optional): Instruction classes allowed to
             cross the barrier. None means that no instruction classes may cross.
-            Named instruction classes are not supported yet.
+            Currently only None is allowed.
     """
     allow = _unwrap_if_constexpr(allow)
     if allow is None or isinstance(allow, str):
