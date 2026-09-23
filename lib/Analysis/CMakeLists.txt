@@ -5,6 +5,8 @@ add_triton_library(TritonAnalysis
   BufferIndexAnalysis.cpp
   Membar.cpp
   Alias.cpp
+  RangeAnalysis.cpp
+  ControlFlowRangeAnalysis.cpp
   Utility.cpp
 
   DEPENDS
@@ -16,6 +18,7 @@ add_triton_library(TritonAnalysis
 
   LINK_LIBS PUBLIC
   MLIRAnalysis
+  MLIRControlFlowDialect
   MLIRLLVMDialect
   TritonIR
   TritonGPUIR
