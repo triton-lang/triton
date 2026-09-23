@@ -577,6 +577,37 @@ def test_tma():
     torch.testing.assert_close(out, torch.zeros_like(out))
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires datacenter Blackwell or newer")
+@pytest.mark.parametrize("swizzle", [0, 128])
+@pytest.mark.parametrize("width", [64, 128])
+@pytest.mark.parametrize("device_descriptor", [False, True])
+def test_tma_fp4_padded_load(swizzle, width, device_descriptor):
+
+    @gluon.jit
+    def kernel(desc, src, dst, WIDTH: ttgl.constexpr, DEVICE_DESCRIPTOR: ttgl.constexpr):
+        if DEVICE_DESCRIPTOR:
+            desc = tma.make_tensor_descriptor(src, [32, 256], [256, 1], [16, WIDTH], desc.layout)
+        smem = ttgl.allocate_shared_memory(ttgl.uint8, desc.block_shape, desc.layout)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.expect(bar, desc.nbytes_per_cta)
+        tma.async_load(desc, [8, 64], bar, smem)
+        mbarrier.wait(bar, phase=0)
+        mbarrier.invalidate(bar)
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        rows = ttgl.arange(0, 16, ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, WIDTH, ttgl.SliceLayout(0, layout))
+        ttgl.store(dst + rows[:, None] * WIDTH + cols[None, :], smem.load(layout))
+
+    src = torch.randint(0, 256, (32, 256), dtype=torch.uint8, device="cuda")
+    dst = torch.empty((16, width), dtype=torch.uint8, device="cuda")
+    layout = ttgl.NVMMASharedLayout(swizzle, 8, fp4_padded=True)
+    desc = TensorDescriptor.from_tensor(src, [16, width], layout)
+    triton.set_allocator(lambda size, alignment, stream: torch.empty(size, dtype=torch.uint8, device="cuda"))
+    kernel[(1, )](desc, src, dst, width, device_descriptor)
+    torch.testing.assert_close(dst, src[8:24, 64:64 + width], rtol=0, atol=0)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_proxy_fence_noinline_tma_store():
     out = torch.ones((16, 16), dtype=torch.float16, device="cuda")

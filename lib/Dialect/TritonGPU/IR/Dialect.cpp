@@ -4749,13 +4749,15 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
     bool fp4Padded, bool isTransposed, bool packedSize,
     function_ref<InFlightDiagnostic()> emitError, TMAMode mode) {
+  // Padded FP4 copies require a 64-byte packed box even without swizzling.
+  int boxWidthBytes = fp4Padded && swizzleBytes == 0 ? 128 : swizzleBytes;
   if (mode == TMAMode::Im2Col) {
-    return getTMABlockShapeIm2Col(shapePerCTA, elementBitWidth, swizzleBytes,
+    return getTMABlockShapeIm2Col(shapePerCTA, elementBitWidth, boxWidthBytes,
                                   fp4Padded, isTransposed, packedSize,
                                   emitError);
   }
   // Tiled mode
-  return getTMABlockShapeTiled(shapePerCTA, elementBitWidth, swizzleBytes,
+  return getTMABlockShapeTiled(shapePerCTA, elementBitWidth, boxWidthBytes,
                                fp4Padded, isTransposed, packedSize, emitError);
 }
 

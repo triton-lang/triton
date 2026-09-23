@@ -298,6 +298,14 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
       layout = transposeLinearLayout(layout, order);
     }
     layout = ensureLayoutNotSmallerThan(layout, outDimNames, shapePerCTA);
+    if (shared.getFp4Padded()) {
+      // TMA inserts eight padding bytes after every eight packed FP4 bytes.
+      auto bases = layout.getBases();
+      auto &offsetBases = bases[kOffset];
+      offsetBases.insert(offsetBases.begin() + 3, std::vector<int32_t>(rank, 0));
+      layout = LinearLayout(std::move(bases), layout.getOutDims(),
+                            /*requireSurjective=*/true);
+    }
     return combineCtaCgaWithShape(layout, shared.getCGALayout(), shape);
   }
   assert(rank >= 2);

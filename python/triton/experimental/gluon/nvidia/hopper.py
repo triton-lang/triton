@@ -28,8 +28,7 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
     if round_f32_to_tf32:
         assert dtype_str == "fp32", "round_f32_to_tf32 is only supported for float32 tensors"
     assert elem_bytes * 8 == layout.element_bitwidth
-    padding_factor = 2 if layout.fp4_padded else 1
-    min_block = layout.swizzle_byte_width // (elem_bytes * padding_factor)
+    min_block = 64 if layout.fp4_padded else layout.swizzle_byte_width // elem_bytes
     assert block_shape[-1] >= min_block, \
         f"Expected block_shape[-1] to be at least {min_block} but got {block_shape[-1]}"
     if layout.fp4_padded:
@@ -40,8 +39,8 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
         target = tl.target_info.current_target()
         assert target is None or tl.target_info.cuda_capability_geq(10, 0), \
             "fp4_padded requires blackwell or newer"
-    assert not layout.fp4_padded or layout.swizzle_byte_width == 128, (
-        f"FP4 padded operands must be swizzled with 128-byte width, but got {layout.swizzle_byte_width}")
+    assert not layout.fp4_padded or layout.swizzle_byte_width in (0, 128), (
+        f"FP4 padded operands require no swizzling or 128-byte swizzling, but got {layout.swizzle_byte_width}")
     assert layout.element_bitwidth in [
         8, 16, 32
     ], (f"tensor descriptor dtype must be 8, 16, or 32 bits, but got {layout.element_bitwidth}")

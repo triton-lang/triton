@@ -30,7 +30,8 @@ bool NvidiaGPUAssignDescriptorMemoryLayouts::isCompatibleSharedEncoding(
     Attribute enc) {
   if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(enc))
     return !nvmma.getTransposed() &&
-           (!nvmma.getFp4Padded() || nvmma.getSwizzlingByteWidth() == 128);
+           (!nvmma.getFp4Padded() || nvmma.getSwizzlingByteWidth() == 0 ||
+            nvmma.getSwizzlingByteWidth() == 128);
   return false;
 }
 
