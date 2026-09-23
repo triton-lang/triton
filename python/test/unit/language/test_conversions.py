@@ -321,13 +321,17 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     (torch.float8_e5m2, tl.float8e5, 0x7b),
     (torch.float8_e4m3fn, tl.float8e4nv, 0x7e),
 ])
-def test_typeconvert_fp8_rounding_edges(src_dtype, src_type, dst_dtype, dst_type, max_code, device):
+@pytest.mark.parametrize("BLOCK_SIZE", [128, 1024])
+def test_typeconvert_fp8_rounding_edges(src_dtype, src_type, dst_dtype, dst_type, max_code, BLOCK_SIZE, device):
     if not is_cuda():
         pytest.skip("tests NVIDIA saturating FP8 conversion")
     if dst_type == tl.float8e4nv and torch.cuda.get_device_capability() < (8, 9):
         pytest.skip("E4M3 conversion requires SM89")
     if src_type.primitive_bitwidth == 16:
-        values = torch.arange(65536, dtype=torch.int32, device=device).to(torch.int16).view(src_dtype)
+        bits = torch.arange(65536, dtype=torch.int32, device=device)
+        # Permute every encoding to mix signs, NaNs and finite magnitudes in
+        # packed conversions. The odd multiplier makes this a bijection.
+        values = (bits * 25173 + 13849).to(torch.int16).view(src_dtype)
     else:
         levels = torch.arange(max_code + 1, dtype=torch.uint8, device=device).view(dst_dtype).float()
         midpoints = (levels[:-1] + levels[1:]) / 2
@@ -336,9 +340,9 @@ def test_typeconvert_fp8_rounding_edges(src_dtype, src_type, dst_dtype, dst_type
                             torch.nextafter(midpoints, infinity), levels,
                             torch.tensor([float("inf"), float("nan"), torch.finfo(src_dtype).max], device=device)))
         values = torch.cat((values, -values))
-        values = torch.cat((values, torch.zeros(-values.numel() % 256, device=device)))
+        values = torch.cat((values, torch.zeros(-values.numel() % BLOCK_SIZE, device=device)))
     actual = launch_type_convert_triton(values, src_type, dst_type, device,
-                                       rounding="rtne", BLOCK_SIZE=256).view(dst_dtype)
+                                       rounding="rtne", BLOCK_SIZE=BLOCK_SIZE).view(dst_dtype)
     limit = torch.finfo(dst_dtype).max
     expected = values.clamp(-limit, limit).to(dst_dtype)
     torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))

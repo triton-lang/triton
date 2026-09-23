@@ -27,8 +27,47 @@ struct Fp8ConversionDesc {
   size_t numElements;
 };
 
-static const Fp8ConversionDesc Fp16_to_Fp8E5M2_RTNE = {
-    "cvt.rn.satfinite.e5m2x2.f16x2 $0, $1; \n\t", 32, 16, 2};
+static Fp8ConversionDesc Fp16_to_Fp8E5M2_RTNE(int computeCapability) {
+  if (computeCapability >= 89)
+    return {"cvt.rn.satfinite.e5m2x2.f16x2 $0, $1; \n\t", 32, 16, 2};
+
+  // Work on two FP16 magnitudes per register. set.nan produces 1.0 (0x3c00)
+  // for NaNs and zero otherwise. ORing this into a saturated 0x7b00 produces
+  // NaN 0x7f00, without changing the other half.
+  std::string ptx = "{\n"
+                    ".reg .b32 a<2>, n<2>, t<2>, maxval;\n"
+                    "and.b32 a0, $1, 0x7fff7fff;\n"
+                    "and.b32 a1, $2, 0x7fff7fff;\n"
+                    "set.nan.f16x2.f16x2 n0, a0, a0;\n"
+                    "set.nan.f16x2.f16x2 n1, a1, a1;\n"
+                    "mov.b32 maxval, 0x7b007b00;\n";
+  // min without .NaN maps NaNs to the finite operand too; n restores them.
+  if (computeCapability >= 80)
+    ptx += "min.f16x2 a0, a0, maxval;\n"
+           "min.f16x2 a1, a1, maxval;\n";
+  else
+    ptx += "vmin2.u32.u32.u32 a0, a0, maxval, a0;\n"
+           "vmin2.u32.u32.u32 a1, a1, maxval, a1;\n";
+
+  // Their shared exponent bias makes this work for subnormals as well.
+  // Add 0x7f + retained LSB per half to round ties to even. Clamping first
+  // prevents overflow, so neither addition can carry between halves.
+  ptx += "shr.b32 t0, a0, 8;\n"
+         "shr.b32 t1, a1, 8;\n"
+         "and.b32 t0, t0, 0x00010001;\n"
+         "and.b32 t1, t1, 0x00010001;\n"
+         "add.u32 a0, a0, 0x007f007f;\n"
+         "add.u32 a1, a1, 0x007f007f;\n"
+         "add.u32 a0, a0, t0;\n"
+         "add.u32 a1, a1, t1;\n"
+         "or.b32 a0, a0, n0;\n"
+         "or.b32 a1, a1, n1;\n"
+         "lop3.b32 a0, a0, $1, 0x80008000, 0xf8;\n"
+         "lop3.b32 a1, a1, $2, 0x80008000, 0xf8;\n"
+         "prmt.b32 $0, a0, a1, 0x7531;\n"
+         "}";
+  return {ptx, 32, 32, 4};
+}
 
 const Fp8ConversionDesc Fp16_to_Fp8E5M2_RTZ = {
     "{                            \n"
@@ -358,24 +397,7 @@ struct FpToFpOpConversion
     return builder.launch(rewriter, loc, f16_ty, false);
   }
 
-  static Value convertFp16ToFp8E5M2(Location loc,
-                                    ConversionPatternRewriter &rewriter,
-                                    Value v) {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value bits = b.zext(i32_ty, b.bitcast(v, i16_ty));
-    Value magnitude = b.and_(bits, b.i32_val(0x7fff));
-
-    // Their shared exponent bias lets this rounding handle subnormals too.
-    Value odd = b.and_(b.lshr(magnitude, b.i32_val(8)), b.i32_val(1));
-    Value rounded = b.add(b.add(magnitude, b.i32_val(0x7f)), odd);
-    Value result = b.umin(rounded, b.i32_val(0x7b00));
-    result = b.select(b.icmp_ugt(magnitude, b.i32_val(0x7c00)),
-                      b.i32_val(0x7f00), result);
-    result = b.or_(result, b.and_(bits, b.i32_val(0x8000)));
-    return b.trunc(i8_ty, b.lshr(result, b.i32_val(8)));
-  }
-
-  static Value convertFp32ToFp8E5M2(Location loc,
+  static Value convertFp32ToFp16RTO(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     Value v) {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -386,7 +408,7 @@ struct FpToFpOpConversion
         LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, v,
                              convertFp16ToFp32(loc, rewriter, half));
     Value bits = b.or_(b.bitcast(half, i16_ty), b.zext(i16_ty, inexact));
-    return convertFp16ToFp8E5M2(loc, rewriter, b.bitcast(bits, f16_ty));
+    return b.bitcast(bits, f16_ty);
   }
 
   std::pair<ConverterT, size_t>
@@ -411,7 +433,8 @@ struct FpToFpOpConversion
             {{F8E5M2TyID, F16TyID, undefRounding},
              Fp8E5M2_to_Fp16(computeCapability >= 89)},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTNE}, Fp16_to_Fp8E4M3Nv},
-            {{F16TyID, F8E5M2TyID, RoundingMode::RTNE}, Fp16_to_Fp8E5M2_RTNE},
+            {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
+             Fp16_to_Fp8E5M2_RTNE(computeCapability)},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp16_to_Fp8E5M2_RTZ},
             // F8 -> BF16
             // mul{.rnd}.bf16 and mul{.rnd}.bf16x2 requires sm_90 or higher.
@@ -532,29 +555,15 @@ struct FpToFpOpConversion
       return outVals;
     }
 
-    if (computeCapability < 89 && isa<Float8E5M2Type>(dstElementType) &&
-        roundingMode == RoundingMode::RTNE &&
-        isa<Float16Type, BFloat16Type, Float32Type>(srcElementType)) {
-      SmallVector<Value> outVals;
-      for (const auto &operand : operands) {
-        Value value = operand[0];
-        if (srcElementType.isBF16()) {
-          // BF16 is exact in FP16 throughout E5M2's nonzero rounding range.
-          value = convertFp32ToFp16(loc, rewriter, b.fpext(f32_ty, value),
-                                    RoundingMode::RTNE);
-        }
-        outVals.push_back(srcElementType.isF32()
-                              ? convertFp32ToFp8E5M2(loc, rewriter, value)
-                              : convertFp16ToFp8E5M2(loc, rewriter, value));
-      }
-      return outVals;
-    }
-
+    bool useSoftwareFp8 = computeCapability < 89 &&
+                          isa<Float8E5M2Type>(dstElementType) &&
+                          roundingMode == RoundingMode::RTNE;
     bool useFP16IntermediateSrc =
-        srcElementType.isF32() &&
-        (!(computeCapability >= 89 &&
-           (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(dstElementType))) ||
-         roundingMode.value() == RoundingMode::RTZ);
+        (srcElementType.isF32() &&
+         (!(computeCapability >= 89 &&
+            (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(dstElementType))) ||
+          roundingMode.value() == RoundingMode::RTZ)) ||
+        (useSoftwareFp8 && srcElementType.isBF16());
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;
@@ -564,9 +573,19 @@ struct FpToFpOpConversion
     for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
       inVals.push_back(operands[i][0]);
     }
-    if (useFP16IntermediateSrc)
-      for (Value &v : inVals)
-        v = convertFp32ToFp16(loc, rewriter, v, RoundingMode::RTZ);
+    if (useFP16IntermediateSrc) {
+      for (Value &v : inVals) {
+        if (srcElementType.isBF16()) {
+          // BF16 is exact in FP16 throughout E5M2's nonzero rounding range.
+          v = convertFp32ToFp16(loc, rewriter, b.fpext(f32_ty, v),
+                                RoundingMode::RTNE);
+        } else if (useSoftwareFp8) {
+          v = convertFp32ToFp16RTO(loc, rewriter, v);
+        } else {
+          v = convertFp32ToFp16(loc, rewriter, v, RoundingMode::RTZ);
+        }
+      }
+    }
     inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
