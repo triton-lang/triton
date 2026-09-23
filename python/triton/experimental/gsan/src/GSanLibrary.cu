@@ -634,12 +634,55 @@ GSAN_DEVICE uint32_t getMBarrierKey(uint32_t offset, uint32_t ownerRank,
   return offset | (ownerRank << 24);
 }
 
-GSAN_DEVICE void initMBarrierTable(void *scratch, uint32_t capacity) {
+GSAN_DEVICE void mergeProxyClock(ProxyClock &dst, const ProxyClock &src) {
+  for (int i = 0; i < kMaxExecutionRegions; ++i)
+    if (dst[i] < src[i])
+      dst[i] = src[i];
+}
+
+GSAN_DEVICE void updateTensorMapState(TensorMapState *state, unsigned region,
+                                      unsigned action) {
+  if (action == 0) {
+    state->lock = 0;
+    for (auto &clock : state->clocks)
+      for (auto &epoch : clock)
+        epoch = 0;
+    for (auto &map : state->maps)
+      map.address = 0;
+    return;
+  }
+  clusterLockAcquire(state->lock);
+  if (action == 1) {
+    for (auto &clock : state->clocks)
+      mergeProxyClock(clock, state->clocks[region]);
+  } else {
+    for (auto &clock : state->clocks)
+      mergeProxyClock(state->clocks[region], clock);
+  }
+  clusterLockRelease(state->lock);
+}
+
+GSAN_DEVICE MBarrierState *mbarrierRecord(MBarrierTable *table,
+                                          uint32_t index) {
+  auto *records = reinterpret_cast<char *>(table->states);
+  return reinterpret_cast<MBarrierState *>(records +
+                                           index * table->recordStride);
+}
+
+GSAN_DEVICE MBarrierProxyState *mbarrierProxyState(MBarrierState *barrier) {
+  return reinterpret_cast<MBarrierProxyState *>(barrier + 1);
+}
+
+GSAN_DEVICE void initMBarrierTable(void *scratch, uint32_t capacity,
+                                   bool tensorMaps) {
   auto *table = reinterpret_cast<MBarrierTable *>(scratch);
   table->capacity = capacity;
+  table->recordStride =
+      sizeof(MBarrierState) + (tensorMaps ? sizeof(MBarrierProxyState) : 0);
   for (uint32_t i = 0; i < capacity; ++i) {
-    table->states[i].key = kEmptyMBarrierKey;
-    table->states[i].lock = 0;
+    auto *state = mbarrierRecord(table, i);
+    state->key = kEmptyMBarrierKey;
+    state->lock = 0;
   }
   __scoped_atomic_store_n(&table->lock, 0, __ATOMIC_RELEASE,
                           __MEMORY_SCOPE_DEVICE);
@@ -650,7 +693,7 @@ GSAN_DEVICE MBarrierState *getMBarrierState(MBarrierTable *table, uint32_t key,
   MBarrierState *empty = nullptr;
   clusterLockAcquire(table->lock);
   for (uint32_t i = 0; i < table->capacity; ++i) {
-    auto *state = &table->states[i];
+    auto *state = mbarrierRecord(table, i);
     if (state->key == key) {
       clusterLockRelease(table->lock);
       return state;
@@ -683,8 +726,12 @@ GSAN_DEVICE void initMBarrier(void *scratch, uint32_t offset,
   for (int bank = 0; bank < 2; ++bank) {
     barrier->phases[bank].generation = 0;
     barrier->phases[bank].complete = bank;
-    for (int source = 0; source < kMaxClusterCTAs; ++source)
+    for (int source = 0; source < kMaxClusterCTAs; ++source) {
       barrier->phases[bank].clocks[source] = {};
+      if (table->recordStride > sizeof(MBarrierState))
+        for (auto &epoch : mbarrierProxyState(barrier)->phases[bank][source])
+          epoch = 0;
+    }
   }
   clusterLockRelease(barrier->lock);
 }
@@ -692,15 +739,22 @@ GSAN_DEVICE void initMBarrier(void *scratch, uint32_t offset,
 GSAN_DEVICE void recordMBarrierArrival(GlobalState *globals, void *scratch,
                                        uint32_t offset, uint32_t recipientMask,
                                        uint32_t count, uint32_t sourceRank,
-                                       bool publishClock, Location loc) {
+                                       bool publishClock, TensorMapState *maps,
+                                       unsigned region, Location loc) {
   assert_msg(loc, sourceRank < kMaxClusterCTAs,
              "Invalid GSan mbarrier source CTA rank");
   assert_msg(loc, recipientMask != 0,
              "GSan mbarrier arrival has no recipients");
   MBarrierPublishedClock published = {};
+  ProxyClock proxyClock = {};
   if (publishClock) {
     auto *threadState = getThreadState(globals);
     published = {threadState->threadId, publishMBarrierClock(threadState, loc)};
+    if (maps) {
+      clusterLockAcquire(maps->lock);
+      mergeProxyClock(proxyClock, maps->clocks[region]);
+      clusterLockRelease(maps->lock);
+    }
   }
   auto *table = reinterpret_cast<MBarrierTable *>(scratch);
   for (uint32_t ownerRank = 0; ownerRank < kMaxClusterCTAs; ++ownerRank) {
@@ -714,11 +768,21 @@ GSAN_DEVICE void recordMBarrierArrival(GlobalState *globals, void *scratch,
     if (phase->generation != generation + 1) {
       phase->generation = generation + 1;
       phase->complete = 0;
-      for (int source = 0; source < kMaxClusterCTAs; ++source)
+      for (int source = 0; source < kMaxClusterCTAs; ++source) {
         phase->clocks[source] = {};
+        if (maps)
+          for (auto &epoch :
+               mbarrierProxyState(barrier)->phases[generation & 1][source])
+            epoch = 0;
+      }
     }
-    if (publishClock)
+    if (publishClock) {
       phase->clocks[sourceRank] = published;
+      if (maps)
+        mergeProxyClock(
+            mbarrierProxyState(barrier)->phases[generation & 1][sourceRank],
+            proxyClock);
+    }
     assert_msg(loc, count > 0 && count <= barrier->pendingCount,
                "Invalid GSan mbarrier arrival count");
     barrier->pendingCount -= count;
@@ -733,13 +797,15 @@ GSAN_DEVICE void recordMBarrierArrival(GlobalState *globals, void *scratch,
 
 GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
                                       uint32_t offset, uint32_t ownerRank,
-                                      uint32_t waitPhase, Location loc) {
+                                      uint32_t waitPhase, TensorMapState *maps,
+                                      unsigned region, Location loc) {
   assert_msg(loc, waitPhase < 2, "Invalid GSan mbarrier wait phase");
   auto *table = reinterpret_cast<MBarrierTable *>(scratch);
   auto *barrier = getMBarrierState(
       table, getMBarrierKey(offset, ownerRank, loc), /*create=*/false, loc);
 
   MBarrierPublishedClock clocks[kMaxClusterCTAs] = {};
+  ProxyClock proxyClock = {};
   clusterLockAcquire(barrier->lock);
   const auto &phase = barrier->phases[waitPhase];
   assert_msg(loc, ((phase.generation - 1) & 1) == waitPhase,
@@ -748,7 +814,18 @@ GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
              "GSan mbarrier wait observed an incomplete phase");
   for (int source = 0; source < kMaxClusterCTAs; ++source)
     clocks[source] = phase.clocks[source];
+  // Native mbarrier waits operate on the waiting CTA's local barrier. Only
+  // that CTA's acquisitions can be inherited by its other execution regions.
+  if (maps)
+    mergeProxyClock(proxyClock,
+                    mbarrierProxyState(barrier)->phases[waitPhase][ownerRank]);
   clusterLockRelease(barrier->lock);
+
+  if (maps) {
+    clusterLockAcquire(maps->lock);
+    mergeProxyClock(maps->clocks[region], proxyClock);
+    clusterLockRelease(maps->lock);
+  }
 
   auto *threadState = getThreadState(globals);
   rwLockAcquireWrite(threadState->lock);
@@ -803,6 +880,12 @@ GSAN_DEVICE void recordRead(ThreadState *state, ShadowCell *cell,
   }
 }
 
+GSAN_DEVICE void invalidateTensorMap(ShadowCell *cell, Location loc) {
+  assert_msg(loc, cell->tensorMapVersion < 0xfffffffeu,
+             "GSan tensor-map version overflowed");
+  cell->tensorMapVersion = (cell->tensorMapVersion | 1u) + 1;
+}
+
 GSAN_DEVICE void doWrite(ThreadState *state, ShadowCell *cell, Location loc) {
   // Check WAR
   for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {
@@ -815,6 +898,7 @@ GSAN_DEVICE void doWrite(ThreadState *state, ShadowCell *cell, Location loc) {
                             loc, "Write after write race detected");
   // Update write
   cell->writeClock = makeScalarClock(state, AtomicScope::NonAtomic);
+  invalidateTensorMap(cell, loc);
 }
 
 GSAN_DEVICE void writeRange(ThreadState *state, uintptr_t write_addr,
@@ -859,6 +943,87 @@ GSAN_DEVICE void doRead(ThreadState *state, ShadowCell *cell, Location loc) {
   assertOrderedOrCompatible(state, AtomicScope::NonAtomic, cell->writeClock,
                             loc, "Read after write race detected");
   recordRead(state, cell, AtomicScope::NonAtomic);
+}
+
+GSAN_DEVICE void tensorMapAccess(GlobalState *globals, TensorMapState *maps,
+                                 uintptr_t address, unsigned kind,
+                                 unsigned region, Location loc) {
+  auto *thread = getThreadState(globals);
+  if (!isGsanManaged(address, thread->reserveBase))
+    return;
+  // Keep the ordinary race check independent of proxy visibility. These locks
+  // order sanitizer metadata only; no application clock is imported here.
+  uint32_t versions[32];
+  rwLockAcquireRead(thread->lock);
+  for (unsigned i = 0; i < 32; ++i) {
+    auto *cell = acquireShadow(getShadowAddress(address + 4 * i));
+    if (kind == 1) {
+      doWrite(thread, cell, loc);
+      ++cell->tensorMapVersion;
+    } else {
+      doRead(thread, cell, loc);
+    }
+    versions[i] = cell->tensorMapVersion;
+    if (kind >= 2) {
+      assert_msg(
+          loc, versions[i] == 0 || (versions[i] & 1),
+          "Tensor map used without a proxy release after its last write");
+      assert_msg(loc,
+                 versions[i] == 0 ||
+                     cell->writeClock.threadId / globals->numSms ==
+                         thread->threadId / globals->numSms,
+                 "Tensor map proxy release does not cover this device");
+    }
+    releaseShadow(cell);
+  }
+  rwLockReleaseRead(thread->lock);
+  if (kind < 2)
+    return;
+
+  clusterLockAcquire(maps->lock);
+  TensorMapAcquisition *map = nullptr;
+  TensorMapAcquisition *empty = nullptr;
+  for (auto &entry : maps->maps) {
+    if (entry.address == address)
+      map = &entry;
+    if (entry.address == 0 && empty == nullptr)
+      empty = &entry;
+  }
+  if (kind == 2) {
+    bool sameVersion = map != nullptr;
+    if (map)
+      for (unsigned i = 0; i < 32; ++i)
+        sameVersion &= map->versions[i] == versions[i];
+    if (!map)
+      map = empty;
+    assert_msg(loc, map != nullptr,
+               "GSan tensor-map acquisition table is full");
+    if (!sameVersion) {
+      map->address = address;
+      for (unsigned i = 0; i < 32; ++i)
+        map->versions[i] = versions[i];
+      for (auto &epoch : map->acquired)
+        epoch = 0;
+    }
+    if (!map->acquired[region]) {
+      auto &epoch = maps->clocks[region][region];
+      assert_msg(loc, epoch != 0xffffffffu, "GSan proxy clock overflowed");
+      map->acquired[region] = ++epoch;
+    }
+  } else {
+    bool acquired = false;
+    if (map) {
+      for (unsigned i = 0; i < kMaxExecutionRegions; ++i)
+        acquired |=
+            map->acquired[i] && map->acquired[i] <= maps->clocks[region][i];
+      for (unsigned i = 0; i < 32; ++i)
+        acquired &= map->versions[i] == versions[i];
+    }
+    assert_msg(
+        loc, acquired,
+        "Tensor map used without acquiring its current version in this CTA");
+  }
+  clusterLockRelease(maps->lock);
 }
 
 GSAN_DEVICE void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
@@ -910,9 +1075,12 @@ struct TensorDescInfo {
   const uint32_t *words;
   int rank;
   int bytesPerElem;
+  int contiguousDimScale;
 
   GSAN_DEVICE int64_t shape(int dim) const {
-    return static_cast<int64_t>(words[kShapeWordBase + rank - 1 - dim]) + 1;
+    int64_t extent =
+        static_cast<int64_t>(words[kShapeWordBase + rank - 1 - dim]) + 1;
+    return dim + 1 == rank ? extent / contiguousDimScale : extent;
   }
 
   GSAN_DEVICE uintptr_t byteStride(int dim) const {
@@ -924,9 +1092,11 @@ struct TensorDescInfo {
 };
 
 GSAN_DEVICE TensorDescInfo decodeTensorDesc(const void *descriptor, int rank,
-                                            int bytesPerElem) {
+                                            int bytesPerElem,
+                                            int contiguousDimScale) {
   return {*reinterpret_cast<const uintptr_t *>(descriptor),
-          reinterpret_cast<const uint32_t *>(descriptor), rank, bytesPerElem};
+          reinterpret_cast<const uint32_t *>(descriptor), rank, bytesPerElem,
+          contiguousDimScale};
 }
 
 template <typename ElementHandler>
@@ -947,10 +1117,11 @@ GSAN_DEVICE void tensorAccessRow(uintptr_t rowPtr, int rowBytes,
 template <typename ElementHandler>
 GSAN_DEVICE void tensorAccessDesc(const void *descriptor, const int *coords,
                                   int rank, const int16_t *blockShape,
-                                  int bytesPerElem, int elementGranularity,
-                                  int warpId, int numWarps,
-                                  ElementHandler &handleElement) {
-  TensorDescInfo desc = decodeTensorDesc(descriptor, rank, bytesPerElem);
+                                  int bytesPerElem, int contiguousDimScale,
+                                  int elementGranularity, int warpId,
+                                  int numWarps, ElementHandler &handleElement) {
+  TensorDescInfo desc =
+      decodeTensorDesc(descriptor, rank, bytesPerElem, contiguousDimScale);
   int lastDim = rank - 1;
   int lastExtent = blockShape[lastDim];
   int64_t lastShape = desc.shape(lastDim);
@@ -1006,15 +1177,16 @@ GSAN_DEVICE void tensorAccessDesc(const void *descriptor, const int *coords,
 }
 
 template <typename ElementHandler>
-GSAN_DEVICE void tensorAccessIndexedDesc(const void *descriptor,
-                                         const int *indices, int numIndices,
-                                         int yOffset, int numCols,
-                                         int bytesPerElem, int pred,
-                                         ElementHandler &handleElement) {
+GSAN_DEVICE void
+tensorAccessIndexedDesc(const void *descriptor, const int *indices,
+                        int numIndices, int yOffset, int numCols,
+                        int bytesPerElem, int contiguousDimScale, int pred,
+                        ElementHandler &handleElement) {
   if (!pred)
     return;
 
-  TensorDescInfo desc = decodeTensorDesc(descriptor, 2, bytesPerElem);
+  TensorDescInfo desc =
+      decodeTensorDesc(descriptor, 2, bytesPerElem, contiguousDimScale);
   int64_t rowShape = desc.shape(0);
   int64_t colShape = desc.shape(1);
   int64_t firstCol = yOffset > 0 ? yOffset : 0;
@@ -1071,15 +1243,17 @@ template <typename ShadowCellHandler> struct NonAtomicElementHandler {
 };
 
 template <typename ShadowCellHandler>
-GSAN_DEVICE void
-tensorNonAtomicDesc(ThreadState *state, const void *descriptor,
-                    const int *coords, int rank, const int16_t *blockShape,
-                    int bytesPerElem, int warpId, int numWarps, Location loc,
-                    ShadowCellHandler handleShadowCell) {
+GSAN_DEVICE void tensorNonAtomicDesc(ThreadState *state, const void *descriptor,
+                                     const int *coords, int rank,
+                                     const int16_t *blockShape,
+                                     int bytesPerElem, int contiguousDimScale,
+                                     int warpId, int numWarps, Location loc,
+                                     ShadowCellHandler handleShadowCell) {
   NonAtomicElementHandler<ShadowCellHandler> handleElement{
       state, state->reserveBase, loc, handleShadowCell};
   tensorAccessDesc(descriptor, coords, rank, blockShape, bytesPerElem,
-                   kShadowMemGranularityBytes, warpId, numWarps, handleElement);
+                   contiguousDimScale, kShadowMemGranularityBytes, warpId,
+                   numWarps, handleElement);
   if (handleElement.acquired)
     rwLockReleaseRead(state->lock);
 }
@@ -1088,12 +1262,14 @@ template <typename ShadowCellHandler>
 GSAN_DEVICE void
 tensorNonAtomicIndexedDesc(ThreadState *state, const void *descriptor,
                            const int *indices, int numIndices, int yOffset,
-                           int numCols, int bytesPerElem, int pred,
-                           Location loc, ShadowCellHandler handleShadowCell) {
+                           int numCols, int bytesPerElem,
+                           int contiguousDimScale, int pred, Location loc,
+                           ShadowCellHandler handleShadowCell) {
   NonAtomicElementHandler<ShadowCellHandler> handleElement{
       state, state->reserveBase, loc, handleShadowCell};
   tensorAccessIndexedDesc(descriptor, indices, numIndices, yOffset, numCols,
-                          bytesPerElem, pred, handleElement);
+                          bytesPerElem, contiguousDimScale, pred,
+                          handleElement);
   if (handleElement.acquired)
     rwLockReleaseRead(state->lock);
 }
@@ -1226,8 +1402,10 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
       }
     }
 
-    for (uint8_t i = 0; i < event->numCells; ++i)
+    for (uint8_t i = 0; i < event->numCells; ++i) {
       event->cells[i]->writeClock = newWriteClock;
+      invalidateTensorMap(event->cells[i], loc);
+    }
 
     if (hasRelease(sem))
       incrementThreadEpoch(state, loc);
@@ -1256,14 +1434,15 @@ struct AtomicElementHandler {
 GSAN_DEVICE void tensorAtomicDesc(GlobalState *globals, const void *descriptor,
                                   const int *coords, int rank,
                                   const int16_t *blockShape, int bytesPerElem,
-                                  int sem, int scope, int warpId, int numWarps,
-                                  Location loc) {
+                                  int contiguousDimScale, int sem, int scope,
+                                  int warpId, int numWarps, Location loc) {
   int granularity =
       roundUp(bytesPerElem, static_cast<uintptr_t>(kShadowMemGranularityBytes));
   AtomicElementHandler handleElement{
       globals, globals->reserveBase, granularity, sem, scope, loc};
   tensorAccessDesc(descriptor, coords, rank, blockShape, bytesPerElem,
-                   granularity, warpId, numWarps, handleElement);
+                   contiguousDimScale, granularity, warpId, numWarps,
+                   handleElement);
 }
 
 } // namespace
@@ -1280,27 +1459,28 @@ __triton_gsan_load_tensor(void *globalState, const char *stackPtr, int numElems,
 
 extern "C" GSAN_DEVICE void __triton_gsan_load_tensor_desc(
     void *globalState, const void *descriptor, const int *coords, int rank,
-    const gsan::int16_t *blockShape, int bytesPerElem, int pred, int warpId,
-    int numWarps, const char *file, unsigned line) {
+    const gsan::int16_t *blockShape, int bytesPerElem, int contiguousDimScale,
+    int pred, int warpId, int numWarps, const char *file, unsigned line) {
   if (!pred)
     return;
   auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorNonAtomicDesc(threadState, descriptor, coords, rank, blockShape,
-                            bytesPerElem, warpId, numWarps, loc,
-                            gsan::ReadShadowCellHandler{});
+                            bytesPerElem, contiguousDimScale, warpId, numWarps,
+                            loc, gsan::ReadShadowCellHandler{});
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_load_indexed_tensor_desc(
     void *globalState, const void *descriptor, const int *indices,
-    int numIndices, int yOffset, int numCols, int bytesPerElem, int pred,
-    const char *file, unsigned line) {
+    int numIndices, int yOffset, int numCols, int bytesPerElem,
+    int contiguousDimScale, int pred, const char *file, unsigned line) {
   auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorNonAtomicIndexedDesc(threadState, descriptor, indices, numIndices,
-                                   yOffset, numCols, bytesPerElem, pred, loc,
+                                   yOffset, numCols, bytesPerElem,
+                                   contiguousDimScale, pred, loc,
                                    gsan::ReadShadowCellHandler{});
 }
 
@@ -1356,10 +1536,12 @@ __triton_gsan_cluster_barrier_sync(void *globalState, void *scratch, int pred,
       ctaRank, loc);
 }
 
-extern "C" GSAN_DEVICE void
-__triton_gsan_mbarrier_table_init(void *scratch, int pred, unsigned capacity) {
+extern "C" GSAN_DEVICE void __triton_gsan_mbarrier_table_init(void *scratch,
+                                                              int pred,
+                                                              unsigned capacity,
+                                                              int tensorMaps) {
   if (pred)
-    gsan::initMBarrierTable(scratch, capacity);
+    gsan::initMBarrierTable(scratch, capacity, tensorMaps != 0);
 }
 
 extern "C" GSAN_DEVICE void
@@ -1375,25 +1557,49 @@ __triton_gsan_mbarrier_init(void *scratch, unsigned offset, int pred,
 extern "C" GSAN_DEVICE void
 __triton_gsan_mbarrier_arrive(void *globalState, void *scratch, unsigned offset,
                               int pred, unsigned recipientMask, unsigned count,
-                              unsigned sourceRank, int publishClock,
-                              const char *file, unsigned line) {
+                              unsigned sourceRank, int publishClock, void *maps,
+                              unsigned region, const char *file,
+                              unsigned line) {
   if (!pred)
     return;
   auto loc = gsan::Location{file, line};
   gsan::recordMBarrierArrival(
       reinterpret_cast<gsan::GlobalState *>(globalState), scratch, offset,
-      recipientMask, count, sourceRank, publishClock != 0, loc);
+      recipientMask, count, sourceRank, publishClock != 0,
+      reinterpret_cast<gsan::TensorMapState *>(maps), region, loc);
 }
 
 extern "C" GSAN_DEVICE void
 __triton_gsan_mbarrier_wait(void *globalState, void *scratch, unsigned offset,
                             int pred, unsigned ownerRank, unsigned phase,
-                            const char *file, unsigned line) {
+                            void *maps, unsigned region, const char *file,
+                            unsigned line) {
   if (!pred)
     return;
   auto loc = gsan::Location{file, line};
   gsan::acquireMBarrierPhase(reinterpret_cast<gsan::GlobalState *>(globalState),
-                             scratch, offset, ownerRank, phase, loc);
+                             scratch, offset, ownerRank, phase,
+                             reinterpret_cast<gsan::TensorMapState *>(maps),
+                             region, loc);
+}
+
+extern "C" GSAN_DEVICE void __triton_gsan_tensor_map_state(void *scratch,
+                                                           unsigned action,
+                                                           unsigned region,
+                                                           int pred) {
+  if (pred)
+    gsan::updateTensorMapState(
+        reinterpret_cast<gsan::TensorMapState *>(scratch), region, action);
+}
+
+extern "C" GSAN_DEVICE void __triton_gsan_tensor_map_access(
+    void *globalState, void *scratch, const void *address, unsigned kind,
+    unsigned region, int pred, const char *file, unsigned line) {
+  if (pred)
+    gsan::tensorMapAccess(reinterpret_cast<gsan::GlobalState *>(globalState),
+                          reinterpret_cast<gsan::TensorMapState *>(scratch),
+                          reinterpret_cast<gsan::uintptr_t>(address), kind,
+                          region, {file, line});
 }
 
 extern "C" GSAN_DEVICE void
@@ -1408,38 +1614,41 @@ __triton_gsan_store_tensor(void *globalState, const char *stackPtr,
 
 extern "C" GSAN_DEVICE void __triton_gsan_store_tensor_desc(
     void *globalState, const void *descriptor, const int *coords, int rank,
-    const gsan::int16_t *blockShape, int bytesPerElem, int pred, int warpId,
-    int numWarps, const char *file, unsigned line) {
+    const gsan::int16_t *blockShape, int bytesPerElem, int contiguousDimScale,
+    int pred, int warpId, int numWarps, const char *file, unsigned line) {
   if (!pred)
     return;
   auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorNonAtomicDesc(threadState, descriptor, coords, rank, blockShape,
-                            bytesPerElem, warpId, numWarps, loc,
-                            gsan::WriteShadowCellHandler{});
+                            bytesPerElem, contiguousDimScale, warpId, numWarps,
+                            loc, gsan::WriteShadowCellHandler{});
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_store_indexed_tensor_desc(
     void *globalState, const void *descriptor, const int *indices,
-    int numIndices, int yOffset, int numCols, int bytesPerElem, int pred,
-    const char *file, unsigned line) {
+    int numIndices, int yOffset, int numCols, int bytesPerElem,
+    int contiguousDimScale, int pred, const char *file, unsigned line) {
   auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorNonAtomicIndexedDesc(threadState, descriptor, indices, numIndices,
-                                   yOffset, numCols, bytesPerElem, pred, loc,
+                                   yOffset, numCols, bytesPerElem,
+                                   contiguousDimScale, pred, loc,
                                    gsan::WriteShadowCellHandler{});
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_atomic_tensor_desc(
     void *globalState, const void *descriptor, const int *coords, int rank,
-    const gsan::int16_t *blockShape, int bytesPerElem, int sem, int scope,
-    int warpId, int numWarps, const char *file, unsigned line) {
+    const gsan::int16_t *blockShape, int bytesPerElem, int contiguousDimScale,
+    int sem, int scope, int warpId, int numWarps, const char *file,
+    unsigned line) {
   auto loc = gsan::Location{file, line};
   auto *globals = reinterpret_cast<gsan::GlobalState *>(globalState);
   gsan::tensorAtomicDesc(globals, descriptor, coords, rank, blockShape,
-                         bytesPerElem, sem, scope, warpId, numWarps, loc);
+                         bytesPerElem, contiguousDimScale, sem, scope, warpId,
+                         numWarps, loc);
 }
 
 extern "C" GSAN_DEVICE void

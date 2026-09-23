@@ -35,32 +35,45 @@ static constexpr const char kGSanStreamClockArgAttr[] = "tti.gsan_stream_clock";
 static constexpr const char kGSanKernelIdArgAttr[] = "tti.gsan_kernel_id";
 static constexpr const char kGSanMBarrierScratchArgAttr[] =
     "tti.gsan_mbarrier_scratch";
+static constexpr const char kGSanTensorMapScratchArgAttr[] =
+    "tti.gsan_tensor_map_scratch";
+static constexpr int64_t kGSanTensorMapScratchBytes = 13840;
 static constexpr const char kDisableSetMaxRegisterAttr[] =
     "tti.disable_setmaxregister";
 static constexpr int64_t kGSanClusterBarrierScratchBytes = 128;
 static constexpr int64_t kGSanMBarrierTableHeaderBytes = 16;
 static constexpr int64_t kGSanMBarrierRecordBytes = 176;
+static constexpr int64_t kGSanMBarrierProxyBytes = 2048;
 
-static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
+static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op,
+                                   Value maps) {
+  OpBuilder builder(op);
+  ExperimentalGSanTensorMapAccessOp::create(
+      builder, op.getLoc(), maps, op.getDesc(), TensorMapAccessKind::Use, false,
+      op.getPred());
   if (isa<ttng::TensorDescIm2ColType>(op.getDesc().getType()))
     return;
-
-  OpBuilder builder(op);
   ExperimentalGSanTensorDescAccessOp::create(builder, op.getLoc(), op.getDesc(),
                                              op.getCoord(), op.getPred(),
                                              /*isStore=*/false);
 }
 
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,
-                                    ValueRange coords) {
+                                    ValueRange coords, Value maps) {
   OpBuilder builder(op);
+  ExperimentalGSanTensorMapAccessOp::create(builder, op->getLoc(), maps,
+                                            descValue, TensorMapAccessKind::Use,
+                                            false, Value{});
   ExperimentalGSanTensorDescAccessOp::create(builder, op->getLoc(), descValue,
                                              coords, /*pred=*/Value{},
                                              /*isStore=*/true);
 }
 
-static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {
+static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op, Value maps) {
   OpBuilder builder(op);
+  ExperimentalGSanTensorMapAccessOp::create(
+      builder, op.getLoc(), maps, op.getDesc(), TensorMapAccessKind::Use, false,
+      Value{});
   ExperimentalGSanAtomicTensorDescAccessOp::create(
       builder, op.getLoc(), op.getDesc(), op.getCoord(), MemSemantic::RELAXED,
       MemSyncScope::GPU);
@@ -78,15 +91,21 @@ static void instrumentAtomicPoll(tt::AtomicPollOp op) {
     ttng::ClusterBarrierOp::create(builder, op.getLoc());
 }
 
-static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
+static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op, Value maps) {
   OpBuilder builder(op);
+  ExperimentalGSanTensorMapAccessOp::create(
+      builder, op.getLoc(), maps, op.getDesc(), TensorMapAccessKind::Use, false,
+      op.getPred());
   ExperimentalGSanIndexedTensorDescAccessOp::create(
       builder, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
       op.getPred(), /*isStore=*/false);
 }
 
-static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op) {
+static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op, Value maps) {
   OpBuilder builder(op);
+  ExperimentalGSanTensorMapAccessOp::create(
+      builder, op.getLoc(), maps, op.getDesc(), TensorMapAccessKind::Use, false,
+      Value{});
   ExperimentalGSanIndexedTensorDescAccessOp::create(
       builder, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
       /*pred=*/Value{}, /*isStore=*/true);
@@ -236,7 +255,8 @@ static int64_t getMBarrierCapacity(ModuleOp module) {
 
 static void
 instrumentMBarrierOps(ModuleOp module,
-                      const DenseMap<tt::FuncOp, Value> &scratchMap) {
+                      const DenseMap<tt::FuncOp, Value> &scratchMap,
+                      const DenseMap<tt::FuncOp, Value> &mapScratch) {
   SmallVector<Operation *> ops;
   module.walk([&](Operation *op) { ops.push_back(op); });
   for (Operation *op : ops) {
@@ -245,6 +265,9 @@ instrumentMBarrierOps(ModuleOp module,
     if (scratchIt == scratchMap.end())
       continue;
     Value scratch = getValueForOp(op, scratchIt->second);
+    Value maps;
+    if (auto it = mapScratch.find(func); it != mapScratch.end())
+      maps = getValueForOp(op, it->second);
 
     if (auto init = dyn_cast<ttng::InitBarrierOp>(op)) {
       OpBuilder builder(op);
@@ -265,7 +288,7 @@ instrumentMBarrierOps(ModuleOp module,
           wait.getPred() ? wait.getPred() : trueValue(builder, op->getLoc());
       ExperimentalGSanMBarrierWaitOp::create(builder, op->getLoc(), scratch,
                                              wait.getBarrier(), wait.getPhase(),
-                                             pred);
+                                             pred, maps);
       ttg::BarrierOp::create(builder, op->getLoc(), ttg::AddrSpace::Local);
       continue;
     }
@@ -279,7 +302,7 @@ instrumentMBarrierOps(ModuleOp module,
       ExperimentalGSanMBarrierArriveOp::create(
           builder, op->getLoc(), scratch, arrival.barrier, arrival.pred,
           arrival.count, masks, arrival.multicast, arrival.sourceBroadcastMask,
-          arrival.publishClock);
+          arrival.publishClock, maps);
     }
     if (llvm::any_of(arrivals, [](const MBarrierArrivalInfo &arrival) {
           return arrival.publishClock;
@@ -380,10 +403,21 @@ public:
     DenseSet<StringRef> calledFuncs;
     module.walk(
         [&](tt::CallOp callOp) { calledFuncs.insert(callOp.getCallee()); });
+    bool instrumentMaps = false;
+    module.walk([&](Operation *op) {
+      instrumentMaps |=
+          isa<ttng::TensormapPublishOp, ttng::TensormapCreateOp,
+              ttng::TensormapFenceproxyAcquireOp,
+              ttng::AsyncTMACopyGlobalToLocalOp,
+              ttng::AsyncTMACopyLocalToGlobalOp, ttng::AsyncTMAGatherOp,
+              ttng::AsyncTMAScatterOp, ttng::AsyncTMAReduceOp>(op);
+    });
     int64_t mBarrierCapacity =
-        ttg::lookupNumCTAs(module) > 1 ? getMBarrierCapacity(module) : 0;
+        (ttg::lookupNumCTAs(module) > 1 || instrumentMaps)
+            ? getMBarrierCapacity(module)
+            : 0;
     const bool instrumentMBarriers = mBarrierCapacity > 0;
-    DenseMap<tt::FuncOp, Value> mbarrierScratch;
+    DenseMap<tt::FuncOp, Value> mbarrierScratch, mapScratch;
 
     SmallVector<tt::FuncOp> funcs;
     module.walk([&](tt::FuncOp func) { funcs.push_back(func); });
@@ -392,6 +426,8 @@ public:
       auto funcTy = func.getFunctionType();
       SmallVector<Type> inputTys(funcTy.getInputs().begin(),
                                  funcTy.getInputs().end());
+      if (instrumentMaps && !isEntry)
+        inputTys.push_back(gsanStatePtrTy);
       if (instrumentMBarriers && !isEntry)
         inputTys.push_back(gsanStatePtrTy);
       inputTys.push_back(gsanStatePtrTy);
@@ -405,6 +441,8 @@ public:
         BlockArgument arg = func.getBody().addArgument(type, func.getLoc());
         hiddenArgs.emplace_back(arg, attrName);
       };
+      if (instrumentMaps && !isEntry)
+        addHiddenArg(gsanStatePtrTy, kGSanTensorMapScratchArgAttr);
       if (instrumentMBarriers && !isEntry)
         addHiddenArg(gsanStatePtrTy, kGSanMBarrierScratchArgAttr);
       addHiddenArg(gsanStatePtrTy, kGSanGlobalStateArgAttr);
@@ -420,6 +458,9 @@ public:
         func.setAllArgAttrs(newArgAttrs);
       for (auto [arg, attrName] : hiddenArgs)
         func.setArgAttr(arg.getArgNumber(), attrName, builder.getUnitAttr());
+      if (instrumentMaps && !isEntry)
+        mapScratch.try_emplace(
+            func, getFuncArgumentWithAttr(func, kGSanTensorMapScratchArgAttr));
       if (instrumentMBarriers && !isEntry) {
         mbarrierScratch.try_emplace(
             func, getFuncArgumentWithAttr(func, kGSanMBarrierScratchArgAttr));
@@ -428,15 +469,30 @@ public:
       if (isEntry) {
         OpBuilder b(&func.front(), func.front().begin());
         ExperimentalGSanInitOp::create(b, func.getLoc(), acquireStreamClock);
+        if (instrumentMaps) {
+          Value scratch = createThirdPartyScratchAlloc(
+              b, func.getLoc(), gsanStatePtrTy, kGSanTensorMapScratchBytes,
+              /*alignment=*/16);
+          ExperimentalGSanTensorMapStateOp::create(b, func.getLoc(), scratch,
+                                                   0);
+          ttg::BarrierOp::create(b, func.getLoc(), ttg::AddrSpace::Local);
+          mapScratch.try_emplace(func, scratch);
+        }
         if (instrumentMBarriers) {
-          int64_t scratchBytes = kGSanMBarrierTableHeaderBytes +
-                                 mBarrierCapacity * kGSanMBarrierRecordBytes;
+          int64_t scratchBytes =
+              kGSanMBarrierTableHeaderBytes +
+              mBarrierCapacity *
+                  (kGSanMBarrierRecordBytes +
+                   (instrumentMaps ? kGSanMBarrierProxyBytes : 0));
           Value scratch = createThirdPartyScratchAlloc(
               b, func.getLoc(), gsanStatePtrTy, scratchBytes,
               /*alignment=*/16, /*sharedClusterState=*/true);
-          ExperimentalGSanMBarrierTableInitOp::create(b, func.getLoc(), scratch,
-                                                      mBarrierCapacity);
-          ttng::ClusterBarrierOp::create(b, func.getLoc(), /*relaxed=*/true);
+          ExperimentalGSanMBarrierTableInitOp::create(
+              b, func.getLoc(), scratch, mBarrierCapacity, instrumentMaps);
+          if (ttg::lookupNumCTAs(module) > 1)
+            ttng::ClusterBarrierOp::create(b, func.getLoc(), /*relaxed=*/true);
+          else
+            ttg::BarrierOp::create(b, func.getLoc(), ttg::AddrSpace::Local);
           mbarrierScratch.try_emplace(func, scratch);
         }
         func.walk([&](tt::ReturnOp returnOp) {
@@ -461,6 +517,8 @@ public:
       Value streamClock =
           getFuncArgumentWithAttr(caller, kGSanStreamClockArgAttr);
       Value kernelId = getFuncArgumentWithAttr(caller, kGSanKernelIdArgAttr);
+      if (instrumentMaps)
+        operands.push_back(getValueForOp(callOp, mapScratch.lookup(caller)));
       if (instrumentMBarriers) {
         auto scratchIt = mbarrierScratch.find(caller);
         assert(scratchIt != mbarrierScratch.end() &&
@@ -483,7 +541,30 @@ public:
 
     module.walk([&](Operation *op) {
       IRRewriter b(op);
+      Value maps;
+      if (auto it = mapScratch.find(op->getParentOfType<tt::FuncOp>());
+          it != mapScratch.end())
+        maps = getValueForOp(op, it->second);
       mlir::TypeSwitch<Operation *>(op)
+          .Case([&](ttng::TensormapPublishOp op) {
+            ExperimentalGSanTensorMapAccessOp::create(
+                b, op.getLoc(), maps, op.getSource(), TensorMapAccessKind::Read,
+                true, Value{});
+            ExperimentalGSanTensorMapAccessOp::create(
+                b, op.getLoc(), maps, op.getDescPtr(),
+                TensorMapAccessKind::Publish, true, Value{});
+          })
+          .Case([&](ttng::TensormapCreateOp op) {
+            ExperimentalGSanTensorMapAccessOp::create(
+                b, op.getLoc(), maps, op.getDescPtr(),
+                TensorMapAccessKind::Publish, false, Value{});
+          })
+          .Case([&](ttng::TensormapFenceproxyAcquireOp op) {
+            b.setInsertionPointAfter(op);
+            ExperimentalGSanTensorMapAccessOp::create(
+                b, op.getLoc(), maps, op.getDescPtr(),
+                TensorMapAccessKind::Acquire, false, Value{});
+          })
           .Case([&](tt::LoadOp op) {
             ExperimentalGSanTensorAccessOp::create(
                 b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/false);
@@ -511,17 +592,19 @@ public:
                 b, op.getLoc(), op.getSrc(), op.getMask(), /*isStore=*/false);
           })
           .Case([&](ttng::AsyncTMACopyGlobalToLocalOp op) {
-            instrumentAsyncTMALoad(op);
+            instrumentAsyncTMALoad(op, maps);
           })
-          .Case(
-              [&](ttng::AsyncTMAGatherOp op) { instrumentAsyncTMAGather(op); })
+          .Case([&](ttng::AsyncTMAGatherOp op) {
+            instrumentAsyncTMAGather(op, maps);
+          })
           .Case([&](ttng::AsyncTMACopyLocalToGlobalOp op) {
-            instrumentAsyncTMAStore(op, op.getDesc(), op.getCoord());
+            instrumentAsyncTMAStore(op, op.getDesc(), op.getCoord(), maps);
           })
-          .Case(
-              [&](ttng::AsyncTMAReduceOp op) { instrumentAsyncTMAReduce(op); })
+          .Case([&](ttng::AsyncTMAReduceOp op) {
+            instrumentAsyncTMAReduce(op, maps);
+          })
           .Case([&](ttng::AsyncTMAScatterOp op) {
-            instrumentAsyncTMAScatter(op);
+            instrumentAsyncTMAScatter(op, maps);
           })
           .Case([&](tt::AtomicRMWOp op) {
             auto newOp = ExperimentalGSanAtomicRMWOp::create(
@@ -544,11 +627,18 @@ public:
           })
           .Case([&](ttg::WarpSpecializeOp op) {
             op->setAttr(kDisableSetMaxRegisterAttr, builder.getUnitAttr());
+            if (maps) {
+              ExperimentalGSanTensorMapStateOp::create(b, op.getLoc(), maps, 1);
+              ttg::BarrierOp::create(b, op.getLoc(), ttg::AddrSpace::Local);
+              b.setInsertionPointAfter(op);
+              ExperimentalGSanTensorMapStateOp::create(b, op.getLoc(), maps, 2);
+              ttg::BarrierOp::create(b, op.getLoc(), ttg::AddrSpace::Local);
+            }
           });
     });
 
     if (instrumentMBarriers)
-      instrumentMBarrierOps(module, mbarrierScratch);
+      instrumentMBarrierOps(module, mbarrierScratch, mapScratch);
     instrumentClusterBarrierEquivalents(module);
   }
 };

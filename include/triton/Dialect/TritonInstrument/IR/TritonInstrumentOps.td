@@ -170,7 +170,8 @@ def TTI_ExperimentalGSanMBarrierTableInitOp
     Initializes GSan's internal mbarrier table, used to sequence memory accesses
     through cluster mbarriers. This operation is internal to GSan instrumentation.
   }];
-  let arguments = (ins TT_Ptr:$scratch, I32Attr:$capacity);
+  let arguments = (ins TT_Ptr:$scratch, I32Attr:$capacity,
+                       DefaultValuedAttr<BoolAttr, "false">:$tensorMaps);
   let assemblyFormat = "$scratch `,` $capacity attr-dict `:` type($scratch)";
 }
 
@@ -212,10 +213,11 @@ def TTI_ExperimentalGSanMBarrierArriveOp
                        I32Attr:$count, DenseI32ArrayAttr:$multicastMasks,
                        BoolAttr:$multicast,
                        I32Attr:$sourceBroadcastMask,
-                       DefaultValuedAttr<BoolAttr, "true">:$publishClock);
+                       DefaultValuedAttr<BoolAttr, "true">:$publishClock,
+                       Optional<TT_Ptr>:$maps);
   let assemblyFormat = [{
-    $scratch `,` $barrier `,` $pred `,` $count attr-dict `:` type($scratch) `,`
-    qualified(type($barrier))
+    $scratch `,` $barrier `,` $pred `,` $count (`,` $maps^)? attr-dict `:` type($scratch) `,`
+    qualified(type($barrier)) (`,` type($maps)^)?
   }];
 }
 
@@ -231,10 +233,10 @@ def TTI_ExperimentalGSanMBarrierWaitOp
     This operation is internal to GSan instrumentation.
   }];
   let arguments = (ins TT_Ptr:$scratch, TTG_MemDescType:$barrier,
-                       I32:$phase, I1:$pred);
+                       I32:$phase, I1:$pred, Optional<TT_Ptr>:$maps);
   let assemblyFormat = [{
-    $scratch `,` $barrier `,` $phase `,` $pred attr-dict `:` type($scratch) `,`
-    qualified(type($barrier))
+    $scratch `,` $barrier `,` $phase `,` $pred (`,` $maps^)? attr-dict `:` type($scratch) `,`
+    qualified(type($barrier)) (`,` type($maps)^)?
   }];
 }
 
@@ -283,6 +285,28 @@ def TTI_ExperimentalGSanAtomicTensorDescAccessOp
     $desc `[` $coords `]` `,` $sem `,` $scope attr-dict `:`
     qualified(type($desc))
   }];
+}
+
+def TTI_ExperimentalGSanTensorMapAccessOp
+    : TTI_Op<"experimental_gsan_tensor_map_access"> {
+  let summary = "Instrument a 128-byte tensor-map metadata access for GSan";
+  let arguments = (ins
+    TT_Ptr:$scratch,
+    Arg<AnyTypeOf<[TT_Ptr, TT_AnyTensorDescType]>, "",
+        [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+    TTI_TensorMapAccessKind:$kind, BoolAttr:$firstCTAOnly, Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $scratch `,` $ptr `,` $kind `,` $firstCTAOnly (`,` $pred^)? attr-dict `:` type($scratch) `,` qualified(type($ptr))
+  }];
+}
+
+def TTI_ExperimentalGSanTensorMapStateOp
+    : TTI_Op<"experimental_gsan_tensor_map_state"> {
+  let summary = "Initialize or join per-CTA tensor-map acquisition clocks";
+  // 0 initializes; 1 forks the current region into all regions; 2 joins them.
+  let arguments = (ins TT_Ptr:$scratch, I32Attr:$action);
+  let assemblyFormat = "$scratch `,` $action attr-dict `:` type($scratch)";
 }
 
 def TTI_ExperimentalGSanTensorAccessOp

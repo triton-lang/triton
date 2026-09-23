@@ -151,7 +151,7 @@ static Allocation::BufferId getScratchBufferId(Operation *op,
 }
 
 static bool scratchBufferUsesWarpSync(Operation *op) {
-  if (isa<ttng::TensormapCreateOp>(op))
+  if (isa<ttng::TensormapCreateOp, ttng::TensormapPublishOp>(op))
     return true;
   auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
   if (!cvt)

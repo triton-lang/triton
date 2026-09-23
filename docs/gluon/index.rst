@@ -10,3 +10,8 @@ advanced kernels can trade convenience for control.
 - Browse the :doc:`examples gallery <../getting-started/examples/gluon/index>` for
   complete Gluon example kernels.
 - Browse the :doc:`Gluon API reference <api/index>`
+
+.. toctree::
+   :maxdepth: 1
+
+   tensor-maps

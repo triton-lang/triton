@@ -1976,6 +1976,20 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, subsliceType, alloc, offset, dim);
 }
 
+// -- TensormapPublishOp --
+LogicalResult TensormapPublishOp::verify() {
+  auto type = getSource().getType();
+  auto rank = type.getShape().size();
+  if (rank < 1 || rank > 5 || getShape().size() != rank ||
+      getStrides().size() != rank)
+    return emitOpError(
+        "requires one shape and stride per template dimension (rank 1-5)");
+  if (getBase().getType().getPointeeType() !=
+      type.getSignlessBlockType().getElementType())
+    return emitOpError("base element type must match the template");
+  return success();
+}
+
 // -- TensormapCreateOp --
 LogicalResult TensormapCreateOp::verify() {
   auto rank = getBoxDim().size();

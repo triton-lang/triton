@@ -1360,6 +1360,96 @@ def test_device_tma_load():
     torch.testing.assert_close(input, output)
 
 
+@gluon.jit
+def _publish_tensor_maps(storage, template, pointers, metadata, generation):
+    index = ttgl.program_id(0)
+    selected = ttgl.load(generation) * 20 + index
+    base = ttgl.load(pointers + selected).to(ttgl.pointer_type(template.dtype))
+    rows = ttgl.load(metadata + selected * 3)
+    cols = ttgl.load(metadata + selected * 3 + 1)
+    stride = ttgl.load(metadata + selected * 3 + 2)
+    tma.publish_tensor_descriptor(storage + index * 128, template, base, [rows, cols], [stride, 1])
+
+
+@gluon.jit
+def _consume_tensor_maps(storage, metadata, generation, output, BLOCK_M: ttgl.constexpr, SMEM: ttgl.constexpr,
+                         REGS: ttgl.constexpr):
+    index = ttgl.program_id(0)
+    selected = ttgl.load(generation) * 20 + index
+    rows = ttgl.load(metadata + selected * 3)
+    cols = ttgl.load(metadata + selected * 3 + 1)
+    stride = ttgl.load(metadata + selected * 3 + 2)
+    desc = tma.load_tensor_descriptor(storage + index * 128, [rows, cols], [stride, 1], [BLOCK_M, 64],
+                                      output.dtype.element_ty, SMEM)
+    smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    # Reuse the acquired descriptor for both column tiles.
+    for col in range(2):
+        mbarrier.expect(bar, desc.nbytes_per_cta)
+        tma.async_load(desc, [ttgl.program_id(1) * BLOCK_M, col * 64], bar, smem)
+        mbarrier.wait(bar, col)
+        values = smem.load(REGS)
+        x = ttgl.program_id(1) * BLOCK_M + ttgl.arange(0, BLOCK_M, ttgl.SliceLayout(1, REGS))
+        y = col * 64 + ttgl.arange(0, 64, ttgl.SliceLayout(0, REGS))
+        ttgl.store(output + index * 64 * 128 + x[:, None] * 128 + y[None, :], values)
+    mbarrier.invalidate(bar)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("fp4", [False, True])
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+def test_tensor_map_publication(fp4, num_ctas):
+    if fp4 and not is_blackwell():
+        pytest.skip("Padded FP4 requires Blackwell")
+    dtype = torch.uint8 if fp4 else torch.float16
+    element_bits = 8 if fp4 else 16
+    template_layout = ttgl.NVMMASharedLayout(128, element_bits, rank=2, fp4_padded=fp4)
+    cga = [[1 << i, 0] for i in range(num_ctas.bit_length() - 1)]
+    smem_layout = ttgl.NVMMASharedLayout(128, element_bits, rank=2, fp4_padded=fp4, cga_layout=cga)
+    regs = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=cga)
+    allocations, metadata, expected = [], [], []
+    for generation in range(2):
+        reference = torch.zeros((20, 64, 128), dtype=dtype, device="cuda")
+        for index in range(20):
+            rows = 33 + index % 8
+            cols = (64 if fp4 else 96) if generation == 0 else 128
+            stride = 128 + generation * 32
+            data = torch.randint(1, 100, (rows, stride), device="cuda").to(dtype)
+            allocations.append(data)
+            metadata.append([rows, cols, stride])
+            reference[index, :rows, :cols] = data[:, :cols]
+        expected.append(reference)
+    pointers = torch.tensor([x.data_ptr() for x in allocations], device="cuda", dtype=torch.uint64)
+    metadata = torch.tensor(metadata, device="cuda", dtype=torch.int32)
+    generation = torch.zeros((), device="cuda", dtype=torch.int32)
+    storage = torch.empty((20, 128), device="cuda", dtype=torch.uint8)
+    output = torch.empty((20, 64, 128), device="cuda", dtype=dtype)
+    template = TensorDescriptor.from_tensor(allocations[0], [16, 64], template_layout)
+
+    def run():
+        # The template describes one CTA's tile; the consumers distribute
+        # a larger logical block across their cluster.
+        _publish_tensor_maps[(20, )](storage, template, pointers, metadata, generation)
+        return _consume_tensor_maps[(20, 4 // num_ctas)](storage, metadata, generation, output, 16 * num_ctas,
+                                                         smem_layout, regs, num_ctas=num_ctas)
+
+    kernel = run()
+    torch.testing.assert_close(output, expected[0], rtol=0, atol=0)
+    assert "fence.proxy.tensormap::generic.acquire.gpu" in kernel.asm["ptx"]
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        run()
+        _consume_tensor_maps[(20, 4 // num_ctas)](storage, metadata, generation, output, 16 * num_ctas, smem_layout,
+                                                  regs, num_ctas=num_ctas)
+    # Republish at identical descriptor addresses with different allocations,
+    # dimensions and strides, exercising tensor-map cache invalidation.
+    for version in [1, 0, 1]:
+        generation.fill_(version)
+        graph.replay()
+        torch.testing.assert_close(output, expected[version], rtol=0, atol=0)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_device_tma_store():
 
@@ -6466,3 +6556,46 @@ def test_tmem288k_simple(Ncol1: int, Ncol2: int):
     num_warps = 4
     tmem288k_simple_kernel[(1, )](input, output, M, Ncol1, Ncol2, num_warps=num_warps)
     torch.testing.assert_close(input.cpu(), output.cpu(), atol=0, rtol=0)
+
+
+@gluon.jit
+def _publish_strided_tensor_map(storage, template, base, shape, strides):
+    tma.publish_tensor_descriptor(storage, template, base, shape, strides)
+
+
+@gluon.jit
+def _copy_published_tensor_map(storage, output, shape, strides, coord):
+    desc = tma.load_tensor_descriptor(storage, shape, strides, output.block_shape, output.dtype, output.layout)
+    tile = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, desc.nbytes_per_cta)
+    tma.async_load(desc, coord, bar, tile)
+    mbarrier.wait(bar, 0)
+    mbarrier.invalidate(bar)
+    tma.async_store(output, [0] * len(shape), tile)
+    tma.store_wait(0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("rank", [2, 3, 5])
+@pytest.mark.parametrize("producer_ctas", [1, 2])
+def test_tensor_map_publication_strided_rank(rank, producer_ctas):
+    block = [2] * (rank - 2) + [8, 64]
+    shape = [3] * (rank - 2) + [9, 96]
+    physical_shape = shape[:-1] + [128]
+    data = torch.randn(physical_shape, dtype=torch.float16, device="cuda")
+    # Replication lets a multi-CTA producer use the same template. Only its
+    # first CTA may write the global map.
+    cga = [[0] * rank] if producer_ctas == 2 else []
+    template_layout = ttgl.NVMMASharedLayout(32, 16, rank=rank, cga_layout=cga)
+    output_layout = ttgl.NVMMASharedLayout(32, 16, rank=rank)
+    template_data = torch.empty([1] * (rank - 1) + [64], dtype=data.dtype, device=data.device)
+    template = TensorDescriptor.from_tensor(template_data, block, template_layout)
+    output = torch.empty(block, dtype=data.dtype, device=data.device)
+    output_desc = TensorDescriptor.from_tensor(output, block, output_layout)
+    storage = torch.empty(128, dtype=torch.uint8, device=data.device)
+    _publish_strided_tensor_map[(1, )](storage, template, data, tuple(shape), data.stride(), num_ctas=producer_ctas)
+    _copy_published_tensor_map[(1, )](storage, output_desc, tuple(shape), data.stride(), tuple([0] * (rank - 1) + [32]))
+    expected = data[tuple([slice(0, size) for size in block[:-1]] + [slice(32, 96)])]
+    torch.testing.assert_close(output, expected, rtol=0, atol=0)

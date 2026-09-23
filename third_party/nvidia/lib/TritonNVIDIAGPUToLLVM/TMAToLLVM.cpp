@@ -301,6 +301,70 @@ struct TensormapCreateOpConversion
   }
 };
 
+struct TensormapPublishOpConversion
+    : public ConvertOpToLLVMPattern<ttng::TensormapPublishOp> {
+  const NVIDIA::TargetInfo &targetInfo;
+
+  TensormapPublishOpConversion(LLVMTypeConverter &converter,
+                               const NVIDIA::TargetInfo &targetInfo,
+                               PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(ttng::TensormapPublishOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto ctx = getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto smem = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+    Value thread = getThreadId(rewriter, loc);
+    Value firstWarp = b.icmp_slt(thread, b.i32_val(32));
+    Value firstCTA =
+        b.icmp_eq(targetInfo.getClusterCTAId(rewriter, loc), b.i32_val(0));
+    auto [before, copyBlock, after] =
+        createIfBlock(rewriter, loc, b.and_(firstCTA, firstWarp));
+    rewriter.setInsertionPointToStart(copyBlock);
+
+    // Preserve the driver-encoded representation, including fields which are
+    // not exposed by the language. Each lane copies one word of the template.
+    Value src = b.gep(adaptor.getSource().getType(), i32_ty,
+                      adaptor.getSource(), thread);
+    Value dst = b.gep(smem.getType(), i32_ty, smem, thread);
+    Value word = b.load(i32_ty, src);
+    targetInfo.storeShared(rewriter, loc, dst, word, b.true_val());
+    LLVM::NVIDIA::createSyncWarp(loc, rewriter);
+
+    auto [copied, updateBlock, updated] =
+        createIfBlock(rewriter, loc, b.icmp_eq(thread, b.i32_val(0)));
+    rewriter.setInsertionPointToStart(updateBlock);
+    tensormap_replace_global_address(loc, ctx, rewriter, smem,
+                                     adaptor.getBase());
+    auto type = op.getSource().getType();
+    int rank = type.getShape().size();
+    bool fp4Padded = isFp4Padded(type.getSharedLayout());
+    int elemBytes = type.getElementType().getIntOrFloatBitWidth() / 8;
+    for (int i = 0; i < rank; ++i) {
+      Value dim = adaptor.getShape()[rank - 1 - i];
+      if (i == 0 && fp4Padded)
+        dim = b.mul(dim, b.i32_val(2));
+      tensormap_replace_global_dim(loc, ctx, rewriter, smem, i, dim);
+    }
+    for (int i = 0; i < rank - 1; ++i) {
+      Value stride =
+          b.mul(adaptor.getStrides()[rank - 2 - i], b.i64_val(elemBytes));
+      if (targetInfo.getPtxVersion() <= 85)
+        stride = b.ashr(stride, b.i64_val(4));
+      tensormap_replace_global_stride(loc, ctx, rewriter, smem, i, stride);
+    }
+    rewriter.setInsertionPointToStart(updated);
+    LLVM::NVIDIA::createSyncWarp(loc, rewriter);
+    tensormap_cp_fenceproxy(loc, ctx, rewriter, adaptor.getDescPtr(), smem);
+    rewriter.setInsertionPointToStart(after);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct ReinterpretTensorDescOpConversion
     : public ConvertOpToLLVMPattern<ReinterpretTensorDescOp> {
 
@@ -324,6 +388,8 @@ void mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<TensormapCreateOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<TensormapPublishOpConversion>(typeConverter, targetInfo,
+                                             benefit);
   patterns.add<TensormapFenceproxyAcquireOpConversion,
                ReinterpretTensorDescOpConversion>(typeConverter, benefit);
 }

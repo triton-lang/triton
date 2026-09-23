@@ -16,6 +16,8 @@
 
 #include "GSan.h"
 
+static_assert(sizeof(gsan::ShadowCell) == TRITON_GSAN_SHADOW_CELL_BYTES);
+
 // #define GSAN_LOG_ALLOCATIONS
 #ifdef GSAN_LOG_ALLOCATIONS
 #define LOGF(...) printf(__VA_ARGS__);

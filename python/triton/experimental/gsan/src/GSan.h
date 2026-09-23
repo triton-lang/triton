@@ -58,8 +58,11 @@ struct alignas(4) ShadowCell {
   ScalarClock writeClock;
   uint16_t numReads;
   uint16_t lock;
+  // Even values are generic writes; odd values have a tensor-map release.
+  // Zero denotes memory not yet written by an instrumented kernel.
+  uint32_t tensorMapVersion;
 };
-static_assert(sizeof(ShadowCell) == 24);
+static_assert(sizeof(ShadowCell) == 28);
 static_assert(alignof(ShadowCell) == 4);
 
 struct GlobalState {
@@ -131,6 +134,25 @@ struct MBarrierPublishedClock {
 };
 static_assert(sizeof(MBarrierPublishedClock) == 4);
 
+static constexpr int kMaxExecutionRegions = 16;
+static constexpr int kMaxTensorMaps = 64;
+using ProxyClock = uint32_t[kMaxExecutionRegions];
+
+struct TensorMapAcquisition {
+  uintptr_t address;
+  uint32_t versions[128 / kShadowMemGranularityBytes];
+  ProxyClock acquired;
+};
+
+// Per physical CTA, freshly initialized at every kernel entry. In particular,
+// this state must not live in the persistent, per-SM ThreadState.
+struct alignas(16) TensorMapState {
+  uint32_t lock;
+  ProxyClock clocks[kMaxExecutionRegions];
+  TensorMapAcquisition maps[kMaxTensorMaps];
+};
+static_assert(sizeof(TensorMapState) == 13840);
+
 struct MBarrierPhaseState {
   // One-based generation tag. The initially completed phase 1 has tag zero.
   uint32_t generation;
@@ -153,9 +175,16 @@ struct alignas(16) MBarrierState {
 };
 static_assert(sizeof(MBarrierState) == 176);
 
+// Appended to each barrier record only in kernels that track tensor maps.
+struct MBarrierProxyState {
+  ProxyClock phases[2][kMaxClusterCTAs];
+};
+static_assert(sizeof(MBarrierProxyState) == 2048);
+
 struct alignas(16) MBarrierTable {
   uint32_t lock;
   uint32_t capacity;
+  uint32_t recordStride;
   MBarrierState states[];
 };
 static_assert(sizeof(MBarrierTable) == 16);

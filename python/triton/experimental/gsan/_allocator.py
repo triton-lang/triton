@@ -25,6 +25,7 @@ def _load_gsan_module() -> ModuleType:
         raise RuntimeError("GSan allocator requires the CUDA backend.")
 
     from triton.backends.nvidia.driver import library_dirs, include_dirs
+    from triton._C.libtriton.gsan_testing import SHADOW_CELL_SIZE_BYTES
 
     return compile_module_from_file(
         src_path=str(_GSAN_SOURCE_PATH),
@@ -32,6 +33,9 @@ def _load_gsan_module() -> ModuleType:
         library_dirs=library_dirs(),
         include_dirs=include_dirs,
         libraries=["libcuda.so.1"],
+        # The module cache does not otherwise include GSan.h. Keep the allocator
+        # and the compiler's instrumentation on the same shadow-memory ABI.
+        ccflags=[f"-DTRITON_GSAN_SHADOW_CELL_BYTES={SHADOW_CELL_SIZE_BYTES}"],
     )
 
 

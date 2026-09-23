@@ -1679,3 +1679,61 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):
             for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
                 address = target[row, col].data_ptr() + byte_offset
                 _assert_atomic_rmw_shadow(address, AtomicScope.GPU, is_release=False)
+
+
+@gluon.jit
+def _publish_map(storage, template, base, rows, cols, stride):
+    hopper.tma.publish_tensor_descriptor(storage, template, base, [rows, cols], [stride, 1])
+
+
+@gluon.jit
+def _load_published_map(storage, out, rows, cols, stride, FP4: gl.constexpr, OFFSET: gl.constexpr):
+    layout: gl.constexpr = gl.NVMMASharedLayout(128, 8 if FP4 else 16, rank=2, fp4_padded=FP4)
+    desc = hopper.tma.load_tensor_descriptor(storage, [rows, cols], [stride, 1], [16, 64], out.dtype.element_ty, layout)
+    shared = gl.allocate_shared_memory(desc.dtype, desc.block_shape, layout)
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, desc.nbytes_per_cta)
+    hopper.tma.async_load(desc, [0, OFFSET], bar, shared)
+    hopper.mbarrier.wait(bar, 0)
+    hopper.mbarrier.invalidate(bar)
+    regs: gl.constexpr = gl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    x = gl.arange(0, 16, gl.SliceLayout(1, regs))
+    y = gl.arange(0, 64, gl.SliceLayout(0, regs))
+    gl.store(out + x[:, None] * 64 + y[None, :], shared.load(regs))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("fp4", [False, True])
+@pytest.mark.parametrize("producer_ctas", [1, 2])
+def test_published_tensor_map_metadata_and_payload(with_gsan, fp4, producer_ctas):
+    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
+
+    if fp4 and not is_blackwell():
+        pytest.skip("Padded FP4 requires Blackwell")
+    dtype = torch.uint8 if fp4 else torch.float16
+    data = torch.randint(1, 100, (7, 128), device="cuda").to(dtype)
+    out = torch.empty((16, 64), dtype=dtype, device="cuda")
+    storage = torch.empty(128, dtype=torch.uint8, device="cuda")
+    cga = [[0, 0]] if producer_ctas == 2 else []
+    layout = gl.NVMMASharedLayout(128, 8 if fp4 else 16, rank=2, fp4_padded=fp4, cga_layout=cga)
+    template = GluonTensorDescriptor.from_tensor(data, [16, 64], layout)
+    cols = 64 if fp4 else 96
+    offset = 0 if fp4 else 64
+    _publish_map[(1, )](storage, template, data, 7, cols, 128, num_ctas=producer_ctas)
+    _load_published_map[(1, )](storage, out, 7, cols, 128, fp4, offset)
+    expected = torch.zeros_like(out)
+    expected[:7, :cols - offset] = data[:, offset:cols]
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+    # Include the final metadata word, not just the base-address field.
+    for byte_offset in range(0, 128, SHADOW_GRANULARITY_BYTES):
+        cell = shadow_cell_from_address(storage.data_ptr() + byte_offset)
+        assert cell.write_clock.epoch != 0
+        assert cell.num_reads != 0
+    assert shadow_cell_from_address(data[0, offset].data_ptr()).num_reads != 0
+    if fp4:
+        # A fully out-of-bounds tile must not read the second half of the row.
+        _load_published_map[(1, )](storage, out, 7, cols, 128, fp4, 64)
+        torch.testing.assert_close(out, torch.zeros_like(out), rtol=0, atol=0)
+    assert shadow_cell_from_address(data[0, cols].data_ptr()).num_reads == 0
