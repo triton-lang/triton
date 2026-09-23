@@ -45,6 +45,10 @@ class BaseBackend(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    def get_jit_cache_key_options(self, options: dict) -> dict:
+        """Resolve options needed to identify an in-memory compilation."""
+        return options
+
     @abstractmethod
     def add_stages(self, stages: dict, options: object, language: Language) -> None:
         """

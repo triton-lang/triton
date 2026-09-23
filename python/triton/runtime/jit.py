@@ -747,6 +747,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
+        options = backend.get_jit_cache_key_options(options)
 
         # add a cache field to the kernel specializations for kernel specific
         # pass pipelines

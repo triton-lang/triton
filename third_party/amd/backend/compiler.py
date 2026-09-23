@@ -4,7 +4,7 @@ from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from dataclasses import dataclass
 import ctypes
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 from types import ModuleType
 import os
 import sys
@@ -239,7 +239,7 @@ class HIPOptions:
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", 'bf16x3', 'bf16x6')
-    enable_fp_fusion: bool = True
+    enable_fp_fusion: Optional[bool] = None
     launch_cooperative_grid: bool = False
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
@@ -259,6 +259,9 @@ class HIPOptions:
     llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
 
     def __post_init__(self):
+        if self.enable_fp_fusion is None:
+            object.__setattr__(self, "enable_fp_fusion", knobs.language.default_fp_fusion)
+
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
@@ -309,6 +312,12 @@ class HIPBackend(BaseBackend):
     def get_target_name(self, options) -> str:
         return f"hip:{options.arch}"
 
+    def get_jit_cache_key_options(self, opts):
+        if opts.get("enable_fp_fusion") is None:
+            opts = dict(opts)
+            opts["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        return opts
+
     def parse_options(self, opts) -> Any:
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
         if is_enabled(opts, "consan"):
@@ -334,8 +343,6 @@ class HIPBackend(BaseBackend):
             deprecated_fp8_dot_operand_dtypes.update({"fp8e5b16", "fp8e4b8"})
             args["deprecated_fp8_dot_operand_dtypes"] = tuple(sorted(deprecated_fp8_dot_operand_dtypes))
 
-        if "enable_fp_fusion" not in opts:
-            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
         return HIPOptions(**args)
 
