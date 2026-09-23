@@ -86,19 +86,57 @@ def convert_1d_to_2d_slice_cga_kernel(out, HEAD: ttgl.constexpr, NUM_CTAS: ttgl.
     ttgl.store(out + dd, y)
 
 
+def _scan_linear_layouts():
+    # Deliberately interleave logical axis bits across registers, lanes, and
+    # warps, and give each hardware dimension a different basis order.
+    bases = [[8, 0], [0, 2], [1, 0], [0, 8], [2, 0], [0, 1], [16, 0], [0, 16], [4, 0], [0, 4]]
+    lane_bits = THREADS_PER_WARP.bit_length() - 1
+    reg_bits = len(bases) - lane_bits - 2
+    ordinary = ttgl.DistributedLinearLayout(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
+    # Keep the same logical shape, with broadcasts in all three hardware dims.
+    reg_bits += 2
+    broadcast = ttgl.DistributedLinearLayout([[0, 0]] + bases[:reg_bits], [[0, 0]] + bases[reg_bits:-1],
+                                             [[0, 0], bases[-1]], [], [32, 32])
+    # Warp-owned low bits leave no contiguous warp-local segment to scan.
+    # The carries for different register groups overlap in logical scan order.
+    bases = [[16, 0], [0, 16], [8, 0], [0, 8], [4, 0], [0, 4], [2, 0], [0, 2], [1, 0], [0, 1]]
+    reg_bits = len(bases) - lane_bits - 2
+    warp_minor = ttgl.DistributedLinearLayout(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
+    # A contiguous register prefix with a parallel bit between scan lane bits.
+    # Scanning the group endpoints must also handle nonconsecutive lane bits.
+    bases = [[1, 0], [2, 0], [0, 1], [4, 0], [8, 0], [0, 2], [16, 0], [0, 4], [0, 8], [0, 16]]
+    register_groups = ttgl.DistributedLinearLayout(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
+    return [ordinary, broadcast, warp_minor, register_groups]
+
+
+SCAN_EXTRA_LAYOUTS = _filter_layouts([
+    *_scan_linear_layouts(),
+    ttgl.BlockedLayout([32, 1], [1, THREADS_PER_WARP], [1, 4], [0, 1]),
+    ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 2, 2], [4, 1, THREADS_PER_WARP // 4], [2, 1, 2], [2, 0, 1])),
+    ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], instr_shape=[16, 8]),
+    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16]),
+    ttgl.DotOperandLayout(parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], instr_shape=[16, 8]),
+                          operand_index=0, k_width=2),
+    ttgl.amd.AMDMFMALayout(version=3, instr_shape=[16, 16, 16], transposed=False, warps_per_cta=[2, 2]),
+    ttgl.amd.AMDWMMALayout(version=1, transposed=False, warp_bases=[[1, 0], [0, 1]]),
+])
+
+
 @gluon.jit
-def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr):
+def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
+                reverse: ttgl.constexpr = False):
     x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
     x_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
     x = ttgl.load(x_ptr + x_offs_m * N + x_offs_n)
-    y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine)
+    y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine, reverse=reverse)
     ttgl.store(z_ptr + x_offs_m * N + x_offs_n, y)
 
 
-@pytest.mark.parametrize("M, N", [(32, 16), (32, 32), (32, 64), (64, 32)])
+@pytest.mark.parametrize("M, N", [(32, 16), (32, 32), (32, 64), (64, 32), (1, 32), (32, 1)])
 @pytest.mark.parametrize(
     "src_layout",
     _filter_layouts([
+        *SCAN_EXTRA_LAYOUTS,
         ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1]),
         ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1]),
         ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1]),
@@ -113,7 +151,8 @@ def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl
     ]))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("sanitize_overflow", [False, True])
-def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, reverse, device):
 
     torch.manual_seed(0)
 
@@ -121,11 +160,69 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
     z = torch.zeros((M, N), dtype=torch.int32, device=device)
     z_tri = torch.empty_like(z)
 
-    scan_kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, num_warps=4, sanitize_overflow=sanitize_overflow,
+    scan_kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, reverse, num_warps=4, sanitize_overflow=sanitize_overflow,
                            debug=sanitize_overflow)
 
-    z_ref = torch.cumsum(x, dim=axis, dtype=torch.int32)
-    torch.testing.assert_close(z_tri, z_ref)
+    z_ref = torch.cumsum(x.flip([axis]) if reverse else x, dim=axis, dtype=torch.int32)
+    if reverse:
+        z_ref = z_ref.flip([axis])
+    torch.testing.assert_close(z_tri, z_ref, rtol=0, atol=0)
+
+
+@gluon.jit
+def _scan_affine_combine(a1, b1, a2, b2):
+    return a1 * a2, b1 * a2 + b2
+
+
+@pytest.mark.parametrize("layout", [
+    *SCAN_EXTRA_LAYOUTS,
+    ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1]),
+    ttgl.BlockedLayout([8, 1], [2, THREADS_PER_WARP // 2], [1, 4], [0, 1])
+])
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_layouts_noncommutative(layout, axis, reverse, device):
+
+    @gluon.jit
+    def kernel(A, B, OutA, OutB, layout: ttgl.constexpr, axis: ttgl.constexpr, reverse: ttgl.constexpr):
+        m = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))[:, None]
+        n = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))[None, :]
+        a = ttgl.load(A + m * 32 + n)
+        b = ttgl.load(B + m * 32 + n)
+        a, b = ttgl.associative_scan((a, b), axis, _scan_affine_combine, reverse=reverse)
+        ttgl.store(OutA + m * 32 + n, a)
+        ttgl.store(OutB + m * 32 + n, b)
+
+    torch.manual_seed(0)
+    a = torch.randint(0, 2, (32, 32), dtype=torch.int32) * 2 - 1
+    b = torch.randint(-100, 100, (32, 32), dtype=torch.int64)
+    expected_a, expected_b = a.clone(), b.clone()
+    order = list(reversed(range(32))) if reverse else list(range(32))
+    for prev, cur in zip(order, order[1:]):
+        expected_a.select(axis, cur).copy_(expected_a.select(axis, prev) * a.select(axis, cur))
+        expected_b.select(axis, cur).copy_(expected_b.select(axis, prev) * a.select(axis, cur) + b.select(axis, cur))
+    a, b = a.to(device), b.to(device)
+    out_a, out_b = torch.empty_like(a), torch.empty_like(b)
+    kernel[(1, )](a, b, out_a, out_b, layout, axis, reverse, num_warps=4)
+    torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
+    torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("num_ctas", [2, 4])
+@pytest.mark.parametrize("replicate", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_cta_local(num_ctas, replicate, reverse, device):
+    cga = [[0, 0 if replicate else 1 << i] for i in range(num_ctas.bit_length() - 1)]
+    layout = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0], cga)
+    torch.manual_seed(0)
+    x = torch.randint(-100, 100, (32, 64), dtype=torch.int32, device=device)
+    out = torch.empty_like(x)
+    scan_kernel[(1, )](x, out, 32, 64, layout, 0, reverse, num_warps=4, num_ctas=num_ctas)
+    expected = torch.cumsum(x.flip([0]) if reverse else x, dim=0, dtype=torch.int32)
+    if reverse:
+        expected = expected.flip([0])
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
 
 
 def test_scan_blocked_broadcast_layout(device):

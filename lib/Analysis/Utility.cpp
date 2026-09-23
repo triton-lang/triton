@@ -407,129 +407,100 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
   return reduced;
 }
 
-ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
-  auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
-  srcShape = firstTy.getShape();
-  legacyEncoding = firstTy.getEncoding();
-  // Remove broadcasting in the registers
-  // We also remove it in the lowering and re-add it when we pack the results
-  auto origLayout = triton::gpu::toLinearLayout(firstTy);
-  auto removeBroadcastRegs = actionRemoveBroadcastedRegs(origLayout);
-  origLayout = removeBroadcastRegs.apply(origLayout);
-  srcEncoding = triton::gpu::LinearEncodingAttr::get(op.getContext(),
-                                                     std::move(origLayout));
-  srcElementTypes = op.getElementTypes();
-  // The codegen does not support different element/thread/warp order so
-  // we choose one a priori. We choose that of the blocked encoding.
-  // When we generalise this code to other layouts we'll probably need to
-  // get rid of all this logic and the *Stride auxiliary methods
-  // and replace them by transposes and reshapes on the LinearLayout
-  if (auto blockedEncoding =
-          dyn_cast<triton::gpu::BlockedEncodingAttr>(legacyEncoding)) {
-    order = llvm::to_vector(blockedEncoding.getOrder());
-  } else {
-    order = srcEncoding.getOrder();
+ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
+    : scanOp(op),
+      layout(triton::gpu::toLinearLayout(op.getInputTypes().front())) {
+  auto *ctx = op.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto axis = *std::next(layout.getOutDimNames().begin(), op.getAxis());
+  layout = layout.removeZeroBasesAlongDim(kReg);
+
+  // Put axis registers first, in logical order, without changing which thread
+  // owns any value. Unlike reduction, scan cannot reorder logical axis bits.
+  const auto &regBases = layout.getBases().lookup(kReg);
+  auto permutation = llvm::to_vector(llvm::seq<size_t>(regBases.size()));
+  llvm::stable_sort(permutation, [&](size_t a, size_t b) {
+    unsigned x = regBases[a][op.getAxis()];
+    unsigned y = regBases[b][op.getAxis()];
+    return x && (!y || x < y);
+  });
+  registerOrder = ColumnAction(permutation, kReg, regBases.size());
+  layout = registerOrder.apply(layout);
+  localScanSize = factorMaximalIdentityPrefix(layout, kReg, axis,
+                                              layout.getOutDimSize(axis))
+                      .size;
+  if (!isSupported())
+    return;
+
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  segmentSize = layout.getOutDimSize(axis);
+  for (const auto &basis : layout.getBases().lookup(kWarp)) {
+    if (basis[op.getAxis()])
+      segmentSize = std::min(segmentSize, unsigned(basis[op.getAxis()]));
   }
 
-  for (const auto &t : op.getInputTypes()) {
-    if (t.getShape() != srcShape) {
-      op.emitError() << "shape mismatch";
+  // Only scan the contiguous warp-local segments here. All remaining axis
+  // bits are handled together by one exchange of segment totals.
+  SmallVector<StringAttr> dims = {kReg, kLane, kWarp};
+  std::array<unsigned, 3> lower = {};
+  for (unsigned bit = 0; (1u << bit) < segmentSize; ++bit) {
+    std::array<unsigned, 3> current = {};
+    for (auto [d, dim] : llvm::enumerate(dims)) {
+      for (auto [i, basis] : llvm::enumerate(layout.getBases().lookup(dim))) {
+        if (basis[op.getAxis()] == (1u << bit))
+          current[d] = 1u << i;
+      }
     }
-    if (t.getEncoding() != legacyEncoding) {
-      op.emitError() << "encoding mismatch";
+    if ((1u << bit) >= localScanSize)
+      stages.push_back({lower, current});
+    for (unsigned d = 0; d < dims.size(); ++d)
+      lower[d] |= current[d];
+  }
+
+  if (segmentSize == layout.getOutDimSize(axis))
+    return;
+
+  // Store [segment][parallel] with parallel lane bits most minor. Threads
+  // scanning the same column read the same summary (a shared-memory broadcast),
+  // while adjacent parallel lanes read adjacent words instead of striding over
+  // register-owned values and introducing bank conflicts.
+  LinearLayout::BasesT bases;
+  for (auto [dim, dimBases] : layout.getBases())
+    bases[dim] = std::vector<std::vector<int32_t>>(dimBases.size(), {0});
+  unsigned parallelBits = 0;
+  for (auto dim : {kLane, kWarp, kReg}) {
+    for (auto [i, basis] : llvm::enumerate(layout.getBases().lookup(dim))) {
+      if (!basis[op.getAxis()] &&
+          llvm::any_of(basis, [](int32_t x) { return x != 0; }))
+        bases[dim][i][0] = 1u << parallelBits++;
     }
   }
-}
-
-unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
-  return getEncoding().getContigPerThread()[getAxis()];
-}
-
-unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
-  auto contigPerThread = getEncoding().getContigPerThread();
-  contigPerThread[getAxis()] = 1;
-  return product<unsigned>(contigPerThread);
-}
-
-Region &ScanLoweringHelper::getCombineOp() { return scanOp.getCombineOp(); }
-
-unsigned ScanLoweringHelper::getAxisNumThreadsPerWarpWithUniqueData() {
-  return getEncoding().getThreadsPerWarp()[getAxis()];
-}
-
-unsigned ScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
-  auto nThreads = product(getEncoding().getThreadsPerWarp());
-  return nThreads / getAxisNumThreadsPerWarpWithUniqueData();
-}
-
-// Return the flat numbers of threads computing independent scan results.
-unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
-  auto nWarps = product(getEncoding().getWarpsPerCTA());
-  return (nWarps / getAxisNumWarpsWithUniqueData()) *
-         getNonAxisNumThreadsPerWarp();
-}
-
-unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
-  return getEncoding().getWarpsPerCTA()[getAxis()];
-}
-
-unsigned ScanLoweringHelper::getAxisNumBlocks() {
-  auto contigPerThread = getEncoding().getContigPerThread();
-  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
-  auto warpsPerCTA = getEncoding().getWarpsPerCTA();
-  unsigned axis = getAxis();
-  return ceil<unsigned>(
-      getShape()[axis],
-      (contigPerThread[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
-}
-
-unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
-  auto contigPerThread = getEncoding().getContigPerThread();
-  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
-  auto warpsPerCTA = getEncoding().getWarpsPerCTA();
-  auto rank = contigPerThread.size();
-  unsigned axis = getAxis();
-  unsigned numBlocks = 1;
-  for (unsigned i = 0; i < rank; i++) {
-    if (i == axis)
-      continue;
-    numBlocks *=
-        ceil<unsigned>(getShape()[i], (contigPerThread[i] * threadsPerWarp[i] *
-                                       warpsPerCTA[i]));
+  for (auto dim : dims) {
+    for (auto [i, basis] : llvm::enumerate(layout.getBases().lookup(dim))) {
+      if (basis[op.getAxis()] >= segmentSize)
+        bases[dim][i][0] = (basis[op.getAxis()] / segmentSize) << parallelBits;
+    }
   }
-  return numBlocks;
+  scratchLayout = LinearLayout(std::move(bases), {kOffset});
 }
 
 bool ScanLoweringHelper::isSupported() {
-  // TODO: Support the following cases:
-  // 1. Scan on non-blocking encodings
-  if (!isa<BlockedEncodingAttr>(legacyEncoding))
-    return false;
-  return true;
+  auto *ctx = scanOp.getContext();
+  auto axis = *std::next(layout.getOutDimNames().begin(), scanOp.getAxis());
+  return layout.sublayoutIsZero({StringAttr::get(ctx, "block")}, {axis});
 }
 
-unsigned ScanLoweringHelper::getScratchSizeInElems() {
-  unsigned numWarps = product(getEncoding().getWarpsPerCTA());
-  unsigned numNonAxisElementsPerWarp =
-      getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
-  unsigned numElements = numWarps * numNonAxisElementsPerWarp *
-                         getAxisNumBlocks() * getNonAxisNumBlocks();
-  return numElements;
+unsigned ScanLoweringHelper::getScratchSizeInElems() const {
+  return scratchLayout ? scratchLayout->getTotalOutDimSize() : 0;
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
-  // Lowering will fail later if the layout is not supported.
-  if (!isSupported())
-    return 0;
-
-  unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
-  if (axisNumWarps == 1)
-    return 0;
-  unsigned elementSizeInBytes = 0;
-  for (const auto &ty : srcElementTypes) {
-    elementSizeInBytes += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
-  }
-  return elementSizeInBytes * getScratchSizeInElems();
+  unsigned bytes = 0;
+  for (Type ty : scanOp.getElementTypes())
+    bytes += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
+  return bytes * getScratchSizeInElems();
 }
 
 static void computeTranspositionSelectors(
@@ -991,42 +962,6 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape,
     }
   }
   return ret;
-}
-
-unsigned ScanLoweringHelper::getAxisElementStride() {
-  auto order = getOrder();
-  unsigned stride = 1;
-  for (unsigned dim : order) {
-    if (dim == getAxis())
-      return stride;
-    stride *= getEncoding().getContigPerThread()[dim];
-  }
-  llvm_unreachable("Axis not found in order");
-}
-
-unsigned ScanLoweringHelper::getAxisThreadStride() {
-  auto encoding = getEncoding();
-  auto ll = encoding.getLinearLayout();
-  auto kThread = StringAttr::get(encoding.getContext(), "lane");
-  auto outDims = llvm::to_vector(ll.getOutDimNames());
-  uint64_t bases = getInputBasisMask(ll, kThread, {outDims[getAxis()]});
-  return bases ? uint64_t{1} << llvm::countr_zero(bases) : 1;
-}
-
-unsigned ScanLoweringHelper::getAxisBlockStride() {
-  auto order = getOrder();
-  unsigned stride = 1;
-  auto contigPerThread = getEncoding().getContigPerThread();
-  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
-  auto warpsPerCTA = getEncoding().getWarpsPerCTA();
-  for (unsigned dim : order) {
-    if (dim == getAxis())
-      return stride;
-    stride *= ceil<unsigned int>(getShape()[dim], contigPerThread[dim] *
-                                                      threadsPerWarp[dim] *
-                                                      warpsPerCTA[dim]);
-  }
-  llvm_unreachable("Axis not found in order");
 }
 
 GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)

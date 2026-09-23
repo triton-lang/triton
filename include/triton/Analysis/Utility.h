@@ -1,6 +1,8 @@
 #ifndef TRITON_ANALYSIS_UTILITY_H
 #define TRITON_ANALYSIS_UTILITY_H
 
+#include <array>
+
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/Builders.h"
@@ -113,55 +115,35 @@ private:
 
 class ScanLoweringHelper {
 public:
+  // Masks are indexed by register, lane, and warp. A stage combines the
+  // terminal prefix of the lower half with each prefix in the upper half.
+  struct Stage {
+    std::array<unsigned, 3> lower;
+    std::array<unsigned, 3> current;
+  };
+
   explicit ScanLoweringHelper(triton::ScanOp op);
-  // Return true if the lowering of the scan op is supported.
   bool isSupported();
-  // Return the number of elements per thread along axis dim.
-  unsigned getAxisNumElementsPerThread();
-  // Return the number of elements per thread along non-axis dims.
-  unsigned getNonAxisNumElementsPerThread();
-  // Return the number of threads per warp along non-axis dims.
-  unsigned getNonAxisNumThreadsPerWarp();
-  // Return the flat numbers of threads computing independent scan results.
-  unsigned getNonAxisNumThreadsPerCTA();
-  // Return the number of warps per CTA along axis dim with unique data.
-  unsigned getAxisNumWarpsWithUniqueData();
-  // Return the number of threads per warp along axis dim with unique data.
-  unsigned getAxisNumThreadsPerWarpWithUniqueData();
-  // Return the number of blocks along axis dim.
-  unsigned getAxisNumBlocks();
-  // Return the number of blocks along non axis dim.
-  unsigned getNonAxisNumBlocks();
-  // Return the size of the scratch space needed for scan lowering.
+  const triton::LinearLayout &getLayout() const { return layout; }
+  const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
+  unsigned getLocalScanSize() const { return localScanSize; }
+  // Length of a contiguous logical segment contained in one warp.
+  unsigned getSegmentSize() const { return segmentSize; }
+  const std::optional<triton::LinearLayout> &getScratchLayout() const {
+    return scratchLayout;
+  }
+  ArrayRef<Stage> getStages() const { return stages; }
+  unsigned getScratchSizeInElems() const;
   unsigned getScratchSizeInBytes();
-  // Return the number of elements of the scratch space needed for scan
-  // lowering.
-  unsigned getScratchSizeInElems();
-
-  // Stride between contiguous element along axis dim.
-  unsigned getAxisElementStride();
-  // Stride between contiguous threads along axis dim.
-  unsigned getAxisThreadStride();
-  // Stride between contiguous blocks along axis dim.
-  unsigned getAxisBlockStride();
-
-  Location getLoc() { return scanOp.getLoc(); }
-  unsigned getAxis() { return scanOp.getAxis(); }
-  bool getReverse() { return scanOp.getReverse(); }
-  triton::gpu::LinearEncodingAttr getEncoding() { return srcEncoding; }
-  llvm::ArrayRef<int64_t> getShape() { return srcShape; }
-  unsigned getNumOperands() { return scanOp.getNumOperands(); }
-  SmallVector<Type> getElementTypes() { return srcElementTypes; }
-  SmallVector<unsigned> getOrder() { return order; }
-  Region &getCombineOp();
 
 private:
   triton::ScanOp scanOp;
-  triton::gpu::LinearEncodingAttr srcEncoding;
-  Attribute legacyEncoding;
-  llvm::ArrayRef<int64_t> srcShape;
-  SmallVector<Type> srcElementTypes;
-  SmallVector<unsigned> order;
+  triton::LinearLayout layout;
+  triton::ColumnAction registerOrder;
+  unsigned localScanSize = 1;
+  unsigned segmentSize = 1;
+  SmallVector<Stage> stages;
+  std::optional<triton::LinearLayout> scratchLayout;
 };
 
 // Helper class for lowering `tt.gather` operations. This class shares lowering
