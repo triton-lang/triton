@@ -1131,7 +1131,7 @@ class tensor(base_value):
             elif isinstance(sl, (builtins.slice, slice)) and all(
                     _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
                 indexed_dims += 1
-                if indexed_dims > len(ret.shape):
+                if indexed_dims > src_rank:
                     raise ValueError(f"too many indices for tensor of rank {src_rank}")
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
