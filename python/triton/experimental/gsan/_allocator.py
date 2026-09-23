@@ -100,6 +100,11 @@ def has_live_allocations() -> bool:
     return _load_gsan_module().has_live_allocations()
 
 
+def supports_fabric_handles(device: int) -> bool:
+    """Return whether a CUDA device supports fabric allocation handles."""
+    return _load_gsan_module().supports_fabric_handles(device)
+
+
 def reset() -> None:
     """Reset GSan runtime state after all GSan allocations have been released.
 

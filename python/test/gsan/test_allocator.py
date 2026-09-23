@@ -22,6 +22,7 @@ from triton.experimental.gsan._allocator import (
     gsan_malloc,
     import_allocation_handles,
     import_runtime_state_handle,
+    supports_fabric_handles,
 )
 from triton.experimental.gsan._testing_utils import (global_state, shadow_cell_from_address, shadow_tensor_for,
                                                      store_one_i32, thread_state_from_smid)
@@ -626,6 +627,8 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
     ],
 )
 def test_export_import_fabric_handles(explicit_config, allocator_config):
+    if not supports_fabric_handles(torch.cuda.current_device()):
+        pytest.skip("CUDA device does not support fabric handles")
     result = run_in_process(
         _run_export_import_fabric_handles_check,
         args=(explicit_config, ),
