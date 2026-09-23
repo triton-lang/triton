@@ -22,7 +22,7 @@ from triton.tools.triton_to_gluon_translator.common_helpers import (
 
 @gluon.constexpr_function
 def _is_cdna5(target=None):
-    return target is not None and target.arch == "gfx1250"
+    return target is not None and target.arch.removesuffix("-strict") == "gfx1250"
 
 
 @gluon.constexpr_function

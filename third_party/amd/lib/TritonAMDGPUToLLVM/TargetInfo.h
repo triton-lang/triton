@@ -34,6 +34,8 @@ public:
 
   bool supportDppBroadcast() const;
 
+  bool isGFX1250Strict() const;
+
   Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
 
   Value ballot(RewriterBase &rewriter, Location loc, Type type,

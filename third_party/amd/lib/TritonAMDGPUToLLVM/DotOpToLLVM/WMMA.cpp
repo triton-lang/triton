@@ -24,6 +24,7 @@
 #include "mlir/Support/LLVM.h"
 
 #include "../PatternTritonGPUOpToLLVM.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/WmmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -639,6 +640,11 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
       LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getAElemType());
   Type scaledBElemType =
       LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getBElemType());
+  auto targetFeatures =
+      amdgpu::TargetFeatures::fromModuleOp(op->getParentOfType<ModuleOp>());
+  if (!targetFeatures.supportsFP4Wmma(scaledAElemType, scaledBElemType))
+    return op.emitError("wmma fp4 op not supported on this arch");
+
   auto KBaseScale = scaleFactor == 32 ? 4 : 8;
 
   FailureOr<WmmaScaleIntrinsic> maybeWmmaScaleIntrinsic =

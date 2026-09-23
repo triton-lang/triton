@@ -36,7 +36,8 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
   llvm::AMDGPU::GPUKind GPUKind = getTritonTargetInfo().getGPUKind();
 
   Value globalTimeVal;
-  if (GPUKind == llvm::AMDGPU::GK_GFX1250) {
+  if (GPUKind == llvm::AMDGPU::GK_GFX1250 ||
+      GPUKind == llvm::AMDGPU::GK_GFX1250_STRICT) {
     Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
     globalTimeVal =
         LLVM::createLLVMIntrinsicCallOp(
@@ -148,7 +149,8 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
   // Granularity is per-WGP, not per-CU: the CU-within-WGP bit
   // (HW_ID1.SIMD_ID[0]) is intentionally omitted; add it if sub-WGP resolution
   // is ever needed.
-  if (GPUKind == llvm::AMDGPU::GK_GFX1250) {
+  if (GPUKind == llvm::AMDGPU::GK_GFX1250 ||
+      GPUKind == llvm::AMDGPU::GK_GFX1250_STRICT) {
     Value msg = b.i32_val(/*MSG_RTN_GET_SE_AID_ID=*/135);
     Value seAid =
         LLVM::createLLVMIntrinsicCallOp(

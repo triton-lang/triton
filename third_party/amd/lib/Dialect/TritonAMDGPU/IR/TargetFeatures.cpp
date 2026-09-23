@@ -1,9 +1,11 @@
 #include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/TargetParser/AMDGPUTargetParser.h"
 
 namespace mlir::triton::amdgpu {
 
@@ -17,6 +19,8 @@ struct GfxArch {
 std::optional<GfxArch> parseGfxArch(StringRef arch) {
   if (!arch.consume_front("gfx"))
     return std::nullopt;
+
+  bool strict = arch.consume_back("-strict");
 
   if (arch.size() < 3)
     return std::nullopt;
@@ -33,6 +37,9 @@ std::optional<GfxArch> parseGfxArch(StringRef arch) {
 
   unsigned major;
   if (arch.getAsInteger(10, major))
+    return std::nullopt;
+
+  if (strict && !(major == 12 && minor == 5))
     return std::nullopt;
 
   return GfxArch{major, minor, patch};
@@ -118,6 +125,10 @@ bool TargetFeatures::isCDNA4() const {
 
 bool TargetFeatures::isGFX1250() const {
   return getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetFeatures::isGFX1250Strict() const {
+  return llvm::AMDGPU::parseArchAMDGCN(arch) == llvm::AMDGPU::GK_GFX1250_STRICT;
 }
 
 int TargetFeatures::getWarpSize() const {
@@ -240,7 +251,7 @@ bool TargetFeatures::supportsTDM() const { return isGFX1250(); }
 bool TargetFeatures::supportsMultiCTALaunch() const { return isGFX1250(); }
 
 unsigned TargetFeatures::getMaxMulticastMaskPopcount() const {
-  return isGFX1250() ? 5 : 1;
+  return (isGFX1250() && !isGFX1250Strict()) ? 5 : 1;
 }
 
 bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
@@ -324,7 +335,15 @@ bool TargetFeatures::supportsPermlaneSwap() const {
          getISAFamily() == ISAFamily::GFX1250;
 }
 
-bool TargetFeatures::supportsCvtPkScalePk8() const { return isGFX1250(); }
+bool TargetFeatures::supportsCvtPkScalePk8() const {
+  return isGFX1250() && !isGFX1250Strict();
+}
+
+bool TargetFeatures::supportsFP4Wmma(Type aElemType, Type bElemType) const {
+  if (isa<Float4E2M1FNType>(aElemType) || isa<Float4E2M1FNType>(bElemType))
+    return isGFX1250() && !isGFX1250Strict();
+  return true;
+}
 
 bool TargetFeatures::supportsHwScaledUpcast() const {
   return getISAFamily() == ISAFamily::CDNA4 ||

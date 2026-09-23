@@ -56,6 +56,7 @@ public:
   bool isCDNA3() const;
   bool isCDNA4() const;
   bool isGFX1250() const;
+  bool isGFX1250Strict() const;
 
   int getWarpSize() const;
   bool supportsWaveId() const;
@@ -86,6 +87,7 @@ public:
   bool supportDppBroadcast() const;
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
+  bool supportsFP4Wmma(Type aElemType, Type bElemType) const;
   bool supportsHwScaledUpcast() const;
   bool supportsHwScaledDowncast() const;
 

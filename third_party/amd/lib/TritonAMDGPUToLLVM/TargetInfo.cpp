@@ -869,6 +869,10 @@ bool TargetInfo::supportDppBroadcast() const {
   return targetFeatures.supportDppBroadcast();
 }
 
+bool TargetInfo::isGFX1250Strict() const {
+  return targetFeatures.isGFX1250Strict();
+}
+
 std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
 TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   switch (getISAFamily()) {
