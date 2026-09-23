@@ -598,6 +598,7 @@ def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
                               f"codegen-bootstrap-{revision}-{system_suffix}-{checkout_hash}")
     install_path = os.path.join(build_path, "install")
     llvm_cmake_path = os.path.join(llvm_path, "lib", "cmake", "llvm")
+    lld_cmake_path = os.path.join(llvm_path, "lib", "cmake", "lld")
     command = [
         "cmake",
         "-G",
@@ -607,6 +608,7 @@ def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
         "-B",
         build_path,
         f"-DLLVM_DIR={llvm_cmake_path}",
+        f"-DLLD_DIR={lld_cmake_path}",
         f"-DCMAKE_INSTALL_PREFIX={install_path}",
         f"-DTRITON_AMD_LLVM_REVISION={revision}",
         "-DCMAKE_BUILD_TYPE=Release",

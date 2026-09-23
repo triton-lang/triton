@@ -24,6 +24,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
@@ -705,6 +706,10 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("flags") = std::vector<std::string>{},
       py::call_guard<py::gil_scoped_release>());
 
+  m.def("set_data_layout", [](llvm::Module *mod, const std::string &layout) {
+    mod->setDataLayout(layout);
+  });
+
   m.def(
       "optimize_module",
       [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
@@ -949,18 +954,26 @@ void init_triton_llvm(py::module_ &m) {
   m.def("init_targets", []() {
     static std::once_flag init_flag;
     std::call_once(init_flag, []() {
+      // Initialize generic legacy passes explicitly.
+      llvm::PassRegistry &registry = *llvm::PassRegistry::getPassRegistry();
+      llvm::initializeCore(registry);
+      llvm::initializeCodeGen(registry);
+      llvm::initializeLoopStrengthReducePass(registry);
+      llvm::initializePostInlineEntryExitInstrumenterPass(registry);
+      llvm::initializeUnreachableBlockElimLegacyPassPass(registry);
+      llvm::initializeConstantHoistingLegacyPassPass(registry);
+      llvm::initializeScalarOpts(registry);
+      llvm::initializeIPO(registry);
+      llvm::initializeVectorization(registry);
+      llvm::initializeScalarizeMaskedMemIntrinLegacyPassPass(registry);
+      llvm::initializeTransformUtils(registry);
+
       // Initialize only the GPU targets Triton emits code for. Initializing all
       // targets would also require linking LLVM's host target libraries.
       LLVMInitializeNVPTXTargetInfo();
       LLVMInitializeNVPTXTarget();
       LLVMInitializeNVPTXTargetMC();
       LLVMInitializeNVPTXAsmPrinter();
-
-      LLVMInitializeAMDGPUTargetInfo();
-      LLVMInitializeAMDGPUTarget();
-      LLVMInitializeAMDGPUTargetMC();
-      LLVMInitializeAMDGPUAsmParser();
-      LLVMInitializeAMDGPUAsmPrinter();
 
       // Installed exactly once, before any target compilation. The dispatcher
       // reads thread-local state and is safe for parallel codegen.

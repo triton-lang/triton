@@ -384,7 +384,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # mlir
     MLIRNVVMDialect
     MLIRNVVMToLLVMIRTranslation
-    MLIRGPUToNVVMTransforms
     MLIRIR
     MLIRControlFlowToLLVM
     MLIRPass
@@ -393,19 +392,17 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRSupport
     MLIRTargetLLVMIRExport
     MLIRMathToLLVM
-    MLIRROCDLToLLVMIRTranslation
     MLIRGPUDialect
     MLIRSCFToControlFlow
     MLIRIndexToLLVM
-    MLIRGPUToROCDLTransforms
     MLIRUBToLLVM
 
     # LLVM
     LLVMBitWriter
+    LLVMMIRParser
     LLVMPasses
+    LLVMPlugins
     LLVMNVPTXCodeGen
-    LLVMAMDGPUCodeGen
-    LLVMAMDGPUAsmParser
 
     Python3::Module
     nanobind-static

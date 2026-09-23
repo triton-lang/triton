@@ -31,6 +31,28 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TritonGPUToLLVM
     TritonInstrumentIR
     TritonInstrumentToLLVM
+    # MLIR's imported GPU conversion targets expose the entire GPU runtime in
+    # their link interface, including the AMDGPU backend. Link the conversion
+    # archives directly and spell the pieces used by these patterns explicitly.
+    $<TARGET_FILE:MLIRGPUToNVVMTransforms>
+    $<TARGET_FILE:MLIRMathToNVVM>
+    $<TARGET_FILE:MLIRNVGPUToNVVM>
+    $<TARGET_FILE:MLIRGPUToGPURuntimeTransforms>
+    $<TARGET_FILE:MLIRGPUTransforms>
+    $<TARGET_FILE:MLIRAsyncToLLVM>
+    $<TARGET_FILE:MLIRAsyncDialect>
+    $<TARGET_FILE:MLIRMemRefToLLVM>
+    $<TARGET_FILE:MLIRVectorToLLVM>
+    $<TARGET_FILE:MLIRMathToLLVM>
+    $<TARGET_FILE:MLIRTargetLLVMIRExport>
+    $<TARGET_FILE:MLIRLLVMToLLVMIRTranslation>
+    $<TARGET_FILE:MLIRFuncToLLVM>
+    $<TARGET_FILE:MLIRConvertToLLVMPass>
+    $<TARGET_FILE:MLIRConvertToLLVMInterface>
+    $<TARGET_FILE:MLIRVectorTransforms>
+    $<TARGET_FILE:MLIRGPUUtils>
+    $<TARGET_FILE:MLIRNVVMDialect>
+    $<TARGET_FILE:MLIRNVGPUDialect>
     MLIRReconcileUnrealizedCasts
     NVGPUIR
     MLIRUBToLLVM

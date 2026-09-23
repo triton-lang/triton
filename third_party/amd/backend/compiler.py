@@ -60,6 +60,14 @@ def _load_amd_codegen(path: str):
         ctypes.POINTER(ctypes.c_void_p),
     ]
     library.triton_amdgpu_compile.restype = ctypes.c_int
+    library.triton_amdgpu_data_layout.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_data_layout.restype = ctypes.c_int
     library.triton_amdgpu_assemble.argtypes = [
         ctypes.c_char_p,
         ctypes.c_size_t,
@@ -71,6 +79,20 @@ def _load_amd_codegen(path: str):
         ctypes.POINTER(ctypes.c_void_p),
     ]
     library.triton_amdgpu_assemble.restype = ctypes.c_int
+    library.triton_amdgpu_has_architected_sgprs.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_has_architected_sgprs.restype = ctypes.c_int
+    library.triton_amdgpu_link.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_link.restype = ctypes.c_int
     library.triton_amdgpu_free.argtypes = [ctypes.c_void_p]
     library.triton_amdgpu_free.restype = None
     library.triton_amdgpu_revision.argtypes = []
@@ -80,6 +102,61 @@ def _load_amd_codegen(path: str):
 
 def get_amd_codegen_revision() -> str:
     return _load_amd_codegen(get_amd_codegen_path()).triton_amdgpu_revision().decode("utf-8")
+
+
+def _raise_amd_codegen_error(library, error, fallback):
+    message = ctypes.string_at(error).decode("utf-8") if error.value else fallback
+    if error.value:
+        library.triton_amdgpu_free(error)
+    revision = library.triton_amdgpu_revision().decode("utf-8")
+    raise RuntimeError(f"AMD LLVM {revision}: {message}")
+
+
+def get_amdgpu_data_layout(processor: str, features: str) -> str:
+    library = _load_amd_codegen(get_amd_codegen_path())
+    data_layout = ctypes.c_void_p()
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_data_layout(
+        amd.get_target_triple(processor).encode("utf-8"),
+        processor.encode("utf-8"),
+        features.encode("utf-8"),
+        ctypes.byref(data_layout),
+        ctypes.byref(error),
+    )
+    if status:
+        _raise_amd_codegen_error(library, error, "unknown AMD data-layout failure")
+    try:
+        return ctypes.string_at(data_layout).decode("utf-8")
+    finally:
+        library.triton_amdgpu_free(data_layout)
+
+
+def has_architected_sgprs(processor: str, features: str = "") -> bool:
+    library = _load_amd_codegen(get_amd_codegen_path())
+    result = ctypes.c_uint8()
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_has_architected_sgprs(
+        amd.get_target_triple(processor).encode("utf-8"),
+        processor.encode("utf-8"),
+        features.encode("utf-8"),
+        ctypes.byref(result),
+        ctypes.byref(error),
+    )
+    if status:
+        _raise_amd_codegen_error(library, error, "unknown AMD feature-query failure")
+    return bool(result.value)
+
+
+def link_hsaco(input_path: str, output_path: str) -> None:
+    library = _load_amd_codegen(get_amd_codegen_path())
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_link(
+        os.fsencode(input_path),
+        os.fsencode(output_path),
+        ctypes.byref(error),
+    )
+    if status:
+        _raise_amd_codegen_error(library, error, "unknown AMD linker failure")
 
 
 def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
@@ -109,11 +186,7 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
     status = library.triton_amdgpu_compile(llvm_bitcode, len(llvm_bitcode), ctypes.byref(options),
                                            ctypes.byref(assembly), ctypes.byref(assembly_size), ctypes.byref(error))
     if status:
-        message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown AMD code-generation failure"
-        if error.value:
-            library.triton_amdgpu_free(error)
-        revision = library.triton_amdgpu_revision().decode("utf-8")
-        raise RuntimeError(f"AMD LLVM {revision}: {message}")
+        _raise_amd_codegen_error(library, error, "unknown AMD code-generation failure")
     try:
         return ctypes.string_at(assembly, assembly_size.value).decode("utf-8")
     finally:
@@ -137,11 +210,7 @@ def assemble_amdgcn(assembly: str, processor: str, features: str) -> bytes:
         ctypes.byref(error),
     )
     if status:
-        message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown AMD assembly failure"
-        if error.value:
-            library.triton_amdgpu_free(error)
-        revision = library.triton_amdgpu_revision().decode("utf-8")
-        raise RuntimeError(f"AMD LLVM {revision}: {message}")
+        _raise_amd_codegen_error(library, error, "unknown AMD assembly failure")
     try:
         return ctypes.string_at(object_file, object_size.value)
     finally:
@@ -587,7 +656,7 @@ class HIPBackend(BaseBackend):
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
-        llvm.attach_datalayout(llvm_mod, target_triple, options.arch, target_features, get_llvm_flags(options.arch))
+        llvm.set_data_layout(llvm_mod, get_amdgpu_data_layout(options.arch, target_features))
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -666,14 +735,17 @@ class HIPBackend(BaseBackend):
                 if not fn.is_declaration():
                     fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options.arch),
-                             options.enable_fp_fusion, disable_vector_combine=True)
+        # The following avoids instantiating an AMD TargetMachine in libtriton
+        # to keep O3 target-independent; moving target-aware O3 into the separate
+        # AMD CodeGen library is follow-up work.
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, '', '', [], options.enable_fp_fusion,
+                             disable_vector_combine=True)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
         # optimize_module from calls to @llvm.amdgcn.workgroup.id.x/y/z(). We cannot rely on this because a
         # dispatch dimensions might be used even if there is no program_id() call for it.
-        if amd.has_architected_sgprs(options.arch):
+        if has_architected_sgprs(options.arch, target_features):
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-x")
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-y")
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-z")
@@ -759,7 +831,7 @@ class HIPBackend(BaseBackend):
             with tempfile.NamedTemporaryFile() as tmp_in:
                 with open(tmp_in.name, "wb") as fd_in:
                     fd_in.write(hsaco)
-                amd.link_hsaco(tmp_in.name, tmp_out.name)
+                link_hsaco(tmp_in.name, tmp_out.name)
             with open(tmp_out.name, "rb") as fd_out:
                 ret = fd_out.read()
         return ret
