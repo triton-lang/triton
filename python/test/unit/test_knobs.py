@@ -466,6 +466,26 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
     assert fresh_knobs.amd.use_buffer_ops
 
 
+@pytest.mark.parametrize("default_fp_fusion", [False, True])
+def test_default_fp_fusion_compiler_option(default_fp_fusion, fresh_knobs, monkeypatch):
+    from triton.compiler import make_backend
+    from triton.runtime import driver
+
+    monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", str(int(default_fp_fusion)))
+    backend = make_backend(driver.active.get_current_target())
+
+    assert backend.parse_options({}).enable_fp_fusion is default_fp_fusion
+
+
+@pytest.mark.skipif(not is_hip(), reason="use_buffer_ops is a HIP option")
+def test_default_use_buffer_ops_compiler_option(fresh_knobs, monkeypatch):
+    from triton.backends.amd.compiler import HIPOptions
+
+    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
+
+    assert HIPOptions(arch="gfx942").use_buffer_ops is False
+
+
 def test_env_updated(fresh_knobs, monkeypatch):
     fresh_knobs.amd.use_buffer_ops = False
     assert os.getenv("AMDGCN_USE_BUFFER_OPS") == "0"

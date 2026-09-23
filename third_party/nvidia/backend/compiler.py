@@ -125,7 +125,7 @@ class CUDAOptions:
     ptx_version: int = None
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
-    enable_fp_fusion: bool = True
+    enable_fp_fusion: Optional[bool] = None
     sched4reg: bool = False
     enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False
@@ -146,6 +146,9 @@ class CUDAOptions:
     min_shared_mem: Optional[int] = None
 
     def __post_init__(self):
+        if self.enable_fp_fusion is None:
+            object.__setattr__(self, "enable_fp_fusion", knobs.language.default_fp_fusion)
+
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
@@ -210,6 +213,12 @@ class CUDABackend(BaseBackend):
         super().__init__(target)
         self.binary_ext = "cubin"
 
+    def get_jit_cache_key_options(self, opts):
+        if opts.get("enable_fp_fusion") is None:
+            opts = dict(opts)
+            opts["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        return opts
+
     def parse_options(self, opts) -> Any:
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
         if any(is_enabled(opts, mode) for mode in ["consan", "iisan"]):
@@ -240,9 +249,6 @@ class CUDABackend(BaseBackend):
         if "deprecated_fp8_dot_operand_dtypes" not in args:
             if capability >= 90:
                 args["deprecated_fp8_dot_operand_dtypes"] = ("fp8e4b15", )
-
-        if "enable_fp_fusion" not in args:
-            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
 
         if is_enabled(args, "gsan"):
             from triton.runtime.driver import driver

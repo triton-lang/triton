@@ -676,6 +676,45 @@ def test_jit_warmup_cache(device) -> None:
     assert len(kernel_add.device_caches[device][0]) == 1
 
 
+def test_default_fp_fusion_in_memory_cache_key(monkeypatch, fresh_triton_cache) -> None:
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 0.0)
+
+    with triton.knobs.language.scope():
+        triton.knobs.language.reset()
+        monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", "1")
+        first = kernel.warmup(torch.float32, grid=(1, ))
+
+        monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", "0")
+        second = kernel.warmup(torch.float32, grid=(1, ))
+
+    assert first.metadata.enable_fp_fusion is True
+    assert second.metadata.enable_fp_fusion is False
+    assert second is not first
+
+
+@pytest.mark.skipif(reason="use_buffer_ops is a HIP option", condition=not is_hip())
+def test_default_use_buffer_ops_in_memory_cache_key(monkeypatch, fresh_triton_cache) -> None:
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 0.0)
+
+    with triton.knobs.amd.scope():
+        triton.knobs.amd.reset()
+        monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "1")
+        first = kernel.warmup(torch.float32, grid=(1, ))
+
+        monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
+        second = kernel.warmup(torch.float32, grid=(1, ))
+
+    assert first.metadata.use_buffer_ops is True
+    assert second.metadata.use_buffer_ops is False
+    assert second is not first
+
+
 def test_jit_debug(device) -> None:
 
     @triton.jit
@@ -877,8 +916,9 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
     default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0")
     try:
         use_buffer_ops_opts = ["1", "0"]
-        # The ranges should only be available when buffer ops are enabled
-        pointer_ranges = [[(0, )], []]
+        # The range is a property of the argument, so it is reported either way;
+        # make_ttgir is what gates the buffer-ops passes on AMDGCN_USE_BUFFER_OPS.
+        pointer_ranges = [[(0, )], [(0, )]]
         for use_buffer_ops, pointer_range in zip(use_buffer_ops_opts, pointer_ranges):
             # Set AMDGCN_USE_BUFFER_OPS
             os.environ["AMDGCN_USE_BUFFER_OPS"] = use_buffer_ops

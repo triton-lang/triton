@@ -20,8 +20,19 @@ class Language(Enum):
     GLUON = 1
 
 
+# How much of a tensor argument's key the native specializer builds, as the value of
+# `BaseBackend.supports_native_tensor_specialization`: nothing (the backend's
+# get_tensor_specialization() is called per argument), the alignment bit "D", or "D"
+# plus "S" for an allocation addressable with a 32-bit offset -- its *underlying
+# storage*, not the view. Keys are "", "D", "S" or "DS"; align=False drops only "D".
+# RANGE needs torch's stable C ABI to read the storage, and is served as NONE without it.
+NATIVE_TENSOR_SPEC_NONE = 0
+NATIVE_TENSOR_SPEC_ALIGN = 1
+NATIVE_TENSOR_SPEC_RANGE = 2
+
+
 class BaseBackend(metaclass=ABCMeta):
-    supports_native_tensor_specialization = True
+    supports_native_tensor_specialization = NATIVE_TENSOR_SPEC_ALIGN
 
     def __init__(self, target: GPUTarget) -> None:
         self.target = target
@@ -44,6 +55,10 @@ class BaseBackend(metaclass=ABCMeta):
         This function may contain target-specific heuristics and check the legality of the provided options
         """
         raise NotImplementedError
+
+    def get_jit_cache_key_options(self, options: dict) -> dict:
+        """Resolve options needed to identify an in-memory compilation."""
+        return options
 
     @abstractmethod
     def add_stages(self, stages: dict, options: object, language: Language) -> None:
