@@ -28,6 +28,7 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
     if round_f32_to_tf32:
         assert dtype_str == "fp32", "round_f32_to_tf32 is only supported for float32 tensors"
     assert elem_bytes * 8 == layout.element_bitwidth
+    # Padded FP4 requires 64 packed bytes (128 bytes with padding), even without swizzling.
     min_block = 64 if layout.fp4_padded else layout.swizzle_byte_width // elem_bytes
     assert block_shape[-1] >= min_block, \
         f"Expected block_shape[-1] to be at least {min_block} but got {block_shape[-1]}"
