@@ -1,5 +1,7 @@
 import collections
 import functools
+import itertools
+import re
 import triton
 import triton.language as tl
 from triton.experimental import gluon
@@ -136,6 +138,214 @@ def test_minimum_maximum_tensor_promotion(op, other_dtype, expected_dtype):
         tl.static_assert(rhs.dtype == expected_dtype)
 
     run_parser(kernel, args=(op, other_dtype, expected_dtype))
+
+
+@pytest.mark.parametrize("op", ["lt", "le", "gt", "ge", "eq", "ne"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("typed_scalar", [False, True])
+@pytest.mark.parametrize("dtype, value, scalar_dtype, weak_dtype, strong_dtype", [
+    (tl.float16, 0.0, tl.float32, "f16", "f32"),
+    (tl.bfloat16, 0.0, tl.float32, "bf16", "f32"),
+    (tl.float32, 2.0**-127, tl.float64, "f32", "f64"),
+    (tl.int8, 1, tl.int32, "i8", "i32"),
+    (tl.int8, -128, tl.int32, "i8", "i32"),
+    (tl.int8, 127, tl.int32, "i8", "i32"),
+    (tl.uint8, 1, tl.int32, "i8", "i32"),
+    (tl.uint8, 255, tl.int32, "i8", "i32"),
+    (tl.int8, 256.0, tl.float32, "f32", "f32"),
+    (tl.int32, 1.0, tl.float32, "f32", "f32"),
+])
+def test_comparison_scalar_promotion(op, reverse, typed_scalar, dtype, value, scalar_dtype, weak_dtype, strong_dtype):
+
+    @triton.jit
+    def kernel(X, value: tl.constexpr, scalar_dtype: tl.constexpr, op: tl.constexpr, reverse: tl.constexpr,
+               typed_scalar: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        if typed_scalar:
+            y = tl.full((), value, scalar_dtype)
+        else:
+            y: tl.constexpr = value
+        if op == "lt":
+            result = (y < x) if reverse else (x < y)
+        elif op == "le":
+            result = (y <= x) if reverse else (x <= y)
+        elif op == "gt":
+            result = (y > x) if reverse else (x > y)
+        elif op == "ge":
+            result = (y >= x) if reverse else (x >= y)
+        elif op == "eq":
+            result = (y == x) if reverse else (x == y)
+        else:
+            result = (y != x) if reverse else (x != y)
+        anchor(result)
+
+    module = run_parser(kernel, args=(MockTensor(dtype), value, scalar_dtype, op, reverse, typed_scalar))
+    comparisons = [line for line in module.str_nodebug().splitlines() if "arith.cmp" in line]
+    assert len(comparisons) == 1
+    expected_dtype = strong_dtype if typed_scalar else weak_dtype
+    assert f"tensor<8x{expected_dtype}>" in comparisons[0]
+
+
+@pytest.mark.parametrize("op", ["lt", "le", "gt", "ge", "eq", "ne"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("dtype, value", [
+    (tl.int8, -129),
+    (tl.int8, 128),
+    (tl.int8, 256),
+    (tl.uint8, -1),
+    (tl.uint8, 256),
+    (tl.int16, -(2**15) - 1),
+    (tl.int16, 2**15),
+    (tl.uint16, 2**16),
+    (tl.int32, -(2**31) - 1),
+    (tl.int32, 2**31),
+    (tl.uint32, 2**32),
+    (tl.int64, -(2**63) - 1),
+    (tl.int64, 2**63),
+    (tl.uint64, 2**64),
+])
+def test_comparison_scalar_out_of_range(op, reverse, dtype, value):
+
+    @triton.jit
+    def kernel(X, value: tl.constexpr, op: tl.constexpr, reverse: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        if op == "lt":
+            result = (value < x) if reverse else (x < value)
+        elif op == "le":
+            result = (value <= x) if reverse else (x <= value)
+        elif op == "gt":
+            result = (value > x) if reverse else (x > value)
+        elif op == "ge":
+            result = (value >= x) if reverse else (x >= value)
+        elif op == "eq":
+            result = (value == x) if reverse else (x == value)
+        else:
+            result = (value != x) if reverse else (x != value)
+        anchor(result)
+
+    with pytest.raises(CompilationError, match="out of range|negative scalar|Nonrepresentable integer"):
+        run_parser(kernel, args=(MockTensor(dtype), value, op, reverse))
+
+
+@pytest.mark.parametrize("op, dtype, value, expected_dtype", [
+    (tl.umulhi, tl.int32, 1, tl.int32),
+    (tl.umulhi, tl.uint32, 1, tl.uint32),
+    (tl.div_rn, tl.float32, 2.0**-127, tl.float32),
+    (tl.fdiv, tl.float32, 2.0**-127, tl.float32),
+    (tl.fdiv, tl.float16, 2.0, tl.float32),
+    (tl.fdiv, tl.bfloat16, 2.0, tl.float32),
+    (tl.fdiv, tl.float64, 2.0, tl.float64),
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_binary_math_scalar_promotion(op, dtype, value, expected_dtype, reverse):
+
+    @triton.jit
+    def kernel(X, op: tl.constexpr, value: tl.constexpr, expected_dtype: tl.constexpr, reverse: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        if reverse:
+            result = op(value, x)
+        else:
+            result = op(x, value)
+        tl.static_assert(result.dtype == expected_dtype)
+        anchor(result)
+
+    run_parser(kernel, args=(MockTensor(dtype), op, value, expected_dtype, reverse))
+
+
+@pytest.mark.parametrize("lhs_dtype, rhs_dtype, expected_dtype", [
+    (tl.float32, tl.int32, tl.float32),
+    (tl.int32, tl.float32, tl.float32),
+    (tl.int32, tl.int32, None),
+])
+@pytest.mark.parametrize("scalar_rhs", [False, True])
+@pytest.mark.parametrize("ieee_rounding, approx", [(False, False), (True, False), (False, True)])
+def test_fdiv_type_promotion(lhs_dtype, rhs_dtype, expected_dtype, scalar_rhs, ieee_rounding, approx):
+
+    @triton.jit
+    def kernel(X, Y, value: tl.constexpr, expected_dtype: tl.constexpr, scalar_rhs: tl.constexpr,
+               ieee_rounding: tl.constexpr, approx: tl.constexpr):
+        offsets = tl.arange(0, 8)
+        x = tl.load(X + offsets)
+        if scalar_rhs:
+            y: tl.constexpr = value
+        else:
+            y = tl.load(Y + offsets)
+        result = tl.fdiv(x, y, ieee_rounding=ieee_rounding, approx=approx)
+        tl.static_assert(result.dtype == expected_dtype)
+        anchor(result)
+
+    value = 2.0 if rhs_dtype.is_floating() else 2
+    args = (MockTensor(lhs_dtype), MockTensor(rhs_dtype), value, expected_dtype, scalar_rhs, ieee_rounding, approx)
+    if expected_dtype is None:
+        with pytest.raises(CompilationError, match="fdiv requires floating-point operands after type promotion"):
+            run_parser(kernel, args=args)
+    else:
+        run_parser(kernel, args=args)
+
+
+def test_umulhi_scalar_out_of_range():
+
+    @triton.jit
+    def kernel(X):
+        x = tl.load(X)
+        anchor(tl.umulhi(x, 2**31))
+
+    with pytest.raises(CompilationError, match="out of range for type int32"):
+        run_parser(kernel, args=(MockTensor(tl.int32), ))
+
+
+@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
+@pytest.mark.parametrize("dtype, value", [(tl.float16, 1.0), (tl.bfloat16, 1.0), (tl.float32, 2.0**-127)])
+@pytest.mark.parametrize("tensor_args", range(1, 8))
+def test_ternary_math_scalar_promotion(op, dtype, value, tensor_args):
+
+    @triton.jit
+    def kernel(X, op: tl.constexpr, value: tl.constexpr, tensor_args: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        result = op(x if tensor_args & 1 else value, x if tensor_args & 2 else value, x if tensor_args & 4 else value)
+        tl.static_assert(result.dtype == x.dtype)
+        anchor(result)
+
+    run_parser(kernel, args=(MockTensor(dtype), op, value, tensor_args))
+
+
+@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
+@pytest.mark.parametrize("scalar_arg", range(3))
+def test_ternary_math_scalar_precision(op, scalar_arg):
+
+    @triton.jit
+    def kernel(X, Y, op: tl.constexpr, scalar_arg: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        y = tl.load(Y + tl.arange(0, 8))
+        value: tl.constexpr = 1.0 + 2.0**-30
+        if scalar_arg == 0:
+            result = op(value, x, y)
+        elif scalar_arg == 1:
+            result = op(x, value, y)
+        else:
+            result = op(x, y, value)
+        tl.static_assert(result.dtype == tl.float64)
+        anchor(result)
+
+    module = run_parser(kernel, args=(MockTensor(tl.float16), MockTensor(tl.float64), op, scalar_arg))
+    constants = re.findall(r"arith.constant ([^ ]+) : f64", module.str_nodebug())
+    assert any(float(value) == 1.0 + 2.0**-30 for value in constants)
+
+
+@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
+@pytest.mark.parametrize("order", list(itertools.permutations(range(3))))
+def test_ternary_math_mixed_scalar_kinds(op, order):
+
+    @triton.jit
+    def kernel(X, op: tl.constexpr, order: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        result = op(x if order[0] == 0 else (2.0**-127 if order[0] == 1 else 1.0), x if order[1] == 0 else
+                    (2.0**-127 if order[1] == 1 else 1.0), x if order[2] == 0 else
+                    (2.0**-127 if order[2] == 1 else 1.0))
+        tl.static_assert(result.dtype == tl.float64)
+        anchor(result)
+
+    run_parser(kernel, args=(MockTensor(tl.int16), op, order))
 
 
 @pytest.mark.parametrize("op", ["minimum", "maximum", "clamp", "cumsum", "cumprod"])
@@ -730,7 +940,8 @@ def test_named_expr_without_prior_annotation_decays():
     # CHECK: scf.if [[COND]] {
     # CHECK:   tt.call @{{.*}}anchor{{.*}}(%c11_i32) : (i32) -> ()
     # CHECK: } else {
-    # CHECK:   [[ADD:%.*]] = arith.addi %c11_i32, %c1_i32_0 : i32
+    # CHECK:   [[ONE:%.*]] = arith.constant 1 : i32
+    # CHECK:   [[ADD:%.*]] = arith.addi %c11_i32, [[ONE]] : i32
     # CHECK:   tt.call @{{.*}}anchor{{.*}}([[ADD]]) : (i32) -> ()
     # CHECK: }
     if (x := constexpr_function(10)) != 10:
