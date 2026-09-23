@@ -11,9 +11,8 @@ using namespace mlir::triton;
 namespace {
 struct ScanOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp> {
-  // Values are indexed by register, then by scan operand. Registers follow
-  // ScanLoweringHelper's logical axis order until packResults restores the
-  // original layout order.
+  // Values are indexed by register, then by scan operand. The scan phases use
+  // logical axis order; unpacking and packing use the original layout order.
   using ScanValues = SmallVector<SmallVector<Value>>;
 
   ScanOpConversion(LLVMTypeConverter &typeConverter,
@@ -29,7 +28,13 @@ struct ScanOpConversion
     if (!helper.isSupported())
       return op.emitError("scan axis distributed across CTAs is not supported");
 
-    auto values = unpackInputs(op, adaptor, helper, rewriter);
+    auto values = unpackInputs(op, adaptor, rewriter);
+
+    // Match the helper's layout: axis register bits first, ordered by logical
+    // significance. This only reorders SSA values within each thread.
+    const auto &registerOrder = helper.getRegisterOrder();
+    permuteRegisters(values, registerOrder);
+
     unsigned localSize = helper.getLocalScanSize();
     bool scanEndpoints = localSize > 2 && helper.getStages().size() > 1;
 
@@ -54,25 +59,37 @@ struct ScanOpConversion
     if (helper.getScratchLayout())
       scanAcrossWarps(op, helper, values, laneId, warpId, rewriter);
 
-    packResults(op, helper, values, rewriter);
+    // Restore the input register order before packing the results.
+    permuteRegisters(values, registerOrder.inverse());
+    packResults(op, values, rewriter);
     return success();
   }
 
 private:
   ScanValues unpackInputs(triton::ScanOp op, OpAdaptor adaptor,
-                          const ScanLoweringHelper &helper,
                           ConversionPatternRewriter &rewriter) const {
-    auto kReg = StringAttr::get(rewriter.getContext(), "register");
-    unsigned numRegs = helper.getLayout().getInDimSize(kReg);
-    ScanValues values(numRegs);
+    ScanValues values;
     for (Value operand : adaptor.getOperands()) {
       auto unpacked =
           unpackUniqueTensorElements(op.getLoc(), operand, rewriter);
-      unpacked = helper.getRegisterOrder().apply(unpacked);
-      for (unsigned r = 0; r < numRegs; ++r)
+      values.resize(unpacked.size());
+      for (unsigned r = 0; r < unpacked.size(); ++r)
         values[r].push_back(unpacked[r]);
     }
     return values;
+  }
+
+  void permuteRegisters(ScanValues &values, const ColumnAction &order) const {
+    if (order.isIdentity())
+      return;
+    for (unsigned i = 0; i < values.front().size(); ++i) {
+      SmallVector<Value> operand;
+      for (const auto &row : values)
+        operand.push_back(row[i]);
+      operand = order.apply(operand);
+      for (unsigned r = 0; r < values.size(); ++r)
+        values[r][i] = operand[r];
+    }
   }
 
   // Each group contains the consecutive low axis bits owned by registers.
@@ -357,16 +374,13 @@ private:
     return combined;
   }
 
-  void packResults(triton::ScanOp op, const ScanLoweringHelper &helper,
-                   const ScanValues &values,
+  void packResults(triton::ScanOp op, const ScanValues &values,
                    ConversionPatternRewriter &rewriter) const {
     SmallVector<Value> results;
-    auto inverseOrder = helper.getRegisterOrder().inverse();
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       SmallVector<Value> unpacked;
       for (const auto &row : values)
         unpacked.push_back(row[i]);
-      unpacked = inverseOrder.apply(unpacked);
       results.push_back(
           packUniqueTensorElements(op.getLoc(), getTypeConverter(), unpacked,
                                    rewriter, op.getResult()[i].getType()));
