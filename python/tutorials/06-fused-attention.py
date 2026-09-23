@@ -11,6 +11,10 @@ Extra Credits:
 * Original flash attention paper (https://arxiv.org/abs/2205.14135)
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
+On Blackwell, ``attention(..., num_ctas=2)`` distributes each forward query tile
+over a CTA cluster; 4 and 8 CTAs are also supported. The sequence length must be
+divisible by ``128 * num_ctas``. The default is one CTA.
+
 """
 
 import pytest
@@ -82,7 +86,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
         # -- update output accumulator --
-        if not IS_HOPPER and warp_specialize and BLOCK_M == 128 and HEAD_DIM == 128:
+        if not IS_HOPPER and warp_specialize and BLOCK_M >= 128 and HEAD_DIM == 128:
             BM: tl.constexpr = acc.shape[0]
             BN: tl.constexpr = acc.shape[1]
             acc0, acc1 = acc.reshape([BM, 2, BN // 2]).permute(0, 2, 1).split()
@@ -130,17 +134,23 @@ elif supports_host_descriptor():
 else:
     NUM_STAGES_OPTIONS = [2, 3, 4]
 
-configs = [
-    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, pre_hook=_host_descriptor_pre_hook) \
-    for BM in [64, 128]\
-    for BN in [32, 64, 128]\
-    for s in NUM_STAGES_OPTIONS \
-    for w in [4, 8]\
-]
-if "PYTEST_VERSION" in os.environ:
-    # Use a single config in testing for reproducibility
-    configs = [
-        triton.Config(dict(BLOCK_M=128, BLOCK_N=64), num_stages=2, num_warps=4, pre_hook=_host_descriptor_pre_hook),
+
+def attention_configs(num_ctas=1):
+    # Give each CTA 128 query rows so the attention dots split along M.
+    block_m_options = [64, 128] if num_ctas == 1 else [128 * num_ctas]
+    if "PYTEST_VERSION" in os.environ:
+        # Use a single config in testing for reproducibility.
+        return [
+            triton.Config(dict(BLOCK_M=128 * num_ctas, BLOCK_N=64), num_stages=2, num_warps=4, num_ctas=num_ctas,
+                          pre_hook=_host_descriptor_pre_hook),
+        ]
+    return [
+        triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, num_ctas=num_ctas,
+                      pre_hook=_host_descriptor_pre_hook)
+        for BM in block_m_options
+        for BN in [32, 64, 128]
+        for s in NUM_STAGES_OPTIONS
+        for w in [4, 8]
     ]
 
 
@@ -154,11 +164,12 @@ def keep(conf):
 def prune_invalid_configs(configs, named_args, **kwargs):
     N_CTX = kwargs["N_CTX"]
     STAGE = kwargs["STAGE"]
+    HEAD_DIM = kwargs["HEAD_DIM"]
 
     # Filter out configs where BLOCK_M > N_CTX
     # Filter out configs where BLOCK_M < BLOCK_N when causal is True
     return [
-        conf for conf in configs if conf.kwargs.get("BLOCK_M", 0) <= N_CTX and (
+        conf for conf in configs if conf.kwargs["BLOCK_N"] <= HEAD_DIM and conf.kwargs.get("BLOCK_M", 0) <= N_CTX and (
             conf.kwargs.get("BLOCK_M", 0) >= conf.kwargs.get("BLOCK_N", 0) or STAGE == 1)
     ]
 
@@ -171,8 +182,9 @@ def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
         return tl.make_tensor_descriptor(desc_or_ptr, shape, strides, block_shape)
 
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
-                 prune_configs_by={'early_config_prune': prune_invalid_configs})
+@triton.autotune(configs=list(filter(keep, attention_configs())),
+                 key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "STAGE",
+                      "warp_specialize"], prune_configs_by={'early_config_prune': prune_invalid_configs})
 @triton.jit
 def _attn_fwd(sm_scale, M,  #
               Z, H, desc_q, desc_k, desc_v, desc_o, N_CTX,  #
@@ -243,6 +255,18 @@ def _attn_fwd(sm_scale, M,  #
     m_ptrs = M + off_hz * N_CTX + offs_m
     tl.store(m_ptrs, m_i)
     desc_o.store([qo_offset_y, 0], acc.to(dtype))
+
+
+# Each cluster size has its own autotuning cache. Multi-CTA launches are opt-in
+# on Blackwell; the compiler chooses the supported MMA and specialization path.
+_attn_fwd_kernels = {1: _attn_fwd}
+if is_blackwell():
+    for num_ctas in [2, 4, 8]:
+        _attn_fwd_kernels[num_ctas] = triton.autotune(
+            configs=attention_configs(num_ctas),
+            key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "STAGE", "warp_specialize"],
+            prune_configs_by={'early_config_prune': prune_invalid_configs},
+        )(_attn_fwd.fn)
 
 
 @triton.jit
@@ -503,7 +527,13 @@ def _attn_bwd(Q, K, V, sm_scale,  #
 class _attention(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale, warp_specialize=True):
+    def forward(ctx, q, k, v, causal, sm_scale, warp_specialize=True, num_ctas=1):
+        if num_ctas not in (1, 2, 4, 8):
+            raise ValueError("num_ctas must be 1, 2, 4, or 8")
+        if num_ctas != 1 and not is_blackwell():
+            raise ValueError("Multi-CTA attention requires Blackwell")
+        if num_ctas != 1 and q.shape[2] % (128 * num_ctas) != 0:
+            raise ValueError("Multi-CTA attention requires a sequence length divisible by 128 * num_ctas")
         # shape constraints
         HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
         # when v is in float8_e5m2 it is transposed.
@@ -554,7 +584,7 @@ class _attention(torch.autograd.Function):
                 extra_kern_args["maxnreg"] = 168
             else:
                 extra_kern_args["maxnreg"] = 80
-        _attn_fwd[grid](
+        _attn_fwd_kernels[num_ctas][grid](
             sm_scale, M,  #
             q.shape[0], q.shape[1],  #
             desc_q, desc_k, desc_v, desc_o,  #
@@ -616,7 +646,9 @@ class _attention(torch.autograd.Function):
         return dq, dk, dv, None, None, None, None
 
 
-attention = _attention.apply
+def attention(q, k, v, causal, sm_scale, warp_specialize=True, num_ctas=1):
+    return _attention.apply(q, k, v, causal, sm_scale, warp_specialize, num_ctas)
+
 
 TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 
@@ -627,10 +659,13 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
 @pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
+@pytest.mark.parametrize("num_ctas", [1, 2, 4, 8] if is_blackwell() else [1])
 @pytest.mark.parametrize("mode", ["fwd", "bwd"])
 @pytest.mark.parametrize("provider", ["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []))
 @pytest.mark.enable_warmup
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtype=torch.float16):
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, num_ctas, mode, provider, dtype=torch.float16):
+    if N_CTX < 128 * num_ctas:
+        pytest.skip("Sequence is smaller than the fixed test query tile")
     if mode == "fwd" and "fp16" in provider:
         pytest.skip("Avoid running the forward computation twice.")
     if mode == "bwd" and "fp8" in provider:
@@ -668,7 +703,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
         v = v.permute(0, 1, 3, 2).contiguous()
         v = v.permute(0, 1, 3, 2)
         v = v.to(torch.float8_e5m2)
-    tri_out = attention(q, k, v, causal, sm_scale, warp_specialize).half()
+    tri_out = attention(q, k, v, causal, sm_scale, warp_specialize, num_ctas).half()
     if mode == "fwd":
         atol = 3 if "fp8" in provider else 1e-2
         torch.testing.assert_close(tri_out, ref_out, atol=atol, rtol=0)
@@ -690,11 +725,13 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
 
 
 @pytest.mark.enable_warmup
-def test_fp8_v_batch_head_descriptor():
+@pytest.mark.parametrize("num_ctas", [1, 2, 4, 8] if is_blackwell() else [1])
+@pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
+def test_fp8_v_batch_head_descriptor(num_ctas, warp_specialize):
     if not TORCH_HAS_FP8:
         pytest.skip("PyTorch does not have float8_e5m2")
 
-    Z, H, N_CTX, HEAD_DIM = 2, 2, 128, 64
+    Z, H, N_CTX, HEAD_DIM = 2, 2, 128 * num_ctas, 64
     torch.manual_seed(20)
     q = torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=torch.float16, device=DEVICE).normal_(0.0, 0.5)
     k = torch.empty_like(q).normal_(0.0, 0.5)
@@ -705,7 +742,7 @@ def test_fp8_v_batch_head_descriptor():
 
     scores = torch.matmul(q.float(), k.float().transpose(2, 3)) * 0.5
     ref_out = torch.matmul(torch.softmax(scores, dim=-1), v.float())
-    tri_out = attention(q, k, v, False, 0.5, False).float()
+    tri_out = attention(q, k, v, False, 0.5, warp_specialize, num_ctas=num_ctas).float()
 
     torch.testing.assert_close(tri_out, ref_out, atol=0.125, rtol=0)
 
@@ -727,16 +764,26 @@ for HEAD_DIM in [64, 128]:
             # Enable warpspec for causal fwd on Hopper
             enable_ws = mode == "fwd" and (is_blackwell() or (is_hopper() and not causal))
             for warp_specialize in [False, True] if enable_ws else [False]:
+                cluster_sizes = [1, 2, 4, 8] if is_blackwell() and mode == "fwd" else [1]
+                providers, provider_names, styles = [], [], []
+                for num_ctas, color in zip(cluster_sizes, ["red", "orange", "purple", "brown"]):
+                    for precision, style in [("fp16", "-"), ("fp8", "--")] if TORCH_HAS_FP8 else [("fp16", "-")]:
+                        suffix = f"-{num_ctas}cta" if num_ctas > 1 else ""
+                        providers.append(f"triton-{precision}{suffix}")
+                        provider_names.append(f"Triton [{precision.upper()}, {num_ctas} CTA]")
+                        styles.append((color, style))
+                if HAS_FLASH:
+                    providers.append("flash")
+                    provider_names.append("Flash-2")
+                    styles.append(("green", "-"))
                 configs.append(
                     triton.testing.Benchmark(
                         x_names=["N_CTX"],
                         x_vals=[2**i for i in range(10, 15)],
                         line_arg="provider",
-                        line_vals=["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []) +
-                        (["flash"] if HAS_FLASH else []),
-                        line_names=["Triton [FP16]"] + (["Triton [FP8]"] if TORCH_HAS_FP8 else []) +
-                        (["Flash-2"] if HAS_FLASH else []),
-                        styles=[("red", "-"), ("blue", "-"), ("green", "-")],
+                        line_vals=providers,
+                        line_names=provider_names,
+                        styles=styles,
                         ylabel="TFLOPS",
                         plot_name=
                         f"fused-attention-batch{BATCH}-head{N_HEADS}-d{HEAD_DIM}-{mode}-causal={causal}-warp_specialize={warp_specialize}",
@@ -756,6 +803,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, warp_specialize, mo
     assert mode in ["fwd", "bwd"]
     dtype = torch.float16
     if "triton" in provider:
+        num_ctas = int(provider.rsplit("-", 1)[1].removesuffix("cta")) if provider.endswith("cta") else 1
         q = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
         k = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
         v = torch.randn((BATCH, H, N_CTX, HEAD_DIM), dtype=dtype, device=device, requires_grad=True)
@@ -766,7 +814,7 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, warp_specialize, mo
             v = v.permute(0, 1, 3, 2)
             v = v.to(torch.float8_e5m2)
         sm_scale = 1.3
-        fn = lambda: attention(q, k, v, causal, sm_scale, warp_specialize)
+        fn = lambda: attention(q, k, v, causal, sm_scale, warp_specialize, num_ctas)
         if mode == "bwd":
             o = fn()
             do = torch.randn_like(o)
