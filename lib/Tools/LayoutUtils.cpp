@@ -58,10 +58,9 @@ LinearLayout invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
                       /*requireSurjective=*/false);
 }
 
-LinearLayout
-ensureLayoutNotLargerThan(const LinearLayout &layout,
-                          const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
-                          bool broadcastRegisters) {
+LinearLayout ensureLayoutNotLargerThan(
+    const LinearLayout &layout,
+    const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
   assert(shape.size() == layout.getNumOutDims());
   if (shape.empty()) {
     return layout;
@@ -84,7 +83,7 @@ ensureLayoutNotLargerThan(const LinearLayout &layout,
     outDimSizes.push_back(pair.second);
   }
   for (auto &[inDimName, inDimBases] : bases) {
-    bool dropBroadcasting = (!broadcastRegisters && inDimName == kRegister);
+    bool dropBroadcasting = inDimName == kRegister;
     std::vector<std::vector<int32_t>> newBasesRegister;
     for (auto &basis : inDimBases) {
       bool wasZero = true;

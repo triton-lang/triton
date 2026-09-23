@@ -16,17 +16,14 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
 invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
                       ArrayRef<StringAttr> localDims);
 
-// For each output dimension d, ensure that the layout's output size (i.e., its
-// codomain) does not exceed shape[d]. Do this without changing the size of the
-// layout's inputs (i.e., leave its domain unchanged).
+// Clamp each output dimension to shape[d] by zeroing out-of-bounds basis
+// components. Register bases made entirely zero by clamping are omitted;
+// already-zero register bases and the sizes of other input dimensions are
+// preserved. Basis components must be zero or powers of two.
 //
-// This function is invariant to the order of the layout's input and output
-// dimensions.
+// This function is invariant to the order of the input and output dimensions.
 //
-// We achieve this by setting the largest value in each output dimension d to 0
-// because bases that map to a location larger than shape[d]
-// effectively duplicate along that dimension.  For example, consider a layout
-// with an output dimension size of 32, and we call ensureLayoutNotLargerThan to
+// For example, consider a layout with an output dimension size of 32, and
 // shrink the output dimension size to 8:
 //
 //   L(register=1) = 8
@@ -35,8 +32,7 @@ invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
 //   L(lane=1) = 2
 //   L(lane=2) = 16
 //
-// In the first step, we shrink the output dimension size to 16 by setting
-// L(lane=2) to 0:
+// Setting L(lane=2) to 0 gives:
 //
 //   L(register=1) = 8
 //   L(register=2) = 4
@@ -44,31 +40,19 @@ invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
 //   L(lane=1) = 2
 //   L(lane=2) = 0
 //
-// This means that lane=2 has the same data as lane=0.
+// This means that lane=2 has the same data as lane=0. The number of lanes
+// stays the same.
 //
-// Now the output dimension of this layout has a size of 16, which is still
-// larger than 8.  We find the current largest value in the output dimension,
-// which is L(register=1) = 8, and we set L(register=1) to 0:
+// L(register=1) = 8 is also out of bounds. Omitting this register basis and
+// compacting the remaining register indices gives the final layout:
 //
-//   L(register=1) = 0
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 0
-//
-// Now the output dimension of this layout has a size of 8, which is the desired
-// size.  Note that this method works only because the bases are powers of two,
-// which is the case for DistributedLayouts If broadcastRegisters is false, we
-// remove any register that's larger than the desired shape. In the example
-// above we would have
 //   L(register=1) = 4
 //   L(register=2) = 1
 //   L(lane=1) = 2
 //   L(lane=2) = 0
-LinearLayout
-ensureLayoutNotLargerThan(const LinearLayout &layout,
-                          const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
-                          bool broadcastRegisters = true);
+LinearLayout ensureLayoutNotLargerThan(
+    const LinearLayout &layout,
+    const llvm::SmallDenseMap<StringAttr, int64_t> &shape);
 
 // For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
 // smaller than shape[d].  Do this by increasing the size of the layout's inputs

@@ -248,6 +248,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   bool transB = !bLoader->getDescriptor().transposed;
 
   auto fc = unpackTensorElements(loc, loadedC, rewriter, dTensorTy);
+  // M and N are multiples of 64 and 8, so only trailing N registers can repeat.
+  unsigned compactAccSize =
+      std::min(accSize, 2 * triton::gpu::getElemsPerThread(dTensorTy)[1]);
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
   triton::nvgpu::WGMMAEltType eltTypeA = getMmaOperandType(a, allowTF32);
@@ -262,9 +265,12 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   SmallVector<Value> mmaResults;
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
+      SmallVector<Value> instructionAcc;
+      for (unsigned i = 0; i < accSize; ++i)
+        instructionAcc.push_back(
+            fc[(m * numRepN + n) * compactAccSize + i % compactAccSize]);
       llvm::SmallVector<Value> mmaOut =
-          loadReg(rewriter, loc, fc, (m * numRepN + n) * accSize, accSize,
-                  startSequence);
+          loadReg(rewriter, loc, instructionAcc, 0, accSize, startSequence);
       llvm::SmallVector<Type> elemTypes;
       for (Value accEl : mmaOut)
         elemTypes.push_back(accEl.getType());
@@ -291,9 +297,26 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                  32 / aTensorTy.getElementTypeBitWidth());
 
           unsigned regASize = (instrMNK[0] * instrMNK[2]) / 32;
+          auto aShape = getShapePerCTA(aTensorTy);
+          unsigned kWidth = aDotOpEnc.getKWidth();
+          unsigned innerK = std::min<unsigned>(kWidth, aShape[1]);
+          unsigned innerM =
+              std::min<unsigned>(2, std::max<int64_t>(1, aShape[0] / 8));
+          unsigned outerK = std::min<unsigned>(
+              2, std::max<int64_t>(1, aShape[1] / (4 * kWidth)));
+          SmallVector<Value> operands;
+          for (unsigned i = 0; i < regASize; ++i) {
+            unsigned idx = (m * numRepK + k) * regASize + i;
+            // Reuse compact registers for dimensions smaller than a warp tile.
+            unsigned kInner = idx % kWidth % innerK;
+            unsigned mInner = idx / kWidth % 2 % innerM;
+            unsigned kOuter = idx / (2 * kWidth) % 2 % outerK;
+            unsigned rep = idx / (4 * kWidth);
+            idx = kInner + innerK * (mInner + innerM * (kOuter + outerK * rep));
+            operands.push_back(structA[idx]);
+          }
           llvm::SmallVector<Value> regA =
-              loadReg(rewriter, loc, structA, (m * numRepK + k) * regASize,
-                      regASize, startSequence);
+              loadReg(rewriter, loc, operands, 0, regASize, startSequence);
           // Emit "dummy" mov instructions for the register operand. The
           // expectation is that there is a wait_group op before this WGMMA op
           // which waits for the same WGMMA op issued in the previous iteration
@@ -362,8 +385,12 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   if (sync)
     mmaResults = emitWait(rewriter, loc, mmaResults, 0);
 
-  SmallVector<Value> results =
+  auto instructionResults =
       unpackAccumulator(rewriter, loc, mmaResults, dTensorTy);
+  SmallVector<Value> results;
+  for (unsigned i = 0; i < fc.size(); ++i)
+    results.push_back(
+        instructionResults[i / compactAccSize * accSize + i % compactAccSize]);
 
   // replace with new packed result
   auto res =
