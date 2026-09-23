@@ -11,8 +11,8 @@ using namespace mlir::triton;
 namespace {
 struct ScanOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp> {
-  // Values stay in their original register order, with broadcast registers
-  // removed, and are indexed by register, then by scan operand.
+  // Values are indexed by register, then by scan operand. The scan phases use
+  // logical axis order; unpacking and packing use the original layout order.
   using ScanValues = SmallVector<SmallVector<Value>>;
 
   ScanOpConversion(LLVMTypeConverter &typeConverter,
@@ -37,11 +37,16 @@ struct ScanOpConversion
         values[r].push_back(unpacked[r]);
     }
 
+    // Match the helper's layout: axis register bits first, ordered by logical
+    // significance. This only reorders SSA values within each thread.
+    const auto &registerOrder = helper.getRegisterOrder();
+    permuteRegisters(values, registerOrder);
+
     unsigned localSize = helper.getLocalScanSize();
     bool scanEndpoints = localSize > 2 && helper.getStages().size() > 1;
 
-    // First scan register groups that form contiguous logical segments.
-    scanRegisterGroups(op, helper, values, scanEndpoints, rewriter);
+    // First scan contiguous groups of registers owned by each thread.
+    scanRegisterGroups(op, values, localSize, scanEndpoints, rewriter);
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value threadId = getThreadId(rewriter, loc);
@@ -57,6 +62,8 @@ struct ScanOpConversion
     if (helper.getScratchLayout())
       scanAcrossWarps(op, helper, values, laneId, warpId, rewriter);
 
+    // Restore the input register order before packing the results.
+    permuteRegisters(values, registerOrder.inverse());
     SmallVector<Value> results;
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       SmallVector<Value> unpacked;
@@ -71,32 +78,41 @@ struct ScanOpConversion
   }
 
 private:
+  void permuteRegisters(ScanValues &values, const ColumnAction &order) const {
+    if (order.isIdentity())
+      return;
+    for (unsigned i = 0; i < values.front().size(); ++i) {
+      SmallVector<Value> operand;
+      for (const auto &row : values)
+        operand.push_back(row[i]);
+      operand = order.apply(operand);
+      for (unsigned r = 0; r < values.size(); ++r)
+        values[r][i] = operand[r];
+    }
+  }
+
   // Each group contains the consecutive low axis bits owned by registers.
   // Higher register bits can still be interleaved with lane/warp bits.
-  void scanRegisterGroups(triton::ScanOp op, const ScanLoweringHelper &helper,
-                          ScanValues &values, bool scanEndpoints,
+  void scanRegisterGroups(triton::ScanOp op, ScanValues &values,
+                          unsigned localSize, bool scanEndpoints,
                           ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
-    unsigned localSize = helper.getLocalScanSize();
     bool reverse = op.getReverse();
-    for (ArrayRef<unsigned> registers : helper.getRegisterGroups()) {
-      for (unsigned base = 0; base < registers.size(); base += localSize) {
-        auto group = registers.slice(base, localSize);
-        // For the endpoint scan, retain prefixes of the suffix excluding the
-        // leading element. They can all combine with the scanned leading value
-        // independently afterwards, without another serial register scan.
-        for (unsigned i = scanEndpoints ? 2 : 1; i < localSize; ++i) {
-          unsigned r = group[reverse ? localSize - 1 - i : i];
-          unsigned prev = group[reverse ? localSize - i : i - 1];
-          values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
-                                     values[prev], values[r]);
-        }
-        if (scanEndpoints) {
-          unsigned first = reverse ? group.back() : group.front();
-          unsigned last = reverse ? group.front() : group.back();
-          values[last] = applyCombineOp(loc, rewriter, op.getCombineOp(),
-                                        values[first], values[last]);
-        }
+    for (unsigned base = 0; base < values.size(); base += localSize) {
+      // For the endpoint scan, retain prefixes of the suffix excluding the
+      // leading element. They can all combine with the scanned leading value
+      // independently afterwards, without another serial register scan.
+      for (unsigned i = scanEndpoints ? 2 : 1; i < localSize; ++i) {
+        unsigned r = base + (reverse ? localSize - 1 - i : i);
+        unsigned prev = reverse ? r + 1 : r - 1;
+        values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
+                                   values[prev], values[r]);
+      }
+      if (scanEndpoints) {
+        unsigned first = base + (reverse ? localSize - 1 : 0);
+        unsigned last = base + (reverse ? 0 : localSize - 1);
+        values[last] = applyCombineOp(loc, rewriter, op.getCombineOp(),
+                                      values[first], values[last]);
       }
     }
   }
@@ -131,28 +147,26 @@ private:
       // shared by multiple destination registers.
       auto previous = values;
       DenseMap<unsigned, SmallVector<Value>> endpoints;
-      for (const auto &group : helper.getRegisterGroups()) {
-        for (auto [i, r] : llvm::enumerate(group)) {
-          unsigned localIndex = i % localSize;
-          if (scanEndpoints && localIndex != 0 && localIndex != localSize - 1)
-            continue;
-          if (stage.current[0] && bool(r & stage.current[0]) == reverse)
-            continue;
-          unsigned src = (r & ~clear[0]) | set[0];
-          auto it = endpoints.find(src);
-          if (it == endpoints.end()) {
-            SmallVector<Value> endpoint = previous[src];
-            if (clear[1]) {
-              Value lane = b.or_(b.and_(laneId, b.i32_val(~clear[1])),
-                                 b.i32_val(set[1]));
-              for (Value &value : endpoint)
-                value = targetInfo.shuffleIdx(rewriter, loc, value, lane);
-            }
-            it = endpoints.try_emplace(src, std::move(endpoint)).first;
+      for (unsigned r = 0; r < values.size(); ++r) {
+        unsigned localIndex = r % localSize;
+        if (scanEndpoints && localIndex != 0 && localIndex != localSize - 1)
+          continue;
+        if (stage.current[0] && bool(r & stage.current[0]) == reverse)
+          continue;
+        unsigned src = (r & ~clear[0]) | set[0];
+        auto it = endpoints.find(src);
+        if (it == endpoints.end()) {
+          SmallVector<Value> endpoint = previous[src];
+          if (clear[1]) {
+            Value lane =
+                b.or_(b.and_(laneId, b.i32_val(~clear[1])), b.i32_val(set[1]));
+            for (Value &value : endpoint)
+              value = targetInfo.shuffleIdx(rewriter, loc, value, lane);
           }
-          values[r] =
-              combineWithPrefix(op, it->second, previous[r], rewriter, pred);
+          it = endpoints.try_emplace(src, std::move(endpoint)).first;
         }
+        values[r] =
+            combineWithPrefix(op, it->second, previous[r], rewriter, pred);
       }
     }
 
@@ -160,15 +174,12 @@ private:
     // prefix. Both endpoints already contain their complete warp-local scan.
     if (!scanEndpoints)
       return;
-    for (ArrayRef<unsigned> registers : helper.getRegisterGroups()) {
-      for (unsigned base = 0; base < registers.size(); base += localSize) {
-        auto group = registers.slice(base, localSize);
-        unsigned first = reverse ? group.back() : group.front();
-        for (unsigned i = 1; i + 1 < localSize; ++i) {
-          unsigned r = group[reverse ? localSize - 1 - i : i];
-          values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
-                                     values[first], values[r]);
-        }
+    for (unsigned base = 0; base < values.size(); base += localSize) {
+      unsigned first = base + (reverse ? localSize - 1 : 0);
+      for (unsigned i = 1; i + 1 < localSize; ++i) {
+        unsigned r = base + (reverse ? localSize - 1 - i : i);
+        values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
+                                   values[first], values[r]);
       }
     }
   }
@@ -194,10 +205,11 @@ private:
     unsigned numOperands = op.getNumOperands();
     bool reverse = op.getReverse();
 
+    auto regMask = getInputBasisMask(layout, kReg, {axis});
     auto laneMask = getInputBasisMask(layout, kLane, {axis});
     auto warpMask = getInputBasisMask(layout, kWarp, {axis});
-    // A warp-local segment occupies this many consecutive entries in each
-    // ordered register group, even when the register indices are scattered.
+    // Register order puts all axis bits first, sorted by logical significance.
+    unsigned axisRegs = regMask + 1;
     unsigned segmentRegs = 1;
     for (const auto &basis : layout.getBases().lookup(kReg))
       if (basis[op.getAxis()] && basis[op.getAxis()] < segmentSize)
@@ -221,17 +233,16 @@ private:
         getOutputBasisMask(layout, {kLane, kWarp}, axis) / segmentSize;
     unsigned regSegmentMask =
         getOutputBasisMask(layout, {kReg}, axis) / segmentSize;
-    DenseMap<unsigned, unsigned> segmentStarts;
-    const auto &firstGroup = helper.getRegisterGroups().front();
-    for (unsigned i = 0; i < firstGroup.size(); i += segmentRegs) {
+    DenseMap<unsigned, unsigned> segmentToReg;
+    for (unsigned r = 0; r < axisRegs; r += segmentRegs) {
       unsigned segment = layout
-                             .apply({{kReg, firstGroup[i]},
+                             .apply({{kReg, r},
                                      {kLane, 0},
                                      {kWarp, 0},
                                      {kBlock, 0}})[op.getAxis()]
                              .second /
                          segmentSize;
-      segmentStarts[segment] = i;
+      segmentToReg[segment] = r;
     }
     Value parallelLane = b.and_(laneId, b.i32_val(~laneMask));
     Value parallelWarp = b.and_(warpId, b.i32_val(~warpMask));
@@ -243,9 +254,9 @@ private:
     // as soon as the last possible segment for a register group is reached.
     // This keeps only one carry live for ordinary blocked layouts, but also
     // handles register/lane/warp axis bits interleaved in any order.
-    for (ArrayRef<unsigned> group : helper.getRegisterGroups()) {
-      Value parallelOffset = getScratchOffset(
-          loc, rewriter, scratch, group.front(), parallelLane, parallelWarp);
+    for (unsigned base = 0; base < values.size(); base += axisRegs) {
+      Value parallelOffset = getScratchOffset(loc, rewriter, scratch, base,
+                                              parallelLane, parallelWarp);
       SmallVector<Value> acc;
       DenseMap<unsigned, SmallVector<Value>> carries;
       for (unsigned step = 1; step < numSegments; ++step) {
@@ -261,7 +272,8 @@ private:
         }
         acc = applyCombineOp(loc, rewriter, op.getCombineOp(), acc, total);
         unsigned regSegment = current & regSegmentMask;
-        auto &carry = carries[regSegment];
+        unsigned reg = segmentToReg.lookup(regSegment);
+        auto &carry = carries[reg];
         if (carry.empty()) {
           carry = acc;
         } else {
@@ -275,10 +287,9 @@ private:
           continue;
         Value pred =
             regSegment == (reverse ? regSegmentMask : 0) ? notFirst : Value{};
-        for (unsigned r :
-             group.slice(segmentStarts.lookup(regSegment), segmentRegs))
+        for (unsigned r = base + reg; r < base + reg + segmentRegs; ++r)
           values[r] = combineWithPrefix(op, carry, values[r], rewriter, pred);
-        carries.erase(regSegment);
+        carries.erase(reg);
       }
       assert(carries.empty() && "all carries must be consumed");
     }
@@ -311,17 +322,14 @@ private:
     Value writer = b.and_(representative,
                           b.icmp_eq(b.and_(laneId, b.i32_val(segmentLaneMask)),
                                     b.i32_val(reverse ? 0 : segmentLaneMask)));
-    for (const auto &group : helper.getRegisterGroups()) {
-      for (unsigned pos = reverse ? 0 : segmentRegs - 1; pos < group.size();
-           pos += segmentRegs) {
-        unsigned r = group[pos];
-        Value index = getScratchOffset(
-            loc, rewriter, *helper.getScratchLayout(), r, laneId, warpId);
-        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-          Value ptr = b.gep(smemBases[i].getType(), getElementType(op, i),
-                            smemBases[i], index);
-          targetInfo.storeShared(rewriter, loc, ptr, values[r][i], writer);
-        }
+    unsigned lastReg = reverse ? 0 : segmentRegs - 1;
+    for (unsigned r = lastReg; r < values.size(); r += segmentRegs) {
+      Value index = getScratchOffset(loc, rewriter, *helper.getScratchLayout(),
+                                     r, laneId, warpId);
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        Value ptr = b.gep(smemBases[i].getType(), getElementType(op, i),
+                          smemBases[i], index);
+        targetInfo.storeShared(rewriter, loc, ptr, values[r][i], writer);
       }
     }
     return smemBases;
