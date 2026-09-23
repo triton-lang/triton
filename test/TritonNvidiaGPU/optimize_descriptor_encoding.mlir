@@ -1,6 +1,113 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-optimize-descriptor-encoding | FileCheck %s
-// Test that gather/scatter are assigned swizzled encodings
 
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+// CHECK-DAG: #[[DESC:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+// CHECK-DAG: #[[LOCAL:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+// CHECK: tt.func public @descriptor_fp4_swizzle_0(
+// CHECK-SAME: %arg0: !tt.tensordesc<16x8xi8, #[[DESC]]>
+tt.func public @descriptor_fp4_swizzle_0(%arg0: !tt.tensordesc<16x8xi8>) {
+  %c0 = arith.constant 0 : i32
+  // CHECK: %[[LOAD:.*]] = tt.descriptor_load %arg0{{.*}} : !tt.tensordesc<16x8xi8, #[[DESC]]>
+  %0 = tt.descriptor_load %arg0[%c0, %c0] : !tt.tensordesc<16x8xi8> -> tensor<16x8xi8, #blocked>
+  // CHECK: ttg.local_alloc %[[LOAD]] : {{.*}} -> !ttg.memdesc<16x8xi8, #[[LOCAL]], #smem>
+  %1 = ttg.local_alloc %0 : (tensor<16x8xi8, #blocked>) -> !ttg.memdesc<16x8xi8, #shared, #smem>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+// CHECK-DAG: #[[DESC:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+// CHECK-DAG: #[[LOCAL:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+// CHECK: tt.func public @descriptor_fp4_swizzle_32(
+// CHECK-SAME: %arg0: !tt.tensordesc<16x16xi8, #[[DESC]]>
+tt.func public @descriptor_fp4_swizzle_32(%arg0: !tt.tensordesc<16x16xi8>) {
+  %c0 = arith.constant 0 : i32
+  // CHECK: %[[LOAD:.*]] = tt.descriptor_load %arg0{{.*}} : !tt.tensordesc<16x16xi8, #[[DESC]]>
+  %0 = tt.descriptor_load %arg0[%c0, %c0] : !tt.tensordesc<16x16xi8> -> tensor<16x16xi8, #blocked>
+  // CHECK: ttg.local_alloc %[[LOAD]] : {{.*}} -> !ttg.memdesc<16x16xi8, #[[LOCAL]], #smem>
+  %1 = ttg.local_alloc %0 : (tensor<16x16xi8, #blocked>) -> !ttg.memdesc<16x16xi8, #shared, #smem>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+// CHECK-DAG: #[[DESC:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+// CHECK-DAG: #[[LOCAL:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+// CHECK: tt.func public @descriptor_fp4_swizzle_64(
+// CHECK-SAME: %arg0: !tt.tensordesc<16x32xi8, #[[DESC]]>
+tt.func public @descriptor_fp4_swizzle_64(%arg0: !tt.tensordesc<16x32xi8>) {
+  %c0 = arith.constant 0 : i32
+  // CHECK: %[[LOAD:.*]] = tt.descriptor_load %arg0{{.*}} : !tt.tensordesc<16x32xi8, #[[DESC]]>
+  %0 = tt.descriptor_load %arg0[%c0, %c0] : !tt.tensordesc<16x32xi8> -> tensor<16x32xi8, #blocked>
+  // CHECK: ttg.local_alloc %[[LOAD]] : {{.*}} -> !ttg.memdesc<16x32xi8, #[[LOCAL]], #smem>
+  %1 = ttg.local_alloc %0 : (tensor<16x32xi8, #blocked>) -> !ttg.memdesc<16x32xi8, #shared, #smem>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+// CHECK-DAG: #[[DESC:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+// CHECK: tt.func public @descriptor_fp4_swizzle_128(
+// CHECK-SAME: %arg0: !tt.tensordesc<16x64xi8, #[[DESC]]>
+tt.func public @descriptor_fp4_swizzle_128(%arg0: !tt.tensordesc<16x64xi8>) {
+  %c0 = arith.constant 0 : i32
+  // CHECK: %[[LOAD:.*]] = tt.descriptor_load %arg0{{.*}} : !tt.tensordesc<16x64xi8, #[[DESC]]>
+  %0 = tt.descriptor_load %arg0[%c0, %c0] : !tt.tensordesc<16x64xi8> -> tensor<16x64xi8, #blocked>
+  // CHECK: ttg.local_alloc %[[LOAD]] : {{.*}} -> !ttg.memdesc<16x64xi8, #[[DESC]], #smem>
+  %1 = ttg.local_alloc %0 : (tensor<16x64xi8, #blocked>) -> !ttg.memdesc<16x64xi8, #shared, #smem>
+  tt.return
+}
+}
+
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 0], [0, 8], [1, 0], [2, 0], [4, 8], [8, 0]]}, alignment = 32>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+// CHECK-DAG: #[[DESC:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+// CHECK-DAG: #[[LOCAL:.*]] = #ttg.shared_linear<{{.*}}alignment = 32>
+// CHECK: tt.func public @descriptor_fp4_shared_linear(
+// CHECK-SAME: %arg0: !tt.tensordesc<16x16xi8, #[[DESC]]>
+tt.func public @descriptor_fp4_shared_linear(%arg0: !tt.tensordesc<16x16xi8>) {
+  %c0 = arith.constant 0 : i32
+  // CHECK: %[[LOAD:.*]] = tt.descriptor_load %arg0{{.*}} : !tt.tensordesc<16x16xi8, #[[DESC]]>
+  %0 = tt.descriptor_load %arg0[%c0, %c0] : !tt.tensordesc<16x16xi8> -> tensor<16x16xi8, #blocked>
+  // CHECK: ttg.local_alloc %[[LOAD]] : {{.*}} -> !ttg.memdesc<16x16xi8, #[[LOCAL]], #smem>
+  %1 = ttg.local_alloc %0 : (tensor<16x16xi8, #blocked>) -> !ttg.memdesc<16x16xi8, #shared, #smem>
+  tt.return
+}
+}
+
+// -----
+
+// Test that gather/scatter are assigned swizzled encodings
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 
