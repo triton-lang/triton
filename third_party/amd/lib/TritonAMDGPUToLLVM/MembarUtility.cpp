@@ -8,7 +8,8 @@
 namespace mlir::triton::AMD {
 namespace {
 // Returns true if
-// 1) one is LocalLoad synced via AsyncWait.
+// 1) op2 is a LocalLoad synced via AsyncWait and op1 is an AsyncLoad into the
+//    same buffer (RAW).
 // 2) both are AsyncLoad
 bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
                                        Allocation *allocation) {
@@ -71,8 +72,9 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
   if (!sameBuffer)
     return false;
 
-  return isLocalLoadWithAsyncWaitToken(op1) ||
-         isLocalLoadWithAsyncWaitToken(op2);
+  // Filter only the RAW direction: the AsyncWait orders the synced LocalLoad
+  // after the AsyncLoad, but not a later refill of the same buffer (WAR).
+  return isLocalLoadWithAsyncWaitToken(op2);
 }
 
 bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
