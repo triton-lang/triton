@@ -4964,6 +4964,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
+def test_amd_sched_barrier_placement(target):
+
+    @gluon.jit
+    def kernel(X, Y, Out):
+        x = ttgl.load(X)
+        ttgl.amd.hint.sched_barrier()
+        y = ttgl.load(Y)
+        result = x + y
+        ttgl.amd.hint.sched_barrier(allow=None)
+        ttgl.store(Out, result)
+
+    x = MockTensor(ttgl.float32)
+    y = MockTensor(ttgl.float32)
+    out = MockTensor(ttgl.float32)
+    module = run_parser(kernel, *make_args(x, y, out), target=target)
+    ir_str = anonymize_ir(module.str_nodebug())
+    ir_str = re.sub(r'("ttg\.threads-per-warp"\s*=\s*)\d{2}', r'\1...', ir_str)
+    expecttest.assert_expected_inline(
+        ir_str, """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = tt.load %arg0 : !tt.ptr<f32>
+    rocdl.sched.barrier none
+    %1 = tt.load %arg1 : !tt.ptr<f32>
+    %2 = arith.addf %0, %1 : f32
+    rocdl.sched.barrier none
+    tt.store %arg2, %2 : !tt.ptr<f32>
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
 def test_amd_warp_pipeline(target):
 
     @gluon.jit
