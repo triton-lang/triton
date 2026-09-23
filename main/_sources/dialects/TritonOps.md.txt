@@ -29,6 +29,44 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `tt.approx_divf` (triton::ApproxDivFOp)
+
+_Approximate division for 32-bit floating point types_
+
+Syntax:
+
+```
+operation ::= `tt.approx_divf` $x `,` $y attr-dict `:` type($x)
+```
+
+Divides x by y with approximate accuracy. On NVIDIA, this lowers to
+div.approx.f32, with a maximum error of 2 ULP for denominators whose
+magnitude is in [2^-126, 2^126]. Results outside this range may differ
+from full-range division. On AMD, this lowers to llvm.amdgcn.fdiv.fast,
+with a maximum error of 2.5 ULP and no support for denormal inputs or
+results.
+
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `x` | 32-bit float or ranked tensor of 32-bit float values |
+| `y` | 32-bit float or ranked tensor of 32-bit float values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 32-bit float or ranked tensor of 32-bit float values |
+
+
+
 ### `tt.assert` (triton::AssertOp)
 
 _Device-side assert, as in CUDA for correctness checking_
