@@ -258,6 +258,11 @@ class HIPOptions:
     # Example: llvm_fn_attrs="amdgpu-sched-strategy=iterative-ilp,noinline"
     llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
 
+    # Run the kernel in CU (non-WGP) wavefront execution mode. Only RDNA
+    # (gfx10, gfx11, gfx120x) has the distinction.
+    # Defaults to the TRITON_HIP_CU_MODE knob.
+    cu_mode: bool = False
+
     def __post_init__(self):
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
@@ -336,6 +341,10 @@ class HIPBackend(BaseBackend):
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        # A None value means "not specified", so that a caller forwarding an
+        # optional setting still picks up the knob. An explicit False does not.
+        if opts.get("cu_mode") is None and knobs.amd.cu_mode is not None:
+            args["cu_mode"] = knobs.amd.cu_mode
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
         return HIPOptions(**args)
 
@@ -539,7 +548,7 @@ class HIPBackend(BaseBackend):
         ## 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
         ##    For now it is used as a controller for developers only.
         __HIP_FTZ = True
-        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
+        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ, options.cu_mode)
         # Lower Proton segment values before warp specialization captures partition operands.
         instrument(pm, point="llvmir-to-llvm", context=mod.context)
         amd.passes.ttgpuir.add_warp_specialize_to_llvm(pm, options.arch)
@@ -633,7 +642,21 @@ class HIPBackend(BaseBackend):
         if knobs.compilation.enable_asan:
             kernel_fn.add_fn_target_feature("+xnack")
             kernel_fn.add_fn_asan_attr()
+        # +cumode is a no-op on targets without WGP mode, so no architecture
+        # gate is needed here.
+        if options.cu_mode:
+            if knobs.compilation.enable_asan:
+                # add_fn_target_feature overwrites "target-features", so this
+                # would discard the +xnack set just above. Reject rather than
+                # let one silently win: xnack and CU mode only coexist on RDNA1
+                # (gfx101x) hardware anyway.
+                raise ValueError("cu_mode is not supported together with TRITON_ENABLE_ASAN")
+            kernel_fn.add_fn_target_feature("+cumode")
         for name, value in options.llvm_fn_attrs:
+            if name == "target-features" and options.cu_mode:
+                # Overriding replaces the attribute, dropping +cumode, so the
+                # kernel would run in WGP mode despite cu_mode being set.
+                raise ValueError("llvm_fn_attrs cannot override 'target-features' when cu_mode is set")
             kernel_fn.remove_fn_attr(name)
             kernel_fn.add_fn_attr(name, value)
 

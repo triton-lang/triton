@@ -629,7 +629,17 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!mlir::triton::amdgpu::isCDNA(targetInfo.getISAFamily()))
+    // An `!mmra <"amdgpu-synchronize-as":"local">` fence emits no vector cache
+    // invalidate, so a thread that did not itself execute a preceding acquire
+    // relies on some other wave having invalidated the L0 it reads through.
+    // That only holds when the whole work-group shares one L0: always true on
+    // CDNA, and true on RDNA only in CU mode, since a WGP-mode work-group is
+    // spread over two CUs with an L0 each.
+    auto isaFamily = targetInfo.getISAFamily();
+    bool workgroupSharesOneL0 = mlir::triton::amdgpu::isCDNA(isaFamily) ||
+                                (mlir::triton::amdgpu::isRDNA(isaFamily) &&
+                                 targetInfo.isCuModeEnabled());
+    if (!workgroupSharesOneL0)
       return failure();
     // Check no other memory addrspaces are selected.
     // TensorRead/Write are allowed but noop.
