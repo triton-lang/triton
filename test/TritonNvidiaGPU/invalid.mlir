@@ -433,6 +433,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+#nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tma_im2col_pixel_split(%desc: !ttng.tensordesc_im2col<32x128xf32, #nvmma>) {
+    %true = arith.constant true
+    %zero = arith.constant 0 : i32
+    %offset = arith.constant 0 : i16
+    %dst = ttg.local_alloc : () -> !ttg.memdesc<32x128xf32, #nvmma, #smem, mutable>
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    // expected-error @below {{im2col TMA does not support splitting pixels across CTAs}}
+    ttng.async_tma_copy_global_to_local %desc[%zero, %zero, %zero, %zero] offsets = [%offset, %offset] %dst, %bar, %true : !ttng.tensordesc_im2col<32x128xf32, #nvmma>, !ttg.memdesc<2xi64, #barrier, #smem, mutable> -> !ttg.memdesc<32x128xf32, #nvmma, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

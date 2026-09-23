@@ -643,6 +643,52 @@ def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width, m
     torch.testing.assert_close(out, inp.reshape(pixels_per_column, channels_per_pixel), atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("cga_layout", [[], [[0, 0]], [[0, 1]], [[1, 0]]],
+                         ids=["single", "multicast", "channels", "pixels"])
+@pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.parametrize("fp4_padded", [False, True])
+def test_tma_im2col_cta_split(cga_layout, stride, fp4_padded, device, capfd):
+    if fp4_padded and not is_blackwell():
+        pytest.skip("Padded FP4 requires Blackwell")
+
+    @gluon.jit
+    def kernel(desc, dst, MULTICAST: ttgl.constexpr):
+        smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.expect(bar, desc.nbytes_per_cta)
+        tma.async_load_im2col(desc, [0, 0, 0, 0], [0, 0], bar, smem, multicast=MULTICAST)
+        mbarrier.wait(bar, phase=0)
+        mbarrier.invalidate(bar)
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=desc.layout.cga_layout)
+        rows = ttgl.arange(0, 32, ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 128, ttgl.SliceLayout(0, layout))
+        ttgl.store(dst + rows[:, None] * 128 + cols[None, :], smem.load(layout))
+
+    dtype = torch.uint8 if fp4_padded else torch.float32
+    src = torch.randint(0, 128, (1, 4, 64, 256), device=device).to(dtype)
+    dst = torch.empty((32, 128), dtype=dtype, device=device)
+    layout = ttgl.NVMMASharedLayout(128, src.element_size() * 8, fp4_padded=fp4_padded, cga_layout=cga_layout)
+    desc = gluon.nvidia.hopper.TensorDescriptorIm2Col.from_tensor(
+        src,
+        [32, 128],
+        layout,
+        element_strides=[1, 1, stride, 1],
+        pixel_box_lower_corner=[0, 0],
+        pixel_box_upper_corner=[0, 0],
+    )
+    multicast = cga_layout == [[0, 0]]
+    num_ctas = 2 if cga_layout else 1
+    if cga_layout == [[1, 0]]:
+        with pytest.raises(RuntimeError, match="error encountered during parsing"):
+            kernel.warmup(desc, dst, multicast, num_ctas=num_ctas, grid=(1, ))
+        assert "im2col TMA does not support splitting pixels across CTAs" in "".join(capfd.readouterr())
+        return
+    kernel[(1, )](desc, dst, multicast, num_ctas=num_ctas)
+    torch.testing.assert_close(dst, src[0, 0, :32 * stride:stride, :128], atol=0, rtol=0)
+
+
 @gluon.jit
 def tma_round_f32_to_tf32_kernel(in_desc, out_desc):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
