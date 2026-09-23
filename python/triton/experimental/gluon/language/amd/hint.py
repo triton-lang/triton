@@ -5,11 +5,10 @@ __all__ = ["sched_barrier"]
 
 @builtin
 def sched_barrier(allow=None, _semantic=None):
-    """Insert a barrier that constrains AMDGPU backend instruction scheduling.
+    """Insert a barrier that constrains LLVM instruction scheduling.
 
-    The barrier prevents the compiler's instruction scheduler from moving
-    instructions across this point. It is a compiler hint only: it does not
-    synchronize threads, order memory accesses, or emit a hardware instruction.
+    The barrier prevents the LLVM compiler's instruction scheduler from moving
+    instructions across this point. It is a LLVM compiler hint only.
 
     Args:
         allow (str or tuple[str, ...], optional): Instruction classes allowed to
