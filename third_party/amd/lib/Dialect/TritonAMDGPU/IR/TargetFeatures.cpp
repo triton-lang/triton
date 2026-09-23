@@ -5,7 +5,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/TargetParser/AMDGPUTargetParser.h"
 
 namespace mlir::triton::amdgpu {
 
@@ -128,7 +127,7 @@ bool TargetFeatures::isGFX1250() const {
 }
 
 bool TargetFeatures::isGFX1250Strict() const {
-  return llvm::AMDGPU::parseArchAMDGCN(arch) == llvm::AMDGPU::GK_GFX1250_STRICT;
+  return isGFX1250() && StringRef(arch).ends_with("-strict");
 }
 
 int TargetFeatures::getWarpSize() const {
