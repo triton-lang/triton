@@ -129,7 +129,11 @@ public:
   explicit ScanLoweringHelper(triton::ScanOp op);
   bool isSupported();
   const triton::LinearLayout &getLayout() const { return layout; }
-  const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
+  // Each group fixes the non-axis register bits and lists original register
+  // indices in increasing logical axis order. Broadcast registers are removed.
+  ArrayRef<SmallVector<unsigned>> getRegisterGroups() const {
+    return registerGroups;
+  }
   unsigned getLocalScanSize() const { return localScanSize; }
   // Length of a contiguous logical segment contained in one warp.
   unsigned getSegmentSize() const { return segmentSize; }
@@ -143,7 +147,7 @@ public:
 private:
   triton::ScanOp scanOp;
   triton::LinearLayout layout;
-  triton::ColumnAction registerOrder;
+  SmallVector<SmallVector<unsigned>> registerGroups;
   unsigned localScanSize = 1;
   unsigned segmentSize = 1;
   SmallVector<Stage> stages;

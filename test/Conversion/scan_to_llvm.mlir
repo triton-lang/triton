@@ -127,9 +127,8 @@ tt.func public @anchor(%ptr: !llvm.ptr, %arg0: !llvm.struct<(i32)>, %arg1: !llvm
 
 // CHECK-LABEL: @test_registers
 // WARP-LABEL: @test_registers
-// Register bases [4, 1, 2] require different forward and inverse permutations.
-// Logical elements 0 and 1 live in input registers 0 and 2. Their inclusive
-// prefix must be written back to output register 2, not register 1.
+// With register bases [4, 1, 2], logical elements 0 and 1 live in input
+// registers 0 and 2. Their inclusive prefix must remain in output register 2.
 // WARP: %[[R0:.*]] = extractvalue {{.*}}, 0
 // WARP: %[[R2:.*]] = extractvalue {{.*}}, 2
 // WARP: %[[PREFIX1:.*]] = add i32 %[[R0]], %[[R2]]
