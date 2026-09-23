@@ -9,7 +9,8 @@ endif()
 project(triton CXX C)
 include(CTest)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -217,7 +218,7 @@ endif()
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 if(NOT MSVC)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC")
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS")
 endif()
@@ -297,8 +298,9 @@ else()
 endif()
 
 include_directories(".")
-include_directories(${MLIR_INCLUDE_DIRS})
-include_directories(${LLVM_INCLUDE_DIRS})
+# LLVM/MLIR range comparisons can trigger -Wambiguous-reversed-operator in
+# C++20. Treat these external headers as system includes.
+include_directories(SYSTEM ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 include_directories(${PROJECT_SOURCE_DIR}/third_party)
