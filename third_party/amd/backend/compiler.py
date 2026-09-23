@@ -107,7 +107,9 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
     if upgraded_src == src:
         # Serialize with Triton's LLVM: newer backends support older bitcode,
         # whereas textual IR has no backwards-compatibility guarantee.
-        llvm_ir = llvm.to_bitcode(src)
+        # Express fusion permission in the IR because newer LLVM versions no
+        # longer honor TargetOptions::AllowFPOpFusion during code generation.
+        llvm_ir = llvm.to_bitcode(src, enable_fp_fusion)
     else:
         # LLVM commit 5bf967cb132b changed named-barrier intrinsic operands from
         # address space 3 to 15. The bitcode reader rejects the legacy signature
