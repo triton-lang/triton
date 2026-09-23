@@ -264,6 +264,11 @@ def matmul(a, b, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
+    With gather_indx, BlackwellActMXScaleLayout activation scales must already
+    follow the gathered row order; strided activation scales are gathered with
+    the values. For ragged-M matmul, the Blackwell scale layout must use the same
+    row segmentation as a_ragged_metadata.
+
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
     When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
@@ -624,6 +629,9 @@ def matmul(a, b, bias,
         assert opt_flags.block_m == 128 and opt_flags.block_k >= 128, "block_m and block_k must be at least 128 if x scale is swizzled"
         a_scale_has_tma = True
     if a_scale_has_tma:
+        scale_layout = a_scale.storage.layout.make_transformation(a_scale.shape_max, is_fp4=False)
+        assert (scale_layout.mode == "ragged") == (ragged_dimension == "M"), \
+            "Blackwell activation scales must use the matmul's row layout"
         scale_block_k = opt_flags.block_k // mx_block_size
         a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
         a_scale_tensor_or_tma = make_tma(a_scale, a_scale_tma_block_size, "dense", is_scale=True)
