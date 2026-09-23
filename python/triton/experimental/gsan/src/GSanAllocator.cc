@@ -1317,6 +1317,39 @@ PyObject *pyHasLiveAllocations([[maybe_unused]] PyObject *self,
   return PyBool_FromLong(hasLiveAllocations());
 }
 
+PyObject *pySupportsFabricHandles([[maybe_unused]] PyObject *self,
+                                  PyObject *const *args, Py_ssize_t nargs) {
+  if (nargs != 1) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.supports_fabric_handles expected 1 positional argument, "
+                 "got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  int device = 0;
+  if (!parseIntArg(args[0], "device", &device))
+    return nullptr;
+
+  CUdevice cuDevice = 0;
+  CUresult err = cuDeviceGet(&cuDevice, device);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    PyErr_SetString(PyExc_RuntimeError, "cuDeviceGet failed.");
+    return nullptr;
+  }
+
+  int supported = 0;
+  err = cuDeviceGetAttribute(
+      &supported, CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED, cuDevice);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    PyErr_SetString(PyExc_RuntimeError, "cuDeviceGetAttribute failed.");
+    return nullptr;
+  }
+  return PyBool_FromLong(supported);
+}
+
 PyObject *pyReset([[maybe_unused]] PyObject *self, PyObject *const *args,
                   Py_ssize_t nargs) {
   if (nargs != 0) {
@@ -1690,6 +1723,9 @@ PyMethodDef kGSanAllocatorMethods[] = {
     {"has_live_allocations",
      reinterpret_cast<PyCFunction>(pyHasLiveAllocations), METH_NOARGS,
      "Return whether the GSan allocation reserve has live allocations."},
+    {"supports_fabric_handles",
+     reinterpret_cast<PyCFunction>(pySupportsFabricHandles), METH_FASTCALL,
+     "Return whether a CUDA device supports fabric allocation handles."},
     {"reset", reinterpret_cast<PyCFunction>(pyReset), METH_FASTCALL,
      "Reset GSan runtime state when there are no live allocations."},
     {"get_reserve_pointer", reinterpret_cast<PyCFunction>(pyGetReservePointer),
