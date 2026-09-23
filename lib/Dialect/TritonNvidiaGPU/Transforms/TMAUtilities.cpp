@@ -61,9 +61,10 @@ FailureOr<int> getTMASwizzleMode(Location loc, tt::TensorDescInterface ty) {
 
   bool fp4Padded = isFp4Padded(encoding);
   if (fp4Padded && swizzleBytes != 0 && swizzleBytes != 128) {
-    return emitError(loc) << "fp4 padded operands (elem type .b4x16_p64) only "
-                             "supports no swizzling or 128-byte swizzling, but got "
-                          << swizzleBytes;
+    return emitError(loc)
+           << "fp4 padded operands (elem type .b4x16_p64) only "
+              "supports no swizzling or 128-byte swizzling, but got "
+           << swizzleBytes;
   }
 
   int32_t swizzleMode = 0;
