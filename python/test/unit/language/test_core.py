@@ -1732,6 +1732,7 @@ def noinline_load_block_fn(ptr, BLOCK_SIZE: tl.constexpr):
     return tl.load(ptr + offsets)
 
 
+@pytest.mark.skipif(is_hip(), reason="LLVM dynamic LDS change from 5bf967cb132b")
 def test_noinline_returns_tensor(device):
 
     @triton.jit
