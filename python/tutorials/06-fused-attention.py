@@ -13,7 +13,8 @@ Extra Credits:
 
 On Blackwell, ``attention(..., num_ctas=2)`` distributes each forward query tile
 over a CTA cluster; 4 and 8 CTAs are also supported. The sequence length must be
-divisible by ``128 * num_ctas``. The default is one CTA.
+divisible by ``128 * num_ctas``. The default is one CTA. On Blackwell, CUDA-graph
+autotuning searches tiles, pipeline depth, warp counts, and register limits.
 
 """
 
@@ -144,13 +145,17 @@ def attention_configs(num_ctas=1):
             triton.Config(dict(BLOCK_M=128 * num_ctas, BLOCK_N=64), num_stages=2, num_warps=4, num_ctas=num_ctas,
                           pre_hook=_host_descriptor_pre_hook),
         ]
+    # Register limits interact with the extra worker warps used by specialization.
+    # Keep the compiler default as well as explicit limits in the search.
+    maxnreg_options = [None, 80, 96, 112, 128, 144, 168] if is_blackwell() else [None]
     return [
-        triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, num_ctas=num_ctas,
+        triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w, num_ctas=num_ctas, maxnreg=r,
                       pre_hook=_host_descriptor_pre_hook)
         for BM in block_m_options
         for BN in [32, 64, 128]
         for s in NUM_STAGES_OPTIONS
         for w in [4, 8]
+        for r in maxnreg_options
     ]
 
 
@@ -183,8 +188,9 @@ def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
 
 
 @triton.autotune(configs=list(filter(keep, attention_configs())),
-                 key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "STAGE",
-                      "warp_specialize"], prune_configs_by={'early_config_prune': prune_invalid_configs})
+                 key=["Z", "H", "N_CTX", "HEAD_DIM", "FP8_OUTPUT", "STAGE",
+                      "warp_specialize"], prune_configs_by={'early_config_prune': prune_invalid_configs},
+                 do_bench=triton.testing.do_bench_cudagraph if is_blackwell() else None)
 @triton.jit
 def _attn_fwd(sm_scale, M,  #
               Z, H, desc_q, desc_k, desc_v, desc_o, N_CTX,  #
@@ -264,8 +270,9 @@ if is_blackwell():
     for num_ctas in [2, 4, 8]:
         _attn_fwd_kernels[num_ctas] = triton.autotune(
             configs=attention_configs(num_ctas),
-            key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "STAGE", "warp_specialize"],
+            key=["Z", "H", "N_CTX", "HEAD_DIM", "FP8_OUTPUT", "STAGE", "warp_specialize"],
             prune_configs_by={'early_config_prune': prune_invalid_configs},
+            do_bench=triton.testing.do_bench_cudagraph,
         )(_attn_fwd.fn)
 
 
@@ -579,11 +586,6 @@ class _attention(torch.autograd.Function):
             return (triton.cdiv(q.shape[2], META["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
 
         ctx.grid = grid
-        if is_blackwell() and warp_specialize:
-            if HEAD_DIM_K == 128 and q.dtype == torch.float16:
-                extra_kern_args["maxnreg"] = 168
-            else:
-                extra_kern_args["maxnreg"] = 80
         _attn_fwd_kernels[num_ctas][grid](
             sm_scale, M,  #
             q.shape[0], q.shape[1],  #
