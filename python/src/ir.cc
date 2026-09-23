@@ -1,4 +1,5 @@
 #include "ir.h"
+#include "fp8.h"
 
 #include <cstring>
 #include <nanobind/nanobind.h>
@@ -995,6 +996,12 @@ void init_triton_ir(py::module_ &m) {
              return self.create<arith::ConstantFloatOp>(
                  type, APFloat(type.getFloatSemantics(), std::to_string(v)));
            })
+      .def("get_fp8",
+           [](TritonOpBuilder &self, float v, Type type) -> Value {
+             auto floatType = cast<FloatType>(type);
+             return self.create<arith::ConstantFloatOp>(
+                 floatType, convertFp8(v, floatType.getFloatSemantics()));
+           })
       .def("get_fp16",
            [](TritonOpBuilder &self, float v) -> Value {
              return self.create<arith::ConstantOp>(
@@ -1009,16 +1016,6 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, double v) -> Value {
              return self.create<arith::ConstantOp>(
                  self.getBuilder().getF64FloatAttr(v));
-           })
-      .def("get_null_value",
-           [](TritonOpBuilder &self, Type type) -> Value {
-             if (auto floatTy = dyn_cast<FloatType>(type))
-               return self.create<arith::ConstantFloatOp>(
-                   floatTy, APFloat(floatTy.getFloatSemantics(), 0));
-             else if (auto intTy = dyn_cast<IntegerType>(type))
-               return self.create<arith::ConstantIntOp>(intTy, 0);
-             else
-               throw std::runtime_error("Not implemented");
            })
       .def("get_all_ones_value",
            [](TritonOpBuilder &self, Type type) -> Value {
