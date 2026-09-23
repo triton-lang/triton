@@ -841,7 +841,7 @@ public:
              triton::nvgpu::MemSyncScope::SYSTEM}};
     const bool doPTXLDPromotion = !useRed && isPromotableToNVPTXLD(op) &&
                                   vec == 1 && packed == 1 &&
-                                  ScopeMap.count(op.getScope());
+                                  ScopeMap.contains(op.getScope());
 
     for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
       Value rmwPtr = ptrElements[i];

@@ -641,7 +641,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
 void TritonIntegerRangeAnalysis::initializeFuncOp(tt::FuncOp op) {
   Block *entryBlock = getFuncEntryBlock(op);
   for (BlockArgument argument : op.getArguments()) {
-    if (!this->assumptions.count(argument))
+    if (!this->assumptions.contains(argument))
       continue;
 
     dataflow::IntegerValueRangeLattice *argLattice =
