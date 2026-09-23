@@ -484,7 +484,8 @@ LogicalResult TensorMemoryEncodingAttr::verify(
   if (twoCTAs) {
     auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
     auto cgaLL = cgaLayout.getLinearLayout();
-    if (cgaLL.getBasis(kBlock, 0) != ArrayRef{1, 0}) {
+    if (cgaLL.getInDimSizeLog2(kBlock) == 0 ||
+        cgaLL.getBasis(kBlock, 0) != ArrayRef{1, 0}) {
       return emitError()
              << "twoCTAs layout requires the first CGALayout block basis to "
                 "be [1, 0]";
