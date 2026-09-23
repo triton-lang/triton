@@ -253,7 +253,8 @@ LogicalResult lowerLdStMatrix(
     if (cvt.getInDimSize(kReg) < fullTile.getInDimSize(kReg)) {
       return failure();
     }
-    // Move offset to the front
+    // Move offset to the front in fullTile. Let regPermForDivide match cvt's
+    // register order instead of pre-permuting it.
     std::vector<size_t> regBases, laneBases;
     auto bases = fullTile.invert().getBases().lookup(kOffset);
     for (const auto &basis : bases) {
@@ -279,13 +280,7 @@ LogicalResult lowerLdStMatrix(
     // Register depends on our beloved contigRegs
     permReg = ColumnAction(regBases, kReg, cvt.getInDimSizeLog2(kReg));
     permLanes = ColumnAction(laneBases, kLane, cvt.getInDimSizeLog2(kLane));
-    cvt = permReg.apply(cvt);
     cvt = permLanes.apply(cvt);
-    if (isStore) {
-      vals = permReg.apply(vals);
-    } else {
-      accPermReg = accPermReg.leftCompose(permReg);
-    }
 
     // This is the same as permuting the lanes and registers to the front in
     // fullTile and taking the kOffset sublayout.

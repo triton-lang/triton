@@ -2,6 +2,7 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=93" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=94" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,PTX94 --dump-input-context 20
 // RUN: split-file %s %t
+// RUN: triton-opt %t/ldmatrix-trans-fp8.mlir --allocate-shared-memory-nv=compute-capability=120 --convert-triton-gpu-to-llvm=compute-capability=120 -cse -reconcile-unrealized-casts | FileCheck %t/ldmatrix-trans-fp8.mlir --check-prefix=FP8
 // RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-tmem-wait-insertion -tritoninstrument-concurrency-sanitizer -gluon-canonicalize -cse --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=CONSAN
 // RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=NO-CONSAN
 
@@ -4000,5 +4001,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // NO-CONSAN: llvm.return
     tt.store %unmasked, %value : !tt.ptr<i32>
     tt.return
+  }
+}
+
+// -----
+
+//--- ldmatrix-trans-fp8.mlir
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#dot_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Check that local_load lowers to transposed b8 ldmatrix without an extra
+  // inverse register permutation from accPermReg.
+  // FP8-LABEL: @ldmatrix_trans_fp8_register_order
+  tt.func private @ldmatrix_trans_fp8_register_order(
+      %src: !ttg.memdesc<64x64xf8E4M3FN, #shared, #ttg.shared_memory, mutable>) -> tensor<64x64xf8E4M3FN, #dot_b> {
+    // FP8-DAG: %[[C0:.*]] = llvm.mlir.constant(0 : i32)
+    // FP8-DAG: %[[C1:.*]] = llvm.mlir.constant(1 : i32)
+    // FP8: %[[LOAD:.*]] = nvvm.ldmatrix {{.*}}elt_type<b8>{{.*}}mma_layout<col>
+    // FP8-SAME: num = 2 : i32, shape = #nvvm.ld_st_matrix_shape<m = 16, n = 16>
+    // FP8: %[[WORD:.*]] = llvm.extractvalue %[[LOAD]][0]
+    // FP8: %[[BYTES:.*]] = llvm.bitcast %[[WORD]] : i32 to vector<4xi8>
+    // FP8: %[[B0:.*]] = llvm.extractelement %[[BYTES]][%[[C0]] : i32]
+    // FP8: %[[B1:.*]] = llvm.extractelement %[[BYTES]][%[[C1]] : i32]
+    // FP8: %[[OUT0:.*]] = llvm.insertvalue %[[B0]], {{.*}}[0]
+    // FP8: llvm.insertvalue %[[B1]], %[[OUT0]][1]
+    %value = ttg.local_load %src : !ttg.memdesc<64x64xf8E4M3FN, #shared, #ttg.shared_memory, mutable> -> tensor<64x64xf8E4M3FN, #dot_b>
+    tt.return %value : tensor<64x64xf8E4M3FN, #dot_b>
   }
 }
