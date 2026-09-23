@@ -4682,16 +4682,18 @@ getTMABlockShapeIm2Col(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   // Clamp the contiguous dimension (channelsPerPixel) to max 256
   blockShape[contigDim] = std::min(blockShape[contigDim], contigDimMax);
 
-  // Contiguous dim must equal the swizzle byte size if swizzle is enabled
-  if (swizzleBytes != 0) {
-    auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
+  // Unswizzled padded FP4 requires 64 packed bytes (128 bytes with padding).
+  // Keep the swizzle width for swizzled layouts, including local MMA layouts.
+  int boxWidthBytes = fp4Padded && swizzleBytes == 0 ? 128 : swizzleBytes;
+  if (boxWidthBytes != 0) {
+    auto contigDimSize = (8 * boxWidthBytes) / elementBitWidth;
     if (blockShape[contigDim] < contigDimSize) {
       if (emitError) {
         emitError() << Twine("im2col mode: block shape along the contiguous "
                              "dimension ") +
                            Twine(contigDim) +
-                           " is too small for the swizzle byte size " +
-                           Twine(swizzleBytes) + ", got " +
+                           " is too small for the required TMA box byte size " +
+                           Twine(boxWidthBytes) + ", got " +
                            Twine(blockShape[contigDim]) +
                            " but expected at least " + Twine(contigDimSize);
       }
@@ -4722,15 +4724,17 @@ getTMABlockShapeTiled(ArrayRef<int64_t> shapePerCTA, int elementBitWidth,
   constexpr int64_t dimMax = 256;
   for (auto &size : blockShape)
     size = std::min(size, dimMax);
-  // Last dim must equal the swizzle byte size
-  if (swizzleBytes != 0) {
-    auto contigDimSize = (8 * swizzleBytes) / elementBitWidth;
+  // Unswizzled padded FP4 requires 64 packed bytes (128 bytes with padding).
+  // Keep the swizzle width for swizzled layouts, including local MMA layouts.
+  int boxWidthBytes = fp4Padded && swizzleBytes == 0 ? 128 : swizzleBytes;
+  if (boxWidthBytes != 0) {
+    auto contigDimSize = (8 * boxWidthBytes) / elementBitWidth;
     if (blockShape[contigDim] < contigDimSize) {
       if (emitError) {
         emitError() << Twine("block shape along the contiguous dimension ") +
                            Twine(contigDim) +
-                           " is too small for the swizzle byte size " +
-                           Twine(swizzleBytes) +
+                           " is too small for the required TMA box byte size " +
+                           Twine(boxWidthBytes) +
                            " in an NVMMASharedLayout, got " +
                            Twine(blockShape[contigDim]) +
                            " but expected at least " + Twine(contigDimSize);
@@ -4749,15 +4753,13 @@ FailureOr<SmallVector<int64_t>> triton::gpu::getTMABlockShape(
     ArrayRef<int64_t> shapePerCTA, int elementBitWidth, int swizzleBytes,
     bool fp4Padded, bool isTransposed, bool packedSize,
     function_ref<InFlightDiagnostic()> emitError, TMAMode mode) {
-  // Padded FP4 copies require a 64-byte packed box even without swizzling.
-  int boxWidthBytes = fp4Padded && swizzleBytes == 0 ? 128 : swizzleBytes;
   if (mode == TMAMode::Im2Col) {
-    return getTMABlockShapeIm2Col(shapePerCTA, elementBitWidth, boxWidthBytes,
+    return getTMABlockShapeIm2Col(shapePerCTA, elementBitWidth, swizzleBytes,
                                   fp4Padded, isTransposed, packedSize,
                                   emitError);
   }
   // Tiled mode
-  return getTMABlockShapeTiled(shapePerCTA, elementBitWidth, boxWidthBytes,
+  return getTMABlockShapeTiled(shapePerCTA, elementBitWidth, swizzleBytes,
                                fp4Padded, isTransposed, packedSize, emitError);
 }
 
