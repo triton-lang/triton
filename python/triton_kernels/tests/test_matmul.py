@@ -822,6 +822,43 @@ def test_mxfp8_act_scale_store_zeroes_partial_group(n, is_persistent, device):
         assert torch.all(unused_groups == 0xFF)
 
 
+def test_gathered_ragged_act_scale_indexing(device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    m, k = 256, 128
+    values = (torch.arange(m * k, device=device).reshape(m, k) % 7 - 3).to(torch.float8_e4m3fn)
+    scale_shape = (m, k // MXFP_BLOCK_SIZE.value)
+    scales = (torch.arange(m * scale_shape[1], device=device).reshape(scale_shape) % 7 + 124).to(torch.uint8)
+    gather_indx = torch.arange(m - 1, -1, -1, dtype=torch.int32, device=device)
+
+    # The second slice starts at scale block 2 after padding the first slice.
+    slice_sizes = torch.tensor([129, 127], dtype=torch.int32, device=device)
+    metadata = make_ragged_tensor_metadata(slice_sizes, m)
+    gathered_scales = convert_layout(
+        wrap_torch_tensor(scales[gather_indx.long()]),
+        layout.BlackwellActMXScaleLayout(metadata),
+    )
+    weights = torch.eye(k, dtype=torch.bfloat16, device=device).repeat(2, 1, 1)
+
+    with opt_flags.scoped_opt_flags_constraints({"block_m": 128, "block_k": 128, "is_persistent": True, "split_k": 1}):
+        actual = matmul(
+            wrap_torch_tensor(values),
+            weights,
+            None,
+            metadata,
+            gather_indx=gather_indx,
+            precision_config=PrecisionConfig(
+                a_mx_scale=gathered_scales,
+                a_microblock_size=MXFP_BLOCK_SIZE.value,
+                out_dtype=torch.bfloat16,
+            ),
+        )
+
+    expected = upcast_from_mxfp_torch(values, scales, torch.bfloat16, axis=-1)[gather_indx.long()]
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")
