@@ -294,7 +294,7 @@ jobs:
             triton triton-rocm pytorch-triton torch amd-torch-device-gfx1250 \
             rocm rocm-sdk-core rocm-sdk-devel rocm-sdk-libraries rocm-sdk-device-gfx1250 \
             2>/dev/null || true
-          python3 -m pip install --pre --force-reinstall --no-cache-dir \
+          python3 -m pip install --pre --force-reinstall \
             --index-url "${ROCM_NIGHTLY_INDEX_URL}" \
             --extra-index-url https://pypi.org/simple \
             "rocm[libraries,devel,device-gfx1250]==${ROCM_VERSION}" \
