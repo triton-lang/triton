@@ -125,6 +125,35 @@ void enableFPContraction(llvm::Module &module) {
         instruction.setHasAllowContract(true);
 }
 
+void addDynamicLDSAbsoluteAddress(llvm::Module &module) {
+  // LLVM commit 5bf967cb132b checks the original dynamic LDS global for the
+  // absolute-address metadata that amdgpu-lower-module-lds attaches to its
+  // per-kernel representative. Triton's global_smem is the sole LDS allocation
+  // and therefore starts at address zero, so provide the equivalent metadata
+  // until the LLVM regression is fixed upstream.
+  llvm::GlobalVariable *dynamicLDS = module.getNamedGlobal("global_smem");
+  if (!dynamicLDS || !dynamicLDS->isDeclaration() ||
+      dynamicLDS->getAddressSpace() != 3 ||
+      dynamicLDS->getMetadata(llvm::LLVMContext::MD_absolute_symbol))
+    return;
+
+  const llvm::DataLayout &layout = module.getDataLayout();
+  if (dynamicLDS->getGlobalSize(layout) != 0)
+    return;
+  for (llvm::GlobalVariable &global : module.globals())
+    if (&global != dynamicLDS && global.getAddressSpace() == 3)
+      return;
+
+  llvm::LLVMContext &context = module.getContext();
+  llvm::Type *i32 = llvm::Type::getInt32Ty(context);
+  llvm::Metadata *bounds[] = {
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(i32, 0)),
+      llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(i32, 1)),
+  };
+  dynamicLDS->setMetadata(llvm::LLVMContext::MD_absolute_symbol,
+                          llvm::MDNode::get(context, bounds));
+}
+
 } // namespace
 
 extern "C" TRITON_AMD_EXPORT int
@@ -212,6 +241,7 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
   if (!machine)
     return fail("failed to create AMD target machine", error);
   module->setDataLayout(machine->createDataLayout());
+  addDynamicLDSAbsoluteAddress(*module);
 
   for (llvm::Function &function : module->functions())
     if (!function.hasFnAttribute(llvm::Attribute::NoInline))
