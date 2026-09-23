@@ -1388,6 +1388,15 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self) {
              self.create<ttag::ClusterBarrierWaitOp>();
            })
+      .def("create_amd_sched_barrier",
+           [](GluonOpBuilder &self, uint32_t allowMask) {
+             auto mask = ROCDL::symbolizeSchedGroupMask(allowMask);
+             if (!mask)
+               throw std::invalid_argument("invalid scheduling barrier mask " +
+                                           std::to_string(allowMask));
+             self.create<ROCDL::SchedBarrier>(*mask);
+           },
+           py::arg("allow_mask"))
       .def("create_warp_pipeline_border",
            [](GluonOpBuilder &self, const std::string &marker, int priority) {
              auto border =
