@@ -66,10 +66,8 @@ inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
 namespace tools {
 
 inline void assertIsRecognized(const std::string &env) {
-  bool is_invalidating = CACHE_INVALIDATING_ENV_VARS.find(env.c_str()) !=
-                         CACHE_INVALIDATING_ENV_VARS.end();
-  bool is_neutral =
-      CACHE_NEUTRAL_ENV_VARS.find(env.c_str()) != CACHE_NEUTRAL_ENV_VARS.end();
+  bool is_invalidating = CACHE_INVALIDATING_ENV_VARS.contains(env.c_str());
+  bool is_neutral = CACHE_NEUTRAL_ENV_VARS.contains(env.c_str());
   std::string errmsg = env + "is not recognized. "
                              "Please add it to triton/Tools/Sys/GetEnv.h";
   assert((is_invalidating || is_neutral) && errmsg.c_str());

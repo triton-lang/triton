@@ -69,7 +69,7 @@ void GraphState::recordNode(uint64_t nodeId, const std::string &name,
 void GraphState::buildLaunchEntries(const DataToEntryMap &dataToEntry,
                                     DataToEntryMap &dataToGraphEntry) const {
   for (const auto &[data, entry] : dataToEntry) {
-    if (capturedData.find(data) == capturedData.end())
+    if (!capturedData.contains(data))
       // This data object was not enabled during graph capture.
       continue;
     dataToGraphEntry.insert({data, entry});

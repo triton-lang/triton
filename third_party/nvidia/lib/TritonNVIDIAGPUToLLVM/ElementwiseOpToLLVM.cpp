@@ -473,7 +473,7 @@ struct FpToFpOpConversion
     std::tuple<TypeID, TypeID, RoundingMode> key = {
         srcTy.getTypeID(), dstTy.getTypeID(),
         roundingMode.value_or(undefRounding)};
-    if (srcMap.count(key) == 0) {
+    if (!srcMap.contains(key)) {
       llvm::errs() << "Unsupported conversion from " << srcTy << " to "
                    << dstTy;
       if (roundingMode.has_value())

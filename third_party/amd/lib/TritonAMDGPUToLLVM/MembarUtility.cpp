@@ -66,7 +66,7 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
 
   // Check if operations access the same buffer
   bool sameBuffer = llvm::any_of(
-      op1BufferIds, [&](auto id) { return op2BufferIds.count(id); });
+      op1BufferIds, [&](auto id) { return op2BufferIds.contains(id); });
 
   if (!sameBuffer)
     return false;

@@ -210,7 +210,7 @@ void MetricBuffer::synchronize(DeviceBuffer &buffer) {
 MetricBuffer::DeviceBuffer &MetricBuffer::getOrCreateBuffer() {
   std::lock_guard<std::mutex> lock(bufferMutex);
   auto device = runtime->getDevice();
-  if (deviceBuffers.find(device) == deviceBuffers.end()) {
+  if (!deviceBuffers.contains(device)) {
     deviceBuffers[device] = DeviceBuffer{};
     auto &buffer = deviceBuffers.at(device);
     if (mappedHostBuffer) {
