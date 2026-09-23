@@ -530,6 +530,7 @@ class amd_knobs(base_knobs):
     use_async_copy: env_opt_bool = env_opt_bool("TRITON_HIP_USE_ASYNC_COPY")
     use_coexec_scheduler: env_opt_bool = env_opt_bool("TRITON_HIP_USE_COEXEC_SCHEDULER")
     use_expert_scheduling: env_opt_bool = env_opt_bool("TRITON_HIP_USE_EXPERT_SCHEDULING")
+    cu_mode: env_opt_bool = env_opt_bool("TRITON_HIP_CU_MODE")
 
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
