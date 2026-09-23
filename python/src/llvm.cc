@@ -16,6 +16,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -75,12 +76,11 @@ namespace {
 
 void enableFPContraction(llvm::Module &module) {
   for (llvm::Function &function : module)
-    for (llvm::BasicBlock &block : function)
-      for (llvm::Instruction &instruction : block)
-        if (instruction.getOpcode() == llvm::Instruction::FAdd ||
-            instruction.getOpcode() == llvm::Instruction::FSub ||
-            instruction.getOpcode() == llvm::Instruction::FMul)
-          instruction.setHasAllowContract(true);
+    for (llvm::Instruction &instruction : llvm::instructions(function))
+      if (instruction.getOpcode() == llvm::Instruction::FAdd ||
+          instruction.getOpcode() == llvm::Instruction::FSub ||
+          instruction.getOpcode() == llvm::Instruction::FMul)
+        instruction.setHasAllowContract(true);
 }
 
 struct ExpandMaskedDivRemPass : RequiredPassInfoMixin<ExpandMaskedDivRemPass> {
