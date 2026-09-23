@@ -11,6 +11,11 @@ using namespace mlir::triton;
 namespace {
 struct ScanOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp> {
+  // Values are indexed by register, then by scan operand. Registers follow
+  // ScanLoweringHelper's logical axis order until packResults restores the
+  // original layout order.
+  using ScanValues = SmallVector<SmallVector<Value>>;
+
   ScanOpConversion(LLVMTypeConverter &typeConverter,
                    const TargetInfoBase &targetInfo, PatternBenefit benefit)
       : ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp>(typeConverter,
@@ -24,34 +29,60 @@ struct ScanOpConversion
     if (!helper.isSupported())
       return op.emitError("scan axis distributed across CTAs is not supported");
 
+    auto values = unpackInputs(op, adaptor, helper, rewriter);
+    unsigned localSize = helper.getLocalScanSize();
+    bool scanEndpoints = localSize > 2 && helper.getStages().size() > 1;
+
+    // First scan contiguous groups of registers owned by each thread.
+    scanRegisterGroups(op, values, localSize, scanEndpoints, rewriter);
+
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto *ctx = rewriter.getContext();
-    auto kReg = StringAttr::get(ctx, "register");
-    const auto &layout = helper.getLayout();
-    unsigned numRegs = layout.getInDimSize(kReg);
-    unsigned numOperands = op.getNumOperands();
-    bool reverse = op.getReverse();
+    Value threadId = getThreadId(rewriter, loc);
+    unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+    Value laneId = b.urem(threadId, b.i32_val(warpSize));
+    Value warpId = b.udiv(threadId, b.i32_val(warpSize));
 
-    SmallVector<SmallVector<Value>> values(numRegs);
+    // Merge the groups into contiguous warp-local prefixes. When the tree
+    // scans only group endpoints, reconstruct the interior prefixes next.
+    scanWithinWarps(op, helper, values, laneId, scanEndpoints, rewriter);
+    if (scanEndpoints)
+      completeRegisterGroups(op, values, localSize, rewriter);
+
+    // Finally add the carries from preceding warp-local segments.
+    if (helper.getScratchLayout())
+      scanAcrossWarps(op, helper, values, laneId, warpId, rewriter);
+
+    packResults(op, helper, values, rewriter);
+    return success();
+  }
+
+private:
+  ScanValues unpackInputs(triton::ScanOp op, OpAdaptor adaptor,
+                          const ScanLoweringHelper &helper,
+                          ConversionPatternRewriter &rewriter) const {
+    auto kReg = StringAttr::get(rewriter.getContext(), "register");
+    unsigned numRegs = helper.getLayout().getInDimSize(kReg);
+    ScanValues values(numRegs);
     for (Value operand : adaptor.getOperands()) {
-      auto unpacked = unpackUniqueTensorElements(loc, operand, rewriter);
+      auto unpacked =
+          unpackUniqueTensorElements(op.getLoc(), operand, rewriter);
       unpacked = helper.getRegisterOrder().apply(unpacked);
       for (unsigned r = 0; r < numRegs; ++r)
         values[r].push_back(unpacked[r]);
     }
+    return values;
+  }
 
-    // Factor out the consecutive low axis bits owned by registers. Each group
-    // is a contiguous logical segment, even when later axis bits belong to
-    // registers interleaved with lane/warp bits.
-    unsigned localSize = helper.getLocalScanSize();
-    // Every tree stage reads the terminal register of a local group. Scan
-    // only each group's leading element and total through the entire tree,
-    // then reconstruct its interior prefixes from local suffix prefixes.
-    // This saves combines without adding shuffles, including for register
-    // bits interleaved with lane bits above the local register prefix.
-    bool scanEndpoints = localSize > 2 && helper.getStages().size() > 1;
-    for (unsigned base = 0; base < numRegs; base += localSize) {
+  // Each group contains the consecutive low axis bits owned by registers.
+  // Higher register bits can still be interleaved with lane/warp bits.
+  void scanRegisterGroups(triton::ScanOp op, ScanValues &values,
+                          unsigned localSize, bool scanEndpoints,
+                          ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    bool reverse = op.getReverse();
+    for (unsigned base = 0; base < values.size(); base += localSize) {
       // For the endpoint scan, retain prefixes of the suffix excluding the
       // leading element. They can all combine with the scanned leading value
       // independently afterwards, without another serial register scan.
@@ -68,12 +99,18 @@ struct ScanOpConversion
                                       values[first], values[last]);
       }
     }
+  }
 
-    Value threadId = getThreadId(rewriter, loc);
-    unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
-        op->getParentOfType<ModuleOp>());
-    Value laneId = b.urem(threadId, b.i32_val(warpSize));
-    Value warpId = b.udiv(threadId, b.i32_val(warpSize));
+  // Every tree stage reads the terminal register of a local group. Scanning
+  // only each group's leading element and total saves combines without adding
+  // shuffles. Interior prefixes are completed by completeRegisterGroups.
+  void scanWithinWarps(triton::ScanOp op, const ScanLoweringHelper &helper,
+                       ScanValues &values, Value laneId, bool scanEndpoints,
+                       ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    unsigned localSize = helper.getLocalScanSize();
+    bool reverse = op.getReverse();
     for (const auto &stage : helper.getStages()) {
       // In logical coordinates the lower-half endpoint is
       // (x & ~((1 << (k + 1)) - 1)) | ((1 << k) - 1).
@@ -99,7 +136,7 @@ struct ScanOpConversion
       // shared by multiple destination registers.
       auto previous = values;
       DenseMap<unsigned, SmallVector<Value>> endpoints;
-      for (unsigned r = 0; r < numRegs; ++r) {
+      for (unsigned r = 0; r < values.size(); ++r) {
         unsigned localIndex = r % localSize;
         if (scanEndpoints && localIndex != 0 && localIndex != localSize - 1)
           continue;
@@ -116,46 +153,32 @@ struct ScanOpConversion
           }
           it = endpoints.try_emplace(src, std::move(endpoint)).first;
         }
-        auto combined = applyCombineOp(loc, rewriter, op.getCombineOp(),
-                                       it->second, previous[r], pred);
-        for (unsigned i = 0; i < numOperands; ++i)
-          values[r][i] =
-              pred ? b.select(pred, combined[i], previous[r][i]) : combined[i];
+        values[r] =
+            combineWithPrefix(op, it->second, previous[r], rewriter, pred);
       }
     }
-    if (scanEndpoints) {
-      for (unsigned base = 0; base < numRegs; base += localSize) {
-        unsigned first = base + (reverse ? localSize - 1 : 0);
-        for (unsigned i = 1; i + 1 < localSize; ++i) {
-          unsigned r = base + (reverse ? localSize - 1 - i : i);
-          values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
-                                     values[first], values[r]);
-        }
-      }
-    }
-
-    if (helper.getScratchLayout())
-      scanAcrossWarps(op, helper, values, laneId, warpId, rewriter);
-
-    SmallVector<Value> results;
-    auto inverseOrder = helper.getRegisterOrder().inverse();
-    for (unsigned i = 0; i < numOperands; ++i) {
-      SmallVector<Value> unpacked;
-      for (const auto &row : values)
-        unpacked.push_back(row[i]);
-      unpacked = inverseOrder.apply(unpacked);
-      results.push_back(packUniqueTensorElements(loc, getTypeConverter(),
-                                                 unpacked, rewriter,
-                                                 op.getResult()[i].getType()));
-    }
-    rewriter.replaceOp(op, results);
-    return success();
   }
 
-private:
-  void scanAcrossWarps(triton::ScanOp op, ScanLoweringHelper &helper,
-                       SmallVector<SmallVector<Value>> &values, Value laneId,
-                       Value warpId,
+  // Combine each scanned leading element with the saved local suffix
+  // prefixes. Both endpoints already contain their complete warp-local scan.
+  void completeRegisterGroups(triton::ScanOp op, ScanValues &values,
+                              unsigned localSize,
+                              ConversionPatternRewriter &rewriter) const {
+    bool reverse = op.getReverse();
+    for (unsigned base = 0; base < values.size(); base += localSize) {
+      unsigned first = base + (reverse ? localSize - 1 : 0);
+      for (unsigned i = 1; i + 1 < localSize; ++i) {
+        unsigned r = base + (reverse ? localSize - 1 - i : i);
+        values[r] = applyCombineOp(op.getLoc(), rewriter, op.getCombineOp(),
+                                   values[first], values[r]);
+      }
+    }
+  }
+
+  // Publish one total per contiguous warp-local segment, then scan those
+  // totals in logical order and prepend the exclusive carry to each prefix.
+  void scanAcrossWarps(triton::ScanOp op, const ScanLoweringHelper &helper,
+                       ScanValues &values, Value laneId, Value warpId,
                        ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -179,48 +202,20 @@ private:
     // Register order puts all axis bits first, sorted by logical significance.
     unsigned axisRegs = regMask + 1;
     unsigned segmentRegs = 1;
-    unsigned segmentLaneMask = 0;
     for (const auto &basis : layout.getBases().lookup(kReg))
       if (basis[op.getAxis()] && basis[op.getAxis()] < segmentSize)
         segmentRegs *= 2;
-    for (auto [i, basis] : llvm::enumerate(layout.getBases().lookup(kLane)))
-      if (basis[op.getAxis()] && basis[op.getAxis()] < segmentSize)
-        segmentLaneMask |= 1u << i;
 
-    auto smemBases =
-        getSmemBases(op, helper.getScratchSizeInElems(), rewriter, targetInfo);
+    auto smemBases = storeWarpTotals(op, helper, values, segmentRegs, laneId,
+                                     warpId, rewriter);
+    b.barrier(triton::gpu::AddrSpace::Local);
+
     SmallVector<Type> smemTypes;
     for (unsigned i = 0; i < numOperands; ++i)
       smemTypes.push_back(getElementType(op, i));
     auto ptr = [&](unsigned i, Value offset) {
       return b.gep(smemBases[i].getType(), smemTypes[i], smemBases[i], offset);
     };
-    auto offset = [&](unsigned reg, Value lane, Value warp) {
-      return applyLinearLayout(loc, rewriter, scratch,
-                               {{kReg, b.i32_val(reg)},
-                                {kLane, lane},
-                                {kWarp, warp},
-                                {kBlock, b.i32_val(0)}})
-          .front()
-          .second;
-    };
-    auto free = layout.getFreeVariableMasks();
-    Value representative =
-        b.icmp_eq(b.or_(b.and_(laneId, b.i32_val(free.lookup(kLane))),
-                        b.and_(warpId, b.i32_val(free.lookup(kWarp)))),
-                  b.i32_val(0));
-    Value writer = b.and_(representative,
-                          b.icmp_eq(b.and_(laneId, b.i32_val(segmentLaneMask)),
-                                    b.i32_val(reverse ? 0 : segmentLaneMask)));
-    unsigned lastReg = reverse ? 0 : segmentRegs - 1;
-    for (unsigned r = lastReg; r < values.size(); r += segmentRegs) {
-      Value index = offset(r, laneId, warpId);
-      for (unsigned i = 0; i < numOperands; ++i)
-        targetInfo.storeShared(rewriter, loc, ptr(i, index), values[r][i],
-                               writer);
-    }
-    b.barrier(triton::gpu::AddrSpace::Local);
-
     auto threadLayout = layout.sublayout({kLane, kWarp}, {axis});
     Value threadSegment = applyLinearLayout(loc, rewriter, threadLayout,
                                             {{kLane, laneId}, {kWarp, warpId}})
@@ -254,7 +249,8 @@ private:
     // This keeps only one carry live for ordinary blocked layouts, but also
     // handles register/lane/warp axis bits interleaved in any order.
     for (unsigned base = 0; base < values.size(); base += axisRegs) {
-      Value parallelOffset = offset(base, parallelLane, parallelWarp);
+      Value parallelOffset = getScratchOffset(loc, rewriter, scratch, base,
+                                              parallelLane, parallelWarp);
       SmallVector<Value> acc;
       DenseMap<unsigned, SmallVector<Value>> carries;
       for (unsigned step = 1; step < numSegments; ++step) {
@@ -282,17 +278,100 @@ private:
           continue;
         Value pred =
             regSegment == (reverse ? regSegmentMask : 0) ? notFirst : Value{};
-        for (unsigned r = base + reg; r < base + reg + segmentRegs; ++r) {
-          auto combined = applyCombineOp(loc, rewriter, op.getCombineOp(),
-                                         carry, values[r], pred);
-          for (unsigned i = 0; i < numOperands; ++i)
-            values[r][i] =
-                pred ? b.select(pred, combined[i], values[r][i]) : combined[i];
-        }
+        for (unsigned r = base + reg; r < base + reg + segmentRegs; ++r)
+          values[r] = combineWithPrefix(op, carry, values[r], rewriter, pred);
         carries.erase(reg);
       }
       assert(carries.empty() && "all carries must be consumed");
     }
+  }
+
+  // Only the terminal element of each segment writes its total. When the
+  // layout broadcasts lanes or warps, elect one representative writer.
+  SmallVector<Value>
+  storeWarpTotals(triton::ScanOp op, const ScanLoweringHelper &helper,
+                  const ScanValues &values, unsigned segmentRegs, Value laneId,
+                  Value warpId, ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto kLane = StringAttr::get(rewriter.getContext(), "lane");
+    auto kWarp = StringAttr::get(rewriter.getContext(), "warp");
+    const auto &layout = helper.getLayout();
+    unsigned segmentLaneMask = 0;
+    for (auto [i, basis] : llvm::enumerate(layout.getBases().lookup(kLane)))
+      if (basis[op.getAxis()] && basis[op.getAxis()] < helper.getSegmentSize())
+        segmentLaneMask |= 1u << i;
+
+    auto smemBases =
+        getSmemBases(op, helper.getScratchSizeInElems(), rewriter, targetInfo);
+    auto free = layout.getFreeVariableMasks();
+    Value representative =
+        b.icmp_eq(b.or_(b.and_(laneId, b.i32_val(free.lookup(kLane))),
+                        b.and_(warpId, b.i32_val(free.lookup(kWarp)))),
+                  b.i32_val(0));
+    bool reverse = op.getReverse();
+    Value writer = b.and_(representative,
+                          b.icmp_eq(b.and_(laneId, b.i32_val(segmentLaneMask)),
+                                    b.i32_val(reverse ? 0 : segmentLaneMask)));
+    unsigned lastReg = reverse ? 0 : segmentRegs - 1;
+    for (unsigned r = lastReg; r < values.size(); r += segmentRegs) {
+      Value index = getScratchOffset(loc, rewriter, *helper.getScratchLayout(),
+                                     r, laneId, warpId);
+      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+        Value ptr = b.gep(smemBases[i].getType(), getElementType(op, i),
+                          smemBases[i], index);
+        targetInfo.storeShared(rewriter, loc, ptr, values[r][i], writer);
+      }
+    }
+    return smemBases;
+  }
+
+  Value getScratchOffset(Location loc, ConversionPatternRewriter &rewriter,
+                         const LinearLayout &scratch, unsigned reg, Value lane,
+                         Value warp) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto *ctx = rewriter.getContext();
+    return applyLinearLayout(
+               loc, rewriter, scratch,
+               {{StringAttr::get(ctx, "register"), b.i32_val(reg)},
+                {StringAttr::get(ctx, "lane"), lane},
+                {StringAttr::get(ctx, "warp"), warp},
+                {StringAttr::get(ctx, "block"), b.i32_val(0)}})
+        .front()
+        .second;
+  }
+
+  // Keep the existing prefix where the carry does not apply. The predicate
+  // also guards the combine region, which may contain side effects.
+  SmallVector<Value> combineWithPrefix(triton::ScanOp op, ValueRange prefix,
+                                       ValueRange values,
+                                       ConversionPatternRewriter &rewriter,
+                                       Value pred) const {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto combined =
+        applyCombineOp(loc, rewriter, op.getCombineOp(), prefix, values, pred);
+    if (pred)
+      for (unsigned i = 0; i < combined.size(); ++i)
+        combined[i] = b.select(pred, combined[i], values[i]);
+    return combined;
+  }
+
+  void packResults(triton::ScanOp op, const ScanLoweringHelper &helper,
+                   const ScanValues &values,
+                   ConversionPatternRewriter &rewriter) const {
+    SmallVector<Value> results;
+    auto inverseOrder = helper.getRegisterOrder().inverse();
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      SmallVector<Value> unpacked;
+      for (const auto &row : values)
+        unpacked.push_back(row[i]);
+      unpacked = inverseOrder.apply(unpacked);
+      results.push_back(
+          packUniqueTensorElements(op.getLoc(), getTypeConverter(), unpacked,
+                                   rewriter, op.getResult()[i].getType()));
+    }
+    rewriter.replaceOp(op, results);
   }
 
   const TargetInfoBase &targetInfo;
