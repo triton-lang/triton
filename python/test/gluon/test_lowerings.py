@@ -106,7 +106,13 @@ def _scan_linear_layouts():
     # Scanning the group endpoints must also handle nonconsecutive lane bits.
     bases = [[1, 0], [2, 0], [0, 1], [4, 0], [8, 0], [0, 2], [16, 0], [0, 4], [0, 8], [0, 16]]
     register_groups = ttgl.DistributedLinearLayout(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
-    return [ordinary, broadcast, warp_minor, register_groups]
+    # Local prefixes and warp-local segments both use scattered register
+    # indices. The high axis register bit selects another cross-warp segment,
+    # and a parallel register bit separates two independent scans.
+    scattered_registers = ttgl.DistributedLinearLayout(
+        [[32, 0], [1, 0], [0, 1], [2, 0]], [[4, 0], [8, 0], [0, 2], [0, 4], [0, 8]] + [[0, 0]] * (lane_bits - 5),
+        [[16, 0], [0, 16]], [], [64, 32])
+    return [ordinary, broadcast, warp_minor, register_groups, scattered_registers]
 
 
 SCAN_EXTRA_LAYOUTS = _filter_layouts([
@@ -183,11 +189,13 @@ def _scan_affine_combine(a1, b1, a2, b2):
 ])
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("reverse", [False, True])
-def test_scan_layouts_noncommutative(layout, axis, reverse, device):
+@pytest.mark.parametrize("M", [32, 64])
+def test_scan_layouts_noncommutative(layout, axis, reverse, M, device):
 
     @gluon.jit
-    def kernel(A, B, OutA, OutB, layout: ttgl.constexpr, axis: ttgl.constexpr, reverse: ttgl.constexpr):
-        m = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))[:, None]
+    def kernel(A, B, OutA, OutB, M: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
+               reverse: ttgl.constexpr):
+        m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
         n = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))[None, :]
         a = ttgl.load(A + m * 32 + n)
         b = ttgl.load(B + m * 32 + n)
@@ -196,16 +204,18 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, device):
         ttgl.store(OutB + m * 32 + n, b)
 
     torch.manual_seed(0)
-    a = torch.randint(0, 2, (32, 32), dtype=torch.int32) * 2 - 1
-    b = torch.randint(-100, 100, (32, 32), dtype=torch.int64)
+    a = torch.randint(0, 2, (M, 32), dtype=torch.int32) * 2 - 1
+    b = torch.randint(-100, 100, (M, 32), dtype=torch.int64)
     expected_a, expected_b = a.clone(), b.clone()
-    order = list(reversed(range(32))) if reverse else list(range(32))
+    order = list(range(a.shape[axis]))
+    if reverse:
+        order.reverse()
     for prev, cur in zip(order, order[1:]):
         expected_a.select(axis, cur).copy_(expected_a.select(axis, prev) * a.select(axis, cur))
         expected_b.select(axis, cur).copy_(expected_b.select(axis, prev) * a.select(axis, cur) + b.select(axis, cur))
     a, b = a.to(device), b.to(device)
     out_a, out_b = torch.empty_like(a), torch.empty_like(b)
-    kernel[(1, )](a, b, out_a, out_b, layout, axis, reverse, num_warps=4)
+    kernel[(1, )](a, b, out_a, out_b, M, layout, axis, reverse, num_warps=4)
     torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
     torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
 

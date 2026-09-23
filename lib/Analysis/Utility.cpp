@@ -416,20 +416,33 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
   auto axis = *std::next(layout.getOutDimNames().begin(), op.getAxis());
   layout = layout.removeZeroBasesAlongDim(kReg);
 
-  // Put axis registers first, in logical order, without changing which thread
-  // owns any value. Unlike reduction, scan cannot reorder logical axis bits.
+  // Keep the layout and values in their original register order. Describe
+  // each parallel scan by an ordered list of its register indices instead.
   const auto &regBases = layout.getBases().lookup(kReg);
-  auto permutation = llvm::to_vector(llvm::seq<size_t>(regBases.size()));
-  llvm::stable_sort(permutation, [&](size_t a, size_t b) {
-    unsigned x = regBases[a][op.getAxis()];
-    unsigned y = regBases[b][op.getAxis()];
-    return x && (!y || x < y);
-  });
-  registerOrder = ColumnAction(permutation, kReg, regBases.size());
-  layout = registerOrder.apply(layout);
-  localScanSize = factorMaximalIdentityPrefix(layout, kReg, axis,
-                                              layout.getOutDimSize(axis))
-                      .size;
+  SmallVector<std::pair<unsigned, unsigned>> axisBases;
+  unsigned axisRegMask = 0;
+  for (auto [bit, basis] : llvm::enumerate(regBases)) {
+    if (basis[op.getAxis()]) {
+      axisBases.emplace_back(basis[op.getAxis()], 1u << bit);
+      axisRegMask |= 1u << bit;
+    }
+  }
+  llvm::sort(axisBases);
+  for (auto [logicalBit, regBit] : axisBases) {
+    if (logicalBit != localScanSize)
+      break;
+    localScanSize *= 2;
+  }
+  for (unsigned base = 0; base < layout.getInDimSize(kReg); ++base) {
+    if (base & axisRegMask)
+      continue;
+    auto &group = registerGroups.emplace_back(1, base);
+    for (auto [logicalBit, regBit] : axisBases) {
+      unsigned size = group.size();
+      for (unsigned i = 0; i < size; ++i)
+        group.push_back(group[i] | regBit);
+    }
+  }
   if (!isSupported())
     return;
 
