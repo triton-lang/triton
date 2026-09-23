@@ -177,6 +177,8 @@ def _scan_affine_combine(a1, b1, a2, b2):
 @pytest.mark.parametrize("layout", [
     *SCAN_EXTRA_LAYOUTS,
     ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1]),
+    # Exercise endpoint reconstruction followed by a cross-warp carry on axis 0.
+    ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1]),
     ttgl.BlockedLayout([8, 1], [2, THREADS_PER_WARP // 2], [1, 4], [0, 1])
 ])
 @pytest.mark.parametrize("axis", [0, 1])
