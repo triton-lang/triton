@@ -93,6 +93,31 @@ tt.func @two_stage_example(%n: index) {
 // CHECK-NOT: rocdl.sched.barrier
 // CHECK: tt.return
 
+// -- phase_gap on the first stage is copied onto the loop ----
+
+tt.func @first_stage_phase_gap(%n: index) {
+  %c0  = arith.constant 0 : index
+  %c1  = arith.constant 1 : index
+
+  scf.for %i = %c0 to %n step %c1 {
+    %x = arith.addi %i, %c1 : index
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0", triton.warp_pipeline.phase_gap = 2 : i32}
+    %y = arith.muli %x, %c1 : index
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage1"}
+    scf.yield
+  }
+
+  tt.return
+}
+
+// CHECK-LABEL: tt.func @first_stage_phase_gap(
+// CHECK: scf.for
+// CHECK-COUNT-2: scf.execute_region
+// CHECK: triton.warp_pipeline.phase_gap = 2
+// CHECK-SAME: triton.warp_pipeline.pipelined_for
+// CHECK-NOT: rocdl.sched.barrier
+// CHECK: tt.return
+
 // -- pipelining with pre-existing barrier (ignorable ops) ----
 
 // CHECK-LABEL: tt.func public @triple_buf_two_stages
@@ -167,7 +192,7 @@ tt.func @flat_pipeline_example(%n: index) {
   %a  = arith.addi %c0, %c1 : index
   %a2 = arith.muli %a, %c1 : index
 
-  rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0_epi", triton.warp_pipeline.priority = 1 : i32}
+  rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0_epi", triton.warp_pipeline.phase_gap = 1 : i32, triton.warp_pipeline.priority = 1 : i32}
 
   // Stage 1
   %b  = arith.addi %a2, %c0 : index

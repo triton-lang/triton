@@ -1389,7 +1389,8 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttag::ClusterBarrierWaitOp>();
            })
       .def("create_warp_pipeline_border",
-           [](GluonOpBuilder &self, const std::string &marker, int priority) {
+           [](GluonOpBuilder &self, const std::string &marker, int priority,
+              int phaseGap) {
              auto border =
                  self.create<ROCDL::SchedBarrier>(ROCDL::SchedGroupMask::none);
              auto ctx = self.getContext();
@@ -1399,6 +1400,11 @@ void init_gluon_ir(py::module_ &m) {
                auto i32Ty = IntegerType::get(ctx, 32);
                border->setAttr("triton.warp_pipeline.priority",
                                IntegerAttr::get(i32Ty, priority));
+             }
+             if (phaseGap > 0) {
+               auto i32Ty = IntegerType::get(ctx, 32);
+               border->setAttr("triton.warp_pipeline.phase_gap",
+                               IntegerAttr::get(i32Ty, phaseGap));
              }
            });
 
