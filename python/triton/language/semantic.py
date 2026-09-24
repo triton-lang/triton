@@ -99,7 +99,9 @@ class TritonSemantic(Generic[TensorTy]):
             return tl.float32
         # 6) return fp16 if operands are different fp8
         if a_ty.is_fp8() and b_ty.is_fp8():
-            return a_ty if a_ty == b_ty else tl.float16
+            if a_ty == b_ty:
+                raise TypeError(f"arithmetic on fp8 dtype {a_ty} not supported, promote to float16 first")
+            return tl.float16
         if not a_ty.is_int() or not b_ty.is_int():
             raise TypeError(f"unexpected type {a_ty} and {b_ty}")
         # 6 ) both operands are integer and undergo
