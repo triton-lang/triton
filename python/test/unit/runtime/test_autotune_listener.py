@@ -104,7 +104,7 @@ def test_autotune_listener_disk_cache_hit(device: str, fresh_knobs, fresh_triton
 
     configs = [triton.Config({"BLOCK_SIZE": 32}), triton.Config({"BLOCK_SIZE": 128})]
 
-    @triton.autotune(configs=configs, key=["N"], do_bench=do_bench, cache_results=True)
+    @triton.autotune(configs=configs, key=["N"], cache_results=True)
     @triton.jit
     def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
         offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
