@@ -591,4 +591,18 @@ tt.func private @reduce_broadcast_halves_minui_small(%arg0: tensor<8x4xi32, #hal
   tt.return %0 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
 }
 
+// A zero-result op in front of the arithmetic combiner must not crash the
+// NVIDIA tree-arity query (which dereferences result 0 unconditionally).
+// CHECK-LABEL: @reduce_with_print_in_combine
+// CHECK: llvm.return
+tt.func private @reduce_with_print_in_combine(%arg0: tensor<32x16xi32, #blocked_reduce>) -> tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked_reduce}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    tt.print "combine" {hex = false, isSigned = array<i32: 1>} : %a : i32
+    %c = arith.addi %a, %b : i32
+    tt.reduce.return %c : i32
+  }) : (tensor<32x16xi32, #blocked_reduce>) -> tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked_reduce}>>
+  tt.return %0 : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked_reduce}>>
+}
+
 }
