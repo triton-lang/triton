@@ -273,6 +273,16 @@ static bool getBackwardSliceToPartition(Value v,
         currentDim--;
     }
 
+    if (auto reshapeOp = dyn_cast<ReshapeOp>(op)) {
+      if (auto axis = reshapeOp.getExpandDimsAxis();
+          axis && !reshapeOp.getAllowReorder()) {
+        // currentDim is the dim after expansion.
+        assert(*axis != currentDim && "expanded dim always has shape 1");
+        if (*axis < currentDim)
+          currentDim--;
+      }
+    }
+
     // Recusively process operands backwards.
     if (op->hasTrait<OpTrait::Elementwise>() ||
         isa<arith::ConstantOp, arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp,
