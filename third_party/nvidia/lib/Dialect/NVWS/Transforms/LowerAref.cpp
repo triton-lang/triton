@@ -134,7 +134,7 @@ void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp,
 struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
-  Value twoCTAReadyMbars;
+  Value localFullMbars;
   int depth;
   SmallVector<Value> buffers;
 };
@@ -149,11 +149,12 @@ Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
   return barrier;
 }
 
-Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
-                     Value stage,
-                     std::optional<PartitionWsTagIds> partitionWsTagIds,
-                     StageCluster stageCluster) {
-  auto barrier = createSingleBufferView(rewriter, aref.fullMbars, stage);
+Value getProducerBarrier(PatternRewriter &rewriter, Location loc,
+                         ArefValue aref, Value stage,
+                         std::optional<PartitionWsTagIds> partitionWsTagIds,
+                         StageCluster stageCluster) {
+  Value mbars = aref.localFullMbars ? aref.localFullMbars : aref.fullMbars;
+  auto barrier = createSingleBufferView(rewriter, mbars, stage);
   assignStageCluster(barrier.getDefiningOp(), partitionWsTagIds, stageCluster,
                      rewriter);
   return barrier;
@@ -248,34 +249,11 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   return count;
 }
 
-Value createArefBarrierAlloc(ImplicitLocOpBuilder &builder, Type type,
-                             unsigned numBarriers, bool twoCTAs) {
-  if (!twoCTAs)
-    return createScalarAlloc(builder, type, numBarriers);
-
-  MLIRContext *ctx = builder.getContext();
-  unsigned numCTAs = TritonGPUDialect::getNumCTAs(
-      builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>());
-  assert(numCTAs % 2 == 0);
-  Attribute sharedMemorySpace = SharedMemorySpaceAttr::get(ctx);
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto dim = standardOutDimNames(ctx, /*rank=*/1)[0];
-  auto barrierCGALayout = CGAEncodingAttr::get(
-      ctx, LinearLayout::zeros1D(2, kBlock, dim) *
-               LinearLayout::identity1D(numCTAs / 2, kBlock, dim));
-  auto barrierEncoding =
-      SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCGALayout);
-  auto memDescType =
-      MemDescType::get({numBarriers, numCTAs / 2}, type, barrierEncoding,
-                       sharedMemorySpace, /*mutableMemory=*/true);
-  return LocalAllocOp::create(builder, memDescType, Value());
-}
-
 Value createBarrierArray(ImplicitLocOpBuilder &initBuilder,
                          ImplicitLocOpBuilder &cleanupBuilder, int numBarriers,
                          int arrivalCount, bool twoCTAs) {
-  Value barrierAlloc = createArefBarrierAlloc(
-      initBuilder, initBuilder.getI64Type(), numBarriers, twoCTAs);
+  Value barrierAlloc = createScalarAlloc(initBuilder, initBuilder.getI64Type(),
+                                         numBarriers, twoCTAs);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(initBuilder, barrierAlloc, i);
     InitBarrierOp::create(initBuilder, barrierView, arrivalCount);
@@ -331,31 +309,33 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
         return exit && llvm::is_contained(castAsyncOpAttrs(exit.getAsyncOps()),
                                           AsyncOp::NONE);
       });
-  bool needsTwoCTAReadyBarrier =
-      isSharedMemory && hasTwoCTAConsumer && hasSynchronousConsumer;
-
   ImplicitLocOpBuilder initBuilder(op.getLoc(), op);
   ImplicitLocOpBuilder cleanupBuilder(op.getLoc(), op);
   setArefBarrierInsertionPoints(op, initBuilder, cleanupBuilder,
                                 teardownBarriers);
 
-  // Both CTAs must release their TMEM reads before the buffer can be reused.
+  // Like Gluon's matmul: load-empty barriers are CTA-local, while TMEM-empty
+  // barriers join both CTAs' read releases before the two-CTA MMA reuses TMEM.
   auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(bufferType.getEncoding());
   bool needsPeerReadRelease = tmemEnc && tmemEnc.getTwoCTAs();
   Value emptyMbars =
       createBarrierArray(initBuilder, cleanupBuilder, depth,
                          count.consumerPendingCount, needsPeerReadRelease);
-  Value fullMbars = createBarrierArray(
-      initBuilder, cleanupBuilder, depth, count.producerPendingCount,
-      hasTwoCTAConsumer && !needsTwoCTAReadyBarrier);
-  // With ordinary readers, keep TMA completion local to each CTA and join
-  // those completions in a separate barrier before issuing the two-CTA MMA.
-  Value twoCTAReadyMbars;
-  if (needsTwoCTAReadyBarrier)
-    twoCTAReadyMbars = createBarrierArray(initBuilder, cleanupBuilder, depth, 1,
-                                          /*twoCTAs=*/true);
+  // Only mixed readers need an extra, CTA-local producer-completion barrier.
+  // Ordinary readers wait on it; MMA readers join those waits in fullMbars.
+  Value localFullMbars;
+  if (isSharedMemory && hasTwoCTAConsumer && hasSynchronousConsumer)
+    localFullMbars = createBarrierArray(initBuilder, cleanupBuilder, depth,
+                                        count.producerPendingCount,
+                                        /*twoCTAs=*/false);
 
-  return ArefValue{emptyMbars, fullMbars, twoCTAReadyMbars, depth,
+  // Load-ready barriers are two-CTA for MMA inputs; accumulator-ready barriers
+  // are CTA-local so both CTAs wait before reading TMEM.
+  Value fullMbars = createBarrierArray(
+      initBuilder, cleanupBuilder, depth,
+      localFullMbars ? 1 : count.producerPendingCount, hasTwoCTAConsumer);
+
+  return ArefValue{emptyMbars, fullMbars, localFullMbars, depth,
                    op.getOperands()};
 }
 
@@ -522,15 +502,15 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
 
   if (llvm::any_of(asyncKinds, hasTMA)) {
     Value fullBarrier =
-        getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                       getPartitionWsTagIds(op), getStageCluster(op));
+        getProducerBarrier(rewriter, loc, arefVal, op.getStage(),
+                           getPartitionWsTagIds(op), getStageCluster(op));
     lowerTMALoad(op, fullBarrier, rewriter, arefVal);
   }
 
   if (llvm::any_of(asyncKinds, hasCLC)) {
     Value fullBarrier =
-        getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                       getPartitionWsTagIds(op), getStageCluster(op));
+        getProducerBarrier(rewriter, loc, arefVal, op.getStage(),
+                           getPartitionWsTagIds(op), getStageCluster(op));
     lowerCLC(op, fullBarrier, rewriter);
   }
 
@@ -567,13 +547,13 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
   rewriter.setInsertionPointAfter(op);
 
   Value fullBarrier =
-      getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                     getPartitionWsTagIds(op), getStageCluster(op));
+      getProducerBarrier(rewriter, loc, arefVal, op.getStage(),
+                         getPartitionWsTagIds(op), getStageCluster(op));
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
   // Only MMA acquisitions join the CTAs; ordinary readers wait locally above.
-  if (arefVal.twoCTAReadyMbars && !getAsyncMMAv5Consumers(op).empty()) {
-    Value ready = createSingleBufferView(rewriter, arefVal.twoCTAReadyMbars,
-                                         op.getStage());
+  if (arefVal.localFullMbars && !getAsyncMMAv5Consumers(op).empty()) {
+    Value ready =
+        createSingleBufferView(rewriter, arefVal.fullMbars, op.getStage());
     assignStageCluster(ready.getDefiningOp(), getPartitionWsTagIds(op),
                        getStageCluster(op), rewriter);
     auto arrive = ArriveBarrierOp::create(rewriter, loc, ready, 1);
@@ -673,8 +653,8 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
   }
 
   Value fullBarrier =
-      getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                     getPartitionWsTagIds(op), getStageCluster(op));
+      getProducerBarrier(rewriter, loc, arefVal, op.getStage(),
+                         getPartitionWsTagIds(op), getStageCluster(op));
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
                       fullBarrier, getPartitionWsTagIds(op),
                       getStageCluster(op));
