@@ -142,7 +142,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 
 #detailed_cache_policy = #ttng.cache_policy<l1 = evict_last, l2_primary = evict_first, l2_secondary = evict_unchanged, l2_fraction = 3.300000e-01 : f32, l2_prefetch_size = 128 : i32>
 #store_detailed_cache_policy = #ttng.cache_policy<l1 = evict_last, l2_primary = evict_first, l2_secondary = evict_unchanged, l2_fraction = 3.300000e-01 : f32>
-#modifier_l2_cache_policy = #ttng.cache_policy<cache_modifier = cg, l2_primary = evict_last, l2_secondary = evict_unchanged, l2_fraction = 5.000000e-01 : f32>
+#modifier_l2_cache_policy = #ttng.cache_policy<cache_modifier = cg, l2_primary = evict_last, l2_secondary = evict_unchanged, l2_fraction = 1.000000e+00 : f32>
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: load_with_detailed_cache_policy
@@ -163,7 +163,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK-LABEL: load_with_cache_modifier_in_policy
   tt.func @load_with_cache_modifier_in_policy(%ptrs : tensor<128x!tt.ptr<f32>, #blocked0>) {
-    // CHECK: createpolicy.fractional.L2::evict_last.b64 $0, 0.5;
+    // CHECK: createpolicy.fractional.L2::evict_last.b64 $0, 1.0;
     // CHECK: ld.global.cg.L2::cache_hint.b32
     %value = tt.load %ptrs {cachePolicy = #modifier_l2_cache_policy} : tensor<128x!tt.ptr<f32>, #blocked0>
     tt.return
