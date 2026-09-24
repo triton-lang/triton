@@ -133,7 +133,7 @@ void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp,
 struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
-  Value localFullMbars;
+  Value mixedConsumerMbars;
   int depth;
   SmallVector<Value> buffers;
 };
@@ -148,11 +148,12 @@ Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
   return barrier;
 }
 
-Value getProducerBarrier(PatternRewriter &rewriter, Location loc,
-                         ArefValue aref, Value stage,
-                         std::optional<PartitionWsTagIds> partitionWsTagIds,
-                         StageCluster stageCluster) {
-  Value mbars = aref.localFullMbars ? aref.localFullMbars : aref.fullMbars;
+Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
+                     Value stage,
+                     std::optional<PartitionWsTagIds> partitionWsTagIds,
+                     StageCluster stageCluster) {
+  Value mbars =
+      aref.mixedConsumerMbars ? aref.mixedConsumerMbars : aref.fullMbars;
   auto barrier = createSingleBufferView(rewriter, mbars, stage);
   assignStageCluster(barrier.getDefiningOp(), partitionWsTagIds, stageCluster,
                      rewriter);
@@ -292,6 +293,21 @@ void setArefBarrierInsertionPoints(
 ArefValue
 createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
                    DenseMap<Block *, ClusterBarrierOp> &teardownBarriers) {
+  // Barrier roles: empty = safe to reuse; full = ready to consume.
+  // Local barriers wait in each CTA; two-CTA barriers combine arrivals and
+  // wait in the leader CTA.
+  //
+  // clang-format off
+  // Buffer -> consumers                 emptyMbars  mixedConsumerMbars fullMbars
+  // One-CTA case                        local       absent             local
+  // SMEM -> two-CTA MMA only             local       absent             two-CTA
+  // SMEM -> two-CTA MMA + ordinary reads local       local              two-CTA
+  // Two-CTA TMEM -> ordinary reads       two-CTA     absent             local
+  // Two-CTA TMEM -> two-CTA MMA only      two-CTA     absent             two-CTA
+  // clang-format on
+  //
+  // Mixed SMEM readers wait on mixedConsumerMbars; MMA readers then signal
+  // and wait on fullMbars to join both CTAs' producer completions.
   auto bufferType = cast<MemDescType>(op.getType().getBaseType().front());
   int depth = getArefDepth(bufferType);
   BarrierCount count = getArrivalCount(op);
@@ -309,25 +325,22 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
   setArefBarrierInsertionPoints(op, initBuilder, cleanupBuilder,
                                 teardownBarriers);
 
-  // TMEM reuse waits for both CTAs' read releases.
   auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(bufferType.getEncoding());
   bool needsPeerReadRelease = tmemEnc && tmemEnc.getTwoCTAs();
   Value emptyMbars =
       createBarrierArray(initBuilder, cleanupBuilder, depth,
                          count.consumerPendingCount, needsPeerReadRelease);
-  // Mixed SMEM readers need local completion before the MMA join.
-  Value localFullMbars;
+  Value mixedConsumerMbars;
   if (isSharedMemory && hasTwoCTAConsumer && hasSynchronousConsumer)
-    localFullMbars = createBarrierArray(initBuilder, cleanupBuilder, depth,
-                                        count.producerPendingCount,
-                                        /*twoCTAs=*/false);
+    mixedConsumerMbars = createBarrierArray(initBuilder, cleanupBuilder, depth,
+                                            count.producerPendingCount,
+                                            /*twoCTAs=*/false);
 
-  // MMA inputs use two-CTA readiness; accumulator readers wait locally.
   Value fullMbars = createBarrierArray(
       initBuilder, cleanupBuilder, depth,
-      localFullMbars ? 1 : count.producerPendingCount, hasTwoCTAConsumer);
+      mixedConsumerMbars ? 1 : count.producerPendingCount, hasTwoCTAConsumer);
 
-  return ArefValue{emptyMbars, fullMbars, localFullMbars, depth,
+  return ArefValue{emptyMbars, fullMbars, mixedConsumerMbars, depth,
                    op.getOperands()};
 }
 
@@ -494,15 +507,15 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
 
   if (llvm::any_of(asyncKinds, hasTMA)) {
     Value fullBarrier =
-        getProducerBarrier(rewriter, loc, arefVal, op.getStage(),
-                           getPartitionWsTagIds(op), getStageCluster(op));
+        getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                       getPartitionWsTagIds(op), getStageCluster(op));
     lowerTMALoad(op, fullBarrier, rewriter, arefVal);
   }
 
   if (llvm::any_of(asyncKinds, hasCLC)) {
     Value fullBarrier =
-        getProducerBarrier(rewriter, loc, arefVal, op.getStage(),
-                           getPartitionWsTagIds(op), getStageCluster(op));
+        getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                       getPartitionWsTagIds(op), getStageCluster(op));
     lowerCLC(op, fullBarrier, rewriter);
   }
 
@@ -539,11 +552,11 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
   rewriter.setInsertionPointAfter(op);
 
   Value fullBarrier =
-      getProducerBarrier(rewriter, loc, arefVal, op.getStage(),
-                         getPartitionWsTagIds(op), getStageCluster(op));
+      getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                     getPartitionWsTagIds(op), getStageCluster(op));
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
   // Join local completions only for MMA readers.
-  if (arefVal.localFullMbars && !getAsyncMMAv5Consumers(op).empty()) {
+  if (arefVal.mixedConsumerMbars && !getAsyncMMAv5Consumers(op).empty()) {
     Value ready =
         createSingleBufferView(rewriter, arefVal.fullMbars, op.getStage());
     assignStageCluster(ready.getDefiningOp(), getPartitionWsTagIds(op),
@@ -645,8 +658,8 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
   }
 
   Value fullBarrier =
-      getProducerBarrier(rewriter, loc, arefVal, op.getStage(),
-                         getPartitionWsTagIds(op), getStageCluster(op));
+      getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                     getPartitionWsTagIds(op), getStageCluster(op));
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
                       fullBarrier, getPartitionWsTagIds(op),
                       getStageCluster(op));
