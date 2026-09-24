@@ -98,8 +98,8 @@ FailureOr<Value> createCachePolicy(CachePolicy cachePolicy,
     const std::string writeConstraint = "=l";
     // prepare asm operands
     auto *dstOpr = ptxBuilder.newOperand(writeConstraint, /*init=*/true);
-    float fractionValue = fraction ? fraction.getValue().convertToFloat() : 1.0f;
-    auto *fractionOpr = ptxBuilder.newFloatConstantOperand(fractionValue);
+    double fractionValue = fraction ? fraction.getValueAsDouble() : 1.0;
+    auto *fractionOpr = ptxBuilder.newConstantOperand(fractionValue);
     policy(dstOpr, fractionOpr);
 
     Type policyRetTy = rewriter.getI64Type();

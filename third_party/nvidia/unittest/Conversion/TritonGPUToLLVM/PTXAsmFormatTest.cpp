@@ -61,28 +61,32 @@ TEST_F(PTXAsmFormatTest, basic) {
   ASSERT_EQ(constraints, "=r,b"); // $0 -> =r, $1 -> b
 }
 
-TEST_F(PTXAsmFormatTest, floatConstants) {
+TEST_F(PTXAsmFormatTest, doubleConstants) {
   PTXBuilder builder;
-  EXPECT_EQ(builder.newFloatConstantOperand(1.0f)->dump(), "1.0");
-  EXPECT_EQ(builder.newFloatConstantOperand(2.0f)->dump(), "2.0");
-  EXPECT_EQ(builder.newFloatConstantOperand(-2.0f)->dump(), "-2.0");
-  EXPECT_EQ(builder.newFloatConstantOperand(0.0f)->dump(), "0.0");
-  EXPECT_EQ(builder.newFloatConstantOperand(-0.0f)->dump(), "-0.0");
-  EXPECT_EQ(builder.newFloatConstantOperand(0.1f)->dump(), "0.1");
-  EXPECT_EQ(builder.newFloatConstantOperand(0.33f)->dump(), "0.33");
+  EXPECT_EQ(builder.newConstantOperand(1)->dump(), "0x1");
+  EXPECT_EQ(builder.newConstantOperand(1u)->dump(), "0x1");
+  EXPECT_EQ(builder.newConstantOperand(int64_t{1})->dump(), "0x1");
+  EXPECT_EQ(builder.newConstantOperand(1.0)->dump(), "1.0");
+  EXPECT_EQ(builder.newConstantOperand(2.0)->dump(), "2.0");
+  EXPECT_EQ(builder.newConstantOperand(-2.0)->dump(), "-2.0");
+  EXPECT_EQ(builder.newConstantOperand(0.0)->dump(), "0.0");
+  EXPECT_EQ(builder.newConstantOperand(-0.0)->dump(), "-0.0");
+  EXPECT_EQ(builder.newConstantOperand(0.1)->dump(), "0.1");
+  EXPECT_EQ(builder.newConstantOperand(0.1f)->dump(), "0.10000000149011612");
+  EXPECT_EQ(builder.newConstantOperand(0.33)->dump(), "0.33");
 
-  for (float value : {std::numeric_limits<float>::denorm_min(),
-                      std::numeric_limits<float>::min(),
-                      std::numeric_limits<float>::max(),
-                      std::nextafter(1.0f, 0.0f),
-                      std::nextafter(1.0f, 2.0f), -1e-30f, 1e30f}) {
-    auto text = builder.newFloatConstantOperand(value)->dump();
+  for (double value : {std::numeric_limits<double>::denorm_min(),
+                       std::numeric_limits<double>::min(),
+                       std::numeric_limits<double>::max(),
+                       std::nextafter(1.0, 0.0), std::nextafter(1.0, 2.0),
+                       -1e-300, 1e300}) {
+    auto text = builder.newConstantOperand(value)->dump();
     EXPECT_NE(text.find_first_of(".eE"), std::string::npos);
-    float parsed;
+    double parsed;
     auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
     ASSERT_EQ(result.ec, std::errc{});
     EXPECT_EQ(result.ptr, text.data() + text.size());
-    EXPECT_EQ(std::bit_cast<uint32_t>(parsed), std::bit_cast<uint32_t>(value));
+    EXPECT_EQ(std::bit_cast<uint64_t>(parsed), std::bit_cast<uint64_t>(value));
   }
 }
 

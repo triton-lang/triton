@@ -72,7 +72,7 @@ PTXBuilder::Operand *PTXBuilder::newConstantOperand(int64_t v) {
   return newConstantOperand(ss.str());
 }
 
-PTXBuilder::Operand *PTXBuilder::newFloatConstantOperand(float v) {
+PTXBuilder::Operand *PTXBuilder::newConstantOperand(double v) {
   assert(std::isfinite(v));
   char buffer[64];
   auto [end, error] = std::to_chars(std::begin(buffer), std::end(buffer), v);

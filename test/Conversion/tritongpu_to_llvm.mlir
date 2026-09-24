@@ -178,9 +178,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 
-  // CHECK-LABEL: load_with_shortest_l2_fraction
-  tt.func @load_with_shortest_l2_fraction(%ptrs : tensor<128x!tt.ptr<f32>, #blocked0>) {
-    // CHECK: createpolicy.fractional.L2::evict_last.b64 $0, 0.1;
+  // CHECK-LABEL: load_with_round_trip_l2_fraction
+  tt.func @load_with_round_trip_l2_fraction(%ptrs : tensor<128x!tt.ptr<f32>, #blocked0>) {
+    // CHECK: createpolicy.fractional.L2::evict_last.b64 $0, 0.10000000149011612;
     %value = tt.load %ptrs {cachePolicy = #tenth_l2_cache_policy} : tensor<128x!tt.ptr<f32>, #blocked0>
     tt.return
   }

@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include <concepts>
 #include <memory>
 #include <string>
 
@@ -159,8 +160,11 @@ struct PTXBuilder {
 
   // Create a constant integer operand.
   Operand *newConstantOperand(int64_t v);
-  // Create a finite f32 operand with shortest round-tripping decimal syntax.
-  Operand *newFloatConstantOperand(float v);
+  template <std::integral T> Operand *newConstantOperand(T v) {
+    return newConstantOperand(static_cast<int64_t>(v));
+  }
+  // Create a finite floating-point operand with shortest round-tripping syntax.
+  Operand *newConstantOperand(double v);
   // Create a constant operand with explicit code specified.
   Operand *newConstantOperand(const std::string &v);
 
