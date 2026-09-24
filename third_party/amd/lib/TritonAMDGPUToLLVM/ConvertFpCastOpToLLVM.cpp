@@ -2455,9 +2455,19 @@ struct FpToFpOpConversion
         (srcElementType.isF16() && dstElementType.isBF16());
     if (useFp32Intermediate)
       roundingMode = roundingMode.value_or(RoundingMode::RTNE);
-    auto converter =
-        getConverter(useFp32Intermediate ? f32_ty : srcElementType,
-                     dstElementType, maxElementsPerThread, roundingMode);
+    // There is no direct conversion between f64 and fp8: convert from or to
+    // f32 and truncate or extend around it. Truncating to f32 first only
+    // preserves RTNE.
+    auto isFp8 = [](Type ty) {
+      return ty.isFloat() && ty.getIntOrFloatBitWidth() == 8;
+    };
+    bool truncSrcF64 = srcElementType.isF64() && isFp8(dstElementType) &&
+                       roundingMode == RoundingMode::RTNE;
+    bool extDstF64 = dstElementType.isF64() && isFp8(srcElementType);
+    auto converter = getConverter(
+        (useFp32Intermediate || truncSrcF64) ? f32_ty : srcElementType,
+        extDstF64 ? f32_ty : dstElementType, maxElementsPerThread,
+        roundingMode);
     if (converter == nullptr) {
       std::string rmError;
       if (roundingMode.has_value())
@@ -2488,6 +2498,9 @@ struct FpToFpOpConversion
       for (Value &v : inVals)
         v = srcElementType.isBF16() ? AMD::convertBf16ToFp32(loc, rewriter, v)
                                     : Fp16ToFp32OneValue(loc, rewriter, v);
+    if (truncSrcF64)
+      for (Value &v : inVals)
+        v = LLVM::FPTruncOp::create(rewriter, loc, f32_ty, v);
 
     auto maybeOutVals = converter->convert(loc, rewriter, inVals);
     assert(maybeOutVals.has_value());
@@ -2495,6 +2508,9 @@ struct FpToFpOpConversion
 
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
+    if (extDstF64)
+      for (Value &v : outVals)
+        v = LLVM::FPExtOp::create(rewriter, loc, f64_ty, v);
     return outVals;
   }
 

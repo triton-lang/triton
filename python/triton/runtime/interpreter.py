@@ -186,6 +186,18 @@ def _get_np_dtype(tt_dtype):
     return np_types[tt_dtype]
 
 
+def _shift_right_and_round(value, shift, rounding_mode):
+    # Drop the `shift` low bits of `value`, rounding to nearest even for RTNE and truncating otherwise.
+    value = value.astype(np.int64)
+    shift = np.minimum(shift, 62)
+    result = value >> shift
+    if rounding_mode == _ir.ROUNDING_MODE.RTNE:
+        remainder = value & ((np.int64(1) << shift) - 1)
+        half = np.int64(1) << (shift - 1)
+        result += (remainder > half) | ((remainder == half) & ((result & 1) == 1))
+    return result
+
+
 def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     input_uint_dtype = getattr(np, f"uint{input_dtype.primitive_bitwidth}")
     output_unint_dtype = getattr(np, f"uint{output_dtype.primitive_bitwidth}")
@@ -213,26 +225,42 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         exponent[subnormal_index] = 1 - bit_pos[subnormal_index]
         # 0 significand and subnormal should be treated as 0
         exponent[zero_significand_index & subnormal_index] = bias_input - bias_output
-        significand[subnormal_index] = (significand[subnormal_index] << bit_pos[subnormal_index]) & (
-            (1 << input_dtype.fp_mantissa_width) - 1)
+        significand[subnormal_index] = (
+            significand[subnormal_index] << bit_pos[subnormal_index].astype(input_uint_dtype)) & (
+                (1 << input_dtype.fp_mantissa_width) - 1)
     # Prevent overflow and underflow
     exponent_output = np.maximum(0, np.minimum((exponent - bias_input + bias_output), (1 << output_exponent_width) - 1))
     exponent_output = exponent_output.astype(output_unint_dtype)
     sign_output = sign.astype(output_unint_dtype)
-    if input_dtype.primitive_bitwidth > output_dtype.primitive_bitwidth:  # Downcast
-        significand_output = (significand >> (input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width)) & (
-            (1 << output_dtype.fp_mantissa_width) - 1)
-        if rounding_mode == _ir.ROUNDING_MODE.RTNE:  # Round to nearst even
-            # find the cut-off bit
-            cut_off = significand & (1 << (input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width - 1))
-            significand_output = significand_output + (cut_off > 0)
-        significand_output = significand_output.astype(output_unint_dtype)
+    downcast = input_dtype.primitive_bitwidth > output_dtype.primitive_bitwidth
+    if downcast:
+        mantissa_shift = input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width
+        significand_output = _shift_right_and_round(significand, mantissa_shift, rounding_mode)
+        # Rounding up past the largest mantissa carries into the exponent.
+        carry = (significand_output >> output_dtype.fp_mantissa_width) & (exponent_output > 0) & (
+            exponent_output < (1 << output_exponent_width) - 1)
+        exponent_output = exponent_output + carry.astype(output_unint_dtype)
+        significand_output = (significand_output &
+                              ((1 << output_dtype.fp_mantissa_width) - 1)).astype(output_unint_dtype)
+        # Subnormal results: round the full significand once, shifted by how far the exponent underflows.
+        subnormal_index = (exponent_output == 0) & ((input_bin & ((1 <<
+                                                                   (input_dtype.primitive_bitwidth - 1)) - 1)) != 0)
+        if np.any(subnormal_index):
+            full_significand = significand[subnormal_index] | (1 << input_dtype.fp_mantissa_width)
+            underflow = (1 - bias_output) - (exponent[subnormal_index] - bias_input)
+            significand_output[subnormal_index] = _shift_right_and_round(full_significand, mantissa_shift + underflow,
+                                                                         rounding_mode)
+        # NaN stays NaN: an all-ones exponent and mantissa is NaN in IEEE-like formats and in fp8e4nv.
+        if output_dtype not in (tl.float8e4b8, tl.float8e5b16):
+            nan_index = (exponent == (1 << input_exponent_width) - 1) & (significand != 0)
+            exponent_output[nan_index] = (1 << output_exponent_width) - 1
+            significand_output[nan_index] = (1 << output_dtype.fp_mantissa_width) - 1
     else:  # Upcast
         significand_output = (significand.astype(output_unint_dtype) <<
                               (output_dtype.fp_mantissa_width - input_dtype.fp_mantissa_width)) & (
                                   (1 << output_dtype.fp_mantissa_width) - 1)
     subnormal_index = exponent_output == 0
-    if np.any(subnormal_index):  # underflow
+    if not downcast and np.any(subnormal_index):  # underflow
         # normal repr: ((-1.0)**sign) * (2.0**(exp - exp_bias_input)) * (1 + 2^(m0) + 2^(m1) + ... + 2^(mn))
         # where m0, m1, ..., mn are the 1-bit of the mantissa
         # shift = (1 - exp_bias_output) - (exp - exp_bias_input)
@@ -243,8 +271,9 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         subnormal_index = subnormal_index & non_zero_exponent_index
         shift = np.zeros_like(input_bin, dtype=np.int32)
         shift[subnormal_index] = (1 - bias_output) - (exponent[subnormal_index] - bias_input)
+        shift = shift.astype(output_unint_dtype)
         significand_output[subnormal_index] = (significand_output[subnormal_index] >> shift[subnormal_index]) | (
-            1 << (output_dtype.fp_mantissa_width - shift[subnormal_index]))
+            output_unint_dtype(1) << (output_dtype.fp_mantissa_width - shift[subnormal_index]))
     if output_dtype in (tl.float8e4b8, tl.float8e5b16):
         # FNUZ formats have only unsigned zero; the sign bit alone encodes NaN.
         zero_output = (exponent_output == 0) & (significand_output == 0)
