@@ -277,8 +277,10 @@ private:
     Region &combineRegion =
         vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
 
-    Operation &combinerOp = combineRegion.front().front();
-    unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
+    Operation *combinerOp = vectorCombineRegion
+                                ? &vectorCombineRegion->front().front()
+                                : op.getSingleCombiner();
+    unsigned arity = combinerOp ? targetInfo.getReductionTreeArity(combinerOp) : 2;
 
     // Perform a tree reduction
     unsigned numOperands = accs.size();
