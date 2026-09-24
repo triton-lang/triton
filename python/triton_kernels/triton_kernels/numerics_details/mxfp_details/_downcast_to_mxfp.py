@@ -75,7 +75,22 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
     quant_scale = tl.where(dequant_scale_rounded == 0, 0, 1.0 / dequant_scale_rounded)
 
     f32_tensor = tl.reshape(f32_tensor, [BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, MICROBLOCK_SIZE])
-    quant_tensor = f32_tensor * quant_scale
+    if (mx_tensor_dtype == tl.uint8 and mx_scale_dtype == tl.float8e4nv
+            and (src_tensor.dtype == tl.float16 or src_tensor.dtype == tl.bfloat16)
+            and cuda_capability_geq(10, 0)):
+        # Keep FP32 rounding while scaling two values per instruction.
+        # FP32 inputs retain scalar multiplication to avoid a codegen regression.
+        quant_tensor = tl.inline_asm_elementwise(
+            "{ .reg .b64 values, scales, result;\n"
+            "  mov.b64 values, {$2, $3};\n"
+            "  mov.b64 scales, {$4, $5};\n"
+            "  mul.rn.f32x2 result, values, scales;\n"
+            "  mov.b64 {$0, $1}, result; }",
+            constraints="=f,=f,f,f,f,f",
+            args=[f32_tensor, quant_scale], dtype=tl.float32, is_pure=True, pack=2,
+        )
+    else:
+        quant_tensor = f32_tensor * quant_scale
 
     # Reshape the tensors after scaling
     quant_tensor = quant_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM])

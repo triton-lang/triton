@@ -374,6 +374,33 @@ def test_mxfp_casting(
     assert_close(x, dequant, maxtol=0.5, rmstol=0.15)
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("axis", [0, -1])
+@pytest.mark.parametrize("stride", [1, 2])
+def test_nvfp4_packed_scale_matches_fp32(dtype, axis, stride, device):
+    if not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
+    torch.manual_seed(0)
+    # Exercise partial tiles and strided inputs with nonconstant block scales.
+    x = torch.randn((33, 80 * stride), dtype=dtype, device=device)[:, ::stride]
+    x[0].fill_(0.0)
+    x[1].fill_(-0.0)
+    x[2].fill_(torch.finfo(dtype).tiny)
+    x[3].fill_(torch.finfo(dtype).max)
+    x[4, 0] = float("nan")
+    x[5, 0] = float("inf")
+    # A BF16 intermediate would round the scaled second value differently.
+    x[6, :16] = torch.tensor([1.40625, 0.29296875] + [0.0] * 14, dtype=dtype, device=device)
+    if axis == 0:
+        x = x.T
+    quant, scale = downcast_to_mxfp(x, torch.uint8, axis, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value)
+    # Exact widening selects the existing scalar FP32 multiply implementation.
+    expected_quant, expected_scale = downcast_to_mxfp(x.float(), torch.uint8, axis, torch.float8_e4m3fn,
+                                                      NVFP_BLOCK_SIZE.value)
+    assert_equal(quant, expected_quant)
+    assert_equal(scale.view(torch.uint8), expected_scale.view(torch.uint8))
+
+
 @pytest.mark.parametrize("convert", [downcast_to_mxfp, downcast_to_mxfp_torch], ids=["triton", "torch"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("axis", [0, -1])

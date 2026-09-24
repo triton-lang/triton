@@ -23,30 +23,6 @@ def num_warps(_semantic=None):
     return core.constexpr(_semantic.builder.options.num_warps)
 
 
-@core.builtin
-def convert_bfloat16_to_fp4(x, _semantic=None):
-    """Convert BF16 values to packed E2M1 FP4, rounding to nearest, ties to even.
-
-    The input must have an even-sized last dimension. The uint8 output halves
-    that dimension, with the first value of each pair in the low nibble.
-    Out-of-range values saturate to signed 6; NaNs convert to positive 6.
-    No scaling is performed. Requires PTX 9.1 and an SM100, SM110, or SM120
-    family target supporting the native packed conversion.
-    """
-    if x.dtype != core.bfloat16:
-        raise ValueError("convert_bfloat16_to_fp4 requires bfloat16 input")
-    shape = x.type.shape if x.type.is_block() else []
-    if not shape or shape[-1] % 2:
-        raise ValueError("convert_bfloat16_to_fp4 requires an even-sized last dimension")
-    pairs = _semantic.reshape(x, [*shape[:-1], shape[-1] // 2, 2], can_reorder=False)
-    lo, hi = _semantic.split(pairs)
-    return core.inline_asm_elementwise(
-        "{ .reg .b32 pair; .reg .b8 result;\n"
-        "  mov.b32 pair, {$1, $2};\n"
-        "  cvt.rn.satfinite.e2m1x2.bf16x2 result, pair;\n"
-        "  cvt.u32.u8 $0, result; }", "=r,h,h", [lo, hi], dtype=core.uint8, is_pure=True, pack=1, _semantic=_semantic)
-
-
 # ----- FP8E4M3B15 ------
 # This data-type is a variant of the standard FP8E4M3 format.
 # It was designed for fast software conversion to FP16 on
