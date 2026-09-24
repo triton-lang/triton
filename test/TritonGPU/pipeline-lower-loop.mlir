@@ -2020,6 +2020,8 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
   // Two barrier slots prevent a peer from arriving twice on an unobserved phase.
   // Conditional reads advance the ring and phase only when they execute.
   // CHECK-LABEL: @two_cta_accumulator_read_release
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<4x4xi64,
+  // CHECK-COUNT-4: ttng.init_barrier {{.*}}, 1
   // CHECK: ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
   // CHECK: scf.for
   // CHECK: ttng.tc_gen5_mma {{.*}}loop.cluster = 2 : i32, loop.stage = 2 : i32{{.*}}two_ctas

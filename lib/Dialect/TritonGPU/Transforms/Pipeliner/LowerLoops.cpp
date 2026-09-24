@@ -285,31 +285,6 @@ static bool hasNonMMAUsers(Operation *op) {
   });
 }
 
-static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
-  SmallVector<Value> descs = mma.getCompletionDescs();
-
-  SmallVector<uint16_t> broadcastMasks =
-      ttng::getCTABroadcastMasks(mma.getTwoCtas(), descs);
-  if (broadcastMasks.empty())
-    return 1;
-
-  int numCTAs = lookupNumCTAs(mma.getOperation());
-  uint16_t ctaMask = numCTAs - 1;
-  int count = 0;
-  for (int cta = 0; cta < numCTAs; ++cta) {
-    if (mma.getTwoCtas() && (cta & 1))
-      continue;
-    for (uint16_t broadcastMask : broadcastMasks) {
-      // Count CTAs that issue the multicast commit
-      if ((cta & (~broadcastMask & ctaMask)) == 0) {
-        ++count;
-        break;
-      }
-    }
-  }
-  return count;
-}
-
 // Convert a scalar load to a load of a tensor of shape <1>.
 void convertScalarToTensorLoad(Operation *op, CoarseSchedule &schedule,
                                scf::ForOp forOp) {
@@ -828,9 +803,8 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
-  Value barrierAlloc =
-      createBarrierAlloc(forOp, numStages, getMMAv5CompletionBarrierCount(mma),
-                         /*twoCTAs=*/false);
+  Value barrierAlloc = createBarrierAlloc(forOp, numStages, /*arriveCount=*/1,
+                                          /*twoCTAs=*/false);
   Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
   Value phase = forOp.getRegionIterArg(phaseArgIdx);
   Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
