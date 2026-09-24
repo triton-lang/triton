@@ -134,7 +134,7 @@ void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp,
 struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
-  Value readyMbars;
+  Value twoCTAReadyMbars;
   int depth;
   SmallVector<Value> buffers;
 };
@@ -322,8 +322,7 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
   auto bufferType = cast<MemDescType>(op.getType().getBaseType().front());
   int depth = getArefDepth(bufferType);
   BarrierCount count = getArrivalCount(op);
-  auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(bufferType.getEncoding());
-  bool twoCTATmem = tmemEnc && tmemEnc.getTwoCTAs();
+  bool isSharedMemory = isa<SharedMemorySpaceAttr>(bufferType.getMemorySpace());
   bool hasTwoCTAConsumer = llvm::any_of(
       mmav5Ops, [](MMAv5OpInterface mma) { return mma.getTwoCtas(); });
   bool hasSynchronousConsumer =
@@ -332,28 +331,32 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
         return exit && llvm::is_contained(castAsyncOpAttrs(exit.getAsyncOps()),
                                           AsyncOp::NONE);
       });
-  bool needsReadyBarrier =
-      hasTwoCTAConsumer && hasSynchronousConsumer && !twoCTATmem;
+  bool needsTwoCTAReadyBarrier =
+      isSharedMemory && hasTwoCTAConsumer && hasSynchronousConsumer;
 
   ImplicitLocOpBuilder initBuilder(op.getLoc(), op);
   ImplicitLocOpBuilder cleanupBuilder(op.getLoc(), op);
   setArefBarrierInsertionPoints(op, initBuilder, cleanupBuilder,
                                 teardownBarriers);
 
-  // Both CTAs must release their accumulator reads before it can be reused.
-  Value emptyMbars = createBarrierArray(initBuilder, cleanupBuilder, depth,
-                                        count.consumerPendingCount, twoCTATmem);
-  Value fullMbars = createBarrierArray(initBuilder, cleanupBuilder, depth,
-                                       count.producerPendingCount,
-                                       hasTwoCTAConsumer && !needsReadyBarrier);
+  // Both CTAs must release their TMEM reads before the buffer can be reused.
+  auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(bufferType.getEncoding());
+  bool needsPeerReadRelease = tmemEnc && tmemEnc.getTwoCTAs();
+  Value emptyMbars =
+      createBarrierArray(initBuilder, cleanupBuilder, depth,
+                         count.consumerPendingCount, needsPeerReadRelease);
+  Value fullMbars = createBarrierArray(
+      initBuilder, cleanupBuilder, depth, count.producerPendingCount,
+      hasTwoCTAConsumer && !needsTwoCTAReadyBarrier);
   // With ordinary readers, keep TMA completion local to each CTA and join
   // those completions in a separate barrier before issuing the two-CTA MMA.
-  Value readyMbars;
-  if (needsReadyBarrier)
-    readyMbars = createBarrierArray(initBuilder, cleanupBuilder, depth, 1,
-                                    /*twoCTAs=*/true);
+  Value twoCTAReadyMbars;
+  if (needsTwoCTAReadyBarrier)
+    twoCTAReadyMbars = createBarrierArray(initBuilder, cleanupBuilder, depth, 1,
+                                          /*twoCTAs=*/true);
 
-  return ArefValue{emptyMbars, fullMbars, readyMbars, depth, op.getOperands()};
+  return ArefValue{emptyMbars, fullMbars, twoCTAReadyMbars, depth,
+                   op.getOperands()};
 }
 
 SmallVector<Value>
@@ -567,9 +570,10 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
       getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                      getPartitionWsTagIds(op), getStageCluster(op));
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
-  if (arefVal.readyMbars && !getAsyncMMAv5Consumers(op).empty()) {
-    Value ready =
-        createSingleBufferView(rewriter, arefVal.readyMbars, op.getStage());
+  // Only MMA acquisitions join the CTAs; ordinary readers wait locally above.
+  if (arefVal.twoCTAReadyMbars && !getAsyncMMAv5Consumers(op).empty()) {
+    Value ready = createSingleBufferView(rewriter, arefVal.twoCTAReadyMbars,
+                                         op.getStage());
     assignStageCluster(ready.getDefiningOp(), getPartitionWsTagIds(op),
                        getStageCluster(op), rewriter);
     auto arrive = ArriveBarrierOp::create(rewriter, loc, ready, 1);
@@ -733,10 +737,8 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
 
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
 public:
-  LowerArefCreate(MLIRContext *ctx, unsigned defaultNumStages,
-                  DenseMap<Block *, ClusterBarrierOp> &teardownBarriers)
-      : OpRewritePattern(ctx), defaultNumStages(defaultNumStages),
-        teardownBarriers(teardownBarriers) {}
+  LowerArefCreate(MLIRContext *ctx, unsigned defaultNumStages)
+      : OpRewritePattern(ctx), defaultNumStages(defaultNumStages) {}
 
   LogicalResult matchAndRewrite(ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
@@ -785,7 +787,7 @@ public:
 
 private:
   unsigned defaultNumStages;
-  DenseMap<Block *, ClusterBarrierOp> &teardownBarriers;
+  mutable DenseMap<Block *, ClusterBarrierOp> teardownBarriers;
 };
 
 bool isProducerLoad(ArefCreateOp arefOp) {
@@ -1088,9 +1090,8 @@ public:
     if (failed(runPipeline(pm, m)))
       return signalPassFailure();
 
-    DenseMap<Block *, ClusterBarrierOp> teardownBarriers;
     mlir::RewritePatternSet patterns(context);
-    patterns.add<LowerArefCreate>(context, numStages, teardownBarriers);
+    patterns.add<LowerArefCreate>(context, numStages);
     GreedyRewriteConfig config;
     config.enableConstantCSE(false);
     config.enableFolding(false);

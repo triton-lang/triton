@@ -245,6 +245,7 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
         return
     expect_two_ctas = num_ctas > 1
     assert ("two_ctas" in compiled.asm["ttgir"]) == expect_two_ctas
+    assert ("tcgen05.mma.cta_group::2" in compiled.asm["ptx"]) == expect_two_ctas
     assert ("ttg.warp_specialize" in compiled.asm["ttgir"]) == warp_specialize
     assert "multicast" not in compiled.asm["ttgir"]
     torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
