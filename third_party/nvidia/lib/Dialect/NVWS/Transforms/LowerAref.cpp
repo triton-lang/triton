@@ -295,7 +295,7 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
                    DenseMap<Block *, ClusterBarrierOp> &teardownBarriers) {
   // Barrier roles: empty = safe to reuse; full = ready to consume.
   // Local barriers wait in each CTA; two-CTA barriers combine arrivals and
-  // wait in the leader CTA. 
+  // wait in the leader CTA.
   //
   // clang-format off
   // Buffer -> consumers                 emptyMbars  mixedConsumerMbars fullMbars
