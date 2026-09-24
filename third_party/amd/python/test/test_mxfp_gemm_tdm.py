@@ -114,7 +114,6 @@ def mxgemm_kernel(a_ptr, b_ptr, output_ptr,  #
                   BLOCK_N: tl.constexpr,  #
                   BLOCK_K: tl.constexpr,  #
                   GROUP_SIZE_M: tl.constexpr,  #
-                  TRANSPOSE_B: tl.constexpr,  #
                   ):
     """
     MXFP GEMM kernel: C = A @ B with microscaling.
@@ -180,20 +179,12 @@ def mxgemm_kernel(a_ptr, b_ptr, output_ptr,  #
         strides=(stride_am, 1),
         block_shape=(BLOCK_M, BLOCK_K // DIV_FACTOR_A),
     )
-    if TRANSPOSE_B:
-        b_desc = tl.make_tensor_descriptor(
-            base=b_ptr + (pid_n * BLOCK_N) * stride_bn,
-            shape=(N, K // DIV_FACTOR_B),
-            strides=(stride_bn, stride_bk),
-            block_shape=(BLOCK_N, BLOCK_K // DIV_FACTOR_B),
-        )
-    else:
-        b_desc = tl.make_tensor_descriptor(
-            base=b_ptr + (pid_n * BLOCK_N) * stride_bn,
-            shape=(K // DIV_FACTOR_B, N),
-            strides=(stride_bk, stride_bn),
-            block_shape=(BLOCK_K // DIV_FACTOR_B, BLOCK_N),
-        )
+    b_desc = tl.make_tensor_descriptor(
+        base=b_ptr + (pid_n * BLOCK_N) * stride_bn,
+        shape=(K, N),
+        strides=(stride_bk, 1),
+        block_shape=(BLOCK_K // DIV_FACTOR_B, BLOCK_N),
+    )
 
     # =========================================================================
     # Main computation loop
@@ -219,25 +210,19 @@ def mxgemm_kernel(a_ptr, b_ptr, output_ptr,  #
 
         # Load A and B matrices via descriptor load
         a = a_desc.load([0, k * (BLOCK_K // DIV_FACTOR_A)])
-        if TRANSPOSE_B:
-            b = b_desc.load([0, k * (BLOCK_K // DIV_FACTOR_B)])
-            b = tl.trans(b)
-        else:
-            b = b_desc.load([k * (BLOCK_K // DIV_FACTOR_B), 0])
+        b = b_desc.load([k * (BLOCK_K // DIV_FACTOR_B), 0])
 
         # Scaled matrix multiply using tl.dot_scaled
         accumulator = tl.dot_scaled(a, scale_a, DTYPE_A, b, scale_b, DTYPE_B, accumulator)
 
     # =========================================================================
-    # Store output via TDM descriptor store
+    # Store output
     # =========================================================================
-    c_desc = tl.make_tensor_descriptor(
-        base=output_ptr,
-        shape=(M, N),
-        strides=(stride_cm, 1),
-        block_shape=(BLOCK_M, BLOCK_N),
-    )
-    c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], accumulator)
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
 # ============================================================================
@@ -269,9 +254,6 @@ def run_mxfp_gemm(
     dtype_b: str,
     num_warps: int,
     group_size_m: int,
-    transpose_b: bool = True,
-    benchmark_mode: str = None,
-    benchmark_num_iters: int = 32,
 ):
     """
     Run MXFP GEMM kernel with specified configuration.
@@ -317,16 +299,7 @@ def run_mxfp_gemm(
 
     # Move to GPU
     a_d = a.data.contiguous().cuda()
-    if transpose_b:
-        # Transposed B: store physically as [N, K] so K is the contiguous dim,
-        b_d = b.data.T.contiguous().cuda()
-        # b_d is [N, K]: stride(1) is the K stride (=1), stride(0) is the N stride.
-        stride_bk, stride_bn = b_d.stride(1), b_d.stride(0)
-    else:
-        # Non-transposed B: store physically as [K, N] (N contiguous).
-        b_d = b.data.contiguous().cuda()
-        # b_d is [K, N]: stride(0) is the K stride, stride(1) is the N stride (=1).
-        stride_bk, stride_bn = b_d.stride(0), b_d.stride(1)
+    b_d = b.data.contiguous().cuda()
     a_scale_d = a_scale_input.cuda()
     b_scale_d = b_scale_input.cuda()
     c_d = torch.zeros(M, N, dtype=torch.float32, device='cuda')
@@ -335,29 +308,21 @@ def run_mxfp_gemm(
     num_blocks = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
     grid = (num_blocks, )
 
-    fn = lambda: mxgemm_kernel[grid](
+    mxgemm_kernel[grid](
         a_d, b_d, c_d,  #
         a_scale_d, b_scale_d,  #
         M, N, K,  #
         a_scale_d.stride(0),  #
         a_d.stride(0), a_d.stride(1),  #
-        stride_bk, stride_bn,  #
+        b_d.stride(0), b_d.stride(1),  #
         c_d.stride(0), c_d.stride(1),  #
         dtype_to_triton_type[dtype_a],  #
         dtype_to_triton_type[dtype_b],  #
         SCALE_BLOCK,  #
         BLOCK_M, BLOCK_N, BLOCK_K,  #
         group_size_m,  #
-        transpose_b,  #
         num_warps=num_warps,  #
     )
-
-    if benchmark_mode == 'eager':
-        time_ms = triton.testing.do_bench(fn, warmup=10, rep=benchmark_num_iters)
-        tflops = 2 * M * N * K / (time_ms * 1e-3) / 1e12
-        print(f'execution time: {time_ms} ms, {tflops:.2f} TFLOPS')
-    else:
-        fn()
 
     torch.cuda.synchronize()
 
@@ -377,17 +342,15 @@ def run_mxfp_gemm(
 @pytest.mark.parametrize("BM, BN, BK", [(128, 128, 128)])
 @pytest.mark.parametrize("dtype_a", ['float8_e5m2', 'float8_e4m3', 'float4'])
 @pytest.mark.parametrize("dtype_b", ['float8_e5m2', 'float8_e4m3', 'float4'])
-@pytest.mark.parametrize("TRANSPOSE_B", [True, False])
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Scaled dot with TDM is only tested on gfx1250.")
-def test_mxgemm(M, N, K, BM, BN, BK, dtype_a, dtype_b, TRANSPOSE_B):
+def test_mxgemm(M, N, K, BM, BN, BK, dtype_a, dtype_b):
     """Test MXFP GEMM with descriptor loads and pre-shuffled scales."""
 
     output, ref, max_diff = run_mxfp_gemm(M, N, K,  #
                                           BM, BN, BK,  #
                                           dtype_a, dtype_b,  #
                                           num_warps=4,  #
-                                          group_size_m=1,  #
-                                          transpose_b=TRANSPOSE_B)
+                                          group_size_m=1)
 
     torch.testing.assert_close(output, ref, rtol=1e-5, atol=0.02)
 
@@ -404,10 +367,7 @@ def main():
     parser.add_argument('--dtype_a', type=str, default='float8_e5m2', choices=['float4', 'float8_e5m2', 'float8_e4m3'])
     parser.add_argument('--dtype_b', type=str, default='float8_e5m2', choices=['float4', 'float8_e5m2', 'float8_e4m3'])
     parser.add_argument('--num_warps', type=int, default=4, help='Number of warps')
-    parser.add_argument('--group_size_m', type=int, default=8, help='Number of programs per group')
-    parser.add_argument('--benchmark_mode', type=str, default='none', choices=['none', 'eager'],
-                        help="Timing method. 'eager' uses triton.testing.do_bench; 'none' disables timing.")
-    parser.add_argument('--benchmark_num_iters', type=int, default=32, help='Number of iterations (rep) for do_bench')
+    parser.add_argument('--group_size_m', type=int, default=1, help='Number of programs per group')
 
     args = parser.parse_args()
 
@@ -416,16 +376,12 @@ def main():
     print(f"  Block sizes: block_m={args.block_m}, block_n={args.block_n}, block_k={args.block_k}")
     print("  Mode: Descriptor loads with pre-shuffled scales")
 
-    output, ref, max_diff = run_mxfp_gemm(
-        args.M, args.N, args.K,  #
-        args.block_m, args.block_n, args.block_k,  #
-        args.dtype_a, args.dtype_b,  #
-        num_warps=args.num_warps,  #
-        group_size_m=args.group_size_m,  #
-        transpose_b=True,  #
-        benchmark_mode=None if args.benchmark_mode == 'none' else args.benchmark_mode,  #
-        benchmark_num_iters=args.benchmark_num_iters,  #
-    )
+    output, ref, max_diff = run_mxfp_gemm(args.M, args.N, args.K,  #
+                                          args.block_m, args.block_n, args.block_k,  #
+                                          args.dtype_a, args.dtype_b,  #
+                                          num_warps=args.num_warps,  #
+                                          group_size_m=args.group_size_m,  #
+                                          )
 
     print("\nResults:")
     print(f"  Output range: [{output.min():.2f}, {output.max():.2f}]")
