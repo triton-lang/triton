@@ -277,22 +277,17 @@ private:
     Region &combineRegion =
         vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
 
-    // The combiner for tree arity is the arithmetic op; a side-effecting,
-    // zero-result op (e.g. tt.print) may sit in front of it, and the NVIDIA
-    // arity query dereferences result 0 unconditionally.
+    // The combiner for tree arity is the op that defines the returned value
+    // (e.g. the maximumf in addf -> maximumf -> tt.reduce.return); a
+    // side-effecting, zero-result op (e.g. tt.print) may sit anywhere in the
+    // region, and the NVIDIA arity query dereferences result 0.
     Operation *combinerOp = nullptr;
-    for (Block &block : combineRegion) {
-      for (Operation &candidate : block) {
-        if (candidate.getNumResults() > 0) {
-          combinerOp = &candidate;
-          break;
-        }
-      }
-      if (combinerOp)
-        break;
-    }
-    // No resultful op means no arithmetic to arbitrate; a binary tree is the
-    // safe shape for any target.
+    if (auto returnOp = dyn_cast<triton::ReduceReturnOp>(
+            combineRegion.front().getTerminator()))
+      if (!returnOp.getOperands().empty())
+        combinerOp = returnOp.getOperands().front().getDefiningOp();
+    // No defining op (a bare block argument) means no arithmetic to
+    // arbitrate; a binary tree is the safe shape for any target.
     unsigned arity =
         combinerOp ? targetInfo.getReductionTreeArity(combinerOp) : 2;
 
