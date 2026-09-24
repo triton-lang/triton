@@ -225,6 +225,13 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     // CHECK: [[BUF_A:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
     // CHECK: [[BUF_B:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x64xf16, #shared, #smem, mutable>
     // CHECK: [[TMA_EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64, #shared1, #smem, mutable>
+    // One MMA consumer partition contributes one completion per slot.
+    // CHECK: [[TMA_EMPTY0:%.*]] = ttg.memdesc_index [[TMA_EMPTY]]
+    // CHECK-NEXT: ttng.init_barrier [[TMA_EMPTY0]], 1
+    // CHECK: [[TMA_EMPTY1:%.*]] = ttg.memdesc_index [[TMA_EMPTY]]
+    // CHECK-NEXT: ttng.init_barrier [[TMA_EMPTY1]], 1
+    // CHECK: [[TMA_EMPTY2:%.*]] = ttg.memdesc_index [[TMA_EMPTY]]
+    // CHECK-NEXT: ttng.init_barrier [[TMA_EMPTY2]], 1
     // CHECK: [[TMA_FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi64, #shared1, #smem, mutable>
     %3 = ttg.local_alloc : () -> !ttg.memdesc<1x128x64xf16, #shared, #smem, mutable>
     %4 = nvws.aref.create %3 : <[!ttg.memdesc<1x128x64xf16, #shared, #smem, mutable>]>

@@ -2050,31 +2050,6 @@ LogicalResult CLCLoadResultOp::verify() {
   return verifyCLCResultMemdesc(getLoc(), getSrc().getType());
 }
 
-int getMMAv5CompletionBarrierCount(MMAv5OpInterface mma) {
-  SmallVector<Value> descs = mma.getCompletionDescs();
-
-  SmallVector<uint16_t> broadcastMasks =
-      getCTABroadcastMasks(mma.getTwoCtas(), descs);
-  if (broadcastMasks.empty())
-    return 1;
-
-  int numCTAs = gpu::lookupNumCTAs(mma.getOperation());
-  uint16_t ctaMask = numCTAs - 1;
-  int count = 0;
-  for (int cta = 0; cta < numCTAs; ++cta) {
-    if (mma.getTwoCtas() && (cta & 1))
-      continue;
-    for (uint16_t broadcastMask : broadcastMasks) {
-      // Count CTAs that issue the multicast commit
-      if ((cta & (~broadcastMask & ctaMask)) == 0) {
-        ++count;
-        break;
-      }
-    }
-  }
-  return count;
-}
-
 SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs) {
   SmallVector<uint16_t> broadcastMasks;
   if (!descs.empty()) {

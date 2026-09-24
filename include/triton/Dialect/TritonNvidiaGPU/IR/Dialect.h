@@ -171,8 +171,6 @@ std::optional<LinearLayout>
 getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
                                 unsigned numWarps);
 
-int getMMAv5CompletionBarrierCount(MMAv5OpInterface mma);
-
 SmallVector<uint16_t> getCTABroadcastMasks(bool twoCTAs, ValueRange descs);
 
 // Compact encoding of a CTA multicast group for a given broadcast mask:
