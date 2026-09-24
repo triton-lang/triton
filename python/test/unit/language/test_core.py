@@ -4175,6 +4175,70 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     raise AssertionError("Unsupported float8 dtype")
 
 
+@pytest.mark.interpreter
+def test_dot_uint8(device):
+    if not is_interpreter():
+        if is_cuda() and torch.cuda.get_device_capability() < (7, 5):
+            pytest.skip("uint8 dot requires NVIDIA MMA v2 or newer")
+        if is_hip() and not (is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4() or is_hip_gfx1250()):
+            pytest.skip("uint8 dot requires AMD WMMA support")
+        if not (is_cuda() or is_hip()):
+            pytest.skip("uint8 dot is only supported on NVIDIA and AMD WMMA targets")
+
+    M, N, K = 64, 64, 64
+
+    @triton.jit
+    def kernel(x_ptr, y_ptr, z_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr):
+        offs_m = tl.arange(0, M)
+        offs_n = tl.arange(0, N)
+        offs_k = tl.arange(0, K)
+        x = tl.load(x_ptr + offs_m[:, None] * K + offs_k[None, :])
+        y = tl.load(y_ptr + offs_k[:, None] * N + offs_n[None, :])
+        z = tl.dot(x, y)
+        tl.store(z_ptr + offs_m[:, None] * N + offs_n[None, :], z)
+
+    # Values above 127 distinguish unsigned dot semantics from signed int8.
+    x = torch.randint(128, 256, (M, K), dtype=torch.uint8, device=device)
+    y = torch.randint(128, 256, (K, N), dtype=torch.uint8, device=device)
+    z = torch.empty((M, N), dtype=torch.int32, device=device)
+    pgm = kernel[(1, )](x, y, z, M, N, K, num_warps=4)
+
+    x_ref = to_numpy(x).astype(np.int32)
+    y_ref = to_numpy(y).astype(np.int32)
+    np.testing.assert_array_equal(to_numpy(z), x_ref @ y_ref)
+
+    if is_interpreter():
+        return
+    if is_hip():
+        assert "v_wmma_i32" in pgm.asm["amdgcn"]
+    else:
+        ptx = pgm.asm["ptx"]
+        capability = torch.cuda.get_device_capability()
+        if capability[0] == 10 and capability[1] == 0:
+            assert re.search(r"tcgen05.mma.cta_group::1.kind::i8", ptx)
+        else:
+            assert ".s32.u8.u8.s32" in ptx
+
+
+@pytest.mark.interpreter
+def test_dot_mixed_int8_uint8_rejected(device):
+
+    @triton.jit
+    def kernel(x_ptr, y_ptr, z_ptr):
+        offs = tl.arange(0, 16)
+        x = tl.load(x_ptr + offs[:, None] * 16 + offs[None, :])
+        y = tl.load(y_ptr + offs[:, None] * 16 + offs[None, :])
+        tl.store(z_ptr + offs[:, None] * 16 + offs[None, :], tl.dot(x, y))
+
+    x = torch.empty((16, 16), dtype=torch.int8, device=device)
+    y = torch.empty((16, 16), dtype=torch.uint8, device=device)
+    z = torch.empty((16, 16), dtype=torch.int32, device=device)
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as exc_info:
+        kernel[(1, )](x, y, z)
+    assert "Both operands must be same dtype" in str(exc_info.value.__cause__)
+
+
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_base_cases():
     return [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1, None)

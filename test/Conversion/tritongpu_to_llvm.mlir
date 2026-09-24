@@ -1960,6 +1960,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma, kWidth=4}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma, kWidth=4}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: matmul_unsigned_i8dot
+  tt.func @matmul_unsigned_i8dot(%a: tensor<16x32xi8, #dot_operand_a>,
+                                 %b: tensor<32x8xi8, #dot_operand_b>,
+                                 %c: tensor<16x8xi32, #mma>) {
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mma.sync.aligned.m16n8k32.row.col.satfinite.s32.u8.u8.s32
+    %d = tt.dot %a, %b, %c {isUnsigned = true} : tensor<16x32xi8, #dot_operand_a> * tensor<32x8xi8, #dot_operand_b> -> tensor<16x8xi32, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor=2, warpsPerCTA=[1, 1], instrShape = [16, 8]}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#mma, kWidth=4}>
+#dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#mma, kWidth=4}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: matmul_mixed_signed_i8dot
   tt.func @matmul_mixed_signed_i8dot(%a: tensor<16x32xi8, #dot_operand_a>,
                                      %b: tensor<32x8xi8, #dot_operand_b>,

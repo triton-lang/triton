@@ -786,9 +786,20 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
 
+  std::string mmaInstruction = instrMap.at(mmaType);
+  if (op.getIsUnsigned()) {
+    if (mmaType != TensorCoreType::INT32_INT8_INT8_INT32)
+      return op.emitError("unsigned MMA requires 8-bit integer operands");
+    mmaInstruction = isTuring
+                         ? "mma.sync.aligned.m8n8k16.row.col.satfinite.s32."
+                           "u8.u8.s32"
+                         : "mma.sync.aligned.m16n8k32.row.col.satfinite.s32."
+                           "u8.u8.s32";
+  }
+
   return convertMMAWithInstruction(op, adaptor.getA(), adaptor.getB(),
                                    adaptor.getC(), typeConverter, rewriter,
-                                   mmaType, instrMap.at(mmaType), isTuring);
+                                   mmaType, mmaInstruction, isTuring);
 }
 
 LogicalResult convertMMA(triton::instrument::DotI8Op op,

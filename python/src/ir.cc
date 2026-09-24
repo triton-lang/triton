@@ -1726,9 +1726,9 @@ void init_triton_ir(py::module_ &m) {
       .def("create_dot",
            [](TritonOpBuilder &self, mlir::Value &a, mlir::Value &b,
               mlir::Value &c, InputPrecision inputPrecision,
-              int maxNumImpreciseAcc) -> mlir::Value {
+              int maxNumImpreciseAcc, bool isUnsigned) -> mlir::Value {
              return self.create<DotOp>(c.getType(), a, b, c, inputPrecision,
-                                       maxNumImpreciseAcc);
+                                       maxNumImpreciseAcc, isUnsigned);
            })
       .def(
           "create_dot_scaled",

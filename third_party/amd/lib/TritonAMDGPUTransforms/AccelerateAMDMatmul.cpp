@@ -572,6 +572,9 @@ public:
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
+    if (dotOp.getIsUnsigned())
+      return dotOp.emitError(
+          "uint8 dot requires AMD WMMA support; MFMA integer dot is signed");
     using TensorValue = TypedValue<RankedTensorType>;
     RankedTensorType oldRetType = dotOp.getType();
     if (!isa_and_nonnull<BlockedEncodingAttr>(oldRetType.getEncoding()))
@@ -796,7 +799,8 @@ public:
                                mfmaInstr->bElementType);
       newDot = tt::DotOp::create(rewriter, dotOp.getLoc(), newAcc.getType(), a,
                                  b, newAcc, dotOp.getInputPrecision(),
-                                 dotOp.getMaxNumImpreciseAcc());
+                                 dotOp.getMaxNumImpreciseAcc(),
+                                 dotOp.getIsUnsigned());
     }
 
     Value dotOutput =
@@ -1550,7 +1554,8 @@ public:
                                          operandTypes[1]);
     auto newDot = tt::DotOp::create(
         rewriter, dotOp.getLoc(), newRetType, castedA, castedB, newAcc,
-        dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
+        dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc(),
+        dotOp.getIsUnsigned());
 
     Value dotOutput = convertAndCastTensor(rewriter, newDot, oldRetEncoding,
                                            oldRetType.getElementType());
@@ -1659,7 +1664,8 @@ public:
       auto newC = castToElTy(rewriter, dotOp.getC(), f32_ty);
       auto newDot = DotOp::create(
           rewriter, dotOp.getLoc(), newC.getType(), dotOp.getA(), dotOp.getB(),
-          newC, dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
+          newC, dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc(),
+          dotOp.getIsUnsigned());
       auto newD = castToElTy(rewriter, newDot.getResult(), f16_ty);
       rewriter.replaceOp(dotOp, newD);
       return success();
@@ -1701,7 +1707,8 @@ public:
 
     auto newDot = DotOp::create(rewriter, dotOp.getLoc(), newC.getType(), newA,
                                 newB, newC, dotOp.getInputPrecision(),
-                                dotOp.getMaxNumImpreciseAcc());
+                                dotOp.getMaxNumImpreciseAcc(),
+                                /*isUnsigned=*/false);
     auto newD = castToElTy(rewriter, newDot.getResult(), dotTypes.d);
 
     rewriter.replaceOp(dotOp, newD);
@@ -1713,6 +1720,9 @@ public:
     if (!isa<BlockedEncodingAttr>(dotOp.getD().getType().getEncoding()))
       return rewriter.notifyMatchFailure(
           dotOp, "expected blocked encoding result tensor");
+
+    if (dotOp.getIsUnsigned())
+      return dotOp.emitError("uint8 dot requires AMD WMMA support");
 
     dotOp.emitRemark() << "Attempting to map dot operation to FMA intrinsic.";
 
