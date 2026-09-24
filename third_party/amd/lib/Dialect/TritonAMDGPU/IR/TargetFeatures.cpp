@@ -353,7 +353,7 @@ bool TargetFeatures::supportsCvtPkScalePk8Block16() const {
 }
 
 bool TargetFeatures::supportsWmmaN16Insts() const {
-  return isGFX1250() && !isGFX1250Strict();
+  return arch.empty() || (isGFX1250() && !isGFX1250Strict());
 }
 
 bool TargetFeatures::supportsHwScaledUpcast() const {

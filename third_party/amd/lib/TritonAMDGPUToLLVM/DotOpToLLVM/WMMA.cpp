@@ -363,7 +363,7 @@ Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
                                tiedLower);
 }
 
-// emulated as fallback for gfx1250 strict arch
+// emulating wmma instructions to prevent gluon layout conversions -> bad perf
 struct EmulatedWmmaOperand {
   SmallVector<Value> vals;
   SmallVector<std::array<int, 2>> k;
