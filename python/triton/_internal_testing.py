@@ -131,6 +131,23 @@ def is_hip_gfx1250():
     return target is not None and target.backend == 'hip' and 'gfx1250' in target.arch
 
 
+# gfx1250-strict WMMA
+GFX1250_STRICT_WMMA = "v_wmma_f32_16x16x4_f32"
+
+
+def expected_wmma_instr(arch, native_instr):
+    return GFX1250_STRICT_WMMA if arch == "gfx1250-strict" else native_instr
+
+# included for CI testing
+def check_wmma_instr(amdgcn, arch, pattern):
+    if arch == "gfx1250-strict":
+        wmma_instrs = set(re.findall(r"v_wmma_\w+", amdgcn))
+        assert wmma_instrs == {GFX1250_STRICT_WMMA}, \
+            f"Expected only {GFX1250_STRICT_WMMA} on {arch}, found {sorted(wmma_instrs)}"
+    else:
+        assert re.search(pattern, amdgcn), f"Can't find {pattern} in amdgcn"
+
+
 def is_hip_cdna3_or_newer():
     return is_hip_cdna3() or is_hip_cdna4()
 

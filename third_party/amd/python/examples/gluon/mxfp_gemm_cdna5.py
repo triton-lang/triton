@@ -6,6 +6,7 @@ import triton.experimental.gluon.language as gl
 from triton.experimental.gluon.language.amd.cdna5 import tdm
 from triton.experimental.gluon.language.amd.cdna5 import async_copy as cp
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
+from triton._internal_testing import check_wmma_instr
 
 # Handle imports for both pytest (module context) and direct execution
 try:
@@ -2436,10 +2437,8 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
             assert 'global_prefetch_b8' not in k.asm['amdgcn']
 
         is_fp4fp4 = DTYPE_A == "float4" and DTYPE_B == "float4"
-        if is_fp4fp4:
-            assert 'v_wmma_scale_f32_32x16x128_f4' in k.asm['amdgcn']
-        else:
-            assert 'v_wmma_scale_f32_16x16x128_f8f6f4' in k.asm['amdgcn']
+        wmma_instr = 'v_wmma_scale_f32_32x16x128_f4' if is_fp4fp4 else 'v_wmma_scale_f32_16x16x128_f8f6f4'
+        check_wmma_instr(k.asm['amdgcn'], k.metadata.arch, wmma_instr)
 
         # Relaxed tolerance for SwiGLU because of sigmoid/exp in the epilogue.
         if IS_SWIGLU:

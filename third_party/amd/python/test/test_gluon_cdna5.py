@@ -8,7 +8,7 @@ from itertools import product
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes
+from triton._internal_testing import check_wmma_instr, is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
@@ -131,7 +131,7 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
         b_ty = "fp8" if b_dtype == "fp8e4nv" else "bf8"
         # NOTE: we always use transposed=True for wmma layout, which will swap A and B
         wmma_pattern += b_ty + "_" + a_ty
-    assert re.search(wmma_pattern, amdgcn)
+    check_wmma_instr(amdgcn, k.metadata.arch, wmma_pattern)
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
@@ -586,7 +586,7 @@ def test_compile_gemm_3d(a_dtype, b_dtype, k_dim, BLOCK_B, BLOCK_M, BLOCK_N, BLO
     amdgcn = k.asm["amdgcn"]
 
     wmma_pattern = "v_wmma_f32_16x16x32_f16"
-    assert re.search(wmma_pattern, amdgcn)
+    check_wmma_instr(amdgcn, k.metadata.arch, wmma_pattern)
 
 
 @pytest.mark.parametrize("k_dim", [32])
@@ -853,7 +853,7 @@ def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, AS
     ttgir = k.asm["ttgir"]
     amdgcn = k.asm["amdgcn"]
 
-    assert re.search("v_wmma_f32_16x16x32_f16", amdgcn)
+    check_wmma_instr(amdgcn, k.metadata.arch, "v_wmma_f32_16x16x32_f16")
 
     if ASYNC_LOAD_TYPE == "TDM":
         # LLVM may duplicate the dynamic loop body while optimizing the final
@@ -1255,14 +1255,15 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
 
     if instr_m == 32:
         if scale_factor == 32 or no_scales:
-            assert "v_wmma_scale_f32_32x16x128_f4" in pgm.asm["amdgcn"]
+            wmma_instr = "v_wmma_scale_f32_32x16x128_f4"
         else:
-            assert "v_wmma_scale16_f32_32x16x128_f4" in pgm.asm["amdgcn"]
+            wmma_instr = "v_wmma_scale16_f32_32x16x128_f4"
     else:
         if scale_factor == 32 or no_scales:
-            assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+            wmma_instr = "v_wmma_scale_f32_16x16x128_f8f6f4"
         else:
-            assert "v_wmma_scale16_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+            wmma_instr = "v_wmma_scale16_f32_16x16x128_f8f6f4"
+    check_wmma_instr(pgm.asm["amdgcn"], pgm.metadata.arch, wmma_instr)
 
     c_torch = (a_ref * a_scale_ref) @ (b_ref * b_scale_ref)
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
@@ -1350,9 +1351,10 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
     pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, cga_layout, num_warps=4,
                         num_ctas=num_ctas)
     if scale_factor == 32:
-        assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+        wmma_instr = "v_wmma_scale_f32_16x16x128_f8f6f4"
     else:
-        assert "v_wmma_scale16_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
+        wmma_instr = "v_wmma_scale16_f32_16x16x128_f8f6f4"
+    check_wmma_instr(pgm.asm["amdgcn"], pgm.metadata.arch, wmma_instr)
 
     c_torch = (a_ref * a_scale_ref) @ (b_ref * b_scale_ref)
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
@@ -2674,8 +2676,7 @@ def test_compile_mxgemm(BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B):
             }), target=GPUTarget("hip", 'gfx1250', 32))
 
     amdgcn = k.asm["amdgcn"]
-    pattern = "v_wmma_scale_f32_16x16x128_f8f6f4"
-    assert re.search(pattern, amdgcn), f"Can't find instruction {pattern} in AMDGCN assembly"
+    check_wmma_instr(amdgcn, k.metadata.arch, "v_wmma_scale_f32_16x16x128_f8f6f4")
 
 
 def init_mxfp_data(dtype, d0: int, d1: int):
@@ -3028,8 +3029,7 @@ def test_compile_wmma_scale_preshuffle(M, N, K, type_a, type_b, TRANSPOSED_WMMA)
     scale_opsel_a = "matrix_a_scale:MATRIX_SCALE_ROW1"
     scale_opsel_b = "matrix_b_scale:MATRIX_SCALE_ROW1"
     for suffix in (scale_opsel_a, scale_opsel_b, f"{scale_opsel_a} {scale_opsel_b}"):
-        pattern = f"{instr}.*{suffix}\n"
-        assert re.search(pattern, amdgcn), f"Can't find pattern {pattern} in AMDGCN assembly"
+        check_wmma_instr(amdgcn, k.metadata.arch, f"{instr}.*{suffix}\n")
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")

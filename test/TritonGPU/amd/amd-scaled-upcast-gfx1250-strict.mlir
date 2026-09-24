@@ -4,7 +4,6 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250-strict", "ttg.threads-per-warp" = 32 : i32} {
-  /// Per-element scales need Block16 packing; fall back to software fmul.
   // CHECK-LABEL: llvm.func @scaled_upcast_fp8_non_broadcast
   // CHECK-NOT: cvt.scale.pk8
   // CHECK: llvm.fmul
@@ -23,7 +22,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-/// Compact K-broadcast scales share a value across lane^16, so Block32 is enough.
 #packed = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 #unpacked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 #compact = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
