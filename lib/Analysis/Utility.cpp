@@ -462,17 +462,36 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
   if (segmentSize == layout.getOutDimSize(axis))
     return;
 
-  // Store [segment][parallel] with parallel lane bits most minor. Threads
-  // scanning the same column read the same summary (a shared-memory broadcast),
-  // while adjacent parallel lanes read adjacent words instead of striding over
-  // register-owned values and introducing bank conflicts.
+  // Store [segment][parallel]. Pack a few register-owned parallel values
+  // together when the resulting lane stride still fits in 32 shared banks.
+  // This permits vector stores without introducing conflicts between lanes.
   LinearLayout::BasesT bases;
   for (auto [dim, dimBases] : layout.getBases())
     bases[dim] = std::vector<std::vector<int32_t>>(dimBases.size(), {0});
+  unsigned parallelLanes = 1;
+  for (const auto &basis : layout.getBases().lookup(kLane))
+    if (!basis[op.getAxis()] &&
+        llvm::any_of(basis, [](int32_t x) { return x != 0; }))
+      parallelLanes *= 2;
+  unsigned wordWidth = 1;
+  for (Type ty : op.getElementTypes())
+    wordWidth =
+        std::max(wordWidth, ceil<unsigned>(ty.getIntOrFloatBitWidth(), 32));
+  unsigned packing = std::min(4u, 32 / (parallelLanes * wordWidth));
+  // Short exchanges do not amortize the extra address and packing work.
+  if (layout.getInDimSize(kReg) / localScanSize < 32)
+    packing = 1;
   unsigned parallelBits = 0;
+  for (auto [i, basis] : llvm::enumerate(layout.getBases().lookup(kReg))) {
+    if ((1u << parallelBits) >= packing)
+      break;
+    if (!basis[op.getAxis()] &&
+        llvm::any_of(basis, [](int32_t x) { return x != 0; }))
+      bases[kReg][i][0] = 1u << parallelBits++;
+  }
   for (auto dim : {kLane, kWarp, kReg}) {
     for (auto [i, basis] : llvm::enumerate(layout.getBases().lookup(dim))) {
-      if (!basis[op.getAxis()] &&
+      if (!bases[dim][i][0] && !basis[op.getAxis()] &&
           llvm::any_of(basis, [](int32_t x) { return x != 0; }))
         bases[dim][i][0] = 1u << parallelBits++;
     }

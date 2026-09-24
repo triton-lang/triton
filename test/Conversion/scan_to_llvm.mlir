@@ -33,7 +33,7 @@ tt.func private @test_1d_simple(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, 
 
 // CHECK-LABEL: @test_1d_grouped
 tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8xi32, #layout_adj> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
@@ -46,14 +46,15 @@ tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8x
 
 // CHECK-LABEL: @test_warp_register_groups
 // WARP-LABEL: @test_warp_register_groups
-// Two groups: six local additions, sixteen lane-stage additions, two
-// register-stage additions, and four interior prefixes. Scanning every
-// register at every stage would require 42 additions.
-// WARP-COUNT-28: add i32
+// Two groups: six local additions, eight total-only lane-stage additions,
+// one inter-group carry, and six interior prefixes.
+// WARP-COUNT-21: add i32
 // WARP-NOT: add i32
 // WARP: ret
 tt.func private @test_warp_register_groups(%arg: tensor<128xi32, #layout_reg4>) -> tensor<128xi32, #layout_reg4> {
-  // CHECK-COUNT-9: @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK-COUNT-9: @llvm.nvvm.shfl.sync.up.i32
+  // CHECK: @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: @llvm.nvvm.shfl.sync.up.i32
   // CHECK-NOT: @llvm.nvvm.shfl
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
@@ -75,7 +76,7 @@ tt.func public @anchor_warp_register_groups(%ptr: !llvm.ptr, %arg: !llvm.struct<
 
 // CHECK-LABEL: @test_2d_grouped
 tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK: st.shared
   // CHECK: @llvm.nvvm.barrier
   // CHECK: load i32, ptr addrspace(3)
@@ -244,9 +245,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
 // advancing either carry to the second batch, exposing independent chains.
 // CARRIES: @llvm.nvvm.barrier
 // CARRIES: load i32, ptr addrspace(3) @global_smem
+// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 496)
 // CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 4)
-// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 504)
-// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 508)
+// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 500)
+// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 512)
 // CARRIES-NOT: @llvm.nvvm.barrier
 // CARRIES-NOT: st.shared
 // CARRIES: ret
@@ -283,6 +285,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // GROUPS-LABEL: @test_grouped_carries
 // Each group of four warp totals is combined independently. The long carry
 // chain accumulates group totals, rather than every individual shared load.
+// GROUPS: st.shared::cta.v2.b32
 // GROUPS: @llvm.nvvm.barrier
 // GROUPS: %[[A:.*]] = load float, ptr addrspace(3) @global_smem
 // GROUPS: %[[B:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 8)

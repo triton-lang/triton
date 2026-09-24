@@ -223,6 +223,11 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device):
 @pytest.mark.parametrize("layout, M", [
     (ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 512),
     (ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 512),
+    # Short grouped carries with four independent register columns.
+    (ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 64),
+    # Local prefixes reconstructed after register-group and cross-warp carries.
+    (ttgl.BlockedLayout([8, 1], [THREADS_PER_WARP, 1], [4, 1], [0, 1]), 1024),
+    (ttgl.BlockedLayout([16, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 2048),
     # Long grouped carries with at most 64 unique register prefixes.
     (ttgl.BlockedLayout([1, 1], [2, THREADS_PER_WARP // 2], [4, 1], [1, 0]), 256),
     # Permute both register order and the warp bits within each group.
