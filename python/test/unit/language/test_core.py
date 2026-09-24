@@ -476,6 +476,36 @@ def test_bfloat16_mul_rounds_to_nearest_even(device):
     torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("dtype", ["float16", "bfloat16", "float32", "float64"])
+def test_fmod_large_quotient(dtype, device):
+    # fmod is exact, so `%` has to stay correct when x / y is too large to be
+    # represented exactly. Computing x - trunc(x / y) * y breaks down there and
+    # can even return a result with the wrong sign or larger than y.
+    check_type_supported(dtype, device)
+
+    @triton.jit
+    def kernel(Z, X, Y, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        z = tl.load(X + off) % tl.load(Y + off)
+        tl.store(Z + off, z)
+
+    SIZE = 1024
+    rs = RandomState(17)
+    torch_dtype = getattr(torch, dtype)
+    max_exp = {"float16": 14, "bfloat16": 100, "float32": 100, "float64": 1000}[dtype]
+    x = rs.uniform(1, 2, SIZE) * np.exp2(rs.randint(0, max_exp, SIZE)) * rs.choice([-1, 1], SIZE)
+    y = rs.uniform(1, 2, SIZE) * np.exp2(rs.randint(-4, 4, SIZE)) * rs.choice([-1, 1], SIZE)
+    x = torch.from_numpy(x).to(device=device, dtype=torch_dtype)
+    y = torch.from_numpy(y).to(device=device, dtype=torch_dtype)
+    z = torch.empty_like(x)
+    kernel[(1, )](z, x, y, SIZE=SIZE)
+
+    # fmod of the float64-widened inputs is exact and representable in dtype.
+    z_ref = np.fmod(x.cpu().double().numpy(), y.cpu().double().numpy())
+    z_ref = torch.from_numpy(z_ref).to(torch_dtype)
+    torch.testing.assert_close(z.cpu(), z_ref, atol=0, rtol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("op", ['+', '-'])
 def test_int1_bin_op_wraparound(op, device):

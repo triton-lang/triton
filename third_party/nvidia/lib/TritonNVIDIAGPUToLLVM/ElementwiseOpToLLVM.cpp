@@ -639,6 +639,36 @@ struct FDivOpConversion
   }
 };
 
+// NVPTX lowers llvm.frem to x - trunc(x / y) * y, which is inexact once the
+// quotient no longer fits in the mantissa. Call libdevice's fmod instead.
+struct RemFOpConversion
+    : ElementwiseOpConversionBase<arith::RemFOp, RemFOpConversion> {
+  using Base = ElementwiseOpConversionBase<arith::RemFOp, RemFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(arith::RemFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    bool isF64 = elemTy.isF64();
+    Type computeTy = isF64 ? f64_ty : f32_ty;
+    SmallVector<Value> args = {operands[0][0], operands[0][1]};
+    if (elemTy != computeTy)
+      for (Value &arg : args)
+        arg = b.fpext(computeTy, arg);
+    StringRef funcName = isF64 ? "__nv_fmod" : "__nv_fmodf";
+    Type funcType = getFunctionType(computeTy, args);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    Value ret = LLVM::createLLVMCallOp(rewriter, loc, funcOp, args).getResult();
+    if (elemTy != computeTy)
+      ret = b.fptrunc(elemTy, ret);
+    return {ret};
+  }
+};
+
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
@@ -969,6 +999,8 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 #undef POPULATE_OP
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<RemFOpConversion>(typeConverter, axisInfoAnalysis,
+                                 benefit.getBenefit() + 1);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
