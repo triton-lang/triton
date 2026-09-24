@@ -2,6 +2,7 @@
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
 // RUN: triton-opt %t/parallel-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=CARRIES
+// RUN: triton-opt %t/grouped-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=GROUPS
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
 //--- scan.mlir
@@ -268,6 +269,58 @@ tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
     tt.scan.return %sum : i32
   }) : (tensor<512x2xi32, #parallel_carries>) -> tensor<512x2xi32, #parallel_carries>
   tt.store %ptrs, %result : tensor<512x2x!tt.ptr<i32>, #parallel_carries>
+  tt.return
+}
+
+}
+
+//--- grouped-carries.mlir
+
+#grouped_carries = #ttg.linear<{register = [[0, 1], [16, 0], [32, 0], [64, 0], [128, 0], [256, 0]], lane = [[1, 0], [2, 0], [0, 0], [0, 0], [0, 0]], warp = [[4, 0], [8, 0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+
+// GROUPS-LABEL: @test_grouped_carries
+// Each group of four warp totals is combined independently. The long carry
+// chain accumulates group totals, rather than every individual shared load.
+// GROUPS: @llvm.nvvm.barrier
+// GROUPS: %[[A:.*]] = load float, ptr addrspace(3) @global_smem
+// GROUPS: %[[B:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 8)
+// GROUPS: %[[AB:.*]] = fadd float %[[A]], %[[B]]
+// GROUPS: %[[C:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 16)
+// GROUPS: %[[ABC:.*]] = fadd float %[[AB]], %[[C]]
+// GROUPS: %[[D:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 24)
+// GROUPS: %[[TOTAL:.*]] = fadd float %[[ABC]], %[[D]]
+// GROUPS: %[[E:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 32)
+// GROUPS: %[[F:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 40)
+// GROUPS: %[[EF:.*]] = fadd float %[[E]], %[[F]]
+// GROUPS: %[[G:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 48)
+// GROUPS: %[[EFG:.*]] = fadd float %[[EF]], %[[G]]
+// GROUPS: %[[H:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 56)
+// GROUPS: %[[NEXT:.*]] = fadd float %[[EFG]], %[[H]]
+// GROUPS: fadd float %[[TOTAL]], %[[NEXT]]
+// GROUPS-NOT: @llvm.nvvm.barrier
+// GROUPS-NOT: st.shared
+// GROUPS: ret
+tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
+  %rows = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #ttg.slice<{dim = 1, parent = #grouped_carries}>>
+  %cols = tt.make_range {start = 0 : i32, end = 2 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #grouped_carries}>>
+  %r = tt.expand_dims %rows {axis = 1 : i32} : tensor<512xi32, #ttg.slice<{dim = 1, parent = #grouped_carries}>> -> tensor<512x1xi32, #grouped_carries>
+  %c = tt.expand_dims %cols {axis = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #grouped_carries}>> -> tensor<1x2xi32, #grouped_carries>
+  %two = arith.constant dense<2> : tensor<512x1xi32, #grouped_carries>
+  %r2 = arith.muli %r, %two : tensor<512x1xi32, #grouped_carries>
+  %rr = tt.broadcast %r2 : tensor<512x1xi32, #grouped_carries> -> tensor<512x2xi32, #grouped_carries>
+  %cc = tt.broadcast %c : tensor<1x2xi32, #grouped_carries> -> tensor<512x2xi32, #grouped_carries>
+  %offset = arith.addi %rr, %cc : tensor<512x2xi32, #grouped_carries>
+  %base = tt.splat %ptr : !tt.ptr<f32> -> tensor<512x2x!tt.ptr<f32>, #grouped_carries>
+  %ptrs = tt.addptr %base, %offset : tensor<512x2x!tt.ptr<f32>, #grouped_carries>, tensor<512x2xi32, #grouped_carries>
+  %arg = tt.load %ptrs : tensor<512x2x!tt.ptr<f32>, #grouped_carries>
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: f32, %rhs: f32):
+    %sum = arith.addf %lhs, %rhs : f32
+    tt.scan.return %sum : f32
+  }) : (tensor<512x2xf32, #grouped_carries>) -> tensor<512x2xf32, #grouped_carries>
+  tt.store %ptrs, %result : tensor<512x2x!tt.ptr<f32>, #grouped_carries>
   tt.return
 }
 
