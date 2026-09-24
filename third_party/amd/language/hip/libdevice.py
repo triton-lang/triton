@@ -1,4 +1,4 @@
-from triton.language import core
+﻿from triton.language import core
 
 
 @core.extern
@@ -530,3 +530,73 @@ def isfinited(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
         (core.dtype("fp64"), ): ("__ocml_isfinite_f64", core.dtype("int32")),
     }, is_pure=True, _semantic=_semantic).to(core.int1, _semantic=_semantic)
+
+
+# ---------------------------------------------------------------------------
+# Bitcast ops missing from HIP libdevice - Part 3 of libdevice parity fix.
+# These reinterpret bits without conversion, mapping to LLVM BitcastOp.
+# See: https://github.com/triton-lang/triton/issues/10375
+# ---------------------------------------------------------------------------
+
+
+@core.extern
+def float_as_int(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__triton_hip_float_as_int", core.dtype("int32")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def int_as_float(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("int32"), ): ("__triton_hip_int_as_float", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def float_as_uint(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__triton_hip_float_as_uint", core.dtype("uint32")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def uint_as_float(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("uint32"), ): ("__triton_hip_uint_as_float", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def double_as_longlong(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp64"), ): ("__triton_hip_double_as_longlong", core.dtype("int64")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def longlong_as_double(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("int64"), ): ("__triton_hip_longlong_as_double", core.dtype("fp64")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def hiloint2double(arg0, arg1, _semantic=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("int32"), core.dtype("int32")): ("__triton_hip_hiloint2double", core.dtype("fp64")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def double2hiint(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp64"), ): ("__triton_hip_double2hiint", core.dtype("int32")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def double2loint(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp64"), ): ("__triton_hip_double2loint", core.dtype("int32")),
+    }, is_pure=True, _semantic=_semantic)
