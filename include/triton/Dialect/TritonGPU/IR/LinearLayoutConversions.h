@@ -18,6 +18,7 @@ class NVMMASharedEncodingAttr;
 class TensorOrMemDesc;
 class MemDescType;
 class CGAEncodingAttr;
+class SharedEncodingTrait;
 enum class TMAMode;
 
 // - BlockedEncodingAttrs have the following input dimensions.
@@ -91,6 +92,10 @@ nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
 // `LinearLayout::sublayout(inDimNames, outDimNames)` when "block" is not in
 // `inDimNames`. The latter does not modify the output sizes.
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout);
+
+// Rebuild a shared encoding with its CGA mapping removed. This preserves the
+// intra-CTA layout and infers the corresponding per-CTA output shape.
+Attribute dropCGA(SharedEncodingTrait inner);
 
 // Combines the layout of a CTA (input dims [register, lane, warp]) with the
 // layout of a CGA (i.e. a block), and ensures that the resulting layout has the

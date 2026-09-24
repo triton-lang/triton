@@ -1206,7 +1206,7 @@ static LinearLayout removeCGAFromLinearLayout(const LinearLayout &layout) {
                       llvm::to_vector(layout.getOutDimNames()));
 }
 
-static Attribute dropCGA(SharedEncodingTrait inner) {
+Attribute dropCGA(SharedEncodingTrait inner) {
   auto *ctx = inner.getContext();
   if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(inner)) {
     // Padded layouts carry their linear component directly. It was built for
