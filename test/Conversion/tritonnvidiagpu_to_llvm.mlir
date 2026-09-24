@@ -1207,3 +1207,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %r : f32
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @mul_f32_pair(
+  // CHECK-COUNT-2: llvm.fmul {{.*}} : f32
+  // CANONICALIZE-SM100-LABEL: @mul_f32_pair(
+  // CANONICALIZE-SM100: llvm.fmul {{.*}} : vector<2xf32>
+  tt.func private @mul_f32_pair(%x: tensor<256xf32, #blocked>, %y: tensor<256xf32, #blocked>) -> tensor<256xf32, #blocked> {
+    %z = arith.mulf %x, %y : tensor<256xf32, #blocked>
+    tt.return %z : tensor<256xf32, #blocked>
+  }
+
+  // CANONICALIZE-SM100-LABEL: @mul_f32_single(
+  // CANONICALIZE-SM100: llvm.fmul {{.*}} : f32
+  // CANONICALIZE-SM100-NOT: vector<2xf32>
+  tt.func private @mul_f32_single(%x: tensor<128xf32, #blocked>, %y: tensor<128xf32, #blocked>) -> tensor<128xf32, #blocked> {
+    %z = arith.mulf %x, %y : tensor<128xf32, #blocked>
+    tt.return %z : tensor<128xf32, #blocked>
+  }
+
+  // CANONICALIZE-SM100-LABEL: @mul_f64_pair(
+  // CANONICALIZE-SM100-COUNT-2: llvm.fmul {{.*}} : f64
+  tt.func private @mul_f64_pair(%x: tensor<256xf64, #blocked>, %y: tensor<256xf64, #blocked>) -> tensor<256xf64, #blocked> {
+    %z = arith.mulf %x, %y : tensor<256xf64, #blocked>
+    tt.return %z : tensor<256xf64, #blocked>
+  }
+}

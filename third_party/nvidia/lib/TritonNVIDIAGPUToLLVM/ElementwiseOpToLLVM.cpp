@@ -717,6 +717,27 @@ struct ExpOpConversionApprox
   }
 };
 
+// Keep ordinary multiplication visible to LLVM so it can still fold constants,
+// fuse multiply-adds, or scalarize pairs that require register repacking.
+struct PackedMulFOpConversion
+    : ElementwiseOpConversionBase<arith::MulFOp, PackedMulFOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
+
+  SmallVector<Value> createDestOps(arith::MulFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    if (!elemTy.isF32() || operands.size() < 2)
+      return {};
+    Value lhs = packLLVector(loc, {operands[0][0], operands[1][0]}, rewriter);
+    Value rhs = packLLVector(loc, {operands[0][1], operands[1][1]}, rewriter);
+    Value result =
+        LLVM::FMulOp::create(rewriter, loc, lhs.getType(), ValueRange{lhs, rhs},
+                             adaptor.getAttributes().getValue());
+    return unpackLLVector(loc, result, rewriter);
+  }
+};
+
 struct PackedArithOpConversion
     : ConvertOpToLLVMPattern<nvidia_gpu::PackedArithOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -962,6 +983,10 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   POPULATE_OP(arith::SubFOp, LLVM::FSubOp);
   POPULATE_OP(arith::AddFOp, LLVM::FAddOp);
   POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
+
+  if (computeCapability >= 100 && targetInfo.getPtxVersion() >= 86)
+    patterns.add<PackedMulFOpConversion>(typeConverter, axisInfoAnalysis,
+                                         benefit.getBenefit() + 1);
 
   POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);
