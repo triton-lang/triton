@@ -87,6 +87,7 @@ public:
   bool supportDppBroadcast() const;
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
+  bool supportsCvtPkScalePk8Block16() const;
   bool supportsFP4Wmma(Type aElemType, Type bElemType) const;
   bool supportsHwScaledUpcast() const;
   bool supportsHwScaledDowncast() const;

@@ -223,6 +223,10 @@ def get_llvm_flags(arch):
     return flags
 
 
+def get_core_llvm_arch(arch):
+    return "gfx1250" if arch == "gfx1250-strict" else arch
+
+
 def is_fpsan_supported(arch):
     return arch.removesuffix("-strict") in ["gfx942", "gfx950", "gfx1250"]
 
@@ -610,16 +614,17 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        target_triple = amd.get_target_triple(options.arch)
-        amd.attach_target_triple(llvm_mod, options.arch)
+        core_llvm_arch = get_core_llvm_arch(options.arch)
+        target_triple = amd.get_target_triple(core_llvm_arch)
+        amd.attach_target_triple(llvm_mod, core_llvm_arch)
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
-        llvm.attach_datalayout(llvm_mod, target_triple, options.arch, target_features, get_llvm_flags(options.arch))
+        llvm.attach_datalayout(llvm_mod, target_triple, core_llvm_arch, target_features, get_llvm_flags(options.arch))
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
-        amd.set_isa_version(llvm_mod, options.arch)
+        amd.set_isa_version(llvm_mod, core_llvm_arch)
         amd.set_abi_version(llvm_mod, 500)
         amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
@@ -695,7 +700,7 @@ class HIPBackend(BaseBackend):
                 if not fn.is_declaration():
                     fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options.arch),
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, core_llvm_arch, '', get_llvm_flags(options.arch),
                              options.enable_fp_fusion, disable_vector_combine=True)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).

@@ -335,7 +335,11 @@ bool TargetFeatures::supportsPermlaneSwap() const {
 }
 
 bool TargetFeatures::supportsCvtPkScalePk8() const {
-  return isGFX1250() && !isGFX1250Strict();
+  return isGFX1250();
+}
+
+bool TargetFeatures::supportsCvtPkScalePk8Block16() const {
+  return supportsCvtPkScalePk8() && !isGFX1250Strict();
 }
 
 bool TargetFeatures::supportsFP4Wmma(Type aElemType, Type bElemType) const {
@@ -345,13 +349,11 @@ bool TargetFeatures::supportsFP4Wmma(Type aElemType, Type bElemType) const {
 }
 
 bool TargetFeatures::supportsHwScaledUpcast() const {
-  return getISAFamily() == ISAFamily::CDNA4 ||
-         getISAFamily() == ISAFamily::GFX1250;
+  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8();
 }
 
 bool TargetFeatures::supportsHwScaledDowncast() const {
-  return getISAFamily() == ISAFamily::CDNA4 ||
-         getISAFamily() == ISAFamily::GFX1250;
+  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8();
 }
 
 bool TargetFeatures::supportBitwidth16Elementwise() const { return true; }
