@@ -88,7 +88,7 @@ public:
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
   bool supportsCvtPkScalePk8Block16() const;
-  bool supportsFP4Wmma(Type aElemType, Type bElemType) const;
+  bool supportsGfx1250Wmma(StringRef intrinsicName) const;
   bool supportsHwScaledUpcast() const;
   bool supportsHwScaledDowncast() const;
 

@@ -435,6 +435,14 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
            << "are supported on the current AMD GPU architecture.";
   }
 
+  auto targetFeatures =
+      amdgpu::TargetFeatures::fromModuleOp(op->getParentOfType<ModuleOp>());
+  if (targetFeatures.isGFX1250() &&
+      !targetFeatures.supportsGfx1250Wmma(maybeWmmaIntrinsic->name))
+    return op.emitError("wmma op type ")
+           << maybeWmmaIntrinsic->name << " not supported on "
+           << targetFeatures.getArch();
+
   unsigned kInstrSize = maybeWmmaIntrinsic->kDim;
 
   intrinsicName = maybeWmmaIntrinsic->name;
@@ -640,10 +648,6 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
       LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getAElemType());
   Type scaledBElemType =
       LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getBElemType());
-  auto targetFeatures =
-      amdgpu::TargetFeatures::fromModuleOp(op->getParentOfType<ModuleOp>());
-  if (!targetFeatures.supportsFP4Wmma(scaledAElemType, scaledBElemType))
-    return op.emitError("wmma fp4 op not supported on this arch");
 
   auto KBaseScale = scaleFactor == 32 ? 4 : 8;
 
@@ -661,6 +665,14 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
            << ". Check whether the wmma version, instruction shape, and data "
               "types are supported on the current AMD GPU architecture.";
   }
+
+  auto targetFeatures =
+      amdgpu::TargetFeatures::fromModuleOp(op->getParentOfType<ModuleOp>());
+  if (targetFeatures.isGFX1250() &&
+      !targetFeatures.supportsGfx1250Wmma(maybeWmmaScaleIntrinsic->name))
+    return op.emitError("wmma op type ")
+           << maybeWmmaScaleIntrinsic->name << " not supported on "
+           << targetFeatures.getArch();
 
   auto kBaseA = maybeWmmaScaleIntrinsic->kBaseA;
   auto kBaseB = maybeWmmaScaleIntrinsic->kBaseB;

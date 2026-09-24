@@ -342,9 +342,25 @@ bool TargetFeatures::supportsCvtPkScalePk8Block16() const {
   return supportsCvtPkScalePk8() && !isGFX1250Strict();
 }
 
-bool TargetFeatures::supportsFP4Wmma(Type aElemType, Type bElemType) const {
-  if (isa<Float4E2M1FNType>(aElemType) || isa<Float4E2M1FNType>(bElemType))
-    return isGFX1250() && !isGFX1250Strict();
+bool TargetFeatures::supportsGfx1250Wmma(StringRef intrinsicName) const {
+  // unsupported on strict hardware
+  static constexpr StringRef kStrictDisabledWmma[] = {
+      "llvm.amdgcn.wmma.f16.16x16x128.bf8.bf8",
+      "llvm.amdgcn.wmma.f16.16x16x128.bf8.fp8",
+      "llvm.amdgcn.wmma.f16.16x16x128.fp8.bf8",
+      "llvm.amdgcn.wmma.f16.16x16x128.fp8.fp8",
+      "llvm.amdgcn.wmma.f32.16x16x128.bf8.bf8",
+      "llvm.amdgcn.wmma.f32.16x16x128.bf8.fp8",
+      "llvm.amdgcn.wmma.f32.16x16x128.fp8.bf8",
+      "llvm.amdgcn.wmma.f32.16x16x128.fp8.fp8",
+      "llvm.amdgcn.wmma.f32.32x16x128.f4",
+      "llvm.amdgcn.wmma.scale16.f32.32x16x128.f4",
+      "llvm.amdgcn.wmma.scale16.f32.16x16x128.f8f6f4",
+  };
+  if (!isGFX1250())
+    return false;
+  if (isGFX1250Strict())
+    return !llvm::is_contained(kStrictDisabledWmma, intrinsicName);
   return true;
 }
 
