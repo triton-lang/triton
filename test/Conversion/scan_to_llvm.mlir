@@ -1,6 +1,7 @@
 // RUN: split-file %s %t
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
+// RUN: triton-opt %t/parallel-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=CARRIES
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
 //--- scan.mlir
@@ -229,4 +230,45 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     }) : (tensor<256xi32, #layout>) -> tensor<256xi32, #layout>
     tt.return %0 : tensor<256xi32, #layout>
   }
+}
+
+//--- parallel-carries.mlir
+
+#parallel_carries = #ttg.linear<{register = [[0, 1], [8, 0], [16, 0], [32, 0], [64, 0], [128, 0], [256, 0]], lane = [[1, 0], [2, 0], [0, 0], [0, 0], [0, 0]], warp = [[4, 0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+
+// CARRIES-LABEL: @test_parallel_carries
+// Each thread owns two columns. Read the first batch for both columns before
+// advancing either carry to the second batch, exposing independent chains.
+// CARRIES: @llvm.nvvm.barrier
+// CARRIES: load i32, ptr addrspace(3) @global_smem
+// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 4)
+// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 504)
+// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 508)
+// CARRIES-NOT: @llvm.nvvm.barrier
+// CARRIES-NOT: st.shared
+// CARRIES: ret
+tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
+  %rows = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #ttg.slice<{dim = 1, parent = #parallel_carries}>>
+  %cols = tt.make_range {start = 0 : i32, end = 2 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #parallel_carries}>>
+  %r = tt.expand_dims %rows {axis = 1 : i32} : tensor<512xi32, #ttg.slice<{dim = 1, parent = #parallel_carries}>> -> tensor<512x1xi32, #parallel_carries>
+  %c = tt.expand_dims %cols {axis = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #parallel_carries}>> -> tensor<1x2xi32, #parallel_carries>
+  %two = arith.constant dense<2> : tensor<512x1xi32, #parallel_carries>
+  %r2 = arith.muli %r, %two : tensor<512x1xi32, #parallel_carries>
+  %rr = tt.broadcast %r2 : tensor<512x1xi32, #parallel_carries> -> tensor<512x2xi32, #parallel_carries>
+  %cc = tt.broadcast %c : tensor<1x2xi32, #parallel_carries> -> tensor<512x2xi32, #parallel_carries>
+  %offset = arith.addi %rr, %cc : tensor<512x2xi32, #parallel_carries>
+  %base = tt.splat %ptr : !tt.ptr<i32> -> tensor<512x2x!tt.ptr<i32>, #parallel_carries>
+  %ptrs = tt.addptr %base, %offset : tensor<512x2x!tt.ptr<i32>, #parallel_carries>, tensor<512x2xi32, #parallel_carries>
+  %arg = tt.load %ptrs : tensor<512x2x!tt.ptr<i32>, #parallel_carries>
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<512x2xi32, #parallel_carries>) -> tensor<512x2xi32, #parallel_carries>
+  tt.store %ptrs, %result : tensor<512x2x!tt.ptr<i32>, #parallel_carries>
+  tt.return
+}
+
 }
