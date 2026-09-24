@@ -331,7 +331,7 @@ SmallVector<Edge> getOutCrossingEdges(Partition *partition) {
 }
 
 void deserializeManualPartitions(Operation *region, Graph *graph) {
-  std::map<int, Partition *> manual_partitions;
+  DenseMap<int, Partition *> manual_partitions;
   graph->walk([&](Node *node) {
     if (node->isOp()) {
       auto op = node->getOp();
@@ -576,6 +576,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        auto to = edge.getToNode();
        if (!isMMA(from)) {
          // skip if not from an MMA
+         return false;
        }
        if (!isIfResult(to))
          // skip if not to an if op result
@@ -849,7 +850,7 @@ void mergePartitions(Graph *graph, std::string funcName,
                    << crossingEdges.size() << " crossing edges remaining\n";
     });
 
-    for (auto [name, apply] : heuristics) {
+    for (const auto &[name, apply] : heuristics) {
       for (auto it = crossingEdges.begin(); it != crossingEdges.end();) {
         auto edge = *it;
 
@@ -862,7 +863,7 @@ void mergePartitions(Graph *graph, std::string funcName,
         if (apply(edge)) {
           // check if applying the heuristic will satisfy the constraints
           bool ok = true;
-          for (auto [name, constraint] : constraints) {
+          for (const auto &[name, constraint] : constraints) {
             if (!constraint(edge)) {
               ok = false;
               break;
@@ -915,7 +916,7 @@ void mergePartitions(Graph *graph, std::string funcName,
       SmallVector<Partition *> all_partitions;
       for (auto partition : graph->getPartitions())
         all_partitions.push_back(partition);
-      for (auto [name, apply] : partition_heuristics) {
+      for (const auto &[name, apply] : partition_heuristics) {
         for (auto partitionA : all_partitions) {
           for (auto partitionB : all_partitions) {
             if (partitionA == partitionB)
@@ -1191,7 +1192,7 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
         continue;
 
       auto update = [&]() {
-        std::map<Node *, Node *> parentMap;
+        DenseMap<Node *, Node *> parentMap;
 
         SmallVector<Node *> stack;
         stack.push_back(start);
@@ -1208,7 +1209,7 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
                 if (child->getPartitions().size() != 1 || !isCandidate(child)) {
                   // do nothing
                 } else if (child->getPartition() == partition) {
-                  parentMap.emplace(child, node);
+                  parentMap.try_emplace(child, node);
                   stack.push_back(child);
                 } else if (child->getPartition() == startPartition) {
                   // found a path, set all nodes on the path to the partition
