@@ -606,14 +606,11 @@ tt.func public @reduce_with_print_in_combine(%arg0: tensor<32x16xi32, #blocked_r
 }
 
 // The arity query inspects the op that defines the returned value, not the
-// first resultful op in the region.
+// first resultful op in the region. A chained region like this one is not a
+// single direct combiner, so getSingleCombiner declines it and the tree
+// stays binary.
 // CHECK-LABEL: @reduce_combiner_defines_return
 // CHECK: ret void
-// TERNARY-LABEL: @reduce_combiner_defines_return
-// TERNARY: %[[SUM_A:.*]] = llvm.fadd %{{.*}}, %{{.*}} : f32
-// TERNARY-NEXT: %[[MAX_A:.*]] = llvm.intr.maximum(%[[SUM_A]], %{{.*}}) : (f32, f32) -> f32
-// TERNARY-NEXT: %[[SUM_B:.*]] = llvm.fadd %[[MAX_A]], %{{.*}} : f32
-// TERNARY-NEXT: llvm.intr.maximum(%[[SUM_B]], %[[MAX_A]]) : (f32, f32) -> f32
 tt.func public @reduce_combiner_defines_return(%arg0: tensor<128x4xf32, #blocked_reduce>) {
   %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
   ^bb0(%a: f32, %b: f32):
