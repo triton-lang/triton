@@ -224,6 +224,23 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: test_f64_fp8_conversion
+  tt.func @test_f64_fp8_conversion(%in0: tensor<128xf64, #blocked>, %in1: tensor<128xf8E4M3FN, #blocked>) {
+    // CHECK-COUNT-2: llvm.fptrunc %{{.*}} : f64 to f32
+    // CHECK: cvt.rn.satfinite.e4m3x2.f32
+    %out0 = tt.fp_to_fp %in0, rounding = rtne : tensor<128xf64, #blocked> -> tensor<128xf8E4M3FN, #blocked>
+    // CHECK: cvt.rn.f16x2.e4m3x2
+    // CHECK-COUNT-2: llvm.fpext %{{.*}} : f16 to f32
+    // CHECK-COUNT-2: llvm.fpext %{{.*}} : f32 to f64
+    %out1 = tt.fp_to_fp %in1 : tensor<128xf8E4M3FN, #blocked> -> tensor<128xf64, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 // CHECK-LABEL: clamp
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
