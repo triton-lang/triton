@@ -220,6 +220,23 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device):
     torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("layout, M", [
+    (ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 512),
+    (ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 512),
+    # The high lane bit keeps register-group carries live across batches.
+    (ttgl.DistributedLinearLayout([[16, 0], [0, 1], [2, 0], [8, 0], [0, 2]],
+                                  [[64, 0], [0, 4], [4, 0], [0, 8], [0, 16]] + [[0, 0]] *
+                                  (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [32, 0]], [], [128, 32]), 128),
+    # Also broadcast registers, lanes, and warps while interleaving carries.
+    (ttgl.DistributedLinearLayout([[16, 0], [0, 1], [2, 0], [8, 0], [0, 2], [0, 16], [32, 0], [0, 0]],
+                                  [[64, 0], [0, 4], [4, 0], [0, 8], [0, 0]] + [[0, 0]] *
+                                  (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [0, 0]], [], [128, 32]), 128),
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_parallel_carries_noncommutative(layout, M, reverse, device):
+    test_scan_layouts_noncommutative(layout, axis=0, reverse=reverse, M=M, device=device)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
 @pytest.mark.parametrize("num_ctas", [2, 4])
 @pytest.mark.parametrize("replicate", [False, True])
