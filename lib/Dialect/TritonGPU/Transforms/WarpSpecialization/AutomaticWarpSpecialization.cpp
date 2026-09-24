@@ -94,11 +94,6 @@ std::unique_ptr<Pass> createVerifyWarpSpecializationPartitionsPass() {
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
-  getOperation().walk([](Operation *op) {
-    if (op->hasAttr(kWarpSpecializeAttrName) &&
-        hasUnsupportedTwoCTAAccumulatorReads(op))
-      op->removeAttr(kWarpSpecializeAttrName);
-  });
   OpPassManager pm;
   auto addPassWithPartitionVerifier = [&](std::unique_ptr<Pass> pass) {
     pm.addPass(std::move(pass));

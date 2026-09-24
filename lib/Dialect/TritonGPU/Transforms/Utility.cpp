@@ -1662,32 +1662,6 @@ replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
   return maybeLocalLoad;
 }
 
-bool hasUnsupportedTwoCTAAccumulatorReads(Operation *loop) {
-  DenseMap<Value, unsigned> reads;
-  DenseSet<Value> conditionalReads;
-  bool hasUnconditionalRead = false;
-  loop->walk([&](ttng::TMEMLoadOp load) {
-    auto encoding = dyn_cast<ttng::TensorMemoryEncodingAttr>(
-        load.getSrc().getType().getEncoding());
-    if (!encoding || !encoding.getTwoCTAs())
-      return;
-    Value src = load.getSrc();
-    ++reads[src];
-    if (load->getParentOp() == loop) {
-      hasUnconditionalRead |= llvm::any_of(src.getUsers(), [](Operation *user) {
-        auto mma = dyn_cast<ttng::MMAv5OpInterface>(user);
-        return mma && !matchPattern(mma.useAccumulator(), m_Zero());
-      });
-    }
-    auto condition = load->getParentOfType<scf::IfOp>();
-    if (condition && loop->isAncestor(condition))
-      conditionalReads.insert(src);
-  });
-  return hasUnconditionalRead || llvm::any_of(conditionalReads, [&](Value src) {
-           return reads[src] > 1;
-         });
-}
-
 bool comesFromLoadOrBlockArg(Value v) {
   // Peel out the original cvt dot_op<..., #blocked>
   // and any other potential cvt/trans ops

@@ -291,7 +291,7 @@ private:
     scf::ForOp current = forOp;
     do {
       if (current->hasAttr(kWarpSpecializeAttrName)) {
-        return !hasUnsupportedTwoCTAAccumulatorReads(current);
+        return true;
       }
       current = current->getParentOfType<scf::ForOp>();
     } while (current);

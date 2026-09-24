@@ -312,10 +312,6 @@ replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
 // This will skip convert layouts and memdesc views.
 // This is a helper useful to know if value is likely to come from shared memory
 // after converting loads into async loads.
-// Intermediate two-CTA accumulator reads use the ordinary pipeliner until
-// NVWS can preserve their lifetimes across accumulator multibuffering.
-bool hasUnsupportedTwoCTAAccumulatorReads(Operation *loop);
-
 bool comesFromLoadOrBlockArg(Value v);
 
 // For structured control flow ops, returns the values associated with the
