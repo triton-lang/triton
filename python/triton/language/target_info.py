@@ -57,4 +57,4 @@ def is_hip_cdna4():
 @constexpr_function
 def is_hip_gfx1250():
     target = current_target()
-    return target is not None and target.arch.removesuffix("-strict") == "gfx1250"
+    return target is not None and target.arch in ("gfx1250", "gfx1250-strict")

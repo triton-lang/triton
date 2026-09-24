@@ -185,9 +185,6 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
     return fail(message, error);
   }
 
-  // LLVM no longer supports globally enabling FP contraction through
-  // TargetOptions. Preserve enableFPFusion by expressing that permission on
-  // the operations consumed by the independently pinned code generator.
   if (options->enableFPFusion)
     enableFPContraction(*module);
 

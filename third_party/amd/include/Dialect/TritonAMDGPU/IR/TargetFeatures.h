@@ -48,6 +48,7 @@ public:
   static TargetFeatures fromModuleOp(ModuleOp moduleOp);
 
   StringRef getArch() const;
+  StringRef getBaseArch() const;
 
   ISAFamily getISAFamily() const;
 
@@ -99,6 +100,8 @@ private:
   static constexpr char kTargetPrefix[] = "hip:";
 
   std::string arch;
+  std::string baseArch;
+  ISAFamily isaFamily;
 };
 
 bool isCDNA(ISAFamily isaFamily);

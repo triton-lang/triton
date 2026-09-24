@@ -213,8 +213,7 @@ struct ConvertTritonAMDGPUToLLVM
                                                      patterns, commonBenefit);
 
     FailureOr<mlir::amdgpu::Chipset> maybeChipset =
-        mlir::amdgpu::Chipset::parse(
-            StringRef(this->gfxArch.getValue()).split("-strict").first);
+        mlir::amdgpu::Chipset::parse(targetInfo.getBaseArch());
     if (failed(maybeChipset)) {
       emitError(UnknownLoc::get(&getContext()),
                 "Invalid AMDGPU chipset name: " + this->gfxArch);

@@ -191,21 +191,20 @@ def is_in_thread_transpose_enabled(arch):
         if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
-def is_async_copy_enabled(arch):
-    return (arch.removesuffix("-strict") in ["gfx950", "gfx1250"]
-            ) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
+def is_async_copy_enabled(base_arch):
+    return (base_arch in ["gfx950", "gfx1250"]) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
 
 
-def is_coexec_scheduler_enabled(arch):
+def is_coexec_scheduler_enabled(base_arch):
     if knobs.amd.use_coexec_scheduler is not None:
         return knobs.amd.use_coexec_scheduler
-    return arch.removesuffix("-strict") == "gfx1250"
+    return base_arch == "gfx1250"
 
 
-def is_expert_scheduling_enabled(arch):
+def is_expert_scheduling_enabled(base_arch):
     if knobs.amd.use_expert_scheduling is not None:
         return knobs.amd.use_expert_scheduling
-    return arch.removesuffix("-strict") == "gfx1250"
+    return base_arch == "gfx1250"
 
 
 def get_llvm_flags(arch):
@@ -223,16 +222,12 @@ def get_llvm_flags(arch):
     return flags
 
 
-def get_core_llvm_arch(arch):
-    return "gfx1250" if arch == "gfx1250-strict" else arch
+def is_fpsan_supported(base_arch):
+    return base_arch in ["gfx942", "gfx950", "gfx1250"]
 
 
-def is_fpsan_supported(arch):
-    return arch.removesuffix("-strict") in ["gfx942", "gfx950", "gfx1250"]
-
-
-def is_consan_supported(arch):
-    return arch.removesuffix("-strict") == "gfx1250"
+def is_consan_supported(base_arch):
+    return base_arch == "gfx1250"
 
 
 def _parse_llvm_fn_attrs(attrs):
@@ -291,7 +286,10 @@ class HIPOptions:
     llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
 
     def __post_init__(self):
-        gfx_major = int(self.arch.removesuffix("-strict")[3:-2])
+        # The arch without the "-strict" suffix.
+        base_arch = self.arch.removesuffix("-strict")
+        object.__setattr__(self, 'base_arch', base_arch)
+        gfx_major = int(base_arch[3:-2])
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
@@ -471,7 +469,7 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_triton_licm(pm)
         passes.common.add_canonicalizer(pm)
 
-        use_async_copy = is_async_copy_enabled(options.arch)
+        use_async_copy = is_async_copy_enabled(options.base_arch)
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
         amd.passes.ttgpuir.add_optimize_descriptor_encoding(pm)
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
@@ -505,7 +503,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if is_enabled(options, "fpsan") and is_fpsan_supported(options.arch):
+        if is_enabled(options, "fpsan") and is_fpsan_supported(options.base_arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
@@ -526,12 +524,12 @@ class HIPBackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttir.add_loop_unroll(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        if is_enabled(options, "fpsan") and is_fpsan_supported(options.arch):
+        if is_enabled(options, "fpsan") and is_fpsan_supported(options.base_arch):
             passes.common.add_symbol_dce(pm)
         amd.passes.ttgpuir.add_warp_pipeline(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
 
-        if is_enabled(options, "fpsan") and is_fpsan_supported(options.arch):
+        if is_enabled(options, "fpsan") and is_fpsan_supported(options.base_arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
@@ -552,13 +550,13 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         # Reserve LDS space for ConSan captures before allocation computes offsets.
-        if is_enabled(options, "consan") and is_consan_supported(options.arch):
+        if is_enabled(options, "consan") and is_consan_supported(options.base_arch):
             passes.ttgpuir.add_prepare_consan_captures(pm, "amd")
         amd.passes.ttgpuir.add_allocate_shared_memory(pm, options.arch)
         # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         amd.passes.ttgpuir.add_membar(pm, options.arch)
-        if is_enabled(options, "consan") and is_consan_supported(options.arch):
+        if is_enabled(options, "consan") and is_consan_supported(options.base_arch):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
             passes.common.add_cse(pm)
@@ -614,7 +612,7 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        core_llvm_arch = get_core_llvm_arch(options.arch)
+        core_llvm_arch = options.base_arch
         target_triple = amd.get_target_triple(core_llvm_arch)
         amd.attach_target_triple(llvm_mod, core_llvm_arch)
         target_features = ''
@@ -657,7 +655,7 @@ class HIPBackend(BaseBackend):
         if options.waves_per_eu != 0:
             kernel_fn.add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu},{options.waves_per_eu}")
 
-        if is_coexec_scheduler_enabled(options.arch) and options.num_warps <= 4:
+        if is_coexec_scheduler_enabled(options.base_arch) and options.num_warps <= 4:
             kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
 
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
@@ -676,8 +674,7 @@ class HIPBackend(BaseBackend):
         #
         # TODO(tyb0807): Disabled when using MIR swap/dump because the value is
         # not serializable to/from MIR YAML
-        if options.arch.removesuffix("-strict") != "gfx1250" and not (knobs.amd.swap_mir
-                                                                     or knobs.amd.dump_mir):
+        if options.base_arch != "gfx1250" and not (knobs.amd.swap_mir or knobs.amd.dump_mir):
             amd.set_all_fn_arg_inreg(kernel_fn)
 
         if knobs.compilation.enable_asan:
@@ -693,7 +690,7 @@ class HIPBackend(BaseBackend):
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
 
-        if is_expert_scheduling_enabled(options.arch):
+        if is_expert_scheduling_enabled(options.base_arch):
             # LLVM reads this attribute per function. Apply it after linking so
             # external device-library definitions are covered as well.
             for fn in llvm_mod.get_functions():

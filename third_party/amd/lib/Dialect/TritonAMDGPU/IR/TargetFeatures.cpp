@@ -43,12 +43,16 @@ std::optional<GfxArch> parseGfxArch(StringRef arch) {
 
   return GfxArch{major, minor, patch};
 }
+
+ISAFamily computeISAFamily(StringRef arch);
 } // namespace
 
 TargetFeatures::TargetFeatures(std::optional<StringRef> arch)
     : TargetFeatures(arch.value_or("")) {}
 
-TargetFeatures::TargetFeatures(StringRef arch) : arch(arch.str()) {}
+TargetFeatures::TargetFeatures(StringRef arch)
+    : arch(arch.str()), baseArch(arch.split("-strict").first),
+      isaFamily(computeISAFamily(arch)) {}
 
 TargetFeatures TargetFeatures::fromModuleOp(ModuleOp moduleOp) {
   auto targetAttr =
@@ -65,7 +69,12 @@ TargetFeatures TargetFeatures::fromModuleOp(ModuleOp moduleOp) {
 
 StringRef TargetFeatures::getArch() const { return arch; }
 
-ISAFamily TargetFeatures::getISAFamily() const {
+StringRef TargetFeatures::getBaseArch() const { return baseArch; }
+
+ISAFamily TargetFeatures::getISAFamily() const { return isaFamily; }
+
+namespace {
+ISAFamily computeISAFamily(StringRef arch) {
   std::optional<GfxArch> gfxArch = parseGfxArch(arch);
   if (!gfxArch)
     return ISAFamily::Unknown;
@@ -105,6 +114,7 @@ ISAFamily TargetFeatures::getISAFamily() const {
 
   return ISAFamily::Unknown;
 }
+} // namespace
 
 bool TargetFeatures::isCDNA() const {
   return mlir::triton::amdgpu::isCDNA(getISAFamily());
@@ -127,7 +137,7 @@ bool TargetFeatures::isGFX1250() const {
 }
 
 bool TargetFeatures::isGFX1250Strict() const {
-  return isGFX1250() && StringRef(arch).ends_with("-strict");
+  return isGFX1250() && arch != baseArch;
 }
 
 int TargetFeatures::getWarpSize() const {
