@@ -861,6 +861,11 @@ class TritonSemantic(Generic[TensorTy]):
             return self.tensor(
                 self.builder.create_fp_to_fp(input.handle, dst_ty.to_ir(self.builder), ir.ROUNDING_MODE.RTNE), dst_ty)
 
+        # int <=> fp8: there is no direct conversion, so go through fp32. Any
+        # integer too large for fp32 is far outside the range of fp8 anyway.
+        if (src_sca_ty.is_int() and dst_sca_ty.is_fp8()) or (src_sca_ty.is_fp8() and dst_sca_ty.is_int()):
+            return self.cast(self.cast(input, tl.float32), dst_sca_ty)
+
         if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
             assert self.builder.codegen_fns.get(
                 "convert_custom_types") is not None, "target doesn't provide conversion for this type."

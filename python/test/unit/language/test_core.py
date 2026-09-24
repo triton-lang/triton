@@ -2516,7 +2516,13 @@ def test_tensor_atomic_use_result(dtype_str, size, op, device):
                            + [(dtype_x, dtype_z, False, size)
                               for dtype_z in torch_float8_dtypes
                               for dtype_x in ["float16", "float32", "bfloat16"]
-                              for size in [1024, 32]]) if torch.__version__ >= "2.1" else []))
+                              for size in [1024, 32]]  #
+                           + [(dtype_x, dtype_z, False, 1024)
+                              for dtype_x in torch_float8_dtypes
+                              for dtype_z in ["int8", "int32"]]  #
+                           + [(dtype_x, dtype_z, False, 1024)
+                              for dtype_z in torch_float8_dtypes
+                              for dtype_x in ["int8", "int32"]]) if torch.__version__ >= "2.1" else []))
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     # CUDA: bfloat16 on cc < 80 will not be tested
@@ -2549,7 +2555,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         if dtype_z in uint_dtypes:
             x = np.absolute(x)
         x_tri = to_triton(x, device=device)
-    if 'float' in dtype_z and 'float' in dtype_x:
+    if ('float' in dtype_z and 'float' in dtype_x) or (dtype_z.startswith('float8') and dtype_x in integral_dtypes):
         # make sure we use values that can be represented in both types
         x_tri = x_tri.to(getattr(torch, dtype_z)).to(getattr(torch, dtype_x))
     # triton kernel
