@@ -292,81 +292,89 @@ Value createArefBarrierAlloc(ImplicitLocOpBuilder &builder, Type type,
   return LocalAllocOp::create(builder, memDescType, Value());
 }
 
-Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
-                     int numBarriers, int arrivalCount, bool twoCTAs) {
-  Value barrierAlloc =
-      createArefBarrierAlloc(b1, b1.getI64Type(), numBarriers, twoCTAs);
+Value createBarrierArray(ImplicitLocOpBuilder &initBuilder,
+                         ImplicitLocOpBuilder &cleanupBuilder, int numBarriers,
+                         int arrivalCount, bool twoCTAs) {
+  Value barrierAlloc = createArefBarrierAlloc(
+      initBuilder, initBuilder.getI64Type(), numBarriers, twoCTAs);
   for (unsigned i = 0; i < numBarriers; i++) {
-    Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
-    InitBarrierOp::create(b1, barrierView, arrivalCount);
+    Value barrierView = createSingleBufferView(initBuilder, barrierAlloc, i);
+    InitBarrierOp::create(initBuilder, barrierView, arrivalCount);
   }
-  // Invalidate and deallocate the barriers.
   for (unsigned i = 0; i < numBarriers; i++) {
-    Value barrierView = createSingleBufferView(b2, barrierAlloc, i);
-    InvalBarrierOp::create(b2, barrierView);
+    Value barrierView = createSingleBufferView(cleanupBuilder, barrierAlloc, i);
+    InvalBarrierOp::create(cleanupBuilder, barrierView);
   }
-  LocalDeallocOp::create(b2, barrierAlloc);
+  LocalDeallocOp::create(cleanupBuilder, barrierAlloc);
   return barrierAlloc;
 }
 
-ArefValue
-createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
-                  const DenseSet<MMAv5OpInterface> &mmav5Ops,
-                  DenseMap<Block *, ClusterBarrierOp> &teardownBarriers) {
-  BarrierCount count = getArrivalCount(op, mmav5Ops);
+void setArefBarrierInsertionPoints(
+    ArefCreateOp op, ImplicitLocOpBuilder &initBuilder,
+    ImplicitLocOpBuilder &cleanupBuilder,
+    DenseMap<Block *, ClusterBarrierOp> &teardownBarriers) {
+  initBuilder.setInsertionPoint(op);
+  cleanupBuilder.setInsertionPoint(op->getBlock()->getTerminator());
 
-  auto arefTy = op.getType();
-  auto arefBufTypes = llvm::to_vector(llvm::map_range(
-      arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
-  auto depth = getArefDepth(arefBufTypes[0]);
-  bool useTwoCTA = llvm::any_of(
-      mmav5Ops, [](MMAv5OpInterface mma) { return mma.getTwoCtas(); });
-
-  ImplicitLocOpBuilder b1(op->getLoc(), op), b2(op->getLoc(), op);
-  b2.setInsertionPoint(op->getBlock()->getTerminator());
-
-  // Initialize once before conditional specialization and any initial empty
-  // wait, so cluster initialization can be fenced at function entry. Arefs
-  // nested in a repeating loop retain their original lifetime.
+  // Initialize before conditional specialization and any initial empty wait,
+  // so cluster initialization can be fenced at function entry. Loop-local
+  // arefs retain their original lifetime.
   if (gpu::lookupNumCTAs(op) > 1 &&
       !op->getParentOfType<LoopLikeOpInterface>()) {
-    auto func = op->getParentOfType<triton::FuncOp>();
-    b1.setInsertionPointToStart(&func.getBody().front());
-    b2.setInsertionPoint(func.getBody().front().getTerminator());
+    auto &entry = op->getParentOfType<triton::FuncOp>().getBody().front();
+    initBuilder.setInsertionPointToStart(&entry);
+    cleanupBuilder.setInsertionPoint(entry.getTerminator());
   }
-  if (nvidia_gpu::getModuleTwoCTAs(op)) {
-    // A warp-specialization join is CTA-local. Wait for the peer CTA's final
-    // releases before invalidating any aref barriers at this lifetime boundary.
-    // Arefs ending in the same block share one rendezvous and teardown group.
-    auto &barrier = teardownBarriers[b2.getBlock()];
-    if (!barrier)
-      barrier = ClusterBarrierOp::create(b2, /*relaxed=*/false);
-    b2.setInsertionPointAfter(barrier);
-  }
-  auto tmemEnc =
-      dyn_cast<TensorMemoryEncodingAttr>(arefBufTypes[0].getEncoding());
+  if (!nvidia_gpu::getModuleTwoCTAs(op))
+    return;
+
+  // A warp-specialization join is CTA-local. Share one cluster rendezvous
+  // before all aref invalidations at this lifetime boundary to wait for the
+  // peer CTA's final releases.
+  auto &barrier = teardownBarriers[cleanupBuilder.getBlock()];
+  if (!barrier)
+    barrier = ClusterBarrierOp::create(cleanupBuilder, /*relaxed=*/false);
+  cleanupBuilder.setInsertionPointAfter(barrier);
+}
+
+ArefValue
+createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
+                   DenseMap<Block *, ClusterBarrierOp> &teardownBarriers) {
+  auto bufferType = cast<MemDescType>(op.getType().getBaseType().front());
+  int depth = getArefDepth(bufferType);
+  BarrierCount count = getArrivalCount(op, mmav5Ops);
+  auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(bufferType.getEncoding());
   bool twoCTATmem = tmemEnc && tmemEnc.getTwoCTAs();
-  // Both CTAs must release their accumulator reads before the leader can
-  // overwrite it. The pair barrier's init count includes both arrivals.
-  auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount,
-                                   /*twoCTAs=*/twoCTATmem);
+  bool hasTwoCTAConsumer = llvm::any_of(
+      mmav5Ops, [](MMAv5OpInterface mma) { return mma.getTwoCtas(); });
   bool hasSynchronousConsumer =
       llvm::any_of(op->getUsers(), [](Operation *user) {
         auto exit = dyn_cast<ArefGetExitOp>(user);
         return exit && llvm::is_contained(castAsyncOpAttrs(exit.getAsyncOps()),
                                           AsyncOp::NONE);
       });
-  bool needsReadyBarrier = useTwoCTA && hasSynchronousConsumer && !twoCTATmem;
-  Value fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount,
-                                   /*twoCTAs=*/useTwoCTA && !needsReadyBarrier);
-  // A shared operand with ordinary readers needs a local TMA wait in each
-  // CTA. Join those local completions before the two-CTA MMA can issue.
+  bool needsReadyBarrier =
+      hasTwoCTAConsumer && hasSynchronousConsumer && !twoCTATmem;
+
+  ImplicitLocOpBuilder initBuilder(op.getLoc(), op);
+  ImplicitLocOpBuilder cleanupBuilder(op.getLoc(), op);
+  setArefBarrierInsertionPoints(op, initBuilder, cleanupBuilder,
+                                teardownBarriers);
+
+  // Both CTAs must release their accumulator reads before it can be reused.
+  Value emptyMbars = createBarrierArray(initBuilder, cleanupBuilder, depth,
+                                        count.consumerPendingCount, twoCTATmem);
+  Value fullMbars = createBarrierArray(initBuilder, cleanupBuilder, depth,
+                                       count.producerPendingCount,
+                                       hasTwoCTAConsumer && !needsReadyBarrier);
+  // With ordinary readers, keep TMA completion local to each CTA and join
+  // those completions in a separate barrier before issuing the two-CTA MMA.
   Value readyMbars;
   if (needsReadyBarrier)
-    readyMbars = createBarriers(b1, b2, depth, 1, /*twoCTAs=*/true);
+    readyMbars = createBarrierArray(initBuilder, cleanupBuilder, depth, 1,
+                                    /*twoCTAs=*/true);
 
-  return ArefValue{emptyMbars, fullMbars, readyMbars, static_cast<int>(depth),
-                   op.getOperands()};
+  return ArefValue{emptyMbars, fullMbars, readyMbars, depth, op.getOperands()};
 }
 
 SmallVector<Value>
@@ -761,7 +769,7 @@ public:
     // consumer mmav5 ops requires the corresponding get enter op to be still
     // used in the IR, collect them here.
     auto mmav5Ops = getAsyncMMAv5Consumers(op.getResult());
-    auto aref = createAndInitMbar(op, rewriter, mmav5Ops, teardownBarriers);
+    auto aref = createArefBarriers(op, mmav5Ops, teardownBarriers);
 
     for (auto userOp : op->getUsers()) {
       opToDelete.insert(userOp);

@@ -723,6 +723,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100"} {
   // An existing barrier is not part of either aref's teardown.
   // CHECK-LABEL: @shared_aref_teardown
+  // CHECK-COUNT-4: ttng.init_barrier
+  // CHECK: ttng.init_barrier
   tt.func @shared_aref_teardown(%value: tensor<128xi32, #blocked_teardown>) {
     %c0 = arith.constant 0 : i32
     %unrelated = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared_teardown, #smem_teardown, mutable>
@@ -774,7 +776,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   tt.func @loop_aref_teardown(%value: tensor<128xi32, #blocked_teardown>, %n: i32) {
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
+    // CHECK-NOT: ttng.init_barrier
     // CHECK: scf.for
+    // CHECK-COUNT-2: ttng.init_barrier
     scf.for %i = %c0 to %n step %c1 : i32 {
       %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>
       %aref0 = nvws.aref.create %alloc0 : <[!ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>]>
