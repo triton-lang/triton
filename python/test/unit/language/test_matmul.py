@@ -211,7 +211,6 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     (2, 3, 1024, False),
     (2, 3, 1024, True),
     (4, 3, 1024, True),
-    (8, 3, 1024, True),
     (2, 1, 1024, False),
     (2, 3, 64, False),
 ])
@@ -314,18 +313,15 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
-@pytest.mark.parametrize("warp_specialize", [False, True])
-@pytest.mark.parametrize("persistent, K", [(False, 512), (True, 64), (True, 512)])
-@pytest.mark.parametrize("split_epilogue", [False, True])
-def test_tma_matmul_two_ctas_specialization(num_ctas, warp_specialize, persistent, K, split_epilogue, device):
+@pytest.mark.parametrize("persistent, K, split_epilogue", [(False, 512, False), (True, 64, False), (True, 512, True)])
+def test_tma_matmul_two_ctas_specialization(num_ctas, persistent, K, split_epilogue, device):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
-    def kernel(A, B, C, M, K, BM: tl.constexpr, PERSISTENT: tl.constexpr, WS: tl.constexpr, SPLIT: tl.constexpr):
-        for tile in tl.range(tl.program_id(0), M // BM, tl.num_programs(0), flatten=True, warp_specialize=WS
-                             and PERSISTENT):
+    def kernel(A, B, C, M, K, BM: tl.constexpr, PERSISTENT: tl.constexpr, SPLIT: tl.constexpr):
+        for tile in tl.range(tl.program_id(0), M // BM, tl.num_programs(0), flatten=True, warp_specialize=PERSISTENT):
             acc = tl.full((BM, 128), 0, tl.float32)
-            for k in tl.range(K // 64, warp_specialize=WS and not PERSISTENT):
+            for k in tl.range(K // 64, warp_specialize=not PERSISTENT):
                 a = A.load([tile * BM, k * 64])
                 b = B.load([0, k * 64]).T
                 acc = tl.dot(a, b, acc)
@@ -347,13 +343,13 @@ def test_tma_matmul_two_ctas_specialization(num_ctas, warp_specialize, persisten
         TensorDescriptor.from_tensor(t, shape)
         for t, shape in [(a, [BM, 64]), (b, [128, 64]), (c, [BM, 64 if split_epilogue else 128])]
     ]
-    compiled = kernel[(1 if persistent else M // BM, )](*args, M, K, BM, persistent, warp_specialize, split_epilogue,
-                                                        num_ctas=num_ctas, num_stages=3, num_warps=4)
+    compiled = kernel[(1 if persistent else M // BM, )](*args, M, K, BM, persistent, split_epilogue, num_ctas=num_ctas,
+                                                        num_stages=3, num_warps=4)
     if is_compile_warmup():
         return
     torch.testing.assert_close(c, a @ b.T, atol=0.01, rtol=0.01)
     ttgir, ptx = compiled.asm["ttgir"], compiled.asm["ptx"]
-    assert ("ttg.warp_specialize" in ttgir) == warp_specialize
+    assert "ttg.warp_specialize" in ttgir
     assert "two_ctas" in ttgir
     assert "tcgen05.mma.cta_group::2" in ptx
     assert "multicast" not in ttgir

@@ -46,7 +46,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
-#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir::triton;
@@ -273,9 +272,7 @@ void setArefBarrierInsertionPoints(
   initBuilder.setInsertionPoint(op);
   cleanupBuilder.setInsertionPoint(op->getBlock()->getTerminator());
 
-  // Initialize before conditional specialization and any initial empty wait,
-  // so cluster initialization can be fenced at function entry. Loop-local
-  // arefs retain their original lifetime.
+  // Initialize before conditional specialization; keep loop-local lifetimes.
   if (gpu::lookupNumCTAs(op) > 1 &&
       !op->getParentOfType<LoopLikeOpInterface>()) {
     auto &entry = op->getParentOfType<triton::FuncOp>().getBody().front();
@@ -285,9 +282,7 @@ void setArefBarrierInsertionPoints(
   if (!nvidia_gpu::getModuleTwoCTAs(op))
     return;
 
-  // A warp-specialization join is CTA-local. Share one cluster rendezvous
-  // before all aref invalidations at this lifetime boundary to wait for the
-  // peer CTA's final releases.
+  // Wait for peer-CTA releases before invalidating aref barriers.
   auto &barrier = teardownBarriers[cleanupBuilder.getBlock()];
   if (!barrier)
     barrier = ClusterBarrierOp::create(cleanupBuilder, /*relaxed=*/false);
@@ -314,23 +309,20 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
   setArefBarrierInsertionPoints(op, initBuilder, cleanupBuilder,
                                 teardownBarriers);
 
-  // Like Gluon's matmul: load-empty barriers are CTA-local, while TMEM-empty
-  // barriers join both CTAs' read releases before the two-CTA MMA reuses TMEM.
+  // TMEM reuse waits for both CTAs' read releases.
   auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(bufferType.getEncoding());
   bool needsPeerReadRelease = tmemEnc && tmemEnc.getTwoCTAs();
   Value emptyMbars =
       createBarrierArray(initBuilder, cleanupBuilder, depth,
                          count.consumerPendingCount, needsPeerReadRelease);
-  // Only mixed readers need an extra, CTA-local producer-completion barrier.
-  // Ordinary readers wait on it; MMA readers join those waits in fullMbars.
+  // Mixed SMEM readers need local completion before the MMA join.
   Value localFullMbars;
   if (isSharedMemory && hasTwoCTAConsumer && hasSynchronousConsumer)
     localFullMbars = createBarrierArray(initBuilder, cleanupBuilder, depth,
                                         count.producerPendingCount,
                                         /*twoCTAs=*/false);
 
-  // Load-ready barriers are two-CTA for MMA inputs; accumulator-ready barriers
-  // are CTA-local so both CTAs wait before reading TMEM.
+  // MMA inputs use two-CTA readiness; accumulator readers wait locally.
   Value fullMbars = createBarrierArray(
       initBuilder, cleanupBuilder, depth,
       localFullMbars ? 1 : count.producerPendingCount, hasTwoCTAConsumer);
@@ -550,7 +542,7 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
       getProducerBarrier(rewriter, loc, arefVal, op.getStage(),
                          getPartitionWsTagIds(op), getStageCluster(op));
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
-  // Only MMA acquisitions join the CTAs; ordinary readers wait locally above.
+  // Join local completions only for MMA readers.
   if (arefVal.localFullMbars && !getAsyncMMAv5Consumers(op).empty()) {
     Value ready =
         createSingleBufferView(rewriter, arefVal.fullMbars, op.getStage());
