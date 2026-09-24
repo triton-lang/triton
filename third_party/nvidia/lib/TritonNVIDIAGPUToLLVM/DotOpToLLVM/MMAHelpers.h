@@ -3,27 +3,26 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Tools/LayoutUtils.h"
 
+#include <bit>
+
 namespace mlir {
 namespace triton {
 namespace NVIDIA {
 
 // The descriptor format is described in the spec:
 // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-shared-memory-layout-matrix-descriptor
-// Unnamed fields are not used
-union SMEMDescriptor {
-  uint64_t descriptor;
-  struct {
-    uint64_t baseAddress : 14;
-    uint64_t : 2;
-    uint64_t leadDimensionBaseOffset : 14;
-    uint64_t : 2;
-    uint64_t strideDimensionBaseOffset : 14;
-    uint64_t : 3;
-    uint64_t matrixBaseOffset : 3;
-    uint64_t leadDimensionAbsoluteMode : 1;
-    uint64_t : 9;
-    uint64_t swizzlingMode : 2;
-  };
+// Reserved fields are named so bit_cast preserves every descriptor bit.
+struct SMEMDescriptor {
+  uint64_t baseAddress : 14;
+  uint64_t reserved0 : 2;
+  uint64_t leadDimensionBaseOffset : 14;
+  uint64_t reserved1 : 2;
+  uint64_t strideDimensionBaseOffset : 14;
+  uint64_t reserved2 : 3;
+  uint64_t matrixBaseOffset : 3;
+  uint64_t leadDimensionAbsoluteMode : 1;
+  uint64_t reserved3 : 9;
+  uint64_t swizzlingMode : 2;
 };
 
 struct MMASMEMDescriptor {
@@ -186,7 +185,7 @@ public:
       currDesc.leadDimensionBaseOffset = 0;
     }
     int32_t smemByteOffsetb128 = smemByteOffsetb8 >> 4;
-    uint64_t descBits = currDesc.descriptor + smemByteOffsetb128;
+    uint64_t descBits = std::bit_cast<uint64_t>(currDesc) + smemByteOffsetb128;
     // Add the base address to the descriptor
     Value low = tb.add(tb.i32_val(uint32_t(descBits)), baseb128);
     Value high = tb.i32_val(descBits >> 32);
@@ -280,8 +279,8 @@ private:
 
     assert(getReps(ll, shmemTileInv).has_value());
 
-    SMEMDescriptor desc;
-    desc.descriptor = mmaVersion == 5 ? 1ULL << 46 : 0ULL;
+    auto desc =
+        std::bit_cast<SMEMDescriptor>(mmaVersion == 5 ? 1ULL << 46 : 0ULL);
     // The lbo / sbo is defined wrt. the 128b elements
     desc.leadDimensionBaseOffset = (lbo * bitwidth / 8) >> 4;
     desc.strideDimensionBaseOffset = (sbo * bitwidth / 8) >> 4;

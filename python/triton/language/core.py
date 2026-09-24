@@ -1039,66 +1039,66 @@ class tensor(base_value):
     # >
     @builtin
     def __gt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_than(self, other)
 
     @builtin
     def __rgt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_than(other, self)
 
     # >=
     @builtin
     def __ge__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_equal(self, other)
 
     @builtin
     def __rge__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_equal(other, self)
 
     # <
     @builtin
     def __lt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_than(self, other)
 
     @builtin
     def __rlt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_than(other, self)
 
     # <=
     @builtin
     def __le__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_equal(self, other)
 
     @builtin
     def __rle__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_equal(other, self)
 
     # ==
     @builtin
     def __eq__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.equal(self, other)
 
     @builtin
     def __req__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.equal(other, self)
 
     @builtin
     def __ne__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.not_equal(self, other)
 
     @builtin
     def __rne__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.not_equal(other, self)
 
     @builtin
@@ -2839,9 +2839,7 @@ def expect_zero(x, mask, _semantic=None):
     if is_enabled(_semantic.builder.options, "fpsan"):
         return _semantic.where(mask, 0, x)
     if _semantic.builder.options.debug:
-        x_tensor = _semantic.to_tensor(x)
-        zero = _semantic.to_tensor(0)
-        cond = _semantic.or_(_semantic.equal(x_tensor, zero), _semantic.not_(mask))
+        cond = _semantic.or_(_semantic.equal(x, 0), _semantic.not_(mask))
         _semantic.device_assert(cond, "expect_zero expected x == 0 where mask is true", None)
     return x
 
@@ -2955,9 +2953,9 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _semantic=N
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    min = _semantic.to_tensor(min)
-    max = _semantic.to_tensor(max)
+    x = _unwrap_if_constexpr(x)
+    min = _unwrap_if_constexpr(min)
+    max = _unwrap_if_constexpr(max)
 
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
 

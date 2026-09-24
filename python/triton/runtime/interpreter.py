@@ -611,6 +611,7 @@ class InterpreterBuilder:
     create_fneg = lambda self, input: self.unary_op(input, np.negative)
     create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_precise_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
+    create_approx_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
     create_sdiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
     create_udiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
     # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.

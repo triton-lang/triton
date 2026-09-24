@@ -1,7 +1,16 @@
 {
-  "llvm_hash": "ce3529423abda3fc4ad0b542daa50af21e539a29",
+  "llvm_hash": "d26ff26ef4e94a4de9ce5228ef5b32b5290cca8f",
   "build_number": 1,
-  "sha256sum": {},
+  "sha256sum": {
+    "almalinux-arm64": "020282346bc2a9f6c0f811096aa015aec64b99348e54516cc08082e99a080672",
+    "almalinux-x64": "4adc31298027f1c644ad619adcb07aec680a3cb8dc3f641a5d5767e5e234da50",
+    "macos-arm64": "b7b8f3eecb4bde2eeafcb9cd961f48feb60ec6e4036b9da1a65cab7993126b16",
+    "macos-x64": "5b29ab95c620752e379fc7141ee9e5b0848d26696a0044008e537661717cdaa4",
+    "ubuntu-arm64": "1e3e3aa4d59a97f40bf7b88cca82b648b0724d9d2f1548cec8e2f9e627fdd89a",
+    "ubuntu-x64": "d2aa7b7e35fbb98cb08b940dd4ed8984988e4dbf06e686c394addb4ac775614a",
+    "windows-arm64": "f80e9014abc641793d661486640eca0022371d9128f46077bc320282b5198f98",
+    "windows-x64": "3ef91e269ba16e61ca6f94ca4da2397624dd762240844dbd8e5926b9cb47db19"
+  },
   "bootstrap_llvm": {
     "build_number": 1,
     "sha256sum": {

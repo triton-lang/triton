@@ -21,7 +21,9 @@ from triton.experimental.gsan._allocator import (
     gsan_free,
     gsan_malloc,
     import_allocation_handles,
+    is_write_once_allocation,
     import_runtime_state_handle,
+    supports_fabric_handles,
 )
 from triton.experimental.gsan._testing_utils import (global_state, shadow_cell_from_address, shadow_tensor_for,
                                                      store_one_i32, thread_state_from_smid)
@@ -235,14 +237,14 @@ def _run_launch_stream_clocks_use_private_pool_check() -> None:
     reset()
 
 
-def _run_export_import_fabric_handles_check(explicit_config: bool) -> None:
+def _run_export_import_fabric_handles_check(explicit_config: bool, write_once: bool) -> None:
     device = torch.cuda.current_device()
     configure(
         device_ranks={device: 0},
         num_devices=2,
         handle_type=ShareableHandleType.FABRIC if explicit_config else None,
     )
-    real_ptr = gsan_malloc(4096, device)
+    real_ptr = gsan_malloc(4096, device, write_once=write_once)
     imported_ptr = 0
     try:
         runtime_handle, runtime_alloc_size = export_runtime_state_handle(
@@ -263,6 +265,7 @@ def _run_export_import_fabric_handles_check(explicit_config: bool) -> None:
         real_handle, shadow_handle, alloc_size = export_allocation_handles(
             real_ptr,
             ShareableHandleType.FABRIC,
+            write_once=write_once,
         )
         assert isinstance(real_handle, bytes)
         assert isinstance(shadow_handle, bytes)
@@ -275,7 +278,9 @@ def _run_export_import_fabric_handles_check(explicit_config: bool) -> None:
             alloc_size,
             device,
             ShareableHandleType.FABRIC,
+            write_once=write_once,
         )
+        assert is_write_once_allocation(imported_ptr) == write_once
         local_real = uint8_cuda_tensor_from_ptr(real_ptr, alloc_size, device)
         imported_real = uint8_cuda_tensor_from_ptr(imported_ptr, alloc_size, device)
         local_shadow = shadow_tensor_for(local_real)
@@ -411,7 +416,7 @@ def test_default_topology_uses_cuda_device_indices():
 
 def test_malloc_free(_direct_allocator):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
-    real_base = reserve_ptr + reserve_size // 2
+    real_base = reserve_ptr + reserve_size // 4
 
     # First valid allocation should come from the real base and be reusable.
     p0 = malloc(1)
@@ -496,12 +501,12 @@ def test_mem_pool():
     assert reserve_ptr != 0
     assert reserve_size > 0
 
-    # Check real allocation is in higher half of reserve
-    real_base = reserve_ptr + reserve_size // 2
+    # Check real allocation is in the higher half of the normal arena
+    real_base = reserve_ptr + reserve_size // 4
     assert real_base <= real.data_ptr() < reserve_ptr + reserve_size
 
     shadow = shadow_tensor_for(real)
-    assert reserve_ptr <= shadow.data_ptr() < reserve_ptr + reserve_size // 2
+    assert reserve_ptr <= shadow.data_ptr() < reserve_ptr + reserve_size // 4
 
     # Test that real and shadow allocation can be used
     real.zero_()
@@ -625,13 +630,91 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
         pytest.param(False, "fabric_handles:True", id="pytorch-config-default"),
     ],
 )
-def test_export_import_fabric_handles(explicit_config, allocator_config):
+@pytest.mark.parametrize("write_once", [False, True])
+def test_export_import_fabric_handles(explicit_config, allocator_config, write_once):
+    if not supports_fabric_handles(torch.cuda.current_device()):
+        pytest.skip("CUDA device does not support fabric handles")
     result = run_in_process(
         _run_export_import_fabric_handles_check,
-        args=(explicit_config, ),
+        args=(explicit_config, write_once),
         env={"PYTORCH_CUDA_ALLOC_CONF": allocator_config},
     )
     if (isinstance(result.exc, RuntimeError) and str(result.exc) == "gsanExportRuntimeStateHandle failed."
             and "operation not permitted" in result.driver_stderr_output.lower()):
         pytest.skip("CUDA fabric handles require an accessible NVIDIA IMEX channel")
     assert result.exc is None
+
+
+@pytest.mark.parametrize("write_once", [False, True])
+def test_allocation_mode_and_shadow_size(write_once):
+    device = torch.cuda.current_device()
+    ptr = gsan_malloc(513, device, write_once=write_once)
+    assert ptr
+    try:
+        assert is_write_once_allocation(ptr) == write_once
+        assert is_write_once_allocation(ptr + 512) == write_once
+        real_ptr, real_size, shadow_ptr, shadow_size = export_allocation_memhandle_regions(ptr + 1)
+        assert real_ptr == ptr
+        assert shadow_size == real_size * (4 if write_once else 6)
+        shadow = uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_size, device)
+        assert torch.count_nonzero(shadow).item() == 0
+        shadow.fill_(5)
+        torch.cuda.synchronize()
+    finally:
+        gsan_free(ptr, device)
+    with pytest.raises(ValueError, match="live GSan allocation"):
+        is_write_once_allocation(ptr)
+    reused = gsan_malloc(513, device, write_once=write_once)
+    try:
+        assert reused == ptr
+        _, _, shadow_ptr, shadow_size = export_allocation_memhandle_regions(reused)
+        shadow = uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_size, device)
+        assert torch.count_nonzero(shadow).item() == 0
+    finally:
+        gsan_free(reused, device)
+
+
+def test_write_once_export_import_preserves_shadow(fresh_knobs):
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    device = torch.cuda.current_device()
+    ptr = gsan_malloc(513, device, write_once=True)
+    imported = 0
+    fds = []
+    try:
+        with pytest.raises(ValueError, match="allocation mode"):
+            export_allocation_handles(ptr, ShareableHandleType.POSIX_FILE_DESCRIPTOR)
+        real_fd, shadow_fd, size = export_allocation_handles(ptr, ShareableHandleType.POSIX_FILE_DESCRIPTOR,
+                                                             write_once=True)
+        fds = [real_fd, shadow_fd]
+        imported = import_allocation_handles(real_fd, shadow_fd, size, device,
+                                             ShareableHandleType.POSIX_FILE_DESCRIPTOR, write_once=True)
+        assert is_write_once_allocation(imported + 1)
+        original = uint8_cuda_tensor_from_ptr(ptr, 513, device)
+        alias = uint8_cuda_tensor_from_ptr(imported, 513, device)
+        store_one_i32[(1, )](original)
+        assert alias[0].item() == 1
+        assert shadow_cell_from_address(imported) == shadow_cell_from_address(ptr)
+        assert shadow_cell_from_address(imported).epoch > 0
+        assert shadow_cell_from_address(imported + 1).epoch == 0
+    finally:
+        for fd in fds:
+            os.close(fd)
+        if imported:
+            free_allocation(imported, device)
+        gsan_free(ptr, device)
+
+
+def _run_write_once_live_allocation_check():
+    device = torch.cuda.current_device()
+    ptr = gsan_malloc(1, device, write_once=True)
+    assert has_live_allocations()
+    with pytest.raises(AssertionError, match="allocations are still live"):
+        reset()
+    gsan_free(ptr, device)
+    assert not has_live_allocations()
+    reset()
+
+
+def test_write_once_live_allocation_blocks_reset():
+    result = run_in_process(_run_write_once_live_allocation_check)
+    assert result.exc is None, result.exc

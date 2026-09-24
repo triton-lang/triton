@@ -1,6 +1,10 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=88" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=93" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=94" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,PTX94 --dump-input-context 20
+// RUN: split-file %s %t
+// RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-tmem-wait-insertion -tritoninstrument-concurrency-sanitizer -gluon-canonicalize -cse --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=CONSAN
+// RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=NO-CONSAN
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv='compute-capability=89 ptx-version=81' --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=89 ptx-version=81' -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefix=SM89
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -3912,6 +3916,62 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // SM89-LABEL: @fp32_to_fp8e5_rtne
+  // SM89-NOT: cvt.rz.f16.f32
+  // SM89: cvt.rn.satfinite.e5m2x2.f32
+  // CHECK-LABEL: @fp32_to_fp8e5_rtne
+  // CHECK-NOT: llvm.fpext
+  // CHECK-NOT: llvm.fcmp
+  // CHECK: llvm.inline_asm
+  // CHECK-SAME: add.u32 x0, $1, 0xffff;
+  // CHECK-SAME: lop3.b32 x0, $1, x0, 0x10000, 0xf8;
+  // CHECK-SAME: cvt.rz.f16x2.f32 h0, x1, x0;
+  // CHECK-SAME: cvt.rz.f16x2.f32 h1, x3, x2;
+  // CHECK-SAME: min.f16x2
+  // CHECK-SAME: prmt.b32 $0, a0, a1, 0x7531;
+  // CHECK-SAME: "=r,r,r,r,r"
+  // CHECK-NOT: llvm.inline_asm
+  // CHECK-NOT: llvm.fpext
+  // CHECK-NOT: llvm.fcmp
+  // CHECK: llvm.return
+  tt.func private @fp32_to_fp8e5_rtne(%in: tensor<128xf32, #blocked>) -> tensor<128xf8E5M2, #blocked> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xf32, #blocked> -> tensor<128xf8E5M2, #blocked>
+    tt.return %out : tensor<128xf8E5M2, #blocked>
+  }
+
+  // CHECK-LABEL: @fp16_to_fp8e5_rtne
+  // CHECK-NOT: llvm.fpext
+  // CHECK: llvm.inline_asm
+  // CHECK-SAME: set.nan.f16x2.f16x2 n0, a0, a0;
+  // CHECK-SAME: mov.b32 maxval, 0x7b007b00;
+  // CHECK-SAME: min.f16x2 a0, a0, maxval;
+  // CHECK-SAME: and.b32 t0, t0, 0x00010001;
+  // CHECK-SAME: add.u32 a0, a0, 0x007f007f;
+  // CHECK-SAME: add.u32 a0, a0, t0;
+  // CHECK-SAME: prmt.b32 $0, a0, a1, 0x7531;
+  // CHECK-SAME: "=r,r,r"
+  // CHECK: llvm.return
+  tt.func private @fp16_to_fp8e5_rtne(%in: tensor<128xf16, #blocked>) -> tensor<128xf8E5M2, #blocked> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xf16, #blocked> -> tensor<128xf8E5M2, #blocked>
+    tt.return %out : tensor<128xf8E5M2, #blocked>
+  }
+
+  // CHECK-LABEL: @bf16_to_fp8e5_rtne
+  // CHECK: llvm.fpext
+  // CHECK: cvt.rn.f16.f32
+  // CHECK: llvm.inline_asm {{.*}}min.f16x2
+  // CHECK-SAME: prmt.b32 $0, a0, a1, 0x7531;
+  // CHECK: llvm.return
+  tt.func private @bf16_to_fp8e5_rtne(%in: tensor<128xbf16, #blocked>) -> tensor<128xf8E5M2, #blocked> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xbf16, #blocked> -> tensor<128xf8E5M2, #blocked>
+    tt.return %out : tensor<128xf8E5M2, #blocked>
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @bf16_to_fp16_fallback
   // CHECK: llvm.fpext {{.*}} : bf16 to f32
@@ -3965,6 +4025,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     ttg.local_scatter %alloc[%indices], %gathered {axis = 0 : i32} : !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<256xi32, #blocked>, tensor<256x!tt.ptr<i32>, #blocked>
     %sum = arith.addi %values, %other : tensor<256xi32, #blocked>
     tt.store %out, %sum : tensor<256x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+//--- masked-store-barrier.mlir
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+  // CONSAN-LABEL: @consan_masked_store_barrier
+  // NO-CONSAN-LABEL: @consan_masked_store_barrier
+  tt.func public @consan_masked_store_barrier(%masked: !tt.ptr<i32>, %unmasked: !tt.ptr<i32>, %value: i32, %mask: i1, %branch: i1) {
+    cf.cond_br %branch, ^masked_store, ^join
+  ^masked_store:
+    // CONSAN: st.global.b32{{.*}}, %arg0,
+    // CONSAN-NEXT: nvvm.barrier
+    // CONSAN-NEXT: llvm.br
+    // NO-CONSAN-NOT: nvvm.barrier
+    // NO-CONSAN: st.global.b32{{.*}}, %arg0,
+    // NO-CONSAN-NEXT: llvm.br
+    tt.store %masked, %value, %mask : !tt.ptr<i32>
+    cf.br ^join
+  ^join:
+    // CONSAN: st.global.b32{{.*}}, %arg1,
+    // CONSAN-NOT: nvvm.barrier
+    // CONSAN: llvm.return
+    // NO-CONSAN-NOT: nvvm.barrier
+    // NO-CONSAN: st.global.b32{{.*}}, %arg1,
+    // NO-CONSAN-NOT: nvvm.barrier
+    // NO-CONSAN: llvm.return
+    tt.store %unmasked, %value : !tt.ptr<i32>
     tt.return
   }
 }
