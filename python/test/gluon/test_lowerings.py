@@ -223,6 +223,16 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device):
 @pytest.mark.parametrize("layout, M", [
     (ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 512),
     (ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 512),
+    # Long grouped carries with at most 64 unique register prefixes.
+    (ttgl.BlockedLayout([1, 1], [2, THREADS_PER_WARP // 2], [4, 1], [1, 0]), 256),
+    # Permute both register order and the warp bits within each group.
+    (ttgl.DistributedLinearLayout([[32, 0], [0, 1], [8, 0], [128, 0], [16, 0], [64, 0]],
+                                  [[0, 2], [0, 4], [0, 8], [0, 16], [1, 0]] + [[0, 0]] *
+                                  (THREADS_PER_WARP.bit_length() - 6), [[4, 0], [2, 0]], [], [256, 32]), 256),
+    # Grouped carries also support redundant register and warp owners.
+    (ttgl.DistributedLinearLayout([[16, 0], [0, 16], [64, 0], [4, 0], [8, 0], [32, 0], [0, 0]],
+                                  [[0, 1], [0, 2], [0, 4], [0, 8], [2, 0]] + [[0, 0]] *
+                                  (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [0, 0]], [], [128, 32]), 128),
     # The high lane bit keeps register-group carries live across batches.
     (ttgl.DistributedLinearLayout([[16, 0], [0, 1], [2, 0], [8, 0], [0, 2]],
                                   [[64, 0], [0, 4], [4, 0], [0, 8], [0, 16]] + [[0, 0]] *
