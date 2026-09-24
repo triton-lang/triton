@@ -298,7 +298,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %31 = arith.cmpi sgt, %30, %c0_i32 : i32
 
     %51 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %52 = tt.expand_dims %51 {axis = 1 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #blocked>
+    %52 = tt.reshape %51 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #blocked>
     %65 = tt.splat %arg3 : i32 -> tensor<4x1xi32, #blocked>
     %66 = arith.cmpi slt, %52, %65 : tensor<4x1xi32, #blocked>
     %67 = tt.broadcast %66 : tensor<4x1xi1, #blocked> -> tensor<4x32xi1, #blocked>

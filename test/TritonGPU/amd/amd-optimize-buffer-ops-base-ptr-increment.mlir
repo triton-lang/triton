@@ -350,7 +350,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       ) attributes {noinline = false} {
     %Xstep = arith.constant dense<64> : tensor<16x64xi32, #blocked>
     %Ystep_slice = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %Ystep_2d = tt.expand_dims %Ystep_slice {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
+    %Ystep_2d = tt.reshape %Ystep_slice : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
     %Ystep = tt.broadcast %Ystep_2d : tensor<1x32xi32, #blocked> -> tensor<64x32xi32, #blocked>
     %Zstep = arith.constant dense<256> : tensor<32x32xi32, #blocked>
     %iter_first = arith.constant 0 : index
