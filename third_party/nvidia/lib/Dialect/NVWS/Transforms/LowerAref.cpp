@@ -295,7 +295,7 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
                    DenseMap<Block *, ClusterBarrierOp> &teardownBarriers) {
   // Barrier roles: empty = safe to reuse; full = ready to consume.
   // Local barriers wait in each CTA; two-CTA barriers combine arrivals and
-  // wait in the leader CTA.
+  // wait in the leader CTA. 
   //
   // clang-format off
   // Buffer -> consumers                 emptyMbars  mixedConsumerMbars fullMbars
@@ -305,9 +305,6 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
   // Two-CTA TMEM -> ordinary reads       two-CTA     absent             local
   // Two-CTA TMEM -> two-CTA MMA only      two-CTA     absent             two-CTA
   // clang-format on
-  //
-  // Mixed SMEM readers wait on mixedConsumerMbars; MMA readers then signal
-  // and wait on fullMbars to join both CTAs' producer completions.
   auto bufferType = cast<MemDescType>(op.getType().getBaseType().front());
   int depth = getArefDepth(bufferType);
   BarrierCount count = getArrivalCount(op);
