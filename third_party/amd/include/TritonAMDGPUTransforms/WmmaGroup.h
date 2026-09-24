@@ -19,9 +19,11 @@ struct WmmaIntrinsic {
                                       Type bElemType, Type dElemType);
 
   WmmaIntrinsic(StringRef symbol, unsigned m, unsigned n, unsigned k,
-                unsigned kB, Type aET, Type bET, Type dET)
+                unsigned kB, Type aET, Type bET, Type dET,
+                bool requiresN16Insts = false)
       : name(symbol), mDim(m), nDim(n), kDim(k), kBase(kB), aElementType(aET),
-        bElementType(bET), dElementType(dET) {}
+        bElementType(bET), dElementType(dET),
+        requiresN16Insts(requiresN16Insts) {}
   WmmaIntrinsic(const WmmaIntrinsic &other) = default;
   WmmaIntrinsic(WmmaIntrinsic &&other) = default;
   WmmaIntrinsic() = default;
@@ -42,6 +44,8 @@ struct WmmaIntrinsic {
   Type aElementType;
   Type bElementType;
   Type dElementType;
+
+  bool requiresN16Insts = false;
 };
 
 struct WmmaScaleIntrinsic {
@@ -52,9 +56,10 @@ struct WmmaScaleIntrinsic {
                                            bool isScale16, bool isTransposed);
 
   WmmaScaleIntrinsic(StringRef symbol, unsigned m, unsigned n, unsigned kDim,
-                     unsigned kBaseAVal, unsigned kBaseBVal, Type dET)
+                     unsigned kBaseAVal, unsigned kBaseBVal, Type dET,
+                     bool requiresN16Insts = false)
       : name(symbol), mDim(m), nDim(n), kDim(kDim), kBaseA(kBaseAVal),
-        kBaseB(kBaseBVal), dElemType(dET) {}
+        kBaseB(kBaseBVal), dElemType(dET), requiresN16Insts(requiresN16Insts) {}
   WmmaScaleIntrinsic(const WmmaScaleIntrinsic &other) = default;
   WmmaScaleIntrinsic(WmmaScaleIntrinsic &&other) = default;
   WmmaScaleIntrinsic() = default;
@@ -70,6 +75,8 @@ struct WmmaScaleIntrinsic {
   unsigned kBaseA;
   unsigned kBaseB;
   Type dElemType;
+
+  bool requiresN16Insts = false;
 };
 } // namespace mlir
 

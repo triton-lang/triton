@@ -342,44 +342,8 @@ bool TargetFeatures::supportsCvtPkScalePk8Block16() const {
   return supportsCvtPkScalePk8() && !isGFX1250Strict();
 }
 
-bool TargetFeatures::supportsGfx1250Wmma(StringRef intrinsicName) const {
-  // unsupported on strict hardware
-  static constexpr StringRef kStrictDisabledWmma[] = {
-      "llvm.amdgcn.wmma.f16.16x16x128.bf8.bf8",
-      "llvm.amdgcn.wmma.f16.16x16x128.bf8.fp8",
-      "llvm.amdgcn.wmma.f16.16x16x128.fp8.bf8",
-      "llvm.amdgcn.wmma.f16.16x16x128.fp8.fp8",
-      "llvm.amdgcn.wmma.f32.16x16x128.bf8.bf8",
-      "llvm.amdgcn.wmma.f32.16x16x128.bf8.fp8",
-      "llvm.amdgcn.wmma.f32.16x16x128.fp8.bf8",
-      "llvm.amdgcn.wmma.f32.16x16x128.fp8.fp8",
-      "llvm.amdgcn.wmma.f32.32x16x128.f4",
-      "llvm.amdgcn.wmma.scale16.f32.32x16x128.f4",
-      "llvm.amdgcn.wmma.scale16.f32.16x16x128.f8f6f4",
-      // Instructions unsupported in LLVM
-      "llvm.amdgcn.wmma.f32.16x16x32.bf16",
-      "llvm.amdgcn.wmma.bf16.16x16x32.bf16",
-      "llvm.amdgcn.wmma.bf16f32.16x16x32.bf16",
-      "llvm.amdgcn.wmma.f32.16x16x64.fp8.fp8",
-      "llvm.amdgcn.wmma.f32.16x16x64.fp8.bf8",
-      "llvm.amdgcn.wmma.f32.16x16x64.bf8.fp8",
-      "llvm.amdgcn.wmma.f32.16x16x64.bf8.bf8",
-      "llvm.amdgcn.wmma.f16.16x16x64.fp8.fp8",
-      "llvm.amdgcn.wmma.f16.16x16x64.fp8.bf8",
-      "llvm.amdgcn.wmma.f16.16x16x64.bf8.fp8",
-      "llvm.amdgcn.wmma.f16.16x16x64.bf8.bf8",
-      "llvm.amdgcn.wmma.i32.16x16x64.iu8",
-      "llvm.amdgcn.wmma.f32.16x16x32.f16",
-      "llvm.amdgcn.wmma.f16.16x16x32.f16",
-      "llvm.amdgcn.wmma.f32.16x16x128.f8f6f4",
-      "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4",
-      "llvm.amdgcn.wmma.scale.f32.32x16x128.f4",
-  };
-  if (!isGFX1250())
-    return false;
-  if (isGFX1250Strict())
-    return !llvm::is_contained(kStrictDisabledWmma, intrinsicName);
-  return true;
+bool TargetFeatures::supportsWmmaN16Insts() const {
+  return isGFX1250() && !isGFX1250Strict();
 }
 
 bool TargetFeatures::supportsHwScaledUpcast() const {
