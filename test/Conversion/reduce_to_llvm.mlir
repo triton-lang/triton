@@ -83,7 +83,9 @@ tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<32x16xi32, #linear>) {
 // TERNARY: %[[PRINT_MAX_B:.*]] = llvm.intr.smax(%{{.*}}, %[[PRINT_MAX_A]]) : (i32, i32) -> i32
 // TERNARY: llvm.call @vprintf
 // TERNARY: %[[PRINT_MAX_C:.*]] = llvm.intr.smax(%{{.*}}, %[[PRINT_MAX_B]]) : (i32, i32) -> i32
-// TERNARY: llvm.store volatile %[[PRINT_MAX_C]],
+// TERNARY: %[[PRINT_MAX_PACKED:.*]] = llvm.insertvalue %[[PRINT_MAX_C]], %{{.*}}[0] : !llvm.struct<(i32)>
+// TERNARY: %[[PRINT_MAX_RESULT:.*]] = llvm.extractvalue %[[PRINT_MAX_PACKED]][0] : !llvm.struct<(i32)>
+// TERNARY: llvm.store volatile %[[PRINT_MAX_RESULT]],
 tt.func public @reduce_maximum_with_print(%ptr: !llvm.ptr, %arg0: tensor<128x4xi32, #blocked_reduce>) {
   %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
   ^bb0(%a: i32, %b: i32):
@@ -91,8 +93,9 @@ tt.func public @reduce_maximum_with_print(%ptr: !llvm.ptr, %arg0: tensor<128x4xi
     %maximum = arith.maxsi %b, %a : i32
     tt.reduce.return %maximum : i32
   }) : (tensor<128x4xi32, #blocked_reduce>) -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
-  %1 = builtin.unrealized_conversion_cast %0 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>> to i32
-  llvm.store volatile %1, %ptr : i32, !llvm.ptr
+  %1 = builtin.unrealized_conversion_cast %0 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>> to !llvm.struct<(i32)>
+  %2 = llvm.extractvalue %1[0] : !llvm.struct<(i32)>
+  llvm.store volatile %2, %ptr : i32, !llvm.ptr
   tt.return
 }
 
