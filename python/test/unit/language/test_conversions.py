@@ -12,6 +12,72 @@ from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3
 FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
 
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("shape", [(256,), (16, 32)])
+def test_bfloat16_to_fp4_all_encodings(frontend, shape, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] not in (10, 11, 12):
+        pytest.skip("packed BF16 to FP4 conversion requires Blackwell")
+    from triton.language.extra.cuda import convert_bfloat16_to_fp4
+    from triton.experimental import gluon
+    from triton.experimental.gluon import language as gl
+
+    @triton.jit
+    def triton_kernel(X, Y, SHAPE: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        x = tl.load(X + offsets).reshape(SHAPE)
+        y = convert_bfloat16_to_fp4(x).reshape((BLOCK // 2,))
+        tl.store(Y + tl.program_id(0) * (BLOCK // 2) + tl.arange(0, BLOCK // 2), y)
+
+    @gluon.jit
+    def gluon_kernel(X, Y, SHAPE: gl.constexpr, BLOCK: gl.constexpr):
+        offsets = gl.program_id(0) * BLOCK + gl.arange(0, BLOCK, layout=gl.BlockedLayout([2], [32], [4], [0]))
+        x = gl.load(X + offsets).reshape(SHAPE)
+        y = convert_bfloat16_to_fp4(x).reshape((BLOCK // 2,))
+        out_offsets = gl.arange(0, BLOCK // 2, layout=y.type.layout)
+        gl.store(Y + gl.program_id(0) * (BLOCK // 2) + out_offsets, y)
+
+    # Exercise every BF16 bit pattern in both nibble positions, with distinct partners.
+    bits = torch.arange(65536, dtype=torch.int32, device=device)
+    x = torch.stack((bits, bits ^ 0x8001), dim=1).to(torch.uint16).view(torch.bfloat16).flatten()
+    y = torch.empty(x.numel() // 2, dtype=torch.uint8, device=device)
+    block = int(np.prod(shape))
+    kernel = triton_kernel if frontend == "triton" else gluon_kernel
+    compiled = kernel[(x.numel() // block,)](x, y, shape, block, enable_fp_fusion=False)
+
+    values = x.float()
+    levels = torch.tensor([0., .5, 1., 1.5, 2., 3., 4., 6.], device=device)
+    # Prefer even encodings at halfway points, independently of the PTX conversion.
+    tie_order = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7], device=device)
+    distance = (values.abs().clamp(max=6)[:, None] - levels[tie_order]).abs()
+    expected = tie_order[distance.argmin(-1)].to(torch.uint8)
+    expected |= torch.signbit(values).to(torch.uint8) << 3
+    expected = torch.where(values.isnan(), 7, expected)
+    expected = expected[::2] | (expected[1::2] << 4)
+    torch.testing.assert_close(y, expected, rtol=0, atol=0)
+    assert "cvt.rn.satfinite.e2m1x2.bf16x2" in compiled.asm["ptx"]
+    assert "cvt.rn.satfinite.e2m1x2.f32" not in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize("dtype,shape,message", [
+    ("float32", (2,), "requires bfloat16 input"),
+    ("float16", (2,), "requires bfloat16 input"),
+    ("int16", (2,), "requires bfloat16 input"),
+    ("bfloat16", (1,), "requires an even-sized last dimension"),
+    ("bfloat16", (), "requires an even-sized last dimension"),
+])
+def test_bfloat16_to_fp4_invalid_input(dtype, shape, message):
+    if not is_cuda():
+        pytest.skip("requires CUDA")
+    from triton.language.extra.cuda import convert_bfloat16_to_fp4
+
+    @triton.jit
+    def kernel(DTYPE: tl.constexpr, SHAPE: tl.constexpr):
+        convert_bfloat16_to_fp4(tl.full(SHAPE, 0, DTYPE))
+
+    with pytest.raises(triton.CompilationError, match=message):
+        kernel[(1,)](getattr(tl, dtype), shape)
+
+
 def matching_int(dtype):
     if dtype.primitive_bitwidth == 8:
         return torch.int8

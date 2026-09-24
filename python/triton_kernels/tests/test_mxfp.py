@@ -287,30 +287,6 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
     assert_equal(weight, dequant)
 
 
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
-@pytest.mark.parametrize("axis", [0, -1])
-@pytest.mark.parametrize("layout", ["contiguous", "pitched", "strided"])
-def test_nvfp4_downcast_wide_rows(dtype, axis, layout, device):
-    if not cuda_capability_geq(10, 0):
-        pytest.skip("NVFP4 requires Blackwell or newer")
-    torch.manual_seed(0)
-    # Both dimensions have tails; the input is large enough to use wide row tiles.
-    rows, cols = 257, 4112
-    stride = 2 if layout == "strided" else 1
-    pitch = cols * stride + (16 if layout == "pitched" else 0)
-    x = torch.empty_strided((rows, cols), (pitch, stride), dtype=dtype, device=device)
-    x.copy_(torch.randn((rows, cols), dtype=dtype, device=device))
-    x[0].fill_(0.0)
-    x[1].fill_(-0.0)
-    if axis == 0:
-        x = x.T
-    quant, scale = downcast_to_mxfp(x, torch.uint8, axis, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value)
-    expected_quant, expected_scale = downcast_to_mxfp_torch(x, torch.uint8, axis, torch.float8_e4m3fn,
-                                                            NVFP_BLOCK_SIZE.value)
-    assert_equal(quant, expected_quant)
-    assert_equal(scale, expected_scale)
-
-
 def test_downcast_to_mxfp_accepts_pitched_strided_input(device):
     torch.manual_seed(0)
     dense = torch.randn((64, 128), device=device, dtype=torch.bfloat16)

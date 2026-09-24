@@ -12,7 +12,6 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 from triton_kernels.tensor import Tensor, wrap_torch_tensor, empty
 from triton_kernels.tensor_details.layout import StridedLayout
 from triton_kernels.tensor_details.dtype import FP4, FP8_E4M3FN, FP8_E5M2, UINT8
-from triton_kernels.target_info import cuda_capability_geq
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
 # -----------------------------------------------------------------------------
@@ -77,13 +76,6 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
         BLOCK_OUT_DIM = 32
         BLOCK_QUANT_DIM = microblock_size * 4
         NUM_WARPS = 4 if x.dtype == torch.float32 else 8
-        if (scale_dtype == torch.float8_e4m3fn and microblock_size == NVFP_BLOCK_SIZE.value
-                and cuda_capability_geq(10, 0) and x_storage.stride(1) == 1
-                and L >= 1024 and x_storage.numel() >= 2**20):
-            # Wide row tiles improve memory access once there is enough work to fill the GPU.
-            BLOCK_OUT_DIM = 1
-            BLOCK_QUANT_DIM = min(2048, triton.next_power_of_2(L))
-            NUM_WARPS = 4
         # launch kernel
         blocks_out_dim = triton.cdiv(x_storage.shape[0], BLOCK_OUT_DIM)
         blocks_quant_dim = triton.cdiv(x_storage.shape[1], BLOCK_QUANT_DIM)
