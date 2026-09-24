@@ -249,50 +249,71 @@ private:
     Value notFirst =
         b.icmp_ne(threadSegment, b.i32_val(reverse ? threadMask : 0));
 
-    // Every thread reads the ordered segment totals for its parallel scan.
-    // Select its exclusive carry while accumulating, then consume that carry
-    // as soon as the last possible segment for a register group is reached.
-    // This keeps only one carry live for ordinary blocked layouts, but also
-    // handles register/lane/warp axis bits interleaved in any order.
-    for (unsigned base = 0; base < values.size(); base += axisRegs) {
-      Value parallelOffset = getScratchOffset(loc, rewriter, scratch, base,
-                                              parallelLane, parallelWarp);
+    // Interleave independent parallel scans so their shared loads and carry
+    // chains can overlap. Each scan still accumulates segments in logical
+    // order and consumes a carry as soon as its register group is complete.
+    struct ParallelScan {
+      Value parallelOffset;
       SmallVector<Value> acc;
       DenseMap<unsigned, SmallVector<Value>> carries;
-      for (unsigned step = 1; step < numSegments; ++step) {
-        unsigned previous = reverse ? numSegments - step : step - 1;
-        unsigned current = reverse ? previous - 1 : step;
-        Value index = b.add(parallelOffset, b.i32_val(previous * numParallel));
-        SmallVector<Value> total;
-        for (unsigned i = 0; i < numOperands; ++i) {
-          Value ptr =
-              b.gep(smemBases[i].getType(), smemTypes[i], smemBases[i], index);
-          total.push_back(targetInfo.loadShared(rewriter, loc, ptr,
-                                                smemTypes[i], b.true_val()));
-        }
-        acc = applyCombineOp(loc, rewriter, op.getCombineOp(), acc, total);
-        unsigned regSegment = current & regSegmentMask;
-        unsigned reg = segmentToReg.lookup(regSegment);
-        auto &carry = carries[reg];
-        if (carry.empty()) {
-          carry = acc;
-        } else {
+    };
+    SmallVector<ParallelScan> parallelScans(values.size() / axisRegs);
+    for (auto [parallel, state] : llvm::enumerate(parallelScans))
+      state.parallelOffset =
+          getScratchOffset(loc, rewriter, scratch, parallel * axisRegs,
+                           parallelLane, parallelWarp);
+
+    // A register group spans the low segment bits owned by lanes/warps.
+    // Keep short scans together: interleaving small batches can hurt backend
+    // scheduling and register pressure. For longer scans, expose independent
+    // carry chains in batches of at least 64 segments, without splitting a
+    // contiguous register group.
+    unsigned segmentsPerGroup =
+        regSegmentMask ? 1u << llvm::countr_zero(regSegmentMask) : numSegments;
+    unsigned segmentsPerBatch =
+        std::min(numSegments, std::max(64u, segmentsPerGroup));
+    for (unsigned first = 0; first < numSegments; first += segmentsPerBatch) {
+      for (auto [parallel, state] : llvm::enumerate(parallelScans)) {
+        for (unsigned step = std::max(1u, first);
+             step < first + segmentsPerBatch; ++step) {
+          unsigned previous = reverse ? numSegments - step : step - 1;
+          unsigned current = reverse ? previous - 1 : step;
+          unsigned regSegment = current & regSegmentMask;
+          unsigned reg = segmentToReg.lookup(regSegment);
+          unsigned base = parallel * axisRegs;
+          Value index =
+              b.add(state.parallelOffset, b.i32_val(previous * numParallel));
+          SmallVector<Value> total;
+          for (unsigned i = 0; i < numOperands; ++i) {
+            Value ptr = b.gep(smemBases[i].getType(), smemTypes[i],
+                              smemBases[i], index);
+            total.push_back(targetInfo.loadShared(rewriter, loc, ptr,
+                                                  smemTypes[i], b.true_val()));
+          }
+          state.acc = applyCombineOp(loc, rewriter, op.getCombineOp(),
+                                     state.acc, total);
+          auto &carry = state.carries[reg];
+          if (carry.empty()) {
+            carry = state.acc;
+          } else {
+            Value pred =
+                b.icmp_eq(threadSegment, b.i32_val(current & threadMask));
+            for (unsigned i = 0; i < numOperands; ++i)
+              carry[i] = b.select(pred, state.acc[i], carry[i]);
+          }
+          unsigned last = reverse ? regSegment : regSegment | threadMask;
+          if (current != last)
+            continue;
           Value pred =
-              b.icmp_eq(threadSegment, b.i32_val(current & threadMask));
-          for (unsigned i = 0; i < numOperands; ++i)
-            carry[i] = b.select(pred, acc[i], carry[i]);
+              regSegment == (reverse ? regSegmentMask : 0) ? notFirst : Value{};
+          for (unsigned r = base + reg; r < base + reg + segmentRegs; ++r)
+            values[r] = combineWithPrefix(op, carry, values[r], rewriter, pred);
+          state.carries.erase(reg);
         }
-        unsigned last = reverse ? regSegment : regSegment | threadMask;
-        if (current != last)
-          continue;
-        Value pred =
-            regSegment == (reverse ? regSegmentMask : 0) ? notFirst : Value{};
-        for (unsigned r = base + reg; r < base + reg + segmentRegs; ++r)
-          values[r] = combineWithPrefix(op, carry, values[r], rewriter, pred);
-        carries.erase(reg);
       }
-      assert(carries.empty() && "all carries must be consumed");
     }
+    for (const auto &state : parallelScans)
+      assert(state.carries.empty() && "all carries must be consumed");
   }
 
   // Only the terminal element of each segment writes its total. When the
