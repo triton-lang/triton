@@ -159,6 +159,8 @@ struct PTXBuilder {
 
   // Create a constant integer operand.
   Operand *newConstantOperand(int64_t v);
+  // Create a finite f32 operand with shortest round-tripping decimal syntax.
+  Operand *newFloatConstantOperand(float v);
   // Create a constant operand with explicit code specified.
   Operand *newConstantOperand(const std::string &v);
 

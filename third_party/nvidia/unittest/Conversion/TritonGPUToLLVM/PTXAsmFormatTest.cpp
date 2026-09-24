@@ -5,6 +5,10 @@
 #include "llvm/Support/Signals.h"
 
 #include <gtest/gtest.h>
+#include <bit>
+#include <charconv>
+#include <cmath>
+#include <limits>
 
 namespace mlir {
 namespace triton {
@@ -55,6 +59,31 @@ TEST_F(PTXAsmFormatTest, basic) {
 
   auto constraints = builder.getConstraints();
   ASSERT_EQ(constraints, "=r,b"); // $0 -> =r, $1 -> b
+}
+
+TEST_F(PTXAsmFormatTest, floatConstants) {
+  PTXBuilder builder;
+  EXPECT_EQ(builder.newFloatConstantOperand(1.0f)->dump(), "1.0");
+  EXPECT_EQ(builder.newFloatConstantOperand(2.0f)->dump(), "2.0");
+  EXPECT_EQ(builder.newFloatConstantOperand(-2.0f)->dump(), "-2.0");
+  EXPECT_EQ(builder.newFloatConstantOperand(0.0f)->dump(), "0.0");
+  EXPECT_EQ(builder.newFloatConstantOperand(-0.0f)->dump(), "-0.0");
+  EXPECT_EQ(builder.newFloatConstantOperand(0.1f)->dump(), "0.1");
+  EXPECT_EQ(builder.newFloatConstantOperand(0.33f)->dump(), "0.33");
+
+  for (float value : {std::numeric_limits<float>::denorm_min(),
+                      std::numeric_limits<float>::min(),
+                      std::numeric_limits<float>::max(),
+                      std::nextafter(1.0f, 0.0f),
+                      std::nextafter(1.0f, 2.0f), -1e-30f, 1e30f}) {
+    auto text = builder.newFloatConstantOperand(value)->dump();
+    EXPECT_NE(text.find_first_of(".eE"), std::string::npos);
+    float parsed;
+    auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+    ASSERT_EQ(result.ec, std::errc{});
+    EXPECT_EQ(result.ptr, text.data() + text.size());
+    EXPECT_EQ(std::bit_cast<uint32_t>(parsed), std::bit_cast<uint32_t>(value));
+  }
 }
 
 TEST_F(PTXAsmFormatTest, complexInstruction) {

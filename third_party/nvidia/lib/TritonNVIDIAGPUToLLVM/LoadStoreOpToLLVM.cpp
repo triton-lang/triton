@@ -23,7 +23,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/APInt.h"
-#include "llvm/ADT/SmallString.h"
 
 #include <cassert>
 
@@ -99,13 +98,8 @@ FailureOr<Value> createCachePolicy(CachePolicy cachePolicy,
     const std::string writeConstraint = "=l";
     // prepare asm operands
     auto *dstOpr = ptxBuilder.newOperand(writeConstraint, /*init=*/true);
-    SmallString<16> fractionBuffer;
-    if (fraction)
-      fraction.getValue().toString(fractionBuffer);
-    else
-      fractionBuffer = "1.0";
-    std::string fractionStr = fractionBuffer.str().str();
-    auto *fractionOpr = ptxBuilder.newConstantOperand(fractionStr);
+    float fractionValue = fraction ? fraction.getValue().convertToFloat() : 1.0f;
+    auto *fractionOpr = ptxBuilder.newFloatConstantOperand(fractionValue);
     policy(dstOpr, fractionOpr);
 
     Type policyRetTy = rewriter.getI64Type();

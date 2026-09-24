@@ -3,6 +3,8 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "llvm/Support/raw_ostream.h"
+#include <charconv>
+#include <cmath>
 // TODO(Superjomn): unify to llvm::raw_string_ostream
 #include <sstream>
 
@@ -68,6 +70,18 @@ PTXBuilder::Operand *PTXBuilder::newConstantOperand(int64_t v) {
   std::stringstream ss;
   ss << "0x" << std::hex << v;
   return newConstantOperand(ss.str());
+}
+
+PTXBuilder::Operand *PTXBuilder::newFloatConstantOperand(float v) {
+  assert(std::isfinite(v));
+  char buffer[64];
+  auto [end, error] = std::to_chars(std::begin(buffer), std::end(buffer), v);
+  assert(error == std::errc{});
+  std::string text(buffer, end);
+  // PTX must parse integral-valued floats as floating-point operands.
+  if (text.find_first_of(".eE") == std::string::npos)
+    text += ".0";
+  return newConstantOperand(text);
 }
 
 std::string PTXBuilder::getConstraints() const {
