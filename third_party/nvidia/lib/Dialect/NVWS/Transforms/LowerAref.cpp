@@ -309,8 +309,10 @@ Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
   return barrierAlloc;
 }
 
-ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
-                            const DenseSet<MMAv5OpInterface> &mmav5Ops) {
+ArefValue
+createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
+                  const DenseSet<MMAv5OpInterface> &mmav5Ops,
+                  DenseMap<Block *, ClusterBarrierOp> &teardownBarriers) {
   BarrierCount count = getArrivalCount(op, mmav5Ops);
 
   auto arefTy = op.getType();
@@ -331,6 +333,15 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter,
     auto func = op->getParentOfType<triton::FuncOp>();
     b1.setInsertionPointToStart(&func.getBody().front());
     b2.setInsertionPoint(func.getBody().front().getTerminator());
+  }
+  if (nvidia_gpu::getModuleTwoCTAs(op)) {
+    // A warp-specialization join is CTA-local. Wait for the peer CTA's final
+    // releases before invalidating any aref barriers at this lifetime boundary.
+    // Arefs ending in the same block share one rendezvous and teardown group.
+    auto &barrier = teardownBarriers[b2.getBlock()];
+    if (!barrier)
+      barrier = ClusterBarrierOp::create(b2, /*relaxed=*/false);
+    b2.setInsertionPointAfter(barrier);
   }
   auto tmemEnc =
       dyn_cast<TensorMemoryEncodingAttr>(arefBufTypes[0].getEncoding());
@@ -735,8 +746,10 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
 
 class LowerArefCreate : public OpRewritePattern<ArefCreateOp> {
 public:
-  LowerArefCreate(MLIRContext *ctx, unsigned defaultNumStages)
-      : OpRewritePattern(ctx), defaultNumStages(defaultNumStages) {}
+  LowerArefCreate(MLIRContext *ctx, unsigned defaultNumStages,
+                  DenseMap<Block *, ClusterBarrierOp> &teardownBarriers)
+      : OpRewritePattern(ctx), defaultNumStages(defaultNumStages),
+        teardownBarriers(teardownBarriers) {}
 
   LogicalResult matchAndRewrite(ArefCreateOp op,
                                 PatternRewriter &rewriter) const override {
@@ -748,7 +761,7 @@ public:
     // consumer mmav5 ops requires the corresponding get enter op to be still
     // used in the IR, collect them here.
     auto mmav5Ops = getAsyncMMAv5Consumers(op.getResult());
-    auto aref = createAndInitMbar(op, rewriter, mmav5Ops);
+    auto aref = createAndInitMbar(op, rewriter, mmav5Ops, teardownBarriers);
 
     for (auto userOp : op->getUsers()) {
       opToDelete.insert(userOp);
@@ -785,6 +798,7 @@ public:
 
 private:
   unsigned defaultNumStages;
+  DenseMap<Block *, ClusterBarrierOp> &teardownBarriers;
 };
 
 bool isProducerLoad(ArefCreateOp arefOp) {
@@ -1087,29 +1101,14 @@ public:
     if (failed(runPipeline(pm, m)))
       return signalPassFailure();
 
-    bool loweredArefs = false;
-    m.walk([&](ArefCreateOp) { loweredArefs = true; });
+    DenseMap<Block *, ClusterBarrierOp> teardownBarriers;
     mlir::RewritePatternSet patterns(context);
-    patterns.add<LowerArefCreate>(context, numStages);
+    patterns.add<LowerArefCreate>(context, numStages, teardownBarriers);
     GreedyRewriteConfig config;
     config.enableConstantCSE(false);
     config.enableFolding(false);
     if (applyPatternsGreedily(m, std::move(patterns), config).failed())
       signalPassFailure();
-
-    if (loweredArefs && nvidia_gpu::getModuleTwoCTAs(m)) {
-      m.walk([&](triton::FuncOp func) {
-        // A warp-specialization join is CTA-local. Before destroying the
-        // aref barriers, also wait for the peer CTA's final read releases.
-        for (Operation &op : func.getBody().front()) {
-          if (isa<InvalBarrierOp>(op)) {
-            OpBuilder builder(&op);
-            ClusterBarrierOp::create(builder, op.getLoc(), /*relaxed=*/false);
-            break;
-          }
-        }
-      });
-    }
 
     // Hoist all poison ops to the top of function from nvws.wg regions.
     // They are unannotated and will trip subsequent passes, same to hoist.

@@ -714,3 +714,84 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked_teardown = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#shared_teardown = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem_teardown = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100"} {
+  // An existing barrier is not part of either aref's teardown.
+  // CHECK-LABEL: @shared_aref_teardown
+  tt.func @shared_aref_teardown(%value: tensor<128xi32, #blocked_teardown>) {
+    %c0 = arith.constant 0 : i32
+    %unrelated = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared_teardown, #smem_teardown, mutable>
+    ttng.init_barrier %unrelated, 1 : !ttg.memdesc<1xi64, #shared_teardown, #smem_teardown, mutable>
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: ttng.inval_barrier
+    ttng.inval_barrier %unrelated : !ttg.memdesc<1xi64, #shared_teardown, #smem_teardown, mutable>
+    ttg.local_dealloc %unrelated : !ttg.memdesc<1xi64, #shared_teardown, #smem_teardown, mutable>
+    %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>
+    %aref0 = nvws.aref.create %alloc0 : <[!ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>]>
+    %buf0, %tok0 = nvws.aref.put.enter %aref0[%c0, %c0] : <[!ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>]> -> !ttg.memdesc<128xi32, #shared_teardown, #smem_teardown, mutable, 1x128>, !ttg.async.token
+    ttg.local_store %value, %buf0 : tensor<128xi32, #blocked_teardown> -> !ttg.memdesc<128xi32, #shared_teardown, #smem_teardown, mutable, 1x128>
+    nvws.aref.put.exit %aref0[%c0], %tok0 [#nvws.async_op<none>] : <[!ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>]>, !ttg.async.token
+    %alloc1 = ttg.local_alloc : () -> !ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>
+    %aref1 = nvws.aref.create %alloc1 : <[!ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>]>
+    %buf1, %tok1 = nvws.aref.put.enter %aref1[%c0, %c0] : <[!ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>]> -> !ttg.memdesc<128xi32, #shared_teardown, #smem_teardown, mutable, 1x128>, !ttg.async.token
+    ttg.local_store %value, %buf1 : tensor<128xi32, #blocked_teardown> -> !ttg.memdesc<128xi32, #shared_teardown, #smem_teardown, mutable, 1x128>
+    nvws.aref.put.exit %aref1[%c0], %tok1 [#nvws.async_op<none>] : <[!ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>]>, !ttg.async.token
+    // Both arefs share one rendezvous before their four barrier invalidations.
+    // CHECK: ttng.cluster_barrier
+    // CHECK: ttng.inval_barrier
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: ttng.inval_barrier
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: ttng.inval_barrier
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: ttng.inval_barrier
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: tt.return
+    tt.return
+  }
+
+  // Another function in the same module has no arefs to tear down.
+  // CHECK-LABEL: @no_aref_teardown
+  tt.func @no_aref_teardown() {
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared_teardown, #smem_teardown, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared_teardown, #smem_teardown, mutable>
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: ttng.inval_barrier
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared_teardown, #smem_teardown, mutable>
+    ttg.local_dealloc %bar : !ttg.memdesc<1xi64, #shared_teardown, #smem_teardown, mutable>
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: tt.return
+    tt.return
+  }
+
+  // Loop-local arefs synchronize before their own lifetime ends.
+  // CHECK-LABEL: @loop_aref_teardown
+  tt.func @loop_aref_teardown(%value: tensor<128xi32, #blocked_teardown>, %n: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    // CHECK: scf.for
+    scf.for %i = %c0 to %n step %c1 : i32 {
+      %alloc0 = ttg.local_alloc : () -> !ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>
+      %aref0 = nvws.aref.create %alloc0 : <[!ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>]>
+      %buf0, %tok0 = nvws.aref.put.enter %aref0[%c0, %c0] : <[!ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>]> -> !ttg.memdesc<128xi32, #shared_teardown, #smem_teardown, mutable, 1x128>, !ttg.async.token
+      ttg.local_store %value, %buf0 : tensor<128xi32, #blocked_teardown> -> !ttg.memdesc<128xi32, #shared_teardown, #smem_teardown, mutable, 1x128>
+      nvws.aref.put.exit %aref0[%c0], %tok0 [#nvws.async_op<none>] : <[!ttg.memdesc<1x128xi32, #shared_teardown, #smem_teardown, mutable>]>, !ttg.async.token
+      // CHECK: ttg.local_store
+      // CHECK: ttng.cluster_barrier
+      // CHECK: ttng.inval_barrier
+      // CHECK-NOT: ttng.cluster_barrier
+      // CHECK: ttng.inval_barrier
+      // CHECK-NOT: ttng.cluster_barrier
+      // CHECK: }
+      scf.yield
+    }
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: tt.return
+    tt.return
+  }
+}
