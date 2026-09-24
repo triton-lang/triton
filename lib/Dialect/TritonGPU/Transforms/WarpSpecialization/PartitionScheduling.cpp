@@ -228,7 +228,7 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
     for (auto &use : value.getUses()) {
       auto op = use.getOwner();
       auto key = std::make_pair(op, use.getOperandNumber());
-      if (operands.find(key) != operands.end()) {
+      if (operands.contains(key)) {
         auto inputPort = operands[key];
         Node::addEdge(outputPort, inputPort);
       }
@@ -279,7 +279,7 @@ void propagateDataValues(const SmallVector<OutputPort> &values) {
 
   auto add = [&](OutputPort value) {
     value.getNode()->setDataValue(value.getIdx());
-    if (seen.find(value) == seen.end()) {
+    if (!seen.contains(value)) {
       stack.push_back(value);
       seen.insert(value);
     }
@@ -340,7 +340,7 @@ void deserializeManualPartitions(Operation *region, Graph *graph) {
             cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName))
                 .asArrayRef();
         for (auto id : partitionIds) {
-          if (manual_partitions.find(id) == manual_partitions.end()) {
+          if (!manual_partitions.contains(id)) {
             auto partition = graph->addPartition();
             partition->addFlag(Flags::MANUAL);
             manual_partitions[id] = partition;
@@ -1026,7 +1026,7 @@ void propagatePartitions(Graph *graph, std::string funcName,
             node->addPartitions(partitions);
             auto numPartitionsAfter = node->getPartitions().size();
             changed |= (numPartitionsBefore != numPartitionsAfter);
-            if (seen.count(node) == 0) {
+            if (!seen.contains(node)) {
               stack.push_back(node);
               seen.insert(node);
             }
@@ -1148,7 +1148,7 @@ void propagatePartitions(Graph *graph, std::string funcName,
           continue;
         fromNode->addPartitions(partitions);
 
-        if (seen.count(edge.getFromNode()) == 0) {
+        if (!seen.contains(edge.getFromNode())) {
           stack.push_back(fromNode);
           seen.insert(fromNode);
         }
@@ -1213,7 +1213,7 @@ void duplicateCheapOps(Graph *graph, std::string funcName,
                 } else if (child->getPartition() == startPartition) {
                   // found a path, set all nodes on the path to the partition
                   node->addPartition(startPartition);
-                  while (parentMap.find(node) != parentMap.end()) {
+                  while (parentMap.contains(node)) {
                     node = parentMap[node];
                     node->addPartition(startPartition);
                   }

@@ -29,8 +29,12 @@
 #include <numeric>
 
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -480,7 +484,8 @@ LogicalResult TensorMemoryEncodingAttr::verify(
   if (twoCTAs) {
     auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
     auto cgaLL = cgaLayout.getLinearLayout();
-    if (cgaLL.getBasis(kBlock, 0) != ArrayRef{1, 0}) {
+    if (cgaLL.getInDimSizeLog2(kBlock) == 0 ||
+        cgaLL.getBasis(kBlock, 0) != ArrayRef{1, 0}) {
       return emitError()
              << "twoCTAs layout requires the first CGALayout block basis to "
                 "be [1, 0]";
@@ -681,6 +686,53 @@ public:
     return OpAsmDialectInterface::getAlias(attr, os);
   }
 };
+
+struct DivFByConstant : public OpRewritePattern<arith::DivFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::DivFOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isa<Float32Type, RankedTensorType>(op.getType()) ||
+        !getElementTypeOrSelf(op.getType()).isF32())
+      return failure();
+
+    auto targetInfo =
+        triton::TargetInfoBase::fromModuleOp(op->getParentOfType<ModuleOp>());
+    if (!targetInfo || !targetInfo->isCuda())
+      return failure();
+
+    // This range keeps both the denominator and its reciprocal normal.
+    auto inRange = [](APFloat value) {
+      value.clearSign();
+      return value >= APFloat(0x1p-126f) && value <= APFloat(0x1p126f);
+    };
+    APFloat denominator(0.0f);
+    DenseFPElementsAttr denominators;
+    Value divisor = op.getRhs();
+    if (matchPattern(op.getRhs(), m_ConstantFloat(&denominator))) {
+      if (!inRange(denominator))
+        return failure();
+      if (isa<RankedTensorType>(op.getType()))
+        divisor = arith::ConstantOp::create(
+            rewriter, op.getLoc(),
+            rewriter.getFloatAttr(rewriter.getF32Type(), denominator));
+    } else if (!matchPattern(op.getRhs(), m_Constant(&denominators)) ||
+               !llvm::all_of(denominators.getValues<APFloat>(), inRange)) {
+      return failure();
+    }
+
+    auto one = arith::ConstantOp::create(
+        rewriter, op.getLoc(), rewriter.getOneAttr(divisor.getType()));
+    Value reciprocal = triton::ApproxDivFOp::create(
+        rewriter, op.getLoc(), divisor.getType(), one, divisor);
+    if (reciprocal.getType() != op.getType())
+      reciprocal = triton::SplatOp::create(rewriter, op.getLoc(), op.getType(),
+                                           reciprocal);
+    rewriter.replaceOpWithNewOp<arith::MulFOp>(op, op.getLhs(), reciprocal);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -702,6 +754,11 @@ void TritonNvidiaGPUDialect::initialize() {
   addInterfaces<TritonNvidiaGPUVerifyTensorLayoutInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonInlinerInterface>();
+}
+
+void TritonNvidiaGPUDialect::getCanonicalizationPatterns(
+    RewritePatternSet &patterns) const {
+  patterns.add<DivFByConstant>(getContext());
 }
 
 // verify TritonNvidiaGPU ops

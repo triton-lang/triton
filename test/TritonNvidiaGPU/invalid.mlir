@@ -1,5 +1,20 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+// expected-error @below {{twoCTAs layout requires the first CGALayout block basis to be [1, 0]}}
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1, twoCTAs = true>
+
+// -----
+
+// expected-error @below {{twoCTAs layout requires the first CGALayout block basis to be [1, 0]}}
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1, CGALayout = [], twoCTAs = true>
+
+// -----
+
+// expected-error @below {{twoCTAs layout requires the first CGALayout block basis to be [1, 0]}}
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1, CGALayout = [[0, 1]], twoCTAs = true>
+
+// -----
+
 // A descriptor's logical K must cover complete MMA instructions, even if its
 // backing allocation is larger.
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>

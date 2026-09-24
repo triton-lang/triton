@@ -317,7 +317,8 @@ def _p_matmul(
 
         XMxScalePtrs = None
         if is_x_microscaled and stride_x_mx_z is not None: # x is mx but not using TMA
-            offs_m = off_m + tl.arange(0, BLOCK_M)
+            if X_TMA_MODE is not None:
+                offs_m = off_m + tl.arange(0, BLOCK_M)
             XMxScalePtrs = XMxScale + off_x_z.to(index_type) * stride_x_mx_z
             if GatherIndx is None:
                 XMxScalePtrs += slice_off_m * stride_x_mx_m
@@ -406,13 +407,15 @@ def _p_matmul(
                         mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
                     mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
                     x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
-                else: # use TMA for x scale load - only cover batched case for now
-                    if X_TMA_MODE == "dense":
-                        off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
-                    else:
+                else: # use TMA for x scale load
+                    # Gathered values can use a dense descriptor while their
+                    # scales are already padded and ordered by ragged slice.
+                    if RAGGED_DIMENSION == "M":
                         # slice_block_off_m points to the start of the current slice in the padded version
                         # + off_m points to the current block in the slice
                         off_m_scale = slice_block_off_m + off_m // 128
+                    else:
+                        off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
                     x_scales = XMxScale.load([0, off_m_scale, off_k_x // MX_PACK_DIVISOR // 4, 0, 0])
                     x_scales = unswizzle_act_mx_scale_bw(x_scales)
             elif x_format == "fp16" or x_format == "bf16":

@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 
 from ._allocator import get_global_state_pointer
-from triton._C.libtriton.gsan_testing import thread_state_address, SHADOW_GRANULARITY_BYTES, PER_DEVICE_STATE_STRIDE_BYTES, GLOBAL_STATE_SIZE_BYTES, shadow_cell_address, thread_state_stride_bytes, SHADOW_CELL_SIZE_BYTES
+from triton._C.libtriton.gsan_testing import is_write_once_address, shadow_cell_size, shadow_granularity, thread_state_address, PER_DEVICE_STATE_STRIDE_BYTES, GLOBAL_STATE_SIZE_BYTES, shadow_cell_address, thread_state_stride_bytes
 from ._testing import (decode_global_state_tensor, decode_shadow_cell_tensor, decode_thread_state_tensor)
 from ._utils import uint8_cuda_tensor_from_ptr
 
@@ -26,11 +26,12 @@ def shadow_cell_tensor_from_address(real_address: int, *, device_index: int | No
     if device_index is None:
         device_index = torch.cuda.current_device()
     shadow_ptr = shadow_cell_address(real_address)
-    return uint8_cuda_tensor_from_ptr(shadow_ptr, SHADOW_CELL_SIZE_BYTES, device_index)
+    return uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_cell_size(real_address), device_index)
 
 
 def shadow_cell_from_address(real_address: int, *, device_index: int | None = None):
-    return decode_shadow_cell_tensor(shadow_cell_tensor_from_address(real_address, device_index=device_index))
+    return decode_shadow_cell_tensor(shadow_cell_tensor_from_address(real_address, device_index=device_index),
+                                     write_once=is_write_once_address(real_address))
 
 
 def global_state_tensor(*, device_index: int | None = None) -> torch.Tensor:
@@ -70,10 +71,11 @@ def thread_state_from_smid(smid: int, *, device_index: int | None = None):
 
 
 def shadow_tensor_for(real: torch.Tensor) -> torch.Tensor:
-    shadow_ptr = shadow_cell_address(real.data_ptr())
+    real_ptr = real.data_ptr()
+    shadow_ptr = shadow_cell_address(real_ptr)
     nbytes = real.untyped_storage().nbytes()
-    num_cells = triton.cdiv(nbytes, SHADOW_GRANULARITY_BYTES)
-    shadow_size = num_cells * SHADOW_CELL_SIZE_BYTES
+    num_cells = triton.cdiv(nbytes, shadow_granularity(real_ptr))
+    shadow_size = num_cells * shadow_cell_size(real_ptr)
     return uint8_cuda_tensor_from_ptr(shadow_ptr, shadow_size, real.device.index)
 
 

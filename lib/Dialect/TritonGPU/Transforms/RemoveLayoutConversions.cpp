@@ -459,8 +459,7 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         // If we don't need to rewrite the op we still need to remap the
         // operands.
         for (OpOperand &operand : op.getOpOperands()) {
-          auto it = layouts.find(operand.get());
-          if (it == layouts.end())
+          if (!layouts.contains(operand.get()))
             continue;
           Attribute encoding = getEncodingBeforeRewrite(operand.get());
           Value newOperand = getValueAs(operand.get(), encoding);
@@ -499,7 +498,7 @@ Attribute LayoutPropagation::getEncodingBeforeRewrite(Value value) const {
 
 void LayoutPropagation::setEncodingInPlace(Value value, Attribute encoding) {
   auto tensorType = cast<RankedTensorType>(value.getType());
-  if (!originalEncodings.count(value))
+  if (!originalEncodings.contains(value))
     originalEncodings[value] = tensorType.getEncoding();
   value.setType(tensorType.cloneWithEncoding(encoding));
 }
@@ -730,7 +729,7 @@ void LayoutRematerialization::rewriteSlice(
   opsToRewrite = mlir::topologicalSort(opsToRewrite);
 
   // replaceAllUsesWith calls delayed until after initial rewrite.
-  // This is required for slice.count(value) to work mid rewrite.
+  // This is required for slice.contains(value) to work mid rewrite.
   SmallVector<std::tuple<Value, Value>> replacements;
 
   SmallVector<Operation *> deadOps;
@@ -741,7 +740,7 @@ void LayoutRematerialization::rewriteSlice(
       SmallVector<std::pair<size_t, size_t>> argMapping;
       SmallVector<Value> newOperands;
       for (auto arg : forOp.getRegionIterArgs()) {
-        if (slice.count(arg)) {
+        if (slice.contains(arg)) {
           OpOperand &initVal = *forOp.getTiedLoopInit(arg);
           argMapping.push_back(std::make_pair(
               forOp.getTiedLoopResult(&initVal).getResultNumber(),
@@ -776,7 +775,7 @@ void LayoutRematerialization::rewriteSlice(
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       SmallVector<Type> newTypes;
       for (auto res : ifOp.getResults()) {
-        if (slice.count(res)) {
+        if (slice.contains(res)) {
           auto it = layout.find(res);
           assert(it != layout.end());
 
@@ -790,7 +789,7 @@ void LayoutRematerialization::rewriteSlice(
       unsigned oldIdx = 0;
       unsigned newIdx = ifOp.getNumResults();
       for (auto res : ifOp.getResults()) {
-        if (slice.count(res)) {
+        if (slice.contains(res)) {
           // Why can't we use res instead of ifOp.getResult(oldIdx)?
           mapping.map(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
           addRematValue(ifOp.getResult(oldIdx), layout[res],
