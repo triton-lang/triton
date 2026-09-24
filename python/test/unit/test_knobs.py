@@ -277,6 +277,25 @@ def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags
     assert "s_endpgm" in assembly
 
 
+@pytest.mark.parametrize(("arch", "base_arch", "warp_size"), [
+    ("gfx1250", "gfx1250", 32),
+    ("gfx1250-strict", "gfx1250", 32),
+])
+def test_amd_strict_base_arch(arch, base_arch, warp_size, fresh_knobs):
+    from triton.backends.amd import compiler
+
+    options = compiler.HIPOptions(arch=arch)
+
+    assert options.arch == arch
+    assert options.base_arch == base_arch
+    assert options.warp_size == warp_size
+    assert compiler.is_async_copy_enabled(options.base_arch)
+    assert compiler.is_coexec_scheduler_enabled(options.base_arch)
+    assert compiler.is_expert_scheduling_enabled(options.base_arch)
+    assert compiler.is_fpsan_supported(options.base_arch)
+    assert compiler.is_consan_supported(options.base_arch)
+
+
 def test_amd_codegen_path_override(fresh_knobs, monkeypatch):
     from triton.backends.amd import compiler
 
