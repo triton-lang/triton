@@ -61,7 +61,8 @@ std::optional<PartitionId> getPartitionId(Operation *op, int pos = 0) {
 
 struct TmemAccessDag {
   struct Node {
-    // For now we assume there is only one use of generated async tmem token
+    // Token uses form a chain, with conditional branches represented by
+    // subDags.
     std::unique_ptr<Node> user;
     SmallVector<std::unique_ptr<Node>> subDags;
     Node(Operation *op, OpOperand *tokOperand,
@@ -83,6 +84,15 @@ struct TmemAccessDag {
 
   Node *getRootNode() { return dag.get(); }
   TMEMAllocOp getAllocOp() { return cast<TMEMAllocOp>(dag->op); }
+
+  Value addTokenUsers(Value tok, Node *node) {
+    if (tok.use_empty())
+      return tok;
+    if (tok.hasOneUse())
+      return addOp(*tok.getUses().begin(), node);
+    // Multiple uses are the then/else branches of the next conditional.
+    return addIfOp(tok, node);
+  }
 
   Value addIfOp(Value tok, Node *node) {
     SmallVector<OpOperand *> uses;
@@ -150,8 +160,7 @@ struct TmemAccessDag {
     ifOpNode->tokPos = tokPos;
 
     auto newTok = ifOp.getResult(tokPos);
-    assert(newTok.hasOneUse());
-    return addOp(*newTok.getUses().begin(), ifOpNode);
+    return addTokenUsers(newTok, ifOpNode);
   }
 
   Value addLoopOp(OpOperand &tokOperand, Node *loopNode) {
@@ -221,17 +230,7 @@ struct TmemAccessDag {
       llvm_unreachable("unsupported user");
     }
 
-    if (newTok.use_empty())
-      return newTok;
-
-    if (newTok.hasOneUse()) {
-      auto &use = *newTok.getUses().begin();
-      return addOp(use, newNode);
-    }
-
-    // Multiple uses of token are expected only in IfOp: one in then and one in
-    // else branches.
-    return addIfOp(newTok, newNode);
+    return addTokenUsers(newTok, newNode);
   }
 
   static TmemAccessDag build(TMEMAllocOp allocOp) {
@@ -648,6 +647,97 @@ bool hasProducerConsumerPartitioning(TmemAccessDag &accessDag) {
   return valid;
 }
 
+// A get/put handoff advances the aref's buffer. An accumulating MMA may only
+// cross that handoff if it discards the old accumulator on that path. Checking
+// that the accumulator is reset somewhere in the loop is not sufficient: an
+// intermediate reader may release a still-live partial sum.
+bool preservesAccumulatorAcrossHandoffs(MMAv5OpInterface mma) {
+  using Conditions = DenseMap<Value, bool>;
+  auto isFalse = [](Value value, const Conditions &conditions) {
+    while (value) {
+      if (matchPattern(value, m_Zero()))
+        return true;
+      if (auto it = conditions.find(value); it != conditions.end())
+        return !it->second;
+      auto select = value.getDefiningOp<arith::SelectOp>();
+      if (!select)
+        return false;
+      auto it = conditions.find(select.getCondition());
+      if (it == conditions.end())
+        return false;
+      value = it->second ? select.getTrueValue() : select.getFalseValue();
+    }
+    return false;
+  };
+
+  std::function<bool(Value, Value, bool, Conditions, DenseSet<Value>)> visit;
+  visit = [&](Value token, Value useAcc, bool released, Conditions conditions,
+              DenseSet<Value> visited) -> bool {
+    if (isFalse(useAcc, conditions))
+      return true;
+    if (!token || !visited.insert(token).second)
+      return false;
+    if (auto arg = dyn_cast<BlockArgument>(token)) {
+      auto loop = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp());
+      if (!loop || arg.getArgNumber() == 0)
+        return false;
+      unsigned pos = arg.getArgNumber() - 1;
+      auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+      Value initialUse = useAcc, nextUse = useAcc;
+      if (auto flag = dyn_cast_or_null<BlockArgument>(useAcc);
+          flag && flag.getOwner() == loop.getBody()) {
+        if (flag.getArgNumber() == 0)
+          return false;
+        initialUse = loop.getInitArgs()[flag.getArgNumber() - 1];
+        nextUse = yield.getOperand(flag.getArgNumber() - 1);
+      } else if (useAcc && !loop.isDefinedOutsideOfLoop(useAcc)) {
+        // An expression in the current iteration cannot be evaluated using
+        // conditions from the preceding iteration.
+        initialUse = nextUse = {};
+      }
+      return visit(loop.getInitArgs()[pos], initialUse, released, Conditions(),
+                   visited) &&
+             visit(yield.getOperand(pos), nextUse, released, Conditions(),
+                   visited);
+    }
+    Operation *def = token.getDefiningOp();
+    if (auto load = dyn_cast<TMEMLoadOp>(def)) {
+      released |= getPartitionId(load) != getPartitionId(mma);
+      return visit(load.getDep(), useAcc, released, conditions, visited);
+    }
+    if (auto store = dyn_cast<TMEMStoreOp>(def)) {
+      if (released)
+        return false;
+      if (matchPattern(store.getPred(), m_One()))
+        return true;
+      return visit(store.getDep(), useAcc, released, conditions, visited);
+    }
+    if (isa<MMAv5OpInterface, TMEMAllocOp>(def))
+      return !released;
+    if (auto ifOp = dyn_cast<scf::IfOp>(def)) {
+      unsigned pos = cast<OpResult>(token).getResultNumber();
+      auto thenConditions = conditions;
+      thenConditions[ifOp.getCondition()] = true;
+      conditions[ifOp.getCondition()] = false;
+      return visit(ifOp.thenYield().getOperand(pos), useAcc, released,
+                   thenConditions, visited) &&
+             visit(ifOp.elseYield().getOperand(pos), useAcc, released,
+                   conditions, visited);
+    }
+    if (auto loop = dyn_cast<scf::ForOp>(def)) {
+      unsigned pos = cast<OpResult>(token).getResultNumber();
+      auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+      return visit(loop.getInitArgs()[pos], useAcc, released, conditions,
+                   visited) &&
+             visit(yield.getOperand(pos), useAcc, released, conditions,
+                   visited);
+    }
+    return false;
+  };
+  return visit(mma.getAccDep(), mma.useAccumulator(), false, Conditions(),
+               DenseSet<Value>());
+}
+
 int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
   auto rootNode = accessDag.getRootNode();
   auto allocOp = cast<TMEMAllocOp>(rootNode->op);
@@ -656,6 +746,7 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
   if (isMultiStaged) {
     for (auto user : allocOp.getResult().getUsers()) {
       if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
+        isMultiStaged &= preservesAccumulatorAcrossHandoffs(mmaOp);
         if (auto loop = dyn_cast<scf::ForOp>(user->getParentOp())) {
           auto wsLoop =
               getOuterWSLoop(cast<LoopLikeOpInterface>(loop.getOperation()));
