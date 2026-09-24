@@ -192,11 +192,8 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(ArefGetEnterOp getEnter) {
   return mmav5Ops;
 }
 
-BarrierCount getArrivalCount(ArefCreateOp op,
-                             const DenseSet<MMAv5OpInterface> &mmav5Ops) {
-  SetVector<int> producerGroups;
-  DenseMap<int, int> consumerGroupCounts;
-  DenseSet<int> mmaConsumerGroups;
+BarrierCount getArrivalCount(ArefCreateOp op) {
+  SetVector<int> producerGroups, consumerGroups;
   BarrierCount count;
 
   for (auto user : op->getUsers()) {
@@ -205,8 +202,9 @@ BarrierCount getArrivalCount(ArefCreateOp op,
     auto partitionIds = getPartitionIds(user);
 
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      assert(partitionIds.size() == 1);
-      if (producerGroups.count(partitionIds.front())) {
+      assert(partitionIds.size() == 1 &&
+             "aref producer must have exactly one partition");
+      if (producerGroups.contains(partitionIds.front())) {
         continue;
       }
       producerGroups.insert(partitionIds.front());
@@ -223,42 +221,23 @@ BarrierCount getArrivalCount(ArefCreateOp op,
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      int consumerCount = 0;
-      for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
-        if (kind == AsyncOp::TC5MMA)
-          continue;
-        switch (kind) {
-        case AsyncOp::WGMMA:
-        case AsyncOp::NONE:
-          consumerCount += 1;
-          break;
-        default:
-          llvm_unreachable("unsupported consumer kind");
-        }
-      }
       for (int partitionId : partitionIds) {
-        int &groupCount = consumerGroupCounts[partitionId];
-        groupCount = std::max(groupCount, consumerCount);
+        if (!consumerGroups.insert(partitionId))
+          continue;
+        for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
+          switch (kind) {
+          case AsyncOp::TC5MMA:
+          case AsyncOp::WGMMA:
+          case AsyncOp::NONE:
+            count.consumerPendingCount += 1;
+            break;
+          default:
+            llvm_unreachable("unsupported consumer kind");
+          }
+        }
       }
     }
   }
-
-  for (MMAv5OpInterface mma : mmav5Ops) {
-    Operation *mmaOp = mma.getOperation();
-    if (!hasPartition(mmaOp))
-      continue;
-    auto partitionIds = getPartitionIds(mmaOp);
-    assert(partitionIds.size() == 1);
-    mmaConsumerGroups.insert(partitionIds.front());
-  }
-
-  // Automatic specialization does not enable operand multicast. Each MMA
-  // consumer partition contributes one completion arrival, also for two-CTA
-  // MMAs where only the pair leader issues the commit.
-  count.consumerPendingCount += mmaConsumerGroups.size();
-  for (auto [partitionId, consumerCount] : consumerGroupCounts)
-    count.consumerPendingCount += consumerCount;
-
   // If the aref is not used within a warp-specialized loop, the pending counts
   // will be equal 0. Set them to 1.
   if (count.consumerPendingCount == 0)
@@ -342,7 +321,7 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
                    DenseMap<Block *, ClusterBarrierOp> &teardownBarriers) {
   auto bufferType = cast<MemDescType>(op.getType().getBaseType().front());
   int depth = getArefDepth(bufferType);
-  BarrierCount count = getArrivalCount(op, mmav5Ops);
+  BarrierCount count = getArrivalCount(op);
   auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(bufferType.getEncoding());
   bool twoCTATmem = tmemEnc && tmemEnc.getTwoCTAs();
   bool hasTwoCTAConsumer = llvm::any_of(
