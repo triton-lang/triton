@@ -50,8 +50,6 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
   auto order = ttg::getOrder(sharedLinear, shape);
   auto sharedLinearLayout = ttg::toLinearLayout(shape, sharedLinear);
   auto isEquivalent = [&](ttg::NVMMASharedEncodingAttr candidate) {
-    if (!isCompatibleSharedEncoding(candidate))
-      return false;
     auto candidateLayout = ttg::nvmmaSharedToLinearLayout(
         shape, candidate, ttg::TMAMode::Tiled, /*disableSwizzle=*/false,
         /*emitErrors=*/false);
@@ -67,7 +65,7 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
     auto preferred = ttg::NVMMASharedEncodingAttr::get(
         ctx, shape, order, cgaLayout, elementType, fp4Padded);
     preferredCandidates.push_back(preferred);
-    if (isEquivalent(preferred))
+    if (isCompatibleSharedEncoding(preferred) && isEquivalent(preferred))
       return preferred;
   }
 
@@ -79,7 +77,7 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
           cgaLayout);
       if (llvm::is_contained(preferredCandidates, candidate))
         continue;
-      if (isEquivalent(candidate))
+      if (isCompatibleSharedEncoding(candidate) && isEquivalent(candidate))
         return candidate;
     }
   }
