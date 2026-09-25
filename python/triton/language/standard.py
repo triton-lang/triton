@@ -295,6 +295,10 @@ def _pick_sum_dtype(in_dtype, dtype):
     if dtype is not None:
         return dtype
 
+    # fp8 sums promote to fp16: the fp8 add in the combine region has no
+    # lowering, same rule as binary arithmetic.
+    if in_dtype.is_fp8():
+        return core.float16
     # For integer bitwidths less than 32, pick int32 with the same sign to
     # avoid overflow.
     if in_dtype.is_int_signed() and in_dtype.int_bitwidth < 32:

@@ -1421,8 +1421,8 @@ def test_fp8_div_mod_promotion():
     # `/` and `%` do not exist natively for floats narrower than fp32, so the
     # result of a division or modulo with a floating operand is promoted to
     # fp32 -- one rule covering fp8, fp16 and bfloat16, tensor and scalar
-    # operands alike. Other ops keep the existing promotions (same fp8 stays
-    # that fp8, mixed fp8 goes to float16).
+    # operands alike. Arithmetic that cannot lower at fp8 (+, -, *) promotes
+    # same-type fp8 to fp16; mixed fp8 goes to float16 as before.
 
     @triton.jit
     def kernel():
@@ -1436,7 +1436,7 @@ def test_fp8_div_mod_promotion():
         tl.static_assert((x / y).dtype == tl.float32)
         tl.static_assert((x / z).dtype == tl.float32)
         tl.static_assert((x % y).dtype == tl.float32)
-        tl.static_assert((x * y).dtype == tl.float8e5)
+        tl.static_assert((x * y).dtype == tl.float16)
         tl.static_assert((x * z).dtype == tl.float16)
         # fp16 and bfloat16 division/modulo upcast through the same rule
         tl.static_assert((h / h).dtype == tl.float32)
@@ -1456,11 +1456,79 @@ def test_fp8_div_mod_promotion():
         tl.static_assert((h / 2.0).dtype == tl.float32)
         tl.static_assert((d / 2.0).dtype == tl.float64)
         tl.static_assert((d % 2.0).dtype == tl.float64)
-        tl.static_assert((x * 2.0).dtype == tl.float8e5)
+        tl.static_assert((x * 2.0).dtype == tl.float16)
         tl.static_assert((h * 2.0).dtype == tl.float16)
         tl.static_assert((i // 2).dtype == tl.int32)
 
     run_parser(kernel)
+
+
+def test_fp8_arith_promotes_to_fp16():
+    # Same-type fp8 arithmetic has no fp8 lowering, so it promotes to fp16
+    # before evaluating (#11898). Selection ops keep fp8.
+
+    @triton.jit
+    def kernel(x_ptr, y_ptr):
+        x = tl.load(x_ptr + tl.arange(0, 8))
+        y = tl.load(y_ptr + tl.arange(0, 8))
+        tl.static_assert((x + y).dtype == tl.float16)
+        tl.static_assert((x - y).dtype == tl.float16)
+        tl.static_assert((x * y).dtype == tl.float16)
+        tl.static_assert((-x).dtype == tl.float16)
+        tl.static_assert((x + 2.0).dtype == tl.float16)
+        tl.static_assert(tl.sum(x).dtype == tl.float16)
+        # A comparison returns int1 either way; the operand promotion is
+        # pinned on the TTIR below.
+        tl.static_assert((x > y).dtype == tl.int1)
+        tl.static_assert((x == y).dtype == tl.int1)
+        # Selection ops lower at fp8 and keep it.
+        tl.static_assert(tl.maximum(x, y).dtype == tl.float8e5)
+        tl.static_assert(tl.minimum(x, y).dtype == tl.float8e5)
+        i = tl.full((8, ), 1, tl.int32)
+        tl.static_assert(tl.where(i > 0, x, y).dtype == tl.float8e5)
+
+    run_parser(kernel, args=(MockTensor(tl.float8e5), MockTensor(tl.float8e5)))
+
+    @triton.jit
+    def cmp_kernel(x_ptr, y_ptr):
+        x = tl.load(x_ptr + tl.arange(0, 8))
+        y = tl.load(y_ptr + tl.arange(0, 8))
+        tl.sum((x > y).to(tl.int32))
+
+    module = run_parser(cmp_kernel, args=(MockTensor(tl.float8e5), MockTensor(tl.float8e5)))
+    cmp_lines = [line for line in module.str_nodebug().splitlines() if "arith.cmp" in line]
+    assert len(cmp_lines) == 1
+    assert "f16>" in cmp_lines[0]
+
+    @triton.jit
+    def sum_kernel(x_ptr):
+        tl.sum(tl.load(x_ptr + tl.arange(0, 8)))
+
+    module = run_parser(sum_kernel, args=(MockTensor(tl.float8e5),))
+    # The reduction runs in fp16: the fp8 input converts up front and the
+    # combine fn adds f16.
+    ttir = module.str_nodebug()
+    assert "tt.fp_to_fp" in ttir and "xf8E5M2" in ttir and "xf16" in ttir
+    assert "arith.addf" in ttir and "f16" in ttir
+
+    @triton.jit
+    def maximum_kernel(x_ptr, y_ptr):
+        x = tl.load(x_ptr + tl.arange(0, 8))
+        y = tl.load(y_ptr + tl.arange(0, 8))
+        tl.maximum(x, y)
+
+    module = run_parser(maximum_kernel, args=(MockTensor(tl.float8e5), MockTensor(tl.float8e5)))
+    ttir = module.str_nodebug()
+    assert "arith.maximumf" in ttir or "arith.maxnumf" in ttir
+    assert "xf8" in ttir
+
+    @triton.jit
+    def neg_kernel(x_ptr):
+        tl.sum(-tl.load(x_ptr + tl.arange(0, 8)))
+
+    module = run_parser(neg_kernel, args=(MockTensor(tl.float8e5),))
+    ttir = module.str_nodebug()
+    assert "arith.negf" in ttir and "f16" in ttir
 
 
 # ===-----------------------------------------------------------------------===#

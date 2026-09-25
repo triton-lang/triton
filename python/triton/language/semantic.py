@@ -69,7 +69,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected signedness {a_sn} and {b_sn}")
 
     def computation_type_impl(self, a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_is_scalar: bool,
-                              div_or_mod: bool) -> tl.dtype:
+                              div_or_mod: bool, fp8_arith: bool = False) -> tl.dtype:
         # 0) For scalars we follow semantics similar to PyTorch, namely:
         # - If the scalar is of a lower or equal kind (bool < uint < int < fp),
         #   it doesn't participate in the promotion
@@ -102,7 +102,13 @@ class TritonSemantic(Generic[TensorTy]):
             return tl.float32
         # 6) return fp16 if operands are different fp8
         if a_ty.is_fp8() and b_ty.is_fp8():
-            return a_ty if a_ty == b_ty else tl.float16
+            if a_ty != b_ty:
+                return tl.float16
+            # Same-type fp8: arithmetic that has no fp8 lowering (+, -, *,
+            # unary -, comparisons, reduction sums) promotes to fp16, matching
+            # the div/mod precedent of promoting before evaluating. Selection
+            # ops (maximum/minimum/where/clamp) lower at fp8 and keep it.
+            return tl.float16 if fp8_arith else a_ty
         if not a_ty.is_int() or not b_ty.is_int():
             raise TypeError(f"unexpected type {a_ty} and {b_ty}")
         # 6 ) both operands are integer and undergo
@@ -172,7 +178,7 @@ class TritonSemantic(Generic[TensorTy]):
 
     def binary_op_type_checking_impl(self, lhs: TensorTy | numbers.Number, rhs: TensorTy | numbers.Number,
                                      allow_lhs_ptr=False, allow_rhs_ptr=False, arithmetic_check=True,
-                                     div_or_mod=False) -> Tuple[TensorTy, TensorTy]:
+                                     div_or_mod=False, fp8_arith=False) -> Tuple[TensorTy, TensorTy]:
         lhs_is_scalar = isinstance(lhs, numbers.Number)
         rhs_is_scalar = isinstance(rhs, numbers.Number)
         # implicit typecasting
@@ -181,7 +187,8 @@ class TritonSemantic(Generic[TensorTy]):
         self.check_ptr_type_impl(lhs_sca_ty, rhs_sca_ty, allow_lhs_ptr)
         self.check_ptr_type_impl(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr)
         if arithmetic_check and not lhs_sca_ty.is_ptr() and not rhs_sca_ty.is_ptr():
-            ret_sca_ty = self.computation_type_impl(lhs_sca_ty, lhs_is_scalar, rhs_sca_ty, rhs_is_scalar, div_or_mod)
+            ret_sca_ty = self.computation_type_impl(lhs_sca_ty, lhs_is_scalar, rhs_sca_ty, rhs_is_scalar,
+                                                    div_or_mod, fp8_arith)
             lhs = self._cast_to_computation_type(lhs, ret_sca_ty)
             rhs = self._cast_to_computation_type(rhs, ret_sca_ty)
         else:
@@ -249,7 +256,7 @@ class TritonSemantic(Generic[TensorTy]):
 
     def add(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number,
             sanitize_overflow: bool) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other, True, True)
+        input, other = self.binary_op_type_checking_impl(input, other, True, True, fp8_arith=True)
         input_scalar_ty = input.type.scalar
         other_scalar_ty = other.type.scalar
         if input_scalar_ty.is_ptr() and other_scalar_ty.is_ptr():
@@ -280,7 +287,7 @@ class TritonSemantic(Generic[TensorTy]):
 
     def sub(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number,
             sanitize_overflow: bool) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other, True, False)
+        input, other = self.binary_op_type_checking_impl(input, other, True, False, fp8_arith=True)
         scalar_ty = input.type.scalar
         # ptr - offset
         if scalar_ty.is_ptr():
@@ -297,7 +304,7 @@ class TritonSemantic(Generic[TensorTy]):
 
     def mul(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number,
             sanitize_overflow: bool) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.binary_op_type_checking_impl(input, other, fp8_arith=True)
         scalar_ty = input.type.scalar
         # float * float
         if scalar_ty.is_floating():
@@ -504,6 +511,9 @@ class TritonSemantic(Generic[TensorTy]):
         if input_sca_ty.is_ptr():
             raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
         if input_sca_ty.is_floating():
+            # fneg has no fp8 lowering either; promote like binary arithmetic.
+            if input_sca_ty.is_fp8():
+                input = self.cast(input, tl.float16)
             return self.tensor(self.builder.create_fneg(input.handle), input.type)
         _0 = self.tensor(self.builder.get_null_value(input_sca_ty.to_ir(self.builder)), input_sca_ty)
         return self.sub(_0, input, True)
@@ -523,7 +533,7 @@ class TritonSemantic(Generic[TensorTy]):
         return v.type.with_element_ty(tl.int1)
 
     def greater_than(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.binary_op_type_checking_impl(input, other, fp8_arith=True)
         scalar_ty = input.type.scalar
         # float > float
         if scalar_ty.is_floating():
@@ -537,7 +547,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def greater_equal(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.binary_op_type_checking_impl(input, other, fp8_arith=True)
         scalar_ty = input.type.scalar
         # float >= float
         if scalar_ty.is_floating():
@@ -551,7 +561,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def less_than(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.binary_op_type_checking_impl(input, other, fp8_arith=True)
         scalar_ty = input.type.scalar
         # float < float
         if scalar_ty.is_floating():
@@ -565,7 +575,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def less_equal(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.binary_op_type_checking_impl(input, other, fp8_arith=True)
         scalar_ty = input.type.scalar
         # float < float
         if scalar_ty.is_floating():
@@ -579,7 +589,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def equal(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.binary_op_type_checking_impl(input, other, fp8_arith=True)
         scalar_ty = input.type.scalar
         # float == float
         if scalar_ty.is_floating():
@@ -590,7 +600,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def not_equal(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.binary_op_type_checking_impl(input, other, fp8_arith=True)
         scalar_ty = input.type.scalar
         # float == float
         if scalar_ty.is_floating():
