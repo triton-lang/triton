@@ -115,7 +115,7 @@ def is_tma_compliant(tensor):
     except ValueError:
         major_dim = -1
     ndim = storage.data.ndim
-    bitwidth = tensor.dtype.bitwidth
+    bitwidth = storage.data.element_size() * 8
     compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
     return all(compliant)
 

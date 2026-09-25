@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -canonicalize | FileCheck %s --check-prefixes=CHECK,BARRIER
-// RUN: triton-opt %s -gluon-canonicalize | FileCheck %s --check-prefix=BARRIER
+// RUN: triton-opt %s -canonicalize | FileCheck %s --check-prefixes=CHECK,BARRIER,COMMON
+// RUN: triton-opt %s -gluon-canonicalize | FileCheck %s --check-prefixes=BARRIER,COMMON
 
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [32, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0], [64, 0]], block = []}>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
@@ -113,5 +113,130 @@ tt.func @false_tmem_store_keeps_token(%value: tensor<128x128xf32, #data>, %mem: 
   %false = arith.constant false
   %token = ttng.tmem_store %value, %mem[%dep], %false : tensor<128x128xf32, #data> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   tt.return %token : !ttg.async.token
+}
+}
+
+#div_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-warps" = 4 : i32} {
+// COMMON-LABEL: @fdiv_constant_in_range
+// COMMON: %[[ONE:.*]] = arith.constant 1.000000e+00 : f32
+// COMMON: %[[RECIP_MIN:.*]] = tt.approx_divf %[[ONE]], %{{.*}} : f32
+// COMMON-NEXT: arith.mulf %arg0, %[[RECIP_MIN]] : f32
+// COMMON: %[[RECIP_MAX:.*]] = tt.approx_divf %[[ONE]], %{{.*}} : f32
+// COMMON-NEXT: arith.mulf %arg0, %[[RECIP_MAX]] : f32
+// COMMON: %[[RECIP_NEG_MIN:.*]] = tt.approx_divf %[[ONE]], %{{.*}} : f32
+// COMMON-NEXT: arith.mulf %arg0, %[[RECIP_NEG_MIN]] : f32
+// COMMON: %[[RECIP_NEG_MAX:.*]] = tt.approx_divf %[[ONE]], %{{.*}} : f32
+// COMMON-NEXT: arith.mulf %arg0, %[[RECIP_NEG_MAX]] : f32
+// COMMON: %[[RECIP_THREE:.*]] = tt.approx_divf %[[ONE]], %{{.*}} : f32
+// COMMON-NEXT: arith.mulf %arg0, %[[RECIP_THREE]] : f32
+// COMMON: %[[RECIP_NEG_THREE:.*]] = tt.approx_divf %[[ONE]], %{{.*}} : f32
+// COMMON-NEXT: arith.mulf %arg0, %[[RECIP_NEG_THREE]] : f32
+// COMMON-NEXT: tt.return
+tt.func @fdiv_constant_in_range(%x: f32) -> (f32, f32, f32, f32, f32, f32) {
+  %min = arith.constant 0x00800000 : f32
+  %max = arith.constant 0x7E800000 : f32
+  %neg_min = arith.constant 0x80800000 : f32
+  %neg_max = arith.constant 0xFE800000 : f32
+  %three = arith.constant 3.0 : f32
+  %neg_three = arith.constant -3.0 : f32
+  %a = arith.divf %x, %min : f32
+  %b = arith.divf %x, %max : f32
+  %c = arith.divf %x, %neg_min : f32
+  %d = arith.divf %x, %neg_max : f32
+  %e = arith.divf %x, %three : f32
+  %f = arith.divf %x, %neg_three : f32
+  tt.return %a, %b, %c, %d, %e, %f : f32, f32, f32, f32, f32, f32
+}
+
+// COMMON-LABEL: @fdiv_constant_out_of_range
+// COMMON-COUNT-9: arith.divf
+// COMMON-NEXT: tt.return
+tt.func @fdiv_constant_out_of_range(%x: f32) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+  %below_min = arith.constant 0x007FFFFF : f32
+  %above_max = arith.constant 0x7E800001 : f32
+  %neg_below_min = arith.constant 0x807FFFFF : f32
+  %neg_above_max = arith.constant 0xFE800001 : f32
+  %zero = arith.constant 0.0 : f32
+  %neg_zero = arith.constant -0.0 : f32
+  %inf = arith.constant 0x7F800000 : f32
+  %neg_inf = arith.constant 0xFF800000 : f32
+  %nan = arith.constant 0x7FC00000 : f32
+  %a = arith.divf %x, %below_min : f32
+  %b = arith.divf %x, %above_max : f32
+  %c = arith.divf %x, %neg_below_min : f32
+  %d = arith.divf %x, %neg_above_max : f32
+  %e = arith.divf %x, %zero : f32
+  %f = arith.divf %x, %neg_zero : f32
+  %g = arith.divf %x, %inf : f32
+  %h = arith.divf %x, %neg_inf : f32
+  %i = arith.divf %x, %nan : f32
+  tt.return %a, %b, %c, %d, %e, %f, %g, %h, %i : f32, f32, f32, f32, f32, f32, f32, f32, f32
+}
+
+// COMMON-LABEL: @fdiv_constant_tensor
+// COMMON-DAG: %[[ONE:.*]] = arith.constant 1.000000e+00 : f32
+// COMMON-DAG: %[[THREE:.*]] = arith.constant 3.000000e+00 : f32
+// COMMON-DAG: %[[ONES:.*]] = arith.constant dense<1.000000e+00> : tensor<4xf32,
+// COMMON: %[[SCALAR_RECIP:.*]] = tt.approx_divf %[[ONE]], %[[THREE]] : f32
+// COMMON-NEXT: %[[SPLAT:.*]] = tt.splat %[[SCALAR_RECIP]] : f32 -> tensor<4xf32,
+// COMMON-NEXT: %[[A:.*]] = arith.mulf %arg0, %[[SPLAT]] : tensor<4xf32,
+// COMMON-NEXT: %[[TENSOR_RECIP:.*]] = tt.approx_divf %[[ONES]], %{{.*}} : tensor<4xf32,
+// COMMON-NEXT: %[[B:.*]] = arith.mulf %arg0, %[[TENSOR_RECIP]] : tensor<4xf32,
+// COMMON-NEXT: %[[C:.*]] = arith.divf
+// COMMON-NEXT: tt.return %[[A]], %[[B]], %[[C]]
+tt.func @fdiv_constant_tensor(%x: tensor<4xf32, #div_layout>) -> (tensor<4xf32, #div_layout>, tensor<4xf32, #div_layout>, tensor<4xf32, #div_layout>) {
+  %splat = arith.constant dense<3.0> : tensor<4xf32, #div_layout>
+  %in_range = arith.constant dense<[0x00800000, 0x7E800000, 0x80800000, 0xFE800000]> : tensor<4xf32, #div_layout>
+  %out_of_range = arith.constant dense<[3.0, -3.0, 0.0, 4.0]> : tensor<4xf32, #div_layout>
+  %a = arith.divf %x, %splat : tensor<4xf32, #div_layout>
+  %b = arith.divf %x, %in_range : tensor<4xf32, #div_layout>
+  %c = arith.divf %x, %out_of_range : tensor<4xf32, #div_layout>
+  tt.return %a, %b, %c : tensor<4xf32, #div_layout>, tensor<4xf32, #div_layout>, tensor<4xf32, #div_layout>
+}
+
+// COMMON-LABEL: @fdiv_runtime_denominator
+// COMMON: arith.divf
+tt.func @fdiv_runtime_denominator(%x: f32, %y: f32) -> f32 {
+  %a = arith.divf %x, %y : f32
+  tt.return %a : f32
+}
+
+// COMMON-LABEL: @fdiv_constant_f64
+// COMMON: arith.divf
+tt.func @fdiv_constant_f64(%x: f64) -> f64 {
+  %three = arith.constant 3.0 : f64
+  %a = arith.divf %x, %three : f64
+  tt.return %a : f64
+}
+
+// COMMON-LABEL: @fdiv_constant_precise
+// COMMON: tt.precise_divf
+tt.func @fdiv_constant_precise(%x: f32) -> f32 {
+  %three = arith.constant 3.0 : f32
+  %a = tt.precise_divf %x, %three : f32
+  tt.return %a : f32
+}
+}
+
+module attributes {"ttg.target" = "hip:gfx942"} {
+// COMMON-LABEL: @fdiv_constant_amd
+// COMMON: arith.divf
+// COMMON-NEXT: tt.return
+tt.func @fdiv_constant_amd(%x: f32) -> f32 {
+  %three = arith.constant 3.0 : f32
+  %a = arith.divf %x, %three : f32
+  tt.return %a : f32
+}
+}
+
+module {
+// COMMON-LABEL: @fdiv_constant_no_target
+// COMMON: arith.divf
+// COMMON-NEXT: tt.return
+tt.func @fdiv_constant_no_target(%x: f32) -> f32 {
+  %three = arith.constant 3.0 : f32
+  %a = arith.divf %x, %three : f32
+  tt.return %a : f32
 }
 }

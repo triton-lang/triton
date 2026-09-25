@@ -230,7 +230,7 @@ bool hoistTmemAlloc(ttng::TMEMAllocOp allocToHoist) {
       SetVector<Operation *> slice;
       (void)getBackwardSlice(x, &slice, opt);
       for (auto user : y.getUsers()) {
-        if (x.getDefiningOp() == user || slice.count(user)) {
+        if (x.getDefiningOp() == user || slice.contains(user)) {
           return true;
         }
       }

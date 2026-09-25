@@ -16,6 +16,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -72,6 +73,15 @@ struct BreakStructPhiNodesPass
 using namespace llvm;
 
 namespace {
+
+void enableFPContraction(llvm::Module &module) {
+  for (llvm::Function &function : module)
+    for (llvm::Instruction &instruction : llvm::instructions(function))
+      if (instruction.getOpcode() == llvm::Instruction::FAdd ||
+          instruction.getOpcode() == llvm::Instruction::FSub ||
+          instruction.getOpcode() == llvm::Instruction::FMul)
+        instruction.setHasAllowContract(true);
+}
 
 struct ExpandMaskedDivRemPass : RequiredPassInfoMixin<ExpandMaskedDivRemPass> {
   PreservedAnalyses run(Module &module, ModuleAnalysisManager &) {
@@ -643,23 +653,30 @@ void init_triton_llvm(py::module_ &m) {
       },
       py::keep_alive<0, 2>(), py::call_guard<py::gil_scoped_release>());
 
-  m.def("to_bitcode", [](const std::string &llvmIR) {
-    std::string bitcode;
-    {
-      py::gil_scoped_release release;
-      llvm::LLVMContext context;
-      auto buffer = llvm::MemoryBuffer::getMemBuffer(llvmIR, "triton", false);
-      llvm::SMDiagnostic error;
-      auto module = llvm::parseIR(buffer->getMemBufferRef(), error, context);
-      if (!module)
-        throw std::runtime_error(
-            "failed to parse LLVM IR: " + error.getMessage().str() +
-            " at line " + std::to_string(error.getLineNo()));
-      llvm::raw_string_ostream stream(bitcode);
-      llvm::WriteBitcodeToFile(*module, stream);
-    }
-    return py::bytes(bitcode.data(), bitcode.size());
-  });
+  m.def(
+      "to_bitcode",
+      [](const std::string &llvmIR, bool enable_fp_fusion) {
+        std::string bitcode;
+        {
+          py::gil_scoped_release release;
+          llvm::LLVMContext context;
+          auto buffer =
+              llvm::MemoryBuffer::getMemBuffer(llvmIR, "triton", false);
+          llvm::SMDiagnostic error;
+          auto module =
+              llvm::parseIR(buffer->getMemBufferRef(), error, context);
+          if (!module)
+            throw std::runtime_error(
+                "failed to parse LLVM IR: " + error.getMessage().str() +
+                " at line " + std::to_string(error.getLineNo()));
+          if (enable_fp_fusion)
+            enableFPContraction(*module);
+          llvm::raw_string_ostream stream(bitcode);
+          llvm::WriteBitcodeToFile(*module, stream);
+        }
+        return py::bytes(bitcode.data(), bitcode.size());
+      },
+      py::arg("llvm_ir"), py::arg("enable_fp_fusion") = false);
 
   // Add Triton and LLVM versions to the module.
   m.def("add_version_info", [](llvm::Module *mod) {
@@ -1005,7 +1022,7 @@ void init_triton_llvm(py::module_ &m) {
       // Mark linked-in functions as internal because backends use external
       // linkage as a signifier of kernel functions.
       for (llvm::Function &fn : dstMod->functions()) {
-        if (externalFns.count(fn.getName().str())) {
+        if (externalFns.contains(fn.getName().str())) {
           fn.setLinkage(llvm::GlobalValue::InternalLinkage);
         }
       }

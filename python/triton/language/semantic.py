@@ -175,37 +175,59 @@ class TritonSemantic(Generic[TensorTy]):
                                      div_or_mod=False) -> Tuple[TensorTy, TensorTy]:
         lhs_is_scalar = isinstance(lhs, numbers.Number)
         rhs_is_scalar = isinstance(rhs, numbers.Number)
-        if lhs_is_scalar:
-            lhs_scalar = lhs
-            lhs = self.to_tensor(lhs)
-        if rhs_is_scalar:
-            rhs_scalar = rhs
-            rhs = self.to_tensor(rhs)
-
         # implicit typecasting
-        lhs_sca_ty = lhs.type.scalar
-        rhs_sca_ty = rhs.type.scalar
+        lhs_sca_ty = self.to_tensor_type(lhs) if lhs_is_scalar else lhs.dtype
+        rhs_sca_ty = self.to_tensor_type(rhs) if rhs_is_scalar else rhs.dtype
         self.check_ptr_type_impl(lhs_sca_ty, rhs_sca_ty, allow_lhs_ptr)
         self.check_ptr_type_impl(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr)
         if arithmetic_check and not lhs_sca_ty.is_ptr() and not rhs_sca_ty.is_ptr():
             ret_sca_ty = self.computation_type_impl(lhs_sca_ty, lhs_is_scalar, rhs_sca_ty, rhs_is_scalar, div_or_mod)
-            if (lhs_is_scalar and lhs_scalar < 0 and ret_sca_ty.is_int_unsigned()
-                    or rhs_is_scalar and rhs_scalar < 0 and ret_sca_ty.is_int_unsigned()):
-                raise ValueError("Cannot perform a binary operation between an unsigned tensor and a negative scalar. "
-                                 "Perform a explicit cast on one of them.")
-            if ret_sca_ty.is_int():
-                if lhs_is_scalar and not (ret_sca_ty.get_int_min_value() <= lhs_scalar <=
-                                          ret_sca_ty.get_int_max_value()):
-                    raise ValueError(f"Scalar {lhs_scalar} is out of range for type {ret_sca_ty}")
-                if rhs_is_scalar and not (ret_sca_ty.get_int_min_value() <= rhs_scalar <=
-                                          ret_sca_ty.get_int_max_value()):
-                    raise ValueError(f"Scalar {rhs_scalar} is out of range for type {ret_sca_ty}")
-            lhs = self.scalar_constant(lhs_scalar, dtype=ret_sca_ty) if lhs_is_scalar else self.cast(lhs, ret_sca_ty)
-            rhs = self.scalar_constant(rhs_scalar, dtype=ret_sca_ty) if rhs_is_scalar else self.cast(rhs, ret_sca_ty)
+            lhs = self._cast_to_computation_type(lhs, ret_sca_ty)
+            rhs = self._cast_to_computation_type(rhs, ret_sca_ty)
+        else:
+            lhs, rhs = self.to_tensor(lhs), self.to_tensor(rhs)
 
         # implicit broadcasting
         lhs, rhs = self.broadcast_impl_value(lhs, rhs)
         return lhs, rhs
+
+    def _cast_to_computation_type(self, value: TensorTy | numbers.Number, dtype: tl.dtype) -> TensorTy:
+        if not isinstance(value, numbers.Number):
+            return self.cast(value, dtype)
+        if value < 0 and dtype.is_int_unsigned():
+            raise ValueError("Cannot perform a binary operation between an unsigned tensor and a negative scalar. "
+                             "Perform a explicit cast on one of them.")
+        if dtype.is_int() and not (dtype.get_int_min_value() <= value <= dtype.get_int_max_value()):
+            raise ValueError(f"Scalar {value} is out of range for type {dtype}")
+        return self.scalar_constant(value, dtype=dtype)
+
+    def ternary_op_type_checking_impl(self, a: TensorTy | numbers.Number, b: TensorTy | numbers.Number,
+                                      c: TensorTy | numbers.Number) -> Tuple[TensorTy, TensorTy, TensorTy]:
+        args = (a, b, c)
+        # Combine the tensor and scalar types separately so every scalar is
+        # compared with the actual tensor kind, independently of operand order.
+        tensor_dtype = scalar_dtype = None
+        for arg in args:
+            if isinstance(arg, numbers.Number):
+                arg_dtype = self.to_tensor_type(arg)
+                scalar_dtype = arg_dtype if scalar_dtype is None else self.computation_type_impl(
+                    scalar_dtype, True, arg_dtype, True, False)
+            else:
+                tensor_dtype = arg.dtype if tensor_dtype is None else self.computation_type_impl(
+                    tensor_dtype, False, arg.dtype, False, False)
+        if tensor_dtype is None:
+            dtype = scalar_dtype
+        elif scalar_dtype is None:
+            dtype = tensor_dtype
+        else:
+            dtype = self.computation_type_impl(tensor_dtype, False, scalar_dtype, True, False)
+        # Materialize scalars only after resolving the final type, to avoid
+        # rounding them through a narrower intermediate type.
+        a, b, c = (self._cast_to_computation_type(arg, dtype) for arg in args)
+        a, b = self.broadcast_impl_value(a, b)
+        a, c = self.broadcast_impl_value(a, c)
+        b, c = self.broadcast_impl_value(b, c)
+        return a, b, c
 
     def binary_op_sanitize_overflow_impl(self, lhs: TensorTy, rhs: TensorTy, binary_op: callable):
         if lhs.type.scalar.int_bitwidth >= 64 or not self.builder.options.sanitize_overflow:
@@ -326,13 +348,18 @@ class TritonSemantic(Generic[TensorTy]):
                 return self.tensor(self.builder.create_udiv(input.handle, other.handle), input.type)
         raise TypeError(f"unexpected type {input_scalar_ty}")
 
-    def fdiv(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number, ieee_rounding: bool) -> TensorTy:
-        input_scalar_ty = input.type.scalar
-        other_scalar_ty = other.type.scalar
-        if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
-            raise TypeError("both operands of fdiv must have floating scalar type")
-        input, other = self.binary_op_type_checking_impl(input, other, False, False, False, True)
-        if ieee_rounding:
+    def fdiv(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number, ieee_rounding: bool,
+             approx: bool = False) -> TensorTy:
+        if ieee_rounding and approx:
+            raise ValueError("approx and ieee_rounding cannot both be True")
+        input, other = self.binary_op_type_checking_impl(input, other, div_or_mod=True)
+        if not input.dtype.is_floating():
+            raise TypeError("fdiv requires floating-point operands after type promotion")
+        if approx:
+            if not input.type.scalar.is_fp32():
+                raise ValueError("approx division requires float32 operands")
+            ret = self.builder.create_approx_divf(input.handle, other.handle)
+        elif ieee_rounding:
             ret = self.builder.create_precise_divf(input.handle, other.handle)
         else:
             ret = self.builder.create_fdiv(input.handle, other.handle)
@@ -395,10 +422,9 @@ class TritonSemantic(Generic[TensorTy]):
         else:
             raise TypeError(f"Unexpected dtype {dtype}")
 
-    def clamp(self, x: TensorTy, min: TensorTy, max: TensorTy, propagate_nan: tl.PropagateNan):
-        min, max = self.binary_op_type_checking_impl(min, max)
-        x, min = self.binary_op_type_checking_impl(x, min)
-        x, max = self.binary_op_type_checking_impl(x, max)
+    def clamp(self, x: TensorTy | numbers.Number, min: TensorTy | numbers.Number, max: TensorTy | numbers.Number,
+              propagate_nan: tl.PropagateNan):
+        x, min, max = self.ternary_op_type_checking_impl(x, min, max)
 
         dtype = x.dtype
         if dtype.is_floating():
@@ -496,7 +522,7 @@ class TritonSemantic(Generic[TensorTy]):
     def _bool_like(self, v: TensorTy) -> tl.block_type:
         return v.type.with_element_ty(tl.int1)
 
-    def greater_than(self, input: TensorTy, other: TensorTy) -> TensorTy:
+    def greater_than(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
         input, other = self.binary_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float > float
@@ -510,7 +536,7 @@ class TritonSemantic(Generic[TensorTy]):
                 return self.tensor(self.builder.create_icmpUGT(input.handle, other.handle), self._bool_like(input))
         raise TypeError(f"unexpected type {scalar_ty}")
 
-    def greater_equal(self, input: TensorTy, other: TensorTy) -> TensorTy:
+    def greater_equal(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
         input, other = self.binary_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float >= float
@@ -524,7 +550,7 @@ class TritonSemantic(Generic[TensorTy]):
                 return self.tensor(self.builder.create_icmpUGE(input.handle, other.handle), self._bool_like(input))
         raise TypeError(f"unexpected type {scalar_ty}")
 
-    def less_than(self, input: TensorTy, other: TensorTy) -> TensorTy:
+    def less_than(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
         input, other = self.binary_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float < float
@@ -538,7 +564,7 @@ class TritonSemantic(Generic[TensorTy]):
                 return self.tensor(self.builder.create_icmpULT(input.handle, other.handle), self._bool_like(input))
         raise TypeError(f"unexpected type {scalar_ty}")
 
-    def less_equal(self, input: TensorTy, other: TensorTy) -> TensorTy:
+    def less_equal(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
         input, other = self.binary_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float < float
@@ -552,7 +578,7 @@ class TritonSemantic(Generic[TensorTy]):
                 return self.tensor(self.builder.create_icmpULE(input.handle, other.handle), self._bool_like(input))
         raise TypeError(f"unexpected type {scalar_ty}")
 
-    def equal(self, input: TensorTy, other: TensorTy) -> TensorTy:
+    def equal(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
         input, other = self.binary_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float == float
@@ -563,7 +589,7 @@ class TritonSemantic(Generic[TensorTy]):
             return self.tensor(self.builder.create_icmpEQ(input.handle, other.handle), self._bool_like(input))
         raise TypeError(f"unexpected type {scalar_ty}")
 
-    def not_equal(self, input: TensorTy, other: TensorTy) -> TensorTy:
+    def not_equal(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:
         input, other = self.binary_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float == float
@@ -652,6 +678,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def expand_dims(self, input: TensorTy, axis: int) -> TensorTy:
         dst_shape = [tl._unwrap_if_constexpr(x) for x in input.shape]
+        if axis < 0 or axis > len(dst_shape):
+            raise ValueError(f"invalid axis {axis}")
         dst_shape.insert(axis, 1)
 
         if not input.type.is_block():
