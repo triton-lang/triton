@@ -1268,7 +1268,11 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
 }
 
 LinearLayout toLinearLayout(RankedTensorType type) {
-  return toLinearLayout(type.getShape(), type.getEncoding());
+  auto layout = type.getEncoding();
+  if (!layout) {
+    llvm::report_fatal_error("toLinearLayout: RankedTensorType must have a layout encoding, got none");
+  }
+  return toLinearLayout(type.getShape(), layout);
 }
 
 LinearLayout toLinearLayout(MemDescType type) {
