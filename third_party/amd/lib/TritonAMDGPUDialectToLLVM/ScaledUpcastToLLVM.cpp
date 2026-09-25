@@ -128,7 +128,7 @@ struct ScaledUpcastFp4OpPattern
     auto groupScaleReg =
         computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
 
-    if (targetInfo.supportsCvtPkScalePk8()) {
+    if (targetInfo.supportsCvtPkScalePk8Block16()) {
       if (failed(checkPk8ScaleType(upcastOp, upcastOp.getScale().getType())))
         return failure();
 
@@ -261,10 +261,7 @@ struct ScaledUpcastFp8OpPattern
     SmallVector<Value> results;
     results.reserve(inputVals.size());
     bool broadcast = isScaleLane16Broadcast(upcastOp.getScale().getType());
-    bool usePk8 =
-        targetInfo.supportsCvtPkScalePk8() &&
-        (broadcast || targetInfo.supportsCvtPkScalePk8Block16());
-    if (usePk8) {
+    if (targetInfo.supportsCvtPkScalePk8Block16()) {
       if (failed(checkPk8ScaleType(upcastOp, upcastOp.getScale().getType())))
         return failure();
 

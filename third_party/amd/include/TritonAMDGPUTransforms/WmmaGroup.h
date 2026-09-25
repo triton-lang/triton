@@ -7,12 +7,14 @@
 
 namespace mlir {
 
+inline constexpr llvm::StringLiteral kWmmaN16InstsFeature = "wmma-n16-insts";
+
 struct WmmaIntrinsic {
-  // Chooses a suitable wmma instrinsic for the given input case.
-  static FailureOr<WmmaIntrinsic> selectFor(int version, unsigned mDim,
-                                            unsigned nDim, unsigned inputKDim,
-                                            Type aElemType, Type bElemType,
-                                            Type dElemType);
+
+  static FailureOr<WmmaIntrinsic>
+  selectFor(int version, unsigned mDim, unsigned nDim, unsigned inputKDim,
+            Type aElemType, Type bElemType, Type dElemType,
+            ArrayRef<StringRef> unsupportedFeatures = {});
   // Gets the wmma intrinsic based on exact match of all parameters.
   static FailureOr<WmmaIntrinsic> get(int version, unsigned mDim, unsigned nDim,
                                       unsigned kDim, Type aElemType,
@@ -20,10 +22,10 @@ struct WmmaIntrinsic {
 
   WmmaIntrinsic(StringRef symbol, unsigned m, unsigned n, unsigned k,
                 unsigned kB, Type aET, Type bET, Type dET,
-                bool requiresN16Insts = false)
+                StringRef requiredFeature = "")
       : name(symbol), mDim(m), nDim(n), kDim(k), kBase(kB), aElementType(aET),
-        bElementType(bET), dElementType(dET),
-        requiresN16Insts(requiresN16Insts) {}
+        bElementType(bET), dElementType(dET), requiredFeature(requiredFeature) {
+  }
   WmmaIntrinsic(const WmmaIntrinsic &other) = default;
   WmmaIntrinsic(WmmaIntrinsic &&other) = default;
   WmmaIntrinsic() = default;
@@ -45,7 +47,7 @@ struct WmmaIntrinsic {
   Type bElementType;
   Type dElementType;
 
-  bool requiresN16Insts = false;
+  StringRef requiredFeature;
 };
 
 struct WmmaScaleIntrinsic {
@@ -57,9 +59,9 @@ struct WmmaScaleIntrinsic {
 
   WmmaScaleIntrinsic(StringRef symbol, unsigned m, unsigned n, unsigned kDim,
                      unsigned kBaseAVal, unsigned kBaseBVal, Type dET,
-                     bool requiresN16Insts = false)
+                     StringRef requiredFeature = "")
       : name(symbol), mDim(m), nDim(n), kDim(kDim), kBaseA(kBaseAVal),
-        kBaseB(kBaseBVal), dElemType(dET), requiresN16Insts(requiresN16Insts) {}
+        kBaseB(kBaseBVal), dElemType(dET), requiredFeature(requiredFeature) {}
   WmmaScaleIntrinsic(const WmmaScaleIntrinsic &other) = default;
   WmmaScaleIntrinsic(WmmaScaleIntrinsic &&other) = default;
   WmmaScaleIntrinsic() = default;
@@ -76,7 +78,7 @@ struct WmmaScaleIntrinsic {
   unsigned kBaseB;
   Type dElemType;
 
-  bool requiresN16Insts = false;
+  StringRef requiredFeature;
 };
 } // namespace mlir
 

@@ -805,6 +805,10 @@ bool TargetInfo::supportsMultiCTALaunch() const {
   return targetFeatures.supportsMultiCTALaunch();
 }
 
+bool TargetInfo::supportsMulticast() const {
+  return targetFeatures.supportsMulticast();
+}
+
 unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
   return targetFeatures.getMaxMulticastMaskPopcount();
 }

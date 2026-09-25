@@ -9,6 +9,9 @@
 
 namespace mlir::triton::amdgpu {
 
+inline constexpr llvm::StringLiteral kWmmaRestrictedInstsFeature =
+    "wmma-restricted-insts";
+
 enum class ISAFamily {
   Unknown,
   GCN5_1,
@@ -76,6 +79,7 @@ public:
 
   bool supportsTDM() const;
   bool supportsMultiCTALaunch() const;
+  bool supportsMulticast() const;
   unsigned getMaxMulticastMaskPopcount() const;
   bool supportsClusterLoadBitWidth(int bitWidth) const;
 
@@ -89,7 +93,7 @@ public:
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
   bool supportsCvtPkScalePk8Block16() const;
-  bool supportsWmmaN16Insts() const;
+  ArrayRef<StringRef> getUnsupportedWmmaFeatures() const;
   bool supportsHwScaledUpcast() const;
   bool supportsHwScaledDowncast() const;
 

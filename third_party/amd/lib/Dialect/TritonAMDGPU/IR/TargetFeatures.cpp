@@ -259,12 +259,16 @@ bool TargetFeatures::supportsTDM() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsMultiCTALaunch() const { return isGFX1250(); }
 
+bool TargetFeatures::supportsMulticast() const {
+  return supportsMultiCTALaunch() && !isGFX1250Strict();
+}
+
 unsigned TargetFeatures::getMaxMulticastMaskPopcount() const {
-  return (isGFX1250() && !isGFX1250Strict()) ? 5 : 1;
+  return supportsMulticast() ? 5 : 1;
 }
 
 bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
-  if (getISAFamily() == ISAFamily::GFX1250) {
+  if (supportsMulticast()) {
     return llvm::is_contained({32, 64, 128}, bitWidth);
   }
   return false;
@@ -344,20 +348,21 @@ bool TargetFeatures::supportsPermlaneSwap() const {
          getISAFamily() == ISAFamily::GFX1250;
 }
 
-bool TargetFeatures::supportsCvtPkScalePk8() const {
-  return isGFX1250();
-}
+bool TargetFeatures::supportsCvtPkScalePk8() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsCvtPkScalePk8Block16() const {
   return supportsCvtPkScalePk8() && !isGFX1250Strict();
 }
 
-bool TargetFeatures::supportsWmmaN16Insts() const {
-  return arch.empty() || (isGFX1250() && !isGFX1250Strict());
+ArrayRef<StringRef> TargetFeatures::getUnsupportedWmmaFeatures() const {
+  static const StringRef kGFX1250Strict[] = {kWmmaRestrictedInstsFeature};
+  if (isGFX1250Strict())
+    return kGFX1250Strict;
+  return {};
 }
 
 bool TargetFeatures::supportsHwScaledUpcast() const {
-  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8();
+  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8Block16();
 }
 
 bool TargetFeatures::supportsHwScaledDowncast() const {

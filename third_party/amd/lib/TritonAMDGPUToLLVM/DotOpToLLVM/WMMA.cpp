@@ -363,233 +363,6 @@ Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
                                tiedLower);
 }
 
-// emulating wmma instructions to prevent gluon layout conversions -> bad perf
-struct EmulatedWmmaOperand {
-  SmallVector<Value> vals;
-  SmallVector<std::array<int, 2>> k;
-  SmallVector<int> sub;
-};
-
-static Value decodeE8M0ToF32(ConversionPatternRewriter &rewriter, Location loc,
-                             Value scale) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  Value v = b.zext(i32_ty, scale);
-  Value bits = b.shl(v, b.i32_val(23));
-  bits = b.select(b.icmp_eq(v, b.i32_val(0)), b.i32_val(0x00400000), bits);
-  bits = b.select(b.icmp_eq(v, b.i32_val(0xFF)), b.i32_val(0x7FC00000), bits);
-  return b.bitcast(bits, f32_ty);
-}
-
-static Value decodeToF32(ConversionPatternRewriter &rewriter, Location loc,
-                         Value v, Type elemTy, int nibble = 0) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  if (elemTy.isF16() || elemTy.isBF16())
-    return b.fpext(f32_ty, v);
-  if (isa<Float8E4M3FNType, Float8E5M2Type>(elemTy))
-    return LLVM::AMD::convertF8ToF32_SW(rewriter, loc, v,
-                                        isa<Float8E4M3FNType>(elemTy));
-  if (isa<Float4E2M1FNType>(elemTy)) {
-    Value nib = b.and_(b.lshr(b.zext(i32_ty, v), b.i32_val(4 * nibble)),
-                       b.i32_val(0xF));
-    Value exp = b.and_(b.lshr(nib, b.i32_val(1)), b.i32_val(0x3));
-    Value man = b.and_(nib, b.i32_val(0x1));
-    Value normal = b.or_(b.shl(b.add(exp, b.i32_val(126)), b.i32_val(23)),
-                         b.shl(man, b.i32_val(22)));
-    Value subnormal = b.select(b.icmp_ne(man, b.i32_val(0)),
-                               b.i32_val(0x3F000000), b.i32_val(0));
-    Value mag = b.select(b.icmp_eq(exp, b.i32_val(0)), subnormal, normal);
-    Value sign = b.shl(b.and_(nib, b.i32_val(0x8)), b.i32_val(28));
-    return b.bitcast(b.or_(mag, sign), f32_ty);
-  }
-  assert(elemTy.isInteger() && "unexpected wmma operand element type");
-  if (elemTy.isUnsignedInteger())
-    return LLVM::UIToFPOp::create(rewriter, loc, f32_ty, v);
-  return b.inttofloat(f32_ty, v);
-}
-
-static EmulatedWmmaOperand
-decodeWmmaOperand(ConversionPatternRewriter &rewriter, Location loc, Value raw,
-                  int kBase, DotOperandEncodingAttr enc, Type elemTy) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(enc.getParent());
-  int nonKRepeat =
-      std::max(1u, wmmaLayout.getOperandNonKDim(enc.getOpIdx()) / 16); // 16x16 wmma
-  int kPerSub = kBase / nonKRepeat;
-  int kWidth = enc.getKWidth();
-  Type rawElemTy = cast<VectorType>(raw.getType()).getElementType();
-  bool isFp4 = isa<Float4E2M1FNType>(elemTy);
-
-  EmulatedWmmaOperand res;
-  for (int i = 0; i < kBase; ++i) {
-    Value elem = b.extract_element(rawElemTy, raw, b.i32_val(i));
-    int sub = i / kPerSub;
-    int w = i % kPerSub;
-    std::array<int, 2> k;
-    for (int h = 0; h < 2; ++h)
-      k[h] = w % kWidth + h * kWidth + (w / kWidth) * 2 * kWidth;
-    if (isFp4) {
-      // Two e2m1 values per byte, the even K index in the low nibble.
-      for (int nib = 0; nib < 2; ++nib) {
-        res.vals.push_back(decodeToF32(rewriter, loc, elem, elemTy, nib));
-        res.k.push_back({2 * k[0] + nib, 2 * k[1] + nib});
-        res.sub.push_back(sub);
-      }
-    } else {
-      res.vals.push_back(decodeToF32(rewriter, loc, elem, elemTy));
-      res.k.push_back(k);
-      res.sub.push_back(sub);
-    }
-  }
-  return res;
-}
-
-static FailureOr<SmallVector<SmallVector<Value>>> getEmulatedWmmaScales(
-    ConversionPatternRewriter &rewriter, Location loc,
-    const LinearLayout &scaleLayout, ArrayRef<Value> scaleElems,
-    Type scaleElemTy, int rank, int batch, int nonK, int kIdx, int numKBlocks,
-    int numSub, Value isHalf1, amdgpu::ISAFamily isaFamily) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  auto ctx = rewriter.getContext();
-  auto invLayout = scaleLayout.pseudoinvert();
-  auto locate = [&](int row, int kCol) {
-    SmallVector<std::pair<StringAttr, int32_t>> coords;
-    if (rank == 3)
-      coords.push_back({S("dim0"), batch});
-    coords.push_back({S(rank == 3 ? "dim1" : "dim0"), row});
-    coords.push_back({S(rank == 3 ? "dim2" : "dim1"), kCol});
-    auto inDims = invLayout.apply(coords);
-    return std::make_pair(inDims[0].second, inDims[1].second);
-  };
-
-  SmallVector<SmallVector<Value>> scales(numSub);
-  for (int s = 0; s < numSub; ++s) {
-    for (int kb = 0; kb < numKBlocks; ++kb) {
-      int row = nonK + 16 * s;
-      int kCol = kIdx * numKBlocks + kb;
-      auto [reg, lane] = locate(row, kCol);
-      if ((lane & 15) != 0)
-        return failure();
-      for (int t : {1, 2, 4, 8}) {
-        auto [tReg, tLane] = locate(row + t, kCol);
-        if (tReg != reg || tLane != (lane ^ t))
-          return failure();
-      }
-      Value raw = scaleElems[reg];
-      Value swapped = LLVM::AMD::shuffleXor(loc, rewriter, raw, 16, isaFamily);
-      Value v = b.select(isHalf1, lane == 16 ? raw : swapped,
-                         lane == 0 ? raw : swapped);
-      scales[s].push_back(isa<Float8E4M3FNType>(scaleElemTy)
-                              ? LLVM::AMD::convertF8ToF32_SW(rewriter, loc, v,
-                                                             /*isE4M3FN=*/true)
-                              : decodeE8M0ToF32(rewriter, loc, v));
-    }
-  }
-  return scales;
-}
-
-static void applyEmulatedWmmaScales(TritonLLVMOpBuilder &b,
-                                    EmulatedWmmaOperand &operand,
-                                    ArrayRef<SmallVector<Value>> scales,
-                                    int scaleBlock, Value isHalf1) {
-  for (size_t e = 0; e < operand.vals.size(); ++e) {
-    auto &subScales = scales[operand.sub[e]];
-    Value lo = subScales[operand.k[e][0] / scaleBlock];
-    Value hi = subScales[operand.k[e][1] / scaleBlock];
-    operand.vals[e] =
-        b.fmul(operand.vals[e], lo == hi ? lo : b.select(isHalf1, hi, lo));
-  }
-}
-
-// for strict architecture where wmma is restricted. fallback to fp32
-static FailureOr<Value>
-emulateWmmaWithF32(ConversionPatternRewriter &rewriter, Location loc,
-                   const EmulatedWmmaOperand &x, const EmulatedWmmaOperand &y,
-                   Value acc, Value isHalf1, amdgpu::ISAFamily isaFamily,
-                   StringRef f32IntrinsicName) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-
-  // check packing
-  int numSub = 1 + *llvm::max_element(x.sub);
-  int kLogical = 2 * y.vals.size(); // 2 wmma halves
-  auto accTy = cast<VectorType>(acc.getType());
-  if (y.vals.size() % 2 != 0 || llvm::any_of(y.sub, [](int s) { return s; }) ||
-      accTy.getNumElements() != 8 * numSub) // validity check
-    return failure();
-
-  // validate y
-  llvm::DenseSet<int> yKs;
-  for (auto &k : y.k)
-    for (int h = 0; h < 2; ++h)
-      if (k[h] >= kLogical || !yKs.insert(k[h]).second)
-        return failure();
-
-  // identify locations in x
-  llvm::DenseMap<std::pair<int, int>, std::pair<int, int>> xLoc;
-  for (auto [e, k] : llvm::enumerate(x.k))
-    for (int h = 0; h < 2; ++h)
-      if (k[h] >= kLogical ||
-          !xLoc.try_emplace({x.sub[e], k[h]}, e, h).second)
-        return failure();
-  if (xLoc.size() != size_t(numSub * kLogical))
-    return failure();
-
-  // check if swapped previously, otherwise swap wmma halves if needed
-  SmallVector<Value> xSwapped(x.vals.size());
-  auto getX = [&](int s, int k, int h) -> Value {
-    auto [e, srcHalf] = xLoc.lookup({s, k});
-    if (srcHalf == h)
-      return x.vals[e];
-    if (!xSwapped[e])
-      xSwapped[e] =
-          LLVM::AMD::shuffleXor(loc, rewriter, x.vals[e], 16, isaFamily);
-    return xSwapped[e];
-  };
-  auto pickX = [&](int s, const std::array<int, 2> &k) -> Value {
-    Value lo = getX(s, k[0], 0);
-    Value hi = getX(s, k[1], 1);
-    return lo == hi ? lo : b.select(isHalf1, hi, lo);
-  };
-
-  // matmul with resolved A & B layouts
-  // may be excessive but designed to stay in wmma so that wmma support does not
-  // require being checked when input tensors are loaded, reasoning is decoupling
-  bool isIntDot = accTy.getElementType().isInteger();
-  Type f32x2Ty = vec_ty(f32_ty, 2);
-  Type f32x8Ty = vec_ty(f32_ty, 8);
-  for (int s = 0; s < numSub; ++s) {
-    Value tileAcc = b.null(f32x8Ty);
-    if (!isIntDot)
-      for (int v = 0; v < 8; ++v)
-        tileAcc = b.insert_element(
-            f32x8Ty, tileAcc,
-            b.extract_element(f32_ty, acc, b.i32_val(8 * s + v)),
-            b.i32_val(v));
-
-    for (size_t j = 0; j < y.vals.size(); j += 2) {
-      Value valA = b.undef(f32x2Ty);
-      valA = b.insert_element(f32x2Ty, valA, pickX(s, y.k[j]), b.i32_val(0));
-      valA =
-          b.insert_element(f32x2Ty, valA, pickX(s, y.k[j + 1]), b.i32_val(1));
-      Value valB = b.undef(f32x2Ty);
-      valB = b.insert_element(f32x2Ty, valB, y.vals[j], b.i32_val(0));
-      valB = b.insert_element(f32x2Ty, valB, y.vals[j + 1], b.i32_val(1));
-      tileAcc = generateWMMAIntrinsic(rewriter, loc, /*wmmaVer=*/3, valA, valB,
-                                      tileAcc, f32_ty, f32_ty, f32_ty,
-                                      f32IntrinsicName, std::nullopt);
-    }
-
-    // write back
-    for (int v = 0; v < 8; ++v) {
-      Value val = b.extract_element(f32_ty, tileAcc, b.i32_val(v));
-      if (isIntDot)
-        val = b.add(b.extract_element(i32_ty, acc, b.i32_val(8 * s + v)),
-                    LLVM::FPToSIOp::create(rewriter, loc, i32_ty, val));
-      acc = b.insert_element(accTy, acc, val, b.i32_val(8 * s + v));
-    }
-  }
-  return acc;
-}
-
 static uint64_t packMN(uint32_t m, uint32_t n) {
   return (uint64_t(m) << 32) | uint64_t(n);
 }
@@ -664,20 +437,11 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 
   auto targetFeatures =
       amdgpu::TargetFeatures::fromModuleOp(op->getParentOfType<ModuleOp>());
-  unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
-  bool emulateN16 = maybeWmmaIntrinsic->requiresN16Insts &&
-                    !targetFeatures.supportsWmmaN16Insts();
-  StringRef f32IntrinsicName;
-  Value isHalf1;
-  if (emulateN16) {
-    auto f32Intrinsic = WmmaIntrinsic::get(wmmaVer, 16, 16, 4, f32_ty, f32_ty,
-                                           f32_ty);
-    assert(succeeded(f32Intrinsic) && "missing wmma f32 16x16x4 intrinsic");
-    f32IntrinsicName = f32Intrinsic->name;
-    Value laneId =
-        tb.and_(getThreadId(rewriter, loc), tb.i32_val(warpSize - 1));
-    isHalf1 = tb.icmp_ne(tb.and_(laneId, tb.i32_val(warpSize / 2)),
-                         tb.i32_val(0));
+  if (llvm::is_contained(targetFeatures.getUnsupportedWmmaFeatures(),
+                         maybeWmmaIntrinsic->requiredFeature)) {
+    return op.emitError("wmma intrinsic ")
+           << maybeWmmaIntrinsic->name << " is not supported on "
+           << targetFeatures.getArch();
   }
 
   unsigned kInstrSize = maybeWmmaIntrinsic->kDim;
@@ -711,6 +475,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackTensorElements(loc, loadedC, rewriter, dTensorTy);
 
+  unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
   constexpr unsigned vgprElemBitWidth = 32;
   unsigned paddedOutputElemSize =
       wmmaVer == 1 ? vgprElemBitWidth / dstElemTy.getIntOrFloatBitWidth() : 1;
@@ -763,34 +528,6 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
       }
     }
     for (size_t k = 0; k < numRepK; ++k) {
-      if (emulateN16) {
-        auto ha = getOperandVals(
-            rewriter, typeConverter, aLayout, loadedA, /*opIdx*/ 0, rank,
-            batchIdx, m, k, kInstrSize, kBase, kDimTensorA, aEnc, warpSize,
-            /*opScale*/ nullptr, aTensorTy, aElemTy, loc);
-        ha = maskRepeatedKLanes(rewriter, loc, aLayout, aEnc, ha, warpSize);
-        auto hb = getOperandVals(
-            rewriter, typeConverter, bLayout, loadedB, /*opIdx*/ 1, rank,
-            batchIdx, n, k, kInstrSize, kBase, kDimTensorB, bEnc, warpSize,
-            /*opScale*/ nullptr, bTensorTy, bElemTy, loc);
-        hb = maskRepeatedKLanes(rewriter, loc, bLayout, bEnc, hb, warpSize);
-        auto opA = decodeWmmaOperand(rewriter, loc, ha, kBase, aEnc, aElemTy);
-        auto opB = decodeWmmaOperand(rewriter, loc, hb, kBase, bEnc, bElemTy);
-        auto res = wmmaLayout.getIsTransposed()
-                       ? emulateWmmaWithF32(rewriter, loc, opB, opA, acc,
-                                            isHalf1,
-                                            targetFeatures.getISAFamily(),
-                                            f32IntrinsicName)
-                       : emulateWmmaWithF32(rewriter, loc, opA, opB, acc,
-                                            isHalf1,
-                                            targetFeatures.getISAFamily(),
-                                            f32IntrinsicName);
-        if (failed(res))
-          return op.emitError("wmma conversion to fp32 failed. received [")
-                 << intrinsicName << "] on " << targetFeatures.getArch();
-        acc = *res;
-        continue;
-      }
       auto ha =
           getOperandVals(rewriter, typeConverter, aLayout, loadedA,
                          /*opIdx*/ 0, rank, batchIdx, m, k, kInstrSize, kBase,
@@ -912,7 +649,6 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
       LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getAElemType());
   Type scaledBElemType =
       LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getBElemType());
-
   auto KBaseScale = scaleFactor == 32 ? 4 : 8;
 
   FailureOr<WmmaScaleIntrinsic> maybeWmmaScaleIntrinsic =
@@ -932,20 +668,12 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 
   auto targetFeatures =
       amdgpu::TargetFeatures::fromModuleOp(op->getParentOfType<ModuleOp>());
-  unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
-  bool emulateN16 = maybeWmmaScaleIntrinsic->requiresN16Insts &&
-                    !targetFeatures.supportsWmmaN16Insts();
-  StringRef f32IntrinsicName;
-  Value isHalf1;
-  if (emulateN16) {
-    auto f32Intrinsic = WmmaIntrinsic::get(wmmaVer, 16, 16, 4, f32_ty, f32_ty,
-                                           f32_ty);
-    assert(succeeded(f32Intrinsic) && "missing wmma f32 16x16x4 intrinsic");
-    f32IntrinsicName = f32Intrinsic->name;
-    Value laneId =
-        tb.and_(getThreadId(rewriter, loc), tb.i32_val(warpSize - 1));
-    isHalf1 = tb.icmp_ne(tb.and_(laneId, tb.i32_val(warpSize / 2)),
-                         tb.i32_val(0));
+  if (llvm::is_contained(targetFeatures.getUnsupportedWmmaFeatures(),
+                         maybeWmmaScaleIntrinsic->requiredFeature)) {
+    return op.emitError("wmma scale intrinsic ")
+           << maybeWmmaScaleIntrinsic->name << " is not supported on "
+           << targetFeatures.getArch()
+           << ". Use a 16x16x128 scaled wmma layout instead.";
   }
 
   auto kBaseA = maybeWmmaScaleIntrinsic->kBaseA;
@@ -980,13 +708,8 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackTensorElements(loc, loadedC, rewriter, dTensorTy);
-  SmallVector<Value> aScaleElems, bScaleElems;
-  if (emulateN16) {
-    aScaleElems =
-        unpackTensorElements(loc, loadedAScale, rewriter, aScaleTensorTy);
-    bScaleElems =
-        unpackTensorElements(loc, loadedBScale, rewriter, bScaleTensorTy);
-  }
+
+  unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
 
   auto aEnc = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   auto bEnc = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
@@ -1014,50 +737,6 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
       acc = tb.insert_element(vecTy, acc, fc[reg + v], tb.i32_val(v));
     }
     for (size_t k = 0; k < numRepK; k++) {
-      if (emulateN16) {
-        auto ha = getOperandVals(
-            rewriter, typeConverter, aLayout, loadedA, /*opIdx*/ 0, rank,
-            batchIdx, m, k, kDimA, kBaseA, kDimTensorA, aEnc, warpSize,
-            /*opSel*/ nullptr, aTensorTy, aTensorTy.getElementType(), loc);
-        ha = maskRepeatedKLanes(rewriter, loc, aLayout, aEnc, ha, warpSize);
-        auto hb = getOperandVals(
-            rewriter, typeConverter, bLayout, loadedB, /*opIdx*/ 1, rank,
-            batchIdx, n, k, kDimB, kBaseB, kDimTensorB, bEnc, warpSize,
-            /*opSel*/ nullptr, bTensorTy, bTensorTy.getElementType(), loc);
-        hb = maskRepeatedKLanes(rewriter, loc, bLayout, bEnc, hb, warpSize);
-        auto opA =
-            decodeWmmaOperand(rewriter, loc, ha, kBaseA, aEnc, scaledAElemType);
-        auto opB =
-            decodeWmmaOperand(rewriter, loc, hb, kBaseB, bEnc, scaledBElemType);
-        auto scalesA = getEmulatedWmmaScales(
-            rewriter, loc, aScaleLayout, aScaleElems,
-            aScaleTensorTy.getElementType(), rank, batchIdx, m, k, kDimScale,
-            1 + *llvm::max_element(opA.sub), isHalf1,
-            targetFeatures.getISAFamily());
-        auto scalesB = getEmulatedWmmaScales(
-            rewriter, loc, bScaleLayout, bScaleElems,
-            bScaleTensorTy.getElementType(), rank, batchIdx, n, k, kDimScale,
-            1 + *llvm::max_element(opB.sub), isHalf1,
-            targetFeatures.getISAFamily());
-        FailureOr<Value> res = failure();
-        if (succeeded(scalesA) && succeeded(scalesB)) {
-          applyEmulatedWmmaScales(tb, opA, *scalesA, scaleFactor, isHalf1);
-          applyEmulatedWmmaScales(tb, opB, *scalesB, scaleFactor, isHalf1);
-          res = wmmaLayout.getIsTransposed()
-                    ? emulateWmmaWithF32(rewriter, loc, opB, opA, acc, isHalf1,
-                                         targetFeatures.getISAFamily(),
-                                         f32IntrinsicName)
-                    : emulateWmmaWithF32(rewriter, loc, opA, opB, acc, isHalf1,
-                                         targetFeatures.getISAFamily(),
-                                         f32IntrinsicName);
-        }
-        if (failed(res))
-          return op.emitError("wmma conversion to fp32 failed. received [")
-                 << maybeWmmaScaleIntrinsic->name << "] on "
-                 << targetFeatures.getArch();
-        acc = *res;
-        continue;
-      }
       int scaleOpSelA = 0;
       int scaleOpSelB = 0;
 
