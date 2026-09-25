@@ -683,21 +683,26 @@ def _run_failure_case(case: str, shadow_granularity: int | None = None, *, runne
     assert error in result.driver_stderr_output
 
 
-@pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
+# Test races at every cell size with byte accesses, plus the default-pool word
+# case. Multi-cell word accesses are checked by the shadow-update tests.
+RACE_ACCESS_CASES = [(granularity, torch.int8) for granularity in (1, 2, 4, 8, 16)] + [(4, torch.int32)]
+
+
+@pytest.mark.parametrize("shadow_granularity,dtype", RACE_ACCESS_CASES, indirect=["shadow_granularity"])
 def test_read_after_write(shadow_granularity, dtype):
     _run_failure_case("raw", shadow_granularity, runner=_run_raw_case, source_function=_raw_kernel.fn,
                       marker="value = gl.load(ptr + offsets)", error="Read after write race detected",
                       runner_kwargs={"dtype": dtype})
 
 
-@pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
+@pytest.mark.parametrize("shadow_granularity,dtype", RACE_ACCESS_CASES, indirect=["shadow_granularity"])
 def test_write_after_read(shadow_granularity, dtype):
     _run_failure_case("war", shadow_granularity, runner=_run_war_case, source_function=_war_kernel.fn,
                       marker="gl.store(ptr + offsets, 1)", error="Write after read race detected",
                       runner_kwargs={"dtype": dtype})
 
 
-@pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
+@pytest.mark.parametrize("shadow_granularity,dtype", RACE_ACCESS_CASES, indirect=["shadow_granularity"])
 def test_write_after_write(shadow_granularity, dtype):
     _run_failure_case("waw", shadow_granularity, runner=_run_waw_case, source_function=_waw_kernel.fn,
                       marker="gl.store(ptr + offsets, 2)", error="Write after write race detected",
@@ -737,6 +742,7 @@ def _run_coarse_pool_access_case(kind):
     ("store", "tl.store(ptr, 1)"),
     ("atomic", "tl.atomic_add(ptr, 1)"),
 ])
+@pytest.mark.parametrize("shadow_granularity", [4, 16], indirect=True)
 def test_pool_partial_and_atomic_access_restrictions(shadow_granularity, kind, marker):
     if shadow_granularity != 16:
         result = run_in_process(_run_coarse_pool_access_case, args=(kind, ),
@@ -750,6 +756,7 @@ def test_pool_partial_and_atomic_access_restrictions(shadow_granularity, kind, m
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("shadow_granularity", [4, 16], indirect=True)
 def test_pool_partial_tma_tail_restrictions(shadow_granularity):
     if shadow_granularity != 16:
         result = run_in_process(_run_coarse_pool_access_case, args=("tma_tail", ),

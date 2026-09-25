@@ -431,6 +431,7 @@ def test_default_topology_uses_cuda_device_indices():
     assert get_device_rank(1) == 1
 
 
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_malloc_free(_direct_allocator, shadow_granularity):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
     pool_index = 2 * (1, 2, 4, 8, 16).index(shadow_granularity)
@@ -509,6 +510,7 @@ def test_free_invalid_pointer_and_double_free(_direct_allocator):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_mem_pool(shadow_granularity):
     pool = create_mem_pool(shadow_granularity=shadow_granularity)
     with torch.cuda.use_mem_pool(pool):
@@ -591,6 +593,7 @@ def test_export_allocation_memhandle_regions_accepts_interior_pointer(_direct_al
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 @pytest.mark.parametrize("size", [4096, _ODD_LARGE_ALLOCATION_SIZE])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator, size, shadow_granularity):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
     device = torch.cuda.current_device()
@@ -680,6 +683,7 @@ def test_mem_pools_have_distinct_regions():
     ],
 )
 @pytest.mark.parametrize("write_once", [False, True])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_export_import_fabric_handles(explicit_config, allocator_config, write_once, shadow_granularity):
     if not supports_fabric_handles(torch.cuda.current_device()):
         pytest.skip("CUDA device does not support fabric handles")
@@ -696,6 +700,7 @@ def test_export_import_fabric_handles(explicit_config, allocator_config, write_o
 
 @pytest.mark.parametrize("write_once", [False, True])
 @pytest.mark.parametrize("size", [513, _ODD_LARGE_ALLOCATION_SIZE])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_allocation_mode_and_shadow_size(write_once, shadow_granularity, size):
     device = torch.cuda.current_device()
     ptr = gsan_malloc(size, device, write_once=write_once, shadow_granularity=shadow_granularity)
@@ -730,6 +735,7 @@ def _store_write_once_cell(ptr, WIDTH: gl.constexpr):
     gl.store(ptr + offsets, 1)
 
 
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_write_once_export_import_preserves_shadow(fresh_knobs, shadow_granularity):
     triton.knobs.compilation.instrumentation_mode = "gsan"
     device = torch.cuda.current_device()

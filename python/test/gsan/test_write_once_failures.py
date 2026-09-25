@@ -108,10 +108,20 @@ def _run_write_once_failure(case, shadow_granularity):
 @pytest.mark.parametrize("case,marker,error", [
     ("unwritten", "value = gl.load(ptr + offsets)", "Read of write-once memory before its first write"),
     ("second", "gl.store(ptr + offsets, 2)", "Write-once memory written more than once"),
+    ("overlap", "gl.store(ptr.to(gl.pointer_type(gl.uint8)) + 3, 2)", "Write-once memory written more than once"),
+])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
+def test_write_once_rejects_invalid_cell_access(case, marker, error, shadow_granularity):
+    if case == "overlap" and shadow_granularity == 16:
+        marker = "gl.store(overlap_ptr, 2)"
+    _run_failure_case(case, runner=_run_write_once_failure, runner_args=(case, shadow_granularity),
+                      source_function=_write_once_failure_kernel.fn, marker=marker, error=error)
+
+
+@pytest.mark.parametrize("case,marker,error", [
     ("cross_kernel", "gl.store(ptr + offsets, 3)", "Write-once memory written more than once"),
     ("cache_reuse", "gl.store(ptr + offsets, 3)", "Write-once memory written more than once"),
     ("alias", "gl.store(ptr + offsets, 3)", "Write-once memory written more than once"),
-    ("overlap", "gl.store(ptr.to(gl.pointer_type(gl.uint8)) + 3, 2)", "Write-once memory written more than once"),
     ("atomic_load", "value = gl.atomic_load", "Atomic operations on write-once memory are not supported"),
     ("atomic_store", "gl.atomic_store", "Atomic operations on write-once memory are not supported"),
     ("atomic_rmw", "gl.atomic_add", "Atomic operations on write-once memory are not supported"),
@@ -126,8 +136,6 @@ def _run_write_once_failure(case, shadow_granularity):
      "Atomic operations on write-once memory are not supported"),
 ])
 def test_write_once_rejects_invalid_access(case, marker, error, shadow_granularity):
-    if case == "overlap" and shadow_granularity == 16:
-        marker = "gl.store(overlap_ptr, 2)"
     _run_failure_case(case, runner=_run_write_once_failure, runner_args=(case, shadow_granularity),
                       source_function=_write_once_failure_kernel.fn, marker=marker, error=error)
 
@@ -143,6 +151,7 @@ def _run_write_once_unordered_read(shadow_granularity):
         torch.cuda.synchronize()
 
 
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_write_once_unordered_read(shadow_granularity):
     _run_failure_case("write_once_raw", runner=_run_write_once_unordered_read, runner_args=(shadow_granularity, ),
                       source_function=_raw_kernel.fn, marker="value = gl.load(ptr + offsets)",
@@ -191,7 +200,9 @@ def _run_memory_category_boundary(pool_index, boundary, is_store):
         torch.cuda.synchronize()
 
 
-@pytest.mark.parametrize("pool_index", range(10))
+# Cover both modes at the first and last granularity, including the transition
+# to unused slots. The allocator tests check address mapping for all ten pools.
+@pytest.mark.parametrize("pool_index", [0, 1, 8, 9])
 @pytest.mark.parametrize("boundary", ["start", "end"])
 @pytest.mark.parametrize("is_store", [False, True])
 def test_access_rejects_crossing_memory_category_boundary(pool_index, boundary, is_store):

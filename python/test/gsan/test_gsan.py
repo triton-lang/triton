@@ -145,6 +145,7 @@ def _load_wide_i32(ptr, out_ptr):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_load_store_updates_shadow(with_gsan):
     width = max(1, with_gsan // 4)
     target = torch.zeros(width, dtype=torch.int32, device="cuda")
@@ -196,6 +197,7 @@ def _disjoint_access_kernel(ptr, out, counter, KIND: gl.constexpr, CELL_BYTES: g
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("kind", ["raw", "war", "waw"])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_disjoint_masked_accesses(fresh_knobs, shadow_granularity, kind):
     triton.knobs.compilation.instrumentation_mode = "gsan"
     pool = create_mem_pool(shadow_granularity=shadow_granularity)
@@ -226,6 +228,7 @@ def _byte_pool_atomic_kernel(ptr):
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 @pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8], indirect=True)
 def test_atomic_updates_every_shadow_cell(with_gsan, dtype):
     target = torch.zeros(1, dtype=dtype, device="cuda")
     _byte_pool_atomic_kernel[(1, )](target, num_warps=1)
@@ -1059,6 +1062,7 @@ def test_atomic_load_only_records_read(with_gsan, dtype, sem, scope, expected_sc
 @pytest.mark.parametrize("op", ["load", "store"])
 @pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.int32, torch.float64])
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8], indirect=True)
 def test_atomic_load_store_vectorized_shadow(with_gsan, op, dtype):
 
     @gluon.jit
@@ -1135,6 +1139,7 @@ def test_gluon_atomic_load_store_updates_shadow(with_gsan, dtype):
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8], indirect=True)
 def test_masked_atomic_load_store_only_updates_active_lanes(with_gsan, dtype):
     # Keep each lane in a separate shadow cell. Byte accesses start inside the
     # cell so the value checks also catch overwrites of neighboring bytes.
@@ -1668,6 +1673,7 @@ def _scatter_reference(dst: torch.Tensor, src: torch.Tensor, x_offsets: torch.Te
 
 
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_gluon_async_copy_updates_shadow(with_gsan):
     block = 128
     start_idx = 8 if with_gsan == 16 else 5
@@ -1699,6 +1705,7 @@ def test_gluon_async_copy_updates_shadow(with_gsan):
                                     reason="Multi-CTA TMA requires Hopper or Blackwell")),
 ])
 @pytest.mark.parametrize("row_idx,col_idx", [(5, 8), (30, 8), (5, 32)])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_tma_masked_load_updates_shadow(with_gsan, with_allocator, row_idx, col_idx, num_ctas):
     block = 32
     m_size = 35
@@ -1735,6 +1742,7 @@ def test_tma_masked_load_updates_shadow(with_gsan, with_allocator, row_idx, col_
                                     reason="Multi-CTA TMA requires Hopper or Blackwell")),
 ])
 @pytest.mark.parametrize("row_idx,col_idx", [(5, 8), (30, 8), (5, 32)])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_tma_masked_store_updates_shadow(with_gsan, with_allocator, row_idx, col_idx, num_ctas):
     block = 32
     m_size = 35
@@ -1768,6 +1776,7 @@ def test_tma_masked_store_updates_shadow(with_gsan, with_allocator, row_idx, col
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_tma_load_store_uses_pool_granularity(fresh_knobs, with_allocator, shadow_granularity):
     triton.knobs.compilation.instrumentation_mode = "gsan"
     output = torch.empty((32, 32), dtype=torch.int32, device="cuda")
@@ -1785,6 +1794,7 @@ def test_tma_load_store_uses_pool_granularity(fresh_knobs, with_allocator, shado
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_host_tma_gather_updates_shadow(fresh_knobs, shadow_granularity):
     triton.knobs.compilation.instrumentation_mode = "gsan"
     block_x = 8
@@ -1819,6 +1829,7 @@ def test_host_tma_gather_updates_shadow(fresh_knobs, shadow_granularity):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_host_tma_scatter_updates_shadow(fresh_knobs, shadow_granularity):
     triton.knobs.compilation.instrumentation_mode = "gsan"
     block_x = 8

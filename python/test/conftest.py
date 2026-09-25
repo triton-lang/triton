@@ -8,7 +8,9 @@ def pytest_configure(config):
         config.option.instafail = True
 
 
-@pytest.fixture(params=[1, 2, 4, 8, 16], ids=lambda granularity: f"granularity-{granularity}")
+# Exercise synchronization/ordering at the default granularity. Tests whose
+# behavior depends on cell size explicitly parametrize this fixture indirectly.
+@pytest.fixture(params=[4], ids=lambda granularity: f"granularity-{granularity}")
 def shadow_granularity(request):
     marker = request.node.get_closest_marker("gsan_fine_granularity")
     if request.param == 16 and marker is not None:
