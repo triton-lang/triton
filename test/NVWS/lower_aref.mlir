@@ -768,7 +768,22 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: ttng.init_barrier {{.*}}, 1
   // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
   // CHECK: ttng.init_barrier {{.*}}, 1
-  tt.func @tmem_store_mixed(%a: !A, %b: !B, %out: !T, %v: !Regs) {
+  // MMA consumers join both CTAs; ordinary readers only wait locally.
+  // CHECK: ttng.tmem_store
+  // CHECK: [[PRODUCED:%.*]] = ttg.memdesc_index [[PRODUCER_DONE]]
+  // CHECK: ttng.arrive_barrier [[PRODUCED]], 1
+  // CHECK: [[MMA_READY:%.*]] = ttg.memdesc_index [[PRODUCER_DONE]]
+  // CHECK: ttng.wait_barrier [[MMA_READY]],
+  // CHECK: [[PAIR_READY:%.*]] = ttg.memdesc_index [[FULL]]
+  // CHECK: ttng.arrive_barrier [[PAIR_READY]], 1
+  // CHECK: ttng.wait_barrier [[PAIR_READY]],
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK: [[READ_READY:%.*]] = ttg.memdesc_index [[PRODUCER_DONE]]
+  // CHECK: ttng.wait_barrier [[READ_READY]],
+  // CHECK-NOT: ttng.arrive_barrier
+  // CHECK: [[READ:%.*]] = ttng.tmem_load
+  // CHECK: tt.return [[READ]]
+  tt.func @tmem_store_mixed(%a: !A, %b: !B, %out: !T, %v: !Regs) -> !Regs {
     %zero = arith.constant 0 : i32
     %true = arith.constant true
     %false = arith.constant false
@@ -783,7 +798,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %r, %rt = nvws.aref.get.enter %aref[%zero, %zero] {ttg.partition = array<i32: 3>} : <[!Stages]> -> !View, !ttg.async.token
     %val = ttng.tmem_load %r {ttg.partition = array<i32: 3>} : !View -> !Regs
     nvws.aref.get.exit %aref[%zero], %rt [#nvws.async_op<none>] {ttg.partition = array<i32: 3>} : <[!Stages]>, !ttg.async.token
-    tt.return
+    tt.return %val : !Regs
   }
   // CHECK-LABEL: @tmem_mma_reads(
   // CHECK-NOT: ttg.local_alloc
