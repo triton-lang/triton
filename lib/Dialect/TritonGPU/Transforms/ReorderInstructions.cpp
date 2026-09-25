@@ -92,6 +92,7 @@ public:
   void runOnOperation() override {
     ModuleOp m = getOperation();
     mlir::DominanceInfo dom(m);
+
     // sink conversion after the last dealloc
     // before the first use ancestor in its block
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
@@ -101,6 +102,7 @@ public:
         if (isa<triton::gpu::LocalDeallocOp>(&*curr))
           op->moveAfter(&*curr);
     });
+
     // Sink conversions into loops when they will increase
     // register pressure
     DenseMap<Operation *, Operation *> opToMove;
@@ -121,6 +123,7 @@ public:
     });
     for (auto &kv : opToMove)
       kv.first->moveBefore(kv.second);
+
     // Move alloc(load) immediately after dependent load
     m.walk([&](triton::gpu::LocalAllocOp op) {
       if (!op.getSrc())
@@ -134,6 +137,7 @@ public:
         return;
       moveAfter(op, argOp);
     });
+
     // Move transpositions just after their definition
     opToMove.clear();
     m.walk([&](triton::TransposeOpInterface op) {
@@ -142,6 +146,7 @@ public:
         return;
       moveAfter(op, argOp);
     });
+
     // Move `dot` operand so that conversions to opIdx=1 happens after
     // conversions to opIdx=0
     m.walk([&](triton::gpu::LocalLoadOp op) {
@@ -169,6 +174,88 @@ public:
         return;
       moveAfter(op, AOp);
     });
+
+    // Sink memory loads closer to their first use to shorten live ranges
+    // across heavy compute regions (e.g. tt.dot), provided no write
+    // side-effecting operations intervene.
+    SmallVector<triton::LoadOp> loadsToSink;
+    m.walk([&](triton::LoadOp op) {
+      loadsToSink.push_back(op);
+    });
+
+    for (auto op : loadsToSink) {
+      Operation *firstUse = getFirstUse(op);
+      if (!firstUse)
+        continue;
+      if (op->getNextNode() == firstUse)
+        continue;
+      if (crossWriteSideEffectingOp(op, firstUse))
+        continue;
+
+      // Collect the backward slice of pure operations that define the pointer
+      // and whose only purpose is feeding this load.
+      SetVector<Operation *> backwardSlice;
+      SmallVector<Operation *> worklist;
+      if (Operation *ptrOp = op.getPtr().getDefiningOp()) {
+        if (ptrOp->getBlock() == op->getBlock())
+          worklist.push_back(ptrOp);
+      }
+
+      bool validSlice = true;
+      while (!worklist.empty()) {
+        Operation *curr = worklist.pop_back_val();
+        if (backwardSlice.contains(curr))
+          continue;
+        if (curr->getBlock() != op->getBlock())
+          continue;
+        if (!curr->hasOneUse())
+          continue;
+        if (hasWriteSideEffect(curr)) {
+          validSlice = false;
+          break;
+        }
+        backwardSlice.insert(curr);
+        for (Value operand : curr->getOperands()) {
+          if (Operation *def = operand.getDefiningOp()) {
+            if (def->getBlock() == op->getBlock())
+              worklist.push_back(def);
+          }
+        }
+      }
+
+      if (!validSlice)
+        continue;
+
+      // Topological sort of backwardSlice: ensure definitions precede uses.
+      // Since ops were originally valid in the block, sort by their current block position.
+      SmallVector<Operation *> sortedSlice(backwardSlice.begin(), backwardSlice.end());
+      llvm::sort(sortedSlice, [](Operation *a, Operation *b) {
+        return a->isBeforeInBlock(b);
+      });
+
+      // Verify that all external operands of sortedSlice will dominate the new insertion point.
+      bool canSinkSlice = llvm::all_of(sortedSlice, [&](Operation *sliceOp) {
+        return llvm::all_of(sliceOp->getOperands(), [&](Value operand) {
+          if (Operation *def = operand.getDefiningOp()) {
+            if (def->getBlock() == op->getBlock()) {
+              return backwardSlice.contains(def) || def->isBeforeInBlock(firstUse);
+            }
+          }
+          return true;
+        });
+      });
+
+      if (!canSinkSlice)
+        continue;
+
+      // Move the address slice immediately before firstUse, preserving topological order
+      for (Operation *sliceOp : sortedSlice) {
+        sliceOp->moveBefore(firstUse);
+      }
+      // Move load immediately after its address slice and before firstUse
+      op->moveBefore(firstUse);
+    }
+
     return;
   }
 };
