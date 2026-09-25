@@ -15,7 +15,6 @@ import triton
 from triton import cdiv
 from triton.language.core import PropagateNan
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-from triton._internal_testing import expected_wmma_instr
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
 from triton.experimental.gluon.language import expand_dims
@@ -3214,8 +3213,8 @@ def test_block_scaled_attn_fwd(q_type, kv_type, batch, seqlen_q, seqlen_k, num_q
         # check use correct wmma instruction
         if re.match(groups['pv'], code) or re.match(groups['qk'], code):
             wmma_instrs = [instr for instr in instrs if re.match(r'v_wmma_*', instr)]
-            wmma_instr = expected_wmma_instr(kernel.metadata.arch, "v_wmma_scale_f32_16x16x128_f8f6f4")
-            assert len(wmma_instrs) > 0 and all(instr.startswith(wmma_instr) for instr in wmma_instrs)
+            assert len(wmma_instrs) > 0 and \
+                all(instr.startswith("v_wmma_scale_f32_16x16x128_f8f6f4") for instr in wmma_instrs)
         # check always use ds_load_b128 to load k and all instructions are using the same vgpr for address
         if re.match(groups['ds_load_k'], code):
             ds_load_instrs = [instr for instr in instrs if re.match(r'ds_load_', instr)]
@@ -3292,8 +3291,8 @@ def test_global_scaled_attn_fwd(q_type, kv_type, batch, seqlen_q, seqlen_k, num_
         # check use correct wmma instruction
         if re.match(groups['pv'], code) or re.match(groups['qk'], code):
             wmma_instrs = [instr for instr in instrs if re.match(r'v_wmma_*', instr)]
-            wmma_instr = expected_wmma_instr(kernel.metadata.arch, "v_wmma_scale_f32_16x16x128_f8f6f4")
-            assert len(wmma_instrs) > 0 and all(instr.startswith(wmma_instr) for instr in wmma_instrs)
+            assert len(wmma_instrs) > 0 and \
+                all(instr.startswith("v_wmma_scale_f32_16x16x128_f8f6f4") for instr in wmma_instrs)
         # check always use ds_load_b128 to load k and all instructions are using the same vgpr for address
         if re.match(groups['ds_load_k'], code):
             ds_load_instrs = [instr for instr in instrs if re.match(r'ds_load_', instr)]

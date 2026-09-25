@@ -8,7 +8,7 @@ from itertools import product
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import check_wmma_instr, is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes
+from triton._internal_testing import check_scaled_upcast_instr, check_wmma_instr, check_wmma_instr_rejected, is_wmma_instr_disabled, is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
@@ -114,10 +114,6 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
     }
     fn = gemm_kernel
 
-    k = triton.compile(src=gluon._runtime.GluonASTSource(fn, signature, constexprs),
-                       target=GPUTarget("hip", 'gfx1250', 32))
-    amdgcn = k.asm["amdgcn"]
-
     wmma_pattern = "v_wmma_"
     wmma_pattern += "f32_"
     wmma_pattern += "16x16x" + str(k_dim) + "_"
@@ -131,7 +127,14 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
         b_ty = "fp8" if b_dtype == "fp8e4nv" else "bf8"
         # NOTE: we always use transposed=True for wmma layout, which will swap A and B
         wmma_pattern += b_ty + "_" + a_ty
-    check_wmma_instr(amdgcn, k.metadata.arch, wmma_pattern)
+
+    compile_fn = lambda: triton.compile(src=gluon._runtime.GluonASTSource(fn, signature, constexprs), target=GPUTarget(
+        "hip", 'gfx1250', 32))
+    if is_wmma_instr_disabled(wmma_pattern):
+        check_wmma_instr_rejected(compile_fn)
+        return
+    k = compile_fn()
+    check_wmma_instr(k.asm["amdgcn"], k.metadata.arch, wmma_pattern)
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
@@ -185,7 +188,7 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
     pgm = scaled_upcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, compact_scale,
                                           num_warps=4)
 
-    assert pgm.asm["amdgcn"].count("v_cvt_scale_pk8_bf16_fp4") == BLOCK_K // 32
+    check_scaled_upcast_instr(pgm.asm["amdgcn"], pgm.metadata.arch, "v_cvt_scale_pk8_bf16_fp4", BLOCK_K // 32)
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -243,7 +246,7 @@ def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
     pgm = scaled_upcast_fp4_bf16_gemm_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_N, BLOCK_K, SCALE_FACTOR,
                                                     num_warps=4)
 
-    assert "v_cvt_scale_pk8_bf16_fp4" in pgm.asm["amdgcn"]
+    check_scaled_upcast_instr(pgm.asm["amdgcn"], pgm.metadata.arch, "v_cvt_scale_pk8_bf16_fp4")
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -295,7 +298,7 @@ def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
 
     pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, ttgl_out, num_warps=1)
 
-    assert f"v_cvt_scale_pk8_{out_dtype}_{in_mnemonic}" in pgm.asm["amdgcn"]
+    check_scaled_upcast_instr(pgm.asm["amdgcn"], pgm.metadata.arch, f"v_cvt_scale_pk8_{out_dtype}_{in_mnemonic}")
     y_ref = (x_ref * scale_ref).to(torch_out)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -338,7 +341,7 @@ def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
 
     pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, num_warps=1)
 
-    assert "v_cvt_scale_pk8_bf16_fp8" in pgm.asm["amdgcn"]
+    check_scaled_upcast_instr(pgm.asm["amdgcn"], pgm.metadata.arch, "v_cvt_scale_pk8_bf16_fp8")
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -476,7 +479,7 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
     b_device = b.cuda()
     c_device = c.cuda()
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    gemm_kernel[grid](
+    launch = lambda: gemm_kernel[grid](
         a_device, b_device, c_device,  #
         M, N, K,  #
         stride_am, stride_ak,  #
@@ -484,6 +487,10 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
         stride_cm, stride_cn,  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
         INSTR_SHAPE_K=k_dim, K_WIDTH=2 if a_dtype == torch.float32 else 8)
+    if a_dtype.itemsize == 1 and is_wmma_instr_disabled(f"v_wmma_f32_16x16x{k_dim}_fp8_fp8"):
+        check_wmma_instr_rejected(launch)
+        return
+    launch()
 
     c_triton = c_device.cpu()
     c_torch = a.to(torch.float32) @ b.to(torch.float32)
@@ -1248,8 +1255,8 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
         b_scale_ref = 1.0
 
     c = torch.zeros((M, N), dtype=torch.float32).cuda()
-    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, instr_m, instr_n, transposed,
-                        num_warps=4)
+    launch = lambda: kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, instr_m, instr_n,
+                                   transposed, num_warps=4)
 
     no_scales = not with_a_scale and not with_b_scale
 
@@ -1263,6 +1270,10 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
             wmma_instr = "v_wmma_scale_f32_16x16x128_f8f6f4"
         else:
             wmma_instr = "v_wmma_scale16_f32_16x16x128_f8f6f4"
+    if is_wmma_instr_disabled(wmma_instr):
+        check_wmma_instr_rejected(launch)
+        return
+    pgm = launch()
     check_wmma_instr(pgm.asm["amdgcn"], pgm.metadata.arch, wmma_instr)
 
     c_torch = (a_ref * a_scale_ref) @ (b_ref * b_scale_ref)
