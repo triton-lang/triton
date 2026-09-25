@@ -207,9 +207,54 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   }
 
-  // PaddedSharedEncodingAttr is also a SharedEncodingTrait but we have some
-  // additional rules to verify.
-  if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
+  // These encodings are also SharedEncodingTraits but have additional rules.
+  if (auto enc = dyn_cast<PartitionedSharedEncodingAttr>(encoding)) {
+    auto inner = enc.getPartitionLayout();
+    if (isa<PartitionedSharedEncodingAttr>(inner)) {
+      return emitError()
+             << "nested PartitionedSharedEncodingAttr is not supported";
+    }
+    if (isa<NVMMASharedEncodingAttr>(inner)) {
+      return emitError() << "NVMMASharedEncodingAttr is not supported as a "
+                            "partitionLayout";
+    }
+
+    auto blockShape = getShapePerCTA(enc, layoutAllocShape);
+    unsigned partitionDim = enc.getPartitionDim();
+    unsigned numLogicalPieces = enc.getNumLogicalPieces();
+    if (blockShape[partitionDim] % numLogicalPieces != 0) {
+      return emitError()
+             << "per-CTA allocation extent along partitionDim must be "
+                "divisible by numPartitions * numGroups; got "
+             << blockShape[partitionDim] << " and " << numLogicalPieces;
+    }
+
+    SmallVector<int64_t> pieceShape(blockShape);
+    pieceShape[partitionDim] /= numLogicalPieces;
+    auto verifyFixedShape = [&](const LinearLayout &layout) -> LogicalResult {
+      auto bases = layout.getBases();
+      auto kBlock = StringAttr::get(ctx, "block");
+      if (layout.hasInDim(kBlock))
+        bases[kBlock] = {};
+      LinearLayout localPiece(std::move(bases),
+                              llvm::to_vector(layout.getOutDimNames()));
+      if (!llvm::equal(localPiece.getOutDimSizes(), pieceShape)) {
+        return emitError() << "partitionLayout does not match the per-CTA "
+                              "logical piece shape; expected "
+                           << pieceShape << ", got "
+                           << localPiece.getOutDimSizes();
+      }
+      return success();
+    };
+
+    if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(inner)) {
+      if (failed(verifyFixedShape(padded.getLinearComponent())))
+        return failure();
+    } else if (auto linear = dyn_cast<SharedLinearEncodingAttr>(inner)) {
+      if (failed(verifyFixedShape(linear.getLinearLayout())))
+        return failure();
+    }
+  } else if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
     auto rank = enc.getRank();
     // Ensure linear component's outDims match the alloc size ignoring
     // pipelining dimension
