@@ -419,7 +419,9 @@ def _run_waw_case(dtype=torch.int32, shadow_granularity=4) -> None:
 
 @run_with_gsan
 def _run_pdl_without_wait_case() -> None:
-    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
+    # Keep the producer CTAs in separate cells even in an 8-byte pool so the
+    # failure comes from the missing consumer wait, not producer false sharing.
+    payload = torch.zeros(2, dtype=torch.int64, device="cuda")
     scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
     _pdl_producer_kernel[(2, )](payload, num_warps=1)
     _pdl_consumer_without_wait_kernel[(1, )](payload, scratch, num_warps=1, launch_pdl=True)

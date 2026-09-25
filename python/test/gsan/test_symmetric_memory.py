@@ -106,12 +106,13 @@ def _load_cell_kernel(buf, byte_offset, out, WIDTH: gl.constexpr):
     gl.store(out + offsets, value)
 
 
-def _run_symmetric_memory_checks(rank: int, world_size: int, shadow_granularity: int) -> None:
+def _run_symmetric_memory_checks(rank: int, world_size: int, shadow_granularity: int, write_once: bool) -> None:
     dev = torch.device(f"cuda:{rank}")
     torch.cuda.set_device(dev)
     symmetric_memory.configure(dist.group.WORLD)
 
-    buf = symmetric_memory.empty((2048, ), dtype=torch.uint8, device=dev, shadow_granularity=shadow_granularity)
+    buf = symmetric_memory.empty((2048, ), dtype=torch.uint8, device=dev, shadow_granularity=shadow_granularity,
+                                 write_once=write_once)
     buf.fill_(rank + 1)
 
     hdl = symmetric_memory.rendezvous(buf, group=dist.group.WORLD)
@@ -132,7 +133,7 @@ def _run_symmetric_memory_checks(rank: int, world_size: int, shadow_granularity:
 
     local_shadow = shadow_tensor_for(buf)
     peer_shadow = shadow_tensor_for(peer_buf)
-    assert local_shadow.numel() == peer_shadow.numel()
+    assert local_shadow.numel() == peer_shadow.numel() == buf.numel() // shadow_granularity * (4 if write_once else 24)
 
     local_shadow.fill_(rank + 3)
     hdl.barrier(channel=0)
@@ -233,15 +234,16 @@ def _run_subgroup_symmetric_memory_checks(rank: int, shadow_granularity) -> None
             dist.destroy_process_group(subgroup)
 
 
-def _run_multi_node_simulated_symmetric_memory_checks(rank: int, world_size: int, device_index: int,
-                                                      shadow_granularity) -> None:
+def _run_multi_node_simulated_symmetric_memory_checks(rank: int, world_size: int, device_index: int, shadow_granularity,
+                                                      write_once) -> None:
     triton.knobs.compilation.instrumentation_mode = "gsan"
 
     dev = torch.device(f"cuda:{device_index}")
     torch.cuda.set_device(dev)
     symmetric_memory.configure(dist.group.WORLD)
 
-    buf = symmetric_memory.empty((2048, ), dtype=torch.uint8, device=dev, shadow_granularity=shadow_granularity)
+    buf = symmetric_memory.empty((2048, ), dtype=torch.uint8, device=dev, shadow_granularity=shadow_granularity,
+                                 write_once=write_once)
     buf.fill_(rank + 31)
 
     hdl = symmetric_memory.rendezvous(buf, group=dist.group.WORLD)
@@ -282,8 +284,8 @@ def _run_multi_node_simulated_symmetric_memory_checks(rank: int, world_size: int
                                                       device_index=device_index)
     assert int(buf[incoming_shadow_offset].item()) == prev + 151
     assert incoming_shadow_after != incoming_shadow_before
-    assert incoming_shadow_after.write_clock != incoming_shadow_before.write_clock
-    assert incoming_shadow_after.write_clock.epoch != 0
+    write_clock = incoming_shadow_after if write_once else incoming_shadow_after.write_clock
+    assert write_clock.epoch != 0
     assert untouched_shadow_after == untouched_shadow_before
 
     _assert_barrier_synchronizes_stream_clocks(hdl, device_index, dist.group.WORLD)
@@ -301,16 +303,19 @@ def _run_single_cta_atomic_sync_check(rank: int, world_size: int, shadow_granula
     symmetric_memory.configure(dist.group.WORLD)
 
     peer = (rank + 1) % world_size
-    state = symmetric_memory.empty((2, ), dtype=torch.int32, device=dev, shadow_granularity=shadow_granularity)
+    # The counter and payload must not share a coarse shadow cell.
+    stride = max(1, shadow_granularity // 4)
+    state = symmetric_memory.empty((2 * stride, ), dtype=torch.int32, device=dev, shadow_granularity=shadow_granularity)
     state.zero_()
 
     hdl = symmetric_memory.rendezvous(state, group=dist.group.WORLD)
     counter = hdl.get_buffer(0, (1, ), state.dtype, storage_offset=0)
-    peer_payload = hdl.get_buffer(peer, (1, ), state.dtype, storage_offset=1)
-    local_payload = state[1:]
+    peer_payload = hdl.get_buffer(peer, (1, ), state.dtype, storage_offset=stride)
+    local_payload = state[stride:stride + 1]
     payload_hdl = None
     if write_once:
-        payload = symmetric_memory.empty((1, ), dtype=torch.int32, device=dev, write_once=True)
+        payload = symmetric_memory.empty((1, ), dtype=torch.int32, device=dev, write_once=True,
+                                         shadow_granularity=shadow_granularity)
         payload_hdl = symmetric_memory.rendezvous(payload, group=dist.group.WORLD)
         local_payload = payload
         peer_payload = payload_hdl.get_buffer(peer, payload.shape, payload.dtype)
@@ -346,7 +351,7 @@ def _run_single_cta_atomic_sync_check(rank: int, world_size: int, shadow_granula
         assert is_write_once_allocation(peer_payload.data_ptr())
         clock = shadow_cell_from_address(peer_payload.data_ptr())
         assert clock.epoch > 0
-        assert shadow_tensor_for(peer_payload).numel() == 16
+        assert shadow_tensor_for(peer_payload).numel() == triton.cdiv(4, shadow_granularity) * 4
         payload_hdl.close()
     hdl.close()
     hdl.close()
@@ -380,8 +385,8 @@ def _run_single_cta_no_atomic_sync_check(rank: int, world_size: int, shadow_gran
     torch.cuda.synchronize()
 
 
-def _distributed_worker(rank: int, world_size: int, master_port: int, run_subgroup_check: bool,
-                        shadow_granularity: int) -> None:
+def _distributed_worker(rank: int, world_size: int, master_port: int, run_subgroup_check: bool, shadow_granularity: int,
+                        write_once: bool = False) -> None:
     dev = f"cuda:{rank}"
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["MASTER_ADDR"] = "127.0.0.1"
@@ -392,7 +397,7 @@ def _distributed_worker(rank: int, world_size: int, master_port: int, run_subgro
         if run_subgroup_check:
             _run_subgroup_symmetric_memory_checks(rank, shadow_granularity)
         else:
-            _run_symmetric_memory_checks(rank, world_size, shadow_granularity)
+            _run_symmetric_memory_checks(rank, world_size, shadow_granularity, write_once)
         dist.barrier()
     finally:
         dist.destroy_process_group()
@@ -414,14 +419,15 @@ def _distributed_worker_single_cta_atomic_sync(rank: int, world_size: int, maste
 
 
 def _distributed_worker_multi_node_simulated(rank: int, world_size: int, master_port: int, num_local_devices: int,
-                                             shadow_granularity) -> None:
+                                             shadow_granularity, write_once) -> None:
     device_index = rank % num_local_devices
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(master_port)
     dist.init_process_group(backend="gloo", rank=rank, world_size=world_size, timeout=_PROCESS_GROUP_TIMEOUT)
     try:
-        _run_multi_node_simulated_symmetric_memory_checks(rank, world_size, device_index, shadow_granularity)
+        _run_multi_node_simulated_symmetric_memory_checks(rank, world_size, device_index, shadow_granularity,
+                                                          write_once)
         dist.barrier()
     finally:
         dist.destroy_process_group()
@@ -458,13 +464,14 @@ def _distributed_worker_single_cta_no_atomic_sync(rank: int, world_size: int, ma
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_gsan_symmetric_memory_rendezvous(shadow_granularity):
+@pytest.mark.parametrize("write_once", [False, True])
+def test_gsan_symmetric_memory_rendezvous(shadow_granularity, write_once):
     if torch.cuda.device_count() < 2:
         pytest.skip("requires 2 CUDA devices")
 
     world_size = 2
     master_port = _get_free_tcp_port()
-    _spawn_distributed(_distributed_worker, world_size, master_port, False, shadow_granularity)
+    _spawn_distributed(_distributed_worker, world_size, master_port, False, shadow_granularity, write_once)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
@@ -478,13 +485,15 @@ def test_gsan_symmetric_memory_rendezvous_subgroup_without_global_zero(shadow_gr
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_gsan_symmetric_memory_rendezvous_multi_node_simulated(shadow_granularity):
+@pytest.mark.parametrize("write_once", [False, True])
+def test_gsan_symmetric_memory_rendezvous_multi_node_simulated(shadow_granularity, write_once):
     if torch.cuda.device_count() < 2:
         pytest.skip("requires 2 CUDA devices")
 
     world_size = 4
     master_port = _get_free_tcp_port()
-    _spawn_distributed(_distributed_worker_multi_node_simulated, world_size, master_port, 2, shadow_granularity)
+    _spawn_distributed(_distributed_worker_multi_node_simulated, world_size, master_port, 2, shadow_granularity,
+                       write_once)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")

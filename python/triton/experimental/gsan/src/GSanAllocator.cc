@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <random>
 
 #include "GSan.h"
@@ -370,8 +371,8 @@ int gsanEnsureInit() {
   alloc->globalStateAddress = globalsBase;
 
   for (int i = 0; i < gsan::kNumPools; ++i) {
-    bool writeOnce = i == 3;
-    int granularity = writeOnce ? 1 : 1 << (2 * i);
+    bool writeOnce = (i & 1) != 0;
+    int granularity = 1 << (i >> 1);
     auto *root = &alloc->treeRoots[i];
     root->virtualAddress =
         gsan::getRealBaseAddress(reserveBase, granularity, writeOnce);
@@ -632,8 +633,7 @@ void unmapNodeHandles(AllocNode *node, bool realMapped, bool shadowMapped) {
 // TODO: Handle streams?
 void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
                                 int shadowGranularity, bool writeOnce = false) {
-  if (size <= 0 || !gsan::isValidShadowGranularity(shadowGranularity) ||
-      (writeOnce && shadowGranularity != 1))
+  if (size <= 0 || !gsan::isValidShadowGranularity(shadowGranularity))
     return nullptr;
 
   std::lock_guard lg(mut);
@@ -664,9 +664,11 @@ void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
     printCUDAError(err);
     return nullptr;
   }
-  // A 16-byte pool has a 3/2 shadow-to-real ratio. Use an even number of
-  // allocation pages so both shadow addresses and sizes remain page aligned.
-  size_t alignment = granularity * (shadowGranularity == 16 ? 2 : 1);
+  // Scale real allocation alignment so fractional shadow-to-real ratios
+  // still produce page-aligned shadow addresses and sizes.
+  size_t alignment =
+      granularity * shadowGranularity /
+      std::gcd(shadowGranularity, gsan::getShadowCellSize(writeOnce));
   size_t allocSize = roundUp(static_cast<size_t>(size), alignment);
   auto *root = &alloc->treeRoots[gsan::getPoolIndexForGranularity(
       shadowGranularity, writeOnce)];
@@ -722,8 +724,32 @@ extern "C" void *gsanMallocWriteOnce(ssize_t size, int device, void *stream) {
   return gsanMallocWithGranularity(size, device, stream, 1, true);
 }
 
+extern "C" void *gsanMallocWriteOnce2(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 2, true);
+}
+
+extern "C" void *gsanMallocWriteOnce4(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 4, true);
+}
+
+extern "C" void *gsanMallocWriteOnce8(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 8, true);
+}
+
+extern "C" void *gsanMallocWriteOnce16(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 16, true);
+}
+
 extern "C" void *gsanMalloc1(ssize_t size, int device, void *stream) {
   return gsanMallocWithGranularity(size, device, stream, 1);
+}
+
+extern "C" void *gsanMalloc2(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 2);
+}
+
+extern "C" void *gsanMalloc8(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 8);
 }
 
 extern "C" void *gsanMalloc16(ssize_t size, int device, void *stream) {
@@ -814,8 +840,8 @@ int gsanExportAllocationHandles(void *void_ptr,
             "gsanExportAllocationHandles called with invalid pointer\n");
     return -1;
   }
-  if (!includeGranularity && !gsan::isWriteOnceAddress(ptr) &&
-      gsan::getShadowGranularity(ptr) != 4)
+  if (!includeGranularity && gsan::getShadowGranularity(ptr) !=
+                                 (gsan::isWriteOnceAddress(ptr) ? 1 : 4))
     return -2;
 
   CUresult err = cuMemExportToShareableHandle(
@@ -932,8 +958,7 @@ gsanImportAllocationHandles(const GSanShareableHandle *realShareableHandle,
                             bool writeOnce = false) {
   if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
       !isSupportedShareableHandleType(handleType) || allocSize == 0 ||
-      !gsan::isValidShadowGranularity(shadowGranularity) ||
-      (writeOnce && shadowGranularity != 1))
+      !gsan::isValidShadowGranularity(shadowGranularity))
     return nullptr;
   if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
       (realShareableHandle->fd < 0 || shadowShareableHandle->fd < 0)) {
@@ -1147,11 +1172,12 @@ bool parseShadowGranularityArg(PyObject *obj, int *out) {
   if (PyBool_Check(obj) || !parseIntArg(obj, "shadow_granularity", out)) {
     if (!PyErr_Occurred())
       PyErr_SetString(PyExc_ValueError,
-                      "shadow_granularity must be 1, 4, or 16");
+                      "shadow_granularity must be 1, 2, 4, 8, or 16");
     return false;
   }
   if (!gsan::isValidShadowGranularity(*out)) {
-    PyErr_SetString(PyExc_ValueError, "shadow_granularity must be 1, 4, or 16");
+    PyErr_SetString(PyExc_ValueError,
+                    "shadow_granularity must be 1, 2, 4, 8, or 16");
     return false;
   }
   return true;
