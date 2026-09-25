@@ -9,6 +9,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -55,6 +56,7 @@ static PyObject *fp32_str = nullptr;
 static PyObject *u1_str = nullptr;
 static PyObject *D_str = nullptr;
 static PyObject *constexpr_str = nullptr;
+static PyObject *aggregate_str = nullptr;
 static PyObject *empty_str = nullptr;
 static PyObject *nvTmaDesc_str = nullptr;
 
@@ -63,6 +65,7 @@ static PyObject *data_ptr_attr = nullptr;
 static PyObject *dtype_attr = nullptr;
 static PyObject *cache_key_attr = nullptr;
 static PyObject *_fields_attr = nullptr;
+static PyObject *triton_aggregate_attr = nullptr;
 static PyObject *block_shape_attr = nullptr;
 static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
@@ -126,6 +129,7 @@ void init_interned_strings() {
   u1_str = intern_from_string("u1");
   D_str = intern_from_string("D");
   constexpr_str = intern_from_string("constexpr");
+  aggregate_str = intern_from_string("aggregate");
   empty_str = intern_from_string("");
   nvTmaDesc_str = intern_from_string("nvTmaDesc");
 
@@ -134,6 +138,7 @@ void init_interned_strings() {
   dtype_attr = intern_from_string("dtype");
   cache_key_attr = intern_from_string("cache_key");
   _fields_attr = intern_from_string("_fields");
+  triton_aggregate_attr = intern_from_string("__triton_aggregate__");
   block_shape_attr = intern_from_string("block_shape");
   shape_attr = intern_from_string("shape");
   layout_attr = intern_from_string("layout");
@@ -427,6 +432,13 @@ handle_constexpr_type(PyObject *backend, PyObject *arg, bool is_const,
   return {from_borrowed_ref(constexpr_str), from_borrowed_ref(arg)};
 }
 
+std::pair<py::object, py::object> handle_aggregate(PyObject *backend,
+                                                   PyObject *arg, bool is_const,
+                                                   bool specialize_value,
+                                                   bool align) {
+  return {from_borrowed_ref(aggregate_str), from_borrowed_ref(arg)};
+}
+
 std::pair<py::object, py::object>
 handle_jit_callable(PyObject *backend, PyObject *arg, bool is_const,
                     bool specialize_value, bool align) {
@@ -582,6 +594,10 @@ std::pair<py::object, py::object> specialize_arg(PyObject *backend,
   }
 
   // fallback paths checking attributes directly
+  if (PyObject_HasAttr(arg, triton_aggregate_attr)) {
+    return handle_aggregate(backend, arg, is_const, specialize_value, align);
+  }
+
   if (PyObject_HasAttr(arg, data_ptr_attr)) {
     return handle_tensor(backend, arg, is_const, specialize_value, align);
   }
@@ -789,9 +805,79 @@ PyObject *make_tensordesc_args(PyObject *self, PyObject *const *args,
   return result.release().ptr();
 }
 
+bool append_path(const std::vector<Py_ssize_t> &path, PyObject **out) {
+  if (!*out) {
+    *out = PyList_New(0);
+    if (!*out)
+      return false;
+  }
+  auto tuple = from_new_ref(PyTuple_New(path.size()));
+  if (!tuple)
+    return false;
+  for (size_t i = 0; i < path.size(); ++i) {
+    PyObject *idx = PyLong_FromSsize_t(path[i]);
+    if (!idx)
+      return false;
+    PyTuple_SET_ITEM(tuple.ptr(), i, idx); // steals
+  }
+  return PyList_Append(*out, tuple.ptr()) == 0;
+}
+
+bool collect_aggregate_paths(PyObject *type, std::vector<Py_ssize_t> &path,
+                             PyObject **out) {
+  if (type == aggregate_str)
+    return append_path(path, out);
+  if (!PyTuple_Check(type))
+    return true;
+  Py_ssize_t size = PyTuple_GET_SIZE(type);
+  for (Py_ssize_t i = 0; i < size; ++i) {
+    path.push_back(i);
+    bool ok = collect_aggregate_paths(PyTuple_GET_ITEM(type, i), path, out);
+    path.pop_back();
+    if (!ok)
+      return false;
+  }
+  return true;
+}
+
+PyObject *find_aggregate_arg_paths(PyObject *self, PyObject *specialization) {
+  if (!init_called && !init_globals())
+    return nullptr;
+
+  if (!PyList_Check(specialization)) {
+    PyErr_SetString(
+        PyExc_TypeError,
+        "find_aggregate_arg_paths expected a list of (type, key) pairs");
+    return nullptr;
+  }
+
+  PyObject *out = nullptr;
+  std::vector<Py_ssize_t> path;
+  Py_ssize_t nargs = PyList_GET_SIZE(specialization);
+  for (Py_ssize_t i = 0; i < nargs; ++i) {
+    PyObject *entry = PyList_GET_ITEM(specialization, i);
+    if (!PyTuple_Check(entry) || PyTuple_GET_SIZE(entry) != 2) {
+      Py_XDECREF(out);
+      return nullptr;
+    }
+    path.push_back(i);
+    bool ok = collect_aggregate_paths(PyTuple_GET_ITEM(entry, 0), path, &out);
+    path.pop_back();
+    if (!ok) {
+      Py_XDECREF(out);
+      return nullptr;
+    }
+  }
+  if (!out)
+    Py_RETURN_NONE;
+  return out;
+}
+
 static PyMethodDef module_methods[] = {
     {"native_specialize_impl", (PyCFunction)specialize_impl, METH_FASTCALL,
      nullptr},
+    {"native_find_aggregate_arg_paths", (PyCFunction)find_aggregate_arg_paths,
+     METH_O, "Paths of the argument slots holding @triton.aggregate arguments"},
     {"make_tensordesc_args", (PyCFunction)make_tensordesc_args, METH_FASTCALL,
      "Helper to translate tensordesc args"},
     {nullptr, nullptr, 0, nullptr} // sentinel
