@@ -21,12 +21,13 @@ using uint16_t = __UINT16_TYPE__;
 using uint32_t = __UINT32_TYPE__;
 using uintptr_t = __UINTPTR_TYPE__;
 
-// Three normal pools and one byte-granular write-once pool. Address bits
-// identify the pool and enclosing reservation without a metadata lookup.
+// A normal/write-once pair for each power-of-two granularity from 1 to 16.
+// The low pool-index bit selects the mode; the remaining bits encode log2
+// granularity. Six unused slots keep the reservation a power of two.
 static constexpr size_t kPoolReserveSize = 1ull << 40;
-static constexpr int kNumPools = 4;
-static constexpr size_t kReserveSize = 4 * kPoolReserveSize;
-// Default normal granularity. Normal pools use 1 << (2 * poolIndex) bytes.
+static constexpr int kNumPools = 10;
+static constexpr size_t kReserveSize = 16 * kPoolReserveSize;
+// Default normal granularity. Write-once allocations default to one byte.
 static constexpr int kShadowMemGranularityBytes = 4;
 static_assert((kReserveSize & (kReserveSize - 1)) == 0,
               "kReserveSize must be a power of 2");
@@ -67,7 +68,7 @@ static_assert(sizeof(ShadowCell) == 24);
 static_assert(alignof(ShadowCell) == 4);
 
 // The entire scalar clock is accessed atomically. There is no lock or
-// reader state, and zero denotes a byte without an instrumented write.
+// reader state, and zero denotes a cell without an instrumented write.
 struct WriteOnceShadowCell {
   ScalarClock writeClock;
 };
@@ -190,12 +191,18 @@ inline GSAN_HOST_DEVICE GlobalState *getGlobalState(ThreadState *threadState) {
 }
 
 inline GSAN_HOST_DEVICE bool isValidShadowGranularity(int granularity) {
-  return granularity == 1 || granularity == 4 || granularity == 16;
+  return granularity > 0 && granularity <= 16 &&
+         (granularity & (granularity - 1)) == 0;
 }
 
 inline GSAN_HOST_DEVICE int getPoolIndexForGranularity(int granularity,
                                                        bool writeOnce = false) {
-  return writeOnce ? 3 : granularity == 1 ? 0 : granularity == 4 ? 1 : 2;
+  int log2Granularity = granularity == 1   ? 0
+                        : granularity == 2 ? 1
+                        : granularity == 4 ? 2
+                        : granularity == 8 ? 3
+                                           : 4;
+  return 2 * log2Granularity + writeOnce;
 }
 
 inline GSAN_HOST_DEVICE int getPoolIndex(uintptr_t address) {
@@ -204,7 +211,7 @@ inline GSAN_HOST_DEVICE int getPoolIndex(uintptr_t address) {
 
 inline GSAN_HOST_DEVICE int getShadowGranularity(uintptr_t address) {
   int pool = getPoolIndex(address);
-  return pool == 3 ? 1 : 1 << (2 * pool);
+  return 1 << (pool >> 1);
 }
 
 inline GSAN_HOST_DEVICE uintptr_t getRealBaseAddress(
@@ -221,7 +228,7 @@ inline GSAN_HOST_DEVICE uintptr_t getReserveBaseFromAddress(uintptr_t addr) {
 
 // Assumes address is in this process's GSan reservation.
 inline GSAN_HOST_DEVICE bool isWriteOnceAddress(uintptr_t addr) {
-  return getPoolIndex(addr) == 3;
+  return (getPoolIndex(addr) & 1) != 0;
 }
 
 inline GSAN_HOST_DEVICE size_t getShadowCellSize(uintptr_t addr) {

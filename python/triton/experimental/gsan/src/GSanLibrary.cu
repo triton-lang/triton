@@ -986,6 +986,8 @@ GSAN_DEVICE void tensorAccessRow(uintptr_t rowPtr, int rowBytes,
     checkCoarseAccess(rowPtr, rowBytes, granularity, handleElement.loc);
     elementGranularity = granularity;
   } else {
+    assert_msg(handleElement.loc, !isWriteOnceAddress(rowPtr),
+               "Atomic operations on write-once memory are not supported");
     assert_msg(handleElement.loc, granularity != 16,
                "GSan 16-byte pools do not support atomic accesses");
     elementGranularity = roundUp(elementGranularity, granularity);

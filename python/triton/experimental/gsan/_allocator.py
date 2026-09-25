@@ -43,17 +43,15 @@ def _compile_gsan_allocator() -> str:
 
 def _validate_shadow_granularity(shadow_granularity: int) -> None:
     if isinstance(shadow_granularity, bool) or not isinstance(shadow_granularity, int):
-        raise ValueError("shadow_granularity must be 1, 4, or 16")
-    if shadow_granularity not in (1, 4, 16):
-        raise ValueError("shadow_granularity must be 1, 4, or 16")
+        raise ValueError("shadow_granularity must be 1, 2, 4, 8, or 16")
+    if shadow_granularity not in (1, 2, 4, 8, 16):
+        raise ValueError("shadow_granularity must be 1, 2, 4, 8, or 16")
 
 
 def _resolve_shadow_granularity(shadow_granularity: int | None, write_once: bool) -> int:
     if shadow_granularity is None:
         return 1 if write_once else 4
     _validate_shadow_granularity(shadow_granularity)
-    if write_once and shadow_granularity != 1:
-        raise ValueError("write_once allocations require shadow_granularity=1")
     return shadow_granularity
 
 
@@ -63,12 +61,12 @@ def _get_allocator(shadow_granularity: int, write_once: bool):
     so_name = _compile_gsan_allocator()
     malloc = "gsanMalloc" if shadow_granularity == 4 else f"gsanMalloc{shadow_granularity}"
     if write_once:
-        malloc = "gsanMallocWriteOnce"
+        malloc = "gsanMallocWriteOnce" if shadow_granularity == 1 else f"gsanMallocWriteOnce{shadow_granularity}"
     return CUDAPluggableAllocator(so_name, malloc, "gsanFree")
 
 
 def get_allocator(*, shadow_granularity: int | None = None, write_once: bool = False):
-    """Returns the allocator for a 1-, 4-, or 16-byte shadow-memory pool.
+    """Returns the allocator for a 1-, 2-, 4-, 8-, or 16-byte shadow-memory pool.
 
     See :func:`create_mem_pool` for the access requirements of each pool.
     """
@@ -255,8 +253,8 @@ def export_allocation_handles(ptr, handle_type, *, write_once: bool = False, inc
     must be passed to :func:`import_allocation_handles`. Non-default pools
     require this option so legacy callers cannot silently import the wrong
     shadow layout. Pass the allocation's ``write_once`` mode to both export and
-    import; it is checked here. Write-once allocations retain the three-field
-    export API because their granularity is always one byte.
+    import; it is checked here. The three-field API is available for the default
+    granularity of each mode: four bytes normally, one byte for write-once.
     """
     module = _load_gsan_module()
     return module.export_allocation_handles(ptr, handle_type, write_once, include_granularity)

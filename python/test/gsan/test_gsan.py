@@ -12,7 +12,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x
 from triton.experimental.gsan import create_mem_pool
-from triton._C.libtriton.gsan_testing import AtomicScope, ScalarClock, shadow_granularity as get_shadow_granularity
+from triton._C.libtriton.gsan_testing import AtomicScope, ScalarClock, shadow_granularity as get_shadow_granularity, shadow_cell_address
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
                                                      thread_state_from_smid)
 
@@ -238,32 +238,26 @@ def test_atomic_updates_every_shadow_cell(with_gsan, dtype):
 
 
 @gluon.jit
-def _mixed_pool_store_kernel(byte_ptr, word_ptr, wide_ptr):
+def _mixed_pool_store_kernel(pointers):
     offsets = gl.arange(0, 512, layout=gl.BlockedLayout([16], [32], [1], [0]))
-    gl.store(byte_ptr + offsets, 5, mask=offsets % 2 == 0)
-    gl.store(word_ptr + offsets, 6)
-    gl.store(wide_ptr + offsets, 7)
+    for i in gl.static_range(len(pointers)):
+        gl.store(pointers[i] + offsets, i + 1)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 def test_mem_pools_mix_granularities_in_one_kernel(fresh_knobs):
     triton.knobs.compilation.instrumentation_mode = "gsan"
-    pools = [create_mem_pool(shadow_granularity=g) for g in (1, 4, 16)]
+    combinations = [(g, w) for g in (1, 2, 4, 8, 16) for w in (False, True)]
+    pools = [create_mem_pool(shadow_granularity=g, write_once=w) for g, w in combinations]
     tensors = []
-    for pool, dtype in zip(pools, (torch.uint8, torch.int32, torch.uint8)):
+    for pool in pools:
         with torch.cuda.use_mem_pool(pool):
-            tensors.append(torch.zeros(512, dtype=dtype, device="cuda"))
-    byte_tensor, word_tensor, wide_tensor = tensors
-    _mixed_pool_store_kernel[(1, )](*tensors, num_warps=1)
-    expected = torch.zeros_like(byte_tensor)
-    expected[::2] = 5
-    torch.testing.assert_close(byte_tensor, expected)
-    torch.testing.assert_close(word_tensor, torch.full_like(word_tensor, 6))
-    torch.testing.assert_close(wide_tensor, torch.full_like(wide_tensor, 7))
-    assert shadow_cell_from_address(byte_tensor.data_ptr()).write_clock.epoch != 0
-    assert shadow_cell_from_address(byte_tensor.data_ptr() + 1).write_clock.epoch == 0
-    assert shadow_cell_from_address(word_tensor.data_ptr()).write_clock.epoch != 0
-    assert shadow_cell_from_address(wide_tensor.data_ptr()).write_clock.epoch != 0
+            tensors.append(torch.zeros(512, dtype=torch.uint8, device="cuda"))
+    _mixed_pool_store_kernel[(1, )](tuple(tensors), num_warps=1)
+    for i, (tensor, (_, write_once)) in enumerate(zip(tensors, combinations)):
+        torch.testing.assert_close(tensor, torch.full_like(tensor, i + 1))
+        cell = shadow_cell_from_address(tensor.data_ptr())
+        assert (cell if write_once else cell.write_clock).epoch != 0
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
@@ -319,14 +313,15 @@ def _pdl_two_back_consumer_kernel(payload_ptr, result_ptr):
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
 @pytest.mark.gsan_fine_granularity("This synchronization test uses sub-16-byte scalar accesses")
 def test_programmatic_dependent_launch_wait_synchronizes_vector_clocks(with_gsan, capfd):
-    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
+    dtype = torch.int64 if with_gsan == 8 else torch.int32
+    payload = torch.zeros(2, dtype=dtype, device="cuda")
     result = torch.full_like(payload, -1)
 
     _pdl_producer_kernel[(2, )](payload, num_warps=1)
     compiled = _pdl_consumer_kernel[(2, )](payload, result, num_warps=1, launch_pdl=True)
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(result, torch.tensor([1000, 1001], device="cuda", dtype=torch.int32))
+    torch.testing.assert_close(result, torch.tensor([1000, 1001], device="cuda", dtype=dtype))
     assert "griddepcontrol.wait" in compiled.asm["ptx"]
     assert "red.relaxed.gpu.max.u32" in compiled.asm["ptx"]
     _assert_no_gsan_runtime_output(capfd)
@@ -420,14 +415,15 @@ def test_gluon_warp_specialize_completes(with_gsan):
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
 @pytest.mark.gsan_fine_granularity("This synchronization test uses sub-16-byte scalar accesses")
 def test_programmatic_dependent_launch_wait_inside_warp_specialize(with_gsan, capfd):
-    payload = torch.empty((128, ), dtype=torch.int32, device="cuda")
+    dtype = torch.int64 if with_gsan == 8 else torch.int32
+    payload = torch.empty((128, ), dtype=dtype, device="cuda")
     result = torch.full_like(payload, -1)
 
     _pdl_producer_kernel[(128, )](payload, num_warps=1)
     compiled = _gluon_ws_pdl_wait_kernel[(1, )](payload, result, num_warps=4, launch_pdl=True)
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(result, torch.arange(1000, 1128, device="cuda", dtype=torch.int32))
+    torch.testing.assert_close(result, torch.arange(1000, 1128, device="cuda", dtype=dtype))
     assert "griddepcontrol.wait" in compiled.asm["ptx"]
     _assert_no_gsan_runtime_output(capfd)
 
@@ -435,14 +431,15 @@ def test_programmatic_dependent_launch_wait_inside_warp_specialize(with_gsan, ca
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
 @pytest.mark.gsan_fine_granularity("This synchronization test uses sub-16-byte scalar accesses")
 def test_programmatic_dependent_launch_wait_inside_noinline_warp_specialize(with_gsan, capfd):
-    payload = torch.empty((128, ), dtype=torch.int32, device="cuda")
+    dtype = torch.int64 if with_gsan == 8 else torch.int32
+    payload = torch.empty((128, ), dtype=dtype, device="cuda")
     result = torch.full_like(payload, -1)
 
     _pdl_producer_kernel[(128, )](payload, num_warps=1)
     compiled = _gluon_ws_pdl_wait_noinline_kernel[(1, )](payload, result, num_warps=4, launch_pdl=True)
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(result, torch.arange(1000, 1128, device="cuda", dtype=torch.int32))
+    torch.testing.assert_close(result, torch.arange(1000, 1128, device="cuda", dtype=dtype))
     assert "tt.call" in compiled.asm["ttgir"]
     assert "griddepcontrol.wait" in compiled.asm["ptx"]
     _assert_no_gsan_runtime_output(capfd)
@@ -502,13 +499,14 @@ def _gluon_cluster_barrier_sync_kernel(payload_ptr, out_ptr):
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
 @pytest.mark.gsan_fine_granularity("This synchronization test uses sub-16-byte scalar accesses")
 def test_gluon_cluster_barrier_synchronizes_vector_clocks(with_gsan):
-    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
-    out = torch.full((2, ), -1, dtype=torch.int32, device="cuda")
+    dtype = torch.int64 if with_gsan == 8 else torch.int32
+    payload = torch.zeros(2, dtype=dtype, device="cuda")
+    out = torch.full((2, ), -1, dtype=dtype, device="cuda")
 
     _gluon_cluster_barrier_sync_kernel[(1, )](payload, out, num_warps=4, num_ctas=2)
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(out, torch.tensor([1, 2], dtype=torch.int32, device="cuda"))
+    torch.testing.assert_close(out, torch.tensor([1, 2], dtype=dtype, device="cuda"))
     for offset in range(2):
         payload_cell = shadow_cell_from_address(payload.data_ptr() + offset * payload.element_size())
         producer_tid = payload_cell.write_clock.thread_id
@@ -582,13 +580,14 @@ def _gluon_ws_cluster_barrier_kernel(payload_ptr, out_ptr):
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
 @pytest.mark.gsan_fine_granularity("This synchronization test uses sub-16-byte scalar accesses")
 def test_gluon_cluster_barriers_in_warp_specialize_synchronize_vector_clocks(with_gsan):
-    payload = torch.zeros(4, dtype=torch.int32, device="cuda")
-    out = torch.full((4, ), -1, dtype=torch.int32, device="cuda")
+    dtype = torch.int64 if with_gsan == 8 else torch.int32
+    payload = torch.zeros(4, dtype=dtype, device="cuda")
+    out = torch.full((4, ), -1, dtype=dtype, device="cuda")
 
     _gluon_ws_cluster_barrier_kernel[(1, )](payload, out, num_warps=4, num_ctas=2)
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(out, torch.arange(1, 5, dtype=torch.int32, device="cuda"))
+    torch.testing.assert_close(out, torch.arange(1, 5, dtype=dtype, device="cuda"))
     for offset in range(4):
         payload_cell = shadow_cell_from_address(payload.data_ptr() + offset * payload.element_size())
         producer_tid = payload_cell.write_clock.thread_id
@@ -648,14 +647,15 @@ def _gluon_mbarrier_sync_kernel(payload_ptr, counter_ptr, out_ptr):
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
 @pytest.mark.gsan_fine_granularity("This synchronization test uses sub-16-byte scalar accesses")
 def test_gluon_mbarrier_wait_preserves_completed_epochs(with_gsan):
-    payload = torch.zeros(4, dtype=torch.int32, device="cuda")
-    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
-    out = torch.full((4, ), -1, dtype=torch.int32, device="cuda")
+    dtype = torch.int64 if with_gsan == 8 else torch.int32
+    payload = torch.zeros(4, dtype=dtype, device="cuda")
+    counter = torch.zeros(1, dtype=dtype, device="cuda")
+    out = torch.full((4, ), -1, dtype=dtype, device="cuda")
 
     _gluon_mbarrier_sync_kernel[(1, )](payload, counter, out, num_warps=4, num_ctas=2)
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(out, torch.arange(1, 5, dtype=torch.int32, device="cuda"))
+    torch.testing.assert_close(out, torch.arange(1, 5, dtype=dtype, device="cuda"))
     for offset in range(4):
         payload_cell = shadow_cell_from_address(payload.data_ptr() + offset * payload.element_size())
         producer_tid = payload_cell.write_clock.thread_id
@@ -697,14 +697,15 @@ def _gluon_ws_mbarrier_sync_kernel(payload_ptr, counter_ptr, out_ptr):
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
 @pytest.mark.gsan_fine_granularity("This synchronization test uses sub-16-byte scalar accesses")
 def test_gluon_mbarrier_sync_in_warp_specialized_partitions(with_gsan):
-    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
-    counter = torch.zeros(2, dtype=torch.int32, device="cuda")
-    out = torch.full((2, ), -1, dtype=torch.int32, device="cuda")
+    dtype = torch.int64 if with_gsan == 8 else torch.int32
+    payload = torch.zeros(2, dtype=dtype, device="cuda")
+    counter = torch.zeros(2, dtype=dtype, device="cuda")
+    out = torch.full((2, ), -1, dtype=dtype, device="cuda")
 
     _gluon_ws_mbarrier_sync_kernel[(1, )](payload, counter, out, num_warps=4, num_ctas=2)
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(out, torch.tensor([1, 2], dtype=torch.int32, device="cuda"))
+    torch.testing.assert_close(out, torch.tensor([1, 2], dtype=dtype, device="cuda"))
     for offset in range(2):
         payload_cell = shadow_cell_from_address(payload.data_ptr() + offset * payload.element_size())
         producer_tid = payload_cell.write_clock.thread_id
@@ -742,8 +743,9 @@ def _gluon_mbarrier_repeated_phases_kernel(markers, flags, iterations, EXPECT: g
 @pytest.mark.parametrize("expect", [False, True], ids=["arrive", "expect"])
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_gluon_mbarrier_repeated_phases_reuse_epochs_and_snapshots(with_gsan, expect):
-    markers = torch.zeros(4, dtype=torch.int32, device="cuda")
-    flags = torch.zeros(2, dtype=torch.int32, device="cuda")
+    dtype = torch.int64 if with_gsan == 8 else torch.int32
+    markers = torch.zeros(4, dtype=dtype, device="cuda")
+    flags = torch.zeros(2, dtype=dtype, device="cuda")
     _gluon_mbarrier_repeated_phases_kernel[(1, )](markers, flags, 65536, expect, num_warps=4, num_ctas=2)
     torch.cuda.synchronize()
 
@@ -796,10 +798,11 @@ def _gluon_mbarrier_transitive_clock_kernel(markers):
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_gluon_mbarrier_preserves_transitively_imported_clocks(with_gsan):
+    dtype = torch.int64 if with_gsan == 8 else torch.int32
     num_sms = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
-    warm = torch.zeros(num_sms, dtype=torch.int32, device="cuda")
-    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
-    markers = torch.zeros(4, dtype=torch.int32, device="cuda")
+    warm = torch.zeros(num_sms, dtype=dtype, device="cuda")
+    counter = torch.zeros(1, dtype=dtype, device="cuda")
+    markers = torch.zeros(4, dtype=dtype, device="cuda")
     stream = torch.cuda.Stream()
     stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(stream):
@@ -1401,11 +1404,12 @@ def _release_rmw_chain_kernel(payload_ptr, counter_ptr, out_ptr, scope: tl.const
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_atomic_release_rmw_chain_synchronizes_all_writers(with_gsan, capfd, scope, expected_scope):
+    dtype = torch.int64 if with_gsan == 8 else torch.int32
     num_writers = 3
-    payload = torch.zeros(num_writers, dtype=torch.int32, device="cuda")
+    payload = torch.zeros(num_writers, dtype=dtype, device="cuda")
 
-    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
-    out = torch.full((num_writers, ), -1, dtype=torch.int32, device="cuda")
+    counter = torch.zeros(1, dtype=dtype, device="cuda")
+    out = torch.full((num_writers, ), -1, dtype=dtype, device="cuda")
     _release_rmw_chain_kernel[(num_writers + 1, )](
         payload,
         counter,
@@ -1416,7 +1420,7 @@ def test_atomic_release_rmw_chain_synchronizes_all_writers(with_gsan, capfd, sco
     )
     torch.cuda.synchronize()
 
-    expected = torch.arange(1000, 1000 + num_writers, dtype=torch.int32, device="cuda")
+    expected = torch.arange(1000, 1000 + num_writers, dtype=dtype, device="cuda")
     torch.testing.assert_close(out, expected)
 
     writer_tids = set()
@@ -1580,9 +1584,9 @@ def _shadow_cells_for_tensor(tensor: torch.Tensor):
         real_ptr = tensor[i].data_ptr()
         granularity = get_shadow_granularity(real_ptr)
         row.append(
-            tuple(
-                shadow_cell_from_address(real_ptr + byte_offset, device_index=device_idx)
-                for byte_offset in range(0, tensor.element_size(), granularity)))
+            tuple((shadow_cell_address(real_ptr + byte_offset),
+                   shadow_cell_from_address(real_ptr + byte_offset, device_index=device_idx))
+                  for byte_offset in range(0, tensor.element_size(), granularity)))
     return row
 
 
@@ -1591,10 +1595,19 @@ def _assert_shadow_mask(before, after, changed_mask: torch.Tensor, *, access_kin
     assert len(before) == changed_mask.shape[0]
     assert len(before[0]) == changed_mask.shape[1]
 
+    # Logical elements can share a coarse shadow cell. A change to any of them
+    # updates the cell seen through all of those elements, including masked ones.
+    changed_cells = {
+        address
+        for row_idx, col_idx in changed_mask.nonzero().tolist()
+        for address, _ in before[row_idx][col_idx]
+    }
     for row_idx in range(changed_mask.shape[0]):
         for col_idx in range(changed_mask.shape[1]):
-            for before_cell, after_cell in zip(before[row_idx][col_idx], after[row_idx][col_idx]):
-                if changed_mask[row_idx, col_idx].item():
+            for (address, before_cell), (after_address, after_cell) in zip(before[row_idx][col_idx],
+                                                                           after[row_idx][col_idx]):
+                assert address == after_address
+                if address in changed_cells:
                     assert after_cell != before_cell
                     if access_kind == "read":
                         assert after_cell.write_clock == before_cell.write_clock
