@@ -563,6 +563,32 @@ module attributes {"ttg.target" = "hip:gfx950", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // -----
 
+#unpacked_scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @scaled_upcast_fp8_requires_packed_registers(
+      %input: tensor<64x16xf8E5M2, #unpacked_scale>,
+      %scale: tensor<64x16xbf16, #unpacked_scale>) {
+    // expected-error@+1 {{requires groups of 4 register-consecutive values along one tensor axis}}
+    %0 = amdg.scaled_upcast_fp8 %input scale %scale : tensor<64x16xf8E5M2, #unpacked_scale>, tensor<64x16xbf16, #unpacked_scale> -> tensor<64x16xbf16, #unpacked_scale>
+    tt.return
+  }
+}
+
+// -----
+
+#incomplete_scale_group = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @scaled_upcast_fp8_requires_complete_register_groups(
+      %input: tensor<64x16xf8E5M2, #incomplete_scale_group>,
+      %scale: tensor<64x16xbf16, #incomplete_scale_group>) {
+    // expected-error@+1 {{requires a multiple of 4 unique values per thread}}
+    %0 = amdg.scaled_upcast_fp8 %input scale %scale : tensor<64x16xf8E5M2, #incomplete_scale_group>, tensor<64x16xbf16, #incomplete_scale_group> -> tensor<64x16xbf16, #incomplete_scale_group>
+    tt.return
+  }
+}
+
+// -----
+
 // Compact scale where the scale layout does not match the value layout, so one
 // scale value spans multiple scale blocks.
 #packed = #ttg.linear<{register = [[0, 16], [0, 1], [0, 2], [0, 4], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
