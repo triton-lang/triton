@@ -248,11 +248,14 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
   // The staggering of rows only works if we have enough (wrap) rows to stagger.
   // If we have less rows we get bank conflicts. For each pow2 too small we will
   // get 2 times more conflicts.
-  unsigned requiredRows = warpSize / contigLanes * wrap;
+  // Scaled by contigLanes so a row wider than a warp of vectors does not
+  // truncate the quotient to zero and hide the conflicts.
+  unsigned requiredRowsScaled = warpSize * wrap;
+  unsigned haveRowsScaled = nonContigDim * contigLanes;
   unsigned xWayConflicts =
-      (nonContigDim >= requiredRows)
+      (haveRowsScaled >= requiredRowsScaled)
           ? 1
-          : (llvm::Log2_32(requiredRows / nonContigDim) + 1);
+          : (llvm::Log2_32(requiredRowsScaled / haveRowsScaled) + 1);
   // Heuristic, for ds_read_b128 we do not tolerate any conflicts but for
   // ds_read_b64(_tr) we tolerate 2-way because swizzling will produce the same
   // number of conflicts.
@@ -269,10 +272,14 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     }
   }
 
-  // Use 16 rows wrap if block large enough
+  // Use 16 rows wrap if block large enough. Compared without dividing by
+  // contigLanes: once a row spans more than a warp of vectors that quotient
+  // truncates to zero, and the guard would accept any number of rows and
+  // stagger over rows the tile does not have.
   bool useBestWrap = false;
   unsigned bestWrap = 16;
-  if (nonContigDim >= warpSize / contigLanes * bestWrap && bestWrap > wrap) {
+  if (nonContigDim >= bestWrap &&
+      nonContigDim * contigLanes >= warpSize * bestWrap && bestWrap > wrap) {
     useBestWrap = true;
     wrap = bestWrap;
   }
