@@ -271,6 +271,9 @@ class DotOperandLayout(DistributedLayout):
         return derived
 
 
+from .._target import get_compilation_target
+
+
 @dataclass(frozen=True, eq=True)
 class NVMMADistributedLayout(DistributedLayout):
     """
@@ -294,6 +297,12 @@ class NVMMADistributedLayout(DistributedLayout):
         super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
 
     def _to_ir(self, builder):
+        target = get_compilation_target()
+        if self.version == [1, 0] and target is not None and not target.endswith(("70", "72")):
+            raise ValueError(
+                "NVMMADistributedLayout version [1, 0] is only supported on "
+                f"Volta targets (sm70/sm72), got {target}"
+            )
         return builder.get_mma_layout(
             self.version,
             self.warps_per_cta,
