@@ -16,7 +16,7 @@ from .._C.libtriton import ir, gluon_ir
 from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 # ideally we wouldn't need any runtime component
-from ..runtime.jit import get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
+from ..runtime.jit import get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction, AggregateArg
 from .._utils import apply_with_path, set_iterable_path, is_namedtuple
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
@@ -270,15 +270,38 @@ class ASTFunction:
         vals = make_template(self.arg_types)
         handles = [fn.args(i) for i in range(fn.get_num_args())]
         cursor = 0
+        index = 0
+
+        def set_attrs(path):
+            for attr_name, attr_val in self.attrs.get(path, []):
+                fn.set_arg_attr(cursor, attr_name, attr_val)
+
+        def build_aggregate(path, ty):
+            # aggregate argument: attributes of its runtime members
+            # are keyed by their position in the (wrapper, *members) tuple
+            nonlocal cursor, index
+            instance = ty.base_cls._get_instance()
+            for name, fty in ty.fields:
+                if isinstance(fty, language.core._aggregate_type):
+                    value = build_aggregate(path, fty)
+                else:
+                    if not isinstance(fty, language.core.constexpr_type):
+                        set_attrs(path + (index, ))
+                        index += 1
+                    value, cursor = fty._unflatten_ir(handles, cursor)
+                setattr(instance, name, value)
+            return instance
 
         def build_value(path, ty):
-            nonlocal cursor, handles
+            nonlocal cursor, index
             # > set attributes
-            attr_specs = self.attrs.get(path, [])
-            for attr_name, attr_val in attr_specs:
-                fn.set_arg_attr(cursor, attr_name, attr_val)
+            set_attrs(path)
             # > build frontend value
-            val, cursor = ty._unflatten_ir(handles, cursor)
+            if isinstance(ty, language.core._aggregate_type):
+                index = 1
+                val = build_aggregate(path, ty)
+            else:
+                val, cursor = ty._unflatten_ir(handles, cursor)
             set_iterable_path(vals, path, val)
 
         apply_with_path(self.arg_types, build_value)
@@ -1749,13 +1772,19 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
             return language.tuple_type([constexpr_type(v) for v in value], fields)
         return constexpr(value).type
 
+    def set_type(argument, index, ty):
+        if isinstance(argument, list):
+            argument[index] = ty
+        else:
+            argument.types[index] = ty
+
     def apply_constexpr_types(argument, indices, value):
         index = indices.pop()
         if len(indices) == 0:
-            if isinstance(argument, list):
-                argument[index] = constexpr_type(value)
-            else:
-                argument.types[index] = constexpr_type(value)
+            set_type(argument, index, constexpr_type(value))
+        elif len(indices) == 1 and isinstance(value, AggregateArg):
+            # drop the AggregateArg wrapper
+            set_type(argument, index, value.to_type(argument[index].types[1:]))
         else:
             apply_constexpr_types(argument[index], indices, value)
 

@@ -19,7 +19,8 @@ from .driver import driver
 from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
-from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
+from triton._C.libtriton import (get_cache_invalidating_env_vars, native_find_aggregate_arg_paths,
+                                 native_specialize_impl, ir)
 
 TRITON_MODULE = "triton.language"
 GLUON_MODULE = "triton.experimental.gluon.language"
@@ -123,7 +124,12 @@ class DependenciesFinder(ast.NodeVisitor):
         if getattr(val, "__triton_aggregate__", False):
             self.hasher.update(str(val.__annotations__).encode("utf-8"))
             for attr in val.hash_attrs:
-                self.record_reference(attr)
+                if isinstance(attr, JITCallable) or getattr(attr, "__triton_builtin__", False):
+                    self.record_reference(attr)
+                else:
+                    # plain Python methods (e.g. a host-side __init__) are never
+                    # compiled; hash their source
+                    self.hasher.update(_source_key(attr).encode("utf-8"))
             return
 
         if getattr(val, "__triton_builtin__", False):
@@ -377,12 +383,19 @@ class KernelInterface(Generic[T]):
 
 
 def serialize_specialization_data(name, signature, constants, attrs, options, key, target):
-    constants = {
-        key: str(value) if value.__class__.__name__ == "dtype" else {"constexpr": value.value}
-        if value.__class__.__name__ == "constexpr" else {"jit_function": f"{value.module}:{value.fn.__qualname__}"}
-        if value.__class__.__name__ == "JITFunction" else value
-        for key, value in constants.items()
-    }
+
+    def serialize_constant(value):
+        if value.__class__.__name__ == "dtype":
+            return str(value)
+        if value.__class__.__name__ == "constexpr":
+            return {"constexpr": value.value}
+        if value.__class__.__name__ == "JITFunction":
+            return {"jit_function": f"{value.module}:{value.fn.__qualname__}"}
+        if value.__class__.__name__ == "AggregateArg":
+            return {"aggregate_arg": value.cache_key}
+        return value
+
+    constants = {key: serialize_constant(value) for key, value in constants.items()}
 
     import json
     obj = {
@@ -608,6 +621,182 @@ def _replace_jit_callables(obj):
     return obj
 
 
+def _source_key(fn):
+    # source of a plain Python function, or its definition site if unavailable
+    try:
+        return inspect.getsource(fn)
+    except (OSError, TypeError):
+        code = getattr(fn, "__code__", None)
+        return f"{code.co_filename}:{code.co_firstlineno}" if code else getattr(fn, "__qualname__", repr(fn))
+
+
+def _replaced_at_path(container, path, value):
+    # copy of a nested tuple/namedtuple/list with the element at `path` replaced
+    idx, *rest = path
+    items = list(container)
+    items[idx] = _replaced_at_path(items[idx], rest, value) if rest else value
+    if isinstance(container, list):
+        return items
+    return type(container)(*items) if is_namedtuple(type(container)) else tuple(items)
+
+
+# how a member of a host-constructed aggregate argument reaches the kernel
+_BAKED = "baked"  # tl.constexpr member, folded into the kernel body
+_LIFTED = "lifted"  # runtime member, becomes a kernel parameter
+_NESTED = "nested"  # aggregate member, recurse
+
+# stands in for a runtime member in AggregateArg.key; its value is a kernel parameter
+_RUNTIME_MEMBER = object()
+_SCALAR_TYPES = frozenset({int, float, bool, str, type(None)})
+
+
+def _aggregate_field_plan(base_cls):
+    # (class_key, ((name, is_constexpr), ...)) for an aggregate class, memoized on
+    # the class. The key hashes each method: classes returned by a factory share a
+    # qualname but may differ in their jit methods.
+    memo = getattr(base_cls, "__aggregate_field_plan__", None)
+    if memo is not None and memo[0] is base_cls:
+        return memo[1]
+    from triton.language.core import constexpr
+    parts = [f"{base_cls.__module__}.{base_cls.__qualname__}", str(base_cls.__annotations__)]
+    for member in base_cls.hash_attrs:
+        if isinstance(member, JITCallable):
+            parts.append(member.cache_key)
+        elif (code := getattr(member, "__code__", None)) is not None:
+            parts.append(f"{code.co_filename}:{code.co_firstlineno}")
+    annotations = base_cls.__annotations__
+    fields = tuple((name, annotations.get(name) is constexpr) for name in base_cls.__aggregate_fields__)
+    plan = (",".join(parts), fields)
+    base_cls.__aggregate_field_plan__ = (base_cls, plan)
+    return plan
+
+
+def _baked_key(value):
+    # hashable, value-based key of a tl.constexpr member. (type, value) rather than
+    # value: 2 == 2.0 == True in Python but each bakes to a different constant type.
+    ty = type(value)
+    if ty in _SCALAR_TYPES:
+        return (ty, value)
+    if isinstance(value, JITCallable):
+        return (ty, value.cache_key)
+    if hasattr(value, "shape") and hasattr(value, "dtype") and hasattr(value, "data_ptr"):
+        return (ty, "tensor", tuple(value.shape), str(value.dtype))
+    try:
+        hash(value)
+    except TypeError:
+        return (ty, "repr", repr(value))
+    return (ty, value)
+
+
+class AggregateArg:
+    """
+    Interned compile-time identity of a host-constructed aggregate kernel argument:
+    its class and tl.constexpr member values, never its runtime members. `fields`
+    is (name, kind, payload) per member, `key` the hashable (class_key, *member_keys)
+    and `cache_key` its string form.
+    """
+
+    __slots__ = ("base_cls", "fields", "key", "_hash", "_cache_key")
+
+    _interned: Dict[tuple, "AggregateArg"] = {}
+    _by_cache_key: Dict[str, "AggregateArg"] = {}
+    # per-instance memo for_value leaves on an aggregate
+    _MEMO = "__aggregate_arg_lift__"
+
+    def __init__(self, base_cls, fields, key):
+        self.base_cls = base_cls
+        self.fields = fields
+        self.key = key
+        self._hash = hash(key)
+        self._cache_key = None
+
+    @classmethod
+    def for_value(cls, value):
+        # (wrapper, runtime_values) for a host-built aggregate, runtime members
+        # flattened depth-first. Memoized on the instance, which is immutable.
+        memo = value.__dict__.get(cls._MEMO)
+        if memo is not None:
+            return memo
+        class_key, fields = _aggregate_field_plan(type(value))
+        runtime_values = []
+        key = [class_key]
+        for name, is_constexpr in fields:
+            member = getattr(value, name)
+            if is_constexpr:
+                key.append(_baked_key(member.value))
+            elif getattr(member, "__triton_aggregate__", False):
+                sub, sub_runtime_values = cls.for_value(member)
+                runtime_values.extend(sub_runtime_values)
+                key.append(sub.key)
+            else:
+                runtime_values.append(member)
+                key.append(_RUNTIME_MEMBER)
+        key = tuple(key)
+        wrapper = cls._interned.get(key)
+        if wrapper is None:
+            wrapper = cls._interned.setdefault(key, cls._build(value, key))
+        memo = (wrapper, tuple(runtime_values))
+        object.__setattr__(value, cls._MEMO, memo)
+        return memo
+
+    @classmethod
+    def _build(cls, value, key):
+        fields = []
+        for name, is_constexpr in _aggregate_field_plan(type(value))[1]:
+            member = getattr(value, name)
+            if is_constexpr:
+                fields.append((name, _BAKED, member.value))
+            elif getattr(member, "__triton_aggregate__", False):
+                fields.append((name, _NESTED, cls.for_value(member)[0]))
+            else:
+                fields.append((name, _LIFTED, None))
+        return cls(type(value), fields, key)
+
+    def to_type(self, runtime_types):
+        # frontend type of the argument; `runtime_types` are the signature types of
+        # the lifted members, depth-first
+        from triton.language.core import _aggregate_type, constexpr
+        types = iter(runtime_types)
+
+        def build(arg):
+            fields = []
+            for name, kind, payload in arg.fields:
+                if kind is _BAKED:
+                    fields.append((name, constexpr(payload).type))
+                elif kind is _NESTED:
+                    fields.append((name, build(payload)))
+                else:
+                    fields.append((name, next(types)))
+            return _aggregate_type(arg.base_cls, fields)
+
+        return build(self)
+
+    @property
+    def cache_key(self) -> str:
+        if self._cache_key is None:
+            parts = [self.key[0]]
+            for (name, kind, payload), member_key in zip(self.fields, self.key[1:]):
+                if kind is _BAKED:
+                    ty, *material = member_key
+                    parts.append(f"{name}={ty.__qualname__}:{','.join(map(repr, material))}")
+                elif kind is _NESTED:
+                    parts.append(f"{name}=agg[{payload.cache_key}]")
+                else:
+                    parts.append(f"{name}=rt")
+            self._cache_key = "aggregate:" + "|".join(parts)
+            AggregateArg._by_cache_key.setdefault(self._cache_key, self)
+        return self._cache_key
+
+    def __repr__(self) -> str:
+        return self.cache_key
+
+    def __hash__(self) -> int:
+        return self._hash
+
+    def __eq__(self, other) -> bool:
+        return self is other or (isinstance(other, AggregateArg) and self.key == other.key)
+
+
 def compute_cache_key(kernel_key_cache, specialization, options):
     key = (tuple(specialization), str(options))
     cache_key = kernel_key_cache.get(key, None)
@@ -730,6 +919,29 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         return options, signature, constexprs, attrs
 
+    def _specialize_aggregate_args(self, backend, bound_args, specialization):
+        # Lift the runtime members of host-constructed aggregate arguments (slots the
+        # specializer tagged "aggregate", at any tuple depth) to kernel parameters.
+        # The slot becomes the tuple (wrapper, *members): the AggregateArg wrapper is
+        # the constexpr head and sits in the attribute slot so it joins the cache key.
+        paths = native_find_aggregate_arg_paths(specialization)
+        if paths is None:
+            return
+        for i, *nested in paths:
+            name = self.arg_names[i]
+            arg_type, arg_attr = specialization[i]
+            wrapper, runtime_values = AggregateArg.for_value(get_iterable_path(bound_args[name], nested))
+            types, attrs = native_specialize_impl(backend, runtime_values, False, True, True)
+            new_value, new_type, new_attr = (wrapper, *runtime_values), ("constexpr", *types), (wrapper, *attrs)
+            if nested:
+                bound_args[name] = _replaced_at_path(bound_args[name], nested, new_value)
+                arg_type = _replaced_at_path(arg_type, nested, new_type)
+                arg_attr = _replaced_at_path(arg_attr, nested, new_attr)
+            else:
+                bound_args[name] = new_value
+                arg_type, arg_attr = new_type, new_attr
+            specialization[i] = (arg_type, arg_attr)
+
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
         kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
@@ -747,6 +959,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
+
+        self._specialize_aggregate_args(backend, bound_args, specialization)
 
         # add a cache field to the kernel specializations for kernel specific
         # pass pipelines
@@ -859,6 +1073,11 @@ class JITFunction(JITCallable, KernelInterface[T]):
                     if jf_key in _triton_jit_function_registry:
                         return _triton_jit_function_registry[jf_key]
                     raise RuntimeError(f"Unable to resolve JITFunction {jf_key} for preload")
+                if 'aggregate_arg' in value:
+                    agg_key = value['aggregate_arg']
+                    if agg_key in AggregateArg._by_cache_key:
+                        return AggregateArg._by_cache_key[agg_key]
+                    raise RuntimeError(f"Unable to resolve aggregate argument {agg_key} for preload")
             return convert_to_tuple_if_list(value)
 
         constexprs = {key: _decode_constant(value) for key, value in zip(constant_keys, constant_vals)}
@@ -1151,6 +1370,19 @@ class BoundConstexprFunction(JITCallable):
 
 class ConstexprFunction(JITCallable, Generic[T]):
 
+    # triton.language.core helpers, bound on first call (a module-level import would
+    # be a cycle) so host-side calls do not re-run the import each time
+    _constexpr = None
+    _unwrap_if_constexpr = None
+    _unwrap_types = None
+
+    @classmethod
+    def _bind_core_helpers(cls):
+        from triton.language.core import _unwrap_if_constexpr, constexpr, tuple as tl_tuple
+        ConstexprFunction._constexpr = constexpr
+        ConstexprFunction._unwrap_if_constexpr = _unwrap_if_constexpr
+        ConstexprFunction._unwrap_types = (constexpr, list, tuple, tl_tuple)
+
     def __init__(self, fn):
         super().__init__(fn)
 
@@ -1165,10 +1397,18 @@ class ConstexprFunction(JITCallable, Generic[T]):
         ...
 
     def __call__(self, *args, _semantic=None, **kwargs):
-        from triton.language.core import _unwrap_if_constexpr, constexpr
-        # de-constexpr arguments and discard the _semantic keyword argument:
-        args = [_unwrap_if_constexpr(x) for x in args]
-        kwargs = {k: _unwrap_if_constexpr(v) for (k, v) in kwargs.items()}
+        unwrap_if_constexpr = ConstexprFunction._unwrap_if_constexpr
+        if unwrap_if_constexpr is None:
+            ConstexprFunction._bind_core_helpers()
+            unwrap_if_constexpr = ConstexprFunction._unwrap_if_constexpr
+        # de-constexpr arguments and discard the _semantic keyword argument
+        # (only rebuild the argument list if something needs unwrapping):
+        unwrap_types = ConstexprFunction._unwrap_types
+        for x in args:
+            if isinstance(x, unwrap_types):
+                args = [unwrap_if_constexpr(x) for x in args]
+                break
+        kwargs = {k: unwrap_if_constexpr(v) for (k, v) in kwargs.items()}
 
         # call the raw Python function f:
         res = self.fn(*args, **kwargs)
@@ -1180,7 +1420,7 @@ class ConstexprFunction(JITCallable, Generic[T]):
         # convert result back to a Triton constexpr:
         if knobs.runtime.interpret:
             return res  # No constexpr in interpreter
-        return constexpr(res)
+        return ConstexprFunction._constexpr(res)
 
 
 def constexpr_function(fn: T) -> ConstexprFunction[T]:

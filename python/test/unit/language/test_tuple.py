@@ -467,3 +467,340 @@ def test_constexpr_tuple_arg_subscript(device):
     out = torch.zeros(1, dtype=torch.int32, device=device)
     kernel[(1, )](out, shape=(8, 4, 2))
     assert out.item() == 842
+
+
+@triton.aggregate
+class _Offset:
+    """A host-constructible aggregate mixing a runtime and a compile-time member."""
+    values: tl.tensor
+    bump: tl.constexpr
+
+    @triton.constexpr_function
+    def __init__(self, values, bump):
+        self.values = values
+        self.bump = tl.constexpr(bump)
+
+    @triton.jit
+    def load(self, offs):
+        return tl.load(self.values + offs) + self.bump
+
+
+def test_aggregate_in_tuple_argument(device):
+    """An aggregate may travel inside a tuple argument rather than as an argument of
+    its own. Its runtime members are lifted to kernel parameters in place, so the
+    tuple's other elements are unaffected and swapping a runtime member reuses the
+    compiled kernel."""
+
+    @triton.jit
+    def kernel(out_ptr, packed, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(out_ptr + offs, packed[0].load(offs) * packed[1])
+
+    BLOCK = 16
+    values = torch.arange(BLOCK, dtype=torch.float32, device=device)
+    out = torch.zeros(BLOCK, dtype=torch.float32, device=device)
+
+    kernel[(1, )](out, (_Offset(values, 1.0), 2.0), BLOCK)
+    torch.testing.assert_close(out, (values + 1.0) * 2.0)
+
+    # Only the aggregate's runtime member changes: no recompile.
+    n_compiled = len(kernel.device_caches[out.device.index][0])
+    other = torch.arange(BLOCK, dtype=torch.float32, device=device) * 3
+    kernel[(1, )](out, (_Offset(other, 1.0), 2.0), BLOCK)
+    torch.testing.assert_close(out, (other + 1.0) * 2.0)
+    assert len(kernel.device_caches[out.device.index][0]) == n_compiled
+
+
+def test_aggregate_in_namedtuple_argument(device):
+    """Same, but the enclosing argument is a namedtuple: it keeps its own type, so
+    the aggregate is still reachable by field name."""
+
+    class Packed(NamedTuple):
+        offset: object
+        gain: object
+
+    @triton.jit
+    def kernel(out_ptr, packed, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(out_ptr + offs, packed.offset.load(offs) * packed.gain)
+
+    BLOCK = 16
+    values = torch.arange(BLOCK, dtype=torch.float32, device=device)
+    out = torch.zeros(BLOCK, dtype=torch.float32, device=device)
+
+    kernel[(1, )](out, Packed(_Offset(values, 4.0), 0.5), BLOCK)
+    torch.testing.assert_close(out, (values + 4.0) * 0.5)
+
+
+def test_aggregate_in_constexpr_declared_argument_is_not_lifted(device):
+    """A parameter declared `tl.constexpr` is baked whole. The binder gives it one
+    flat compile-time slot without looking inside, so an aggregate passed that way
+    (on its own or inside a tuple) is an ordinary constexpr object: nothing is
+    lifted, and it specializes on object identity like any other constexpr."""
+    from triton._C.libtriton import native_find_aggregate_arg_paths
+    from triton.compiler import make_backend
+    from triton.runtime.jit import create_function_from_signature
+
+    BLOCK = 16
+    values = torch.arange(BLOCK, dtype=torch.float32, device=device)
+
+    @triton.jit
+    def kernel(out_ptr, cfg: tl.constexpr, packed: tl.constexpr, BLOCK: tl.constexpr):
+        pass
+
+    backend = make_backend(triton.runtime.driver.active.get_current_target())
+    binder = create_function_from_signature(kernel.signature, kernel.params, backend)
+    _, specialization, _ = binder(values, _PureConfig(1.0, 4.0), (_Offset(values, 1.0), 2.0), BLOCK, debug=False,
+                                  instrumentation_mode="", fpsan_homomorphic_casts=False)
+    assert native_find_aggregate_arg_paths(specialization) is None
+    assert specialization[1][0] == "constexpr" and specialization[2][0] == "constexpr"
+
+
+@triton.aggregate
+class _PureConfig:
+    """An aggregate with no runtime members at all: purely a bundle of constants."""
+    lo: tl.constexpr
+    hi: tl.constexpr
+
+    @triton.constexpr_function
+    def __init__(self, lo, hi):
+        self.lo = tl.constexpr(lo)
+        self.hi = tl.constexpr(hi)
+
+    @triton.jit
+    def span(self):
+        return self.hi - self.lo
+
+
+def test_pure_constexpr_aggregate_keys_on_value(device):
+    """An aggregate with nothing to lift is still keyed by its *values*, not by the
+    identity of the instance -- otherwise a fresh (and equal) aggregate built per
+    launch would miss the compilation cache every time."""
+
+    @triton.jit
+    def kernel(out_ptr, cfg, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(out_ptr + offs, tl.full((BLOCK, ), cfg.span(), tl.float32))
+
+    BLOCK = 16
+    out = torch.zeros(BLOCK, dtype=torch.float32, device=device)
+
+    kernel[(1, )](out, _PureConfig(1.0, 4.0), BLOCK)
+    torch.testing.assert_close(out, torch.full_like(out, 3.0))
+    n_compiled = len(kernel.device_caches[out.device.index][0])
+
+    # A distinct object with equal members reuses the kernel.
+    kernel[(1, )](out, _PureConfig(1.0, 4.0), BLOCK)
+    assert len(kernel.device_caches[out.device.index][0]) == n_compiled
+
+    # Different members specialize.
+    kernel[(1, )](out, _PureConfig(1.0, 6.0), BLOCK)
+    torch.testing.assert_close(out, torch.full_like(out, 5.0))
+    assert len(kernel.device_caches[out.device.index][0]) == n_compiled + 1
+
+    # So do members that are `==` in Python but bake to a different constant
+    # type: `1 == 1.0`, yet an int member is not a float member.
+    kernel[(1, )](out, _PureConfig(1, 4), BLOCK)
+    torch.testing.assert_close(out, torch.full_like(out, 3.0))
+    assert len(kernel.device_caches[out.device.index][0]) == n_compiled + 2
+
+
+def test_aggregate_arg_wrappers_are_interned(device):
+    """Equal-valued aggregates -- distinct instances, distinct runtime members --
+    resolve to the *same* wrapper object at launch, so the in-memory kernel cache
+    lookup compares by identity. The wrapper carries no runtime member; those come
+    back separately, from the aggregate at hand."""
+    from triton.runtime.jit import AggregateArg
+
+    values = torch.arange(16, dtype=torch.float32, device=device)
+    other = values * 3
+
+    w1, rt1 = AggregateArg.for_value(_Offset(values, 1.0))
+    w2, rt2 = AggregateArg.for_value(_Offset(other, 1.0))
+    assert w1 is w2
+    assert len(rt1) == 1 and rt1[0] is values
+    assert len(rt2) == 1 and rt2[0] is other
+
+    # A different baked member, or a different class, is a different wrapper.
+    w3, _ = AggregateArg.for_value(_Offset(values, 2.0))
+    assert w3 is not w1 and w3 != w1
+    w4, rt4 = AggregateArg.for_value(_PureConfig(1.0, 4.0))
+    assert w4 is not w1 and len(rt4) == 0
+
+    # The lift is memoized on the (immutable) instance: a prebuilt aggregate
+    # launched repeatedly is walked once, and the memo is per instance -- an
+    # equal-valued sibling shares the wrapper but reports its own members.
+    agg = _Offset(values, 1.0)
+    first = AggregateArg.for_value(agg)
+    assert AggregateArg.for_value(agg) is first
+    assert first[0] is w1 and first[1][0] is values
+    assert AggregateArg.for_value(_Offset(other, 1.0)) is not first
+    # aggregate_replace() builds a fresh instance, so it does not inherit the memo.
+    replaced = tl.aggregate_replace(agg, bump=2.0)
+    assert AggregateArg.for_value(replaced)[0] is w3
+
+    # The launch path hands the interned wrapper to the specialization, so a repeat
+    # launch with a fresh equal aggregate hits the same kernel_key_cache entry.
+    @triton.jit
+    def kernel(out_ptr, off, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(out_ptr + offs, off.load(offs))
+
+    out = torch.zeros(16, dtype=torch.float32, device=device)
+    kernel[(1, )](out, _Offset(values, 1.0), 16)
+    kernel[(1, )](out, _Offset(other, 1.0), 16)
+    torch.testing.assert_close(out, other + 1.0)
+    kernel_cache, kernel_key_cache = kernel.device_caches[out.device.index][:2]
+    assert len(kernel_cache) == 1 and len(kernel_key_cache) == 1
+    (spec, _), = kernel_key_cache.keys()
+    assert spec[1][1][0] is w1
+
+
+def test_aggregate_arg_preload_round_trip(device, fresh_knobs):
+    """The serialized specialization data of a kernel taking a host aggregate can be
+    preloaded, and the preloaded kernel is the one a later launch uses."""
+
+    @triton.jit
+    def kernel(out_ptr, off, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(out_ptr + offs, off.load(offs))
+
+    specialization_data = None
+
+    def cache_hook(*args, **kwargs):
+        nonlocal specialization_data
+        specialization_data = kwargs["compile"]["specialization_data"]
+
+    fresh_knobs.runtime.jit_cache_hook = cache_hook
+
+    BLOCK = 16
+    values = torch.arange(BLOCK, dtype=torch.float32, device=device)
+    out = torch.zeros(BLOCK, dtype=torch.float32, device=device)
+    kernel[(1, )](out, _Offset(values, 3.0), BLOCK)
+    torch.testing.assert_close(out, values + 3.0)
+    assert specialization_data is not None
+    fresh_knobs.runtime.jit_cache_hook = None
+
+    kernel.device_caches.clear()
+    assert kernel.preload(specialization_data) is not None
+    kernel_cache = kernel.device_caches[out.device.index][0]
+    assert len(kernel_cache) == 1
+
+    out.zero_()
+    other = values * 2
+    kernel[(1, )](out, _Offset(other, 3.0), BLOCK)
+    torch.testing.assert_close(out, other + 3.0)
+    assert len(kernel_cache) == 1
+
+
+def _make_scaling_epilogue(op):
+    """A factory for a parameterized aggregate. Every class it returns has the same
+    `__qualname__`, so the cache key cannot be the class name alone."""
+
+    @triton.aggregate
+    class _Epilogue:
+        values: tl.tensor
+
+        @triton.constexpr_function
+        def __init__(self, values):
+            self.values = values
+
+        if op == "add":
+
+            @triton.jit
+            def apply(self, offs):
+                return tl.load(self.values + offs) + 100.0
+        else:
+
+            @triton.jit
+            def apply(self, offs):
+                return tl.load(self.values + offs) * 100.0
+
+    return _Epilogue
+
+
+def test_aggregate_classes_sharing_a_qualname_do_not_share_a_kernel(device):
+    """Two aggregate classes from the same factory differ only in the body of a
+    `@triton.jit` method -- same module, same qualname, same field layout. Each must
+    compile its own kernel."""
+    added, multiplied = _make_scaling_epilogue("add"), _make_scaling_epilogue("mul")
+    assert added.__qualname__ == multiplied.__qualname__
+
+    @triton.jit
+    def kernel(out_ptr, epilogue, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(out_ptr + offs, epilogue.apply(offs))
+
+    BLOCK = 16
+    values = torch.full((BLOCK, ), 2.0, dtype=torch.float32, device=device)
+    out = torch.zeros(BLOCK, dtype=torch.float32, device=device)
+
+    kernel[(1, )](out, added(values), BLOCK)
+    torch.testing.assert_close(out, values + 100.0)
+
+    kernel[(1, )](out, multiplied(values), BLOCK)
+    torch.testing.assert_close(out, values * 100.0)
+
+
+@triton.aggregate
+class _HostBias:
+    """An aggregate with a plain Python (host-only) constructor."""
+    values: tl.tensor
+    n: tl.constexpr
+
+    def __init__(self, values, n):
+        self.values = values
+        self.n = tl.constexpr(n)
+
+    @triton.jit
+    def apply(self, offs):
+        return tl.load(self.values + offs, mask=offs < self.n, other=0.0)
+
+
+@triton.aggregate
+class _HostBiasScale(_HostBias):
+    scale: tl.tensor
+
+    def __init__(self, values, n, scale):
+        self.values = values
+        self.n = tl.constexpr(n)
+        self.scale = scale
+
+    @triton.jit
+    def apply(self, offs):
+        return _HostBias.apply(self, offs) * self.scale
+
+
+def test_aggregate_derived_with_host_init_references_base(device):
+    """A `@triton.jit` method that references an aggregate class whose `__init__`
+    is a plain Python function hashes that class without compiling its `__init__`."""
+
+    @triton.jit
+    def kernel(out_ptr, epilogue, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(out_ptr + offs, epilogue.apply(offs))
+
+    BLOCK = 16
+    values = torch.arange(BLOCK, dtype=torch.float32, device=device)
+    out = torch.zeros(BLOCK, dtype=torch.float32, device=device)
+    kernel[(1, )](out, _HostBiasScale(values, 12, 0.5), BLOCK)
+    expected = torch.where(torch.arange(BLOCK, device=device) < 12, values, 0.0) * 0.5
+    torch.testing.assert_close(out, expected)
+
+
+@triton.aggregate
+class _HostDesc:
+    """An aggregate with a plain Python constructor and a descriptor member."""
+    desc: tl.tensor_descriptor
+
+    def __init__(self, desc):
+        self.desc = desc
+
+
+def test_aggregate_host_field_rejects_wrong_value_type():
+    """A runtime member of a host-constructed aggregate accepts only values that can
+    be lifted to a kernel parameter of the annotated type."""
+    with pytest.raises(TypeError, match="attribute 'values'"):
+        _HostBias("not a tensor", 4)
+    with pytest.raises(TypeError, match="attribute 'desc'"):
+        _HostDesc(torch.zeros(4))
