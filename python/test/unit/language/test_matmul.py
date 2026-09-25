@@ -5,6 +5,7 @@ import triton
 import triton.language as tl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 import re
+from test_compile_only import _prefetched_descriptor_matmul_kernel
 from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_gfx1250, is_rubin, is_blackwell
 
 pytestmark = pytest.mark.enable_warmup
@@ -1589,3 +1590,22 @@ def test_nvfp4_ue5m3_matmul():
     torch.testing.assert_close(ref, out, atol=1e-3, rtol=1e-3)
     if not is_compile_warmup():
         assert "kind::mxf4nvf4.block_scale.block16" in kernel.asm["ptx"]
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250 TDM loads")
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 64), (128, 128, 128)])
+@pytest.mark.parametrize("k_tiles", [1, 8])
+def test_prefetched_descriptor_matmul_correctness(BLOCK_M, BLOCK_N, BLOCK_K, k_tiles, device):
+    # Exercise one iteration and repeated use of the prefetched loop-carried tiles.
+    torch.manual_seed(42)
+    M, N, K = 2 * BLOCK_M, 2 * BLOCK_N, k_tiles * BLOCK_K
+    a = torch.randn((M, K), device=device, dtype=torch.float16)
+    b = torch.randn((N, K), device=device, dtype=torch.float16)
+    c = torch.empty((M, N), device=device, dtype=torch.float16)
+    # Disable automatic pipelining to isolate layout propagation.
+    _prefetched_descriptor_matmul_kernel[(M // BLOCK_M, N // BLOCK_N)](a, b, c, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                                                       num_stages=1)
+    if is_compile_warmup():
+        return
+    ref = (a.float() @ b.float().T).half()
+    torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)

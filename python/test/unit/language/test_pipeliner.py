@@ -5,6 +5,8 @@ import torch
 import triton
 import triton.language as tl
 
+from test_compile_only import running_sum_matmul_kernel
+
 from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_gfx1250
 
 
@@ -616,3 +618,41 @@ def test_conditional_store_pipeline(num_stages, device):
     # Expected output: [1, 2, 3, 4, ..., N]
     expected = torch.arange(1, N + 1, dtype=torch.int32, device=device)
     assert torch.equal(output, expected)
+
+
+@pytest.mark.parametrize("num_stages", [1, 2, 3])
+@pytest.mark.parametrize("conditional", [False, True])
+def test_running_sum_matmul_pipeline(num_stages, conditional, device):
+    """Check a pipelined matmul whose B operand is a loop-carried running sum."""
+    check_capabilities()
+
+    torch.manual_seed(0)
+    M, N, K = 128, 128, 128
+    BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
+    num_k_blocks = K // BLOCK_K
+    a = torch.randn(M, K, device=device, dtype=torch.float16) * 0.1
+    b = torch.randn(K, N, device=device, dtype=torch.float16) * 0.1
+
+    # Reference: running sum of B tiles along K, optionally reusing the
+    # preceding tile on odd iterations, multiplied by the corresponding A slice.
+    ref = torch.zeros(M, N, device=device, dtype=torch.float32)
+    b_running = torch.zeros(BLOCK_K, N, device=device, dtype=torch.float16)
+    for k_blk in range(num_k_blocks):
+        b_blk = k_blk - 1 if conditional and k_blk % 2 else k_blk
+        b_tile = b[b_blk * BLOCK_K:(b_blk + 1) * BLOCK_K, :]
+        b_running = b_running + b_tile
+        a_tile = a[:, k_blk * BLOCK_K:(k_blk + 1) * BLOCK_K].float()
+        ref += a_tile @ b_running.float()
+    ref = ref.to(torch.float16)
+
+    c = torch.empty((M, N), device=device, dtype=torch.float16)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    running_sum_matmul_kernel[grid](
+        a, b, c,  #
+        M, N, K,  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        c.stride(0), c.stride(1),  #
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
+        NUM_STAGES=num_stages, CONDITIONAL=conditional)
+    torch.testing.assert_close(c, ref, atol=1e-3, rtol=1e-3)
