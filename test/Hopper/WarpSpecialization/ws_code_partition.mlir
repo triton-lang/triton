@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --nvgpu-test-ws-code-partition=num-buffers=1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --nvgpu-test-ws-code-partition=num-buffers=1 -verify-diagnostics=only-expected | FileCheck %s
 
 // CHECK-LABEL: @matmul_kernel_one_consumer
 // CHECK: ttg.warp_specialize{{.*}}requestedRegisters = array<i32: 232>
@@ -434,6 +434,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     } {async_task_id = array<i32: 0, 1, 2>, tt.num_stages = 3 : i32, tt.warp_specialize}
     %12 = ttg.convert_layout %11 {async_task_id = array<i32: 1, 2>} : tensor<64x32xi32, #mma> -> tensor<64x32xi32, #blocked2>
     tt.descriptor_store %4[%6, %8], %12 {async_task_id = array<i32: 1, 2>} : !tt.tensordesc<64x32xsi32, #shared2>, tensor<64x32xi32, #blocked2>
+    tt.return
+  }
+}
+
+// -----
+
+// One descriptor load feeds two WGMMA consumers in opposite operand roles.
+// The non-specialized path gives those consumers separate buffers, one for
+// each NVMMAShared encoding. Code partitioning cannot merge them into one
+// producer buffer until it supports consumer-specific buffers and copies.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#out_blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 32]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared_transposed = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
+#out_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32, "ttng.two-ctas" = false} {
+  tt.func public @two_dot_roles_require_different_encodings(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i8>, %arg2: !tt.ptr<i8>, %arg3: i32, %arg4: i32, %arg5: i32) attributes {noinline = false} {
+    %c1_i64 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 1 : i64
+    %c64_i32 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 64 : i32
+    %c0_i32 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 0 : i32
+    %c1_i32 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 1 : i32
+    %c63_i32 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 63 : i32
+    %cst = arith.constant {async_task_id = array<i32: 1, 2>} dense<0> : tensor<64x64xi32, #mma>
+    %0 = arith.extsi %arg5 {async_task_id = array<i32: 0>} : i32 to i64
+    %1 = tt.make_tensor_descriptor %arg1, [%arg3, %arg5], [%0, %c1_i64] {async_task_id = array<i32: 0>} : <i8>, <64x64xsi8, #shared>
+    %2 = arith.extsi %arg4 {async_task_id = array<i32: 0, 1, 2>} : i32 to i64
+    %3 = tt.make_tensor_descriptor %arg2, [%arg5, %arg4], [%2, %c1_i64] {async_task_id = array<i32: 0>} : <i8>, <64x64xsi8, #shared>
+    %4 = tt.make_tensor_descriptor %arg0, [%arg3, %arg4], [%2, %c1_i64] {async_task_id = array<i32: 1, 2>} : <i32>, <64x64xsi32, #out_shared>
+    %5 = tt.get_program_id x {async_task_id = array<i32: 0, 1, 2>} : i32
+    %6 = arith.muli %5, %c64_i32 {async_task_id = array<i32: 0, 1, 2>} : i32
+    %7 = tt.get_program_id y {async_task_id = array<i32: 0, 1, 2>} : i32
+    %8 = arith.muli %7, %c64_i32 {async_task_id = array<i32: 0, 1, 2>} : i32
+    %9 = arith.addi %arg5, %c63_i32 {async_task_id = array<i32: 0, 1, 2>} : i32
+    %10 = arith.divsi %9, %c64_i32 {async_task_id = array<i32: 0, 1, 2>} : i32
+    %11 = scf.for %arg6 = %c0_i32 to %10 step %c1_i32 iter_args(%arg7 = %cst) -> (tensor<64x64xi32, #mma>)  : i32 {
+      %13 = arith.muli %arg6, %c64_i32 {async_task_id = array<i32: 0>} : i32
+      %14 = tt.descriptor_load %1[%6, %13] {async_task_id = array<i32: 0>} : !tt.tensordesc<64x64xsi8, #shared> -> tensor<64x64xi8, #blocked>
+      // expected-error @+1 {{warp specialization cannot share a producer buffer between MMA consumers requiring different NVMMAShared encodings}}
+      %15 = ttg.local_alloc %14 {async_task_id = array<i32: 1, 2>} : (tensor<64x64xi8, #blocked>) -> !ttg.memdesc<64x64xi8, #shared, #smem>
+      %16 = ttg.local_alloc %14 {async_task_id = array<i32: 1, 2>} : (tensor<64x64xi8, #blocked>) -> !ttg.memdesc<64x64xi8, #shared_transposed, #smem>
+      %17 = tt.descriptor_load %3[%13, %8] {async_task_id = array<i32: 0>} : !tt.tensordesc<64x64xsi8, #shared> -> tensor<64x64xi8, #blocked>
+      %18 = ttg.local_alloc %17 {async_task_id = array<i32: 1, 2>} : (tensor<64x64xi8, #blocked>) -> !ttg.memdesc<64x64xi8, #shared_transposed, #smem>
+      %19 = ttg.local_alloc %17 {async_task_id = array<i32: 1, 2>} : (tensor<64x64xi8, #blocked>) -> !ttg.memdesc<64x64xi8, #shared, #smem>
+      %20 = ttng.warp_group_dot %15, %18, %arg7 {async_task_id = array<i32: 1, 2>, inputPrecision = 0 : i32} : !ttg.memdesc<64x64xi8, #shared, #smem> * !ttg.memdesc<64x64xi8, #shared_transposed, #smem> -> tensor<64x64xi32, #mma>
+      %21 = ttng.warp_group_dot %19, %16, %20 {async_task_id = array<i32: 1, 2>, inputPrecision = 0 : i32} : !ttg.memdesc<64x64xi8, #shared, #smem> * !ttg.memdesc<64x64xi8, #shared_transposed, #smem> -> tensor<64x64xi32, #mma>
+      scf.yield {async_task_id = array<i32: 1, 2>} %21 : tensor<64x64xi32, #mma>
+    } {async_task_id = array<i32: 0, 1, 2>, tt.num_stages = 3 : i32, tt.warp_specialize}
+    %12 = ttg.convert_layout %11 {async_task_id = array<i32: 1, 2>} : tensor<64x64xi32, #mma> -> tensor<64x64xi32, #out_blocked>
+    tt.descriptor_store %4[%6, %8], %12 {async_task_id = array<i32: 1, 2>} : !tt.tensordesc<64x64xsi32, #out_shared>, tensor<64x64xi32, #out_blocked>
     tt.return
   }
 }

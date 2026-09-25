@@ -623,8 +623,8 @@ static void splitConsumerGroupsByFill(
   SmallVector<Channel *> newOrder;
   for (Channel *key : orderedChannels) {
     auto it = channelsGroupedByConsumers.find(key);
-    if (it == channelsGroupedByConsumers.end())
-      continue;
+    assert(it != channelsGroupedByConsumers.end() &&
+           "ordered channel must have a consumer group");
     SmallVector<std::pair<ChannelFillKind, SmallVector<Channel *>>> parts;
     for (Channel *c : it->second) {
       ChannelFillKind kind = getChannelFillKind(c, copyOpMap);
@@ -803,7 +803,7 @@ ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
 
 // Create a buffer array for each producer op, if the producer is in a ForOp,
 // the buffer array will contain numBuffers.
-DenseMap<Channel *, Value> createBuffer(
+FailureOr<DenseMap<Channel *, Value>> createBuffer(
     DenseMap<Channel *, SmallVector<Channel *>> &channelsGroupedByProducers,
     const SmallVector<Channel *> &orderedChannels, triton::FuncOp funcOp) {
 
@@ -855,19 +855,40 @@ DenseMap<Channel *, Value> createBuffer(
 
       // Get shape, layout and type of a slice
       auto sliceShape = tensorType.getShape();
-      // Check the consumer type
-      auto actualConsumers = getActualConsumers(dstOp);
-      LLVM_DEBUG({
-        DBGS() << "actual consumers: \n";
-        for (auto consumerOp : actualConsumers) {
-          DBGS() << *consumerOp << "\n";
+      // All channels in this group share one buffer, so all MMA consumers must
+      // agree on its encoding. A producer used in both dot operand roles may
+      // require two different encodings; supporting that needs separate
+      // buffers and consumer-specific use rewriting.
+      bool requireMMASharedEncoding = false;
+      ttg::NVMMASharedEncodingAttr mmaSharedLayout;
+      for (Channel *c : channels) {
+        auto actualConsumers = getActualConsumers(c->getDstOp());
+        LLVM_DEBUG({
+          DBGS() << "actual consumers: \n";
+          for (Operation *consumerOp : actualConsumers)
+            DBGS() << *consumerOp << "\n";
+        });
+        if (!llvm::any_of(actualConsumers, [](Operation *op) {
+              return isa<mlir::triton::DotOpInterface>(op);
+            }))
+          continue;
+        requireMMASharedEncoding = true;
+        auto localAlloc = dyn_cast<ttg::LocalAllocOp>(c->getDstOp());
+        if (!localAlloc)
+          continue;
+        auto allocEncoding = dyn_cast_or_null<ttg::NVMMASharedEncodingAttr>(
+            localAlloc.getType().getEncoding());
+        if (!allocEncoding)
+          continue;
+        if (mmaSharedLayout && mmaSharedLayout != allocEncoding) {
+          localAlloc.emitOpError()
+              << "warp specialization cannot share a producer buffer between "
+                 "MMA consumers requiring different NVMMAShared encodings: "
+              << mmaSharedLayout << " and " << allocEncoding;
+          return failure();
         }
-      });
-
-      bool requireMMASharedEncoding =
-          llvm::any_of(actualConsumers, [](Operation *op) {
-            return isa<mlir::triton::DotOpInterface>(op);
-          });
+        mmaSharedLayout = allocEncoding;
+      }
 
       Attribute sharedLayout;
       if (requireMMASharedEncoding) {
@@ -878,11 +899,7 @@ DenseMap<Channel *, Value> createBuffer(
         // here from the producer's register order drops the operand role and
         // can produce an encoding no WGMMA instruction accepts, so reuse the
         // encoding of the allocation this buffer replaces when there is one.
-        if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(dstOp)) {
-          auto allocEncoding = localAlloc.getType().getEncoding();
-          if (isa_and_nonnull<ttg::NVMMASharedEncodingAttr>(allocEncoding))
-            sharedLayout = allocEncoding;
-        }
+        sharedLayout = mmaSharedLayout;
         if (!sharedLayout)
           sharedLayout = ttg::NVMMASharedEncodingAttr::get(
               context, sliceShape, order, CGALayout, elemType,
@@ -1353,7 +1370,7 @@ void foldLocalLoads(triton::FuncOp funcOp) {
 
 } // namespace
 
-void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
+LogicalResult doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
   // Step 1: collect all communications between producers and consumers.
   SmallVector<std::unique_ptr<Channel>> channelsOrigin;
   collectAsyncChannels(channelsOrigin, funcOp, numBuffers);
@@ -1362,7 +1379,7 @@ void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
     channels.push_back(c.get());
   }
   if (channels.empty()) {
-    return;
+    return success();
   }
 
   // Step 2: group channels
@@ -1398,8 +1415,10 @@ void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
   });
 
   // Step 5: Create buffers. An array of buffers for each channel.
-  DenseMap<Channel *, Value> bufferMap =
-      createBuffer(channelsGroupedByProducers, channels, funcOp);
+  auto bufferMapOr = createBuffer(channelsGroupedByProducers, channels, funcOp);
+  if (failed(bufferMapOr))
+    return failure();
+  DenseMap<Channel *, Value> bufferMap = std::move(*bufferMapOr);
   LLVM_DEBUG({
     LDBG("\n\nafter createBuffer");
     funcOp.dump();
@@ -1453,6 +1472,7 @@ void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
     LDBG("\n\nwith specializeRegion");
     funcOp.dump();
   });
+  return success();
 }
 
 #define GEN_PASS_DEF_NVGPUTESTWSCODEPARTITION
@@ -1464,13 +1484,20 @@ public:
   using impl::NVGPUTestWSCodePartitionBase<
       NVGPUTestWSCodePartitionPass>::NVGPUTestWSCodePartitionBase;
 
-  void runOnFuncOp(triton::FuncOp funcOp) {
+  LogicalResult runOnFuncOp(triton::FuncOp funcOp) {
     // Disable code partitioning when numBuffers is 0.
     if (numBuffers > 0)
-      doCodePartition(funcOp, numBuffers);
+      return doCodePartition(funcOp, numBuffers);
+    return success();
   }
   void runOnOperation() override {
-    getOperation()->walk([&](triton::FuncOp funcOp) { runOnFuncOp(funcOp); });
+    LogicalResult result = success();
+    getOperation()->walk([&](triton::FuncOp funcOp) {
+      if (succeeded(result))
+        result = runOnFuncOp(funcOp);
+    });
+    if (failed(result))
+      return signalPassFailure();
     LLVM_DEBUG({
       LDBG("post pass");
       getOperation()->dump();
