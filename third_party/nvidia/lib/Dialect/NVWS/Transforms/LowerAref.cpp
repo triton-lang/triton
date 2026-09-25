@@ -299,6 +299,7 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
   // Empty barriers protect the next write; full barriers protect reads.
   // MMA completion already covers both CTAs. Only independent per-CTA
   // accesses need an additional join; mixed signals first complete locally.
+  // Ordinary reads ("reads" below) are per-CTA reads.
   //
   // clang-format off
   // Producer              Consumers           empty consumerCompletion producerCompletion full
@@ -325,19 +326,9 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
         return exit && llvm::is_contained(castAsyncOpAttrs(exit.getAsyncOps()),
                                           AsyncOp::TC5MMA);
       });
-  // Include initialization stores: their readiness is still per-CTA.
-  bool hasPerCTAProducer =
-      !hasTwoCTAProducer || llvm::any_of(op->getUsers(), [](Operation *user) {
-        auto exit = dyn_cast<ArefPutExitOp>(user);
-        return exit && llvm::any_of(castAsyncOpAttrs(exit.getAsyncOps()),
-                                    [](AsyncOp kind) {
-                                      return kind != AsyncOp::TC5MMA;
-                                    });
-      });
   bool needsEmptyJoin = hasTwoCTAProducer && hasSynchronousConsumer;
-  bool needsFullJoin = hasTwoCTAConsumer && hasPerCTAProducer;
-  bool needsProducerCompletion =
-      needsFullJoin && (hasTwoCTAProducer || hasSynchronousConsumer);
+  bool needsFullJoin = hasTwoCTAConsumer && !hasTwoCTAProducer;
+  bool needsProducerCompletion = needsFullJoin && hasSynchronousConsumer;
   bool needsConsumerCompletion = needsEmptyJoin && hasTwoCTAConsumer;
   BarrierCount count = getArrivalCount(op);
   ImplicitLocOpBuilder initBuilder(op.getLoc(), op);
