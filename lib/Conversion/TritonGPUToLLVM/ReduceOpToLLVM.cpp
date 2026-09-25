@@ -277,8 +277,15 @@ private:
     Region &combineRegion =
         vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
 
-    Operation &combinerOp = combineRegion.front().front();
-    unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
+    // The combiner for tree arity is the op that defines the returned value.
+    // getSingleCombiner already validates the region's shape (single operand,
+    // single result, combiner mapping to the two block args) and returns
+    // nullptr for anything else; a binary tree is the safe fallback shape.
+    Operation *combinerOp = vectorCombineRegion
+                                ? &vectorCombineRegion->front().front()
+                                : op.getSingleCombiner();
+    unsigned arity =
+        combinerOp ? targetInfo.getReductionTreeArity(combinerOp) : 2;
 
     // Perform a tree reduction
     unsigned numOperands = accs.size();

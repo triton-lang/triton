@@ -591,4 +591,34 @@ tt.func private @reduce_broadcast_halves_minui_small(%arg0: tensor<8x4xi32, #hal
   tt.return %0 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
 }
 
+// A zero-result op in front of the arithmetic combiner must not crash the
+// NVIDIA tree-arity query (which dereferences result 0 unconditionally).
+// CHECK-LABEL: @reduce_with_print_in_combine
+// CHECK: ret void
+tt.func public @reduce_with_print_in_combine(%arg0: tensor<32x16xi32, #blocked_reduce>) {
+  %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    tt.print "combine" {hex = false, isSigned = array<i32: 1>} : %a : i32
+    %c = arith.addi %a, %b : i32
+    tt.reduce.return %c : i32
+  }) : (tensor<32x16xi32, #blocked_reduce>) -> tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked_reduce}>>
+  tt.return
+}
+
+// The arity query inspects the op that defines the returned value, not the
+// first resultful op in the region. A chained region like this one is not a
+// single direct combiner, so getSingleCombiner declines it and the tree
+// stays binary.
+// CHECK-LABEL: @reduce_combiner_defines_return
+// CHECK: ret void
+tt.func public @reduce_combiner_defines_return(%arg0: tensor<128x4xf32, #blocked_reduce>) {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: f32, %b: f32):
+    %sum = arith.addf %a, %b : f32
+    %result = arith.maximumf %sum, %a : f32
+    tt.reduce.return %result : f32
+  }) : (tensor<128x4xf32, #blocked_reduce>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
+  tt.return
+}
+
 }
