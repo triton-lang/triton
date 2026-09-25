@@ -279,27 +279,14 @@ void convertOpResultsFromLayouts(Operation *op,
 }
 
 bool preferTwoCTALayout(triton::DotOp dot) {
-  if (dot.getType().getRank() != 2 || ttg::lookupNumCTAs(dot) < 2)
+  if (ttg::lookupNumCTAs(dot) < 2)
     return false;
   auto module = dot->getParentOfType<ModuleOp>();
   auto target = module->getAttrOfType<StringAttr>(ttg::AttrTargetName);
   if (!target || !target.getValue().starts_with("cuda:"))
     return false;
   int cc = getNVIDIAComputeCapability(module);
-  if (cc < 100 || cc >= 120)
-    return false;
-  auto isDescriptorLoaded = [](Value value) {
-    while (Operation *op = value.getDefiningOp()) {
-      if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op))
-        value = cvt.getSrc();
-      else if (auto trans = dyn_cast<triton::TransOp>(op))
-        value = trans.getSrc();
-      else
-        return isa<triton::DescriptorLoadOp>(op);
-    }
-    return false;
-  };
-  return isDescriptorLoaded(dot.getA()) && isDescriptorLoaded(dot.getB());
+  return cc >= 100 && cc < 120;
 }
 
 SmallVector<unsigned> getDotCGASplit(ArrayRef<int64_t> shape, unsigned numCTAs,
@@ -318,14 +305,17 @@ SmallVector<unsigned> getDotCGASplit(ArrayRef<int64_t> shape, unsigned numCTAs,
   constexpr unsigned kMinChunkSize = 64;
   auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
 
-  if (preferTwoCTA) {
+  if (preferTwoCTA && numCTAs >= 2) {
     // Split N between pairs, while adjacent CTAs cooperate along M. Prefer
     // two N partitions when each CTA retains a useful, legal MMAv5 tile.
     unsigned splitM = std::max(2u, numCTAs / 2);
     unsigned splitN = numCTAs / splitM;
     if (m / splitM >= kMinChunkSize && m / splitM <= kPreferredChunkSize &&
-        n / splitN >= kMinChunkSize && n / splitN <= 256)
-      return {splitM, splitN};
+        n / splitN >= kMinChunkSize && n / splitN <= 256) {
+      ctaSplit[rank - 2] = splitM;
+      ctaSplit[rank - 1] = splitN;
+      return ctaSplit;
+    }
   }
 
   unsigned splitM = 1;
@@ -363,6 +353,7 @@ void assignDotCGALayout(triton::DotOp dot) {
   SmallVector<unsigned> ctaOrder;
   for (unsigned dim = dTy.getRank(); dim > 0; --dim)
     ctaOrder.push_back(dim - 1);
+  // The first two order entries are the last tensor dimensions: N, then M.
   if (preferTwoCTA)
     std::swap(ctaOrder[0], ctaOrder[1]);
 
