@@ -39,7 +39,7 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
                                       clamp, mode, UnitAttr());
   if (type != i32_ty) {
     if (bits < 32)
-      result = b.trunc(int_ty(bits), result);
+      result = b.trunc(int_ty(bits), result, LLVM::IntegerOverflowFlags::nuw);
     result = b.bitcast(result, type);
   }
   return result;

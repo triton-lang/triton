@@ -378,7 +378,8 @@ static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
   Value toVal = val;
 
   if (originalBits < fromBits) {
-    toVal = b.trunc(int_ty(originalBits), toVal);
+    toVal =
+        b.trunc(int_ty(originalBits), toVal, LLVM::IntegerOverflowFlags::nsw);
   }
 
   if (!valType.isIntOrIndex()) {

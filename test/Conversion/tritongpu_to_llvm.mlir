@@ -4031,6 +4031,74 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#dst = #ttg.linear<{register = [], lane = [[2], [1], [4], [8], [16]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:80"} {
+  // CHECK-LABEL: @shuffle_i1_preserves_extension
+  tt.func private @shuffle_i1_preserves_extension(%arg: tensor<32xi1, #src>) -> tensor<32xi1, #dst> {
+    // CHECK: llvm.zext %{{.*}} : i1 to i32
+    // CHECK: nvvm.shfl.sync
+    // CHECK: llvm.trunc %{{.*}} overflow<nuw> : i32 to i1
+    %0 = ttg.convert_layout %arg : tensor<32xi1, #src> -> tensor<32xi1, #dst>
+    tt.return %0 : tensor<32xi1, #dst>
+  }
+  // CHECK-LABEL: @shuffle_i16_preserves_extension
+  tt.func private @shuffle_i16_preserves_extension(%arg: tensor<32xi16, #src>) -> tensor<32xi16, #dst> {
+    // CHECK: llvm.zext %{{.*}} : i16 to i32
+    // CHECK: nvvm.shfl.sync
+    // CHECK: llvm.trunc %{{.*}} overflow<nuw> : i32 to i16
+    %0 = ttg.convert_layout %arg : tensor<32xi16, #src> -> tensor<32xi16, #dst>
+    tt.return %0 : tensor<32xi16, #dst>
+  }
+  // CHECK-LABEL: @shuffle_f16_preserves_extension
+  tt.func private @shuffle_f16_preserves_extension(%arg: tensor<32xf16, #src>) -> tensor<32xf16, #dst> {
+    // CHECK: llvm.zext %{{.*}} : i16 to i32
+    // CHECK: nvvm.shfl.sync
+    // CHECK: llvm.trunc %{{.*}} overflow<nuw> : i32 to i16
+    %0 = ttg.convert_layout %arg : tensor<32xf16, #src> -> tensor<32xf16, #dst>
+    tt.return %0 : tensor<32xf16, #dst>
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+#dst = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [32]], warp = [[16]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:80"} {
+  // CHECK-LABEL: @shared_i1_preserves_extension
+  tt.func private @shared_i1_preserves_extension(%arg: tensor<64xi1, #src>) -> tensor<64xi1, #dst> {
+    // CHECK: llvm.zext %{{.*}} : i1 to i8
+    // CHECK: llvm.store
+    // CHECK: llvm.load
+    // CHECK: llvm.trunc %{{.*}} overflow<nuw> : i8 to i1
+    %0 = ttg.convert_layout %arg : tensor<64xi1, #src> -> tensor<64xi1, #dst>
+    tt.return %0 : tensor<64xi1, #dst>
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#dst = #ttg.linear<{register = [[4], [2]], lane = [[1], [8], [16], [32], [64]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:80"} {
+  // CHECK-LABEL: @packed_shuffle_i1_preserves_extension
+  tt.func private @packed_shuffle_i1_preserves_extension(%arg: tensor<128xi1, #src>) -> tensor<128xi1, #dst> {
+    // CHECK: llvm.zext %{{.*}} : i1 to i{{16|32}}
+    // CHECK: llvm.trunc %{{.*}} overflow<nuw> : i16 to i1
+    %0 = ttg.convert_layout %arg : tensor<128xi1, #src> -> tensor<128xi1, #dst>
+    tt.return %0 : tensor<128xi1, #dst>
+  }
+  // CHECK-LABEL: @packed_shuffle_i8_preserves_extension
+  tt.func private @packed_shuffle_i8_preserves_extension(%arg: tensor<128xi8, #src>) -> tensor<128xi8, #dst> {
+    // CHECK: llvm.zext %{{.*}} : i8 to i{{16|32}}
+    // CHECK: llvm.trunc %{{.*}} overflow<nuw> : i16 to i8
+    %0 = ttg.convert_layout %arg : tensor<128xi8, #src> -> tensor<128xi8, #dst>
+    tt.return %0 : tensor<128xi8, #dst>
+  }
+}
+
+// -----
+
 //--- masked-store-barrier.mlir
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
