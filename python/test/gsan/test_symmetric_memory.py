@@ -465,6 +465,7 @@ def _distributed_worker_single_cta_no_atomic_sync(rank: int, world_size: int, ma
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 @pytest.mark.parametrize("write_once", [False, True])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_gsan_symmetric_memory_rendezvous(shadow_granularity, write_once):
     if torch.cuda.device_count() < 2:
         pytest.skip("requires 2 CUDA devices")
@@ -486,6 +487,7 @@ def test_gsan_symmetric_memory_rendezvous_subgroup_without_global_zero(shadow_gr
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 @pytest.mark.parametrize("write_once", [False, True])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_gsan_symmetric_memory_rendezvous_multi_node_simulated(shadow_granularity, write_once):
     if torch.cuda.device_count() < 2:
         pytest.skip("requires 2 CUDA devices")

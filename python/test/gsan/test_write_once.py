@@ -20,7 +20,11 @@ from test_gsan import (
     _host_tma_scatter_kernel,
 )
 
-pytestmark = pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+# These tests exercise write-once cell coverage, not the general ordering matrix.
+pytestmark = [
+    pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend"),
+    pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True),
+]
 
 
 @pytest.fixture
