@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/CGAEncodingAttr.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
 #include <variant>
 
@@ -659,6 +660,19 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     asyncWaitCluster = 1;
     globalLoadCluster = 2;
     localLoadCluster = 3;
+    localStoreCluster = 4;
+  }
+
+  // TDM copy reordering to improve latency hiding.
+  // On by default; set TRITON_HIP_DISABLE_TDM_REORDER=1 to turn it off.
+  bool tdmReorder =
+      hasTDMLoad && hasScaledDot && !waitAtTail &&
+      !::mlir::triton::tools::getBoolEnv("TRITON_HIP_DISABLE_TDM_REORDER");
+  if (tdmReorder) {
+    globalLoadCluster = 0; // all TDM copies first
+    asyncWaitCluster = 1;  // single wait after the copies
+    localLoadCluster = 2;  // local_loads after the wait
+    computeCluster = 3;    // dot_scaled last
     localStoreCluster = 4;
   }
 
