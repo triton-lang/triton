@@ -301,13 +301,13 @@ createArefBarriers(ArefCreateOp op, const DenseSet<MMAv5OpInterface> &mmav5Ops,
   // accesses need an additional join; mixed signals first complete locally.
   //
   // clang-format off
-  // Producer     Consumers            empty  consumerCompletion producerCompletion full
-  // Per-CTA      Per-CTA              local  absent             absent             local
-  // Per-CTA      Two-CTA MMA          local  absent             absent             pair
-  // Per-CTA      Two-CTA MMA + reads  local  absent             local              pair
-  // Two-CTA MMA  Ordinary reads       pair   absent             absent             local
-  // Two-CTA MMA  Two-CTA MMA          local  absent             absent             local
-  // Two-CTA MMA  Two-CTA MMA + reads  pair   local              absent             local
+  // Producer              Consumers           empty consumerCompletion producerCompletion full
+  // Per-CTA               Per-CTA             local absent             absent             local
+  // Per-CTA               Two-CTA MMA         local absent             absent             pair
+  // Per-CTA               Two-CTA MMA + reads local absent             local              pair
+  // Two-CTA MMA           Ordinary reads      pair  absent             absent             local
+  // Two-CTA MMA           Two-CTA MMA         local absent             absent             local
+  // Two-CTA MMA           Two-CTA MMA + reads pair  local              absent             local
   // clang-format on
   auto bufferType = cast<MemDescType>(op.getType().getBaseType().front());
   int depth = getArefDepth(bufferType);

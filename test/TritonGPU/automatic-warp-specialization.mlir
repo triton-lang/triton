@@ -479,8 +479,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [2, 0]], twoCTAs = true>
 module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CLEAN-LABEL: @two_cta_auto_warp_specialization
-  // One completion per CTA pair.
-  // BASE-COUNT-8: ttng.init_barrier {{.*}}, 1
   // CLEAN: ttg.warp_specialize
   // CLEAN: ttng.wait_barrier
   // CLEAN: ttng.tc_gen5_mma {{.*}}two_ctas

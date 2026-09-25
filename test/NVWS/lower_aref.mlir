@@ -744,6 +744,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: @tmem_store_mma(
   // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
   // CHECK: ttng.init_barrier {{.*}}, 1
+  // CHECK-NOT: ttg.local_alloc
   // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
   // CHECK: ttng.init_barrier {{.*}}, 1
   tt.func @tmem_store_mma(%a: !A, %b: !B, %out: !T, %v: !Regs) {
@@ -785,6 +786,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
   // CHECK-LABEL: @tmem_mma_reads(
+  // CHECK-NOT: ttg.local_alloc
   // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
   // CHECK: ttng.init_barrier {{.*}}, 1
   // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
