@@ -292,6 +292,11 @@ class NVMMADistributedLayout(DistributedLayout):
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("instr_shape", _unwrap_if_constexpr(self.instr_shape))
         super().__setattr__("cga_layout", _unwrap_if_constexpr(self.cga_layout))
+        if len(self.warps_per_cta) < 2:
+            raise ValueError(
+                "NVMMADistributedLayout requires rank >= 2; "
+                f"got rank {len(self.warps_per_cta)}"
+            )
 
     def _to_ir(self, builder):
         return builder.get_mma_layout(
