@@ -252,22 +252,20 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   return count;
 }
 
-// Snapshot of aref uses before greedy rewriting changes their buffer views.
+// Aref uses before greedy rewriting.
 struct ArefUseInfo {
-  // Producer/consumer arrival counts before scaling for paired barriers.
+  // Arrival counts before CTA scaling.
   BarrierCount arrivalCount;
-  // Two-CTA MMA completion, independent of the buffer's CTA layout.
   bool hasTwoCTAProducer = false;
-  // Two-CTA MMA consumer outside the default partition.
   bool hasTwoCTAConsumer = false;
-  // A consumer releases the buffer synchronously (AsyncOp::NONE).
+  // Consumer with AsyncOp::NONE.
   bool hasSynchronousConsumer = false;
-  // Exit kinds used to select fences between generic and async accesses.
+  // For async-proxy fences.
   bool hasTMAProducer = false;
   bool hasMMAv5Consumer = false;
-  // MMA consumers eligible for async execution; excludes the default partition.
+  // MMA consumers outside the default partition.
   DenseSet<MMAv5OpInterface> mmav5Consumers;
-  // Get-enters feeding MMA, including the default partition, for ready joins.
+  // MMA get-enters in any partition, for ready joins.
   DenseSet<Operation *> mmaGetEnters;
 };
 
