@@ -214,12 +214,7 @@ def get_llvm_flags(arch):
     run in parallel while they use identical flags. Prefer per-function LLVM
     attributes (see make_llir) whenever LLVM offers one.
     """
-    flags = []
-    # LLVM has no per-function attribute for the AMDGPU register pressure
-    # trackers yet.
-    if arch in ["gfx942", "gfx950"]:
-        flags.append("amdgpu-use-amdgpu-trackers")
-    return flags
+    return []
 
 
 def is_fpsan_supported(arch):
