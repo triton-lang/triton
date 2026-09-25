@@ -80,6 +80,13 @@ def async_scatter(tensor_desc, x_offsets, y_offset, src, _semantic=None):
     """
     Asynchronously scatter elements from shared memory to global memory using TMA.
 
+    .. warning::
+
+        TMA scatter writes only in whole 16-byte chunks. If the innermost
+        dimension's size in bytes is not a multiple of 16, a scatter may
+        overwrite padding beyond the tensor's shape up to the next 16-byte
+        boundary.
+
     Args:
         tensor_desc (tensor_descriptor): The tensor descriptor.
         x_offsets (tensor): 1D tensor of X offsets.
