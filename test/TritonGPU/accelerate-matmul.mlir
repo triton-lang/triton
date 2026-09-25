@@ -320,6 +320,123 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Select two-CTA MMAv5 and split A along M and B along N for descriptor-loaded operands.
+  //   CHECK-DAG:   #ttng.tensor_memory_encoding<{{.*}}twoCTAs = true>
+  //   CHECK-DAG:   #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[1, 0\]\]}}}>
+  //   CHECK-DAG:   #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[0, 1\]\]}}}>
+  // CHECK-LABEL: mmav5_two_cta
+  //       CHECK:   ttng.tc_gen5_mma {{.*}} {two_ctas}
+  tt.func public @mmav5_two_cta(%a_desc: !tt.tensordesc<128x64xf16>, %b_desc: !tt.tensordesc<64x256xf16>, %c: tensor<128x256xf32, #blocked>) -> tensor<128x256xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked>
+    %bd = ttg.convert_layout %b : tensor<64x256xf16, #blocked> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %d : tensor<128x256xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
+#lhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0], [1, 0]]}>
+#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Adjacent CTA IDs must split M to form a cooperating pair.
+  // CHECK-LABEL: mmav5_four_ctas_nonadjacent_m_split
+  // CHECK-NOT: two_ctas
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK-NOT: two_ctas
+  // CHECK: tt.return
+  tt.func public @mmav5_four_ctas_nonadjacent_m_split(%a_desc: !tt.tensordesc<256x64xf16>, %b_desc: !tt.tensordesc<64x256xf16>, %c: tensor<256x256xf32, #blocked>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #lhs>
+    %ad = ttg.convert_layout %a : tensor<256x64xf16, #lhs> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #rhs>
+    %bd = ttg.convert_layout %b : tensor<64x256xf16, #rhs> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<256x256xf32, #blocked>
+    tt.return %d : tensor<256x256xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [2, 0], [0, 1]]}>
+#lhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [2, 0], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Select two-CTA MMAv5 and split A along M and B along N for descriptor-loaded operands.
+  //   CHECK-DAG:   #ttng.tensor_memory_encoding<{{.*}}twoCTAs = true>
+  //   CHECK-DAG:   #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[1, 0\], \[2, 0\], \[0, 0\]\]}}}>
+  //   CHECK-DAG:   #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[0, 1\], \[0, 0\], \[0, 2\]\]}}}>
+  // CHECK-LABEL: mmav5_two_cta_eight_ctas
+  //       CHECK:   ttng.tc_gen5_mma {{.*}} {two_ctas}
+  tt.func public @mmav5_two_cta_eight_ctas(%a_desc: !tt.tensordesc<512x64xf16>, %b_desc: !tt.tensordesc<64x512xf16>, %c: tensor<512x512xf32, #blocked>) -> tensor<512x512xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16, #lhs>
+    %ad = ttg.convert_layout %a : tensor<512x64xf16, #lhs> -> tensor<512x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x512xf16> -> tensor<64x512xf16, #blocked>
+    %bd = ttg.convert_layout %b : tensor<64x512xf16, #blocked> -> tensor<64x512xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<512x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x512xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<512x512xf32, #blocked>
+    tt.return %d : tensor<512x512xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Split the [N, K] descriptor load along N, preserve its other users, and
+  // transpose back to [K, N] for MMA.
+  // CHECK-DAG: #[[$RHS_SPLIT:.+]] = #ttg.blocked<{{.*}}threadsPerWarp = [32, 1],{{.*}}CGALayout = {{\[\[1, 0\]\]}}}>
+  // CHECK-DAG: #[[$RHS_ORIG:.+]] = #ttg.blocked<{{.*}}threadsPerWarp = [32, 1],{{.*}}CGALayout = {{\[\[0, 1\]\]}}}>
+  // CHECK-LABEL: @mmav5_two_cta_transposed_rhs
+  // CHECK: %[[LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<256x64xf16, #[[$RHS_SPLIT]]>
+  // CHECK-DAG: %[[TRANS:.+]] = tt.trans %[[LOAD]] {{.*}} -> tensor<64x256xf16, #{{.*}}>
+  // CHECK-DAG: %[[ORIGINAL:.+]] = ttg.convert_layout %[[LOAD]] {{.*}} -> tensor<256x64xf16, #[[$RHS_ORIG]]>
+  // CHECK-DAG: %[[ALLOC:.+]] = ttg.local_alloc %[[TRANS]]
+  // CHECK: ttng.tc_gen5_mma {{.*}}%[[ALLOC]]{{.*}} {two_ctas}
+  // CHECK: tt.return {{.*}}, %[[ORIGINAL]]
+  tt.func public @mmav5_two_cta_transposed_rhs(%a_desc: !tt.tensordesc<128x64xf16>, %b_desc: !tt.tensordesc<256x64xf16>, %c: tensor<128x256xf32, #blocked>) -> (tensor<128x256xf32, #blocked>, tensor<256x64xf16, #rhs>) {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #rhs>
+    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xf16, #rhs> -> tensor<64x256xf16, #blocked>
+    %bd = ttg.convert_layout %bt : tensor<64x256xf16, #blocked> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %d, %b : tensor<128x256xf32, #blocked>, tensor<256x64xf16, #rhs>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 0]]}>
+#rhs_trans = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // A transpose alone is insufficient: its source must be a descriptor load.
+  // CHECK-LABEL: @mmav5_transposed_tensor_rhs
+  // CHECK-NOT: two_ctas
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK-NOT: two_ctas
+  // CHECK: tt.return
+  tt.func public @mmav5_transposed_tensor_rhs(%a_desc: !tt.tensordesc<128x64xf16>, %b: tensor<256x64xf16, #rhs>, %c: tensor<128x256xf32, #blocked>) -> tensor<128x256xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xf16, #rhs> -> tensor<64x256xf16, #rhs_trans>
+    %bd = ttg.convert_layout %bt : tensor<64x256xf16, #rhs_trans> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %d : tensor<128x256xf32, #blocked>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -1278,5 +1395,105 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 4 : i32, "ttg.num-
     %c = arith.constant dense<0.0> : tensor<8x128x128xf32, #blocked>
     %d = tt.dot %a, %b, %c : tensor<8x128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<8x32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<8x128x128xf32, #blocked>
     tt.return %d : tensor<8x128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @mmav5_two_cta_fallback_tensor_lhs
+  // CHECK-NOT: two_ctas
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK-NOT: two_ctas
+  // CHECK: tt.return
+  tt.func public @mmav5_two_cta_fallback_tensor_lhs(%a: tensor<128x64xf16, #blocked>, %b_desc: !tt.tensordesc<64x256xf16>, %c: tensor<128x256xf32, #blocked>) -> tensor<128x256xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #rhs>
+    %bd = ttg.convert_layout %b : tensor<64x256xf16, #rhs> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %d : tensor<128x256xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @mmav5_two_cta_fallback_narrow_rhs
+  // CHECK-NOT: two_ctas
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK-NOT: two_ctas
+  // CHECK: tt.return
+  tt.func public @mmav5_two_cta_fallback_narrow_rhs(%a_desc: !tt.tensordesc<128x64xf16>, %b_desc: !tt.tensordesc<64x8xf16>, %c: tensor<128x8xf32, #blocked>) -> tensor<128x8xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x8xf16> -> tensor<64x8xf16, #rhs>
+    %bd = ttg.convert_layout %b : tensor<64x8xf16, #rhs> -> tensor<64x8xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x8xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x8xf32, #blocked>
+    tt.return %d : tensor<128x8xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @mmav5_two_cta_rhs_f16_n16
+  // CHECK: ttng.tc_gen5_mma {{.*}} {two_ctas}
+  // CHECK: tt.return
+  tt.func public @mmav5_two_cta_rhs_f16_n16(%a_desc: !tt.tensordesc<128x64xf16>, %b_desc: !tt.tensordesc<64x16xf16>, %c: tensor<128x16xf32, #blocked>) -> tensor<128x16xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x16xf16> -> tensor<64x16xf16, #rhs>
+    %bd = ttg.convert_layout %b : tensor<64x16xf16, #rhs> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x16xf32, #blocked>
+    tt.return %d : tensor<128x16xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @mmav5_two_cta_rhs_f8E4M3FN_n16
+  // CHECK-NOT: two_ctas
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK-NOT: two_ctas
+  // CHECK: tt.return
+  tt.func public @mmav5_two_cta_rhs_f8E4M3FN_n16(%a_desc: !tt.tensordesc<128x64xf8E4M3FN>, %b_desc: !tt.tensordesc<64x16xf8E4M3FN>, %c: tensor<128x16xf32, #blocked>) -> tensor<128x16xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<128x64xf8E4M3FN> -> tensor<128x64xf8E4M3FN, #blocked>
+    %ad = ttg.convert_layout %a : tensor<128x64xf8E4M3FN, #blocked> -> tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x16xf8E4M3FN> -> tensor<64x16xf8E4M3FN, #rhs>
+    %bd = ttg.convert_layout %b : tensor<64x16xf8E4M3FN, #rhs> -> tensor<64x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x16xf32, #blocked>
+    tt.return %d : tensor<128x16xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @mmav5_two_cta_rhs_f8E4M3FN_n32
+  // CHECK: ttng.tc_gen5_mma {{.*}} {two_ctas}
+  // CHECK: tt.return
+  tt.func public @mmav5_two_cta_rhs_f8E4M3FN_n32(%a_desc: !tt.tensordesc<128x64xf8E4M3FN>, %b_desc: !tt.tensordesc<64x32xf8E4M3FN>, %c: tensor<128x32xf32, #blocked>) -> tensor<128x32xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<128x64xf8E4M3FN> -> tensor<128x64xf8E4M3FN, #blocked>
+    %ad = ttg.convert_layout %a : tensor<128x64xf8E4M3FN, #blocked> -> tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x32xf8E4M3FN> -> tensor<64x32xf8E4M3FN, #rhs>
+    %bd = ttg.convert_layout %b : tensor<64x32xf8E4M3FN, #rhs> -> tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x32xf32, #blocked>
+    tt.return %d : tensor<128x32xf32, #blocked>
   }
 }
