@@ -189,6 +189,16 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   unsigned alignment = std::min(maxMultiple, maxContig);
   unsigned maxElementsPerThread = getMaxElementsPerThread(op);
   unsigned currPerThread = std::min(alignment, maxElementsPerThread);
+  if (auto predicated = dyn_cast<PredicatedOpInterface>(op)) {
+    if (Value mask = predicated.getPredicateOperand()) {
+      // Respect mask-limited vectorization along the proposed memory order,
+      // which may differ from the mask's current layout order.
+      auto *maskInfo = axisInfoAnalysis.getAxisInfo(mask);
+      unsigned maskAlignment =
+          maskInfo ? std::max<int64_t>(maskInfo->getConstancy(order[0]), 1) : 1;
+      currPerThread = std::min(currPerThread, maskAlignment);
+    }
+  }
   LDBG("elemNumBytes: " << elemNumBytes
                         << ", divisibility: " << maxMultipleBytes
                         << ", contig: " << valInfo.getContiguity(order[0])
