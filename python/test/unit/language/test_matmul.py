@@ -343,7 +343,8 @@ def test_tma_matmul_two_ctas_layout(num_ctas, BM, BN, warp_specialize, persisten
     if is_compile_warmup():
         return
     torch.testing.assert_close(c, (a.float() @ b.float().T).half(), atol=0.01, rtol=0.01)
-    assert ("ttg.warp_specialize" in compiled.asm["ttgir"]) == warp_specialize
+    # Automatic warp specialization is disabled for two-CTA MMA.
+    assert "ttg.warp_specialize" not in compiled.asm["ttgir"]
     assert "tcgen05.mma.cta_group::2" in compiled.asm["ptx"]
     assert "multicast" not in compiled.asm["ttgir"]
     assert all(".multicast" not in line for line in compiled.asm["ptx"].splitlines() if "cp.async.bulk.tensor" in line)
