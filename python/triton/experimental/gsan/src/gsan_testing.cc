@@ -366,12 +366,12 @@ void init_gsan_testing(py::module_ &m) {
   m.def(
       "shadow_cell_address", gsan::getShadowAddress, py::arg("real_address"),
       "Return the address of the ShadowCell corresponding to a real address.");
+  m.def("shadow_granularity", gsan::getShadowGranularity,
+        py::arg("real_address"), "Return the pointer's shadow granularity.");
 
   m.def("is_write_once_address", gsan::isWriteOnceAddress);
   m.def("shadow_cell_size",
         [](uintptr_t addr) { return gsan::getShadowCellSize(addr); });
-  m.def("shadow_granularity",
-        [](uintptr_t addr) { return gsan::getShadowGranularity(addr); });
   m.def("decode_write_once_clock", [](py::bytes data) {
     if (data.size() < sizeof(gsan::WriteOnceShadowCell))
       throw py::value_error(

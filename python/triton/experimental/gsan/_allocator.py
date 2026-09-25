@@ -41,11 +41,37 @@ def _compile_gsan_allocator() -> str:
     return _load_gsan_module().__file__
 
 
+def _validate_shadow_granularity(shadow_granularity: int) -> None:
+    if isinstance(shadow_granularity, bool) or not isinstance(shadow_granularity, int):
+        raise ValueError("shadow_granularity must be 1, 2, 4, 8, or 16")
+    if shadow_granularity not in (1, 2, 4, 8, 16):
+        raise ValueError("shadow_granularity must be 1, 2, 4, 8, or 16")
+
+
+def _resolve_shadow_granularity(shadow_granularity: int | None, write_once: bool) -> int:
+    if shadow_granularity is None:
+        return 1 if write_once else 4
+    _validate_shadow_granularity(shadow_granularity)
+    return shadow_granularity
+
+
 @functools.lru_cache()
-def get_allocator(*, write_once: bool = False):
+def _get_allocator(shadow_granularity: int, write_once: bool):
     from torch.cuda.memory import CUDAPluggableAllocator
     so_name = _compile_gsan_allocator()
-    return CUDAPluggableAllocator(so_name, "gsanMallocWriteOnce" if write_once else "gsanMalloc", "gsanFree")
+    malloc = "gsanMalloc" if shadow_granularity == 4 else f"gsanMalloc{shadow_granularity}"
+    if write_once:
+        malloc = "gsanMallocWriteOnce" if shadow_granularity == 1 else f"gsanMallocWriteOnce{shadow_granularity}"
+    return CUDAPluggableAllocator(so_name, malloc, "gsanFree")
+
+
+def get_allocator(*, shadow_granularity: int | None = None, write_once: bool = False):
+    """Returns the allocator for a 1-, 2-, 4-, 8-, or 16-byte shadow-memory pool.
+
+    See :func:`create_mem_pool` for the access requirements of each pool.
+    """
+    shadow_granularity = _resolve_shadow_granularity(shadow_granularity, write_once)
+    return _get_allocator(shadow_granularity, write_once)
 
 
 def configure(
@@ -120,14 +146,29 @@ def reset() -> None:
     _stream_sync._reset_caches()
 
 
-def create_mem_pool(*, write_once: bool = False):
+def create_mem_pool(*, shadow_granularity: int | None = None, write_once: bool = False):
+    """Creates a CUDA memory pool with the specified shadow granularity.
+
+    With ``write_once=True``, each byte may be written once per backing allocation
+    lifetime, and reads must be ordered after that write. This mode always uses
+    byte granularity; other explicit granularities are rejected.
+
+    Granularity is fixed for the lifetime of the underlying allocation, including
+    all tensor views and imported aliases. Use 1 for independent byte accesses,
+    or the default 4 for lower shadow-memory overhead. The 16-byte pool requires
+    every instrumented access to cover complete, aligned 16-byte units and does
+    not support atomics (including TMA reductions). Violations are diagnosed by
+    GSan. Aligned TMA loads and stores are suitable for this pool.
+    """
     from torch.cuda.memory import MemPool
-    return MemPool(get_allocator(write_once=write_once).allocator())
+    return MemPool(get_allocator(shadow_granularity=shadow_granularity, write_once=write_once).allocator())
 
 
-def gsan_malloc(size: int, device: int, stream: int = 0, *, write_once: bool = False) -> int:
+def gsan_malloc(size: int, device: int, stream: int = 0, *, shadow_granularity: int | None = None,
+                write_once: bool = False) -> int:
+    shadow_granularity = _resolve_shadow_granularity(shadow_granularity, write_once)
     module = _load_gsan_module()
-    return module.malloc(size, device, stream, write_once)
+    return module.malloc(size, device, stream, write_once, shadow_granularity)
 
 
 def gsan_free(ptr: int, device: int, size: int = 0, stream: int = 0) -> None:
@@ -167,6 +208,7 @@ def export_allocation_handles(
     handle_type: Literal[ShareableHandleType.POSIX_FILE_DESCRIPTOR],
     *,
     write_once: bool = False,
+    include_granularity: Literal[False] = False,
 ) -> tuple[int, int, int]:
     ...
 
@@ -177,14 +219,45 @@ def export_allocation_handles(
     handle_type: Literal[ShareableHandleType.FABRIC],
     *,
     write_once: bool = False,
+    include_granularity: Literal[False] = False,
 ) -> tuple[bytes, bytes, int]:
     ...
 
 
-def export_allocation_handles(ptr, handle_type, *, write_once: bool = False):
-    """Export handles, checking the mode that must also be passed to import."""
+@overload
+def export_allocation_handles(
+    ptr: int,
+    handle_type: Literal[ShareableHandleType.POSIX_FILE_DESCRIPTOR],
+    *,
+    write_once: bool = False,
+    include_granularity: Literal[True],
+) -> tuple[int, int, int, int]:
+    ...
+
+
+@overload
+def export_allocation_handles(
+    ptr: int,
+    handle_type: Literal[ShareableHandleType.FABRIC],
+    *,
+    write_once: bool = False,
+    include_granularity: Literal[True],
+) -> tuple[bytes, bytes, int, int]:
+    ...
+
+
+def export_allocation_handles(ptr, handle_type, *, write_once: bool = False, include_granularity: bool = False):
+    """Returns real/shadow handles and allocation size.
+
+    Set ``include_granularity=True`` to append the shadow granularity, which
+    must be passed to :func:`import_allocation_handles`. Non-default pools
+    require this option so legacy callers cannot silently import the wrong
+    shadow layout. Pass the allocation's ``write_once`` mode to both export and
+    import; it is checked here. The three-field API is available for the default
+    granularity of each mode: four bytes normally, one byte for write-once.
+    """
     module = _load_gsan_module()
-    return module.export_allocation_handles(ptr, handle_type, write_once)
+    return module.export_allocation_handles(ptr, handle_type, write_once, include_granularity)
 
 
 def export_allocation_memhandle_regions(ptr: int) -> tuple[int, int, int, int]:
@@ -200,6 +273,7 @@ def import_allocation_handles(
     device: int,
     handle_type: Literal[ShareableHandleType.POSIX_FILE_DESCRIPTOR],
     *,
+    shadow_granularity: int | None = None,
     write_once: bool = False,
 ) -> int:
     ...
@@ -213,6 +287,7 @@ def import_allocation_handles(
     device: int,
     handle_type: Literal[ShareableHandleType.FABRIC],
     *,
+    shadow_granularity: int | None = None,
     write_once: bool = False,
 ) -> int:
     ...
@@ -225,8 +300,10 @@ def import_allocation_handles(
     device,
     handle_type,
     *,
+    shadow_granularity: int | None = None,
     write_once: bool = False,
 ):
+    shadow_granularity = _resolve_shadow_granularity(shadow_granularity, write_once)
     module = _load_gsan_module()
     return module.import_allocation_handles(
         real_handle,
@@ -235,6 +312,7 @@ def import_allocation_handles(
         device,
         handle_type,
         write_once,
+        shadow_granularity,
     )
 
 
