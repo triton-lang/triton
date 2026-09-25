@@ -18,6 +18,39 @@ def mock_tensor_from_tensor(tensor):
     return MockTensor(tensor.dtype, tensor.shape)
 
 
+@pytest.mark.parametrize("shape", [
+    (),
+    (0, ),
+    (2, ),
+    (2, 3),
+    (2, 1, 4),
+    (2, 0, 4),
+    (2, 3, 0),
+    (2, 3, 4),
+    (2, 3, 4, 5),
+    (2, 3, 4, 5, 6),
+])
+def test_mock_tensor_stride(shape):
+    tensor = torch.empty(shape)
+    assert mock_tensor_from_tensor(tensor).stride() == tensor.stride()
+
+
+def test_mock_tensor_symbolic_stride():
+
+    class MockSymInt:
+
+        def __sym_max__(self, other):
+            assert other == 1
+            return self
+
+        def __rmul__(self, other):
+            return ("mul", other, self)
+
+    size = MockSymInt()
+    assert MockTensor(torch.float32, (size, 4)).stride() == (4, 1)
+    assert MockTensor(torch.float32, (2, size, 4)).stride() == (("mul", 4, size), 4, 1)
+
+
 class MockJITCallable(JITCallable):
 
     def __init__(self):
