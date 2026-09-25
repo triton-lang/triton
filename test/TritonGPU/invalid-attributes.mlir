@@ -12,9 +12,11 @@
 
 // -----
 
-// expected-error@+2 {{ttg.dot_op kWidth parameter can only be non-zero for Ampere or Hopper MMA parent}}
-#mma = #ttg.nvidia_mma<{versionMajor = 1, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
-#dot_op = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+// expected-error@+1 {{Volta (versionMajor = 1) is deprecated and no longer supported}}
+#mma_volta = #ttg.nvidia_mma<{versionMajor = 1, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
+// -----
+// expected-error@+1 {{versionMajor must be 2 (Ampere) or 3 (Hopper), got 99}}
+#mma_bad_version = #ttg.nvidia_mma<{versionMajor = 99, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
 
 // -----
 
