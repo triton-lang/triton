@@ -187,7 +187,7 @@ class NvidiaTool:
             if version is None:
                 return None
             return NvidiaTool(path, version.group(1))
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except (subprocess.CalledProcessError, OSError):
             return None
 
 
