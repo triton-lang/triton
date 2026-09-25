@@ -478,15 +478,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [2, 0]], twoCTAs = true>
 module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // Keep the regular MMA self-dependency when automatic specialization is skipped.
-  // CLEAN-LABEL: @two_cta_no_auto_warp_specialization
-  // CLEAN-NOT: ttg.warp_specialize
-  // BASE: ttng.tc_gen5_mma {{.*}}tt.self_latency = 1 : i32
-  // BASE: tt.warp_specialize
-  // PIPELINE: ttng.arrive_barrier
-  // PIPELINE: ttng.wait_barrier
+  // CLEAN-LABEL: @two_cta_auto_warp_specialization
+  // CLEAN: ttg.warp_specialize
+  // CLEAN: ttng.wait_barrier
+  // CLEAN: ttng.tc_gen5_mma {{.*}}two_ctas
   // CLEAN: tt.return
-  tt.func @two_cta_no_auto_warp_specialization(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
+  tt.func @two_cta_auto_warp_specialization(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
     %true = arith.constant true
     %false = arith.constant false
     %c0 = arith.constant 0 : i32
