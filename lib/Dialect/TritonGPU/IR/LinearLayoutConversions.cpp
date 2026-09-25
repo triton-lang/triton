@@ -985,8 +985,9 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     auto instrShapeMNK = getInstrShape();
     tileShape = SmallVector<unsigned>({instrShapeMNK[0], instrShapeMNK[1]});
   } else {
-    llvm::report_fatal_error(
-        "Unsupported NvidiaMmaEncoding version in toLinearLayout");
+    llvm::report_fatal_error("Unsupported NvidiaMmaEncoding version " +
+                             llvm::Twine(getVersionMajor()) +
+                             " in toLinearLayout");
   }
   // nvidiamma layout always assumes kWidth = 2
   constexpr auto kWidth = 2;
