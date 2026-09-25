@@ -1,9 +1,11 @@
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/CGAEncodingAttr.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -49,6 +51,7 @@ struct TDMChainOps {
   Operation *tdmOp;
   triton::amdgpu::AsyncTDMWait waitOp;
   ttg::LocalLoadOp maybeLocalLoadOp;
+  triton::amdgpu::TDMPrefetchOp maybePrefetchOp;
 };
 
 using StreamOpVariant =
@@ -79,12 +82,12 @@ TDMChainOps createTDMAsync(
   auto maybeSharedLoad = tt::replaceUsesWithLocalLoad(
       builder, origLoad->getResult(0), viewLoad, waitOp);
 
-  return {tdmOp, waitOp, maybeSharedLoad};
+  return {tdmOp, waitOp, maybeSharedLoad, /*maybePrefetch=*/nullptr};
 }
 
 TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
                                Value extractIdx) {
-  return createTDMAsync(
+  TDMChainOps chainOps = createTDMAsync(
       loadOp, alloc, extractIdx,
       [&](OpBuilder &builder, Location loc, Value view, Value pred) {
         Value desc = createUpdateTDMDescriptorOp(builder, loc, loadOp.getDesc(),
@@ -93,6 +96,16 @@ TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
         return triton::amdgpu::AsyncTDMCopyGlobalToLocalOp::create(builder, loc,
                                                                    desc, view);
       });
+
+  if (loadOp->hasAttr("prefetch")) {
+    OpBuilder builder(loadOp);
+    Location loc = loadOp->getLoc();
+    Value pred = arith::ConstantIntOp::create(builder, loc, 1, 1);
+    chainOps.maybePrefetchOp = triton::amdgpu::TDMPrefetchOp::create(
+        builder, loc, loadOp.getDesc(), loadOp.getIndices(), pred,
+        /*speculative=*/true, /*returnOffsets=*/nullptr);
+  }
+  return chainOps;
 }
 
 TDMChainOps createTDMAsyncGather(tt::DescriptorGatherOp gatherOp, Value alloc,
@@ -438,7 +451,7 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
 // multi-buffering based on the required number of buffers.
 LoadToStreamOpMap
 createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
-                const int &numBuffers, bool useAsyncCopy,
+                const int &numBuffers, bool useAsyncCopy, bool useL2Prefetch,
                 tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   IRRewriter builder(forOp);
   Location loc = forOp.getLoc();
@@ -476,6 +489,9 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     auto gatherOp = dyn_cast<tt::DescriptorGatherOp>(op);
     if (!loadOp && !descLoadOp && !gatherOp)
       continue;
+
+    if (useL2Prefetch)
+      op->setAttr("prefetch", mlir::UnitAttr::get(forOp->getContext()));
 
     // Create an allocation that can hold distance number of loadOp shapes.
     auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
@@ -552,14 +568,31 @@ void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
 // scheduling.
 //   WARNING: Changing the order of schedule.clusters.newAtBack() calls
 //            can cause invalid schedules to be produced.
-LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
-                           int &numBuffers, bool useAsyncCopy, bool hasTDMLoad,
+LogicalResult initSchedule(int maxDist, Stages &stages, int &numBuffers,
+                           bool useAsyncCopy, bool hasTDMLoad,
                            bool hasScaledDot, bool waitAtTail,
-                           Clusters &clusters, tt::CoarseSchedule &schedule) {
+                           bool useL2Prefetch, Clusters &clusters,
+                           tt::CoarseSchedule &schedule) {
   LDBG("Init SingleDotSchedule");
+
+  int numStages = schedule.getNumStages();
+  if (useL2Prefetch) {
+    // Note, it doesn't feel right to do it here but a lack of
+    // encapsulation `CoarseSchedule` allows us to do it
+    // shift all original ops to right if we use l2 prefetch
+    for (auto &[_, schedLocation] : schedule.opToStageAndCluster) {
+      auto &[stage, cluster] = schedLocation;
+      stage += 1;
+    }
+    // adjust number of stages to accomodate the l2 prefetch stage
+    numStages += 1;
+    schedule.setNumStages(numStages);
+  }
   int lastStage = numStages - 1;
-  stages[SCHED_GLOBAL_LOAD] = 0;
-  stages[SCHED_LOCAL_STORE] = 0;
+
+  stages[SCHED_GLOBAL_PREFETCH] = 0;
+  stages[SCHED_GLOBAL_LOAD] = useL2Prefetch ? 1 : 0;
+  stages[SCHED_LOCAL_STORE] = useL2Prefetch ? 1 : 0;
   stages[SCHED_LOCAL_LOAD] = lastStage;
   stages[SCHED_COMPUTE] = lastStage;
 
@@ -587,7 +620,9 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   }
 
   LDBG(
-      "Stage schedule:" << "  GLOBAL_LOAD stage = " << stages[SCHED_GLOBAL_LOAD]
+      "Stage schedule:" << "  SCHED_GLOBAL_PREFETCH stage = "
+                        << stages[SCHED_GLOBAL_PREFETCH]
+                        << ", GLOBAL_LOAD stage = " << stages[SCHED_GLOBAL_LOAD]
                         << ", LOCAL_STORE stage = " << stages[SCHED_LOCAL_STORE]
                         << ", LOCAL_LOAD stage = " << stages[SCHED_LOCAL_LOAD]
                         << ", COMPUTE stage = " << stages[SCHED_COMPUTE]
@@ -636,6 +671,9 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   // else
   //   schedule ttg.local_load in the middle
   int localLoadCluster = globalLoadCluster;
+
+  // prefetch data after global and local loads
+  int prefetchCluster = globalLoadCluster + 1;
   if (stages[SCHED_LOCAL_LOAD] == stages[SCHED_LOCAL_STORE]) {
     localLoadCluster = std::max(3, localStoreCluster + 1);
   } else if (numBuffers == 1 && localLoadCluster >= localStoreCluster) {
@@ -659,6 +697,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     asyncWaitCluster = 1;
     globalLoadCluster = 2;
     localLoadCluster = 3;
+    prefetchCluster = 0; // prefetch data as soon as possible
     localStoreCluster = 4;
   }
 
@@ -672,6 +711,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   std::generate(clusterVec.begin(), clusterVec.end(),
                 [&]() { return schedule.clusters.newAtBack(); });
 
+  clusters[SCHED_GLOBAL_PREFETCH] = clusterVec[prefetchCluster];
   clusters[SCHED_GLOBAL_LOAD] = clusterVec[globalLoadCluster];
   clusters[SCHED_LOCAL_STORE] = clusterVec[localStoreCluster];
   clusters[SCHED_LOCAL_LOAD] = clusterVec[localLoadCluster];
@@ -680,7 +720,8 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
 
   remapClusters(schedule, clusterMap, clusters);
 
-  LDBG("Cluster schedule:" << "  GLOBAL_LOAD cluster = " << globalLoadCluster
+  LDBG("Cluster schedule:" << "  GLOBAL_PREFETCH cluster = " << prefetchCluster
+                           << ", GLOBAL_LOAD cluster = " << globalLoadCluster
                            << ", LOCAL_STORE cluster = " << localStoreCluster
                            << ", LOCAL_LOAD cluster = " << localLoadCluster
                            << ", COMPUTE cluster = " << computeCluster
@@ -691,9 +732,10 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
 }
 
 void scheduleTDMOps(Operation *tdmOp, Operation *waitOp,
-                    ttg::LocalLoadOp maybeLocalLoadOp, Operation *origLoadOp,
-                    tt::CoarseSchedule &schedule, const Stages &stages,
-                    const Clusters &clusters) {
+                    ttg::LocalLoadOp maybeLocalLoadOp,
+                    triton::amdgpu::TDMPrefetchOp maybePrefetchOp,
+                    Operation *origLoadOp, tt::CoarseSchedule &schedule,
+                    const Stages &stages, const Clusters &clusters) {
   auto [loadStage, loadCluster] = schedule[origLoadOp];
   schedule.insert(tdmOp, loadStage, loadCluster);
   // If the LocalLoads are scheduled to a later stage than AsyncCopy we need to
@@ -710,6 +752,10 @@ void scheduleTDMOps(Operation *tdmOp, Operation *waitOp,
     scheduleLocalLoad(maybeLocalLoadOp, schedule, stages[SCHED_LOCAL_LOAD],
                       clusters[SCHED_LOCAL_LOAD]);
   }
+
+  if (maybePrefetchOp)
+    schedule.insert(maybePrefetchOp, stages[SCHED_GLOBAL_PREFETCH],
+                    clusters[SCHED_GLOBAL_PREFETCH]);
 }
 
 void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
@@ -759,8 +805,9 @@ void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
                        const Clusters &clusters) {
   for (auto [l, streamOps] : loadToStreamOp) {
     if (auto asyncOps = std::get_if<TDMChainOps>(&streamOps)) {
-      auto [tdmOp, waitOp, localLoad] = *asyncOps;
-      scheduleTDMOps(tdmOp, waitOp, localLoad, l, schedule, stages, clusters);
+      auto [tdmOp, waitOp, localLoad, maybePrefetchOp] = *asyncOps;
+      scheduleTDMOps(tdmOp, waitOp, localLoad, maybePrefetchOp, l, schedule,
+                     stages, clusters);
     } else if (auto asyncOps = std::get_if<AsyncCopyChainOps>(&streamOps)) {
       auto loadOp = cast<tt::LoadOp>(l);
       scheduleAsyncCopy(*asyncOps, loadOp, schedule, stages, clusters);
@@ -774,7 +821,8 @@ void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
 void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                     tt::CoarseSchedule &schedule,
                     triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                    bool useAsyncCopy, bool hasTDMLoad, bool waitAtTail) {
+                    bool useAsyncCopy, bool hasTDMLoad, bool waitAtTail,
+                    bool useL2Prefetch) {
   LDBG("SingleDotSchedule::updateSchedule");
   Stages stages;
   Clusters clusters;
@@ -788,14 +836,15 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   forOp.walk([&](tt::DotScaledOp) { hasScaledDot = true; });
 
   int numBuffers = 1;
-  if (failed(initSchedule(maxDist, stages, schedule.getNumStages(), numBuffers,
-                          useAsyncCopy, hasTDMLoad, hasScaledDot, waitAtTail,
-                          clusters, schedule)))
+  if (failed(initSchedule(maxDist, stages, numBuffers, useAsyncCopy, hasTDMLoad,
+                          hasScaledDot, waitAtTail, useL2Prefetch, clusters,
+                          schedule)))
     return;
 
   // Convert the loads into shared memory allocations and loads from them.
-  auto loadToStreamOps = createStreamOps(loadToInfo, forOp, numBuffers,
-                                         useAsyncCopy, axisInfoAnalysis);
+  auto loadToStreamOps =
+      createStreamOps(loadToInfo, forOp, numBuffers, useAsyncCopy,
+                      useL2Prefetch, axisInfoAnalysis);
 
   scheduleStreamOps(loadToStreamOps, schedule, stages, clusters);
   dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule stream ops:");
@@ -915,8 +964,9 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   // Convert the loads into shared memory allocations and loads from them.
   // TODO support different numBuffers
   int numBuffers = useAsyncCopy ? 2 : 1;
-  auto loadToStreamOps = createStreamOps(loadToInfo, forOp, numBuffers,
-                                         useAsyncCopy, axisInfoAnalysis);
+  auto loadToStreamOps =
+      createStreamOps(loadToInfo, forOp, numBuffers, useAsyncCopy,
+                      /*useL2Prefetch=*/false, axisInfoAnalysis);
   scheduleStreamOps(loadToStreamOps, schedule, clusters);
 
   // Now that the original load is replaced by a sequence of new Ops. It become
@@ -941,7 +991,7 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
 
 static void lowerLoop(scf::ForOp forOp,
                       triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                      bool useAsyncCopy, bool usePingpong) {
+                      bool useAsyncCopy, bool usePingpong, bool useL2Prefetch) {
   tt::CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp, /*normalizeClusterId=*/false))) {
     return;
@@ -1000,7 +1050,7 @@ static void lowerLoop(scf::ForOp forOp,
   } else {
     SingleDotSchedule::updateSchedule(forOp, loadToInfo, schedule,
                                       axisInfoAnalysis, useAsyncCopy,
-                                      hasTDMLoad, waitAtTail);
+                                      hasTDMLoad, waitAtTail, useL2Prefetch);
   }
 
   dumpScheduleDebug(schedule, DEBUG_TYPE, "[lowerLoops]updated schedule:");
@@ -1008,14 +1058,16 @@ static void lowerLoop(scf::ForOp forOp,
   schedule.serialize(forOp);
 }
 
-void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong) {
+void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong,
+                bool useL2Prefetch) {
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   if (loops.empty())
     return;
   for (auto forOp : loops) {
-    lowerLoop(forOp, axisInfoAnalysis, useAsyncCopy, usePingpong);
+    lowerLoop(forOp, axisInfoAnalysis, useAsyncCopy, usePingpong,
+              useL2Prefetch);
   }
 }
 
