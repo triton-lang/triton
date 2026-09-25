@@ -117,35 +117,6 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
   });
 }
 
-void init_plugin_passes(py::module_ &m) {
-  auto m_ptr = std::make_shared<py::module_>(m);
-  m.def(
-      "extend_with",
-      [m_ptr](const std::string &path) {
-        // Load the plugin library.
-        auto pluginOrErr = mlir::triton::plugin::TritonPlugin::load(path);
-        if (!pluginOrErr) {
-          std::string errMsg = llvm::toString(pluginOrErr.takeError());
-          throw std::runtime_error(errMsg);
-        }
-        auto plugin = std::move(*pluginOrErr);
-
-        // Extend this submodule with the passes defined in the plugin.
-        py::gil_scoped_acquire acquire;
-        for (const auto &pass : plugin.listPasses()) {
-          std::string wrapped = std::string("add_") + pass.name;
-          m_ptr->def(
-              wrapped.c_str(),
-              [pass](mlir::PassManager &pm, std::vector<std::string> args) {
-                pass.addPass(&pm, args);
-              },
-              py::arg("pm"), py::arg("args") = std::vector<std::string>());
-        }
-      },
-      "Given a path to a Triton extension, load it and create `add_*` "
-      "functions for each pass.");
-}
-
 void init_triton_passes_convert(py::module_ &m) {
   using namespace mlir;
   ADD_PASS_WRAPPER_0("add_scf_to_cf", createSCFToControlFlowPass);
@@ -191,6 +162,6 @@ void init_triton_passes(py::module_ &m) {
   init_triton_passes_llvmir(llvmir_m);
   auto gluon_m = m.def_submodule("gluon");
   init_gluon_passes(gluon_m);
-  auto plugin_m = m.def_submodule("plugin");
-  init_plugin_passes(plugin_m);
+  // Per-plugin `passes.<plugin_name>` submodules are created lazily by
+  // `extendTritonWith` (see `ir.cc`) when a Triton extension is loaded.
 }
