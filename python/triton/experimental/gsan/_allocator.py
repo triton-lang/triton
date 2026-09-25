@@ -106,8 +106,9 @@ def reset() -> None:
     Runs garbage collection if allocations remain. If any are still live,
     raises ``AssertionError`` without resetting the runtime or stream clocks.
     """
-    from . import _stream_sync
+    from . import _stream_sync, graph
 
+    graph._check_reset()
     module = _load_gsan_module()
     if module.has_live_allocations():
         gc.collect()

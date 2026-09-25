@@ -426,6 +426,48 @@ def _run_pdl_missing_wait_case() -> None:
     torch.cuda.synchronize()
 
 
+@triton.jit
+def _graph_unordered_write_kernel(payload, REVERSE: tl.constexpr):
+    pid = tl.program_id(0)
+    if REVERSE:
+        pid = tl.num_programs(0) - 1 - pid
+    tl.store(payload + pid, 1)
+
+
+@run_with_gsan
+def _run_explicit_graph_failure_case(kind: str) -> None:
+    from triton.experimental.gsan import graph
+    from triton.experimental.gsan._testing_utils import ExplicitGraph
+
+    n = 512
+    payload = torch.zeros(n, dtype=torch.int32, device="cuda")
+    scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
+    should_wait = torch.zeros(1, dtype=torch.int32, device="cuda")
+    pdl = kind != "unordered"
+    nodes = [graph.GraphNode(), graph.GraphNode((), (0, )) if pdl else graph.GraphNode()]
+    plan = graph.GraphPlan(torch.cuda.current_device(), nodes)
+    with ExplicitGraph(plan) as executable:
+        if pdl:
+            producer = _pdl_producer_kernel.warmup(payload, grid=(n, ), num_warps=1)
+            if kind == "missing_wait":
+                consumer = _pdl_conditional_wait_kernel.warmup(should_wait, scratch, grid=(1, ), num_warps=1,
+                                                               launch_pdl=True)
+                arguments = (should_wait, scratch)
+            else:
+                consumer = _pdl_consumer_without_wait_kernel.warmup(payload, scratch, grid=(1, ), num_warps=1,
+                                                                    launch_pdl=True)
+                arguments = (payload, scratch)
+            executable.add_kernel(producer, (payload, ), n)
+            executable.add_kernel(consumer, arguments, 1)
+        else:
+            for reverse in (False, True):
+                kernel = _graph_unordered_write_kernel.warmup(payload, REVERSE=reverse, grid=(n, ), num_warps=1)
+                executable.add_kernel(kernel, (payload, ), n)
+        executable.instantiate()
+        executable.launch()
+        torch.cuda.synchronize()
+
+
 @run_with_gsan
 def _run_pdl_persistent_state_without_wait_case() -> None:
     num_sms = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
@@ -685,6 +727,22 @@ def test_write_after_read():
 def test_write_after_write():
     _run_failure_case("waw", runner=_run_waw_case, source_function=_waw_kernel.fn, marker="tl.store(ptr, 2)",
                       error="Write after write race detected")
+
+
+def test_explicit_graph_unordered_nodes_report_race():
+    _run_failure_case("graph_unordered", runner=_run_explicit_graph_failure_case, runner_args=("unordered", ),
+                      source_function=_graph_unordered_write_kernel.fn, marker="tl.store(payload + pid, 1)",
+                      error="Write after write race detected")
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Graph PDL requires SM90 or newer")
+@pytest.mark.parametrize("missing_wait", [False, True])
+def test_explicit_graph_programmatic_edge_requires_wait(missing_wait):
+    source = _pdl_conditional_wait_kernel if missing_wait else _pdl_consumer_without_wait_kernel
+    _run_failure_case("graph_pdl", runner=_run_explicit_graph_failure_case,
+                      runner_args=("missing_wait" if missing_wait else "before_wait", ), source_function=source.fn,
+                      marker="def _pdl_conditional_wait_kernel" if missing_wait else "value = tl.load(payload_ptr + 1)",
+                      error="did not call gdc_wait" if missing_wait else "Read after write race detected")
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")

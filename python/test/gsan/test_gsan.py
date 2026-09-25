@@ -1637,3 +1637,131 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):
             for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
                 address = target[row, col].data_ptr() + byte_offset
                 _assert_atomic_rmw_shadow(address, AtomicScope.GPU, is_release=False)
+
+
+@triton.jit
+def _graph_copy_kernel(Input, Output, ADD: tl.constexpr, WAIT: tl.constexpr = False, SIGNAL: tl.constexpr = False):
+    if WAIT:
+        tl.extra.cuda.gdc_wait()
+    pid = tl.program_id(0)
+    value = tl.load(Input + (tl.num_programs(0) - 1 - pid))
+    tl.store(Output + pid, value + ADD)
+    if SIGNAL:
+        tl.extra.cuda.gdc_launch_dependents()
+
+
+@triton.jit
+def _graph_join_kernel(Left, Right, Output):
+    pid = tl.program_id(0)
+    tl.store(Output + pid, tl.load(Left + pid) + tl.load(Right + pid))
+
+
+@pytest.mark.parametrize("pdl", [False, True])
+@pytest.mark.parametrize("change_stream", [False, True])
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Graph PDL requires Hopper or newer")
+def test_explicit_graph_fork_join_replay(with_gsan, pdl, change_stream):
+    from triton.experimental.gsan import graph
+    from triton.experimental.gsan._testing_utils import ExplicitGraph
+
+    #          +--full--> left --full--+
+    # root ----+                      +--> join
+    #          +--edge--> right --full-+
+    # "edge" is PDL when pdl=True (right calls gdc_wait), full otherwise.
+    # eager write --> graph replay 0 --> ... --> graph replay 8 --> eager copy
+    # Replays alternate streams when change_stream=True.
+    n = 512
+    source = torch.zeros(n, device="cuda", dtype=torch.int32)
+    root, left, right, result = [torch.empty_like(source) for _ in range(4)]
+    plan = graph.GraphPlan(torch.cuda.current_device(), [
+        graph.GraphNode(),
+        graph.GraphNode((0, )),
+        graph.GraphNode((), (0, )) if pdl else graph.GraphNode((0, )),
+        graph.GraphNode((1, 2))
+    ])
+    kernels = [
+        (_graph_copy_kernel.warmup(source, root, ADD=1, SIGNAL=pdl, grid=(n, ), num_warps=1), (source, root)),
+        (_graph_copy_kernel.warmup(root, left, ADD=2, grid=(n, ), num_warps=1), (root, left)),
+        (_graph_copy_kernel.warmup(root, right, ADD=3, WAIT=pdl, launch_pdl=pdl, grid=(n, ),
+                                   num_warps=1), (root, right)),
+        (_graph_join_kernel.warmup(left, right, result, grid=(n, ), num_warps=1), (left, right, result)),
+    ]
+    stream = torch.cuda.Stream() if change_stream else torch.cuda.current_stream()
+    with ExplicitGraph(plan) as executable:
+        for compiled, arguments in kernels:
+            executable.add_kernel(compiled, arguments, n)
+        executable.instantiate()
+        # Consume an eager producer before replay and feed an eager consumer after.
+        _write_blocks_kernel[(4, )](source, n, BLOCK_SIZE=128)
+        for iteration in range(9):
+            selected = stream if iteration % 2 else torch.cuda.current_stream()
+            if selected != torch.cuda.current_stream():
+                selected.wait_stream(torch.cuda.current_stream())
+            completion = executable.launch(selected)
+            # The same executable's next replay is ordered even on another stream.
+        torch.cuda.current_stream().wait_stream(stream)
+        graph.acquire_completions(torch.cuda.current_device(), torch.cuda.current_stream().cuda_stream, (completion, ))
+        _graph_copy_kernel[(n, )](result, source, ADD=0, num_warps=1)
+        torch.cuda.synchronize()
+        assert torch.all(source == 9)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_graph_completion_is_immutable_across_stream_slot_reuse(with_gsan):
+    from triton.experimental.gsan import graph, _stream_sync
+
+    # write --> snapshot --> write 0 --> ... --> write 6
+    #              |
+    #              +--> retained clock (unchanged as stream slots are reused)
+    device = torch.cuda.current_device()
+    stream = torch.cuda.current_stream().cuda_stream
+    values = torch.zeros(1024, device="cuda", dtype=torch.int32)
+    _write_blocks_kernel[(8, )](values, values.numel(), BLOCK_SIZE=128)
+    snapshot = graph.record_completion(device, stream)
+    expected = snapshot.clock.clone()
+    for _ in range(7):
+        _write_blocks_kernel[(8, )](values, values.numel(), BLOCK_SIZE=128)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(snapshot.clock, expected)
+    assert not torch.equal(snapshot.clock, _stream_sync._current_stream_clock(device, stream))
+
+
+def test_explicit_graph_aborted_launch_preserves_stream_order(with_gsan):
+    from triton.experimental.gsan import graph, _stream_sync
+
+    # write --> reserve empty graph --> abort (restore the write's stream clock)
+    # The empty graph would contain only entry --> exit helpers; it is not run.
+    device = torch.cuda.current_device()
+    stream = torch.cuda.current_stream().cuda_stream
+    values = torch.zeros(512, device="cuda", dtype=torch.int32)
+    _write_blocks_kernel[(4, )](values, values.numel(), BLOCK_SIZE=128)
+    expected = _stream_sync._current_stream_clock(device, stream).clone()
+    plan = graph.GraphPlan(device, ())
+    prepared = plan.prepare_launch(stream)
+    prepared.finish(submitted=False)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(_stream_sync._current_stream_clock(device, stream), expected)
+    plan.close()
+
+
+def test_explicit_graph_storage_survives_executable_close(with_gsan):
+    import gc
+    import weakref
+    from triton.experimental.gsan import graph
+    from triton.experimental.gsan._testing_utils import ExplicitGraph
+
+    # Empty graph: entry --> exit --> completion snapshot
+    # Host:       launch --> close --> synchronize --> collect retained storage
+    device = torch.cuda.current_device()
+    plan = graph.GraphPlan(device, ())
+    reference = weakref.ref(plan)
+    with ExplicitGraph(plan) as executable:
+        executable.instantiate()
+        completion = executable.launch()
+    del plan, executable
+    gc.collect()
+    # The submission owns storage until its CUDA completion event is observed.
+    assert reference() is not None
+    torch.cuda.synchronize()
+    graph._collect_pending()
+    assert reference() is None
+    assert completion.clock.numel() > 0

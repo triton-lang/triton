@@ -6,7 +6,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK-SHARED: module attributes {
   // CHECK-SHARED-DAG: ttg.shared = 123456 : i32
   // CHECK-LABEL: llvm.func @load_store
-  // CHECK: llvm.call @__triton_gsan_init({{.*}}) : (!llvm.ptr, !llvm.ptr, i64, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_init({{.*}}) : (!llvm.ptr, !llvm.ptr, i64, i32, i32, i32, !llvm.ptr, i32) -> ()
   // CHECK: nvvm.barrier
   // CHECK: llvm.store %{{.*}} : i64, !llvm.ptr
   // CHECK: llvm.store %{{.*}} : i8, !llvm.ptr

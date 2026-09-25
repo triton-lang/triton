@@ -244,10 +244,10 @@ GSAN_DEVICE bool canAccumulateReleaseRmw(ThreadState *state, AtomicScope scope,
                                    getGlobalState(state));
 }
 
-GSAN_DEVICE void acquireStreamClock(ThreadState *state,
-                                    const uint32_t *streamClock,
-                                    uint32_t threadIdx, uint32_t numThreads,
-                                    uint32_t barrierId) {
+GSAN_DEVICE void acquireLaunchClocks(ThreadState *state,
+                                     const LaunchState &launch,
+                                     uint32_t threadIdx, uint32_t numThreads,
+                                     uint32_t barrierId) {
   syncThreads(barrierId, numThreads);
   if (threadIdx == 0)
     rwLockAcquireWrite(state->lock);
@@ -255,7 +255,9 @@ GSAN_DEVICE void acquireStreamClock(ThreadState *state,
 
   auto *globals = getGlobalState(state);
   for (int i = threadIdx; i < globals->numThreads; i += numThreads) {
-    auto epoch = streamClock[i];
+    uint32_t epoch = 0;
+    for (uint64_t j = 0; j < launch.numWaitClocks; ++j)
+      epoch = epoch < launch.waitClocks[j][i] ? launch.waitClocks[j][i] : epoch;
     if (state->vectorClock[i] < epoch)
       state->vectorClock[i] = static_cast<epoch_t>(epoch);
   }
@@ -269,7 +271,8 @@ GSAN_DEVICE void acquireStreamClock(ThreadState *state,
     rwLockReleaseWrite(state->lock);
 }
 
-GSAN_DEVICE void publishStreamClock(ThreadState *state, uint32_t *streamClock,
+GSAN_DEVICE void publishLaunchClock(ThreadState *state,
+                                    uint32_t *completionClock,
                                     uint32_t threadIdx, uint32_t numThreads,
                                     uint32_t barrierId, Location loc) {
   syncThreads(barrierId, numThreads);
@@ -286,7 +289,7 @@ GSAN_DEVICE void publishStreamClock(ThreadState *state, uint32_t *streamClock,
     uint32_t current = state->vectorClock[i];
     asm volatile("red.relaxed.gpu.max.u32 [%0], %1;"
                  :
-                 : "l"(streamClock + i), "r"(current)
+                 : "l"(completionClock + i), "r"(current)
                  : "memory");
   }
 
@@ -295,14 +298,7 @@ GSAN_DEVICE void publishStreamClock(ThreadState *state, uint32_t *streamClock,
     rwLockReleaseRead(state->lock);
 }
 
-GSAN_DEVICE uint32_t *getStreamClock(uint32_t *streamClocks,
-                                     __UINT64_TYPE__ kernelId, unsigned offset,
-                                     GlobalState *globals) {
-  return streamClocks + ((kernelId + offset) % 3) * globals->numThreads;
-}
-
-GSAN_DEVICE void initThread(GlobalState *globals, uint32_t *streamClocks,
-                            __UINT64_TYPE__ kernelId, bool acquirePrevious,
+GSAN_DEVICE void initThread(GlobalState *globals, const LaunchState &launch,
                             uint32_t threadIdx, uint32_t numThreads,
                             uint32_t barrierId, Location loc) {
   auto *state = getThreadState(globals);
@@ -321,26 +317,26 @@ GSAN_DEVICE void initThread(GlobalState *globals, uint32_t *streamClocks,
       __scoped_atomic_store_n(&state->globals, globals, __ATOMIC_RELEASE,
                               __MEMORY_SCOPE_DEVICE);
     }
-    state->gdcWaitCalled = acquirePrevious;
+    state->gdcWaitCalled = launch.numWaitClocks == 0;
   }
   syncThreads(barrierId, numThreads);
 
-  // A dependent grid can begin once its predecessor has signaled, but the
-  // grid two launches back has completed by then. Replace all non-local clock
-  // entries so persistent SM state cannot acquire the predecessor implicitly.
-  auto *streamClock =
-      getStreamClock(streamClocks, kernelId, acquirePrevious ? 2 : 1, globals);
+  // Persistent SM state must not implicitly acquire a concurrent graph node.
+  // Only the caller-supplied entry frontier is known to have completed.
   auto tid = state->threadId;
   for (int i = threadIdx; i < globals->numThreads; i += numThreads) {
     if (i == tid)
       continue;
-    auto epoch = streamClock[i];
+    uint32_t epoch = 0;
+    for (uint64_t j = 0; j < launch.numEntryClocks; ++j)
+      epoch =
+          epoch < launch.entryClocks[j][i] ? launch.entryClocks[j][i] : epoch;
     state->vectorClock[i] = static_cast<epoch_t>(epoch);
   }
 
   if (threadIdx == 0) {
-    // Preserve the synchronized vector clock from prior launches on this
-    // stream and advance the local epoch for the new kernel entry.
+    // Advance the SM's local epoch; nonlocal components came from the explicit
+    // entry frontier above.
     auto *clock = state->vectorClock;
     assert_msg(loc, clock[tid] != kMaxEpoch, "Vector clock overflowed");
     clock[tid] += 1;
@@ -1305,37 +1301,35 @@ extern "C" GSAN_DEVICE void __triton_gsan_load_indexed_tensor_desc(
 }
 
 extern "C" GSAN_DEVICE void
-__triton_gsan_init(void *globalState, gsan::uint32_t *streamClocks,
-                   __UINT64_TYPE__ kernelId, int acquirePrevious,
-                   unsigned threadIdx, unsigned numThreads, unsigned barrierId,
-                   const char *file, unsigned line) {
+__triton_gsan_init(void *globalState, const gsan::LaunchState *launchTable,
+                   gsan::uint64_t launchIndex, unsigned threadIdx,
+                   unsigned numThreads, unsigned barrierId, const char *file,
+                   unsigned line) {
   auto loc = gsan::Location{file, line};
   gsan::initThread(reinterpret_cast<gsan::GlobalState *>(globalState),
-                   streamClocks, kernelId, acquirePrevious != 0, threadIdx,
-                   numThreads, barrierId, loc);
+                   launchTable[launchIndex], threadIdx, numThreads, barrierId,
+                   loc);
 }
 
-extern "C" GSAN_DEVICE void
-__triton_gsan_kernel_exit(void *globalState, gsan::uint32_t *streamClocks,
-                          __UINT64_TYPE__ kernelId, unsigned threadIdx,
-                          unsigned numThreads, unsigned barrierId,
-                          const char *file, unsigned line) {
+extern "C" GSAN_DEVICE void __triton_gsan_kernel_exit(
+    void *globalState, const gsan::LaunchState *launchTable,
+    gsan::uint64_t launchIndex, unsigned threadIdx, unsigned numThreads,
+    unsigned barrierId, const char *file, unsigned line) {
   auto loc = gsan::Location{file, line};
   auto *globals = reinterpret_cast<gsan::GlobalState *>(globalState);
   auto *state = gsan::getThreadState(globals);
-  gsan::publishStreamClock(
-      state, gsan::getStreamClock(streamClocks, kernelId, 0, globals),
-      threadIdx, numThreads, barrierId, loc);
+  gsan::publishLaunchClock(state, launchTable[launchIndex].completionClock,
+                           threadIdx, numThreads, barrierId, loc);
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_grid_dependency_wait(
-    void *globalState, gsan::uint32_t *streamClocks, __UINT64_TYPE__ kernelId,
-    unsigned threadIdx, unsigned numThreads, unsigned barrierId) {
+    void *globalState, const gsan::LaunchState *launchTable,
+    gsan::uint64_t launchIndex, unsigned threadIdx, unsigned numThreads,
+    unsigned barrierId) {
   auto *globals = reinterpret_cast<gsan::GlobalState *>(globalState);
   auto *state = gsan::getThreadState(globals);
-  gsan::acquireStreamClock(
-      state, gsan::getStreamClock(streamClocks, kernelId, 2, globals),
-      threadIdx, numThreads, barrierId);
+  gsan::acquireLaunchClocks(state, launchTable[launchIndex], threadIdx,
+                            numThreads, barrierId);
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_cluster_barrier_init(void *scratch,

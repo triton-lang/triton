@@ -86,3 +86,107 @@ def store_one_i32(ptr):
 def load_one_i32(ptr, out_ptr):
     value = tl.load(ptr)
     tl.store(out_ptr, value)
+
+
+class ExplicitGraph:
+    """Small native graph launcher for GSan regression tests (no stream capture)."""
+
+    def __init__(self, plan):
+        import ctypes as C
+
+        self.C = C
+        self.cuda = C.CDLL("libcuda.so.1")
+        self.plan = plan
+        self.graph = C.c_void_p()
+        self.executable = C.c_void_p()
+        self.nodes = []
+        self.compiled = []
+        self.parameters = []
+
+        class Params(C.Structure):
+            _fields_ = [("func", C.c_void_p), ("grid_x", C.c_uint), ("grid_y", C.c_uint), ("grid_z", C.c_uint),
+                        ("block_x", C.c_uint), ("block_y", C.c_uint), ("block_z", C.c_uint), ("shared", C.c_uint),
+                        ("args", C.POINTER(C.c_void_p)), ("extra", C.c_void_p), ("kernel", C.c_void_p),
+                        ("context", C.c_void_p)]
+
+        self.Params = Params
+        self._call("cuGraphCreate", C.byref(self.graph), C.c_uint(0))
+        begin, self.end_spec = plan.boundary_kernels
+        self.begin_node = self._add(begin, ())
+
+    def _call(self, name, *args):
+        status = getattr(self.cuda, name)(*args)
+        if status:
+            raise RuntimeError(f"{name} failed with CUDA error {status}")
+
+    def _params(self, spec):
+        C = self.C
+        values = (C.c_uint64 * len(spec.arguments))(*spec.arguments)
+        pointers = (C.c_void_p * len(values))(*(C.addressof(values) + i * 8 for i in range(len(values))))
+        params = self.Params(spec.function, spec.grid, 1, 1, spec.block, 1, 1, spec.shared, pointers, None, None, None)
+        return params, values, pointers
+
+    def _add(self, spec, dependencies):
+        C = self.C
+        node = C.c_void_p()
+        deps = (C.c_void_p * len(dependencies))(*(dep.value for dep in dependencies))
+        params, values, pointers = self._params(spec)
+        self._call("cuGraphAddKernelNode_v2", C.byref(node), self.graph, deps, C.c_size_t(len(dependencies)),
+                   C.byref(params))
+        self.parameters.append((params, values, pointers))
+        return node
+
+    def add_kernel(self, compiled, arguments, grid):
+        from .graph import KernelLaunch
+
+        C = self.C
+        index = len(self.nodes)
+        node = self.plan.nodes[index]
+        assert compiled.metadata.num_ctas == 1
+        assert not compiled.metadata.global_scratch_size and not compiled.metadata.profile_scratch_size
+        compiled._init_handles()
+        self.compiled.append(compiled)
+        values = tuple(arg.data_ptr() if hasattr(arg, "data_ptr") else arg for arg in arguments)
+        spec = KernelLaunch(compiled.function, grid, compiled.metadata.num_warps * 32, compiled.metadata.shared,
+                            (*values, *self.plan.node_launch_args(index), 0, 0))
+        deps = tuple(self.nodes[j] for j in node.dependencies)
+        if not node.dependencies and not node.programmatic_dependencies:
+            deps = (self.begin_node, )
+        result = self._add(spec, deps)
+        for predecessor in node.programmatic_dependencies:
+            # from_port=programmatic, to_port=default, type=programmatic.
+            edge = (C.c_ubyte * 8)(1, 0, 1, 0, 0, 0, 0, 0)
+            self._call("cuGraphAddDependencies_v2", self.graph, C.byref(self.nodes[predecessor]), C.byref(result),
+                       C.byref(edge), C.c_size_t(1))
+        self.nodes.append(result)
+
+    def instantiate(self):
+        C = self.C
+        assert len(self.nodes) == len(self.plan.nodes)
+        self.end_node = self._add(self.end_spec, self.nodes or (self.begin_node, ))
+        self._call("cuGraphInstantiateWithFlags", C.byref(self.executable), self.graph, C.c_uint64(0))
+
+    def launch(self, stream=None, dependencies=()):
+        C = self.C
+        if stream is None:
+            stream = torch.cuda.current_stream()
+        prepared = self.plan.prepare_launch(stream.cuda_stream, dependencies)
+        try:
+            for node, spec in ((self.begin_node, prepared.begin), (self.end_node, prepared.end)):
+                params, _values, _pointers = self._params(spec)
+                self._call("cuGraphExecKernelNodeSetParams_v2", self.executable, node, C.byref(params))
+            self._call("cuGraphLaunch", self.executable, C.c_void_p(stream.cuda_stream))
+        except BaseException:
+            prepared.finish(False)
+            raise
+        prepared.finish()
+        return prepared.completion
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        if self.executable.value:
+            self._call("cuGraphExecDestroy", self.executable)
+        self._call("cuGraphDestroy", self.graph)
+        self.plan.close()

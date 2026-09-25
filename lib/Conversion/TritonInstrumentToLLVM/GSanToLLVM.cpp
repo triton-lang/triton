@@ -65,9 +65,10 @@ static constexpr StringLiteral kGSanMBarrierWaitRuntimeFn =
     "__triton_gsan_mbarrier_wait";
 static constexpr StringLiteral kGSanGlobalStateArgAttr =
     "tti.gsan_global_state";
-static constexpr StringLiteral kGSanStreamClockArgAttr =
-    "tti.gsan_stream_clock";
-static constexpr StringLiteral kGSanKernelIdArgAttr = "tti.gsan_kernel_id";
+static constexpr StringLiteral kGSanLaunchTableArgAttr =
+    "tti.gsan_launch_table";
+static constexpr StringLiteral kGSanLaunchIndexArgAttr =
+    "tti.gsan_launch_index";
 
 LLVM::LLVMFuncOp
 getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
@@ -79,7 +80,7 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
   auto *ctx = rewriter.getContext();
   SmallVector<Type> argTys;
   if (funcName == kGSanInitRuntimeFn) {
-    argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty,      i32_ty, i32_ty,
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty,      i32_ty,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanKernelExitRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty,      i32_ty,
@@ -369,12 +370,12 @@ FailureOr<Value> getGSanGlobalStateArg(Operation *op,
   return emitError(loc, "Unable to find gsan global state");
 }
 
-FailureOr<Value> getGSanStreamClockArg(Operation *op,
+FailureOr<Value> getGSanLaunchTableArg(Operation *op,
                                        ConversionPatternRewriter &rewriter,
                                        Location loc) {
   auto funcOp = op->getParentOfType<FunctionOpInterface>();
   for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
-    if (!funcOp.getArgAttr(i, kGSanStreamClockArgAttr))
+    if (!funcOp.getArgAttr(i, kGSanLaunchTableArgAttr))
       continue;
     Value arg = funcOp.getArgument(i);
     if (arg.getType() == ptr_ty(rewriter.getContext()))
@@ -383,15 +384,15 @@ FailureOr<Value> getGSanStreamClockArg(Operation *op,
     arg = b.addrspacecast(ptr_ty(rewriter.getContext()), arg);
     return arg;
   }
-  return emitError(loc, "Unable to find gsan stream clock");
+  return emitError(loc, "Unable to find gsan launch table");
 }
 
-FailureOr<Value> getGSanKernelIdArg(Operation *op,
-                                    ConversionPatternRewriter &rewriter,
-                                    Location loc) {
+FailureOr<Value> getGSanLaunchIndexArg(Operation *op,
+                                       ConversionPatternRewriter &rewriter,
+                                       Location loc) {
   auto funcOp = op->getParentOfType<FunctionOpInterface>();
   for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
-    if (funcOp.getArgAttr(i, kGSanKernelIdArgAttr))
+    if (funcOp.getArgAttr(i, kGSanLaunchIndexArgAttr))
       return funcOp.getArgument(i);
   }
   return emitError(loc, "Unable to find gsan kernel ID");
@@ -1038,11 +1039,11 @@ public:
     auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
     if (failed(gsanGlobalStatePtr))
       return failure();
-    auto streamClockPtr = getGSanStreamClockArg(op, rewriter, loc);
-    if (failed(streamClockPtr))
+    auto launchTablePtr = getGSanLaunchTableArg(op, rewriter, loc);
+    if (failed(launchTablePtr))
       return failure();
-    auto kernelId = getGSanKernelIdArg(op, rewriter, loc);
-    if (failed(kernelId))
+    auto launchIndex = getGSanLaunchIndexArg(op, rewriter, loc);
+    if (failed(launchIndex))
       return failure();
 
     auto runtimeFunc =
@@ -1054,10 +1055,9 @@ public:
     auto numThreads = b.i32_val(ttg::lookupNumWarps(op) *
                                 ttg::lookupThreadsPerWarp(rewriter));
     Value barrierId = tt::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
-    b.call(runtimeFunc,
-           ValueRange{*gsanGlobalStatePtr, *streamClockPtr, *kernelId,
-                      b.i32_val(op.getAcquireStreamClock()), threadIdx,
-                      numThreads, barrierId, sourceLoc.file, sourceLoc.line});
+    b.call(runtimeFunc, ValueRange{*gsanGlobalStatePtr, *launchTablePtr,
+                                   *launchIndex, threadIdx, numThreads,
+                                   barrierId, sourceLoc.file, sourceLoc.line});
     b.barrier(ttg::AddrSpace::Local);
     rewriter.eraseOp(op);
     return success();
@@ -1073,10 +1073,10 @@ struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
-    auto streamClockPtr = getGSanStreamClockArg(op, rewriter, loc);
-    auto kernelId = getGSanKernelIdArg(op, rewriter, loc);
-    if (failed(gsanGlobalStatePtr) || failed(streamClockPtr) ||
-        failed(kernelId))
+    auto launchTablePtr = getGSanLaunchTableArg(op, rewriter, loc);
+    auto launchIndex = getGSanLaunchIndexArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr) || failed(launchTablePtr) ||
+        failed(launchIndex))
       return failure();
 
     StringRef runtimeFn;
@@ -1090,7 +1090,7 @@ struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
     auto numThreads = b.i32_val(ttg::lookupNumWarps(op) *
                                 ttg::lookupThreadsPerWarp(rewriter));
     Value barrierId = tt::nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
-    SmallVector<Value> args{*gsanGlobalStatePtr, *streamClockPtr, *kernelId,
+    SmallVector<Value> args{*gsanGlobalStatePtr, *launchTablePtr, *launchIndex,
                             threadIdx,           numThreads,      barrierId};
     if constexpr (std::is_same_v<OpTy, tti::ExperimentalGSanKernelExitOp>) {
       auto sourceLoc = materializeSourceLocation(rewriter, loc);

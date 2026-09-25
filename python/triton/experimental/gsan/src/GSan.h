@@ -20,6 +20,17 @@ using uint8_t = __UINT8_TYPE__;
 using uint16_t = __UINT16_TYPE__;
 using uint32_t = __UINT32_TYPE__;
 using uintptr_t = __UINTPTR_TYPE__;
+using uint64_t = __UINT64_TYPE__;
+
+// The table and its pointer lists are immutable while in flight.
+// Clocks use u32 so all CTAs can publish with a native atomic maximum.
+struct LaunchState {
+  const uint32_t *const *entryClocks;
+  uint64_t numEntryClocks;
+  const uint32_t *const *waitClocks;
+  uint64_t numWaitClocks;
+  uint32_t *completionClock;
+};
 
 // Reserve 1 PiB, should be big enough for a while :)
 static constexpr size_t kReserveSize = 1ull << 40;

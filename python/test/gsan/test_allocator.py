@@ -219,7 +219,8 @@ def _run_launch_stream_clocks_use_private_pool_check() -> None:
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream), torch.cuda.use_mem_pool(pool):
         before = torch.empty(1, device=device)
-        clocks, kernel_id = _stream_sync.get_launch_stream_clock(device, stream.cuda_stream)
+        table, launch_index = _stream_sync.get_launch_state(device, stream.cuda_stream)
+        clocks = _stream_sync._launch_stream_state(device, stream.cuda_stream).clocks
         after = torch.empty(1, device=device)
     stream.synchronize()
 
@@ -228,10 +229,11 @@ def _run_launch_stream_clocks_use_private_pool_check() -> None:
     assert reserve_begin <= before.data_ptr() < reserve_end
     assert not reserve_begin <= clocks.data_ptr() < reserve_end
     assert reserve_begin <= after.data_ptr() < reserve_end
-    assert kernel_id == 0
+    assert launch_index == 0
+    assert not reserve_begin <= table.data_ptr() < reserve_end
     assert torch.count_nonzero(clocks).item() == 0
 
-    del before, after, clocks, pool
+    del before, after, clocks, table, pool
     reset()
 
 
