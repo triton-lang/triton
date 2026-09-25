@@ -1463,6 +1463,49 @@ def test_fp8_div_mod_promotion():
     run_parser(kernel)
 
 
+def test_fp8_same_type_arithmetic_error():
+    # Same-type fp8 arithmetic has no backend lowering and must be a frontend
+    # error (fix for #11898). Only mixed fp8 promotes to fp16, and selection
+    # ops (where/maximum) stay fp8.
+
+    @triton.jit
+    def mul_same_fp8():
+        x = tl.full((8, ), 0, tl.float16).to(tl.float8e4nv)
+        y = tl.full((8, ), 0, tl.float16).to(tl.float8e4nv)
+        _ = x * y
+
+    with pytest.raises(CompilationError, match="arithmetic on fp8"):
+        run_parser(mul_same_fp8)
+
+    @triton.jit
+    def mul_scalar_fp8():
+        x = tl.full((8, ), 0, tl.float16).to(tl.float8e4nv)
+        _ = x * 2
+
+    with pytest.raises(CompilationError, match="arithmetic on fp8"):
+        run_parser(mul_scalar_fp8)
+
+    @triton.jit
+    def add_same_fp8():
+        x = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
+        y = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
+        _ = x + y
+
+    with pytest.raises(CompilationError, match="arithmetic on fp8"):
+        run_parser(add_same_fp8)
+
+    # Mixed fp8 still promotes to fp16, where/maximum stay fp8
+    @triton.jit
+    def mixed_and_selection():
+        x = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
+        z = tl.full((8, ), 0, tl.float16).to(tl.float8e4nv)
+        tl.static_assert((x * z).dtype == tl.float16)
+        tl.static_assert(tl.where(tl.full((8, ), True, tl.int1), x, x).dtype == tl.float8e5)
+        tl.static_assert(tl.maximum(x, x).dtype == tl.float8e5)
+
+    run_parser(mixed_and_selection)
+
+
 # ===-----------------------------------------------------------------------===#
 # Aggregate inheritance, __post_init__, and aggregate_replace tests
 # ===-----------------------------------------------------------------------===#
