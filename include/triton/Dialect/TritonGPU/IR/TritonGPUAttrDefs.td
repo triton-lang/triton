@@ -1389,6 +1389,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     LinearLayout dotOperandToLinearLayout(Attribute dotOp, ArrayRef<int64_t> shape) const;
   }];
 
+  let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 }
 
