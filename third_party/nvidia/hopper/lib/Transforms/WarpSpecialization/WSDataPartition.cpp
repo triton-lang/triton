@@ -1313,6 +1313,20 @@ bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups) {
 
   // Rewrite the rematerialized ops.
   LDBG("Rewriting rematerialized Ops");
+
+  // A reduce on the dimension the accumulator is partitioned along has no
+  // slice implementation. Reject it before any IR mutation instead of hitting
+  // the assertion in sliceOp halfway through partitioning (#11958).
+  for (auto op : partitionScheme.ops) {
+    if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+      if (reduceOp.getAxis() == partitionScheme.opPartitionDims[op]) {
+        reduceOp.emitOpError("reduce on the warp-specialized partition "
+                             "dimension is not supported");
+        return false;
+      }
+    }
+  }
+
   rewriteRematerializedOps(funcOp, partitionScheme);
   LLVM_DEBUG({
     LDBG("After rewriting rematerialized Ops:");
