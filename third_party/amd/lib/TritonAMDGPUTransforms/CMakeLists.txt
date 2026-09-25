@@ -17,6 +17,7 @@ add_triton_library(TritonAMDGPUTransforms
   Pipeline.cpp
   ScheduleLoops.cpp
   LowerLoops.cpp
+  LowerFence.cpp
   TDMStoresPipeline.cpp
   MfmaGroup.cpp
   WmmaGroup.cpp
