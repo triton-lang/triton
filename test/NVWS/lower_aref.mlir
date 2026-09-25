@@ -707,3 +707,174 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[1, 0]]}>
+#b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 32, CGALayout = [[0, 1]]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+!A = !ttg.memdesc<256x64xf32, #a, #smem>
+!B = !ttg.memdesc<64x64xf32, #b, #smem>
+!T = !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable>
+!Stages = !ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>
+!View = !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 2x256x64>
+!Regs = tensor<256x64xf32, #blocked>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @tmem_store_reads(
+  // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  tt.func @tmem_store_reads(%a: !A, %b: !B, %out: !T, %v: !Regs) {
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    %buf = ttng.tmem_alloc : () -> !Stages
+    %aref = nvws.aref.create %buf : <[!Stages]>
+    %p, %pt = nvws.aref.put.enter %aref[%zero, %zero] {ttg.partition = array<i32: 1>} : <[!Stages]> -> !View, !ttg.async.token
+    ttng.tmem_store %v, %p, %true {ttg.partition = array<i32: 1>} : !Regs -> !View
+    nvws.aref.put.exit %aref[%zero], %pt [#nvws.async_op<none>] {ttg.partition = array<i32: 1>} : <[!Stages]>, !ttg.async.token
+    %r, %rt = nvws.aref.get.enter %aref[%zero, %zero] {ttg.partition = array<i32: 3>} : <[!Stages]> -> !View, !ttg.async.token
+    %val = ttng.tmem_load %r {ttg.partition = array<i32: 3>} : !View -> !Regs
+    nvws.aref.get.exit %aref[%zero], %rt [#nvws.async_op<none>] {ttg.partition = array<i32: 3>} : <[!Stages]>, !ttg.async.token
+    tt.return
+  }
+  // CHECK-LABEL: @tmem_store_mma(
+  // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  tt.func @tmem_store_mma(%a: !A, %b: !B, %out: !T, %v: !Regs) {
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    %buf = ttng.tmem_alloc : () -> !Stages
+    %aref = nvws.aref.create %buf : <[!Stages]>
+    %p, %pt = nvws.aref.put.enter %aref[%zero, %zero] {ttg.partition = array<i32: 1>} : <[!Stages]> -> !View, !ttg.async.token
+    ttng.tmem_store %v, %p, %true {ttg.partition = array<i32: 1>} : !Regs -> !View
+    nvws.aref.put.exit %aref[%zero], %pt [#nvws.async_op<none>] {ttg.partition = array<i32: 1>} : <[!Stages]>, !ttg.async.token
+    %m, %mt = nvws.aref.get.enter %aref[%zero, %zero] {ttg.partition = array<i32: 2>} : <[!Stages]> -> !View, !ttg.async.token
+    ttng.tc_gen5_mma %m, %b, %out, %false, %true {is_async, two_ctas, ttg.partition = array<i32: 2>} : !View, !B, !T
+    nvws.aref.get.exit %aref[%zero], %mt [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 2>} : <[!Stages]>, !ttg.async.token
+    tt.return
+  }
+  // CHECK-LABEL: @tmem_store_mixed(
+  // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 2
+  // CHECK: [[PRODUCER_DONE:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  tt.func @tmem_store_mixed(%a: !A, %b: !B, %out: !T, %v: !Regs) {
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    %buf = ttng.tmem_alloc : () -> !Stages
+    %aref = nvws.aref.create %buf : <[!Stages]>
+    %p, %pt = nvws.aref.put.enter %aref[%zero, %zero] {ttg.partition = array<i32: 1>} : <[!Stages]> -> !View, !ttg.async.token
+    ttng.tmem_store %v, %p, %true {ttg.partition = array<i32: 1>} : !Regs -> !View
+    nvws.aref.put.exit %aref[%zero], %pt [#nvws.async_op<none>] {ttg.partition = array<i32: 1>} : <[!Stages]>, !ttg.async.token
+    %m, %mt = nvws.aref.get.enter %aref[%zero, %zero] {ttg.partition = array<i32: 2>} : <[!Stages]> -> !View, !ttg.async.token
+    ttng.tc_gen5_mma %m, %b, %out, %false, %true {is_async, two_ctas, ttg.partition = array<i32: 2>} : !View, !B, !T
+    nvws.aref.get.exit %aref[%zero], %mt [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 2>} : <[!Stages]>, !ttg.async.token
+    %r, %rt = nvws.aref.get.enter %aref[%zero, %zero] {ttg.partition = array<i32: 3>} : <[!Stages]> -> !View, !ttg.async.token
+    %val = ttng.tmem_load %r {ttg.partition = array<i32: 3>} : !View -> !Regs
+    nvws.aref.get.exit %aref[%zero], %rt [#nvws.async_op<none>] {ttg.partition = array<i32: 3>} : <[!Stages]>, !ttg.async.token
+    tt.return
+  }
+  // CHECK-LABEL: @tmem_mma_reads(
+  // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  tt.func @tmem_mma_reads(%a: !A, %b: !B, %out: !T, %v: !Regs) {
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    %buf = ttng.tmem_alloc : () -> !Stages
+    %aref = nvws.aref.create %buf : <[!Stages]>
+    %p, %pt = nvws.aref.put.enter %aref[%zero, %zero] {ttg.partition = array<i32: 1>} : <[!Stages]> -> !View, !ttg.async.token
+    ttng.tc_gen5_mma %a, %b, %p, %false, %true {is_async, two_ctas, ttg.partition = array<i32: 1>} : !A, !B, !View
+    nvws.aref.put.exit %aref[%zero], %pt [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 1>} : <[!Stages]>, !ttg.async.token
+    %r, %rt = nvws.aref.get.enter %aref[%zero, %zero] {ttg.partition = array<i32: 3>} : <[!Stages]> -> !View, !ttg.async.token
+    %val = ttng.tmem_load %r {ttg.partition = array<i32: 3>} : !View -> !Regs
+    nvws.aref.get.exit %aref[%zero], %rt [#nvws.async_op<none>] {ttg.partition = array<i32: 3>} : <[!Stages]>, !ttg.async.token
+    tt.return
+  }
+  // CHECK-LABEL: @tmem_mma_mma(
+  // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  // CHECK-NOT: ttg.local_alloc
+  // CHECK-NOT: ttng.arrive_barrier
+  // CHECK: [[RELEASE:%.*]] = ttg.memdesc_index [[EMPTY]]
+  // CHECK: ttng.wait_barrier [[RELEASE]],
+  // CHECK-NOT: ttng.arrive_barrier
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK: [[PRODUCED:%.*]] = ttg.memdesc_index [[FULL]]
+  // CHECK: ttng.tc_gen5_commit [[PRODUCED]]
+  // CHECK: [[READY:%.*]] = ttg.memdesc_index [[FULL]]
+  // CHECK: ttng.wait_barrier [[READY]],
+  // CHECK-NOT: ttng.arrive_barrier
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK: [[CONSUMED:%.*]] = ttg.memdesc_index [[EMPTY]]
+  // CHECK: ttng.tc_gen5_commit [[CONSUMED]]
+  // CHECK-NOT: ttng.arrive_barrier
+  // CHECK: tt.return
+  tt.func @tmem_mma_mma(%a: !A, %b: !B, %out: !T, %v: !Regs) {
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    %buf = ttng.tmem_alloc : () -> !Stages
+    %aref = nvws.aref.create %buf : <[!Stages]>
+    %p, %pt = nvws.aref.put.enter %aref[%zero, %zero] {ttg.partition = array<i32: 1>} : <[!Stages]> -> !View, !ttg.async.token
+    ttng.tc_gen5_mma %a, %b, %p, %false, %true {is_async, two_ctas, ttg.partition = array<i32: 1>} : !A, !B, !View
+    nvws.aref.put.exit %aref[%zero], %pt [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 1>} : <[!Stages]>, !ttg.async.token
+    %m, %mt = nvws.aref.get.enter %aref[%zero, %zero] {ttg.partition = array<i32: 2>} : <[!Stages]> -> !View, !ttg.async.token
+    ttng.tc_gen5_mma %m, %b, %out, %false, %true {is_async, two_ctas, ttg.partition = array<i32: 2>} : !View, !B, !T
+    nvws.aref.get.exit %aref[%zero], %mt [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 2>} : <[!Stages]>, !ttg.async.token
+    tt.return
+  }
+  // CHECK-LABEL: @tmem_mma_mixed(
+  // CHECK: [[CONSUMER_DONE:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 2
+  // CHECK: [[EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  // CHECK: [[FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x2xi64,
+  // CHECK: ttng.init_barrier {{.*}}, 1
+  // CHECK: [[RELEASE:%.*]] = ttg.memdesc_index [[CONSUMER_DONE]]
+  // CHECK: ttng.wait_barrier [[RELEASE]], [[PHASE:%[^ ]+]]
+  // CHECK: [[NEXT:%.*]] = arith.xori [[PHASE]],
+  // CHECK: [[REUSE:%.*]] = ttg.memdesc_index [[EMPTY]]
+  // CHECK: ttng.arrive_barrier [[REUSE]], 1
+  // CHECK: ttng.wait_barrier [[REUSE]], [[NEXT]]
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK: [[PRODUCED:%.*]] = ttg.memdesc_index [[FULL]]
+  // CHECK: ttng.tc_gen5_commit [[PRODUCED]]
+  // CHECK: [[READY:%.*]] = ttg.memdesc_index [[FULL]]
+  // CHECK: ttng.wait_barrier [[READY]], [[READ_PHASE:%[^ ]+]]
+  // CHECK-NOT: ttng.arrive_barrier
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK: [[CONSUMED:%.*]] = ttg.memdesc_index [[CONSUMER_DONE]]
+  // CHECK: ttng.tc_gen5_commit [[CONSUMED]]
+  tt.func @tmem_mma_mixed(%a: !A, %b: !B, %out: !T, %v: !Regs) {
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    %buf = ttng.tmem_alloc : () -> !Stages
+    %aref = nvws.aref.create %buf : <[!Stages]>
+    %p, %pt = nvws.aref.put.enter %aref[%zero, %zero] {ttg.partition = array<i32: 1>} : <[!Stages]> -> !View, !ttg.async.token
+    ttng.tc_gen5_mma %a, %b, %p, %false, %true {is_async, two_ctas, ttg.partition = array<i32: 1>} : !A, !B, !View
+    nvws.aref.put.exit %aref[%zero], %pt [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 1>} : <[!Stages]>, !ttg.async.token
+    %m, %mt = nvws.aref.get.enter %aref[%zero, %zero] {ttg.partition = array<i32: 2>} : <[!Stages]> -> !View, !ttg.async.token
+    ttng.tc_gen5_mma %m, %b, %out, %false, %true {is_async, two_ctas, ttg.partition = array<i32: 2>} : !View, !B, !T
+    nvws.aref.get.exit %aref[%zero], %mt [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 2>} : <[!Stages]>, !ttg.async.token
+    %r, %rt = nvws.aref.get.enter %aref[%zero, %zero] {ttg.partition = array<i32: 3>} : <[!Stages]> -> !View, !ttg.async.token
+    %val = ttng.tmem_load %r {ttg.partition = array<i32: 3>} : !View -> !Regs
+    nvws.aref.get.exit %aref[%zero], %rt [#nvws.async_op<none>] {ttg.partition = array<i32: 3>} : <[!Stages]>, !ttg.async.token
+    tt.return
+  }
+}
