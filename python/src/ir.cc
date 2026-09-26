@@ -2067,7 +2067,7 @@ bool str_eq_ignore_case(const char *s1, const char *s2, int n) {
   return true;
 }
 
-bool is_truthy(char *str) {
+bool is_truthy(const char *str) {
   int len = strnlen(str, 5);
   if (len > 4)
     return false;
@@ -2149,6 +2149,11 @@ void init_triton_env_vars(py::module_ &m) {
             auto strVal = triton::tools::getStrEnv(envVar);
             if (strVal.empty())
               continue;
+            if (envVar == "TRITON_DISABLE_LINE_INFO") {
+              if (is_truthy(strVal.c_str()))
+                ret[envVar] = "true";
+              continue;
+            }
             auto boolV = triton::tools::isEnvValueBool(strVal);
             if (boolV.has_value())
               ret[envVar] = boolV.value() ? "true" : "false";
