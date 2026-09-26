@@ -174,7 +174,8 @@ SmallVector<unsigned, 3> planWarps(Operation *dotOp, ArrayRef<int64_t> shape,
 FailureOr<MfmaIntrinsic>
 chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
                       Type aElemType, Type bElemType, int inputKSize,
-                      int enforcedNonKDim, bool withScale, bool allowXF32) {
+                      int enforcedNonKDim, bool withScale, bool allowXF32,
+                      int numWarps = 0) {
   // number of matrix elements along k dim per one MFMA instruction
   unsigned kDim = 0;
 
@@ -189,7 +190,24 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
     mDim = nDim = enforcedNonKDim;
   } else {
     int minSize = std::min(M, N);
-    if (minSize >= 32) {
+    // A matrix instruction produces mDim*nDim outputs on one wavefront, so
+    // the shape has to fit the per-warp share of the tile and not just the
+    // tile itself. Choosing on min(M, N) alone asks only the latter. When
+    // the share is smaller, the surplus is computed and discarded, because
+    // the accumulator layout cannot be distributed across the workgroup's
+    // warps in M/N. The NVIDIA backend applies the same idea to MMAv3 in
+    // mmaVersionToInstrShape: maxN = max(shape[1] / nWarps, 8). It caps a
+    // single dimension because m is fixed at 16 there; the shape chosen
+    // here is square, so the corresponding condition is on area.
+    //
+    // numWarps == 0 means the caller did not supply it. share is then the
+    // whole tile, and the test degenerates to the previous one.
+    const int64_t share =
+        (numWarps > 0) ? ((int64_t)M * N) / numWarps : ((int64_t)M * N);
+    auto fitsTileAndShare = [&](int64_t d) {
+      return d <= M && d <= N && d * d <= share;
+    };
+    if (fitsTileAndShare(32)) {
       // On CNDA2-4, if the element type is f64, we use 16x16 intrinsic as
       // there's no 32x32 intrinsic.
       mDim = nDim = 32;
@@ -197,6 +215,12 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
         mDim = nDim = 16;
       }
     } else if (minSize >= 16) {
+      // Deliberately the original fits-in-tile test, not
+      // fitsTileAndShare(16): 16x16 is the smallest square MFMA, so there is
+      // nothing to fall back to. Applying the share test here would reject
+      // every candidate for a 16x16, 16x32 or 32x16 tile on four warps and
+      // leave mDim = nDim = 0, dropping the dot off MFMA silently. The
+      // NVIDIA cap above is floored at 8 for the same reason.
       mDim = nDim = 16;
     } else if (minSize >= 4) {
       if (M >= 64) {
@@ -250,18 +274,20 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
                                                int nonKDim,
-                                               bool withScale = false) {
+                                               bool withScale = false,
+                                               int numWarps = 0) {
   RankedTensorType aType = dot.getA().getType();
   bool allowXF32 =
       dot.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
   return chooseMfmaInstruction(
       dot.getLoc(), mfmaVersion, dot.getC().getType(), aType.getElementType(),
       dot.getB().getType().getElementType(), aType.getShape().back(), nonKDim,
-      withScale, allowXF32);
+      withScale, allowXF32, numWarps);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
-                                               int mfmaVersion, int nonKDim) {
+                                               int mfmaVersion, int nonKDim,
+                                               int numWarps = 0) {
   using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 
   auto ctx = dot.getContext();
@@ -275,7 +301,8 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
   Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getBElemType());
   return chooseMfmaInstruction(dot.getLoc(), mfmaVersion, dot.getC().getType(),
                                aElemType, bElemType, inputKDim, nonKDim,
-                               /*withScale=*/true, /*allowXF32=*/false);
+                               /*withScale=*/true, /*allowXF32=*/false,
+                               numWarps);
 }
 
 using OperandTypesVector = SmallVector<Type, 4>;
@@ -602,14 +629,15 @@ public:
     // If we can't find a proper instruction, we will fall back to select from
     // normal mfma instructions.
     FailureOr<MfmaIntrinsic> mfmaInstr =
-        chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, withScale);
+        chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, withScale, numWarps);
     if (failed(mfmaInstr)) {
       if (!withScale) {
         return rewriter.notifyMatchFailure(
             dotOp,
             "Unable to choose preferable MFMA intrinsic for dot operation.");
       }
-      mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, false);
+      mfmaInstr =
+          chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, false, numWarps);
       if (failed(mfmaInstr)) {
         return rewriter.notifyMatchFailure(
             dotOp, "Unable to choose MFMA intrinsic for dot operation.");
@@ -994,8 +1022,8 @@ public:
                                          "num_warps==1 is not supported");
 
     // Choose a suitable Scaled MFMA instruction for this scaled dot op.
-    FailureOr<MfmaIntrinsic> mfmaInstr =
-        chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
+    FailureOr<MfmaIntrinsic> mfmaInstr = chooseMfmaInstruction(
+        dotOp, mfmaVersion, nonKDim, static_cast<int>(numWarps));
     if (failed(mfmaInstr)) {
       return rewriter.notifyMatchFailure(dotOp,
                                          "Unable to choose preferable MFMA "
