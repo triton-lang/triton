@@ -1024,6 +1024,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %dst = ttg.local_alloc {allocation.offset = 0 : i32}
         : () -> !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>
     // CHECK: %[[DESTINATION:.*]] = ttg.local_alloc
+    // Poison initialization uses the target's native cluster barrier.
+    // CHECK: ttg.local_store {{.*}}, %[[DESTINATION]]
+    // CHECK-NEXT: amdg.cluster_barrier_arrive
+    // CHECK-NEXT: amdg.cluster_barrier_wait
     // CHECK-NOT: ttg.global_scratch_alloc
     // CHECK: tti.experimental_lock_release
     // CHECK-NEXT: ttg.local_scatter %[[DESTINATION]][%arg0], %arg1
