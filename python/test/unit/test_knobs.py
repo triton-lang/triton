@@ -393,8 +393,10 @@ def test_amd_codegen_respects_mir_dump_knob(enabled, fresh_knobs, monkeypatch, t
     from triton.backends.amd import compiler
 
     events = []
+    # One call, not two: translate_to_mir dumps the MIR and, from that same
+    # MachineFunction, the scheduling DAG appended after the marker. The knob
+    # gates that single call.
     monkeypatch.setattr(compiler.llvm, "translate_to_mir", lambda *args: events.append("mir"))
-    monkeypatch.setattr(compiler.llvm, "dump_sched_dag", lambda *args: events.append("dag"))
     monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: "s_endpgm")
     backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
     source = "define amdgpu_kernel void @test_kernel() { ret void }"
@@ -406,7 +408,7 @@ def test_amd_codegen_respects_mir_dump_knob(enabled, fresh_knobs, monkeypatch, t
             fresh_knobs.amd.dump_mir = None
         backend.make_amdgcn(source, {}, compiler.HIPOptions(arch="gfx942"))
 
-    assert events == (["mir", "dag"] if enabled else [])
+    assert events == (["mir"] if enabled else [])
 
 
 def test_amd_codegen_preserves_mir_replacement(fresh_knobs, monkeypatch):
