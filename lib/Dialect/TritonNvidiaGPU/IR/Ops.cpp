@@ -50,6 +50,28 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
+LogicalResult impl::verifyRequiresTcgen05(Operation *op) {
+  ModuleOp module = op->getParentOfType<ModuleOp>();
+  if (!module)
+    return success();
+
+  Attribute target = module->getAttr(gpu::AttrTargetName);
+  if (!target)
+    return success();
+
+  if (auto targetAttr = dyn_cast<StringAttr>(target)) {
+    int computeCapability;
+    StringRef targetName = targetAttr.getValue();
+    if (targetName.consume_front("cuda:") &&
+        !targetName.getAsInteger(10, computeCapability) &&
+        TargetFeatures(computeCapability).supportsTcgen05())
+      return success();
+  }
+
+  return op->emitOpError() << "requires tcgen05 support, but target " << target
+                           << " does not support it";
+}
+
 // -- PackedArithOp --
 namespace {
 constexpr llvm::StringLiteral Half = "hb";

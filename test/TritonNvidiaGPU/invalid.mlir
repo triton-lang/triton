@@ -15,6 +15,37 @@
 
 // -----
 
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:120"} {
+  tt.func @tcgen05_unsupported_target() {
+    // expected-error @below {{'ttng.tmem_alloc' op requires tcgen05 support, but target "cuda:120" does not support it}}
+    %0 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:not-an-architecture"} {
+  tt.func @tcgen05_malformed_target() {
+    // expected-error @below {{'ttng.tmem_wait' op requires tcgen05 support, but target "cuda:not-an-architecture" does not support it}}
+    ttng.tmem_wait load
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942"} {
+  tt.func @tcgen05_non_cuda_target() {
+    // expected-error @below {{'ttng.tmem_wait' op requires tcgen05 support, but target "hip:gfx942" does not support it}}
+    ttng.tmem_wait store
+    tt.return
+  }
+}
+
+// -----
+
 // A descriptor's logical K must cover complete MMA instructions, even if its
 // backing allocation is larger.
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
