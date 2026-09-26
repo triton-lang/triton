@@ -859,6 +859,11 @@ LogicalResult MapElementwiseOp::verifyRegions() {
 
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
+  // splat(unsplat(t)) -> t, when the round-trip reproduces t's exact type
+  // (shape and encoding), so this is a pure identity.
+  if (auto unsplat = getSrc().getDefiningOp<UnsplatOp>())
+    if (unsplat.getSrc().getType() == getType())
+      return unsplat.getSrc();
   auto value = adaptor.getSrc();
   if (!value)
     return {};
@@ -876,6 +881,22 @@ LogicalResult UnsplatOp::verify() {
     return emitError("source tensor must have exactly one element");
   }
   return success();
+}
+
+OpFoldResult UnsplatOp::fold(FoldAdaptor adaptor) {
+  // unsplat(splat(x)) -> x
+  if (auto splat = getSrc().getDefiningOp<SplatOp>())
+    if (splat.getSrc().getType() == getType())
+      return splat.getSrc();
+  // unsplat(constant) -> scalar constant
+  if (auto dense = dyn_cast_if_present<DenseElementsAttr>(adaptor.getSrc())) {
+    if (dense.getNumElements() != 1)
+      return {};
+    Attribute elem = *dense.value_begin<Attribute>();
+    if (isa<IntegerAttr, FloatAttr>(elem))
+      return elem;
+  }
+  return {};
 }
 
 LogicalResult UnsplatOp::inferReturnTypes(
