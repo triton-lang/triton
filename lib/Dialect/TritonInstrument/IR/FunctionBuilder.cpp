@@ -1327,11 +1327,6 @@ void FunctionBuilder::createInvalidateBarrierStateCallImpl(
   Value barrierStatesVal = auxData.barrierStates.at(insertPoint).value;
   auto barrierStatesType =
       cast<RankedTensorType>(auxData.barrierStates.at(insertPoint).type);
-  auto selectedType =
-      tti::getSlicedTensorType(barrierStatesType, {1}, b.getI1Type());
-  if (selectedBarriers.getType() != selectedType)
-    selectedBarriers =
-        ttg::ConvertLayoutOp::create(b, selectedType, selectedBarriers);
   Value waitingVal = auxData.waiting.at(insertPoint).value;
   auto waitingType =
       cast<RankedTensorType>(auxData.waiting.at(insertPoint).type);

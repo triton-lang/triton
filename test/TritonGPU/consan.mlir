@@ -3474,3 +3474,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0], [0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.shared = 512 : i32, ttg.tensor_memory_size = 0 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: tt.func private @__triton_consan_invalidate_barrier_state_
+  // CHECK: ttg.convert_layout {{.*}} {force_warp_shuffle}
+  // CHECK-LABEL: tt.func public @invalidate_many_barriers
+  tt.func public @invalidate_many_barriers() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c64 = arith.constant 64 : i32
+    %bars = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64x1xi64, #bar, #smem, mutable>
+    scf.for %i = %c0 to %c64 step %c1 : i32 {
+      %bar = ttg.memdesc_index %bars[%i] : !ttg.memdesc<64x1xi64, #bar, #smem, mutable> -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
+      ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #bar, #smem, mutable>
+      // CHECK: ttng.init_barrier
+      // CHECK-NOT: ttg.convert_layout
+      // CHECK: tt.call @__triton_consan_invalidate_barrier_state_
+      // CHECK: ttng.inval_barrier
+      ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #bar, #smem, mutable>
+    }
+    tt.return
+  }
+}
