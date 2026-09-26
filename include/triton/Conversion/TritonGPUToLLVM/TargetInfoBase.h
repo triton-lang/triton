@@ -142,6 +142,7 @@ public:
   virtual bool supportLdStMatrixB8() const { return false; }
   virtual bool supportBitwidth16Elementwise() const { return false; }
   virtual bool supportBitwidth32Elementwise() const { return false; }
+  virtual bool supportsTcgen05() const { return false; }
 
   // Returns the preferred arity of the in-thread reduction tree for the given
   // combiner operation. The default is 2 (binary tree). Targets that have
