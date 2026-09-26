@@ -864,6 +864,11 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
     return failure();
   if (failed(verifyTMAMode(*this, isIm2Col, getCoord(), getOffsets())))
     return failure();
+  // An output pixel offset is not a spatial coordinate: im2col traversal
+  // also depends on element strides and the bounding box.
+  if (isIm2Col && getShapePerCTA(resultType)[0] != resultType.getDimSize(0))
+    return emitOpError(
+        "im2col TMA does not support splitting pixels across CTAs");
   if (getMulticast() && !hasCGABroadcast(resultType))
     return emitOpError(
         "multicast requires the shared layout to broadcast across CTAs");
