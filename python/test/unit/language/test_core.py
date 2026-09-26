@@ -441,6 +441,44 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             test_broadcast=(op != "%"), x_low=x_low, x_high=x_high, filter_y=filter_y, test_scalar=not skip_scalar_test)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.parametrize("block_size", [128, 256, 1024])
+@pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.parametrize("broadcast", [False, True])
+def test_fp32_mul_packed(block_size, stride, broadcast, device):
+
+    @triton.jit
+    def kernel(X, Y, Z, Ref, N: tl.constexpr, STRIDE: tl.constexpr, BROADCAST: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        x = tl.load(X + offsets * STRIDE, offsets < N, other=0)
+        if BROADCAST:
+            y = tl.load(Y)
+        else:
+            y = tl.load(Y + offsets * STRIDE, offsets < N, other=0)
+        reference = tl.inline_asm_elementwise("mul.rn.f32 $0, $1, $2;", constraints="=f,f,f", args=[x, y],
+                                              dtype=tl.float32, is_pure=True, pack=1)
+        tl.store(Z + offsets, x * y, offsets < N)
+        tl.store(Ref + offsets, reference, offsets < N)
+
+    n = 2051
+    # Random bit patterns include subnormals, infinities, and NaNs.
+    rs = RandomState(42)
+    x_bits = rs.randint(0, 2**32, n * stride, dtype=np.uint32)
+    x_bits[:8 * stride:stride] = [0, 0x80000000, 1, 0x80000001, 0x7F7FFFFF, 0x7F800000, 0xFF800000, 0x7FC00000]
+    y_bits = rs.randint(0, 2**32, n * stride, dtype=np.uint32)
+    y_bits[0] = 0x3FC00000  # A non-power-of-two broadcast scale.
+    x = torch.from_numpy(x_bits.view(np.float32)).to(device)
+    y = torch.from_numpy(y_bits.view(np.float32)).to(device)
+    z = torch.empty(n, dtype=torch.float32, device=device)
+    ref = torch.empty_like(z)
+    compiled = kernel[(triton.cdiv(n, block_size), )](x, y, z, ref, n, stride, broadcast, block_size)
+    finite = ~torch.isnan(ref)
+    assert torch.equal(torch.isnan(z), torch.isnan(ref))
+    assert torch.equal(z.view(torch.int32)[finite], ref.view(torch.int32)[finite])
+    if torch.cuda.get_device_capability()[0] >= 10 and block_size >= 256 and stride == 1:
+        assert "mul.f32x2" in compiled.asm["ptx"] or "mul.rn.f32x2" in compiled.asm["ptx"]
+
+
 def test_bfloat16_mul_rounds_to_nearest_even(device):
     # A bf16 multiply has to round to nearest even. Hardware multiply-accumulate
     # instructions that write a bf16 result may truncate instead, which is off by
@@ -7101,20 +7139,21 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 @pytest.mark.parametrize("default_override", [False, True])
 @pytest.mark.parametrize("force_disable", [False, True])
-def test_enable_fp_fusion(enable_fp_fusion, default_override, force_disable, device, fresh_knobs):
+@pytest.mark.parametrize("block_size", [128, 1024])
+def test_enable_fp_fusion(enable_fp_fusion, default_override, force_disable, block_size, device, fresh_knobs):
     # Sequential multiply add can be fused by backend
     @triton.jit
-    def mul_add(data):
-        ptrs = data + tl.arange(0, 128)
+    def mul_add(data, BLOCK: tl.constexpr):
+        ptrs = data + tl.arange(0, BLOCK)
         tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
 
-    data = torch.randn((128, ), device=device, dtype=torch.float32)
+    data = torch.randn((block_size, ), device=device, dtype=torch.float32)
     fresh_knobs.language.force_disable_fp_fusion = force_disable
     if default_override:
         fresh_knobs.language.default_fp_fusion = enable_fp_fusion
-        h = mul_add.warmup(data, grid=(1, ))
+        h = mul_add.warmup(data, block_size, grid=(1, ))
     else:
-        h = mul_add.warmup(data, grid=(1, ), enable_fp_fusion=enable_fp_fusion)
+        h = mul_add.warmup(data, block_size, grid=(1, ), enable_fp_fusion=enable_fp_fusion)
 
     if not is_cuda():
         return
