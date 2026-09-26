@@ -8,11 +8,12 @@ from dataclasses import dataclass, fields
 
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
-from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared
+from triton.experimental.gluon.language.nvidia import blackwell as bw
+from triton.experimental.gluon.nvidia.blackwell import TensorDescriptor
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
+    fence_async_shared,
     tensor_memory_descriptor,
     tensor_memory_descriptor_type,
     tma,
@@ -20,9 +21,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma,
     tcgen05_mma_barrier_count,
     tcgen05_commit,
-    float2,
 )
-from triton.experimental.gluon.language.nvidia.blackwell.float2 import Float2Tensor
 
 # ===-----------------------------------------------------------------------===#
 # Layout Utilities
@@ -110,9 +109,9 @@ def Channel(T, alloc_fn):
                 mbarrier.arrive(self.empty_bars.index(i), count=num_consumers)
 
         @gluon.jit
-        def acquire_producer(self, counter, mem):
+        def acquire_producer(self, counter):
             index, phase = counter.index, counter.phase
-            mem = mem.index(index)
+            mem = self.mem.index(index)
             ready_bar = self.ready_bars.index(index)
             empty_bar = self.empty_bars.index(index)
 
@@ -120,9 +119,9 @@ def Channel(T, alloc_fn):
             return mem, ready_bar
 
         @gluon.jit
-        def acquire_consumer(self, counter, mem):
+        def acquire_consumer(self, counter):
             index, phase = counter.index, counter.phase
-            mem = mem.index(index)
+            mem = self.mem.index(index)
             ready_bar = self.ready_bars.index(index)
             empty_bar = self.empty_bars.index(index)
 
@@ -141,6 +140,14 @@ def Channel(T, alloc_fn):
         def create_consumer(self):
             return Consumer(self, self.create_counter())
 
+        @gluon.jit
+        def release(self):
+            if isinstance(self.mem, gl.shared_memory_descriptor):
+                self.mem._keep_alive()
+            for i in gl.static_range(self.num_buffers):
+                mbarrier.invalidate(self.ready_bars.index(i))
+                mbarrier.invalidate(self.empty_bars.index(i))
+
     @gluon.aggregate
     class Producer:
         channel: ChannelType
@@ -148,11 +155,7 @@ def Channel(T, alloc_fn):
 
         @gluon.jit
         def acquire(self):
-            return self.acquire_from(self.channel.mem)
-
-        @gluon.jit
-        def acquire_from(self, mem):
-            mem, ready_bar = self.channel.acquire_producer(self.counter, mem)
+            mem, ready_bar = self.channel.acquire_producer(self.counter)
             next = Producer(self.channel, self.counter.increment())
             return mem, ready_bar, next
 
@@ -163,11 +166,7 @@ def Channel(T, alloc_fn):
 
         @gluon.jit
         def acquire(self):
-            return self.acquire_from(self.channel.mem)
-
-        @gluon.jit
-        def acquire_from(self, mem):
-            mem, empty_bar = self.channel.acquire_consumer(self.counter, mem)
+            mem, empty_bar = self.channel.acquire_consumer(self.counter)
             next = Consumer(self.channel, self.counter.increment())
             return mem, empty_bar, next
 
@@ -181,10 +180,10 @@ TensorMemoryChannel, TensorMemoryProducer, TensorMemoryConsumer = Channel(tensor
 
 
 @gluon.jit
-def get_desc_channel(desc, num_buffers: gl.constexpr):
-    shape: gl.constexpr = desc.block_type.shape
+def get_desc_channel(config, desc, num_buffers: gl.constexpr):
+    shape: gl.constexpr = desc.block_shape
     layout: gl.constexpr = desc.layout
-    return SharedMemoryChannel.alloc(shape, desc.dtype, layout, num_buffers, consumer_two_ctas=gl.num_ctas() > 1)
+    return SharedMemoryChannel.alloc(shape, desc.dtype, layout, num_buffers, consumer_two_ctas=config.TWO_CTAS)
 
 
 @gluon.jit
@@ -205,6 +204,7 @@ class AttentionConfig:
     H: gl.tensor
     N_CTX: gl.tensor
     CGA_LAYOUT: gl.constexpr
+    TWO_CTAS: gl.constexpr
     m_cga_layout: gl.constexpr
 
     BLOCK_M: gl.constexpr
@@ -274,18 +274,19 @@ class AttentionConfig:
         o_cta_shape = [self.SPLIT_M_PER_CTA, self.HEAD_DIM // get_split_dim(self.CGA_LAYOUT, 1)]
         qk_instr_shape = get_mma_instr_shape(qk_cta_shape, gl.float32)
         o_instr_shape = get_mma_instr_shape(o_cta_shape, gl.float32)
+        self.TWO_CTAS = gl.constexpr(bool(CGA_LAYOUT))
         self.qk_tmem_layout = gl.constexpr(
             TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), col_stride=1, cga_layout=self.CGA_LAYOUT,
-                               two_ctas=bool(self.CGA_LAYOUT)))
+                               two_ctas=self.TWO_CTAS))
         self.o_tmem_layout = gl.constexpr(
             TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1]), col_stride=1, cga_layout=self.CGA_LAYOUT,
-                               two_ctas=bool(self.CGA_LAYOUT)))
+                               two_ctas=self.TWO_CTAS))
         self.p_tmem_layout = gl.constexpr(
             TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), col_stride=1, cga_layout=self.CGA_LAYOUT,
-                               two_ctas=bool(self.CGA_LAYOUT)))
+                               two_ctas=self.TWO_CTAS))
         o_splitn_tmem_layout: gl.constexpr = TensorMemoryLayout(
             (o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR), col_stride=1, cga_layout=self.CGA_LAYOUT,
-            two_ctas=bool(self.CGA_LAYOUT))
+            two_ctas=self.TWO_CTAS)
         qk_tmem_ty: gl.constexpr = tensor_memory_descriptor_type(gl.float32, self.qk_shape, self.qk_tmem_layout,
                                                                  self.qk_shape)
         o_splitn_tmem_ty: gl.constexpr = tensor_memory_descriptor_type(
@@ -384,23 +385,23 @@ class AttentionProgram:
 @gluon.jit
 def _borrow_s_as_p(config, s_tmem):
     cols: gl.constexpr = s_tmem.dtype.primitive_bitwidth // config.dtype.primitive_bitwidth
-    p_tmem = s_tmem._reinterpret(config.dtype, [config.SPLIT_M, cols * config.BLOCK_N], config.p_tmem_layout)
+    p_tmem = s_tmem.reinterpret(config.dtype, [config.SPLIT_M, cols * config.BLOCK_N], config.p_tmem_layout)
     return p_tmem.slice(0, config.BLOCK_N)
 
 
 @gluon.jit
 def _borrow_s_as_alpha(config, s_tmem):
     alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1,
-                                                    cga_layout=config.CGA_LAYOUT, two_ctas=gl.num_ctas() > 1)
-    alpha_tmem = s_tmem._reinterpret(layout=alpha_layout)
+                                                    cga_layout=config.CGA_LAYOUT, two_ctas=config.TWO_CTAS)
+    alpha_tmem = s_tmem.reinterpret(layout=alpha_layout)
     return alpha_tmem.slice(config.BLOCK_N // 2, 1)
 
 
 @gluon.jit
 def _borrow_s_for_epilogue(config, s_tmem):
     layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1, cga_layout=config.CGA_LAYOUT,
-                                              two_ctas=gl.num_ctas() > 1)
-    s_tmem = s_tmem._reinterpret(layout=layout)
+                                              two_ctas=config.TWO_CTAS)
+    s_tmem = s_tmem.reinterpret(layout=layout)
     m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
     l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
     return m_i_tmem, l_i_tmem
@@ -472,7 +473,7 @@ def _join_n(xs):
 
 @gluon.jit
 def _attn_fwd_load(config, chnls, descs, M, STAGE: gl.constexpr):
-    q_chnl, kv_chnl, v_mem, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
 
     q_producer = q_chnl.create_producer()
@@ -495,20 +496,22 @@ def _attn_fwd_load(config, chnls, descs, M, STAGE: gl.constexpr):
         q1_smem, q1_bar, q_producer = q_producer.acquire()
         issue_async_tma_load(q1_smem, q1_bar, desc_q, q1_offset)
 
-        v_smem, v_bar, kv_producer = kv_producer.acquire_from(v_mem)
+        kv_smem, v_bar, kv_producer = kv_producer.acquire()
+        v_smem = _reinterpret_kv_as_v(kv_smem, desc_v)
         issue_async_tma_load(v_smem, v_bar, desc_v, offsetkv_y)
 
         for start_n in range(lo + config.BLOCK_N, hi, config.BLOCK_N):
             offsetkv_y = prog.offset_y + start_n
             k_smem, k_bar, kv_producer = kv_producer.acquire()
             issue_async_tma_load(k_smem, k_bar, desc_k, offsetkv_y)
-            v_smem, v_bar, kv_producer = kv_producer.acquire_from(v_mem)
+            kv_smem, v_bar, kv_producer = kv_producer.acquire()
+            v_smem = _reinterpret_kv_as_v(kv_smem, desc_v)
             issue_async_tma_load(v_smem, v_bar, desc_v, offsetkv_y)
 
 
 @gluon.jit
 def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
-    q_chnl, kv_chnl, v_mem, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
 
     q_consumer = q_chnl.create_consumer()
@@ -533,7 +536,8 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
         s1_tmem, s1_bar, s1_producer = s1_producer.acquire()
         tcgen05_mma(q1_smem, k_smem.permute((1, 0)), s1_tmem, use_acc=False, multicast=True, mbarriers=[s1_bar, k_bar])
 
-        v_smem, v_bar, kv_consumer = kv_consumer.acquire_from(v_mem)
+        kv_smem, v_bar, kv_consumer = kv_consumer.acquire()
+        v_smem = _reinterpret_kv_as_v(kv_smem, desc_v)
         o0_tmem, o0_bar, o_producer = o_producer.acquire()
         s0_tmem, s0_bar, s0_producer = s0_producer.acquire()
         p0_tmem = _borrow_s_as_p(config, s0_tmem)
@@ -553,7 +557,8 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
             tcgen05_mma(q1_smem, k_smem.permute((1, 0)), s1_tmem, use_acc=False, multicast=True,
                         mbarriers=[s1_bar, k_bar])
 
-            v_smem, v_bar, kv_consumer = kv_consumer.acquire_from(v_mem)
+            kv_smem, v_bar, kv_consumer = kv_consumer.acquire()
+            v_smem = _reinterpret_kv_as_v(kv_smem, desc_v)
             o0_tmem, o0_bar, o_producer = o_producer.acquire()
             s0_tmem, s0_bar, s0_producer = s0_producer.acquire()
             p0_tmem = _borrow_s_as_p(config, s0_tmem)
@@ -623,6 +628,17 @@ def _subtiled_qk_load(config, s_tmem, use_tmem_red: gl.constexpr):
 
 
 @gluon.jit
+def _combine_add2(a, b, c, d):
+    parent: gl.constexpr = gl.BlockedLayout([1, 2], [1, 32], [1, gl.num_warps()], [1, 0],
+                                            cga_layout=[[0, 0]] * (gl.num_ctas().bit_length() - 1))
+    layout: gl.constexpr = gl.SliceLayout(0, parent)
+    lanes = gl.arange(0, 2, layout=layout)
+    lhs = gl.where(lanes == 0, a, b)
+    rhs = gl.where(lanes == 0, c, d)
+    return gl.split(bw.add2(lhs, rhs))
+
+
+@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, exp_turnstile, corr_bar,  #
                         offs_m, m_i, l_i, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
@@ -647,10 +663,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         alpha_tmem.store(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout))
         mbarrier.arrive(corr_bar, count=1)
 
-        rowmax = float2.pack(-m_ij[:, None].broadcast_to(qk.shape), axis=1)
-        qk = float2.pack(qk, axis=1)
-        qk = float2.fma(qk, float2.full_like(qk, config.qk_scale), rowmax)
-        qk = float2.unpack(qk, axis=1)
+        qk = bw.fma2(qk, config.qk_scale, -m_ij[:, None])
 
         # Force the softmax partitions to take turns in the EX2 section. This
         # prevents contention for the EX2 unit and improves utilization.
@@ -669,10 +682,11 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         if config.use_exp2_turnstile:
             mbarrier.arrive(exp_bar, count=1)
 
-        l_ij = float2.pack2(*_split_n(p)).sum(axis=1)
-        l_ij = Float2Tensor(gl.convert_layout(l_ij.value, l_i.value.type.layout, assert_trivial=True))
-        alpha = gl.convert_layout(alpha, l_i.value.type.layout, assert_trivial=True)
-        l_i = float2.fma(l_i, float2.pack2(alpha, alpha), l_ij)
+        p0, p1 = gl.reduce(_split_n(p), axis=1, combine_fn=_combine_add2)
+        l_ij = gl.join(p0, p1)
+        l_ij = gl.convert_layout(l_ij, l_i.type.layout, assert_trivial=True)
+        alpha = gl.convert_layout(alpha, gl.SliceLayout(1, l_i.type.layout), assert_trivial=True)
+        l_i = bw.fma2(l_i, gl.join(alpha, alpha), l_ij)
         m_i = m_ij
 
     return m_i, l_i, corr_bar, s_consumer, corr_producer, exp_turnstile
@@ -696,9 +710,9 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
         offs_m += gl.arange(tile_id * config.SPLIT_M, (1 + tile_id) * config.SPLIT_M)
 
         m_i = gl.full([config.SPLIT_M], -float("inf"), gl.float32, qk_slice_dim1)
-        # Accumulate into 2 row-sums so the reduction can be performed with FADD2.
+        # Keep the two row sums adjacent so their updates use packed FMA2.
         l_i = gl.full([config.SPLIT_M], 0.0, gl.float32, gl.SliceLayout(1, sum_layout))
-        l_i = float2.pack2(l_i, l_i)
+        l_i = gl.join(l_i, l_i)
 
         if STAGE & 1:
             m_i, l_i, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
@@ -708,7 +722,7 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
             m_i, l_i, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
                 tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
                 offs_m, m_i, l_i, STAGE=2, use_tmem_red=use_tmem_red)
-        l_i0, l_i1 = float2.unpack2(l_i)
+        l_i0, l_i1 = gl.split(l_i)
         l_i = l_i0 + l_i1
 
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
@@ -724,21 +738,21 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
 
 @gluon.jit
 def _attn_fwd_softmax0(config, chnls, descs, M, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
-    q_chnl, kv_chnl, v_mem, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
     _softmax_tile(0, config, M, desc_o, STAGE, s0_chnl, c0_chnl, exp_turnstile.create_producer(), use_tmem_red)
 
 
 @gluon.jit
 def _attn_fwd_softmax1(config, chnls, descs, M, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
-    q_chnl, kv_chnl, v_mem, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
     _softmax_tile(1, config, M, desc_o, STAGE, s1_chnl, c1_chnl, exp_turnstile.create_consumer(), use_tmem_red)
 
 
 @gluon.jit
 def _attn_fwd_epilogue(config, chnls, descs, M, STAGE: gl.constexpr):
-    q_chnl, kv_chnl, v_mem, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
 
     epi_consumer = epi_chnl.create_consumer()
@@ -747,10 +761,10 @@ def _attn_fwd_epilogue(config, chnls, descs, M, STAGE: gl.constexpr):
         prog = scheduler.get_program(pid)
 
         o0_smem, o0_bar, epi_consumer = epi_consumer.acquire()
-        tma.async_copy_shared_to_global(desc_o, [prog.qo_offset_y + config.SPLIT_M * 0, 0], o0_smem)
+        tma.async_store(desc_o, [prog.qo_offset_y + config.SPLIT_M * 0, 0], o0_smem)
 
         o1_smem, o1_bar, epi_consumer = epi_consumer.acquire()
-        tma.async_copy_shared_to_global(desc_o, [prog.qo_offset_y + config.SPLIT_M * 1, 0], o1_smem)
+        tma.async_store(desc_o, [prog.qo_offset_y + config.SPLIT_M * 1, 0], o1_smem)
 
         tma.store_wait(1)
         mbarrier.arrive(o0_bar, count=1)
@@ -769,12 +783,11 @@ def _attn_fwd_correction_rescale(config, s_tmem, corr_consumer, o_consumer):
     mbarrier.arrive(corr_bar, count=1)
     alpha = gl.convert_layout(alpha.reshape([config.SPLIT_M]), alpha_layout)
 
-    alpha = float2.pack(alpha[:, None].broadcast_to(config.o_shape[0], config.SPLIT_D), axis=1)
+    alpha = alpha[:, None].broadcast_to(config.o_shape[0], config.SPLIT_D)
     for i in gl.static_range(config.SPLIT_D_FACTOR):
         o_ref = o_tmem.slice(i * config.SPLIT_D, config.SPLIT_D)
-        o = float2.pack(o_ref.load(config.o_splitn_layout), axis=1)
-        o = o * alpha
-        o_ref.store(float2.unpack(o, axis=1))
+        o = bw.mul2(o_ref.load(config.o_splitn_layout), alpha)
+        o_ref.store(o)
     mbarrier.arrive(o_bar, count=1)
     return corr_consumer, o_consumer
 
@@ -804,12 +817,11 @@ def _attn_fwd_correction_epilogue(config, prog, s_tmem, M, corr_consumer, epi_pr
                      "Block shape is too small for the swizzle byte size in NVMMA Shared Layout")
     SPLIT_N: gl.constexpr = o_smem.type.shape[1] // SPLIT_N_FACTOR
 
-    scale = float2.pack((1 / l_i)[:, None].broadcast_to(config.o_shape[0], SPLIT_N), axis=1)
+    scale = (1 / l_i)[:, None].broadcast_to(config.o_shape[0], SPLIT_N)
     for i in gl.static_range(SPLIT_N_FACTOR):
         o_ref = o_tmem.slice(i * SPLIT_N, SPLIT_N)
-        o = float2.pack(o_ref.load(config.o_splitn_layout), axis=1)
-        o = o * scale
-        o_smem.slice(i * SPLIT_N, SPLIT_N, dim=1).store(float2.unpack(o, axis=1).to(config.dtype))
+        o = bw.mul2(o_ref.load(config.o_splitn_layout), scale)
+        o_smem.slice(i * SPLIT_N, SPLIT_N, dim=1).store(o.to(config.dtype))
 
     fence_async_shared()
     mbarrier.arrive(epi_bar, count=1)
@@ -827,7 +839,7 @@ def _attn_fwd_correction_epilogue(config, prog, s_tmem, M, corr_consumer, epi_pr
 
 @gluon.jit
 def _attn_fwd_correction(config, chnls, descs, M, STAGE: gl.constexpr):
-    q_chnl, kv_chnl, v_mem, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
+    q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
 
     s0_tmem = s0_chnl.mem.index(0)
     s1_tmem = s1_chnl.mem.index(0)
@@ -855,7 +867,7 @@ def _attn_fwd_correction(config, chnls, descs, M, STAGE: gl.constexpr):
         corr0_consumer, epi_producer, o_consumer = _attn_fwd_correction_epilogue(  #
             config, prog, s0_tmem, M, corr0_consumer, epi_producer, o_consumer)
         corr1_consumer, epi_producer, o_consumer = _attn_fwd_correction_epilogue(  #
-            config, prog, s1_tmem, M, corr1_consumer, epi_producer, o_consumer)
+            config, prog, s1_tmem, M + config.SPLIT_M, corr1_consumer, epi_producer, o_consumer)
 
 
 def attention_repr(specialization):
@@ -864,6 +876,11 @@ def attention_repr(specialization):
     if specialization.constants["dtype"] == gl.float8e5:
         name = "cutlass_" + name
     return name
+
+
+@gluon.jit
+def _reinterpret_kv_as_v(kv_smem, desc_v):
+    return kv_smem.reinterpret(desc_v.dtype, desc_v.block_shape, desc_v.layout)
 
 
 @gluon.jit(do_not_specialize=["Z", "H", "N_CTX"], repr=attention_repr)
@@ -878,16 +895,15 @@ def attention_kernel(  #
                              STAGE, SPLIT_EXP_FACTOR,  #
                              dtype, num_warps, NUM_KV_BUFFERS, USE_EXP2_TURNSTILE)
 
-    q_chnl = get_desc_channel(desc_q, num_buffers=2)
-    kv_chnl = get_desc_channel(desc_k, num_buffers=config.num_kv_buffers)
-    v_mem = kv_chnl.mem._reinterpret(layout=desc_v.layout)
+    q_chnl = get_desc_channel(config, desc_q, num_buffers=2)
+    kv_chnl = get_desc_channel(config, desc_k, num_buffers=config.num_kv_buffers)
     o_chnl = TensorMemoryChannel.alloc(config.o_shape, gl.float32, config.o_tmem_layout, num_buffers=2,
-                                       producer_two_ctas=gl.num_ctas() > 1)
+                                       producer_two_ctas=config.TWO_CTAS)
     epi_chnl = SharedMemoryChannel.alloc(config.o_shape, config.dtype, gl.constexpr(desc_o.layout), num_buffers=2)
     s0_chnl = TensorMemoryChannel.alloc(config.qk_shape, gl.float32, config.qk_tmem_layout, num_buffers=1,
-                                        producer_two_ctas=gl.num_ctas() > 1)
+                                        producer_two_ctas=config.TWO_CTAS)
     s1_chnl = TensorMemoryChannel.alloc(config.qk_shape, gl.float32, config.qk_tmem_layout, num_buffers=1,
-                                        producer_two_ctas=gl.num_ctas() > 1)
+                                        producer_two_ctas=config.TWO_CTAS)
     sync_layout: gl.constexpr = mbarrier.MBarrierLayout.multicta(gl.num_ctas())
     c0_chnl = SharedMemoryChannel.alloc([gl.num_ctas()], gl.int8, sync_layout, num_buffers=1)
     c1_chnl = SharedMemoryChannel.alloc([gl.num_ctas()], gl.int8, sync_layout, num_buffers=1)
@@ -896,12 +912,12 @@ def attention_kernel(  #
     qk_mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count(
         [q_chnl.mem.index(0), kv_chnl.mem.index(0).permute((1, 0))],
         multicast=True,
-        two_ctas=s0_chnl.mem.index(0).type.layout.two_ctas,
+        two_ctas=config.TWO_CTAS,
     )
     pv_mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count(
-        [v_mem.index(0)],
+        [_reinterpret_kv_as_v(kv_chnl.mem.index(0), desc_v)],
         multicast=True,
-        two_ctas=o_chnl.mem.index(0).type.layout.two_ctas,
+        two_ctas=config.TWO_CTAS,
     )
     gl.static_assert(qk_mma_barrier_count == pv_mma_barrier_count,
                      "shared KV channel requires matching K and V consumer counts")
@@ -926,7 +942,7 @@ def attention_kernel(  #
     c1_chnl.prime()
     exp_turnstile.prime()
 
-    chnls = (q_chnl, kv_chnl, v_mem, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
+    chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
     descs = (desc_q, desc_k, desc_v, desc_o)
     gl.warp_specialize([
         (_attn_fwd_correction, (config, chnls, descs, M, STAGE)),
@@ -936,6 +952,16 @@ def attention_kernel(  #
         (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
         (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
     ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
+
+    q_chnl.release()
+    kv_chnl.release()
+    o_chnl.release()
+    epi_chnl.release()
+    s0_chnl.release()
+    s1_chnl.release()
+    c0_chnl.release()
+    c1_chnl.release()
+    exp_turnstile.release()
 
 
 # ===-----------------------------------------------------------------------===#
@@ -967,7 +993,7 @@ class KernelConfig:
     USE_TMEM_RED: bool = False
     NUM_KV_BUFFERS: int | None = None
     USE_EXP2_TURNSTILE: bool | None = None
-    CTA_LAYOUT: tuple[tuple[int, int], ...] | None = None
+    CGA_LAYOUT: tuple[tuple[int, int], ...] | None = None
 
 
 def _default_split_exp_factor(head_dim: int) -> int:
@@ -1003,9 +1029,9 @@ def select_kernel_config(
     use_selected_tmem_red = (use_tmem_red or (is_bwu and not causal)) and not causal
     num_kv_buffers = _default_num_kv_buffers(head_dim, dtype)
     use_exp2_turnstile = head_dim == 64
-    cta_layout = ()
+    cga_layout = ()
     if not causal and head_dim == 128 and dtype.itemsize == 2:
-        cta_layout = ((1, 0), )
+        cga_layout = ((1, 0), )
 
     if causal:
         group_size_n = 8 if head_dim == 64 or n_ctx <= 2048 else 4
@@ -1072,7 +1098,7 @@ def select_kernel_config(
         USE_TMEM_RED=use_selected_tmem_red,
         NUM_KV_BUFFERS=num_kv_buffers,
         USE_EXP2_TURNSTILE=use_exp2_turnstile,
-        CTA_LAYOUT=cta_layout,
+        CGA_LAYOUT=cga_layout,
     )
     if override is None:
         return config
@@ -1094,7 +1120,7 @@ def make_tensor_desc(x, shape, strides, block_shape, cga_layout=()):
 
 
 def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red=False, p: KernelConfig | None = None,
-                      cta_layout=None):
+                      cga_layout=None):
     if isinstance(o, bool) and M is None and use_tmem_red is False:
         use_tmem_red = o
         o = None
@@ -1106,8 +1132,8 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 
     stage = 3 if causal else 1
     p = select_kernel_config(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red, override=p)
-    if cta_layout is None:
-        cta_layout = p.CTA_LAYOUT
+    if cga_layout is None:
+        cga_layout = p.CGA_LAYOUT
 
     if o is None:
         o = torch.empty_like(q)
@@ -1118,15 +1144,15 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 
     # The kernel will split the cluster tile into two subtiles. Keep the
     # configured M tile per CTA and grow the cluster tile with the CTA layout.
-    BLOCK_M = p.BLOCK_M * get_split_dim(cta_layout, 0)
+    BLOCK_M = p.BLOCK_M * get_split_dim(cga_layout, 0)
     BLOCK_N = p.BLOCK_N
     SPLIT_M = BLOCK_M // 2
     GROUP_SIZE_N = p.GROUP_SIZE_N
-    num_ctas = 2**len(cta_layout)
+    num_ctas = 2**len(cga_layout)
     NUM_SMS = max(1, torch.cuda.get_device_properties("cuda").multi_processor_count * p.OCCUPANCY // num_ctas)
 
-    lhs_cga_layout = get_mma_operand_cga_layout(cta_layout, 0)
-    rhs_cga_layout = get_mma_operand_cga_layout(cta_layout, 1)
+    lhs_cga_layout = get_mma_operand_cga_layout(cga_layout, 0)
+    rhs_cga_layout = get_mma_operand_cga_layout(cga_layout, 1)
     k_cga_layout = tuple((basis[1], basis[0]) for basis in rhs_cga_layout)
 
     desc_q = make_tensor_desc(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[SPLIT_M, HEAD_DIM_K],
@@ -1136,7 +1162,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
     desc_k = make_tensor_desc(k, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[BLOCK_N, HEAD_DIM_K],
                               cga_layout=k_cga_layout)
     desc_o = make_tensor_desc(o, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=[SPLIT_M, HEAD_DIM_K],
-                              cga_layout=cta_layout)
+                              cga_layout=cga_layout)
 
     num_pid_m = triton.cdiv(q.shape[2], BLOCK_M)
     num_pid_n = q.shape[0] * q.shape[1]
@@ -1148,7 +1174,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
         SPLIT_EXP_FACTOR=p.SPLIT_EXP_FACTOR, STAGE=stage, dtype=torch_dtype_to_triton(q.dtype),  #
         num_warps=p.NUM_WARPS, maxnreg=p.MAXNREG, use_tmem_red=p.USE_TMEM_RED, NUM_KV_BUFFERS=p.NUM_KV_BUFFERS,
-        USE_EXP2_TURNSTILE=p.USE_EXP2_TURNSTILE, CGA_LAYOUT=cta_layout, num_ctas=num_ctas)
+        USE_EXP2_TURNSTILE=p.USE_EXP2_TURNSTILE, CGA_LAYOUT=cga_layout, num_ctas=num_ctas)
 
     return o, M
 
@@ -1158,6 +1184,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 # ===-----------------------------------------------------------------------===#
 
 
+@pytest.mark.enable_warmup(min_capability=10)
 @pytest.mark.parametrize("Z", [1, 4])
 @pytest.mark.parametrize("H", [32])
 @pytest.mark.parametrize("N_CTX", [1024, 2048, 4096, 8192])
@@ -1165,9 +1192,10 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 @pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float8_e5m2])
 @pytest.mark.parametrize("use_tmem_red", [False, True] if is_blackwell_ultra() else [False])
-@pytest.mark.parametrize("cta_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
+@pytest.mark.parametrize("cga_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, profile=False):
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, profile=False,
+            p: KernelConfig | None = None):
     device = "cuda"
 
     def alloc_fn(size: int, alignment: int, stream):
@@ -1184,7 +1212,9 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, prof
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
     sm_scale = 0.5
 
-    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red, cta_layout=cta_layout)
+    tri_m = torch.full(q.shape[:-1], float("nan"), device=device, dtype=torch.float32)
+    tri_out, tri_m = attention_forward(q, k, v, causal, sm_scale, M=tri_m, use_tmem_red=use_tmem_red, p=p,
+                                       cga_layout=cga_layout)
     if dtype == torch.float8_e5m2:
         ref_out = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=sm_scale,
                                                                    is_causal=causal)
@@ -1193,14 +1223,26 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cta_layout, prof
         ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
+    # Sample rows from both subtiles without materializing full attention scores.
+    with torch.no_grad():
+        rows = torch.arange(0, N_CTX, 128, device=device)
+        scores = torch.matmul(q[..., rows, :].float(), k.float().transpose(-1, -2)) * sm_scale
+        if causal:
+            scores.masked_fill_(rows[:, None] < torch.arange(N_CTX, device=device)[None, :], float("-inf"))
+        ref_m = torch.logsumexp(scores, dim=-1) / math.log(2)
+        torch.testing.assert_close(tri_m[..., rows], ref_m, atol=1e-2, rtol=0)
 
+
+@pytest.mark.enable_warmup(min_capability=10, priority=3)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
-@pytest.mark.parametrize("cta_layout", [(), ((1, 0), )], ids=["1cta", "2ctas"])
+@pytest.mark.parametrize("cga_layout", [(), ((1, 0), )], ids=["1cta", "2ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
-def test_op_consan(dtype, cta_layout):
+def test_op_consan(dtype, cga_layout):
+    p = KernelConfig(NUM_KV_BUFFERS=4) if dtype == torch.float16 and cga_layout and not is_blackwell_ultra() else None
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "consan"
-        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False, cta_layout=cta_layout)
+        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False, cga_layout=cga_layout,
+                p=p)
 
 
 # ===-----------------------------------------------------------------------===#

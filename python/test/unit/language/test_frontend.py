@@ -1,7 +1,13 @@
+import collections
 import functools
+import itertools
+import re
 import triton
 import triton.language as tl
+from triton.experimental import gluon
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
+from triton.compiler.code_generator import CodeGenerator
+from triton.runtime.jit import MockTensor
 from triton.compiler.errors import CompilationError
 import pytest
 from typing import NamedTuple
@@ -9,6 +15,16 @@ from typing import NamedTuple
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
 # ===-----------------------------------------------------------------------===#
+
+
+@pytest.mark.parametrize("jit", [triton.jit, gluon.jit])
+def test_jit_variadic_keyword_arguments(jit):
+
+    def kernel(**kwargs):
+        pass
+
+    with pytest.raises(TypeError, match=r"JIT functions do not support \*\*kwargs"):
+        jit(kernel)
 
 
 def doesnt_compile(kernel):
@@ -24,6 +40,351 @@ def doesnt_compile(kernel):
 @triton.jit
 def anchor(v):
     pass
+
+
+@pytest.mark.parametrize("scalar", [True, False])
+@pytest.mark.parametrize("src_dtype, dst_dtype", [(tl.bfloat16, tl.float16), (tl.float16, tl.bfloat16)])
+def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
+
+    @triton.jit
+    def kernel(X, SCALAR: tl.constexpr, DTYPE: tl.constexpr):
+        if not SCALAR:
+            X = X + tl.arange(0, 32)
+        # CHECK: [[X:%.*]] = tt.load
+        x = tl.load(X)
+        # CHECK-NEXT: [[Y:%.*]] = tt.fp_to_fp [[X]], rounding = rtne
+        y = x.to(DTYPE)
+        # CHECK-NEXT: tt.call {{.*}}([[Y]])
+        anchor(y)
+
+    run_filecheck_test(kernel, args=(MockTensor(src_dtype), scalar, dst_dtype))
+
+
+def test_store_int_to_bool():
+
+    @triton.jit
+    def kernel(output_ptr, value):
+        # CHECK: arith.cmpi ne, %arg1, %c0_i32 : i32
+        tl.store(output_ptr, value)
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.int1), 256))
+
+
+@pytest.mark.parametrize("dtype",
+                         [tl.float16, tl.bfloat16, tl.float32, tl.float64, tl.float8e4nv, tl.float8e5, tl.float8e4b15],
+                         ids=str)
+def test_scalar_constant_preserves_signed_zero(dtype):
+
+    @triton.jit
+    def kernel(dtype: tl.constexpr):
+        # CHECK: arith.constant -0.000000e+00
+        anchor(tl.full((), -0.0, dtype))
+        # CHECK: arith.constant 0.000000e+00
+        anchor(tl.full((), 0.0, dtype))
+
+    run_filecheck_test(kernel, args=(dtype, ))
+
+
+@pytest.mark.parametrize("dtype",
+                         [tl.int1, tl.int8, tl.int16, tl.int32, tl.int64, tl.uint8, tl.uint16, tl.uint32, tl.uint64],
+                         ids=str)
+@pytest.mark.parametrize("value", [0.0, -0.0])
+def test_scalar_constant_float_zero_to_integer(dtype, value):
+
+    @triton.jit
+    def kernel(dtype: tl.constexpr, value: tl.constexpr):
+        # CHECK: arith.constant {{0|false}}
+        anchor(tl.full((), value, dtype))
+
+    run_filecheck_test(kernel, args=(dtype, value))
+
+
+@pytest.mark.parametrize("op", [tl.minimum, tl.maximum])
+@pytest.mark.parametrize("dtype, value, expected_dtype", [
+    (tl.float16, 0.0, tl.float16),
+    (tl.float16, 0, tl.float16),
+    (tl.float32, 0.0, tl.float32),
+    (tl.float64, 0.0, tl.float64),
+    (tl.bfloat16, 0.0, tl.bfloat16),
+    (tl.int8, False, tl.int8),
+    (tl.int16, 0, tl.int16),
+    (tl.uint16, 0, tl.uint16),
+    (tl.int16, 0.0, tl.float32),
+])
+def test_minimum_maximum_scalar_promotion(op, dtype, value, expected_dtype):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, dtype: tl.constexpr, value: tl.constexpr, expected_dtype: tl.constexpr):
+        x = tl.full((8, ), 1, dtype)
+        lhs = op(x, value)
+        rhs = op(value, x)
+        tl.static_assert(lhs.dtype == expected_dtype)
+        tl.static_assert(rhs.dtype == expected_dtype)
+
+    run_parser(kernel, args=(op, dtype, value, expected_dtype))
+
+
+@pytest.mark.parametrize("op", [tl.minimum, tl.maximum])
+@pytest.mark.parametrize("other_dtype, expected_dtype", [(tl.float32, tl.float32), (tl.bfloat16, tl.float16)])
+def test_minimum_maximum_tensor_promotion(op, other_dtype, expected_dtype):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, other_dtype: tl.constexpr, expected_dtype: tl.constexpr):
+        x = tl.full((8, ), 1, tl.float16)
+        y = tl.full((), 0.0, other_dtype)
+        lhs = op(x, y)
+        rhs = op(y, x)
+        tl.static_assert(lhs.dtype == expected_dtype)
+        tl.static_assert(rhs.dtype == expected_dtype)
+
+    run_parser(kernel, args=(op, other_dtype, expected_dtype))
+
+
+@pytest.mark.parametrize("op", ["lt", "le", "gt", "ge", "eq", "ne"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("typed_scalar", [False, True])
+@pytest.mark.parametrize("dtype, value, scalar_dtype, weak_dtype, strong_dtype", [
+    (tl.float16, 0.0, tl.float32, "f16", "f32"),
+    (tl.bfloat16, 0.0, tl.float32, "bf16", "f32"),
+    (tl.float32, 2.0**-127, tl.float64, "f32", "f64"),
+    (tl.int8, 1, tl.int32, "i8", "i32"),
+    (tl.int8, -128, tl.int32, "i8", "i32"),
+    (tl.int8, 127, tl.int32, "i8", "i32"),
+    (tl.uint8, 1, tl.int32, "i8", "i32"),
+    (tl.uint8, 255, tl.int32, "i8", "i32"),
+    (tl.int8, 256.0, tl.float32, "f32", "f32"),
+    (tl.int32, 1.0, tl.float32, "f32", "f32"),
+])
+def test_comparison_scalar_promotion(op, reverse, typed_scalar, dtype, value, scalar_dtype, weak_dtype, strong_dtype):
+
+    @triton.jit
+    def kernel(X, value: tl.constexpr, scalar_dtype: tl.constexpr, op: tl.constexpr, reverse: tl.constexpr,
+               typed_scalar: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        if typed_scalar:
+            y = tl.full((), value, scalar_dtype)
+        else:
+            y: tl.constexpr = value
+        if op == "lt":
+            result = (y < x) if reverse else (x < y)
+        elif op == "le":
+            result = (y <= x) if reverse else (x <= y)
+        elif op == "gt":
+            result = (y > x) if reverse else (x > y)
+        elif op == "ge":
+            result = (y >= x) if reverse else (x >= y)
+        elif op == "eq":
+            result = (y == x) if reverse else (x == y)
+        else:
+            result = (y != x) if reverse else (x != y)
+        anchor(result)
+
+    module = run_parser(kernel, args=(MockTensor(dtype), value, scalar_dtype, op, reverse, typed_scalar))
+    comparisons = [line for line in module.str_nodebug().splitlines() if "arith.cmp" in line]
+    assert len(comparisons) == 1
+    expected_dtype = strong_dtype if typed_scalar else weak_dtype
+    assert f"tensor<8x{expected_dtype}>" in comparisons[0]
+
+
+@pytest.mark.parametrize("op", ["lt", "le", "gt", "ge", "eq", "ne"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("dtype, value", [
+    (tl.int8, -129),
+    (tl.int8, 128),
+    (tl.int8, 256),
+    (tl.uint8, -1),
+    (tl.uint8, 256),
+    (tl.int16, -(2**15) - 1),
+    (tl.int16, 2**15),
+    (tl.uint16, 2**16),
+    (tl.int32, -(2**31) - 1),
+    (tl.int32, 2**31),
+    (tl.uint32, 2**32),
+    (tl.int64, -(2**63) - 1),
+    (tl.int64, 2**63),
+    (tl.uint64, 2**64),
+])
+def test_comparison_scalar_out_of_range(op, reverse, dtype, value):
+
+    @triton.jit
+    def kernel(X, value: tl.constexpr, op: tl.constexpr, reverse: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        if op == "lt":
+            result = (value < x) if reverse else (x < value)
+        elif op == "le":
+            result = (value <= x) if reverse else (x <= value)
+        elif op == "gt":
+            result = (value > x) if reverse else (x > value)
+        elif op == "ge":
+            result = (value >= x) if reverse else (x >= value)
+        elif op == "eq":
+            result = (value == x) if reverse else (x == value)
+        else:
+            result = (value != x) if reverse else (x != value)
+        anchor(result)
+
+    with pytest.raises(CompilationError, match="out of range|negative scalar|Nonrepresentable integer"):
+        run_parser(kernel, args=(MockTensor(dtype), value, op, reverse))
+
+
+@pytest.mark.parametrize("op, dtype, value, expected_dtype", [
+    (tl.umulhi, tl.int32, 1, tl.int32),
+    (tl.umulhi, tl.uint32, 1, tl.uint32),
+    (tl.div_rn, tl.float32, 2.0**-127, tl.float32),
+    (tl.fdiv, tl.float32, 2.0**-127, tl.float32),
+    (tl.fdiv, tl.float16, 2.0, tl.float32),
+    (tl.fdiv, tl.bfloat16, 2.0, tl.float32),
+    (tl.fdiv, tl.float64, 2.0, tl.float64),
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_binary_math_scalar_promotion(op, dtype, value, expected_dtype, reverse):
+
+    @triton.jit
+    def kernel(X, op: tl.constexpr, value: tl.constexpr, expected_dtype: tl.constexpr, reverse: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        if reverse:
+            result = op(value, x)
+        else:
+            result = op(x, value)
+        tl.static_assert(result.dtype == expected_dtype)
+        anchor(result)
+
+    run_parser(kernel, args=(MockTensor(dtype), op, value, expected_dtype, reverse))
+
+
+@pytest.mark.parametrize("lhs_dtype, rhs_dtype, expected_dtype", [
+    (tl.float32, tl.int32, tl.float32),
+    (tl.int32, tl.float32, tl.float32),
+    (tl.int32, tl.int32, None),
+])
+@pytest.mark.parametrize("scalar_rhs", [False, True])
+@pytest.mark.parametrize("ieee_rounding, approx", [(False, False), (True, False), (False, True)])
+def test_fdiv_type_promotion(lhs_dtype, rhs_dtype, expected_dtype, scalar_rhs, ieee_rounding, approx):
+
+    @triton.jit
+    def kernel(X, Y, value: tl.constexpr, expected_dtype: tl.constexpr, scalar_rhs: tl.constexpr,
+               ieee_rounding: tl.constexpr, approx: tl.constexpr):
+        offsets = tl.arange(0, 8)
+        x = tl.load(X + offsets)
+        if scalar_rhs:
+            y: tl.constexpr = value
+        else:
+            y = tl.load(Y + offsets)
+        result = tl.fdiv(x, y, ieee_rounding=ieee_rounding, approx=approx)
+        tl.static_assert(result.dtype == expected_dtype)
+        anchor(result)
+
+    value = 2.0 if rhs_dtype.is_floating() else 2
+    args = (MockTensor(lhs_dtype), MockTensor(rhs_dtype), value, expected_dtype, scalar_rhs, ieee_rounding, approx)
+    if expected_dtype is None:
+        with pytest.raises(CompilationError, match="fdiv requires floating-point operands after type promotion"):
+            run_parser(kernel, args=args)
+    else:
+        run_parser(kernel, args=args)
+
+
+def test_umulhi_scalar_out_of_range():
+
+    @triton.jit
+    def kernel(X):
+        x = tl.load(X)
+        anchor(tl.umulhi(x, 2**31))
+
+    with pytest.raises(CompilationError, match="out of range for type int32"):
+        run_parser(kernel, args=(MockTensor(tl.int32), ))
+
+
+@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
+@pytest.mark.parametrize("dtype, value", [(tl.float16, 1.0), (tl.bfloat16, 1.0), (tl.float32, 2.0**-127)])
+@pytest.mark.parametrize("tensor_args", range(1, 8))
+def test_ternary_math_scalar_promotion(op, dtype, value, tensor_args):
+
+    @triton.jit
+    def kernel(X, op: tl.constexpr, value: tl.constexpr, tensor_args: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        result = op(x if tensor_args & 1 else value, x if tensor_args & 2 else value, x if tensor_args & 4 else value)
+        tl.static_assert(result.dtype == x.dtype)
+        anchor(result)
+
+    run_parser(kernel, args=(MockTensor(dtype), op, value, tensor_args))
+
+
+@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
+@pytest.mark.parametrize("scalar_arg", range(3))
+def test_ternary_math_scalar_precision(op, scalar_arg):
+
+    @triton.jit
+    def kernel(X, Y, op: tl.constexpr, scalar_arg: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        y = tl.load(Y + tl.arange(0, 8))
+        value: tl.constexpr = 1.0 + 2.0**-30
+        if scalar_arg == 0:
+            result = op(value, x, y)
+        elif scalar_arg == 1:
+            result = op(x, value, y)
+        else:
+            result = op(x, y, value)
+        tl.static_assert(result.dtype == tl.float64)
+        anchor(result)
+
+    module = run_parser(kernel, args=(MockTensor(tl.float16), MockTensor(tl.float64), op, scalar_arg))
+    constants = re.findall(r"arith.constant ([^ ]+) : f64", module.str_nodebug())
+    assert any(float(value) == 1.0 + 2.0**-30 for value in constants)
+
+
+@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
+@pytest.mark.parametrize("order", list(itertools.permutations(range(3))))
+def test_ternary_math_mixed_scalar_kinds(op, order):
+
+    @triton.jit
+    def kernel(X, op: tl.constexpr, order: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        result = op(x if order[0] == 0 else (2.0**-127 if order[0] == 1 else 1.0), x if order[1] == 0 else
+                    (2.0**-127 if order[1] == 1 else 1.0), x if order[2] == 0 else
+                    (2.0**-127 if order[2] == 1 else 1.0))
+        tl.static_assert(result.dtype == tl.float64)
+        anchor(result)
+
+    run_parser(kernel, args=(MockTensor(tl.int16), op, order))
+
+
+@pytest.mark.parametrize("op", ["minimum", "maximum", "clamp", "cumsum", "cumprod"])
+@pytest.mark.parametrize("dtype", [tl.bfloat16, tl.float16, tl.float32], ids=str)
+def test_bfloat16_promotion_elementwise_and_scan(op, dtype):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, dtype: tl.constexpr):
+        x = tl.full((32, ), 1, tl.bfloat16)
+        y = tl.full((32, ), 2, dtype)
+        if op == "clamp":
+            result = tl.clamp(x, -y, y)
+        elif op == "minimum" or op == "maximum":
+            result = getattr(tl, op)(x, y)
+        else:
+            result = getattr(tl, op)(x, dtype=None if dtype == tl.bfloat16 else dtype)
+        tl.static_assert(result.dtype == dtype)
+
+    run_parser(kernel, args=(op, dtype))
+
+
+@pytest.mark.parametrize("op", ["min", "max"])
+@pytest.mark.parametrize("return_indices", [False, True])
+@pytest.mark.parametrize("tie_break_left", [False, True])
+def test_bfloat16_promotion_reduction(op, return_indices, tie_break_left):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, return_indices: tl.constexpr, tie_break_left: tl.constexpr):
+        x = tl.full((32, ), 1, tl.bfloat16)
+        result = getattr(tl, op)(x, 0, return_indices=return_indices, return_indices_tie_break_left=tie_break_left)
+        if return_indices:
+            value, index = result
+            tl.static_assert(value.dtype == tl.bfloat16)
+            tl.static_assert(index.dtype == tl.int32)
+        else:
+            # Ordinary min/max reductions still widen all small input types.
+            tl.static_assert(result.dtype == tl.float32)
+
+    run_parser(kernel, args=(op, return_indices, tie_break_left))
 
 
 @triton.aggregate
@@ -357,8 +718,23 @@ def test_constexpr_function_from_jit():
     tl.arange(0, x)
 
 
+@filecheck_test
+@triton.jit
+def test_cdiv_constexpr():
+    # CHECK-LABEL: test_cdiv_constexpr
+    x: tl.constexpr = triton.cdiv(33, 32)
+    # CHECK: make_range {end = 2 : i32, start = 0 : i32}
+    tl.arange(0, x)
+
+
 def test_constexpr_function_from_python():
     assert constexpr_function(7) == 8
+
+    @triton.constexpr_function
+    def with_kwargs(**kwargs):
+        return kwargs["value"] + 1
+
+    assert with_kwargs(value=7) == 8
 
 
 @filecheck_test
@@ -371,6 +747,18 @@ def test_named_expr():
     anchor(x)
     # CHECK-NEXT: call @{{.*}}anchor{{.*}}(%c0_i32)
     anchor(y)
+
+
+@pytest.mark.parametrize("value", [[[1, 2], [3, 4]], ((1, 2), (3, 4)), ([1, 2], (3, 4))])
+def test_nested_constexpr_tuple_comparison(value):
+
+    @triton.jit
+    def kernel(value: tl.constexpr):
+        tl.static_assert([[1, 2], [3, 4]] == value)
+        tl.static_assert(value == [[1, 2], [3, 4]])
+        tl.static_assert([[1, 2], [3, 5]] != value)
+
+    run_parser(kernel, args=(value, ))
 
 
 def test_tuple_assignment_respects_prior_constexpr_annotation():
@@ -421,6 +809,46 @@ def test_tuple_assignment_constexpr_tuple_normalizes_recursively():
     run_parser(kernel)
 
 
+def test_tuple_assignment_rejects_too_many_values():
+
+    @triton.jit
+    def kernel():
+        a, b = (1, 2, 3)  # noqa: F841
+
+    with pytest.raises(CompilationError, match="too many values to unpack"):
+        run_parser(kernel)
+
+
+def test_tuple_assignment_rejects_too_few_values():
+
+    @triton.jit
+    def kernel():
+        a, b, c = (1, 2)  # noqa: F841
+
+    with pytest.raises(CompilationError, match=r"not enough values to unpack \(expected 3, got 2\)"):
+        run_parser(kernel)
+
+
+def test_tuple_assignment_rejects_nested_mismatch():
+
+    @triton.jit
+    def kernel():
+        (a, b), c = ((1, 2, 3), 4)  # noqa: F841
+
+    with pytest.raises(CompilationError, match="too many values to unpack"):
+        run_parser(kernel)
+
+
+def test_tuple_assignment_rejects_starred_target():
+
+    @triton.jit
+    def kernel():
+        a, *rest = (1, 2, 3)  # noqa: F841
+
+    with pytest.raises(CompilationError, match="starred assignment targets are not supported"):
+        run_parser(kernel)
+
+
 def test_list_comprehension_if_filter():
 
     @triton.jit
@@ -444,6 +872,53 @@ def test_list_comprehension_if_filter():
     run_parser(kernel)
 
 
+def test_list_comprehension_tuple_target():
+
+    @triton.jit
+    def kernel():
+        vals: tl.constexpr = [a + b for a, b in ((1, 2), (3, 4))]
+        tl.static_assert(len(vals) == 2)
+        tl.static_assert(vals[0] == 3)
+        tl.static_assert(vals[1] == 7)
+
+        nested: tl.constexpr = [a + b + c for a, (b, c) in ((1, (2, 3)), (4, (5, 6)))]
+        tl.static_assert(len(nested) == 2)
+        tl.static_assert(nested[0] == 6)
+        tl.static_assert(nested[1] == 15)
+
+    run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_mismatch():
+
+    @triton.jit
+    def kernel():
+        vals = [a + b for a, b in ((1, 2, 3), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="too many values to unpack"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_scalar_item():
+
+    @triton.jit
+    def kernel():
+        vals = [a + b for a, b in (1, 2)]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="cannot unpack non-iterable value"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_starred_target():
+
+    @triton.jit
+    def kernel():
+        vals = [a for a, *rest in ((1, 2, 3), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="starred assignment targets are not supported"):
+        run_parser(kernel)
+
+
 def test_named_expr_respects_prior_constexpr_annotation():
 
     @triton.jit
@@ -465,7 +940,8 @@ def test_named_expr_without_prior_annotation_decays():
     # CHECK: scf.if [[COND]] {
     # CHECK:   tt.call @{{.*}}anchor{{.*}}(%c11_i32) : (i32) -> ()
     # CHECK: } else {
-    # CHECK:   [[ADD:%.*]] = arith.addi %c11_i32, %c1_i32_0 : i32
+    # CHECK:   [[ONE:%.*]] = arith.constant 1 : i32
+    # CHECK:   [[ADD:%.*]] = arith.addi %c11_i32, [[ONE]] : i32
     # CHECK:   tt.call @{{.*}}anchor{{.*}}([[ADD]]) : (i32) -> ()
     # CHECK: }
     if (x := constexpr_function(10)) != 10:
@@ -582,6 +1058,19 @@ def test_call_in_while():
             trivial_return()
         else:
             trivial_return()
+
+
+@filecheck_test
+@triton.jit
+def test_while_integer_condition():
+    # CHECK-LABEL: test_while_integer_condition
+    i = tl.program_id(0)
+    # CHECK: scf.while
+    # CHECK: [[COND:%.*]] = arith.cmpi ne, %{{.*}}, %{{.*}} : i32
+    # CHECK: scf.condition([[COND]])
+    while i:
+        i -= 1
+    anchor(i)
 
 
 def test_return_in_while():
@@ -795,6 +1284,43 @@ def test_atomic_scalar_masks():
     tl.atomic_xor(ptrs, 1, mask=True)
 
 
+@pytest.mark.parametrize("dtype", [tl.int1, tl.int8, tl.uint8, tl.int16, tl.int32, tl.int64], ids=str)
+def test_atomic_load_store(dtype):
+
+    @triton.jit
+    def kernel(dtype: tl.constexpr):
+        BLOCK: tl.constexpr = 128
+        ptr = tl.full((BLOCK, ), 0, tl.int64).to(tl.pointer_type(dtype), bitcast=True)
+        offs = tl.arange(0, BLOCK)
+        ptrs = ptr + offs
+        mask = offs < 64
+        # CHECK: %{{.*}} = tt.atomic_load acquire, gpu, %{{.*}}, %{{.*}} : (tensor<128x!tt.ptr<[[TYPE:i(8|16|32|64)]]>>, tensor<128xi1>) -> tensor<128x[[TYPE]]>
+        value = tl.atomic_load(ptrs, mask=mask)
+        tl.static_assert(value.dtype == dtype)
+        # CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<[[TYPE]]>>
+        tl.atomic_store(ptrs, value, mask=mask)
+        # CHECK: %{{.*}} = tt.atomic_load relaxed, sys
+        tl.atomic_load(ptrs, sem="relaxed", scope="sys")
+        # CHECK: tt.atomic_store relaxed, cta
+        tl.atomic_store(ptrs, 1, sem="relaxed", scope="cta")
+
+    run_filecheck_test(kernel, args=(dtype, ))
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_load_rejects_release_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_load(ptr, sem="release")
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_store_rejects_acquire_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_store(ptr, 1, sem="acquire")
+
+
 @filecheck_test
 @triton.jit
 def test_atomic_poll():
@@ -813,11 +1339,31 @@ def test_atomic_poll_timeout():
     tl.atomic_poll(ptr, 1, timeout_ns=1000)
 
 
+@filecheck_test
+@triton.jit
+def test_atomic_poll_tensor_pointer():
+    # CHECK-LABEL: test_atomic_poll_tensor_pointer
+    ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    # CHECK: tt.atomic_poll acquire, gpu, {{.*}} : tensor<1x!tt.ptr<i32>>, tensor<1xi32> -> tensor<1xi1>
+    tl.atomic_poll(ptrs, 1)
+
+
+@filecheck_test
+@triton.jit
+def test_atomic_poll_tensor_timeout():
+    # CHECK-LABEL: test_atomic_poll_tensor_timeout
+    ptrs = tl.full((128, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    expected = tl.arange(0, 128)
+    # CHECK: tt.atomic_poll acquire, gpu, {{.*}} timeout {{.*}} : tensor<128x!tt.ptr<i32>>, tensor<128xi32> -> tensor<128xi1>
+    result = tl.atomic_poll(ptrs, expected, timeout_ns=0)
+    tl.static_assert(result.shape == expected.shape)
+
+
 @doesnt_compile
 @triton.jit
-def test_atomic_poll_rejects_tensor_pointer():
-    ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
-    tl.atomic_poll(ptrs, 1)
+def test_atomic_poll_rejects_mismatched_shape():
+    ptrs = tl.full((32, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_poll(ptrs, tl.arange(0, 64))
 
 
 @doesnt_compile
@@ -867,6 +1413,52 @@ def test_return_promotion():
 
         c = tuple_return(tmp)
         tl.static_assert(c.type == tl.tuple_type([tl.int32, tl.int32]))
+
+    run_parser(kernel)
+
+
+def test_fp8_div_mod_promotion():
+    # `/` and `%` do not exist natively for floats narrower than fp32, so the
+    # result of a division or modulo with a floating operand is promoted to
+    # fp32 -- one rule covering fp8, fp16 and bfloat16, tensor and scalar
+    # operands alike. Other ops keep the existing promotions (same fp8 stays
+    # that fp8, mixed fp8 goes to float16).
+
+    @triton.jit
+    def kernel():
+        x = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
+        y = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
+        z = tl.full((8, ), 0, tl.float16).to(tl.float8e4nv)
+        h = tl.full((8, ), 0, tl.float16)
+        b = tl.full((8, ), 0, tl.bfloat16)
+        d = tl.full((8, ), 0, tl.float64)
+        i = tl.full((8, ), 0, tl.int32)
+        tl.static_assert((x / y).dtype == tl.float32)
+        tl.static_assert((x / z).dtype == tl.float32)
+        tl.static_assert((x % y).dtype == tl.float32)
+        tl.static_assert((x * y).dtype == tl.float8e5)
+        tl.static_assert((x * z).dtype == tl.float16)
+        # fp16 and bfloat16 division/modulo upcast through the same rule
+        tl.static_assert((h / h).dtype == tl.float32)
+        tl.static_assert((h % h).dtype == tl.float32)
+        tl.static_assert((b / b).dtype == tl.float32)
+        tl.static_assert((h * h).dtype == tl.float16)
+        tl.static_assert((b * b).dtype == tl.bfloat16)
+        # integer division and modulo keep integer promotion
+        tl.static_assert((i // i).dtype == tl.int32)
+        tl.static_assert((i % i).dtype == tl.int32)
+        # A scalar operand doesn't participate in promotion, so / and % against
+        # a narrow float tensor must upcast to fp32 for the same reason, while other
+        # ops keep the tensor's type.
+        tl.static_assert((2.0 / x).dtype == tl.float32)
+        tl.static_assert((x / 2.0).dtype == tl.float32)
+        tl.static_assert((x % 2).dtype == tl.float32)
+        tl.static_assert((h / 2.0).dtype == tl.float32)
+        tl.static_assert((d / 2.0).dtype == tl.float64)
+        tl.static_assert((d % 2.0).dtype == tl.float64)
+        tl.static_assert((x * 2.0).dtype == tl.float8e5)
+        tl.static_assert((h * 2.0).dtype == tl.float16)
+        tl.static_assert((i // 2).dtype == tl.int32)
 
     run_parser(kernel)
 
@@ -1182,3 +1774,207 @@ def test_dot_fp16_accumulator():
         tl.dot(a, b, c)
 
     run_parser(fp16_acc_kernel)
+
+
+# ===-----------------------------------------------------------------------===#
+# Loop-carried variable lowering
+# ===-----------------------------------------------------------------------===#
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_readonly_alias():
+    # CHECK-LABEL: test_loop_carry_readonly_alias
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    acc = seed
+    # CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = %[[SEED]]) -> (i32)
+    for i in range(3):
+        # CHECK: %[[SUM:.*]] = arith.addi %[[ACC]], %[[SEED]] : i32
+        acc = acc + seed
+        # CHECK: scf.yield %[[SUM]] : i32
+    anchor(acc)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_shared_initial_value():
+    # CHECK-LABEL: test_loop_carry_shared_initial_value
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    a = seed
+    b = seed
+    # CHECK: scf.for {{.*}} iter_args(%[[A:.*]] = %[[SEED]], %[[B:.*]] = %[[SEED]])
+    for i in range(3):
+        # CHECK: %[[NEXT_A:.*]] = arith.addi %[[A]],
+        a = a + 1
+        # CHECK: %[[NEXT_B:.*]] = arith.addi %[[B]],
+        b = b + 2
+        # CHECK: scf.yield %[[NEXT_A]], %[[NEXT_B]] : i32, i32
+    anchor(a)
+    anchor(b)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_while_shared_initial_value():
+    # CHECK-LABEL: test_loop_carry_while_shared_initial_value
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    a = seed
+    b = seed
+    # CHECK: scf.while
+    while a < 4:
+        # CHECK: } do {
+        # CHECK-NEXT: ^bb0(%[[A:.*]]: i32, %[[B:.*]]: i32):
+        # CHECK: %[[NEXT_A:.*]] = arith.addi %[[A]], %[[SEED]] : i32
+        a = a + seed
+        # CHECK: %[[NEXT_B:.*]] = arith.addi %[[B]],
+        b = b + 2
+        # CHECK: scf.yield %[[NEXT_A]], %[[NEXT_B]] : i32, i32
+    anchor(a)
+    anchor(b)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_tuple_shared_initial_value():
+    # CHECK-LABEL: test_loop_carry_tuple_shared_initial_value
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    pair = (seed, seed)
+    # CHECK: scf.for {{.*}} iter_args(%[[A:.*]] = %[[SEED]], %[[B:.*]] = %[[SEED]])
+    for i in range(3):
+        # CHECK: %[[NEXT_A:.*]] = arith.addi %[[A]],
+        # CHECK: %[[NEXT_B:.*]] = arith.addi %[[B]],
+        pair = (pair[0] + 1, pair[1] + 2)
+        # CHECK: scf.yield %[[NEXT_A]], %[[NEXT_B]] : i32, i32
+    anchor(pair[0])
+    anchor(pair[1])
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_swap():
+    # CHECK-LABEL: test_loop_carry_swap
+    a = 0
+    b = 1
+    # CHECK: scf.for {{.*}} iter_args(%[[A:.*]] = {{.*}}, %[[B:.*]] = {{.*}})
+    for i in range(3):
+        a, b = b, a
+        # CHECK: scf.yield %[[B]], %[[A]] : i32, i32
+    anchor(a)
+    anchor(b)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_invariant_identity():
+    # CHECK-LABEL: test_loop_carry_invariant_identity
+    seed = 1
+    alias = seed
+    acc = 0
+    # CHECK: scf.for {{.*}} iter_args({{.*}}) -> (i32)
+    for i in range(3):
+        tl.static_assert(alias is seed)
+        acc = acc + alias
+    anchor(acc)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_empty_nested():
+    # CHECK-LABEL: test_loop_carry_empty_nested
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    # CHECK: scf.for
+    # CHECK-NOT: iter_args
+    for i in range(2):
+        # CHECK: scf.while : () -> ()
+        while seed < 0:
+            # CHECK: } do {
+            # CHECK: tt.call @{{.*}}anchor{{.*}}(%[[SEED]])
+            anchor(seed)
+            # CHECK: scf.yield
+
+
+@triton.jit
+def _loop_carry_nest_depth_3(KIND: tl.constexpr):
+    acc = 0
+    if KIND == 0:
+        for i in range(2):
+            for j in range(2):
+                for k in range(2):
+                    acc += 1
+    elif KIND == 1:
+        i = 0
+        while i < 2:
+            j = 0
+            while j < 2:
+                k = 0
+                while k < 2:
+                    acc += 1
+                    k += 1
+                j += 1
+            i += 1
+    elif KIND == 2:
+        for i in range(2):
+            j = 0
+            while j < 2:
+                for k in range(2):
+                    acc += 1
+                j += 1
+    else:
+        i = 0
+        while i < 2:
+            for j in range(2):
+                k = 0
+                while k < 2:
+                    acc += 1
+                    k += 1
+            i += 1
+    anchor(acc)
+
+
+@pytest.mark.parametrize("kind", range(4), ids=["for", "while", "for-while-for", "while-for-while"])
+def test_loop_carry_discovery_avoids_exponential_revisits(monkeypatch, kind):
+    """A depth-three body is generated four times, rather than eight."""
+    per_body = collections.Counter()
+    visit = CodeGenerator.visit_compound_statement
+
+    def counted(self, stmts):
+        per_body[id(stmts)] += 1
+        return visit(self, stmts)
+
+    monkeypatch.setattr(CodeGenerator, "visit_compound_statement", counted)
+    run_parser(_loop_carry_nest_depth_3, args=(kind, ))
+    assert max(per_body.values()) == 4
+
+
+def test_const_ptr_is_constant_addrspace():
+
+    @triton.jit
+    def kernel(In: tl.const, Out, N, BLOCK: tl.constexpr):
+        # CHECK-LABEL: tt.func public @kernel
+        # A `tl.const` pointer argument is tagged with Triton's constant address
+        # CHECK-SAME: %arg0: !tt.ptr<f32, "constant">
+        # A plain pointer stays global
+        # CHECK-SAME: %arg1: !tt.ptr<f32> {
+        offs = tl.arange(0, BLOCK)
+        mask = offs < N
+        tl.store(Out + offs, tl.load(In + offs, mask=mask), mask=mask)
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 8, 128))
+
+
+def test_cache_policy_ir_attrs():
+
+    @triton.jit
+    def kernel(In, Out, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        # CHECK: %[[VALUE:.*]] = tt.load {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_first>}
+        value = tl.load(In + offsets, cache_modifier=".cg", eviction_policy="evict_first")
+        # CHECK: tt.store {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = wt, eviction_policy = evict_last>}
+        tl.store(Out + offsets, value, cache_modifier=".wt", eviction_policy="evict_last")
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 128))

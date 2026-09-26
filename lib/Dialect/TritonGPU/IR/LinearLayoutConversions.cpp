@@ -47,8 +47,11 @@ SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
   return ret;
 }
 
-LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
-                                          SwizzledSharedEncodingAttr shared) {
+} // namespace
+
+LinearLayout
+SwizzledSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -96,8 +99,8 @@ LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
 }
 
 LinearLayout
-sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
-                                AMDRotatingSharedEncodingAttr shared) {
+AMDRotatingSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -147,8 +150,6 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
 
   return combineCtaCgaWithShape(ctaLayout, shared.getCGALayout(), shape);
 }
-
-} // namespace
 
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
@@ -363,6 +364,12 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
       reshapedLayout, standardOutDimNames(ctx, shapePerCTA.size()),
       shapePerCTA);
   return combineCtaCgaWithShape(reshapedLayout, shared.getCGALayout(), shape);
+}
+
+LinearLayout
+NVMMASharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
+  return nvmmaSharedToLinearLayout(shape, *this, TMAMode::Tiled);
 }
 
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
@@ -591,108 +598,13 @@ LinearLayout chooseWmmaCTALinearLayout(MLIRContext *ctx, unsigned rank,
   return ret.transposeOuts(dims);
 }
 
-std::optional<LinearLayout>
-chooseDotDsReadTrLayout(DotOperandEncodingAttr dotMfmaLayout,
-                        ArrayRef<int64_t> shape, int32_t elemBitWidth,
-                        unsigned instBitWidth,
-                        unsigned numLanesInShuffleGroup) {
-  if (instBitWidth != 64 || numLanesInShuffleGroup != 16)
-    return std::nullopt;
-  auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
-  auto mDim = mfmaLayout.getInstrShape()[0];
-  assert(mDim == 16 || mDim == 32);
-
-  assert(elemBitWidth == 4);
-  // When doing ds_read_tr4 we actually write the LL as if it were on i8
-  // elements this is becasue LL needs to be described for the i8 tensor
-  // elements.
-  elemBitWidth = 8;
-
-  auto rank = shape.size();
-  bool hasBatchDim = rank == 3;
-  auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
-
-  int32_t kSize = shape[kDim];
-  auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-
-  MLIRContext *ctx = dotMfmaLayout.getContext();
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  StringAttr kRegister = S("register");
-  StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
-
-  // register order
-  // operand A: [1, 0] / [2, 1, 0]
-  // operand B: [0, 1] / [1, 2, 0]
-  // Regular dot mfma order for both cases is [k, nonk]/[k, nonk, batch]
-  // For LDS transpose layout swap order to [nonk, k]/[nonk, k, batch]
-  SmallVector<unsigned> order =
-      getOrderForDotOperand(dotMfmaLayout.getOpIdx(), rank, /*kContig*/ false);
-
-  std::vector<std::vector<int32_t>> registerBase;
-  std::vector<std::vector<int32_t>> laneBase;
-
-  const bool isMfma32 = (mDim == 32);
-  // ds_read_b64_tr4 operates on FP4 values swapping the packing of them. Look
-  // at i8 values for the ownership of register/lane since it's the data type
-  // of the tensor. Register dimension: what i8 in the tile are held by thread
-  // 0? Lane dimension: what i8 in the tile are held in register 0 of each
-  // thread?
-  registerBase.push_back({1, 0});
-  registerBase.push_back({2, 0});
-  registerBase.push_back({4, 0});
-  registerBase.push_back({0, 16});
-
-  // If more than one tile needs to be loaded, populate registerBase
-  // dimension for the other tiles
-  const int kTileSize = isMfma32 ? 64 : 128;
-  for (int reg = kTileSize; reg < kSize; reg *= 2) {
-    registerBase.push_back({0, reg});
-  }
-
-  // When mDim == 16 we have 16x128 mfma, otherwise it's 16x64
-  // The LL for the two is different
-  laneBase.push_back({0, 1});
-  laneBase.push_back({0, 2});
-  laneBase.push_back({0, 4});
-  laneBase.push_back({0, 8});
-  if (mDim == 16) {
-    laneBase.push_back({0, 32});
-    laneBase.push_back({0, 64});
-  } else {
-    assert(mDim == 32);
-    laneBase.push_back({8, 0});
-    laneBase.push_back({0, 32});
-  }
-
-  // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
-  // To assign them to actual matrix dimensions we associate with register
-  // `order` which is also [nonk, k] given we set kContig to false.
-  LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
-                          {outDimNames[order[0]], outDimNames[order[1]]});
-  if (hasBatchDim) {
-    assert(order[2] == 0);
-    // Extend the base vector with one value to accommodate for the batch
-    // dimension, which appears at the last.
-    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
-    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
-  }
-
-  // warp order
-  // common for both operand A and B: [0, 1] / [0, 1, 2]
-  // in both cases it is [M dim, N dim]/[batch, M dim, N dim]
-  auto warpOrder = getDefaultMmaOrder(mfmaLayout);
-  LinearLayout warpLayout = identityStandardND(kWarp, warpsPerCTA, warpOrder);
-
-  LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
-                           warpLayout.transposeOuts(outDimNames);
-  return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCGALayout(), shape);
-}
-
-LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
-                                   ArrayRef<int64_t> shape) {
-  auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
+LinearLayout
+AMDMfmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                              ArrayRef<int64_t> shape) const {
+  auto dotMfmaLayout = cast<DotOperandEncodingAttr>(dotOp);
+  auto mfmaLayout = *this;
+  assert(mfmaLayout == dotMfmaLayout.getParent() &&
+         "dot operand parent must be this layout");
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
@@ -878,9 +790,13 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(wmmaLayout, getCGALayout(), shape);
 }
 
-LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
-                                          ArrayRef<int64_t> shape) {
-  auto wmmaLayout = llvm::cast<AMDWmmaEncodingAttr>(dotWmmaLayout.getParent());
+LinearLayout
+AMDWmmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                              ArrayRef<int64_t> shape) const {
+  auto dotWmmaLayout = cast<DotOperandEncodingAttr>(dotOp);
+  auto wmmaLayout = *this;
+  assert(wmmaLayout == dotWmmaLayout.getParent() &&
+         "dot operand parent must be this layout");
   unsigned version = wmmaLayout.getVersion();
   assert(version >= 1 && version <= 3 && "unexpected wmma version");
 
@@ -970,7 +886,8 @@ BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
       identityStandardND(S("lane"), getThreadsPerWarp(), order) *
       identityStandardND(S("warp"), getWarpsPerCTA(), order);
 
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape)
+      .removeZeroBasesAlongDim(S("register"));
 }
 
 LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
@@ -1081,10 +998,13 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
 }
 
-LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
-                                     DotOperandEncodingAttr dot) {
+LinearLayout
+NvidiaMmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                                ArrayRef<int64_t> shape) const {
+  auto dot = cast<DotOperandEncodingAttr>(dotOp);
+  auto mma = *this;
+  assert(mma == dot.getParent() && "dot operand parent must be this layout");
   int rank = shape.size();
-  auto mma = cast<NvidiaMmaEncodingAttr>(dot.getParent());
   int kWidth = dot.getKWidth();
   bool isA = dot.getOpIdx() == 0;
   MLIRContext *ctx = mma.getContext();
@@ -1111,21 +1031,18 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
                                            kDim, S("warp"))
                    .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(dot), shape);
+  return combineCtaCgaWithShape(ctaLayout, dot.getCGALayout(), shape);
 }
 
 LinearLayout
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
-  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
+  if (mlir::isa<BlockedEncodingAttr>(parent))
     return fmaDotToLinearLayout(*this, shape);
-  } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
-    return mfmaDotToLinearLayout(*this, shape);
-  } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    return wmmaDotOperandToLinearLayout(*this, shape);
-  } else {
-    return nvidiaDotToLinearLayout(shape, *this);
-  }
+  if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(parent))
+    return mma.dotOperandToLinearLayout(*this, shape);
+  llvm::report_fatal_error(
+      "unexpected parent layout in DotOperandEncodingAttr::toLinearLayout");
 }
 
 LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
@@ -1332,21 +1249,8 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
                           return llvm::isPowerOf2_32(dim) && dim >= 1;
                         }) &&
            "shape must be a postive power of 2");
-    if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = swizzledSharedToLinearLayout(shape, shared);
-    } else if (auto shared = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+    if (auto shared = dyn_cast<SharedEncodingTrait>(layout)) {
       result = shared.toLinearLayout(shape);
-    } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
-      result = nvmmaSharedToLinearLayout(shape, shared, TMAMode::Tiled);
-    } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutAMDRotating(shape, sbl);
-    } else if (auto partitioned =
-                   dyn_cast<PartitionedSharedEncodingAttr>(layout)) {
-      assert(!isa<PaddedSharedEncodingAttr>(partitioned.getPartitionLayout()) &&
-             "toLinearLayout does not support partitioned layouts wrapping "
-             "padded layouts; use paddedLinearLayout instead");
-      result = partitionedSharedToLinearLayout(shape, partitioned);
     } else if (auto tensorMemoryEncoding =
                    dyn_cast<TensorMemoryEncodingAttr>(layout)) {
       result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);
@@ -1370,9 +1274,10 @@ LinearLayout toLinearLayout(RankedTensorType type) {
 LinearLayout toLinearLayout(MemDescType type) {
   // For TMEM we instantiate the subview directly. This is possible
   // as TMEM has no swizzling.
-  if (isa<TensorMemoryEncodingAttr>(type.getEncoding())) {
-    auto shape = type.getShape().take_back(2);
-    auto allocShape = type.getAllocShape().take_back(2);
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace())) {
+    auto shape = dropPipeliningDim(type.getShape(), type.getEncoding());
+    auto allocShape =
+        dropPipeliningDim(type.getAllocShape(), type.getEncoding());
     auto ll = toLinearLayout(allocShape, type.getEncoding());
     auto outDims = llvm::to_vector(ll.getOutDimNames());
     // Trim the shape
@@ -1390,8 +1295,9 @@ LinearLayout toLinearLayout(MemDescType type) {
   // Shared memory needs the allocation shape so that invertAndCompose can trim
   // subviews. We also remove the first dimension of the allocation shape if
   // there was a call to memdesc_index.
-  auto shape = type.getAllocShape().take_back(type.getRank());
-  return toLinearLayout(shape, type.getEncoding());
+  return toLinearLayout(
+      dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+      type.getEncoding());
 }
 
 LinearLayout toLinearLayout(TensorOrMemDesc type) {
@@ -1412,6 +1318,24 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
                                                                    layout);
 }
 
+LinearLayout
+PartitionedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  if (isa<PaddedSharedEncodingAttr>(getPartitionLayout())) {
+    llvm::report_fatal_error(
+        "toLinearLayout does not support partitioned layouts wrapping padded "
+        "layouts; use paddedLinearLayout instead");
+  }
+  return partitionedSharedToLinearLayout(shape, *this);
+}
+
+LinearLayout
+PaddedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  // A padded layout's interval padding is not expressible as a LinearLayout;
+  // toLinearLayoutIgnoringPadding() routes it to paddedLinearLayout() instead.
+  llvm::report_fatal_error("padded shared encoding has no linear layout; use "
+                           "paddedLinearLayout instead");
+}
+
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
   assert(isPaddedEncoding(encoding) &&
          "expected padded encoding or partitioned wrapping padded");
@@ -1425,8 +1349,20 @@ LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
 }
 
 LinearLayout paddedLinearLayout(MemDescType type) {
-  auto shape = type.getAllocShape().take_back(type.getRank());
-  return paddedLinearLayout(shape, type.getEncoding());
+  return paddedLinearLayout(
+      dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+      type.getEncoding());
+}
+
+LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
+                                           Attribute encoding) {
+  return isPaddedEncoding(encoding) ? paddedLinearLayout(shape, encoding)
+                                    : toLinearLayout(shape, encoding);
+}
+
+LinearLayout toLinearLayoutIgnoringPadding(MemDescType type) {
+  return isPaddedEncoding(type.getEncoding()) ? paddedLinearLayout(type)
+                                              : toLinearLayout(type);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
@@ -1516,16 +1452,6 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
       {{kOffset, totalOffsets}, {kIteration, totalIters}, {kBlock, 1}});
 }
 
-std::optional<LinearLayout>
-chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
-                     int32_t elemBitWidth, unsigned instBitWidth,
-                     unsigned numLanesInShuffleGroup) {
-  assert(elemBitWidth == 4);
-  auto dot = cast<DotOperandEncodingAttr>(enc);
-  return chooseDotDsReadTrLayout(dot, shape, elemBitWidth, instBitWidth,
-                                 numLanesInShuffleGroup);
-}
-
 LinearLayout chooseScaledWmmaScaleLayout(
     MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
     unsigned wmmaMDim, unsigned wmmaNDim, bool isTransposed,
@@ -1570,14 +1496,15 @@ LinearLayout chooseScaledWmmaScaleLayout(
   }
 
   if (dotOperandIdx == 1) {
-    // ctaLayout comes from the dot operand. For B in scaled dot,
+    // ctaLayout and cgaLayout come from the dot operand. For B in scaled dot,
     // - the operand is ordered as [K, N]
     // - the scale is ordered as [N, K / 32 or 16].
-    // Swap the last two dims of ctaLayout to match the tileLayout
+    // Swap the last two dims of both to match the tileLayout
     SmallVector<int32_t> order = {1, 0};
     if (hasBatchDim)
       order = {0, 2, 1};
     ctaLayout = transposeLinearLayout(ctaLayout, order);
+    cgaLayout = inferDotScaleCGALayoutFromOperand(cgaLayout, dotOperandIdx);
   }
 
   // Zero out M or N dim based on opIdx
@@ -1634,6 +1561,8 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<unsigned> warpsPerCTA,
                                           CGAEncodingAttr cgaLayout) {
   unsigned rank = shape.size();
+  assert((rank == 2 || rank == 3) && "scaled dot expects rank-2 or rank-3");
+  assert(warpsPerCTA.size() == rank && "warp layout must match operand rank");
   auto outDims = standardOutDimNames(ctx, rank);
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
@@ -1642,25 +1571,31 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
   // - B: [K, N]
   // - aScale: [M, K / K_GROUP_SIZE]
   // - bScale: [N, K / K_GROUP_SIZE]
-  const unsigned kIdx = 1;
-  const unsigned mnIdx = 0;
+  const unsigned kIdx = rank - 1;
+  const unsigned mnIdx = rank - 2;
 
-  std::vector<std::vector<int32_t>> laneBase;
-  SmallVector<unsigned> order;
-  SmallVector<unsigned> mmaWarpsPerCTA;
-  if (opIdx == 0) {
-    laneBase = {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
-    order = SmallVector<unsigned>{1u, 0u};
-    mmaWarpsPerCTA = SmallVector<unsigned>{warpsPerCTA[0], warpsPerCTA[1]};
-  } else {
-    laneBase = {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
-    order = SmallVector<unsigned>{0u, 1u};
-    mmaWarpsPerCTA = SmallVector<unsigned>{warpsPerCTA[1], warpsPerCTA[0]};
+  std::vector<std::vector<int32_t>> laneBase(5, std::vector<int32_t>(rank, 0));
+  laneBase[2][mnIdx] = 1;
+  laneBase[3][mnIdx] = 2;
+  laneBase[4][mnIdx] = 4;
+  if (opIdx == 0)
+    laneBase[0][mnIdx] = 8;
+
+  SmallVector<unsigned> order = getMatrixOrder(rank, /*rowMajor=*/true);
+  SmallVector<unsigned> mmaWarpsPerCTA(warpsPerCTA.begin(), warpsPerCTA.end());
+  if (opIdx == 1) {
+    std::swap(mmaWarpsPerCTA[mnIdx], mmaWarpsPerCTA[kIdx]);
+    for (unsigned &dim : order) {
+      if (dim == mnIdx)
+        dim = kIdx;
+      else if (dim == kIdx)
+        dim = mnIdx;
+    }
   }
   LinearLayout LL =
-      LinearLayout::identity1D(shape[1], kRegister, outDims[kIdx]) *
-      LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
-      broadcastedDotOperandLayout(ctx, mmaWarpsPerCTA, order, 1u, kWarp);
+      LinearLayout::identity1D(shape[kIdx], kRegister, outDims[kIdx]) *
+      LinearLayout({{kLane, laneBase}}, outDims) *
+      broadcastedDotOperandLayout(ctx, mmaWarpsPerCTA, order, kIdx, kWarp);
   return combineCtaCgaWithShape(LL, cgaLayout, shape);
 }
 
@@ -1964,3 +1899,43 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
 }
 
 } // namespace mlir::triton::gpu
+
+namespace mlir {
+
+// We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
+// under the common dimensions. If a transformation is the identity on block,
+// it does not need distributed shared memory. If it is also the identity on
+// warp, it can transfer via warp shuffles, and if it is the identity on lane,
+// it only needs to reorder registers.
+triton::LinearLayout minimalCvtLayout(const triton::LinearLayout &srcLayout,
+                                      const triton::LinearLayout &dstLayout) {
+  auto srcDims = llvm::to_vector(srcLayout.getInDimNames());
+  auto dstDims = llvm::to_vector(dstLayout.getInDimNames());
+  SmallVector<StringAttr> commonDims;
+  for (int i = 0; i < std::min(srcDims.size(), dstDims.size()); ++i) {
+    auto srcDim = srcDims[srcDims.size() - i - 1];
+    auto dstDim = dstDims[dstDims.size() - i - 1];
+    if (srcDim != dstDim)
+      break;
+    commonDims.push_back(srcDim);
+  }
+
+  auto conversion = dstLayout.invertAndCompose(srcLayout);
+  // Try to quotient by the slower-moving subspace first.
+  for (auto dim : commonDims) {
+    auto quotient = conversion.quotient(dim);
+    if (!quotient)
+      break;
+    conversion = *quotient;
+  }
+  return conversion;
+}
+
+triton::LinearLayout minimalCvtLayout(Type srcTy, Type dstTy) {
+  auto src = cast<triton::gpu::TensorOrMemDesc>(srcTy);
+  auto dst = cast<triton::gpu::TensorOrMemDesc>(dstTy);
+  return minimalCvtLayout(triton::gpu::toLinearLayout(src),
+                          triton::gpu::toLinearLayout(dst));
+}
+
+} // namespace mlir

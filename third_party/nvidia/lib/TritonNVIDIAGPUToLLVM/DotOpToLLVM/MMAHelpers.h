@@ -3,26 +3,26 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Tools/LayoutUtils.h"
 
+#include <bit>
+
 namespace mlir {
 namespace triton {
 namespace NVIDIA {
 
 // The descriptor format is described in the spec:
 // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-shared-memory-layout-matrix-descriptor
-// Unnamed fields are not used
-union SMEMDescriptor {
-  uint64_t descriptor;
-  struct {
-    uint64_t baseAddress : 14;
-    uint64_t : 2;
-    uint64_t leadDimensionBaseOffset : 14;
-    uint64_t : 2;
-    uint64_t strideDimensionBaseOffset : 14;
-    uint64_t : 3;
-    uint64_t matrixBaseOffset : 3;
-    uint64_t : 10;
-    uint64_t swizzlingMode : 2;
-  };
+// Reserved fields are named so bit_cast preserves every descriptor bit.
+struct SMEMDescriptor {
+  uint64_t baseAddress : 14;
+  uint64_t reserved0 : 2;
+  uint64_t leadDimensionBaseOffset : 14;
+  uint64_t reserved1 : 2;
+  uint64_t strideDimensionBaseOffset : 14;
+  uint64_t reserved2 : 3;
+  uint64_t matrixBaseOffset : 3;
+  uint64_t leadDimensionAbsoluteMode : 1;
+  uint64_t reserved3 : 9;
+  uint64_t swizzlingMode : 2;
 };
 
 struct MMASMEMDescriptor {
@@ -46,7 +46,7 @@ public:
   // ctaTileSize), return the associated memory descriptor for SMEM / TMEM.
   virtual MemDescOperand memLoad(int a, int b,
                                  ConversionPatternRewriter &rewriter,
-                                 Location loc) const = 0;
+                                 Location loc, int kSize = 0) const = 0;
 };
 
 class DotOpMmaSmemLoader : public DotOpMmaMemLoader {
@@ -153,12 +153,12 @@ public:
     if (failed(desc))
       return failure();
 
-    Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x7FFF)));
+    Value baseb128 = b.and_(baseSrcb128, b.i32_val(0x7FFF));
     return DotOpMmaSmemLoader{*desc, baseb128, ll};
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc) const {
+                 Location loc, int kSize = 0) const {
     auto *ctx = loc.getContext();
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto dims = to_vector(ll.getInDimNames());
@@ -174,16 +174,35 @@ public:
     // Take the next 0/1/2/3 bits after the 128b tile
     uint32_t mask = (desc.swizzlingByteWidth >> 4) - 1;
     currDesc.matrixBaseOffset = (smemByteOffsetb8 / 128) & mask;
+    // Packed FP4 K96 may straddle a 128-byte swizzle sector. SM103 can
+    // address the second chunk through an absolute leading dimension.
+    // The caller selects this only for K-major, 128-byte-swizzled operands
+    // whose MN tile origins preserve a zero matrix base offset.
+    int k = desc.transposed ? a : b;
+    bool useAbsolute = kSize == 96 && k % 256 + kSize > 256;
+    if (useAbsolute) {
+      currDesc.leadDimensionAbsoluteMode = 1;
+      currDesc.leadDimensionBaseOffset = 0;
+    }
     int32_t smemByteOffsetb128 = smemByteOffsetb8 >> 4;
-    Value descValBase =
-        tb.int_val(64, currDesc.descriptor + smemByteOffsetb128);
+    uint64_t descBits = std::bit_cast<uint64_t>(currDesc) + smemByteOffsetb128;
     // Add the base address to the descriptor
-    Value descVal = tb.add(descValBase, baseb128);
-    return descVal;
+    Value low = tb.add(tb.i32_val(uint32_t(descBits)), baseb128);
+    Value high = tb.i32_val(descBits >> 32);
+    Value descWords = packLLVector(loc, {low, high}, rewriter);
+    Value result = tb.bitcast(descWords, i64_ty);
+    if (useAbsolute) {
+      int nextK = (k / 256 + 1) * 256;
+      Value next = smemLoad(desc.transposed ? nextK : a,
+                            desc.transposed ? b : nextK, rewriter, loc);
+      Value nextAddress = tb.and_(next, tb.i64_val(0x3fff));
+      result = tb.or_(result, tb.shl(nextAddress, tb.i64_val(16)));
+    }
+    return result;
   }
   MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                         Location loc) const override {
-    return {smemLoad(a, b, rewriter, loc), std::nullopt};
+                         Location loc, int kSize = 0) const override {
+    return {smemLoad(a, b, rewriter, loc, kSize), std::nullopt};
   }
 
   MMASMEMDescriptor &getDescriptor() { return desc; }
@@ -260,8 +279,8 @@ private:
 
     assert(getReps(ll, shmemTileInv).has_value());
 
-    SMEMDescriptor desc;
-    desc.descriptor = mmaVersion == 5 ? 1ULL << 46 : 0ULL;
+    auto desc =
+        std::bit_cast<SMEMDescriptor>(mmaVersion == 5 ? 1ULL << 46 : 0ULL);
     // The lbo / sbo is defined wrt. the 128b elements
     desc.leadDimensionBaseOffset = (lbo * bitwidth / 8) >> 4;
     desc.strideDimensionBaseOffset = (sbo * bitwidth / 8) >> 4;

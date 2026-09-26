@@ -27,6 +27,7 @@ public:
   virtual ~WarpSpecializeBarrierHelper() = default;
 
   virtual bool isBarrierOp(Operation *op) const = 0;
+  virtual bool isBarrierHandleOp(Operation *op) const { return false; }
   virtual Type getBarrierHandleType(MLIRContext *ctx) const = 0;
   virtual FailureOr<Value>
   getBarrierHandle(TritonLLVMIRRewriter &b,

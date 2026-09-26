@@ -14,6 +14,10 @@
 
 namespace mlir::LLVM::AMD {
 
+// Decode the target-independent compatibility payload accepted by Triton
+// memory operations. Target-specific cache policy attributes are rejected.
+FailureOr<triton::CacheModifier> getCacheModifier(Attribute cachePolicy);
+
 // Here is a partial definition of DppCtrl enums. For the complete definition,
 // please check:
 // https://github.com/llvm/llvm-project/blob/8c75290/llvm/lib/Target/AMDGPU/SIDefines.h#L939
@@ -50,9 +54,11 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
-// Emit the cta multicast mask for a given cta id based on the src layout
+// Emit the cta multicast mask for a given cta id based on the src layout.
+// Groups sharing data among more than maxMaskPopcount CTAs are split into
+// smaller subgroups because the hardware would otherwise drop the multicast.
 Value emitCtaMulticastMask(RewriterBase &rewriter, Location loc, Value blockId,
-                           const LinearLayout &cvt);
+                           const LinearLayout &cvt, unsigned maxMaskPopcount);
 
 std::pair<bool, bool>
 getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
@@ -65,7 +71,7 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, Value multicastMask,
              triton::CacheModifier cm = triton::CacheModifier::NONE,
-             bool forceNoAliasAsyncLoads = false);
+             bool isVolatile = false, bool forceNoAliasAsyncLoads = false);
 
 // Stores to shared or global memory with predication.
 // forceNoAliasAsyncLoads=true adds alias information to the llvm.store to
@@ -131,12 +137,9 @@ Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
 
 // Software implementation of converting an 8-element vector of MXFP4 elements
 // to a wider type: BF16 or FP16 for target before CDNA4.
-// for CDNA3, we have optimized sequence that can combine scale during the
-// conversion
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
-                                    mlir::triton::amdgpu::ISAFamily isaFamily,
-                                    Value scale = nullptr);
+                                    mlir::triton::amdgpu::ISAFamily isaFamily);
 
 template <typename ConvertOp>
 SmallVector<Value, 4>

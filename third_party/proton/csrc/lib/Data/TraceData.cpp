@@ -53,7 +53,7 @@ public:
     void addChild(const Context &context, size_t id) { children[context] = id; }
 
     bool hasChild(const Context &context) const {
-      return children.find(context) != children.end();
+      return children.contains(context);
     }
 
     size_t getChild(const Context &context) const {
@@ -152,9 +152,7 @@ public:
     return nextEventId++;
   }
 
-  bool hasEvent(size_t eventId) {
-    return traceEvents.find(eventId) != traceEvents.end();
-  }
+  bool hasEvent(size_t eventId) { return traceEvents.contains(eventId); }
 
   Event &getEvent(size_t eventId) {
     auto it = traceEvents.find(eventId);
@@ -255,7 +253,7 @@ void TraceData::addMetrics(
   auto &event = currentTrace->getEvent(eventId);
   auto &flexibleMetrics = event.metricSet.flexibleMetrics;
   for (auto [metricName, metricValue] : metrics) {
-    if (flexibleMetrics.find(metricName) == flexibleMetrics.end()) {
+    if (!flexibleMetrics.contains(metricName)) {
       flexibleMetrics.emplace(metricName,
                               FlexibleMetric(metricName, metricValue));
     } else {

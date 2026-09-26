@@ -33,6 +33,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include "Utility.h"
+#include <type_traits>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -48,6 +49,24 @@ void mlir::triton::NVIDIA::createFenceMBarrierInitReleaseCluster(
 }
 
 namespace {
+template <typename OpTy>
+struct GridDependencyOpConversion : public ConvertOpToLLVMPattern<OpTy> {
+  using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    PTXBuilder ptxBuilder;
+    if constexpr (std::is_same_v<OpTy, triton::GridDependencyWaitOp>)
+      (*ptxBuilder.create("griddepcontrol.wait"))();
+    else
+      (*ptxBuilder.create("griddepcontrol.launch_dependents"))();
+    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(rewriter.getContext()));
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 Value getElectWarp0OrThread0(const NVIDIA::TargetInfo &targetInfo,
                              TritonLLVMOpBuilder &b) {
   if (targetInfo.getComputeCapability() >= 90) {
@@ -129,11 +148,9 @@ struct FenceMBarrierInitReleaseClusterOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    // Only one thread needs to issue the fence, just like mbarrier.init.
-    Value tid = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(tid, b.i32_val(0));
+    // The fence only orders initializations issued by the same thread.
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
 
     NVIDIA::createFenceMBarrierInitReleaseCluster(rewriter, loc, pred);
 
@@ -639,6 +656,10 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
   bool supportsMBarrierMulticast = targetInfo.getComputeCapability() == 107;
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
+  patterns.add<
+      GridDependencyOpConversion<triton::GridDependencyWaitOp>,
+      GridDependencyOpConversion<triton::GridDependencyLaunchDependentsOp>>(
+      typeConverter, benefit);
   patterns.add<FenceMBarrierInitReleaseClusterOpConversion>(typeConverter,
                                                             benefit);
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(

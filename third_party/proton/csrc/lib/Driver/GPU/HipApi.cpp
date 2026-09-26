@@ -10,7 +10,8 @@ namespace hip {
 struct ExternLibHip : public ExternLibBase {
   using RetType = hipError_t;
   static constexpr const char *name = "libamdhip64.so";
-  static constexpr const char *defaultDir = "";
+  static constexpr const char *pathEnv = nullptr;
+  static constexpr const char *libraryEnv = "TRITON_LIBHIP_PATH";
   static constexpr RetType success = hipSuccess;
   static void *lib;
 };
@@ -21,6 +22,8 @@ DEFINE_DISPATCH(ExternLibHip, launchKernel, hipModuleLaunchKernel,
                 hipFunction_t, unsigned int, unsigned int, unsigned int,
                 unsigned int, unsigned int, unsigned int, unsigned int,
                 hipStream_t, void **, void **)
+
+DEFINE_DISPATCH(ExternLibHip, init, hipInit, unsigned int)
 
 DEFINE_DISPATCH(ExternLibHip, deviceSynchronize, hipDeviceSynchronize)
 

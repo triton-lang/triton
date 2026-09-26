@@ -272,6 +272,12 @@ public:
     StalledDispatchStall,
     StalledSleeping,
     StalledSelected,
+    // AMD stall reasons (from rocprofiler-sdk pc_sampling.h)
+    StalledALUDependency,
+    StalledWaitcnt,
+    StalledInternalInstruction,
+    StalledArbiterWinExStall,
+    StalledOtherWait,
     Count,
   };
 
@@ -323,6 +329,12 @@ public:
       "stalled_dispatch_stall",
       "stalled_sleeping",
       "stalled_selected",
+      // AMD
+      "stalled_alu_dependency",
+      "stalled_waitcnt",
+      "stalled_internal_instruction",
+      "stalled_arbiter_win_ex_stall",
+      "stalled_other_wait",
   };
   const static inline std::string name = "PCSamplingMetric";
 };
@@ -345,6 +357,8 @@ public:
     InitTime,
     PreFinalTime,
     PostFinalTime,
+    IsAsync,
+    EndUnitId,
     Count,
   };
 
@@ -355,7 +369,8 @@ public:
               const std::string &kernelName, uint64_t blockId,
               uint64_t processorId, uint64_t unitId, uint64_t deviceId,
               uint64_t deviceType, uint64_t timeShiftCost, uint64_t initTime,
-              uint64_t preFinalTime, uint64_t postFinalTime)
+              uint64_t preFinalTime, uint64_t postFinalTime,
+              bool isAsync = false, uint64_t endUnitId = 0)
       : CycleMetric() {
     this->values[StartCycle] = startCycle;
     this->values[EndCycle] = endCycle;
@@ -372,6 +387,8 @@ public:
     this->values[InitTime] = initTime;
     this->values[PreFinalTime] = preFinalTime;
     this->values[PostFinalTime] = postFinalTime;
+    this->values[IsAsync] = static_cast<uint64_t>(isAsync);
+    this->values[EndUnitId] = endUnitId;
   }
 
   const std::string &getName() const override { return name; }
@@ -392,16 +409,17 @@ public:
 
 private:
   const static inline bool PROPERTY[CycleMetricKind::Count] = {
-      false, false, false, false, true,  true,  true, true,
-      true,  true,  true,  true,  false, false, false};
+      false, false, false, false, true,  true,  true, true, true,
+      true,  true,  true,  false, false, false, true, true};
   const static inline bool EXCLUSIVE[CycleMetricKind::Count] = {
-      false, false, true, true, true,  true,  true, true,
-      true,  true,  true, true, false, false, false};
+      false, false, true, true,  true,  true,  true, true, true,
+      true,  true,  true, false, false, false, true, true};
   static constexpr std::string_view VALUE_NAMES[CycleMetricKind::Count] = {
-      "start_cycle", "end_cycle",      "cycles",         "normalized_cycles",
-      "kernel_id",   "kernel_name",    "block_id",       "processor_id",
-      "unit_id",     "device_id",      "device_type",    "time_shift_cost",
-      "init_time",   "pre_final_time", "post_final_time"};
+      "start_cycle", "end_cycle",      "cycles",          "normalized_cycles",
+      "kernel_id",   "kernel_name",    "block_id",        "processor_id",
+      "unit_id",     "device_id",      "device_type",     "time_shift_cost",
+      "init_time",   "pre_final_time", "post_final_time", "is_async",
+      "end_unit_id"};
   const static inline std::string name = "CycleMetric";
 };
 

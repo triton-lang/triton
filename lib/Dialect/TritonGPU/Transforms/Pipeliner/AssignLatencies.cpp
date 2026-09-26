@@ -25,6 +25,53 @@ namespace {
 // assignLatencies
 //===----------------------------------------------------------------------===//
 
+bool hasLoopCarriedAccumulatorCycle(ttng::MMAv5OpInterface mma,
+                                    scf::ForOp forOp) {
+  Value start = mma.getAccDep();
+  Value target = mma.getToken();
+  if (!start || !target)
+    return false;
+
+  // Follow the accumulator dependency backwards, mapping loop block arguments
+  // to their yielded values. A cross-MMA cycle is found when the recurrence
+  // returns to this MMA through another MMA.
+  SmallVector<std::pair<Value, bool>> worklist = {{start, false}};
+  // Following all operands may reach the same value along paths that differ in
+  // whether another MMA was crossed. Track those states separately so that a
+  // visit before crossing another MMA does not suppress a visit after crossing
+  // one.
+  DenseSet<Value> seenBeforeAnotherMMA;
+  DenseSet<Value> seenAfterAnotherMMA;
+  while (!worklist.empty()) {
+    auto [current, crossedAnotherMMA] = worklist.pop_back_val();
+    DenseSet<Value> &seen =
+        crossedAnotherMMA ? seenAfterAnotherMMA : seenBeforeAnotherMMA;
+    if (!seen.insert(current).second)
+      continue;
+    if (current == target) {
+      if (crossedAnotherMMA)
+        return true;
+      continue;
+    }
+
+    if (auto arg = dyn_cast<BlockArgument>(current)) {
+      if (arg.getOwner() == forOp.getBody() && arg.getArgNumber() > 0)
+        worklist.emplace_back(forOp.getYieldedValues()[arg.getArgNumber() - 1],
+                              crossedAnotherMMA);
+      continue;
+    }
+
+    Operation *def = current.getDefiningOp();
+    if (!def || !forOp->isAncestor(def))
+      continue;
+    crossedAnotherMMA |=
+        isa<ttng::MMAv5OpInterface>(def) && def != mma.getOperation();
+    for (Value operand : getNestedOperands(def))
+      worklist.emplace_back(operand, crossedAnotherMMA);
+  }
+  return false;
+}
+
 // Return true if the preconditions for pipelining the loop are met.
 bool preCondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
@@ -165,7 +212,7 @@ public:
     DenseMap<Operation *, int> mmaSelfLatency;
     // Check if the load op (mma operand) is pipelineable.
     auto isLoadToBePipelined = [&](Operation *op) {
-      return opLatency.count(op) && opLatency[op] > 0;
+      return opLatency.contains(op) && opLatency[op] > 0;
     };
     for (auto &op : forOp.getBody()->without_terminator()) {
       // If the acc can not be multibuffered, do not pipeline the uses of
@@ -220,6 +267,8 @@ public:
                                cantWarpSpec)))
               mmaSelfLatency[mma] = 0;
           }
+          if (hasLoopCarriedAccumulatorCycle(mma, forOp))
+            opLatency.erase(&op);
         }
       }
     }
@@ -297,13 +346,13 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
 
   std::function<void(Operation *, Operation *, int)> dfs =
       [&](Operation *op, Operation *finalUser, int distance) {
-        if (!seen.insert(op).second || excluded.count(op))
+        if (!seen.insert(op).second || excluded.contains(op))
           return;
         if (isa<tt::LoadOp, tt::DescriptorLoadLikeOpInterface>(op)) {
           if (!AssignLoadLatencies::isPipeliningBeneficial(
                   op, finalUser, axisInfoAnalysis, filterSmall))
             return;
-          if (loadOpToIndLevel.count(op)) {
+          if (loadOpToIndLevel.contains(op)) {
             int level = loadOpToIndLevel[op].first;
             if (level != distance) {
               // If we have multiple uses at different distances, we don't

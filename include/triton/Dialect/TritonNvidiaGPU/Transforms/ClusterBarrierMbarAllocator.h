@@ -24,8 +24,6 @@ inline void copyClusterBarrierMbarOffset(Operation *src, Operation *dst) {
     dst->setAttr(kClusterBarrierMbarOffsetAttrName, attr);
 }
 
-bool needsClusterBarrier(Operation *op);
-
 void runClusterBarrierMbarAllocator(ModuleOp mod);
 
 } // namespace nvidia_gpu

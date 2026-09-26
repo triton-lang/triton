@@ -138,17 +138,11 @@ struct WarpGroupDotWaitOpConversion
   using ConvertOpToLLVMPattern<
       triton::nvidia_gpu::WarpGroupDotWaitOp>::ConvertOpToLLVMPattern;
 
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::WarpGroupDotWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto pendings = op.getPendings();
-    Location loc = op.getLoc();
-    ValueRange inputs = adaptor.getInputs();
-    if (inputs.size() == 1) {
-      rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(
-          op, inputs.front(), pendings);
-      return success();
-    }
+  static FailureOr<Value> packInputs(Location loc, RewriterBase &rewriter,
+                                     ValueRange inputs) {
+    if (inputs.size() == 1)
+      return inputs.front();
+
     SmallVector<Type> types;
     // Pack the inputs into a single struct.
     for (Type type : inputs.getTypes()) {
@@ -169,12 +163,20 @@ struct WarpGroupDotWaitOpConversion
                                              value, outputStructIndex++);
       }
     }
-    Value packedOutput = triton::nvgpu::WGMMAWaitGroupOp::create(
-        rewriter, loc, packed, pendings);
-    // Unpack the output into the original struct types.
+    return packed;
+  }
+
+  static SmallVector<Value> unpackOutput(Location loc, RewriterBase &rewriter,
+                                         Value packedOutput, TypeRange types) {
     SmallVector<Value> outputs;
-    outputStructIndex = 0;
-    for (Type type : inputs.getTypes()) {
+    if (types.size() == 1) {
+      outputs.push_back(packedOutput);
+      return outputs;
+    }
+
+    // Unpack the output into the original struct types.
+    unsigned outputStructIndex = 0;
+    for (Type type : types) {
       auto structType = cast<LLVM::LLVMStructType>(type);
       Value unpacked = LLVM::UndefOp::create(rewriter, loc, structType);
       for (auto [i, type] : llvm::enumerate(structType.getBody())) {
@@ -185,7 +187,32 @@ struct WarpGroupDotWaitOpConversion
       }
       outputs.push_back(unpacked);
     }
+    return outputs;
+  }
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::WarpGroupDotWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    ValueRange inputs = adaptor.getInputs();
+    auto packed = packInputs(loc, rewriter, inputs);
+    if (failed(packed))
+      return failure();
+
+    auto wait = triton::nvgpu::WGMMAWaitGroupOp::create(rewriter, loc, *packed,
+                                                        op.getPendings());
+    auto outputs =
+        unpackOutput(loc, rewriter, wait.getResult(), inputs.getTypes());
+    bool synchronizeWarpGroups =
+        !op.getWarpGroupLocal() && triton::gpu::lookupNumWarps(op) > 4;
     rewriter.replaceOp(op, outputs);
+
+    // WGMMA waits only synchronize the issuing warp group. Synchronize all
+    // warp groups before releasing shared-memory dependencies.
+    if (synchronizeWarpGroups) {
+      triton::gpu::BarrierOp::create(rewriter, loc,
+                                     triton::gpu::AddrSpace::Local);
+    }
     return success();
   }
 };

@@ -180,8 +180,13 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     if (isa<LLVM::LLVMPointerType>(type)) {
       return "%p";
     }
+    // Use hexadecimal floating-point notation for floats. The printf ABI
+    // promotes them to f64 before formatting.
+    if (hex && isa<FloatType>(type)) {
+      return "%a";
+    }
     // Hex is "0x%0nx" or "0x%0nllx", where n is the number of hex digits in the
-    // type (so 4 for fp16, 8 for int32, 16 for int64).
+    // integer type (so 4 for int16, 8 for int32, 16 for int64).
     if (hex) {
       // Ignore `width` for `hex` values, pad to typeWidth.
       std::string ret =

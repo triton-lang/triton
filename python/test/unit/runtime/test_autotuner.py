@@ -5,7 +5,6 @@ import triton.language as tl
 import pytest
 
 import pathlib
-import uuid
 from triton._internal_testing import is_cuda, is_hip_cdna2, is_rubin
 
 
@@ -263,6 +262,113 @@ def test_prune_configs_fractional_top_k_keeps_one(device: str):
     torch.testing.assert_close(src, dst)
 
 
+def test_prune_configs_fractional_top_k_after_early_prune():
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': block_size}) for block_size in range(1, 11)]
+    estimated = []
+    launched = []
+    benchmarked = []
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            launched.append(kwargs['BLOCK_SIZE'])
+
+    def do_bench(kernel_call, quantiles):
+        kernel_call()
+        benchmarked.append(launched[-1])
+        return [launched[-1]] * 3
+
+    def early_config_prune(configs, named_args, **kwargs):
+        return configs[:6]
+
+    def perf_model(*args, **kwargs):
+        estimated.append(kwargs['BLOCK_SIZE'])
+        return kwargs['BLOCK_SIZE']
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(),
+        arg_names=[],
+        configs=configs,
+        key=[],
+        reset_to_zero=None,
+        restore_value=None,
+        do_bench=do_bench,
+        prune_configs_by={
+            'early_config_prune': early_config_prune,
+            'perf_model': perf_model,
+            'top_k': 0.5,
+        },
+    )
+
+    tuner.run()
+
+    assert estimated == list(range(1, 7))
+    assert benchmarked == [1, 2, 3]
+
+
+def test_unknown_key_name_is_rejected():
+    # `key` is documented as a list of argument names. An unknown name used to be
+    # dropped from the tuning key by run(), so the kernel tuned once and then reused
+    # that config no matter how the real argument changed.
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            pass
+
+    for param in ("key", "reset_to_zero", "restore_value"):
+        with pytest.raises(ValueError, match="not kernel arguments"):
+            triton.runtime.Autotuner(
+                Kernel(),
+                arg_names=["n"],
+                configs=[triton.Config(kwargs={"BLOCK_SIZE": 32})],
+                key=["N"] if param == "key" else [],
+                reset_to_zero=["N"] if param == "reset_to_zero" else None,
+                restore_value=["N"] if param == "restore_value" else None,
+            )
+
+
+def test_restore_value_with_user_pre_hook():
+    # A user-supplied pre_hook replaces the default one that populates restore_copies,
+    # but the default post_hook that reads it stays installed, so running the autotuner
+    # used to raise AttributeError instead of benchmarking.
+    launched = []
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            launched.append(kwargs["BLOCK_SIZE"])
+
+    def do_bench(kernel_call, quantiles):
+        kernel_call()
+        return [1.0, 1.0, 1.0]
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(),
+        arg_names=["x"],
+        configs=[triton.Config(kwargs={"BLOCK_SIZE": 32}),
+                 triton.Config(kwargs={"BLOCK_SIZE": 64})],
+        key=[],
+        reset_to_zero=None,
+        restore_value=["x"],
+        pre_hook=lambda kwargs, reset_only=False: None,
+        do_bench=do_bench,
+    )
+
+    tuner.run(x=None)
+
+    # Both configs get benchmarked, then the winner is launched for real.
+    assert launched[:2] == [32, 64]
+
+
 def test_config_ir_override_changes_disk_cache_key():
     # Autotuner derives persisted result-cache keys from Config.__str__().
     first = triton.Config(kwargs={"BLOCK_SIZE": 32}, ir_override="first.ttir")
@@ -318,7 +424,7 @@ def test_pruned_single_config_skips_benchmark(prune_kind: str, device: str, fres
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="Requires compute capability >= 9 for NV")
-def test_override_ttir(device):
+def test_override_ttir(device, tmp_path: pathlib.Path):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
@@ -346,7 +452,7 @@ module {
   }
 }
     """
-    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ttir")
+    temp_file = tmp_path / "test_override.ttir"
     temp_file.write_text(ir_src)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
@@ -367,7 +473,7 @@ module {
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="Requires compute capability >= 9 for NV")
-def test_override_ttgir(device):
+def test_override_ttgir(device, tmp_path: pathlib.Path):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
@@ -396,7 +502,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
     """
-    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ttgir")
+    temp_file = tmp_path / "test_override.ttgir"
     temp_file.write_text(ir_src)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
@@ -417,7 +523,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9,
                     reason="PTX file in this unit test is only for SM90")
-def test_override_ptx(device):
+def test_override_ptx(device, tmp_path: pathlib.Path):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
@@ -493,7 +599,7 @@ $L__func_end0:
                                         // -- End function
 }
     """
-    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ptx")
+    temp_file = tmp_path / "test_override.ptx"
     temp_file.write_text(ir_src)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
@@ -526,7 +632,7 @@ def test_exceed_tmem(device):
         if exception is not None:
             exception_out_of_resource = exception
 
-    @triton.autotune(configs=configs, key=['N'], do_bench=do_bench, pre_hook=None, post_hook=_post_hook)
+    @triton.autotune(configs=configs, key=[], do_bench=do_bench, pre_hook=None, post_hook=_post_hook)
     @triton.jit
     def dot_kernel(dst, BLOCK_SIZE: tl.constexpr):
         a = tl.full((BLOCK_SIZE, BLOCK_SIZE), 0.0, tl.float16)

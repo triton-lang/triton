@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 --convert-scf-to-cf | FileCheck %s --check-prefixes=COMMON,GFX950
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-scf-to-cf | FileCheck %s --check-prefixes=COMMON,GFX942
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx950' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 --convert-scf-to-cf | FileCheck %s --check-prefixes=COMMON,GFX950
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-scf-to-cf | FileCheck %s --check-prefixes=COMMON,GFX942
 
 // COMMON: [[$ASYNC_COPY_SCOPE:#.*]] = #llvm.alias_scope<id = "amdg.AsyncCopies"
 // COMMON: [[$LOCAL_LOAD_SCOPE:#.*]] = #llvm.alias_scope<id = "amdg.LocalLoads"
@@ -44,7 +44,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}} {alias_scopes = [[[$ASYNC_COPY_SCOPE]]]
     // Check that store for 'other' has alias information set
     // COMMON: llvm.store {{.*}} {alias_scopes = [[[$LOCAL_LOAD_SCOPE]]], {{.*}}, noalias_scopes = [[[$ASYNC_COPY_SCOPE]]]
-    %65 = amdg.buffer_load_to_local %arg1[%arg2] mask=%mask other=%other into %arg3 : <f32>[tensor<8x64xi32, #blocked>] tensor<8x64xf32, #blocked> -> <8x64xf32, #shared, #smem, mutable>
+    %65 = amdg.buffer_load_to_local %arg1[%arg2] mask=%mask other=%other into %arg3 : !tt.ptr<f32>[tensor<8x64xi32, #blocked>] tensor<8x64xf32, #blocked> -> <8x64xf32, #shared, #smem, mutable>
 
     // COMMON: llvm.return
     tt.return

@@ -3,8 +3,11 @@ Reproducibility tests for Proton.
 Each test should invoke one or more GPU kernels and check the validity of their profiling results.
 """
 
+import inspect
 import os
 import pathlib
+import subprocess
+import sys
 
 import triton
 import triton.profiler as proton
@@ -21,6 +24,7 @@ from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 from triton.testing import cuda_graph_without_gc
+from subprocess_utils import clean_rocprofiler_env
 
 
 def _find_frame_by_name(frame, name):
@@ -31,6 +35,118 @@ def _find_frame_by_name(frame, name):
             return current
         queue.extend(current["children"])
     return None
+
+
+# Remove _skip_cudagraph_test once the rocm version has been updated on CI nodes
+_skip_cudagraph_test = pytest.mark.skipif(
+    os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1",
+    reason="CUDAGraph test skipped due to environment constraints",
+)
+
+
+@pytest.mark.skipif(not is_hip(), reason="ROCprofiler is only available on HIP")
+@pytest.mark.parametrize("capture_graph", [False, pytest.param(True, marks=_skip_cudagraph_test)])
+def test_rocprofiler_process_exit_without_finalize(tmp_path: pathlib.Path, capture_graph: bool):
+    # Run in a subprocess so normal process teardown exercises the ordering
+    # between HIP teardown, SDK finalization, and Proton static destruction.
+    script = tmp_path / "unfinalized_rocprofiler.py"
+    output = tmp_path / "unfinalized_rocprofiler"
+    script.write_text(f"""
+import triton.profiler as proton
+import triton
+import triton.language as tl
+import torch
+
+
+@triton.jit
+def copy(x, y, n: tl.constexpr):
+    offsets = tl.arange(0, n)
+    tl.store(y + offsets, tl.load(x + offsets))
+
+
+x = torch.ones((1024,), device="cuda")
+y = torch.zeros_like(x)
+proton.start({str(output)!r}, hook="triton", backend="rocprofiler")
+if {capture_graph!r}:
+    copy[(1,)](x, y, x.numel())
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        with proton.scope("copy_scope", metrics={{"elements": x.numel()}}):
+            copy[(1,)](x, y, x.numel())
+for _ in range(100):
+    if {capture_graph!r}:
+        graph.replay()
+    else:
+        copy[(1,)](x, y, x.numel())
+# Intentionally omit synchronization and proton.finalize(). The SDK must
+# finish queued work and drain its pending callbacks before Proton destroys
+# the callback targets.
+""")
+
+    # Poison freed heap allocations so stale Proton state is not likely to
+    # remain accidentally usable until rocprofiler-sdk's atexit handler runs.
+    env = os.environ.copy()
+    env["MALLOC_PERTURB_"] = "165"
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=20, env=env)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(not is_hip(), reason="ROCprofiler is only available on HIP")
+@_skip_cudagraph_test
+@pytest.mark.parametrize("num_sessions", [1, 2])
+def test_rocprofiler_graph_session_exit(tmp_path: pathlib.Path, num_sessions: int):
+    script = tmp_path / "rocprofiler_graph_sessions.py"
+    script.write_text(f"""
+import triton.profiler as proton
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def copy(x, y, n: tl.constexpr):
+    offsets = tl.arange(0, n)
+    tl.store(y + offsets, tl.load(x + offsets))
+
+
+for session in range({num_sessions}):
+    # The first session starts before Torch can initialize HIP.
+    proton.start(f"{str(tmp_path)}/profile_{{session}}", hook="triton", backend="rocprofiler")
+    import torch
+
+    x = torch.ones((1024,), device="cuda")
+    y = torch.zeros_like(x)
+    copy[(1,)](x, y, x.numel())
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        with proton.scope("copy_scope", metrics={{"elements": x.numel()}}):
+            copy[(1,)](x, y, x.numel())
+    with proton.scope("replay"):
+        graph.replay()
+    proton.finalize()
+    torch.testing.assert_close(x, y)
+# Captured metric kernels must remain safe after profiling stops.
+y.zero_()
+graph.replay()
+torch.cuda.synchronize()
+torch.testing.assert_close(x, y)
+""")
+    # The subprocess must exit normally after freeing graph metric buffers.
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60,
+                            env=clean_rocprofiler_env())
+    assert result.returncode == 0, result.stderr
+    for session in range(num_sessions):
+        data = json.loads((tmp_path / f"profile_{session}.hatchet").read_text())
+        replay = _find_frame_by_name(data[0], "replay")
+        assert replay is not None
+        scope = _find_frame_by_name(replay, "copy_scope")
+        assert scope is not None
+        assert scope["metrics"]["elements"] == 1024
+        kernel = _find_frame_by_name(scope, "copy")
+        assert kernel is not None
+        assert kernel["metrics"]["count"] == 1
+        assert kernel["metrics"]["time (ns)"] > 0
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -90,11 +206,8 @@ def test_triton(tmp_path: pathlib.Path, device: str):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
+@_skip_cudagraph_test
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
-    # TODO(Keren): Uncomment when rocprofiler-sdk has been updated
-    if os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1":
-        pytest.skip("CUDagraph test is disabled")
-
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -173,7 +286,7 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
         assert total_iters == 10
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -242,7 +355,7 @@ def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, 
     assert profiled_frame["metrics"]["sum_metric"] == float(x.numel())
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
+@_skip_cudagraph_test
 def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -298,7 +411,7 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     assert has_positive_time_metric(replay1_frame)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph deactivation")
+@_skip_cudagraph_test
 def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -366,7 +479,7 @@ def test_cudagraph_deactivate(tmp_path, device: str):
     assert scope_c_frame is not None
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph replay")
+@_skip_cudagraph_test
 @pytest.mark.parametrize("data_format", ["hatchet", "hatchet_msgpack"])
 def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_format: str, device: str):
     stream = torch.cuda.Stream()
@@ -429,7 +542,7 @@ def test_cudagraph_filters_unlinked_virtual_scopes(tmp_path: pathlib.Path, data_
     assert iter_with_kernel_frame["children"][0]["metrics"]["time (ns)"] > 0
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_cudagraph_multi_stream(tmp_path: pathlib.Path, device: str):
     """
     kernels in a cudagraph can be launched using multiple internal streams, without
@@ -949,37 +1062,88 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
 
 
 def test_pcsampling(tmp_path: pathlib.Path, device: str):
-    if not is_cuda():
-        pytest.skip("Only CUDA backend supports pc sampling")
+    if not (is_cuda() or is_hip()):
+        pytest.skip("Only CUDA and HIP backends support pc sampling")
 
     if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
         pytest.skip("PC sampling test is disabled")
+    expect_source_attribution = True
+    if is_hip():
+        from triton._C.libproton import proton as libproton
+
+        expect_source_attribution = libproton.has_amd_pc_sampling_source_locations()
 
     @triton.jit
     def foo(x, y, size: tl.constexpr):
         offs = tl.arange(0, size)
-        for _ in range(1000):
+        for _ in range(2000):
             tl.store(y + offs, tl.load(x + offs))
 
+    def total_samples(frame):
+        samples = frame["metrics"].get("num_samples", 0)
+        for child in frame["children"]:
+            samples += total_samples(child)
+        return samples
+
+    def pc_sample_source_frames(frame):
+        frames = []
+        queue = [frame]
+        while queue:
+            current = queue.pop(0)
+            name = current["frame"]["name"]
+            if "@" in name:
+                try:
+                    file_line, function = name.rsplit("@", 1)
+                    file_name, line = file_line.rsplit(":", 1)
+                    frames.append((pathlib.Path(file_name), int(line), function, current))
+                except ValueError:
+                    pass
+            queue.extend(current["children"])
+        return frames
+
+    foo_source, foo_start_line = inspect.getsourcelines(foo.fn)
+    expected_store_lines = {foo_start_line + idx for idx, line in enumerate(foo_source) if "tl.store" in line}
+    assert expected_store_lines
+
     temp_file = tmp_path / "test_pcsampling.hatchet"
-    proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti", mode="pcsampling")
+    backend = "cupti" if is_cuda() else "rocprofiler"
+    try:
+        proton.start(
+            str(temp_file.with_suffix("")),
+            hook="triton",
+            backend=backend,
+            mode="pcsampling",
+        )
+    except RuntimeError as e:
+        message = str(e)
+        amd_pc_sampling_unavailable = ("rocprofiler-sdk PC sampling service is not available" in message
+                                       or "rocprofiler-sdk did not report PC sampling configurations" in message)
+        if is_hip() and amd_pc_sampling_unavailable:
+            proton.finalize()
+            pytest.skip(message)
+        raise
     with proton.scope("init"):
         x = torch.ones((1024, ), device=device, dtype=torch.float32)
         y = torch.zeros_like(x)
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
     proton.finalize()
+
     with temp_file.open() as f:
         data = json.load(f)
-    init_frame = data[0]["children"][0]
+
     test_frame = data[0]["children"][1]
-    # With line mapping
-    assert "foo" in test_frame["children"][0]["frame"]["name"]
-    assert test_frame["children"][0]["children"][0]["metrics"]["num_samples"] > 0
-    assert "@" in test_frame["children"][0]["children"][0]["frame"]["name"]
-    # Without line mapping
-    assert "elementwise" in init_frame["children"][0]["frame"]["name"]
-    assert init_frame["children"][0]["metrics"]["num_samples"] > 0
+
+    foo_frame = _find_frame_by_name(test_frame, "foo")
+    assert foo_frame is not None
+    if expect_source_attribution:
+        matching_source_frames = [
+            frame for file_name, line, function, frame in pc_sample_source_frames(foo_frame)
+            if file_name == pathlib.Path(__file__) and line in expected_store_lines and function
+            and frame["metrics"].get("num_samples", 0) > 0
+        ]
+        assert matching_source_frames
+    assert total_samples(foo_frame) > 0
 
 
 def test_deactivate(tmp_path: pathlib.Path, device: str):
@@ -1024,7 +1188,7 @@ def test_multiple_sessions(tmp_path: pathlib.Path, device: str):
     assert scope0_count + scope1_count == 3
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_multiple_sessions_cudagraph_metric_kernels(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1168,7 +1332,6 @@ def test_trace(tmp_path: pathlib.Path, device: str):
         assert abs(time.time_ns() - base_time_ns) < one_day_ns
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
 def test_trace_flexible_metrics_scope_ranges(tmp_path: pathlib.Path, device: str):
 
     @triton.jit
@@ -1261,7 +1424,7 @@ def test_trace_flexible_metrics_no_kernel_anchor(tmp_path: pathlib.Path):
     assert isinstance(trace_events[0]["args"]["scope_id"], int)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports cudagraph trace reconstruction")
+@_skip_cudagraph_test
 def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1444,6 +1607,7 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path, device: str):
 
 
 @pytest.mark.skipif(not is_cuda() and not is_hip(), reason="Only CUDA/HIP backend supports NVTX profiling")
+@pytest.mark.skipif(is_hip(), reason="ROCm profiling intermittently omits kernel metrics")
 @pytest.mark.parametrize("enable_nvtx", [None, True, False])
 def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, device: str):
     if enable_nvtx is not None:
@@ -1482,6 +1646,7 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, d
     assert kernel["metrics"]["count"] == 1
 
 
+@_skip_cudagraph_test
 def test_tensor_metrics_scope(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_tensor_metrics_scope.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -1511,6 +1676,7 @@ def test_tensor_metrics_scope(tmp_path: pathlib.Path, device: str):
     assert test_frame["metrics"]["x_std"] == 0.0
 
 
+@_skip_cudagraph_test
 def test_tensor_metrics_hook(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_tensor_metrics_hook.hatchet"
 
@@ -1545,7 +1711,7 @@ def test_tensor_metrics_hook(tmp_path: pathlib.Path, device: str):
     assert foo_test_frame["metrics"]["flops"] == 8.0
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_tensor_metrics_cudagraph_hook(tmp_path: pathlib.Path, device: str):
     """
     Test triton kernels launched from metadata hooks and hook="triton"
@@ -1604,7 +1770,7 @@ def test_tensor_metrics_cudagraph_hook(tmp_path: pathlib.Path, device: str):
     assert _find_frame_by_name(metadata_frame, "metadata_helper_kernel") is not None
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1694,7 +1860,7 @@ def test_tensor_metrics_cudagraph(tmp_path: pathlib.Path, device: str):
     assert scope_d_frame["metrics"]["vec"] == [0, 10, 20, 30]
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
@@ -1747,7 +1913,7 @@ def test_tensor_metrics_cudagraph_deactivate(tmp_path: pathlib.Path, device: str
         assert c_frame["metrics"]["count"] == 10
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
     if torch.cuda.device_count() < 2:
         pytest.skip("Requires at least two CUDA devices")
@@ -1834,11 +2000,10 @@ def test_tensor_metrics_multi_device_cudagraph(tmp_path: pathlib.Path):
         assert scope_b_frame["metrics"]["sum"] == 40.0
 
     assert len(data) > 1
-    cuda_devices = data[1].get("CUDA", {})
+    cuda_devices = data[1].get("HIP", {}) if is_hip() else data[1].get("CUDA", {})
     assert len(cuda_devices) >= 2
 
 
-@pytest.mark.skipif(not is_cuda(), reason="AMD is broken for now and will be fixed")
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, device: str):
@@ -1875,7 +2040,7 @@ def test_periodic_flushing(tmp_path, fresh_knobs, data_format, buffer_size, devi
     assert num_scopes == 5000
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
+@_skip_cudagraph_test
 @pytest.mark.parametrize("buffer_size", [256 * 1024, 64 * 1024 * 1024])
 @pytest.mark.parametrize("data_format", ["hatchet_msgpack", "hatchet"])
 def test_periodic_flushing_cudagraph(tmp_path, fresh_knobs, data_format, buffer_size, device: str):

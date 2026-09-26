@@ -1,5 +1,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -367,7 +369,7 @@ TEST_F(LinearLayoutConversionsTest, Blocked4D) {
                                    {3, 2, 1, 0}));
   EXPECT_EQ(ll, LinearLayout(
                     {
-                        {S("register"), {{0, 0, 0, 0}, {0, 0, 0, 0}}},
+                        {S("register"), {}},
                         {S("lane"),
                          {{0, 0, 0, 0},
                           {0, 0, 0, 0},
@@ -1945,174 +1947,6 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_kwidth4) {
             toLinearLayout({16, 16}, mfmaDotOp1_16));
 }
 
-TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans_fp4_mn_packed) {
-  auto parentMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{16, 16, 16},
-           /*isTransposed=*/false);
-  auto mfmaDotOp0_kwidth_16 =
-      mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/16);
-  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            LinearLayout({{S("register"),
-                           {{1, 0},
-                            {2, 0},
-                            {4, 0},
-                            {0, 16},
-                            {0, 128},
-                            {32, 0},
-                            {64, 0},
-                            {128, 0}}},
-                          {S("lane"),
-                           {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}, {0, 64}}},
-                          {S("warp"), {{8, 0}, {16, 0}}},
-                          {S("block"), {}}},
-                         {S("dim0"), S("dim1")}));
-
-  // Dot operand for LDS transpose load based on transposed mfma layout has
-  // same layout as ordinary.
-  auto parentTMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{16, 16, 16},
-           /*isTransposed=*/true);
-  auto tmfmaDotOp0_kwidth_16 =
-      mfmaDotOp(parentTMfma16, /*opIdx=*/0, /*kWidth=*/16);
-
-  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16));
-}
-
-TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans_fp4_mn_packed) {
-  auto parentMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{16, 16, 16},
-           /*isTransposed=*/false);
-
-  // double rated mfma with large enough shape
-  auto mfmaDotOp1_kwidth_16 =
-      mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
-  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            LinearLayout({{S("register"),
-                           {{0, 1},
-                            {0, 2},
-                            {0, 4},
-                            {16, 0},
-                            {128, 0},
-                            {0, 8},
-                            {0, 16},
-                            {0, 32},
-                            {0, 64},
-                            {0, 128}}},
-                          {S("lane"),
-                           {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {64, 0}}},
-                          {S("warp"), {{0, 0}, {0, 0}}},
-                          {S("block"), {}}},
-                         {S("dim0"), S("dim1")}));
-
-  // Dot operand for LDS transpose load based on transposed mfma layout has
-  // same layout as ordinary.
-  auto parentTMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{16, 16, 16},
-           /*isTransposed=*/true);
-
-  auto tmfmaDotOp1_kwidth_16 =
-      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/16);
-
-  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16));
-}
-
-TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans_fp4_mn_packed) {
-  auto parentMfma32 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{32, 32, 8},
-           /*isTransposed=*/false);
-  auto mfmaDotOp0_kwidth_16 =
-      mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/16);
-  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            LinearLayout(
-                {{S("register"),
-                  {{1, 0},
-                   {2, 0},
-                   {4, 0},
-                   {0, 16},
-                   {0, 64},
-                   {0, 128},
-                   {64, 0},
-                   {128, 0}}},
-                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}, {0, 32}}},
-                 {S("warp"), {{16, 0}, {32, 0}}},
-                 {S("block"), {}}},
-                {S("dim0"), S("dim1")}));
-
-  // Dot operand for LDS transpose load based on transposed mfma layout has
-  // same layout as ordinary.
-  auto parentTMfma32 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{32, 32, 8},
-           /*isTransposed=*/true);
-  auto tmfmaDotOp0_kwidth_16 =
-      mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/16);
-
-  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16));
-}
-
-TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_tran_fp4_mn_packeds) {
-  auto parentMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{32, 32, 8},
-           /*isTransposed=*/false);
-  auto mfmaDotOp1_kwidth_16 =
-      mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
-
-  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            LinearLayout(
-                {{S("register"),
-                  {{0, 1},
-                   {0, 2},
-                   {0, 4},
-                   {16, 0},
-                   {64, 0},
-                   {128, 0},
-                   {0, 16},
-                   {0, 32},
-                   {0, 64},
-                   {0, 128}}},
-                 {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}, {32, 0}}},
-                 {S("warp"), {{0, 0}, {0, 0}}},
-                 {S("block"), {}}},
-                {S("dim0"), S("dim1")}));
-
-  // Dot operand for LDS transpose load based on transposed mfma layout has
-  // same layout as ordinary.
-  auto parentTMfma16 =
-      mfma(/*version=*/3, /*warps=*/{4, 1}, /*instrShape=*/{32, 32, 8},
-           /*isTransposed=*/true);
-  auto tmfmaDotOp1_kwidth_16 =
-      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/16);
-
-  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16),
-            chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
-                                 /*numLanesInShuffleGroup*/ 16));
-}
-
 TEST_F(LinearLayoutConversionsTest, WMMA_v1_2x4Warps) {
   auto legacy = wmma(/*warps=*/{2, 4}, /*version=*/1, /*transposed=*/false);
 
@@ -2729,6 +2563,37 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps) {
                     {S("warp"), {{0, 16}, {0, 32}, {16, 0}}},
                     {S("block"), {}}},
                    {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest,
+       WMMA_v3_32x16TransposedPartitionedCTAIsInjective) {
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, 2);
+
+  LinearLayout ctaLayout({{S("register"), {{0, 1}, {1, 0}}},
+                          {S("warp"), {{4, 2}, {2, 0}, {4, 0}}}},
+                         {S("dim0"), S("dim1")});
+  auto layout = AMDWmmaEncodingAttr::get(&ctx, /*version=*/3, ctaLayout,
+                                         /*isTransposed=*/true, cgaLayout,
+                                         /*instrShape=*/{32, 16, 128});
+
+  auto linear = toLinearLayout({128, 128}, layout);
+  EXPECT_TRUE(linear.isInjective());
+  EXPECT_EQ(linear.getInDimSize(S("register")), 64);
+
+  // Physical 32x16 CTA extents are wrong for the transposed layout's logical
+  // 16x32 output tile. The N dimension is clipped when composed for a 128x128
+  // accumulator, duplicating half the values and registers.
+  LinearLayout physicalCtaLayout({{S("register"), {{0, 1}, {0, 2}}},
+                                  {S("warp"), {{2, 4}, {1, 0}, {2, 0}}}},
+                                 {S("dim0"), S("dim1")});
+  auto physicalLayout =
+      AMDWmmaEncodingAttr::get(&ctx, /*version=*/3, physicalCtaLayout,
+                               /*isTransposed=*/true, cgaLayout,
+                               /*instrShape=*/{32, 16, 128});
+
+  auto physicalLinear = toLinearLayout({128, 128}, physicalLayout);
+  EXPECT_FALSE(physicalLinear.isInjective());
+  EXPECT_EQ(physicalLinear.getInDimSize(S("register")), 128);
 }
 
 TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs) {
@@ -3613,6 +3478,34 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
   EXPECT_EQ(ll, layout);
 }
 
+TEST_F(LinearLayoutConversionsTest, SM120BatchedDotScaledScaleLayout) {
+  auto cgaLayout =
+      CGAEncodingAttr::fromSplitParams(&ctx, {1, 1, 1}, {1, 1, 1}, {2, 1, 0});
+
+  auto layout =
+      getSM120DotScaledScaleLayout(&ctx, /*shape=*/{4, 128, 2}, /*opIdx=*/0,
+                                   /*warpsPerCTA=*/{4, 1, 1}, cgaLayout);
+  auto expected = LinearLayout(
+      {{S("register"), {{0, 0, 1}, {0, 16, 0}, {0, 32, 0}, {0, 64, 0}}},
+       {S("lane"), {{0, 8, 0}, {0, 0, 0}, {0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+       {S("warp"), {{1, 0, 0}, {2, 0, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1"), S("dim2")});
+  EXPECT_EQ(expected, layout);
+
+  layout =
+      getSM120DotScaledScaleLayout(&ctx, /*shape=*/{4, 128, 2}, /*opIdx=*/1,
+                                   /*warpsPerCTA=*/{4, 1, 1}, cgaLayout);
+  expected = LinearLayout(
+      {{S("register"),
+        {{0, 0, 1}, {0, 8, 0}, {0, 16, 0}, {0, 32, 0}, {0, 64, 0}}},
+       {S("lane"), {{0, 0, 0}, {0, 0, 0}, {0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+       {S("warp"), {{1, 0, 0}, {2, 0, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1"), S("dim2")});
+  EXPECT_EQ(expected, layout);
+}
+
 //===----------------------------------------------------------------------===//
 // nvmmaSharedToLinearLayout TMA Mode Independence Tests
 //
@@ -3663,6 +3556,79 @@ TEST_F(LinearLayoutConversionsTest,
           << dim0 << ", " << dim1 << "] with " << swizzleBytes << "B swizzle";
     }
   }
+}
+
+// A dot-operand parent may be any MmaEncodingTrait, including out-of-tree
+// layouts unknown to core. No such layout exists in-tree, so attach the
+// interface to a placeholder attribute (a test-only stand-in) and check both
+// seams. testExtMmaSentinel is what the stand-in returns, so the test can
+// confirm dispatch reached it.
+static LinearLayout testExtMmaSentinel(MLIRContext *ctx) {
+  auto S = [&](StringRef s) { return StringAttr::get(ctx, s); };
+  return LinearLayout(
+      {
+          {S("register"), {}},
+          {S("lane"), {{1}, {2}}},
+          {S("warp"), {}},
+          {S("block"), {}},
+      },
+      {S("dim0")});
+}
+
+// Test-only stand-in: MmaEncodingTrait attached to a placeholder attribute.
+struct TestExtMmaModel
+    : public MmaEncodingTrait::ExternalModel<TestExtMmaModel, StringAttr> {
+  SmallVector<unsigned> getRepOrderForOperand(Attribute attr, int opIdx) const {
+    return {0};
+  }
+  LinearLayout dotOperandToLinearLayout(Attribute attr, Attribute dotOp,
+                                        ArrayRef<int64_t> shape) const {
+    return testExtMmaSentinel(attr.getContext());
+  }
+};
+
+TEST_F(LinearLayoutConversionsTest, OutOfTreeMmaDotOperandExtensionPoint) {
+  StringAttr::attachInterface<TestExtMmaModel>(ctx);
+  Attribute parent = S("test_out_of_tree_mma");
+  ASSERT_TRUE(isa<MmaEncodingTrait>(parent));
+
+  // verify accepts an unknown MmaEncodingTrait parent.
+  auto emitError = [&]() {
+    return mlir::emitError(mlir::UnknownLoc::get(&ctx));
+  };
+  EXPECT_TRUE(succeeded(DotOperandEncodingAttr::verify(emitError, /*opIdx=*/0,
+                                                       parent, /*kWidth=*/0)));
+
+  // toLinearLayout dispatches through the interface, not a hardcoded type.
+  auto dotOperand = dot(parent, /*idx=*/0, /*kWidth=*/0);
+  EXPECT_EQ(dotOperand.toLinearLayout({4}), testExtMmaSentinel(&ctx));
+}
+
+// A shared layout may be any SharedEncodingTrait, including out-of-tree layouts
+// unknown to core. No such layout exists in-tree, so attach the interface to a
+// placeholder attribute (a test-only stand-in) and check the dispatch reaches
+// it. testExtSharedSentinel is what the stand-in returns.
+static LinearLayout testExtSharedSentinel(MLIRContext *ctx) {
+  auto S = [&](StringRef s) { return StringAttr::get(ctx, s); };
+  return LinearLayout::identity1D(4, S("offset"), S("dim0"));
+}
+
+// Test-only stand-in: SharedEncodingTrait attached to a placeholder attribute.
+struct TestExtSharedModel
+    : public SharedEncodingTrait::ExternalModel<TestExtSharedModel,
+                                                StringAttr> {
+  LinearLayout toLinearLayout(Attribute attr, ArrayRef<int64_t> shape) const {
+    return testExtSharedSentinel(attr.getContext());
+  }
+};
+
+TEST_F(LinearLayoutConversionsTest, OutOfTreeSharedEncodingExtensionPoint) {
+  StringAttr::attachInterface<TestExtSharedModel>(ctx);
+  Attribute layout = S("test_out_of_tree_shared");
+  ASSERT_TRUE(isa<SharedEncodingTrait>(layout));
+
+  // toLinearLayout dispatches through the interface, not a hardcoded type.
+  EXPECT_EQ(toLinearLayout({4}, layout), testExtSharedSentinel(&ctx));
 }
 
 } // anonymous namespace

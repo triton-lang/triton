@@ -18,9 +18,15 @@ NVIDIA Blackwell
     :toctree: generated
     :nosignatures:
 
+    add2
     allocate_tensor_memory
     fence_async_shared
+    fma2
+    max2
+    min2
     mma_v2
+    mul2
+    sub2
     tensor_memory_descriptor
     tensor_memory_descriptor_type
     TensorMemoryLayout

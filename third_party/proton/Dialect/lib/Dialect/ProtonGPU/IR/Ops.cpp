@@ -20,20 +20,25 @@ namespace gpu {
 
 // -- CircularRecordOp --
 LogicalResult CircularStoreOp::verify() {
-  auto scopeId = getScopeId();
   auto segmentType = getSegment().getType();
   auto selectedIds = segmentType.getSelectIds();
   auto bufferSizeInBytes = segmentType.getNBytes();
   auto mod = getOperation()->getParentOfType<ModuleOp>();
-
   int numWarps = getTotalNumWarps(mod);
-
   int segmentNum = selectedIds.empty() ? numWarps : selectedIds.size();
   if (!llvm::isPowerOf2_32(bufferSizeInBytes / segmentNum))
     return emitOpError("profiling buffer segment size must be power of 2");
 
-  if (scopeId < 0 || scopeId > 255)
-    return emitOpError("scope id must be in [0, 255]");
+  if (static_cast<bool>(getScopeIdAttr()) ==
+      static_cast<bool>(getDynamicScopeId()))
+    return emitOpError(
+        "requires exactly one static or dynamic scope identifier");
+
+  if (auto scopeId = getScopeIdAttr()) {
+    auto value = scopeId.getInt();
+    if (value < 0 || value > 255)
+      return emitOpError("scope id must be in [0, 255]");
+  }
 
   return success();
 }

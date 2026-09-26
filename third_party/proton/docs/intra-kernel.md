@@ -108,8 +108,21 @@ with pl.scope("compute"):
     ...
 ```
 
-Advanced users can insert `proton.record start` and `proton.record end`
-directly in TTIR or TTGIR.
+Asynchronous operations such as asynchronous memory transfers and matrix multiplications can be measured with an opaque event.
+Allocation does not record a timestamp but instead only associates the event with a name.
+The same event can be passed across loops, functions, and warp specialized regions to identify the start and the end of an asynchronous operation.
+
+```python
+event = pl.allocate_event("async_copy")
+pl.start_event(event)
+issue_async_copy(...)
+...
+pl.end_event(event)
+```
+
+Advanced users can insert `proton.record start`, `proton.record end`,
+`proton.allocate_event` and `proton.event` directly in TTIR or
+TTGIR.
 
 ## Understanding Timeline Traces
 

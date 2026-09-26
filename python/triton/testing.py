@@ -13,6 +13,27 @@ from . import language as tl
 from . import runtime
 
 
+@functools.lru_cache(maxsize=None)
+def _cublas_for_device(device):
+    import torch
+    from triton._C.libtriton import nvidia
+
+    workspace = torch.empty(32 * 1024 * 1024, device=device, dtype=torch.uint8)
+    return workspace, nvidia.cublas.CublasLt(workspace)
+
+
+def cublas():
+    """Return the current device's cached cuBLAS handle outside compile warmup."""
+    from triton._internal_testing import is_compile_warmup
+
+    if is_compile_warmup():
+        return None
+
+    import torch
+
+    return _cublas_for_device(torch.cuda.current_device())[1]
+
+
 def nvsmi(attrs):
     attrs = ','.join(attrs)
     cmd = ['nvidia-smi', '-i', '0', '--query-gpu=' + attrs, '--format=csv,noheader,nounits']
