@@ -13,6 +13,7 @@ from triton._internal_testing import (
     is_hip,
     is_hip_gfx1250,
     is_hopper_or_newer,
+    skip_if_unsupported_cluster_size,
 )
 from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
@@ -847,6 +848,7 @@ def test_reduce_funky_layout(src_layout, axis, device):
     shape = tuple(src_layout.shape)
     num_warps = 2**len(src_layout.warp_bases)
     num_ctas = 2**len(src_layout.block_bases)
+    skip_if_unsupported_cluster_size(num_ctas)
     # TODO: Remove this once AMD supports num_ctas > 1
     if num_ctas > 1 and not is_hopper_or_newer():
         pytest.skip("num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
