@@ -436,6 +436,7 @@ class CompiledKernel:
         self._module_pid = None
         self.function = None
         self._run = None
+        self._prebound_launcher = None
 
     def __del__(self):
 
@@ -486,6 +487,10 @@ class CompiledKernel:
         warp_size = self.metadata.warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
+        if knobs.runtime.use_prebound_launcher:
+            make_prebound_launcher = getattr(self._run, "make_prebound_launcher", None)
+            if make_prebound_launcher is not None:
+                self._prebound_launcher = make_prebound_launcher(self.function)
         if knobs.runtime.kernel_load_end_hook is not None:
             knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
@@ -513,8 +518,12 @@ class CompiledKernel:
             if stream is None:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
-            launch_metadata = self.launch_metadata(grid, stream, *args)
-            self.run(grid[0], grid[1], grid[2], stream, self.function, self.packed_metadata, launch_metadata,
-                     knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *args)
+            if self._prebound_launcher is not None and not knobs.runtime.launch_enter_hook \
+                    and not knobs.runtime.launch_exit_hook:
+                self._prebound_launcher(grid[0], grid[1], grid[2], stream, *args)
+            else:
+                launch_metadata = self.launch_metadata(grid, stream, *args)
+                self.run(grid[0], grid[1], grid[2], stream, self.function, self.packed_metadata, launch_metadata,
+                         knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *args)
 
         return runner
