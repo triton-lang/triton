@@ -37,6 +37,10 @@ public:
     return computeCapability >= 90 && computeCapability / 10 != 12;
   }
 
+  bool supportsTcgen05() const {
+    return computeCapability >= 100 && computeCapability < 120;
+  }
+
   bool supportMaximumMinimum() const { return computeCapability >= 80; }
 
   bool supportLdMatrix() const { return computeCapability >= 75; }

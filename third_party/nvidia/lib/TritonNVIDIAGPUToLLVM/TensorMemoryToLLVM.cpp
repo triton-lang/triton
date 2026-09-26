@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
@@ -505,17 +506,29 @@ static void combinePartialReductions(Location loc,
 
 struct TensorMemoryWaitOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMWaitOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  TensorMemoryWaitOpConversion(const LLVMTypeConverter &converter,
+                               int computeCapability, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        targetFeatures(computeCapability) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Diagnose unsupported targets before NVPTX instruction selection.
+    if (!targetFeatures.supportsTcgen05())
+      return op->emitOpError(
+          "requires a target with tcgen05 (tensor memory) support, which "
+          "the current compute capability does not provide");
+
     auto kind = op.getKind() == TMEMWaitKind::LOAD
                     ? NVVM::Tcgen05WaitKind::LOAD
                     : NVVM::Tcgen05WaitKind::STORE;
     rewriter.replaceOpWithNewOp<NVVM::Tcgen05WaitOp>(op, kind);
     return success();
   }
+
+private:
+  TargetFeatures targetFeatures;
 };
 
 struct TensorMemoryLoadOpConversion
@@ -855,10 +868,12 @@ struct TMEMSubSliceOpConversion
 
 void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
+    int computeCapability, PatternBenefit benefit) {
   patterns.add<TensorMemoryCopyOpConversion, TensorMemoryLoadOpConversion,
-               TensorMemoryStoreOpConversion, TensorMemoryAllocOpConversion,
-               TensorMemoryWaitOpConversion>(typeConverter, benefit);
+               TensorMemoryStoreOpConversion, TensorMemoryAllocOpConversion>(
+      typeConverter, benefit);
+  patterns.add<TensorMemoryWaitOpConversion>(typeConverter, computeCapability,
+                                             benefit);
 }
 
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
