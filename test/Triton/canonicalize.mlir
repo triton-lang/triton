@@ -351,3 +351,54 @@ tt.func @split_join_folds_through_discardable_attr(%a: tensor<8x4xf32>, %b: tens
   %o:2 = tt.split %j {async_task_id = array<i32: 0>} : tensor<8x4x2xf32> -> tensor<8x4xf32>
   tt.return %o#0, %o#1 : tensor<8x4xf32>, tensor<8x4xf32>
 }
+
+// -----
+
+// CHECK-LABEL: @unsplat_splat
+tt.func @unsplat_splat(%x: f32) -> f32 {
+  // unsplat(splat(x)) -> x
+  // CHECK-NOT: tt.splat
+  // CHECK-NOT: tt.unsplat
+  // CHECK: tt.return %arg0
+  %t = tt.splat %x : f32 -> tensor<1xf32>
+  %y = tt.unsplat %t : tensor<1xf32>
+  tt.return %y : f32
+}
+
+// -----
+
+// CHECK-LABEL: @splat_unsplat
+tt.func @splat_unsplat(%t: tensor<1x1xi32>) -> tensor<1x1xi32> {
+  // splat(unsplat(t)) -> t
+  // CHECK-NOT: tt.unsplat
+  // CHECK-NOT: tt.splat
+  // CHECK: tt.return %arg0
+  %x = tt.unsplat %t : tensor<1x1xi32>
+  %u = tt.splat %x : i32 -> tensor<1x1xi32>
+  tt.return %u : tensor<1x1xi32>
+}
+
+// -----
+
+// CHECK-LABEL: @unsplat_constant
+tt.func @unsplat_constant() -> f32 {
+  // unsplat(constant) -> scalar constant
+  // CHECK-NOT: tt.unsplat
+  // CHECK: %[[C:.*]] = arith.constant 4.200000e+01 : f32
+  // CHECK: tt.return %[[C]]
+  %c = arith.constant dense<42.0> : tensor<1xf32>
+  %y = tt.unsplat %c : tensor<1xf32>
+  tt.return %y : f32
+}
+
+// -----
+
+// CHECK-LABEL: @splat_unsplat_shape_mismatch
+tt.func @splat_unsplat_shape_mismatch(%t: tensor<1xf32>) -> tensor<1x1xf32> {
+  // Result type differs from t: must not fold.
+  // CHECK: tt.unsplat
+  // CHECK: tt.splat
+  %x = tt.unsplat %t : tensor<1xf32>
+  %u = tt.splat %x : f32 -> tensor<1x1xf32>
+  tt.return %u : tensor<1x1xf32>
+}

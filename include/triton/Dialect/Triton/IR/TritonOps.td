@@ -536,6 +536,7 @@ def TT_UnsplatOp : TT_Op<"unsplat", [Pure,
 
     let assemblyFormat = "$src attr-dict `:` type($src)";
     let hasVerifier = 1;
+    let hasFolder = 1;
 }
 
 def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
