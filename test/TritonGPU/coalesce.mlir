@@ -299,6 +299,72 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: #[[$WEAK_LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+  // CHECK: #[[$WIDE_LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+  // CHECK-LABEL: @uncoalesced_byte_load_sm80_w4
+  // CHECK: tt.load {{.*}} : tensor<32x512x!tt.ptr<i8>, #[[$WEAK_LAYOUT]]>
+  // CHECK: tt.load {{.*}} : tensor<32x512x!tt.ptr<i8>, #[[$WIDE_LAYOUT]]>
+  tt.func public @uncoalesced_byte_load_sm80_w4(
+      %weak: tensor<32x512x!tt.ptr<i8>, #blocked> {tt.contiguity = dense<[1, 1]> : tensor<2xi32>, tt.divisibility = dense<[1, 1]> : tensor<2xi32>},
+      %wide: tensor<32x512x!tt.ptr<i8>, #blocked> {tt.contiguity = dense<[1, 512]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}) -> tensor<32x512xi8, #blocked> {
+    %zero = arith.constant dense<0> : tensor<32x512xi32, #blocked>
+    %weak_ptr = tt.addptr %weak, %zero : tensor<32x512x!tt.ptr<i8>, #blocked>, tensor<32x512xi32, #blocked>
+    %wide_ptr = tt.addptr %wide, %zero : tensor<32x512x!tt.ptr<i8>, #blocked>, tensor<32x512xi32, #blocked>
+    %weak_value = tt.load %weak_ptr : tensor<32x512x!tt.ptr<i8>, #blocked>
+    %wide_value = tt.load %wide_ptr : tensor<32x512x!tt.ptr<i8>, #blocked>
+    %sum = arith.addi %weak_value, %wide_value : tensor<32x512xi8, #blocked>
+    tt.return %sum : tensor<32x512xi8, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-NOT: order = [0, 1]
+  // CHECK: #[[$W8_LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+  // CHECK-LABEL: @uncoalesced_byte_load_sm80_w8
+  // CHECK: tt.load {{.*}} : tensor<32x512x!tt.ptr<i8>, #[[$W8_LAYOUT]]>
+  // CHECK: tt.load {{.*}} : tensor<32x512x!tt.ptr<i8>, #[[$W8_LAYOUT]]>
+  tt.func public @uncoalesced_byte_load_sm80_w8(
+      %weak: tensor<32x512x!tt.ptr<i8>, #blocked> {tt.contiguity = dense<[1, 1]> : tensor<2xi32>, tt.divisibility = dense<[1, 1]> : tensor<2xi32>},
+      %wide: tensor<32x512x!tt.ptr<i8>, #blocked> {tt.contiguity = dense<[1, 512]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}) -> tensor<32x512xi8, #blocked> {
+    %zero = arith.constant dense<0> : tensor<32x512xi32, #blocked>
+    %weak_ptr = tt.addptr %weak, %zero : tensor<32x512x!tt.ptr<i8>, #blocked>, tensor<32x512xi32, #blocked>
+    %wide_ptr = tt.addptr %wide, %zero : tensor<32x512x!tt.ptr<i8>, #blocked>, tensor<32x512xi32, #blocked>
+    %weak_value = tt.load %weak_ptr : tensor<32x512x!tt.ptr<i8>, #blocked>
+    %wide_value = tt.load %wide_ptr : tensor<32x512x!tt.ptr<i8>, #blocked>
+    %sum = arith.addi %weak_value, %wide_value : tensor<32x512xi8, #blocked>
+    tt.return %sum : tensor<32x512xi8, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-NOT: order = [0, 1]
+  // CHECK: #[[$SM90_LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+  // CHECK-LABEL: @uncoalesced_byte_load_sm90
+  // CHECK: tt.load {{.*}} : tensor<32x512x!tt.ptr<i8>, #[[$SM90_LAYOUT]]>
+  // CHECK: tt.load {{.*}} : tensor<32x512x!tt.ptr<i8>, #[[$SM90_LAYOUT]]>
+  tt.func public @uncoalesced_byte_load_sm90(
+      %weak: tensor<32x512x!tt.ptr<i8>, #blocked> {tt.contiguity = dense<[1, 1]> : tensor<2xi32>, tt.divisibility = dense<[1, 1]> : tensor<2xi32>},
+      %wide: tensor<32x512x!tt.ptr<i8>, #blocked> {tt.contiguity = dense<[1, 512]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}) -> tensor<32x512xi8, #blocked> {
+    %zero = arith.constant dense<0> : tensor<32x512xi32, #blocked>
+    %weak_ptr = tt.addptr %weak, %zero : tensor<32x512x!tt.ptr<i8>, #blocked>, tensor<32x512xi32, #blocked>
+    %wide_ptr = tt.addptr %wide, %zero : tensor<32x512x!tt.ptr<i8>, #blocked>, tensor<32x512xi32, #blocked>
+    %weak_value = tt.load %weak_ptr : tensor<32x512x!tt.ptr<i8>, #blocked>
+    %wide_value = tt.load %wide_ptr : tensor<32x512x!tt.ptr<i8>, #blocked>
+    %sum = arith.addi %weak_value, %wide_value : tensor<32x512xi8, #blocked>
+    tt.return %sum : tensor<32x512xi8, #blocked>
+  }
+}
+
+// -----
+
 // CHECK: #[[$LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
