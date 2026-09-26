@@ -162,7 +162,8 @@ public:
                                         Value bufferMask, uint64_t threadMask,
                                         Value pred, MemType memType,
                                         Operation *insertPoint,
-                                        Value effectCTAs);
+                                        Value effectCTAs,
+                                        Value bufferIndex = {});
   // setReadVisibility: record the actual reader in the visibility columns of
   // each observer, including any synthetic peers.
   // bufferIndex is optional and requires a proven one-hot bufferMask.
@@ -209,7 +210,8 @@ public:
   void createVerifyReadVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,
                                       int thread, StringRef operandName,
                                       Value pred, MemType memType,
-                                      Operation *insertPoint, Value effectCTAs);
+                                      Operation *insertPoint, Value effectCTAs,
+                                      Value bufferIndex = {});
   // copyWriteVisibility: replicate the write visibility bit of sourceThread to
   // every destination thread in destMask.
   void createCopyWriteVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,

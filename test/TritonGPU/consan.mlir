@@ -160,35 +160,35 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-NOT: tt.load
   // CHECK: tt.store %{{[^,]+}}, %{{[^,]+}}, %[[PUBLISH_STORE_MASK]] {ignore_cta} : tensor<2x2x2x!tt.ptr<i{{32|64}}>
   // CHECK-NOT: tt.load
-  // CHECK: %[[CLEAR_WRITES_BUFFERS:.*]] = tt.broadcast {{.*}} -> tensor<2x2x2x1x2xi1
+  // CHECK: %[[CLEAR_WRITES_BUFFERS:.*]] = arith.constant dense<true> : tensor<2x1x2x1x2xi1
   // CHECK-NOT: tt.load
-  // CHECK: tt.splat %[[PUBLISH_CTAS]] : i32 -> tensor<2x2x2x1x2xi32
+  // CHECK: tt.splat %[[PUBLISH_CTAS]] : i32 -> tensor<2x1x2x1x2xi32
   // CHECK-NOT: tt.load
-  // CHECK: %[[CLEAR_WRITES_CTAS:.*]] = arith.cmpi ne, {{.*}} : tensor<2x2x2x1x2xi32
-  // CHECK-NEXT: %[[CLEAR_WRITES_MASK:.*]] = arith.andi %[[CLEAR_WRITES_BUFFERS]], %[[CLEAR_WRITES_CTAS]] : tensor<2x2x2x1x2xi1
-  // CHECK-NEXT: %[[CLEAR_WRITES_ZERO:.*]] = arith.constant dense<0> : tensor<2x2x2x1x2xi8
+  // CHECK: %[[CLEAR_WRITES_CTAS:.*]] = arith.cmpi ne, {{.*}} : tensor<2x1x2x1x2xi32
+  // CHECK-NEXT: %[[CLEAR_WRITES_MASK:.*]] = arith.andi %[[CLEAR_WRITES_BUFFERS]], %[[CLEAR_WRITES_CTAS]] : tensor<2x1x2x1x2xi1
+  // CHECK-NEXT: %[[CLEAR_WRITES_ZERO:.*]] = arith.constant dense<0> : tensor<2x1x2x1x2xi8
   // CHECK-NOT: tt.load
-  // CHECK: tt.store %{{[^,]+}}, %[[CLEAR_WRITES_ZERO]], %[[CLEAR_WRITES_MASK]] {ignore_cta} : tensor<2x2x2x1x2x!tt.ptr<i8>
+  // CHECK: tt.store %{{[^,]+}}, %[[CLEAR_WRITES_ZERO]], %[[CLEAR_WRITES_MASK]] {ignore_cta} : tensor<2x1x2x1x2x!tt.ptr<i8>
   // CHECK-NOT: tt.load
-  // CHECK: %[[CLEAR_READS_BUFFERS:.*]] = tt.broadcast {{.*}} -> tensor<2x2x2x1x2xi1
+  // CHECK: %[[CLEAR_READS_BUFFERS:.*]] = arith.constant dense<true> : tensor<2x1x2x1x2xi1
   // CHECK-NOT: tt.load
-  // CHECK: tt.splat %[[PUBLISH_CTAS]] : i32 -> tensor<2x2x2x1x2xi32
+  // CHECK: tt.splat %[[PUBLISH_CTAS]] : i32 -> tensor<2x1x2x1x2xi32
   // CHECK-NOT: tt.load
-  // CHECK: %[[CLEAR_READS_CTAS:.*]] = arith.cmpi ne, {{.*}} : tensor<2x2x2x1x2xi32
-  // CHECK-NEXT: %[[CLEAR_READS_MASK:.*]] = arith.andi %[[CLEAR_READS_BUFFERS]], %[[CLEAR_READS_CTAS]] : tensor<2x2x2x1x2xi1
-  // CHECK-NEXT: %[[CLEAR_READS_ZERO:.*]] = arith.constant dense<0> : tensor<2x2x2x1x2xi{{32|64}}
+  // CHECK: %[[CLEAR_READS_CTAS:.*]] = arith.cmpi ne, {{.*}} : tensor<2x1x2x1x2xi32
+  // CHECK-NEXT: %[[CLEAR_READS_MASK:.*]] = arith.andi %[[CLEAR_READS_BUFFERS]], %[[CLEAR_READS_CTAS]] : tensor<2x1x2x1x2xi1
+  // CHECK-NEXT: %[[CLEAR_READS_ZERO:.*]] = arith.constant dense<0> : tensor<2x1x2x1x2xi{{32|64}}
   // CHECK-NOT: tt.load
-  // CHECK: tt.store %{{[^,]+}}, %[[CLEAR_READS_ZERO]], %[[CLEAR_READS_MASK]] {ignore_cta} : tensor<2x2x2x1x2x!tt.ptr<i{{32|64}}>
+  // CHECK: tt.store %{{[^,]+}}, %[[CLEAR_READS_ZERO]], %[[CLEAR_READS_MASK]] {ignore_cta} : tensor<2x1x2x1x2x!tt.ptr<i{{32|64}}>
   // CHECK-NOT: tt.load
-  // CHECK: %[[CLEAR_TRACKING_BUFFERS:.*]] = tt.broadcast {{.*}} -> tensor<2x2x2x1x2x2xi1
+  // CHECK: %[[CLEAR_TRACKING_BUFFERS:.*]] = arith.constant dense<true> : tensor<2x1x2x1x2x2xi1
   // CHECK-NOT: tt.load
-  // CHECK: tt.splat %[[PUBLISH_CTAS]] : i32 -> tensor<2x2x2x1x2x2xi32
+  // CHECK: tt.splat %[[PUBLISH_CTAS]] : i32 -> tensor<2x1x2x1x2x2xi32
   // CHECK-NOT: tt.load
-  // CHECK: %[[CLEAR_TRACKING_CTAS:.*]] = arith.cmpi ne, {{.*}} : tensor<2x2x2x1x2x2xi32
-  // CHECK-NEXT: %[[CLEAR_TRACKING_MASK:.*]] = arith.andi %[[CLEAR_TRACKING_BUFFERS]], %[[CLEAR_TRACKING_CTAS]] : tensor<2x2x2x1x2x2xi1
-  // CHECK-NEXT: %[[CLEAR_TRACKING_ZERO:.*]] = arith.constant dense<0> : tensor<2x2x2x1x2x2xi{{32|64}}
+  // CHECK: %[[CLEAR_TRACKING_CTAS:.*]] = arith.cmpi ne, {{.*}} : tensor<2x1x2x1x2x2xi32
+  // CHECK-NEXT: %[[CLEAR_TRACKING_MASK:.*]] = arith.andi %[[CLEAR_TRACKING_BUFFERS]], %[[CLEAR_TRACKING_CTAS]] : tensor<2x1x2x1x2x2xi1
+  // CHECK-NEXT: %[[CLEAR_TRACKING_ZERO:.*]] = arith.constant dense<0> : tensor<2x1x2x1x2x2xi{{32|64}}
   // CHECK-NOT: tt.load
-  // CHECK: tt.store %{{[^,]+}}, %[[CLEAR_TRACKING_ZERO]], %[[CLEAR_TRACKING_MASK]] {ignore_cta} : tensor<2x2x2x1x2x2x!tt.ptr<i{{32|64}}>
+  // CHECK: tt.store %{{[^,]+}}, %[[CLEAR_TRACKING_ZERO]], %[[CLEAR_TRACKING_MASK]] {ignore_cta} : tensor<2x1x2x1x2x2x!tt.ptr<i{{32|64}}>
   // CHECK-NOT: tt.load
   // CHECK: tt.return
 
@@ -342,11 +342,11 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-LABEL: tt.func private @__triton_consan_publish_write_visibility_
   // CHECK: cf.cond_br
   // CHECK-NOT: cf.cond_br
-  // CHECK: tt.store {{.*}} : tensor<4x2x4x2x2x!tt.ptr<i8>,
+  // CHECK: tt.store {{.*}} : tensor<4x1x4x2x2x!tt.ptr<i8>,
   // CHECK-NOT: cf.cond_br
-  // CHECK: tt.store {{.*}} : tensor<4x2x4x1x4x!tt.ptr<i{{32|64}}>,
+  // CHECK: tt.store {{.*}} : tensor<4x1x4x1x4x!tt.ptr<i{{32|64}}>,
   // CHECK-NOT: cf.cond_br
-  // CHECK: tt.store {{.*}} : tensor<4x2x4x2x4x2x!tt.ptr<i{{32|64}}>,
+  // CHECK: tt.store {{.*}} : tensor<4x1x4x2x4x2x!tt.ptr<i{{32|64}}>,
   // CHECK-NOT: cf.cond_br
   // CHECK: tt.return
   // CHECK-LABEL: @mbarrier_multicast_four_ctas
@@ -445,8 +445,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32} {
   // CHECK-LABEL: tt.func private @__triton_consan_publish_write_visibility_
   // Write tracking streams K in groups of four, preserving the full phase stride.
-  // CHECK: %[[STREAM_W_MASK:.*]] = arith.andi {{.*}} : tensor<4x8x4x4x2xi1,
-  // CHECK-NEXT: %[[STREAM_W_ZERO:.*]] = arith.constant dense<0> : tensor<4x8x4x4x2xi8,
+  // CHECK: %[[STREAM_W_MASK:.*]] = arith.andi {{.*}} : tensor<4x1x4x4x2xi1,
+  // CHECK-NEXT: %[[STREAM_W_ZERO:.*]] = arith.constant dense<0> : tensor<4x1x4x4x2xi8,
   // CHECK: %[[STREAM_W_FIRST:.*]] = arith.constant 0 : i32
   // CHECK: %[[STREAM_W_STEP:.*]] = arith.constant 4 : i32
   // CHECK: %[[STREAM_W_LIMIT:.*]] = arith.constant 8 : i32
@@ -456,13 +456,13 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // CHECK: %[[STREAM_W_OFFSET:.*]] = arith.muli %[[STREAM_W_IV]], %[[STREAM_W_STRIDE]] : i32
   // CHECK: tt.addptr {{.*}}, %[[STREAM_W_OFFSET]] : !tt.ptr<i8>, i32
   // CHECK: arith.constant dense<1024> : tensor<2xi32,
-  // CHECK: tt.store {{.*}}, %[[STREAM_W_ZERO]], %[[STREAM_W_MASK]]{{.*}} : tensor<4x8x4x4x2x!tt.ptr<i8>,
+  // CHECK: tt.store {{.*}}, %[[STREAM_W_ZERO]], %[[STREAM_W_MASK]]{{.*}} : tensor<4x1x4x4x2x!tt.ptr<i8>,
   // CHECK: %[[STREAM_W_NEXT:.*]] = arith.addi %[[STREAM_W_IV]], %[[STREAM_W_STEP]] : i32
   // CHECK: %[[STREAM_W_MORE:.*]] = arith.cmpi ult, %[[STREAM_W_NEXT]], %[[STREAM_W_LIMIT]] : i32
   // CHECK: cf.cond_br %[[STREAM_W_MORE]], ^[[STREAM_W_LOOP]](%[[STREAM_W_NEXT]] : i32),
   // Read visibility streams T, without compressing the reader-origin stride.
-  // CHECK: %[[STREAM_T_MASK:.*]] = arith.andi {{.*}} : tensor<4x8x4x1x4xi1,
-  // CHECK-NEXT: %[[STREAM_T_ZERO:.*]] = arith.constant dense<0> : tensor<4x8x4x1x4xi{{32|64}},
+  // CHECK: %[[STREAM_T_MASK:.*]] = arith.andi {{.*}} : tensor<4x1x4x1x4xi1,
+  // CHECK-NEXT: %[[STREAM_T_ZERO:.*]] = arith.constant dense<0> : tensor<4x1x4x1x4xi{{32|64}},
   // CHECK: %[[STREAM_T_FIRST:.*]] = arith.constant 0 : i32
   // CHECK: %[[STREAM_T_STEP:.*]] = arith.constant 1 : i32
   // CHECK: %[[STREAM_T_LIMIT:.*]] = arith.constant 2 : i32
@@ -472,13 +472,13 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // CHECK: %[[STREAM_T_OFFSET:.*]] = arith.muli %[[STREAM_T_IV]], %[[STREAM_T_STRIDE]] : i32
   // CHECK: tt.addptr {{.*}}, %[[STREAM_T_OFFSET]] : !tt.ptr<i{{32|64}}>, i32
   // CHECK: arith.constant dense<256> : tensor<4xi32,
-  // CHECK: tt.store {{.*}}, %[[STREAM_T_ZERO]], %[[STREAM_T_MASK]]{{.*}} : tensor<4x8x4x1x4x!tt.ptr<i{{32|64}}>,
+  // CHECK: tt.store {{.*}}, %[[STREAM_T_ZERO]], %[[STREAM_T_MASK]]{{.*}} : tensor<4x1x4x1x4x!tt.ptr<i{{32|64}}>,
   // CHECK: %[[STREAM_T_NEXT:.*]] = arith.addi %[[STREAM_T_IV]], %[[STREAM_T_STEP]] : i32
   // CHECK: %[[STREAM_T_MORE:.*]] = arith.cmpi ult, %[[STREAM_T_NEXT]], %[[STREAM_T_LIMIT]] : i32
   // CHECK: cf.cond_br %[[STREAM_T_MORE]], ^[[STREAM_T_LOOP]](%[[STREAM_T_NEXT]] : i32),
   // Read tracking streams K, retaining full origin and phase bank strides.
-  // CHECK: %[[STREAM_R_MASK:.*]] = arith.andi {{.*}} : tensor<4x8x4x1x4x2xi1,
-  // CHECK-NEXT: %[[STREAM_R_ZERO:.*]] = arith.constant dense<0> : tensor<4x8x4x1x4x2xi{{32|64}},
+  // CHECK: %[[STREAM_R_MASK:.*]] = arith.andi {{.*}} : tensor<4x1x4x1x4x2xi1,
+  // CHECK-NEXT: %[[STREAM_R_ZERO:.*]] = arith.constant dense<0> : tensor<4x1x4x1x4x2xi{{32|64}},
   // CHECK: %[[STREAM_R_FIRST:.*]] = arith.constant 0 : i32
   // CHECK: %[[STREAM_R_STEP:.*]] = arith.constant 1 : i32
   // CHECK: %[[STREAM_R_LIMIT:.*]] = arith.constant 8 : i32
@@ -489,7 +489,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // CHECK: tt.addptr {{.*}}, %[[STREAM_R_OFFSET]] : !tt.ptr<i{{32|64}}>, i32
   // CHECK: arith.constant dense<1024> : tensor<4xi32,
   // CHECK: arith.constant dense<4096> : tensor<2xi32,
-  // CHECK: tt.store {{.*}}, %[[STREAM_R_ZERO]], %[[STREAM_R_MASK]]{{.*}} : tensor<4x8x4x1x4x2x!tt.ptr<i{{32|64}}>,
+  // CHECK: tt.store {{.*}}, %[[STREAM_R_ZERO]], %[[STREAM_R_MASK]]{{.*}} : tensor<4x1x4x1x4x2x!tt.ptr<i{{32|64}}>,
   // CHECK: %[[STREAM_R_NEXT:.*]] = arith.addi %[[STREAM_R_IV]], %[[STREAM_R_STEP]] : i32
   // CHECK: %[[STREAM_R_MORE:.*]] = arith.cmpi ult, %[[STREAM_R_NEXT]], %[[STREAM_R_LIMIT]] : i32
   // CHECK: cf.cond_br %[[STREAM_R_MORE]], ^[[STREAM_R_LOOP]](%[[STREAM_R_NEXT]] : i32),

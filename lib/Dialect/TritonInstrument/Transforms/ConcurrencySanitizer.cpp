@@ -1426,7 +1426,8 @@ private:
         addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
                        effect.operandName, readCTAs, opInfo->commitKind);
         addReadChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
-                      effect.operandName, effectCTAs, opInfo->commitKind);
+                      effect.operandName, effectCTAs, opInfo->commitKind,
+                      materialized.bufferIndex);
       };
 
       if (materialized.barrierCTAs) {
@@ -1478,7 +1479,7 @@ private:
         if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
           funcBuilder.createPublishWriteVisibilityCall(
               b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
-              pred, memType, op, effectCTAs);
+              pred, memType, op, effectCTAs, materialized.bufferIndex);
         }
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
@@ -1486,7 +1487,8 @@ private:
           if (auxData.hasAsyncCopyMbarriers &&
               opInfo->commitKind == CommitKind::AsyncCp)
             funcBuilder.createPublishWriteVisibilityCall(
-                b, bufferMask, 0, pred, memType, op, effectCTAs);
+                b, bufferMask, 0, pred, memType, op, effectCTAs,
+                materialized.bufferIndex);
           funcBuilder.createStageAccessForCommitCall(
               b, bufferMask, baseThread, pred, memType, opInfo->commitKind, op);
         }
@@ -1603,9 +1605,11 @@ private:
                      Operation *op, Value bufferMask, Value pred,
                      MemType memType, int thread,
                      const std::string &operandName, Value effectCTAs,
-                     CommitKind::Kind opCommitKind = CommitKind::None) {
-    funcBuilder.createVerifyReadVisibilityCall(
-        b, bufferMask, thread, operandName, pred, memType, op, effectCTAs);
+                     CommitKind::Kind opCommitKind = CommitKind::None,
+                     Value bufferIndex = {}) {
+    funcBuilder.createVerifyReadVisibilityCall(b, bufferMask, thread,
+                                               operandName, pred, memType, op,
+                                               effectCTAs, bufferIndex);
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
