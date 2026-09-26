@@ -48,3 +48,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+
+// -----
+
+// The mask restriction is available before any physical layout is assigned.
+// CHECK: [[$MASKED_COALESCED:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @masked_coalesced_odd_tail
+  tt.func @masked_coalesced_odd_tail(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %start: i32 {tt.divisibility = 1024 : i32}) {
+    %range = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #gluon.coalesced_encoding>
+    %base = tt.splat %ptr : !tt.ptr<bf16> -> tensor<1024x!tt.ptr<bf16>, #gluon.coalesced_encoding>
+    %ptrs = tt.addptr %base, %range : tensor<1024x!tt.ptr<bf16>, #gluon.coalesced_encoding>, tensor<1024xi32, #gluon.coalesced_encoding>
+    %tile = tt.splat %start : i32 -> tensor<1024xi32, #gluon.coalesced_encoding>
+    %offsets = arith.addi %tile, %range : tensor<1024xi32, #gluon.coalesced_encoding>
+    %end = arith.constant dense<1023> : tensor<1024xi32, #gluon.coalesced_encoding>
+    %mask = arith.cmpi slt, %offsets, %end : tensor<1024xi32, #gluon.coalesced_encoding>
+    // CHECK: tt.load {{.*}} : tensor<1024x!tt.ptr<bf16>, [[$MASKED_COALESCED]]>
+    %value = tt.load %ptrs, %mask : tensor<1024x!tt.ptr<bf16>, #gluon.coalesced_encoding>
+    // CHECK: tt.store {{.*}} : tensor<1024x!tt.ptr<bf16>, [[$MASKED_COALESCED]]>
+    tt.store %ptrs, %value, %mask : tensor<1024x!tt.ptr<bf16>, #gluon.coalesced_encoding>
+    tt.return
+  }
+}
