@@ -1,5 +1,39 @@
 // RUN: triton-opt %s -split-input-file --allow-unregistered-dialect --nvws-assign-stage-phase  -cse | FileCheck %s
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // Forwarding a token through a conditional must preserve its stage even
+  // when all buffer views and acquisitions are outside the conditional.
+  // CHECK-LABEL: @forward_acquired_token
+  tt.func @forward_acquired_token(%n: i32, %condition: i1) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<2x1xi32, #shared, #smem, mutable>
+    %aref = nvws.aref.create %alloc : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>
+    %buf, %token = nvws.aref.get.enter %aref {ttg.partition = array<i32: 0>} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]> -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>, !ttg.async.token
+    // CHECK: [[LOOP:%.*]]:3 = scf.for {{.*}} iter_args({{.*}}, [[STAGE:%.*]] = {{.*}}, [[PHASE:%.*]] = {{.*}})
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%iter = %token) -> !ttg.async.token : i32 {
+      %view = nvws.aref.buffer %aref, %iter {ttg.partition = array<i32: 0>} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>, !ttg.async.token -> !ttg.memdesc<1xi32, #shared, #smem, mutable, 2x1>
+      // CHECK: [[IF:%.*]]:3 = scf.if
+      %forward = scf.if %condition -> !ttg.async.token {
+        // CHECK: scf.yield {{.*}}, [[STAGE]], [[PHASE]]
+        scf.yield %iter : !ttg.async.token
+      } else {
+        // CHECK: scf.yield {{.*}}, [[STAGE]], [[PHASE]]
+        scf.yield %iter : !ttg.async.token
+      } {ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>]}
+      // CHECK: scf.yield {{.*}}, [[IF]]#1, [[IF]]#2
+      scf.yield %forward : !ttg.async.token
+    } {ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>]}
+    // CHECK: nvws.aref.get.exit {{.*}}[[[LOOP]]#1], [[LOOP]]#0
+    nvws.aref.get.exit %aref, %result [#nvws.async_op<none>] {ttg.partition = array<i32: 0>} : <[!ttg.memdesc<2x1xi32, #shared, #smem, mutable>]>, !ttg.async.token
+    tt.return
+  }
+}
+
+// -----
+
 #shared0 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

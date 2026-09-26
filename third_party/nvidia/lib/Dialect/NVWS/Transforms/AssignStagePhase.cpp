@@ -107,6 +107,11 @@ template <class T> struct AssignStagePhase {
     for (auto &op : *block) {
       if (getTypedOp(&op) || isBufferUsed(dyn_cast<ArefBufferOp>(op), token)) {
         return true;
+      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
+        // A region may forward an acquired token without creating another
+        // buffer view. Its result still needs the stage of that acquisition.
+        if (token && llvm::is_contained(yieldOp.getOperands(), token))
+          return true;
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         Value newTok;
         if (auto pos = findValuePosInRange(forOp.getInitArgs(), token)) {
@@ -359,6 +364,10 @@ template <class T> struct AssignStagePhase {
         phaseIds.insert(argIds.begin(), argIds.end());
       }
     }
+    if (stageIds.empty())
+      stageIds = getOwnerPartitions();
+    if (phaseIds.empty())
+      phaseIds = getOwnerPartitions();
     ifOpOutputsIds.push_back(stageIds);
     ifOpOutputsIds.push_back(phaseIds);
     setPartition(newIfOp, ifOpIds);
