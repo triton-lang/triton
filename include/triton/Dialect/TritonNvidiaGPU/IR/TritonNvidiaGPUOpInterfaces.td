@@ -3,6 +3,8 @@
 
 include "mlir/IR/OpBase.td"
 
+def RequiresTcgen05 : NativeOpTrait<"RequiresTcgen05">;
+
 def TMAOpInterface : OpInterface<"TMAOpInterface"> {
   let description = [{
     Common interface for asynchronous TMA operations.

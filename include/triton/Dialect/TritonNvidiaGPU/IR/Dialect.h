@@ -30,7 +30,9 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Support/LogicalResult.h"
 #include "llvm/Support/ErrorHandling.h"
 
 // TritonNvidiaGPU depends on Triton
@@ -45,7 +47,20 @@
 
 namespace mlir::triton::nvidia_gpu::impl {
 LogicalResult verifyMMAv5Op(Operation *op);
+LogicalResult verifyRequiresTcgen05(Operation *op);
 } // namespace mlir::triton::nvidia_gpu::impl
+
+namespace mlir::OpTrait {
+
+template <typename ConcreteType>
+class RequiresTcgen05 : public TraitBase<ConcreteType, RequiresTcgen05> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return triton::nvidia_gpu::impl::verifyRequiresTcgen05(op);
+  }
+};
+
+} // namespace mlir::OpTrait
 
 #include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.h.inc"
 

@@ -697,6 +697,7 @@ def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait", [MemWaitOpTrait]> {
 }
 
 def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
+    RequiresTcgen05,
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
@@ -761,6 +762,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
 }
 
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
+    RequiresTcgen05,
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
@@ -838,7 +840,9 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   let hasVerifier = 1;
 }
 
-def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
+def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [
+    RequiresTcgen05,
+    AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
@@ -886,7 +890,7 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
 }
 
 // Inserted by TMEM synchronization and instrumentation before lowering.
-def TTNG_TMEMWaitOp : TTNG_Op<"tmem_wait"> {
+def TTNG_TMEMWaitOp : TTNG_Op<"tmem_wait", [RequiresTcgen05]> {
   let summary = "Wait for tensor memory loads or stores to complete";
   let description = [{
     Waits for all prior tensor memory loads or stores issued by the executing
@@ -901,7 +905,10 @@ def TTNG_TMEMWaitOp : TTNG_Op<"tmem_wait"> {
   let assemblyFormat = "$kind attr-dict";
 }
 
-def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
+def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [
+    RequiresTcgen05,
+    AttrSizedResultSegments
+]> {
   let summary = "Load a buffer from tensor memory into a distributed tensor";
 
   let description = [{
@@ -1003,6 +1010,7 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
 }
 
 def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [
+    RequiresTcgen05,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Store a distributed tensor into a buffer in tensor memory";
   let hasCanonicalizeMethod = 1;
@@ -1036,7 +1044,9 @@ def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [
+    RequiresTcgen05,
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "allocate tensor memory";
   let description = [{
     This operation allocates a buffer in tensor memory and returns a descriptor
@@ -1063,8 +1073,11 @@ def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEf
   }];
 }
 
-def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
-                                                    MemDescViewTrait]> {
+def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [
+    RequiresTcgen05,
+    Pure,
+    MemDescViewTrait
+]> {
   let summary = "Take a subslice of a tensor memory allocation";
   let description = [{
     This operation takes a subslice of a tensor memory allocation and returns a
@@ -1087,7 +1100,7 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
+def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [RequiresTcgen05]> {
   let summary = "Initiate an asynchronous copy operation from shared memory to tensor memory.";
 
   let description = [{

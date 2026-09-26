@@ -1,13 +1,55 @@
-import pytest
+import os
 import re
+import subprocess
+import sys
 from types import SimpleNamespace
+
+import pytest
 
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
 from triton.compiler import ASTSource
 from triton.compiler.errors import CompileTimeAssertionFailure
+from triton.experimental import gluon
+from triton.experimental.gluon import language as ttgl
+from triton.experimental.gluon._runtime import GluonASTSource
+from triton.experimental.gluon.language.nvidia import blackwell
 from triton.runtime.driver import driver
+
+
+@gluon.jit
+def tcgen05_compile_only_kernel():
+    layout: ttgl.constexpr = blackwell.TensorMemoryLayout([128, 128], col_stride=1)
+    _ = blackwell.allocate_tensor_memory(ttgl.float32, [128, 128], layout)
+
+
+def _compile_tcgen05_target(arch, instrumentation_mode):
+    source = GluonASTSource(tcgen05_compile_only_kernel, {}, {})
+    triton.compile(source, target=GPUTarget("cuda", arch, 32), options={"instrumentation_mode": instrumentation_mode})
+
+
+@pytest.mark.parametrize("arch, supported", [(90, False), (100, True), (110, True), (120, False)])
+@pytest.mark.parametrize("instrumentation_mode", ["", "consan"])
+def test_compile_only_tcgen05_target(arch, supported, instrumentation_mode, tmp_path):
+    env = os.environ.copy()
+    env["TRITON_CACHE_DIR"] = str(tmp_path)
+    script = ("from test_compile_only import _compile_tcgen05_target; "
+              f"_compile_tcgen05_target({arch}, {instrumentation_mode!r})")
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        cwd=os.path.dirname(__file__),
+        text=True,
+        env=env,
+        timeout=120,
+    )
+    if supported:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode == 1, result.stderr
+        assert "requires tcgen05 support" in result.stderr
+        assert f'target "cuda:{arch}" does not support it' in result.stderr
 
 
 @triton.jit
