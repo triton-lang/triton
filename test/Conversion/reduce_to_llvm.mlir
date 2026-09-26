@@ -74,9 +74,10 @@ tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<32x16xi32, #linear>) {
 }
 
 // TERNARY-LABEL: @reduce_maximum_f32
-// TERNARY: %[[MAXIMUM_A:.*]] = llvm.intr.maximum(%{{.*}}, %{{.*}}) : (f32, f32) -> f32
-// TERNARY-NEXT: %[[MAXIMUM_B:.*]] = llvm.intr.maximum(%[[MAXIMUM_A]], %{{.*}}) : (f32, f32) -> f32
-// TERNARY-NEXT: llvm.intr.maximum(%[[MAXIMUM_B]], %{{.*}}) : (f32, f32) -> f32
+// TERNARY-NOT: llvm.intr.maximum
+// TERNARY-DAG: llvm.fcmp "uno"
+// TERNARY-DAG: llvm.intr.maxnum
+// TERNARY-DAG: llvm.select
 tt.func public @reduce_maximum_f32(%arg0: tensor<128x4xf32, #blocked_reduce>) {
   %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
   ^bb0(%a: f32, %b: f32):
@@ -87,9 +88,10 @@ tt.func public @reduce_maximum_f32(%arg0: tensor<128x4xf32, #blocked_reduce>) {
 }
 
 // TERNARY-LABEL: @reduce_minimum_f32
-// TERNARY: %[[MINIMUM_A:.*]] = llvm.intr.minimum(%{{.*}}, %{{.*}}) : (f32, f32) -> f32
-// TERNARY-NEXT: %[[MINIMUM_B:.*]] = llvm.intr.minimum(%[[MINIMUM_A]], %{{.*}}) : (f32, f32) -> f32
-// TERNARY-NEXT: llvm.intr.minimum(%[[MINIMUM_B]], %{{.*}}) : (f32, f32) -> f32
+// TERNARY-NOT: llvm.intr.minimum
+// TERNARY-DAG: llvm.fcmp "uno"
+// TERNARY-DAG: llvm.intr.minnum
+// TERNARY-DAG: llvm.select
 tt.func public @reduce_minimum_f32(%arg0: tensor<128x4xf32, #blocked_reduce>) {
   %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
   ^bb0(%a: f32, %b: f32):
@@ -165,9 +167,10 @@ tt.func public @reduce_maxnum_f16(%arg0: tensor<128x8xf16, #blocked_packed_reduc
 }
 
 // TERNARY-LABEL: @reduce_minimum_bf16
-// TERNARY: %[[PACKED_MINIMUM_A:.*]] = llvm.intr.minimum(%{{.*}}, %{{.*}}) : (vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
-// TERNARY-NEXT: %[[PACKED_MINIMUM_B:.*]] = llvm.intr.minimum(%[[PACKED_MINIMUM_A]], %{{.*}}) : (vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
-// TERNARY-NEXT: llvm.intr.minimum(%[[PACKED_MINIMUM_B]], %{{.*}}) : (vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
+// TERNARY-NOT: llvm.intr.minimum
+// TERNARY-DAG: llvm.fcmp "uno"
+// TERNARY-DAG: llvm.intr.minnum
+// TERNARY-DAG: llvm.select
 tt.func public @reduce_minimum_bf16(%arg0: tensor<128x8xbf16, #blocked_packed_reduce>) {
   %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
   ^bb0(%a: bf16, %b: bf16):
@@ -178,9 +181,10 @@ tt.func public @reduce_minimum_bf16(%arg0: tensor<128x8xbf16, #blocked_packed_re
 }
 
 // TERNARY-LABEL: @reduce_maximum_f64
-// TERNARY: %[[F64_LEFT:.*]] = llvm.intr.maximum(%{{.*}}, %{{.*}}) : (f64, f64) -> f64
-// TERNARY-NEXT: %[[F64_RIGHT:.*]] = llvm.intr.maximum(%{{.*}}, %{{.*}}) : (f64, f64) -> f64
-// TERNARY-NEXT: llvm.intr.maximum(%[[F64_LEFT]], %[[F64_RIGHT]]) : (f64, f64) -> f64
+// TERNARY-NOT: llvm.intr.maximum
+// TERNARY-DAG: llvm.fcmp "uno"
+// TERNARY-DAG: llvm.intr.maxnum
+// TERNARY-DAG: llvm.select
 tt.func public @reduce_maximum_f64(%arg0: tensor<128x4xf64, #blocked_reduce>) {
   %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
   ^bb0(%a: f64, %b: f64):
