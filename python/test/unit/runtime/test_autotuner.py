@@ -1,3 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
+import threading
+
 import torch
 
 import triton
@@ -727,3 +730,272 @@ def test_prune_all_configs(device):
         assert e is not None and str(
             e
         ) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
+
+
+# These tests exercise real JIT specialization and compilation. To reproduce the
+# worker-autotuner regressions on PR #11847, run them with
+# TRITON_AUTOTUNING_COMPILE_WORKERS=2 (and TRITON_AUTOTUNING_OVERLAP_BENCH=0).
+
+
+@pytest.mark.parametrize("inplace", [False, True])
+@pytest.mark.parametrize("keyword_arg", [False, True])
+def test_async_warmup_descriptor_specialization(device, fresh_triton_cache, inplace, keyword_arg):
+    from triton.runtime._async_compile import FutureKernel
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Tensor descriptors require Hopper or newer")
+
+    src = torch.randn((128, 32), device=device)
+    dst = torch.empty_like(src)
+    desc = TensorDescriptor.from_tensor(src, [16, 32])
+    prepared = []
+
+    def prepare(args):
+        # Aliases must stay aliases, including across positional/keyword args.
+        assert args["A"] is args["B"] is desc
+        shape = [args["BLOCK_M"], 32]
+        if inplace:
+            args["A"].block_shape[:] = shape
+        else:
+            args["A"].block_shape = shape
+        prepared.append(args["BLOCK_M"])
+
+    configs = [triton.Config({"BLOCK_M": m}, pre_hook=prepare) for m in (32, 64)]
+
+    @triton.autotune(configs=configs, key=[])
+    @triton.jit
+    def kernel(A, B, Y, BLOCK_M: tl.constexpr):
+        a = A.load([0, 0])
+        b = B.load([0, 0])
+        tl.static_assert(a.shape[0] == BLOCK_M)
+        tl.static_assert(b.shape[0] == BLOCK_M)
+        offsets = tl.arange(0, BLOCK_M)[:, None] * 32 + tl.arange(0, 32)[None, :]
+        tl.store(Y + offsets, a + b)
+
+    # Hold the compiler until all specializations have captured their types.
+    # A later in-place mutation must not change either queued ASTSource.
+    release = threading.Event()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        blocker = executor.submit(release.wait, 60)
+        with triton.AsyncCompileMode(executor):
+            try:
+                if keyword_arg:
+                    kernels = kernel.warmup(desc, B=desc, Y=dst, grid=(1, ))
+                else:
+                    kernels = kernel.warmup(desc, desc, dst, grid=(1, ))
+                assert prepared == [32, 64]
+                assert all(isinstance(k, FutureKernel) for k in kernels)
+                assert all(not k.future.done() for k in kernels)
+                desc.block_shape[:] = [128, 32]
+            finally:
+                release.set()
+        assert blocker.result()
+
+    assert kernel.nargs is None
+    for config, compiled in zip(configs, kernels):
+        prepare({"A": desc, "B": desc, **config.kwargs})
+        launched = kernel.fn[(1, )](desc, desc, dst, **config.all_kwargs())
+        # Launch the already compiled specialization, not a replacement.
+        assert launched is compiled.result()
+        torch.testing.assert_close(dst[:config.kwargs["BLOCK_M"]], 2 * src[:config.kwargs["BLOCK_M"]])
+
+
+def test_async_warmup_hooks_on_caller(device, fresh_triton_cache):
+    caller = threading.get_ident()
+    observed = []
+
+    def prepare(args):
+        observed.append((args["BLOCK"], threading.get_ident()))
+
+    @triton.autotune(configs=[triton.Config({"BLOCK": b}, pre_hook=prepare) for b in (32, 64)], key=[])
+    @triton.jit
+    def kernel(X, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        tl.store(X + offsets, offsets)
+
+    x = torch.empty(64, device=device)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        with triton.AsyncCompileMode(executor):
+            kernel.warmup(x, grid=(1, ))
+    assert observed == [(32, caller), (64, caller)]
+
+
+def test_async_warmup_noncopyable_argument(device, fresh_triton_cache):
+
+    class TensorWrapper:
+
+        def __init__(self, tensor):
+            self.tensor = tensor
+            self.dtype = tensor.dtype
+
+        def data_ptr(self):
+            return self.tensor.data_ptr()
+
+        def __copy__(self):
+            raise TypeError("This tensor wrapper cannot be copied")
+
+    x = torch.arange(64, device=device, dtype=torch.float32)
+    y = torch.empty_like(x)
+    wrapped = TensorWrapper(x)
+
+    def prepare(args):
+        assert args["X"] is wrapped
+
+    @triton.autotune(configs=[triton.Config({"BLOCK": b}, pre_hook=prepare) for b in (32, 64)], key=[],
+                     do_bench=do_bench)
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        tl.store(Y + offsets, tl.load(X + offsets))
+
+    grid = lambda meta: (triton.cdiv(64, meta["BLOCK"]), )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        with triton.AsyncCompileMode(executor):
+            kernel.warmup(wrapped, y, grid=grid)
+    kernel[grid](wrapped, y)
+    torch.testing.assert_close(y, x)
+
+
+def test_async_warmup_current_device(fresh_triton_cache):
+    if not is_cuda() or torch.cuda.device_count() < 2:
+        pytest.skip("Requires two CUDA devices")
+
+    @triton.autotune(configs=[triton.Config({"BLOCK": b}) for b in (32, 64)], key=[])
+    @triton.jit
+    def kernel(BLOCK: tl.constexpr):
+        pass
+
+    with torch.cuda.device(1):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            with triton.AsyncCompileMode(executor):
+                kernel.warmup(grid=(1, ))
+        assert set(kernel.fn.device_caches) == {1}
+
+
+def test_async_warmup_failed_candidate(device, fresh_triton_cache):
+    from triton.runtime._async_compile import FutureKernel
+
+    @triton.autotune(configs=[triton.Config({"BLOCK": b}) for b in (32, 64)], key=[], do_bench=do_bench)
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        tl.static_assert(BLOCK == 32, "unsupported candidate")
+        offsets = tl.arange(0, BLOCK)
+        tl.store(Y + offsets, tl.load(X + offsets))
+
+    x = torch.arange(32, device=device, dtype=torch.float32)
+    y = torch.empty_like(x)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        with triton.AsyncCompileMode(executor, ignore_errors=True):
+            kernels = kernel.warmup(x, y, grid=(1, ))
+            assert all(isinstance(k, FutureKernel) for k in kernels)
+    kernel[(1, )](x, y)
+    assert kernel.best_config.kwargs["BLOCK"] == 32
+    assert kernel.configs_timings[kernel.configs[1]] == [float("inf")] * 3
+    torch.testing.assert_close(y, x)
+
+
+@pytest.mark.parametrize("hook_kind", ["config", "jit"])
+def test_autotune_no_speculative_hook_side_effects(device, fresh_triton_cache, hook_kind):
+    # A normal launch must not add unpaired pre-hook invocations for speculative
+    # compilation. Only explicit warmup opts into additional hook invocations.
+    x = torch.full((1, ), 10.0, device=device)
+    y = torch.empty_like(x)
+    calls = []
+
+    def prepare(args):
+        calls.append("pre")
+        args["X"].add_(1)
+
+    def restore(args, exception):
+        assert exception is None
+        calls.append("post")
+        args["X"].sub_(1)
+
+    def bench_once(fn, quantiles):
+        fn()
+        torch.cuda.synchronize()
+        return [1.0] * 3
+
+    @triton.jit
+    def copy_kernel(X, Y, BLOCK: tl.constexpr):
+        tl.store(Y, tl.load(X))
+
+    if hook_kind == "jit":
+        copy_kernel.add_pre_run_hook(lambda X, Y, **kwargs: prepare({"X": X}))
+    configs = [triton.Config({"BLOCK": b}, pre_hook=prepare if hook_kind == "config" else None) for b in (32, 64)]
+    kernel = triton.autotune(configs=configs, key=[], post_hook=restore, do_bench=bench_once)(copy_kernel)
+    kernel[(1, )](x, y)
+    assert calls == ["pre", "post", "pre", "post", "pre"]
+    torch.testing.assert_close(y, torch.full_like(y, 11.0))
+
+
+def test_autotune_pre_hook_before_heuristic(device, fresh_triton_cache):
+    x = torch.arange(32, device=device, dtype=torch.float32)
+    y = torch.empty_like(x)
+
+    def prepare(args, reset_only=False):
+        args["X"].compile_extent = 32
+
+    @triton.autotune(configs=[triton.Config({"BLOCK": b}) for b in (32, 64)], key=[], pre_hook=prepare,
+                     do_bench=do_bench)
+    @triton.heuristics({"N": lambda args: args["X"].compile_extent})
+    @triton.jit
+    def kernel(X, Y, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        tl.store(Y + offsets, tl.load(X + offsets, offsets < N, other=0), offsets < N)
+
+    kernel[(1, )](x, y)
+    torch.testing.assert_close(y, x)
+
+
+def test_warmup_pre_hook_failure_clears_args():
+
+    def prepare(args):
+        raise ValueError("cannot prepare config")
+
+    @triton.autotune(configs=[triton.Config({}, pre_hook=prepare)], key=[])
+    @triton.jit
+    def kernel(X):
+        pass
+
+    with pytest.raises(ValueError, match="cannot prepare config"):
+        kernel.warmup(object(), grid=(1, ))
+    assert kernel.nargs is None
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_warmup_prunes_before_config_hooks(device, fresh_triton_cache, asynchronous):
+    from contextlib import nullcontext
+
+    prepared = []
+
+    def prepare(args):
+        prepared.append(args["BLOCK"])
+
+    def prune(configs, named_args, **kwargs):
+        assert named_args["X"] is x
+        assert kwargs["Y"] is y
+        return configs[1:]
+
+    def unexpected_hook(*args, **kwargs):
+        pytest.fail("Warmup must not invoke benchmarking hooks")
+
+    @triton.autotune(configs=[triton.Config({"BLOCK": b}, pre_hook=prepare) for b in (32, 64, 128)], key=[],
+                     prune_configs_by={"early_config_prune": prune}, pre_hook=unexpected_hook,
+                     post_hook=unexpected_hook, do_bench=unexpected_hook)
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        tl.store(Y + offsets, tl.load(X + offsets))
+
+    x = torch.ones(128, device=device)
+    y = torch.zeros_like(x)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        with triton.AsyncCompileMode(executor) if asynchronous else nullcontext():
+            kernels = kernel.warmup(x, Y=y, grid=(1, ))
+    assert prepared == [64, 128]
+    assert len(kernels) == 2
+    assert kernel.nargs is None
+    assert not kernel.cache
+    torch.testing.assert_close(y, torch.zeros_like(y))
