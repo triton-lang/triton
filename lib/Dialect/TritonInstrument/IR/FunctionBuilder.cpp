@@ -304,6 +304,32 @@ std::tuple<Block *, Block *, Block *> createIfBlock(ImplicitLocOpBuilder &b,
   return {prevBlock, ifBlock, thenBlock};
 }
 
+// Emit a counted loop without introducing SCF after SCF-to-CF conversion.
+void createChunkLoop(ImplicitLocOpBuilder &b, int64_t extent, int64_t chunk,
+                     llvm::function_ref<void(Value)> body) {
+  assert(extent > 0 && extent % chunk == 0);
+  Value first = arith::ConstantIntOp::create(b, 0, 32);
+  if (extent == chunk) {
+    body(first);
+    return;
+  }
+  Value step = arith::ConstantIntOp::create(b, chunk, 32);
+  Value limit = arith::ConstantIntOp::create(b, extent, 32);
+  Block *preheader = b.getInsertionBlock();
+  Block *continuation = preheader->splitBlock(b.getInsertionPoint());
+  Block *loop = b.createBlock(continuation);
+  Value index = loop->addArgument(b.getI32Type(), b.getLoc());
+  b.setInsertionPointToEnd(preheader);
+  cf::BranchOp::create(b, loop, ValueRange{first});
+  b.setInsertionPointToStart(loop);
+  body(index);
+  Value next = arith::AddIOp::create(b, index, step);
+  Value more = arith::CmpIOp::create(b, arith::CmpIPredicate::ult, next, limit);
+  cf::CondBranchOp::create(b, more, loop, ValueRange{next}, continuation,
+                           ValueRange{});
+  b.setInsertionPointToStart(continuation);
+}
+
 Value createConvertLayout(ImplicitLocOpBuilder &b, Value tensor,
                           Attribute encoding) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
@@ -653,9 +679,18 @@ void FunctionBuilder::createFillGlobalTensorCall(ImplicitLocOpBuilder &b,
       {type}, [type](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value ptr = entryBlock->getArgument(0);
         Value scalar = entryBlock->getArgument(1);
-        Value tensor = triton::SplatOp::create(fb, type, scalar);
-        createStoreScratchMemory(fb, fb.getLoc(), ptr, tensor, type,
-                                 /*currentCTAOnly=*/false);
+        int64_t extent = type.getNumElements();
+        int64_t chunk = std::min<int64_t>(extent, 1024);
+        auto storeType = tti::getIntTensorType(
+            entryBlock->getParent(), {chunk},
+            type.getElementType().getIntOrFloatBitWidth());
+        Value tensor = triton::SplatOp::create(fb, storeType, scalar);
+        createChunkLoop(fb, extent, chunk, [&](Value offset) {
+          Value chunkPtr =
+              triton::AddPtrOp::create(fb, ptr.getType(), ptr, offset);
+          createStoreScratchMemory(fb, fb.getLoc(), chunkPtr, tensor, storeType,
+                                   /*currentCTAOnly=*/false);
+        });
         triton::ReturnOp::create(fb);
       });
 }
@@ -2560,18 +2595,33 @@ static void createClearBarrierTrackingCall(ImplicitLocOpBuilder &b,
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
 
+        SmallVector<int64_t> shape(trackingType.getShape());
+        SmallVector<int64_t> strides(shape.size(), 1);
+        for (unsigned dim = 1; dim < shape.size(); ++dim)
+          strides[dim] = strides[dim - 1] * shape[dim - 1];
+        int64_t extent = shape[1];
+        // Clear one buffer row at a time, retaining every barrier and phase.
+        shape[1] = 1;
+        auto storeType = tti::getIntTensorType(
+            entryBlock->getParent(), shape,
+            trackingType.getElementType().getIntOrFloatBitWidth());
         Value barriersEqBar =
-            convertAndBroadcast(fb, selectedBarriers, {3}, trackingType);
+            convertAndBroadcast(fb, selectedBarriers, {3}, storeType);
         Value barrierCTAs = createCurrentCTAMask(fb);
         Value barrierCTAMask =
-            createCTASetMask(fb, trackingType, /*dim=*/2, barrierCTAs);
+            createCTASetMask(fb, storeType, /*dim=*/2, barrierCTAs);
         barriersEqBar =
             arith::AndIOp::create(fb, barriersEqBar, barrierCTAMask);
-        Value zero =
-            tti::createConstIntTensor(fb, fb.getLoc(), 0, trackingType);
-        tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr, zero,
-                                      trackingType, /*currentCTAOnly=*/false,
-                                      barriersEqBar);
+        Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0, storeType);
+        Value stride = arith::ConstantIntOp::create(fb, strides[1], 32);
+        createChunkLoop(fb, extent, 1, [&](Value row) {
+          Value offset = arith::MulIOp::create(fb, row, stride);
+          Value viewPtr = triton::AddPtrOp::create(fb, trackingPtr.getType(),
+                                                   trackingPtr, offset);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), viewPtr, zero,
+                                        storeType, /*currentCTAOnly=*/false,
+                                        barriersEqBar, strides);
+        });
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);

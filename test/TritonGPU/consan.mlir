@@ -3474,3 +3474,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0], [0], [0]]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[0], [0], [0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.shared = 8448 : i32, ttg.tensor_memory_size = 0 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: tt.func private @__triton_consan_clear_barrier_read_tracking_
+  // CHECK: tt.store {{.*}} : tensor<8x1x8x32x8x2x!tt.ptr<i32>,
+  // CHECK: cf.cond_br
+  // CHECK-LABEL: tt.func private @__triton_consan_fill_global_tensor_nw1_P_I32_T4194304xI32
+  // CHECK: tt.splat {{.*}} : i32 -> tensor<1024xi32,
+  // CHECK: tt.store {{.*}} : tensor<1024x!tt.ptr<i32>,
+  // CHECK: cf.cond_br
+  // CHECK-LABEL: tt.func public @large_barrier_tracking
+  tt.func public @large_barrier_tracking() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c32 = arith.constant 32 : i32
+    %c64 = arith.constant 64 : i32
+    %zero = arith.constant dense<0> : tensor<32xi32, #blocked>
+    %buffers = ttg.local_alloc {allocation.offset = 256 : i32} : () -> !ttg.memdesc<64x32xi32, #bar, #smem, mutable>
+    scf.for %i = %c0 to %c64 step %c1 : i32 {
+      %buf = ttg.memdesc_index %buffers[%i] : !ttg.memdesc<64x32xi32, #bar, #smem, mutable> -> !ttg.memdesc<32xi32, #bar, #smem, mutable>
+      ttg.local_store %zero, %buf : tensor<32xi32, #blocked> -> !ttg.memdesc<32xi32, #bar, #smem, mutable>
+      %value = ttg.local_load %buf : !ttg.memdesc<32xi32, #bar, #smem, mutable> -> tensor<32xi32, #blocked>
+    }
+    %bars = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x1xi64, #bar, #smem, mutable>
+    scf.for %i = %c0 to %c32 step %c1 : i32 {
+      %bar = ttg.memdesc_index %bars[%i] : !ttg.memdesc<32x1xi64, #bar, #smem, mutable> -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
+      ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #bar, #smem, mutable>
+      ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #bar, #smem, mutable>
+    }
+    tt.return
+  }
+}
