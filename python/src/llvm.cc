@@ -789,17 +789,9 @@ void init_triton_llvm(py::module_ &m) {
         std::string pluginFile =
             mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
 
-        // Pass the target machine to the LLVM-IR pass builder whenever `arch`
-        // is specified, including when an LLVM-IR pass plugin is loaded, so the
-        // O3 pipeline and any plugin passes keep target-aware cost models and
-        // lowering.
-        //
-        // Previously the target machine was dropped whenever a plugin was
-        // present, to avoid a target-machine mismatch with instrumentation
-        // plugins that splice in externally (Clang-)compiled code. We now
-        // always set it when `arch` is known and rely on plugins to be target-
-        // consistent, which lets scheduler-style plugins keep the target cost
-        // models without a separate opt-in guard.
+        // Pass the target machine whenever `arch` is known, also when an
+        // LLVM-IR pass plugin is loaded, so that loading a plugin does not
+        // change which target passes and cost models the pipeline uses.
         std::unique_ptr<TargetMachine> targetMachine = nullptr;
         if (!arch.empty())
           targetMachine =
