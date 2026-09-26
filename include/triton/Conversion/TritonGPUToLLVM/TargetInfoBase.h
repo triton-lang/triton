@@ -21,6 +21,7 @@ public:
   static std::unique_ptr<TargetInfoBase> fromModuleOp(ModuleOp moduleOp);
 
   virtual bool supportMaximumMinimum() const = 0;
+  virtual bool supportDistributedSharedMemory() const { return false; }
 
   virtual Value getClusterCTAId(RewriterBase &rewriter, Location loc) const = 0;
 
