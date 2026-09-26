@@ -421,6 +421,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#shared_cga_inner = #ttg.padded_shared<[128:+4] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0], [8, 0]], block = [[0, 64]]}>
+#smem_cga_inner = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tdm_store_padding_interval_larger_than_shape_per_cta(
+    %tensorDesc: !tt.tensordesc<16x128xf16>,
+    %memDesc: !ttg.memdesc<16x128xf16, #shared_cga_inner, #smem_cga_inner, mutable>
+  ) {
+    // expected-error @+1 {{got padInterval=128, innermost dimension=64}}
+    amdg.async_tdm_copy_local_to_global %tensorDesc from %memDesc: !ttg.memdesc<16x128xf16, #shared_cga_inner, #smem_cga_inner, mutable> -> !tt.tensordesc<16x128xf16>
+    tt.return
+  }
+
+  tt.func public @tdm_scatter_padding_interval_larger_than_shape_per_cta(
+    %tensorDesc: !tt.tensordesc<16x128xf16>,
+    %memDesc: !ttg.memdesc<16x128xf16, #shared_cga_inner, #smem_cga_inner, mutable>,
+    %row_indices: tensor<16xi32>
+  ) {
+    // expected-error @+1 {{got padInterval=128, innermost dimension=64}}
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %memDesc : tensor<16xi32>, !ttg.memdesc<16x128xf16, #shared_cga_inner, #smem_cga_inner, mutable> -> !tt.tensordesc<16x128xf16>
+    tt.return
+  }
+
+  tt.func public @tdm_gather_padding_interval_larger_than_shape_per_cta(
+    %tensorDesc: !tt.tensordesc<16x128xf16, #shared_cga_inner>,
+    %memDesc: !ttg.memdesc<16x128xf16, #shared_cga_inner, #smem_cga_inner, mutable>,
+    %row_indices: tensor<16xi32>
+  ) {
+    // expected-error @+1 {{got padInterval=128, innermost dimension=64}}
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices] to %memDesc : tensor<16xi32>, !ttg.memdesc<16x128xf16, #shared_cga_inner, #smem_cga_inner, mutable> -> !tt.tensordesc<16x128xf16, #shared_cga_inner>
+    tt.return
+  }
+}
+
+// -----
+
 // warp_used_hint validation tests
 #shared_wb = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem_wb = #ttg.shared_memory
