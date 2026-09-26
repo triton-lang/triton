@@ -150,7 +150,7 @@ getOrAddPrintMemrefFuncDecl(ConversionPatternRewriter &rewriter) {
                                   funcType);
 }
 
-static StringRef makeNullTerminatedString(StringRef s) {
+static llvm::SmallString<64> makeNullTerminatedString(StringRef s) {
   llvm::SmallString<64> ss(s);
   ss.push_back(0);
   return ss;
