@@ -521,20 +521,13 @@ struct MinMaxFOpConversion
 
   explicit MinMaxFOpConversion(LLVMTypeConverter &typeConverter,
                                ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               bool hwNanPropagationSupported,
                                PatternBenefit benefit = 1)
       : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
-                                          benefit),
-        hwNanPropagationSupported(hwNanPropagationSupported) {}
-
+                                          benefit) {}
   SmallVector<Value> createDestOps(OpTy op, Adaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    if (hwNanPropagationSupported) {
-      return {DestOpNanProp::create(rewriter, loc, elemTy, operands[0][0],
-                                    operands[0][1])};
-    }
     // Handle workaround for NaN propagation, i.e. software emulation of NaN
     // propagation. If any of the operands is NaN, return NaN.
     auto lhs = operands[0][0];
@@ -553,7 +546,6 @@ struct MinMaxFOpConversion
   }
 
 private:
-  bool hwNanPropagationSupported;
 };
 
 struct ClampFOpConversion
@@ -680,9 +672,9 @@ void mlir::triton::populateMinMaxFOpToLLVMPattern(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, bool hwNanPropagationSupported,
     PatternBenefit benefit) {
   patterns.add<MinMaxFOpConversion<arith::MinimumFOp>>(
-      typeConverter, axisInfoAnalysis, hwNanPropagationSupported, benefit);
+      typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MinMaxFOpConversion<arith::MaximumFOp>>(
-      typeConverter, axisInfoAnalysis, hwNanPropagationSupported, benefit);
+      typeConverter, axisInfoAnalysis, benefit);
 }
 
 void mlir::triton::populateClampFOpToLLVMPattern(
