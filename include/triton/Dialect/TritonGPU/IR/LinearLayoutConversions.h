@@ -94,7 +94,7 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout);
 
 // Combines the layout of a CTA (input dims [register, lane, warp]) with the
 // layout of a CGA (i.e. a block), and ensures that the resulting layout has the
-// given shape.
+// given shape, omitting registers made redundant by shrinking the layout.
 //
 // See the nomenclature note at the top of LinearLayoutConversions.cpp for why
 // the variable with type CGAEncodingAttr is called cgaLayoutAttr.
