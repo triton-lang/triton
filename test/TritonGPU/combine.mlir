@@ -4859,3 +4859,37 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return %r#0, %r#1, %converted : tensor<128xi32, #slice>, tensor<128xf32, #slice>, tensor<128xf32, #dst>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 1, 2], instrShape = [1, 16, 8]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // fp4_to_fp unpacks N (axis 2) of a rank-3 rhs, which is not its fastest
+  // dimension (K), so the dot operand layout is not propagated through it.
+  // CHECK-LABEL: @fp4_to_fp_rank3_rhs_n_axis
+  // CHECK: ttg.fp4_to_fp %{{.*}} {axis = 2 : i32} : tensor<2x64x16xi8, #blocked> -> tensor<2x64x32xbf16, #blocked1>
+  // CHECK: ttg.convert_layout %{{.*}} : tensor<2x64x32xbf16, #blocked1> -> tensor<2x64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+  tt.func @fp4_to_fp_rank3_rhs_n_axis(%a: tensor<2x16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>, %ptr: tensor<2x64x16x!tt.ptr<i8>, #blocked>) -> tensor<2x16x32xf32, #mma> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<2x16x32xf32, #mma>
+    %0 = tt.load %ptr : tensor<2x64x16x!tt.ptr<i8>, #blocked>
+    %1 = ttg.fp4_to_fp %0 {axis = 2 : i32} : tensor<2x64x16xi8, #blocked> -> tensor<2x64x32xbf16, #blocked1>
+    %2 = ttg.convert_layout %1 : tensor<2x64x32xbf16, #blocked1> -> tensor<2x64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    %3 = tt.dot %a, %2, %cst : tensor<2x16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<2x64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<2x16x32xf32, #mma>
+    tt.return %3 : tensor<2x16x32xf32, #mma>
+  }
+
+  // fp4_to_fp unpacks K (axis 2) of a rank-3 lhs, which is its fastest
+  // dimension, so the dot operand layout is propagated through it.
+  // CHECK-LABEL: @fp4_to_fp_rank3_lhs_k_axis
+  // CHECK: ttg.fp4_to_fp %{{.*}} {axis = 2 : i32} : tensor<2x16x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> -> tensor<2x16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+  tt.func @fp4_to_fp_rank3_lhs_k_axis(%ptr: tensor<2x16x32x!tt.ptr<i8>, #blocked>, %b: tensor<2x64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>) -> tensor<2x16x32xf32, #mma> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<2x16x32xf32, #mma>
+    %0 = tt.load %ptr : tensor<2x16x32x!tt.ptr<i8>, #blocked>
+    %1 = ttg.fp4_to_fp %0 {axis = 2 : i32} : tensor<2x16x32xi8, #blocked> -> tensor<2x16x64xbf16, #blocked1>
+    %2 = ttg.convert_layout %1 : tensor<2x16x64xbf16, #blocked1> -> tensor<2x16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    %3 = tt.dot %2, %b, %cst : tensor<2x16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<2x64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<2x16x32xf32, #mma>
+    tt.return %3 : tensor<2x16x32xf32, #mma>
+  }
+}
