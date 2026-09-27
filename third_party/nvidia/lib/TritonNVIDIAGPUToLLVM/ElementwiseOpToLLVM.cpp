@@ -360,9 +360,11 @@ struct ExtFOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+    // Expose the bits so LLVM folds packed high-half extraction into a mask.
+    // With ptxas 13.4, BF16x2 then uses IMAD + LOP3 instead of the PRMT + two
+    // IMADs generated for two cvt.f32.bf16 instructions.
     if (getElementTypeOrSelf(op.getIn()).isBF16() && elemTy.isF32()) {
       auto b = TritonLLVMOpBuilder(loc, rewriter);
-      // Let LLVM widen a packed pair with a shift and a mask.
       Value bits = b.zext(i32_ty, b.bitcast(operands[0][0], i16_ty));
       return {b.bitcast(b.shl(bits, b.i32_val(16)), f32_ty)};
     }
