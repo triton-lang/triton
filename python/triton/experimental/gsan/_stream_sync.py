@@ -74,7 +74,7 @@ def _reset_caches() -> None:
 
 @triton.jit(do_not_specialize=["rank", "epoch"])
 def _synchronize_process_group_barrier_kernel(counters, rank, epoch, WORLD_SIZE: tl.constexpr):
-    tl.atomic_xchg(counters + rank, epoch, sem="release", scope="sys")
+    tl.atomic_store(counters + rank, epoch, sem="release", scope="sys")
     for peer in tl.static_range(WORLD_SIZE):
         tl.atomic_poll(counters + peer, epoch, sem="acquire", scope="sys")
 

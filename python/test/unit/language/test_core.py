@@ -1958,7 +1958,7 @@ def test_atomic_poll_waits_for_remote_cta(device):
             tl.store(out, tl.load(payload))
         else:
             tl.store(payload, 42)
-            tl.atomic_xchg(flag, 1, sem="release", scope="gpu")
+            tl.atomic_store(flag, 1, sem="release", scope="gpu")
 
     flag = torch.zeros(1, dtype=torch.int32, device=device)
     payload = torch.zeros_like(flag)

@@ -179,7 +179,7 @@ def _layer_norm_bwd_dx_fused(DX,  # pointer to the input gradient
     count = tl.load(Count)
     # First store doesn't accumulate
     if count == 0:
-        tl.atomic_xchg(Count, 1)
+        tl.atomic_store(Count, 1, sem="release")
     else:
         partial_dw += tl.load(DW, mask=mask)
         partial_db += tl.load(DB, mask=mask)
@@ -191,7 +191,7 @@ def _layer_norm_bwd_dx_fused(DX,  # pointer to the input gradient
     tl.debug_barrier()
 
     # Release the lock
-    tl.atomic_xchg(Lock, 0)
+    tl.atomic_store(Lock, 0, sem="release")
 
 
 @triton.jit

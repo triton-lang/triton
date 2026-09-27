@@ -325,7 +325,7 @@ def test_atomic_poll_tensor_acquire(block_size, use_result, device):
             ttgl.store(Out + offsets, values)
         else:
             ttgl.store(Payload + offsets, offsets + 1)
-            ttgl.atomic_xchg(Flags + offsets, 1, sem="release", scope="gpu")
+            ttgl.atomic_store(Flags + offsets, 1, sem="release", scope="gpu")
 
     flags = torch.zeros(block_size, dtype=torch.int32, device=device)
     payload = torch.zeros_like(flags)

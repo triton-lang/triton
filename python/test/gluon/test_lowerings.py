@@ -193,7 +193,7 @@ def test_atomic_poll_two_ctas(warp_specialize, device):
         pid = ttgl.program_id(0)
         if pid == 0:
             ttgl.store(payload, 42)
-            ttgl.atomic_xchg(flag, 1, sem="release", scope="gpu")
+            ttgl.atomic_store(flag, 1, sem="release", scope="gpu")
         else:
             matched = ttgl.atomic_poll(flag, 1, sem="acquire", scope="gpu", timeout_ns=1_000_000_000)
             if matched:

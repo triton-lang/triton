@@ -145,7 +145,7 @@ def tma_message_passing_kernel(message_desc, ready, output, MESSAGE_SIZE: gl.con
 
         # Before signaling CTA 1, wait for the TMA write to become visible in HBM.
         tma.store_wait(pendings=0, read_only=False)
-        gl.atomic_xchg(ready, 1, sem="release", scope="gpu")
+        gl.atomic_store(ready, 1, sem="release", scope="gpu")
     else:
         # CTA 1 waits until the TMA message has been published, then reads it
         # back through TMA.
