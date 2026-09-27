@@ -216,9 +216,12 @@ def get_llvm_flags(options):
     """
     flags = []
     # LLVM has no per-function attribute for the AMDGPU register pressure
-    # trackers yet. They help kernels that request waves_per_eu > 1 and would
-    # otherwise spill, but regress single-wave MFMA kernels that already fit.
-    if options.arch in ["gfx942", "gfx950"] and options.waves_per_eu > 1:
+    # trackers yet. They help kernels that run at least two waves per SIMD and
+    # would otherwise spill, but regress single-wave MFMA kernels that already
+    # fit. With num_warps > 4 each SIMD hosts at least two waves of the
+    # workgroup, so those kernels always qualify; smaller workgroups qualify
+    # only when they request waves_per_eu > 1.
+    if options.arch in ["gfx942", "gfx950"] and (options.num_warps > 4 or options.waves_per_eu > 1):
         flags.append("amdgpu-use-amdgpu-trackers")
     # Discourage VGPR reuse that creates VALU-to-DS WAR hazards and requires
     # s_wait_alu va_vdst waits in expert scheduling mode.

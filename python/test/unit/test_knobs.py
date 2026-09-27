@@ -208,8 +208,9 @@ def test_amd_llvm_options_concurrent():
 
     compiler.llvm.init_targets()
     source = _amd_scheduler_kernel()
-    # gfx950 codegen needs a process-wide LLVM option that gfx1250 codegen must
-    # not see, and every HSACO link resets all LLVM options.
+    # gfx950 codegen with waves_per_eu > 1 needs a process-wide LLVM option (the
+    # register pressure trackers) that gfx1250 codegen must not see, and every
+    # HSACO link resets all LLVM options.
     backends = {
         arch: compiler.HIPBackend(GPUTarget("hip", arch, warp_size))
         for arch, warp_size in [("gfx950", 64), ("gfx1250", 32)]
@@ -217,7 +218,7 @@ def test_amd_llvm_options_concurrent():
 
     def emit(arch):
         backend = backends[arch]
-        options = backend.parse_options({})
+        options = backend.parse_options({"waves_per_eu": 2})
         metadata = {}
         amdgcn = backend.make_amdgcn(source, metadata, options)
         backend.make_hsaco(amdgcn, metadata, options)
@@ -233,14 +234,20 @@ def test_amd_llvm_options_concurrent():
     assert results == [expected[arch] for arch in archs]
 
 
-@pytest.mark.parametrize(("arch", "enable_fp_fusion", "disable_opt", "expected_flags", "disable_optimization"), [
-    ("gfx90a", True, None, [], False),
-    ("gfx942", False, "1", ["amdgpu-use-amdgpu-trackers"], True),
-    ("gfx950", True, "disable-lsr", ["amdgpu-use-amdgpu-trackers"], False),
-    ("gfx1250", True, "0", ["amdgpu-anti-hints-for-va-vdst"], False),
+@pytest.mark.parametrize((
+    "arch", "num_warps", "waves_per_eu", "enable_fp_fusion", "disable_opt", "expected_flags", "disable_optimization"
+), [
+    ("gfx90a", 8, 2, True, None, [], False),
+    # The register pressure trackers need at least two waves per SIMD: either
+    # more than four warps per workgroup or an explicit waves_per_eu > 1.
+    ("gfx942", 8, 0, False, "1", ["amdgpu-use-amdgpu-trackers"], True),
+    ("gfx942", 4, 0, True, None, [], False),
+    ("gfx950", 4, 2, True, "disable-lsr", ["amdgpu-use-amdgpu-trackers"], False),
+    ("gfx950", 4, 1, True, None, [], False),
+    ("gfx1250", 4, 0, True, "0", ["amdgpu-anti-hints-for-va-vdst"], False),
 ])
-def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags, disable_optimization, fresh_knobs,
-                             monkeypatch):
+def test_amd_codegen_options(arch, num_warps, waves_per_eu, enable_fp_fusion, disable_opt, expected_flags,
+                             disable_optimization, fresh_knobs, monkeypatch):
     from triton.backends.compiler import GPUTarget
     from triton.backends.amd import compiler
 
@@ -258,7 +265,8 @@ def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags
 
     warp_size = 32 if arch == "gfx1250" else 64
     backend = compiler.HIPBackend(GPUTarget("hip", arch, warp_size))
-    options = compiler.HIPOptions(arch=arch, enable_fp_fusion=enable_fp_fusion)
+    options = compiler.HIPOptions(arch=arch, num_warps=num_warps, waves_per_eu=waves_per_eu,
+                                  enable_fp_fusion=enable_fp_fusion)
     source = "define amdgpu_kernel void @test_kernel() { ret void }"
     metadata = {}
     assembly = backend.make_amdgcn(source, metadata, options)
