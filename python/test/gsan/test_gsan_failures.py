@@ -185,7 +185,7 @@ def _transitive_atomic_sync_kernel(payload_ptr, flag0_ptr, flag1_ptr, counter_pt
         atomic_poll(counter_ptr, 2)
         ready = 0
         while ready != 1:
-            ready = tl.atomic_add(flag1_ptr, 0, sem="acquire", scope=scope)
+            ready = tl.atomic_load(flag1_ptr, sem="acquire", scope=scope)
         result = tl.load(payload_ptr)
         tl.store(scratch_ptr, result)
 

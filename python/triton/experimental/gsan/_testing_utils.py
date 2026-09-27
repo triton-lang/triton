@@ -18,7 +18,7 @@ def nanosleep(duration):
 
 @triton.jit
 def atomic_poll(ptr, expect, sem: tl.constexpr = "relaxed", scope: tl.constexpr = "gpu"):
-    while tl.atomic_add(ptr, 0, sem=sem, scope=scope) != expect:
+    while tl.atomic_load(ptr, sem=sem, scope=scope) != expect:
         nanosleep(100)
 
 

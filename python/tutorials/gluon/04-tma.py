@@ -151,7 +151,7 @@ def tma_message_passing_kernel(message_desc, ready, output, MESSAGE_SIZE: gl.con
         # back through TMA.
         ready_value = 0
         while ready_value != 1:
-            ready_value = gl.atomic_add(ready, 0, sem="acquire", scope="gpu")
+            ready_value = gl.atomic_load(ready, sem="acquire", scope="gpu")
 
         bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
