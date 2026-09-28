@@ -66,6 +66,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// A shared_linear consumer matching the supported 128-byte padded layout
+// should retain padding in the TMA descriptor.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#padded_linear = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 0], [0, 8], [0, 16], [0, 32], [1, 8], [2, 16], [4, 32], [8, 0], [16, 0], [32, 0], [64, 0]]}, alignment = 1024>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-DAG: #[[PADDED128:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+  // CHECK: tt.func @fp4_padded_k128_shared_linear
+  // CHECK-SAME: !tt.tensordesc<128x64xi8, #[[PADDED128]]>
+  tt.func @fp4_padded_k128_shared_linear(%desc: !tt.tensordesc<128x64xi8>) {
+    %c0 = arith.constant 0 : i32
+    // CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} : !tt.tensordesc<128x64xi8, #[[PADDED128]]>
+    %v = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<128x64xi8> -> tensor<128x64xi8, #blocked>
+    // CHECK: ttg.local_alloc %[[LOAD]] {{.*}} -> !ttg.memdesc<128x64xi8, {{.*}}, #smem>
+    %s = ttg.local_alloc %v : (tensor<128x64xi8, #blocked>) -> !ttg.memdesc<128x64xi8, #padded_linear, #smem>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 

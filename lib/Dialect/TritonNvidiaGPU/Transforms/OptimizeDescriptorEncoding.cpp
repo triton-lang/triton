@@ -56,31 +56,30 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
     return succeeded(candidateLayout) && *candidateLayout == sharedLinearLayout;
   };
 
-  SmallVector<ttg::NVMMASharedEncodingAttr> preferredCandidates;
   // TMA descriptors only support non-transposed layouts. Preserve Triton's
   // default shape/order-based choice when it already matches this
   // shared_linear layout. The full candidate scan below is only a fallback for
   // equivalent non-transposed layouts not selected by the heuristic builder.
-  for (bool fp4Padded : {false, true}) {
-    auto preferred = ttg::NVMMASharedEncodingAttr::get(
-        ctx, shape, order, cgaLayout, elementType, fp4Padded);
-    preferredCandidates.push_back(preferred);
-    if (isCompatibleSharedEncoding(preferred) && isEquivalent(preferred))
-      return preferred;
-  }
+  auto preferred = ttg::NVMMASharedEncodingAttr::get(
+      ctx, shape, order, cgaLayout, elementType, /*fp4Padded=*/false);
+  if (isCompatibleSharedEncoding(preferred) && isEquivalent(preferred))
+    return preferred;
 
   unsigned elementBitWidth = std::max(8u, elementType.getIntOrFloatBitWidth());
-  for (bool fp4Padded : {false, true}) {
-    for (unsigned swizzle : {0u, 32u, 64u, 128u}) {
-      auto candidate = ttg::NVMMASharedEncodingAttr::get(
-          ctx, swizzle, /*transposed=*/false, elementBitWidth, fp4Padded,
-          cgaLayout);
-      if (llvm::is_contained(preferredCandidates, candidate))
-        continue;
-      if (isCompatibleSharedEncoding(candidate) && isEquivalent(candidate))
-        return candidate;
-    }
+  for (unsigned swizzle : {0u, 32u, 64u, 128u}) {
+    auto candidate = ttg::NVMMASharedEncodingAttr::get(
+        ctx, swizzle, /*transposed=*/false, elementBitWidth,
+        /*fp4Padded=*/false, cgaLayout);
+    if (candidate != preferred && isEquivalent(candidate))
+      return candidate;
   }
+
+  // Only 128-byte swizzling is supported for padded FP4 TMA descriptors.
+  auto fp4Padded = ttg::NVMMASharedEncodingAttr::get(
+      ctx, /*swizzlingByteWidth=*/128, /*transposed=*/false, elementBitWidth,
+      /*fp4Padded=*/true, cgaLayout);
+  if (isEquivalent(fp4Padded))
+    return fp4Padded;
 
   return {};
 }
