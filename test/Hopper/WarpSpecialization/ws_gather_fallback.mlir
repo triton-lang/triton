@@ -67,6 +67,30 @@
 // CHECK-LABEL: @unrelated_epilogue_gather_keeps_warp_specialization
 // CHECK: ttg.warp_specialize
 // CHECK: tt.gather
+// CHECK-LABEL: @gather_joined_with_partitioned_epilogue_falls_back
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: ttng.warp_group_dot
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.num_stages = 2 : i32
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.gather
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: arith.addf
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.descriptor_store
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
 // CHECK-LABEL: @independent_gather_fed_dot_falls_back
 // CHECK-NOT: ttg.warp_specialize
 // CHECK-NOT: tt.warp_specialize
@@ -284,6 +308,27 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
     %mask = arith.constant dense<true> : tensor<128x256xi1, #blocked1>
     tt.descriptor_store %c_desc[%c0, %c0], %out_blocked : !tt.tensordesc<128x256xf16, #shared>, tensor<128x256xf16, #blocked1>
     tt.store %gather_ptrs, %output_gather, %mask : tensor<128x256x!tt.ptr<f16>, #blocked1>
+    tt.return
+  }
+
+  tt.func @gather_joined_with_partitioned_epilogue_falls_back(%arg0: !tt.tensordesc<128x64xf16>, %arg1: !tt.tensordesc<64x256xf16>, %arg2: !tt.tensordesc<128x256xf16>, %independent: tensor<128x256xf16, #blocked1>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %indices = arith.constant dense<0> : tensor<128x256xi32, #blocked1>
+    %init = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %acc = scf.for %i = %c0 to %c1 step %c1 iter_args(%iter = %init) -> tensor<128x256xf32, #mma> : i32 {
+      %a = tt.descriptor_load %arg0[%i, %c0] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+      %a_smem = ttg.local_alloc %a : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+      %b = tt.descriptor_load %arg1[%c0, %i] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked1>
+      %b_smem = ttg.local_alloc %b : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+      %dot = ttng.warp_group_dot %a_smem, %b_smem, %iter {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+      scf.yield %dot : tensor<128x256xf32, #mma>
+    } {tt.num_stages = 2 : i32, tt.warp_specialize}
+    %out = arith.truncf %acc : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
+    %out_blocked = ttg.convert_layout %out : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>
+    %output_gather = tt.gather %independent[%indices] {axis = 1 : i32} : (tensor<128x256xf16, #blocked1>, tensor<128x256xi32, #blocked1>) -> tensor<128x256xf16, #blocked1>
+    %sum = arith.addf %out_blocked, %output_gather : tensor<128x256xf16, #blocked1>
+    tt.descriptor_store %arg2[%c0, %c0], %sum : !tt.tensordesc<128x256xf16>, tensor<128x256xf16, #blocked1>
     tt.return
   }
 
