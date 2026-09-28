@@ -7,7 +7,9 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/Dump.h"
+#include "llvm/ADT/SetVector.h"
 
 #define DEBUG_TYPE "nvgpu-warp-specialization"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -44,6 +46,11 @@ public:
     if (numWarps != 4)
       return;
 
+    bool hasPreexistingTaskIds = false;
+    funcOp.walk([&](Operation *op) {
+      hasPreexistingTaskIds |= op->hasAttr("async_task_id");
+    });
+
     // FIXME: skip warpspec if there is else block. Need to improve
     // CodePartitioning to correctly handle channels in else block.
     bool hasElse = false;
@@ -54,6 +61,139 @@ public:
     });
     if (hasElse)
       return;
+
+    // Gather is not supported by the data partitioner. Decline warp
+    // specialization when a Gather is in, feeds, or depends on a selected loop,
+    // or is dataflow-connected to a dot selected for function-wide
+    // partitioning.
+    auto isInWarpSpecializedLoop = [&](Operation *op) {
+      for (scf::ForOp loop : loops)
+        if (loop.getOperation() == op || loop->isAncestor(op))
+          return true;
+      return false;
+    };
+    auto isPartitionRoot = [](Operation *op) {
+      // Data partitioning considers both dot forms after task-ID propagation.
+      return isa<triton::nvidia_gpu::WarpGroupDotOp,
+                 triton::nvidia_gpu::TCGen5MMAOp>(op);
+    };
+    auto hasPartitionRootInBackwardSlice = [&](Operation *root) {
+      SetVector<Value> worklist;
+      SetVector<Value> visited;
+      for (Value operand : root->getOperands())
+        worklist.insert(operand);
+      while (!worklist.empty()) {
+        Value value = worklist.pop_back_val();
+        if (!visited.insert(value))
+          continue;
+
+        if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+          if (auto forOp =
+                  dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
+            if (blockArg.getArgNumber() > 0) {
+              unsigned iterArg = blockArg.getArgNumber() - 1;
+              // A loop-carried block argument depends on both its initial
+              // value and the value yielded by the previous iteration.
+              worklist.insert(forOp.getInitArgs()[iterArg]);
+              worklist.insert(forOp.getYieldedValues()[iterArg]);
+            }
+          }
+          continue;
+        }
+
+        Operation *op = value.getDefiningOp();
+        if (!op)
+          continue;
+        if (isInWarpSpecializedLoop(op) || isPartitionRoot(op))
+          return true;
+
+        if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+          unsigned result = cast<OpResult>(value).getResultNumber();
+          // The loop result is the final value of its corresponding iter arg.
+          worklist.insert(forOp.getInitArgs()[result]);
+          worklist.insert(forOp.getYieldedValues()[result]);
+          continue;
+        }
+        for (Value operand : op->getOperands())
+          worklist.insert(operand);
+      }
+      return false;
+    };
+    auto hasPartitionRootInForwardSlice = [&](Value root) {
+      SetVector<Value> worklist;
+      SetVector<Value> visited;
+      worklist.insert(root);
+      while (!worklist.empty()) {
+        Value value = worklist.pop_back_val();
+        if (!visited.insert(value))
+          continue;
+
+        for (Operation *user : value.getUsers()) {
+          if (isInWarpSpecializedLoop(user) || isPartitionRoot(user))
+            return true;
+
+          if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+            for (unsigned i = 0; i < forOp.getInitArgs().size(); ++i) {
+              if (forOp.getInitArgs()[i] == value) {
+                worklist.insert(forOp.getRegionIterArgs()[i]);
+                worklist.insert(forOp.getResult(i));
+              }
+            }
+            continue;
+          }
+
+          if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+            // Preserve the yielded operand's index when crossing the loop.
+            for (unsigned i = 0; i < yieldOp->getNumOperands(); ++i) {
+              if (yieldOp->getOperand(i) != value)
+                continue;
+              if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
+                // The yielded value becomes the loop-carried block argument
+                // on the next iteration, even if the loop result is unused.
+                worklist.insert(forOp.getRegionIterArgs()[i]);
+                worklist.insert(forOp.getResult(i));
+              }
+            }
+            continue;
+          }
+
+          for (Value result : user->getResults())
+            worklist.insert(result);
+        }
+      }
+      return false;
+    };
+    bool hasUnsupportedGather = false;
+    funcOp.walk([&](triton::GatherOp gatherOp) {
+      if (hasUnsupportedGather)
+        return;
+      if (isInWarpSpecializedLoop(gatherOp.getOperation())) {
+        hasUnsupportedGather = true;
+        return;
+      }
+
+      hasUnsupportedGather =
+          hasPartitionRootInBackwardSlice(gatherOp.getOperation());
+      if (hasUnsupportedGather || gatherOp->getResult(0).use_empty())
+        return;
+
+      hasUnsupportedGather =
+          hasPartitionRootInForwardSlice(gatherOp->getResult(0));
+    });
+    if (hasUnsupportedGather) {
+      if (hasPreexistingTaskIds) {
+        funcOp.emitError()
+            << "warp specialization cannot fall back from unsupported gather "
+               "in "
+               "warp-specialized function with preexisting async_task_id "
+               "attributes";
+        return signalPassFailure();
+      }
+      funcOp.walk([](scf::ForOp loop) {
+        loop->removeAttr(triton::kWarpSpecializeAttrName);
+      });
+      return;
+    }
 
     OpBuilder builder(funcOp);
     auto moduleOp = funcOp->getParentOfType<ModuleOp>();

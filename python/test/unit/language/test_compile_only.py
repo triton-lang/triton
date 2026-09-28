@@ -15,6 +15,28 @@ def topk_kernel(K: tl.constexpr):
     tl.topk(x, K)
 
 
+@triton.jit
+def gather_before_dot_ws_kernel(
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    K: tl.constexpr,
+):
+    om = tl.arange(0, M)
+    on = tl.arange(0, N)
+    ok = tl.arange(0, K)
+    acc = tl.zeros([M, N], dtype=tl.float32)
+    for i in tl.range(0, 4, warp_specialize=True):
+        a = tl.load(a_ptr + om[:, None] * K + ok[None, :] + i * M * K)
+        b = tl.load(b_ptr + ok[:, None] * N + on[None, :] + i * K * N)
+        idx = tl.full([M, K], 1, tl.int32)
+        a = tl.gather(a, idx, axis=1)
+        acc += tl.dot(a, b)
+    tl.store(c_ptr + om[:, None] * N + on[None, :], acc)
+
+
 @pytest.mark.parametrize(
     "k, error",
     [
@@ -39,6 +61,21 @@ def test_topk_invalid_k(k, error):
 def test_topk_valid_k(k):
     src = ASTSource(fn=topk_kernel, signature={"K": "constexpr"}, constexprs={"K": k})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
+
+
+def test_compile_only_ws_gather_falls_back():
+    src = ASTSource(
+        fn=gather_before_dot_ws_kernel,
+        signature={"a_ptr": "*fp16", "b_ptr": "*fp16", "c_ptr": "*fp32"},
+        constexprs={"M": 128, "N": 128, "K": 128},
+    )
+    compiled = triton.compile(
+        src,
+        target=GPUTarget("cuda", 90, 32),
+        options={"num_warps": 4, "num_stages": 3},
+    )
+    assert "tt.gather" in compiled.asm["ttgir"]
+    assert "ttg.warp_specialize" not in compiled.asm["ttgir"]
 
 
 def test_compile_only_sort_keeps_comparisons_boolean() -> None:
