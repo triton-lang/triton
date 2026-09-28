@@ -1328,9 +1328,9 @@ static bool hasUnsupportedAtomicRMW(triton::FuncOp &funcOp,
     bool isProducer = taskIds == producerTaskIds;
     bool isConsumer = taskIds == consumerTaskIds;
     if (inPartitionScheme) {
-      // Rewriting the partition closure cannot preserve an atomic's execution:
-      // a no-op dimension duplicates the update, while a sliced dimension may
-      // change its operand shape.
+      // The partitioner cannot prove that rewriting preserves the atomic
+      // effect: a no-op dimension can duplicate it, while slicing can change
+      // its operand shapes.
       unsupported = true;
       return;
     }
