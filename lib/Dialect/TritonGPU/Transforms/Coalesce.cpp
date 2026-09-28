@@ -40,24 +40,36 @@ static Attribute pickDescriptorLoadStoreLayout(
   int maxVectorSize = 128 / type.getElementTypeBitWidth();
 
   int vectorSize = std::min(numElemsPerThread, maxVectorSize);
-  // Use the contiguous dimension before distributing threads along a
-  // subsequent non-innermost reduction. Wider shared-memory loads would
-  // distribute threads along the reduction axis instead.
-  if (reductionAxis && *reductionAxis != type.getRank() - 1 &&
-      shapePerCTA.back() >= threadsPerWarp)
-    vectorSize = std::min<int64_t>(
-        vectorSize, std::max<int64_t>(1, shapePerCTA.back() / numThreads));
-  SmallVector<unsigned> sizePerThread(type.getRank(), 1);
-  sizePerThread.back() = vectorSize;
-
   SmallVector<unsigned> order =
       getMatrixOrder(type.getRank(), /*rowMajor*/ true);
   auto cgaLayout = triton::gpu::getCGALayout(type.getEncoding());
+  auto makeLayout = [&](int vectorSize) {
+    SmallVector<unsigned> sizePerThread(type.getRank(), 1);
+    sizePerThread.back() = vectorSize;
+    return triton::gpu::BlockedEncodingAttr::get(
+        type.getContext(), type.getShape(), sizePerThread, order, numWarps,
+        threadsPerWarp, cgaLayout);
+  };
+  auto defaultLayout = makeLayout(vectorSize);
+  if (!reductionAxis || *reductionAxis == type.getRank() - 1 ||
+      shapePerCTA.back() < threadsPerWarp)
+    return defaultLayout;
 
-  Attribute layout = triton::gpu::BlockedEncodingAttr::get(
-      type.getContext(), type.getShape(), sizePerThread, order, numWarps,
-      threadsPerWarp, cgaLayout);
-  return layout;
+  // Smaller vectors can distribute more threads over the contiguous dimension
+  // at the cost of shared-memory load vectorization. Choose that layout only
+  // when it reduces communication along the reduction axis.
+  int candidateVectorSize = std::min<int64_t>(
+      vectorSize, std::max<int64_t>(1, shapePerCTA.back() / numThreads));
+  if (candidateVectorSize == vectorSize)
+    return defaultLayout;
+  auto candidateLayout = makeLayout(candidateVectorSize);
+  auto reductionFanout = [&](triton::gpu::BlockedEncodingAttr layout) {
+    return layout.getThreadsPerWarp()[*reductionAxis] *
+           layout.getWarpsPerCTA()[*reductionAxis];
+  };
+  return reductionFanout(candidateLayout) < reductionFanout(defaultLayout)
+             ? candidateLayout
+             : defaultLayout;
 }
 
 static std::optional<unsigned> getSingleUseReductionAxis(Operation *load) {
@@ -85,7 +97,7 @@ static void pickDescriptorLoadStoreLayout(
     if (auto load = dyn_cast<DescriptorOpInterface>(op)) {
       if (load->getNumResults() == 1) {
         std::optional<unsigned> reductionAxis;
-        if (isNvidia && isa<DescriptorLoadLikeOpInterface>(op))
+        if (isNvidia && isa<DescriptorLoadOp>(op))
           reductionAxis = getSingleUseReductionAxis(op);
         layoutMap[op] = pickDescriptorLoadStoreLayout(
             numWarps, threadsPerWarp,

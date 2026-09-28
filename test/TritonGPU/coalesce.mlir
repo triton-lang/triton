@@ -2,6 +2,7 @@
 
 #src = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #src}>
+#slice0 = #ttg.slice<{dim = 0, parent = #src}>
 #last_slice = #ttg.slice<{dim = 2, parent = #src}>
 
 // CHECK: [[$REDUCE_LOCAL:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
@@ -62,6 +63,47 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %reduced : tensor<1x64xf32, #slice>
   }
 
+  // A reduction directly on the loaded BF16 tensor has the same layout need.
+  // CHECK-LABEL: @descriptor_reduce_without_extf
+  // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x128xbf16, [[$REDUCE_LOCAL]]>
+  tt.func @descriptor_reduce_without_extf(%desc: !tt.tensordesc<1x32x128xbf16>, %i: i32) -> tensor<1x128xbf16, #slice> {
+    %load = tt.descriptor_load %desc[%i, %i, %i] : !tt.tensordesc<1x32x128xbf16> -> tensor<1x32x128xbf16, #src>
+    %reduced = "tt.reduce"(%load) <{axis = 1 : i32}> ({
+    ^bb0(%a: bf16, %b: bf16):
+      %max = arith.maximumf %a, %b : bf16
+      tt.reduce.return %max : bf16
+    }) : (tensor<1x32x128xbf16, #src>) -> tensor<1x128xbf16, #slice>
+    tt.return %reduced : tensor<1x128xbf16, #slice>
+  }
+
+  // A second use of the extension keeps the descriptor's default layout.
+  // CHECK-LABEL: @descriptor_reduce_extf_multiple_users
+  // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x128xbf16, [[$DEFAULT_DESCRIPTOR]]>
+  tt.func @descriptor_reduce_extf_multiple_users(%desc: !tt.tensordesc<1x32x128xbf16>, %i: i32) -> (tensor<1x128xf32, #slice>, tensor<1x32x128xf32, #src>) {
+    %load = tt.descriptor_load %desc[%i, %i, %i] : !tt.tensordesc<1x32x128xbf16> -> tensor<1x32x128xbf16, #src>
+    %wide = arith.extf %load : tensor<1x32x128xbf16, #src> to tensor<1x32x128xf32, #src>
+    %reduced = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %max = arith.maximumf %a, %b : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<1x32x128xf32, #src>) -> tensor<1x128xf32, #slice>
+    tt.return %reduced, %wide : tensor<1x128xf32, #slice>, tensor<1x32x128xf32, #src>
+  }
+
+  // Axis 0 is already thread-local in the default layout.
+  // CHECK-LABEL: @descriptor_reduce_already_thread_local
+  // CHECK: tt.descriptor_load {{.*}} -> tensor<4x16x128xbf16, [[$DEFAULT_DESCRIPTOR]]>
+  tt.func @descriptor_reduce_already_thread_local(%desc: !tt.tensordesc<4x16x128xbf16>, %i: i32) -> tensor<16x128xf32, #slice0> {
+    %load = tt.descriptor_load %desc[%i, %i, %i] : !tt.tensordesc<4x16x128xbf16> -> tensor<4x16x128xbf16, #src>
+    %wide = arith.extf %load : tensor<4x16x128xbf16, #src> to tensor<4x16x128xf32, #src>
+    %reduced = "tt.reduce"(%wide) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %max = arith.maximumf %a, %b : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<4x16x128xf32, #src>) -> tensor<16x128xf32, #slice0>
+    tt.return %reduced : tensor<16x128xf32, #slice0>
+  }
+
   // CHECK-LABEL: @descriptor_reduce_multiple_users
   // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x128xbf16, [[$DEFAULT_DESCRIPTOR]]>
   tt.func @descriptor_reduce_multiple_users(%desc: !tt.tensordesc<1x32x128xbf16>, %i: i32) -> (tensor<1x128xf32, #slice>, tensor<1x32x128xbf16, #src>) {
@@ -86,6 +128,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       tt.reduce.return %max : f32
     }) : (tensor<1x32x128xf32, #src>) -> tensor<1x32xf32, #last_slice>
     tt.return %reduced : tensor<1x32xf32, #last_slice>
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#indices = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#slice = #ttg.slice<{dim = 0, parent = #src}>
+
+// CHECK: [[$GATHER_DEFAULT:#.*]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Descriptor gathers retain the default layout even before a reduction.
+  // CHECK-LABEL: @descriptor_gather_reduce
+  // CHECK: tt.descriptor_gather {{.*}} -> tensor<32x128xbf16, [[$GATHER_DEFAULT]]>
+  tt.func @descriptor_gather_reduce(%desc: !tt.tensordesc<1x128xbf16>, %indices: tensor<32xi32, #indices>, %i: i32) -> tensor<128xf32, #slice> {
+    %gather = tt.descriptor_gather %desc[%indices, %i] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32, #indices>, i32) -> tensor<32x128xbf16, #src>
+    %wide = arith.extf %gather : tensor<32x128xbf16, #src> to tensor<32x128xf32, #src>
+    %reduced = "tt.reduce"(%wide) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %max = arith.maximumf %a, %b : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<32x128xf32, #src>) -> tensor<128xf32, #slice>
+    tt.return %reduced : tensor<128xf32, #slice>
   }
 }
 
