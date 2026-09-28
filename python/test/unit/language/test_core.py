@@ -8065,6 +8065,43 @@ def test_chained_comparison_values(device, scalar, mode):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("initialize", [False, True])
+@pytest.mark.parametrize("position", ["middle", "left", "right", "dependent", "nested"])
+def test_chained_comparison_assignment_scope(device, initialize, position):
+
+    @triton.jit
+    def kernel(X, Values, Result, INITIALIZE: tl.constexpr, POSITION: tl.constexpr):
+        offsets = tl.arange(0, 16)
+        if INITIALIZE:
+            value = tl.full((16, ), -42, tl.int32)
+        if POSITION == "middle":
+            result = 0 < (value := tl.load(X + offsets)) < 8
+        elif POSITION == "left":
+            result = (value := tl.load(X + offsets)) > 0 < 8
+        elif POSITION == "right":
+            result = 0 < 8 > (value := tl.load(X + offsets))
+        elif POSITION == "dependent":
+            result = 0 < (value := tl.load(X + offsets)) < value + 1
+        else:
+            result = (0 < (value := tl.load(X + offsets)) < 8) == 1 != 0
+        tl.store(Values + offsets, value)
+        tl.store(Result + offsets, result)
+
+    x = torch.arange(-4, 12, device=device, dtype=torch.int32)
+    values = torch.empty_like(x)
+    result = torch.empty_like(x, dtype=torch.bool)
+    kernel[(1, )](x, values, result, initialize, position)
+    torch.testing.assert_close(values, x)
+    if position in ("left", "dependent"):
+        expected = x > 0
+    elif position == "right":
+        expected = x < 8
+    else:
+        expected = (0 < x) & (x < 8)
+    torch.testing.assert_close(result, expected)
+
+
+@pytest.mark.interpreter
 def test_chained_comparison_broadcast(device):
 
     @triton.jit

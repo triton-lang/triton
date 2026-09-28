@@ -1516,23 +1516,35 @@ class GridExecutor:
         self._restore_args_dev(args_dev, args_hst, kwargs, kwargs_hst)
 
 
-def _interpreter_chained_compare(operands, comparisons):
-    lhs = operands[0]()
-    values = []
-    for operand, compare in zip(operands[1:], comparisons):
-        rhs = operand()
-        value = compare(lhs, rhs)
-        if isinstance(value, tl.tensor):
-            values.append(value)
-        elif not value:
-            return value
-        lhs = rhs
-    if not values:
-        return value
-    result = values.pop()
-    for value in reversed(values):
-        result = value.logical_and(result)
-    return result
+class _InterpreterComparison:
+    """Adapt native Python comparison chaining to Triton's tensor semantics."""
+
+    def __init__(self, value, comparison=None):
+        self.value = value
+        self.comparison = comparison
+        self.result = None
+        self.tensor_results = []
+
+    def __lt__(self, rhs):
+        # Python reuses the right operand for the next comparison. Carry the
+        # accumulated results with it, delegating to the original operator.
+        rhs.result = rhs.comparison(self.value, rhs.value)
+        rhs.tensor_results = self.tensor_results
+        if isinstance(rhs.result, tl.tensor):
+            rhs.tensor_results.append(rhs.result)
+        return rhs
+
+    def __bool__(self):
+        # Only compile-time false comparisons short-circuit the native chain.
+        return isinstance(self.result, tl.tensor) or bool(self.result)
+
+    def get_result(self):
+        if not self or not self.tensor_results:
+            return self.result
+        result = self.tensor_results[-1]
+        for value in reversed(self.tensor_results[:-1]):
+            result = value.logical_and(result)
+        return result
 
 
 class ASTTransformer(ast.NodeTransformer):
@@ -1542,23 +1554,24 @@ class ASTTransformer(ast.NodeTransformer):
         if len(node.ops) == 1:
             return node
 
-        def thunk(body, names=()):
-            args = ast.arguments(posonlyargs=[], args=[ast.arg(arg=name) for name in names], kwonlyargs=[],
-                                 kw_defaults=[], defaults=[])
-            return ast.Lambda(args=args, body=body)
+        def wrap_operand(value, op=None):
+            args = [value]
+            if op is not None:
+                parameters = ast.arguments(posonlyargs=[], args=[ast.arg(arg="lhs"),
+                                                                 ast.arg(arg="rhs")], kwonlyargs=[], kw_defaults=[],
+                                           defaults=[])
+                comparison = ast.Compare(left=ast.Name(id="lhs", ctx=ast.Load()), ops=[op],
+                                         comparators=[ast.Name(id="rhs", ctx=ast.Load())])
+                args.append(ast.Lambda(args=parameters, body=comparison))
+            return ast.Call(func=ast.Name(id="_InterpreterComparison", ctx=ast.Load()), args=args, keywords=[])
 
-        # Delaying operands preserves compile-time short-circuiting and evaluates
-        # each middle operand only once, including calls with side effects.
-        operands = [thunk(operand) for operand in [node.left, *node.comparators]]
-        comparisons = [
-            thunk(
-                ast.Compare(left=ast.Name(id="lhs", ctx=ast.Load()), ops=[op],
-                            comparators=[ast.Name(id="rhs", ctx=ast.Load())]), ("lhs", "rhs")) for op in node.ops
-        ]
+        # Keep operand expressions in their original scope so assignment
+        # expressions still bind there. Python's native chain evaluates each
+        # operand once and uses the wrappers' truthiness to short-circuit.
+        chain = ast.Compare(left=wrap_operand(node.left), ops=[ast.Lt() for _ in node.ops],
+                            comparators=[wrap_operand(value, op) for op, value in zip(node.ops, node.comparators)])
         return ast.copy_location(
-            ast.Call(func=ast.Name(id="_interpreter_chained_compare", ctx=ast.Load()),
-                     args=[ast.Tuple(elts=operands, ctx=ast.Load()),
-                           ast.Tuple(elts=comparisons, ctx=ast.Load())], keywords=[]), node)
+            ast.Call(func=ast.Attribute(value=chain, attr="get_result", ctx=ast.Load()), args=[], keywords=[]), node)
 
     def visit_Assign(self, node):
         names = []
