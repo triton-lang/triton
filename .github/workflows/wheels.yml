@@ -102,9 +102,9 @@ jobs:
             export CIBW_MANYLINUX_AARCH64_IMAGE="quay.io/pypa/manylinux_2_28_${{ matrix.config.arch }}:latest"
           fi
 
-          # Version-specific wheels for Python 3.10 and 3.11.
-          export CIBW_BUILD="cp3{10,11}-manylinux_${{ matrix.config.arch }}"
-          export CIBW_SKIP="cp{35,36,37,38,39}-*"
+          # Version-specific wheel for Python 3.11.
+          export CIBW_BUILD="cp311-manylinux_${{ matrix.config.arch }}"
+          export CIBW_SKIP="cp{35,36,37,38,39,310}-*"
           python3 -m cibuildwheel . --output-dir wheelhouse
 
           # A single abi3 wheel built on Python 3.12 supports Python 3.12+.
