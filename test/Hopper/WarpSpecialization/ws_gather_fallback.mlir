@@ -65,7 +65,7 @@
 // CHECK-NOT: tt.warp_specialize
 // CHECK-NOT: async_task_id
 // CHECK-LABEL: @independent_gather_joined_with_loop_scalar_keeps_warp_specialization
-// CHECK-DAG: arith.constant dense<false> : tensor<128x256xi1, #blocked1>
+// CHECK-DAG: arith.constant {{.*}}dense<false> : tensor<128x256xi1, #blocked1>
 // CHECK-DAG: ttg.warp_specialize
 // CHECK: tt.gather
 // CHECK: arith.addf
