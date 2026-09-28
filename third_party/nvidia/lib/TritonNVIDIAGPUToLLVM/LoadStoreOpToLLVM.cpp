@@ -105,6 +105,9 @@ FailureOr<Value> createCachePolicy(CachePolicy cachePolicy,
     else
       fractionBuffer = "1.0";
     std::string fractionStr = fractionBuffer.str().str();
+    // PTX requires a floating-point literal, even for integral fractions.
+    if (fractionStr.find_first_of(".eE") == std::string::npos)
+      fractionStr += ".0";
     auto *fractionOpr = ptxBuilder.newConstantOperand(fractionStr);
     policy(dstOpr, fractionOpr);
 
@@ -841,7 +844,7 @@ public:
              triton::nvgpu::MemSyncScope::SYSTEM}};
     const bool doPTXLDPromotion = !useRed && isPromotableToNVPTXLD(op) &&
                                   vec == 1 && packed == 1 &&
-                                  ScopeMap.count(op.getScope());
+                                  ScopeMap.contains(op.getScope());
 
     for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
       Value rmwPtr = ptrElements[i];

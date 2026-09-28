@@ -775,8 +775,35 @@ def test_invalid_slice(device):
     def _kernel(dst):
         dst[10:]
 
+    @triton.jit
+    def _scalar_slice_newaxis():
+        scalar = tl.program_id(axis=0)
+        scalar[:, None]
+
+    @triton.jit
+    def _scalar_newaxis_slice():
+        scalar = tl.program_id(axis=0)
+        scalar[None, :]
+
+    @triton.jit
+    def _vector_too_many_slices():
+        vector = tl.arange(0, 4)
+        vector[:, :]
+
     with pytest.raises(triton.TritonError, match='unsupported tensor index'):
         _kernel[(1, )](dst=dst)
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        _scalar_slice_newaxis[(1, )]()
+    assert "too many indices for tensor of rank 0" in str(exc_info.value.__cause__)
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        _scalar_newaxis_slice[(1, )]()
+    assert "too many indices for tensor of rank 0" in str(exc_info.value.__cause__)
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        _vector_too_many_slices[(1, )]()
+    assert "too many indices for tensor of rank 1" in str(exc_info.value.__cause__)
 
 
 # ----------------
@@ -2771,7 +2798,12 @@ def test_umulhi(dtype_str, device):
     if not is_interpreter() and is_cuda():
         assert f"mul.hi.u{np_dtype.itemsize * 8}" in compiled.asm["ptx"]
     elif not is_interpreter() and is_hip():
-        assert "v_mul_hi_u32" in compiled.asm["amdgcn"]
+        # gfx1250 multiplies 64-bit operands natively instead of decomposing
+        # the wide product into 32-bit multiply-high instructions.
+        if np_dtype.itemsize == 8 and is_hip_gfx1250():
+            assert "v_mad_nc_u64_u32" in compiled.asm["amdgcn"]
+        else:
+            assert "v_mul_hi_u32" in compiled.asm["amdgcn"]
 
 
 @pytest.mark.parametrize("masked", [False, True])
@@ -3370,9 +3402,9 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
         z_ptr = Z
         if KEEP_DIMS and AXIS is None:
             if IS_3D:
-                z_ptr = z_ptr[None, None, None, :]
+                z_ptr = z_ptr[None, None, None]
             else:
-                z_ptr = z_ptr[None, None, :]
+                z_ptr = z_ptr[None, None]
         if IS_3D:
             if AXIS == 0:
                 z_ptr = Z + range_n[:, None] * BLOCK_K + range_k[None, :]
@@ -7057,7 +7089,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     if is_hopper() and low_precision_acc > 0:
         # Hopper-specific workaround lower precision accumulator.
-        assert h.asm["ptx"].count("add.f32") == (BLOCK_M * BLOCK_N) // (32 * num_warps) * (BLOCK_K // low_precision_acc)
+        assert len(re.findall(r"add(?:\.rn)?\.f32",
+                              h.asm["ptx"])) == (BLOCK_M * BLOCK_N) // (32 * num_warps) * (BLOCK_K // low_precision_acc)
 
 
 # -----------------------
@@ -7067,7 +7100,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 @pytest.mark.parametrize("default_override", [False, True])
-def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knobs):
+@pytest.mark.parametrize("force_disable", [False, True])
+def test_enable_fp_fusion(enable_fp_fusion, default_override, force_disable, device, fresh_knobs):
     # Sequential multiply add can be fused by backend
     @triton.jit
     def mul_add(data):
@@ -7075,6 +7109,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
         tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
+    fresh_knobs.language.force_disable_fp_fusion = force_disable
     if default_override:
         fresh_knobs.language.default_fp_fusion = enable_fp_fusion
         h = mul_add.warmup(data, grid=(1, ))
@@ -7084,7 +7119,27 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
     if not is_cuda():
         return
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
-    assert found_fma == enable_fp_fusion
+    assert found_fma == (enable_fp_fusion and not force_disable)
+
+
+@pytest.mark.parametrize("explicit_fma", [False, True])
+@pytest.mark.parametrize("force_disable", [False, True])
+def test_force_disable_fp_fusion(explicit_fma, force_disable, device, fresh_knobs):
+
+    @triton.jit
+    def mul_add(x, y, z, out, EXPLICIT_FMA: tl.constexpr):
+        a, b, c = tl.load(x), tl.load(y), tl.load(z)
+        value = tl.fma(a, b, c) if EXPLICIT_FMA else a * b + c
+        tl.store(out, value)
+
+    x = torch.tensor([1 + 2**-23], device=device, dtype=torch.float32)
+    y = torch.tensor([1 - 2**-23], device=device, dtype=torch.float32)
+    z = torch.tensor([-1], device=device, dtype=torch.float32)
+    out = torch.empty_like(x)
+    fresh_knobs.language.force_disable_fp_fusion = force_disable
+    kernel = mul_add[(1, )](x, y, z, out, explicit_fma, enable_fp_fusion=True)
+    assert kernel.metadata.enable_fp_fusion == (not force_disable)
+    assert out.item() == (-2**-46 if explicit_fma or not force_disable else 0)
 
 
 # -----------------------

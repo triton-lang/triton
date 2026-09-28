@@ -450,7 +450,7 @@ LogicalResult scheduleOpsBetweenDots(scf::ForOp forOp,
       auto defOp = v.getDefiningOp();
       // Abort path if we hit a blockarg, left the forward slice of dot0 or the
       // op has already a schedule
-      if (!defOp || !dot0Slice.contains(defOp) || schedule.count(defOp) != 0) {
+      if (!defOp || !dot0Slice.contains(defOp) || schedule.contains(defOp)) {
         continue;
       }
 

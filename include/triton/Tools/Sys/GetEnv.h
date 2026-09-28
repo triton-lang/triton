@@ -34,6 +34,8 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_DISABLE_LINE_INFO",
     "TRITON_DUMP_MIR",
     "TRITON_ENABLE_LLVM_DEBUG",
+    "TRITON_FORCE_DISABLE_FP_FUSION",
+    "TRITON_HIP_DISABLE_TDM_REORDER",
     "TRITON_HIP_USE_ASYNC_COPY",
     "TRITON_HIP_USE_BLOCK_PINGPONG",
     "TRITON_HIP_USE_COEXEC_SCHEDULER",
@@ -66,10 +68,8 @@ inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
 namespace tools {
 
 inline void assertIsRecognized(const std::string &env) {
-  bool is_invalidating = CACHE_INVALIDATING_ENV_VARS.find(env.c_str()) !=
-                         CACHE_INVALIDATING_ENV_VARS.end();
-  bool is_neutral =
-      CACHE_NEUTRAL_ENV_VARS.find(env.c_str()) != CACHE_NEUTRAL_ENV_VARS.end();
+  bool is_invalidating = CACHE_INVALIDATING_ENV_VARS.contains(env.c_str());
+  bool is_neutral = CACHE_NEUTRAL_ENV_VARS.contains(env.c_str());
   std::string errmsg = env + "is not recognized. "
                              "Please add it to triton/Tools/Sys/GetEnv.h";
   assert((is_invalidating || is_neutral) && errmsg.c_str());

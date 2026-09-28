@@ -15,8 +15,9 @@ import triton
 import triton.language as tl
 
 from triton._internal_testing import is_cuda
+from triton._C.libtriton.gsan_testing import shadow_granularity
 from triton.experimental.gsan import _stream_sync, symmetric_memory
-from triton.experimental.gsan._testing_utils import atomic_poll, shadow_cell_from_address, shadow_tensor_for, SHADOW_GRANULARITY_BYTES
+from triton.experimental.gsan._testing_utils import atomic_poll, shadow_cell_from_address, shadow_tensor_for
 
 pytestmark = pytest.mark.xdist_group("gsan-symmetric-memory")
 _PROCESS_GROUP_TIMEOUT = timedelta(seconds=30)
@@ -252,9 +253,10 @@ def _run_multi_node_simulated_symmetric_memory_checks(rank: int, world_size: int
     hdl.barrier(channel=0)
     assert torch.all(buf == (prev + 101)).item()
 
-    outgoing_shadow_offset = rank * SHADOW_GRANULARITY_BYTES
-    incoming_shadow_offset = prev * SHADOW_GRANULARITY_BYTES
-    untouched_shadow_offset = (world_size + rank) * SHADOW_GRANULARITY_BYTES
+    outgoing_shadow_offset = rank * shadow_granularity(peer_buf.data_ptr())
+    granularity = shadow_granularity(buf.data_ptr())
+    incoming_shadow_offset = prev * granularity
+    untouched_shadow_offset = (world_size + rank) * granularity
     incoming_shadow_before = shadow_cell_from_address(buf.data_ptr() + incoming_shadow_offset,
                                                       device_index=device_index)
     untouched_shadow_before = shadow_cell_from_address(buf.data_ptr() + untouched_shadow_offset,
@@ -288,7 +290,8 @@ def _run_multi_node_simulated_symmetric_memory_checks(rank: int, world_size: int
     hdl.close()
 
 
-def _run_single_cta_atomic_sync_check(rank: int, world_size: int) -> None:
+def _run_single_cta_atomic_sync_check(rank: int, world_size: int, write_once: bool = False) -> None:
+    triton.knobs.compilation.instrumentation_mode = "gsan"
     dev = torch.device(f"cuda:{rank}")
     torch.cuda.set_device(dev)
     symmetric_memory.configure(dist.group.WORLD)
@@ -301,6 +304,12 @@ def _run_single_cta_atomic_sync_check(rank: int, world_size: int) -> None:
     counter = hdl.get_buffer(0, (1, ), state.dtype, storage_offset=0)
     peer_payload = hdl.get_buffer(peer, (1, ), state.dtype, storage_offset=1)
     local_payload = state[1:]
+    payload_hdl = None
+    if write_once:
+        payload = symmetric_memory.empty((1, ), dtype=torch.int32, device=dev, write_once=True)
+        payload_hdl = symmetric_memory.rendezvous(payload, group=dist.group.WORLD)
+        local_payload = payload
+        peer_payload = payload_hdl.get_buffer(peer, payload.shape, payload.dtype)
     num_ready = torch.full((1, ), -1, dtype=torch.int32, device=dev)
     seen_peer = torch.full((1, ), -1, dtype=torch.int32, device=dev)
 
@@ -328,6 +337,13 @@ def _run_single_cta_atomic_sync_check(rank: int, world_size: int) -> None:
 
     dist.barrier()
     torch.cuda.synchronize()
+    if payload_hdl is not None:
+        from triton.experimental.gsan._allocator import is_write_once_allocation
+        assert is_write_once_allocation(peer_payload.data_ptr())
+        clock = shadow_cell_from_address(peer_payload.data_ptr())
+        assert clock.epoch > 0
+        assert shadow_tensor_for(peer_payload).numel() == 16
+        payload_hdl.close()
     hdl.close()
     hdl.close()
 
@@ -375,7 +391,8 @@ def _distributed_worker(rank: int, world_size: int, master_port: int, run_subgro
         dist.destroy_process_group()
 
 
-def _distributed_worker_single_cta_atomic_sync(rank: int, world_size: int, master_port: int) -> None:
+def _distributed_worker_single_cta_atomic_sync(rank: int, world_size: int, master_port: int,
+                                               write_once: bool = False) -> None:
     dev = f"cuda:{rank}"
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["MASTER_ADDR"] = "127.0.0.1"
@@ -383,7 +400,7 @@ def _distributed_worker_single_cta_atomic_sync(rank: int, world_size: int, maste
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev),
                             timeout=_PROCESS_GROUP_TIMEOUT)
     try:
-        _run_single_cta_atomic_sync_check(rank, world_size)
+        _run_single_cta_atomic_sync_check(rank, world_size, write_once)
         dist.barrier()
     finally:
         dist.destroy_process_group()
@@ -463,13 +480,14 @@ def test_gsan_symmetric_memory_rendezvous_multi_node_simulated():
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_gsan_symmetric_memory_single_cta_atomic_sync():
+@pytest.mark.parametrize("write_once", [False, True])
+def test_gsan_symmetric_memory_single_cta_atomic_sync(write_once):
     if torch.cuda.device_count() < 2:
         pytest.skip("requires 2 CUDA devices")
 
     world_size = 2
     master_port = _get_free_tcp_port()
-    _spawn_distributed(_distributed_worker_single_cta_atomic_sync, world_size, master_port)
+    _spawn_distributed(_distributed_worker_single_cta_atomic_sync, world_size, master_port, write_once)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")

@@ -1,5 +1,6 @@
 # isort: off
 # fmt: off
+from contextlib import nullcontext
 from dataclasses import dataclass, fields
 import itertools
 import importlib
@@ -359,14 +360,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     b_dtype = DType(weight_dtype_str)
     c_dtype = DType(output_dtype_str or act_dtype_str)
     device_capability = torch.cuda.get_device_capability()[0]
-    # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if device_capability < 10 and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4):
             pytest.skip("NVFP4 matmul only tested on Blackwell or newer")
         if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
             pytest.skip("FP8 E4M3FN tests require Hopper or newer")
-        if b_dtype.is_any_float8 and device_capability < 9:
-            pytest.skip("Float8 not tested on A100")
         if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if b_dtype.has_mx_scale and a_dtype.has_global_scale and device_capability < 10:
@@ -820,6 +818,51 @@ def test_mxfp8_act_scale_store_zeroes_partial_group(n, is_persistent, device):
             -3, first_unused_group, n_scale_groups - first_unused_group
         )
         assert torch.all(unused_groups == 0xFF)
+
+
+@pytest.mark.parametrize("scale_slice_sizes", [None, (128, 128), (130, 126), (129, 127)],
+                         ids=["shared", "different-block-offsets", "different-slice-offsets", "equal-copy"])
+def test_gathered_ragged_act_scale_indexing(device, scale_slice_sizes):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    m, k = 256, 128
+    values = (torch.arange(m * k, device=device).reshape(m, k) % 7 - 3).to(torch.float8_e4m3fn)
+    scale_shape = (m, k // MXFP_BLOCK_SIZE.value)
+    scales = (torch.arange(m * scale_shape[1], device=device).reshape(scale_shape) % 7 + 124).to(torch.uint8)
+    gather_indx = torch.arange(m - 1, -1, -1, dtype=torch.int32, device=device)
+
+    # The second slice starts at scale block 2 after padding the first slice.
+    slice_sizes = torch.tensor([129, 127], dtype=torch.int32, device=device)
+    metadata = make_ragged_tensor_metadata(slice_sizes, m)
+    scale_metadata = metadata if scale_slice_sizes is None else make_ragged_tensor_metadata(
+        torch.tensor(scale_slice_sizes, dtype=torch.int32, device=device), m)
+    gathered_scales = convert_layout(
+        wrap_torch_tensor(scales[gather_indx.long()]),
+        layout.BlackwellActMXScaleLayout(scale_metadata),
+    )
+    weights = torch.eye(k, dtype=torch.bfloat16, device=device).repeat(2, 1, 1)
+
+    expected_error = nullcontext() if scale_slice_sizes is None else pytest.raises(
+        AssertionError, match="same RaggedTensorMetadata instance")
+    constraints = {"block_m": 128, "block_k": 128, "is_persistent": True, "split_k": 1}
+    with opt_flags.scoped_opt_flags_constraints(constraints), expected_error:
+        actual = matmul(
+            wrap_torch_tensor(values),
+            weights,
+            None,
+            metadata,
+            gather_indx=gather_indx,
+            precision_config=PrecisionConfig(
+                a_mx_scale=gathered_scales,
+                a_microblock_size=MXFP_BLOCK_SIZE.value,
+                out_dtype=torch.bfloat16,
+            ),
+        )
+
+    if scale_slice_sizes is None:
+        expected = upcast_from_mxfp_torch(values, scales, torch.bfloat16, axis=-1)[gather_indx.long()]
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 def test_k_ragged_mxfp8_act_scale_swizzling(device):

@@ -29,7 +29,10 @@ private:
 bool NvidiaGPUAssignDescriptorMemoryLayouts::isCompatibleSharedEncoding(
     Attribute enc) {
   if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(enc))
-    return !nvmma.getTransposed();
+    // Only 128-byte swizzling is supported for padded FP4 TMA descriptors.
+    // MMA operands can still use padded layouts with smaller swizzles.
+    return !nvmma.getTransposed() &&
+           (!nvmma.getFp4Padded() || nvmma.getSwizzlingByteWidth() == 128);
   return false;
 }
 
@@ -62,7 +65,7 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
     auto preferred = ttg::NVMMASharedEncodingAttr::get(
         ctx, shape, order, cgaLayout, elementType, fp4Padded);
     preferredCandidates.push_back(preferred);
-    if (isEquivalent(preferred))
+    if (isCompatibleSharedEncoding(preferred) && isEquivalent(preferred))
       return preferred;
   }
 
@@ -74,7 +77,7 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
           cgaLayout);
       if (llvm::is_contained(preferredCandidates, candidate))
         continue;
-      if (isEquivalent(candidate))
+      if (isCompatibleSharedEncoding(candidate) && isEquivalent(candidate))
         return candidate;
     }
   }

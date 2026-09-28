@@ -163,9 +163,11 @@ ttg::BlockedEncodingAttr getOptimizedBlockedEncoding(PatternRewriter &rewriter,
     sizePerThread[dim] =
         static_cast<unsigned>(std::min<int64_t>(shape[dim], maxElems));
   }
-  return ttg::BlockedEncodingAttr::get(
-      rewriter.getContext(), sizePerThread, base.getThreadsPerWarp(),
-      base.getWarpsPerCTA(), order, base.getCGALayout());
+  // Recompute lane and warp distribution after increasing vector width;
+  // retaining the scalar layout can duplicate a narrow row across many lanes.
+  return ttg::BlockedEncodingAttr::get(rewriter.getContext(), shape,
+                                       sizePerThread, order, numWarps,
+                                       threadsPerWarp, base.getCGALayout());
 }
 
 struct ScratchInfo {

@@ -1,5 +1,70 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-optimize-descriptor-encoding | FileCheck %s
-// Test that gather/scatter are assigned swizzled encodings
+// Test descriptor layout selection for TMA.
+
+// Padded FP4 MMA layouts with small K cannot be used directly by TMA.
+// Load packed bytes with a legal layout and keep the padded consumer layout.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#padded = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-DAG: #[[PACKED:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+  // CHECK-DAG: #[[PADDED:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+  // CHECK: tt.func @fp4_padded_small_k32
+  // CHECK-SAME: !tt.tensordesc<128x16xi8, #[[PACKED]]>
+  tt.func @fp4_padded_small_k32(%desc: !tt.tensordesc<128x16xi8>) {
+    %c0 = arith.constant 0 : i32
+    // CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} : !tt.tensordesc<128x16xi8, #[[PACKED]]>
+    %v = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<128x16xi8> -> tensor<128x16xi8, #blocked>
+    // CHECK: ttg.local_alloc %[[LOAD]] {{.*}} -> !ttg.memdesc<128x16xi8, #[[PADDED]], #smem>
+    %s = ttg.local_alloc %v : (tensor<128x16xi8, #blocked>) -> !ttg.memdesc<128x16xi8, #padded, #smem>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#padded = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-DAG: #[[PACKED64:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+  // CHECK-DAG: #[[PADDED64:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+  // CHECK: tt.func @fp4_padded_small_k64
+  // CHECK-SAME: !tt.tensordesc<128x32xi8, #[[PACKED64]]>
+  tt.func @fp4_padded_small_k64(%desc: !tt.tensordesc<128x32xi8>) {
+    %c0 = arith.constant 0 : i32
+    // CHECK: %[[LOAD64:.*]] = tt.descriptor_load {{.*}} : !tt.tensordesc<128x32xi8, #[[PACKED64]]>
+    %v = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<128x32xi8> -> tensor<128x32xi8, #blocked>
+    // CHECK: ttg.local_alloc %[[LOAD64]] {{.*}} -> !ttg.memdesc<128x32xi8, #[[PADDED64]], #smem>
+    %s = ttg.local_alloc %v : (tensor<128x32xi8, #blocked>) -> !ttg.memdesc<128x32xi8, #padded, #smem>
+    tt.return
+  }
+}
+
+// -----
+
+// The same rejection must apply when a shared_linear consumer is matched to
+// an equivalent padded NVMMA layout.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#padded_linear = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 0], [0, 8], [0, 16], [1, 0], [2, 8], [4, 16], [8, 0], [16, 0], [32, 0], [64, 0]]}, alignment = 512>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-DAG: #[[PACKED_LINEAR:.*]] = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+  // CHECK-DAG: #[[PADDED_LINEAR:.*]] = #ttg.shared_linear<{{.*}}alignment = 512>
+  // CHECK: tt.func @fp4_padded_small_k64_shared_linear
+  // CHECK-SAME: !tt.tensordesc<128x32xi8, #[[PACKED_LINEAR]]>
+  tt.func @fp4_padded_small_k64_shared_linear(%desc: !tt.tensordesc<128x32xi8>) {
+    %c0 = arith.constant 0 : i32
+    // CHECK: %[[LOAD_LINEAR:.*]] = tt.descriptor_load {{.*}} : !tt.tensordesc<128x32xi8, #[[PACKED_LINEAR]]>
+    %v = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<128x32xi8> -> tensor<128x32xi8, #blocked>
+    // CHECK: ttg.local_alloc %[[LOAD_LINEAR]] {{.*}} -> !ttg.memdesc<128x32xi8, #[[PADDED_LINEAR]], #smem>
+    %s = ttg.local_alloc %v : (tensor<128x32xi8, #blocked>) -> !ttg.memdesc<128x32xi8, #padded_linear, #smem>
+    tt.return
+  }
+}
+
+// -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>

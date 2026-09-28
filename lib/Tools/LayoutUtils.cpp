@@ -514,11 +514,11 @@ SmallVector<StringAttr> supremum(const SmallVector<StringAttr> &x,
     }
     int candX = INF, candY = INF;
     if (i < x.size()) {
-      if (posY.count(x[i]) && posY[x[i]] >= j)
+      if (posY.contains(x[i]) && posY[x[i]] >= j)
         candX = posY[x[i]];
     }
     if (j < y.size()) {
-      if (posX.count(y[j]) && posX[y[j]] >= i)
+      if (posX.contains(y[j]) && posX[y[j]] >= i)
         candY = posX[y[j]];
     }
     if (i < x.size() && candX == INF) {
