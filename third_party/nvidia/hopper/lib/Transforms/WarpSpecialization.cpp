@@ -64,8 +64,8 @@ public:
 
     // Gather is not supported by the data partitioner. Decline warp
     // specialization when a Gather is in, feeds, or depends on a selected loop
-    // or partition root, or joins a partitioned value at an elementwise or
-    // store consumer.
+    // or partition root, or joins a partitioned value at a consumer whose
+    // operands are sliced together.
     auto isInWarpSpecializedLoop = [&](Operation *op) {
       for (scf::ForOp loop : loops)
         if (loop.getOperation() == op || loop->isAncestor(op))
@@ -154,12 +154,13 @@ public:
           if (isInWarpSpecializedLoop(user) || isPartitionRoot(user))
             return true;
 
-          // Data partitioning adds every operand of partitioned consumers to
-          // the closure. A Gather can therefore join a partitioned value here
-          // even when neither value depends on the other.
+          // These consumers are sliced with their operands. A Gather can
+          // therefore meet a partitioned value here even when neither value
+          // depends on the other.
           if (user->hasTrait<OpTrait::Elementwise>() ||
               isa<triton::StoreOp, triton::DescriptorStoreOp,
-                  triton::AtomicRMWOp>(user)) {
+                  triton::AtomicRMWOp, triton::JoinOp, triton::LoadOp,
+                  triton::ReduceOp>(user)) {
             for (Value operand : user->getOperands()) {
               if (operand != value && hasPartitionRootInBackwardSlice(
                                           operand, hasPartitionableValue))

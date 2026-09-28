@@ -94,6 +94,82 @@
 // CHECK-NOT: ttg.warp_specialize
 // CHECK-NOT: tt.warp_specialize
 // CHECK-NOT: async_task_id
+// CHECK-LABEL: @gather_join_consumer_falls_back
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: ttng.warp_group_dot
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.num_stages = 2 : i32
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.gather
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.join
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.store
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK-LABEL: @gather_load_consumer_falls_back
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: ttng.warp_group_dot
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.num_stages = 2 : i32
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.gather
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.load
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.store
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK-LABEL: @gather_reduce_consumer_falls_back
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: ttng.warp_group_dot
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.num_stages = 2 : i32
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.gather
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.reduce
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.store
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
+// CHECK: tt.store
+// CHECK-NOT: ttg.warp_specialize
+// CHECK-NOT: tt.warp_specialize
+// CHECK-NOT: async_task_id
 // CHECK-LABEL: @independent_gather_fed_dot_falls_back
 // CHECK-NOT: ttg.warp_specialize
 // CHECK-NOT: tt.warp_specialize
@@ -197,6 +273,7 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 256, 16]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
@@ -337,6 +414,75 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
     %output_gather = tt.gather %independent[%indices] {axis = 1 : i32} : (tensor<128x256xf16, #blocked1>, tensor<128x256xi32, #blocked1>) -> tensor<128x256xf16, #blocked1>
     %sum = arith.addf %out_blocked, %output_gather : tensor<128x256xf16, #blocked1>
     tt.descriptor_store %arg2[%c0, %c0], %sum : !tt.tensordesc<128x256xf16>, tensor<128x256xf16, #blocked1>
+    tt.return
+  }
+
+  tt.func @gather_join_consumer_falls_back(%arg0: !tt.tensordesc<128x64xf16>, %arg1: !tt.tensordesc<64x256xf16>, %arg2: tensor<128x256x2x!tt.ptr<f16>, #blocked2>, %independent: tensor<128x256xf16, #blocked1>, %iterations: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %indices = arith.constant dense<0> : tensor<128x256xi32, #blocked1>
+    %init = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %acc = scf.for %i = %c0 to %iterations step %c1 iter_args(%iter = %init) -> tensor<128x256xf32, #mma> : i32 {
+      %a = tt.descriptor_load %arg0[%i, %c0] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+      %a_smem = ttg.local_alloc %a : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+      %b = tt.descriptor_load %arg1[%c0, %i] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked1>
+      %b_smem = ttg.local_alloc %b : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+      %dot = ttng.warp_group_dot %a_smem, %b_smem, %iter {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+      scf.yield %dot : tensor<128x256xf32, #mma>
+    } {tt.num_stages = 2 : i32, tt.warp_specialize}
+    %out = arith.truncf %acc : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
+    %out_blocked = ttg.convert_layout %out : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>
+    %gathered = tt.gather %independent[%indices] {axis = 1 : i32} : (tensor<128x256xf16, #blocked1>, tensor<128x256xi32, #blocked1>) -> tensor<128x256xf16, #blocked1>
+    %joined = tt.join %out_blocked, %gathered : tensor<128x256xf16, #blocked1> -> tensor<128x256x2xf16, #blocked2>
+    tt.store %arg2, %joined : tensor<128x256x2x!tt.ptr<f16>, #blocked2>
+    tt.return
+  }
+
+  tt.func @gather_load_consumer_falls_back(%arg0: !tt.tensordesc<128x64xf16>, %arg1: !tt.tensordesc<64x256xf16>, %arg2: tensor<128x256x!tt.ptr<f16>, #blocked1>, %arg3: tensor<128x256x!tt.ptr<f16>, #blocked1>, %mask: tensor<128x256xi1, #blocked1>, %iterations: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %indices = arith.constant dense<0> : tensor<128x256xi32, #blocked1>
+    %init = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %acc = scf.for %i = %c0 to %iterations step %c1 iter_args(%iter = %init) -> tensor<128x256xf32, #mma> : i32 {
+      %a = tt.descriptor_load %arg0[%i, %c0] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+      %a_smem = ttg.local_alloc %a : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+      %b = tt.descriptor_load %arg1[%c0, %i] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked1>
+      %b_smem = ttg.local_alloc %b : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+      %dot = ttng.warp_group_dot %a_smem, %b_smem, %iter {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+      scf.yield %dot : tensor<128x256xf32, #mma>
+    } {tt.num_stages = 2 : i32, tt.warp_specialize}
+    %out = arith.truncf %acc : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
+    %out_blocked = ttg.convert_layout %out : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>
+    %gathered_ptrs = tt.gather %arg2[%indices] {axis = 1 : i32} : (tensor<128x256x!tt.ptr<f16>, #blocked1>, tensor<128x256xi32, #blocked1>) -> tensor<128x256x!tt.ptr<f16>, #blocked1>
+    %loaded = tt.load %gathered_ptrs, %mask, %out_blocked : tensor<128x256x!tt.ptr<f16>, #blocked1>
+    tt.store %arg3, %loaded : tensor<128x256x!tt.ptr<f16>, #blocked1>
+    tt.return
+  }
+
+  tt.func @gather_reduce_consumer_falls_back(%arg0: !tt.tensordesc<128x64xf16>, %arg1: !tt.tensordesc<64x256xf16>, %arg2: tensor<128x!tt.ptr<f16>, #ttg.slice<{dim = 1, parent = #blocked1}>>, %arg3: tensor<128x!tt.ptr<f16>, #ttg.slice<{dim = 1, parent = #blocked1}>>, %independent: tensor<128x256xf16, #blocked1>, %iterations: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %indices = arith.constant dense<0> : tensor<128x256xi32, #blocked1>
+    %init = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %acc = scf.for %i = %c0 to %iterations step %c1 iter_args(%iter = %init) -> tensor<128x256xf32, #mma> : i32 {
+      %a = tt.descriptor_load %arg0[%i, %c0] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+      %a_smem = ttg.local_alloc %a : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+      %b = tt.descriptor_load %arg1[%c0, %i] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked1>
+      %b_smem = ttg.local_alloc %b : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+      %dot = ttng.warp_group_dot %a_smem, %b_smem, %iter {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+      scf.yield %dot : tensor<128x256xf32, #mma>
+    } {tt.num_stages = 2 : i32, tt.warp_specialize}
+    %out = arith.truncf %acc : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
+    %out_blocked = ttg.convert_layout %out : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>
+    %gathered = tt.gather %independent[%indices] {axis = 1 : i32} : (tensor<128x256xf16, #blocked1>, tensor<128x256xi32, #blocked1>) -> tensor<128x256xf16, #blocked1>
+    %reduced:2 = "tt.reduce"(%out_blocked, %gathered) <{axis = 1 : i32}> ({
+    ^bb0(%lhs0: f16, %lhs1: f16, %rhs0: f16, %rhs1: f16):
+      %sum0 = arith.addf %lhs0, %rhs0 : f16
+      %sum1 = arith.addf %lhs1, %rhs1 : f16
+      tt.reduce.return %sum0, %sum1 : f16, f16
+    }) : (tensor<128x256xf16, #blocked1>, tensor<128x256xf16, #blocked1>) -> (tensor<128xf16, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<128xf16, #ttg.slice<{dim = 1, parent = #blocked1}>>)
+    tt.store %arg2, %reduced#0 : tensor<128x!tt.ptr<f16>, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    tt.store %arg3, %reduced#1 : tensor<128x!tt.ptr<f16>, #ttg.slice<{dim = 1, parent = #blocked1}>>
     tt.return
   }
 
