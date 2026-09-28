@@ -11,6 +11,29 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
 
+@triton.jit
+def atomic_rmw_ws_kernel(
+    a_ptr,
+    b_ptr,
+    out_ptr,
+    atomic_ptr,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    WARP_SPECIALIZE: tl.constexpr,
+):
+    om = tl.arange(0, M)
+    on = tl.arange(0, N)
+    ok = tl.arange(0, K)
+    acc = tl.zeros([M, N], dtype=tl.float32)
+    for i in tl.range(0, 4, warp_specialize=WARP_SPECIALIZE):
+        a = tl.load(a_ptr + om[:, None] * K + ok[None, :] + i * M * K)
+        b = tl.load(b_ptr + ok[:, None] * N + on[None, :] + i * K * N)
+        acc += tl.dot(a, b)
+        tl.atomic_add(atomic_ptr + om[:, None] * N + on[None, :], acc)
+    tl.store(out_ptr + om[:, None] * N + on[None, :], acc)
+
+
 def is_hopper_or_blackwell():
     return is_hopper() or is_blackwell()
 
@@ -264,6 +287,57 @@ def matmul_tma_ws_kernel(  #
 
 def exceeds_smem_capacity(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, use_fp8):
     return (num_stages * BLOCK_K * (BLOCK_M + BLOCK_N) + BLOCK_M * BLOCK_N) * (1 if use_fp8 else 2) > 228 * 1024
+
+
+@pytest.mark.skipif(is_hip() or not is_hopper(), reason="Requires Hopper CUDA")
+def test_warp_specialize_atomic_rmw_fallback_preserves_effects():
+    M = N = K = 128
+    torch.manual_seed(11954)
+    a = torch.randn((4, M, K), device="cuda", dtype=torch.float16)
+    b = torch.randn((4, K, N), device="cuda", dtype=torch.float16)
+    out_ws = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    out_plain = torch.empty_like(out_ws)
+    atomic_ws = torch.zeros_like(out_ws)
+    atomic_plain = torch.zeros_like(out_ws)
+
+    kernel_ws = atomic_rmw_ws_kernel[(1, )](
+        a,
+        b,
+        out_ws,
+        atomic_ws,
+        M,
+        N,
+        K,
+        True,
+        num_warps=4,
+        num_stages=3,
+    )
+    atomic_rmw_ws_kernel[(1, )](
+        a,
+        b,
+        out_plain,
+        atomic_plain,
+        M,
+        N,
+        K,
+        False,
+        num_warps=4,
+        num_stages=3,
+    )
+    if is_compile_warmup():
+        return
+
+    assert "tt.atomic_rmw" in kernel_ws.asm["ttgir"]
+    assert "ttg.warp_specialize" not in kernel_ws.asm["ttgir"]
+    expected_output = torch.zeros_like(out_ws)
+    expected_atomic = torch.zeros_like(out_ws)
+    for i in range(4):
+        expected_output += a[i].float() @ b[i].float()
+        expected_atomic += expected_output
+    torch.testing.assert_close(out_ws, expected_output, atol=5e-2, rtol=5e-2)
+    torch.testing.assert_close(atomic_ws, expected_atomic, atol=5e-2, rtol=5e-2)
+    torch.testing.assert_close(out_ws, out_plain, atol=5e-2, rtol=5e-2)
+    torch.testing.assert_close(atomic_ws, atomic_plain, atol=5e-2, rtol=5e-2)
 
 
 @pytest.mark.parametrize("M, N, K", [(32, 32, 32), (2048, 2048, 512)])
