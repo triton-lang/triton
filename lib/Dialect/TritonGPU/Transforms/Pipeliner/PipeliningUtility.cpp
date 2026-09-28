@@ -307,14 +307,9 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
   auto regLayout = triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   // FIXME: Here we should pass a MemDescType instead of a SharedEncodingTrait!!
   // This is currently broken for memdesc_subslice!
-  auto sharedLayout =
-      triton::gpu::toLinearLayoutIgnoringPadding(shape, sharedEnc);
+  auto sharedLayout = triton::gpu::toLinearLayout(shape, sharedEnc);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-  int vecElems = regToSharedLayout.getNumConsecutiveInOut();
-  // Padding is composed on top of that layout, so consecutive elements cannot
-  // reach past the first padding they hit.
-  if (triton::gpu::isPaddedEncoding(sharedEnc))
-    vecElems = std::min<int>(vecElems, triton::gpu::getMinInterval(sharedEnc));
+  const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
   return vecElems * registerTy.getElementTypeBitWidth() / 8;
 }
 
