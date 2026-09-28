@@ -3142,6 +3142,24 @@ def test_argmax_argmin_with_nan(dtype, device):
     assert val.item() == 5.0, f"expected 5.0, got {val.item()}"
     assert idx.item() == 1, f"expected 1, got {idx.item()}"
 
+    # argmax/argmin with a NaN lane to the right of finite extrema and no
+    # padding between them (N == BLOCK): the value path follows the
+    # "nan ignore" style, so the index must return the finite extrema's
+    # index regardless of the reduction tree order.
+    # Regression test for https://github.com/triton-lang/triton/issues/11993
+    x_finite_extrema = torch.tensor([-13.0, -1.0, 17.0, float("nan")], dtype=dtype, device=device)
+    val.zero_()
+    idx.zero_()
+    argmax_kernel[(1, )](x_finite_extrema, val, idx, N=4, BLOCK=4)
+    assert val.item() == 17.0, f"expected 17.0, got {val.item()}"
+    assert idx.item() == 2, f"expected 2, got {idx.item()}"
+
+    val.zero_()
+    idx.zero_()
+    argmin_kernel[(1, )](x_finite_extrema, val, idx, N=4, BLOCK=4)
+    assert val.item() == -13.0, f"expected -13.0, got {val.item()}"
+    assert idx.item() == 0, f"expected 0, got {idx.item()}"
+
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
