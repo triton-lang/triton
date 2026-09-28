@@ -238,9 +238,48 @@ tt.func @tma_cache_normal(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !t
   tt.return
 }
 
+// CHECK-LABEL: @tma_cache_gather
+// CHECK: [[POLICY:%.*]] = {{.*}}call i64 asm "{{.*}}createpolicy.fractional.L2::evict_last.L2::evict_first.b64{{.*}}", "=l"()
+// CHECK: "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared::cta.global.mbarrier::complete_tx::bytes.L2::cache_hint [$1], [$2, {$3, $4, $5, $6, $7}], [$8], $9;", "b,r,l,r,r,r,r,r,r,l"
+// CHECK-SAME: i64 [[POLICY]])
+// CHECK: ret void
+tt.func @tma_cache_gather(%desc: !tt.tensordesc<1x128xbf16, #shared1>, %dst: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %indices: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %coord: i32, %pred: i1) {
+  ttng.async_tma_gather %desc[%indices, %coord] %dst, %bar, %pred {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>} : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<1xi64, #shared, #smem, mutable>, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, i1
+  tt.return
+}
+
+// CHECK-LABEL: @tma_cache_scatter
+// CHECK: [[POLICY:%.*]] = {{.*}}call i64 asm "{{.*}}createpolicy.fractional.L2::evict_last.L2::evict_first.b64{{.*}}", "=l"()
+// CHECK: "@$0 cp.async.bulk.tensor.2d.tile::scatter4.global.shared::cta.bulk_group.L2::cache_hint [$1, {$2, $3, $4, $5, $6}], [$7], $8;", "b,l,r,r,r,r,r,r,l"
+// CHECK-SAME: i64 [[POLICY]])
+// CHECK: ret void
+tt.func @tma_cache_scatter(%desc: !tt.tensordesc<1x128xbf16, #shared1>, %dst: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %indices: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %coord: i32) {
+  ttng.async_tma_scatter %desc[%indices, %coord] %dst {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>} : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>
+  tt.return
+}
+
+// CHECK-LABEL: @tma_cache_store
+// CHECK: [[POLICY:%.*]] = {{.*}}call i64 asm "{{.*}}createpolicy.fractional.L2::evict_last.L2::evict_first.b64{{.*}}", "=l"()
+// CHECK: "@$0 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group.L2::cache_hint [$1, {$2, $3}], [$4], $5;", "b,l,r,r,r,l"
+// CHECK-SAME: i64 [[POLICY]])
+// CHECK: ret void
+tt.func @tma_cache_store(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %coord: i32) {
+  ttng.async_tma_copy_local_to_global %desc[%coord, %coord] %dst {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>} : !tma_cache_desc, !tma_cache_dst
+  tt.return
+}
+
 }
 
 // ROUNDTRIP-LABEL: @tma_cache_first
 // ROUNDTRIP: cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>
 // ROUNDTRIP-LABEL: @tma_cache_fractional
+// ROUNDTRIP: cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>
+
+// ROUNDTRIP-LABEL: @tma_cache_gather
+// ROUNDTRIP: cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>
+
+// ROUNDTRIP-LABEL: @tma_cache_scatter
+// ROUNDTRIP: cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>
+
+// ROUNDTRIP-LABEL: @tma_cache_store
 // ROUNDTRIP: cachePolicy = #ttng.cache_policy<l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = 5.000000e-01 : f32>

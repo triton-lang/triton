@@ -589,13 +589,24 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
     local memory pointed to by the memory descriptor instead of from a
     distributed tensor. The copied data depends on the global memory descriptor
     pointed to by `desc`.
+
+    The optional `cachePolicy` attribute has the same L2-only policy contract
+    as `async_tma_copy_global_to_local`. An absent policy emits no hint;
+    explicit detailed policies, including `evict_normal`, are preserved.
   }];
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
-    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src
+    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src,
+    OptionalAttr<AnyAttr>:$cachePolicy
   );
+
+  let builders = [
+    OpBuilder<(ins "Value":$desc, "ValueRange":$coord, "Value":$src), [{
+      build($_builder, $_state, desc, coord, src, Attribute{});
+    }]>
+  ];
 
   let assemblyFormat = [{
     $desc `[` $coord `]` $src
@@ -642,6 +653,10 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
     This operation gathers multiple rows of data from a global memory matrix to
     local memory asynchronously. This is similar to
     async_tma_copy_global_to_local except that each row is indexed independently.
+
+    The optional `cachePolicy` attribute has the same L2-only policy contract
+    as `async_tma_copy_global_to_local`. An absent policy emits no hint;
+    explicit detailed policies, including `evict_normal`, are preserved.
   }];
 
   let arguments = (ins
@@ -651,8 +666,17 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
     Arg<TTG_MemDescType, "", AsyncSharedWrite>:$result,
     I1:$pred,
-    UnitAttr:$multicast
+    UnitAttr:$multicast,
+    OptionalAttr<AnyAttr>:$cachePolicy
   );
+
+  let builders = [
+    OpBuilder<(ins "Value":$desc, "Value":$xOffsets, "Value":$yOffset,
+                   "Value":$barrier, "Value":$result, "Value":$pred,
+                   CArg<"bool", "false">:$multicast), [{
+      build($_builder, $_state, desc, xOffsets, yOffset, barrier, result, pred, multicast, Attribute{});
+    }]>
+  ];
 
   let assemblyFormat = [{
     $desc `[` $x_offsets `,` $y_offset `]` $result `,` $barrier `,` $pred
@@ -672,14 +696,25 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [
     operation scatters a 2D tensor in shared memory, laid out using the core
     tensor tiles nvmma_shared layout, into separately indexed rows in global
     memory at a given `y` offset.
+
+    The optional `cachePolicy` attribute has the same L2-only policy contract
+    as `async_tma_copy_global_to_local`. An absent policy emits no hint;
+    explicit detailed policies, including `evict_normal`, are preserved.
   }];
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
-    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src
+    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src,
+    OptionalAttr<AnyAttr>:$cachePolicy
   );
+
+  let builders = [
+    OpBuilder<(ins "Value":$desc, "Value":$xOffsets, "Value":$yOffset, "Value":$src), [{
+      build($_builder, $_state, desc, xOffsets, yOffset, src, Attribute{});
+    }]>
+  ];
 
   let assemblyFormat = [{
     $desc `[` $x_offsets `,` $y_offset `]` $src

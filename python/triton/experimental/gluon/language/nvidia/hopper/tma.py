@@ -202,12 +202,12 @@ def _tma_cache_policy(cache_policy, eviction_policy, builder):
     if not isinstance(policy, (_CachePolicy, CachePolicy)):
         raise TypeError("TMA cache_policy must be a CachePolicy")
     if policy.cache_modifier not in (None, "none"):
-        raise ValueError("TMA loads do not support cache modifiers")
+        raise ValueError("TMA operations do not support cache modifiers")
     if isinstance(policy, CachePolicy):
         if policy.l1 is not None:
-            raise ValueError("TMA loads do not support L1 eviction policies")
+            raise ValueError("TMA operations do not support L1 eviction policies")
         if policy.l2_prefetch_size is not None:
-            raise ValueError("TMA loads do not support L2 prefetch size")
+            raise ValueError("TMA operations do not support L2 prefetch size")
     return policy._to_ir(builder)
 
 
@@ -301,7 +301,7 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
 
 
 @builtin
-def async_store(tensor_desc, coord, src, _semantic=None):
+def async_store(tensor_desc, coord, src, eviction_policy=None, cache_policy=None, _semantic=None):
     """
     Store data from shared memory to global memory using TMA.
 
@@ -309,11 +309,18 @@ def async_store(tensor_desc, coord, src, _semantic=None):
         tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
         src (ttgl.shared_memory_descriptor): Source memory descriptor.
+        eviction_policy: L2 eviction hint: ``""``, ``"evict_first"``, or
+            ``"evict_last"``. None and the empty string leave the policy unspecified.
+        cache_policy: A compile-time ``CachePolicy`` containing only an L2
+            fractional eviction policy. Cannot be combined with an explicitly
+            supplied ``eviction_policy``, including the empty string. Cache
+            policies are performance hints and do not affect synchronization.
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_store", "innermost coordinate", _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
-    _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
+    cache_policy = _tma_cache_policy(cache_policy, eviction_policy, _semantic.builder)
+    _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle, cache_policy)
 
 
 @builtin

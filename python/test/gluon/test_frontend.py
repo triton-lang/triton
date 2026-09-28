@@ -5874,41 +5874,64 @@ def test_compute_efficient_padded_shared_layout_invalid_returns_none():
 
 
 @gluon.jit
-def tma_cache_policy_kernel(desc, pred, POLICY: ttgl.constexpr, EVICTION: ttgl.constexpr, IM2COL: ttgl.constexpr,
+def tma_cache_policy_kernel(desc, pred, POLICY: ttgl.constexpr, EVICTION: ttgl.constexpr, KIND: ttgl.constexpr,
                             MULTICAST: ttgl.constexpr):
-    smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    if KIND == "gather" or KIND == "scatter":
+        shape: ttgl.constexpr = [32, desc.block_shape[1]]
+        offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
+            1, ttgl.BlockedLayout([4, 1], [1, 32], [4, 1], [0, 1], cga_layout=desc.layout.cga_layout))
+        offsets = 31 - ttgl.arange(0, 32, layout=offsets_layout)
+    else:
+        shape: ttgl.constexpr = desc.block_shape
+    smem = ttgl.allocate_shared_memory(desc.dtype, shape, desc.layout)
     bar = hopper.mbarrier.allocate_mbarrier()
     hopper.mbarrier.init(bar, count=1)
-    hopper.mbarrier.expect(bar, desc.nbytes_per_cta, pred=pred)
-    if IM2COL:
+    hopper.mbarrier.expect(bar, smem.nbytes_per_cta, pred=pred)
+    if KIND == "im2col":
         hopper.tma.async_load_im2col(desc, [0, 0, 0, 0], [0, 0], bar, smem, pred=pred, multicast=MULTICAST,
                                      cache_policy=POLICY, eviction_policy=EVICTION)
+    elif KIND == "gather":
+        tma.async_gather(desc, offsets, 0, bar, smem, pred=pred, multicast=MULTICAST, cache_policy=POLICY,
+                         eviction_policy=EVICTION)
+    elif KIND == "scatter":
+        tma.async_gather(desc, offsets, 0, bar, smem, pred=pred)
+    elif KIND == "store":
+        hopper.tma.async_load(desc, [0] * len(desc.block_shape), bar, smem, pred=pred)
     else:
         hopper.tma.async_load(desc, [0] * len(desc.block_shape), bar, smem, pred=pred, multicast=MULTICAST,
                               cache_policy=POLICY, eviction_policy=EVICTION)
     hopper.mbarrier.wait(bar, phase=0, pred=pred, deps=[smem])
     hopper.mbarrier.invalidate(bar)
+    if KIND == "store":
+        if pred:
+            hopper.tma.async_store(desc, [0] * len(shape), smem, cache_policy=POLICY, eviction_policy=EVICTION)
+            hopper.tma.store_wait(0)
+    elif KIND == "scatter":
+        if pred:
+            tma.async_scatter(desc, offsets, 0, smem, cache_policy=POLICY, eviction_policy=EVICTION)
+            hopper.tma.store_wait(0)
 
 
-def make_tma_cache_policy_desc(rank=2, im2col=False, multicast=False):
-    shape = [16, 32] if im2col else [2] * (rank - 1) + [256]
+def make_tma_cache_policy_desc(rank=2, kind="load", multicast=False):
+    shape = [16, 32] if kind == "im2col" else [32, 256] if kind in ("gather", "scatter") else [2] * (rank - 1) + [256]
     layout = ttgl.NVMMASharedLayout(0, 16, rank=len(shape), cga_layout=(tuple(0 for _ in shape), ) if multicast else ())
-    data_shape = [1, 1, 16, 32] if im2col else shape
+    data_shape = [1, 1, 16, 32] if kind == "im2col" else shape
     strides = [math.prod(data_shape[i + 1:]) for i in range(len(data_shape))]
     inp = MockTensor(ttgl.float16, tuple(data_shape))
-    if im2col:
+    if kind == "im2col":
         from triton.experimental.gluon.nvidia.hopper import TensorDescriptorIm2Col
         return TensorDescriptorIm2Col(inp, data_shape, strides, shape, layout, element_strides=[1, 1, 1, 1],
                                       pixel_box_lower_corner=[0, 0], pixel_box_upper_corner=[0, 0])
-    return TensorDescriptor(inp, data_shape, strides, shape, layout)
+    block_shape = [1, shape[1]] if kind in ("gather", "scatter") else shape
+    return TensorDescriptor(inp, data_shape, strides, block_shape, layout)
 
 
-@pytest.mark.parametrize("im2col", [False, True])
+@pytest.mark.parametrize("kind", ["load", "im2col", "gather", "store", "scatter"])
 @pytest.mark.parametrize("eviction", [None, "", "evict_normal", "evict_first", "evict_last"])
-def test_tma_cache_policy_frontend_legacy(im2col, eviction):
-    desc = make_tma_cache_policy_desc(im2col=im2col)
-    mod = run_parser(tma_cache_policy_kernel, *make_args(desc, False, None, eviction, im2col, False),
-                     target=HOPPER_TARGET)
+def test_tma_cache_policy_frontend_legacy(kind, eviction):
+    desc = make_tma_cache_policy_desc(kind=kind)
+    mod = run_parser(tma_cache_policy_kernel, *make_args(desc, False, None, eviction, kind, False),
+                     target=BLACKWELL_TARGET)
     text = mod.str_nodebug()
     if eviction in (None, "", "evict_normal"):
         assert "cachePolicy" not in text
@@ -5916,7 +5939,7 @@ def test_tma_cache_policy_frontend_legacy(im2col, eviction):
         assert f"cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = {eviction}>" in text
 
 
-@pytest.mark.parametrize("im2col", [False, True])
+@pytest.mark.parametrize("kind", ["load", "im2col", "gather", "store", "scatter"])
 @pytest.mark.parametrize("primary,fraction,secondary", [
     ("evict_first", 1.0, "evict_unchanged"),
     ("evict_last", 1.0, "evict_unchanged"),
@@ -5924,37 +5947,39 @@ def test_tma_cache_policy_frontend_legacy(im2col, eviction):
     ("evict_last", 0.5, "evict_first"),
     ("evict_unchanged", 0.25, "evict_first"),
 ])
-def test_tma_cache_policy_frontend_typed(im2col, primary, fraction, secondary):
+def test_tma_cache_policy_frontend_typed(kind, primary, fraction, secondary):
     policy = hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy(primary, fraction, secondary))
-    desc = make_tma_cache_policy_desc(im2col=im2col)
-    mod = run_parser(tma_cache_policy_kernel, *make_args(desc, False, policy, None, im2col, False),
-                     target=HOPPER_TARGET)
+    desc = make_tma_cache_policy_desc(kind=kind)
+    mod = run_parser(tma_cache_policy_kernel, *make_args(desc, False, policy, None, kind, False),
+                     target=BLACKWELL_TARGET)
     text = mod.str_nodebug()
     assert f"l2_primary = {primary}" in text
     assert f"l2_secondary = {secondary}" in text
     assert f"l2_fraction = {fraction:.6e} : f32" in text
 
 
-@pytest.mark.parametrize("im2col", [False, True])
+@pytest.mark.parametrize("kind", ["load", "im2col", "gather", "store", "scatter"])
 @pytest.mark.parametrize("policy,eviction,message", [
-    (hopper.CachePolicy(l1="evict_first"), None, "TMA loads do not support L1"),
-    (hopper.CachePolicy(cache_modifier="cg"), None, "TMA loads do not support cache modifiers"),
-    (hopper.CachePolicy(l2_prefetch_size=128), None, "TMA loads do not support L2 prefetch size"),
+    (hopper.CachePolicy(l1="evict_first"), None, "TMA operations do not support L1"),
+    (hopper.CachePolicy(cache_modifier="cg"), None, "TMA operations do not support cache modifiers"),
+    (hopper.CachePolicy(l2_prefetch_size=128), None, "TMA operations do not support L2 prefetch size"),
     (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_first", 1.0)), "", "mutually exclusive"),
     (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5)), "evict_first", "mutually exclusive"),
     (None, "invalid", "Unsupported eviction policy"),
     ("evict_first", None, "TMA cache_policy must be a CachePolicy"),
 ])
-def test_tma_cache_policy_frontend_invalid(im2col, policy, eviction, message):
+def test_tma_cache_policy_frontend_invalid(kind, policy, eviction, message):
     with pytest.raises(CompilationError, match=message):
         run_parser(tma_cache_policy_kernel,
-                   *make_args(make_tma_cache_policy_desc(im2col=im2col), False, policy, eviction, im2col, False),
-                   target=HOPPER_TARGET)
+                   *make_args(make_tma_cache_policy_desc(kind=kind), False, policy, eviction, kind, False),
+                   target=BLACKWELL_TARGET)
 
 
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
-@pytest.mark.parametrize("rank,im2col,multicast", [(1, False, False), (2, False, False), (5, False, False),
-                                                   (2, False, True), (4, True, False), (4, True, True)])
+@pytest.mark.parametrize("rank,kind,multicast", [(1, "load", False), (2, "load", False), (5, "load", False),
+                                                 (2, "load", True), (4, "im2col", False), (4, "im2col", True),
+                                                 (2, "gather", False), (2, "gather", True), (1, "store", False),
+                                                 (2, "store", False), (5, "store", False), (2, "scatter", False)])
 @pytest.mark.parametrize("policy,eviction,expected", [
     (None, None, None),
     (None, "evict_first", "createpolicy.fractional.L2::evict_first.b64"),
@@ -5964,19 +5989,23 @@ def test_tma_cache_policy_frontend_invalid(im2col, policy, eviction, message):
     (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first")), None,
      "createpolicy.fractional.L2::evict_last.L2::evict_first.b64"),
 ])
-def test_tma_cache_policy_ptx(target, rank, im2col, multicast, policy, eviction, expected, tmp_path):
+def test_tma_cache_policy_ptx(target, rank, kind, multicast, policy, eviction, expected, tmp_path):
     # Parse a runtime predicate, then compile the saved Gluon IR all the way
     # through the pinned ptxas for both architectures without needing that GPU.
-    desc = make_tma_cache_policy_desc(rank, im2col, multicast)
+    if kind in ("gather", "scatter") and target == HOPPER_TARGET:
+        pytest.skip("gather/scatter require Blackwell")
+    desc = make_tma_cache_policy_desc(rank, kind, multicast)
     mod = run_parser(tma_cache_policy_kernel,
-                     *make_args(desc, False, policy, eviction, im2col, multicast, num_ctas=2 if multicast else 1),
+                     *make_args(desc, False, policy, eviction, kind, multicast, num_ctas=2 if multicast else 1),
                      target=target)
     source = tmp_path / "tma_cache_policy.glir"
     source.write_text(mod.str_nodebug())
     compiled = triton.compile(str(source), target=target)
     ptx = compiled.asm["ptx"]
     assert compiled.asm["cubin"]
-    loads = [line for line in ptx.splitlines() if "cp.async.bulk.tensor" in line]
+    opcode = {"gather": ".tile::gather4", "scatter": ".tile::scatter4", "store":
+              ".global.shared::cta"}.get(kind, "cp.async.bulk.tensor")
+    loads = [line for line in ptx.splitlines() if "cp.async.bulk.tensor" in line and opcode in line]
     assert loads
     assert all((".L2::cache_hint" in line) == (expected is not None) for line in loads)
     if expected is None:
@@ -5988,5 +6017,5 @@ def test_tma_cache_policy_ptx(target, rank, im2col, multicast, policy, eviction,
         assert all(re.search(r", %rd[0-9]+;", line) for line in loads)
         if multicast:
             assert all(re.search(r", %rs[0-9]+, %rd[0-9]+;", line) for line in loads)
-        if im2col:
+        if kind == "im2col":
             assert all(re.search(r"\}, (?:%rs[0-9]+, )?%rd[0-9]+;", line) for line in loads)

@@ -799,7 +799,7 @@ def test_tma_multicast_copy(ctas_per_cga, policy):
 
 @gluon.jit
 def tma_gather_scatter_kernel(in_desc, gather_out_desc, scatter_out_desc, gather_idx_ptr, scatter_idx_ptr,
-                              BLOCK_M: ttgl.constexpr, x_offsets_layout: ttgl.constexpr):
+                              BLOCK_M: ttgl.constexpr, x_offsets_layout: ttgl.constexpr, POLICY: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, [BLOCK_M, gather_out_desc.block_shape[1]], gather_out_desc.layout)
 
     bar = mbarrier.allocate_mbarrier()
@@ -807,14 +807,14 @@ def tma_gather_scatter_kernel(in_desc, gather_out_desc, scatter_out_desc, gather
 
     gather_offsets = ttgl.load(gather_idx_ptr + ttgl.arange(0, BLOCK_M, layout=x_offsets_layout))
     mbarrier.expect(bar, smem.nbytes_per_cta)
-    blackwell_tma.async_gather(in_desc, gather_offsets, 0, bar, smem, multicast=True)
+    blackwell_tma.async_gather(in_desc, gather_offsets, 0, bar, smem, multicast=True, cache_policy=POLICY)
     mbarrier.wait(bar, phase=0, deps=[smem])
 
     mbarrier.invalidate(bar)
 
     scatter_offsets = ttgl.load(scatter_idx_ptr + ttgl.arange(0, BLOCK_M, layout=x_offsets_layout))
-    tma.async_store(gather_out_desc, [0, 0], smem)
-    blackwell_tma.async_scatter(scatter_out_desc, scatter_offsets, 0, smem)
+    tma.async_store(gather_out_desc, [0, 0], smem, cache_policy=POLICY)
+    blackwell_tma.async_scatter(scatter_out_desc, scatter_offsets, 0, smem, cache_policy=POLICY)
     tma.store_wait(0)
 
     smem._keep_alive()
@@ -831,7 +831,9 @@ def get_split_dim(cga_layout, dim):
     [[1, 0], [0, 0]],
     [[1, 0], [2, 0]],
 ])
-def test_tma_gather_scatter_multi_cta(cga_layout):
+@pytest.mark.parametrize(
+    "policy", [None, hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"))])
+def test_tma_gather_scatter_multi_cta(cga_layout, policy):
     cga_split_num = [get_split_dim(cga_layout, dim) for dim in range(2)]
 
     BLOCK_M = 32 * cga_split_num[0]
@@ -865,10 +867,14 @@ def test_tma_gather_scatter_multi_cta(cga_layout):
         scatter_idx,
         BLOCK_M,
         x_offsets_layout,
+        policy,
         num_warps=4,
         num_ctas=num_ctas,
     )
 
+    assert all((".L2::cache_hint" in line) == (policy is not None)
+               for line in compiled.asm["ptx"].splitlines()
+               if "cp.async.bulk.tensor" in line)
     expected_gather = inp[gather_idx.to(torch.int64)]
     expected_scatter = torch.zeros_like(inp)
     expected_scatter[scatter_idx.to(torch.int64)] = expected_gather
@@ -6532,24 +6538,43 @@ def test_tmem288k_simple(Ncol1: int, Ncol2: int):
 
 @gluon.jit
 def tma_cache_policy_copy_kernel(in_desc, out_desc, Flag, POLICY: ttgl.constexpr, EVICTION: ttgl.constexpr,
-                                 LAYOUT: ttgl.constexpr):
-    initial = ttgl.full(in_desc.block_shape, -1, in_desc.dtype, LAYOUT)
-    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout, initial)
+                                 LAYOUT: ttgl.constexpr, KIND: ttgl.constexpr):
+    if KIND == "gather" or KIND == "scatter":
+        shape: ttgl.constexpr = [32, in_desc.block_shape[1]]
+        offsets_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([4, 1], [1, 32], [4, 1], [0, 1]))
+        offsets = 31 - ttgl.arange(0, 32, layout=offsets_layout)
+    else:
+        shape: ttgl.constexpr = in_desc.block_shape
+    initial = ttgl.full(shape, -1, in_desc.dtype, LAYOUT)
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, shape, in_desc.layout, initial)
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
     pred = ttgl.load(Flag) != 0
-    mbarrier.expect(bar, in_desc.nbytes_per_cta, pred=pred)
-    tma.async_load(in_desc, [0] * len(in_desc.block_shape), bar, smem, pred=pred, cache_policy=POLICY,
-                   eviction_policy=EVICTION)
+    mbarrier.expect(bar, smem.nbytes_per_cta, pred=pred)
+    if KIND == "gather":
+        blackwell_tma.async_gather(in_desc, offsets, 0, bar, smem, pred=pred, cache_policy=POLICY,
+                                   eviction_policy=EVICTION)
+    elif KIND == "scatter":
+        blackwell_tma.async_gather(in_desc, offsets, 0, bar, smem, pred=pred)
+    elif KIND == "store":
+        tma.async_load(in_desc, [0] * len(shape), bar, smem, pred=pred)
+    else:
+        tma.async_load(in_desc, [0] * len(shape), bar, smem, pred=pred, cache_policy=POLICY, eviction_policy=EVICTION)
     mbarrier.wait(bar, phase=0, pred=pred, deps=[smem])
     mbarrier.invalidate(bar)
-    tma.async_store(out_desc, [0] * len(out_desc.block_shape), smem)
+    if KIND == "store":
+        tma.async_store(out_desc, [0] * len(shape), smem, cache_policy=POLICY, eviction_policy=EVICTION)
+    elif KIND == "scatter":
+        blackwell_tma.async_scatter(out_desc, offsets, 0, smem, cache_policy=POLICY, eviction_policy=EVICTION)
+    else:
+        tma.async_store(out_desc, [0] * len(shape), smem)
     tma.store_wait(0)
     smem._keep_alive()
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
-@pytest.mark.parametrize("rank", [1, 2, 5])
+@pytest.mark.parametrize("kind,rank", [("load", 1), ("load", 2), ("load", 5), ("store", 1), ("store", 2), ("store", 5),
+                                       ("gather", 2), ("scatter", 2)])
 @pytest.mark.parametrize("pred", [False, True])
 @pytest.mark.parametrize("policy,eviction", [
     (None, None),
@@ -6562,18 +6587,23 @@ def tma_cache_policy_copy_kernel(in_desc, out_desc, Flag, POLICY: ttgl.constexpr
     (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first")), None),
     (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_unchanged", 0.25, "evict_first")), None),
 ])
-def test_tma_cache_policy_copy(rank, pred, policy, eviction):
-    shape = [2] * (rank - 1) + [256]
+def test_tma_cache_policy_copy(kind, rank, pred, policy, eviction):
+    if kind in ("gather", "scatter") and not is_blackwell():
+        pytest.skip("gather/scatter require Blackwell")
+    shape = [32, 256] if kind in ("gather", "scatter") else [2] * (rank - 1) + [256]
     inp = torch.randn(shape, dtype=torch.float16, device="cuda")
     out = torch.empty_like(inp)
     flag = torch.tensor([pred], dtype=torch.int32, device="cuda")
     shared = ttgl.NVMMASharedLayout(0, 16, rank=rank)
     layout = ttgl.BlockedLayout([1] * rank, [1] * (rank - 1) + [32], [1] * (rank - 1) + [4],
                                 list(reversed(range(rank))))
-    in_desc = TensorDescriptor.from_tensor(inp, shape, shared)
-    out_desc = TensorDescriptor.from_tensor(out, shape, shared)
-    compiled = tma_cache_policy_copy_kernel[(1, )](in_desc, out_desc, flag, policy, eviction, layout)
-    torch.testing.assert_close(out, inp if pred else torch.full_like(inp, -1), atol=0, rtol=0)
+    in_shape = [1, shape[1]] if kind in ("gather", "scatter") else shape
+    out_shape = [1, shape[1]] if kind == "scatter" else shape
+    in_desc = TensorDescriptor.from_tensor(inp, in_shape, shared)
+    out_desc = TensorDescriptor.from_tensor(out, out_shape, shared)
+    compiled = tma_cache_policy_copy_kernel[(1, )](in_desc, out_desc, flag, policy, eviction, layout, kind)
+    expected = inp.flip(0) if kind == "gather" else inp
+    torch.testing.assert_close(out, expected if pred else torch.full_like(inp, -1), atol=0, rtol=0)
     assert (".L2::cache_hint" in compiled.asm["ptx"]) == (policy is not None
                                                           or eviction in ("evict_first", "evict_last"))
     primary = policy.l2.primary if policy is not None else eviction
