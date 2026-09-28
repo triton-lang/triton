@@ -77,13 +77,36 @@ public:
       return isa<triton::nvidia_gpu::WarpGroupDotOp,
                  triton::nvidia_gpu::TCGen5MMAOp>(op);
     };
-    auto hasPartitionRootInBackwardSlice = [&](Value root) {
+    auto hasPartitionableDimension = [](auto shape) {
+      for (int64_t dim : shape)
+        if (dim > 1)
+          return true;
+      return false;
+    };
+    // The sibling preflight runs before the partition dimension is known.
+    // Keep values that could pass the partitioner's shape boundary on some
+    // dimension, without following scalar broadcasts back into the loop.
+    auto hasPartitionableShape = [&](auto &&self, Type type) -> bool {
+      if (auto ptrType = dyn_cast<triton::PointerType>(type))
+        return self(self, ptrType.getPointeeType());
+      if (auto memDescType = dyn_cast<triton::gpu::MemDescType>(type))
+        return hasPartitionableDimension(memDescType.getShape());
+      if (auto tensorType = dyn_cast<RankedTensorType>(type))
+        return hasPartitionableDimension(tensorType.getShape());
+      if (auto tensorDescType = dyn_cast<triton::TensorDescType>(type))
+        return hasPartitionableDimension(tensorDescType.getShape());
+      return false;
+    };
+    auto hasPartitionableValue = [&](Value value) {
+      return hasPartitionableShape(hasPartitionableShape, value.getType());
+    };
+    auto hasPartitionRootInBackwardSlice = [&](Value root, auto shouldFollow) {
       SetVector<Value> worklist;
       SetVector<Value> visited;
       worklist.insert(root);
       while (!worklist.empty()) {
         Value value = worklist.pop_back_val();
-        if (!visited.insert(value))
+        if (!visited.insert(value) || !shouldFollow(value))
           continue;
 
         if (auto blockArg = dyn_cast<BlockArgument>(value)) {
@@ -131,14 +154,15 @@ public:
           if (isInWarpSpecializedLoop(user) || isPartitionRoot(user))
             return true;
 
-          // Data partitioning adds every operand of these consumers to the
-          // closure. A Gather can therefore join a partitioned value here even
-          // when neither value depends on the other.
+          // Data partitioning adds every operand of partitioned consumers to
+          // the closure. A Gather can therefore join a partitioned value here
+          // even when neither value depends on the other.
           if (user->hasTrait<OpTrait::Elementwise>() ||
               isa<triton::StoreOp, triton::DescriptorStoreOp,
                   triton::AtomicRMWOp>(user)) {
             for (Value operand : user->getOperands()) {
-              if (operand != value && hasPartitionRootInBackwardSlice(operand))
+              if (operand != value && hasPartitionRootInBackwardSlice(
+                                          operand, hasPartitionableValue))
                 return true;
             }
           }
@@ -184,7 +208,8 @@ public:
       }
 
       for (Value operand : gatherOp->getOperands()) {
-        if (hasPartitionRootInBackwardSlice(operand)) {
+        if (hasPartitionRootInBackwardSlice(operand,
+                                            [](Value) { return true; })) {
           hasUnsupportedGather = true;
           return;
         }
