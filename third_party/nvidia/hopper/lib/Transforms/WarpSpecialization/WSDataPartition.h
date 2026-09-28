@@ -5,8 +5,8 @@
 
 namespace mlir {
 
-// Returned before data-partition rewriting so the pass can remove generated
-// task IDs and loop markers before falling back.
+// UnsupportedAtomicRMW is reported before data-partition rewriting so the pass
+// can remove generated task IDs and loop markers before falling back.
 enum class DataPartitionResult { Success, Retry, UnsupportedAtomicRMW };
 
 DataPartitionResult doDataPartition(triton::FuncOp &funcOp,
