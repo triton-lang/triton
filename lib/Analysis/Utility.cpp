@@ -5,7 +5,6 @@
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
@@ -87,62 +86,19 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 }
 
 bool ReduceOpHelper::isReduceWithinCTA() {
-  // TODO: Support reduce across CTAS
-  // Layout optimization passes such as AssignCGALayoutsPass and
-  // RemoveLayoutConversionPass should avoid cross-CTA reduction
   return getCTASplitNum(srcEncoding)[axis] == 1;
 }
 
 bool ReduceOpHelper::isAssociative() {
-  size_t reduce_size = srcShape[axis];
-  if (reduce_size <= 2)
+  if (srcShape[axis] <= 2)
     return true;
-  bool hasNoAssociativeOp = false;
-  op.walk([&](Operation *nestedOp) -> WalkResult {
-    if (isa<arith::AddFOp, arith::MulFOp>(nestedOp)) {
-      // Reductions with more than two elements are treated as non-associative
-      // if their combiner contains an addf or mulf operation.
-      hasNoAssociativeOp = true;
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
-  });
-  return !hasNoAssociativeOp;
-}
-
-unsigned ReduceOpHelper::getScratchSizeInBytes(
-    GetNumScratchElemsFn numScratchElemsGetter) {
-  auto kLane = StringAttr::get(op.getContext(), "lane");
-
-  auto isReduced = [axis = axis](const LinearLayout &layout) {
-    return layout.getOutDimSizes().begin()[axis] == 1;
-  };
-  auto regLl = reducedRegLaneLayout(srcTy, axis);
-
-  // All the inputs have the same layout so, since we order them from largest
-  // bitsize to smallest, and the first one is aligned, by induction, they are
-  // all aligned, so we don't need to align the byte numbers returned here.
-  unsigned bytesRegToTmp = 0;
-  while (!isReduced(regLl)) {
-    auto tmpLl = getInterLayout(regLl, axis);
-    // We take the maximum of the elements and multiply by the total bitwidth.
-    // We do this as otherwise it's quite tricky to find the correct
-    // BaseOffsets in the lowering.
-    int bytes = 0;
-    for (auto inputTy : op.getInputTypes()) {
-      unsigned nelem = 0;
-      if (numScratchElemsGetter) {
-        nelem = numScratchElemsGetter(regLl, tmpLl, getBitwidth(inputTy));
-      } else {
-        nelem =
-            getNumScratchElemsSwizzledCvt(regLl, tmpLl, getBitwidth(inputTy));
-      }
-      bytes += nelem * (getBitwidth(inputTy) / 8);
-    }
-    bytesRegToTmp = std::max<unsigned>(bytesRegToTmp, bytes);
-    regLl = zeroBasesAlongDimAndReorder(tmpLl, axis, kLane);
-  }
-  return bytesRegToTmp;
+  return !op.getCombineOp()
+              .walk([](Operation *nestedOp) {
+                return isa<arith::AddFOp, arith::MulFOp>(nestedOp)
+                           ? WalkResult::interrupt()
+                           : WalkResult::advance();
+              })
+              .wasInterrupted();
 }
 
 ReduceOpHelper::InThreadVectorizeOpKind
@@ -155,7 +111,7 @@ ReduceOpHelper::getInThreadVectorizeOpKind(unsigned axisPack,
   if (!combiner)
     return InThreadVectorizeOpKind::None;
 
-  Type elemTy = srcElementTypes.front();
+  Type elemTy = srcTy.getElementType();
   unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
   if (bitwidth == 16 && !supportBitwidth16Elementwise)
     return InThreadVectorizeOpKind::None;
@@ -215,53 +171,45 @@ ReduceOpHelper::getInThreadVectorizeOpKind(unsigned axisPack,
   return InThreadVectorizeOpKind::None;
 }
 
-Value ReduceOpHelper::createInThreadVectorizedCombineOp(
-    OpBuilder &builder, Location loc, InThreadVectorizeOpKind kind, Value lhs,
-    Value rhs) {
-  auto vecTy = lhs.getType();
-  Value result;
-  switch (kind) {
-  case InThreadVectorizeOpKind::AddF:
-    result = LLVM::FAddOp::create(builder, loc, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MulF:
-    result = LLVM::FMulOp::create(builder, loc, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MinNumF:
-    result = LLVM::MinNumOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MaxNumF:
-    result = LLVM::MaxNumOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MinimumF:
-    result = LLVM::MinimumOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MaximumF:
-    result = LLVM::MaximumOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::AddI:
-    result = LLVM::AddOp::create(builder, loc, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MulI:
-    result = LLVM::MulOp::create(builder, loc, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MinSI:
-    result = LLVM::SMinOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MaxSI:
-    result = LLVM::SMaxOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MinUI:
-    result = LLVM::UMinOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::MaxUI:
-    result = LLVM::UMaxOp::create(builder, loc, vecTy, lhs, rhs);
-    break;
-  case InThreadVectorizeOpKind::None:
-  default:
-    llvm::report_fatal_error("Unsupported in-thread vectorize op kind");
+ReduceOpHelper::ScratchConfig
+ReduceOpHelper::getScratchConfig(const LinearLayout &src,
+                                 const LinearLayout &dst,
+                                 GetNumScratchElemsFn numScratchElemsGetter) {
+  auto inputTypes = op.getInputTypes();
+  auto indices = llvm::to_vector(llvm::seq<unsigned>(inputTypes.size()));
+  llvm::sort(indices, [&](unsigned i, unsigned j) {
+    return getBitwidth(inputTypes[i]) > getBitwidth(inputTypes[j]);
+  });
+
+  // Pack operands from widest to narrowest so every base remains aligned.
+  ScratchConfig config;
+  config.offsets.resize(inputTypes.size());
+  for (unsigned idx : indices) {
+    unsigned bitwidth = getBitwidth(inputTypes[idx]);
+    unsigned elems = numScratchElemsGetter
+                         ? numScratchElemsGetter(src, dst, bitwidth)
+                         : getNumScratchElemsSwizzledCvt(src, dst, bitwidth);
+    config.offsets[idx] = config.sizeInBytes;
+    config.sizeInBytes += elems * (bitwidth / 8);
   }
-  return result;
+  return config;
+}
+
+unsigned ReduceOpHelper::getScratchSizeInBytes(
+    GetNumScratchElemsFn numScratchElemsGetter) {
+  auto kLane = StringAttr::get(op.getContext(), "lane");
+  auto regLl = reducedRegLaneLayout(srcTy, axis);
+  auto kAxis = *(regLl.getOutDimNames().begin() + axis);
+
+  // Successive reduction stages reuse the scratch allocation.
+  unsigned bytes = 0;
+  while (regLl.getOutDimSize(kAxis) != 1) {
+    auto tmpLl = getInterWarpReductionLayout(regLl, axis);
+    auto config = getScratchConfig(regLl, tmpLl, numScratchElemsGetter);
+    bytes = std::max(bytes, config.sizeInBytes);
+    regLl = zeroBasesAlongDimAndReorder(tmpLl, axis, kLane);
+  }
+  return bytes;
 }
 
 ColumnAction ReduceOpHelper::moveAxisBasesToFront(const LinearLayout &layout,
@@ -314,7 +262,8 @@ ReduceOpHelper::zeroBasesAlongDimAndReorder(const LinearLayout &layout,
   return LinearLayout(std::move(newBases), to_vector(layout.getOutDimNames()));
 }
 
-LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
+LinearLayout
+ReduceOpHelper::getInterWarpReductionLayout(const LinearLayout &layout,
                                             unsigned axis) {
   auto *ctx = layout.getOutDimNames().begin()->getContext();
   auto kLane = mlir::StringAttr::get(ctx, "lane");
@@ -366,12 +315,14 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
 
   // Assumptions (easily relaxed if AMD needs it)
   // We assume that
-  // max number of warps * max number of blocks <= (max number of lanes)^2
-  // We check this in logarithmic space (number of bases)
-  // This is true in nvidia as the max numbers are warps=64 ctas=16 so that
-  // 64 * 16 = 1024 = 32 * 32 = laneBases.size() * laneBases.size()
-  // This implies that, even if we have to perform 3 cvt_layouts, we can perform
-  // first one that does not cross CTAs, and then two that may cross CTAs
+  // max number of warps * max number of blocks <= (max number of lanes)^2.
+  // We check this in logarithmic space (number of bases).
+  // For NVIDIA, using bounds of warps=64 and CTAs=16 gives
+  // 64 * 16 = 1024 = 32 * 32, or 6 + 4 = 2 * 5 in terms of bases.
+  // The block bases also fit in the lane dimension: 4 <= 5.
+  // This implies that, even if we have to perform 3 convert_layouts, we can
+  // perform the first one without crossing CTAs, followed by two that may
+  // cross CTAs.
   assert(blockBases.size() <= laneBases.size());
   assert(warpBases.size() + blockBases.size() <= 2 * laneBases.size());
 
@@ -386,11 +337,8 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
   auto kLane = StringAttr::get(ctx, "lane");
 
   auto reduced = toLinearLayout(srcTy);
-  reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
-
-  reduced = moveAxisBasesToFront(reduced, axis).apply(reduced);
   reduced = zeroBasesAlongDimAndReorder(reduced, axis, kReg);
-  reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);
+  reduced = reduced.removeZeroBasesAlongDim(kReg);
   reduced = zeroBasesAlongDimAndReorder(reduced, axis, kLane);
   return reduced;
 }
