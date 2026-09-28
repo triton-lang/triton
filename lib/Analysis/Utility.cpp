@@ -94,17 +94,14 @@ bool ReduceOpHelper::isReduceWithinCTA() {
 }
 
 bool ReduceOpHelper::isAssociative() {
-  auto dtype = srcElementTypes[0];
-  if (!type::isFloat(dtype))
-    return true;
   size_t reduce_size = srcShape[axis];
   if (reduce_size <= 2)
     return true;
   bool hasNoAssociativeOp = false;
   op.walk([&](Operation *nestedOp) -> WalkResult {
     if (isa<arith::AddFOp, arith::MulFOp>(nestedOp)) {
-      // Only when the data type is float point and reduce size greater than 2,
-      // and has addf or mulf op, we though it's a non-associative reduce.
+      // Reductions with more than two elements are treated as non-associative
+      // if their combiner contains an addf or mulf operation.
       hasNoAssociativeOp = true;
       return WalkResult::interrupt();
     }
