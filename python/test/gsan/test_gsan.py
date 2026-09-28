@@ -1704,6 +1704,8 @@ def test_gluon_async_copy_updates_shadow(with_gsan):
 @pytest.mark.parametrize("row_idx,col_idx", [(5, 8), (30, 8), (5, 32)])
 @pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_tma_masked_load_updates_shadow(with_gsan, with_allocator, row_idx, col_idx, num_ctas):
+    if with_gsan == 16 and not is_hopper_or_newer():
+        pytest.skip("Pre-Hopper descriptor emulation does not guarantee complete 16-byte accesses")
     block = 32
     m_size = 35
     n_size = 36 if with_gsan == 16 else 37
@@ -1741,6 +1743,8 @@ def test_tma_masked_load_updates_shadow(with_gsan, with_allocator, row_idx, col_
 @pytest.mark.parametrize("row_idx,col_idx", [(5, 8), (30, 8), (5, 32)])
 @pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_tma_masked_store_updates_shadow(with_gsan, with_allocator, row_idx, col_idx, num_ctas):
+    if with_gsan == 16 and not is_hopper_or_newer():
+        pytest.skip("Pre-Hopper descriptor emulation does not guarantee complete 16-byte accesses")
     block = 32
     m_size = 35
     n_size = 36 if with_gsan == 16 else 37
