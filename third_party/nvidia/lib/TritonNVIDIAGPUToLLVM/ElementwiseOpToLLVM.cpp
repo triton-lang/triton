@@ -429,23 +429,14 @@ private:
 
 struct ExtFOpConversion
     : ElementwiseOpConversionBase<arith::ExtFOp, ExtFOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::ExtFOp, ExtFOpConversion>;
-  using OpAdaptor = typename Base::OpAdaptor;
-
-  explicit ExtFOpConversion(LLVMTypeConverter &typeConverter,
-                            ModuleAxisInfoAnalysis &axisAnalysisPass,
-                            int computeCapability,
-                            PatternBenefit benefit = patternBenefitDefault)
-      : Base(typeConverter, axisAnalysisPass, benefit),
-        computeCapability(computeCapability) {}
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
   SmallVector<Value> createDestOps(arith::ExtFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    // Keep FPExt on Blackwell so LLVM can select mixed BF16 arithmetic.
-    if (computeCapability < 100 && elemTy.isF32() &&
-        getElementTypeOrSelf(op.getIn()).isBF16()) {
+    // Expose the bits so LLVM folds packed high-half extraction into a mask.
+    if (getElementTypeOrSelf(op.getIn()).isBF16() && elemTy.isF32()) {
       auto b = TritonLLVMOpBuilder(loc, rewriter);
       Value bits = b.zext(i32_ty, b.bitcast(operands[0][0], i16_ty));
       return {b.bitcast(b.shl(bits, b.i32_val(16)), f32_ty)};
@@ -453,9 +444,6 @@ struct ExtFOpConversion
     return {LLVM::FPExtOp::create(rewriter, loc, elemTy, operands[0],
                                   adaptor.getAttributes().getValue())};
   }
-
-private:
-  int computeCapability;
 };
 
 struct FDivOpConversion
@@ -872,8 +860,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 #undef POPULATE_OP
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis,
-                                 computeCapability, benefit);
+  patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<IntToFPOpConversion<arith::SIToFPOp>,
                IntToFPOpConversion<arith::UIToFPOp>>(
       typeConverter, axisInfoAnalysis, computeCapability, benefit);
