@@ -39,6 +39,14 @@ Broadcasting
 2. Two dimensions are compatible if they are equal, or if one of them is 1. A dimension of 1 will be expanded to match the dimension of the other tensor. ``((1, 3, 4), (5, 3, 4)) -> ((5, 3, 4), (5, 3, 4))``
 
 
+Chained Comparisons
+-------------------
+
+Chained comparisons such as ``0 <= x <= 8`` compare each adjacent pair of operands and combine the results with elementwise logical AND. They support both scalar and tensor operands, using the usual type promotion and broadcasting rules for each comparison. Longer chains and mixed comparison operators are supported, for example ``0 <= x < y != 8``.
+
+Operands are evaluated from left to right, and each operand is evaluated only once. As with Triton's ``and`` operator, a comparison that is false at compile time skips the remaining comparisons and operands. Runtime tensor comparisons do not short-circuit, including scalar tensors: later operands are still evaluated even when an earlier comparison is false. Use explicit control flow if later operations must be conditional on a runtime value.
+
+
 Differences with NumPy
 ----------------------
 

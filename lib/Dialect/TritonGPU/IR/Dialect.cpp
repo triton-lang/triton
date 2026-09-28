@@ -2523,6 +2523,26 @@ CGAEncodingAttr PaddedSharedEncodingAttr::getCGALayout() const {
 // NVMMAShared encoding
 //===----------------------------------------------------------------------===//
 
+unsigned NVMMASharedEncodingAttr::getDefaultSwizzlingByteWidth(
+    ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
+    CGAEncodingAttr cgaLayout, unsigned elementBitWidth, bool fp4Padded) {
+  auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
+  int flattenOuterDim = 1;
+  for (int i = 1; i < shapePerCTA.size(); i++)
+    flattenOuterDim *= shapePerCTA[order[i]];
+  if (shapePerCTA.size() < 2 || flattenOuterDim < 8)
+    return 0;
+
+  int packingFactor = fp4Padded ? 2 : 1;
+  auto contigDimSizeInBytes =
+      shapePerCTA[order[0]] * packingFactor * elementBitWidth / 8;
+  for (unsigned swizzle : {128u, 64u, 32u}) {
+    if (contigDimSizeInBytes >= swizzle && contigDimSizeInBytes % swizzle == 0)
+      return swizzle;
+  }
+  return 0;
+}
+
 Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};

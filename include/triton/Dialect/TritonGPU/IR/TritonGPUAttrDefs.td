@@ -465,36 +465,21 @@ def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_share
                      "CGAEncodingAttr":$CGALayout,
                      "Type":$eltTy,
                      "bool": $fp4Padded), [{
-        auto shapePerCTA = getShapePerCTA(CGALayout.getCTASplitNum(), shape);
-        int32_t swizzlingByteWidth = 0;
         unsigned eleBitWidth = eltTy.getIntOrFloatBitWidth();
-        int packingFactor = fp4Padded ? 2 : 1;
-
-        // get proper shared memory swizzling mode from the contiguous dimension
-        // size of the origin blocked layout.
-        auto contigDimSizeInByte = shapePerCTA[order[0]] * packingFactor * eleBitWidth / 8;
-        if (contigDimSizeInByte >= 128 && contigDimSizeInByte % 128 == 0) {
-          swizzlingByteWidth = 128;
-        } else if (contigDimSizeInByte >= 64 && contigDimSizeInByte % 64 == 0) {
-          swizzlingByteWidth = 64;
-        } else if (contigDimSizeInByte >= 32 && contigDimSizeInByte % 32 == 0) {
-          swizzlingByteWidth = 32;
-        } else {
-          swizzlingByteWidth = 0;
-        }
-        int flattenOutterDim = 1;
-        for (int i = 1; i < shapePerCTA.size(); i++) {
-          flattenOutterDim *= shapePerCTA[order[i]];
-        }
-        if (shapePerCTA.size() < 2 || flattenOutterDim < 8) {
-          swizzlingByteWidth = 0;
-        }
+        unsigned swizzlingByteWidth = getDefaultSwizzlingByteWidth(
+            shape, order, CGALayout, eleBitWidth, fp4Padded);
         bool transposed = order.size() > 1 && order[0] == 0;
         return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CGALayout);
     }]>
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    /// Choose the largest swizzle supported by the shape and element bit width,
+    /// or zero for shapes that cannot use swizzling.
+    static unsigned getDefaultSwizzlingByteWidth(
+        ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
+        CGAEncodingAttr cgaLayout, unsigned elementBitWidth, bool fp4Padded);
+
     int getPerPhase() const;
     int getMaxPhase() const;
     int getVec() const;

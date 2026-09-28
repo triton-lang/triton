@@ -2634,6 +2634,29 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("block_size, stride", [(1, 1), (256, 1), (256, 2)])
+def test_cast_bfloat16_to_float32_all_values(block_size, stride, device):
+    check_type_supported("bfloat16", device)
+
+    @triton.jit
+    def kernel(X, Y, BLOCK_SIZE: tl.constexpr, STRIDE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE
+        if BLOCK_SIZE != 1:
+            offsets += tl.arange(0, BLOCK_SIZE)
+        values = tl.load(X + offsets * STRIDE)
+        tl.store(Y + offsets, values.to(tl.float32))
+
+    x = torch.empty_strided((1 << 16, ), (stride, ), dtype=torch.bfloat16, device=device)
+    x.copy_(torch.arange(1 << 16, dtype=torch.int32, device=device).to(torch.int16).view(torch.bfloat16))
+    y = torch.empty(x.shape, dtype=torch.float32, device=device)
+    kernel[(x.numel() // block_size, )](x, y, block_size, stride, num_warps=4)
+
+    expected = x.float()
+    nan = expected.isnan()
+    assert y[nan].isnan().all()
+    torch.testing.assert_close(y.view(torch.int32)[~nan], expected.view(torch.int32)[~nan], rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str, num_warps",
                          [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
@@ -8008,6 +8031,125 @@ def test_dtype_tensor(device, dtype):
         tensor = tl.zeros((1, ), dtype)
 
     dtype_tensor_kernel[(1, )](dtype)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("mode", ["range", "long", "mixed", "constexpr"])
+def test_chained_comparison_values(device, scalar, mode):
+
+    @triton.jit
+    def kernel(X, Y, SCALAR: tl.constexpr, MODE: tl.constexpr):
+        offsets = tl.program_id(0) if SCALAR else tl.arange(0, 16)
+        x = tl.load(X + offsets)
+        if MODE == "range":
+            result = 0 <= x <= 8
+        elif MODE == "long":
+            result = -2 < x <= 8 < x + 4
+        elif MODE == "mixed":
+            result = 8 >= x != 2 == x % 3
+        else:
+            result = -1 < 0 <= x <= 8 < 10
+        tl.store(Y + offsets, result)
+
+    x = torch.arange(-4, 12, device=device, dtype=torch.int32)
+    y = torch.empty_like(x, dtype=torch.bool)
+    kernel[(16 if scalar else 1, )](x, y, scalar, mode)
+    if mode == "long":
+        expected = (-2 < x) & (x <= 8) & (8 < x + 4)
+    elif mode == "mixed":
+        expected = (8 >= x) & (x != 2) & (2 == torch.fmod(x, 3))
+    else:
+        expected = (0 <= x) & (x <= 8)
+    torch.testing.assert_close(y, expected)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("initialize", [False, True])
+@pytest.mark.parametrize("position", ["middle", "left", "right", "dependent", "nested"])
+def test_chained_comparison_assignment_scope(device, initialize, position):
+
+    @triton.jit
+    def kernel(X, Values, Result, INITIALIZE: tl.constexpr, POSITION: tl.constexpr):
+        offsets = tl.arange(0, 16)
+        if INITIALIZE:
+            value = tl.full((16, ), -42, tl.int32)
+        if POSITION == "middle":
+            result = 0 < (value := tl.load(X + offsets)) < 8
+        elif POSITION == "left":
+            result = (value := tl.load(X + offsets)) > 0 < 8
+        elif POSITION == "right":
+            result = 0 < 8 > (value := tl.load(X + offsets))
+        elif POSITION == "dependent":
+            result = 0 < (value := tl.load(X + offsets)) < value + 1
+        else:
+            result = (0 < (value := tl.load(X + offsets)) < 8) == 1 != 0
+        tl.store(Values + offsets, value)
+        tl.store(Result + offsets, result)
+
+    x = torch.arange(-4, 12, device=device, dtype=torch.int32)
+    values = torch.empty_like(x)
+    result = torch.empty_like(x, dtype=torch.bool)
+    kernel[(1, )](x, values, result, initialize, position)
+    torch.testing.assert_close(values, x)
+    if position in ("left", "dependent"):
+        expected = x > 0
+    elif position == "right":
+        expected = x < 8
+    else:
+        expected = (0 < x) & (x < 8)
+    torch.testing.assert_close(result, expected)
+
+
+@pytest.mark.interpreter
+def test_chained_comparison_broadcast(device):
+
+    @triton.jit
+    def kernel(Y):
+        rows = tl.arange(0, 8)[:, None]
+        cols = tl.arange(0, 8)[None, :]
+        tl.store(Y + rows * 8 + cols, 0 <= rows < cols <= 6)
+
+    y = torch.empty((8, 8), device=device, dtype=torch.bool)
+    kernel[(1, )](y)
+    x = torch.arange(8, device=device)
+    torch.testing.assert_close(y, (x[:, None] < x[None, :]) & (x[None, :] <= 6))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("start", [0, 4])
+@pytest.mark.parametrize("descending", [False, True])
+def test_chained_comparison_evaluation_order(device, start, descending):
+
+    @triton.jit
+    def kernel(Counter, Y, DESCENDING: tl.constexpr):
+        if DESCENDING:
+            result = tl.atomic_add(Counter, 1) > tl.atomic_add(Counter, 1) > tl.atomic_add(Counter, 1)
+        else:
+            result = tl.atomic_add(Counter, 1) < tl.atomic_add(Counter, 1) < tl.atomic_add(Counter, 1) < 4
+        tl.store(Y, result)
+
+    counter = torch.full((), start, device=device, dtype=torch.int32)
+    y = torch.empty((), device=device, dtype=torch.bool)
+    kernel[(1, )](counter, y, descending)
+    assert counter.item() == start + 3
+    assert y.item() == (not descending and start + 2 < 4)
+
+
+@pytest.mark.interpreter
+def test_chained_comparison_short_circuit(device):
+
+    @triton.jit
+    def kernel(Counter, Y):
+        result = 1 < 0 < tl.atomic_add(Counter, 1)
+        tl.store(Y, result)
+        tl.store(Y + 1, 0 < 1 > 2 < tl.atomic_add(Counter, 1))
+
+    counter = torch.zeros((), device=device, dtype=torch.int32)
+    y = torch.empty((2, ), device=device, dtype=torch.bool)
+    kernel[(1, )](counter, y)
+    assert counter.item() == 0
+    assert not y.any().item()
 
 
 @pytest.mark.interpreter
