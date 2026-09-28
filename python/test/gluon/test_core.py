@@ -23,6 +23,7 @@ from triton._internal_testing import (
     is_hip_cdna4,
     is_hopper_or_newer,
     is_hopper,
+    skip_if_unsupported_cluster_size,
 )
 from triton.compiler import max_shared_mem
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
@@ -711,6 +712,7 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [1, 4], [4, 4]])
 def test_tma_multicast_copy(ctas_per_cga):
+    skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     cga_split_num = [min(ctas_per_cga[0], 2), min(ctas_per_cga[1], 2)]
     cga_layout = make_cga_layout(ctas_per_cga, cga_split_num, [1, 0])
 
@@ -966,6 +968,7 @@ def make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, two_cta_dim):
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [2, 4], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [True, False] if is_blackwell() else [False])
 def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
+    skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
 
     if two_ctas:
         ctas_per_cga_b = [ctas_per_cga[0] // 2, 2 * ctas_per_cga[1]]
@@ -1762,6 +1765,7 @@ def test_tma_mma_shared_inputs_expect_order(num_warps, use_gather_scatter, expec
 
 def _run_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, use_gather_scatter, expect_before_copy,
                                exact=False):
+    skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     bitwidth = 16
     acc_dtype = torch.float32
 
@@ -1916,6 +1920,7 @@ def _run_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
 @pytest.mark.enable_warmup(min_capability=9, priority=1)
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, instr_m,
                            shape_m, shape_n, shape_k, ctas_per_cga, two_ctas):
+    skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
     # This is fixed in PTXAS 13.0.88. Remove once we upgrade
     if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
@@ -4271,6 +4276,7 @@ def shared_gather_cga_kernel(
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("num_ctas,broadcast_mask", _shared_gather_cga_cases())
 def test_shared_gather_cga(num_ctas, broadcast_mask):
+    skip_if_unsupported_cluster_size(num_ctas)
     cta_tile = 32
     out = torch.empty(cta_tile * num_ctas, dtype=torch.int32, device="cuda")
     value_layout, seed_layout, shared_layout, num_shard_bits = _shared_gather_layouts(num_ctas, broadcast_mask)
@@ -6297,6 +6303,7 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
 @pytest.mark.parametrize("multicast", [True, False])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE, ctas_per_cga, multicast):
+    skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     BLOCK_M = 128 * ctas_per_cga[0]
     BLOCK_N = 128 * ctas_per_cga[1]
     torch.manual_seed(0)
