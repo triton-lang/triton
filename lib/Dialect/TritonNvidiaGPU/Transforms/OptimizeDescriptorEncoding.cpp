@@ -60,24 +60,18 @@ Attribute NvidiaGPUAssignDescriptorMemoryLayouts::getCompatibleSharedEncoding(
   // default shape/order-based choice when it already matches this
   // shared_linear layout. The full candidate scan below is only a fallback for
   // equivalent non-transposed layouts not selected by the heuristic builder.
-  unsigned elementBitWidth = elementType.getIntOrFloatBitWidth();
+  unsigned elementBitWidth = std::max(8u, elementType.getIntOrFloatBitWidth());
   unsigned preferredSwizzle =
       ttg::NVMMASharedEncodingAttr::getDefaultSwizzlingByteWidth(
           shape, order, cgaLayout, elementBitWidth, /*fp4Padded=*/false);
-  bool transposed = order.size() > 1 && order[0] == 0;
-  if (!transposed) {
-    auto preferred = ttg::NVMMASharedEncodingAttr::get(
-        ctx, preferredSwizzle, /*transposed=*/false, elementBitWidth,
-        /*fp4Padded=*/false, cgaLayout);
-    if (isEquivalent(preferred))
-      return preferred;
-  }
+  auto preferred = ttg::NVMMASharedEncodingAttr::get(
+      ctx, preferredSwizzle, /*transposed=*/false, elementBitWidth,
+      /*fp4Padded=*/false, cgaLayout);
+  if (isEquivalent(preferred))
+    return preferred;
 
-  // Sub-byte elements use a different bit width in the fallback candidates.
-  bool skipPreferredSwizzle = !transposed && elementBitWidth >= 8;
-  elementBitWidth = std::max(8u, elementBitWidth);
   for (unsigned swizzle : {0u, 32u, 64u, 128u}) {
-    if (skipPreferredSwizzle && swizzle == preferredSwizzle)
+    if (swizzle == preferredSwizzle)
       continue;
     auto candidate = ttg::NVMMASharedEncodingAttr::get(
         ctx, swizzle, /*transposed=*/false, elementBitWidth,
