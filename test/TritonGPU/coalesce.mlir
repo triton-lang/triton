@@ -6,6 +6,8 @@
 
 // CHECK: [[$REDUCE_LOCAL:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
 // CHECK: [[$REDUCE_VECTOR2:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
+// CHECK: [[$REDUCE_NARROW32:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+// CHECK: [[$REDUCE_NARROW64:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 2, 2], order = [2, 1, 0]}>
 // CHECK: [[$DEFAULT_DESCRIPTOR:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @descriptor_reduce_middle_128
@@ -32,6 +34,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       tt.reduce.return %max : f32
     }) : (tensor<1x32x256xf32, #src>) -> tensor<1x256xf32, #slice>
     tt.return %reduced : tensor<1x256xf32, #slice>
+  }
+
+  // CHECK-LABEL: @descriptor_reduce_middle_32
+  // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x32xbf16, [[$REDUCE_NARROW32]]>
+  tt.func @descriptor_reduce_middle_32(%desc: !tt.tensordesc<1x32x32xbf16>, %i: i32) -> tensor<1x32xf32, #slice> {
+    %load = tt.descriptor_load %desc[%i, %i, %i] : !tt.tensordesc<1x32x32xbf16> -> tensor<1x32x32xbf16, #src>
+    %wide = arith.extf %load : tensor<1x32x32xbf16, #src> to tensor<1x32x32xf32, #src>
+    %reduced = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %max = arith.maximumf %a, %b : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<1x32x32xf32, #src>) -> tensor<1x32xf32, #slice>
+    tt.return %reduced : tensor<1x32xf32, #slice>
+  }
+
+  // CHECK-LABEL: @descriptor_reduce_middle_64
+  // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x64xbf16, [[$REDUCE_NARROW64]]>
+  tt.func @descriptor_reduce_middle_64(%desc: !tt.tensordesc<1x32x64xbf16>, %i: i32) -> tensor<1x64xf32, #slice> {
+    %load = tt.descriptor_load %desc[%i, %i, %i] : !tt.tensordesc<1x32x64xbf16> -> tensor<1x32x64xbf16, #src>
+    %wide = arith.extf %load : tensor<1x32x64xbf16, #src> to tensor<1x32x64xf32, #src>
+    %reduced = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %max = arith.maximumf %a, %b : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<1x32x64xf32, #src>) -> tensor<1x64xf32, #slice>
+    tt.return %reduced : tensor<1x64xf32, #slice>
   }
 
   // CHECK-LABEL: @descriptor_reduce_multiple_users

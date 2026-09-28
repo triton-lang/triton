@@ -40,12 +40,13 @@ static Attribute pickDescriptorLoadStoreLayout(
   int maxVectorSize = 128 / type.getElementTypeBitWidth();
 
   int vectorSize = std::min(numElemsPerThread, maxVectorSize);
-  // Keep a subsequent non-innermost reduction thread-local when the
-  // contiguous dimension can occupy all threads. Wider shared-memory loads
-  // would distribute threads and warps along the reduction axis instead.
+  // Use the contiguous dimension before distributing threads along a
+  // subsequent non-innermost reduction. Wider shared-memory loads would
+  // distribute threads along the reduction axis instead.
   if (reductionAxis && *reductionAxis != type.getRank() - 1 &&
-      shapePerCTA.back() >= numThreads)
-    vectorSize = std::min<int>(vectorSize, shapePerCTA.back() / numThreads);
+      shapePerCTA.back() >= threadsPerWarp)
+    vectorSize = std::min<int64_t>(
+        vectorSize, std::max<int64_t>(1, shapePerCTA.back() / numThreads));
   SmallVector<unsigned> sizePerThread(type.getRank(), 1);
   sizePerThread.back() = vectorSize;
 
