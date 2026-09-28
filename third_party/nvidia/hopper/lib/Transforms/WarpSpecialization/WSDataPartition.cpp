@@ -1,9 +1,11 @@
+#include "nvidia/hopper/lib/Transforms/WarpSpecialization/WSDataPartition.h"
 #include "Utility.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
@@ -390,23 +392,22 @@ static bool getForwardSliceToPartition(Value v,
 
     partitionScheme.opPartitionDims[depOp] = currentDim;
 
-    auto onlyUsedByAtomicStore = [](Value v) {
+    auto onlyUsedByReductionSink = [](Value v) {
       SetVector<Operation *> forwardSlice;
       getForwardSlice(v, &forwardSlice);
-      Operation *atomicStore;
+      Operation *sink = nullptr;
       for (auto op : forwardSlice) {
         if (isa<AtomicRMWOp, DescriptorReduceOp>(op)) {
-          atomicStore = op;
+          sink = op;
           break;
         }
       }
-
-      if (!atomicStore)
+      if (!sink)
         return false;
 
-      // Check all ops in fowardSlice are only connected to atomicStore
-      SmallVector<Operation *> queue = {atomicStore};
-      forwardSlice.remove(atomicStore);
+      // Check all ops in forwardSlice are only connected to the sink.
+      SmallVector<Operation *> queue = {sink};
+      forwardSlice.remove(sink);
       while (!queue.empty()) {
         auto op = queue.back();
         queue.pop_back();
@@ -426,13 +427,12 @@ static bool getForwardSliceToPartition(Value v,
     if (auto dotOp = dyn_cast<nvidia_gpu::WarpGroupDotOp>(depOp)) {
       if ((currentDim == 0 && v == dotOp.getB()) ||
           (currentDim == 1 && v == dotOp.getA())) {
-        // It is fine to continue the partition if the dot output is immediately
-        // stored out via an atomic add, as the dot computes a partial result.
-        if (onlyUsedByAtomicStore(dotOp.getD())) {
+        // Continue K partitioning when the dot result has a single reduction
+        // sink. Atomic RMW sinks are rejected before rewriting.
+        if (onlyUsedByReductionSink(dotOp.getD())) {
           partitionScheme.dotPartitionOperand[dotOp] =
               v == dotOp.getA() ? 0 : 1;
-          // Duplicate the users of the dot output since the shape of the output
-          // will not be changed
+          // Duplicate the users of the dot output since its shape is unchanged.
           currentDim = DataPartitionScheme::noOpPartitionDim;
         } else {
           LLVM_DEBUG({
@@ -1301,15 +1301,59 @@ static bool doDeepCleanup(triton::FuncOp &funcOp,
   return true;
 }
 
-bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups) {
+static bool hasUnsupportedAtomicRMW(triton::FuncOp &funcOp,
+                                    DataPartitionScheme &partitionScheme,
+                                    unsigned numConsumerGroups) {
+  SmallVector<AsyncTaskId, 1> producerTaskIds{0};
+  SmallVector<AsyncTaskId, 2> consumerTaskIds;
+  for (unsigned taskId = 1; taskId <= numConsumerGroups; ++taskId)
+    consumerTaskIds.push_back(static_cast<AsyncTaskId>(taskId));
+
+  bool unsupported = false;
+  funcOp.walk([&](AtomicRMWOp atomicOp) {
+    if (unsupported)
+      return;
+
+    auto taskIds = getAsyncTaskIds(atomicOp);
+    bool inSpecializedLoop = false;
+    for (Operation *parent = atomicOp->getParentOp(); parent;
+         parent = parent->getParentOp()) {
+      if (auto loop = dyn_cast<scf::ForOp>(parent))
+        inSpecializedLoop |= loop->hasAttr(triton::kWarpSpecializeAttrName);
+    }
+    bool inPartitionScheme = partitionScheme.ops.contains(atomicOp);
+    if (!inSpecializedLoop && !inPartitionScheme && taskIds.empty())
+      return;
+
+    bool isProducer = taskIds == producerTaskIds;
+    bool isConsumer = taskIds == consumerTaskIds;
+    if (inPartitionScheme) {
+      // Rewriting the partition closure cannot preserve an atomic's execution:
+      // a no-op dimension duplicates the update, while a sliced dimension may
+      // change its operand shape.
+      unsupported = true;
+      return;
+    }
+
+    unsupported = !isProducer && !(numConsumerGroups == 1 && isConsumer);
+  });
+  return unsupported;
+}
+
+DataPartitionResult doDataPartition(triton::FuncOp &funcOp,
+                                    unsigned numConsumerGroups) {
   DataPartitionScheme partitionScheme;
   if (!computePartitionScheme(funcOp, partitionScheme)) {
+    if (hasUnsupportedAtomicRMW(funcOp, partitionScheme, numConsumerGroups))
+      return DataPartitionResult::UnsupportedAtomicRMW;
     if (numConsumerGroups > 1) {
       LDBG("computePartitionScheme failed when requested");
-      return false;
+      return DataPartitionResult::Retry;
     }
-    return true;
+    return DataPartitionResult::Success;
   }
+  if (hasUnsupportedAtomicRMW(funcOp, partitionScheme, numConsumerGroups))
+    return DataPartitionResult::UnsupportedAtomicRMW;
 
   // Rewrite the rematerialized ops.
   LDBG("Rewriting rematerialized Ops");
@@ -1356,7 +1400,7 @@ bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups) {
   // Make sure original ops are not used
   if (!doDeepCleanup(funcOp, partitionScheme)) {
     LDBG("final cleanup failed");
-    return false;
+    return DataPartitionResult::Retry;
   }
 
   // Make sure original ops are not used
@@ -1367,7 +1411,7 @@ bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups) {
   });
 
   fixTaskId(funcOp);
-  return true;
+  return DataPartitionResult::Success;
 }
 
 #define GEN_PASS_DEF_NVGPUTESTWSDATAPARTITION
@@ -1380,9 +1424,14 @@ public:
       NVGPUTestWSDataPartitionPass>::NVGPUTestWSDataPartitionBase;
 
   void runOnFuncOp(triton::FuncOp funcOp) {
-    if (numWarpGroups > 2)
-      if (!doDataPartition(funcOp, numWarpGroups - 1))
-        signalPassFailure();
+    if (numWarpGroups <= 2)
+      return;
+    auto result = doDataPartition(funcOp, numWarpGroups - 1);
+    if (result == DataPartitionResult::UnsupportedAtomicRMW)
+      funcOp.emitError(
+          "unsupported AtomicRMW in warp-specialization data partition");
+    if (result != DataPartitionResult::Success)
+      signalPassFailure();
   }
 
   void runOnOperation() override {
