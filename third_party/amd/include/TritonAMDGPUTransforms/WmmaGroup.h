@@ -7,10 +7,7 @@
 
 namespace mlir {
 
-inline constexpr llvm::StringLiteral kWmmaN16InstsFeature = "wmma-n16-insts";
-
 struct WmmaIntrinsic {
-
   static FailureOr<WmmaIntrinsic>
   selectFor(int version, unsigned mDim, unsigned nDim, unsigned inputKDim,
             Type aElemType, Type bElemType, Type dElemType,
