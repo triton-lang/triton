@@ -48,11 +48,6 @@ namespace py = nanobind;
 
 namespace {
 llvm::Triple getAMDTargetTriple(const std::string &arch) {
-  // strict is equivalent in this function
-  if (mlir::triton::amdgpu::TargetFeatures(llvm::StringRef(arch))
-          .isGFX1250Strict())
-    return llvm::Triple("amdgpu12.50s-amd-amdhsa");
-
   llvm::AMDGPU::GPUKind gpuKind = llvm::AMDGPU::parseArchAMDGCN(arch);
   llvm::Triple::SubArchType subArch = llvm::AMDGPU::getSubArch(gpuKind);
   if (subArch == llvm::Triple::NoSubArch)
@@ -517,16 +512,13 @@ void init_triton_amd(py::module_ &m) {
 
   m.def("has_architected_sgprs", [](const std::string &arch) {
     std::string error;
-    bool strict = mlir::triton::amdgpu::TargetFeatures(llvm::StringRef(arch))
-                      .isGFX1250Strict();
-    std::string cpu = strict ? "gfx1250" : arch;
-    llvm::Triple triple = getAMDTargetTriple(cpu);
+    llvm::Triple triple = getAMDTargetTriple(arch);
     const llvm::Target *target =
         llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target)
       throw std::runtime_error("target lookup error: " + error);
     std::unique_ptr<llvm::MCSubtargetInfo> sti(
-        target->createMCSubtargetInfo(triple, cpu, ""));
+        target->createMCSubtargetInfo(triple, arch, ""));
     return sti->checkFeatures("+architected-sgprs");
   });
 
