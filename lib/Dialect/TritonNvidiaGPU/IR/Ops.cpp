@@ -859,6 +859,27 @@ AsyncTMACopyGlobalToLocalOp::canonicalize(AsyncTMACopyGlobalToLocalOp op,
 }
 
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
+  // Do not silently accept obsolete attributes in generic textual IR.
+  if ((*this)->hasAttr("cache") || (*this)->hasAttr("evict"))
+    return emitOpError(
+        "use cachePolicy instead of legacy cache/evict attributes");
+  if (getIsVolatile())
+    return emitOpError("volatile TMA loads are not supported");
+  if (Attribute attr = getCachePolicyAttr()) {
+    if (auto policy = dyn_cast<triton::CachePolicyAttr>(attr)) {
+      if (policy.getCacheModifier() != triton::CacheModifier::NONE)
+        return emitOpError("TMA loads do not support cache modifiers");
+    } else if (auto policy = dyn_cast<CachePolicyAttr>(attr)) {
+      if (policy.getCacheModifier() != triton::CacheModifier::NONE)
+        return emitOpError("TMA loads do not support cache modifiers");
+      if (policy.getL1() != CacheEvictionPriority::NONE)
+        return emitOpError("TMA loads do not support L1 eviction policies");
+      if (policy.getL2PrefetchSize())
+        return emitOpError("TMA loads do not support L2 prefetch size");
+    } else {
+      return emitOpError("unsupported TMA cache policy attribute ") << attr;
+    }
+  }
   auto descType = getDesc().getType();
   bool isIm2Col = isIm2ColDescriptor(descType);
   auto descInterface = cast<TensorDescInterface>(descType);

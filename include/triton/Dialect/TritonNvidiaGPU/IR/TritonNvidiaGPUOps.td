@@ -521,6 +521,14 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     tensor. The copied data depends on the global memory descriptor pointed to
     by `desc`.
 
+    The optional `cachePolicy` attribute accepts a generic `tt.cache_policy`
+    or an NVIDIA `ttng.cache_policy` with only an L2 eviction policy. Generic
+    first/last eviction policies apply to all lines (fraction 1.0). An absent
+    policy emits no cache hint. Explicit detailed L2 policies, including
+    `evict_normal`, are preserved. Cache modifiers, L1 policies, L2 prefetch
+    sizes, and volatile accesses are not supported. Hints do not change memory
+    effects or synchronization.
+
     The tensor mode is determined by the descriptor type:
     - tt.tensordesc: TILED mode - Regular tiled tensor memory access
       - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode
@@ -545,8 +553,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     Arg<TTG_MemDescType, "", AsyncSharedWrite>:$result,
     I1:$pred,
     UnitAttr:$multicast,
-    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    OptionalAttr<AnyAttr>:$cachePolicy,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile
   );
 
@@ -555,20 +562,18 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     OpBuilder<(ins "Value":$desc, "ValueRange":$coord, "Value":$barrier,
                    "Value":$result, "Value":$pred,
                    CArg<"bool", "false">:$multicast,
-                   CArg<"triton::CacheModifier", "triton::CacheModifier::NONE">:$cache,
-                   CArg<"triton::EvictionPolicy", "triton::EvictionPolicy::NORMAL">:$evict,
+                   CArg<"Attribute", "{}">:$cachePolicy,
                    CArg<"bool", "false">:$isVolatile), [{
       multicast &= ::mlir::triton::nvidia_gpu::hasCGABroadcast(
                                    ::mlir::cast<::mlir::triton::gpu::MemDescType>(
                                        result.getType()));
       build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
-            result, pred, multicast, cache, evict, isVolatile);
+            result, pred, multicast, cachePolicy, isVolatile);
     }]>
   ];
 
   let assemblyFormat = [{
     $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
 

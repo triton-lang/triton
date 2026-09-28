@@ -637,12 +637,12 @@ def test_proxy_fence_noinline_tma_store():
 
 
 @gluon.jit
-def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr):
+def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr, POLICY: ttgl.constexpr = None):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
     mbarrier.expect(bar, in_desc.block_type.nbytes)
-    tma.async_load_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem, multicast=MULTICAST)
+    tma.async_load_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem, multicast=MULTICAST, cache_policy=POLICY)
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
     tma.async_store(out_desc, [0, 0], smem)
@@ -654,7 +654,9 @@ def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr):
 @pytest.mark.parametrize("channels_per_pixel", [32])
 @pytest.mark.parametrize("swizzle_byte_width", [32])
 @pytest.mark.parametrize("multicast", [False, True], ids=["unicast", "multicast"])
-def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width, multicast):
+@pytest.mark.parametrize(
+    "policy", [None, hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"))])
+def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width, multicast, policy):
     smem_bytes = pixels_per_column * channels_per_pixel * 4 + 8192  # block + mbarrier overhead
     if smem_bytes > 200000:
         pytest.skip(f"Skipping: shared memory {smem_bytes} exceeds limit")
@@ -685,7 +687,9 @@ def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width, m
         pixel_box_upper_corner=[0, 0],
     )
     out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, block_shape, layout)
-    compiled = tma_im2col_kernel[(1, )](in_desc, out_desc, multicast, num_warps=1, num_ctas=2 if multicast else 1)
+    compiled = tma_im2col_kernel[(1, )](in_desc, out_desc, multicast, policy, num_warps=1,
+                                        num_ctas=2 if multicast else 1)
+    assert (".L2::cache_hint" in compiled.asm["ptx"]) == (policy is not None)
     assert (".im2col.mbarrier::complete_tx::bytes.multicast::cluster" in compiled.asm["ptx"]) == multicast
     torch.testing.assert_close(out, inp.reshape(pixels_per_column, channels_per_pixel), atol=0, rtol=0)
 
@@ -738,14 +742,14 @@ def test_gluon_tma_round_f32_to_tf32():
 
 
 @gluon.jit
-def tma_multicast_copy_kernel(in_desc, out_desc):
+def tma_multicast_copy_kernel(in_desc, out_desc, POLICY: ttgl.constexpr = None):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
 
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
 
     mbarrier.expect(bar, in_desc.nbytes_per_cta)
-    tma.async_load(in_desc, [0, 0], bar, smem, multicast=True)
+    tma.async_load(in_desc, [0, 0], bar, smem, multicast=True, cache_policy=POLICY)
     mbarrier.wait(bar, phase=0, deps=[smem])
 
     tma.async_store(out_desc, [0, 0], smem)
@@ -757,7 +761,9 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [1, 4], [4, 4]])
-def test_tma_multicast_copy(ctas_per_cga):
+@pytest.mark.parametrize(
+    "policy", [None, hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"))])
+def test_tma_multicast_copy(ctas_per_cga, policy):
     skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     cga_split_num = [min(ctas_per_cga[0], 2), min(ctas_per_cga[1], 2)]
     cga_layout = make_cga_layout(ctas_per_cga, cga_split_num, [1, 0])
@@ -781,9 +787,11 @@ def test_tma_multicast_copy(ctas_per_cga):
     compiled = tma_multicast_copy_kernel[(1, )](
         in_desc,
         out_desc,
+        policy,
         num_warps=4,
         num_ctas=num_ctas,
     )
+    assert (".L2::cache_hint" in compiled.asm["ptx"]) == (policy is not None)
     expect_multicast = any(ctas_per_cga[i] > cga_split_num[i] for i in range(len(ctas_per_cga)))
     assert (".multicast::cluster" in compiled.asm["ptx"]) == expect_multicast
     torch.testing.assert_close(out, inp, atol=0, rtol=0)
@@ -6520,3 +6528,57 @@ def test_tmem288k_simple(Ncol1: int, Ncol2: int):
     num_warps = 4
     tmem288k_simple_kernel[(1, )](input, output, M, Ncol1, Ncol2, num_warps=num_warps)
     torch.testing.assert_close(input.cpu(), output.cpu(), atol=0, rtol=0)
+
+
+@gluon.jit
+def tma_cache_policy_copy_kernel(in_desc, out_desc, Flag, POLICY: ttgl.constexpr, EVICTION: ttgl.constexpr,
+                                 LAYOUT: ttgl.constexpr):
+    initial = ttgl.full(in_desc.block_shape, -1, in_desc.dtype, LAYOUT)
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout, initial)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    pred = ttgl.load(Flag) != 0
+    mbarrier.expect(bar, in_desc.nbytes_per_cta, pred=pred)
+    tma.async_load(in_desc, [0] * len(in_desc.block_shape), bar, smem, pred=pred, cache_policy=POLICY,
+                   eviction_policy=EVICTION)
+    mbarrier.wait(bar, phase=0, pred=pred, deps=[smem])
+    mbarrier.invalidate(bar)
+    tma.async_store(out_desc, [0] * len(out_desc.block_shape), smem)
+    tma.store_wait(0)
+    smem._keep_alive()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("rank", [1, 2, 5])
+@pytest.mark.parametrize("pred", [False, True])
+@pytest.mark.parametrize("policy,eviction", [
+    (None, None),
+    (None, ""),
+    (None, "evict_first"),
+    (None, "evict_last"),
+    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_first", 1.0)), None),
+    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 1.0)), None),
+    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_normal", 1.0)), None),
+    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first")), None),
+    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_unchanged", 0.25, "evict_first")), None),
+])
+def test_tma_cache_policy_copy(rank, pred, policy, eviction):
+    shape = [2] * (rank - 1) + [256]
+    inp = torch.randn(shape, dtype=torch.float16, device="cuda")
+    out = torch.empty_like(inp)
+    flag = torch.tensor([pred], dtype=torch.int32, device="cuda")
+    shared = ttgl.NVMMASharedLayout(0, 16, rank=rank)
+    layout = ttgl.BlockedLayout([1] * rank, [1] * (rank - 1) + [32], [1] * (rank - 1) + [4],
+                                list(reversed(range(rank))))
+    in_desc = TensorDescriptor.from_tensor(inp, shape, shared)
+    out_desc = TensorDescriptor.from_tensor(out, shape, shared)
+    compiled = tma_cache_policy_copy_kernel[(1, )](in_desc, out_desc, flag, policy, eviction, layout)
+    torch.testing.assert_close(out, inp if pred else torch.full_like(inp, -1), atol=0, rtol=0)
+    assert (".L2::cache_hint" in compiled.asm["ptx"]) == (policy is not None
+                                                          or eviction in ("evict_first", "evict_last"))
+    primary = policy.l2.primary if policy is not None else eviction
+    if primary in ("evict_first", "evict_last", "evict_normal", "evict_unchanged"):
+        expected = f"createpolicy.fractional.L2::{primary}"
+        if policy is not None and policy.l2.secondary == "evict_first":
+            expected += ".L2::evict_first"
+        assert expected + ".b64" in compiled.asm["ptx"]
