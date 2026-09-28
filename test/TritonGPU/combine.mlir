@@ -4626,3 +4626,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %c : tensor<4x2xi32, #dst>
   }
 }
+
+// -----
+
+// hoistConvertDotOperand should try to reuse existing rematerializations even if nothing is hoisted
+
+// CHECK-LABEL: @hoist_dot_operand_reuse_existing_remat
+// CHECK: tt.load
+// CHECK: ttg.convert_layout {{.*}} -> tensor<16x16xf32, #ttg.dot_op
+// CHECK: cvt.rna.tf32.f32
+// CHECK-NOT: cvt.rna.tf32.f32
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.return
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:89", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hoist_dot_operand_reuse_existing_remat(%xp: tensor<16x16x!tt.ptr<f32>, #blocked>, %w: tensor<16x16xf32, #dot1>, %acc: tensor<16x16xf32, #mma>) -> tensor<16x16xf32, #mma> {
+    %x = tt.load %xp : tensor<16x16x!tt.ptr<f32>, #blocked>
+    %hi = tt.elementwise_inline_asm "cvt.rna.tf32.f32 $0, $1;" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %x : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #blocked>
+    %lo = arith.subf %x, %hi : tensor<16x16xf32, #blocked>
+    %a0 = ttg.convert_layout %lo : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #dot0>
+    %d0 = tt.dot %a0, %w, %acc, inputPrecision = tf32 : tensor<16x16xf32, #dot0> * tensor<16x16xf32, #dot1> -> tensor<16x16xf32, #mma>
+    %a1 = ttg.convert_layout %hi : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #dot0>
+    %d1 = tt.dot %a1, %w, %d0, inputPrecision = tf32 : tensor<16x16xf32, #dot0> * tensor<16x16xf32, #dot1> -> tensor<16x16xf32, #mma>
+    tt.return %d1 : tensor<16x16xf32, #mma>
+  }
+}
+
+// -----
+
+// Reduced from the compiler crash in #11659. Hoisting creates an identity
+// conversion whose empty slice has no cached replacement.
+// CHECK-LABEL: @hoist_dot_operand_empty_slice
+// CHECK: tt.dot
+// CHECK: tt.return
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @hoist_dot_operand_empty_slice(%b: tensor<16x32xf16, #dot1>, %acc: tensor<128x32xf32, #mma>, %bits: tensor<128xi64, #blocked>, %a: tensor<128x16xf16, #dot0>) -> tensor<128xi64, #blocked> {
+    %dot = tt.dot %a, %b, %acc, inputPrecision = tf32x3 : tensor<128x16xf16, #dot0> * tensor<16x32xf16, #dot1> -> tensor<128x32xf32, #mma>
+    %values = ttg.convert_layout %dot : tensor<128x32xf32, #mma> -> tensor<128x32xf32, #blocked1>
+    %max = "tt.reduce"(%values) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %next = arith.maxnumf %lhs, %rhs : f32
+      tt.reduce.return %next : f32
+    }) : (tensor<128x32xf32, #blocked1>) -> tensor<128xf32, #slice>
+    %int = tt.bitcast %max : tensor<128xf32, #slice> -> tensor<128xi32, #slice>
+    %converted = ttg.convert_layout %int : tensor<128xi32, #slice> -> tensor<128xi32, #blocked>
+    %wide = arith.extsi %converted : tensor<128xi32, #blocked> to tensor<128xi64, #blocked>
+    %result = arith.ori %bits, %wide : tensor<128xi64, #blocked>
+    tt.return %result : tensor<128xi64, #blocked>
+  }
+}
