@@ -176,6 +176,8 @@ def _argmax_combine(value1, index1, value2, index2, tie_break_left):
     else:
         tie = False
     gt = value1 > value2 or tie
+    if core.constexpr(value2.dtype.is_floating()):
+        gt = gt or (value2 != value2)
     v_ret = core.where(gt, value1, value2)
     i_ret = core.where(gt, index1, index2)
     return v_ret, i_ret
@@ -234,6 +236,8 @@ def _argmin_combine(value1, index1, value2, index2, tie_break_left):
     else:
         tie = False
     lt = value1 < value2 or tie
+    if core.constexpr(value2.dtype.is_floating()):
+        lt = lt or (value2 != value2)
     value_ret = core.where(lt, value1, value2)
     index_ret = core.where(lt, index1, index2)
     return value_ret, index_ret

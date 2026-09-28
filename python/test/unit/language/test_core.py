@@ -3142,6 +3142,21 @@ def test_argmax_argmin_with_nan(dtype, device):
     assert val.item() == 5.0, f"expected 5.0, got {val.item()}"
     assert idx.item() == 1, f"expected 1, got {idx.item()}"
 
+    # argmin: NaN at end [3, 5, nan] -> min=3.0, argmin=0
+    val.zero_()
+    idx.zero_()
+    argmin_kernel[(1, )](x_nan_end, val, idx, N=3, BLOCK=4)
+    assert val.item() == 3.0, f"expected 3.0, got {val.item()}"
+    assert idx.item() == 0, f"expected 0, got {idx.item()}"
+
+    # argmax: NaN at end [5, 3, nan] -> max=5.0, argmax=0
+    x_max_first = torch.tensor([5.0, 3.0, float("nan")], dtype=dtype, device=device)
+    val.zero_()
+    idx.zero_()
+    argmax_kernel[(1, )](x_max_first, val, idx, N=3, BLOCK=4)
+    assert val.item() == 5.0, f"expected 5.0, got {val.item()}"
+    assert idx.item() == 0, f"expected 0, got {idx.item()}"
+
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
