@@ -1516,7 +1516,49 @@ class GridExecutor:
         self._restore_args_dev(args_dev, args_hst, kwargs, kwargs_hst)
 
 
+def _interpreter_chained_compare(operands, comparisons):
+    lhs = operands[0]()
+    values = []
+    for operand, compare in zip(operands[1:], comparisons):
+        rhs = operand()
+        value = compare(lhs, rhs)
+        if isinstance(value, tl.tensor):
+            values.append(value)
+        elif not value:
+            return value
+        lhs = rhs
+    if not values:
+        return value
+    result = values.pop()
+    for value in reversed(values):
+        result = value.logical_and(result)
+    return result
+
+
 class ASTTransformer(ast.NodeTransformer):
+
+    def visit_Compare(self, node):
+        node = self.generic_visit(node)
+        if len(node.ops) == 1:
+            return node
+
+        def thunk(body, names=()):
+            args = ast.arguments(posonlyargs=[], args=[ast.arg(arg=name) for name in names], kwonlyargs=[],
+                                 kw_defaults=[], defaults=[])
+            return ast.Lambda(args=args, body=body)
+
+        # Delaying operands preserves compile-time short-circuiting and evaluates
+        # each middle operand only once, including calls with side effects.
+        operands = [thunk(operand) for operand in [node.left, *node.comparators]]
+        comparisons = [
+            thunk(
+                ast.Compare(left=ast.Name(id="lhs", ctx=ast.Load()), ops=[op],
+                            comparators=[ast.Name(id="rhs", ctx=ast.Load())]), ("lhs", "rhs")) for op in node.ops
+        ]
+        return ast.copy_location(
+            ast.Call(func=ast.Name(id="_interpreter_chained_compare", ctx=ast.Load()),
+                     args=[ast.Tuple(elts=operands, ctx=ast.Load()),
+                           ast.Tuple(elts=comparisons, ctx=ast.Load())], keywords=[]), node)
 
     def visit_Assign(self, node):
         names = []
@@ -1528,7 +1570,8 @@ class ASTTransformer(ast.NodeTransformer):
         # interpreter_semantic.to_tensor(value, False)
         node.value = ast.Call(
             func=ast.Attribute(value=ast.Name(id="interpreter_semantic", ctx=ast.Load()), attr="to_tensor",
-                               ctx=ast.Load()), args=[node.value, ast.Constant(value=False)], keywords=[])
+                               ctx=ast.Load()), args=[self.visit(node.value),
+                                                      ast.Constant(value=False)], keywords=[])
         return node
 
 

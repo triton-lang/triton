@@ -8034,6 +8034,88 @@ def test_dtype_tensor(device, dtype):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("mode", ["range", "long", "mixed", "constexpr"])
+def test_chained_comparison_values(device, scalar, mode):
+
+    @triton.jit
+    def kernel(X, Y, SCALAR: tl.constexpr, MODE: tl.constexpr):
+        offsets = tl.program_id(0) if SCALAR else tl.arange(0, 16)
+        x = tl.load(X + offsets)
+        if MODE == "range":
+            result = 0 <= x <= 8
+        elif MODE == "long":
+            result = -2 < x <= 8 < x + 4
+        elif MODE == "mixed":
+            result = 8 >= x != 2 == x % 3
+        else:
+            result = -1 < 0 <= x <= 8 < 10
+        tl.store(Y + offsets, result)
+
+    x = torch.arange(-4, 12, device=device, dtype=torch.int32)
+    y = torch.empty_like(x, dtype=torch.bool)
+    kernel[(16 if scalar else 1, )](x, y, scalar, mode)
+    if mode == "long":
+        expected = (-2 < x) & (x <= 8) & (8 < x + 4)
+    elif mode == "mixed":
+        expected = (8 >= x) & (x != 2) & (2 == torch.fmod(x, 3))
+    else:
+        expected = (0 <= x) & (x <= 8)
+    torch.testing.assert_close(y, expected)
+
+
+@pytest.mark.interpreter
+def test_chained_comparison_broadcast(device):
+
+    @triton.jit
+    def kernel(Y):
+        rows = tl.arange(0, 8)[:, None]
+        cols = tl.arange(0, 8)[None, :]
+        tl.store(Y + rows * 8 + cols, 0 <= rows < cols <= 6)
+
+    y = torch.empty((8, 8), device=device, dtype=torch.bool)
+    kernel[(1, )](y)
+    x = torch.arange(8, device=device)
+    torch.testing.assert_close(y, (x[:, None] < x[None, :]) & (x[None, :] <= 6))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("start", [0, 4])
+@pytest.mark.parametrize("descending", [False, True])
+def test_chained_comparison_evaluation_order(device, start, descending):
+
+    @triton.jit
+    def kernel(Counter, Y, DESCENDING: tl.constexpr):
+        if DESCENDING:
+            result = tl.atomic_add(Counter, 1) > tl.atomic_add(Counter, 1) > tl.atomic_add(Counter, 1)
+        else:
+            result = tl.atomic_add(Counter, 1) < tl.atomic_add(Counter, 1) < tl.atomic_add(Counter, 1) < 4
+        tl.store(Y, result)
+
+    counter = torch.full((), start, device=device, dtype=torch.int32)
+    y = torch.empty((), device=device, dtype=torch.bool)
+    kernel[(1, )](counter, y, descending)
+    assert counter.item() == start + 3
+    assert y.item() == (not descending and start + 2 < 4)
+
+
+@pytest.mark.interpreter
+def test_chained_comparison_short_circuit(device):
+
+    @triton.jit
+    def kernel(Counter, Y):
+        result = 1 < 0 < tl.atomic_add(Counter, 1)
+        tl.store(Y, result)
+        tl.store(Y + 1, 0 < 1 > 2 < tl.atomic_add(Counter, 1))
+
+    counter = torch.zeros((), device=device, dtype=torch.int32)
+    y = torch.empty((2, ), device=device, dtype=torch.bool)
+    kernel[(1, )](counter, y)
+    assert counter.item() == 0
+    assert not y.any().item()
+
+
+@pytest.mark.interpreter
 def test_short_circuiting(device):
 
     @triton.jit

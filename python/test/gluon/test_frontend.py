@@ -34,6 +34,18 @@ from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 
 @filecheck_test
 @gluon.jit
+def test_chained_comparison_range():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    x = ttgl.arange(0, 128, layout=layout)
+    # CHECK: [[LOW:%.*]] = arith.cmpi
+    # CHECK: [[HIGH:%.*]] = arith.cmpi
+    # CHECK: arith.andi [[LOW]], [[HIGH]] : tensor<128xi1, #blocked>
+    result = 0 <= x <= 8
+    ttgl.static_assert(result.type == ttgl.distributed_type(ttgl.int1, [128], layout))
+
+
+@filecheck_test
+@gluon.jit
 def test_atomic_poll_tensor():
     # CHECK-LABEL: test_atomic_poll_tensor
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
