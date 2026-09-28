@@ -101,7 +101,7 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
                             clamp);
 
     if (bits < 32)
-      val = b.trunc(int_ty(bits), val);
+      val = b.trunc(int_ty(bits), val, LLVM::IntegerOverflowFlags::nsw);
     if (!valType.isIntOrIndex())
       val = b.bitcast(val, valType);
     return val;
