@@ -106,7 +106,7 @@ def make_default_opt_flags_amd(
     # group_m:
     group_m = 4
     # number of xcds
-    num_xcds = 8
+    num_xcds = 1 if get_rdna_version() in (3, 4) else 8
     xcd_swizzle = num_xcds
     # block_nk:
     # TODO: Does opt_flags_amd.compute_block_nk need to be refactored?
