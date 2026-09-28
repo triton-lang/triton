@@ -65,7 +65,8 @@
 // CHECK-NOT: tt.warp_specialize
 // CHECK-NOT: async_task_id
 // CHECK-LABEL: @independent_gather_joined_with_loop_scalar_keeps_warp_specialization
-// CHECK: ttg.warp_specialize
+// CHECK-DAG: arith.constant dense<false> : tensor<128x256xi1, #blocked1>
+// CHECK-DAG: ttg.warp_specialize
 // CHECK: tt.gather
 // CHECK: arith.addf
 // CHECK: tt.store
@@ -281,7 +282,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
     tt.return
   }
 
-  tt.func @independent_gather_joined_with_loop_scalar_keeps_warp_specialization(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: !tt.ptr<f16>, %independent: tensor<128x256xf16, #blocked1>) {
+  tt.func @independent_gather_joined_with_loop_scalar_keeps_warp_specialization(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: !tt.ptr<f16>, %independent: f16) {
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
     %c4 = arith.constant 4 : i32
@@ -306,12 +307,14 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
       scf.yield %i : i32
     } {tt.num_stages = 2 : i32, tt.warp_specialize}
     %output_indices = arith.constant dense<0> : tensor<128x256xi32, #blocked1>
-    %output_gather = tt.gather %independent[%output_indices] {axis = 1 : i32} : (tensor<128x256xf16, #blocked1>, tensor<128x256xi32, #blocked1>) -> tensor<128x256xf16, #blocked1>
+    %independent_tensor = tt.splat %independent : f16 -> tensor<128x256xf16, #blocked1>
+    %output_gather = tt.gather %independent_tensor[%output_indices] {axis = 1 : i32} : (tensor<128x256xf16, #blocked1>, tensor<128x256xi32, #blocked1>) -> tensor<128x256xf16, #blocked1>
     %scalar = arith.sitofp %last_i : i32 to f16
     %scalar_tensor = tt.splat %scalar : f16 -> tensor<128x256xf16, #blocked1>
     %sum = arith.addf %output_gather, %scalar_tensor : tensor<128x256xf16, #blocked1>
     %gather_ptrs = tt.splat %arg3 : !tt.ptr<f16> -> tensor<128x256x!tt.ptr<f16>, #blocked1>
-    %mask = arith.constant dense<true> : tensor<128x256xi1, #blocked1>
+    // This consumer can be cloned into each partition, so keep the store inert.
+    %mask = arith.constant dense<false> : tensor<128x256xi1, #blocked1>
     tt.store %gather_ptrs, %sum, %mask : tensor<128x256x!tt.ptr<f16>, #blocked1>
     tt.return
   }
