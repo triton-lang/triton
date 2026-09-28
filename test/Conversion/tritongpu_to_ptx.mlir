@@ -8,6 +8,8 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
 #blocked_reduce = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 2], order = [1, 0]}>
+#narrow_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+#narrow_dst = #ttg.linear<{register = [], lane = [[2], [1], [4], [8], [16]], warp = [[32]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @reciprocal_f32(%ptr: !tt.ptr<f32>, %arg: f32) {
     // CHECK-LABEL: reciprocal_f32(
@@ -252,6 +254,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     }) {allocation.offset = 0 : i32} : (tensor<1x256xf32, #blocked_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
     %ptr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
     tt.store %ptr, %r : tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
+    tt.return
+  }
+
+  // CHECK-LABEL: .visible .entry shuffle_i1_no_mask(
+  tt.func public @shuffle_i1_no_mask(%arg: tensor<64xi1, #narrow_src>, %out: tensor<64x!tt.ptr<i32>, #narrow_dst>) {
+    // CHECK: shfl.sync.idx.b32 [[VALUE:%r[0-9]+]],
+    // CHECK-NOT: and.b32
+    // CHECK: st.global.b32 {{.*}}, { [[VALUE]] };
+    %0 = ttg.convert_layout %arg : tensor<64xi1, #narrow_src> -> tensor<64xi1, #narrow_dst>
+    %1 = arith.extui %0 : tensor<64xi1, #narrow_dst> to tensor<64xi32, #narrow_dst>
+    tt.store %out, %1 : tensor<64x!tt.ptr<i32>, #narrow_dst>
+    tt.return
+  }
+  // CHECK-LABEL: .visible .entry shuffle_i16_no_mask(
+  tt.func public @shuffle_i16_no_mask(%arg: tensor<64xi16, #narrow_src>, %out: tensor<64x!tt.ptr<i32>, #narrow_dst>) {
+    // CHECK: shfl.sync.idx.b32 [[VALUE:%r[0-9]+]],
+    // CHECK-NOT: and.b32
+    // CHECK: st.global.b32 {{.*}}, { [[VALUE]] };
+    %0 = ttg.convert_layout %arg : tensor<64xi16, #narrow_src> -> tensor<64xi16, #narrow_dst>
+    %1 = arith.extui %0 : tensor<64xi16, #narrow_dst> to tensor<64xi32, #narrow_dst>
+    tt.store %out, %1 : tensor<64x!tt.ptr<i32>, #narrow_dst>
     tt.return
   }
 }
