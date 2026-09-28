@@ -1,5 +1,5 @@
 {
-  "llvm_hash": "d0c52018c28bbf7f4969cae7d115214ff4fd8629",
-  "repository": "ROCm/llvm-project",
+  "llvm_hash": "d26ff26ef4e94a4de9ce5228ef5b32b5290cca8f",
+  "repository": "triton-lang/llvm-project",
   "build_number": 1
 }
