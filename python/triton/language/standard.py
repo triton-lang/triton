@@ -207,13 +207,16 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
         else:
             return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_fast, keep_dims=keep_dims)
     else:
+        out_dtype: core.constexpr = input.dtype
         if core.constexpr(input.dtype.primitive_bitwidth) < core.constexpr(32):
             if core.constexpr(input.dtype.is_floating()):
-                input = input.to(core.float32)
+                # For backward compatibility, we keep the result dtype as f32.
+                out_dtype = core.float32
             else:
                 assert input.dtype.is_int(), "Expecting input to be integer type"
+                out_dtype = core.int32
                 input = input.to(core.int32)
-        return core.reduce(input, axis, _elementwise_max, keep_dims=keep_dims)
+        return core.reduce(input, axis, _elementwise_max, keep_dims=keep_dims).to(out_dtype)
 
 
 @core._tensor_member_fn
@@ -265,13 +268,16 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
         else:
             return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_fast, keep_dims=keep_dims)
     else:
-        if core.constexpr(input.dtype.primitive_bitwidth) < 32:
+        out_dtype: core.constexpr = input.dtype
+        if core.constexpr(input.dtype.primitive_bitwidth) < core.constexpr(32):
             if core.constexpr(input.dtype.is_floating()):
-                input = input.to(core.float32)
+                # For backward compatibility, we keep the result dtype as f32.
+                out_dtype = core.float32
             else:
                 assert input.dtype.is_int(), "Expecting input to be integer type"
+                out_dtype = core.int32
                 input = input.to(core.int32)
-        return core.reduce(input, axis, _elementwise_min, keep_dims=keep_dims)
+        return core.reduce(input, axis, _elementwise_min, keep_dims=keep_dims).to(out_dtype)
 
 
 @core._tensor_member_fn

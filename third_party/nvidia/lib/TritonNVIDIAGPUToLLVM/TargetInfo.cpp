@@ -104,7 +104,9 @@ matchReduxKind(triton::ReduceOp op, int computeCapability,
   Operation *reduceOp = op.getSingleCombiner();
   if (!reduceOp)
     return std::nullopt;
-  if (computeCapability / 10 == 10 && reduceOp->getResultTypes()[0].isF32()) {
+  Type type = reduceOp->getResultTypes()[0];
+  if (computeCapability / 10 == 10 &&
+      (type.isF16() || type.isBF16() || type.isF32())) {
     if (isa<arith::MinimumFOp, arith::MaximumFOp>(reduceOp))
       useNanQualifier = true;
     if (isa<arith::MaxNumFOp, arith::MaximumFOp>(reduceOp))
@@ -724,7 +726,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       return true;
     }
     for (unsigned i = 0; i < acc.size(); ++i) {
-      unsigned bitwidth = acc[i].getType().getIntOrFloatBitWidth();
+      Type type = acc[i].getType();
+      unsigned bitwidth = type.getIntOrFloatBitWidth();
       if (acc[i].getType().isInteger()) {
         if (bitwidth < 32) {
           if (*kind == NVVM::ReductionKind::MIN ||
@@ -733,6 +736,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
           else
             acc[i] = b.zext(i32_ty, acc[i]);
         }
+      } else if (bitwidth < 32) {
+        acc[i] = b.fpext(f32_ty, acc[i]);
       }
       auto redux = [&](Value value) -> Value {
         return NVVM::ReduxOp::create(rewriter, loc, value.getType(), value,
@@ -751,6 +756,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       if (acc[i].getType().isInteger()) {
         if (bitwidth < 32)
           acc[i] = b.trunc(int_ty(bitwidth), acc[i]);
+      } else if (bitwidth < 32) {
+        acc[i] = b.fptrunc(type, acc[i]);
       }
     }
     return true;

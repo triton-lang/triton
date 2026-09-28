@@ -222,6 +222,10 @@ tt.func public @reduce_minimum_bf16(%arg0: tensor<128x8xbf16, #blocked_packed_re
   tt.return
 }
 
+// TERNARY-LABEL: @packed_shuffle_maxnum_f16
+// TERNARY-COUNT-2: nvvm.redux.sync fmax
+// TERNARY-NOT: nvvm.shfl
+// TERNARY: llvm.return
 // PACKEDSHFL-LABEL: @packed_shuffle_maxnum_f16
 // PACKEDSHFL: llvm.bitcast %{{.*}} : vector<2xf16> to i32
 // PACKEDSHFL: nvvm.shfl.sync bfly
@@ -304,6 +308,10 @@ tt.func private @packed_shuffle_mul_i16(%arg0: tensor<8x32xi16, #packed_shuffle>
   tt.return %0 : tensor<8xi16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
 }
 
+// TERNARY-LABEL: @packed_shuffle_minimum_bf16
+// TERNARY-COUNT-2: nvvm.redux.sync fmin
+// TERNARY-NOT: nvvm.shfl
+// TERNARY: llvm.return
 // PACKEDSHFL-LABEL: @packed_shuffle_minimum_bf16
 // PACKEDSHFL: llvm.bitcast %{{.*}} : vector<2xbf16> to i32
 // PACKEDSHFL: nvvm.shfl.sync bfly

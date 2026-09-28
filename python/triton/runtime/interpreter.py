@@ -1135,10 +1135,16 @@ class ReduceOps(ReduceScanOpInterface):
     def min_max(self, input, val_reduce_op, idx_reduce_op=None):
         # If input is a tuple, it must be (val, index), and we only take val
         input = input[0] if isinstance(input, tuple) else input
+        dtype = input.dtype
+        # BF16 is stored as uint16, and NumPy's FP16 reduction has different
+        # signed-zero behavior. Preserve the FP32 computation used previously.
+        if dtype in (tl.float16, tl.bfloat16):
+            input = interpreter_semantic.cast(input, tl.float32)
         val = None
         idx = None
         if val_reduce_op:
             val = self.to_tensor(val_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
+            val = interpreter_semantic.cast(val, dtype)
         if idx_reduce_op:
             idx = self.to_tensor(idx_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), tl.int32)
         if val is not None and idx is not None:

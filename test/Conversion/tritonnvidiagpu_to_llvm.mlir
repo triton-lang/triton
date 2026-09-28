@@ -1214,3 +1214,109 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %r : f32
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CANONICALIZE-SM100-LABEL: @redux_f16_roundtrip(
+  // CANONICALIZE-SM100: %[[R:.*]] = nvvm.redux.sync fmin
+  // CANONICALIZE-SM100-NOT: llvm.fptrunc
+  // CANONICALIZE-SM100-NOT: llvm.fpext
+  // CANONICALIZE-SM100: llvm.return %[[R]] : f32
+  llvm.func @redux_f16_roundtrip(%x: f16, %mask: i32) -> f32 {
+    %ext = llvm.fpext %x : f16 to f32
+    %r = nvvm.redux.sync fmin %ext, %mask : f32 -> f32
+    %trunc = llvm.fptrunc %r : f32 to f16
+    %result = llvm.fpext %trunc : f16 to f32
+    llvm.return %result : f32
+  }
+
+  // CANONICALIZE-SM100-LABEL: @redux_bf16_roundtrip(
+  // CANONICALIZE-SM100: %[[R:.*]] = nvvm.redux.sync fmax {{.*}} {nan = true}
+  // CANONICALIZE-SM100-NOT: llvm.fptrunc
+  // CANONICALIZE-SM100-NOT: llvm.fpext
+  // CANONICALIZE-SM100: llvm.return %[[R]] : f32
+  llvm.func @redux_bf16_roundtrip(%x: bf16, %mask: i32) -> f32 {
+    %ext = llvm.fpext %x : bf16 to f32
+    %r = nvvm.redux.sync fmax %ext, %mask {nan = true} : f32 -> f32
+    %trunc = llvm.fptrunc %r : f32 to bf16
+    %result = llvm.fpext %trunc : bf16 to f32
+    llvm.return %result : f32
+  }
+
+  // An arbitrary FP32 input may need rounding after redux.
+  // CANONICALIZE-SM100-LABEL: @redux_f32_roundtrip(
+  // CANONICALIZE-SM100: llvm.fptrunc
+  // CANONICALIZE-SM100: llvm.fpext
+  llvm.func @redux_f32_roundtrip(%x: f32, %mask: i32) -> f32 {
+    %r = nvvm.redux.sync fmin %x, %mask : f32 -> f32
+    %trunc = llvm.fptrunc %r : f32 to f16
+    %result = llvm.fpext %trunc : f16 to f32
+    llvm.return %result : f32
+  }
+
+  // FP16 values need not be representable in BF16.
+  // CANONICALIZE-SM100-LABEL: @redux_different_types(
+  // CANONICALIZE-SM100: nvvm.redux.sync fmax
+  // CANONICALIZE-SM100: llvm.fptrunc
+  // CANONICALIZE-SM100: llvm.fpext
+  llvm.func @redux_different_types(%x: f16, %mask: i32) -> f32 {
+    %ext = llvm.fpext %x : f16 to f32
+    %r = nvvm.redux.sync fmax %ext, %mask : f32 -> f32
+    %trunc = llvm.fptrunc %r : f32 to bf16
+    %result = llvm.fpext %trunc : bf16 to f32
+    llvm.return %result : f32
+  }
+
+  // CANONICALIZE-SM100-LABEL: @redux_partitioned_bf16(
+  // CANONICALIZE-SM100-COUNT-2: nvvm.redux.sync fmin
+  // CANONICALIZE-SM100: %[[R:.*]] = llvm.select
+  // CANONICALIZE-SM100-NOT: llvm.fptrunc
+  // CANONICALIZE-SM100-NOT: llvm.fpext
+  // CANONICALIZE-SM100: llvm.return %[[R]] : f32
+  llvm.func @redux_partitioned_bf16(%x: bf16, %group: i1, %mask: i32) -> f32 {
+    %identity = llvm.mlir.constant(0x7FC00000 : f32) : f32
+    %ext = llvm.fpext %x : bf16 to f32
+    %a = llvm.select %group, %ext, %identity : i1, f32
+    %b = llvm.select %group, %identity, %ext : i1, f32
+    %ra = nvvm.redux.sync fmin %a, %mask : f32 -> f32
+    %rb = nvvm.redux.sync fmin %b, %mask : f32 -> f32
+    %r = llvm.select %group, %ra, %rb : i1, f32
+    %trunc = llvm.fptrunc %r : f32 to bf16
+    %result = llvm.fpext %trunc : bf16 to f32
+    llvm.return %result : f32
+  }
+
+  // CANONICALIZE-SM100-LABEL: @redux_partitioned_f16(
+  // CANONICALIZE-SM100-COUNT-2: nvvm.redux.sync fmax
+  // CANONICALIZE-SM100: %[[R:.*]] = llvm.select
+  // CANONICALIZE-SM100-NOT: llvm.fptrunc
+  // CANONICALIZE-SM100-NOT: llvm.fpext
+  // CANONICALIZE-SM100: llvm.return %[[R]] : f32
+  llvm.func @redux_partitioned_f16(%x: f16, %group: i1, %mask: i32) -> f32 {
+    %identity = llvm.mlir.constant(0xFF800000 : f32) : f32
+    %ext = llvm.fpext %x : f16 to f32
+    %a = llvm.select %group, %ext, %identity : i1, f32
+    %b = llvm.select %group, %identity, %ext : i1, f32
+    %ra = nvvm.redux.sync fmax %a, %mask {nan = true} : f32 -> f32
+    %rb = nvvm.redux.sync fmax %b, %mask {nan = true} : f32 -> f32
+    %r = llvm.select %group, %ra, %rb : i1, f32
+    %trunc = llvm.fptrunc %r : f32 to f16
+    %result = llvm.fpext %trunc : f16 to f32
+    llvm.return %result : f32
+  }
+
+  // One unproven select arm must preserve rounding.
+  // CANONICALIZE-SM100-LABEL: @redux_partitioned_unproven(
+  // CANONICALIZE-SM100: nvvm.redux.sync fmin
+  // CANONICALIZE-SM100: llvm.fptrunc
+  // CANONICALIZE-SM100: llvm.fpext
+  llvm.func @redux_partitioned_unproven(%x: f16, %y: f32, %group: i1, %mask: i32) -> f32 {
+    %ext = llvm.fpext %x : f16 to f32
+    %a = llvm.select %group, %ext, %y : i1, f32
+    %r = nvvm.redux.sync fmin %a, %mask : f32 -> f32
+    %trunc = llvm.fptrunc %r : f32 to f16
+    %result = llvm.fpext %trunc : f16 to f32
+    llvm.return %result : f32
+  }
+}

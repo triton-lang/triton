@@ -16,6 +16,56 @@ namespace mlir::triton::gpu {
 } // namespace mlir::triton::gpu
 
 namespace {
+
+/// If we have a pattern of fpext -> redux.{min,max} -> fptrunc -> fpext, try to
+/// elide the truncate and re-extend, since we know the value is perfectly
+/// representable in the narrower type.
+class FoldReduxExtensionPattern : public OpRewritePattern<LLVM::FPExtOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(LLVM::FPExtOp op,
+                                PatternRewriter &rewriter) const override {
+    auto trunc = op.getOperand().getDefiningOp<LLVM::FPTruncOp>();
+    if (!trunc)
+      return failure();
+    Type type = trunc.getType();
+    if (!type.isF16() && !type.isBF16())
+      return failure();
+    Value value = trunc.getOperand();
+    if (value.getType() != op.getType())
+      return failure();
+
+    SmallVector<Value> worklist{value};
+    DenseSet<Value> visited;
+    while (!worklist.empty()) {
+      Value current = worklist.pop_back_val();
+      if (!visited.insert(current).second)
+        continue;
+      if (auto ext = current.getDefiningOp<LLVM::FPExtOp>()) {
+        if (ext.getOperand().getType() != type)
+          return failure();
+      } else if (auto select = current.getDefiningOp<LLVM::SelectOp>()) {
+        worklist.append({select.getTrueValue(), select.getFalseValue()});
+      } else if (auto redux = current.getDefiningOp<NVVM::ReduxOp>()) {
+        if (redux.getKind() != NVVM::ReductionKind::FMIN &&
+            redux.getKind() != NVVM::ReductionKind::FMAX)
+          return failure();
+        worklist.push_back(redux.getVal());
+      } else {
+        FloatAttr constant;
+        // NaN or infinity constants are fine.
+        if (!matchPattern(current, m_Constant(&constant)) ||
+            (!constant.getValue().isNaN() && !constant.getValue().isInfinity()))
+          return failure();
+      }
+    }
+
+    // Min/max of extended values is still representable in the source type.
+    rewriter.replaceOp(op, value);
+    return success();
+  }
+};
+
 class FoldAbsIntoReduxPattern : public OpRewritePattern<NVVM::ReduxOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -83,9 +133,9 @@ struct CanonicalizeLLVMIR
   void runOnOperation() override {
     LLVM::LLVMFuncOp func = getOperation();
     RewritePatternSet patterns(&getContext());
-    patterns.add<SelectConstantConditionPattern,
-                 ElideFullClusterRankMaskPattern, FoldAbsIntoReduxPattern>(
-        &getContext());
+    patterns
+        .add<SelectConstantConditionPattern, ElideFullClusterRankMaskPattern,
+             FoldAbsIntoReduxPattern, FoldReduxExtensionPattern>(&getContext());
 
     getContext()
         .getLoadedDialect<LLVM::LLVMDialect>()
