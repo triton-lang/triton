@@ -7310,6 +7310,11 @@ def test_propagate_nan(dtype, propagate_nan, func, device):
 @pytest.mark.parametrize("propagate_nan", ['NONE', 'ALL'])
 def test_clamp(dtype, scalar_bounds, propagate_nan, device):
     check_type_supported(dtype, device)
+    if is_hip_gfx1250() and dtype == 'bfloat16' and scalar_bounds and propagate_nan == 'NONE':
+        # LLVM lowers scalar BF16 min/max with inline constants to packed ops
+        # without the op_sel bits needed to select the constants' upper 16 bits.
+        # Remove this skip once LLVM's scalar BF16 constant selection is fixed.
+        pytest.skip("gfx1250 scalar BF16 min/max uses incorrect inline-constant selectors")
 
     @triton.jit
     def kernel(x_ptr, min_ptr, max_ptr, out_ptr, N, BLOCK_SIZE: tl.constexpr, SCALAR_BOUNDS: tl.constexpr,
