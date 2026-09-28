@@ -131,57 +131,6 @@ def is_hip_gfx1250():
     return target is not None and target.backend == 'hip' and 'gfx1250' in target.arch
 
 
-# WMMA instructions Triton never emits on gfx1250-strict
-GFX1250_STRICT_DISABLED_WMMA = re.compile(r"v_wmma_(f32|f16)_16x16x128_(fp8|bf8)_(fp8|bf8)|"
-                                          r"v_wmma_f32_16x16x128_f8f6f4|"
-                                          r"v_wmma_(scale_|scale16_)?f32_32x16x128_f4")
-
-
-# included for CI testing
-def check_wmma_instr(amdgcn, arch, pattern):
-    assert re.search(pattern, amdgcn), f"Can't find {pattern} in amdgcn"
-    if arch == "gfx1250-strict":
-        disabled = sorted({m.group(0) for m in GFX1250_STRICT_DISABLED_WMMA.finditer(amdgcn)})
-        assert not disabled, f"Found WMMA instructions disabled on {arch}: {disabled}"
-
-
-def check_scaled_upcast_instr(amdgcn, arch, pattern, count=None):
-    if arch == "gfx1250-strict":
-        assert "v_cvt_scale_pk8" not in amdgcn, f"Found v_cvt_scale_pk8 upcasts on {arch}"
-    elif count is None:
-        assert pattern in amdgcn, f"Can't find {pattern} in amdgcn"
-    else:
-        assert amdgcn.count(pattern) == count, f"Expected {count} {pattern} in amdgcn"
-
-
-def is_wmma_instr_disabled(pattern, arch=None):
-    if arch is None:
-        target = get_current_target()
-        arch = target.arch if target is not None else None
-    return arch == "gfx1250-strict" and GFX1250_STRICT_DISABLED_WMMA.fullmatch(pattern) is not None
-
-
-def check_wmma_instr_rejected(fn, arch=None):
-    if arch is None:
-        arch = get_current_target().arch
-    sys.stderr.flush()
-    saved_stderr = os.dup(2)
-    with tempfile.TemporaryFile(mode="w+") as err:
-        os.dup2(err.fileno(), 2)
-        try:
-            with pytest.raises(RuntimeError, match="PassManager::run failed"):
-                fn()
-        finally:
-            os.dup2(saved_stderr, 2)
-            os.close(saved_stderr)
-        err.seek(0)
-        diagnostics = err.read()
-    rejected = re.findall(rf"intrinsic llvm\.amdgcn\.(wmma\.\S+) is not supported on {re.escape(arch)}\b", diagnostics)
-    assert rejected, f"Expected a WMMA intrinsic rejection on {arch}, got:\n{diagnostics[-2000:]}"
-    for name in rejected:
-        assert is_wmma_instr_disabled("v_" + name.replace(".", "_"), arch), f"Unexpectedly rejected {name} on {arch}"
-
-
 def is_hip_cdna3_or_newer():
     return is_hip_cdna3() or is_hip_cdna4()
 
