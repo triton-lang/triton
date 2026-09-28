@@ -130,10 +130,12 @@ public:
           return true;
 
         if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-          unsigned result = cast<OpResult>(value).getResultNumber();
-          // The loop result is the final value of its corresponding iter arg.
-          worklist.insert(forOp.getInitArgs()[result]);
-          worklist.insert(forOp.getYieldedValues()[result]);
+          // The partitioner's forward slice treats all loop results as
+          // partitioned when any init arg is partitioned.
+          for (Value initArg : forOp.getInitArgs())
+            worklist.insert(initArg);
+          for (Value yieldedValue : forOp.getYieldedValues())
+            worklist.insert(yieldedValue);
           continue;
         }
         for (Value operand : op->getOperands())
