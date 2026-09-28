@@ -53,7 +53,6 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
 #define TRITON_WMMA_v(v, m, n, aET, bET, opW, dET, symbol, k, kBase)           \
   TRITON_WMMA_v_feature(v, m, n, aET, bET, opW, dET, symbol, k, kBase, "")
 
-// Same as TRITON_WMMA_v, but tags the intrinsic with a target feature.
 #define TRITON_WMMA_v_feature(v, m, n, aET, bET, opW, dET, symbol, k, kBase,   \
                               feature)                                         \
   {                                                                            \
@@ -71,7 +70,6 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
   TRITON_WMMA_v_2case_feature(v, m, n, aET, bET, opW, dET, symbol1, k1,        \
                               kBase1, "", symbol2, k2, kBase2, "")
 
-// Same as TRITON_WMMA_v_2case, but tags each intrinsic with a target feature.
 #define TRITON_WMMA_v_2case_feature(v, m, n, aET, bET, opW, dET, symbol1, k1,  \
                                     kBase1, feature1, symbol2, k2, kBase2,     \
                                     feature2)                                  \
@@ -301,7 +299,6 @@ WmmaScaleDatabase::WmmaScaleDatabase(MLIRContext *context) {
   TRITON_WMMA_SCALE_v_feature(v, m, n, dET, isScale16, intrinsicFamily,        \
                               symbol, kDim, "")
 
-// Same as TRITON_WMMA_SCALE_v, but tags the intrinsic with a target feature.
 #define TRITON_WMMA_SCALE_v_feature(v, m, n, dET, isScale16, intrinsicFamily,  \
                                     symbol, kDim, feature)                     \
   {                                                                            \
