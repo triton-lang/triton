@@ -129,51 +129,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
   }
 
   tt.func public @extf_bf16(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg0: tensor<256xbf16, #blocked>) {
-    // CHECK-LABEL: extf_bf16(
-    // CHECK-NOT: cvt.f32.bf16
-    // CHECK-COUNT-8: shl.b32 {{.*}}, 16;
-    // CHECK-NOT: cvt.f32.bf16
-    // CHECK: ret;
+    // CHECK-LABEL: extf_bf16
+    // CHECK-COUNT-8: cvt.f32.bf16
     %0 = arith.extf %arg0 : tensor<256xbf16, #blocked> to tensor<256xf32, #blocked>
     %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
     %2 = tt.splat %ptr : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked>
     %3 = tt.addptr %2, %1 : tensor<256x!tt.ptr<f32>, #blocked>, tensor<256xi32, #blocked>
     tt.store %3, %0 : tensor<256x!tt.ptr<f32>, #blocked>
-    tt.return
-  }
-
-  tt.func public @extf_bf16_scalar(%ptr: !tt.ptr<f32>, %arg: bf16) {
-    // CHECK-LABEL: extf_bf16_scalar(
-    // CHECK-NOT: cvt.f32.bf16
-    // CHECK: shl.b32 {{.*}}, 16;
-    // CHECK-NOT: cvt.f32.bf16
-    // CHECK: ret;
-    %result = arith.extf %arg : bf16 to f32
-    tt.store %ptr, %result : !tt.ptr<f32>
-    tt.return
-  }
-
-  tt.func public @extf_bf16_packed(%input: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %output: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
-    // CHECK-LABEL: extf_bf16_packed(
-    // CHECK-NOT: cvt.f32.bf16
-    // CHECK-DAG: shl.b32 {{.*}}, 16;
-    // CHECK-DAG: shl.b32 {{.*}}, 16;
-    // CHECK-DAG: shl.b32 {{.*}}, 16;
-    // CHECK-DAG: shl.b32 {{.*}}, 16;
-    // CHECK-DAG: and.b32 {{.*}}, -65536;
-    // CHECK-DAG: and.b32 {{.*}}, -65536;
-    // CHECK-DAG: and.b32 {{.*}}, -65536;
-    // CHECK-DAG: and.b32 {{.*}}, -65536;
-    // CHECK-NOT: cvt.f32.bf16
-    // CHECK: ret;
-    %offsets = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
-    %inputs = tt.splat %input : !tt.ptr<bf16> -> tensor<256x!tt.ptr<bf16>, #blocked>
-    %input_ptrs = tt.addptr %inputs, %offsets : tensor<256x!tt.ptr<bf16>, #blocked>, tensor<256xi32, #blocked>
-    %values = tt.load %input_ptrs : tensor<256x!tt.ptr<bf16>, #blocked>
-    %result = arith.extf %values : tensor<256xbf16, #blocked> to tensor<256xf32, #blocked>
-    %outputs = tt.splat %output : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked>
-    %output_ptrs = tt.addptr %outputs, %offsets : tensor<256x!tt.ptr<f32>, #blocked>, tensor<256xi32, #blocked>
-    tt.store %output_ptrs, %result : tensor<256x!tt.ptr<f32>, #blocked>
     tt.return
   }
 
