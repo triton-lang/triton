@@ -51,8 +51,7 @@ static Attribute pickDescriptorLoadStoreLayout(
         threadsPerWarp, cgaLayout);
   };
   auto defaultLayout = makeLayout(vectorSize);
-  if (!reductionAxis || *reductionAxis == type.getRank() - 1 ||
-      shapePerCTA.back() < threadsPerWarp)
+  if (!reductionAxis || *reductionAxis == type.getRank() - 1)
     return defaultLayout;
 
   // Smaller vectors can distribute more threads over the contiguous dimension

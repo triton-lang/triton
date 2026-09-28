@@ -6,11 +6,26 @@
 #last_slice = #ttg.slice<{dim = 2, parent = #src}>
 
 // CHECK: [[$REDUCE_LOCAL:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
+// CHECK: [[$REDUCE_SUBWARP16:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
 // CHECK: [[$REDUCE_VECTOR2:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 4], order = [2, 1, 0]}>
 // CHECK: [[$REDUCE_NARROW32:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
 // CHECK: [[$REDUCE_NARROW64:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 2, 2], order = [2, 1, 0]}>
 // CHECK: [[$DEFAULT_DESCRIPTOR:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 8], threadsPerWarp = [1, 2, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // A width below one warp can still reduce the reduction fanout.
+  // CHECK-LABEL: @descriptor_reduce_subwarp16
+  // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x16xbf16, [[$REDUCE_SUBWARP16]]>
+  tt.func @descriptor_reduce_subwarp16(%desc: !tt.tensordesc<1x32x16xbf16>, %i: i32) -> tensor<1x16xf32, #slice> {
+    %load = tt.descriptor_load %desc[%i, %i, %i] : !tt.tensordesc<1x32x16xbf16> -> tensor<1x32x16xbf16, #src>
+    %wide = arith.extf %load : tensor<1x32x16xbf16, #src> to tensor<1x32x16xf32, #src>
+    %reduced = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %max = arith.maximumf %a, %b : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<1x32x16xf32, #src>) -> tensor<1x16xf32, #slice>
+    tt.return %reduced : tensor<1x16xf32, #slice>
+  }
+
   // CHECK-LABEL: @descriptor_reduce_middle_128
   // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x128xbf16, [[$REDUCE_LOCAL]]>
   tt.func @descriptor_reduce_middle_128(%desc: !tt.tensordesc<1x32x128xbf16>, %i: i32) -> tensor<1x128xf32, #slice> {
@@ -159,9 +174,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #src = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 8], order = [2, 1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #src}>
 
+// CHECK: [[$WARP8_SUBWARP_NO_GAIN:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [1, 16, 2], warpsPerCTA = [4, 2, 1], order = [2, 1, 0]}>
 // CHECK: [[$WARP8_NARROW64:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 4, 2], order = [2, 1, 0]}>
 // CHECK: [[$WARP8_VECTOR2:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 8], order = [2, 1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Keep vectorization when a sub-warp-width candidate has equal fanout.
+  // CHECK-LABEL: @descriptor_reduce_8warps_subwarp_no_gain
+  // CHECK: tt.descriptor_load {{.*}} -> tensor<4x32x8xbf16, [[$WARP8_SUBWARP_NO_GAIN]]>
+  tt.func @descriptor_reduce_8warps_subwarp_no_gain(%desc: !tt.tensordesc<4x32x8xbf16>, %i: i32) -> tensor<4x8xf32, #slice> {
+    %load = tt.descriptor_load %desc[%i, %i, %i] : !tt.tensordesc<4x32x8xbf16> -> tensor<4x32x8xbf16, #src>
+    %wide = arith.extf %load : tensor<4x32x8xbf16, #src> to tensor<4x32x8xf32, #src>
+    %reduced = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %max = arith.maximumf %a, %b : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<4x32x8xf32, #src>) -> tensor<4x8xf32, #slice>
+    tt.return %reduced : tensor<4x8xf32, #slice>
+  }
+
   // CHECK-LABEL: @descriptor_reduce_8warps_narrow64
   // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x64xbf16, [[$WARP8_NARROW64]]>
   tt.func @descriptor_reduce_8warps_narrow64(%desc: !tt.tensordesc<1x32x64xbf16>, %i: i32) -> tensor<1x64xf32, #slice> {
