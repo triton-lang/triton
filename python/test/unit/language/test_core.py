@@ -775,8 +775,35 @@ def test_invalid_slice(device):
     def _kernel(dst):
         dst[10:]
 
+    @triton.jit
+    def _scalar_slice_newaxis():
+        scalar = tl.program_id(axis=0)
+        scalar[:, None]
+
+    @triton.jit
+    def _scalar_newaxis_slice():
+        scalar = tl.program_id(axis=0)
+        scalar[None, :]
+
+    @triton.jit
+    def _vector_too_many_slices():
+        vector = tl.arange(0, 4)
+        vector[:, :]
+
     with pytest.raises(triton.TritonError, match='unsupported tensor index'):
         _kernel[(1, )](dst=dst)
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        _scalar_slice_newaxis[(1, )]()
+    assert "too many indices for tensor of rank 0" in str(exc_info.value.__cause__)
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        _scalar_newaxis_slice[(1, )]()
+    assert "too many indices for tensor of rank 0" in str(exc_info.value.__cause__)
+
+    with pytest.raises(triton.TritonError) as exc_info:
+        _vector_too_many_slices[(1, )]()
+    assert "too many indices for tensor of rank 1" in str(exc_info.value.__cause__)
 
 
 # ----------------
@@ -3375,9 +3402,9 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
         z_ptr = Z
         if KEEP_DIMS and AXIS is None:
             if IS_3D:
-                z_ptr = z_ptr[None, None, None, :]
+                z_ptr = z_ptr[None, None, None]
             else:
-                z_ptr = z_ptr[None, None, :]
+                z_ptr = z_ptr[None, None]
         if IS_3D:
             if AXIS == 0:
                 z_ptr = Z + range_n[:, None] * BLOCK_K + range_k[None, :]

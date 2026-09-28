@@ -1975,6 +1975,7 @@ _TCGEN05_MMA_SCALED_CASES = [
                      id=f"{type_a}-{type_b}-mxfp-minimum") for type_a, type_b in _TCGEN05_SCALED_DTYPES
     ],
     pytest.param("e2m1", "e2m1", 128, 128, 64, 16, "e4m3", id="e2m1-e2m1-nvfp4-minimum"),
+    pytest.param("e2m1", "e2m1", 128, 128, 256, 16, "e4m3", id="e2m1-e2m1-nvfp4-wide-scales"),
 ]
 
 
