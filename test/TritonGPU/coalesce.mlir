@@ -91,6 +91,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#src = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 8], order = [2, 1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #src}>
+
+// CHECK: [[$WARP8_NARROW64:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 4, 2], order = [2, 1, 0]}>
+// CHECK: [[$WARP8_VECTOR2:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 1, 8], order = [2, 1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @descriptor_reduce_8warps_narrow64
+  // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x64xbf16, [[$WARP8_NARROW64]]>
+  tt.func @descriptor_reduce_8warps_narrow64(%desc: !tt.tensordesc<1x32x64xbf16>, %i: i32) -> tensor<1x64xf32, #slice> {
+    %load = tt.descriptor_load %desc[%i, %i, %i] : !tt.tensordesc<1x32x64xbf16> -> tensor<1x32x64xbf16, #src>
+    %wide = arith.extf %load : tensor<1x32x64xbf16, #src> to tensor<1x32x64xf32, #src>
+    %reduced = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %max = arith.maximumf %a, %b : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<1x32x64xf32, #src>) -> tensor<1x64xf32, #slice>
+    tt.return %reduced : tensor<1x64xf32, #slice>
+  }
+
+  // CHECK-LABEL: @descriptor_reduce_8warps_vector2
+  // CHECK: tt.descriptor_load {{.*}} -> tensor<1x32x512xbf16, [[$WARP8_VECTOR2]]>
+  tt.func @descriptor_reduce_8warps_vector2(%desc: !tt.tensordesc<1x32x512xbf16>, %i: i32) -> tensor<1x512xf32, #slice> {
+    %load = tt.descriptor_load %desc[%i, %i, %i] : !tt.tensordesc<1x32x512xbf16> -> tensor<1x32x512xbf16, #src>
+    %wide = arith.extf %load : tensor<1x32x512xbf16, #src> to tensor<1x32x512xf32, #src>
+    %reduced = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %max = arith.maximumf %a, %b : f32
+      tt.reduce.return %max : f32
+    }) : (tensor<1x32x512xf32, #src>) -> tensor<1x512xf32, #slice>
+    tt.return %reduced : tensor<1x512xf32, #slice>
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
