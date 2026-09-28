@@ -182,6 +182,8 @@ Scan Ops
     :nosignatures:
 
     associative_scan
+    cumprod
+    cumsum
     histogram
 
 

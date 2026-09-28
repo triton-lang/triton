@@ -203,6 +203,49 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
 
 
+@pytest.mark.parametrize("op", ["cumsum", "cumprod"])
+@pytest.mark.parametrize("axis", [0, 1, -1])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("dtype, out_dtype", [
+    (torch.int8, None),
+    (torch.uint8, None),
+    (torch.int32, None),
+    (torch.float16, None),
+    (torch.float32, None),
+    (torch.int32, torch.int64),
+    (torch.float16, torch.float32),
+])
+def test_standard_scan(op, axis, reverse, dtype, out_dtype, device):
+
+    @gluon.jit
+    def kernel(X, Y, OP: ttgl.constexpr, AXIS: ttgl.constexpr, REVERSE: ttgl.constexpr, DTYPE: ttgl.constexpr,
+               LAYOUT: ttgl.constexpr):
+        m = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, LAYOUT))[:, None]
+        n = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, LAYOUT))[None, :]
+        x = ttgl.load(X + m * 64 + n)
+        y = OP(x, axis=AXIS, reverse=REVERSE, dtype=DTYPE)
+        ttgl.static_assert(y.dtype == Y.dtype.element_ty)
+        ttgl.static_assert(y.type.layout == x.type.layout)
+        ttgl.store(Y + m * 64 + n, y)
+
+    torch.manual_seed(0)
+    # Small integral values make both scan references exact, including fp16.
+    x = torch.randint(0 if dtype == torch.uint8 else -1, 2, (32, 64), device=device).to(dtype)
+    result_dtype = out_dtype or {torch.int8: torch.int32, torch.uint8: torch.uint32}.get(dtype, dtype)
+    y = torch.empty(x.shape, dtype=result_dtype, device=device)
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0])
+    kernel[(1, )](x, y, getattr(ttgl, op), axis, reverse,
+                  getattr(ttgl,
+                          str(out_dtype).removeprefix("torch.")) if out_dtype else None, layout)
+    ref = x.flip([axis]) if reverse else x
+    # PyTorch does not implement scans on uint32.
+    ref = getattr(torch, op)(ref.to(torch.int64) if dtype == torch.uint8 else ref, dim=axis,
+                             dtype=torch.int64 if result_dtype == torch.uint32 else result_dtype)
+    if reverse:
+        ref = ref.flip([axis])
+    torch.testing.assert_close(y.to(ref.dtype), ref, atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
 def test_convert_1d_to_2d_slice_cga(num_ctas, device):
