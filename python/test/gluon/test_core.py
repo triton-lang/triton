@@ -6537,8 +6537,8 @@ def test_tmem288k_simple(Ncol1: int, Ncol2: int):
 
 
 @gluon.jit
-def tma_cache_policy_copy_kernel(in_desc, out_desc, Flag, POLICY: ttgl.constexpr, EVICTION: ttgl.constexpr,
-                                 LAYOUT: ttgl.constexpr, KIND: ttgl.constexpr):
+def tma_cache_policy_copy_kernel(in_desc, out_desc, Flag, POLICY: ttgl.constexpr, LAYOUT: ttgl.constexpr,
+                                 KIND: ttgl.constexpr):
     if KIND == "gather" or KIND == "scatter":
         shape: ttgl.constexpr = [32, in_desc.block_shape[1]]
         offsets_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([4, 1], [1, 32], [4, 1], [0, 1]))
@@ -6552,20 +6552,19 @@ def tma_cache_policy_copy_kernel(in_desc, out_desc, Flag, POLICY: ttgl.constexpr
     pred = ttgl.load(Flag) != 0
     mbarrier.expect(bar, smem.nbytes_per_cta, pred=pred)
     if KIND == "gather":
-        blackwell_tma.async_gather(in_desc, offsets, 0, bar, smem, pred=pred, cache_policy=POLICY,
-                                   eviction_policy=EVICTION)
+        blackwell_tma.async_gather(in_desc, offsets, 0, bar, smem, pred=pred, cache_policy=POLICY)
     elif KIND == "scatter":
         blackwell_tma.async_gather(in_desc, offsets, 0, bar, smem, pred=pred)
     elif KIND == "store":
         tma.async_load(in_desc, [0] * len(shape), bar, smem, pred=pred)
     else:
-        tma.async_load(in_desc, [0] * len(shape), bar, smem, pred=pred, cache_policy=POLICY, eviction_policy=EVICTION)
+        tma.async_load(in_desc, [0] * len(shape), bar, smem, pred=pred, cache_policy=POLICY)
     mbarrier.wait(bar, phase=0, pred=pred, deps=[smem])
     mbarrier.invalidate(bar)
     if KIND == "store":
-        tma.async_store(out_desc, [0] * len(shape), smem, cache_policy=POLICY, eviction_policy=EVICTION)
+        tma.async_store(out_desc, [0] * len(shape), smem, cache_policy=POLICY)
     elif KIND == "scatter":
-        blackwell_tma.async_scatter(out_desc, offsets, 0, smem, cache_policy=POLICY, eviction_policy=EVICTION)
+        blackwell_tma.async_scatter(out_desc, offsets, 0, smem, cache_policy=POLICY)
     else:
         tma.async_store(out_desc, [0] * len(shape), smem)
     tma.store_wait(0)
@@ -6576,18 +6575,18 @@ def tma_cache_policy_copy_kernel(in_desc, out_desc, Flag, POLICY: ttgl.constexpr
 @pytest.mark.parametrize("kind,rank", [("load", 1), ("load", 2), ("load", 5), ("store", 1), ("store", 2), ("store", 5),
                                        ("gather", 2), ("scatter", 2)])
 @pytest.mark.parametrize("pred", [False, True])
-@pytest.mark.parametrize("policy,eviction", [
-    (None, None),
-    (None, ""),
-    (None, "evict_first"),
-    (None, "evict_last"),
-    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_first", 1.0)), None),
-    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 1.0)), None),
-    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_normal", 1.0)), None),
-    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first")), None),
-    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_unchanged", 0.25, "evict_first")), None),
+@pytest.mark.parametrize("policy", [
+    None,
+    ttgl.CachePolicy(),
+    ttgl.CachePolicy(eviction_policy="evict_first"),
+    ttgl.CachePolicy(eviction_policy="evict_last"),
+    hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_first", 1.0)),
+    hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 1.0)),
+    hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_normal", 1.0)),
+    hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first")),
+    hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_unchanged", 0.25, "evict_first")),
 ])
-def test_tma_cache_policy_copy(kind, rank, pred, policy, eviction):
+def test_tma_cache_policy_copy(kind, rank, pred, policy):
     if kind in ("gather", "scatter") and not is_blackwell():
         pytest.skip("gather/scatter require Blackwell")
     shape = [32, 256] if kind in ("gather", "scatter") else [2] * (rank - 1) + [256]
@@ -6601,14 +6600,14 @@ def test_tma_cache_policy_copy(kind, rank, pred, policy, eviction):
     out_shape = [1, shape[1]] if kind == "scatter" else shape
     in_desc = TensorDescriptor.from_tensor(inp, in_shape, shared)
     out_desc = TensorDescriptor.from_tensor(out, out_shape, shared)
-    compiled = tma_cache_policy_copy_kernel[(1, )](in_desc, out_desc, flag, policy, eviction, layout, kind)
+    compiled = tma_cache_policy_copy_kernel[(1, )](in_desc, out_desc, flag, policy, layout, kind)
     expected = inp.flip(0) if kind == "gather" else inp
     torch.testing.assert_close(out, expected if pred else torch.full_like(inp, -1), atol=0, rtol=0)
-    assert (".L2::cache_hint" in compiled.asm["ptx"]) == (policy is not None
-                                                          or eviction in ("evict_first", "evict_last"))
-    primary = policy.l2.primary if policy is not None else eviction
-    if primary in ("evict_first", "evict_last", "evict_normal", "evict_unchanged"):
+    detailed = isinstance(policy, hopper.CachePolicy)
+    primary = policy.l2.primary if detailed else policy.eviction_policy if policy is not None else None
+    assert (".L2::cache_hint" in compiled.asm["ptx"]) == (detailed or primary in ("evict_first", "evict_last"))
+    if detailed or primary in ("evict_first", "evict_last"):
         expected = f"createpolicy.fractional.L2::{primary}"
-        if policy is not None and policy.l2.secondary == "evict_first":
+        if detailed and policy.l2.secondary == "evict_first":
             expected += ".L2::evict_first"
         assert expected + ".b64" in compiled.asm["ptx"]
