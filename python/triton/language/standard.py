@@ -171,11 +171,19 @@ def zeros_like(input):
 
 @jit
 def _argmax_combine(value1, index1, value2, index2, tie_break_left):
+    v1_nan = value1 != value1
+    v2_nan = value2 != value2
     if tie_break_left:
         tie = value1 == value2 and index1 < index2
+        nan_tie = v1_nan and v2_nan and index1 < index2
     else:
         tie = False
-    gt = value1 > value2 or tie
+        nan_tie = False
+    # NaN-ignore semantics, consistent with core.maximum (maxnum) and the
+    # interpreter's np.nanargmax: a NaN operand never wins over a finite
+    # value, so the returned index always corresponds to the value returned
+    # by the reduction (leftmost among NaNs under tie_break_left).
+    gt = core.where(v1_nan, v2_nan and nan_tie, value1 > value2 or tie or v2_nan)
     v_ret = core.where(gt, value1, value2)
     i_ret = core.where(gt, index1, index2)
     return v_ret, i_ret
@@ -229,11 +237,19 @@ def argmax(input, axis, tie_break_left=True, keep_dims=False):
 
 @jit
 def _argmin_combine(value1, index1, value2, index2, tie_break_left):
+    v1_nan = value1 != value1
+    v2_nan = value2 != value2
     if tie_break_left:
         tie = value1 == value2 and index1 < index2
+        nan_tie = v1_nan and v2_nan and index1 < index2
     else:
         tie = False
-    lt = value1 < value2 or tie
+        nan_tie = False
+    # NaN-ignore semantics, consistent with core.minimum (minnum) and the
+    # interpreter's np.nanargmin: a NaN operand never wins over a finite
+    # value, so the returned index always corresponds to the value returned
+    # by the reduction (leftmost among NaNs under tie_break_left).
+    lt = core.where(v1_nan, v2_nan and nan_tie, value1 < value2 or tie or v2_nan)
     value_ret = core.where(lt, value1, value2)
     index_ret = core.where(lt, index1, index2)
     return value_ret, index_ret
