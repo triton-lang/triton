@@ -176,6 +176,8 @@ bool hasCrossCTAScratch(Operation *op) {
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (auto scan = dyn_cast<ScanOp>(op))
+    return ScanLoweringHelper(scan).getAxisNumCTAsWithUniqueData() > 1;
   if (auto histogram = dyn_cast<HistogramOp>(op)) {
     auto block = StringAttr::get(op->getContext(), "block");
     auto layout = gpu::toLinearLayout(histogram.getSrc().getType());

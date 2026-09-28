@@ -321,6 +321,151 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
   }
 }
 
+static unsigned getParallelAccumulatorIndex(ScanLoweringHelper &helper,
+                                            unsigned chunkId) {
+  unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
+  unsigned numScanBlocks = helper.getAxisNumBlocks();
+  unsigned blockStride = helper.getAxisBlockStride();
+  unsigned blockId = chunkId / parallelElementsPerThread;
+  unsigned parallelBlockId =
+      blockId % blockStride +
+      ((blockId / blockStride) / numScanBlocks) * blockStride;
+  return chunkId % parallelElementsPerThread +
+         parallelBlockId * parallelElementsPerThread;
+}
+
+// Publish the aggregate for each scan line in this CTA. The CTA prefix pass
+// reads these values from distributed shared memory after a cluster barrier.
+static void storeCTAAccumulator(
+    SmallVector<SmallVector<Value>> &srcValues,
+    ConversionPatternRewriter &rewriter, ScanLoweringHelper &helper,
+    Value laneIdAxis, Value warpIdAxis, ArrayRef<Value> smemBases,
+    ArrayRef<Type> smemTypes, Value parallelLaneId, Value isRepresentative,
+    const TargetInfoBase &targetInfo) {
+  auto loc = helper.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned scanElementsPerThread = helper.getAxisNumElementsPerThread();
+  unsigned elementStride = helper.getAxisElementStride();
+  unsigned numScanBlocks = helper.getAxisNumBlocks();
+  unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
+  unsigned numParallelLanes = helper.getNonAxisNumThreadsPerCTA();
+  unsigned scratchOffset = helper.getIntraCTAScratchSizeInElems();
+
+  Value mask = b.icmp_eq(
+      laneIdAxis,
+      b.i32_val(helper.getAxisNumThreadsPerWarpWithUniqueData() - 1));
+  mask = b.and_(mask,
+                b.icmp_eq(warpIdAxis,
+                          b.i32_val(helper.getAxisNumWarpsWithUniqueData() - 1)));
+  mask = b.and_(mask, isRepresentative);
+
+  unsigned chunkId = 0;
+  for (unsigned srcIndex = 0; srcIndex < srcValues.size(); ++srcIndex) {
+    unsigned elementIdx =
+        (srcIndex / elementStride) % scanElementsPerThread;
+    if (elementIdx != scanElementsPerThread - 1)
+      continue;
+    unsigned blockId = chunkId / parallelElementsPerThread;
+    unsigned axisBlockId =
+        (blockId / helper.getAxisBlockStride()) % numScanBlocks;
+    if (axisBlockId == numScanBlocks - 1) {
+      unsigned accumulatorIndex =
+          getParallelAccumulatorIndex(helper, chunkId);
+      Value index = b.add(
+          parallelLaneId,
+          b.i32_val(scratchOffset + numParallelLanes * accumulatorIndex));
+      for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
+        Value ptr = b.gep(smemBases[i].getType(), smemTypes[i], smemBases[i],
+                          index);
+        targetInfo.storeShared(rewriter, loc, ptr, srcValues[srcIndex][i],
+                               mask);
+      }
+    }
+    ++chunkId;
+  }
+}
+
+// Add the aggregates of all logically preceding CTA segments to every local
+// scan result. CTA coordinates are derived from the block layout so CTAs split
+// along non-axis dimensions remain independent scan groups.
+static void addCTAPrefix(
+    SmallVector<SmallVector<Value>> &srcValues,
+    ConversionPatternRewriter &rewriter, ScanLoweringHelper &helper,
+    ArrayRef<Value> smemBases, ArrayRef<Type> smemTypes,
+    Value parallelLaneId, ArrayRef<Value> multiDimCTAId, Value scanCTAId,
+    const TargetInfoBase &targetInfo) {
+  auto loc = helper.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned axis = helper.getAxis();
+  unsigned axisNumCTAs = helper.getAxisNumCTAsWithUniqueData();
+  unsigned numParallelLanes = helper.getNonAxisNumThreadsPerCTA();
+  unsigned numParallelAccumulators = helper.getNonAxisNumBlocks() *
+                                     helper.getNonAxisNumElementsPerThread();
+  unsigned scratchOffset = helper.getIntraCTAScratchSizeInElems();
+
+  auto kBlock = rewriter.getStringAttr("block");
+  SmallVector<Value> predecessorCTAIds;
+  predecessorCTAIds.reserve(axisNumCTAs - 1);
+  for (unsigned predecessor = 0; predecessor + 1 < axisNumCTAs;
+       ++predecessor) {
+    SmallVector<Value> targetCTAId(multiDimCTAId);
+    unsigned physicalCTA = helper.getReverse()
+                               ? axisNumCTAs - predecessor - 1
+                               : predecessor;
+    targetCTAId[axis] = b.i32_val(physicalCTA);
+    predecessorCTAIds.push_back(linearize(rewriter, loc, targetCTAId,
+                                          helper.getEncoding(), kBlock));
+  }
+
+  SmallVector<SmallVector<Value>> prefixes(numParallelAccumulators);
+  for (unsigned accumulatorIndex = 0;
+       accumulatorIndex < numParallelAccumulators; ++accumulatorIndex) {
+    Value index = b.add(
+        parallelLaneId,
+        b.i32_val(scratchOffset + numParallelLanes * accumulatorIndex));
+    for (unsigned predecessor = 0; predecessor < predecessorCTAIds.size();
+         ++predecessor) {
+      SmallVector<Value> partial(helper.getNumOperands());
+      for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
+        Value ptr = b.gep(smemBases[i].getType(), smemTypes[i], smemBases[i],
+                          index);
+        partial[i] = targetInfo.loadDShared(
+            rewriter, loc, ptr, predecessorCTAIds[predecessor], smemTypes[i],
+            b.true_val());
+      }
+      if (predecessor == 0) {
+        prefixes[accumulatorIndex] = std::move(partial);
+        continue;
+      }
+      Value include =
+          b.icmp_ugt(scanCTAId, b.i32_val(predecessor));
+      auto combined = accumulate(helper, rewriter, prefixes[accumulatorIndex],
+                                 partial, include);
+      for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
+        prefixes[accumulatorIndex][i] =
+            b.select(include, combined[i], prefixes[accumulatorIndex][i]);
+      }
+    }
+  }
+
+  Value hasPrefix = b.icmp_ne(scanCTAId, b.i32_val(0));
+  unsigned scanElementsPerThread = helper.getAxisNumElementsPerThread();
+  unsigned elementStride = helper.getAxisElementStride();
+  for (unsigned srcIndex = 0; srcIndex < srcValues.size(); ++srcIndex) {
+    unsigned chunkId =
+        (srcIndex % elementStride) +
+        ((srcIndex / elementStride) / scanElementsPerThread) * elementStride;
+    unsigned accumulatorIndex =
+        getParallelAccumulatorIndex(helper, chunkId);
+    auto combined = accumulate(helper, rewriter, prefixes[accumulatorIndex],
+                               srcValues[srcIndex], hasPrefix);
+    for (unsigned i = 0; i < helper.getNumOperands(); ++i) {
+      srcValues[srcIndex][i] =
+          b.select(hasPrefix, combined[i], srcValues[srcIndex][i]);
+    }
+  }
+}
+
 namespace {
 struct ScanOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp> {
@@ -464,6 +609,10 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (!helper.isSupported())
     return op.emitError("TODO: unsupported scan layout");
+  unsigned axisNumCTAs = helper.getAxisNumCTAsWithUniqueData();
+  if (axisNumCTAs > 1 && !targetInfo.supportDistributedSharedMemory())
+    return op.emitError(
+        "tt.scan across CTAs requires distributed shared memory support");
 
   Value threadId = getThreadId(rewriter, loc);
   auto mod = op->getParentOfType<ModuleOp>();
@@ -498,17 +647,19 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   // elements.
   warpScan(srcValues, rewriter, targetInfo, helper, laneIdAxis);
 
+  SmallVector<Value> smemBases;
+  SmallVector<Type> smemTypes;
+  if (helper.getScratchSizeInElems() > 0) {
+    smemBases = getSmemBases(op, helper.getScratchSizeInElems(), rewriter,
+                             targetInfo);
+    smemTypes.resize(op.getNumOperands());
+    for (unsigned i = 0; i < op.getNumOperands(); ++i)
+      smemTypes[i] = getElementType(op, i);
+  }
+
   if (axisNumWarps > 1) {
     // Slow path for the case where there are multiple warps with unique data on
     // the axis.
-    auto elems = helper.getScratchSizeInElems();
-    SmallVector<Value> smemBases =
-        getSmemBases(op, elems, rewriter, targetInfo);
-    SmallVector<Type> smemTypes(op.getNumOperands());
-    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      smemTypes[i] = getElementType(op, i);
-    }
-
     // Store the partial reducing for each warp into shared memory.
     storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
                          smemBases, smemTypes, flatIdParallel, isRepresentative,
@@ -533,6 +684,24 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     AddPartialReduceOneWarp(srcValues, rewriter, targetInfo, helper, warpIdAxis,
                             laneIdAxis, laneIdLast);
   } // else axisNumWarps == 1 and srcValues.size() == 1, nothing to do.
+
+  if (axisNumCTAs > 1) {
+    Value clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
+    auto kBlock = rewriter.getStringAttr("block");
+    auto multiDimCTAId = std::get<0>(delinearize(
+        rewriter, loc, helper.getEncoding(), helper.getShape(), kBlock,
+        clusterCTAId));
+    Value scanCTAId = multiDimCTAId[helper.getAxis()];
+    if (op.getReverse())
+      scanCTAId = b.sub(b.i32_val(axisNumCTAs - 1), scanCTAId);
+
+    storeCTAAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
+                        smemBases, smemTypes, flatIdParallel, isRepresentative,
+                        targetInfo);
+    targetInfo.clusterBarrier(loc, rewriter, op);
+    addCTAPrefix(srcValues, rewriter, helper, smemBases, smemTypes,
+                 flatIdParallel, multiDimCTAId, scanCTAId, targetInfo);
+  }
 
   auto transpose = [](const SmallVector<SmallVector<Value>> &v) {
     assert(v.size() > 0 && v[0].size() > 0);

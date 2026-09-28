@@ -411,6 +411,7 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
   auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
   srcShape = firstTy.getShape();
   legacyEncoding = firstTy.getEncoding();
+  srcShapePerCTA = triton::gpu::getShapePerCTA(legacyEncoding, srcShape);
   // Remove broadcasting in the registers
   // We also remove it in the lowering and re-add it when we pack the results
   auto origLayout = triton::gpu::toLinearLayout(firstTy);
@@ -473,13 +474,17 @@ unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
   return getEncoding().getWarpsPerCTA()[getAxis()];
 }
 
+unsigned ScanLoweringHelper::getAxisNumCTAsWithUniqueData() {
+  return srcShape[getAxis()] / srcShapePerCTA[getAxis()];
+}
+
 unsigned ScanLoweringHelper::getAxisNumBlocks() {
   auto contigPerThread = getEncoding().getContigPerThread();
   auto threadsPerWarp = getEncoding().getThreadsPerWarp();
   auto warpsPerCTA = getEncoding().getWarpsPerCTA();
   unsigned axis = getAxis();
   return ceil<unsigned>(
-      getShape()[axis],
+      srcShapePerCTA[axis],
       (contigPerThread[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
 }
 
@@ -494,8 +499,9 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
     if (i == axis)
       continue;
     numBlocks *=
-        ceil<unsigned>(getShape()[i], (contigPerThread[i] * threadsPerWarp[i] *
-                                       warpsPerCTA[i]));
+        ceil<unsigned>(srcShapePerCTA[i],
+                       (contigPerThread[i] * threadsPerWarp[i] *
+                        warpsPerCTA[i]));
   }
   return numBlocks;
 }
@@ -508,7 +514,9 @@ bool ScanLoweringHelper::isSupported() {
   return true;
 }
 
-unsigned ScanLoweringHelper::getScratchSizeInElems() {
+unsigned ScanLoweringHelper::getIntraCTAScratchSizeInElems() {
+  if (getAxisNumWarpsWithUniqueData() == 1)
+    return 0;
   unsigned numWarps = product(getEncoding().getWarpsPerCTA());
   unsigned numNonAxisElementsPerWarp =
       getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
@@ -517,14 +525,20 @@ unsigned ScanLoweringHelper::getScratchSizeInElems() {
   return numElements;
 }
 
+unsigned ScanLoweringHelper::getScratchSizeInElems() {
+  unsigned numElements = getIntraCTAScratchSizeInElems();
+  if (getAxisNumCTAsWithUniqueData() > 1) {
+    numElements += getNonAxisNumThreadsPerCTA() *
+                   getNonAxisNumElementsPerThread() * getNonAxisNumBlocks();
+  }
+  return numElements;
+}
+
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   // Lowering will fail later if the layout is not supported.
   if (!isSupported())
     return 0;
 
-  unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
-  if (axisNumWarps == 1)
-    return 0;
   unsigned elementSizeInBytes = 0;
   for (const auto &ty : srcElementTypes) {
     elementSizeInBytes += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
@@ -1022,9 +1036,9 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= ceil<unsigned int>(getShape()[dim], contigPerThread[dim] *
-                                                      threadsPerWarp[dim] *
-                                                      warpsPerCTA[dim]);
+    stride *= ceil<unsigned int>(srcShapePerCTA[dim], contigPerThread[dim] *
+                                                          threadsPerWarp[dim] *
+                                                          warpsPerCTA[dim]);
   }
   llvm_unreachable("Axis not found in order");
 }
@@ -1366,6 +1380,8 @@ bool needsClusterBarrier(Operation *op) {
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (isa<ScanOp>(op))
+    return hasCrossCTAScratch(op);
   if (isa<HistogramOp>(op))
     return hasCrossCTAScratch(op);
   return atomicNeedsClusterBarrier(op);

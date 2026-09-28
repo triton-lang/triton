@@ -16,6 +16,9 @@ public:
       : targetFeatures(computeCapability), ptxVersion(ptxVersion) {}
 
   bool supportMaximumMinimum() const override;
+  bool supportDistributedSharedMemory() const override {
+    return targetFeatures.supportClusterOps();
+  }
 
   Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
 
