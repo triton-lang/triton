@@ -63,9 +63,9 @@ public:
       return;
 
     // Gather is not supported by the data partitioner. Decline warp
-    // specialization when a Gather is in, feeds, or depends on a selected loop,
-    // or is dataflow-connected to a dot selected for function-wide
-    // partitioning.
+    // specialization when a Gather is in, feeds, or depends on a selected loop
+    // or partition root, or joins a partitioned value at an elementwise or
+    // store consumer.
     auto isInWarpSpecializedLoop = [&](Operation *op) {
       for (scf::ForOp loop : loops)
         if (loop.getOperation() == op || loop->isAncestor(op))
@@ -77,11 +77,10 @@ public:
       return isa<triton::nvidia_gpu::WarpGroupDotOp,
                  triton::nvidia_gpu::TCGen5MMAOp>(op);
     };
-    auto hasPartitionRootInBackwardSlice = [&](Operation *root) {
+    auto hasPartitionRootInBackwardSlice = [&](Value root) {
       SetVector<Value> worklist;
       SetVector<Value> visited;
-      for (Value operand : root->getOperands())
-        worklist.insert(operand);
+      worklist.insert(root);
       while (!worklist.empty()) {
         Value value = worklist.pop_back_val();
         if (!visited.insert(value))
@@ -119,7 +118,7 @@ public:
       }
       return false;
     };
-    auto hasPartitionRootInForwardSlice = [&](Value root) {
+    auto hasPartitionedUseInForwardSlice = [&](Value root) {
       SetVector<Value> worklist;
       SetVector<Value> visited;
       worklist.insert(root);
@@ -131,6 +130,18 @@ public:
         for (Operation *user : value.getUsers()) {
           if (isInWarpSpecializedLoop(user) || isPartitionRoot(user))
             return true;
+
+          // Data partitioning adds every operand of these consumers to the
+          // closure. A Gather can therefore join a partitioned value here even
+          // when neither value depends on the other.
+          if (user->hasTrait<OpTrait::Elementwise>() ||
+              isa<triton::StoreOp, triton::DescriptorStoreOp,
+                  triton::AtomicRMWOp>(user)) {
+            for (Value operand : user->getOperands()) {
+              if (operand != value && hasPartitionRootInBackwardSlice(operand))
+                return true;
+            }
+          }
 
           if (auto forOp = dyn_cast<scf::ForOp>(user)) {
             for (unsigned i = 0; i < forOp.getInitArgs().size(); ++i) {
@@ -172,13 +183,17 @@ public:
         return;
       }
 
-      hasUnsupportedGather =
-          hasPartitionRootInBackwardSlice(gatherOp.getOperation());
+      for (Value operand : gatherOp->getOperands()) {
+        if (hasPartitionRootInBackwardSlice(operand)) {
+          hasUnsupportedGather = true;
+          return;
+        }
+      }
       if (hasUnsupportedGather || gatherOp->getResult(0).use_empty())
         return;
 
       hasUnsupportedGather =
-          hasPartitionRootInForwardSlice(gatherOp->getResult(0));
+          hasPartitionedUseInForwardSlice(gatherOp->getResult(0));
     });
     if (hasUnsupportedGather) {
       if (hasPreexistingTaskIds) {
