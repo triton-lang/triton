@@ -2908,10 +2908,12 @@ def test_tmem_subslice_block_m_64():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("K,N,mn_major", [(128, 1, False), (256, 4, False), (256, 1, True)])
+@pytest.mark.parametrize("K,N,mn_major,storage_n,block_n", [(128, 1, False, 8, 8), (128, 1, False, 4, 8),
+                                                            (128, 1, False, 2, 8), (128, 1, False, 2, 16),
+                                                            (256, 4, False, 8, 8), (256, 1, True, 16, 16)])
 @pytest.mark.parametrize("scaled", [False, True])
 @pytest.mark.parametrize("two_ctas", [False, True])
-def test_tcgen05_mma_zero_n_bases(K, N, mn_major, scaled, two_ctas):
+def test_tcgen05_mma_zero_n_bases(K, N, mn_major, storage_n, block_n, scaled, two_ctas):
     M = 256 if two_ctas else 128
 
     @gluon.jit
@@ -2958,7 +2960,7 @@ def test_tcgen05_mma_zero_n_bases(K, N, mn_major, scaled, two_ctas):
         out_offsets = ttgl.arange(0, M)[:, None] * N + ttgl.arange(0, N)[None, :]
         ttgl.store(out_ptr + out_offsets, acc.load())
 
-    # Reserve a full physical atom and replicate B across the CTA pair.
+    # Reserve padding and replicate B across the CTA pair.
     b_bases = [
         [1, 0],
         [2, 0],
@@ -2974,9 +2976,15 @@ def test_tcgen05_mma_zero_n_bases(K, N, mn_major, scaled, two_ctas):
     ]
     if mn_major:
         b_bases = [[0, n] for n in (1, 2, 4, 8)] + [[k, 0] for k in (1, 2, 4, 8, 16, 32, 64, 128)]
+    elif storage_n < 8:
+        # Keep trailing padding for the overlapping MMA cores.
+        b_bases = [[k, 0] for k, n in b_bases if k]
+        if storage_n == 4:
+            b_bases.insert(4, [0, 0])
+        b_bases.append([0, 0])
     b_layout = ttgl.SharedLinearLayout([[k, n if n < N else 0] for k, n in b_bases if k < K],
                                        block_bases=[[0, 0]] if two_ctas else [])
-    block_n = (16 if mn_major else 8) * (2 if two_ctas else 1)
+    block_n *= 2 if two_ctas else 1
     torch.manual_seed(0)
     # Products and sums of these dyadic inputs are exactly representable in FP32.
     a = (torch.randint(-8, 9, (M, K), device="cuda").float() / 4).to(torch.float8_e4m3fn)

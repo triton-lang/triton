@@ -75,11 +75,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #b = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0], [0, 0], [0, 0], [16, 0], [32, 0], [64, 0]]}, alignment = 16>
 #b_k = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0], [0, 0], [0, 0], [16, 0], [32, 0], [64, 0], [128, 0]]}, alignment = 16>
 #b_compact = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]]}, alignment = 16>
+#b_overlap = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [0, 0]]}, alignment = 16>
+#b_overlap_k = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [128, 0], [0, 0]]}, alignment = 16>
 #b_full = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = true, elementBitWidth = 8}>
 #scale = #ttng.tensor_memory_scales_encoding<>
 !a = !ttg.memdesc<128x128xf8E4M3FN, #a, #ttng.tensor_memory>
 !b = !ttg.memdesc<128x1xf8E4M3FN, #b, #ttg.shared_memory>
 !b_compact = !ttg.memdesc<128x1xf8E4M3FN, #b_compact, #ttg.shared_memory>
+!b_overlap = !ttg.memdesc<128x1xf8E4M3FN, #b_overlap, #ttg.shared_memory>
+!b_overlap_k_view = !ttg.memdesc<128x1xf8E4M3FN, #b_overlap_k, #ttg.shared_memory, 256x1>
 !b_view = !ttg.memdesc<128x1xf8E4M3FN, #b_full, #ttg.shared_memory, 128x8>
 !b_k_view = !ttg.memdesc<128x1xf8E4M3FN, #b_k, #ttg.shared_memory, 256x1>
 !d = !ttg.memdesc<128x1xf32, #d, #ttng.tensor_memory, mutable>
@@ -89,6 +93,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 !sb = !ttg.memdesc<1x4xi8, #scale, #ttng.tensor_memory, 64x4>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @padded_mma_accepts_overlapping_rhs(%a: !a, %b: !b_overlap, %d: !d, %p: i1) {
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b_overlap, !d
+    tt.return
+  }
+
+  tt.func @padded_mma_rejects_overlapping_rhs_k_subview(%a: !a, %b: !b_overlap_k_view, %d: !d, %p: i1) {
+    // expected-error @below {{overlapping MMA core matrices require a complete allocation}}
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b_overlap_k_view, !d
+    tt.return
+  }
+
   tt.func @padded_mma_accepts_rhs_k_subview(%a: !a, %b: !b_k_view, %d: !d, %p: i1) {
     ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b_k_view, !d
     tt.return
@@ -105,8 +120,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  tt.func @padded_mma_requires_rhs_instruction_storage(%a: !a, %b: !b, %d: !d64, %p: i1) {
-    // expected-error @below {{B shared-memory layout does not support MMA instruction N = 64}}
+  tt.func @padded_mma_accepts_repeated_rhs_core(%a: !a, %b: !b, %d: !d64, %p: i1) {
     ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b, !d64
     tt.return
   }

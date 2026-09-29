@@ -8,6 +8,31 @@ namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::nvidia_gpu {
 
+bool NvmmaSmemAttrs::isCompatibleWith(const LinearLayout &layout,
+                                      const LinearLayout &tile) const {
+  if (swizzlingByteWidth != 0)
+    return getReps(layout, tile).has_value();
+
+  // Match logical elements while allowing unused core columns to overlap K.
+  auto logicalTile = tile;
+  for (auto dim : tile.getInDimNames())
+    logicalTile = logicalTile.resizeInDim(
+        dim, std::min(tile.getInDimSize(dim), layout.getInDimSize(dim)));
+  auto reps = getReps(layout, logicalTile);
+  if (!reps)
+    return false;
+
+  auto offset =
+      StringAttr::get(layout.getInDimNames().begin()->getContext(), "offset");
+  uint64_t maxOffset =
+      getOutputBasisMask(*reps, to_vector(reps->getInDimNames()), offset);
+  // Descriptor strides add; overlapping bases can carry instead of XORing.
+  for (auto dim : tile.getInDimNames())
+    for (int i = 0; i < tile.getInDimSizeLog2(dim); ++i)
+      maxOffset += tile.getBasis(dim, i, offset);
+  return maxOffset < layout.getOutDimSize(offset);
+}
+
 std::optional<std::pair<NvmmaSmemAttrs, LinearLayout>>
 getNvmmaSmemAttrs(const LinearLayout &nvmmaSmemLL, unsigned bitwidth) {
   assert(nvmmaSmemLL.getNumInDims() == 2);
@@ -22,6 +47,7 @@ getNvmmaSmemAttrs(const LinearLayout &nvmmaSmemLL, unsigned bitwidth) {
   // TODO: sw=0 is only matched for the MMA "core-matrices" operand form. The
   // other sw=0 interpretation (nvmma_shared<sw=0> as a flat TMA destination) is
   // not supported here.
+  std::optional<std::pair<NvmmaSmemAttrs, LinearLayout>> overlapping;
   for (bool fp4Padded : {false, true}) {
     for (unsigned swizzling : {0u, 32u, 64u, 128u}) {
       for (bool transposed : {false, true}) {
@@ -39,14 +65,15 @@ getNvmmaSmemAttrs(const LinearLayout &nvmmaSmemLL, unsigned bitwidth) {
         if (transposed)
           coreMatrixLL = transposeLinearLayout(coreMatrixLL, {1, 0});
         auto candidateLL = coreMatrixLL.pseudoinvert();
+        NvmmaSmemAttrs attrs{swizzling, transposed, fp4Padded};
         if (getReps(nvmmaSmemLL, candidateLL))
-          return std::make_pair(
-              NvmmaSmemAttrs{swizzling, transposed, fp4Padded},
-              std::move(candidateLL));
+          return std::make_pair(attrs, std::move(candidateLL));
+        if (!overlapping && attrs.isCompatibleWith(nvmmaSmemLL, candidateLL))
+          overlapping = std::make_pair(attrs, std::move(candidateLL));
       }
     }
   }
-  return std::nullopt;
+  return overlapping;
 }
 
 std::optional<NvmmaSmemAttrs> getNvmmaSmemAttrs(ttg::MemDescType memTy) {

@@ -658,8 +658,15 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
         bType.getDimSize(1) != bType.getAllocShape().back())
       return op->emitOpError(
           "cannot expand the N dimension of a shared-memory subview");
+    if (bType.getShape() !=
+            dropPipeliningDim(bType.getAllocShape(), bType.getEncoding()) &&
+        !getReps(bLayout, coreLayout))
+      return op->emitOpError(
+          "overlapping MMA core matrices require a complete allocation");
     if (requiredN > std::max(bLayout.getInDimSize(dims[1]),
-                             coreLayout.getInDimSize(dims[1])))
+                             coreLayout.getInDimSize(dims[1])) &&
+        (attrs.swizzlingByteWidth != 0 ||
+         bLayout.getInDimSize(dims[1]) > coreLayout.getInDimSize(dims[1])))
       return op->emitOpError(
                  "B shared-memory layout does not support MMA instruction N = ")
              << n;

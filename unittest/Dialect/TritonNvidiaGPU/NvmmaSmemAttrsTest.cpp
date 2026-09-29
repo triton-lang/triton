@@ -151,6 +151,17 @@ TEST_F(NvmmaSmemAttrsTest, InferNvmmaSmemAttrsPaddedN) {
   // A compact vector does not reserve the other seven physical columns.
   auto compact = padded.removeZeroBasesAlongDim(S("offset"));
   EXPECT_FALSE(infer(compact));
+
+  // Moving padding to the end allows overlapping core matrices along K.
+  for (unsigned padding : {1u, 2u, 4u}) {
+    auto narrow = LinearLayout::identity1D(16, S("offset"), S("dim0")) *
+                  LinearLayout::zeros1D(padding, S("offset"), S("dim1")) *
+                  LinearLayout::identity1D(8, S("offset"), S("dim0")) *
+                  LinearLayout::identity1D(1, S("block"), S("dim0"));
+    EXPECT_FALSE(infer(narrow));
+    auto withTail = narrow * LinearLayout::zeros1D(2, S("offset"), S("dim1"));
+    EXPECT_TRUE(infer(withTail));
+  }
 }
 
 TEST_F(NvmmaSmemAttrsTest, Fp4PaddedRequiresI8Storage) {

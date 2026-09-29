@@ -221,7 +221,10 @@ private:
       return mlir::emitError(loc, "instruction M/N must cover at least ")
              << atomMN << " contiguous elements of the shared-memory core";
     if (instrShape[MNdim] > std::max(ll.getInDimSize(dims[MNdim]),
-                                     shmemTileInv.getInDimSize(dims[MNdim]))) {
+                                     shmemTileInv.getInDimSize(dims[MNdim])) &&
+        (attrs.swizzlingByteWidth != 0 ||
+         ll.getInDimSize(dims[MNdim]) >
+             shmemTileInv.getInDimSize(dims[MNdim]))) {
       auto inDims = ll.getInDims();
       return mlir::emitError(loc)
              << "instruction shape [" << instrShape[0] << ", " << instrShape[1]
@@ -250,19 +253,23 @@ private:
     }
 
     auto log2ColsTile = shmemTileInv.getInDimSizeLog2(dims[stridedDim]);
-    if (llvm::Log2_32(instrShape[stridedDim]) > log2ColsTile) {
+    // Keep SBO zero when the remaining M/N coordinates are all padding.
+    if (llvm::Log2_32(instrShape[stridedDim]) > log2ColsTile &&
+        log2ColsTile < ll.getInDimSizeLog2(dims[stridedDim])) {
       sbo = ll.getBasis(dims[stridedDim], log2ColsTile, kOffset);
     }
+    if ((lbo * bitwidth) % 128 || (sbo * bitwidth) % 128)
+      return mlir::emitError(loc,
+                             "MMA descriptor strides must be 16-byte aligned");
 
     // Pad the tile up to the full instruction shape with the relevant
     // stride if the instruction shape is larger than the tile
     auto bases = shmemTileInv.getBases();
     for (int d : {0, 1}) {
+      auto stride = d == leadingDim ? lbo : sbo;
       // 'tile' with the atom tile according to the lbo/sbo rules
       for (int i = 1; i < instrShape[d] / shmemTileInv.getInDimSize(dims[d]);
            i *= 2) {
-        auto stride = ll.getBasis(
-            dims[d], shmemTileInv.getInDimSizeLog2(dims[d]), kOffset);
         bases[dims[d]].push_back({stride * i});
       }
     }
@@ -276,7 +283,9 @@ private:
     shmemTileInv = LinearLayout(std::move(bases),
                                 {{kOffset, llvm::NextPowerOf2(maxBasis)}},
                                 /*requireSurjective=*/false);
-    assert(getReps(ll, shmemTileInv).has_value());
+    if (!attrs.isCompatibleWith(ll, shmemTileInv))
+      return mlir::emitError(
+          loc, "MMA instruction exceeds the shared-memory layout");
 
     auto desc =
         std::bit_cast<SMEMDescriptor>(mmaVersion == 5 ? 1ULL << 46 : 0ULL);
