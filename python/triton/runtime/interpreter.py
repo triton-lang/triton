@@ -256,6 +256,13 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     return output.reshape(input.shape)
 
 
+def _round_fp32_to_bf16(data):
+    # Round to nearest even; NaN is pinned so the carry cannot turn it into inf.
+    bits = data.view(np.uint32)
+    rounded = ((bits + 0x7FFF + ((bits >> 16) & 1)) >> 16).astype(np.uint16)
+    return np.where(np.isnan(data), np.uint16(0x7FC0), rounded)
+
+
 def _erf(x):
     # Numpy does not support erf
     return math.erf(x)
@@ -557,10 +564,11 @@ class InterpreterBuilder:
     def cast_impl(self, src, dst_type):
         src_element_type = src.dtype.scalar
         dst_element_type = dst_type.scalar
-        if (src_element_type == tl.bfloat16 and dst_element_type == tl.float32) or \
-           (src_element_type == tl.float32 and dst_element_type == tl.bfloat16):
+        if src_element_type == tl.bfloat16 and dst_element_type == tl.float32:
             data = _convert_float(src.data, src_element_type, dst_element_type, None).view(_get_np_dtype(dst_type))
             return TensorHandle(data, dst_type.scalar)
+        elif src_element_type == tl.float32 and dst_element_type == tl.bfloat16:
+            return TensorHandle(_round_fp32_to_bf16(src.data), dst_type.scalar)
         else:
             return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
 

@@ -2431,6 +2431,33 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_x", ["float32", "float16"])
+def test_cast_bf16_rounding(dtype_x, device):
+    if not is_interpreter():
+        check_type_supported("bfloat16", device)
+
+    @triton.jit
+    def kernel(X, Z, SIZE: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        tl.store(Z + offs, tl.load(X + offs).to(tl.bfloat16))
+
+    torch.manual_seed(0)
+    dtype = getattr(torch, dtype_x)
+    x = torch.randn(1024, dtype=dtype, device=device)
+    # Ties, a carry out of the mantissa and an overflow tell round-to-nearest-even
+    # apart from truncation and from rounding ties away from zero.
+    x[:8] = torch.tensor([
+        1 + 2**-8, 1 + 2**-7 + 2**-8, 1 + 2**-8 + 2**-10, 2 - 2**-9,
+        torch.finfo(dtype).max,
+        float("nan"), -0.0,
+        torch.finfo(dtype).tiny / 4
+    ], dtype=dtype, device=device)
+    z = torch.empty_like(x, dtype=torch.bfloat16)
+    kernel[(1, )](x, z, SIZE=x.numel())
+    torch.testing.assert_close(z, x.to(torch.bfloat16), rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str, num_warps",
                          [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
 @pytest.mark.parametrize("can_reorder", [True, False])
