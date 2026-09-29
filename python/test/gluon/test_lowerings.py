@@ -186,14 +186,14 @@ def _scan_affine_combine(a1, b1, a2, b2):
 @pytest.mark.parametrize("layout", [
     *SCAN_EXTRA_LAYOUTS,
     ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1]),
-    # Exercise endpoint reconstruction followed by a cross-warp carry on axis 0.
+    # Exercise local prefixes followed by a cross-warp carry on axis 0.
     ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1]),
     ttgl.BlockedLayout([8, 1], [2, THREADS_PER_WARP // 2], [1, 4], [0, 1])
 ])
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("M", [32, 64])
-def test_scan_layouts_noncommutative(layout, axis, reverse, M, device):
+def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=1):
 
     @gluon.jit
     def kernel(A, B, OutA, OutB, M: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
@@ -218,7 +218,7 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device):
         expected_b.select(axis, cur).copy_(expected_b.select(axis, prev) * a.select(axis, cur) + b.select(axis, cur))
     a, b = a.to(device), b.to(device)
     out_a, out_b = torch.empty_like(a), torch.empty_like(b)
-    kernel[(1, )](a, b, out_a, out_b, M, layout, axis, reverse, num_warps=4)
+    kernel[(1, )](a, b, out_a, out_b, M, layout, axis, reverse, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
     torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
 
@@ -226,22 +226,26 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device):
 @pytest.mark.parametrize("layout, M", [
     (ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 512),
     (ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 512),
-    # Short grouped carries with four independent register columns.
+    # Short segment sequences with four independent register columns.
     (ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 64),
-    # Local prefixes reconstructed after register-group and cross-warp carries.
+    # Local register prefixes combined with the scanned segment totals.
     (ttgl.BlockedLayout([8, 1], [THREADS_PER_WARP, 1], [4, 1], [0, 1]), 1024),
     (ttgl.BlockedLayout([16, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 2048),
-    # Long grouped carries with at most 64 unique register prefixes.
+    # A long segment sequence spanning multiple registers in each warp.
     (ttgl.BlockedLayout([1, 1], [2, THREADS_PER_WARP // 2], [4, 1], [1, 0]), 256),
+    # No scan-axis lane bits: the full segment sequence lives in registers.
+    (ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [1, 0]), 128),
+    # More than a warp of segment totals, with both lane and register stages.
+    (ttgl.BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 1024),
     # Permute both register order and the warp bits within each group.
     (ttgl.DistributedLinearLayout([[32, 0], [0, 1], [8, 0], [128, 0], [16, 0], [64, 0]],
                                   [[0, 2], [0, 4], [0, 8], [0, 16], [1, 0]] + [[0, 0]] *
                                   (THREADS_PER_WARP.bit_length() - 6), [[4, 0], [2, 0]], [], [256, 32]), 256),
-    # Grouped carries also support redundant register and warp owners.
+    # Segment totals also support redundant register and warp owners.
     (ttgl.DistributedLinearLayout([[16, 0], [0, 16], [64, 0], [4, 0], [8, 0], [32, 0], [0, 0]],
                                   [[0, 1], [0, 2], [0, 4], [0, 8], [2, 0]] + [[0, 0]] *
                                   (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [0, 0]], [], [128, 32]), 128),
-    # The high lane bit keeps register-group carries live across batches.
+    # A high lane bit interleaves segment ownership with register groups.
     (ttgl.DistributedLinearLayout([[16, 0], [0, 1], [2, 0], [8, 0], [0, 2]],
                                   [[64, 0], [0, 4], [4, 0], [0, 8], [0, 16]] + [[0, 0]] *
                                   (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [32, 0]], [], [128, 32]), 128),
@@ -270,6 +274,9 @@ def test_scan_cta_local(num_ctas, replicate, reverse, device):
     if reverse:
         expected = expected.flip([0])
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    # The tuple conversion must preserve CTA ownership and mixed-width scratch
+    # offsets while scanning a register-spanning sequence of segment totals.
+    test_scan_layouts_noncommutative(layout, axis=0, reverse=reverse, M=256, device=device, num_ctas=num_ctas)
 
 
 @pytest.mark.parametrize("M, N, src_layout, axis, num_ctas", [
@@ -297,7 +304,7 @@ def test_scan_rejects_axis_split_across_ctas(device, capfd):
     with pytest.raises(RuntimeError, match="PassManager::run failed"):
         scan_kernel.warmup(x, y, 64, 1, src_layout, 0, grid=(1, ), num_warps=4, num_ctas=2)
     captured = capfd.readouterr()
-    assert "unsupported scan layout" in captured.out + captured.err
+    assert "scan axis distributed across CTAs is not supported" in captured.out + captured.err
 
 
 def test_scan_blocked_broadcast_layout(device):
