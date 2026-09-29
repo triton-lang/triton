@@ -278,11 +278,8 @@ jobs:
       PYTEST_ADDOPTS: "-p triton._compile_warmup"
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
-      ROCM_NIGHTLY_INDEX_URL: https://nightly.repo.amd.com/rocm/whl-next/
-      ROCM_VERSION: "10.2.0a20260929"
-      TORCH_VERSION: "2.15.0a0+rocm10.2.0a20260929"
     container:
-      image: tritonci/triton-amd-ci:rocm10.1.0a20260820-pytorch2.15.0a0-gfx942-gfx950-gfx1250-r1
+      image: tritonci/triton-amd-ci:rocm10.2.0a20260929-pytorch2.15.0a0-gfx942-gfx950-gfx1250-r1
       options: >-
         --security-opt seccomp=unconfined --user root
         --volume /home/runner/.triton:/github/home/.triton
@@ -291,20 +288,38 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: 'true'
+      - name: Compute cache keys
+        id: rocjitsu-cache-key
+        shell: bash
+        run: |
+          llvm_file="cmake/llvm-info.json"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          amd_file="cmake/amd-llvm-info.json"
+          json_file="cmake/json-version.txt"
+
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$amd_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "amd=$(sha256sum $amd_file | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "json=$(cat $json_file)" >> "$GITHUB_OUTPUT"
+      - name: Restore build dependencies cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/amd
+            ~/.triton/json
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.rocjitsu-cache-key.outputs.llvm }}-nvidia-${{ steps.rocjitsu-cache-key.outputs.nvidia }}-amd-${{ steps.rocjitsu-cache-key.outputs.amd }}-json-${{ steps.rocjitsu-cache-key.outputs.json }}
       - name: Setup gfx1250 emulation
         shell: bash
         run: |
           set -xeo pipefail
           unset HIP_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES
-          python3 -m pip uninstall -y \
-            triton triton-rocm pytorch-triton torch amd-torch-device-gfx1250 \
-            rocm rocm-sdk-core rocm-sdk-devel rocm-sdk-libraries rocm-sdk-device-gfx1250 \
-            2>/dev/null || true
-          python3 -m pip install --pre --force-reinstall \
-            --index-url "${ROCM_NIGHTLY_INDEX_URL}" \
-            --extra-index-url https://pypi.org/simple \
-            "rocm[libraries,devel,device-gfx1250]==${ROCM_VERSION}" \
-            "torch[device-gfx1250]==${TORCH_VERSION}"
           rocm-sdk init
           ROCM_ROOT="$(rocm-sdk path --root)"
           echo "ROCM_ROOT=${ROCM_ROOT}" >> "$GITHUB_ENV"
