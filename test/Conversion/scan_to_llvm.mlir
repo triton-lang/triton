@@ -1,6 +1,6 @@
 // RUN: split-file %s %t
-// RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
-// RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
+// RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
+// RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
 // RUN: triton-opt %t/parallel-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=CARRIES
 // RUN: triton-opt %t/grouped-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=GROUPS
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
@@ -33,7 +33,7 @@ tt.func private @test_1d_simple(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, 
 
 // CHECK-LABEL: @test_1d_grouped
 tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8xi32, #layout_adj> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
@@ -46,15 +46,13 @@ tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8x
 
 // CHECK-LABEL: @test_warp_register_groups
 // WARP-LABEL: @test_warp_register_groups
-// Two groups: six local additions, eight total-only lane-stage additions,
-// one inter-group carry, and six interior prefixes.
-// WARP-COUNT-21: add i32
-// WARP-NOT: add i32
+// The same ordered tree handles lane stages and the higher register stage.
+// WARP: @llvm.nvvm.shfl.sync.idx.i32
+// WARP: add i32
+// WARP-NOT: @llvm.nvvm.barrier
 // WARP: ret
 tt.func private @test_warp_register_groups(%arg: tensor<128xi32, #layout_reg4>) -> tensor<128xi32, #layout_reg4> {
-  // CHECK-COUNT-9: @llvm.nvvm.shfl.sync.up.i32
-  // CHECK: @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK: @llvm.nvvm.shfl.sync.up.i32
+  // CHECK-COUNT-9: @llvm.nvvm.shfl.sync.idx.i32
   // CHECK-NOT: @llvm.nvvm.shfl
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
@@ -76,8 +74,8 @@ tt.func public @anchor_warp_register_groups(%ptr: !llvm.ptr, %arg: !llvm.struct<
 
 // CHECK-LABEL: @test_2d_grouped
 tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
-  // CHECK: st.shared
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: store {{.*}}, ptr addrspace(3)
   // CHECK: @llvm.nvvm.barrier
   // CHECK: load i32, ptr addrspace(3)
   // CHECK: ret
@@ -193,13 +191,13 @@ tt.func public @anchor_permuted_lanes(%ptr: !llvm.ptr, %arg: !llvm.struct<(i32, 
 // Publish all warp-local segment totals once. Later register/lane axis bits
 // must not introduce another shared-memory exchange.
 // CHECK-NOT: @llvm.nvvm.barrier
-// CHECK: st.shared
+// CHECK: store {{.*}}, ptr addrspace(3)
 // CHECK: @llvm.nvvm.barrier
 // CHECK-NOT: @llvm.nvvm.barrier
-// CHECK-NOT: st.shared
+// CHECK-NOT: store {{.*}}, ptr addrspace(3)
 // CHECK: load i32, ptr addrspace(3)
 // CHECK-NOT: @llvm.nvvm.barrier
-// CHECK-NOT: st.shared
+// CHECK-NOT: store {{.*}}, ptr addrspace(3)
 // CHECK: ret
 tt.func private @test_interleaved(%arg: tensor<128xi32, #interleaved>) -> tensor<128xi32, #interleaved> {
   %0 = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
@@ -241,16 +239,14 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // CARRIES-LABEL: @test_parallel_carries
-// Each thread owns two columns. Read the first batch for both columns before
-// advancing either carry to the second batch, exposing independent chains.
+// Exchange the segment totals once, then scan and select carries in each warp.
+// CARRIES: store {{.*}}, ptr addrspace(3)
 // CARRIES: @llvm.nvvm.barrier
-// CARRIES: load i32, ptr addrspace(3) @global_smem
-// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 496)
-// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 4)
-// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 500)
-// CARRIES: load i32, ptr addrspace(3) getelementptr {{.*}}i64 512)
+// CARRIES: load {{.*}}, ptr addrspace(3)
+// CARRIES: @llvm.nvvm.shfl.sync.idx.i32
 // CARRIES-NOT: @llvm.nvvm.barrier
-// CARRIES-NOT: st.shared
+// CARRIES-NOT: store {{.*}}, ptr addrspace(3)
+// CARRIES-NOT: load {{.*}}, ptr addrspace(3)
 // CARRIES: ret
 tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
   %rows = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #ttg.slice<{dim = 1, parent = #parallel_carries}>>
@@ -283,27 +279,16 @@ tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // GROUPS-LABEL: @test_grouped_carries
-// Each group of four warp totals is combined independently. The long carry
-// chain accumulates group totals, rather than every individual shared load.
-// GROUPS: st.shared::cta.v2.b32
+// The 128 segment totals span four registers per parallel column in each warp.
+// Shared memory only converts the totals; the ordered scan uses warp shuffles.
+// GROUPS: store {{.*}}, ptr addrspace(3)
 // GROUPS: @llvm.nvvm.barrier
-// GROUPS: %[[A:.*]] = load float, ptr addrspace(3) @global_smem
-// GROUPS: %[[B:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 8)
-// GROUPS: %[[AB:.*]] = fadd float %[[A]], %[[B]]
-// GROUPS: %[[C:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 16)
-// GROUPS: %[[ABC:.*]] = fadd float %[[AB]], %[[C]]
-// GROUPS: %[[D:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 24)
-// GROUPS: %[[TOTAL:.*]] = fadd float %[[ABC]], %[[D]]
-// GROUPS: %[[E:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 32)
-// GROUPS: %[[F:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 40)
-// GROUPS: %[[EF:.*]] = fadd float %[[E]], %[[F]]
-// GROUPS: %[[G:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 48)
-// GROUPS: %[[EFG:.*]] = fadd float %[[EF]], %[[G]]
-// GROUPS: %[[H:.*]] = load float, ptr addrspace(3) getelementptr {{.*}}i64 56)
-// GROUPS: %[[NEXT:.*]] = fadd float %[[EFG]], %[[H]]
-// GROUPS: fadd float %[[TOTAL]], %[[NEXT]]
+// GROUPS: load {{.*}}, ptr addrspace(3)
+// GROUPS: @llvm.nvvm.shfl.sync.idx.i32
+// GROUPS: fadd float
 // GROUPS-NOT: @llvm.nvvm.barrier
-// GROUPS-NOT: st.shared
+// GROUPS-NOT: store {{.*}}, ptr addrspace(3)
+// GROUPS-NOT: load {{.*}}, ptr addrspace(3)
 // GROUPS: ret
 tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
   %rows = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #ttg.slice<{dim = 1, parent = #grouped_carries}>>

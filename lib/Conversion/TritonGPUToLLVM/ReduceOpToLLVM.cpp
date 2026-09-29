@@ -23,13 +23,11 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
-struct ReduceOpConversion
-    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
+struct ReduceOpConversion : public ConvertOpToLLVMPattern<triton::ReduceOp> {
 public:
   ReduceOpConversion(LLVMTypeConverter &typeConverter,
                      const TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(typeConverter,
-                                                                  benefit),
+      : ConvertOpToLLVMPattern<triton::ReduceOp>(typeConverter, benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
@@ -78,7 +76,8 @@ public:
       if (i > 0) {
         sync(rewriter, loc, lastCvtCrossesCTAs, op);
       }
-      accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
+      accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs,
+                                 getTypeConverter(), targetInfo);
       lastCvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
 
       std::tie(regLl, accs) =
@@ -97,8 +96,8 @@ public:
       if (regLl != outputLayout) {
         // Reuse the shmem
         sync(rewriter, loc, lastCvtCrossesCTAs, op);
-        accs =
-            convertLayoutValues(loc, rewriter, op, regLl, outputLayout, accs);
+        accs = convertLayoutValues(loc, rewriter, op, regLl, outputLayout, accs,
+                                   getTypeConverter(), targetInfo);
       }
     }
 
@@ -471,61 +470,6 @@ private:
                                    op.getResult()[i].getType());
     }
     rewriter.replaceOp(op, results);
-  }
-
-  SmallVector<SmallVector<Value>>
-  convertLayoutValues(Location loc, ConversionPatternRewriter &rewriter,
-                      triton::ReduceOp op, const LinearLayout &srcLayout,
-                      const LinearLayout &dstLayout,
-                      const SmallVector<SmallVector<Value>> &inVals) const {
-    SmallVector<SmallVector<Value>> outVals(op.getNumOperands());
-    auto *ctx = rewriter.getContext();
-    SmallVector<int64_t> shape;
-    for (auto dim : srcLayout.getOutDimNames()) {
-      shape.push_back(srcLayout.getOutDimSize(dim));
-    }
-    auto srcEnc = triton::gpu::LinearEncodingAttr::get(ctx, srcLayout);
-    auto dstEnc = triton::gpu::LinearEncodingAttr::get(ctx, dstLayout);
-    auto baseOffsetAttr = op->getAttrOfType<IntegerAttr>("allocation.offset");
-    assert(baseOffsetAttr && "expected allocation.offset on reduce op");
-    int64_t baseOffset = baseOffsetAttr.getValue().getZExtValue();
-    // The proper way to lower reduce would be to lower it to:
-    // reduce_threads / reduce_lanes / convert_layout
-    // and let AllocationAnalysis handle the shared memory allocation
-    // and Membar the barriers.
-    auto scratch = ReduceOpHelper(op).getScratchConfig(
-        srcLayout, dstLayout,
-        [&](const LinearLayout &src, const LinearLayout &dst,
-            unsigned bitwidth) {
-          auto vecBitwidth =
-              triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
-          auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-          return getNumScratchElemsSwizzledCvt(
-              src, dst, bitwidth, targetInfo.getSharedMemoryBanks(), srcTile,
-              dstTile);
-        });
-    auto offsetTy = IntegerType::get(ctx, 32);
-    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      auto elemTy = op.getElementTypes()[i];
-      auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
-      auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
-      Value packed = packUniqueTensorElements(loc, getTypeConverter(),
-                                              inVals[i], rewriter, srcTy);
-      auto srcTensor =
-          UnrealizedConversionCastOp::create(rewriter, loc, srcTy, packed)
-              .getResult(0);
-      auto cvt =
-          triton::gpu::ConvertLayoutOp::create(rewriter, loc, dstTy, srcTensor);
-      triton::nvidia_gpu::copyClusterBarrierMbarOffset(op, cvt);
-      cvt->setAttr("allocation.offset",
-                   IntegerAttr::get(offsetTy, baseOffset + scratch.offsets[i]));
-      Type packedDstTy = getTypeConverter()->convertType(dstTy);
-      auto packedDst = UnrealizedConversionCastOp::create(
-                           rewriter, loc, packedDstTy, cvt.getResult())
-                           .getResult(0);
-      outVals[i] = unpackUniqueTensorElements(loc, packedDst, rewriter);
-    }
-    return outVals;
   }
 };
 } // namespace
