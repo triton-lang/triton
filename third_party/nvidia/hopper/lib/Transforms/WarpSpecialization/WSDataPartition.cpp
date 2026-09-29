@@ -1,3 +1,4 @@
+#include "nvidia/hopper/lib/Transforms/WarpSpecialization/WSDataPartition.h"
 #include "Utility.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -230,12 +231,12 @@ static bool rematerializeOp(Operation *op, DataPartitionScheme &partitionScheme,
   return false;
 }
 
-static bool getBackwardSliceToPartition(Value v,
-                                        DataPartitionScheme &partitionScheme,
-                                        unsigned currentDim) {
+static DataPartitionResult
+getBackwardSliceToPartition(Value v, DataPartitionScheme &partitionScheme,
+                            unsigned currentDim) {
   assert(partitionScheme.isValidPartitionDim(currentDim) && "invalid dim");
   if (!needToSlice(v, currentDim, partitionScheme.numPartitions))
-    return true;
+    return DataPartitionResult::Success;
   if (auto op = v.getDefiningOp()) {
     // Check dim compatibility
     if (!partitionScheme.ops.insert(op)) {
@@ -248,10 +249,10 @@ static bool getBackwardSliceToPartition(Value v,
             LDBG("dim " << currentDim);
             op->dump();
           });
-          return false;
+          return DataPartitionResult::Retry;
         }
       }
-      return true;
+      return DataPartitionResult::Success;
     }
     partitionScheme.opPartitionDims[op] = currentDim;
 
@@ -281,29 +282,36 @@ static bool getBackwardSliceToPartition(Value v,
             AtomicRMWOp, triton::AddPtrOp, DescriptorLoadOp,
             nvidia_gpu::TMEMAllocOp, nvidia_gpu::TMEMLoadOp, FpToFpOp, SplitOp,
             JoinOp, ReshapeOp>(op)) {
-      for (Value operand : op->getOperands())
-        if (!getBackwardSliceToPartition(operand, partitionScheme, currentDim))
-          return false;
+      for (Value operand : op->getOperands()) {
+        auto result =
+            getBackwardSliceToPartition(operand, partitionScheme, currentDim);
+        if (result != DataPartitionResult::Success)
+          return result;
+      }
     } else if (auto dotOp = dyn_cast<nvidia_gpu::WarpGroupDotOp>(op)) {
-      if (!getBackwardSliceToPartition(currentDim == 0 ? Value(dotOp.getA())
-                                                       : dotOp.getB(),
-                                       partitionScheme, currentDim))
-        return false;
-      if (!getBackwardSliceToPartition(dotOp.getC(), partitionScheme,
-                                       currentDim))
-        return false;
+      auto result = getBackwardSliceToPartition(
+          currentDim == 0 ? Value(dotOp.getA()) : dotOp.getB(),
+          partitionScheme, currentDim);
+      if (result != DataPartitionResult::Success)
+        return result;
+      result = getBackwardSliceToPartition(dotOp.getC(), partitionScheme,
+                                           currentDim);
+      if (result != DataPartitionResult::Success)
+        return result;
       partitionScheme.dotPartitionOperand[dotOp] = currentDim == 0 ? 0 : 1;
     } else if (auto dotOp = dyn_cast<nvidia_gpu::TCGen5MMAOp>(op)) {
-      if (!getBackwardSliceToPartition(currentDim == 0 ? dotOp.getA()
-                                                       : dotOp.getB(),
-                                       partitionScheme, currentDim))
-        return false;
-      if (!getBackwardSliceToPartition(dotOp.getD(), partitionScheme,
-                                       currentDim))
-        return false;
+      auto result = getBackwardSliceToPartition(
+          currentDim == 0 ? dotOp.getA() : dotOp.getB(), partitionScheme,
+          currentDim);
+      if (result != DataPartitionResult::Success)
+        return result;
+      result = getBackwardSliceToPartition(dotOp.getD(), partitionScheme,
+                                           currentDim);
+      if (result != DataPartitionResult::Success)
+        return result;
       partitionScheme.dotPartitionOperand[dotOp] = currentDim == 0 ? 0 : 1;
     } else if (isa<ttng::ReinterpretTensorDescOp, MakeTensorDescOp>(op)) {
-      return true;
+      return DataPartitionResult::Success;
     } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
       // track yield value
       // find result index of v
@@ -320,12 +328,17 @@ static bool getBackwardSliceToPartition(Value v,
       partitionScheme.opPartitionDims[ifOp.elseYield()] = currentDim;
       auto thenYieldArg = ifOp.thenYield().getOperand(resultIndex);
       auto elseYieldArg = ifOp.elseYield().getOperand(resultIndex);
-      if (!getBackwardSliceToPartition(thenYieldArg, partitionScheme,
-                                       currentDim))
-        return false;
-      if (!getBackwardSliceToPartition(elseYieldArg, partitionScheme,
-                                       currentDim))
-        return false;
+      auto result = getBackwardSliceToPartition(thenYieldArg, partitionScheme,
+                                                currentDim);
+      if (result != DataPartitionResult::Success)
+        return result;
+      result = getBackwardSliceToPartition(elseYieldArg, partitionScheme,
+                                           currentDim);
+      if (result != DataPartitionResult::Success)
+        return result;
+    } else if (isa<GatherOp>(op)) {
+      // The partitioner has no rule for slicing a Gather's source and indices.
+      return DataPartitionResult::Unsupported;
     } else {
       llvm_unreachable("Unexpected op");
     }
@@ -336,32 +349,37 @@ static bool getBackwardSliceToPartition(Value v,
     if (auto forOp = dyn_cast<scf::ForOp>(bbAargOwner)) {
       // track initial value
       auto initArg = forOp.getInitArgs()[bbArg.getArgNumber() - 1];
-      if (!getBackwardSliceToPartition(initArg, partitionScheme, currentDim))
-        return false;
+      auto result =
+          getBackwardSliceToPartition(initArg, partitionScheme, currentDim);
+      if (result != DataPartitionResult::Success)
+        return result;
       // track yield value
       auto yieldArg = forOp.getYieldedValues()[bbArg.getArgNumber() - 1];
-      if (!getBackwardSliceToPartition(yieldArg, partitionScheme, currentDim))
-        return false;
+      result =
+          getBackwardSliceToPartition(yieldArg, partitionScheme, currentDim);
+      if (result != DataPartitionResult::Success)
+        return result;
     }
   }
 
-  return true;
+  return DataPartitionResult::Success;
 };
 
-// Return false if the partition is not possible.
-static bool getForwardSliceToPartition(Value v,
-                                       DataPartitionScheme &partitionScheme,
-                                       unsigned currentDim,
-                                       DenseSet<Value> &seen) {
+static DataPartitionResult
+getForwardSliceToPartition(Value v, DataPartitionScheme &partitionScheme,
+                           unsigned currentDim, DenseSet<Value> &seen) {
   assert(partitionScheme.isValidPartitionDim(currentDim) && "invalid dim");
   if (!seen.insert(v).second)
-    return true;
+    return DataPartitionResult::Success;
   if (!needToSlice(v, currentDim, partitionScheme.numPartitions))
-    return true;
+    return DataPartitionResult::Success;
 
   // Recusively process operands forwards.
   unsigned originalDim = currentDim;
   for (Operation *depOp : v.getUsers()) {
+    if (isa<GatherOp>(depOp))
+      return DataPartitionResult::Unsupported;
+
     currentDim = originalDim;
     // Flip dim when op is trans
     if (auto transOp = dyn_cast<TransOp>(depOp)) {
@@ -371,7 +389,6 @@ static bool getForwardSliceToPartition(Value v,
       currentDim = partitionScheme.flipPartitionDim(
           currentDim, memDescTransOp.getOrder(), true);
     }
-
     // Check dim compatibility
     if (!partitionScheme.ops.insert(depOp)) {
       if (!isControlFlowOp(depOp) &&
@@ -380,7 +397,7 @@ static bool getForwardSliceToPartition(Value v,
           LDBG("incompatible partitioning during forwards:");
           depOp->dump();
         });
-        return false;
+        return DataPartitionResult::Retry;
       }
       // YieldOp can be partitioned multiple times, one for each of its
       // operands.
@@ -400,7 +417,6 @@ static bool getForwardSliceToPartition(Value v,
           break;
         }
       }
-
       if (!atomicStore)
         return false;
 
@@ -440,51 +456,55 @@ static bool getForwardSliceToPartition(Value v,
             LDBG("skip partitioning along K of " << opnd << " of dot\n");
             dotOp.dump();
           });
-          return false;
+          return DataPartitionResult::Retry;
         }
       } else {
         partitionScheme.dotPartitionOperand[dotOp] = currentDim == 0 ? 0 : 1;
       }
     }
 
-    for (Value result : depOp->getResults())
-      if (!getForwardSliceToPartition(result, partitionScheme, currentDim,
-                                      seen))
-        return false;
+    for (Value result : depOp->getResults()) {
+      auto partitionResult = getForwardSliceToPartition(
+          result, partitionScheme, currentDim, seen);
+      if (partitionResult != DataPartitionResult::Success)
+        return partitionResult;
+    }
 
     if (auto yieldOp = dyn_cast<scf::YieldOp>(depOp)) {
       auto parentOp = yieldOp->getParentOp();
       for (OpOperand &operand : yieldOp->getOpOperands()) {
         if (operand.get() == v) {
           partitionScheme.ops.insert(parentOp);
-          if (!getForwardSliceToPartition(
-                  parentOp->getResult(operand.getOperandNumber()),
-                  partitionScheme, currentDim, seen))
-            return false;
+          auto partitionResult = getForwardSliceToPartition(
+              parentOp->getResult(operand.getOperandNumber()), partitionScheme,
+              currentDim, seen);
+          if (partitionResult != DataPartitionResult::Success)
+            return partitionResult;
           ;
         }
       }
     }
   }
 
-  return true;
+  return DataPartitionResult::Success;
 };
 
 // Compute a closure of all ops originated from
 // or being dependent on by the root op.
-static bool getSliceToPartition(Value root,
-                                DataPartitionScheme &partitionScheme,
-                                unsigned currentDim) {
-  if (!getBackwardSliceToPartition(root, partitionScheme, currentDim))
-    return false;
+static DataPartitionResult getSliceToPartition(
+    Value root, DataPartitionScheme &partitionScheme, unsigned currentDim) {
+  auto result =
+      getBackwardSliceToPartition(root, partitionScheme, currentDim);
+  if (result != DataPartitionResult::Success)
+    return result;
   DataPartitionScheme forwardPartitionScheme = partitionScheme;
   DenseSet<Value> seen;
-  bool forwardSuccess = getForwardSliceToPartition(root, forwardPartitionScheme,
-                                                   currentDim, seen);
+  result = getForwardSliceToPartition(root, forwardPartitionScheme, currentDim,
+                                      seen);
   // Merge the two partition schemes
   partitionScheme.append(forwardPartitionScheme);
-  if (!forwardSuccess)
-    return false;
+  if (result != DataPartitionResult::Success)
+    return result;
 
   for (auto op : forwardPartitionScheme.ops) {
     // skip ops that have noOpPartitionDim
@@ -494,15 +514,18 @@ static bool getSliceToPartition(Value root,
     if (op->hasTrait<OpTrait::Elementwise>() ||
         isa<StoreOp, DescriptorStoreOp, AtomicRMWOp>(op)) {
       for (OpOperand &operand : op->getOpOperands()) {
-        if (!getBackwardSliceToPartition(operand.get(), partitionScheme,
-                                         currentDim))
-          return false;
+        result =
+            getBackwardSliceToPartition(operand.get(), partitionScheme,
+                                       currentDim);
+        if (result != DataPartitionResult::Success)
+          return result;
       }
     } else if (isa<nvidia_gpu::WarpGroupDotOp, nvidia_gpu::TCGen5MMAOp>(op)) {
       unsigned opndIndx = partitionScheme.dotPartitionOperand[op];
-      if (!getBackwardSliceToPartition(op->getOperand(opndIndx),
-                                       partitionScheme, currentDim))
-        return false;
+      result = getBackwardSliceToPartition(op->getOperand(opndIndx),
+                                           partitionScheme, currentDim);
+      if (result != DataPartitionResult::Success)
+        return result;
       Value accumulator;
       if (auto dotOp = dyn_cast<nvidia_gpu::WarpGroupDotOp>(op)) {
         accumulator = dotOp.getC();
@@ -513,28 +536,32 @@ static bool getSliceToPartition(Value root,
       if (currentDim == 0 && opndIndx == 0 ||
           currentDim == 1 && opndIndx == 1) {
         // Hanlde accumulator
-        if (!getBackwardSliceToPartition(accumulator, partitionScheme,
-                                         currentDim))
-          return false;
+        result = getBackwardSliceToPartition(accumulator, partitionScheme,
+                                             currentDim);
+        if (result != DataPartitionResult::Success)
+          return result;
       } else {
         // slice the other operand
         unsigned otherOpndIndx = 1 - opndIndx;
-        if (!getBackwardSliceToPartition(op->getOperand(otherOpndIndx),
-                                         partitionScheme, 1 - currentDim))
-          return false;
+        result = getBackwardSliceToPartition(op->getOperand(otherOpndIndx),
+                                             partitionScheme, 1 - currentDim);
+        if (result != DataPartitionResult::Success)
+          return result;
         // Hanlde accumulator
-        if (!getBackwardSliceToPartition(accumulator, partitionScheme,
-                                         DataPartitionScheme::noOpPartitionDim))
-          return false;
+        result = getBackwardSliceToPartition(
+            accumulator, partitionScheme,
+            DataPartitionScheme::noOpPartitionDim);
+        if (result != DataPartitionResult::Success)
+          return result;
       }
     }
   }
 
-  return true;
+  return DataPartitionResult::Success;
 }
 
-static bool computePartitionScheme(triton::FuncOp &funcOp,
-                                   DataPartitionScheme &partitionScheme) {
+static DataPartitionResult computePartitionScheme(
+    triton::FuncOp &funcOp, DataPartitionScheme &partitionScheme) {
   // Use dot to drive the partition
   SetVector<Operation *> dots;
 
@@ -549,7 +576,7 @@ static bool computePartitionScheme(triton::FuncOp &funcOp,
   });
 
   if (dots.empty())
-    return true;
+    return DataPartitionResult::Success;
 
   // Checking if all dots can be partitioned in the same way
   for (auto op : dots) {
@@ -580,7 +607,7 @@ static bool computePartitionScheme(triton::FuncOp &funcOp,
     auto shapePerCTA = getShapePerCTA(dotType);
     if (shapePerCTA.size() != 2) {
       LDBG("partition not possible: shapePerCTA " << shapePerCTA.size());
-      return false;
+      return DataPartitionResult::Retry;
     }
     auto asyncTaskIds = getAsyncTaskIds(op);
     int sliceSizeM = shapePerCTA[0] / asyncTaskIds.size();
@@ -599,7 +626,7 @@ static bool computePartitionScheme(triton::FuncOp &funcOp,
 
     if (partitionDim.empty()) {
       LDBG("Partition not available: " << sliceSizeM << " " << sliceSizeN);
-      return false;
+      return DataPartitionResult::Retry;
     }
 
     if (partitionScheme.numPartitions == 0) {
@@ -607,21 +634,25 @@ static bool computePartitionScheme(triton::FuncOp &funcOp,
     } else {
       if (partitionScheme.numPartitions != asyncTaskIds.size()) {
         LDBG("partition not possible, in conflict with previous partition\n");
-        return false;
+        return DataPartitionResult::Retry;
       }
     }
 
     bool success = false;
+    bool sawUnsupported = false;
     for (int i = 0; i < partitionDim.size(); ++i) {
       // Partition the slice closure
       auto trialPartitionScheme = partitionScheme;
       LLVM_DEBUG(
           { LDBG("Trying partition along " << partitionDim[i] << " \n"); });
 
-      if (getSliceToPartition(accumulator, trialPartitionScheme,
-                              partitionDim[i])) {
+      auto result = getSliceToPartition(accumulator, trialPartitionScheme,
+                                        partitionDim[i]);
+      if (result == DataPartitionResult::Success) {
         success = true;
         partitionScheme = trialPartitionScheme;
+      } else if (result == DataPartitionResult::Unsupported) {
+        sawUnsupported = true;
       }
 
       LLVM_DEBUG({
@@ -636,7 +667,8 @@ static bool computePartitionScheme(triton::FuncOp &funcOp,
 
     if (!success) {
       LDBG("partition not possible\n");
-      return false;
+      return sawUnsupported ? DataPartitionResult::Unsupported
+                            : DataPartitionResult::Retry;
     }
   }
 
@@ -647,7 +679,8 @@ static bool computePartitionScheme(triton::FuncOp &funcOp,
     LDBG("\n");
   });
 
-  return !partitionScheme.ops.empty();
+  return partitionScheme.ops.empty() ? DataPartitionResult::Retry
+                                     : DataPartitionResult::Success;
 }
 
 // For each op to be rematerialized, create a new op and replace its user with
@@ -1301,14 +1334,18 @@ static bool doDeepCleanup(triton::FuncOp &funcOp,
   return true;
 }
 
-bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups) {
+DataPartitionResult doDataPartition(triton::FuncOp &funcOp,
+                                    unsigned numConsumerGroups) {
   DataPartitionScheme partitionScheme;
-  if (!computePartitionScheme(funcOp, partitionScheme)) {
+  auto result = computePartitionScheme(funcOp, partitionScheme);
+  if (result == DataPartitionResult::Unsupported)
+    return result;
+  if (result == DataPartitionResult::Retry) {
     if (numConsumerGroups > 1) {
       LDBG("computePartitionScheme failed when requested");
-      return false;
+      return DataPartitionResult::Retry;
     }
-    return true;
+    return DataPartitionResult::Success;
   }
 
   // Rewrite the rematerialized ops.
@@ -1356,7 +1393,7 @@ bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups) {
   // Make sure original ops are not used
   if (!doDeepCleanup(funcOp, partitionScheme)) {
     LDBG("final cleanup failed");
-    return false;
+    return DataPartitionResult::Retry;
   }
 
   // Make sure original ops are not used
@@ -1367,7 +1404,7 @@ bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups) {
   });
 
   fixTaskId(funcOp);
-  return true;
+  return DataPartitionResult::Success;
 }
 
 #define GEN_PASS_DEF_NVGPUTESTWSDATAPARTITION
@@ -1380,9 +1417,14 @@ public:
       NVGPUTestWSDataPartitionPass>::NVGPUTestWSDataPartitionBase;
 
   void runOnFuncOp(triton::FuncOp funcOp) {
-    if (numWarpGroups > 2)
-      if (!doDataPartition(funcOp, numWarpGroups - 1))
-        signalPassFailure();
+    if (numWarpGroups <= 2)
+      return;
+    auto result = doDataPartition(funcOp, numWarpGroups - 1);
+    if (result == DataPartitionResult::Unsupported)
+      funcOp.emitError(
+          "unsupported operation in warp-specialization data partition");
+    if (result != DataPartitionResult::Success)
+      signalPassFailure();
   }
 
   void runOnOperation() override {
