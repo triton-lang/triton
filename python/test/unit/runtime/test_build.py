@@ -4,7 +4,9 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import pytest
+import subprocess
 import tarfile
 import tempfile
 
@@ -54,6 +56,43 @@ PyMODINIT_FUNC PyInit_test_module(void) {
   return m;
 }
 """
+
+
+def test_triton_opt_test_passes(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    import build_helpers
+
+    build_dir = Path(build_helpers.get_cmake_dir())
+    cache_path = build_dir / "CMakeCache.txt"
+    triton_opt = build_dir / "bin" / ("triton-opt.exe" if os.name == "nt" else "triton-opt")
+    if not cache_path.is_file() or not triton_opt.is_file():
+        pytest.skip("requires a local CMake build of triton-opt")
+
+    cache = dict(
+        line.split("=", 1)
+        for line in cache_path.read_text().splitlines()
+        if line.startswith("TRITON_BUILD_TESTS:BOOL="))
+    value = cache["TRITON_BUILD_TESTS:BOOL"].upper()
+    false_values = {"", "0", "OFF", "NO", "FALSE", "N", "IGNORE", "NOTFOUND"}
+    tests_enabled = value not in false_values and not value.endswith("-NOTFOUND")
+    help_text = subprocess.check_output([str(triton_opt), "--help"], text=True)
+    options = {line.strip().split()[0] for line in help_text.splitlines() if line.strip().startswith("--")}
+    assert "--canonicalize" in options
+    assert "--triton-combine" in options
+    for test_pass in (
+            "test-print-alias",
+            "test-print-alignment",
+            "test-print-amd-alignment",
+            "test-print-allocation",
+            "test-print-buffer-region",
+            "test-buffer-region-alias",
+            "test-print-membar",
+            "triton-test-loop-peeling",
+            "test-tritonamdgpu-membar",
+            "test-tritonamdgpu-range-analysis",
+            "test-print-scope-id-allocation",
+    ):
+        assert (f"--{test_pass}" in options) == tests_enabled, test_pass
 
 
 def test_compile_module(fresh_triton_cache):
