@@ -658,3 +658,37 @@ def test_opt_bool(fresh_knobs_including_libraries, monkeypatch):
     assert fresh_knobs.amd.use_block_pingpong
     monkeypatch.delenv("TRITON_HIP_USE_BLOCK_PINGPONG")
     assert fresh_knobs.amd.use_block_pingpong is None
+
+
+def test_hook_chain_is_falsey_when_empty():
+    # Hook chains are never None, so callers must test them for emptiness rather
+    # than `is None` if they want to skip work when no hook is registered.
+    chain = triton.knobs.HookChain()
+    assert chain is not None
+    assert not chain
+
+    def hook(*args, **kwargs):
+        pass
+
+    chain.add(hook)
+    assert chain
+    chain.remove(hook)
+    assert not chain
+
+
+def test_fpsan_homomorphic_casts_read_once(fresh_knobs_including_libraries, monkeypatch):
+    # Read on every kernel launch, so it is resolved at import time like
+    # runtime.debug and compilation.instrumentation_mode. Changing the
+    # environment only takes effect after refresh_knobs().
+    fresh_knobs = fresh_knobs_including_libraries
+    assert not fresh_knobs.compilation.fpsan_homomorphic_casts
+
+    monkeypatch.setenv("TRITON_FPSAN_HOMOMORPHIC_CASTS", "1")
+    assert not fresh_knobs.compilation.fpsan_homomorphic_casts
+
+    triton.knobs.refresh_knobs()
+    assert fresh_knobs.compilation.fpsan_homomorphic_casts
+
+    # Assignment still overrides it, which is how test_fpsan.py toggles it.
+    fresh_knobs.compilation.fpsan_homomorphic_casts = False
+    assert not fresh_knobs.compilation.fpsan_homomorphic_casts

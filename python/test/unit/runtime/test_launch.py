@@ -245,3 +245,27 @@ def test_interpreter_implicit_cvt_bool() -> None:
     assert value.dtype == tl.int1
     assert value.handle.data.dtype == np.bool_
     assert bool(value.handle.data[0]) is True
+
+
+def test_launch_metadata_skipped_without_hooks() -> None:
+    # launch_metadata() builds a LazyDict for the launch hooks to consume. With no
+    # hook registered there is nothing to consume it, so it must return None
+    # rather than allocating one on every launch.
+
+    @triton.jit
+    def kernel(x):
+        pass
+
+    compiled = kernel.warmup(6, grid=(1, ))
+    assert not triton.knobs.runtime.launch_enter_hook
+    assert compiled.launch_metadata((1, ), None, 6) is None
+
+    def hook(launch_metadata):
+        pass
+
+    triton.knobs.runtime.launch_enter_hook.add(hook)
+    try:
+        assert compiled.launch_metadata((1, ), None, 6) is not None
+    finally:
+        triton.knobs.runtime.launch_enter_hook.remove(hook)
+    assert compiled.launch_metadata((1, ), None, 6) is None
