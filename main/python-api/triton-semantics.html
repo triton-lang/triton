@@ -65,6 +65,7 @@
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Triton Semantics</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="#type-promotion">Type Promotion</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#broadcasting">Broadcasting</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#chained-comparisons">Chained Comparisons</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#differences-with-numpy">Differences with NumPy</a></li>
 </ul>
 </li>
@@ -140,6 +141,11 @@
 <li><p>If one of the tensor shapes is shorter, pad it on the left with ones until both tensors have the same number of dimensions: <code class="docutils literal notranslate"><span class="pre">((3,</span> <span class="pre">4),</span> <span class="pre">(5,</span> <span class="pre">3,</span> <span class="pre">4))</span> <span class="pre">-&gt;</span> <span class="pre">((1,</span> <span class="pre">3,</span> <span class="pre">4),</span> <span class="pre">(5,</span> <span class="pre">3,</span> <span class="pre">4))</span></code></p></li>
 <li><p>Two dimensions are compatible if they are equal, or if one of them is 1. A dimension of 1 will be expanded to match the dimension of the other tensor. <code class="docutils literal notranslate"><span class="pre">((1,</span> <span class="pre">3,</span> <span class="pre">4),</span> <span class="pre">(5,</span> <span class="pre">3,</span> <span class="pre">4))</span> <span class="pre">-&gt;</span> <span class="pre">((5,</span> <span class="pre">3,</span> <span class="pre">4),</span> <span class="pre">(5,</span> <span class="pre">3,</span> <span class="pre">4))</span></code></p></li>
 </ol>
+</section>
+<section id="chained-comparisons">
+<h2>Chained Comparisons<a class="headerlink" href="#chained-comparisons" title="Link to this heading"></a></h2>
+<p>Chained comparisons such as <code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">&lt;=</span> <span class="pre">x</span> <span class="pre">&lt;=</span> <span class="pre">8</span></code> compare each adjacent pair of operands and combine the results with elementwise logical AND. They support both scalar and tensor operands, using the usual type promotion and broadcasting rules for each comparison. Longer chains and mixed comparison operators are supported, for example <code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">&lt;=</span> <span class="pre">x</span> <span class="pre">&lt;</span> <span class="pre">y</span> <span class="pre">!=</span> <span class="pre">8</span></code>.</p>
+<p>Operands are evaluated from left to right, and each operand is evaluated only once. As with Triton’s <code class="docutils literal notranslate"><span class="pre">and</span></code> operator, a comparison that is false at compile time skips the remaining comparisons and operands. Runtime tensor comparisons do not short-circuit, including scalar tensors: later operands are still evaluated even when an earlier comparison is false. Use explicit control flow if later operations must be conditional on a runtime value.</p>
 </section>
 <section id="differences-with-numpy">
 <h2>Differences with NumPy<a class="headerlink" href="#differences-with-numpy" title="Link to this heading"></a></h2>

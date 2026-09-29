@@ -181,13 +181,13 @@ Benchmarking naive: ...
 Benchmarking naive: done
 Benchmarking persistent: ...
 Benchmarking persistent: done
-nan 15663.556 ROOT
-├─ 177.349 3874.814 cuBLAS [M=8192, N=8192, K=512]
-│  └─ nan 3874.814 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 176.422 3895.175 matmul_kernel [M=8192, N=8192, K=512]
-├─ 171.431 4008.571 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 176.884 3884.996 torch [M=8192, N=8192, K=512]
-   └─ nan 3884.996 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+nan 15480.359 ROOT
+├─ 179.014 3838.769 cuBLAS [M=8192, N=8192, K=512]
+│  └─ nan 3838.769 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 178.379 3852.441 matmul_kernel [M=8192, N=8192, K=512]
+├─ 174.118 3946.729 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 178.844 3842.419 torch [M=8192, N=8192, K=512]
+   └─ nan 3842.419 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -1025,7 +1025,7 @@ nan 15663.556 ROOT
 </span>        <span class="n">proton</span><span class="o">.</span><span class="n">finalize</span><span class="p">(</span><span class="p">)</span><span class="w">
 </span>        <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">matmul</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
 </span></pre></div></div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 34.657 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 38.816 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>
