@@ -579,7 +579,12 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
 static LinearLayout projectAwayOutDim(const LinearLayout &layout,
                                       StringAttr dim) {
-  return layout.resizeOutDim(dim, 1);
+  llvm::SmallDenseMap<StringAttr, int64_t> shape;
+  for (auto [outDim, size] : layout.getOutDims())
+    shape[outDim] = outDim == dim ? 1 : size;
+  auto registers = StringAttr::get(dim.getContext(), "register");
+  return ensureLayoutNotLargerThan(layout.removeZeroBasesAlongDim(registers),
+                                   shape);
 }
 
 LinearLayout chooseWmmaCTALinearLayout(MLIRContext *ctx, unsigned rank,
@@ -775,7 +780,9 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto rank = shape.size();
 
   auto tileLayout = getTileLayout(rank);
-  auto ctaLayout = getCtaLayout();
+  // The explicit CTA layout may already contain repeated registers.
+  auto ctaLayout = getCtaLayout().removeZeroBasesAlongDim(
+      StringAttr::get(getContext(), "register"));
   auto wmmaLayout = tileLayout * ctaLayout;
 
   // This output-dimension transposition is no longer required, as the
@@ -863,9 +870,6 @@ AMDWmmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
   auto ctaLayout = wmmaLayout.getCtaLayout();
   // Zero out M or N dim based on opIdx
   ctaLayout = projectAwayOutDim(ctaLayout, dimK);
-  // If repetition (aka register basis) iz 0 in all out dims we need to remove
-  // it since this repetition doesn't make sense for dotOp layout.
-  ctaLayout = actionRemoveBroadcastedRegs(ctaLayout).apply(ctaLayout);
 
   LinearLayout dotOperanLayout = tileLayout * ctaLayout;
 
@@ -886,8 +890,7 @@ BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
       identityStandardND(S("lane"), getThreadsPerWarp(), order) *
       identityStandardND(S("warp"), getWarpsPerCTA(), order);
 
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape)
-      .removeZeroBasesAlongDim(S("register"));
+  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
 }
 
 LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
@@ -1037,9 +1040,9 @@ NvidiaMmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
 LinearLayout
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
-  if (mlir::isa<BlockedEncodingAttr>(parent))
+  if (isa<BlockedEncodingAttr>(parent))
     return fmaDotToLinearLayout(*this, shape);
-  if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(parent))
+  if (auto mma = dyn_cast<MmaEncodingTrait>(parent))
     return mma.dotOperandToLinearLayout(*this, shape);
   llvm::report_fatal_error(
       "unexpected parent layout in DotOperandEncodingAttr::toLinearLayout");
@@ -1509,9 +1512,6 @@ LinearLayout chooseScaledWmmaScaleLayout(
 
   // Zero out M or N dim based on opIdx
   ctaLayout = projectAwayOutDim(ctaLayout, dimK);
-  // If repetition (aka register basis) iz 0 in all out dims we need to remove
-  // it since this repetition doesn't make sense for dotOp layout.
-  ctaLayout = actionRemoveBroadcastedRegs(ctaLayout).apply(ctaLayout);
 
   ctaLayout = tileLayout.transposeOuts(outDimNames) * ctaLayout;
   auto nonOpSelLayout =
@@ -1527,11 +1527,13 @@ LinearLayout chooseScaledWmmaScaleLayout(
   // next tile computed by the same warp (aka it's first repetition in non-k
   // dim), if there is one. So register base that naturally represents first
   // repetition needs to be moved to lane base that represents lane 16. Since
-  // for a single tile thread holds 4 vals, we move register base 2, to lane
-  // base 4.
+  // with four scales per thread we move register base 2 to lane base 4;
+  // smaller K dimensions have fewer register bases before that repetition.
 
   // No repetitions in m/n dim.
-  auto firstRepInNonK = tileLayout.getInDimSizeLog2(kRegister);
+  auto elemsPerThread = LinearEncodingTrait::basesPerDim(
+      nonOpSelLayout, kRegister, /*skipBroadcast=*/true);
+  auto firstRepInNonK = llvm::Log2_32(elemsPerThread.back());
   if (nonOpSelLayout.getInDimSizeLog2(kRegister) <= firstRepInNonK) {
     return nonOpSelLayout;
   }

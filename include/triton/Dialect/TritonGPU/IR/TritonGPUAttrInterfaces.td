@@ -250,7 +250,7 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                     "SmallVector<unsigned>",
                     "getRepOrderForOperand",
                     (ins "int":$opIdx)>,
-    InterfaceMethod<"Convert a dot operand whose parent is this MMA layout to a LinearLayout.",
+    InterfaceMethod<"Convert a dot operand whose parent is this MMA layout to a LinearLayout without zero register bases. Lowering supplies any repeated instruction operands.",
                     "LinearLayout",
                     "dotOperandToLinearLayout",
                     (ins "::mlir::Attribute":$dotOp,

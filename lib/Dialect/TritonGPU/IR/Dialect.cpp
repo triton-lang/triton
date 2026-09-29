@@ -1438,8 +1438,7 @@ LinearLayout LinearEncodingTrait::toLinearLayout(const LinearLayout &ll,
   }
   result = result.transposeOuts(permutedDims);
   result = ensureLayoutNotSmallerThan(result, namedShape);
-  result = ensureLayoutNotLargerThan(result, namedShape,
-                                     /*broadcastRegisters=*/false);
+  result = ensureLayoutNotLargerThan(result, namedShape);
   result = result.transposeOuts(canonicalDims);
   return result;
 }
