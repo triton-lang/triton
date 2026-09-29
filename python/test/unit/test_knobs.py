@@ -235,8 +235,8 @@ def test_amd_llvm_options_concurrent():
 
 @pytest.mark.parametrize(("arch", "enable_fp_fusion", "disable_opt", "expected_flags", "disable_optimization"), [
     ("gfx90a", True, None, [], False),
-    ("gfx942", False, "1", ["amdgpu-use-amdgpu-trackers"], True),
-    ("gfx950", True, "disable-lsr", ["amdgpu-use-amdgpu-trackers"], False),
+    ("gfx942", False, "1", [], True),
+    ("gfx950", True, "disable-lsr", [], False),
     ("gfx1250", True, "0", ["amdgpu-anti-hints-for-va-vdst"], False),
 ])
 def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags, disable_optimization, fresh_knobs,
