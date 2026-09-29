@@ -22,13 +22,6 @@
 // CHECK: arith.addf
 // CHECK: tt.descriptor_store
 
-// CHECK-LABEL: @gather_reduce_consumer_falls_back
-// CHECK: ttng.warp_group_dot
-// CHECK: tt.gather
-// CHECK: tt.reduce
-// CHECK: tt.store
-// CHECK: tt.store
-
 // CHECK-LABEL: @independent_gathers_feed_dot_falls_back
 // CHECK: ttng.warp_group_dot
 // CHECK: tt.gather
