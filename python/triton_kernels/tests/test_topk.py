@@ -63,6 +63,37 @@ def test_topk_arbitrary_k_forward_backward(k, apply_softmax, use_provided_indice
     assert_close(x_ref.grad, x.grad)
 
 
+@pytest.mark.parametrize("k", [3, 8, 33])
+@pytest.mark.parametrize("apply_softmax", [False, True])
+@pytest.mark.parametrize("grad_layout", ["contiguous", "sliced", "broadcast", "sum"])
+def test_topk_backward_strided_grad(k, apply_softmax, grad_layout):
+    torch.manual_seed(0)
+    n_rows, n_experts = 7, 67
+    x = torch.randn((n_rows, n_experts), device="cuda", requires_grad=True)
+    x_ref = x.detach().clone().requires_grad_()
+    actual = topk(x, k, apply_softmax=apply_softmax)
+    expected = topk_torch(x_ref, k, apply_softmax=apply_softmax)
+
+    if grad_layout == "sum":
+        actual.vals.sum().backward()
+        expected.vals.sum().backward()
+    else:
+        # Keep backing storage large enough that ignoring the column stride
+        # gives incorrect values without reading out of bounds.
+        grad_data = torch.randn((n_rows, 2 * k), device="cuda")
+        if grad_layout == "sliced":
+            grad = grad_data[:, ::2]
+        elif grad_layout == "broadcast":
+            grad = grad_data[:, :1].expand(-1, k)
+        else:
+            grad = grad_data[:, :k].contiguous()
+        actual.vals.backward(grad)
+        expected.vals.backward(grad)
+
+    # Broadcast gradients through softmax are zero up to rounding error.
+    torch.testing.assert_close(x.grad, x_ref.grad, atol=1e-6, rtol=1e-4)
+
+
 @pytest.mark.parametrize("use_provided_indices", [False, True])
 @pytest.mark.parametrize("n_rows", [1, 7, 16, 31, 32, 128])
 @pytest.mark.parametrize("k", [8, 18, 33, 63, 64])
