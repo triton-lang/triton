@@ -687,3 +687,28 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Four consecutive bytes with independent masks must remain four one-byte
+  // accesses. Rounding their masks up to a shadow word touches inactive bytes.
+  // CHECK-LABEL: llvm.func @independently_masked_bytes
+  // CHECK: %[[FOUR:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-NEXT: %[[ONE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %[[FOUR]], %[[ONE]],
+  // CHECK: %[[FOUR_LOAD:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-NEXT: %[[ONE_LOAD:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[FOUR_LOAD]], %[[ONE_LOAD]],
+  tt.func @independently_masked_bytes(%base: !tt.ptr<i8> {tt.divisibility = 16 : i32},
+                                      %mask: tensor<512xi1, #blocked>) {
+    %offsets = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #blocked>
+    %bases = tt.splat %base : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>, #blocked>
+    %ptrs = tt.addptr %bases, %offsets : tensor<512x!tt.ptr<i8>, #blocked>, tensor<512xi32, #blocked>
+    %values = arith.constant dense<1> : tensor<512xi8, #blocked>
+    tt.store %ptrs, %values, %mask : tensor<512x!tt.ptr<i8>, #blocked>
+    %loaded = tt.load %ptrs, %mask : tensor<512x!tt.ptr<i8>, #blocked>
+    tt.return
+  }
+}

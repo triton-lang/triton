@@ -264,6 +264,12 @@ def matmul(a, b, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
+    With gather_indx, BlackwellActMXScaleLayout activation scales must already
+    follow the gathered row order; strided activation scales are gathered with
+    the values. For ragged-M matmul, the Blackwell scale layout must use the same
+    RaggedTensorMetadata instance as a_ragged_metadata. This ensures matching row
+    segmentation and padding without comparing metadata tensors on the device.
+
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
     When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
@@ -535,7 +541,7 @@ def matmul(a, b, bias,
         available_sms = target_info.num_sms() - opt_flags.idle_sms
         grid = min(opt_flags.occupancy_target * available_sms, grid)
     # canonicalize storage
-    has_scatter_tma = has_scatter and out_matmul.element_size() <= 4 and target_info.has_tma_gather()
+    has_scatter_tma = has_scatter and out_matmul.element_size() <= 4 and target_info.has_tma_scatter()
     c = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     a = Tensor(_canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data), dtype=a.dtype, shape=a.shape, shape_max=a.shape_max)
     b_storage_ndim = 5 if b_is_shuffled else 3
@@ -624,6 +630,12 @@ def matmul(a, b, bias,
         assert opt_flags.block_m == 128 and opt_flags.block_k >= 128, "block_m and block_k must be at least 128 if x scale is swizzled"
         a_scale_has_tma = True
     if a_scale_has_tma:
+        scale_layout = a_scale.storage.layout.make_transformation(a_scale.shape_max, is_fp4=False)
+        assert (scale_layout.mode == "ragged") == (ragged_dimension == "M"), \
+            "Blackwell activation scales must use the matmul's row layout"
+        if ragged_dimension == "M":
+            assert scale_layout.ragged_metadata is a_ragged_metadata, \
+                "Blackwell activation scales must use the same RaggedTensorMetadata instance as the matmul"
         scale_block_k = opt_flags.block_k // mx_block_size
         a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
         a_scale_tensor_or_tma = make_tma(a_scale, a_scale_tma_block_size, "dense", is_scale=True)
@@ -726,6 +738,8 @@ def matmul(a, b, bias,
                    EVEN_K=even_K,
                    W_CACHE_MODIFIER=opt_flags.w_cache_modifier,
                    TOKENS_PER_EXPT_FOR_ANNOTATION=None if a_ragged_metadata is None else a_ragged_metadata.expected_slice_size,
+                   # Preserve scale/bias contraction across the supported epilogues.
+                   enable_fp_fusion=True,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,

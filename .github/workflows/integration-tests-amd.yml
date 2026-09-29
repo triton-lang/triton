@@ -70,6 +70,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: 'true'
+      - name: Inspect AMD runner
+        env:
+          CI_CONTAINER_IMAGE: ${{ matrix.image }}
+          CI_RUNNER_LABELS: ${{ join(matrix.runner, ', ') }}
+        run: bash .github/amd-ci/runner-diagnostics.sh
+        shell: bash
       - name: Compute cache keys
         id: cache-key
         run: |
@@ -253,6 +259,140 @@ jobs:
       - name: Clean up caches
         # Always cleanup the worker, even if builds or tests failed given that these directories are
         # mapped from the host and we write files as the root user in the docker.
+        if: always()
+        run: |
+          rm -rf ~/.triton/cache
+          rm -rf ~/.ccache
+
+  integration-tests-amd-rocjitsu:
+    name: integration-tests-amd (gfx1250-rocjitsu)
+    if: github.repository == 'triton-lang/triton'
+    runs-on: amd-gfx942
+    timeout-minutes: 60
+    env:
+      TRITON_BUILD_WITH_CCACHE: "true"
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+      TRITON_DISABLE_LINE_INFO: 1
+      PYTHON: "python3"
+      PYTEST_ADDOPTS: "-p triton._compile_warmup"
+      CCACHE_COMPRESS: "true"
+      PIP_BREAK_SYSTEM_PACKAGES: 1
+      ROCM_NIGHTLY_INDEX_URL: https://nightly.repo.amd.com/rocm/whl-next/
+      ROCM_VERSION: "10.2.0a20260921"
+      TORCH_VERSION: "2.15.0a0+rocm10.2.0a20260921"
+    container:
+      image: tritonci/triton-amd-ci:rocm10.1.0a20260820-pytorch2.15.0a0-gfx942-gfx950-gfx1250-r1
+      options: >-
+        --security-opt seccomp=unconfined --user root
+        --volume /home/runner/.triton:/github/home/.triton
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+      - name: Setup gfx1250 emulation
+        shell: bash
+        run: |
+          set -xeo pipefail
+          unset HIP_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES
+          python3 -m pip uninstall -y \
+            triton triton-rocm pytorch-triton torch amd-torch-device-gfx1250 \
+            rocm rocm-sdk-core rocm-sdk-devel rocm-sdk-libraries rocm-sdk-device-gfx1250 \
+            2>/dev/null || true
+          python3 -m pip install --pre --force-reinstall \
+            --index-url "${ROCM_NIGHTLY_INDEX_URL}" \
+            --extra-index-url https://pypi.org/simple \
+            "rocm[libraries,devel,device-gfx1250]==${ROCM_VERSION}" \
+            "torch[device-gfx1250]==${TORCH_VERSION}"
+          rocm-sdk init
+          ROCM_ROOT="$(rocm-sdk path --root)"
+          echo "ROCM_ROOT=${ROCM_ROOT}" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${ROCM_ROOT}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "${ROCM_ROOT}/bin" >> "$GITHUB_PATH"
+          test -f "${ROCM_ROOT}/lib/libamdhip64.so"
+          test -x "${ROCM_ROOT}/bin/mirage"
+          config="${ROCM_ROOT}/share/rocjitsu/configs/gfx1250_mi455x.json"
+          if [ ! -f "${config}" ]; then
+            config="${ROCM_ROOT}/share/rocjitsu/configs/gfx1250.json"
+          fi
+          test -f "${config}"
+          echo "ROCJITSU_CONFIG=${config}" >> "$GITHUB_ENV"
+          echo "ROCJITSU=${ROCM_ROOT}/bin/mirage run --in-process --config ${config} --" >> "$GITHUB_ENV"
+      - name: Install Triton
+        shell: bash
+        run: |
+          pip uninstall -y triton pytorch-triton-rocm
+          ccache --zero-stats
+          pip install -r python/requirements.txt
+          pip install -r python/test-requirements.txt pytest-timeout
+          make dev-install
+          pip install -e python/triton_kernels
+      - name: Print ccache stats
+        run: ccache --print-stats
+      - name: Check active target is gfx1250
+        shell: bash
+        run: $ROCJITSU python3 -c "import triton; print(triton.runtime.driver.active.get_current_target())"
+      - name: Run Gluon tests on gfx1250-rocjitsu
+        shell: bash
+        run: |
+          set -euo pipefail
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+            third_party/amd/python/test/test_gluon_cdna5.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+            third_party/amd/python/test/test_tdm_copy.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+            python/test/gluon/test_frontend.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+            python/test/gluon/test_fpsan.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+            third_party/amd/python/examples/gluon/f16_gemm_cdna5.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+            third_party/amd/python/examples/gluon/f16_gemm_streamk_cdna5.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+            third_party/amd/python/examples/gluon/f16_fa_cdna5.py
+          TRITON_DISABLE_LINE_INFO=0 $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+            third_party/amd/python/examples/gluon/mxfp_fa_cdna5.py
+      - name: Run Triton tests on gfx1250-rocjitsu
+        shell: bash
+        run: |
+          set -euo pipefail
+          k_runtime="not (test_device_assert or test_expect_zero_device_assert or test_sanitize_int or test_replenishing_process_pool_reuses_clean_processes or test_run_in_process_handles_large_exceptions)"
+          k_core="not (test_load_store_same_ptr or test_atomic_cas or (test_scan2d and shape365) or (test_scan2d and shape869) or (test_umulhi and int64) or (test_umulhi and uint64) or (test_scaled_dot and e2m1-e4m3))"
+          k_matmul="not (test_preshuffle_scale_mxfp_cdna4 or test_batched_mxfp or test_mxfp8_mxfp4_matmul or test_block_scale_fp4 or (test_simple_matmul and float64-float64))"
+          k_tdesc="not (tensor_descriptor_reduce or test_tensor_descriptor_padding or test_host_tensor_descriptor_round_f32_to_tf32)"
+
+          k_all="$k_runtime and $k_core and $k_matmul and $k_tdesc"
+
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_all" -p no:forked \
+            --timeout=600 --timeout-method=thread \
+            python/test/unit/test_debug.py \
+            python/test/unit/runtime \
+            python/test/unit/language/test_core.py \
+            python/test/unit/language/test_matmul.py \
+            python/test/unit/language/test_tensor_descriptor.py \
+            python/triton_kernels/tests/test_topk.py::test_topk
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+            third_party/amd/python/test/ \
+            --ignore=third_party/amd/python/test/test_address_sanitizer.py \
+            --ignore=third_party/amd/python/test/test_gluon_cdna5_consan.py \
+            --ignore=third_party/amd/python/test/test_pointer_optimization.py \
+            --ignore=third_party/amd/python/test/test_gluon_cdna5.py \
+            --ignore=third_party/amd/python/test/test_tdm_copy.py \
+            --ignore=third_party/amd/python/test/test_int8_dot_small_block_k.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 1 --durations=20 -p no:forked \
+            --timeout=300 --timeout-method=thread \
+            python/test/unit/language/test_pipeliner.py::test_scatter_pipeline
+          moe_tests=(
+            "test_op[None-False-False-True-True-None-128-768-512-1024-batched-float16-float16-None-10-1-False-False-False-False-None-False-False-False-True-None]"
+            "test_op[None-False-True-False-True-None-128-16-256-256-ragged-float8_e5m2-mxfloat4_e2m1-None-10-1-False-True-False-False-None-False-False-False-True-None]"
+            "test_op[None-False-True-False-True-None-128-300-400-832-ragged-float8_e5m2-mxfloat4_e2m1-None-10-1-False-False-False-False-None-False-False-False-True-None]"
+            "test_op[None-False-False-False-False-None-16-727-577-859-ragged-float16-float16-None-10-1-False-False-False-False-None-False-False-False-True-None]"
+          )
+          moe_k_expr="$(printf '%s or ' "${moe_tests[@]}" | sed 's/ or $//')"
+          HSA_ENABLE_SDMA=0 $ROCJITSU pytest --capture=tee-sys -rfs -n 4 --durations=20 \
+            -k "$moe_k_expr" python/triton_kernels/tests/test_matmul.py
+      - name: Clean up caches
         if: always()
         run: |
           rm -rf ~/.triton/cache

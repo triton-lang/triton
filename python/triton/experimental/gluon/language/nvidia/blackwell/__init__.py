@@ -46,33 +46,38 @@ __all__ = [
 
 def _packed_arith(operation, operands, dtype, semantic):
     """Build packed arithmetic with inferred result types and FP4 layouts."""
-    operands = tuple(semantic.to_tensor(operand) for operand in operands)
-    _check(any(isinstance(operand.type, ttgl.distributed_type) for operand in operands),
+    operands = tuple(_unwrap_if_constexpr(operand) for operand in operands)
+    operand_types = tuple(operand.type if isinstance(operand, ttgl.tensor) else semantic.to_tensor_type(operand)
+                          for operand in operands)
+    _check(any(isinstance(ty, ttgl.distributed_type) for ty in operand_types),
            lambda: "packed arithmetic requires at least one distributed tensor operand")
     floating = [
-        operand for operand in operands
-        if isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_floating()
+        operand for operand, ty in zip(operands, operand_types)
+        if isinstance(ty, ttgl.distributed_type) and ty.scalar.is_floating()
     ]
     reference = max(floating, key=lambda operand: operand.numel.value, default=None)
     dtype = _unwrap_if_constexpr(dtype)
 
     if reference is None:
         _check(dtype is not None, lambda: "packed FP4 operands require an explicit result dtype")
-        shape = list(operands[0].type.shape)
+        shape = list(operand_types[0].shape)
         shape[-1] *= 2
     else:
         shape = reference.type.shape
         if dtype is None:
-            addend = operands[-1]
-            dtype = addend.dtype if operation in ("add", "sub", "fma") and addend.dtype.is_fp8() else reference.dtype
-            for operand in operands:
-                if not operand.dtype.is_floating() or (dtype.is_fp8() and operand.dtype.is_fp8()):
+            addend_dtype = operand_types[-1].scalar
+            dtype = addend_dtype if operation in ("add", "sub", "fma") and addend_dtype.is_fp8() else reference.dtype
+            for operand, ty in zip(operands, operand_types):
+                if not ty.scalar.is_floating() or (dtype.is_fp8() and ty.scalar.is_fp8()):
                     continue
-                dtype = semantic.computation_type_impl(dtype, False, operand.dtype, not operand.type.is_block(), False)
+                dtype = semantic.computation_type_impl(dtype, False, ty.scalar, not isinstance(operand, ttgl.tensor),
+                                                       False)
 
     _check(isinstance(dtype, ttgl.dtype), lambda: f"expected 'dtype' to be a dtype but got {dtype}")
     normalized = []
     for operand in operands:
+        if not isinstance(operand, ttgl.tensor):
+            operand = semantic.scalar_constant(operand, dtype)
         is_packed_fp4 = (isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_int()
                          and operand.dtype.primitive_bitwidth == 8 and operand.type.shape != shape)
         if not is_packed_fp4:

@@ -611,6 +611,7 @@ class InterpreterBuilder:
     create_fneg = lambda self, input: self.unary_op(input, np.negative)
     create_mul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_precise_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
+    create_approx_divf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
     create_sdiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
     create_udiv = lambda self, lhs, rhs: self.create_idiv(lhs, rhs)
     # LLVM has 'numpy.fmod', not 'numpy.remainder', semantics on integer remainders.
@@ -1515,7 +1516,62 @@ class GridExecutor:
         self._restore_args_dev(args_dev, args_hst, kwargs, kwargs_hst)
 
 
+class _InterpreterComparison:
+    """Adapt native Python comparison chaining to Triton's tensor semantics."""
+
+    def __init__(self, value, comparison=None):
+        self.value = value
+        self.comparison = comparison
+        self.result = None
+        self.tensor_results = []
+
+    def __lt__(self, rhs):
+        # Python reuses the right operand for the next comparison. Carry the
+        # accumulated results with it, delegating to the original operator.
+        rhs.result = rhs.comparison(self.value, rhs.value)
+        rhs.tensor_results = self.tensor_results
+        if isinstance(rhs.result, tl.tensor):
+            rhs.tensor_results.append(rhs.result)
+        return rhs
+
+    def __bool__(self):
+        # Only compile-time false comparisons short-circuit the native chain.
+        return isinstance(self.result, tl.tensor) or bool(self.result)
+
+    def get_result(self):
+        if not self or not self.tensor_results:
+            return self.result
+        result = self.tensor_results[-1]
+        for value in reversed(self.tensor_results[:-1]):
+            result = value.logical_and(result)
+        return result
+
+
 class ASTTransformer(ast.NodeTransformer):
+
+    def visit_Compare(self, node):
+        node = self.generic_visit(node)
+        if len(node.ops) == 1:
+            return node
+
+        def wrap_operand(value, op=None):
+            args = [value]
+            if op is not None:
+                parameters = ast.arguments(posonlyargs=[], args=[ast.arg(arg="lhs"),
+                                                                 ast.arg(arg="rhs")], kwonlyargs=[], kw_defaults=[],
+                                           defaults=[])
+                comparison = ast.Compare(left=ast.Name(id="lhs", ctx=ast.Load()), ops=[op],
+                                         comparators=[ast.Name(id="rhs", ctx=ast.Load())])
+                args.append(ast.Lambda(args=parameters, body=comparison))
+            return ast.Call(func=ast.Name(id="_InterpreterComparison", ctx=ast.Load()), args=args, keywords=[])
+
+        # Keep operand expressions in their original scope so assignment
+        # expressions still bind there. Python's native chain evaluates each
+        # operand once and uses the wrappers' truthiness to short-circuit.
+        chain = ast.Compare(left=wrap_operand(node.left), ops=[ast.Lt() for _ in node.ops],
+                            comparators=[wrap_operand(value, op) for op, value in zip(node.ops, node.comparators)])
+        return ast.copy_location(
+            ast.Call(func=ast.Attribute(value=chain, attr="get_result", ctx=ast.Load()), args=[], keywords=[]), node)
 
     def visit_Assign(self, node):
         names = []
@@ -1527,7 +1583,8 @@ class ASTTransformer(ast.NodeTransformer):
         # interpreter_semantic.to_tensor(value, False)
         node.value = ast.Call(
             func=ast.Attribute(value=ast.Name(id="interpreter_semantic", ctx=ast.Load()), attr="to_tensor",
-                               ctx=ast.Load()), args=[node.value, ast.Constant(value=False)], keywords=[])
+                               ctx=ast.Load()), args=[self.visit(node.value),
+                                                      ast.Constant(value=False)], keywords=[])
         return node
 
 

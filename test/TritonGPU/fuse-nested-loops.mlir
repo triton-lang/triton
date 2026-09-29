@@ -5,6 +5,25 @@ tt.func @empty_function() {
   tt.return
 }
 
+// CHECK-LABEL: @duplicate_epilogue_outputs
+tt.func @duplicate_epilogue_outputs(%lb: i32, %ub: i32, %step: i32) {
+  %r:2 = scf.for %i = %lb to %ub step %step
+      iter_args(%a = %lb, %b = %ub) -> (i32, i32) : i32 {
+    scf.for %j = %lb to %ub step %step : i32 {
+      "body"() : () -> ()
+    }
+    // CHECK: [[RESULTS:%.*]]:2 = scf.if {{.*}} -> (i32, i32) {
+    // CHECK-NEXT: [[NEXT:%.*]] = "epilogue"([[A:%.*]], [[B:%.*]]) :
+    // CHECK-NEXT: scf.yield [[NEXT]], [[NEXT]] : i32, i32
+    // CHECK-NEXT: } else {
+    // CHECK-NEXT: scf.yield [[A]], [[B]] : i32, i32
+    %next = "epilogue"(%a, %b) : (i32, i32) -> i32
+    // CHECK: scf.yield {{.*}}[[RESULTS]]#0, [[RESULTS]]#1
+    scf.yield %next, %next : i32, i32
+  } {"ttg.always-fuse"}
+  tt.return
+}
+
 // CHECK-LABEL: @no_fusion
 tt.func @no_fusion(%lb: index, %ub: index, %step: index) -> index {
   %c0 = arith.constant 0 : index
@@ -618,6 +637,29 @@ tt.func @prologue_output(%ub: i32) {
     // CHECK-NEXT: }
     scf.yield %next : i32
   } {"ttg.always-fuse"}
+
+  tt.return
+}
+
+// CHECK-LABEL: @hoisted_inner_loop
+tt.func @hoisted_inner_loop() {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  // CHECK: [[SUM:%.*]] = scf.for
+  scf.for %i = %c0 to %c2 step %c1 : i32 {
+    %sum = scf.for %j = %c0 to %c2 step %c1
+        iter_args(%acc = %c0) -> i32 : i32 {
+      // CHECK: arith.addi
+      %next = arith.addi %acc, %j : i32
+      // CHECK-NEXT: scf.yield
+      scf.yield %next : i32
+    }
+    // CHECK-NEXT: }
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: "epilogue"([[SUM]])
+    "epilogue"(%sum) : (i32) -> ()
+  } {tt.flatten}
 
   tt.return
 }

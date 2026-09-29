@@ -1153,3 +1153,47 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#histInput = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [2], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @histogram_masked_two_warps
+  tt.func private @histogram_masked_two_warps(%src: tensor<128xi32, #histInput>, %mask: tensor<128xi1, #histInput>) -> tensor<1xi32, #histInput> {
+    // COMMON: %[[PRED:.*]] = llvm.and %{{.*}}, %{{.*}} : i1
+    // COMMON: %[[BALLOT:.*]] = rocdl.ballot %[[PRED]]{{.*}}i64
+    // COMMON: %[[POPCOUNT:.*]] = {{.*}}ctpop{{.*}}%[[BALLOT]]{{.*}}i64
+    // COMMON: llvm.trunc %[[POPCOUNT]] : i64 to i32
+    // COMMON-NOT: llvm.atomicrmw
+    // COMMON: llvm.store {{.*}}!llvm.ptr<3>
+    // COMMON: rocdl.s.barrier
+    // COMMON-NOT: llvm.atomicrmw
+    // COMMON: llvm.load {{.*}}!llvm.ptr<3>
+    // COMMON: rocdl.update.dpp
+    // COMMON: llvm.add
+    // COMMON-NOT: llvm.atomicrmw
+    // COMMON: llvm.return
+    %hist = tt.histogram %src, %mask : tensor<128xi32, #histInput> -> tensor<1xi32, #histInput>
+    tt.return %hist : tensor<1xi32, #histInput>
+  }
+}
+
+// -----
+
+#histInput = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#histResult = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [1], [0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @histogram_one_warp_nondefault_result
+  // COMMON-NOT: {{llvm.atomicrmw|rocdl.s.barrier|llvm.load|llvm.store}}
+  // COMMON: rocdl.ballot {{.*}}i64
+  // COMMON: ctpop
+  // COMMON: llvm.trunc {{.*}} : i64 to i32
+  // COMMON-NOT: {{llvm.atomicrmw|rocdl.s.barrier|llvm.load|llvm.store}}
+  // COMMON: llvm.select
+  // COMMON-NOT: {{llvm.atomicrmw|rocdl.s.barrier|llvm.load|llvm.store}}
+  // COMMON: llvm.return
+  tt.func private @histogram_one_warp_nondefault_result(%src: tensor<128xi32, #histInput>, %mask: tensor<128xi1, #histInput>) -> tensor<2xi32, #histResult> {
+    %hist = tt.histogram %src, %mask : tensor<128xi32, #histInput> -> tensor<2xi32, #histResult>
+    tt.return %hist : tensor<2xi32, #histResult>
+  }
+}

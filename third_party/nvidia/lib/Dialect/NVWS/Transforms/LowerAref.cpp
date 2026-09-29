@@ -182,7 +182,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
       assert(partitionIds.size() == 1 &&
              "aref producer must have exactly one partition");
-      if (producerGroups.count(partitionIds.front())) {
+      if (producerGroups.contains(partitionIds.front())) {
         continue;
       }
       producerGroups.insert(partitionIds.front());

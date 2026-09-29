@@ -13,6 +13,7 @@ from triton._internal_testing import (
     is_hip,
     is_hip_gfx1250,
     is_hopper_or_newer,
+    skip_if_unsupported_cluster_size,
 )
 from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
@@ -110,6 +111,8 @@ def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl
         ttgl.BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0]),
         ttgl.BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0]),
         ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [1, 0]),
+        ttgl.BlockedLayout([2, 4], [1, THREADS_PER_WARP], [1, 4], [0, 1]),
+        ttgl.BlockedLayout([4, 2], [THREADS_PER_WARP, 1], [4, 1], [1, 0]),
     ]))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("sanitize_overflow", [False, True])
@@ -126,6 +129,34 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
     z_ref = torch.cumsum(x, dim=axis, dtype=torch.int32)
     torch.testing.assert_close(z_tri, z_ref)
+
+
+@pytest.mark.parametrize("M, N, src_layout, axis, num_ctas", [
+    pytest.param(2, 2, ttgl.BlockedLayout([2, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0]), 0, 1, id="registers"),
+    pytest.param(2, 4 * THREADS_PER_WARP, ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [0, 1]), 1, 1,
+                 id="multiwarp"),
+    pytest.param(256, 4, ttgl.BlockedLayout([2, 1], [32, 1], [1, 4], [1, 0], [[0, 1]]), 0, 2, id="nonaxis_split"),
+    pytest.param(256, 4, ttgl.BlockedLayout([2, 1], [32, 1], [1, 4], [1, 0], [[0, 0]]), 0, 2, id="broadcast"),
+    pytest.param(1, 64, ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [[1, 0]]), 0, 2, id="clipped_axis_split"),
+])
+def test_scan_blocked_shape_clipping(M, N, src_layout, axis, num_ctas, device):
+    if num_ctas > 1 and not is_hopper_or_newer():
+        pytest.skip("Requires Hopper or newer")
+    x = torch.arange(1, M * N + 1, dtype=torch.int32, device=device).reshape(M, N)
+    y = torch.empty_like(x)
+    scan_kernel[(1, )](x, y, M, N, src_layout, axis, num_warps=4, num_ctas=num_ctas)
+    torch.testing.assert_close(y, x.cumsum(axis, dtype=torch.int32))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_scan_rejects_axis_split_across_ctas(device, capfd):
+    src_layout = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [[1, 0]])
+    x = torch.ones((64, 1), dtype=torch.int32, device=device)
+    y = torch.empty_like(x)
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        scan_kernel.warmup(x, y, 64, 1, src_layout, 0, grid=(1, ), num_warps=4, num_ctas=2)
+    captured = capfd.readouterr()
+    assert "unsupported scan layout" in captured.out + captured.err
 
 
 def test_scan_blocked_broadcast_layout(device):
@@ -847,6 +878,7 @@ def test_reduce_funky_layout(src_layout, axis, device):
     shape = tuple(src_layout.shape)
     num_warps = 2**len(src_layout.warp_bases)
     num_ctas = 2**len(src_layout.block_bases)
+    skip_if_unsupported_cluster_size(num_ctas)
     # TODO: Remove this once AMD supports num_ctas > 1
     if num_ctas > 1 and not is_hopper_or_newer():
         pytest.skip("num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
@@ -1292,6 +1324,33 @@ def test_histogram(M, bins, src_layout, dst_layout, num_ctas, device):
     z_torch = torch.histc(x.float(), bins=bins, min=0, max=bins - 1).to(torch.int32)
     kernel[(1, )](x, z, M, bins, src_layout, dst_layout, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(z, z_torch, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("bins, num_warps", [(1, 1), (1, 4), (2, 1), (2, 2)])
+def test_histogram_small_masked_input(bins, num_warps, device):
+
+    @gluon.jit
+    def kernel(x_ptr, z_ptr, B: ttgl.constexpr, layout: ttgl.constexpr):
+        offsets = ttgl.arange(0, 128, layout=layout)
+        x = ttgl.load(x_ptr + offsets)
+        counts = ttgl.histogram(x, B, mask=offsets % 3 != 0, layout=layout)
+        ttgl.store(z_ptr + ttgl.arange(0, B, layout=layout), counts)
+
+    offsets = torch.arange(128, device=device)
+    x = (offsets % (bins + 2) - 1).to(torch.int32)
+    selected = x[(offsets % 3 != 0) & (x >= 0) & (x < bins)]
+    expected = torch.bincount(selected.to(torch.int64), minlength=bins).to(torch.int32)
+    result = torch.empty((bins, ), dtype=torch.int32, device=device)
+    layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0])
+    compiled = kernel[(1, )](x, result, bins, layout, num_warps=num_warps)
+    torch.testing.assert_close(result, expected, atol=0, rtol=0)
+    assert "atomicrmw" not in compiled.asm["llir"]
+    if num_warps == 1:
+        assert compiled.metadata.shared == 0
+        if is_cuda():
+            assert "bar.sync" not in compiled.asm["ptx"]
+        elif is_hip():
+            assert "s_barrier" not in compiled.asm["amdgcn"]
 
 
 @pytest.mark.parametrize("M", [64, 128, 256])

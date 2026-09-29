@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 
 #include <array>
+#include <bit>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -156,26 +157,24 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
                                   bool transposeA, bool transposeB, int kSize) {
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  union TCGen5InstructionDescriptor {
-    uint32_t descriptor;
-    struct {
-      uint32_t sparsitySelector : 2;
-      uint32_t sparsity : 1;
-      uint32_t : 1;
-      uint32_t dType : 2;
-      uint32_t : 1;
-      uint32_t aType : 3;
-      uint32_t bType : 3;
-      uint32_t negateA : 1;
-      uint32_t negateB : 1;
-      uint32_t transposeA : 1;
-      uint32_t transposeB : 1;
-      uint32_t N : 6;
-      uint32_t : 1;
-      uint32_t M : 5;
-      uint32_t kSize : 1;
-      uint32_t shift : 2;
-    };
+  // Name reserved fields so bit_cast never reads padding bits.
+  struct TCGen5InstructionDescriptor {
+    uint32_t sparsitySelector : 2;
+    uint32_t sparsity : 1;
+    uint32_t reserved0 : 1;
+    uint32_t dType : 2;
+    uint32_t reserved1 : 1;
+    uint32_t aType : 3;
+    uint32_t bType : 3;
+    uint32_t negateA : 1;
+    uint32_t negateB : 1;
+    uint32_t transposeA : 1;
+    uint32_t transposeB : 1;
+    uint32_t N : 6;
+    uint32_t reserved2 : 1;
+    uint32_t M : 5;
+    uint32_t kSize : 1;
+    uint32_t shift : 2;
   };
   auto getTypeEncoding = [&](Type type) {
     if (type.isF16())
@@ -196,8 +195,7 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   };
   static_assert(sizeof(TCGen5InstructionDescriptor) == 4,
                 "instruction descriptor size should be 32 bits.");
-  TCGen5InstructionDescriptor desc;
-  desc.descriptor = 0;
+  TCGen5InstructionDescriptor desc{};
   desc.transposeA = transposeA;
   desc.transposeB = transposeB;
   desc.M = M >> 4;
@@ -214,7 +212,7 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   if (kSize == 64)
     desc.kSize = 1;
 
-  return b.int_val(32, desc.descriptor);
+  return b.int_val(32, std::bit_cast<uint32_t>(desc));
 }
 
 static Value createScaleInstDescriptorFp8(ConversionPatternRewriter &rewriter,
@@ -225,26 +223,23 @@ static Value createScaleInstDescriptorFp8(ConversionPatternRewriter &rewriter,
                                           int scaleFactorsubIdxB, int kSize) {
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  union TCGen5InstructionDescriptor {
-    uint32_t descriptor;
-    struct {
-      uint32_t sparsitySelector : 2;
-      uint32_t sparsity : 1;
-      uint32_t : 1;
-      uint32_t BScaleFactor : 2;
-      uint32_t : 1;
-      uint32_t aType : 3;
-      uint32_t bType : 3;
-      uint32_t negateA : 1;
-      uint32_t negateB : 1;
-      uint32_t transposeA : 1;
-      uint32_t transposeB : 1;
-      uint32_t N : 6;
-      uint32_t scaleType : 2;
-      uint32_t M : 4;
-      uint32_t AScaleFactor : 2;
-      uint32_t kSize : 1;
-    };
+  struct TCGen5InstructionDescriptor {
+    uint32_t sparsitySelector : 2;
+    uint32_t sparsity : 1;
+    uint32_t reserved0 : 1;
+    uint32_t BScaleFactor : 2;
+    uint32_t reserved1 : 1;
+    uint32_t aType : 3;
+    uint32_t bType : 3;
+    uint32_t negateA : 1;
+    uint32_t negateB : 1;
+    uint32_t transposeA : 1;
+    uint32_t transposeB : 1;
+    uint32_t N : 6;
+    uint32_t scaleType : 2;
+    uint32_t M : 4;
+    uint32_t AScaleFactor : 2;
+    uint32_t kSize : 1;
   };
   auto getTypeEncoding = [](ScaleDotElemType type) {
     switch (type) {
@@ -265,8 +260,7 @@ static Value createScaleInstDescriptorFp8(ConversionPatternRewriter &rewriter,
   };
   static_assert(sizeof(TCGen5InstructionDescriptor) == 4,
                 "instruction descriptor size should be 32 bits.");
-  TCGen5InstructionDescriptor desc;
-  desc.descriptor = 0;
+  TCGen5InstructionDescriptor desc{};
   desc.transposeA = transposeA;
   desc.transposeB = transposeB;
   desc.M = M >> 5;
@@ -284,7 +278,7 @@ static Value createScaleInstDescriptorFp8(ConversionPatternRewriter &rewriter,
     desc.BScaleFactor *= 2;
   }
 
-  return b.int_val(32, desc.descriptor);
+  return b.int_val(32, std::bit_cast<uint32_t>(desc));
 }
 
 static Value createScaleInstDescriptorFp4(
@@ -293,32 +287,28 @@ static Value createScaleInstDescriptorFp4(
     int scaleFactorsubIdxB, mxfpKind mxfpInstKind, int blockK, int kSize) {
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  union TCGen5InstructionDescriptor {
-    uint32_t descriptor;
-    struct {
-      uint32_t sparsitySelector : 2;
-      uint32_t sparsity : 1;
-      uint32_t kSizeUpper : 1;
-      uint32_t BScaleFactor : 2;
-      uint32_t : 1;
-      uint32_t aType : 3;
-      uint32_t bType : 2;
-      uint32_t : 1;
-      uint32_t negateA : 1;
-      uint32_t negateB : 1;
-      uint32_t transposeA : 1;
-      uint32_t transposeB : 1;
-      uint32_t N : 6;
-      uint32_t scaleType : 2;
-      uint32_t M : 4;
-      uint32_t AScaleFactor : 2;
-      uint32_t kSizeLower : 1;
-    };
+  struct TCGen5InstructionDescriptor {
+    uint32_t sparsitySelector : 2;
+    uint32_t sparsity : 1;
+    uint32_t kSizeUpper : 1;
+    uint32_t BScaleFactor : 2;
+    uint32_t reserved0 : 1;
+    uint32_t aType : 3;
+    uint32_t bType : 2;
+    uint32_t reserved1 : 1;
+    uint32_t negateA : 1;
+    uint32_t negateB : 1;
+    uint32_t transposeA : 1;
+    uint32_t transposeB : 1;
+    uint32_t N : 6;
+    uint32_t scaleType : 2;
+    uint32_t M : 4;
+    uint32_t AScaleFactor : 2;
+    uint32_t kSizeLower : 1;
   };
   static_assert(sizeof(TCGen5InstructionDescriptor) == 4,
                 "instruction descriptor size should be 32 bits.");
-  TCGen5InstructionDescriptor desc;
-  desc.descriptor = 0;
+  TCGen5InstructionDescriptor desc{};
   desc.transposeA = transposeA;
   desc.transposeB = transposeB;
   desc.M = M >> 5;
@@ -334,7 +324,7 @@ static Value createScaleInstDescriptorFp4(
     // K96 selectors are byte offsets into three (block32) or six (block16)
     // consecutive scales, including across scale words.
     desc.kSizeLower = 1;
-    return b.int_val(32, desc.descriptor);
+    return b.int_val(32, std::bit_cast<uint32_t>(desc));
   }
   if (kSize == 128) {
     desc.kSizeUpper = 1;
@@ -366,7 +356,7 @@ static Value createScaleInstDescriptorFp4(
            "MMAv5 with kind=mxf4nvf4 and .block16 only supports SFB_ID 0");
   }
 
-  return b.int_val(32, desc.descriptor);
+  return b.int_val(32, std::bit_cast<uint32_t>(desc));
 }
 
 //===----------------------------------------------------------------------===//

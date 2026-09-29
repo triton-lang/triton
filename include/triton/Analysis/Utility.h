@@ -287,6 +287,8 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
 
 namespace triton {
 
+bool canUseWarpBallotHistogram(HistogramOp op);
+
 struct BarrierStages {
   // Stages are independent: for example, a release atomic with scratch has
   // both a leading ordering barrier and a scratch rendezvous.

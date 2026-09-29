@@ -1,6 +1,7 @@
 #include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
+#include "third_party/amd/lib/Target/MIRDAG/DAGBuilder.h"
 #include "triton/Tools/LLVMOptions.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "triton/Version.h"
@@ -16,6 +17,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -72,6 +74,15 @@ struct BreakStructPhiNodesPass
 using namespace llvm;
 
 namespace {
+
+void enableFPContraction(llvm::Module &module) {
+  for (llvm::Function &function : module)
+    for (llvm::Instruction &instruction : llvm::instructions(function))
+      if (instruction.getOpcode() == llvm::Instruction::FAdd ||
+          instruction.getOpcode() == llvm::Instruction::FSub ||
+          instruction.getOpcode() == llvm::Instruction::FMul)
+        instruction.setHasAllowContract(true);
+}
 
 struct ExpandMaskedDivRemPass : RequiredPassInfoMixin<ExpandMaskedDivRemPass> {
   PreservedAnalyses run(Module &module, ModuleAnalysisManager &) {
@@ -205,78 +216,6 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
-void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
-                       const std::string &proc, const std::string &features,
-                       const std::vector<std::string> &flags,
-                       bool enable_fp_fusion, const std::string &dumpFileId) {
-  using namespace mlir;
-
-  // Check if we should dump sched DAG
-  std::string dumpMirBase = triton::tools::getStrEnv("TRITON_DUMP_MIR");
-  bool dumpMir = !dumpMirBase.empty();
-  if (!dumpMir) {
-    return;
-  }
-
-  LLVMOptionSettings options;
-  options.enable(flags);
-  options.enableFlagsFromDisableLLVMOptEnv();
-  options.set("stop-after", "machine-scheduler");
-  options.setFlag("misched-print-dags", true);
-  ScopedLLVMOptions optionScope(options.settings);
-
-  std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
-
-  // inline everything
-  for (llvm::Function &f : module.functions())
-    if (!f.hasFnAttribute(llvm::Attribute::NoInline))
-      f.addFnAttr(llvm::Attribute::AlwaysInline);
-  // verify and store llvm
-  llvm::legacy::PassManager pm;
-  pm.add(llvm::createAlwaysInlinerLegacyPass());
-  pm.add(llvm::createVerifierPass());
-
-  pm.run(module);
-
-  // create machine
-  module.setTargetTriple(Triple(triple));
-  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
-  // set data layout
-  module.setDataLayout(machine->createDataLayout());
-
-  // Save original stderr file descriptor
-  int saved_stderr_fd = dup(fileno(stderr));
-
-  // Redirect stderr to append to dump file
-  FILE *redirected = freopen(dumpFilename.c_str(), "a", stderr);
-  if (!redirected) {
-    llvm::errs() << "Warning: Failed to redirect stderr to " << dumpFilename
-                 << "\n";
-  }
-
-  // emit machine code
-  std::string result;
-  {
-    llvm::raw_string_ostream stream(result);
-    llvm::buffer_ostream pstream(stream);
-    llvm::legacy::PassManager pass;
-    // emit
-    machine->addPassesToEmitFile(pass, pstream, nullptr,
-                                 llvm::CodeGenFileType::AssemblyFile);
-    pass.run(module);
-  }
-
-  // Restore stderr
-  fflush(stderr);
-  if (saved_stderr_fd != -1) {
-    dup2(saved_stderr_fd, fileno(stderr));
-    close(saved_stderr_fd);
-    clearerr(stderr);
-  }
-
-  llvm::errs() << "DAG dumped to: " << dumpFilename << "\n";
-}
-
 std::string
 translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
                      const std::string &proc, const std::string &features,
@@ -317,17 +256,25 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   // set data layout
   module.setDataLayout(machine->createDataLayout());
 
-  // emit machine code
+  // emit machine code (MIR text, since stop-before=machine-scheduler)
   std::string result;
   {
     llvm::raw_string_ostream stream(result);
     llvm::buffer_ostream pstream(stream);
     llvm::legacy::PassManager pass;
-    // emit
     machine->addPassesToEmitFile(pass, pstream, nullptr,
                                  llvm::CodeGenFileType::AssemblyFile);
     pass.run(module);
   }
+
+  // Build the scheduling DAG by re-parsing the MIR text we just produced into a
+  // fresh MachineFunction and running DAGBuilder on it. We key instruction
+  // identity on (bb, position), NOT register names, so the re-parse's virtual-
+  // register renumbering is irrelevant: the re-parsed MF enumerates
+  // instructions in the exact order of the dumped MIR text, so (bb, pos) maps
+  // 1:1 onto the dumped body lines the scheduler reorders.
+  std::string dagText =
+      llvm::mir_dag::buildSchedulingDAGText(result, triple, proc);
 
   std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
   {
@@ -340,6 +287,7 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
       outFile << result;
       outFile << "---";
       outFile << "\n========== SCHEDULING DAG ==========\n";
+      outFile << dagText;
     }
     llvm::errs() << "MIR dumped to: " << dumpFilename << "\n";
   }
@@ -643,23 +591,30 @@ void init_triton_llvm(py::module_ &m) {
       },
       py::keep_alive<0, 2>(), py::call_guard<py::gil_scoped_release>());
 
-  m.def("to_bitcode", [](const std::string &llvmIR) {
-    std::string bitcode;
-    {
-      py::gil_scoped_release release;
-      llvm::LLVMContext context;
-      auto buffer = llvm::MemoryBuffer::getMemBuffer(llvmIR, "triton", false);
-      llvm::SMDiagnostic error;
-      auto module = llvm::parseIR(buffer->getMemBufferRef(), error, context);
-      if (!module)
-        throw std::runtime_error(
-            "failed to parse LLVM IR: " + error.getMessage().str() +
-            " at line " + std::to_string(error.getLineNo()));
-      llvm::raw_string_ostream stream(bitcode);
-      llvm::WriteBitcodeToFile(*module, stream);
-    }
-    return py::bytes(bitcode.data(), bitcode.size());
-  });
+  m.def(
+      "to_bitcode",
+      [](const std::string &llvmIR, bool enable_fp_fusion) {
+        std::string bitcode;
+        {
+          py::gil_scoped_release release;
+          llvm::LLVMContext context;
+          auto buffer =
+              llvm::MemoryBuffer::getMemBuffer(llvmIR, "triton", false);
+          llvm::SMDiagnostic error;
+          auto module =
+              llvm::parseIR(buffer->getMemBufferRef(), error, context);
+          if (!module)
+            throw std::runtime_error(
+                "failed to parse LLVM IR: " + error.getMessage().str() +
+                " at line " + std::to_string(error.getLineNo()));
+          if (enable_fp_fusion)
+            enableFPContraction(*module);
+          llvm::raw_string_ostream stream(bitcode);
+          llvm::WriteBitcodeToFile(*module, stream);
+        }
+        return py::bytes(bitcode.data(), bitcode.size());
+      },
+      py::arg("llvm_ir"), py::arg("enable_fp_fusion") = false);
 
   // Add Triton and LLVM versions to the module.
   m.def("add_version_info", [](llvm::Module *mod) {
@@ -772,18 +727,11 @@ void init_triton_llvm(py::module_ &m) {
         std::string pluginFile =
             mlir::triton::tools::getStrEnv("LLVM_PASS_PLUGIN_PATH");
 
-        // We don't pass the targetMachine to the LLVM-IR pass builder, unless
-        // `arch` is specified.
-        //
-        // Don't set target machine in LLVM pass builder when using LLVM IR
-        // level plugins. LLVM IR level plugin passes typically want to insert
-        // calls to externally generated code (i.e. precompile a Cuda/Hip kernel
-        // with Clang and then insert a call to it within an instrumentation
-        // pass) setting the targetMachine value here can can cause a mismatch
-        // in the target machine between the MLIR and Clang generated kernels
-        // and break the lowering of some target specific intrinsics.
+        // Pass the target machine whenever `arch` is known, also when an
+        // LLVM-IR pass plugin is loaded, so that loading a plugin does not
+        // change which target passes and cost models the pipeline uses.
         std::unique_ptr<TargetMachine> targetMachine = nullptr;
-        if (!arch.empty() && pluginFile.empty())
+        if (!arch.empty())
           targetMachine =
               createTargetMachine(mod, arch, enable_fp_fusion, features);
         PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
@@ -877,27 +825,6 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
       py::arg("is_object"), py::arg("canonicalize_gep"),
       py::arg("sched4reg") = false);
-
-  m.def("dump_sched_dag", [](std::string llvmIR, std::string triple,
-                             std::string proc, std::string features,
-                             std::vector<std::string> flags,
-                             bool enable_fp_fusion, std::string dumpFileId) {
-    // when allow_threads goes out of scope, gil will be released
-    py::gil_scoped_release allow_threads;
-    // create LLVM module from C++
-    llvm::LLVMContext context;
-    std::unique_ptr<llvm::MemoryBuffer> buffer =
-        llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
-    llvm::SMDiagnostic error;
-    std::unique_ptr<llvm::Module> module =
-        llvm::parseIR(buffer->getMemBufferRef(), error, context);
-    if (!module) {
-      llvm::report_fatal_error("failed to parse IR: " + error.getMessage() +
-                               "lineno: " + std::to_string(error.getLineNo()));
-    }
-    dumpSchedulingDAG(*module, triple, proc, features, flags, enable_fp_fusion,
-                      dumpFileId);
-  });
 
   m.def("translate_to_mir",
         [](std::string llvmIR, std::string triple, std::string proc,
@@ -1005,7 +932,7 @@ void init_triton_llvm(py::module_ &m) {
       // Mark linked-in functions as internal because backends use external
       // linkage as a signifier of kernel functions.
       for (llvm::Function &fn : dstMod->functions()) {
-        if (externalFns.count(fn.getName().str())) {
+        if (externalFns.contains(fn.getName().str())) {
           fn.setLinkage(llvm::GlobalValue::InternalLinkage);
         }
       }

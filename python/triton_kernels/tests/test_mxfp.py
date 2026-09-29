@@ -130,6 +130,8 @@ def test_mxfp4_tile_upcast_scale_boundaries(dst_dtype, device):
         tensor.shape[1],
         scale.shape[1],
         {torch.float16: tl.float16, torch.bfloat16: tl.bfloat16, torch.float32: tl.float32}[dst_dtype],
+        # A ptxas bug causes this test to fail with fusion disabled on Hopper.
+        enable_fp_fusion=True,
     )
     torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
@@ -234,8 +236,8 @@ def test_mxfp4_rounding_cases(dst_dtype, device):
 @pytest.mark.parametrize("src_dtype", ["float4_e2m1", "float8_e5m2", "float8_e4m3fn"])
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp_extreme_values(src_dtype, dst_dtype, device):
-    if "float8" in src_dtype and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
-        pytest.skip("Float8 not tested on A100")
+    if src_dtype == "float8_e4m3fn" and is_cuda() and torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
     src_dtype = dtype_str_to_torch(src_dtype)
     dst_dtype = dtype_str_to_torch(dst_dtype)
     BIG_VALUE = 65470 if dst_dtype == torch.float16 else 3.3895e38
@@ -251,8 +253,8 @@ def test_mxfp_extreme_values(src_dtype, dst_dtype, device):
 @pytest.mark.parametrize("src_dtype", ["float4_e2m1", "float8_e5m2", "float8_e4m3fn"])
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
-    if "float8" in src_dtype and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
-        pytest.skip("Float8 not tested on A100")
+    if src_dtype == "float8_e4m3fn" and is_cuda() and torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
     limit_range = src_dtype == "float8_e5m2" and dst_dtype == "float16"
 
     # This test checks that quantization and dequantization kernels produce the exact values for some inputs
@@ -331,9 +333,9 @@ def test_mxfp_casting(
     microblock_size: int,
     device,
 ):
-    if ("float8" in quant_dtype
-            or scale_dtype == torch.float8_e4m3fn) and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
-        pytest.skip("Float8 not tested on A100")
+    if ((quant_dtype == "float8_e4m3fn" or scale_dtype == torch.float8_e4m3fn) and is_cuda()
+            and torch.cuda.get_device_capability() < (8, 9)):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
     torch.manual_seed(0)
     quant_torch_type = dtype_str_to_torch(quant_dtype)
     dequant_torch_type = dtype_str_to_torch(dequant_dtype)

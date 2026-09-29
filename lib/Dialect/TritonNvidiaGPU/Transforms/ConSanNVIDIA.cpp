@@ -100,6 +100,8 @@ public:
     return needed;
   }
 
+  bool needsPtxasMaskedStoreBarrierWorkaround() const override { return true; }
+
   Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                          Operation *op) const override {
     // mask = 0 means no CTA predication.

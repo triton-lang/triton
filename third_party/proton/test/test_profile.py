@@ -24,6 +24,7 @@ from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 from triton.testing import cuda_graph_without_gc
+from subprocess_utils import clean_rocprofiler_env
 
 
 def _find_frame_by_name(frame, name):
@@ -44,9 +45,10 @@ _skip_cudagraph_test = pytest.mark.skipif(
 
 
 @pytest.mark.skipif(not is_hip(), reason="ROCprofiler is only available on HIP")
-def test_rocprofiler_process_exit_without_finalize(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("capture_graph", [False, pytest.param(True, marks=_skip_cudagraph_test)])
+def test_rocprofiler_process_exit_without_finalize(tmp_path: pathlib.Path, capture_graph: bool):
     # Run in a subprocess so normal process teardown exercises the ordering
-    # between Proton static destruction and rocprofiler-sdk's atexit handler.
+    # between HIP teardown, SDK finalization, and Proton static destruction.
     script = tmp_path / "unfinalized_rocprofiler.py"
     output = tmp_path / "unfinalized_rocprofiler"
     script.write_text(f"""
@@ -65,8 +67,18 @@ def copy(x, y, n: tl.constexpr):
 x = torch.ones((1024,), device="cuda")
 y = torch.zeros_like(x)
 proton.start({str(output)!r}, hook="triton", backend="rocprofiler")
-for _ in range(100):
+if {capture_graph!r}:
     copy[(1,)](x, y, x.numel())
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        with proton.scope("copy_scope", metrics={{"elements": x.numel()}}):
+            copy[(1,)](x, y, x.numel())
+for _ in range(100):
+    if {capture_graph!r}:
+        graph.replay()
+    else:
+        copy[(1,)](x, y, x.numel())
 # Intentionally omit synchronization and proton.finalize(). The SDK must
 # finish queued work and drain its pending callbacks before Proton destroys
 # the callback targets.
@@ -78,6 +90,63 @@ for _ in range(100):
     env["MALLOC_PERTURB_"] = "165"
     result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=20, env=env)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(not is_hip(), reason="ROCprofiler is only available on HIP")
+@_skip_cudagraph_test
+@pytest.mark.parametrize("num_sessions", [1, 2])
+def test_rocprofiler_graph_session_exit(tmp_path: pathlib.Path, num_sessions: int):
+    script = tmp_path / "rocprofiler_graph_sessions.py"
+    script.write_text(f"""
+import triton.profiler as proton
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def copy(x, y, n: tl.constexpr):
+    offsets = tl.arange(0, n)
+    tl.store(y + offsets, tl.load(x + offsets))
+
+
+for session in range({num_sessions}):
+    # The first session starts before Torch can initialize HIP.
+    proton.start(f"{str(tmp_path)}/profile_{{session}}", hook="triton", backend="rocprofiler")
+    import torch
+
+    x = torch.ones((1024,), device="cuda")
+    y = torch.zeros_like(x)
+    copy[(1,)](x, y, x.numel())
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        with proton.scope("copy_scope", metrics={{"elements": x.numel()}}):
+            copy[(1,)](x, y, x.numel())
+    with proton.scope("replay"):
+        graph.replay()
+    proton.finalize()
+    torch.testing.assert_close(x, y)
+# Captured metric kernels must remain safe after profiling stops.
+y.zero_()
+graph.replay()
+torch.cuda.synchronize()
+torch.testing.assert_close(x, y)
+""")
+    # The subprocess must exit normally after freeing graph metric buffers.
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60,
+                            env=clean_rocprofiler_env())
+    assert result.returncode == 0, result.stderr
+    for session in range(num_sessions):
+        data = json.loads((tmp_path / f"profile_{session}.hatchet").read_text())
+        replay = _find_frame_by_name(data[0], "replay")
+        assert replay is not None
+        scope = _find_frame_by_name(replay, "copy_scope")
+        assert scope is not None
+        assert scope["metrics"]["elements"] == 1024
+        kernel = _find_frame_by_name(scope, "copy")
+        assert kernel is not None
+        assert kernel["metrics"]["count"] == 1
+        assert kernel["metrics"]["time (ns)"] > 0
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
