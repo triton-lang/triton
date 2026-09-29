@@ -95,11 +95,11 @@ public:
         break;
       case DataPartitionResult::Retry:
         break;
-      case DataPartitionResult::UnsupportedAtomicRMW:
+      case DataPartitionResult::Unsupported:
         if (hasPreexistingTaskIds) {
           funcOp.emitError()
               << "warp specialization cannot fall back from unsupported "
-                 "atomic RMW in warp-specialized function with preexisting "
+                 "data partition in function with preexisting "
                  "async_task_id attributes";
           return signalPassFailure();
         }

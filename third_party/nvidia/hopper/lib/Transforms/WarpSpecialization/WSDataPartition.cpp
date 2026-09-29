@@ -1345,7 +1345,7 @@ DataPartitionResult doDataPartition(triton::FuncOp &funcOp,
   DataPartitionScheme partitionScheme;
   if (!computePartitionScheme(funcOp, partitionScheme)) {
     if (hasUnsupportedAtomicRMW(funcOp, partitionScheme, numConsumerGroups))
-      return DataPartitionResult::UnsupportedAtomicRMW;
+      return DataPartitionResult::Unsupported;
     if (numConsumerGroups > 1) {
       LDBG("computePartitionScheme failed when requested");
       return DataPartitionResult::Retry;
@@ -1353,7 +1353,7 @@ DataPartitionResult doDataPartition(triton::FuncOp &funcOp,
     return DataPartitionResult::Success;
   }
   if (hasUnsupportedAtomicRMW(funcOp, partitionScheme, numConsumerGroups))
-    return DataPartitionResult::UnsupportedAtomicRMW;
+    return DataPartitionResult::Unsupported;
 
   // Rewrite the rematerialized ops.
   LDBG("Rewriting rematerialized Ops");
@@ -1427,9 +1427,9 @@ public:
     if (numWarpGroups <= 2)
       return;
     auto result = doDataPartition(funcOp, numWarpGroups - 1);
-    if (result == DataPartitionResult::UnsupportedAtomicRMW)
+    if (result == DataPartitionResult::Unsupported)
       funcOp.emitError(
-          "unsupported AtomicRMW in warp-specialization data partition");
+          "unsupported operation in warp-specialization data partition");
     if (result != DataPartitionResult::Success)
       signalPassFailure();
   }
