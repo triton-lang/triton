@@ -157,11 +157,6 @@ public:
   // shared memory is not partitioned.
   virtual size_t getSharedMemoryPartitionSize() const { return 0; }
 
-  // Annotate target specific information to local load operations during
-  // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
-  virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                                     Operation *llLoadOp) const {}
-
   // Returns bases of lanes {LoadBases, StoreBases} that are active in a
   // single hardware cycle for shared memory loads and stores.
   virtual std::pair<gpu::LocalMemOpTile, gpu::LocalMemOpTile>
