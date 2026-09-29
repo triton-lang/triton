@@ -652,7 +652,7 @@ tt.func @no_barrier_between_tdm_copies_with_mbarrier(
   %c0_i32 = arith.constant 0 : i32
   %smem = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
   %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-  amdg.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+  amdg.init_barrier %bar, 8 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
   // CHECK-NOT: ttg.barrier local
   // CHECK: amdg.async_tdm_copy_global_to_local
   %token = amdg.async_tdm_copy_global_to_local %in into %smem, barrier = %bar : !tt.tensordesc<128x128xf16, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -684,7 +684,7 @@ tt.func @must_barrier_tdm_copy_without_mbarrier(
   %c0_i32 = arith.constant 0 : i32
   %smem = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
   %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-  amdg.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+  amdg.init_barrier %bar, 8 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
   %token = amdg.async_tdm_copy_global_to_local %in into %smem, barrier = %bar : !tt.tensordesc<128x128xf16, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
   // CHECK: amdg.wait_barrier
   amdg.wait_barrier %bar, %c0_i32 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -715,8 +715,10 @@ tt.func @no_barrier_tdm_mbarrier_in_loop(
   %smem = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
   %barL = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
   %barS = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-  amdg.init_barrier %barL, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-  amdg.init_barrier %barS, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+  // A TDM copy arrives once per warp, so the expected count is num-warps times
+  // the number of copies on that barrier: one load on barL, two stores on barS.
+  amdg.init_barrier %barL, 8 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+  amdg.init_barrier %barS, 16 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
   // CHECK: cf.br
   scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
     // CHECK-NOT: ttg.barrier local
