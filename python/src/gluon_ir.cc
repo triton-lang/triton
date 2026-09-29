@@ -929,6 +929,19 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttg::MemDescSubsliceOp>(resultType, src,
                                                         offsets);
            })
+      .def("create_memdesc_cta_rebase",
+           [](GluonOpBuilder &self, Value src, int32_t numCTAs,
+              int32_t ctaStart) -> py::tuple {
+             auto type = ttg::MemDescCTARebaseOp::inferResultType(
+                 cast<ttg::MemDescType>(src.getType()), numCTAs,
+                 [&]() { return mlir::emitError(self.getLastLoc()); });
+             check(succeeded(type), "invalid shared-memory CTA capture");
+             Value result =
+                 self.create<ttg::MemDescCTARebaseOp>(*type, src, ctaStart);
+             return py::make_tuple(
+                 result, layoutToGluon(type->getEncoding(), self.isRubin()),
+                 toStdVector(type->getAllocShape()));
+           })
       .def("create_memdesc_trans",
            [](GluonOpBuilder &self, Value src,
               std::vector<int> &order) -> Value {
@@ -1219,6 +1232,30 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttg::WarpSpecializeOp>(resultTypes,
                                                        partitionNumWarps);
            })
+      .def("get_num_ctas",
+           [](GluonOpBuilder &self) {
+             return ttg::lookupNumCTAs(self.getBuilder());
+           })
+      .def("get_cta_start",
+           [](GluonOpBuilder &self) {
+             return ttg::lookupCTAStart(self.getBuilder());
+           })
+      .def(
+          "create_cta_specialize",
+          [](GluonOpBuilder &self, std::vector<Value> &captures,
+             std::vector<int> &partitionNumCTAs) -> Operation * {
+            return self.create<ttg::CTASpecializeOp>(
+                captures,
+                self.getBuilder().getDenseI32ArrayAttr(partitionNumCTAs),
+                partitionNumCTAs.size());
+          },
+          ret::reference)
+      .def(
+          "create_cta_specialize_return",
+          [](GluonOpBuilder &self) -> Operation * {
+            return self.create<ttg::CTASpecializeReturnOp>();
+          },
+          ret::reference)
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
               Value mask, Value other,

@@ -67,6 +67,9 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 int lookupThreadsPerWarp(OpBuilder &rewriter);
 int lookupNumCTAs(OpBuilder &rewriter);
 int lookupNumCTAs(Operation *op);
+// Absolute rank of the first CTA in the current specialization context.
+int lookupCTAStart(Operation *op);
+int lookupCTAStart(OpBuilder &builder);
 
 template <typename Key, typename Value> class Cache {
 public:

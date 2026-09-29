@@ -291,6 +291,29 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
   let hasVerifier = 1;
 }
 
+def TTG_MemDescCTARebaseOp : TTG_Op<"memdesc_cta_rebase", [Pure, MemDescViewTrait]> {
+  let summary = "rebase a shared-memory capture into a CTA partition";
+  let description = [{
+    Internal capture conversion for CTA specialization. The source is an
+    ordinary logical slice of a parent allocation. Its physical owners must
+    be exactly the destination partition, beginning at ctaStart. The result
+    describes the same elements with subgroup-local CTA ranks and preserves
+    local offsets. Ownership is checked after inlining, before shared allocation.
+    This operation neither allocates nor copies memory.
+  }];
+  let arguments = (ins TTG_MemDescType:$src, I32Attr:$ctaStart);
+  let results = (outs TTG_MemDescType:$result);
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+  }];
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    static FailureOr<MemDescType> inferResultType(
+        MemDescType src, int32_t numCTAs,
+        function_ref<InFlightDiagnostic()> emitError);
+  }];
+}
+
 def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
                                                   MemDescViewTrait,
                                                   TransposeOpInterface,
@@ -618,6 +641,43 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
   }];
 
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
+}
+
+def TTG_CTASpecializeOp
+    : TTG_Op<"cta_specialize",
+             [IsolatedFromAbove, RecursiveMemoryEffects, AsyncRegions,
+              DeclareOpInterfaceMethods<
+                  RegionBranchOpInterface, ["getEntrySuccessorOperands",
+                                            "getSuccessorInputs"]>]> {
+  let summary = "partition the current CTAs into independent subgroups";
+  let description = [{
+    Executes each region on a consecutive, disjoint range of CTAs. Positive
+    power-of-two partition sizes sum to the current context's CTA count.
+    Each region has its own layout domain and zero-based logical CTA ranks.
+    All current CTAs synchronize on entry and rejoin on exit. Program IDs
+    continue to identify the original logical program. This operation nests.
+
+    Captures are explicit uniform scalars, pointers, or shared-memory views
+    whose CTA range matches the receiving region. Every region receives the
+    complete capture list; unused arguments need not match its CTA context.
+    Regions return no values; communicate through memory.
+    The NVIDIA prototype supports synchronous operations, including subgroup
+    barriers and distributed shared-memory layout conversions and reductions.
+    Asynchronous cluster operations, noinline calls, warp specialization and
+    sanitizer instrumentation are not supported inside these regions.
+  }];
+  let arguments = (ins Variadic<AnyType>:$explicitCaptures,
+                        DenseI32ArrayAttr:$partitionNumCTAs);
+  let regions = (region VariadicRegion<MinSizedRegion<1>>:$partitionRegions);
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def TTG_CTASpecializeReturnOp
+    : TTG_Op<"cta_specialize.return", [Pure, Terminator, ReturnLike,
+                                      HasParent<"CTASpecializeOp">]> {
+  let summary = "rejoin the enclosing CTA specialization";
+  let assemblyFormat = "attr-dict";
 }
 
 def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [

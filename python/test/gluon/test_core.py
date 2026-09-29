@@ -6466,3 +6466,230 @@ def test_tmem288k_simple(Ncol1: int, Ncol2: int):
     num_warps = 4
     tmem288k_simple_kernel[(1, )](input, output, M, Ncol1, Ncol2, num_warps=num_warps)
     torch.testing.assert_close(input.cpu(), output.cpu(), atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("split", ["single", "singleton", "balanced", "uneven", "nested", "wide"])
+def test_cta_specialize_partition_join(split):
+
+    @gluon.jit
+    def leaf(Scratch, Counts, iterations, SLOT: ttgl.constexpr, CTAS: ttgl.constexpr):
+        ttgl.static_assert(ttgl.num_ctas() == CTAS)
+        ttgl.static_assert(ttgl.num_warps() == 4)
+        cga: ttgl.constexpr = [[1], [2]] if CTAS == 4 else ([[1]] if CTAS == 2 else [])
+        replicated: ttgl.constexpr = [[0]] * (CTAS.bit_length() - 1)
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=cga)
+        other: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0], cga_layout=replicated)
+        x = ttgl.arange(0, 512, layout=layout)
+        for i in range(iterations + SLOT):
+            # Both directions exercise remote shared-memory addressing. The
+            # unequal loop trip counts require independent subgroup barriers.
+            values = ttgl.convert_layout(x + i + SLOT, other)
+            values = ttgl.convert_layout(values, layout)
+            total = ttgl.sum(values, 0)
+            ttgl.barrier(cluster=True)
+            old = ttgl.atomic_add(Counts + SLOT, 1)
+            ttgl.store(Scratch + SLOT, total + old)
+
+    @gluon.jit
+    def nested(Scratch, Counts, iterations):
+        ttgl.static_assert(ttgl.num_ctas() == 2)
+        ttgl.cta_specialize([(leaf, (Scratch, Counts, iterations, 1, 1)), (leaf, (Scratch, Counts, iterations, 2, 1))],
+                            [1, 1])
+
+    @gluon.jit
+    def singleton(Scratch, Counts, iterations):
+        ttgl.cta_specialize([(leaf, (Scratch, Counts, iterations, 0, 1))], [1])
+
+    @gluon.jit
+    def kernel(Scratch, Counts, Out, iterations, SPLIT: ttgl.constexpr, CTAS: ttgl.constexpr):
+        pid = ttgl.program_id(0)
+        Scratch += pid * 4
+        Counts += pid * 4
+        Out += pid * 4
+        for _ in range(3):
+            if SPLIT == "single":
+                ttgl.cta_specialize([(leaf, (Scratch, Counts, iterations, 0, 4))], [4])
+            elif SPLIT == "singleton":
+                ttgl.cta_specialize([(singleton, (Scratch, Counts, iterations))], [1])
+            elif SPLIT == "balanced":
+                ttgl.cta_specialize([(leaf, (Scratch, Counts, iterations, 0, 2)),
+                                     (leaf, (Scratch, Counts, iterations, 1, 2))], [2, 2])
+            elif SPLIT == "uneven":
+                ttgl.cta_specialize([(leaf, (Scratch, Counts, iterations, 0, 1)),
+                                     (leaf, (Scratch, Counts, iterations, 1, 2)),
+                                     (leaf, (Scratch, Counts, iterations, 2, 1))], [1, 2, 1])
+            elif SPLIT == "nested":
+                ttgl.cta_specialize([(leaf, (Scratch, Counts, iterations, 0, 2)),
+                                     (nested, (Scratch, Counts, iterations))], [2, 2])
+            else:
+                ttgl.cta_specialize([(leaf, (Scratch, Counts, iterations, 0, 4)),
+                                     (leaf, (Scratch, Counts, iterations, 1, 4))], [4, 4])
+            ttgl.static_assert(ttgl.num_ctas() == CTAS)
+            layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]] * (CTAS.bit_length() - 1))
+            offsets = ttgl.arange(0, 4, layout=layout)
+            ttgl.store(Out + offsets, ttgl.load(Scratch + offsets))
+
+    num_ctas = 8 if split == "wide" else (1 if split == "singleton" else 4)
+    slots = {"single": 1, "singleton": 1, "balanced": 2, "uneven": 3, "nested": 3, "wide": 2}[split]
+    scratch = torch.zeros((3, 4), device="cuda", dtype=torch.int32)
+    counts = torch.zeros_like(scratch)
+    out = torch.zeros_like(scratch)
+    compiled = kernel[(3, )](scratch, counts, out, 5, split, num_ctas, num_ctas=num_ctas)
+    expected_counts = torch.zeros_like(counts)
+    expected = torch.zeros_like(out)
+    for slot in range(slots):
+        expected_counts[:, slot] = 3 * (5 + slot)
+        expected[:, slot] = sum(range(512)) + 512 * (4 + 2 * slot) + 3 * (5 + slot) - 1
+    torch.testing.assert_close(counts, expected_counts, rtol=0, atol=0)
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    assert compiled.metadata.num_ctas == num_ctas
+    assert "ttg.cta_specialize" not in compiled.asm["llir"]
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("group_size", [1, 2])
+def test_cta_specialize_producer_consumer(group_size):
+
+    @gluon.jit
+    def producer(Data, Flag, Out, rounds):
+        ok = True
+        for i in range(rounds):
+            ok = ok & ttgl.atomic_poll(Flag, 0, timeout_ns=100_000_000)
+            ttgl.store(Data, i + 7)
+            ttgl.atomic_xchg(Flag, 1, sem="release")
+        ttgl.store(Out + 1, ok)
+
+    @gluon.jit
+    def consumer(Data, Flag, Out, rounds):
+        total = 0
+        for _ in range(rounds):
+            ready = ttgl.atomic_poll(Flag, 1, timeout_ns=100_000_000)
+            total += ttgl.where(ready, ttgl.load(Data), -1_000_000)
+            ttgl.atomic_xchg(Flag, 0, sem="release")
+        ttgl.store(Out, total)
+
+    @gluon.jit
+    def kernel(Data, Flag, Out, rounds, GROUP_SIZE: ttgl.constexpr):
+        # Put the waiting consumer first to require concurrent execution.
+        ttgl.cta_specialize([(consumer, (Data, Flag, Out, rounds)), (producer, (Data, Flag, Out, rounds))],
+                            [GROUP_SIZE, GROUP_SIZE])
+
+    data = torch.zeros((), device="cuda", dtype=torch.int32)
+    flag = torch.zeros_like(data)
+    out = torch.zeros(2, device="cuda", dtype=torch.int32)
+    kernel[(1, )](data, flag, out, 20, group_size, num_ctas=2 * group_size)
+    assert out.tolist() == [sum(range(20)) + 7 * 20, 1]
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("split, shared_kind, partial", [
+    ("balanced", "plain", False),
+    ("balanced", "swizzled", True),
+    ("nested", "swizzled", False),
+    ("nested", "padded", True),
+    ("uneven", "plain", True),
+    ("uneven", "linear", False),
+])
+def test_cta_specialize_shared_capture(split, shared_kind, partial):
+
+    @gluon.jit
+    def worker(tile, ADD: ttgl.constexpr):
+        cga: ttgl.constexpr = [[1, 0]] if ttgl.num_ctas() == 2 else []
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=cga)
+        # A different CTA distribution requires subgroup DSM accesses. A second
+        # allocation also checks that the captured parent's lifetime is retained.
+        replicated: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0],
+                                                        cga_layout=[[0, 0]] * (ttgl.num_ctas() - 1))
+        values = tile.load(replicated)
+        scratch = ttgl.allocate_shared_memory(ttgl.int32, tile.shape,
+                                              ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=cga), values + ADD)
+        tile.store(scratch.load(layout))
+
+    @gluon.jit
+    def nested(tile):
+        half: ttgl.constexpr = tile.shape[0] // 2
+        ttgl.cta_specialize([(worker, (tile.slice(0, half), 20)), (worker, (tile.slice(half, half), 30))], [1, 1])
+
+    @gluon.jit
+    def kernel(Out, SPLIT: ttgl.constexpr, SHARED_KIND: ttgl.constexpr, PARTIAL: ttgl.constexpr):
+        cga: ttgl.constexpr = [[1, 0], [2, 0]]
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=cga)
+        if SHARED_KIND == "padded":
+            shared: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [32, 128], [1, 0], cga)
+        elif SHARED_KIND == "swizzled":
+            shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(4, 1, 4, [1, 0], cga_layout=cga)
+        elif SHARED_KIND == "linear":
+            shared: ttgl.constexpr = ttgl.to_linear_layout(ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=cga),
+                                                           [32, 128])
+        else:
+            shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=cga)
+        rows = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 128, layout=ttgl.SliceLayout(0, layout))
+        values = rows[:, None] * 128 + cols[None, :] + ttgl.program_id(0) * 10000
+        storage = ttgl.allocate_shared_memory(ttgl.int32, [32, 128], shared, values)
+        for _ in range(3):
+            if PARTIAL:
+                view = storage.slice(64, 64, dim=1)
+            else:
+                view = storage
+            if SPLIT == "balanced":
+                ttgl.cta_specialize([(worker, (view.slice(0, 16), 10)), (worker, (view.slice(16, 16), 20))], [2, 2])
+            elif SPLIT == "nested":
+                ttgl.cta_specialize([(worker, (view.slice(0, 16), 10)), (nested, (view.slice(16, 16), ))], [2, 2])
+            else:
+                ttgl.cta_specialize([(worker, (view.slice(0, 8), 10)), (worker, (view.slice(8, 8), 20)),
+                                     (worker, (view.slice(16, 16), 30))], [1, 1, 2])
+        result = storage.load(layout)
+        offsets = rows[:, None] * 128 + cols[None, :]
+        ttgl.store(Out + ttgl.program_id(0) * 4096 + offsets, result)
+
+    out = torch.empty((3, 32, 128), device="cuda", dtype=torch.int32)
+    kernel[(3, )](out, split, shared_kind, partial, num_ctas=4)
+    expected = torch.arange(4096, device="cuda", dtype=torch.int32).reshape(32, 128)
+    expected = expected[None, :, :] + torch.arange(3, device="cuda")[:, None, None] * 10000
+    additions = {
+        "balanced": [10] * 16 + [20] * 16, "nested": [10] * 16 + [20] * 8 + [30] * 8, "uneven":
+        [10] * 8 + [20] * 8 + [30] * 16
+    }[split]
+    expected[:, :, 64 if partial else 0:] += 3 * torch.tensor(additions, device="cuda")[None, :, None]
+    torch.testing.assert_close(out, expected.to(torch.int32), rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("stage", [0, 1])
+def test_cta_specialize_shared_capture_multibuffer(stage):
+
+    @gluon.jit
+    def worker(args):
+        tile, delta = args
+        ttgl.static_assert(ttgl.num_ctas() == 1)
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0])
+        tile.store(tile.load(layout) + delta)
+
+    @gluon.jit
+    def kernel(Out, stage):
+        cga: ttgl.constexpr = [[1, 0]]
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0], cga_layout=cga)
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=cga)
+        storage = ttgl.allocate_shared_memory(ttgl.int32, [2, 8, 128], shared)
+        storage.index(0).store(ttgl.full([8, 128], 10, ttgl.int32, layout))
+        storage.index(1).store(ttgl.full([8, 128], 20, ttgl.int32, layout))
+        selected = storage.index(stage)
+        # Nested tuples exercise aggregate capture conversion as well as a
+        # runtime pipeline index into a top-level allocation.
+        ttgl.cta_specialize([(worker, ((selected.slice(0, 4), 1), )), (worker, ((selected.slice(4, 4), 2), ))], [1, 1])
+        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 128, layout=ttgl.SliceLayout(0, layout))
+        offsets = rows[:, None] * 128 + cols[None, :]
+        ttgl.store(Out + offsets, storage.index(0).load(layout))
+        ttgl.store(Out + 1024 + offsets, storage.index(1).load(layout))
+
+    out = torch.empty((2, 8, 128), device="cuda", dtype=torch.int32)
+    kernel[(1, )](out, stage, num_ctas=2)
+    expected = torch.empty_like(out)
+    expected[0].fill_(10)
+    expected[1].fill_(20)
+    expected[stage, :4] += 1
+    expected[stage, 4:] += 2
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)

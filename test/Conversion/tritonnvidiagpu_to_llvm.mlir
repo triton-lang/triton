@@ -1207,3 +1207,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %r : f32
   }
 }
+
+
+// -----
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @cta_subgroup_barrier_unaligned
+  // CHECK-COUNT-2: mbarrier.init.shared::cta.b64 [$1], 1;
+  // PTX85-LABEL: @cta_subgroup_barrier_unaligned
+  // PTX86-LABEL: @cta_subgroup_barrier_unaligned
+  // RUBIN-LABEL: @cta_subgroup_barrier_unaligned
+  tt.func @cta_subgroup_barrier_unaligned() {
+    ttg.cta_specialize()
+    partition0() num_ctas(1) {
+      ttg.cta_specialize.return
+    }
+    partition1() num_ctas(2) {
+      // CHECK: nvvm.mapa
+      // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
+      // PTX85: mbarrier.arrive.release.cluster.shared::cluster.b64
+      // PTX86: mbarrier.arrive.relaxed.cluster.shared::cluster.b64
+      // RUBIN: llvm.mlir.constant(6 : i32)
+      // RUBIN: mbarrier.arrive.relaxed.cluster.shared::cluster.multicast::cluster::32b.b64
+      ttng.cluster_barrier {relaxed = true}
+      ttg.cta_specialize.return
+    }
+    partition2() num_ctas(1) {
+      ttg.cta_specialize.return
+    } : () -> ()
+    tt.return
+  }
+}

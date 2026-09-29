@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --triton-nvidia-gpu-cluster-barrier-mbar-allocator | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-cluster-barrier-mbar-allocator | FileCheck %s
 
 #blockedSplitM = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #blockedSplitN = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
@@ -51,6 +51,40 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: ttng.cluster_barrier {ttg.mbar_offset = 40 : i32}
       ttng.cluster_barrier
       ttg.warp_return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32} {
+  // CHECK: module attributes {
+  // CHECK-DAG: ttg.cluster_barrier_cta_counts = array<i32: 2, 4>
+  // CHECK-DAG: ttg.shared = 64 : i32
+  // CHECK-LABEL: @cta_subgroup_barrier_allocation
+  tt.func @cta_subgroup_barrier_allocation() {
+    ttg.cta_specialize()
+    partition0() num_ctas(1) {
+      // CHECK: partition0() num_ctas(1)
+      // CHECK-NEXT: ttg.barrier all
+      ttg.barrier all
+      ttg.cta_specialize.return
+    }
+    partition1() num_ctas(2) {
+      // CHECK: partition1() num_ctas(2)
+      // CHECK-NEXT: ttng.cluster_barrier {ttg.mbar_offset = 0 : i32}
+      ttng.cluster_barrier
+      ttg.cta_specialize.return
+    }
+    partition2() num_ctas(1) {
+      ttg.cta_specialize.return
+    }
+    partition3() num_ctas(4) {
+      // CHECK: partition3() num_ctas(4)
+      // CHECK-NEXT: ttng.cluster_barrier {ttg.mbar_offset = 32 : i32}
+      ttng.cluster_barrier
+      ttg.cta_specialize.return
     } : () -> ()
     tt.return
   }

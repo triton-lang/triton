@@ -171,9 +171,16 @@ struct ClusterBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ClusterBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    int numCTAs = triton::gpu::lookupNumCTAs(op);
+    if (numCTAs == 1) {
+      rewriter.replaceOpWithNewOp<NVVM::BarrierOp>(op);
+      return success();
+    }
     auto mbarOffset = op->getAttrOfType<IntegerAttr>(
         triton::nvidia_gpu::kClusterBarrierMbarOffsetAttrName);
     if (!mbarOffset) {
+      if (op->getParentOfType<triton::gpu::CTASpecializeOp>())
+        return op.emitOpError("missing subgroup barrier allocation");
       auto mod = op->getParentOfType<ModuleOp>();
       int defaultNumWarps = triton::gpu::lookupNumWarps(op);
       int totalNumWarps = defaultNumWarps;
@@ -214,21 +221,30 @@ struct ClusterBarrierOpConversion
     Value barrierPtr = b.gep(ptrTy, barrierSlotTy, barrierPtr0, barrierIdx);
     Value threadId = getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(threadId, b.i32_val(0));
-    int numCTAs = triton::gpu::lookupNumCTAs(op);
+    int ctaStart = triton::gpu::lookupCTAStart(op);
     bool relaxed = op.getRelaxed() && targetInfo.getPtxVersion() >= 86;
     if (targetInfo.getTargetFeatures().supportsMbarMulticast()) {
       Value ctaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
       // Exclude the issuing CTA: the mbarriers expect numCTAs - 1 arrivals.
-      Value allCTAsMask = b.i32_val((1u << numCTAs) - 1);
+      Value allCTAsMask = b.i32_val(((1u << numCTAs) - 1) << ctaStart);
       Value selfMask = b.shl(b.i32_val(1), ctaId);
       Value peerMask = b.xor_(allCTAsMask, selfMask);
       createMBarrierArrive(rewriter, loc, pred, barrierPtr, relaxed, peerMask);
-    } else {
+    } else if (ctaStart % numCTAs == 0) {
+      // Aligned power-of-two intervals preserve the XOR address shortcut.
       Value barrierInt = b.ptrtoint(i32_ty, barrierPtr);
       Value peerId = b.add(threadId, b.i32_val(1));
       Value peerBarrierInt = b.xor_(barrierInt, b.shl(peerId, b.i32_val(24)));
       Value peerBarrierPtr = b.inttoptr(barrierPtr.getType(), peerBarrierInt);
       Value arrivePred = b.icmp_ult(threadId, b.i32_val(numCTAs - 1));
+      createMBarrierArrive(rewriter, loc, arrivePred, peerBarrierPtr, relaxed);
+    } else {
+      Value ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+      Value peerId = b.and_(b.add(ctaId, b.add(threadId, b.i32_val(1))),
+                            b.i32_val(numCTAs - 1));
+      Value arrivePred = b.icmp_ult(threadId, b.i32_val(numCTAs - 1));
+      Value peerBarrierPtr =
+          targetInfo.mapDShared(rewriter, loc, barrierPtr, peerId, arrivePred);
       createMBarrierArrive(rewriter, loc, arrivePred, peerBarrierPtr, relaxed);
     }
     createMBarrierWait(rewriter, loc, barrierPtr, parity);
@@ -276,6 +292,8 @@ struct InitializeWSClusterBarriers
     int64_t offset =
         shared - count * triton::nvidia_gpu::kClusterBarrierMbarAllocationSize;
     int numCTAs = triton::gpu::lookupNumCTAs(kernel);
+    auto ctaCounts = mod->getAttrOfType<DenseI32ArrayAttr>(
+        triton::nvidia_gpu::kClusterBarrierCTACountsAttrName);
     for (int64_t i = 0; i < count;
          ++i, offset += triton::nvidia_gpu::kClusterBarrierMbarAllocationSize) {
       Value barrierPtr0 =
@@ -288,7 +306,8 @@ struct InitializeWSClusterBarriers
               loc, rewriter, kernel,
               offset + slot * triton::nvidia_gpu::kClusterBarrierMbarSlotSize,
               targetInfo);
-        createMBarrierInit(rewriter, loc, initPred, barrierPtr, numCTAs - 1);
+        createMBarrierInit(rewriter, loc, initPred, barrierPtr,
+                           (ctaCounts ? ctaCounts[i] : numCTAs) - 1);
       }
       auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr0.getType());
       Value counterPtr = b.gep(ptrTy, i8_ty, barrierPtr0, LLVM::GEPArg(8));

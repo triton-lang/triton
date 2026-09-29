@@ -14,6 +14,8 @@ inline constexpr llvm::StringLiteral kClusterBarrierMbarOffsetAttrName =
     "ttg.mbar_offset";
 inline constexpr llvm::StringLiteral kWSClusterBarrierCountAttrName =
     "ttg.ws_cluster_barrier_count";
+inline constexpr llvm::StringLiteral kClusterBarrierCTACountsAttrName =
+    "ttg.cluster_barrier_cta_counts";
 inline constexpr int64_t kClusterBarrierMbarSlotSize = 16;
 inline constexpr int64_t kClusterBarrierMbarBufferCount = 2;
 inline constexpr int64_t kClusterBarrierMbarAllocationSize =

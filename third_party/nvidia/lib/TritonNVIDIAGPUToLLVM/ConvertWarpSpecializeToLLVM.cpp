@@ -263,6 +263,49 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
 // Pass Definition
 //===----------------------------------------------------------------------===//
 
+static LogicalResult lowerCTASpecialize(CTASpecializeOp op) {
+  SmallVector<int32_t> starts;
+  int start = lookupCTAStart(op);
+  for (int count : op.getPartitionNumCTAs()) {
+    starts.push_back(start);
+    start += count;
+  }
+  TritonLLVMIRRewriter b(op.getLoc(), op);
+  Block *before = op->getBlock();
+  Block *after = b.splitBlock(before, op->getIterator());
+  b.setInsertionPointToEnd(before);
+  Value cta = NVVM::ClusterId::create(b, b.getLoc(), b.getI32Type());
+
+  // All captures already exist in every current thread's registers. Forward
+  // them directly; no shared-memory capture buffer or worker dispatch loop.
+  SmallVector<Block *> entries;
+  for (Region &region : op.getPartitionRegions()) {
+    entries.push_back(&region.front());
+    SmallVector<Operation *> exits;
+    for (Block &block : region)
+      if (isa<CTASpecializeReturnOp>(block.getTerminator()))
+        exits.push_back(block.getTerminator());
+    for (Operation *exit : exits) {
+      b.setInsertionPoint(exit);
+      b.replaceOpWithNewOp<LLVM::BrOp>(exit, ValueRange(), after);
+    }
+    b.inlineRegionBefore(region, after);
+  }
+  b.setInsertionPointToEnd(before);
+  for (unsigned i = 0; i + 1 < entries.size(); ++i) {
+    Block *next = b.createBlock(after);
+    b.setInsertionPointToEnd(before);
+    Value inPartition = b.icmp_ult(cta, b.i32_val(starts[i + 1]));
+    LLVM::CondBrOp::create(b, b.getLoc(), inPartition, entries[i],
+                           op.getExplicitCaptures(), next, ValueRange());
+    before = next;
+    b.setInsertionPointToEnd(before);
+  }
+  LLVM::BrOp::create(b, b.getLoc(), op.getExplicitCaptures(), entries.back());
+  b.eraseOp(op);
+  return success();
+}
+
 namespace {
 struct ConvertWarpSpecializeToLLVM
     : public mlir::triton::impl::ConvertWarpSpecializeToLLVMBase<
@@ -278,7 +321,8 @@ struct ConvertWarpSpecializeToLLVM
     TritonGPUToLLVMTypeConverter typeConverter(&getContext(), option,
                                                targetInfo);
     mod.walk([&](Operation *op) {
-      if (isa<WarpSpecializeOp, WarpSpecializePartitionsOp, WarpYieldOp>(op))
+      if (isa<WarpSpecializeOp, WarpSpecializePartitionsOp, WarpYieldOp,
+              CTASpecializeOp>(op))
         convertOpTypes(op, typeConverter);
     });
     OpPassManager pm;
@@ -292,6 +336,13 @@ struct ConvertWarpSpecializeToLLVM
     NVIDIAWarpSpecializeBarrierHelper barrierHelper(threadsPerWarp);
     if (failed(lowerWarpSpecializeBarriers(mod, barrierHelper)))
       return signalPassFailure();
+
+    // Lower children before parents while the enclosing CTA contexts exist.
+    SmallVector<CTASpecializeOp> ctaOps;
+    mod.walk([&](CTASpecializeOp op) { ctaOps.push_back(op); });
+    for (CTASpecializeOp op : ctaOps)
+      if (failed(lowerCTASpecialize(op)))
+        return signalPassFailure();
 
     SmallVector<LLVM::LLVMFuncOp> kernels;
     for (auto func : mod.getOps<LLVM::LLVMFuncOp>()) {

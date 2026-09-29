@@ -82,6 +82,7 @@ __all__ = [
     "tuple",
     "tuple_type",
     "num_ctas",
+    "cta_specialize",
 ]
 
 T = TypeVar("T", bound=Callable)
@@ -762,6 +763,34 @@ def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs=None, 
 
 
 @builtin
+def cta_specialize(functions_and_args, partition_num_ctas, _semantic=None, _generator=None):
+    """Partition the current CTAs into independently programmed subgroups.
+
+    Each ``(function, args)`` runs on a consecutive range of CTAs. Positive
+    power-of-two ``partition_num_ctas`` must sum to ``num_ctas()``. Within a
+    function, ``num_ctas()`` and tensor layouts refer to its subgroup, while
+    program IDs and the number of warps per CTA stay unchanged. Splits may nest.
+    All current CTAs synchronize before the split and after the functions exit.
+
+    Arguments may contain uniform scalars, pointers, constexprs, and shared
+    memory descriptors sliced to the receiving subgroup's CTAs. Use ordinary
+    ``smem.slice(...)`` views of a parent allocation; each view must reside
+    entirely on exactly that subgroup. Captures preserve the view's shape and
+    storage, with its layout rebased to subgroup-local CTA ranks. Distributed
+    tensors cannot be captured. Functions return no runtime values; communicate
+    through memory. ``barrier(cluster=True)``
+    synchronizes only the current subgroup. Distributed reductions and layout
+    conversions also operate within that subgroup.
+
+    This NVIDIA Hopper+ prototype requires inline functions and synchronous
+    operations. Mixing with warp specialization, asynchronous cluster
+    operations, and sanitizer instrumentation is not yet supported.
+    """
+    partition_num_ctas = [_unwrap_if_constexpr(n) for n in partition_num_ctas]
+    return _semantic.cta_specialize(functions_and_args, partition_num_ctas, _generator)
+
+
+@builtin
 def num_warps(_semantic=None, _generator=None):
     """
     Returns the number of warps that execute the current context, including in warp-specialized regions.
@@ -772,7 +801,7 @@ def num_warps(_semantic=None, _generator=None):
 @builtin
 def num_ctas(_semantic=None):
     """
-    Returns the number of CTAs in the current kernel
+    Returns the number of CTAs in the current execution context
     """
     return _semantic.num_ctas()
 

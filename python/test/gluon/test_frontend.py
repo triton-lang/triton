@@ -5816,3 +5816,113 @@ def test_compute_efficient_padded_shared_layout_invalid_returns_none():
 
     # fp32 has bitwidth 32, outside the supported {4, 8, 16}.
     assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_op, [128, 64], ttgl.float32) is None
+
+
+@pytest.mark.parametrize("counts", [[], [2], [3, 1], [0, 4], [2, 2, 2]])
+def test_cta_specialize_invalid_counts(counts):
+
+    @gluon.jit
+    def worker():
+        pass
+
+    @gluon.jit
+    def kernel(COUNTS: ttgl.constexpr):
+        ttgl.cta_specialize([(worker, ()), (worker, ())], COUNTS)
+
+    with pytest.raises(CompilationError, match="CTA count|powers of two|current context"):
+        run_parser(kernel, *make_args(tuple(counts), num_ctas=4), target=BLACKWELL_TARGET)
+
+
+def test_cta_specialize_return_value():
+
+    @gluon.jit
+    def worker(value):
+        return value + 1
+
+    @gluon.jit
+    def kernel(value):
+        ttgl.cta_specialize([(worker, (value, ))], [2])
+
+    with pytest.raises(CompilationError, match="cannot return runtime values"):
+        run_parser(kernel, *make_args(MockTensor(ttgl.int32), num_ctas=2), target=BLACKWELL_TARGET)
+
+
+def test_cta_specialize_nested_context():
+
+    @gluon.jit
+    def leaf(Out, EXPECTED: ttgl.constexpr):
+        ttgl.static_assert(ttgl.num_ctas() == EXPECTED)
+        ttgl.static_assert(ttgl.num_warps() == 4)
+        ttgl.store(Out, EXPECTED)
+
+    @gluon.jit
+    def nested(Out):
+        ttgl.static_assert(ttgl.num_ctas() == 2)
+        ttgl.cta_specialize([(leaf, (Out, 1)), (leaf, (Out + 1, 1))], [1, 1])
+        ttgl.static_assert(ttgl.num_ctas() == 2)
+
+    @gluon.jit
+    def kernel(Out):
+        ttgl.cta_specialize([(leaf, (Out, 2)), (nested, (Out + 1, ))], [2, 2])
+        ttgl.static_assert(ttgl.num_ctas() == 4)
+
+    mod = run_parser(kernel, *make_args(MockTensor(ttgl.int32), num_ctas=4), target=BLACKWELL_TARGET)
+    assert "ttg.cta_specialize" in mod.str_nodebug()
+
+
+@pytest.mark.parametrize("mode", ["noinline", "warp", "mbarrier"])
+def test_cta_specialize_unsupported_operations(mode, capfd):
+
+    @gluon.jit(noinline=True)
+    def outlined(Out):
+        ttgl.store(Out, 1)
+
+    @gluon.jit
+    def worker(Out, MODE: ttgl.constexpr):
+        if MODE == "noinline":
+            outlined(Out)
+        elif MODE == "warp":
+            ttgl.warp_specialize([(outlined, (Out, )), (outlined, (Out + 1, ))], [4])
+        else:
+            bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+            mbarrier.init(bar, count=1)
+            mbarrier.invalidate(bar)
+
+    @gluon.jit
+    def kernel(Out, MODE: ttgl.constexpr):
+        ttgl.cta_specialize([(worker, (Out, MODE)), (worker, (Out + 1, MODE))], [1, 1])
+
+    source = gluon.GluonASTSource(kernel, {"Out": "*i32", "MODE": "constexpr"}, {"MODE": mode})
+    with pytest.raises(RuntimeError):
+        triton.compile(source, target=BLACKWELL_TARGET, options={"num_ctas": 2})
+    assert "not yet supported" in capfd.readouterr().err
+
+
+@pytest.mark.parametrize("mode", ["wrong_range", "too_narrow", "replicated", "unsliced"])
+def test_cta_specialize_invalid_shared_capture(mode, capfd):
+
+    @gluon.jit
+    def worker(tile):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=[[1, 0]])
+        tile.store(tile.load(layout) + 1)
+
+    @gluon.jit
+    def kernel(MODE: ttgl.constexpr):
+        cga: ttgl.constexpr = [[0, 0], [0, 0]] if MODE == "replicated" else [[1, 0], [2, 0]]
+        storage = ttgl.allocate_shared_memory(ttgl.int32, [32, 128],
+                                              ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=cga))
+        if MODE == "wrong_range":
+            left, right = storage.slice(16, 16), storage.slice(0, 16)
+        elif MODE == "too_narrow":
+            left, right = storage.slice(0, 8), storage.slice(16, 16)
+        elif MODE == "unsliced":
+            left, right = storage, storage
+        else:
+            left, right = storage.slice(0, 16), storage.slice(16, 16)
+        ttgl.cta_specialize([(worker, (left, )), (worker, (right, ))], [2, 2])
+
+    source = gluon.GluonASTSource(kernel, {"MODE": "constexpr"}, {"MODE": mode})
+    with pytest.raises((RuntimeError, CompilationError)):
+        triton.compile(source, target=BLACKWELL_TARGET, options={"num_ctas": 4})
+    errors = capfd.readouterr().err
+    assert "slice must reside on exactly the receiving CTA range" in errors or "does not fit" in errors

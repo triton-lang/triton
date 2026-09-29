@@ -4078,9 +4078,17 @@ struct TritonGPUVerifyTensorLayoutInterface
     if (!memDescTy)
       return makeErr() << "Non-memdesc layout is not allowed in memdesc type.";
 
-    if (failed(verifyMemDescRank(layout, memDescTy, makeErr)) ||
-        failed(verifyCTAs(layout, op, makeErr)))
+    if (failed(verifyMemDescRank(layout, memDescTy, makeErr)))
       return failure();
+    // Capture conversions are formed in the parent context, but their results
+    // use the partition's CTA layout. All actual memory accesses still require
+    // an exact match with the current execution context.
+    if (isa<CTASpecializeOp, MemDescCTARebaseOp>(op)) {
+      if (getNumCTAs(layout) > lookupNumCTAs(op))
+        return makeErr() << "capture has more CTAs than the current context";
+    } else if (failed(verifyCTAs(layout, op, makeErr))) {
+      return failure();
+    }
 
     if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
       auto shape = dropPipeliningDim(memDescTy.getAllocShape(), layout);
@@ -4481,14 +4489,15 @@ void TritonGPUDialect::initialize() {
 LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
                                                          NamedAttribute attr) {
   // Verify that dialect attributes are attached to the right ops.
-  if (llvm::is_contained(
-          {AttrNumCTAsName, AttrTargetName, AttrNumThreadsPerWarp},
-          attr.getName()) &&
+  if (llvm::is_contained({AttrTargetName, AttrNumThreadsPerWarp},
+                         attr.getName()) &&
       !isa<ModuleOp>(op)) {
     return op->emitOpError("has unexpected attribute ")
            << attr.getName() << " which is expected only on `module` ops";
   }
-  if (attr.getName() == AttrNumWarpsName && !isa<ModuleOp, FuncOp>(op)) {
+  if ((attr.getName() == AttrNumWarpsName ||
+       attr.getName() == AttrNumCTAsName) &&
+      !isa<ModuleOp, FuncOp>(op)) {
     return op->emitOpError("has unexpected attribute ")
            << attr.getName()
            << " which is expected only on `module` or `tt.func` ops";
@@ -4557,26 +4566,46 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
 }
 
 int triton::gpu::lookupNumCTAs(Operation *op) {
-  auto mod = dyn_cast<ModuleOp>(op);
-  if (!mod)
-    mod = op->getParentOfType<ModuleOp>();
-
-  if (!mod) {
-    op->emitOpError(
-        "is not contained within a module, cannot lookup number of CTAs");
-    llvm::report_fatal_error(
-        "failed to lookup the number of CTAs, the surrounding module should "
-        "contain a ModuleOp");
-  }
-  return triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+  if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumCTAsName))
+    return attr.getInt();
+  if (auto split = dyn_cast_or_null<CTASpecializeOp>(op->getParentOp()))
+    return split
+        .getPartitionNumCTAs()[op->getParentRegion()->getRegionNumber()];
+  if (Operation *parent = op->getParentOp())
+    return lookupNumCTAs(parent);
+  return 1;
 }
 
-int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
-  assert(rewriter.getInsertionBlock() && "expected an insertion point");
-  Operation *op =
-      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  assert(op && "cannot check number of CTAs outside of module");
-  return triton::gpu::TritonGPUDialect::getNumCTAs(cast<ModuleOp>(op));
+int triton::gpu::lookupNumCTAs(OpBuilder &builder) {
+  Block *block = builder.getInsertionBlock();
+  assert(block && "expected an insertion point");
+  if (auto split = dyn_cast<CTASpecializeOp>(block->getParentOp()))
+    return split.getPartitionNumCTAs()[block->getParent()->getRegionNumber()];
+  return lookupNumCTAs(block->getParentOp());
+}
+
+int triton::gpu::lookupCTAStart(Operation *op) {
+  if (auto attr = op->getAttrOfType<IntegerAttr>("ttg.cta-start"))
+    return attr.getInt();
+  Operation *parent = op->getParentOp();
+  if (!parent)
+    return 0;
+  int start = lookupCTAStart(parent);
+  if (auto split = dyn_cast<CTASpecializeOp>(parent))
+    for (unsigned i = 0; i < op->getParentRegion()->getRegionNumber(); ++i)
+      start += split.getPartitionNumCTAs()[i];
+  return start;
+}
+
+int triton::gpu::lookupCTAStart(OpBuilder &builder) {
+  Block *block = builder.getInsertionBlock();
+  assert(block && "expected an insertion point");
+  Operation *parent = block->getParentOp();
+  int start = lookupCTAStart(parent);
+  if (auto split = dyn_cast<CTASpecializeOp>(parent))
+    for (unsigned i = 0; i < block->getParent()->getRegionNumber(); ++i)
+      start += split.getPartitionNumCTAs()[i];
+  return start;
 }
 
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
