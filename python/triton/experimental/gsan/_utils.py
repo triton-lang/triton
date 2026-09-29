@@ -8,7 +8,7 @@ _DLPACK_CAPSULE_NAME = b"dltensor"
 _DL_UINT = 1
 _DL_BITS_UINT8 = 8
 _DL_LANES = 1
-_DL_CUDA = 2
+_DL_CUDA = 10 if torch.version.hip else 2  # kDLROCM on ROCm builds
 
 
 class _DLDevice(ctypes.Structure):
