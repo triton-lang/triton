@@ -1,3 +1,16 @@
+# Backend-agnostic LLVM-IR helpers (PTX builder utilities and NVGPU layout
+# helpers) used by core passes such as TritonInstrumentToLLVM. These only
+# build LLVM IR and do not require the NVPTX target, so they are built even
+# when the NVIDIA backend is disabled.
+add_triton_library(TritonNVIDIAGPUToLLVMUtility
+    PTXAsmFormat.cpp
+    Utility.cpp
+
+    DEPENDS
+    NVGPUAttrDefsIncGen
+)
+
+if(TRITON_BUILD_NVIDIA_BACKEND)
 add_triton_library(TritonNVIDIAGPUToLLVM
     ConvertLayoutOpToLLVM.cpp
     ConvertWarpSpecializeToLLVM.cpp
@@ -15,8 +28,6 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     SPMDOpToLLVM.cpp
     TensorMemoryToLLVM.cpp
     ClusterOpsToLLVM.cpp
-    PTXAsmFormat.cpp
-    Utility.cpp
     Fp4ToFpOpToLLVM.cpp
     TargetInfo.cpp
     Allocation.cpp
@@ -32,6 +43,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TritonInstrumentIR
     TritonInstrumentToLLVM
     MLIRReconcileUnrealizedCasts
-    NVGPUIR
+    TritonNVIDIAGPUToLLVMUtility
     MLIRUBToLLVM
 )
+endif()

@@ -1,8 +1,12 @@
 from triton.runtime.jit import constexpr_function
-from triton._C.libtriton.gluon_ir import (
-    get_amd_mfma_scale_layout as _get_mfma_scale_layout,
-    compute_amd_efficient_padded_shared_layout as _compute_efficient_padded_shared_layout,
-)
+try:
+    from triton._C.libtriton.gluon_ir import (
+        get_amd_mfma_scale_layout as _get_mfma_scale_layout,
+        compute_amd_efficient_padded_shared_layout as _compute_efficient_padded_shared_layout,
+    )
+except ImportError:  # AMD backend not built
+    _get_mfma_scale_layout = None
+    _compute_efficient_padded_shared_layout = None
 
 from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout

@@ -1,7 +1,11 @@
 #include "Analysis/ScopeIdAllocation.h"
 #include "Conversion/ProtonGPUToLLVM/Passes.h"
+#ifdef TRITON_BUILD_AMD_BACKEND
 #include "Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
+#endif
+#ifdef TRITON_BUILD_NVIDIA_BACKEND
 #include "Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
+#endif
 #include "Conversion/ProtonToProtonGPU/Passes.h"
 #include "Dialect/Proton/IR/Dialect.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
@@ -111,15 +115,21 @@ void init_triton_proton(py::module_ &m) {
               profileScratchSize, profileScratchAlignment, clkExt));
         });
 
+#ifdef TRITON_BUILD_NVIDIA_BACKEND
   ADD_PASS_WRAPPER_0("add_convert_proton_nvidia_gpu_to_llvm",
                      proton::gpu::createConvertProtonNvidiaGPUToLLVMPass);
+#endif
+#ifdef TRITON_BUILD_AMD_BACKEND
   ADD_PASS_WRAPPER_1("add_convert_proton_amd_gpu_to_llvm",
                      proton::gpu::createConvertProtonAMDGPUToLLVMPass,
                      const std::string &);
+#endif
   ADD_PASS_WRAPPER_0("add_allocate_proton_shared_memory",
                      proton::gpu::createAllocateProtonSharedMemoryPass);
   ADD_PASS_WRAPPER_0("add_schedule_buffer_store",
                      proton::gpu::createScheduleBufferStorePass);
+#ifdef TRITON_BUILD_AMD_BACKEND
   ADD_PASS_WRAPPER_0("add_sched_barriers",
                      proton::gpu::createAddSchedBarriersPass);
+#endif
 }

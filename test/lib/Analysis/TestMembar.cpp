@@ -1,13 +1,16 @@
-#include "../third_party/nvidia/include/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Allocation.h"
-#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+
+#ifdef TRITON_BUILD_NVIDIA_BACKEND
+#include "../third_party/nvidia/include/TritonNVIDIAGPUToLLVM/Utility.h"
+#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Allocation.h"
+#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
+#endif
 
 using namespace mlir;
 
@@ -28,6 +31,7 @@ struct TestMembarPass
   }
 
   void runOnOperation() override {
+#ifdef TRITON_BUILD_NVIDIA_BACKEND
     Operation *operation = getOperation();
     ModuleOp moduleOp = cast<ModuleOp>(operation);
     ModuleAllocation allocation(moduleOp);
@@ -48,6 +52,12 @@ struct TestMembarPass
     ModuleMembarAnalysis membarPass(allocation,
                                     mlir::triton::NVIDIA::canSkipBarSync);
     membarPass.run();
+#else
+    getOperation()->emitError(
+        "test-print-membar requires the NVIDIA backend "
+        "(TRITON_BUILD_NVIDIA_BACKEND=ON)");
+    signalPassFailure();
+#endif
   }
 };
 

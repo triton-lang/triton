@@ -9,9 +9,11 @@
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#ifdef TRITON_BUILD_AMD_BACKEND
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#endif
 #include "llvm/CodeGen/SchedulerRegistry.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/Config/llvm-config.h"
@@ -32,7 +34,9 @@
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/StandardInstrumentations.h"
+#ifdef LLVM_HAS_PASS_PLUGIN
 #include "llvm/Plugins/PassPlugin.h"
+#endif
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/SaveAndRestore.h"
@@ -216,6 +220,8 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
+#ifdef TRITON_BUILD_AMD_BACKEND
+// MIR dump tooling (TRITON_DUMP_MIR) uses the AMD backend's MIRDAG library.
 std::string
 translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
                      const std::string &proc, const std::string &features,
@@ -294,6 +300,7 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
 
   return result;
 }
+#endif // TRITON_BUILD_AMD_BACKEND
 
 std::string translateLLVMIRToASM(
     llvm::Module &module, const std::string &triple, const std::string &proc,
@@ -374,6 +381,7 @@ std::string translateLLVMIRToASM(
   return result;
 }
 
+#ifdef TRITON_BUILD_AMD_BACKEND
 std::string
 translateMIRToASM(const std::string &mirPath, const std::string &triple,
                   const std::string &proc, const std::string &features,
@@ -464,6 +472,7 @@ translateMIRToASM(const std::string &mirPath, const std::string &triple,
 
   return result;
 }
+#endif // TRITON_BUILD_AMD_BACKEND
 
 using ret = py::rv_policy;
 
@@ -738,6 +747,7 @@ void init_triton_llvm(py::module_ &m) {
                        std::nullopt, instrCbPtr);
 
         if (!pluginFile.empty()) {
+#ifdef LLVM_HAS_PASS_PLUGIN
           // TODO: Add some logging here that we inserted a pass into the LLVM
           // pass pipeline
           auto passPlugin = llvm::PassPlugin::Load(pluginFile);
@@ -748,6 +758,11 @@ void init_triton_llvm(py::module_ &m) {
             throw std::runtime_error(ErrMsg);
           }
           passPlugin->registerPassBuilderCallbacks(pb);
+#else
+          throw std::runtime_error(
+              "LLVM pass plugins are not supported in this build "
+              "(LLVMPluginsLib not found)");
+#endif
         }
 
         pb.registerModuleAnalyses(mam);
@@ -826,6 +841,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("is_object"), py::arg("canonicalize_gep"),
       py::arg("sched4reg") = false);
 
+#ifdef TRITON_BUILD_AMD_BACKEND
   m.def("translate_to_mir",
         [](std::string llvmIR, std::string triple, std::string proc,
            std::string features, std::vector<std::string> flags,
@@ -851,7 +867,9 @@ void init_triton_llvm(py::module_ &m) {
           }
           return py::str(obj.c_str(), obj.size());
         });
+#endif // TRITON_BUILD_AMD_BACKEND
 
+#ifdef TRITON_BUILD_AMD_BACKEND
   m.def(
       "translate_mir_to_asm",
       [](std::string mirPath, std::string triple, std::string proc,
@@ -872,22 +890,26 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("mirPath"), py::arg("triple"), py::arg("proc"),
       py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
       py::arg("isObject"), py::arg("enableMISched") = false);
+#endif // TRITON_BUILD_AMD_BACKEND
 
   m.def("init_targets", []() {
     static std::once_flag init_flag;
     std::call_once(init_flag, []() {
-      // Initialize only the GPU targets Triton emits code for. Initializing all
-      // targets would also require linking LLVM's host target libraries.
+      // Initialize only the targets that are actually built. Initializing all
+      // targets would also require linking their LLVM target libraries.
+#ifdef TRITON_BUILD_NVIDIA_BACKEND
       LLVMInitializeNVPTXTargetInfo();
       LLVMInitializeNVPTXTarget();
       LLVMInitializeNVPTXTargetMC();
       LLVMInitializeNVPTXAsmPrinter();
-
+#endif
+#ifdef TRITON_BUILD_AMD_BACKEND
       LLVMInitializeAMDGPUTargetInfo();
       LLVMInitializeAMDGPUTarget();
       LLVMInitializeAMDGPUTargetMC();
       LLVMInitializeAMDGPUAsmParser();
       LLVMInitializeAMDGPUAsmPrinter();
+#endif
 
       // Installed exactly once, before any target compilation. The dispatcher
       // reads thread-local state and is safe for parallel codegen.

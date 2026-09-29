@@ -20,6 +20,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
+option(TRITON_BUILD_NVIDIA_BACKEND "Build NVIDIA backend" ON)
+option(TRITON_BUILD_AMD_BACKEND "Build AMD backend" ON)
 option(TRITON_BUILD_NVIDIA_GSAN_RUNTIME
        "Build the CUDA/NVPTX GSan device runtime for the NVIDIA backend" ON)
 option(TRITON_STABLE_ABI "Build with Python Stable ABI (abi3) for Python 3.12+" OFF)
@@ -311,6 +313,41 @@ include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 add_subdirectory(include)
 add_subdirectory(lib)
 
+# When a backend is disabled, still build its dialect libraries and the
+# backend-agnostic utility sources: core triton code (warp-spec passes,
+# instrumentation lowering, layout canonicalization) references NVWS/NVGPU/AMD
+# dialect headers, generated tablegen files, and a few shared IR helpers.
+if(NOT "nvidia" IN_LIST TRITON_CODEGEN_BACKENDS)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvidia/include/CMakeLists.txt")
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvidia/include)
+    include_directories(${CMAKE_CURRENT_BINARY_DIR}/third_party/nvidia/include)
+    add_subdirectory(third_party/nvidia/include)
+    add_subdirectory(third_party/nvidia/lib/Dialect)
+    add_subdirectory(third_party/nvidia/lib/TritonNVIDIAGPUToLLVM)
+  endif()
+endif()
+if(NOT "amd" IN_LIST TRITON_CODEGEN_BACKENDS)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amd/include/CMakeLists.txt")
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/amd/include)
+    include_directories(${CMAKE_CURRENT_BINARY_DIR}/third_party/amd/include)
+    add_subdirectory(third_party/amd/include)
+  endif()
+endif()
+
+# Ensure tablegen targets run before compilation targets that need them.
+foreach(_tg
+    NVGPUTableGen NVGPUAttrDefsIncGen
+    NVWSTableGen NVWSAttrDefsIncGen NVWSTransformsIncGen
+    NVGPUConversionPassIncGen TritonNVIDIAGPUConversionPassIncGen)
+  if(TARGET ${_tg})
+    foreach(_target TritonGPUTransforms TritonNvidiaGPUTransforms TritonInstrumentToLLVM)
+      if(TARGET ${_target})
+        add_dependencies(${_target} ${_tg})
+      endif()
+    endforeach()
+  endif()
+endforeach()
+
 # TODO: Figure out which target is sufficient to fix errors; triton is
 # apparently not enough. Currently set linking libstdc++fs for all targets
 # to support some old version GCC compilers like 8.3.0.
@@ -385,10 +422,10 @@ if(TRITON_BUILD_PYTHON_MODULE)
     ${triton_libs}
     ${triton_plugins}
 
-    # mlir
-    MLIRNVVMDialect
-    MLIRNVVMToLLVMIRTranslation
-    MLIRGPUToNVVMTransforms
+    # mlir core (always needed)
+    MLIRGPUToGPURuntimeTransforms
+    MLIRGPUTransforms
+    MLIRReconcileUnrealizedCasts
     MLIRIR
     MLIRControlFlowToLLVM
     MLIRPass
@@ -397,23 +434,41 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRSupport
     MLIRTargetLLVMIRExport
     MLIRMathToLLVM
-    MLIRROCDLToLLVMIRTranslation
     MLIRGPUDialect
     MLIRSCFToControlFlow
     MLIRIndexToLLVM
-    MLIRGPUToROCDLTransforms
     MLIRUBToLLVM
+    MLIRPluginsLib
 
-    # LLVM
+    # LLVM core
     LLVMBitWriter
     LLVMPasses
-    LLVMNVPTXCodeGen
-    LLVMAMDGPUCodeGen
-    LLVMAMDGPUAsmParser
 
     Python3::Module
     nanobind-static
   )
+
+  # NVIDIA-specific libs (only when NVIDIA backend is enabled)
+  if(TRITON_BUILD_NVIDIA_BACKEND)
+    list(APPEND TRITON_LIBRARIES
+      MLIRNVVMDialect
+      MLIRNVVMToLLVMIRTranslation
+      MLIRGPUToNVVMTransforms
+      LLVMNVPTXCodeGen
+      # LLVMNVPTXAsmPrinter
+    )
+  endif()
+
+  # AMD-specific libs (only when AMD backend is enabled)
+  if(TRITON_BUILD_AMD_BACKEND)
+    list(APPEND TRITON_LIBRARIES
+      MLIRAMDGPUDialect
+      MLIRROCDLToLLVMIRTranslation
+      MLIRGPUToROCDLTransforms
+      LLVMAMDGPUCodeGen
+      LLVMAMDGPUAsmParser
+    )
+  endif()
 
   # Define triton library
   string(JOIN "," TRITON_BACKENDS_TUPLE ${TRITON_CODEGEN_BACKENDS})
@@ -447,6 +502,25 @@ if(TRITON_BUILD_PYTHON_MODULE)
   # targets that link against libtriton do not accidentally link in their own
   # copies of core Triton code and LLVM.
   set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
+
+  if(TRITON_BUILD_NVIDIA_BACKEND)
+    target_compile_definitions(triton PRIVATE TRITON_BUILD_NVIDIA_BACKEND)
+  endif()
+  if(TRITON_BUILD_AMD_BACKEND)
+    target_compile_definitions(triton PRIVATE TRITON_BUILD_AMD_BACKEND)
+  endif()
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR
+     CMAKE_SYSTEM_PROCESSOR MATCHES "[Aa][Rr][Mm]64" OR
+     CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+    target_compile_definitions(triton PRIVATE TRITON_NATIVE_TARGET_AARCH64)
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64")
+    target_compile_definitions(triton PRIVATE TRITON_NATIVE_TARGET_X86)
+  endif()
+  find_library(LLVM_PLUGINS_LIB_PATH LLVMPluginsLib HINTS ${LLVM_LIBRARY_DIR})
+  if(LLVM_PLUGINS_LIB_PATH)
+    target_link_libraries(triton PRIVATE LLVMPluginsLib)
+    target_compile_definitions(triton PRIVATE LLVM_HAS_PASS_PLUGIN)
+  endif()
 
   if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})

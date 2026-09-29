@@ -11,13 +11,17 @@
 #include <optional>
 #include <stdexcept>
 
+#ifdef TRITON_BUILD_AMD_BACKEND
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#endif
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
-#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#ifdef TRITON_BUILD_AMD_BACKEND
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "third_party/amd/lib/TritonAMDGPUTransforms/Utility.h"
+#endif
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -41,7 +45,9 @@ namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 namespace gluon = mlir::triton::gluon;
+#ifdef TRITON_BUILD_AMD_BACKEND
 namespace ttag = mlir::triton::amdgpu;
+#endif
 
 namespace {
 
@@ -360,8 +366,9 @@ void init_gluon_ir(py::module_ &m) {
       .value("MAX", ttng::TMEMLoadReduceModifier::MAX)
       .export_values();
 
-  py::class_<GluonOpBuilder, TritonOpBuilder>(m, "GluonOpBuilder",
-                                              py::dynamic_attr())
+  auto gluonBuilderCls =
+      py::class_<GluonOpBuilder, TritonOpBuilder>(m, "GluonOpBuilder",
+                                                  py::dynamic_attr())
       .def(py::init<MLIRContext *, std::string>(), py::arg("context"),
            py::arg("arch") = "")
       .def("get_op_builder", &GluonOpBuilder::getBuilder, ret::reference)
@@ -693,7 +700,9 @@ void init_gluon_ir(py::module_ &m) {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
              check(ty.getEncoding(), "expected a tensor with an encoding");
              return layoutToGluon(ty.getEncoding(), self.isRubin());
-           })
+           });
+#ifdef TRITON_BUILD_AMD_BACKEND
+  gluonBuilderCls
       .def("get_scaled_upcast_fp4_scale_layout",
            [](GluonOpBuilder &self, Value input, int64_t scaleSize,
               Type elemType, int32_t axis) -> py::object {
@@ -720,7 +729,9 @@ void init_gluon_ir(py::module_ &m) {
                encoding = ttg::GenericLinearEncodingAttr::get(
                    ctx, std::move(*scaleLayout));
              return layoutToGluon(encoding, self.isRubin());
-           })
+           });
+#endif // TRITON_BUILD_AMD_BACKEND
+  gluonBuilderCls
       .def("get_gluon_layout_from_memdesc",
            [](GluonOpBuilder &self, Value memdesc) -> py::object {
              auto ty = dyn_cast<ttg::MemDescType>(memdesc.getType());
@@ -808,13 +819,17 @@ void init_gluon_ir(py::module_ &m) {
                 /*contiguity=*/1);
           },
           py::arg("smem"), py::arg("pointer"), py::arg("mask"),
-          py::arg("other"), py::arg("cachePolicy"), py::arg("isVolatile"))
+          py::arg("other"), py::arg("cachePolicy"), py::arg("isVolatile"));
+#ifdef TRITON_BUILD_AMD_BACKEND
+  gluonBuilderCls
       .def("create_async_copy_local_to_global",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
               Attribute cachePolicy) {
              self.create<ttag::AsyncCopyLocalToGlobalOp>(
                  smem, pointer, mask, cachePolicy, /*contiguity=*/1);
-           })
+           });
+#endif // TRITON_BUILD_AMD_BACKEND
+  gluonBuilderCls
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
              self.create<ttng::AsyncCopyMbarrierArriveOp>(mbarrier,
@@ -888,28 +903,30 @@ void init_gluon_ir(py::module_ &m) {
               int bitwidth) -> int {
              auto regLayout = ttg::toLinearLayout(shape, regLayoutAttr);
              auto smemLayout = ttg::toLinearLayout(shape, sharedLayoutAttr);
+#ifdef TRITON_BUILD_AMD_BACKEND
              auto mod = self.getBuilder()
                             .getInsertionBlock()
                             ->getParentOp()
                             ->getParentOfType<ModuleOp>();
              auto arch = getAMDArch(mod);
-             if (!arch.has_value())
-               return ttg::bankConflictsMemDesc(regLayout, smemLayout,
-                                                bitwidth);
-             tt::AMD::TargetInfo targetInfo(arch->str());
-             int numBanks = targetInfo.getSharedMemoryBanks();
-             auto vecBitwidth = std::max<int32_t>(
-                 32, smemLayout.getInDimSize(StringAttr::get(
-                         smemLayout.getInDimNames().begin()->getContext(),
-                         "vector")) *
-                         bitwidth);
-             auto [dstTile, srcTile] =
-                 targetInfo.getSharedLdStTiles(vecBitwidth);
-             (void)srcTile;
-             assert(srcTile.laneAddr.empty() &&
-                    "srcTile.laneAddr should be empty");
-             return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
-                                              numBanks, dstTile);
+             if (arch.has_value()) {
+               tt::AMD::TargetInfo targetInfo(arch->str());
+               int numBanks = targetInfo.getSharedMemoryBanks();
+               auto vecBitwidth = std::max<int32_t>(
+                   32, smemLayout.getInDimSize(StringAttr::get(
+                           smemLayout.getInDimNames().begin()->getContext(),
+                           "vector")) *
+                           bitwidth);
+               auto [dstTile, srcTile] =
+                   targetInfo.getSharedLdStTiles(vecBitwidth);
+               (void)srcTile;
+               assert(srcTile.laneAddr.empty() &&
+                      "srcTile.laneAddr should be empty");
+               return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
+                                                numBanks, dstTile);
+             }
+#endif
+             return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth);
            })
       .def(
           "create_local_dealloc",
@@ -1218,7 +1235,9 @@ void init_gluon_ir(py::module_ &m) {
               std::vector<int> &partitionNumWarps) {
              return self.create<ttg::WarpSpecializeOp>(resultTypes,
                                                        partitionNumWarps);
-           })
+           });
+#ifdef TRITON_BUILD_AMD_BACKEND
+  gluonBuilderCls
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
               Value mask, Value other,
@@ -1285,13 +1304,6 @@ void init_gluon_ir(py::module_ &m) {
              auto offsetsAttr = self.getBuilder().getDenseI64ArrayAttr(offsets);
              return self.create<ttag::ExtractSliceOp>(resultType, source,
                                                       offsetsAttr);
-           })
-      .def("create_make_tensor_descriptor",
-           [](TritonOpBuilder &self, Type resultTy, Value &base,
-              std::vector<Value> &shape, std::vector<Value> &strides,
-              tt::PaddingOption paddingOption) -> Value {
-             return self.create<tt::MakeTensorDescOp>(resultTy, base, shape,
-                                                      strides, paddingOption);
            })
       .def(
           "create_async_tdm_copy_global_to_local",
@@ -1409,6 +1421,17 @@ void init_gluon_ir(py::module_ &m) {
                                IntegerAttr::get(i32Ty, priority));
              }
            });
+#endif // TRITON_BUILD_AMD_BACKEND
+
+  // create_make_tensor_descriptor is not AMD-specific - register it always
+  gluonBuilderCls
+      .def("create_make_tensor_descriptor",
+           [](TritonOpBuilder &self, Type resultTy, Value &base,
+              std::vector<Value> &shape, std::vector<Value> &strides,
+              tt::PaddingOption paddingOption) -> Value {
+             return self.create<tt::MakeTensorDescOp>(resultTy, base, shape,
+                                                      strides, paddingOption);
+           });
 
   m.def("compute_tmem_reg_layout",
         [](py::object elementTyObj, std::vector<int64_t> shape,
@@ -1477,6 +1500,7 @@ void init_gluon_ir(py::module_ &m) {
         return getCgaLayoutBases(attr);
       });
 
+#ifdef TRITON_BUILD_AMD_BACKEND
   m.def("get_amd_mfma_scale_layout",
         [](unsigned opIdx, std::vector<int64_t> &shape, unsigned mfmaMDim,
            std::vector<unsigned> &tilesPerWarp,
@@ -1541,7 +1565,9 @@ void init_gluon_ir(py::module_ &m) {
             return py::none();
           return layoutToGluon(attr);
         });
+#endif // TRITON_BUILD_AMD_BACKEND
 
+#ifdef TRITON_BUILD_AMD_BACKEND
   m.def("get_amd_wmma_scale_layout",
         [](unsigned opIdx, std::vector<int64_t> &shape, unsigned wmmaMDim,
            unsigned wmmaNDim, bool isTransposed, unsigned scaleFactor,
@@ -1573,6 +1599,7 @@ void init_gluon_ir(py::module_ &m) {
                   : Attribute(ttg::GenericLinearEncodingAttr::get(&ctx, ll));
           return layoutToGluon(attr);
         });
+#endif // TRITON_BUILD_AMD_BACKEND
 
   m.def("get_layout_view",
         [](py::object layout, std::vector<int64_t> shape,
