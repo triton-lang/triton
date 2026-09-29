@@ -895,8 +895,8 @@ void init_triton_llvm(py::module_ &m) {
   m.def("init_targets", []() {
     static std::once_flag init_flag;
     std::call_once(init_flag, []() {
-      // Initialize only the targets that are actually built. Initializing all
-      // targets would also require linking their LLVM target libraries.
+    // Initialize only the targets that are actually built. Initializing all
+    // targets would also require linking their LLVM target libraries.
 #ifdef TRITON_BUILD_NVIDIA_BACKEND
       LLVMInitializeNVPTXTargetInfo();
       LLVMInitializeNVPTXTarget();

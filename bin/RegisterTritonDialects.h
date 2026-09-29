@@ -211,8 +211,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
       mlir::triton::proton::gpu::ProtonGPUDialect, mlir::ROCDL::ROCDLDialect,
       mlir::triton::gluon::GluonDialect>();
 #ifdef TRITON_BUILD_NVIDIA_BACKEND
-  registry
-      .insert<mlir::triton::nvgpu::NVGPUDialect, mlir::triton::nvws::NVWSDialect>();
+  registry.insert<mlir::triton::nvgpu::NVGPUDialect,
+                  mlir::triton::nvws::NVWSDialect>();
 #endif
 #ifdef TRITON_BUILD_AMD_BACKEND
   registry.insert<mlir::triton::amdgpu::TritonAMDGPUDialect>();

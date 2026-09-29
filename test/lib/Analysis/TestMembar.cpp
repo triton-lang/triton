@@ -53,9 +53,8 @@ struct TestMembarPass
                                     mlir::triton::NVIDIA::canSkipBarSync);
     membarPass.run();
 #else
-    getOperation()->emitError(
-        "test-print-membar requires the NVIDIA backend "
-        "(TRITON_BUILD_NVIDIA_BACKEND=ON)");
+    getOperation()->emitError("test-print-membar requires the NVIDIA backend "
+                              "(TRITON_BUILD_NVIDIA_BACKEND=ON)");
     signalPassFailure();
 #endif
   }
