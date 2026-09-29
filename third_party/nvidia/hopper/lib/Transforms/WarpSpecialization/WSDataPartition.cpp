@@ -392,22 +392,23 @@ static bool getForwardSliceToPartition(Value v,
 
     partitionScheme.opPartitionDims[depOp] = currentDim;
 
-    auto onlyUsedByReductionSink = [](Value v) {
+    auto onlyUsedByAtomicStore = [](Value v) {
       SetVector<Operation *> forwardSlice;
       getForwardSlice(v, &forwardSlice);
-      Operation *sink = nullptr;
+      Operation *atomicStore;
       for (auto op : forwardSlice) {
         if (isa<AtomicRMWOp, DescriptorReduceOp>(op)) {
-          sink = op;
+          atomicStore = op;
           break;
         }
       }
-      if (!sink)
+
+      if (!atomicStore)
         return false;
 
-      // Check all ops in forwardSlice are only connected to the sink.
-      SmallVector<Operation *> queue = {sink};
-      forwardSlice.remove(sink);
+      // Check all ops in fowardSlice are only connected to atomicStore
+      SmallVector<Operation *> queue = {atomicStore};
+      forwardSlice.remove(atomicStore);
       while (!queue.empty()) {
         auto op = queue.back();
         queue.pop_back();
@@ -427,12 +428,13 @@ static bool getForwardSliceToPartition(Value v,
     if (auto dotOp = dyn_cast<nvidia_gpu::WarpGroupDotOp>(depOp)) {
       if ((currentDim == 0 && v == dotOp.getB()) ||
           (currentDim == 1 && v == dotOp.getA())) {
-        // Continue K partitioning when the dot result has a single reduction
-        // sink. Atomic RMW sinks are rejected before rewriting.
-        if (onlyUsedByReductionSink(dotOp.getD())) {
+        // It is fine to continue the partition if the dot output is immediately
+        // stored out via an atomic add, as the dot computes a partial result.
+        if (onlyUsedByAtomicStore(dotOp.getD())) {
           partitionScheme.dotPartitionOperand[dotOp] =
               v == dotOp.getA() ? 0 : 1;
-          // Duplicate the users of the dot output since its shape is unchanged.
+          // Duplicate the users of the dot output since the shape of the output
+          // will not be changed
           currentDim = DataPartitionScheme::noOpPartitionDim;
         } else {
           LLVM_DEBUG({
