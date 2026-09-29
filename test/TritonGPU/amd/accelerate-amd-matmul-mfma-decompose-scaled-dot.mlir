@@ -22,10 +22,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: %[[ES:.*]] = arith.extui %[[TS]]
     // CHECK: %[[SHS:.*]] = arith.shli %[[ES]], %[[CST]]
     // CHECK: %[[SCALE_BITS:.*]] = arith.maxui %[[SHS]], %[[MIN_SCALE]]
-    // CHECK: %[[BS:.*]] = tt.bitcast %[[SCALE_BITS]] : tensor<2x32xi16, #ttg.slice<{dim = 1, parent = #blocked{{.*}}}>> -> tensor<2x32xbf16, #ttg.slice<{dim = 1, parent = #blocked{{.*}}}>>
+    // CHECK: %[[BS:.*]] = tt.bitcast %[[SCALE_BITS]] : tensor<2x32xi16, #linear{{.*}}> -> tensor<2x32xbf16, #linear{{.*}}>
     // CHECK-NOT: math.fma
-    // CHECK: %[[EPS:.*]] = tt.reshape %[[BS]] efficient_layout : tensor<2x32xbf16, #ttg.slice<{dim = 1, parent = #blocked{{.*}}}>> -> tensor<2x1x32xbf16, #blocked{{.*}}>
-    // CHECK: %[[BCS:.*]] = tt.broadcast %[[EPS]] : tensor<2x1x32xbf16, #blocked{{.*}}> -> tensor<2x32x32xbf16, #linear{{.*}}>
+    // CHECK: %[[EPS:.*]] = tt.reshape %[[BS]] efficient_layout : tensor<2x32xbf16, #linear{{.*}}> -> tensor<2x1x32xbf16, #linear{{.*}}>
+    // CHECK: %[[BCS:.*]] = tt.broadcast %[[EPS]] : tensor<2x1x32xbf16, #linear{{.*}}> -> tensor<2x32x32xbf16, #linear{{.*}}>
     // CHECK: %[[RTBCS:.*]] = tt.reshape %[[BCS]] : tensor<2x32x32xbf16, #linear{{.*}}> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     // CHECK: %[[UB:.*]] = amdg.scaled_upcast_fp8 %{{.*}} scale %[[RTBCS]] : tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     // CHECK: %[[SELECTEDB:.*]] = arith.select %{{.*}}, %{{.*}}, %[[UB]] : tensor<64x32xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
@@ -94,10 +94,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: %[[ES:.*]] = arith.extui %[[TS]]
     // CHECK: %[[SHS:.*]] = arith.shli %[[ES]], %[[CST]]
     // CHECK: %[[SCALE_BITS:.*]] = arith.maxui %[[SHS]], %[[MIN_SCALE]]
-    // CHECK: %[[BS:.*]] = tt.bitcast %[[SCALE_BITS]] : tensor<2x32xi16, #ttg.slice<{dim = 1, parent = #blocked{{.*}}}>> -> tensor<2x32xbf16, #ttg.slice<{dim = 1, parent = #blocked{{.*}}}>>
+    // CHECK: %[[BS:.*]] = tt.bitcast %[[SCALE_BITS]] : tensor<2x32xi16, #linear{{.*}}> -> tensor<2x32xbf16, #linear{{.*}}>
     // CHECK-NOT: math.fma
-    // CHECK: %[[EPS:.*]] = tt.reshape %[[BS]] efficient_layout : tensor<2x32xbf16, #ttg.slice<{dim = 1, parent = #blocked{{.*}}}>> -> tensor<2x1x32xbf16, #blocked{{.*}}>
-    // CHECK: %[[BCS:.*]] = tt.broadcast %[[EPS]] : tensor<2x1x32xbf16, #blocked{{.*}}> -> tensor<2x32x32xbf16, #linear{{.*}}>
+    // CHECK: %[[EPS:.*]] = tt.reshape %[[BS]] efficient_layout : tensor<2x32xbf16, #linear{{.*}}> -> tensor<2x1x32xbf16, #linear{{.*}}>
+    // CHECK: %[[BCS:.*]] = tt.broadcast %[[EPS]] : tensor<2x1x32xbf16, #linear{{.*}}> -> tensor<2x32x32xbf16, #linear{{.*}}>
     // CHECK: %[[RTBCS:.*]] = tt.reshape %[[BCS]] : tensor<2x32x32xbf16, #linear{{.*}}> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     // CHECK: %[[UB:.*]] = amdg.scaled_upcast_fp4 %{{.*}} scale %[[RTBCS]] {axis = 0 : i32} : tensor<32x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>, tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     // CHECK: %[[A:.*]] = ttg.convert_layout %{{.*}} : tensor<32x64xbf16, #blocked{{.*}}> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
