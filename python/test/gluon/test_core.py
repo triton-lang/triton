@@ -24,6 +24,7 @@ from triton._internal_testing import (
     is_hopper_or_newer,
     is_hopper,
 )
+from triton.backends.compiler import GPUTarget
 from triton.compiler import max_shared_mem
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 from triton.experimental import gluon
@@ -6693,3 +6694,61 @@ def test_cta_specialize_shared_capture_multibuffer(stage):
     expected[stage, :4] += 1
     expected[stage, 4:] += 2
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("mode", ["noinline", "warp", "mbarrier"])
+def test_cta_specialize_unsupported_operations(mode, capfd):
+
+    @gluon.jit(noinline=True)
+    def outlined(Out):
+        ttgl.store(Out, 1)
+
+    @gluon.jit
+    def worker(Out, MODE: ttgl.constexpr):
+        if MODE == "noinline":
+            outlined(Out)
+        elif MODE == "warp":
+            ttgl.warp_specialize([(outlined, (Out, )), (outlined, (Out + 1, ))], [4])
+        else:
+            bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+            mbarrier.init(bar, count=1)
+            mbarrier.invalidate(bar)
+
+    @gluon.jit
+    def kernel(Out, MODE: ttgl.constexpr):
+        ttgl.cta_specialize([(worker, (Out, MODE)), (worker, (Out + 1, MODE))], [1, 1])
+
+    source = gluon.GluonASTSource(kernel, {"Out": "*i32", "MODE": "constexpr"}, {"MODE": mode})
+    with pytest.raises(RuntimeError):
+        triton.compile(source, target=GPUTarget("cuda", 100, 32), options={"num_ctas": 2})
+    assert "not yet supported" in capfd.readouterr().err
+
+
+@pytest.mark.parametrize("mode", ["wrong_range", "too_narrow", "replicated", "unsliced"])
+def test_cta_specialize_invalid_shared_capture(mode, capfd):
+
+    @gluon.jit
+    def worker(tile):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=[[1, 0]])
+        tile.store(tile.load(layout) + 1)
+
+    @gluon.jit
+    def kernel(MODE: ttgl.constexpr):
+        cga: ttgl.constexpr = [[0, 0], [0, 0]] if MODE == "replicated" else [[1, 0], [2, 0]]
+        storage = ttgl.allocate_shared_memory(ttgl.int32, [32, 128],
+                                              ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=cga))
+        if MODE == "wrong_range":
+            left, right = storage.slice(16, 16), storage.slice(0, 16)
+        elif MODE == "too_narrow":
+            left, right = storage.slice(0, 8), storage.slice(16, 16)
+        elif MODE == "unsliced":
+            left, right = storage, storage
+        else:
+            left, right = storage.slice(0, 16), storage.slice(16, 16)
+        ttgl.cta_specialize([(worker, (left, )), (worker, (right, ))], [2, 2])
+
+    source = gluon.GluonASTSource(kernel, {"MODE": "constexpr"}, {"MODE": mode})
+    with pytest.raises((RuntimeError, triton.CompilationError)):
+        triton.compile(source, target=GPUTarget("cuda", 100, 32), options={"num_ctas": 4})
+    errors = capfd.readouterr().err
+    assert "slice must reside on exactly the receiving CTA range" in errors or "does not fit" in errors
