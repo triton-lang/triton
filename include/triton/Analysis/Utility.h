@@ -25,6 +25,24 @@ inline bool isZeroConst(Value v) {
   return false;
 }
 
+// Callback to allow backends to specify a target-specific getter for scratch
+// elements.
+using GetNumScratchElemsFn =
+    std::function<unsigned(const triton::LinearLayout &src,
+                           const triton::LinearLayout &dst, unsigned bitwidth)>;
+
+struct LayoutConversionScratchConfig {
+  SmallVector<unsigned> offsets;
+  unsigned sizeInBytes = 0;
+};
+
+// Byte offsets in operand order, packed widest first to preserve alignment.
+// Register-only and warp-shuffle conversions require no scratch storage.
+LayoutConversionScratchConfig getLayoutConversionScratchConfig(
+    const triton::LinearLayout &src, const triton::LinearLayout &dst,
+    ArrayRef<Type> elementTypes,
+    GetNumScratchElemsFn numScratchElemsGetter = nullptr);
+
 class ReduceOpHelper {
 public:
   enum class InThreadVectorizeOpKind {
@@ -57,31 +75,14 @@ public:
 
   bool isAssociative();
 
-  // Callback to allow backends to specify a target-specific getter for scratch
-  // elements.
-  using GetNumScratchElemsFn = std::function<unsigned(
-      const triton::LinearLayout &src, const triton::LinearLayout &dst,
-      unsigned bitwidth)>;
-
   // Allocation size for the whole reduction: the maximum sizeInBytes returned
-  // by getScratchConfig across its inter-warp/CTA reduction stages.
+  // by getLayoutConversionScratchConfig across its inter-warp/CTA stages.
   unsigned
   getScratchSizeInBytes(GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
   InThreadVectorizeOpKind
   getInThreadVectorizeOpKind(bool supportBitwidth16Elementwise,
                              bool supportBitwidth32Elementwise);
-
-  struct ScratchConfig {
-    SmallVector<unsigned> offsets;
-    unsigned sizeInBytes = 0;
-  };
-
-  // Byte offsets in operand order and total storage for one layout conversion.
-  ScratchConfig
-  getScratchConfig(const triton::LinearLayout &src,
-                   const triton::LinearLayout &dst,
-                   GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
   static triton::ColumnAction
   moveAxisBasesToFront(const triton::LinearLayout &layout, int axis,
@@ -117,27 +118,33 @@ public:
   };
 
   explicit ScanLoweringHelper(triton::ScanOp op);
+  ScanLoweringHelper(const triton::LinearLayout &layout, unsigned axis);
   bool isSupported();
   const triton::LinearLayout &getLayout() const { return layout; }
   const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
   unsigned getLocalScanSize() const { return localScanSize; }
   // Length of a contiguous logical segment contained in one warp.
   unsigned getSegmentSize() const { return segmentSize; }
-  const std::optional<triton::LinearLayout> &getScratchLayout() const {
-    return scratchLayout;
+  const std::optional<triton::LinearLayout> &getSegmentLayout() const {
+    return segmentLayout;
+  }
+  const std::optional<triton::LinearLayout> &getWarpTotalsLayout() const {
+    return warpTotalsLayout;
   }
   ArrayRef<Stage> getStages() const { return stages; }
-  unsigned getScratchSizeInElems() const;
-  unsigned getScratchSizeInBytes();
+  unsigned getScratchSizeInBytes(
+      ArrayRef<Type> elementTypes,
+      GetNumScratchElemsFn numScratchElemsGetter = nullptr) const;
 
 private:
-  triton::ScanOp scanOp;
+  unsigned axis;
   triton::LinearLayout layout;
   triton::ColumnAction registerOrder;
   unsigned localScanSize = 1;
   unsigned segmentSize = 1;
   SmallVector<Stage> stages;
-  std::optional<triton::LinearLayout> scratchLayout;
+  std::optional<triton::LinearLayout> segmentLayout;
+  std::optional<triton::LinearLayout> warpTotalsLayout;
 };
 
 // Helper class for lowering `tt.gather` operations. This class shares lowering
@@ -248,6 +255,8 @@ bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
 
 // The conversion requires data exchange through shared memory.
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);
+bool cvtNeedsSharedMemory(const triton::LinearLayout &src,
+                          const triton::LinearLayout &dst);
 
 /// Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
