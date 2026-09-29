@@ -339,7 +339,7 @@ private:
       AliasInfo &info = latticeElement->getValue();
       if (!info.getAllocs().empty()) {
         for (auto alloc : info.getAllocs()) {
-          if (allocation->valueBuffer.count(alloc))
+          if (allocation->valueBuffer.contains(alloc))
             allocation->addAlias(value, alloc);
           else if (auto argument = dyn_cast<BlockArgument>(alloc);
                    argument && argument.getOwner()->getParentOp() == operation)
@@ -409,7 +409,7 @@ private:
       for (auto *buffer : buffers) {
         auto minId = range.start();
         auto maxId = range.end();
-        if (bufferRange.count(buffer)) {
+        if (bufferRange.contains(buffer)) {
           // Extend the allocated buffer's range
           minId = std::min(minId, bufferRange[buffer].start());
           maxId = std::max(maxId, bufferRange[buffer].end());

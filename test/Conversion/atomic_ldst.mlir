@@ -302,7 +302,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-COMMON: nvvm.cluster.wait
   // CHECK-COMMON: nvvm.mapa
   // CHECK-COMMON: llvm.load %{{.*}} {{.*}} : !llvm.ptr<7> -> i8
-  // CHECK-COMMON: llvm.trunc %{{.*}} : i8 to i1
+  // CHECK-COMMON: llvm.trunc %{{.*}} overflow<nuw> : i8 to i1
   // CHECK-COMMON: llvm.return
   tt.func public @atomic_poll_cluster_replicas(%ptr: tensor<128x!tt.ptr<i32>, #poll>, %expected: tensor<128xi32, #poll>, %timeout: i64, %out: tensor<128x!tt.ptr<i32>, #poll>) {
     %matched = tt.atomic_poll acquire, gpu, %ptr, %expected timeout %timeout : tensor<128x!tt.ptr<i32>, #poll>, tensor<128xi32, #poll> -> tensor<128xi1, #poll>

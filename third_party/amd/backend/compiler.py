@@ -82,13 +82,40 @@ def get_amd_codegen_revision() -> str:
     return _load_amd_codegen(get_amd_codegen_path()).triton_amdgpu_revision().decode("utf-8")
 
 
+_NAMED_BARRIER_INTRINSICS = (
+    "llvm.amdgcn.s.barrier.init",
+    "llvm.amdgcn.s.barrier.signal.var",
+    "llvm.amdgcn.s.barrier.join",
+    "llvm.amdgcn.s.wakeup.barrier",
+    "llvm.amdgcn.s.get.named.barrier.state",
+)
+
+
+def _upgrade_legacy_named_barrier_address_spaces(src: str) -> str:
+    upgraded = src.replace('addrspace(3) global target("amdgcn.named.barrier"',
+                           'addrspace(15) global target("amdgcn.named.barrier"')
+    for intrinsic in _NAMED_BARRIER_INTRINSICS:
+        upgraded = upgraded.replace(f"@{intrinsic}(ptr addrspace(3)", f"@{intrinsic}(ptr addrspace(15)")
+    return upgraded
+
+
 def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
                    disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
                    enable_timing: bool) -> str:
     library = _load_amd_codegen(get_amd_codegen_path())
-    # Serialize with Triton's LLVM: newer backends support older bitcode,
-    # whereas textual IR has no backwards-compatibility guarantee.
-    llvm_bitcode = llvm.to_bitcode(src)
+    upgraded_src = _upgrade_legacy_named_barrier_address_spaces(src)
+    if upgraded_src == src:
+        # Serialize with Triton's LLVM: newer backends support older bitcode,
+        # whereas textual IR has no backwards-compatibility guarantee.
+        # Express fusion permission in the IR because newer LLVM versions no
+        # longer honor TargetOptions::AllowFPOpFusion during code generation.
+        llvm_ir = llvm.to_bitcode(src, enable_fp_fusion)
+    else:
+        # LLVM commit 5bf967cb132b changed named-barrier intrinsic operands from
+        # address space 3 to 15. The bitcode reader rejects the legacy signature
+        # before the standalone code generator can upgrade the module, so send
+        # the narrowly upgraded module as text.
+        llvm_ir = upgraded_src.encode("utf-8")
     options = _AMDGPUCodegenOptions(
         1,
         triple.encode("utf-8"),
@@ -106,8 +133,8 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
     assembly = ctypes.c_void_p()
     assembly_size = ctypes.c_size_t()
     error = ctypes.c_void_p()
-    status = library.triton_amdgpu_compile(llvm_bitcode, len(llvm_bitcode), ctypes.byref(options),
-                                           ctypes.byref(assembly), ctypes.byref(assembly_size), ctypes.byref(error))
+    status = library.triton_amdgpu_compile(llvm_ir, len(llvm_ir), ctypes.byref(options), ctypes.byref(assembly),
+                                           ctypes.byref(assembly_size), ctypes.byref(error))
     if status:
         message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown AMD code-generation failure"
         if error.value:
@@ -188,10 +215,10 @@ def get_llvm_flags(arch):
     attributes (see make_llir) whenever LLVM offers one.
     """
     flags = []
-    # LLVM has no per-function attribute for the AMDGPU register pressure
-    # trackers yet.
-    if arch in ["gfx942", "gfx950"]:
-        flags.append("amdgpu-use-amdgpu-trackers")
+    # Discourage VGPR reuse that creates VALU-to-DS WAR hazards and requires
+    # s_wait_alu va_vdst waits in expert scheduling mode.
+    if arch == "gfx1250" and is_expert_scheduling_enabled(arch):
+        flags.append("amdgpu-anti-hints-for-va-vdst")
     return flags
 
 
@@ -239,7 +266,7 @@ class HIPOptions:
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", 'bf16x3', 'bf16x6')
-    enable_fp_fusion: bool = True
+    enable_fp_fusion: bool = False
     launch_cooperative_grid: bool = False
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
@@ -334,9 +361,8 @@ class HIPBackend(BaseBackend):
             deprecated_fp8_dot_operand_dtypes.update({"fp8e5b16", "fp8e4b8"})
             args["deprecated_fp8_dot_operand_dtypes"] = tuple(sorted(deprecated_fp8_dot_operand_dtypes))
 
-        if "enable_fp_fusion" not in opts:
-            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
+        args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -713,10 +739,11 @@ class HIPBackend(BaseBackend):
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
         if knobs.amd.dump_mir:
+            # translate_to_mir dumps both the pre-machine-scheduler MIR and, built
+            # from that same MachineFunction, the scheduling DAG (a (bb, position)
+            # edge list appended after the SCHEDULING DAG marker).
             _ = llvm.translate_to_mir(src, target_triple, options.arch, features, flags, options.enable_fp_fusion,
                                       dump_file_id)
-            llvm.dump_sched_dag(src, target_triple, options.arch, features, flags, options.enable_fp_fusion,
-                                dump_file_id)
         if knobs.amd.swap_mir_enable_misched and not knobs.amd.swap_mir:
             raise ValueError("TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR to be set")
         if knobs.amd.swap_mir:
