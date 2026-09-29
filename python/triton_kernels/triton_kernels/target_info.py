@@ -80,11 +80,11 @@ def has_native_mxfp():
 
 
 @lru_cache()
-def _num_sms_for_device(driver, device):
+def _num_sms_for_device(driver, device: int) -> int:
     return driver.utils.get_device_properties(device)["multiprocessor_count"]
 
 
-def num_sms():
+def num_sms() -> int:
     driver = triton.runtime.driver.active
     device = driver.get_current_device()
     if os.getenv("CUDA_MPS_ENABLE_PER_CTX_DEVICE_MULTIPROCESSOR_PARTITIONING") == "1":
