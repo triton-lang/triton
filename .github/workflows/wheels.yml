@@ -112,6 +112,15 @@ jobs:
           export CIBW_ENVIRONMENT="MAX_JOBS=4 TRITON_EXT_ENABLED=ON TRITON_BUILD_WITH_CLANG_LLD=1 TRITON_STABLE_ABI=ON"
           python3 -m cibuildwheel . --output-dir wheelhouse
 
+          # Free-threaded builds do not support the limited API, so the cp312
+          # abi3 wheel above does not cover them: 3.15t needs its own wheel.
+          # cpython-prerelease is required while manylinux ships 3.15.0rc1;
+          # drop it once 3.15.0 final is in the image.
+          export CIBW_ENABLE="cpython-prerelease"
+          export CIBW_BUILD="cp315t-manylinux_${{ matrix.config.arch }}"
+          export CIBW_ENVIRONMENT="MAX_JOBS=4 TRITON_EXT_ENABLED=ON TRITON_BUILD_WITH_CLANG_LLD=1"
+          python3 -m cibuildwheel . --output-dir wheelhouse
+
       - uses: actions/upload-artifact@v7
         with:
           name: cibw-wheels-manylinux_2_28_${{ matrix.config.arch }}-wheels-upload
