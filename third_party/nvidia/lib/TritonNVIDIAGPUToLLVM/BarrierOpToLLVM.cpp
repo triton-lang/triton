@@ -424,10 +424,7 @@ struct ArriveBarrierOpConversion
     // accesses which doesn't have a MemBar equivalent :/
     ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
 
-    // The partition-relative thread ID lowers the same or marginally better
-    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
-    Value id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
 
     bool isCrossClusterBarrier =
         op.isMulticast() || LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
