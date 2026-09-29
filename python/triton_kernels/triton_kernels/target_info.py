@@ -1,3 +1,6 @@
+import os
+from functools import lru_cache
+
 import triton
 import triton.language as tl
 
@@ -76,5 +79,15 @@ def has_native_mxfp():
     return cuda_capability_geq(10, 0)
 
 
+@lru_cache()
+def _num_sms_for_device(driver, device):
+    return driver.utils.get_device_properties(device)["multiprocessor_count"]
+
+
 def num_sms():
-    return triton.runtime.driver.active.utils.get_device_properties(0)["multiprocessor_count"]
+    driver = triton.runtime.driver.active
+    device = driver.get_current_device()
+    if os.getenv("CUDA_MPS_ENABLE_PER_CTX_DEVICE_MULTIPROCESSOR_PARTITIONING") == "1":
+        # MPS can report different SM counts for contexts on the same device.
+        return driver.utils.get_device_properties(device)["multiprocessor_count"]
+    return _num_sms_for_device(driver, device)
