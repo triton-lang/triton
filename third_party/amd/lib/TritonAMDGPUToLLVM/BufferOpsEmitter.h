@@ -2,7 +2,6 @@
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_BUFFEROPSEMITTER_H_
 
 #include "TargetInfo.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
