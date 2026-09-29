@@ -53,7 +53,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: tt.descriptor_reduce add
 // CHECK: tt.descriptor_reduce add
 
-// DescriptorReduce remains a supported K-partition sink.
+// The zero-accumulator DescriptorReduce case remains partitionable.
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
