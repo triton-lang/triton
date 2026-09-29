@@ -738,13 +738,13 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
         %out = arith.truncf %dot : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
         %out_blocked = ttg.convert_layout %out : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>
         // Keep the store inert if consumer partitioning duplicates it.
-        tt.store %arg2, %out_blocked, %mask : tensor<128x256x!tt.ptr<f16>, #blocked1>, tensor<128x256xf16, #blocked1>, tensor<128x256xi1, #blocked1>
+        tt.store %arg2, %out_blocked, %mask : tensor<128x256x!tt.ptr<f16>, #blocked1>
         scf.yield %dot : tensor<128x256xf32, #mma>
       } {tt.num_stages = 2 : i32, tt.warp_specialize}
       // Keep the sibling yield independent of the selected loop result.
       scf.yield %data_iter, %init : tensor<128x256xf16, #blocked1>, tensor<128x256xf32, #mma>
     }
-    tt.store %arg3, %loop#0, %mask : tensor<128x256x!tt.ptr<f16>, #blocked1>, tensor<128x256xf16, #blocked1>, tensor<128x256xi1, #blocked1>
+    tt.store %arg3, %loop#0, %mask : tensor<128x256x!tt.ptr<f16>, #blocked1>
     tt.return
   }
 }
