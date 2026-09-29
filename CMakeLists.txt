@@ -22,6 +22,14 @@ option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
 option(TRITON_BUILD_NVIDIA_BACKEND "Build NVIDIA backend" ON)
 option(TRITON_BUILD_AMD_BACKEND "Build AMD backend" ON)
+# The feature macros must be visible to every target in the tree (the Python
+# module, core libraries, tools, plugins and tests all include guarded code).
+if(TRITON_BUILD_NVIDIA_BACKEND)
+  add_compile_definitions(TRITON_BUILD_NVIDIA_BACKEND)
+endif()
+if(TRITON_BUILD_AMD_BACKEND)
+  add_compile_definitions(TRITON_BUILD_AMD_BACKEND)
+endif()
 option(TRITON_BUILD_NVIDIA_GSAN_RUNTIME
        "Build the CUDA/NVPTX GSan device runtime for the NVIDIA backend" ON)
 option(TRITON_STABLE_ABI "Build with Python Stable ABI (abi3) for Python 3.12+" OFF)
@@ -503,12 +511,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   # copies of core Triton code and LLVM.
   set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
 
-  if(TRITON_BUILD_NVIDIA_BACKEND)
-    target_compile_definitions(triton PRIVATE TRITON_BUILD_NVIDIA_BACKEND)
-  endif()
-  if(TRITON_BUILD_AMD_BACKEND)
-    target_compile_definitions(triton PRIVATE TRITON_BUILD_AMD_BACKEND)
-  endif()
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR
      CMAKE_SYSTEM_PROCESSOR MATCHES "[Aa][Rr][Mm]64" OR
      CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
