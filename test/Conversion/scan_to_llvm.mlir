@@ -3,6 +3,8 @@
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
 // RUN: triton-opt %t/parallel-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=CARRIES
 // RUN: triton-opt %t/grouped-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=GROUPS
+// RUN: triton-opt %t/tuple.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TUPLE
+// RUN: triton-opt %t/tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TUPLE
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
 //--- scan.mlir
@@ -312,4 +314,49 @@ tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
   tt.return
 }
 
+}
+
+//--- tuple.mlir
+
+// Thirty-two totals, with parallel lanes leaving only two lane bits available
+// for their sequence. Both tuple operands must scan the eight register groups
+// in reverse order, and their shared scratch allocations must not overlap.
+#tuple = #ttg.linear<{register = [[8, 0], [16, 0], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4]], warp = [[4, 0], [0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// TUPLE: ttg.shared = 1024 : i32
+// TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
+// TUPLE: llvm.getelementptr %arg2[512]
+// TUPLE: llvm.store {{.*}} : vector<{{.*}}i32>, !llvm.ptr<3>
+// TUPLE: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
+// TUPLE: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// TUPLE: nvvm.shfl.sync
+// TUPLE: llvm.mul
+// TUPLE: llvm.add
+// TUPLE: llvm.return
+// AMD-TUPLE: ttg.shared = 1024 : i32
+// AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
+// AMD-TUPLE: llvm.getelementptr %arg2[512]
+// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i32>, !llvm.ptr<3>
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// AMD-TUPLE: llvm.mul
+// AMD-TUPLE: llvm.add
+// AMD-TUPLE: llvm.return
+tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tensor<128x8xi64, #tuple>) -> (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>) {
+  %a_out, %b_out = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%a1: i32, %b1: i64, %a2: i32, %b2: i64):
+    %a12 = arith.muli %a1, %a2 : i32
+    %a2_wide = arith.extsi %a2 : i32 to i64
+    %b12 = arith.muli %b1, %a2_wide : i64
+    %b_sum = arith.addi %b12, %b2 : i64
+    tt.scan.return %a12, %b_sum : i32, i64
+  }) : (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>) -> (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>)
+  tt.return %a_out, %b_out : tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>
+}
 }
