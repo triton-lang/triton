@@ -129,6 +129,8 @@ from ._math import (
 )
 from ._standard import (
     cdiv,
+    cumprod,
+    cumsum,
     full_like,
     max,
     min,

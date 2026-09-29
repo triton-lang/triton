@@ -140,6 +140,60 @@ def test_minimum_maximum_tensor_promotion(op, other_dtype, expected_dtype):
     run_parser(kernel, args=(op, other_dtype, expected_dtype))
 
 
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("dtype", [tl.int8, tl.int32, tl.float32])
+def test_chained_comparison_range(scalar, dtype):
+
+    @triton.jit
+    def kernel(X, SCALAR: tl.constexpr):
+        if not SCALAR:
+            X = X + tl.arange(0, 8)
+        # CHECK: [[X:%.*]] = tt.load
+        x = tl.load(X)
+        # CHECK: [[LOW:%.*]] = arith.cmp{{[if]}} {{[so]}}ge, [[X]],
+        # CHECK: [[HIGH:%.*]] = arith.cmp{{[if]}} {{[so]}}le, [[X]],
+        # CHECK: [[RESULT:%.*]] = arith.andi [[LOW]], [[HIGH]]
+        # CHECK: tt.call {{.*}}([[RESULT]])
+        anchor(0 <= x <= 8)
+
+    run_filecheck_test(kernel, args=(MockTensor(dtype), scalar))
+
+
+def test_chained_comparison_constexpr():
+
+    @triton.jit
+    def kernel():
+        tl.static_assert(0 <= 4 <= 8 < 10)
+        tl.static_assert(not (0 <= 9 <= 8))
+        tl.static_assert(None is None is not False)
+        tl.static_assert(not (1 < 0 < undefined_name))  # noqa: F821
+        tl.static_assert(not (0 < 1 > 2 < undefined_name))  # noqa: F821
+
+    run_parser(kernel)
+
+
+def test_chained_comparison_scalar_promotion():
+
+    @triton.jit
+    def kernel(X):
+        x = tl.load(X + tl.arange(0, 8))
+        anchor(x < 1 < 256)
+
+    # The middle literal remains a constexpr for the second comparison.
+    module = run_parser(kernel, args=(MockTensor(tl.int8), ))
+    assert module.str_nodebug().count("arith.cmpi") == 1
+
+
+def test_chained_comparison_scalar_out_of_range():
+
+    @triton.jit
+    def kernel(X):
+        anchor(0 <= tl.load(X) <= 256)
+
+    with pytest.raises(CompilationError, match="out of range"):
+        run_parser(kernel, args=(MockTensor(tl.int8), ))
+
+
 @pytest.mark.parametrize("op", ["lt", "le", "gt", "ge", "eq", "ne"])
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("typed_scalar", [False, True])
@@ -294,8 +348,13 @@ def test_umulhi_scalar_out_of_range():
         run_parser(kernel, args=(MockTensor(tl.int32), ))
 
 
-@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
-@pytest.mark.parametrize("dtype, value", [(tl.float16, 1.0), (tl.bfloat16, 1.0), (tl.float32, 2.0**-127)])
+@pytest.mark.parametrize(
+    "op, dtype, value", [(op, dtype, value)
+                         for op in [tl.fma, tl.clamp]
+                         for dtype, value in [(tl.float16, 1.0), (tl.bfloat16, 1.0), (tl.float32, 2.0**-127)]] +
+    [(tl.clamp, dtype, 1)
+     for dtype in [tl.int8, tl.int16, tl.int32, tl.int64, tl.uint8, tl.uint16, tl.uint32, tl.uint64]] +
+    [(tl.clamp, tl.int1, True)])
 @pytest.mark.parametrize("tensor_args", range(1, 8))
 def test_ternary_math_scalar_promotion(op, dtype, value, tensor_args):
 
