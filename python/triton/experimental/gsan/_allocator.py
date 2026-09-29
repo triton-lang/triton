@@ -150,16 +150,22 @@ def reset() -> None:
 def create_mem_pool(*, shadow_granularity: int | None = None, write_once: bool = False):
     """Creates a CUDA memory pool with the specified shadow granularity.
 
-    With ``write_once=True``, each byte may be written once per backing allocation
-    lifetime, and reads must be ordered after that write. This mode always uses
-    byte granularity; other explicit granularities are rejected.
+    Both normal and write-once pools support 1-, 2-, 4-, 8-, and 16-byte shadow
+    granularity. If omitted, ``shadow_granularity`` defaults to 4 for normal pools
+    and 1 for ``write_once=True``.
+
+    With ``write_once=True``, each shadow cell permits one write per backing
+    allocation lifetime, and reads must be ordered after that write. A write to
+    any part of a cell claims the whole cell: for example, in a 4-byte pool,
+    writing one byte and then a different byte in the same cell is diagnosed as
+    a repeated write. Write-once pools do not support atomics.
 
     Granularity is fixed for the lifetime of the underlying allocation, including
     all tensor views and imported aliases. Use 1 for independent byte accesses,
-    or the default 4 for lower shadow-memory overhead. The 16-byte pool requires
-    every instrumented access to cover complete, aligned 16-byte units and does
-    not support atomics (including TMA reductions). Violations are diagnosed by
-    GSan. Aligned TMA loads and stores are suitable for this pool.
+    or a larger granularity for lower shadow-memory overhead. The 16-byte pool
+    requires every instrumented access to cover complete, aligned 16-byte units
+    and does not support atomics (including TMA reductions). Violations are
+    diagnosed by GSan. Aligned TMA loads and stores are suitable for this pool.
     """
     from torch.cuda.memory import MemPool
     return MemPool(get_allocator(shadow_granularity=shadow_granularity, write_once=write_once).allocator())
