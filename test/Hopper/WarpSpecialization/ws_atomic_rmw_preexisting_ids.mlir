@@ -1,6 +1,6 @@
 // RUN: not triton-opt %s --nvgpu-warp-specialization=num-stages=2 -o /dev/null 2>&1 | FileCheck %s
 
-// CHECK: warp specialization cannot fall back from unsupported atomic RMW in warp-specialized function with preexisting async_task_id attributes
+// CHECK: warp specialization cannot fall back from unsupported data partition in function with preexisting async_task_id attributes
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
   tt.func @preexisting_unsupported_atomic(%ptr: !tt.ptr<i32>) {

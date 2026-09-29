@@ -1,4 +1,5 @@
 // RUN: triton-opt %s --nvgpu-warp-specialization=num-stages=2 | FileCheck %s
+// RUN: triton-opt %s --nvgpu-warp-specialization=num-stages=2 | FileCheck %s --check-prefix=FALLBACK
 // RUN: triton-opt %s --nvgpu-test-ws-task-partition=num-warp-groups=3 --nvgpu-test-taskid-propagate=num-warp-groups=3 | FileCheck %s --check-prefix=TASK-ID
 
 // CHECK-LABEL: @atomic_rmw_falls_back
@@ -14,6 +15,17 @@
 // CHECK-NOT: async_task_id
 // CHECK: tt.num_stages = 2 : i32
 // CHECK-NOT: async_task_id
+
+// FALLBACK-LABEL: @atomic_rmw_falls_back
+// FALLBACK-NOT: ttg.warp_specialize
+// FALLBACK-NOT: tt.warp_specialize
+// FALLBACK-NOT: async_task_id
+// FALLBACK: tt.num_stages = 2 : i32
+// FALLBACK-NOT: ttg.warp_specialize
+// FALLBACK-NOT: tt.warp_specialize
+// FALLBACK-NOT: async_task_id
+// FALLBACK: tt.return
+
 // CHECK-LABEL: @atomic_epilogue_falls_back
 // CHECK-NOT: ttg.warp_specialize
 // CHECK-NOT: tt.warp_specialize
@@ -35,6 +47,27 @@
 // CHECK-NOT: tt.atomic_rmw add
 // CHECK: partition1
 // CHECK-NOT: tt.atomic_rmw add
+
+// FALLBACK-LABEL: @atomic_epilogue_falls_back
+// FALLBACK-NOT: ttg.warp_specialize
+// FALLBACK-NOT: tt.warp_specialize
+// FALLBACK-NOT: async_task_id
+// FALLBACK: tt.num_stages = 2 : i32
+// FALLBACK-NOT: ttg.warp_specialize
+// FALLBACK-NOT: tt.warp_specialize
+// FALLBACK-NOT: async_task_id
+// FALLBACK: tt.return
+// FALLBACK-LABEL: @producer_atomic_keeps_warp_specialization
+// FALLBACK-LABEL: @producer_tensor_atomic_falls_back
+// FALLBACK-NOT: ttg.warp_specialize
+// FALLBACK-NOT: tt.warp_specialize
+// FALLBACK-NOT: async_task_id
+// FALLBACK: tt.num_stages = 2 : i32
+// FALLBACK-NOT: ttg.warp_specialize
+// FALLBACK-NOT: tt.warp_specialize
+// FALLBACK-NOT: async_task_id
+// FALLBACK: tt.return
+
 // CHECK-LABEL: @producer_tensor_atomic_falls_back
 // CHECK-NOT: ttg.warp_specialize
 // CHECK: tt.atomic_rmw add
@@ -47,6 +80,17 @@
 // CHECK: tt.atomic_rmw fadd
 // CHECK: tt.store
 // CHECK-NOT: ttg.warp_specialize
+
+// FALLBACK-LABEL: @vector_consumer_atomic_falls_back
+// FALLBACK-NOT: ttg.warp_specialize
+// FALLBACK-NOT: tt.warp_specialize
+// FALLBACK-NOT: async_task_id
+// FALLBACK: tt.num_stages = 2 : i32
+// FALLBACK-NOT: ttg.warp_specialize
+// FALLBACK-NOT: tt.warp_specialize
+// FALLBACK-NOT: async_task_id
+// FALLBACK: tt.return
+
 // TASK-ID-LABEL: @producer_atomic_keeps_warp_specialization
 // TASK-ID: tt.atomic_rmw add{{.*}}async_task_id = array<i32: 0>
 // TASK-ID-LABEL: @producer_tensor_atomic_falls_back
