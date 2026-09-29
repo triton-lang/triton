@@ -7,10 +7,10 @@
 // covers the fp16/bf16 <-> fp32 casts, which take the same scalar LLVM path
 // everywhere.
 //
-// HWCVT (gfx1170) has the *plain* v_cvt_pk_{f32_fp8,f32_bf8,fp8_f32,bf8_f32}
+// HWCVT (gfx1170) has the *unscaled* v_cvt_pk_{f32_fp8,f32_bf8,fp8_f32,bf8_f32}
 // ops, which encode OCP on that target, but not the scaled ops CDNA4 and
 // gfx1250 use: expect rocdl.cvt.pk.*, not rocdl.cvt.scalef32.pk.*. There is no
-// plain 16-bit-source op, so f16/bf16 casts hop through f32; both hops are
+// unscaled 16-bit-source op, so f16/bf16 casts hop through f32; both hops are
 // lossless here, leaving the hardware op as the only rounding site.
 //
 // NOHW keeps the software fallback, so the hardware path cannot leak onto a
@@ -82,7 +82,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// f16/bf16 -> OCP fp8/bf8, RTNE. No plain 16-bit-source op exists, so these
+// f16/bf16 -> OCP fp8/bf8, RTNE. No unscaled 16-bit-source op exists, so these
 // widen to f32 first and then use the same packed downcast.
 
 // COMMON-LABEL: downcast_16bit_to_ocp_f8
@@ -185,7 +185,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// The plain hardware downcast is round-to-nearest-even only, so RTZ requests
+// The unscaled hardware downcast is round-to-nearest-even only, so RTZ requests
 // must stay on the software path even on HWCVT targets. Guards against a future
 // change wiring RTZ to the RTNE instruction.
 
@@ -229,16 +229,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// Two values per thread still use the packed converter: only the single-value
-// case is special-cased, so this pins the boundary.
+// Two values per thread fill only the low word of the packed upcast, so a
+// single packed convert covers them and no high-word convert reads undef.
 
-// COMMON-LABEL: two_element_upcast_stays_packed
+// COMMON-LABEL: two_element_upcast_uses_low_word
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @two_element_upcast_stays_packed(%arg0: tensor<256xf8E4M3FN, #blocked>) {
+  tt.func @two_element_upcast_uses_low_word(%arg0: tensor<256xf8E4M3FN, #blocked>,
+                                            %arg1: tensor<256xf8E5M2, #blocked>) {
     // HWCVT-NOT: rocdl.cvt.f32.fp8
-    // HWCVT-COUNT-2: rocdl.cvt.pk.f32.fp8
+    // HWCVT: rocdl.cvt.pk.f32.fp8 %{{.*}}[false]
+    // HWCVT-NOT: rocdl.cvt.pk.f32.fp8
     %0 = tt.fp_to_fp %arg0 : tensor<256xf8E4M3FN, #blocked> -> tensor<256xf32, #blocked>
+
+    // HWCVT-NOT: rocdl.cvt.f32.bf8
+    // HWCVT: rocdl.cvt.pk.f32.bf8 %{{.*}}[false]
+    // HWCVT-NOT: rocdl.cvt.pk.f32.bf8
+    %1 = tt.fp_to_fp %arg1 : tensor<256xf8E5M2, #blocked> -> tensor<256xf32, #blocked>
     tt.return
   }
 }
@@ -247,7 +254,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // The scalar converter is used only for an f32 destination. A single fp8 value
 // headed for f16/bf16 keeps the packed upcast, which here still discards three
-// quarters of its result: there is no plain op landing directly in 16 bits, so
+// quarters of its result: there is no unscaled op landing directly in 16 bits, so
 // the f32 intermediate is needed either way.
 
 // COMMON-LABEL: single_element_upcast_to_16bit_stays_packed
@@ -269,7 +276,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 // FNUZ fp8 is the gfx942 encoding. These targets have no FNUZ hardware, so the
-// plain ops must not be selected for it even though the mnemonics match.
+// unscaled ops must not be selected for it even though the mnemonics match.
 
 // COMMON-LABEL: fnuz_stays_software
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
