@@ -294,6 +294,11 @@
 // CHECK-NOT: ttg.warp_specialize
 // CHECK-NOT: tt.warp_specialize
 // CHECK-NOT: async_task_id
+// CHECK-LABEL: @gather_on_sibling_loop_yield_keeps_warp_specialization
+// CHECK: ttg.warp_specialize
+// CHECK: tt.descriptor_store
+// CHECK: tt.gather
+// CHECK: tt.store
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -665,6 +670,30 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
     } {tt.num_stages = 2 : i32, tt.warp_specialize}
     %loop:2 = scf.for %i = %c0 to %c1 step %c1 iter_args(%dot_iter = %selected, %data_iter = %independent) -> (tensor<128x256xf32, #mma>, tensor<128x256xf16, #blocked1>) : i32 {
       scf.yield %dot_iter, %data_iter : tensor<128x256xf32, #mma>, tensor<128x256xf16, #blocked1>
+    }
+    %out = arith.truncf %loop#0 : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
+    %out_blocked = ttg.convert_layout %out : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>
+    tt.descriptor_store %arg2[%c0, %c0], %out_blocked : !tt.tensordesc<128x256xf16>, tensor<128x256xf16, #blocked1>
+    %gathered = tt.gather %loop#1[%indices] {axis = 1 : i32} : (tensor<128x256xf16, #blocked1>, tensor<128x256xi32, #blocked1>) -> tensor<128x256xf16, #blocked1>
+    tt.store %arg3, %gathered : tensor<128x256x!tt.ptr<f16>, #blocked1>
+    tt.return
+  }
+
+  tt.func @gather_on_sibling_loop_yield_keeps_warp_specialization(%arg0: !tt.tensordesc<128x64xf16>, %arg1: !tt.tensordesc<64x256xf16>, %arg2: !tt.tensordesc<128x256xf16>, %arg3: tensor<128x256x!tt.ptr<f16>, #blocked1>, %independent: tensor<128x256xf16, #blocked1>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %indices = arith.constant dense<0> : tensor<128x256xi32, #blocked1>
+    %init = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %loop:2 = scf.for %i = %c0 to %c1 step %c1 iter_args(%dot_iter = %init, %data_iter = %independent) -> (tensor<128x256xf32, #mma>, tensor<128x256xf16, #blocked1>) : i32 {
+      %selected = scf.for %j = %c0 to %c1 step %c1 iter_args(%iter = %dot_iter) -> tensor<128x256xf32, #mma> : i32 {
+        %a = tt.descriptor_load %arg0[%j, %c0] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+        %a_smem = ttg.local_alloc %a : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+        %b = tt.descriptor_load %arg1[%c0, %j] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked1>
+        %b_smem = ttg.local_alloc %b : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+        %dot = ttng.warp_group_dot %a_smem, %b_smem, %iter {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+        scf.yield %dot : tensor<128x256xf32, #mma>
+      } {tt.num_stages = 2 : i32, tt.warp_specialize}
+      scf.yield %selected, %data_iter : tensor<128x256xf32, #mma>, tensor<128x256xf16, #blocked1>
     }
     %out = arith.truncf %loop#0 : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
     %out_blocked = ttg.convert_layout %out : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>

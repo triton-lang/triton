@@ -130,12 +130,12 @@ public:
           return true;
 
         if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-          // The partitioner's forward slice treats all loop results as
-          // partitioned when any init arg is partitioned.
+          // The forward partition walk propagates an init arg to every loop
+          // result, but a yielded value only to its matching result.
+          unsigned result = cast<OpResult>(value).getResultNumber();
           for (Value initArg : forOp.getInitArgs())
             worklist.insert(initArg);
-          for (Value yieldedValue : forOp.getYieldedValues())
-            worklist.insert(yieldedValue);
+          worklist.insert(forOp.getYieldedValues()[result]);
           continue;
         }
         for (Value operand : op->getOperands())
