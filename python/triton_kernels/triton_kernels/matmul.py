@@ -401,7 +401,7 @@ def matmul(a, b, bias,
     else:
         batch_size = 1
     if c_acc_in is not None:
-        c_acc_is_c = c_acc_in.data_ptr() == c.data_ptr() and c_acc_in.stride() == c.stride()
+        c_acc_is_c = c is not None and c_acc_in.data_ptr() == c.data_ptr() and c_acc_in.stride() == c.stride()
     else:
         c_acc_is_c = None
     K = a.shape[-1]
