@@ -278,11 +278,8 @@ jobs:
       PYTEST_ADDOPTS: "-p triton._compile_warmup"
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
-      ROCM_NIGHTLY_INDEX_URL: https://nightly.repo.amd.com/rocm/whl-next/
-      ROCM_VERSION: "10.2.0a20260921"
-      TORCH_VERSION: "2.15.0a0+rocm10.2.0a20260921"
     container:
-      image: tritonci/triton-amd-ci:rocm10.1.0a20260820-pytorch2.15.0a0-gfx942-gfx950-gfx1250-r1
+      image: tritonci/triton-amd-ci:rocm10.2.0a20260929-pytorch2.15.0a0-gfx942-gfx950-gfx1250-r1
       options: >-
         --security-opt seccomp=unconfined --user root
         --volume /home/runner/.triton:/github/home/.triton
@@ -291,20 +288,38 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: 'true'
+      - name: Compute cache keys
+        id: rocjitsu-cache-key
+        shell: bash
+        run: |
+          llvm_file="cmake/llvm-info.json"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          amd_file="cmake/amd-llvm-info.json"
+          json_file="cmake/json-version.txt"
+
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$amd_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "amd=$(sha256sum $amd_file | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "json=$(cat $json_file)" >> "$GITHUB_OUTPUT"
+      - name: Restore build dependencies cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/amd
+            ~/.triton/json
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.rocjitsu-cache-key.outputs.llvm }}-nvidia-${{ steps.rocjitsu-cache-key.outputs.nvidia }}-amd-${{ steps.rocjitsu-cache-key.outputs.amd }}-json-${{ steps.rocjitsu-cache-key.outputs.json }}
       - name: Setup gfx1250 emulation
         shell: bash
         run: |
           set -xeo pipefail
           unset HIP_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES
-          python3 -m pip uninstall -y \
-            triton triton-rocm pytorch-triton torch amd-torch-device-gfx1250 \
-            rocm rocm-sdk-core rocm-sdk-devel rocm-sdk-libraries rocm-sdk-device-gfx1250 \
-            2>/dev/null || true
-          python3 -m pip install --pre --force-reinstall \
-            --index-url "${ROCM_NIGHTLY_INDEX_URL}" \
-            --extra-index-url https://pypi.org/simple \
-            "rocm[libraries,devel,device-gfx1250]==${ROCM_VERSION}" \
-            "torch[device-gfx1250]==${TORCH_VERSION}"
           rocm-sdk init
           ROCM_ROOT="$(rocm-sdk path --root)"
           echo "ROCM_ROOT=${ROCM_ROOT}" >> "$GITHUB_ENV"
@@ -357,22 +372,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          k_runtime="not (test_device_assert or test_expect_zero_device_assert or test_sanitize_int or test_replenishing_process_pool_reuses_clean_processes or test_run_in_process_handles_large_exceptions)"
-          k_core="not (test_load_store_same_ptr or test_atomic_cas or (test_scan2d and shape365) or (test_scan2d and shape869) or (test_umulhi and int64) or (test_umulhi and uint64) or (test_scaled_dot and e2m1-e4m3))"
-          k_matmul="not (test_preshuffle_scale_mxfp_cdna4 or test_batched_mxfp or test_mxfp8_mxfp4_matmul or test_block_scale_fp4 or (test_simple_matmul and float64-float64))"
-          k_tdesc="not (tensor_descriptor_reduce or test_tensor_descriptor_padding or test_host_tensor_descriptor_round_f32_to_tf32)"
+          k_runtime="not ((test_device_assert and not test_device_assert_barrier) or test_expect_zero_device_assert or test_sanitize_int)"
+          k_core="not (test_load_store_same_ptr or test_atomic_cas or (test_scan2d and shape365) or (test_scan2d and shape869) or (test_scaled_dot and 128-64-128-True-False-False-e2m1-e4m3-4-16-1))"
+          k_matmul="not (test_preshuffle_scale_mxfp_cdna4 or test_batched_mxfp or test_mxfp8_mxfp4_matmul or test_block_scale_fp4 or (test_simple_matmul and False-4-1-512-64-32-2-float64-float64) or (test_simple_matmul and False-4-1-64-512-32-2-float64-float64))"
+          k_tdesc="not tensor_descriptor_reduce"
 
-          k_all="$k_runtime and $k_core and $k_matmul and $k_tdesc"
+          k_all="$k_runtime and $k_core and $k_tdesc"
+          ROCJITSU_BULK="${ROCM_ROOT}/bin/mirage run --in-process --config ${ROCJITSU_CONFIG} --cpu-thread-budget 4 --"
 
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_all" -p no:forked \
+          $ROCJITSU_BULK pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_all" -p no:forked \
             --timeout=600 --timeout-method=thread \
             python/test/unit/test_debug.py \
             python/test/unit/runtime \
             python/test/unit/language/test_core.py \
-            python/test/unit/language/test_matmul.py \
             python/test/unit/language/test_tensor_descriptor.py \
             python/triton_kernels/tests/test_topk.py::test_topk
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+          $ROCJITSU_BULK pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_matmul" -p no:forked \
+            --timeout=600 --timeout-method=thread \
+            python/test/unit/language/test_matmul.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
             third_party/amd/python/test/ \
             --ignore=third_party/amd/python/test/test_address_sanitizer.py \
             --ignore=third_party/amd/python/test/test_gluon_cdna5_consan.py \
