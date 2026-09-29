@@ -899,6 +899,7 @@ def TTNG_TMEMWaitOp : TTNG_Op<"tmem_wait"> {
   }];
   let arguments = (ins TTNG_TMEMWaitKindAttr:$kind);
   let assemblyFormat = "$kind attr-dict";
+  let hasVerifier = 1;
 }
 
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {

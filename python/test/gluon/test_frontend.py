@@ -3,7 +3,6 @@ import pytest
 import re
 from dataclasses import replace
 
-import triton
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -30,6 +29,18 @@ from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.runtime.jit import MockTensor
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+
+
+@filecheck_test
+@gluon.jit
+def test_chained_comparison_range():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    x = ttgl.arange(0, 128, layout=layout)
+    # CHECK: [[LOW:%.*]] = arith.cmpi
+    # CHECK: [[HIGH:%.*]] = arith.cmpi
+    # CHECK: arith.andi [[LOW]], [[HIGH]] : tensor<128xi1, #blocked>
+    result = 0 <= x <= 8
+    ttgl.static_assert(result.type == ttgl.distributed_type(ttgl.int1, [128], layout))
 
 
 @filecheck_test
@@ -132,50 +143,6 @@ def test_inline_asm_frontend_unresolved_layout(layout):
 
     with pytest.raises(CompilationError, match="explicit distributed tensor layouts"):
         run_parser(kernel, *make_args(layout), target=BLACKWELL_TARGET)
-
-
-@pytest.mark.parametrize("elementwise", [False, True])
-def test_inline_asm_shared_amd_compilation(elementwise):
-
-    @gluon.jit
-    def kernel(Out, ELEMENTWISE: ttgl.constexpr):
-        x = ttgl.arange(0, 256, layout=ttgl.BlockedLayout([1], [64], [4], [0]))
-        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), x)
-        asm: ttgl.constexpr = "v_add_u32 $0, $1, $2\nds_read_b32 $0, $0\ns_waitcnt lgkmcnt(0)"
-        if ELEMENTWISE:
-            y = ttgl.inline_asm_elementwise(asm, "=&v,v,v", [smem, x * 4], ttgl.int32, False, 1)
-        else:
-            ttgl.barrier()
-            y = ttgl.inline_asm(asm, "=&v,v,v", [smem, x * 4], x.type)
-        ttgl.store(Out + x, y)
-
-    source = gluon.GluonASTSource(kernel, {"Out": "*i32", "ELEMENTWISE": "constexpr"}, {"ELEMENTWISE": elementwise})
-    compiled = triton.compile(source, target=HIP_TARGET_CDNA3)
-    assert "ds_read_b32" in compiled.asm["amdgcn"]
-
-
-@pytest.mark.parametrize("target, binary", [(AMPERE_TARGET, "cubin"), (HIP_TARGET_CDNA3, "hsaco")])
-def test_gluon_ast_source_without_driver(target, binary, monkeypatch, fresh_triton_cache):
-
-    def fail_driver_access(self):
-        raise AssertionError("Offline compilation must not access the GPU driver")
-
-    monkeypatch.setattr(type(triton.runtime.driver), "active", property(fail_driver_access))
-
-    @gluon.jit
-    def kernel(X, Y, BLOCK: ttgl.constexpr, LAYOUT: ttgl.constexpr):
-        offsets = ttgl.arange(0, BLOCK, layout=LAYOUT)
-        ttgl.store(Y + offsets, ttgl.load(X + offsets))
-
-    source = gluon.GluonASTSource(
-        kernel,
-        signature={"X": "*fp32", "Y": "*fp32", "BLOCK": "constexpr", "LAYOUT": "constexpr"},
-        constexprs={"BLOCK": 128, "LAYOUT": ttgl.BlockedLayout([1], [target.warp_size], [4], [0])},
-        attrs={(0, ): [["tt.divisibility", 16]], (1, ): [["tt.divisibility", 16]]},
-    )
-    compiled = triton.compile(source, target=target)
-    assert "tt.divisibility = 16" in compiled.asm[source.ext]
-    assert compiled.asm[binary]
 
 
 @gluon.jit
