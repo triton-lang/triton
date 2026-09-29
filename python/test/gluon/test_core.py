@@ -6611,3 +6611,51 @@ def test_tma_cache_policy_copy(kind, rank, pred, policy):
         if detailed and policy.l2.secondary == "evict_first":
             expected += ".L2::evict_first"
         assert expected + ".b64" in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize("target", [GPUTarget("cuda", 90, 32), GPUTarget("cuda", 100, 32)])
+@pytest.mark.parametrize("rank,kind,multicast", [(1, "load", False), (2, "load", False), (5, "load", False),
+                                                 (2, "load", True), (4, "im2col", False), (4, "im2col", True),
+                                                 (2, "gather", False), (2, "gather", True), (1, "store", False),
+                                                 (2, "store", False), (5, "store", False), (2, "scatter", False)])
+@pytest.mark.parametrize("policy,expected", [
+    (None, None),
+    (ttgl.CachePolicy(eviction_policy="evict_first"), "createpolicy.fractional.L2::evict_first.b64"),
+    (ttgl.CachePolicy(eviction_policy="evict_last"), "createpolicy.fractional.L2::evict_last.b64"),
+    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_normal", 1.0)),
+     "createpolicy.fractional.L2::evict_normal.b64"),
+    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first")),
+     "createpolicy.fractional.L2::evict_last.L2::evict_first.b64"),
+])
+def test_tma_cache_policy_ptx(target, rank, kind, multicast, policy, expected, tmp_path):
+    from triton._filecheck import run_parser
+    from test_frontend import make_args, make_tma_cache_policy_desc, tma_cache_policy_kernel
+
+    # Parse a runtime predicate, then compile the saved Gluon IR all the way
+    # through the pinned ptxas for both architectures without needing that GPU.
+    if kind in ("gather", "scatter") and target.arch == 90:
+        pytest.skip("gather/scatter require Blackwell")
+    desc = make_tma_cache_policy_desc(rank, kind, multicast)
+    mod = run_parser(tma_cache_policy_kernel,
+                     *make_args(desc, False, policy, kind, multicast, num_ctas=2 if multicast else 1), target=target)
+    source = tmp_path / "tma_cache_policy.glir"
+    source.write_text(mod.str_nodebug())
+    compiled = triton.compile(str(source), target=target)
+    ptx = compiled.asm["ptx"]
+    assert compiled.asm["cubin"]
+    opcode = {"gather": ".tile::gather4", "scatter": ".tile::scatter4", "store":
+              ".global.shared::cta"}.get(kind, "cp.async.bulk.tensor")
+    loads = [line for line in ptx.splitlines() if "cp.async.bulk.tensor" in line and opcode in line]
+    assert loads
+    assert all((".L2::cache_hint" in line) == (expected is not None) for line in loads)
+    if expected is None:
+        assert "createpolicy" not in ptx
+    else:
+        assert expected in ptx
+        # The opaque policy is a 64-bit register and comes after im2col offsets
+        # and the multicast mask, on every emitted message.
+        assert all(re.search(r", %rd[0-9]+;", line) for line in loads)
+        if multicast:
+            assert all(re.search(r", %rs[0-9]+, %rd[0-9]+;", line) for line in loads)
+        if kind == "im2col":
+            assert all(re.search(r"\}, (?:%rs[0-9]+, )?%rd[0-9]+;", line) for line in loads)
