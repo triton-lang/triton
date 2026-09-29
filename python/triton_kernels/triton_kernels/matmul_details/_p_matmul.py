@@ -633,7 +633,7 @@ def _p_matmul(
             if SWAP_XW:
                 acc_tile = acc_tile.T
 
-            acc_tile = acc_tile + biases[a_i][None, :] * betas[:, None]
+            acc_tile = tl.fma(biases[a_i][None, :], betas[:, None], acc_tile)
             if out_alpha is not None:
                 acc_tile *= out_alpha
 

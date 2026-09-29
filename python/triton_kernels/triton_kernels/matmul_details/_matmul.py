@@ -543,7 +543,7 @@ def _matmul(
     if SWAP_XW:
         acc = acc.trans()
     acc *= x_scale * w_scale
-    acc = acc + bias[None, :] * betas[:, None]
+    acc = tl.fma(bias[None, :], betas[:, None], acc)
     if out_alpha is not None:
         acc *= out_alpha
     if ACTIVATION_FN is not None:
