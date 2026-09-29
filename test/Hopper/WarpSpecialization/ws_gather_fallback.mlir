@@ -311,8 +311,8 @@
 // CHECK-NOT: tt.warp_specialize
 // CHECK-NOT: async_task_id
 // CHECK-LABEL: @gather_on_sibling_loop_yield_keeps_warp_specialization
-// CHECK: tt.gather
 // CHECK: ttg.warp_specialize
+// CHECK: tt.gather
 // CHECK: ttng.warp_group_dot
 // CHECK: tt.descriptor_store
 // CHECK: tt.store
@@ -725,6 +725,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
     %c0 = arith.constant 0 : i32
     %c1 = arith.constant 1 : i32
     %indices = arith.constant dense<0> : tensor<128x256xi32, #blocked1>
+    %mask = arith.constant dense<false> : tensor<128x256xi1, #blocked1>
     %init = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
     %gathered = tt.gather %independent[%indices] {axis = 1 : i32} : (tensor<128x256xf16, #blocked1>, tensor<128x256xi32, #blocked1>) -> tensor<128x256xf16, #blocked1>
     %loop:2 = scf.for %i = %c0 to %c1 step %c1 iter_args(%data_iter = %gathered, %dot_iter = %init) -> (tensor<128x256xf16, #blocked1>, tensor<128x256xf32, #mma>) : i32 {
@@ -741,7 +742,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
     %out = arith.truncf %loop#1 : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
     %out_blocked = ttg.convert_layout %out : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>
     tt.descriptor_store %arg2[%c0, %c0], %out_blocked : !tt.tensordesc<128x256xf16>, tensor<128x256xf16, #blocked1>
-    tt.store %arg3, %loop#0 : tensor<128x256x!tt.ptr<f16>, #blocked1>
+    tt.store %arg3, %loop#0, %mask : tensor<128x256x!tt.ptr<f16>, #blocked1>, tensor<128x256xf16, #blocked1>, tensor<128x256xi1, #blocked1>
     tt.return
   }
 }
