@@ -128,7 +128,7 @@ struct ScaledUpcastFp4OpPattern
     auto groupScaleReg =
         computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
 
-    if (targetInfo.supportsCvtPkScalePk8()) {
+    if (targetInfo.supportsCvtPkScalePk8Block16()) {
       if (failed(checkPk8ScaleType(upcastOp, upcastOp.getScale().getType())))
         return failure();
 
@@ -260,14 +260,13 @@ struct ScaledUpcastFp8OpPattern
     bool preShifted = scaleIsPreShifted(upcastOp.getScale().getType());
     SmallVector<Value> results;
     results.reserve(inputVals.size());
-    // Broadcast layouts can use FP8 Block32 (opSel=0). Otherwise use Block16
-    // (opSel=8) and pack lane j^16's scale into byte 1.
-    bool broadcast = isScaleLane16Broadcast(upcastOp.getScale().getType());
-    if (targetInfo.supportsCvtPkScalePk8() &&
-        (broadcast || targetInfo.supportsCvtPkScalePk8Block16())) {
+    if (targetInfo.supportsCvtPkScalePk8Block16()) {
       if (failed(checkPk8ScaleType(upcastOp, upcastOp.getScale().getType())))
         return failure();
 
+      // Broadcast layouts can use FP8 Block32 (opSel=0). Otherwise use Block16
+      // (opSel=8) and pack lane j^16's scale into byte 1.
+      bool broadcast = isScaleLane16Broadcast(upcastOp.getScale().getType());
       SmallVector<Value> crossScaleVals(scaleVals.size());
       auto getCrossScale = [&](int scaleIdx) -> Value {
         if (broadcast)
