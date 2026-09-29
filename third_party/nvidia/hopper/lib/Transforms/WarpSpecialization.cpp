@@ -173,6 +173,14 @@ public:
           if (auto forOp = dyn_cast<scf::ForOp>(user)) {
             for (unsigned i = 0; i < forOp.getInitArgs().size(); ++i) {
               if (forOp.getInitArgs()[i] == value) {
+                // A partitioned init can pull every loop result into the
+                // partition closure, including results from sibling inits.
+                for (unsigned j = 0; j < forOp.getInitArgs().size(); ++j) {
+                  if (i != j &&
+                      hasPartitionRootInBackwardSlice(forOp.getInitArgs()[j],
+                                                      hasPartitionableValue))
+                    return true;
+                }
                 worklist.insert(forOp.getRegionIterArgs()[i]);
                 worklist.insert(forOp.getResult(i));
               }
