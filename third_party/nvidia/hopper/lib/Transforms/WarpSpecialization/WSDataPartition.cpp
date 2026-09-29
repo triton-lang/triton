@@ -290,8 +290,8 @@ getBackwardSliceToPartition(Value v, DataPartitionScheme &partitionScheme,
       }
     } else if (auto dotOp = dyn_cast<nvidia_gpu::WarpGroupDotOp>(op)) {
       auto result = getBackwardSliceToPartition(
-          currentDim == 0 ? Value(dotOp.getA()) : dotOp.getB(),
-          partitionScheme, currentDim);
+          currentDim == 0 ? Value(dotOp.getA()) : dotOp.getB(), partitionScheme,
+          currentDim);
       if (result != DataPartitionResult::Success)
         return result;
       result = getBackwardSliceToPartition(dotOp.getC(), partitionScheme,
@@ -300,9 +300,9 @@ getBackwardSliceToPartition(Value v, DataPartitionScheme &partitionScheme,
         return result;
       partitionScheme.dotPartitionOperand[dotOp] = currentDim == 0 ? 0 : 1;
     } else if (auto dotOp = dyn_cast<nvidia_gpu::TCGen5MMAOp>(op)) {
-      auto result = getBackwardSliceToPartition(
-          currentDim == 0 ? dotOp.getA() : dotOp.getB(), partitionScheme,
-          currentDim);
+      auto result = getBackwardSliceToPartition(currentDim == 0 ? dotOp.getA()
+                                                                : dotOp.getB(),
+                                                partitionScheme, currentDim);
       if (result != DataPartitionResult::Success)
         return result;
       result = getBackwardSliceToPartition(dotOp.getD(), partitionScheme,
@@ -464,8 +464,8 @@ getForwardSliceToPartition(Value v, DataPartitionScheme &partitionScheme,
     }
 
     for (Value result : depOp->getResults()) {
-      auto partitionResult = getForwardSliceToPartition(
-          result, partitionScheme, currentDim, seen);
+      auto partitionResult =
+          getForwardSliceToPartition(result, partitionScheme, currentDim, seen);
       if (partitionResult != DataPartitionResult::Success)
         return partitionResult;
     }
@@ -491,10 +491,10 @@ getForwardSliceToPartition(Value v, DataPartitionScheme &partitionScheme,
 
 // Compute a closure of all ops originated from
 // or being dependent on by the root op.
-static DataPartitionResult getSliceToPartition(
-    Value root, DataPartitionScheme &partitionScheme, unsigned currentDim) {
-  auto result =
-      getBackwardSliceToPartition(root, partitionScheme, currentDim);
+static DataPartitionResult
+getSliceToPartition(Value root, DataPartitionScheme &partitionScheme,
+                    unsigned currentDim) {
+  auto result = getBackwardSliceToPartition(root, partitionScheme, currentDim);
   if (result != DataPartitionResult::Success)
     return result;
   DataPartitionScheme forwardPartitionScheme = partitionScheme;
@@ -514,9 +514,8 @@ static DataPartitionResult getSliceToPartition(
     if (op->hasTrait<OpTrait::Elementwise>() ||
         isa<StoreOp, DescriptorStoreOp, AtomicRMWOp>(op)) {
       for (OpOperand &operand : op->getOpOperands()) {
-        result =
-            getBackwardSliceToPartition(operand.get(), partitionScheme,
-                                       currentDim);
+        result = getBackwardSliceToPartition(operand.get(), partitionScheme,
+                                             currentDim);
         if (result != DataPartitionResult::Success)
           return result;
       }
@@ -548,9 +547,9 @@ static DataPartitionResult getSliceToPartition(
         if (result != DataPartitionResult::Success)
           return result;
         // Hanlde accumulator
-        result = getBackwardSliceToPartition(
-            accumulator, partitionScheme,
-            DataPartitionScheme::noOpPartitionDim);
+        result =
+            getBackwardSliceToPartition(accumulator, partitionScheme,
+                                        DataPartitionScheme::noOpPartitionDim);
         if (result != DataPartitionResult::Success)
           return result;
       }
@@ -560,8 +559,9 @@ static DataPartitionResult getSliceToPartition(
   return DataPartitionResult::Success;
 }
 
-static DataPartitionResult computePartitionScheme(
-    triton::FuncOp &funcOp, DataPartitionScheme &partitionScheme) {
+static DataPartitionResult
+computePartitionScheme(triton::FuncOp &funcOp,
+                       DataPartitionScheme &partitionScheme) {
   // Use dot to drive the partition
   SetVector<Operation *> dots;
 
