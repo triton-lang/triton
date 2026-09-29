@@ -86,8 +86,8 @@ class FileCacheManager(CacheManager):
         if child_paths is None:
             return None
         result = {}
-        for c, p in child_paths.items():
-            p = self._make_path(p)
+        for c in child_paths:
+            p = self._make_path(c)
             if not os.path.exists(p):
                 return None
             result[c] = p
@@ -97,8 +97,8 @@ class FileCacheManager(CacheManager):
     def put_group(self, filename: str, group: Dict[str, str]) -> str:
         if not self.cache_dir:
             raise RuntimeError("Could not create or locate cache dir")
-        # Store children by name so the cache dir still works after being copied or moved.
-        grp_contents = json.dumps({"child_paths": {c: os.path.basename(p) for c, p in group.items()}})
+        # Store just the file names, like RemoteCacheManager, so a copied or moved cache dir still works.
+        grp_contents = json.dumps({"child_paths": sorted(group)})
         grp_filename = f"__grp__{filename}"
         return self.put(grp_contents, grp_filename, binary=False)
 
