@@ -1,7 +1,6 @@
 import expecttest
 import importlib.util
 import itertools
-import json
 import multiprocessing
 import os
 import re
@@ -78,15 +77,6 @@ def test_file_cache_manager_get_group_relocated_dir(fresh_knobs, tmp_path):
         "kernel.json": os.path.join(manager.cache_dir, "kernel.json"),
         "kernel.cubin": os.path.join(manager.cache_dir, "kernel.cubin"),
     }
-
-
-def test_file_cache_manager_get_group_accepts_full_child_paths(fresh_knobs, tmp_path):
-    fresh_knobs.cache.dir = str(tmp_path)
-    manager = FileCacheManager("key")
-    metadata_path = manager.put("{}", "kernel.json", binary=False)
-    # Group files written before children were stored by name hold full paths.
-    manager.put(json.dumps({"child_paths": {"kernel.json": metadata_path}}), "__grp__kernel.json", binary=False)
-    assert manager.get_group("kernel.json") == {"kernel.json": metadata_path}
 
 
 def test_remote_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):

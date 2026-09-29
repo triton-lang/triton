@@ -87,9 +87,7 @@ class FileCacheManager(CacheManager):
             return None
         result = {}
         for c, p in child_paths.items():
-            # Children stored by name live in this cache dir; older group files store full paths.
-            if not os.path.isabs(p):
-                p = self._make_path(p)
+            p = self._make_path(p)
             if not os.path.exists(p):
                 return None
             result[c] = p
@@ -99,9 +97,8 @@ class FileCacheManager(CacheManager):
     def put_group(self, filename: str, group: Dict[str, str]) -> str:
         if not self.cache_dir:
             raise RuntimeError("Could not create or locate cache dir")
-        # Store children in this cache dir by name, so the cache dir still works after being copied or moved.
-        child_paths = {c: os.path.basename(p) if os.path.dirname(p) == self.cache_dir else p for c, p in group.items()}
-        grp_contents = json.dumps({"child_paths": child_paths})
+        # Store children by name so the cache dir still works after being copied or moved.
+        grp_contents = json.dumps({"child_paths": {c: os.path.basename(p) for c, p in group.items()}})
         grp_filename = f"__grp__{filename}"
         return self.put(grp_contents, grp_filename, binary=False)
 
