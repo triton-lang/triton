@@ -1452,6 +1452,30 @@ def test_math_scalar_promotion(dtype, value, ir_dtype):
     assert f"tensor<128x{ir_dtype}," in comparisons[0]
 
 
+@pytest.mark.parametrize("dtype, bound_dtype, result_dtype", [
+    (ttgl.int8, ttgl.int8, ttgl.int8),
+    (ttgl.uint64, ttgl.uint64, ttgl.uint64),
+    (ttgl.int1, ttgl.int1, ttgl.int1),
+    (ttgl.int8, ttgl.int16, ttgl.int16),
+    (ttgl.int32, ttgl.uint32, ttgl.uint32),
+    (ttgl.uint32, ttgl.int64, ttgl.int64),
+    (ttgl.int32, ttgl.float32, ttgl.float32),
+])
+def test_clamp_integer_broadcast_promotion(dtype, bound_dtype, result_dtype):
+
+    @gluon.jit
+    def kernel(dtype: ttgl.constexpr, bound_dtype: ttgl.constexpr, result_dtype: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        x = ttgl.full([4, 1], 1, dtype, layout)
+        upper = ttgl.full([1, 8], 1, bound_dtype, layout)
+        lower: ttgl.constexpr = False if dtype == ttgl.int1 else 0
+        result = ttgl.clamp(x, lower, upper)
+        ttgl.static_assert(result.dtype == result_dtype)
+        ttgl.static_assert(result.shape == [4, 8])
+
+    run_parser(kernel, args=(dtype, bound_dtype, result_dtype), target=BLACKWELL_TARGET)
+
+
 @gluon.jit
 def _packed_arith_invalid_frontend_kernel(case: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])

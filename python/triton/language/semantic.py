@@ -432,8 +432,10 @@ class TritonSemantic(Generic[TensorTy]):
         dtype = x.dtype
         if dtype.is_floating():
             return self.make_tensor(self.builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
+        elif dtype.is_int():
+            return self.minimum(self.maximum(x, min, propagate_nan), max, propagate_nan)
         else:
-            raise TypeError(f"Unexpected dtype {dtype}. Only floating point clamp is supported")
+            raise TypeError(f"Unexpected dtype {dtype}")
 
 ##############
 # bitwise ops
