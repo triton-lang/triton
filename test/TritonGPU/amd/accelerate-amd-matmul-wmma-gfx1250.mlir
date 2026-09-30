@@ -235,11 +235,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %output: tensor<32x32x!tt.ptr<f32>, #blocked>
       ) {
     // CHECK: tt.load %arg1 {amdg.decomposed_dot_scaled_source = true} : tensor<32x4x!tt.ptr<i8>, #blocked1>
-    // CHECK: %[[SCALE_CVT:.*]] = ttg.convert_layout {{.*}} : tensor<32x4xi8, #blocked1> -> tensor<32x4xi8, #ttg.slice<{dim = 2, parent = #blocked3}>>
-    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<32x4x32xi8, #blocked3> -> tensor<32x128xi8, #blocked>
-    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp8 {{.*}} scale %[[SCALE]] : tensor<32x128xf8E4M3FN, #blocked>, tensor<32x128xi8, #blocked> -> tensor<32x128xbf16, #blocked>
+    // CHECK: %[[SCALE_CVT:.*]] = ttg.convert_layout {{.*}} : tensor<32x4xi8, #blocked1> -> tensor<32x4xi8, #ttg.slice<{dim = 2, parent = #[[RESHAPE_LAYOUT:.+]]}>>
+    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<32x4x32xi8, #[[RESHAPE_LAYOUT]]> -> tensor<32x128xi8, #[[UPCAST_LAYOUT:.+]]>
+    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp8 {{.*}} scale %[[SCALE]] : tensor<32x128xf8E4M3FN, #[[UPCAST_LAYOUT]]>, tensor<32x128xi8, #[[UPCAST_LAYOUT]]> -> tensor<32x128xbf16, #[[UPCAST_LAYOUT]]>
     // CHECK: %[[SEL:.*]] = arith.select {{.*}}, {{.*}}, %[[UPCASTED]]
-    // CHECK: %[[CVT1:.*]] = ttg.convert_layout %[[SEL]] : tensor<32x128xbf16, #blocked> -> tensor<32x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
+    // CHECK: %[[CVT1:.*]] = ttg.convert_layout %[[SEL]] : tensor<32x128xbf16, #[[UPCAST_LAYOUT]]> -> tensor<32x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
     // CHECK: %[[OPND0:.*]] = ttg.convert_layout %[[CVT1]] : tensor<32x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<32x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
     // CHECK: tt.dot %[[OPND0]]
     %a = tt.load %arg0 : tensor<32x128x!tt.ptr<f8E4M3FN>, #blocked4>
@@ -266,11 +266,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %arg2: tensor<128x32x!tt.ptr<f8E5M2>, #blocked>,
       %output: tensor<32x32x!tt.ptr<f32>, #blocked>
       ) {
-    // CHECK: %[[SCALE_CVT:.*]] = ttg.convert_layout {{.*}} : tensor<4x32xi8, #blocked3> -> tensor<4x32xi8, #ttg.slice<{dim = 1, parent = #blocked4}>>
-    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<4x32x32xi8, #blocked4> -> tensor<128x32xi8, #blocked2>
-    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp8 {{.*}} scale %[[SCALE]] : tensor<128x32xf8E5M2, #blocked2>, tensor<128x32xi8, #blocked2> -> tensor<128x32xf16, #blocked2>
-    // CHECK: %[[SEL:.*]] = arith.select {{.*}}, %cst, %[[UPCASTED]] : tensor<128x32xi1, #blocked2>, tensor<128x32xf16, #blocked2>
-    // CHECK: %[[CVT1:.*]] = ttg.convert_layout %[[SEL]] : tensor<128x32xf16, #blocked2> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>>
+    // CHECK: %[[SCALE_CVT:.*]] = ttg.convert_layout {{.*}} : tensor<4x32xi8, #{{.*}}> -> tensor<4x32xi8, #ttg.slice<{dim = 1, parent = #[[RESHAPE_LAYOUT:.+]]}>>
+    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<4x32x32xi8, #[[RESHAPE_LAYOUT]]> -> tensor<128x32xi8, #[[UPCAST_LAYOUT:.+]]>
+    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp8 {{.*}} scale %[[SCALE]] : tensor<128x32xf8E5M2, #[[UPCAST_LAYOUT]]>, tensor<128x32xi8, #[[UPCAST_LAYOUT]]> -> tensor<128x32xf16, #[[UPCAST_LAYOUT]]>
+    // CHECK: %[[SEL:.*]] = arith.select {{.*}}, %cst, %[[UPCASTED]] : tensor<128x32xi1, #[[UPCAST_LAYOUT]]>, tensor<128x32xf16, #[[UPCAST_LAYOUT]]>
+    // CHECK: %[[CVT1:.*]] = ttg.convert_layout %[[SEL]] : tensor<128x32xf16, #[[UPCAST_LAYOUT]]> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>>
     // CHECK: %[[OPND1:.*]] = ttg.convert_layout %[[CVT1]] : tensor<128x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     // CHECK: = tt.dot {{.*}}, %[[OPND1]]
     %a = tt.load %arg0 : tensor<32x128x!tt.ptr<f16>, #blocked4>
@@ -299,9 +299,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %output: tensor<16x16x!tt.ptr<f32>, #blocked>
       ) {
     // CHECK: tt.load %arg1 {amdg.decomposed_dot_scaled_source = true} : tensor<16x2x!tt.ptr<i8>, #blocked1>
-    // CHECK: %[[SCALE_CVT:.*]] = ttg.convert_layout {{.*}} : tensor<16x2xi8, #blocked1> -> tensor<16x2xi8, #ttg.slice<{dim = 2, parent = #blocked4}>>
-    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<16x2x32xi8, #[[RESHAPE_LAYOUT:.+]]> -> tensor<16x64xi8, #[[UPCAST_LAYOUT:.+]]>
-    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp4 {{.+}} scale %[[SCALE]] {axis = 1 : i32} : tensor<16x32xi8, #blocked>, tensor<16x64xi8, #[[UPCAST_LAYOUT]]> -> tensor<16x64xbf16, #[[UPCAST_LAYOUT]]>
+    // CHECK: %[[SCALE_CVT:.*]] = ttg.convert_layout {{.*}} : tensor<16x2xi8, #blocked1> -> tensor<16x2xi8, #ttg.slice<{dim = 2, parent = #[[RESHAPE_LAYOUT:.+]]}>>
+    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<16x2x32xi8, #[[RESHAPE_LAYOUT]]> -> tensor<16x64xi8, #[[UPCAST_LAYOUT:.+]]>
+    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp4 {{.+}} scale %[[SCALE]] {axis = 1 : i32} : tensor<16x32xi8, #{{.*}}>, tensor<16x64xi8, #[[UPCAST_LAYOUT]]> -> tensor<16x64xbf16, #[[UPCAST_LAYOUT]]>
     // CHECK: %[[SEL:.*]] = arith.select {{.*}}, %{{.*}}, %[[UPCASTED]] : tensor<16x64xi1, #[[UPCAST_LAYOUT]]>, tensor<16x64xbf16, #[[UPCAST_LAYOUT]]>
     // CHECK: %[[CVT1:.*]] = ttg.convert_layout %[[SEL]] : tensor<16x64xbf16, #[[UPCAST_LAYOUT]]> -> tensor<16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
     // CHECK: %[[OPND0:.*]] = ttg.convert_layout %[[CVT1]] : tensor<16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
@@ -331,9 +331,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %output: tensor<16x16x!tt.ptr<f32>, #blocked>
       ) {
     // CHECK: tt.load %arg1 {amdg.decomposed_dot_scaled_source = true} : tensor<16x2x!tt.ptr<i8>, #[[LOAD_LAYOUT:.+]]>
-    // CHECK: %[[SCALE_CVT:.*]] = ttg.convert_layout {{.*}} : tensor<2x16xi8, #[[SCALE_SRC_LAYOUT:.+]]> -> tensor<2x16xi8, #ttg.slice<{dim = 1, parent = #blocked5}>>
-    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<2x32x16xi8, #[[RESHAPE_LAYOUT:.+]]> -> tensor<64x16xi8, #[[UPCAST_LAYOUT:.+]]>
-    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp4 {{.+}} scale %[[SCALE]] {axis = 0 : i32} : tensor<32x16xi8, #blocked2>, tensor<64x16xi8, #[[UPCAST_LAYOUT]]> -> tensor<64x16xf16, #[[UPCAST_LAYOUT]]>
+    // CHECK: %[[SCALE_CVT:.*]] = ttg.convert_layout {{.*}} : tensor<2x16xi8, #[[SCALE_SRC_LAYOUT:.+]]> -> tensor<2x16xi8, #ttg.slice<{dim = 1, parent = #[[RESHAPE_LAYOUT:.+]]}>>
+    // CHECK: %[[SCALE:.*]] = tt.reshape {{.*}} : tensor<2x32x16xi8, #[[RESHAPE_LAYOUT]]> -> tensor<64x16xi8, #[[UPCAST_LAYOUT:.+]]>
+    // CHECK: %[[UPCASTED:.*]] = amdg.scaled_upcast_fp4 {{.+}} scale %[[SCALE]] {axis = 0 : i32} : tensor<32x16xi8, #{{.*}}>, tensor<64x16xi8, #[[UPCAST_LAYOUT]]> -> tensor<64x16xf16, #[[UPCAST_LAYOUT]]>
     // CHECK: %[[SEL:.*]] = arith.select {{.*}}, %cst, %[[UPCASTED]] : tensor<64x16xi1, #[[UPCAST_LAYOUT]]>, tensor<64x16xf16, #[[UPCAST_LAYOUT]]>
     // CHECK: %[[CVT1:.*]] = ttg.convert_layout %[[SEL]] : tensor<64x16xf16, #[[UPCAST_LAYOUT]]> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>>
     // CHECK: %[[OPND1:.*]] = ttg.convert_layout %[[CVT1]] : tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>

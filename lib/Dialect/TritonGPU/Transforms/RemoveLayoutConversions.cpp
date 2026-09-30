@@ -229,10 +229,8 @@ bool isLayoutAnchor(Operation *op) {
   if (isa<DotOpInterface, AtomicOpInterface, triton::nvidia_gpu::TMEMLoadOp>(
           op))
     return true;
-  if (auto gatherOp = dyn_cast<GatherOp>(op))
-    return gatherOp.getEfficientLayout();
-  if (auto reshape = dyn_cast<ReshapeOp>(op))
-    return reshape.getEfficientLayout();
+  if (hasEfficientLayout(op))
+    return true;
 
   return false;
 }
