@@ -1009,3 +1009,92 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+
+// -----
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @cta_count_mismatch() {
+    // expected-error @below {{partition CTA counts sum to 2 but the current execution context has 4 CTAs}}
+    ttg.cta_specialize()
+    partition0() num_ctas(2) {
+      ttg.cta_specialize.return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @cta_count_not_power_of_two() {
+    // expected-error @below {{partition CTA counts must be positive powers of two}}
+    ttg.cta_specialize()
+    partition0() num_ctas(3) {
+      ttg.cta_specialize.return
+    }
+    partition1() num_ctas(1) {
+      ttg.cta_specialize.return
+    } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @cta_nested_context() {
+    ttg.cta_specialize()
+    partition0() num_ctas(2) {
+      // expected-error @below {{partition CTA counts sum to 4 but the current execution context has 2 CTAs}}
+      ttg.cta_specialize()
+      partition0() num_ctas(4) {
+        ttg.cta_specialize.return
+      } : () -> ()
+      ttg.cta_specialize.return
+    }
+    partition1() num_ctas(2) {
+      ttg.cta_specialize.return
+    } : () -> ()
+    tt.return
+  }
+}
+
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @cta_tensor_capture(%value: tensor<128xi32, #blocked>) {
+    // expected-error @below {{cannot capture distributed tensors}}
+    ttg.cta_specialize(%value)
+    partition0(%arg: tensor<128xi32, #blocked>) num_ctas(2) {
+      ttg.cta_specialize.return
+    } : (tensor<128xi32, #blocked>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#parent = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#local = #ttg.shared_linear<{offset = [[1], [2]], block = []}, alignment = 16>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @cta_capture_wrong_destination() {
+    %storage = ttg.local_alloc : () -> !ttg.memdesc<8xi32, #parent, #smem, mutable>
+    %view = ttg.memdesc_subslice %storage[0] : !ttg.memdesc<8xi32, #parent, #smem, mutable> -> !ttg.memdesc<4xi32, #parent, #smem, mutable, 8>
+    %capture = ttg.memdesc_cta_rebase %view {ctaStart = 0 : i32} : !ttg.memdesc<4xi32, #parent, #smem, mutable, 8> -> !ttg.memdesc<4xi32, #local, #smem, mutable>
+    // expected-error @below {{shared-memory capture must be rebased to the receiving CTA range}}
+    ttg.cta_specialize(%capture)
+    partition0(%unused: !ttg.memdesc<4xi32, #local, #smem, mutable>) num_ctas(1) {
+      ttg.cta_specialize.return
+    }
+    partition1(%arg: !ttg.memdesc<4xi32, #local, #smem, mutable>) num_ctas(1) {
+      %value = ttg.local_load %arg : !ttg.memdesc<4xi32, #local, #smem, mutable> -> tensor<4xi32, #blocked>
+      ttg.cta_specialize.return
+    } : (!ttg.memdesc<4xi32, #local, #smem, mutable>) -> ()
+    tt.return
+  }
+}

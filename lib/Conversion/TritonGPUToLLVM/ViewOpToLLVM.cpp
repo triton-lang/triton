@@ -526,6 +526,36 @@ struct MemDescSubsliceOpConversion
   }
 };
 
+struct MemDescCTARebaseOpConversion
+    : public ConvertOpToLLVMPattern<MemDescCTARebaseOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(MemDescCTARebaseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto srcTy = op.getSrc().getType();
+    auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    auto smem = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), elemTy,
+                                                rewriter);
+    // The capture analysis proved these bits select the destination group.
+    // Clear them while preserving subgroup-local offsets and allocation
+    // strides, including swizzles and padding.
+    auto dstTy = op.getType();
+    auto allocShape =
+        dropPipeliningDim(dstTy.getAllocShape(), dstTy.getEncoding());
+    SmallVector<Value> offsets(smem.getOffsets());
+    unsigned prefix = offsets.size() - allocShape.size();
+    for (auto [i, size] : llvm::enumerate(allocShape))
+      offsets[prefix + i] = b.and_(offsets[prefix + i], b.i32_val(size - 1));
+    SharedMemoryObject result(smem.getBases(), elemTy, offsets);
+    rewriter.replaceOp(op,
+                       getStructFromSharedMemoryObject(loc, result, rewriter));
+    return success();
+  }
+};
+
 struct MemDescReinterpretOpConversion
     : public ConvertOpToLLVMPattern<MemDescReinterpretOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -573,4 +603,5 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<MemDescSubsliceOpConversion, MemDescIndexOpConversion>(
       typeConverter, benefit);
   patterns.add<MemDescReinterpretOpConversion>(typeConverter, benefit);
+  patterns.add<MemDescCTARebaseOpConversion>(typeConverter, benefit);
 }

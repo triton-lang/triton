@@ -87,14 +87,20 @@ _compute_tmem_reg_layout.__triton_builtin__ = True
 
 class GluonCallerContext:
 
-    def __init__(self, num_warps: int):
+    def __init__(self, num_warps: int, num_ctas=None, cta_start=0):
         self.num_warps = num_warps
+        self.num_ctas = num_ctas
+        self.cta_start = cta_start
 
     def mangle(self):
-        return f"_NW{self.num_warps}"
+        suffix = f"_NC{self.num_ctas}_CS{self.cta_start}" if self.num_ctas is not None else ""
+        return f"_NW{self.num_warps}{suffix}"
 
     def initialize_callee(self, fn, builder):
         fn.set_attr("ttg.num-warps", builder.get_int32_attr(self.num_warps))
+        if self.num_ctas is not None:
+            fn.set_attr("ttg.num-ctas", builder.get_int32_attr(self.num_ctas))
+            fn.set_attr("ttg.cta-start", builder.get_int32_attr(self.cta_start))
 
 
 class GluonSemantic(TritonSemantic[TensorTy]):
@@ -691,8 +697,63 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
         return next(unflatten_ir_values(mlir_results, [default_result.type]))
 
+    def cta_specialize(self, functions_and_args, partition_num_ctas: Sequence[int], generator):
+        _check(len(functions_and_args) > 0, lambda: "expected at least one CTA partition")
+        _check(len(functions_and_args) == len(partition_num_ctas), lambda: "expected one CTA count per CTA partition")
+        _check(
+            all(isinstance(n, int) and n > 0 and n & (n - 1) == 0 for n in partition_num_ctas),
+            lambda: "CTA partition counts must be positive powers of two",
+        )
+        current_num_ctas = self.num_ctas().value
+        _check(
+            sum(partition_num_ctas) == current_num_ctas,
+            lambda: f"CTA partition counts must sum to the current context's {current_num_ctas} CTAs",
+        )
+        for _, args in functions_and_args:
+            _check(isinstance(args, (tuple, ttgl.tuple)), lambda: "function arguments must be a tuple")
+
+        _check(self.builder.options.backend_name == "cuda" and int(self.builder.options.arch.removeprefix("sm")) >= 90,
+               lambda: "CTA specialization requires NVIDIA Hopper or newer")
+        _check(not self.builder.options.instrumentation_mode,
+               lambda: "CTA specialization does not yet support sanitizer instrumentation")
+        builder = self.builder
+        cta_start = builder.get_cta_start()
+
+        def rebase_capture(arg, count, start):
+            if isinstance(arg, ttgl.shared_memory_descriptor):
+                handle, layout, alloc_shape = builder.create_memdesc_cta_rebase(arg.handle, count, start)
+                return ttgl.shared_memory_descriptor(handle, arg.dtype, arg.shape, layout, alloc_shape)
+            if isinstance(arg, (tuple, ttgl.tuple)):
+                return ttgl.tuple([rebase_capture(value, count, start) for value in arg])
+            return arg
+
+        rebased = []
+        for (func, args), count in zip(functions_and_args, partition_num_ctas):
+            rebased.append((func, tuple(rebase_capture(arg, count, cta_start) for arg in args)))
+            cta_start += count
+        functions_and_args = rebased
+        partition_args = [flatten_values_to_ir(args) for _, args in functions_and_args]
+        captures = [value for args in partition_args for value in args]
+        cta_start = builder.get_cta_start()
+        num_warps = self.num_warps(generator).value
+        op = builder.create_cta_specialize(captures, partition_num_ctas)
+        arg_types = [arg.get_type() for arg in captures]
+        arg_offset = 0
+        for i, (func, args) in enumerate(functions_and_args):
+            block = builder.create_block_with_parent(op.get_region(i), arg_types)
+            count = len(partition_args[i])
+            block_args = [block.get_argument(arg_offset + j) for j in range(count)]
+            block_args = unflatten_ir_values(block_args, [arg.type for arg in args])
+            context = GluonCallerContext(num_warps, partition_num_ctas[i], cta_start)
+            result = generator.call_JitFunction(func, block_args, kwargs={}, caller_context=context)
+            _check(not flatten_values_to_ir([result]), lambda: "CTA partitions cannot return runtime values")
+            builder.create_cta_specialize_return()
+            arg_offset += count
+            cta_start += partition_num_ctas[i]
+        builder.set_insertion_point_after(op)
+
     def num_ctas(self):
-        return ttgl.constexpr(self.builder.options.num_ctas)
+        return ttgl.constexpr(self.builder.get_num_ctas())
 
     def num_warps(self, generator):
         if generator.caller_context is not None:

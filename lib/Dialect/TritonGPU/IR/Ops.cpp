@@ -1312,6 +1312,193 @@ LogicalResult MemDescSubsliceOp::verify() {
   return success();
 }
 
+FailureOr<MemDescType> MemDescCTARebaseOp::inferResultType(
+    MemDescType src, int32_t numCTAs,
+    function_ref<InFlightDiagnostic()> emitError) {
+  auto shared = dyn_cast_or_null<SharedEncodingTrait>(src.getEncoding());
+  if (!shared || isa<PartitionedSharedEncodingAttr>(src.getEncoding())) {
+    emitError() << "CTA captures require an unpartitioned shared-memory layout";
+    return failure();
+  }
+  if (numCTAs <= 0 || !llvm::isPowerOf2_32(numCTAs) ||
+      numCTAs > getNumCTAs(src.getEncoding())) {
+    emitError() << "invalid CTA count for shared-memory capture";
+    return failure();
+  }
+  auto ll = toLinearLayoutIgnoringPadding(src);
+  ll = ll.resizeInDim(StringAttr::get(src.getContext(), "block"), numCTAs);
+  // Remove the logical dimensions contributed by the omitted CTAs, retaining
+  // every local offset basis (including gaps and padding in ordinary slices).
+  auto prefix = src.getRank() - ll.getNumOutDims();
+  SmallVector<int64_t> allocShape(src.getAllocShape().take_front(prefix));
+  for (auto [i, dim] : llvm::enumerate(llvm::to_vector(ll.getOutDimNames()))) {
+    uint32_t mask = 0;
+    for (const auto &bases : llvm::make_second_range(ll.getBases()))
+      for (const auto &basis : bases)
+        mask |= basis[i];
+    int64_t size = int64_t(1) << llvm::bit_width(mask);
+    if (src.getDimSize(prefix + i) > size) {
+      emitError()
+          << "shared-memory slice does not fit the partition's CTA layout";
+      return failure();
+    }
+    allocShape.push_back(size);
+    ll = ll.resizeOutDim(dim, size);
+  }
+  if (!ll.isSurjective()) {
+    emitError()
+        << "shared-memory slice does not fit the partition's CTA layout";
+    return failure();
+  }
+  Attribute encoding;
+  if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(src.getEncoding()))
+    encoding = PaddedSharedEncodingAttr::get(
+        src.getContext(), padded.getIntervals(), padded.getPaddings(), ll);
+  else
+    encoding = SharedLinearEncodingAttr::get(src.getContext(), ll,
+                                             shared.getAlignment());
+  return MemDescType::get(src.getShape(), src.getElementType(), encoding,
+                          src.getMemorySpace(), src.getMutableMemory(),
+                          allocShape);
+}
+
+LogicalResult MemDescCTARebaseOp::verify() {
+  if (!isa_and_nonnull<SharedEncodingTrait>(getType().getEncoding()))
+    return emitOpError("requires a shared-memory result layout");
+  auto expected =
+      inferResultType(getSrc().getType(), getNumCTAs(getType().getEncoding()),
+                      [&]() { return emitOpError(); });
+  if (failed(expected))
+    return failure();
+  if (*expected != getType())
+    return emitOpError("incorrect rebased shared-memory type");
+  if (getCtaStart() < lookupCTAStart(*this) ||
+      getCtaStart() + getNumCTAs(getType().getEncoding()) >
+          lookupCTAStart(*this) + lookupNumCTAs(*this))
+    return emitOpError("destination CTA range is outside the current context");
+  return success();
+}
+
+// -- CTASpecializeOp --
+
+void CTASpecializeOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  if (src.isParent()) {
+    for (Region &region : getPartitionRegions())
+      successors.emplace_back(&region);
+  } else {
+    successors.emplace_back(getOperation());
+  }
+}
+
+OperandRange CTASpecializeOp::getEntrySuccessorOperands(RegionSuccessor) {
+  return getExplicitCaptures();
+}
+
+ValueRange CTASpecializeOp::getSuccessorInputs(RegionSuccessor successor) {
+  Region *region = successor.getSuccessor();
+  return region ? region->getArguments() : ValueRange();
+}
+
+LogicalResult CTASpecializeOp::verify() {
+  auto sizes = getPartitionNumCTAs();
+  if (sizes.empty() || sizes.size() != getPartitionRegions().size())
+    return emitOpError(
+        "requires one CTA count per partition and at least one partition");
+  int64_t total = 0;
+  for (int32_t size : sizes) {
+    if (size <= 0 || !llvm::isPowerOf2_32(size))
+      return emitOpError("partition CTA counts must be positive powers of two");
+    total += size;
+  }
+  int numCTAs = lookupNumCTAs(*this);
+  if (total != numCTAs)
+    return emitOpError("partition CTA counts sum to ")
+           << total << " but the current execution context has " << numCTAs
+           << " CTAs";
+  for (Type type : getOperandTypes()) {
+    if (isa<RankedTensorType>(type))
+      return emitOpError("cannot capture distributed tensors");
+    if (auto desc = dyn_cast<MemDescType>(type))
+      if (!isa<SharedMemorySpaceAttr>(desc.getMemorySpace()))
+        return emitOpError("can only capture shared-memory descriptors");
+  }
+  int start = lookupCTAStart(*this);
+  for (auto [region, size] : llvm::zip(getPartitionRegions(), sizes)) {
+    if (region.getArgumentTypes() != getOperandTypes())
+      return emitOpError(
+          "partition arguments must match the explicit captures");
+    for (auto [arg, capture] :
+         llvm::zip(region.getArguments(), getExplicitCaptures())) {
+      if (arg.use_empty() || !isa<MemDescType>(arg.getType()))
+        continue;
+      auto rebase = capture.getDefiningOp<MemDescCTARebaseOp>();
+      // A producer may already be converted during dialect conversion. The
+      // allocation pass checks all producers before lowering starts.
+      if ((rebase && rebase.getCtaStart() != start) ||
+          getNumCTAs(cast<MemDescType>(arg.getType()).getEncoding()) != size)
+        return emitOpError(
+            "shared-memory capture must be rebased to the receiving CTA range");
+    }
+    for (Block &block : region)
+      if (block.getTerminator()->getNumSuccessors() == 0 &&
+          !isa<CTASpecializeReturnOp>(block.getTerminator()))
+        return emitOpError(
+            "partition exits must use ttg.cta_specialize.return");
+    start += size;
+  }
+  return success();
+}
+
+ParseResult CTASpecializeOp::parse(OpAsmParser &p, OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand> operands;
+  SMLoc operandLoc = p.getCurrentLocation();
+  if (p.parseOperandList(operands, AsmParser::Delimiter::Paren) ||
+      p.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+  SmallVector<int32_t> sizes;
+  while (succeeded(
+      p.parseOptionalKeyword("partition" + Twine(sizes.size()).str()))) {
+    SmallVector<OpAsmParser::Argument> args;
+    if (p.parseArgumentList(args, AsmParser::Delimiter::Paren,
+                            /*allowType=*/true) ||
+        p.parseKeyword("num_ctas") || p.parseLParen() ||
+        p.parseInteger(sizes.emplace_back()) || p.parseRParen() ||
+        p.parseRegion(*result.addRegion(), args))
+      return failure();
+  }
+  FunctionType type;
+  if (p.parseColon() || p.parseType(type) ||
+      p.resolveOperands(operands, type.getInputs(), operandLoc,
+                        result.operands))
+    return failure();
+  if (type.getNumResults())
+    return p.emitError(operandLoc, "CTA specialization cannot return values");
+  result.addAttribute(getPartitionNumCTAsAttrName(result.name),
+                      p.getBuilder().getDenseI32ArrayAttr(sizes));
+  return success();
+}
+
+void CTASpecializeOp::print(OpAsmPrinter &p) {
+  p << '(';
+  p.printOperands(getExplicitCaptures());
+  p << ')';
+  p.printOptionalAttrDictWithKeyword((*this)->getAttrs(),
+                                     {getPartitionNumCTAsAttrName()});
+  for (auto [i, region, size] :
+       llvm::enumerate(getPartitionRegions(), getPartitionNumCTAs())) {
+    p.printNewline();
+    p << "partition" << i << '(';
+    llvm::interleaveComma(region.getArguments(), p, [&](BlockArgument arg) {
+      p.printRegionArgument(arg);
+    });
+    p << ") num_ctas(" << size << ") ";
+    p.printRegion(region, /*printEntryBlockArgs=*/false);
+  }
+  p << " : ";
+  p.printFunctionalType(getOperandTypes(), TypeRange());
+}
+
 // -- WarpSpecializeOp --
 
 RegionRange WarpSpecializeOp::getPartitionRegions() {

@@ -61,6 +61,7 @@ public:
 
     // Warp specialization and warp ID are lowered by subsequent passes.
     addLegalOp<triton::gpu::WarpIdOp, triton::gpu::WarpSpecializeOp,
+               triton::gpu::CTASpecializeOp, triton::gpu::CTASpecializeReturnOp,
                triton::gpu::WarpYieldOp,
                triton::gpu::WarpSpecializePartitionsOp,
                triton::gpu::WarpReturnOp>();

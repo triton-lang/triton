@@ -45,29 +45,35 @@ void runClusterBarrierMbarAllocator(ModuleOp mod) {
   int64_t shared = sharedAttr ? sharedAttr.getInt() : 0;
   int64_t nextOffset = llvm::alignTo(shared, int64_t{8});
   DenseMap<Region *, IntegerAttr> regionOffsets;
+  SmallVector<int32_t> ctaCounts;
   Builder builder(mod.getContext());
 
   kernel.walk([&](Operation *op) {
-    if (!needsClusterBarrier(op))
+    if (!needsClusterBarrier(op) || gpu::lookupNumCTAs(op) == 1)
       return;
-    if (!op->getParentOfType<gpu::WarpSpecializeOp>())
+    if (!op->getParentOfType<gpu::WarpSpecializeOp>() &&
+        !op->getParentOfType<gpu::CTASpecializeOp>())
       return;
     Region *region = op->getParentRegion();
-    while (!isa<gpu::WarpSpecializeOp, gpu::WarpSpecializePartitionsOp>(
-        region->getParentOp()))
+    while (!isa<gpu::WarpSpecializeOp, gpu::WarpSpecializePartitionsOp,
+                gpu::CTASpecializeOp>(region->getParentOp()))
       region = region->getParentOp()->getParentRegion();
 
     auto [it, inserted] = regionOffsets.try_emplace(region);
     if (inserted) {
       it->second = builder.getI32IntegerAttr(nextOffset);
       nextOffset += kClusterBarrierMbarAllocationSize;
+      ctaCounts.push_back(gpu::lookupNumCTAs(op));
     }
     op->setAttr(kClusterBarrierMbarOffsetAttrName, it->second);
   });
 
-  if (regionOffsets.empty())
+  if (regionOffsets.empty()) {
     mod->removeAttr(kWSClusterBarrierCountAttrName);
-  else {
+    mod->removeAttr(kClusterBarrierCTACountsAttrName);
+  } else {
+    mod->setAttr(kClusterBarrierCTACountsAttrName,
+                 builder.getDenseI32ArrayAttr(ctaCounts));
     mod->setAttr(kWSClusterBarrierCountAttrName,
                  builder.getI32IntegerAttr(regionOffsets.size()));
     mod->setAttr("ttg.shared", builder.getI32IntegerAttr(nextOffset));

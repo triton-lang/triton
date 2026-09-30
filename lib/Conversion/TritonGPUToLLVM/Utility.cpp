@@ -1698,9 +1698,14 @@ static Value getScratchPtrImpl(Location loc, RewriterBase &rewriter,
     linearId = b.mul(linearId, b.i64_val(numCTAs));
     // currentCTA sets whether to rebase the linearId to the CTA id or
     // just keep the pointer to the whole tensor
-    if (currentCTA)
-      linearId =
-          b.add(linearId, zextToI64(targetInfo.getClusterCTAId(rewriter, loc)));
+    if (currentCTA) {
+      // Global scratch belongs to physical CTAs, even within a subgroup.
+      Value ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+      int start = triton::gpu::lookupCTAStart(rewriter);
+      if (start)
+        ctaId = b.add(ctaId, b.i32_val(start));
+      linearId = b.add(linearId, zextToI64(ctaId));
+    }
   }
 
   auto allocSize = allocSizeAttrVal.getValue().getZExtValue();
@@ -2079,6 +2084,18 @@ makeWarpGroupsIsolatedFromAbove(triton::gpu::WarpSpecializeOp wsOp) {
 void makeAllWarpGroupsIsolatedFromAbove(Operation *op) {
   op->walk([](triton::gpu::WarpSpecializeOp wsOp) {
     makeWarpGroupsIsolatedFromAbove(wsOp);
+  });
+  op->walk([](triton::gpu::CTASpecializeOp local) {
+    SetVector<Value> captures;
+    getUsedValuesDefinedAbove(local.getPartitionRegions(), captures);
+    for (Value capture : captures) {
+      local->insertOperands(local.getNumOperands(), capture);
+      for (Region &region : local.getPartitionRegions()) {
+        BlockArgument arg =
+            region.addArgument(capture.getType(), capture.getLoc());
+        replaceAllUsesInRegionWith(capture, arg, region);
+      }
+    }
   });
 }
 

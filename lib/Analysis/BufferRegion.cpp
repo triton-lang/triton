@@ -535,8 +535,14 @@ LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
   if (failed(Base::initialize(top)))
     return failure();
 
-  top->walk([&](ttg::WarpSpecializeOp wsOp) {
-    for (Region *region : wsOp.getPartitionRegions()) {
+  top->walk([&](Operation *op) {
+    SmallVector<Region *> regions;
+    if (auto ws = dyn_cast<ttg::WarpSpecializeOp>(op))
+      llvm::append_range(regions, ws.getPartitionRegions());
+    else if (auto split = dyn_cast<ttg::CTASpecializeOp>(op))
+      for (Region &region : split.getPartitionRegions())
+        regions.push_back(&region);
+    for (Region *region : regions) {
       if (region->empty())
         continue;
       Block &entry = region->front();
@@ -701,6 +707,12 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     regionInfo.views.insert(getAllocView(tmemAllocOp.getResult(),
                                          getAllocationOffset(tmemAllocOp)));
     return propagateRegions(regionInfo);
+  }
+  if (isa<ttg::MemDescCTARebaseOp>(op)) {
+    // The view switches from parent to subgroup CTA coordinates. Keep alias
+    // identity in SharedMemoryAliasAnalysis, but do not compare footprints in
+    // these different coordinate systems to prove memory accesses disjoint.
+    return propagateRegions(RegionInfo::getPessimisticValueState());
   }
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
     const RegionInfo &in = operands[0]->getValue();

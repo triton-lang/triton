@@ -174,11 +174,17 @@ bool TargetInfo::supportMaximumMinimum() const {
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
-  if (triton::gpu::lookupNumCTAs(&rewriter.getInsertionBlock()->front()) == 1)
+  if (triton::gpu::lookupNumCTAs(rewriter) == 1)
     return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
 
-  return triton::nvgpu::ClusterCTAIdOp::create(rewriter, loc,
-                                               rewriter.getI32Type());
+  Value rank = triton::nvgpu::ClusterCTAIdOp::create(rewriter, loc,
+                                                     rewriter.getI32Type());
+  int start = triton::gpu::lookupCTAStart(rewriter);
+  if (start) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    rank = b.sub(rank, b.i32_val(start));
+  }
+  return rank;
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -235,6 +241,11 @@ static Value mapa(RewriterBase &rewriter, Location loc, Value ptr,
                   Value ctaid) {
   auto clusterPtrTy = ptr_ty(rewriter.getContext(), /*addrspace=*/7);
   // Address translation is speculatable; the memory access keeps its predicate.
+  int start = triton::gpu::lookupCTAStart(rewriter);
+  if (start) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    ctaid = b.add(ctaid, b.i32_val(start));
+  }
   return NVVM::MapaOp::create(rewriter, loc, clusterPtrTy, ptr, ctaid);
 }
 
