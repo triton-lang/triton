@@ -434,11 +434,10 @@ SmallVector<Value> PkF4ToFp32(Location loc, ConversionPatternRewriter &rewriter,
 
 // OCP Bf8/Fp8 -> Bf16
 template <typename SrcFPType>
+  requires llvm::is_one_of<SrcFPType, Float8E4M3FNType, Float8E5M2Type>::value
 SmallVector<Value> OcpF8ToBf16SW(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const SmallVector<Value> &v) {
-  static_assert(std::is_same_v<SrcFPType, Float8E4M3FNType> ||
-                std::is_same_v<SrcFPType, Float8E5M2Type>);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = b.undef(fp8x4VecTy);
@@ -624,16 +623,14 @@ SmallVector<Value> scalePk8DowncastToFp8(Location loc,
 // normal number, i.e. ±448. NaNs are converted to NaNs.
 // For UZ formats please check: https://onnx.ai/onnx/technical/float8.html
 template <typename SrcFPType, typename DstFPType>
+  requires llvm::is_one_of<SrcFPType, Float32Type, Float16Type,
+                           BFloat16Type>::value &&
+           llvm::is_one_of<DstFPType, Float8E4M3FNType, Float8E4M3FNUZType,
+                           Float8E5M2FNUZType>::value
 Value downcastToFp8rtneOneValue(Location loc,
                                 ConversionPatternRewriter &rewriter, Value v) {
-  static_assert((std::is_same_v<SrcFPType, Float32Type>) ||
-                (std::is_same_v<SrcFPType, Float16Type>) ||
-                (std::is_same_v<SrcFPType, BFloat16Type>));
-  static_assert((std::is_same_v<DstFPType, Float8E4M3FNType> ||
-                 std::is_same_v<DstFPType, Float8E4M3FNUZType> ||
-                 std::is_same_v<DstFPType, Float8E5M2FNUZType>));
-  constexpr bool isFp8UZ = (std::is_same_v<DstFPType, Float8E4M3FNUZType> ||
-                            std::is_same_v<DstFPType, Float8E5M2FNUZType>);
+  constexpr bool isFp8UZ =
+      llvm::is_one_of<DstFPType, Float8E4M3FNUZType, Float8E5M2FNUZType>::value;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   FPTypeInfo<SrcFPType> srcFpInfo(loc, rewriter);

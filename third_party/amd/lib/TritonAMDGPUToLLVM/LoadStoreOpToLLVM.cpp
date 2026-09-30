@@ -1871,8 +1871,7 @@ struct BufferAtomicRMWOpConversion
     //    fences which appear before/after the ops).
 
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
-    auto opUsers = op.getResult().getUsers();
-    auto hasUsers = std::distance(opUsers.begin(), opUsers.end()) > 0;
+    bool hasUsers = !op.getResult().use_empty();
 
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
@@ -1979,7 +1978,7 @@ struct BufferAtomicCASOpConversion
     mlir::Operation *lastCASOp;
 
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
-    auto hasUsers = !op.getResult().getUsers().empty();
+    bool hasUsers = !op.getResult().use_empty();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
         freeVarMasks, rewriter, loc, targetInfo);
