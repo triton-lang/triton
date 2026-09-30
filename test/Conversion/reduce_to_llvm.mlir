@@ -535,6 +535,46 @@ tt.func private @reduce_broadcast_xor_small(%arg0: tensor<4x2xi32, #blocked_warp
   tt.return %0 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
 }
 
+// Broadcast the leader's consistently ordered result for a noncommutative combiner.
+// REDUX-LABEL: @reduce_noncommutative
+// REDUX: %[[INPUT:.*]] = llvm.extractvalue
+// REDUX: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+// REDUX-NOT: llvm.select
+// REDUX: %[[SHFL:.*]] = nvvm.shfl.sync bfly %{{.*}}, %[[INPUT]], %[[ONE]],
+// REDUX-NOT: llvm.select
+// REDUX: %[[RESULT:.*]] = llvm.sub %[[INPUT]], %[[SHFL]]
+// REDUX: %[[LEADER_MASK:.*]] = llvm.mlir.constant(-2 : i32)
+// REDUX: %[[LEADER:.*]] = llvm.and %{{.*}}, %[[LEADER_MASK]]
+// REDUX: nvvm.shfl.sync idx %{{.*}}, %[[RESULT]], %[[LEADER]],
+// REDUX: llvm.return
+tt.func private @reduce_noncommutative(%arg0: tensor<4x2xi32, #blocked_warp_reduce>) -> tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    %c = arith.subi %a, %b : i32
+    tt.reduce.return %c : i32
+  }) : (tensor<4x2xi32, #blocked_warp_reduce>) -> tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.return %0 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+}
+
+// The existing matcher also recognizes reversed commutative operands.
+// REDUX-LABEL: @reduce_commutative_swapped
+// REDUX: %[[INPUT:.*]] = llvm.extractvalue
+// REDUX-NOT: llvm.select
+// REDUX: %[[SHFL:.*]] = nvvm.shfl.sync bfly %{{.*}}, %[[INPUT]],
+// REDUX-NOT: llvm.select
+// REDUX: llvm.mul %[[SHFL]], %[[INPUT]]
+// REDUX-NOT: llvm.select
+// REDUX-NOT: nvvm.shfl
+// REDUX: llvm.return
+tt.func private @reduce_commutative_swapped(%arg0: tensor<4x2xi32, #blocked_warp_reduce>) -> tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    %c = arith.muli %b, %a : i32
+    tt.reduce.return %c : i32
+  }) : (tensor<4x2xi32, #blocked_warp_reduce>) -> tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.return %0 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+}
+
 // Four broadcast values meet the generic one-redux threshold.
 // REDUX-LABEL: @reduce_broadcast_maxsi
 // REDUX: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
