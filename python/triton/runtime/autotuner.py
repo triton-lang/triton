@@ -462,14 +462,9 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
                 kernel.warmup(x, x_size, grid=grid)
         kernel[grid](x, x_size)
 
-    Leaving AsyncCompileMode waits for compilation. With ``ignore_errors=True``,
-    failed candidates are retried by normal autotuning, which retains its usual
-    error handling. Benchmarking and the final launch remain sequential.
+    Benchmarking and the final launch remain sequential.
     Warmup invokes each config's pre-hook on the calling thread before capturing
     its specialization, so hooks can prepare tensor descriptor block shapes.
-    Warmup does not run the autotuner's pre/post hooks or reset/restore actions,
-    and does not undo hook side effects. Use this explicit warmup only when the
-    hooks are appropriate for compile-only preparation.
 
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
