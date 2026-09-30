@@ -15,6 +15,7 @@ from triton_kernels.target_info import is_cuda
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 # details
 from .matmul_details._matmul import _matmul
+from .matmul_details._matmul_fp4 import matmul_fp4
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
@@ -280,6 +281,13 @@ def matmul(a, b, bias,
     dtype metadata; values must be read from the communication outputs. This
     requires split_k=1, no output TMA, no c_acc_in, and no output MX scales.
     """
+    result = matmul_fp4(
+        a, b, bias, a_ragged_metadata, b_ragged_metadata, gather_indx, scatter_indx,
+        precision_config, betas, gammas, out_alpha, c, fused_comm, fused_activation,
+        epilogue, c_acc_in,
+    )
+    if result is not None:
+        return result
     is_input_batched = a.ndim == 3
     if is_input_batched:
         assert gather_indx is None, "gather not supported in batched mode"

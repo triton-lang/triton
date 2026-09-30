@@ -913,6 +913,62 @@ def test_k_ragged_mxfp8_act_scale_swizzling(device):
     torch.testing.assert_close(swizzled, canonical)
 
 
+@pytest.mark.parametrize("k,n,sizes", [
+    (2048, 2048, [2048, 2048, 2048, 2048]),
+    (2304, 2176, [0, 345, 2345, 5502]),
+])
+@pytest.mark.parametrize("native_scales", [False, True])
+@pytest.mark.parametrize("gather", [False, True])
+def test_dual_cta_mxfp4_dispatch(k, n, sizes, native_scales, gather, device, opt_flags_scope):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("requires Blackwell")
+    torch.manual_seed(17)
+    rows, experts = sum(sizes), len(sizes)
+    a, a_scale, _ = make_random_tensor(
+        shape=(rows, k), n_slices=experts, ragged_dim=0, ragged_padding=False,
+        device=device, dtype=DType("mxfloat8_e4m3fn"), mxfp_dim=-1, transpose=False,
+        squeeze_batch_dim=False,
+    )
+    metadata = make_ragged_tensor_metadata(torch.tensor(sizes, device=device, dtype=torch.int32), rows)
+    gather_indx = torch.randperm(rows, device=device).to(torch.int32) if gather else None
+    if native_scales:
+        if gather:
+            a_scale = wrap_torch_tensor(a_scale.storage.data[gather_indx])
+        a_scale = convert_layout(a_scale, layout.BlackwellActMXScaleLayout(metadata))
+    b_layout = layout.make_default_matmul_mxfp4_w_layout(
+        mx_axis=-2, allow_blackwell_value_shuffle=False,
+    )
+    b_scale_layout = layout.make_default_matmul_mxfp4_w_scale_layout(mx_axis=-2)
+    b, b_scale, _ = make_random_tensor(
+        shape=(k, n), n_slices=experts, ragged_dim=None, ragged_padding=False,
+        device=device, dtype=DType("mxfloat4_e2m1"), mxfp_dim=-2, transpose=True,
+        squeeze_batch_dim=False, value_hbm_swizzling=b_layout, scale_hbm_swizzling=b_scale_layout,
+    )
+    precision = PrecisionConfig(a_mx_scale=a_scale, b_mx_scale=b_scale,
+                                a_microblock_size=32, b_microblock_size=32, out_dtype=torch.bfloat16)
+    bias = torch.randn(experts, n, device=device, dtype=torch.float32)
+    gammas = torch.rand(rows, device=device)
+    expected = torch.empty((rows, n), device=device, dtype=torch.bfloat16)
+    actual = torch.empty_like(expected)
+    with opt_flags.scoped_opt_flags_constraints({"split_k": 1}):
+        matmul(a.storage.data, b, bias, metadata, gather_indx=gather_indx,
+               precision_config=precision, gammas=gammas, c=expected)
+    launches = []
+
+    def record_launch(metadata):
+        launches.append(metadata.data["name"])
+
+    triton.knobs.runtime.launch_enter_hook.add(record_launch)
+    try:
+        result = matmul(a.storage.data, b, bias, metadata, gather_indx=gather_indx,
+                        precision_config=precision, gammas=gammas, c=actual)
+    finally:
+        triton.knobs.runtime.launch_enter_hook.remove(record_launch)
+    assert "sparse_fp4_matmul_kernel" in launches, launches
+    assert result.data_ptr() == actual.data_ptr()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
 def test_set_idle_sms():
     if not is_cuda():
         pytest.skip("Only supported on CUDA")
