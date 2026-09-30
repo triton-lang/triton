@@ -2652,8 +2652,8 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
 def test_min_max_nan_keep_dims(axis, keep_dims, op, propagate_nan, device):
 
     @gluon.jit
-    def kernel(X, Values, AXIS: ttgl.constexpr, KEEP: ttgl.constexpr, OP: ttgl.constexpr, NAN_MODE: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    def kernel(X, Values, AXIS: ttgl.constexpr, KEEP: ttgl.constexpr, OP: ttgl.constexpr, NAN_MODE: ttgl.constexpr,
+               layout: ttgl.constexpr):
         rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, layout))
         cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
         x = ttgl.load(X + rows[:, None] * 32 + cols[None, :])
@@ -2684,5 +2684,6 @@ def test_min_max_nan_keep_dims(axis, keep_dims, op, propagate_nan, device):
     expected_values = extreme.masked_fill(nan_wins, torch.nan).flatten()
     values = torch.empty_like(expected_values)
     mode = PropagateNan.ALL if propagate_nan else PropagateNan.NONE
-    kernel[(1, )](x, values, axis, keep_dims, op, mode)
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0])
+    kernel[(1, )](x, values, axis, keep_dims, op, mode, layout)
     torch.testing.assert_close(values, expected_values, rtol=0, atol=0, equal_nan=True)
