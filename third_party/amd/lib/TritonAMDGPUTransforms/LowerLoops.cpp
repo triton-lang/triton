@@ -679,8 +679,8 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   // Make assignments
   Clusters clusterVec;
   schedule.clusters.clear();
-  std::generate(clusterVec.begin(), clusterVec.end(),
-                [&]() { return schedule.clusters.newAtBack(); });
+  std::ranges::generate(clusterVec,
+                        [&] { return schedule.clusters.newAtBack(); });
 
   clusters[SCHED_GLOBAL_LOAD] = clusterVec[globalLoadCluster];
   clusters[SCHED_LOCAL_STORE] = clusterVec[localStoreCluster];

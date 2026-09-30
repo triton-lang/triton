@@ -27,8 +27,11 @@ using WmmaKey =
 // WMMA intrinsic map
 //===----------------------------------------------------------------------===//
 
-using WmmaMapValue =
-    std::tuple<StringRef /*symbol*/, unsigned /*kDim*/, unsigned /*kBase*/>;
+struct WmmaMapValue {
+  StringRef symbol;
+  unsigned kDim;
+  unsigned kBase;
+};
 using WmmaMap = llvm::DenseMap<WmmaKey, SmallVector<WmmaMapValue, 2>>;
 
 class WmmaDatabase {
@@ -227,9 +230,8 @@ FailureOr<WmmaIntrinsic> WmmaIntrinsic::get(int version, unsigned mDim,
     return failure();
 
   const SmallVector<WmmaMapValue, 2> &values = it->second;
-  auto match = llvm::find_if(values, [&](const WmmaMapValue &val) {
-    return std::get<1>(val) == kDim;
-  });
+  auto match = llvm::find_if(
+      values, [&](const WmmaMapValue &val) { return val.kDim == kDim; });
   if (match == values.end())
     return failure();
 
@@ -247,7 +249,10 @@ using WmmaScaleKey =
                TypeID /*dElemType*/, unsigned /*isScale16*/,
                WmmaScaleIntrinsic::IntrinsicFamily>;
 
-using WmmaScaleMapValue = std::tuple<StringRef /*symbol*/, unsigned /*kDim*/>;
+struct WmmaScaleMapValue {
+  StringRef symbol;
+  unsigned kDim;
+};
 using WmmaScaleMap =
     llvm::DenseMap<WmmaScaleKey, SmallVector<WmmaScaleMapValue, 4>>;
 
