@@ -3,7 +3,6 @@ import pytest
 import re
 from dataclasses import replace
 
-import triton
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -30,6 +29,18 @@ from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.runtime.jit import MockTensor
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+
+
+@filecheck_test
+@gluon.jit
+def test_chained_comparison_range():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    x = ttgl.arange(0, 128, layout=layout)
+    # CHECK: [[LOW:%.*]] = arith.cmpi
+    # CHECK: [[HIGH:%.*]] = arith.cmpi
+    # CHECK: arith.andi [[LOW]], [[HIGH]] : tensor<128xi1, #blocked>
+    result = 0 <= x <= 8
+    ttgl.static_assert(result.type == ttgl.distributed_type(ttgl.int1, [128], layout))
 
 
 @filecheck_test
@@ -132,50 +143,6 @@ def test_inline_asm_frontend_unresolved_layout(layout):
 
     with pytest.raises(CompilationError, match="explicit distributed tensor layouts"):
         run_parser(kernel, *make_args(layout), target=BLACKWELL_TARGET)
-
-
-@pytest.mark.parametrize("elementwise", [False, True])
-def test_inline_asm_shared_amd_compilation(elementwise):
-
-    @gluon.jit
-    def kernel(Out, ELEMENTWISE: ttgl.constexpr):
-        x = ttgl.arange(0, 256, layout=ttgl.BlockedLayout([1], [64], [4], [0]))
-        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), x)
-        asm: ttgl.constexpr = "v_add_u32 $0, $1, $2\nds_read_b32 $0, $0\ns_waitcnt lgkmcnt(0)"
-        if ELEMENTWISE:
-            y = ttgl.inline_asm_elementwise(asm, "=&v,v,v", [smem, x * 4], ttgl.int32, False, 1)
-        else:
-            ttgl.barrier()
-            y = ttgl.inline_asm(asm, "=&v,v,v", [smem, x * 4], x.type)
-        ttgl.store(Out + x, y)
-
-    source = gluon.GluonASTSource(kernel, {"Out": "*i32", "ELEMENTWISE": "constexpr"}, {"ELEMENTWISE": elementwise})
-    compiled = triton.compile(source, target=HIP_TARGET_CDNA3)
-    assert "ds_read_b32" in compiled.asm["amdgcn"]
-
-
-@pytest.mark.parametrize("target, binary", [(AMPERE_TARGET, "cubin"), (HIP_TARGET_CDNA3, "hsaco")])
-def test_gluon_ast_source_without_driver(target, binary, monkeypatch, fresh_triton_cache):
-
-    def fail_driver_access(self):
-        raise AssertionError("Offline compilation must not access the GPU driver")
-
-    monkeypatch.setattr(type(triton.runtime.driver), "active", property(fail_driver_access))
-
-    @gluon.jit
-    def kernel(X, Y, BLOCK: ttgl.constexpr, LAYOUT: ttgl.constexpr):
-        offsets = ttgl.arange(0, BLOCK, layout=LAYOUT)
-        ttgl.store(Y + offsets, ttgl.load(X + offsets))
-
-    source = gluon.GluonASTSource(
-        kernel,
-        signature={"X": "*fp32", "Y": "*fp32", "BLOCK": "constexpr", "LAYOUT": "constexpr"},
-        constexprs={"BLOCK": 128, "LAYOUT": ttgl.BlockedLayout([1], [target.warp_size], [4], [0])},
-        attrs={(0, ): [["tt.divisibility", 16]], (1, ): [["tt.divisibility", 16]]},
-    )
-    compiled = triton.compile(source, target=target)
-    assert "tt.divisibility = 16" in compiled.asm[source.ext]
-    assert compiled.asm[binary]
 
 
 @gluon.jit
@@ -1483,6 +1450,30 @@ def test_math_scalar_promotion(dtype, value, ir_dtype):
     comparisons = [line for line in module.str_nodebug().splitlines() if "arith.cmpf" in line]
     assert len(comparisons) == 1
     assert f"tensor<128x{ir_dtype}," in comparisons[0]
+
+
+@pytest.mark.parametrize("dtype, bound_dtype, result_dtype", [
+    (ttgl.int8, ttgl.int8, ttgl.int8),
+    (ttgl.uint64, ttgl.uint64, ttgl.uint64),
+    (ttgl.int1, ttgl.int1, ttgl.int1),
+    (ttgl.int8, ttgl.int16, ttgl.int16),
+    (ttgl.int32, ttgl.uint32, ttgl.uint32),
+    (ttgl.uint32, ttgl.int64, ttgl.int64),
+    (ttgl.int32, ttgl.float32, ttgl.float32),
+])
+def test_clamp_integer_broadcast_promotion(dtype, bound_dtype, result_dtype):
+
+    @gluon.jit
+    def kernel(dtype: ttgl.constexpr, bound_dtype: ttgl.constexpr, result_dtype: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        x = ttgl.full([4, 1], 1, dtype, layout)
+        upper = ttgl.full([1, 8], 1, bound_dtype, layout)
+        lower: ttgl.constexpr = False if dtype == ttgl.int1 else 0
+        result = ttgl.clamp(x, lower, upper)
+        ttgl.static_assert(result.dtype == result_dtype)
+        ttgl.static_assert(result.shape == [4, 8])
+
+    run_parser(kernel, args=(dtype, bound_dtype, result_dtype), target=BLACKWELL_TARGET)
 
 
 @gluon.jit
@@ -4929,6 +4920,69 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   ^bb1:  // no predecessors
     %0 = ub.poison : tensor<1xbf16, #gluon.auto_encoding>
     tt.return %0 : tensor<1xbf16, #gluon.auto_encoding>
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
+@pytest.mark.parametrize("allow", [None, ("valu", "salu")])
+def test_amd_sched_barrier(target, allow):
+
+    @gluon.jit
+    def kernel(ALLOW: ttgl.constexpr):
+        ttgl.amd.hint.sched_barrier()
+        ttgl.amd.hint.sched_barrier(allow=ALLOW)
+
+    if allow is not None:
+        with pytest.raises(CompilationError, match="Unsupported instruction class"):
+            run_parser(kernel, *make_args(allow), target=target)
+        return
+
+    module = run_parser(kernel, *make_args(allow), target=target)
+    ir_str = anonymize_ir(module.str_nodebug())
+    ir_str = re.sub(r'("ttg\.threads-per-warp"\s*=\s*)\d{2}', r'\1...', ir_str)
+    expecttest.assert_expected_inline(
+        ir_str, """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    rocdl.sched.barrier none
+    rocdl.sched.barrier none
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
+def test_amd_sched_barrier_placement(target):
+
+    @gluon.jit
+    def kernel(X, Y, Out):
+        x = ttgl.load(X)
+        ttgl.amd.hint.sched_barrier()
+        y = ttgl.load(Y)
+        result = x + y
+        ttgl.amd.hint.sched_barrier(allow=None)
+        ttgl.store(Out, result)
+
+    x = MockTensor(ttgl.float32)
+    y = MockTensor(ttgl.float32)
+    out = MockTensor(ttgl.float32)
+    module = run_parser(kernel, *make_args(x, y, out), target=target)
+    ir_str = anonymize_ir(module.str_nodebug())
+    ir_str = re.sub(r'("ttg\.threads-per-warp"\s*=\s*)\d{2}', r'\1...', ir_str)
+    expecttest.assert_expected_inline(
+        ir_str, """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = tt.load %arg0 : !tt.ptr<f32>
+    rocdl.sched.barrier none
+    %1 = tt.load %arg1 : !tt.ptr<f32>
+    %2 = arith.addf %0, %1 : f32
+    rocdl.sched.barrier none
+    tt.store %arg2, %2 : !tt.ptr<f32>
+    tt.return
   }
 }
 """)

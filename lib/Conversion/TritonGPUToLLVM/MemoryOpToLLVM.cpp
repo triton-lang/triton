@@ -420,7 +420,7 @@ struct AtomicPollOpConversion
         bytes = broadcastTensorResult(op, tensorTy, rewriter, bytes, i8_ty, b,
                                       threadPred, targetInfo);
         for (auto [result, byte] : llvm::zip_equal(results, bytes))
-          result = b.trunc(i1_ty, byte);
+          result = b.trunc(i1_ty, byte, LLVM::IntegerOverflowFlags::nuw);
         if (numCTAs != 1 && !atomicResultHasCTABroadcast(op))
           rendezvous();
       } else {
