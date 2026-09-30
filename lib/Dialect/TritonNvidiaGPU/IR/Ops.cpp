@@ -851,6 +851,27 @@ bool AsyncTMAReduceOp::isSupportedReduceKind(DescriptorReduceKind kind,
   llvm_unreachable("unknown descriptor reduce kind");
 }
 
+static LogicalResult verifyTMACachePolicy(Operation *op, Attribute attr) {
+  if (attr) {
+    if (auto policy = dyn_cast<triton::CachePolicyAttr>(attr)) {
+      if (policy.getCacheModifier() != triton::CacheModifier::NONE)
+        return op->emitOpError("TMA operations do not support cache modifiers");
+    } else if (auto policy = dyn_cast<CachePolicyAttr>(attr)) {
+      if (policy.getCacheModifier() != triton::CacheModifier::NONE)
+        return op->emitOpError("TMA operations do not support cache modifiers");
+      if (policy.getL1() != CacheEvictionPriority::NONE)
+        return op->emitOpError(
+            "TMA operations do not support L1 eviction policies");
+      if (policy.getL2PrefetchSize())
+        return op->emitOpError(
+            "TMA operations do not support L2 prefetch size");
+    } else {
+      return op->emitOpError("unsupported TMA cache policy attribute ") << attr;
+    }
+  }
+  return success();
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult
 AsyncTMACopyGlobalToLocalOp::canonicalize(AsyncTMACopyGlobalToLocalOp op,
@@ -859,6 +880,14 @@ AsyncTMACopyGlobalToLocalOp::canonicalize(AsyncTMACopyGlobalToLocalOp op,
 }
 
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
+  // Do not silently accept obsolete attributes in generic textual IR.
+  if ((*this)->hasAttr("cache") || (*this)->hasAttr("evict"))
+    return emitOpError(
+        "use cachePolicy instead of legacy cache/evict attributes");
+  if (getIsVolatile())
+    return emitOpError("volatile TMA loads are not supported");
+  if (failed(verifyTMACachePolicy(*this, getCachePolicyAttr())))
+    return failure();
   auto descType = getDesc().getType();
   bool isIm2Col = isIm2ColDescriptor(descType);
   auto descInterface = cast<TensorDescInterface>(descType);
@@ -891,6 +920,8 @@ Type AsyncTMACopyGlobalToLocalOp::getPredicateOperandTypeLike() {
 
 // -- AsyncTMACopyLocalToGlobalOp --
 LogicalResult AsyncTMACopyLocalToGlobalOp::verify() {
+  if (failed(verifyTMACachePolicy(*this, getCachePolicyAttr())))
+    return failure();
   // Store ops only support TILED mode
   if (failed(verifyAsyncTMACoords(*this, getCoord(), getDesc().getType(),
                                   /*isIm2Col=*/false)))
@@ -927,6 +958,8 @@ LogicalResult AsyncTMAGatherOp::canonicalize(AsyncTMAGatherOp op,
 }
 
 LogicalResult AsyncTMAGatherOp::verify() {
+  if (failed(verifyTMACachePolicy(*this, getCachePolicyAttr())))
+    return failure();
   auto resultType = getResult().getType();
   if (failed(verifyAsyncTMALoadOp(*this, getDesc().getType(), getBarrier(),
                                   resultType)))
@@ -954,6 +987,8 @@ Type AsyncTMAGatherOp::getPredicateOperandTypeLike() {
 
 // -- AsyncTMAScatter --
 LogicalResult AsyncTMAScatterOp::verify() {
+  if (failed(verifyTMACachePolicy(*this, getCachePolicyAttr())))
+    return failure();
   auto srcType = getSrc().getType();
   if (failed(verifyAsyncTMAStoreOp(*this, getDesc(), srcType)))
     return failure();
