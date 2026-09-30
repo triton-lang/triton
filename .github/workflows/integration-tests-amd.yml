@@ -267,7 +267,7 @@ jobs:
   integration-tests-amd-rocjitsu:
     name: integration-tests-amd (gfx1250-rocjitsu)
     if: github.repository == 'triton-lang/triton'
-    runs-on: amd-gfx90a
+    runs-on: [self-hosted, gfx90a]
     timeout-minutes: 60
     env:
       TRITON_BUILD_WITH_CCACHE: "true"
