@@ -144,11 +144,15 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
   ADD_PASS_OPTION_WRAPPER_2("add_membar",
                             mlir::triton::createTritonNvidiaGPUMembar, int32_t,
                             int32_t);
-  m.def("add_to_llvmir",
-        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
-          pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
-              capability, ptxVersion));
-        });
+  m.def(
+      "add_to_llvmir",
+      [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion,
+         bool canonicalizeLLVMIR) {
+        pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
+            capability, ptxVersion, canonicalizeLLVMIR));
+      },
+      py::arg("pm"), py::arg("capability"), py::arg("ptx_version"),
+      py::arg("canonicalize_llvm_ir") = false);
 }
 
 std::unique_ptr<mlir::Pass>

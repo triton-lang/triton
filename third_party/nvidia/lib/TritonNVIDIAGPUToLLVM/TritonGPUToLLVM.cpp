@@ -11,6 +11,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -85,8 +86,10 @@ struct ConvertTritonGPUToLLVM
 
   ConvertTritonGPUToLLVM(int32_t computeCapability)
       : ConvertTritonGPUToLLVMBase({computeCapability}) {}
-  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
-      : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
+  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion,
+                         bool canonicalizeLLVMIR)
+      : ConvertTritonGPUToLLVMBase(
+            {computeCapability, ptxVersion, canonicalizeLLVMIR}) {}
   void runOnOperation() override;
 
 private:
@@ -131,6 +134,17 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   }
 
   finalizeModule(mod);
+
+  if (!canonicalizeLLVMIR)
+    return;
+
+  // Fold temporary aggregate packing before the pass-boundary verifier walks
+  // these large struct types. The normal verifier still checks the cleaned IR.
+  OpPassManager cleanup;
+  cleanup.addNestedPass<LLVM::LLVMFuncOp>(
+      triton::gpu::createCanonicalizeLLVMIR());
+  if (failed(runPipeline(cleanup, mod)))
+    signalPassFailure();
 }
 
 LogicalResult ConvertTritonGPUToLLVM::lowerFunctions(
@@ -259,10 +273,10 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
   return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
 }
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int32_t computeCapability,
-                                 int32_t ptxVersion) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability,
-                                                  ptxVersion);
+createConvertTritonGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion,
+                                 bool canonicalizeLLVMIR) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, ptxVersion,
+                                                  canonicalizeLLVMIR);
 }
 
 } // namespace mlir::triton

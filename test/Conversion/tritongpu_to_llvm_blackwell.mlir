@@ -1,3 +1,4 @@
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar="compute-capability=103" --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="compute-capability=103 canonicalize-llvm-ir=true" -cse | FileCheck %s --check-prefix=EARLY
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar='compute-capability=100' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=100 -cse | FileCheck %s --check-prefixes=CHECK,SM100
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar='compute-capability=103' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=103 -cse | FileCheck %s --check-prefixes=CHECK,SM103
 
@@ -1693,6 +1694,26 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
       !ttg.memdesc<256x128xf32, #d, #ttng.tensor_memory, mutable>,
       !ttg.memdesc<256x32xi8, #sa, #ttng.tensor_memory>,
       !ttg.memdesc<128x32xi8, #sb, #ttng.tensor_memory>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Lowering must discard temporary tensor structs before module verification.
+  // EARLY-LABEL: llvm.func @fold_temporary_tensor_structs
+  // EARLY-NOT: llvm.insertvalue
+  // EARLY-NOT: llvm.extractvalue
+  // EARLY: llvm.return
+  tt.func @fold_temporary_tensor_structs(%ptr: !tt.ptr<f32>) {
+    %offsets = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #blocked>
+    %base = tt.splat %ptr : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked>
+    %ptrs = tt.addptr %base, %offsets : tensor<256x!tt.ptr<f32>, #blocked>, tensor<256xi32, #blocked>
+    %value = tt.load %ptrs : tensor<256x!tt.ptr<f32>, #blocked>
+    %sum = arith.addf %value, %value : tensor<256xf32, #blocked>
+    tt.store %ptrs, %sum : tensor<256x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
