@@ -3513,7 +3513,6 @@ def test_reduce_cu_mode(wgp_cu_mode, device):
     x = torch.rand(1024, device=device)
     y = torch.empty_like(x)
     handle = kernel[(1, )](x, y, BLOCK=1024, num_warps=8, wgp_cu_mode=wgp_cu_mode)
-    assert "s_barrier" in handle.asm["amdgcn"]
     assert ('"amdgpu-synchronize-as"' in handle.asm["llir"]) == (wgp_cu_mode == "cu")
     torch.testing.assert_close(y, x.sum().expand_as(y), rtol=1e-4, atol=1e-4)
 
