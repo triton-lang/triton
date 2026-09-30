@@ -37,8 +37,6 @@ constexpr char AttrDecomposedDotScaledSource[] =
 
 int getMfmaVersion(ISAFamily isaFamily) {
   switch (isaFamily) {
-  case ISAFamily::CDNA1:
-    return 1;
   case ISAFamily::CDNA2:
     return 2;
   case ISAFamily::CDNA3:
@@ -1820,7 +1818,6 @@ struct TritonAMDGPUAccelerateMatmulPass
       [[fallthrough]];
     case ISAFamily::CDNA3:
     case ISAFamily::CDNA2:
-    case ISAFamily::CDNA1:
       mfmaPatterns.add<::DecomposeAMDScaledBlocked>(context, targetFeatures,
                                                     /*benefit=*/3);
       mfmaPatterns.add<::BlockedToMFMA>(context, getMfmaVersion(isaFamily),
