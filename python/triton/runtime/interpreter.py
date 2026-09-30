@@ -930,116 +930,21 @@ class ReduceOps(ReduceScanOpInterface):
             ret.append(self.to_tensor(data, input[i].dtype))
         return ret
 
-    def min_max_with_indices(self, input, val_reduce_op, idx_reduce_op, tie_break_left=True, propagate_nan=False):
-        input = input[0] if isinstance(input, tuple) else input
-        input, axis = self.unravel((input, ), self.axis)
-        input = input[0]
-        data = input.handle.data
-        moved = np.moveaxis(data, axis, 0)
-        flattened = moved.reshape(moved.shape[0], -1)
-
-        values = np.empty(flattened.shape[1], dtype=data.dtype)
-        indices = np.empty(flattened.shape[1], dtype=np.int32)
-        select_idx = 0 if tie_break_left else -1
-        fill_value = np.inf if val_reduce_op == np.min else -np.inf
-        is_floating = np.issubdtype(data.dtype, np.floating)
-
-        def reduce_column(column):
-            if not is_floating:
-                best_value = val_reduce_op(column)
-                if tie_break_left:
-                    winner = idx_reduce_op(column)
-                else:
-                    best_indices = np.flatnonzero(column == best_value)
-                    winner = best_indices[select_idx]
-                return column[winner], winner
-
-            nan_indices = np.flatnonzero(np.isnan(column))
-            if nan_indices.size == column.shape[0] or (propagate_nan and nan_indices.size > 0):
-                winner = nan_indices[select_idx]
-                return np.nan, winner
-
-            clean = column.copy()
-            if nan_indices.size > 0:
-                clean[nan_indices] = fill_value
-            if tie_break_left:
-                winner = idx_reduce_op(clean)
-            else:
-                best_value = val_reduce_op(clean)
-                best_indices = np.flatnonzero(clean == best_value)
-                winner = best_indices[select_idx]
-            return column[winner], winner
-
-        for column_idx, column in enumerate(flattened.T):
-            values[column_idx], indices[column_idx] = reduce_column(column)
-
-        output_shape = moved.shape[1:]
-        values = values.reshape(output_shape)
-        indices = indices.reshape(output_shape)
-
-        if self.keep_dims:
-            if self.axis is not None:
-                values = np.expand_dims(values, axis)
-                indices = np.expand_dims(indices, axis)
-            else:
-                for _ in range(len(data.shape)):
-                    values = np.expand_dims(values, 0)
-                    indices = np.expand_dims(indices, 0)
-
-        elif self.axis is None:
-            values = values.item()
-            indices = indices.item()
-
-        return self.to_tensor(values, input.dtype), self.to_tensor(indices, tl.int32)
-
-    def min_max(self, input, val_reduce_op, idx_reduce_op=None):
-        # If input is a tuple, it must be (val, index), and we only take val
-        input = input[0] if isinstance(input, tuple) else input
-        val = None
-        idx = None
-        if val_reduce_op:
-            val = self.to_tensor(val_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
-        if idx_reduce_op:
-            idx = self.to_tensor(idx_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), tl.int32)
-        if val is not None and idx is not None:
-            return val, idx
-        elif val is not None:
-            return val
-        elif idx is not None:
-            return idx
-        else:
-            raise ValueError("val_reduce_op and idx_reduce_op are both None")
+    def min_max(self, input, reduce_op):
+        return self.to_tensor(reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
 
     def sum(self, input):
         return self.to_tensor(np.sum(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
 
     def apply_impl(self, input):
-        if self.combine_fn == tl.standard._argmin_combine_tie_break_left:
-            return self.min_max_with_indices(input[0], val_reduce_op=np.min, idx_reduce_op=np.argmin)
-        elif self.combine_fn == tl.standard._argmax_combine_tie_break_left:
-            return self.min_max_with_indices(input[0], val_reduce_op=np.max, idx_reduce_op=np.argmax)
-        elif self.combine_fn == tl.standard._argmin_combine_tie_break_fast:
-            return self.min_max_with_indices(input[0], val_reduce_op=np.min, idx_reduce_op=np.argmin,
-                                             tie_break_left=False)
-        elif self.combine_fn == tl.standard._argmax_combine_tie_break_fast:
-            return self.min_max_with_indices(input[0], val_reduce_op=np.max, idx_reduce_op=np.argmax,
-                                             tie_break_left=False)
-        elif self.combine_fn == tl.standard._argmin_combine_tie_break_left_propagate_nan:
-            return self.min_max_with_indices(input[0], val_reduce_op=np.min, idx_reduce_op=np.argmin,
-                                             propagate_nan=True)
-        elif self.combine_fn == tl.standard._argmin_combine_tie_break_fast_propagate_nan:
-            return self.min_max_with_indices(input[0], val_reduce_op=np.min, idx_reduce_op=np.argmin,
-                                             tie_break_left=False, propagate_nan=True)
-        elif self.combine_fn == tl.standard._argmax_combine_tie_break_left_propagate_nan:
-            return self.min_max_with_indices(input[0], val_reduce_op=np.max, idx_reduce_op=np.argmax,
-                                             propagate_nan=True)
-        elif self.combine_fn == tl.standard._argmax_combine_tie_break_fast_propagate_nan:
-            return self.min_max_with_indices(input[0], val_reduce_op=np.max, idx_reduce_op=np.argmax,
-                                             tie_break_left=False, propagate_nan=True)
-        elif self.combine_fn == tl.standard._elementwise_max_ignore_nan:
-            return self.min_max(input[0], val_reduce_op=np.nanmax, idx_reduce_op=None)
+        if self.combine_fn == tl.standard._elementwise_max_ignore_nan:
+            return self.min_max(input[0], np.nanmax)
         elif self.combine_fn == tl.standard._elementwise_min_ignore_nan:
-            return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=None)
+            return self.min_max(input[0], np.nanmin)
+        elif self.combine_fn == tl.standard._elementwise_max_propagate_nan:
+            return self.min_max(input[0], np.max)
+        elif self.combine_fn == tl.standard._elementwise_min_propagate_nan:
+            return self.min_max(input[0], np.min)
         elif self.combine_fn == tl.standard._sum_combine:
             return self.sum(input[0])
         else:

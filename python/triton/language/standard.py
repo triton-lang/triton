@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ..runtime.jit import jit, constexpr_function
 from . import core
-from .extra.libdevice import isnan
 from . import math
 
 # constexpr utilities
@@ -145,48 +144,6 @@ def zeros_like(input):
 
 
 @jit
-def _isnan(value):
-    if not core.constexpr(value.dtype.is_floating()):
-        return core.full(value.shape, 0, core.int1)
-    if core.constexpr(value.dtype.is_fp64()):
-        return isnan(value)
-    return isnan(value.to(core.float32))
-
-
-@jit
-def _argmax_combine(value1, index1, value2, index2, tie_break_left, propagate_nan):
-    if tie_break_left:
-        tie = (value1 == value2 or (_isnan(value1) and _isnan(value2))) and index1 < index2
-    else:
-        tie = False
-    gt = ((propagate_nan and _isnan(value1) and not _isnan(value2))
-          or (not propagate_nan and not _isnan(value1) and _isnan(value2)) or value1 > value2 or tie)
-    v_ret = core.where(gt, value1, value2)
-    i_ret = core.where(gt, index1, index2)
-    return v_ret, i_ret
-
-
-@jit
-def _argmax_combine_tie_break_left(value1, index1, value2, index2):
-    return _argmax_combine(value1, index1, value2, index2, True, False)
-
-
-@jit
-def _argmax_combine_tie_break_fast(value1, index1, value2, index2):
-    return _argmax_combine(value1, index1, value2, index2, False, False)
-
-
-@jit
-def _argmax_combine_tie_break_left_propagate_nan(value1, index1, value2, index2):
-    return _argmax_combine(value1, index1, value2, index2, True, True)
-
-
-@jit
-def _argmax_combine_tie_break_fast_propagate_nan(value1, index1, value2, index2):
-    return _argmax_combine(value1, index1, value2, index2, False, True)
-
-
-@jit
 def _elementwise_max_ignore_nan(a, b):
     return core.maximum(a, b, propagate_nan=core.PropagateNan.NONE)
 
@@ -196,6 +153,31 @@ def _elementwise_max_propagate_nan(a, b):
     return core.maximum(a, b, propagate_nan=core.PropagateNan.ALL)
 
 
+@jit
+def _argminmax_index(input, value, axis, keep_dims):
+    rank: core.constexpr = len(input.shape)
+    dim: core.constexpr = 0 if axis is None else axis % rank
+    if axis is None:
+        input = core.reshape(input, [input.numel])
+        value = core.reshape(value, [])
+    elif not keep_dims:
+        value = core.expand_dims(value, dim)
+
+    matches = input == value
+    if core.constexpr(input.dtype.is_floating()):
+        # Also match NaNs, including an all-NaN input in ignore-NaN mode.
+        matches = core.where(value == value, matches, input != input)
+    indices = core.arange(0, input.shape[dim])
+    for other_dim in core.static_range(len(input.shape)):
+        if other_dim != dim:
+            indices = core.expand_dims(indices, other_dim)
+    indices = core.where(matches, indices, 0x7fffffff)
+    index = core.reduce(indices, dim, _elementwise_min_ignore_nan, keep_dims=keep_dims)
+    if axis is None and keep_dims:
+        index = core.reshape(index, [1] * rank)
+    return index
+
+
 @core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
@@ -203,26 +185,22 @@ def _elementwise_max_propagate_nan(a, b):
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
         propagate_nan: core.constexpr = core.PropagateNan.NONE):
     input = core._promote_bfloat16_to_float32(input)
-    if return_indices:
-        if propagate_nan == core.PropagateNan.ALL:
-            if return_indices_tie_break_left:
-                return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left_propagate_nan,
-                                                 keep_dims=keep_dims)
-            return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_fast_propagate_nan,
-                                             keep_dims=keep_dims)
-        if return_indices_tie_break_left:
-            return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left, keep_dims=keep_dims)
-        return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_fast, keep_dims=keep_dims)
-    else:
+    # Always select the leftmost match, including when ties may be broken arbitrarily.
+    if not return_indices:
         if core.constexpr(input.dtype.primitive_bitwidth) < core.constexpr(32):
             if core.constexpr(input.dtype.is_floating()):
                 input = input.to(core.float32)
             else:
                 assert input.dtype.is_int(), "Expecting input to be integer type"
                 input = input.to(core.int32)
-        if propagate_nan == core.PropagateNan.ALL:
-            return core.reduce(input, axis, _elementwise_max_propagate_nan, keep_dims=keep_dims)
-        return core.reduce(input, axis, _elementwise_max_ignore_nan, keep_dims=keep_dims)
+    if propagate_nan == core.PropagateNan.ALL:
+        value = core.reduce(input, axis, _elementwise_max_propagate_nan, keep_dims=keep_dims)
+    else:
+        value = core.reduce(input, axis, _elementwise_max_ignore_nan, keep_dims=keep_dims)
+    if return_indices:
+        return value, _argminmax_index(input, value, axis, keep_dims)
+    else:
+        return value
 
 
 @core._tensor_member_fn
@@ -234,39 +212,6 @@ def argmax(input, axis, tie_break_left=True, keep_dims=False):
 
 
 # min and argmin
-
-
-@jit
-def _argmin_combine(value1, index1, value2, index2, tie_break_left, propagate_nan):
-    if tie_break_left:
-        tie = (value1 == value2 or (_isnan(value1) and _isnan(value2))) and index1 < index2
-    else:
-        tie = False
-    lt = ((propagate_nan and _isnan(value1) and not _isnan(value2))
-          or (not propagate_nan and not _isnan(value1) and _isnan(value2)) or value1 < value2 or tie)
-    value_ret = core.where(lt, value1, value2)
-    index_ret = core.where(lt, index1, index2)
-    return value_ret, index_ret
-
-
-@jit
-def _argmin_combine_tie_break_left(value1, index1, value2, index2):
-    return _argmin_combine(value1, index1, value2, index2, True, False)
-
-
-@jit
-def _argmin_combine_tie_break_fast(value1, index1, value2, index2):
-    return _argmin_combine(value1, index1, value2, index2, False, False)
-
-
-@jit
-def _argmin_combine_tie_break_left_propagate_nan(value1, index1, value2, index2):
-    return _argmin_combine(value1, index1, value2, index2, True, True)
-
-
-@jit
-def _argmin_combine_tie_break_fast_propagate_nan(value1, index1, value2, index2):
-    return _argmin_combine(value1, index1, value2, index2, False, True)
 
 
 @jit
@@ -286,26 +231,22 @@ def _elementwise_min_propagate_nan(a, b):
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
         propagate_nan: core.constexpr = core.PropagateNan.NONE):
     input = core._promote_bfloat16_to_float32(input)
-    if return_indices:
-        if propagate_nan == core.PropagateNan.ALL:
-            if return_indices_tie_break_left:
-                return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left_propagate_nan,
-                                                 keep_dims=keep_dims)
-            return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_fast_propagate_nan,
-                                             keep_dims=keep_dims)
-        if return_indices_tie_break_left:
-            return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left, keep_dims=keep_dims)
-        return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_fast, keep_dims=keep_dims)
-    else:
+    # Always select the leftmost match, including when ties may be broken arbitrarily.
+    if not return_indices:
         if core.constexpr(input.dtype.primitive_bitwidth) < 32:
             if core.constexpr(input.dtype.is_floating()):
                 input = input.to(core.float32)
             else:
                 assert input.dtype.is_int(), "Expecting input to be integer type"
                 input = input.to(core.int32)
-        if propagate_nan == core.PropagateNan.ALL:
-            return core.reduce(input, axis, _elementwise_min_propagate_nan, keep_dims=keep_dims)
-        return core.reduce(input, axis, _elementwise_min_ignore_nan, keep_dims=keep_dims)
+    if propagate_nan == core.PropagateNan.ALL:
+        value = core.reduce(input, axis, _elementwise_min_propagate_nan, keep_dims=keep_dims)
+    else:
+        value = core.reduce(input, axis, _elementwise_min_ignore_nan, keep_dims=keep_dims)
+    if return_indices:
+        return value, _argminmax_index(input, value, axis, keep_dims)
+    else:
+        return value
 
 
 @core._tensor_member_fn
