@@ -156,7 +156,7 @@ bool init_globals() noexcept try {
   nvidia_tensor_descriptor_im2col_cls = import_from(
       "triton.experimental.gluon.nvidia.hopper", "TensorDescriptorIm2Col");
   amd_tensor_descriptor_cls =
-      import_from("triton.experimental.gluon.amd.gfx1250", "TensorDescriptor");
+      import_from("triton.experimental.gluon.amd.cdna5", "TensorDescriptor");
 
   auto m_canonicalize = py::module_::import_("triton._utils");
   canonicalize_dtype_fn = import_from("triton._utils", "canonicalize_dtype");

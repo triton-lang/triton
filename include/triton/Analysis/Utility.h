@@ -42,22 +42,8 @@ public:
   };
 
   explicit ReduceOpHelper(triton::ReduceOp op)
-      : op(op.getOperation()), axis(op.getAxis()) {
-    auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
-    srcTy = firstTy;
-    srcShape = firstTy.getShape();
-    srcEncoding = firstTy.getEncoding();
-    srcElementTypes = op.getElementTypes();
-
-    for (const auto &t : op.getInputTypes()) {
-      if (t.getShape() != srcShape) {
-        op.emitError() << "shape mismatch";
-      }
-      if (t.getEncoding() != srcEncoding) {
-        op.emitError() << "encoding mismatch";
-      }
-    }
-  }
+      : op(op), srcTy(op.getInputTypes().front()), srcShape(srcTy.getShape()),
+        srcEncoding(srcTy.getEncoding()), axis(op.getAxis()) {}
 
   RankedTensorType getSrcTy() { return srcTy; }
 
@@ -69,19 +55,33 @@ public:
 
   bool isAssociative();
 
-  // Callback to allow backends to specify target-specific getter for scratch
+  // Callback to allow backends to specify a target-specific getter for scratch
   // elements.
   using GetNumScratchElemsFn = std::function<unsigned(
       const triton::LinearLayout &src, const triton::LinearLayout &dst,
       unsigned bitwidth)>;
 
+  // Allocation size for the whole reduction: the maximum sizeInBytes returned
+  // by getScratchConfig across its inter-warp/CTA reduction stages.
   unsigned
   getScratchSizeInBytes(GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
+  // axisPack is the number of elements reduced per thread along the axis.
   InThreadVectorizeOpKind
   getInThreadVectorizeOpKind(unsigned axisPack,
                              bool supportBitwidth16Elementwise,
                              bool supportBitwidth32Elementwise);
+
+  struct ScratchConfig {
+    SmallVector<unsigned> offsets;
+    unsigned sizeInBytes = 0;
+  };
+
+  // Byte offsets in operand order and total storage for one layout conversion.
+  ScratchConfig
+  getScratchConfig(const triton::LinearLayout &src,
+                   const triton::LinearLayout &dst,
+                   GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
   static triton::ColumnAction
   moveAxisBasesToFront(const triton::LinearLayout &layout, int axis,
@@ -91,23 +91,19 @@ public:
   zeroBasesAlongDimAndReorder(const triton::LinearLayout &layout, unsigned axis,
                               mlir::StringAttr dim);
 
-  static triton::LinearLayout getInterLayout(const triton::LinearLayout &layout,
-                                             unsigned axis);
+  static triton::LinearLayout
+  getInterWarpReductionLayout(const triton::LinearLayout &layout,
+                              unsigned axis);
 
+  // Removes redundant register bases but retains replicated lanes.
   static triton::LinearLayout reducedRegLaneLayout(RankedTensorType srcTy,
                                                    unsigned axis);
-
-  static Value createInThreadVectorizedCombineOp(OpBuilder &builder,
-                                                 Location loc,
-                                                 InThreadVectorizeOpKind kind,
-                                                 Value lhs, Value rhs);
 
 private:
   triton::ReduceOp op;
   RankedTensorType srcTy;
   ArrayRef<int64_t> srcShape;
   Attribute srcEncoding;
-  SmallVector<Type> srcElementTypes;
   int axis;
 };
 
@@ -181,41 +177,47 @@ private:
   RankedTensorType dstTy;
 };
 
-// This struct represents the factorization of a warp-local layout conversion
-// into three components: a register-only permutation, a lane-only permutation,
-// and a set of swaps between lane and register basis vectors. Algebraically, it
-// represents the factorization P = P_mixed \circ P_lane \circ P_reg. It is used
-// to aid in the implementation of the layout conversion using warp-shuffles.
+// For permutation cases, this struct represents the factorization of a
+// warp-local layout conversion into three components: a register-only
+// permutation, a lane-only permutation, and a set of swaps between lane and
+// register basis vectors. Algebraically, it represents the factorization
+// P = P_mixed \circ P_lane \circ P_reg. It is used to aid in the implementation
+// of the layout conversion using warp-shuffles.
 //
-// `pReg` and `pLane` are square layouts each with only one input and output
-// dimension. `mixedTranspositions` holds pairs of integers (i, j)
-// corresponding to the transposition (r_i l_j) of the i-th register basis
-// vector with the j-th lane basis vector along with 16-bit selectors for byte
-// permute instructions (where each of the four nybbles is in the range [0, 7]).
+// `pReg` is a square permutation of the padded registers. `shuffleMap` maps
+// register/lane/warp/block coordinates to source lanes for the shuffle stage.
+// `mixedTranspositions` holds the register bit and source/destination lane bits
+// for each exchange, along with 16-bit selectors for byte permute instructions
+// (where each of the four nybbles is in the range [0, 7]). A lane bit of -1
+// denotes a constant-zero predicate for a one-sided exchange.
 // `nPack` gives the number of basis vectors that can be used for register
 // packing while ensuring packed elements arrive at the same destination lane.
 struct DecomposedWarpConversion {
   struct TranspositionInfo {
-    std::pair<int, int> transposition;
+    int regBit;
+    int srcLane;
+    int dstLane;
     uint16_t topPreSel = 0x3210;
     uint16_t botPreSel = 0x7654;
     uint16_t topPostSel = 0x3210;
     uint16_t botPostSel = 0x7654;
   };
 
-  triton::LinearLayout pReg, pLane;
+  triton::LinearLayout pReg, shuffleMap;
   SmallVector<TranspositionInfo> mixedTranspositions;
   int nPack;
 };
 
-// Produces a decomposition of a permutation describing a warp-local layout
-// conversion as described in `DecomposedWarpConversion` above.
+// Produces a warp-local decomposition.
 //
-// This function handles cases where the numbers of register and lane basis
-// vectors differ between the two layouts. This is done by padding the smaller
+// For permutation cases, the numbers of register and lane basis vectors may
+// differ between the two layouts. This is handled by padding the smaller
 // dimension(s) with zero vectors, ensuring that the layout conversion can be
-// represented as a permutation. The layouts must not contain broadcasted
-// register bases.
+// represented as a permutation.
+//
+// Supports permutation layouts with warp/CTA-dependent lane selection. Source
+// registers must not depend on warp/CTA coordinates.
+// The layouts must not contain broadcasted register bases.
 DecomposedWarpConversion
 getWarpLayoutConvertDecomposition(const triton::LinearLayout &srcLayout,
                                   const triton::LinearLayout &dstLayout,
@@ -278,6 +280,42 @@ std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
 bool isCvtDimSync(const triton::LinearLayout &srcLayout,
                   const triton::LinearLayout &dstLayout, StringAttr dim);
+
+namespace triton {
+
+bool canUseWarpBallotHistogram(HistogramOp op);
+
+struct BarrierStages {
+  // Stages are independent: for example, a release atomic with scratch has
+  // both a leading ordering barrier and a scratch rendezvous.
+  bool beforeMemoryEffects = false;
+  bool afterMemoryEffects = false;
+  bool betweenMemoryEffects = false;
+
+  bool hasBarrier() const {
+    return beforeMemoryEffects || betweenMemoryEffects || afterMemoryEffects;
+  }
+};
+
+// Classify the barriers required by an atomic at a chosen scope. A result
+// broadcast barrier at that scope supplies the post-atomic rendezvous itself.
+BarrierStages getAtomicBarrierStages(MemSemantic semantic,
+                                     bool hasResultBarrier);
+
+// Lane bits to clear when shuffling an atomic result from its issuing lane.
+// Returns nullopt when broadcasting the result requires shared memory.
+std::optional<int32_t> getAtomicResultShuffleMask(Value result);
+
+// Whether distributing an atomic result requires communication between CTAs.
+bool atomicResultHasCTABroadcast(Operation *op);
+
+} // namespace triton
+
+namespace triton::nvidia_gpu {
+
+bool needsClusterBarrier(Operation *op);
+
+} // namespace triton::nvidia_gpu
 
 } // namespace mlir
 

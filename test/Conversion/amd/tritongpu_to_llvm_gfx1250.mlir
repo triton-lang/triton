@@ -15,6 +15,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
 // -----
 
+#noncontiguous = #ttg.generic_linear<{register = [[0, 1]], lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // GFX1250-LABEL: generic_linear_noncontiguous_fp32_to_bf16
+  tt.func @generic_linear_noncontiguous_fp32_to_bf16(%arg0: tensor<8x8xf32, #noncontiguous>) -> tensor<8x8xbf16, #noncontiguous> {
+    // GFX1250-NOT: llvm.call_intrinsic "llvm.amdgcn.perm"
+    // GFX1250-COUNT-2: llvm.trunc {{.*}} : i32 to i16
+    // GFX1250-NOT: llvm.trunc
+    // GFX1250-NOT: llvm.call_intrinsic "llvm.amdgcn.perm"
+    %0 = tt.fp_to_fp %arg0, rounding = rtz : tensor<8x8xf32, #noncontiguous> -> tensor<8x8xbf16, #noncontiguous>
+    tt.return %0 : tensor<8x8xbf16, #noncontiguous>
+  }
+}
+
+// -----
+
+#partition_aware = #ttg.generic_linear<{register = [[0, 1], [0, 2], [0, 8], [0, 16], [0, 32], [16, 0], [0, 128]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 4]], warp = [[64, 64], [32, 0], [64, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // GFX1250-LABEL: generic_linear_fp32_to_fp8
+  tt.func @generic_linear_fp32_to_fp8(%arg0: tensor<128x256xf32, #partition_aware>) -> tensor<128x256xf8E4M3FN, #partition_aware> {
+    // GFX1250-COUNT-16: rocdl.cvt.scalef32.pk8.fp8.f32
+    %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x256xf32, #partition_aware> -> tensor<128x256xf8E4M3FN, #partition_aware>
+    tt.return %0 : tensor<128x256xf8E4M3FN, #partition_aware>
+  }
+}
+
+// -----
+
 #mma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[1, 0], [2, 0]]}, isTranspose = true, instrShape = [16, 16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // GFX1250-LABEL: reduce_16x16
@@ -140,5 +167,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // GFX1250: llvm.fsub {{.*}} : vector<2xbf16>
     %0 = arith.subf %arg0, %arg1 : tensor<64xbf16, #blocked>
     tt.return %0 : tensor<64xbf16, #blocked>
+  }
+}
+
+// -----
+
+#blocked8 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 12 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The eight-warp helper uses the caller's precomputed offset.
+  // GFX1250-LABEL: llvm.func internal @outlined_indices_8
+  // GFX1250: [[WAVE:%.*]] = rocdl.wave.id : i32
+  // GFX1250: [[OFFSET:%.*]] = llvm.mlir.constant(4 : i32) : i32
+  // GFX1250: [[REL:%.*]] = llvm.sub [[WAVE]], [[OFFSET]] : i32
+  // GFX1250: [[MASK:%.*]] = llvm.mlir.constant(7 : i32) : i32
+  // GFX1250: llvm.and [[REL]], [[MASK]] : i32
+  tt.func private @outlined_indices_8() -> tensor<256xi32, #blocked8> attributes {noinline = true, "ttg.num-warps" = 8 : i32, "ttg.warp-id-offset" = 4 : i32} {
+    %range = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #blocked8>
+    tt.return %range : tensor<256xi32, #blocked8>
   }
 }

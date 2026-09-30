@@ -1,12 +1,14 @@
 import expecttest
 import importlib.util
 import itertools
+import multiprocessing
 import os
 import re
 import gc
 import shutil
 import pathlib
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
+from contextlib import ExitStack
 
 import pytest
 import torch
@@ -15,6 +17,26 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
+
+
+@pytest.mark.parametrize("backend, options_type, arch", [
+    ("amd", "HIPOptions", "gfx950"),
+    ("nvidia", "CUDAOptions", "sm90"),
+])
+def test_extern_libs_hash_contents(backend, options_type, arch, tmp_path):
+    compiler = importlib.import_module(f"triton.backends.{backend}.compiler")
+    library = tmp_path / "custom.bc"
+    library.write_bytes(b"original library")
+    options = getattr(compiler, options_type)(arch=arch, extern_libs={"custom": str(library)})
+    try:
+        original = options.hash()
+        assert options.hash() == original
+        library.write_bytes(b"modified library")
+        # File hashes are memoized per process. Start cold, as in a new invocation.
+        compiler.file_hash.cache_clear()
+        assert options.hash() != original
+    finally:
+        compiler.file_hash.cache_clear()
 
 
 def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
@@ -126,14 +148,14 @@ def kernel_with_combine_fn(X, BLOCK: tl.constexpr):
 
 
 def apply_src_change(target, old, new, to_modify):
-    kernel.hash = None
-    function_0.hash = None
-    function_1.hash = None
-    function_2.hash = None
-    to_modify._unsafe_update_src(to_modify.src.replace(old, new))
-    ret = target.cache_key
-    to_modify._unsafe_update_src(to_modify.src.replace(new, old))
-    return ret
+    with ExitStack() as cleanup:
+        # Restoring a dependency's source also invalidates its callers' hashes.
+        for function in (kernel, function_0, function_1, function_2, target):
+            function.hash = None
+            cleanup.callback(setattr, function, "hash", None)
+        cleanup.callback(to_modify._unsafe_update_src, to_modify.src)
+        to_modify._unsafe_update_src(to_modify.src.replace(old, new))
+        return target.cache_key
 
 
 def test_nochange():
@@ -146,18 +168,33 @@ def test_toplevel_change():
     baseline = kernel.cache_key
     updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_1)
     assert baseline != updated
+    assert kernel.cache_key == baseline
+
+
+def test_keyword_only_default_dependency_change():
+
+    @triton.jit
+    def with_default(i, *, function_1: tl.constexpr = function_1):
+        return function_1(i)
+
+    baseline = with_default.cache_key
+    updated = apply_src_change(with_default, 'i + 1', 'i + 2', function_1)
+    assert baseline != updated
+    assert with_default.cache_key == baseline
 
 
 def test_nested1_change():
     baseline = kernel.cache_key
     updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_2)
     assert baseline != updated
+    assert kernel.cache_key == baseline
 
 
 def test_nested2_change():
     baseline = kernel.cache_key
     updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_0)
     assert baseline != updated
+    assert kernel.cache_key == baseline
 
 
 ORDER_DEPENDENT_CONSTEXPR = tl.constexpr(42)
@@ -419,6 +456,18 @@ def test_local_shadows_global():
     kernel[(1, )]()
 
 
+def test_keyword_only_shadows_global(monkeypatch):
+    monkeypatch.setitem(globals(), "GLOBAL", 42)
+
+    @triton.jit
+    def kernel(*, GLOBAL: tl.constexpr):
+        tl.static_assert(GLOBAL == 1)
+
+    kernel[(1, )](GLOBAL=1)
+    monkeypatch.setitem(globals(), "GLOBAL", 43)
+    kernel[(1, )](GLOBAL=1)
+
+
 CONSTEXPR_GLOBAL = tl.constexpr(42)
 
 
@@ -537,6 +586,40 @@ def test_cache_closure():
         closure[(1, )]()
 
     assert "cst has changed since we compiled this kernel, from constexpr[42] to constexpr[43]" in str(e.value)
+
+
+CLOSURE_SHADOW_GLOBAL = tl.constexpr(3)
+
+
+def test_cache_closure_shadows_global():
+
+    def make_closure(value):
+        CLOSURE_SHADOW_GLOBAL = value
+
+        @triton.jit
+        def closure():
+            return CLOSURE_SHADOW_GLOBAL
+
+        return closure
+
+    first = make_closure(tl.constexpr(7))
+    second = make_closure(tl.constexpr(9))
+    same_as_first = make_closure(tl.constexpr(7))
+    captures_none = make_closure(None)
+
+    first_key = first.cache_key
+    second_key = second.cache_key
+    same_as_first_key = same_as_first.cache_key
+    captures_none.cache_key
+
+    def tracked_values(fn):
+        return {name: value for (name, _), (value, _) in fn.used_global_vals.items()}
+
+    assert first_key != second_key
+    assert first_key == same_as_first_key
+    assert tracked_values(first)["CLOSURE_SHADOW_GLOBAL"].value == 7
+    assert tracked_values(second)["CLOSURE_SHADOW_GLOBAL"].value == 9
+    assert "CLOSURE_SHADOW_GLOBAL" not in tracked_values(captures_none)
 
 
 @triton.jit
@@ -973,19 +1056,25 @@ def test_async_compile_error(fresh_triton_cache):
     def fn(x: tl.constexpr):
         tl.static_assert(x == 2)
 
-    with pytest.raises(triton.compiler.errors.CompileTimeAssertionFailure):
-        with (
-                ThreadPoolExecutor(2) as pool,
-                triton.AsyncCompileMode(pool),
-        ):
-            assert triton.runtime._async_compile.active_mode.get() is not None
-            fn.warmup(1, grid=(1, ))
+    with (
+            ThreadPoolExecutor(2) as pool,
+            triton.AsyncCompileMode(pool),
+    ):
+        assert triton.runtime._async_compile.active_mode.get() is not None
+        fn.warmup(1, grid=(1, ))
 
-            assert len(fn.device_caches[0][0]) == 1
+        assert len(fn.device_caches[0][0]) == 1
+        # Resolving the queued kernel reports the compilation failure. The
+        # mode must not resolve the failed FutureKernel again on exit.
+        with pytest.raises(triton.compiler.errors.CompileTimeAssertionFailure):
+            fn[(1, )](1)
 
     # After the AsyncCompileMode context manager exits, the active mode should
     # be set to None again, even if there was an error.
     assert triton.runtime._async_compile.active_mode.get() is None
+    # A failed Future would otherwise retain its exception traceback and the
+    # compiler objects reachable through it.
+    assert len(fn.device_caches[0][0]) == 0
 
 
 def test_higher_order_kernel(device, fresh_triton_cache, capsys):
@@ -1094,9 +1183,11 @@ def test_module_load_unload(device, fresh_knobs):
 
     # we should hit the kernel unload call to decrese the counter from 1 to 0
     counter = 1
+    owner_pid = os.getpid()
 
     def kernel_unload(*args, **kwargs):
         nonlocal counter
+        assert os.getpid() == owner_pid
         counter -= 1
 
     # turn off python garbage collector, so the callback is not called
@@ -1110,6 +1201,14 @@ def test_module_load_unload(device, fresh_knobs):
 
     assert counter == 1
     assert pre_compile.module is not None
+
+    if "fork" in multiprocessing.get_all_start_methods():
+        child = multiprocessing.get_context("fork").Process(target=pre_compile.__del__)
+        child.start()
+        child.join()
+        assert child.exitcode == 0
+        assert counter == 1
+
     pre_compile.__del__()
 
     assert counter == 0

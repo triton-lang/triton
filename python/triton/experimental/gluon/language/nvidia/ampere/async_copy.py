@@ -1,5 +1,5 @@
 from ..._semantic import _check
-from ..._core import _unwrap_if_constexpr, builtin
+from ..._core import _normalize_cache_policy, _unwrap_if_constexpr, builtin
 from triton._C.libtriton import ir
 
 __all__ = [
@@ -12,7 +12,8 @@ __all__ = [
 
 
 @builtin
-def async_load(smem, pointer, mask=None, cache_modifier="", eviction_policy="", volatile=False, _semantic=None):
+def async_load(smem, pointer, mask=None, cache_modifier=None, eviction_policy=None, volatile=False, cache_policy=None,
+               _semantic=None):
     """
     Asynchronously load elements from global memory to shared memory.
 
@@ -20,13 +21,15 @@ def async_load(smem, pointer, mask=None, cache_modifier="", eviction_policy="", 
         smem (shared_memory_descriptor): Destination shared memory descriptor.
         pointer (tensor): Source pointer tensor.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        cache_modifier (str): Cache modifier specifier. Defaults to "".
-        eviction_policy (str): Eviction policy specifier. Defaults to "".
+        cache_modifier (str): Cache modifier specifier. Defaults to None.
+        eviction_policy (str): Eviction policy specifier. Defaults to None.
         volatile (bool): Whether the load is volatile. Defaults to False.
+        cache_policy (CachePolicy): Cache policy. Cannot be combined
+            with ``cache_modifier`` or ``eviction_policy``. Defaults to None.
     """
     mask = _unwrap_if_constexpr(mask)
-    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
-    eviction_policy = _semantic._str_to_eviction_policy(eviction_policy)
+    cache_policy = _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy)
+    cache_policy = cache_policy._to_ir(_semantic.builder)
     volatile = _unwrap_if_constexpr(volatile)
     if mask is not None:
         pointer, mask = _semantic.broadcast_impl_value(pointer, mask)
@@ -36,7 +39,7 @@ def async_load(smem, pointer, mask=None, cache_modifier="", eviction_policy="", 
     )
     mask_handle = mask.handle if mask is not None else ir.value()
     _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, ir.value(),
-                                                        cache_modifier, eviction_policy, volatile)
+                                                        cache_policy, volatile)
 
 
 @builtin

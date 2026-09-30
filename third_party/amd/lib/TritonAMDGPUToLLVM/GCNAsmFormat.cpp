@@ -113,18 +113,6 @@ std::string GCNInstr::Modifier::dump() const {
   return strJoin(mods, " ");
 }
 
-GCNInstr::Operand *GCNBuilder::newAddrOperand(mlir::Value addr,
-                                              StringRef constraint) {
-  auto *opr = newOperand(addr, constraint);
-  opr->repr = [](int idx) -> std::string {
-    std::stringstream ss;
-    ss << "$" << idx;
-    return ss.str();
-  };
-
-  return opr;
-}
-
 std::string GCNBuilder::dump() const {
   llvm::SmallVector<std::string> lines;
   for (auto &exec : executions) {
@@ -172,18 +160,6 @@ std::string GCNInstrExecution::dump() const {
   }
   os.flush();
   return osStr;
-}
-
-SmallVector<GCNInstrExecution::Operand *>
-GCNInstrExecution::getArgList() const {
-  SmallVector<Operand *> args;
-  for (auto *arg : argsInOrder) {
-    if (arg->isList())
-      args.insert(args.end(), arg->list.begin(), arg->list.end());
-    else
-      args.push_back(arg);
-  }
-  return args;
 }
 
 } // namespace mlir::triton

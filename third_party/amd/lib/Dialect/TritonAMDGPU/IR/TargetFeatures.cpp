@@ -92,10 +92,6 @@ ISAFamily TargetFeatures::getISAFamily() const {
     return ISAFamily::RDNA4m;
   if (major == 11)
     return ISAFamily::RDNA3;
-  if (major == 10 && minor == 3)
-    return ISAFamily::RDNA2;
-  if (major == 10 && minor == 1)
-    return ISAFamily::RDNA1;
 
   return ISAFamily::Unknown;
 }
@@ -252,6 +248,7 @@ bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
 
 bool TargetFeatures::supportsBufferAtomicRMW() const {
   return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4,
+                             ISAFamily::RDNA3, ISAFamily::RDNA4m,
                              ISAFamily::RDNA4, ISAFamily::GFX1250},
                             getISAFamily());
 }
@@ -260,9 +257,28 @@ bool TargetFeatures::supportsBufferAtomicFadd(Type elementType) const {
   auto isaFamily = getISAFamily();
   if (isaFamily == ISAFamily::CDNA3 && elementType.isBF16())
     return false;
+  if (isaFamily == ISAFamily::RDNA3 && !elementType.isF32())
+    return false;
+  if (isaFamily == ISAFamily::RDNA4m)
+    return elementType.isF32();
   if (isaFamily == ISAFamily::RDNA4 && elementType.isF64())
     return false;
   return true;
+}
+
+bool TargetFeatures::supportsBufferAtomicFMinMax(Type elementType) const {
+  auto isaFamily = getISAFamily();
+  if (elementType.isF32()) {
+    return llvm::is_contained({ISAFamily::RDNA3, ISAFamily::RDNA4m,
+                               ISAFamily::RDNA4, ISAFamily::GFX1250},
+                              isaFamily);
+  }
+  if (elementType.isF64()) {
+    return llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
+                               ISAFamily::CDNA4, ISAFamily::GFX1250},
+                              isaFamily);
+  }
+  return false;
 }
 
 int32_t TargetFeatures::getBufferAtomicCachePolicy(bool hasUsers) const {
@@ -278,6 +294,7 @@ int32_t TargetFeatures::getBufferAtomicCachePolicy(bool hasUsers) const {
 
 bool TargetFeatures::supportMaximumMinimum() const {
   return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::RDNA4m ||
          getISAFamily() == ISAFamily::GFX1250;
 }
 
@@ -304,6 +321,11 @@ bool TargetFeatures::supportsPermlaneSwap() const {
 bool TargetFeatures::supportsCvtPkScalePk8() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsHwScaledUpcast() const {
+  return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetFeatures::supportsHwScaledDowncast() const {
   return getISAFamily() == ISAFamily::CDNA4 ||
          getISAFamily() == ISAFamily::GFX1250;
 }
@@ -337,8 +359,6 @@ bool isCDNA(ISAFamily isaFamily) {
 
 bool isRDNA(ISAFamily isaFamily) {
   switch (isaFamily) {
-  case ISAFamily::RDNA1:
-  case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:

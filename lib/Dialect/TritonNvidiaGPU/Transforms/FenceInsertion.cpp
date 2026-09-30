@@ -83,7 +83,7 @@ private:
                               llvm::SetVector<Operation *> &result) {
     // If the value has already been visited we can safely return false as we
     // would early return when true.
-    if (visited.count(operand))
+    if (visited.contains(operand))
       return;
     visited.insert(operand);
     if (!isa<triton::gpu::MemDescType>(operand.getType()))

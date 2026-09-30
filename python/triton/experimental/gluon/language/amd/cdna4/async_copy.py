@@ -1,4 +1,4 @@
-from ..._core import ir, builtin, _unwrap_if_constexpr
+from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
 from ..._semantic import _check
 from ..._layouts import DistributedLayout
 from ..cdna3 import _verify_buffer_ops
@@ -41,6 +41,11 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
       To get ideal performance, it is recommended to use 128 bits per element.
     * Writes to ``dest`` must be coalesced.
     * If ``dest`` is swizzled, it can only be swizzled within a warp boundary.
+    * If a ``mask`` is present it must be aligned to the load's vector width: each
+      group of (size per thread) consecutive mask values must be identical. The
+      copy transfers each lane's whole vector in a single transaction, so a mask
+      whose true/false boundary cannot be proven vector-aligned forces
+      per-element vectorization and fails to lower.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
@@ -64,11 +69,12 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
         other = _semantic.cast(other, ptr.dtype.element_ty)
         ptr, other = _semantic.broadcast_impl_value(ptr, other)
 
-    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
     mask_handle = mask.handle if mask is not None else ir.value()
     other_handle = other.handle if other is not None else ir.value()
+    cache_policy = _normalize_cache_policy(None, cache_modifier, None)
+    cache_policy = cache_policy._to_ir(_semantic.builder)
     _semantic.builder.create_async_copy_global_to_local(dest.handle, ptr.handle, mask_handle, other_handle,
-                                                        cache_modifier, ir.EVICTION_POLICY.NORMAL, False)
+                                                        cache_policy, False)
 
 
 @builtin
@@ -101,6 +107,11 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
       To get ideal performance, it is recommended to use 128 bits per element.
     * Writes to ``dest`` must be coalesced.
     * If ``dest`` is swizzled, it can only be swizzled within a warp boundary.
+    * If a ``mask`` is present it must be aligned to the load's vector width: each
+      group of (size per thread) consecutive mask values must be identical. The
+      copy transfers each lane's whole vector in a single transaction, so a mask
+      whose true/false boundary cannot be proven vector-aligned forces
+      per-element vectorization and fails to lower.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.

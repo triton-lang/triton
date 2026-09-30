@@ -72,26 +72,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-LABEL: @atomic_poll
     // CHECK: %[[WARP_ELECTED:.*]] = llvm.and %{{.*}}, %{{.*}} : i1
     // CHECK: %[[ELECTED:.*]] = llvm.and %[[WARP_ELECTED]], %{{.*}} : i1
-    // CHECK: %[[FALSE:.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: llvm.cond_br %[[ELECTED]], ^[[INIT:bb[0-9]+]], ^[[DONE:bb[0-9]+]](%[[FALSE]] : i1)
-    // CHECK: ^[[INIT]]:
     // CHECK: %[[START_RAW:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
     // CHECK: %[[TEN:.*]] = llvm.mlir.constant(10 : i64) : i64
     // CHECK: %[[START:.*]] = llvm.mul %[[START_RAW]], %[[TEN]] : i64
     // CHECK: llvm.br ^[[LOOP:bb[0-9]+]]
     // CHECK: ^[[LOOP]]:
+    // CHECK: %[[UNDEF:.*]] = llvm.mlir.undef : i32
+    // CHECK: llvm.cond_br %[[ELECTED]], ^[[LOAD:bb[0-9]+]], ^[[COMPARE:bb[0-9]+]](%[[UNDEF]] : i32)
+    // CHECK: ^[[LOAD]]:
     // CHECK: %[[LOADED:.*]] = llvm.load %{{.*}} atomic syncscope("agent") monotonic
-    // CHECK: %[[MATCHED:.*]] = llvm.icmp "eq" %[[LOADED]], %{{.*}} : i32
-    // CHECK: llvm.cond_br %[[MATCHED]], ^[[SUCCESS:bb[0-9]+]], ^[[TIMEOUT:bb[0-9]+]]
+    // CHECK: llvm.br ^[[COMPARE]](%[[LOADED]] : i32)
+    // CHECK: ^[[COMPARE]](%[[VALUE:.*]]: i32):
+    // CHECK: %[[MATCHED:.*]] = llvm.icmp "eq" %[[VALUE]], %{{.*}} : i32
+    // CHECK: %[[TRUE:.*]] = llvm.mlir.constant(true) : i1
+    // CHECK: %[[COMPLETE:.*]] = llvm.select %[[ELECTED]], %[[MATCHED]], %[[TRUE]] : i1, i1
+    // CHECK: llvm.cond_br %[[COMPLETE]], ^[[SUCCESS:bb[0-9]+]], ^[[TIMEOUT:bb[0-9]+]]
     // CHECK: ^[[SUCCESS]]:
     // CHECK: llvm.fence syncscope("agent") acquire
-    // CHECK: %[[TRUE:.*]] = llvm.mlir.constant(true) : i1
-    // CHECK: llvm.br ^[[DONE]](%[[TRUE]] : i1)
+    // CHECK: llvm.br ^[[DONE:bb[0-9]+]](%[[ELECTED]] : i1)
     // CHECK: ^[[TIMEOUT]]:
     // CHECK: %[[NOW_RAW:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
     // CHECK: %[[NOW:.*]] = llvm.mul %[[NOW_RAW]], %[[TEN]] : i64
     // CHECK: %[[ELAPSED:.*]] = llvm.sub %[[NOW]], %[[START]] : i64
     // CHECK: %[[TIMED_OUT:.*]] = llvm.icmp "uge" %[[ELAPSED]], %{{.*}} : i64
+    // CHECK: %[[FALSE:.*]] = llvm.mlir.constant(false) : i1
     // CHECK: llvm.cond_br %[[TIMED_OUT]], ^[[DONE]](%[[FALSE]] : i1), ^[[LOOP]]
     // CHECK: ^[[DONE]](%{{.*}}: i1):
     // CHECK: llvm.fence syncscope("workgroup") release
@@ -113,6 +117,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#poll = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @atomic_poll_tensor
+  // CHECK: llvm.load %{{.*}} atomic syncscope("agent") monotonic
+  // CHECK: llvm.fence syncscope("agent") acquire
+  // CHECK: llvm.load %{{.*}} atomic syncscope("agent") monotonic
+  // CHECK: llvm.fence syncscope("agent") acquire
+  // CHECK: rocdl.s.barrier
+  // CHECK: llvm.return
+  tt.func public @atomic_poll_tensor(%ptr: tensor<512x!tt.ptr<i32>, #poll>, %expected: tensor<512xi32, #poll>) {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : tensor<512x!tt.ptr<i32>, #poll>, tensor<512xi32, #poll> -> tensor<512xi1, #poll>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @atomic_cas_f32(%arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL: @atomic_cas_f32
@@ -126,7 +147,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: %[[CMPXCHG:.*]] = llvm.cmpxchg %{{.*}}, %[[C32I]], %[[C64I]] acquire monotonic
     // CHECK: %[[RESI:.*]] = llvm.extractvalue %[[CMPXCHG]][0] : !llvm.struct<(i32, i1)>
     // CHECK: %[[RES:.*]] = llvm.bitcast %[[RESI]] : i32 to f32
-    // CHECK: llvm.store %[[RES]], %{{.*}} : f32, !llvm.ptr<3>
+    // CHECK: llvm.br ^[[DONE:bb[0-9]+]](%[[RES]] : f32)
+    // CHECK: ^[[DONE]](%[[MERGED:.*]]: f32):
+    // CHECK: llvm.store %[[MERGED]], %{{.*}} : f32, !llvm.ptr<3>
     // CHECK: rocdl.s.barrier
     // CHECK: llvm.load
     // CHECK-NOT: rocdl.s.barrier

@@ -37,12 +37,8 @@ using ConverterT = std::function<SmallVector<Value>(
     Location, ConversionPatternRewriter &, const SmallVector<Value> &)>;
 
 namespace {
-bool isCDNA4(ISAFamily family) { return family == ISAFamily::CDNA4; }
 bool isCDNA4OrHigher(ISAFamily family) {
   return family == ISAFamily::CDNA4 || family == ISAFamily::GFX1250;
-}
-bool isCDNA3OrHigher(ISAFamily family) {
-  return family == ISAFamily::CDNA3 || isCDNA4OrHigher(family);
 }
 // List of architectures that have hardware support for FNUZ fp8 formats. On
 // those architectures we will use the HW instructions to do the conversion
@@ -289,37 +285,6 @@ template <typename FPType> struct FPTypeInfo {
     return llvm::APFloat::Bogus();
   }
 
-  std::optional<std::pair<Value, Value>> getPlusMinusInf() {
-    if constexpr (std::is_same_v<FPType, Float32Type>) {
-      return std::make_pair(b.i32_val(0x7F800000), b.i32_val(0xFF800000));
-    }
-    if constexpr (std::is_same_v<FPType, Float16Type>) {
-      return std::make_pair(b.i16_val(0x7C00), b.i16_val(0xFC00));
-    }
-    if constexpr (std::is_same_v<FPType, BFloat16Type>) {
-      return std::make_pair(b.i16_val(0x7F80), b.i16_val(0xFF80));
-    }
-
-    return std::nullopt;
-  }
-
-  std::optional<std::pair<Value, Value>> getPlusMinusMax() {
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNType>) {
-      return std::make_pair(b.i8_val(0x7E), b.i8_val(0xFE));
-    }
-    if constexpr (std::is_same_v<FPType, Float8E4M3FNUZType>) {
-      return std::make_pair(b.i8_val(0x7E), b.i8_val(0xFE));
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2Type>) {
-      return std::make_pair(b.i8_val(0x7B), b.i8_val(0xFB));
-    }
-    if constexpr (std::is_same_v<FPType, Float8E5M2FNUZType>) {
-      return std::make_pair(b.i8_val(0x7B), b.i8_val(0xFB));
-    }
-
-    return std::nullopt;
-  }
-
   Location loc;
   ConversionPatternRewriter &rewriter;
   TritonLLVMOpBuilder b;
@@ -469,11 +434,10 @@ SmallVector<Value> PkF4ToFp32(Location loc, ConversionPatternRewriter &rewriter,
 
 // OCP Bf8/Fp8 -> Bf16
 template <typename SrcFPType>
+  requires llvm::is_one_of<SrcFPType, Float8E4M3FNType, Float8E5M2Type>::value
 SmallVector<Value> OcpF8ToBf16SW(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const SmallVector<Value> &v) {
-  static_assert(std::is_same_v<SrcFPType, Float8E4M3FNType> ||
-                std::is_same_v<SrcFPType, Float8E5M2Type>);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = b.undef(fp8x4VecTy);
@@ -659,16 +623,14 @@ SmallVector<Value> scalePk8DowncastToFp8(Location loc,
 // normal number, i.e. ±448. NaNs are converted to NaNs.
 // For UZ formats please check: https://onnx.ai/onnx/technical/float8.html
 template <typename SrcFPType, typename DstFPType>
+  requires llvm::is_one_of<SrcFPType, Float32Type, Float16Type,
+                           BFloat16Type>::value &&
+           llvm::is_one_of<DstFPType, Float8E4M3FNType, Float8E4M3FNUZType,
+                           Float8E5M2FNUZType>::value
 Value downcastToFp8rtneOneValue(Location loc,
                                 ConversionPatternRewriter &rewriter, Value v) {
-  static_assert((std::is_same_v<SrcFPType, Float32Type>) ||
-                (std::is_same_v<SrcFPType, Float16Type>) ||
-                (std::is_same_v<SrcFPType, BFloat16Type>));
-  static_assert((std::is_same_v<DstFPType, Float8E4M3FNType> ||
-                 std::is_same_v<DstFPType, Float8E4M3FNUZType> ||
-                 std::is_same_v<DstFPType, Float8E5M2FNUZType>));
-  constexpr bool isFp8UZ = (std::is_same_v<DstFPType, Float8E4M3FNUZType> ||
-                            std::is_same_v<DstFPType, Float8E5M2FNUZType>);
+  constexpr bool isFp8UZ =
+      llvm::is_one_of<DstFPType, Float8E4M3FNUZType, Float8E5M2FNUZType>::value;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   FPTypeInfo<SrcFPType> srcFpInfo(loc, rewriter);
@@ -2463,7 +2425,7 @@ struct FpToFpOpConversion
     if (!layoutTy)
       return std::nullopt;
     auto order = triton::gpu::getThreadOrder(layoutTy, tensorTy.getShape());
-    auto elemsPerThread = layoutTy.getElemsPerThread(tensorTy.getShape());
+    auto elemsPerThread = triton::gpu::getElemsPerThread(tensorTy);
     return elemsPerThread[order.back()];
   }
 
@@ -2485,8 +2447,14 @@ struct FpToFpOpConversion
     }
     const size_t maxElementsPerThread = maybeMaxElementsPerThread.value();
 
-    auto converter = getConverter(srcElementType, dstElementType,
-                                  maxElementsPerThread, roundingMode);
+    bool useFp32Intermediate =
+        (srcElementType.isBF16() && dstElementType.isF16()) ||
+        (srcElementType.isF16() && dstElementType.isBF16());
+    if (useFp32Intermediate)
+      roundingMode = roundingMode.value_or(RoundingMode::RTNE);
+    auto converter =
+        getConverter(useFp32Intermediate ? f32_ty : srcElementType,
+                     dstElementType, maxElementsPerThread, roundingMode);
     if (converter == nullptr) {
       std::string rmError;
       if (roundingMode.has_value())
@@ -2512,6 +2480,11 @@ struct FpToFpOpConversion
     }
     inVals.resize(numElements,
                   b.undef(typeConverter->convertType(srcElementType)));
+
+    if (useFp32Intermediate)
+      for (Value &v : inVals)
+        v = srcElementType.isBF16() ? AMD::convertBf16ToFp32(loc, rewriter, v)
+                                    : Fp16ToFp32OneValue(loc, rewriter, v);
 
     auto maybeOutVals = converter->convert(loc, rewriter, inVals);
     assert(maybeOutVals.has_value());

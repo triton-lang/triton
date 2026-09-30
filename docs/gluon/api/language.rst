@@ -182,6 +182,8 @@ Scan Ops
     :nosignatures:
 
     associative_scan
+    cumprod
+    cumsum
     histogram
 
 
@@ -222,6 +224,7 @@ Inline Assembly
     :toctree: generated
     :nosignatures:
 
+    inline_asm
     inline_asm_elementwise
 
 

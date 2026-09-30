@@ -71,7 +71,7 @@ public:
                           Value pred) {
       triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
           rewriter, op.getLoc(), desc, op.getIndices(), barrierAlloc, alloc,
-          pred);
+          pred, /*multicast=*/false, op.getCachePolicyAttr());
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();
