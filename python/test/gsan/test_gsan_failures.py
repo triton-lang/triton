@@ -434,6 +434,17 @@ def _graph_unordered_write_kernel(payload, REVERSE: tl.constexpr):
     tl.store(payload + pid, 1)
 
 
+@triton.jit
+def _graph_pdl_consumer_before_wait_kernel(payload_ptr, scratch_ptr, BLOCK: tl.constexpr):
+    # Read every producer CTA's output so the race does not depend on a single
+    # writer and this consumer being scheduled on different SMs.
+    offsets = tl.arange(0, BLOCK)
+    values = tl.load(payload_ptr + offsets)
+    # Wait after the read so only the access ordering is invalid.
+    tl.extra.cuda.gdc_wait()
+    tl.store(scratch_ptr + offsets, values)
+
+
 @run_with_gsan
 def _run_explicit_graph_failure_case(kind: str) -> None:
     from triton.experimental.gsan import graph
@@ -441,7 +452,7 @@ def _run_explicit_graph_failure_case(kind: str) -> None:
 
     n = 512
     payload = torch.zeros(n, dtype=torch.int32, device="cuda")
-    scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.zeros(n, dtype=torch.int32, device="cuda")
     should_wait = torch.zeros(1, dtype=torch.int32, device="cuda")
     pdl = kind != "unordered"
     nodes = [graph.GraphNode(), graph.GraphNode((), (0, )) if pdl else graph.GraphNode()]
@@ -454,8 +465,8 @@ def _run_explicit_graph_failure_case(kind: str) -> None:
                                                                launch_pdl=True)
                 arguments = (should_wait, scratch)
             else:
-                consumer = _pdl_consumer_without_wait_kernel.warmup(payload, scratch, grid=(1, ), num_warps=1,
-                                                                    launch_pdl=True)
+                consumer = _graph_pdl_consumer_before_wait_kernel.warmup(payload, scratch, BLOCK=n, grid=(1, ),
+                                                                         num_warps=1, launch_pdl=True)
                 arguments = (payload, scratch)
             executable.add_kernel(producer, (payload, ), n)
             executable.add_kernel(consumer, arguments, 1)
@@ -738,11 +749,12 @@ def test_explicit_graph_unordered_nodes_report_race():
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Graph PDL requires SM90 or newer")
 @pytest.mark.parametrize("missing_wait", [False, True])
 def test_explicit_graph_programmatic_edge_requires_wait(missing_wait):
-    source = _pdl_conditional_wait_kernel if missing_wait else _pdl_consumer_without_wait_kernel
-    _run_failure_case("graph_pdl", runner=_run_explicit_graph_failure_case,
-                      runner_args=("missing_wait" if missing_wait else "before_wait", ), source_function=source.fn,
-                      marker="def _pdl_conditional_wait_kernel" if missing_wait else "value = tl.load(payload_ptr + 1)",
-                      error="did not call gdc_wait" if missing_wait else "Read after write race detected")
+    source = _pdl_conditional_wait_kernel if missing_wait else _graph_pdl_consumer_before_wait_kernel
+    _run_failure_case(
+        "graph_pdl", runner=_run_explicit_graph_failure_case,
+        runner_args=("missing_wait" if missing_wait else "before_wait", ), source_function=source.fn,
+        marker="def _pdl_conditional_wait_kernel" if missing_wait else "values = tl.load(payload_ptr + offsets)",
+        error="did not call gdc_wait" if missing_wait else "Read after write race detected")
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
