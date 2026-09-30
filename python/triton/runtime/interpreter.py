@@ -1150,6 +1150,23 @@ class ReduceOps(ReduceScanOpInterface):
         else:
             raise ValueError("val_reduce_op and idx_reduce_op are both None")
 
+    def min_max_with_nan_policy(self, input, val_reduce_op):
+        dtype = input.dtype
+        if dtype == tl.bfloat16:
+            input = interpreter_semantic.cast(input, tl.float32)
+        data = input.handle.data
+        value = val_reduce_op(data, axis=self.axis, keepdims=True)
+        # nanargmin/nanargmax reject all-NaN slices and can select an ignored
+        # NaN when all other values are infinities. Match the reduced value.
+        matches = (data == value) | (np.isnan(data) & np.isnan(value))
+        idx = self.to_tensor(np.argmax(matches, axis=self.axis, keepdims=self.keep_dims), tl.int32)
+        if not self.keep_dims:
+            value = np.squeeze(value, axis=self.axis)
+        val = self.to_tensor(value, input.dtype)
+        if dtype == tl.bfloat16:
+            val = interpreter_semantic.cast(val, dtype)
+        return val, idx
+
     def sum(self, input):
         return self.to_tensor(np.sum(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
 
@@ -1170,6 +1187,22 @@ class ReduceOps(ReduceScanOpInterface):
             return self.min_max(input[0], val_reduce_op=np.nanmin, idx_reduce_op=None)
         elif self.combine_fn is tl.standard._sum_combine:
             return self.sum(input[0])
+        elif (self.combine_fn is tl.standard._argmin_combine_tie_break_left_ignore_nan
+              or self.combine_fn is tl.standard._argmin_combine_tie_break_fast_ignore_nan):
+            return self.min_max_with_nan_policy(input[0], np.fmin.reduce)
+        elif (self.combine_fn is tl.standard._argmax_combine_tie_break_left_ignore_nan
+              or self.combine_fn is tl.standard._argmax_combine_tie_break_fast_ignore_nan):
+            return self.min_max_with_nan_policy(input[0], np.fmax.reduce)
+        elif (self.combine_fn is tl.standard._argmin_combine_tie_break_left_propagate_nan
+              or self.combine_fn is tl.standard._argmin_combine_tie_break_fast_propagate_nan):
+            return self.min_max_with_nan_policy(input[0], np.min)
+        elif (self.combine_fn is tl.standard._argmax_combine_tie_break_left_propagate_nan
+              or self.combine_fn is tl.standard._argmax_combine_tie_break_fast_propagate_nan):
+            return self.min_max_with_nan_policy(input[0], np.max)
+        elif self.combine_fn is tl.standard._elementwise_max_propagate_nan:
+            return self.min_max(input[0], np.max)
+        elif self.combine_fn is tl.standard._elementwise_min_propagate_nan:
+            return self.min_max(input[0], np.min)
         else:
             # Fall back to the slow mode
             return self.generic_reduce(input)

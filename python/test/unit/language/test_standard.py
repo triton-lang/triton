@@ -24,6 +24,105 @@ def test_maximum_minium(dtype, op, device):
     _test_binary(dtype, dtype, expr, numpy_expr, device=device)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.int32])
+@pytest.mark.parametrize("op", ["min", "max"])
+@pytest.mark.parametrize("propagate_nan", ["default", None, "NONE", "ALL"])
+@pytest.mark.parametrize("tie_break_left", [False, True])
+@pytest.mark.parametrize("axis, keep_dims, member", [(-1, True, False), (0, True, True), (1, False, False)])
+def test_min_max_propagate_nan(dtype, op, propagate_nan, tie_break_left, axis, keep_dims, member, device):
+
+    @triton.jit
+    def kernel(X, V, VI, I, AI, SHAPE: tl.constexpr, OP: tl.constexpr, PROPAGATE_NAN: tl.constexpr,
+               TIE_BREAK_LEFT: tl.constexpr, AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr, MEMBER: tl.constexpr,
+               OMIT_POLICY: tl.constexpr):
+        offsets = tl.arange(0, SHAPE[0])[:, None] * SHAPE[1] + tl.arange(0, SHAPE[1])[None, :]
+        x = tl.load(X + offsets)
+        if OMIT_POLICY:
+            value = getattr(tl, OP)(x, AXIS, keep_dims=KEEP_DIMS)
+            indexed_value, index = getattr(tl, OP)(x, AXIS, return_indices=True,
+                                                   return_indices_tie_break_left=TIE_BREAK_LEFT, keep_dims=KEEP_DIMS)
+            arg_index = getattr(tl, "arg" + OP)(x, AXIS, tie_break_left=TIE_BREAK_LEFT, keep_dims=KEEP_DIMS)
+        elif MEMBER:
+            if OP == "min":
+                value = x.min(AXIS, keep_dims=KEEP_DIMS, propagate_nan=PROPAGATE_NAN)
+                indexed_value, index = x.min(AXIS, return_indices=True, return_indices_tie_break_left=TIE_BREAK_LEFT,
+                                             keep_dims=KEEP_DIMS, propagate_nan=PROPAGATE_NAN)
+                arg_index = x.argmin(AXIS, tie_break_left=TIE_BREAK_LEFT, keep_dims=KEEP_DIMS,
+                                     propagate_nan=PROPAGATE_NAN)
+            else:
+                value = x.max(AXIS, keep_dims=KEEP_DIMS, propagate_nan=PROPAGATE_NAN)
+                indexed_value, index = x.max(AXIS, return_indices=True, return_indices_tie_break_left=TIE_BREAK_LEFT,
+                                             keep_dims=KEEP_DIMS, propagate_nan=PROPAGATE_NAN)
+                arg_index = x.argmax(AXIS, tie_break_left=TIE_BREAK_LEFT, keep_dims=KEEP_DIMS,
+                                     propagate_nan=PROPAGATE_NAN)
+        else:
+            value = getattr(tl, OP)(x, AXIS, keep_dims=KEEP_DIMS, propagate_nan=PROPAGATE_NAN)
+            indexed_value, index = getattr(tl, OP)(x, AXIS, return_indices=True,
+                                                   return_indices_tie_break_left=TIE_BREAK_LEFT, keep_dims=KEEP_DIMS,
+                                                   propagate_nan=PROPAGATE_NAN)
+            arg_index = getattr(tl, "arg" + OP)(x, AXIS, tie_break_left=TIE_BREAK_LEFT, keep_dims=KEEP_DIMS,
+                                                propagate_nan=PROPAGATE_NAN)
+        if KEEP_DIMS:
+            expected_shape: tl.constexpr = (1, SHAPE[1]) if AXIS == 0 else (SHAPE[0], 1)
+        else:
+            expected_shape: tl.constexpr = (SHAPE[1], ) if AXIS == 0 else (SHAPE[0], )
+        tl.static_assert(value.shape == expected_shape)
+        tl.static_assert(indexed_value.shape == expected_shape)
+        tl.static_assert(index.shape == expected_shape)
+        tl.static_assert(arg_index.shape == expected_shape)
+        out_offsets = tl.arange(0, value.numel)
+        tl.store(V + out_offsets, value.reshape((value.numel, )))
+        tl.store(VI + out_offsets, indexed_value.reshape((value.numel, )))
+        tl.store(I + out_offsets, index.reshape((value.numel, )))
+        tl.store(AI + out_offsets, arg_index.reshape((value.numel, )))
+
+    x = torch.arange(64, device=device).remainder(13).to(dtype).repeat(8, 1)
+    if dtype.is_floating_point and propagate_nan in ("NONE", "ALL"):
+        x[1, 0] = float("nan")
+        x[2, -1] = float("nan")
+        x[3, [3, 17, 35]] = float("nan")
+        x[4, :] = float("nan")
+        x[5, :] = float("inf")
+        x[6, :] = -float("inf")
+        x[5:7, [0, 31, 63]] = float("nan")
+        x[7, [1, 33]] = -float("inf")
+        x[7, [2, 34]] = float("inf")
+    if axis == 0:
+        x = x.T.contiguous()
+    rows = x.T if axis == 0 else x
+    # Check NaN propagation and ties without imposing new NaN semantics on
+    # the existing default index reductions.
+    expected_values = []
+    candidates = []
+    for row in rows:
+        nan = row.isnan()
+        if nan.all() or (propagate_nan == "ALL" and nan.any()):
+            expected_values.append(row[nan][0])
+            candidates.append(nan)
+        else:
+            value = getattr(torch, op)(row[~nan])
+            expected_values.append(value)
+            candidates.append(row == value)
+    expected_values = torch.stack(expected_values)
+    candidates = torch.stack(candidates)
+    values = torch.empty_like(expected_values)
+    indexed_values = torch.empty_like(values)
+    indices = torch.empty(values.shape, dtype=torch.int32, device=device)
+    arg_indices = torch.empty_like(indices)
+    policy = None if propagate_nan in (None, "default") else getattr(tl.PropagateNan, propagate_nan)
+    kernel[(1, )](x, values, indexed_values, indices, arg_indices, tuple(x.shape), op, policy, tie_break_left, axis,
+                  keep_dims, member, propagate_nan == "default")
+    torch.testing.assert_close(values, expected_values, rtol=0, atol=0, equal_nan=True)
+    torch.testing.assert_close(indexed_values, expected_values, rtol=0, atol=0, equal_nan=True)
+    for actual in (indices, arg_indices):
+        if tie_break_left:
+            torch.testing.assert_close(actual, candidates.int().argmax(dim=1).to(torch.int32))
+        else:
+            assert ((actual >= 0) & (actual < rows.shape[1])).all()
+            assert candidates.gather(1, actual.long()[:, None]).all()
+
+
 # ---------------
 # test sort op
 # ---------------

@@ -1278,16 +1278,18 @@ class tensor(base_value):
     def ravel(self) -> tensor:
         ...
 
-    def max(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
+    def max(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
+            propagate_nan: constexpr = None) -> tensor:
         ...
 
-    def argmax(self, axis, tie_break_left=True, keep_dims=False) -> tensor:
+    def argmax(self, axis, tie_break_left=True, keep_dims=False, propagate_nan: constexpr = None) -> tensor:
         ...
 
-    def min(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
+    def min(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
+            propagate_nan: constexpr = None) -> tensor:
         ...
 
-    def argmin(self, axis, tie_break_left=True, keep_dims=False) -> tensor:
+    def argmin(self, axis, tie_break_left=True, keep_dims=False, propagate_nan: constexpr = None) -> tensor:
         ...
 
     def sum(self, axis=None, keep_dims=False, dtype=None) -> tensor:
@@ -2971,8 +2973,8 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _semantic=N
 # -----------------------
 
 
-def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None,
-                          dtype_arg: str = None) -> Callable[[T], T]:
+def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None, dtype_arg: str = None,
+                          propagate_nan_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
@@ -2994,6 +2996,15 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
             docstr += f"""
     :param {tie_break_arg}: if true, in case of a tie (i.e., multiple elements have the same {name} value), return the left-most index for values that aren't NaN
     :type {tie_break_arg}: bool"""
+        if propagate_nan_arg is not None:
+            docstr += f"""
+    :param {propagate_nan_arg}: NaN handling policy. :code:`None` (default) preserves the legacy behavior:
+        value-only reductions ignore NaNs, while index reductions have unspecified results when NaNs are present.
+        :code:`tl.PropagateNan.NONE` ignores NaNs if any non-NaN values are present;
+        :code:`tl.PropagateNan.ALL` propagates any NaN. Both explicit policies return NaN if all values are NaN.
+        For index reductions with an explicit policy, a NaN result selects a NaN's index,
+        using the left-most NaN index if tie-breaking is enabled.
+    :type {propagate_nan_arg}: tl.PropagateNan | None"""
         if dtype_arg is not None:
             docstr += f"""
     :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. This is useful for preventing data overflows. If not specified, signed integer dtypes narrower than 32 bits are upcasted to :code:`tl.int32`, while unsigned integer and bool dtypes narrower than 32 bits are upcasted to :code:`tl.uint32`. Other dtypes are kept as-is.
