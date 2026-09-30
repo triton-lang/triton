@@ -190,29 +190,21 @@ LogicalResult verifyRegisterConsecutiveGroups(Operation *op,
 
   LinearLayout layout = gpu::toLinearLayout(type);
   auto kRegister = StringAttr::get(op->getContext(), "register");
-  unsigned groupBits = llvm::Log2_64(groupSize);
-  if (layout.getInDimSizeLog2(kRegister) < groupBits)
+  if (layout.getInDimSizeLog2(kRegister) < llvm::Log2_64(groupSize))
     return notConsecutive();
 
-  // Register bit i must contribute 2^i to the same output dimension. The
-  // lowering consumes values in register order, so this proves that each
-  // intrinsic receives one consecutive tensor segment.
-  std::optional<unsigned> axis;
-  for (unsigned bit = 0; bit < groupBits; ++bit) {
-    ArrayRef<int32_t> basis = layout.getBasis(kRegister, bit);
-    int32_t expected = 1 << bit;
-    std::optional<unsigned> bitAxis;
-    for (auto [dim, value] : llvm::enumerate(basis)) {
-      if (value == expected && !bitAxis) {
-        bitAxis = dim;
-      } else if (value != 0) {
-        return notConsecutive();
-      }
-    }
-    if (!bitAxis || (axis && *axis != *bitAxis))
-      return notConsecutive();
-    axis = bitAxis;
-  }
+  // The first register group must cover an aligned segment along one tensor
+  // axis. Other input bits can move or permute the segment without splitting
+  // it.
+  auto outDims = llvm::to_vector(layout.getOutDimNames());
+  LinearLayout group =
+      layout.sublayout({kRegister}, outDims).resizeInDim(kRegister, groupSize);
+  auto isIdentityAlong = [&](StringAttr dim) {
+    LinearLayout identity = LinearLayout::identity1D(groupSize, kRegister, dim);
+    return divideLeft(group, identity).has_value();
+  };
+  if (!llvm::any_of(outDims, isIdentityAlong))
+    return notConsecutive();
   return success();
 }
 
