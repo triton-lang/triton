@@ -267,7 +267,7 @@ jobs:
   integration-tests-amd-rocjitsu:
     name: integration-tests-amd (gfx1250-rocjitsu)
     if: github.repository == 'triton-lang/triton'
-    runs-on: amd-gfx942
+    runs-on: [self-hosted, gfx90a]
     timeout-minutes: 60
     env:
       TRITON_BUILD_WITH_CCACHE: "true"
@@ -352,21 +352,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
-            third_party/amd/python/test/test_gluon_cdna5.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+
+          run_rocjitsu_pytest() {
+            local workers="$1"
+            local budget="$2"
+            shift 2
+            "$ROCM_ROOT/bin/mirage" run --in-process \
+              --config "$ROCJITSU_CONFIG" \
+              --cpu-thread-budget "$budget" -- \
+              python3 -m pytest --capture=tee-sys -rfs \
+              -n "$workers" --durations=20 "$@"
+          }
+
+          run_rocjitsu_pytest 64 1 \
+            third_party/amd/python/test/test_gluon_cdna5.py \
+            -k "not test_runtime_tensor_copy"
+          run_rocjitsu_pytest 8 8 \
+            third_party/amd/python/test/test_gluon_cdna5.py \
+            -k "test_runtime_tensor_copy"
+          run_rocjitsu_pytest 32 2 \
             third_party/amd/python/test/test_tdm_copy.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+          run_rocjitsu_pytest 64 1 \
             python/test/gluon/test_frontend.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+          run_rocjitsu_pytest 64 1 \
             python/test/gluon/test_fpsan.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+          run_rocjitsu_pytest 8 8 \
             third_party/amd/python/examples/gluon/f16_gemm_cdna5.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+          run_rocjitsu_pytest 8 8 \
             third_party/amd/python/examples/gluon/f16_gemm_streamk_cdna5.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+          run_rocjitsu_pytest 8 8 \
             third_party/amd/python/examples/gluon/f16_fa_cdna5.py
-          TRITON_DISABLE_LINE_INFO=0 $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+          TRITON_DISABLE_LINE_INFO=0 run_rocjitsu_pytest 8 8 \
             third_party/amd/python/examples/gluon/mxfp_fa_cdna5.py
       - name: Run Triton tests on gfx1250-rocjitsu
         shell: bash
@@ -377,20 +393,33 @@ jobs:
           k_matmul="not (test_preshuffle_scale_mxfp_cdna4 or test_batched_mxfp or test_mxfp8_mxfp4_matmul or test_block_scale_fp4 or (test_simple_matmul and False-4-1-512-64-32-2-float64-float64) or (test_simple_matmul and False-4-1-64-512-32-2-float64-float64))"
           k_tdesc="not tensor_descriptor_reduce"
 
-          k_all="$k_runtime and $k_core and $k_tdesc"
-          ROCJITSU_BULK="${ROCM_ROOT}/bin/mirage run --in-process --config ${ROCJITSU_CONFIG} --cpu-thread-budget 4 --"
+          run_rocjitsu_pytest() {
+            local workers="$1"
+            local budget="$2"
+            shift 2
+            "$ROCM_ROOT/bin/mirage" run --in-process \
+              --config "$ROCJITSU_CONFIG" \
+              --cpu-thread-budget "$budget" -- \
+              python3 -m pytest --capture=tee-sys -rfs \
+              -n "$workers" --durations=20 "$@"
+          }
 
-          $ROCJITSU_BULK pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_all" -p no:forked \
+          run_rocjitsu_pytest 8 4 \
+            -k "$k_runtime and not test_hooks" -p no:forked \
             --timeout=600 --timeout-method=thread \
             python/test/unit/test_debug.py \
-            python/test/unit/runtime \
+            python/test/unit/runtime
+          run_rocjitsu_pytest 24 2 \
+            -k "$k_core and $k_tdesc" -p no:forked \
+            --timeout=600 --timeout-method=thread \
             python/test/unit/language/test_core.py \
             python/test/unit/language/test_tensor_descriptor.py \
             python/triton_kernels/tests/test_topk.py::test_topk
-          $ROCJITSU_BULK pytest --capture=tee-sys -rfs -n 64 --durations=20 -k "$k_matmul" -p no:forked \
+          run_rocjitsu_pytest 32 2 \
+            -k "$k_matmul" -p no:forked \
             --timeout=600 --timeout-method=thread \
             python/test/unit/language/test_matmul.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+          run_rocjitsu_pytest 48 1 \
             third_party/amd/python/test/ \
             --ignore=third_party/amd/python/test/test_address_sanitizer.py \
             --ignore=third_party/amd/python/test/test_gluon_cdna5_consan.py \
@@ -398,7 +427,7 @@ jobs:
             --ignore=third_party/amd/python/test/test_gluon_cdna5.py \
             --ignore=third_party/amd/python/test/test_tdm_copy.py \
             --ignore=third_party/amd/python/test/test_int8_dot_small_block_k.py
-          $ROCJITSU pytest --capture=tee-sys -rfs -n 1 --durations=20 -p no:forked \
+          run_rocjitsu_pytest 1 8 -p no:forked \
             --timeout=300 --timeout-method=thread \
             python/test/unit/language/test_pipeliner.py::test_scatter_pipeline
           moe_tests=(
@@ -408,8 +437,9 @@ jobs:
             "test_op[None-False-False-False-False-None-16-727-577-859-ragged-float16-float16-None-10-1-False-False-False-False-None-False-False-False-True-None]"
           )
           moe_k_expr="$(printf '%s or ' "${moe_tests[@]}" | sed 's/ or $//')"
-          HSA_ENABLE_SDMA=0 $ROCJITSU pytest --capture=tee-sys -rfs -n 4 --durations=20 \
-            -k "$moe_k_expr" python/triton_kernels/tests/test_matmul.py
+          HSA_ENABLE_SDMA=0 run_rocjitsu_pytest 4 8 \
+            -k "$moe_k_expr" \
+            python/triton_kernels/tests/test_matmul.py
       - name: Clean up caches
         if: always()
         run: |
