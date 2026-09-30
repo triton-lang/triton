@@ -328,13 +328,6 @@ class Autotuner(KernelInterface):
         return pruned_configs
 
     def warmup(self, *args, **kwargs):
-        """Compile the pruned configurations without benchmarking or launching them.
-
-        Config pre-hooks run sequentially on the calling thread before each
-        specialization, including under AsyncCompileMode. They may prepare
-        descriptor metadata; their side effects are not undone. Autotuner
-        pre/post hooks and reset/restore actions are not run during warmup.
-        """
         self.nargs = dict(zip(self.arg_names, args))
         try:
             ret = []
