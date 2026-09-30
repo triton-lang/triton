@@ -4738,3 +4738,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Integer-first tuples still need protection from floating-point reassociation.
+// CHECK-LABEL: @reduce_integer_then_float
+// CHECK: %[[REDUCE:.*]]:2 = "tt.reduce"
+// CHECK: %[[CONVERT:.*]] = ttg.convert_layout %[[REDUCE]]#1
+// CHECK-NOT: "tt.reduce"
+// CHECK: tt.return %[[REDUCE]]#0, %[[REDUCE]]#1, %[[CONVERT]]
+#src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #src}>
+#dst_parent = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#dst = #ttg.slice<{dim = 1, parent = #dst_parent}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  tt.func @reduce_integer_then_float(%count: i32, %value: f32) -> (tensor<128xi32, #slice>, tensor<128xf32, #slice>, tensor<128xf32, #dst>) {
+    %counts = tt.splat %count : i32 -> tensor<128x32xi32, #src>
+    %values = tt.splat %value : f32 -> tensor<128x32xf32, #src>
+    %r:2 = "tt.reduce"(%counts, %values) <{axis = 1 : i32}> ({
+    ^bb0(%ai: i32, %af: f32, %bi: i32, %bf: f32):
+      %i = arith.addi %ai, %bi : i32
+      %f = arith.addf %af, %bf : f32
+      tt.reduce.return %i, %f : i32, f32
+    }) : (tensor<128x32xi32, #src>, tensor<128x32xf32, #src>) -> (tensor<128xi32, #slice>, tensor<128xf32, #slice>)
+    %converted = ttg.convert_layout %r#1 : tensor<128xf32, #slice> -> tensor<128xf32, #dst>
+    tt.return %r#0, %r#1, %converted : tensor<128xi32, #slice>, tensor<128xf32, #slice>, tensor<128xf32, #dst>
+  }
+}

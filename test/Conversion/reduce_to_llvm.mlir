@@ -7,6 +7,7 @@
 #linear = #ttg.linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>
 #blocked_reduce = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked_packed_reduce = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked_nonaxis_packed_reduce = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked_warp_reduce = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 #even_odd = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -176,6 +177,20 @@ tt.func public @reduce_minui_i16(%arg0: tensor<128x8xi16, #blocked_packed_reduce
     %minimum = arith.minui %a, %b : i16
     tt.reduce.return %minimum : i16
   }) : (tensor<128x8xi16, #blocked_packed_reduce>) -> tensor<128xi16, #ttg.slice<{dim = 1, parent = #blocked_packed_reduce}>>
+  tt.return
+}
+
+// A supported opcode need not combine the block arguments.
+// TERNARY-LABEL: @reduce_captured_combiner
+// TERNARY-NOT: vector<2xi16>
+// TERNARY: llvm.return
+tt.func public @reduce_captured_combiner(%arg0: tensor<256x4xi16, #blocked_nonaxis_packed_reduce>, %value: i16, %out: tensor<256x!tt.ptr<i16>, #ttg.slice<{dim = 1, parent = #blocked_nonaxis_packed_reduce}>>) {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i16, %b: i16):
+    %product = arith.muli %value, %value : i16
+    tt.reduce.return %product : i16
+  }) : (tensor<256x4xi16, #blocked_nonaxis_packed_reduce>) -> tensor<256xi16, #ttg.slice<{dim = 1, parent = #blocked_nonaxis_packed_reduce}>>
+  tt.store %out, %0 : tensor<256x!tt.ptr<i16>, #ttg.slice<{dim = 1, parent = #blocked_nonaxis_packed_reduce}>>
   tt.return
 }
 
