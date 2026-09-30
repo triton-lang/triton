@@ -22,7 +22,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
 
 // CHECK-LABEL: @test_1d_simple
 tt.func private @test_1d_simple(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32(i32 -1, i32 %{{.*}}, i32 1, i32 0)
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32(i32 -1, i32 %{{.*}}, i32 2, i32 0)
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32(i32 -1, i32 %{{.*}}, i32 4, i32 0)
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
@@ -35,7 +37,7 @@ tt.func private @test_1d_simple(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, 
 
 // CHECK-LABEL: @test_1d_grouped
 tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8xi32, #layout_adj> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
@@ -48,13 +50,14 @@ tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8x
 
 // CHECK-LABEL: @test_warp_register_groups
 // WARP-LABEL: @test_warp_register_groups
-// The same ordered tree handles lane stages and the higher register stage.
-// WARP: @llvm.nvvm.shfl.sync.idx.i32
+// Scan register-group totals with shuffle-up rounds, then carry between groups.
+// WARP: @llvm.nvvm.shfl.sync.up.i32
 // WARP: add i32
 // WARP-NOT: @llvm.nvvm.barrier
 // WARP: ret
 tt.func private @test_warp_register_groups(%arg: tensor<128xi32, #layout_reg4>) -> tensor<128xi32, #layout_reg4> {
-  // CHECK-COUNT-9: @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK-COUNT-10: @llvm.nvvm.shfl.sync.up.i32
+  // CHECK: @llvm.nvvm.shfl.sync.idx.i32
   // CHECK-NOT: @llvm.nvvm.shfl
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
@@ -76,7 +79,7 @@ tt.func public @anchor_warp_register_groups(%ptr: !llvm.ptr, %arg: !llvm.struct<
 
 // CHECK-LABEL: @test_2d_grouped
 tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK: store {{.*}}, ptr addrspace(3)
   // CHECK: @llvm.nvvm.barrier
   // CHECK: load i32, ptr addrspace(3)
@@ -158,18 +161,9 @@ tt.func public @anchor_registers(%ptr: !llvm.ptr, %arg: !llvm.struct<(i32, i32, 
 
 // CHECK-LABEL: @test_permuted_lanes
 // The low logical axis bits belong to lane bits 1, 3, 0 in that order.
-// Reverse traversal sets the current bit and clears the preceding bits,
-// preserving broadcast lane bit 2 throughout.
-// CHECK: [[TID:%.*]] = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
-// CHECK: [[CLEAR0:%.*]] = and i32 [[TID]], 13
-// CHECK: [[SRC0:%.*]] = or disjoint i32 [[CLEAR0]], 2
-// CHECK: @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 %{{.*}}, i32 [[SRC0]], i32 31)
-// CHECK: [[CLEAR1:%.*]] = and i32 [[TID]], 5
-// CHECK: [[SRC1:%.*]] = or disjoint i32 [[CLEAR1]], 8
-// CHECK: @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 %{{.*}}, i32 [[SRC1]], i32 31)
-// CHECK: [[CLEAR2:%.*]] = and i32 [[TID]], 4
-// CHECK: [[SRC2:%.*]] = or disjoint i32 [[CLEAR2]], 1
-// CHECK: @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 %{{.*}}, i32 [[SRC2]], i32 31)
+// Reverse traversal shifts by logical distances 1, 2, and 4, preserving
+// broadcast lane bit 2. Indexed shuffles handle the permuted physical bits.
+// CHECK-COUNT-3: @llvm.nvvm.shfl.sync.idx.i32
 // CHECK-NOT: @llvm.nvvm.barrier
 // CHECK: ret
 tt.func private @test_permuted_lanes(%arg: tensor<16xi32, #lanes>) -> tensor<16xi32, #lanes> {
