@@ -124,23 +124,41 @@ private:
 
 static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
                                       DenseMap<Operation *, int> &operationId) {
-  auto liveOperations = liveness.resolveLiveness(value);
-  // Views and selects keep their possible source allocations live.
-  SmallVector<Operation *> users(value.getUsers());
-  // Select/view paths can converge on shared users.
-  DenseSet<Operation *> seen;
-  while (!users.empty()) {
-    Operation *user = users.pop_back_val();
-    if (!user->hasTrait<OpTrait::MemDescViewTrait>() &&
-        !isa<arith::SelectOp>(user))
+  SmallVector<Operation *> liveOperations;
+  // Follow aliases through views, selects, calls and control-flow edges. The
+  // liveness of a descriptor value alone does not include its returned aliases
+  // or the successor block arguments to which it is forwarded.
+  SmallVector<Value> aliases{value};
+  DenseSet<Value> seen;
+  while (!aliases.empty()) {
+    Value alias = aliases.pop_back_val();
+    if (!seen.insert(alias).second)
       continue;
-    if (!seen.insert(user).second)
-      continue;
-    auto usersLivness = liveness.resolveLiveness(user->getResult(0));
-    liveOperations.insert(liveOperations.end(), usersLivness.begin(),
-                          usersLivness.end());
-    users.append(user->getResult(0).getUsers().begin(),
-                 user->getResult(0).getUsers().end());
+    auto aliasLiveness = liveness.resolveLiveness(alias);
+    liveOperations.append(aliasLiveness.begin(), aliasLiveness.end());
+    for (Operation *user : alias.getUsers()) {
+      if (auto branch = dyn_cast<BranchOpInterface>(user)) {
+        for (unsigned i = 0; i < user->getNumSuccessors(); ++i) {
+          SuccessorOperands operands = branch.getSuccessorOperands(i);
+          for (auto [index, operand] :
+               llvm::enumerate(operands.getForwardedOperands())) {
+            if (operand == alias)
+              aliases.push_back(user->getSuccessor(i)->getArgument(
+                  index + operands.getProducedOperandCount()));
+          }
+        }
+      }
+      if (!user->hasTrait<OpTrait::MemDescViewTrait>() &&
+          !isa<arith::SelectOp, CallOpInterface>(user))
+        continue;
+      // A call can return any of its descriptor arguments. Conservatively
+      // follow every TMEM result instead of requiring a call alias analysis.
+      for (Value result : user->getResults()) {
+        auto memDesc = dyn_cast<ttg::MemDescType>(result.getType());
+        if (memDesc && isa<TensorMemorySpaceAttr>(memDesc.getMemorySpace()))
+          aliases.push_back(result);
+      }
+    }
   }
   auto minId = std::numeric_limits<int>::max();
   auto maxId = std::numeric_limits<int>::min();
@@ -462,6 +480,19 @@ static LogicalResult allocateFunctionAndCallees(
       allocateTMem(func, funcTMemCols, symbolTable);
   if (failed(totalMemorySize))
     return failure();
+  // Callee-owned storage is reserved only for the duration of a call. Until we
+  // track escaping allocations across functions, do not let a TMEM-allocating
+  // helper return a descriptor that a later call could overwrite. Helpers that
+  // only access and return caller-owned descriptors remain supported.
+  if (*totalMemorySize > 0 && !triton::isKernel(func)) {
+    for (Type type : func.getResultTypes()) {
+      auto memDesc = dyn_cast<ttg::MemDescType>(type);
+      if (memDesc && isa<TensorMemorySpaceAttr>(memDesc.getMemorySpace()))
+        return func->emitError(
+            "returning tensor memory descriptors from functions that allocate "
+            "tensor memory is not supported");
+    }
+  }
   funcTMemCols[func] = *totalMemorySize;
   return success();
 }
