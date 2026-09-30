@@ -1060,6 +1060,66 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#b8 = #ttg.linear<{register = [[256], [32], [16], [8]], lane = [[64], [128], [1], [2], [4]], warp = [], block = []}>
+#b16 = #ttg.linear<{register = [[64], [8], [128]], lane = [[16], [32], [1], [2], [4]], warp = [], block = []}>
+#stb8 = #ttg.linear<{register = [[128], [8], [16], [256]], lane = [[32], [64], [1], [2], [4]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // Choosing [16], [32] avoids bank conflicts and preserves register bit 1.
+  // CHECK-LABEL: @ldmatrix_b8_minimise_conflicts_preserve_words
+  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[LOAD:.*]] = nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b8>, layout = #nvvm.mma_layout<col>, num = 2 : i32
+  // CHECK: %[[WORD:.*]] = llvm.extractvalue %[[LOAD]][0]
+  // CHECK: %[[BYTES:.*]] = llvm.bitcast %[[WORD]] : i32 to vector<4xi8>
+  // CHECK: %[[BYTE1:.*]] = llvm.extractelement %[[BYTES]][%[[ONE]] : i32]
+  // CHECK: %[[TWO:.*]] = llvm.mlir.constant(2 : i32)
+  // CHECK: %[[BYTE2:.*]] = llvm.extractelement %[[BYTES]][%[[TWO]] : i32]
+  // CHECK: llvm.insertvalue %[[BYTE2]], %{{.*}}[2]
+  // CHECK: llvm.insertvalue %[[BYTE1]], %{{.*}}[4]
+  tt.func private @ldmatrix_b8_minimise_conflicts_preserve_words(%A: !ttg.memdesc<512xi8, #shared, #smem>) -> tensor<512xi8, #b8> {
+    %0 = ttg.local_load %A : !ttg.memdesc<512xi8, #shared, #smem> -> tensor<512xi8, #b8>
+    tt.return %0 : tensor<512xi8, #b8>
+  }
+  // Selecting register [8] avoids the bank conflict caused by register [64].
+  // CHECK-LABEL: @ldmatrix_b16_minimise_conflicts
+  // CHECK: %[[LOAD:.*]] = nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<col>, num = 4 : i32
+  // CHECK: %[[WORD:.*]] = llvm.extractvalue %[[LOAD]][0]
+  // CHECK: %[[HALVES:.*]] = llvm.bitcast %[[WORD]] : i32 to vector<2xf16>
+  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[HALF1:.*]] = llvm.extractelement %[[HALVES]][%[[ONE]] : i32]
+  // CHECK: llvm.insertvalue %[[HALF1]], %{{.*}}[2]
+  tt.func private @ldmatrix_b16_minimise_conflicts(%A: !ttg.memdesc<256xf16, #shared, #smem>) -> tensor<256xf16, #b16> {
+    %0 = ttg.local_load %A : !ttg.memdesc<256xf16, #shared, #smem> -> tensor<256xf16, #b16>
+    tt.return %0 : tensor<256xf16, #b16>
+  }
+  // Selecting register [16] avoids the bank conflict caused by register [128].
+  // CHECK-LABEL: @stmatrix_b8_minimise_conflicts
+  // CHECK: %[[INPUT4:.*]] = llvm.extractvalue %{{.*}}[4]
+  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[PACK1:.*]] = llvm.insertelement %[[INPUT4]], %{{.*}}[%[[ONE]] : i32]
+  // CHECK: %[[PACK2:.*]] = llvm.insertelement %{{.*}}, %[[PACK1]][
+  // CHECK: %[[PACK3:.*]] = llvm.insertelement %{{.*}}, %[[PACK2]][
+  // CHECK: %[[WORD:.*]] = llvm.bitcast %[[PACK3]] : vector<4xi8> to i32
+  // CHECK: nvvm.stmatrix %{{[^,]+}}, %[[WORD]], %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b8>, layout = #nvvm.mma_layout<col>, shape = #nvvm.ld_st_matrix_shape<m = 16, n = 8>} : !llvm.ptr<3>, i32, i32, i32, i32
+  tt.func private @stmatrix_b8_minimise_conflicts(%A: !ttg.memdesc<512xi8, #shared, #smem, mutable>, %data: tensor<512xi8, #stb8>) {
+    ttg.local_store %data, %A : tensor<512xi8, #stb8> -> !ttg.memdesc<512xi8, #shared, #smem, mutable>
+    tt.return
+  }
+  // CHECK-LABEL: @stmatrix_b16_minimise_conflicts
+  // CHECK: %[[INPUT2:.*]] = llvm.extractvalue %{{.*}}[2]
+  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[PACK:.*]] = llvm.insertelement %[[INPUT2]], %{{.*}}[%[[ONE]] : i32]
+  // CHECK: %[[WORD:.*]] = llvm.bitcast %[[PACK]] : vector<2xf16> to i32
+  // CHECK: nvvm.stmatrix %{{[^,]+}}, %[[WORD]], %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<col>, shape = #nvvm.ld_st_matrix_shape<m = 8, n = 8>} : !llvm.ptr<3>, i32, i32, i32, i32
+  tt.func private @stmatrix_b16_minimise_conflicts(%A: !ttg.memdesc<256xf16, #shared, #smem, mutable>, %data: tensor<256xf16, #b16>) {
+    ttg.local_store %data, %A : tensor<256xf16, #b16> -> !ttg.memdesc<256xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #linear3 = #ttg.linear<{register = [[0, 0, 0, 1, 0], [0, 0, 0, 0, 8], [0, 0, 0, 8, 0], [0, 0, 0, 0, 16], [0, 0, 0, 0, 128]], lane = [[0, 0, 0, 2, 0], [0, 0, 0, 4, 0], [0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 0, 0, 0, 4]], warp = [[0, 0, 0, 0, 32], [0, 0, 0, 0, 64]], block = []}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, rank = 5}>
 #smem = #ttg.shared_memory
