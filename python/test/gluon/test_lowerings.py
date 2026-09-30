@@ -113,7 +113,15 @@ def _scan_linear_layouts():
     scattered_registers = ttgl.DistributedLinearLayout(
         [[32, 0], [1, 0], [0, 1], [2, 0]], [[4, 0], [8, 0], [0, 2], [0, 4], [0, 8]] + [[0, 0]] * (lane_bits - 5),
         [[16, 0], [0, 16]], [], [64, 32])
-    return [ordinary, broadcast, warp_minor, register_groups, scattered_registers]
+    # Alternate register and lane groups within one warp-local segment. The
+    # physical lane bits are permuted, and the warp owners are broadcast.
+    alternating = [
+        ttgl.DistributedLinearLayout([[r0, 0], [r1, 0], [0, 1], [0, 2], [0, 4]],
+                                     [[l0, 0], [l1, 0], [l2, 0], [0, 8], [0, 16]] + [[0, 0]] * (lane_bits - 5),
+                                     [[0, 0], [0, 0]], [], [32, 32])
+        for r0, r1, l0, l1, l2 in [(1, 4, 8, 2, 16), (2, 8, 16, 1, 4)]
+    ]
+    return [ordinary, broadcast, warp_minor, register_groups, scattered_registers, *alternating]
 
 
 SCAN_EXTRA_LAYOUTS = _filter_layouts([
@@ -235,7 +243,7 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=
     (ttgl.BlockedLayout([1, 1], [2, THREADS_PER_WARP // 2], [4, 1], [1, 0]), 256),
     # No scan-axis lane bits: the full segment sequence lives in registers.
     (ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [1, 0]), 128),
-    # More than a warp of segment totals, with both lane and register stages.
+    # More than a warp of segment totals, with both lane and register groups.
     (ttgl.BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0]), 1024),
     # Permute both register order and the warp bits within each group.
     (ttgl.DistributedLinearLayout([[32, 0], [0, 1], [8, 0], [128, 0], [16, 0], [64, 0]],

@@ -78,58 +78,135 @@ private:
     }
   }
 
-  // Scan contiguous register groups, then merge them in logical bit order.
-  // Higher register bits may be interleaved with lane bits. Each tree stage
-  // reads the preceding stage's endpoints, preserving noncommutative order.
+  // Scan in logical axis order: accumulate register groups sequentially and
+  // scan lane groups with shuffle-up distances 1, 2, 4, ... . Register and lane
+  // groups may alternate in a linear layout.
   void scanWithinWarps(triton::ScanOp op, const ScanLoweringHelper &helper,
                        ScanValues &values, Value laneId,
                        ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto *ctx = op.getContext();
+    auto kReg = StringAttr::get(ctx, "register");
+    auto kLane = StringAttr::get(ctx, "lane");
+    const auto &layout = helper.getLayout();
+    const auto &regBases = layout.getBases().lookup(kReg);
+    const auto &laneBases = layout.getBases().lookup(kLane);
+    unsigned axis = op.getAxis();
     bool reverse = op.getReverse();
-    unsigned localSize = helper.getLocalScanSize();
-    for (unsigned base = 0; base < values.size(); base += localSize) {
-      for (unsigned i = 1; i < localSize; ++i) {
-        unsigned r = base + (reverse ? localSize - 1 - i : i);
-        unsigned prev = reverse ? r + 1 : r - 1;
-        values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
-                                   values[prev], values[r]);
+
+    // Each group of this size already contains its local prefixes. Track the
+    // registers and lanes holding the group so we can read its terminal value.
+    unsigned size = 1;
+    unsigned numRegs = 1;
+    unsigned laneMask = 0;
+    auto terminal = [&](unsigned base) {
+      auto result = values[base + (reverse ? 0 : numRegs - 1)];
+      if (laneMask) {
+        Value lane = b.or_(b.and_(laneId, b.i32_val(~laneMask)),
+                           b.i32_val(reverse ? 0 : laneMask));
+        for (Value &value : result)
+          value = targetInfo.shuffleIdx(rewriter, loc, value, lane);
       }
-    }
-    for (const auto &stage : helper.getStages()) {
-      // In logical coordinates the lower-half endpoint is
-      // (x & ~((1 << (k + 1)) - 1)) | ((1 << k) - 1).
-      // LinearEncodingAttr is a permutation of bits (plus broadcasts), so
-      // translate this affine map to one clear/set mask per hardware dim.
-      unsigned clearReg = stage.lower[0] | stage.current[0];
-      unsigned setReg = reverse ? stage.current[0] : stage.lower[0];
-      unsigned clearLane = stage.lower[1] | stage.current[1];
-      unsigned setLane = reverse ? stage.current[1] : stage.lower[1];
-      Value pred;
-      if (stage.current[1]) {
-        Value bit = b.and_(laneId, b.i32_val(stage.current[1]));
-        pred = b.icmp_eq(bit, b.i32_val(reverse ? 0 : stage.current[1]));
-      }
-      auto previous = values;
-      DenseMap<unsigned, SmallVector<Value>> endpoints;
-      for (unsigned r = 0; r < values.size(); ++r) {
-        if (stage.current[0] && bool(r & stage.current[0]) == reverse)
-          continue;
-        unsigned src = (r & ~clearReg) | setReg;
-        auto it = endpoints.find(src);
-        if (it == endpoints.end()) {
-          SmallVector<Value> endpoint = previous[src];
-          if (clearLane) {
-            Value lane = b.or_(b.and_(laneId, b.i32_val(~clearLane)),
-                               b.i32_val(setLane));
-            for (Value &value : endpoint)
-              value = targetInfo.shuffleIdx(rewriter, loc, value, lane);
+      return result;
+    };
+
+    while (size < helper.getSegmentSize()) {
+      unsigned count = 1;
+      while (
+          size * count < helper.getSegmentSize() &&
+          llvm::any_of(
+              regBases,
+              [&](const auto &basis) { return basis[axis] == size * count; }))
+        count *= 2;
+      if (count > 1) {
+        // Registers are already sorted by axis significance. Prepend each
+        // preceding group's terminal prefix to the next group's values.
+        for (unsigned base = 0; base < values.size(); base += numRegs * count) {
+          for (unsigned i = 1; i < count; ++i) {
+            unsigned cur = base + (reverse ? count - 1 - i : i) * numRegs;
+            unsigned prev = reverse ? cur + numRegs : cur - numRegs;
+            auto prefix = terminal(prev);
+            for (unsigned r = cur; r < cur + numRegs; ++r)
+              values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
+                                         prefix, values[r]);
           }
-          it = endpoints.try_emplace(src, std::move(endpoint)).first;
         }
-        values[r] =
-            combineWithPrefix(op, it->second, previous[r], rewriter, pred);
+        numRegs *= count;
+        size *= count;
+        continue;
       }
+
+      // Collect the next consecutive logical lane bits. Their physical lane
+      // bits can be permuted or separated by bits for independent scans.
+      SmallVector<unsigned> laneBits;
+      unsigned groupMask = 0;
+      while (size * count < helper.getSegmentSize()) {
+        auto it = llvm::find_if(laneBases, [&](const auto &basis) {
+          return basis[axis] == size * count;
+        });
+        if (it == laneBases.end())
+          break;
+        unsigned bit = std::distance(laneBases.begin(), it);
+        laneBits.push_back(bit);
+        groupMask |= 1u << bit;
+        count *= 2;
+      }
+      assert(count > 1 && "warp-local axis bits belong to registers or lanes");
+      Value laneIndex = b.i32_val(0);
+      bool contiguous = true;
+      for (auto [i, bit] : llvm::enumerate(laneBits)) {
+        Value digit = b.and_(b.lshr(laneId, b.i32_val(bit)), b.i32_val(1));
+        laneIndex = b.or_(laneIndex, b.shl(digit, b.i32_val(i)));
+        contiguous &= bit == laneBits.front() + i;
+      }
+      auto shuffle = [&](SmallVector<Value> input, unsigned offset) {
+        if (contiguous && !reverse) {
+          for (Value &value : input)
+            value = targetInfo.shuffleUp(rewriter, loc, value,
+                                         offset << laneBits.front());
+        } else {
+          // Shift in logical lane order, then restore the physical lane bits.
+          // Boundary sources wrap; the combine predicate excludes them.
+          Value index = b.add(laneIndex, b.i32_val(reverse ? offset : -offset));
+          Value lane = b.and_(laneId, b.i32_val(~groupMask));
+          for (auto [i, bit] : llvm::enumerate(laneBits)) {
+            Value digit = b.and_(b.lshr(index, b.i32_val(i)), b.i32_val(1));
+            lane = b.or_(lane, b.shl(digit, b.i32_val(bit)));
+          }
+          for (Value &value : input)
+            value = targetInfo.shuffleIdx(rewriter, loc, value, lane);
+        }
+        return input;
+      };
+      auto hasPrefix = [&](unsigned offset) {
+        return reverse ? b.icmp_ult(laneIndex, b.i32_val(count - offset))
+                       : b.icmp_uge(laneIndex, b.i32_val(offset));
+      };
+      for (unsigned base = 0; base < values.size(); base += numRegs) {
+        // Scan just the group totals, retaining the local prefixes below.
+        auto acc = terminal(base);
+        for (unsigned offset = 1; offset < count; offset *= 2)
+          acc = combineWithPrefix(op, shuffle(acc, offset), acc, rewriter,
+                                  hasPrefix(offset));
+        if (size == 1) {
+          values[base] = std::move(acc);
+          continue;
+        }
+        // The preceding total is an exclusive carry for this group's local
+        // prefixes. Skip the first group without assuming an identity value.
+        auto prefix = shuffle(acc, 1);
+        Value pred = hasPrefix(1);
+        for (unsigned r = base; r < base + numRegs; ++r) {
+          if (!laneMask && r == base + (reverse ? 0 : numRegs - 1))
+            values[r] = acc;
+          else
+            values[r] =
+                combineWithPrefix(op, prefix, values[r], rewriter, pred);
+        }
+      }
+      laneMask |= groupMask;
+      size *= count;
     }
   }
 
@@ -178,7 +255,7 @@ private:
       for (const auto &operand : operands)
         totals[r].push_back(operand[r]);
 
-    // Reuse the same ordered scan, including register stages when the complete
+    // Reuse the same ordered scan, including register groups when the complete
     // sequence is longer than the available lanes.
     ScanLoweringHelper totalsHelper(totalsLayout, op.getAxis());
     permuteRegisters(totals, totalsHelper.getRegisterOrder());
