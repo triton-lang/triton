@@ -86,10 +86,8 @@ struct ConvertTritonGPUToLLVM
 
   ConvertTritonGPUToLLVM(int32_t computeCapability)
       : ConvertTritonGPUToLLVMBase({computeCapability}) {}
-  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion,
-                         bool canonicalizeLLVMIR)
-      : ConvertTritonGPUToLLVMBase(
-            {computeCapability, ptxVersion, canonicalizeLLVMIR}) {}
+  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
+      : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
   void runOnOperation() override;
 
 private:
@@ -134,9 +132,6 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   }
 
   finalizeModule(mod);
-
-  if (!canonicalizeLLVMIR)
-    return;
 
   // Fold temporary aggregate packing before the pass-boundary verifier walks
   // these large struct types. The normal verifier still checks the cleaned IR.
@@ -273,10 +268,10 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
   return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
 }
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion,
-                                 bool canonicalizeLLVMIR) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, ptxVersion,
-                                                  canonicalizeLLVMIR);
+createConvertTritonGPUToLLVMPass(int32_t computeCapability,
+                                 int32_t ptxVersion) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability,
+                                                  ptxVersion);
 }
 
 } // namespace mlir::triton

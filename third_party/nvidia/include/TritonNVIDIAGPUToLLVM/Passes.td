@@ -44,9 +44,6 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
         Option<"ptxVersion", "ptx-version",
                "int32_t", /*default*/"80",
                "PTX version">,
-        Option<"canonicalizeLLVMIR", "canonicalize-llvm-ir",
-               "bool", /*default*/"false",
-               "Canonicalize temporary LLVM aggregates before verification">,
     ];
 }
 
