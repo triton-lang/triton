@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.cumprod
+==========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: cumprod

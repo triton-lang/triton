@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.cumsum
+=========================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: cumsum

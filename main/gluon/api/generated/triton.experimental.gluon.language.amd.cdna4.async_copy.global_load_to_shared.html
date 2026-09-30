@@ -156,6 +156,11 @@ the following conditions must be met or lowering to LLVM will fail:</p>
 To get ideal performance, it is recommended to use 128 bits per element.</p></li>
 <li><p>Writes to <code class="docutils literal notranslate"><span class="pre">dest</span></code> must be coalesced.</p></li>
 <li><p>If <code class="docutils literal notranslate"><span class="pre">dest</span></code> is swizzled, it can only be swizzled within a warp boundary.</p></li>
+<li><p>If a <code class="docutils literal notranslate"><span class="pre">mask</span></code> is present it must be aligned to the load’s vector width: each
+group of (size per thread) consecutive mask values must be identical. The
+copy transfers each lane’s whole vector in a single transaction, so a mask
+whose true/false boundary cannot be proven vector-aligned forces
+per-element vectorization and fails to lower.</p></li>
 </ul>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
