@@ -55,8 +55,8 @@ public:
 
   bool isAssociative();
 
-  // Optional target-specific scratch element count for a layout conversion
-  // and element bitwidth.
+  // Callback to allow backends to specify a target-specific getter for scratch
+  // elements.
   using GetNumScratchElemsFn = std::function<unsigned(
       const triton::LinearLayout &src, const triton::LinearLayout &dst,
       unsigned bitwidth)>;

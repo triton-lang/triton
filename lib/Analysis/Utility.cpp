@@ -92,6 +92,8 @@ bool ReduceOpHelper::isReduceWithinCTA() {
 bool ReduceOpHelper::isAssociative() {
   if (srcShape[axis] <= 2)
     return true;
+  // Reductions with more than two elements are treated as non-associative
+  // if their combiner contains an addf or mulf operation.
   return !op.getCombineOp()
               .walk([](Operation *nestedOp) {
                 return isa<arith::AddFOp, arith::MulFOp>(nestedOp)
@@ -181,7 +183,11 @@ ReduceOpHelper::getScratchConfig(const LinearLayout &src,
     return getBitwidth(inputTypes[i]) > getBitwidth(inputTypes[j]);
   });
 
-  // Pack operands from widest to narrowest so every base remains aligned.
+  // All the inputs have the same layout, so, since we order them from largest
+  // bit size to smallest and the first one is aligned, by induction they are
+  // all aligned. We therefore don't need to align the byte offsets computed here.
+  // Compute the scratch size and base offsets together, as otherwise it is
+  // quite tricky to find the correct base offsets in the lowering.
   ScratchConfig config;
   config.offsets.resize(inputTypes.size());
   for (unsigned idx : indices) {

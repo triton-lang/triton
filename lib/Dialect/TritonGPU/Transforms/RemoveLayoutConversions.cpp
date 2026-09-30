@@ -1160,6 +1160,8 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       auto reduceOp = dyn_cast<ReduceOp>(op);
       ReduceOpHelper helper(reduceOp);
       if (!helper.isAssociative()) {
+        // We shouldn't rematerialize a non-associative reduce op if it has
+        // multiple use chains.
         LDBG("  skipped rematerialization due to non-associative reduce in the "
              "slice");
         return false;

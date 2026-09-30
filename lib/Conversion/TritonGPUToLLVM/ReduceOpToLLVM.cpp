@@ -46,9 +46,11 @@ public:
     // Remove broadcasting in registers as SliceLayout removes them
     regLl = regLl.removeZeroBasesAlongDim(str_attr("register"));
 
+    // First reduce all the values along the axis within each thread.
     std::tie(regLl, accs) =
         reduceWithinThreads(op, std::move(regLl), std::move(accs), rewriter);
 
+    // Then reduce across threads within a warp.
     std::tie(regLl, accs) =
         reduceWithinWarps(op, std::move(regLl), std::move(accs), rewriter);
 
@@ -57,11 +59,13 @@ public:
     assert(regLl ==
            ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis));
 
-    // If we still need to reduce across warps / blocks, create a temporary
-    // layout for reduction within warps. With at most 64 warps * 16 blocks =
-    // 32 * 32, the remaining reduction fits in at most two rounds of warp
-    // reductions. If two rounds are needed, getInterWarpReductionLayout ensures
-    // that the first layout conversion does not cross CTAs.
+    // If we still need to reduce across warps / blocks:
+    // Create a temporary layout for reduction within warps.
+    // By construction of tmpLl, we will iterate at most 2 times, as the maximum
+    // number of warps * blocks is 64 * 16 = 32 * 32.
+    // That is, they fit in 2 rounds of warp reductions.
+    // Moreover, if we do two rounds, getInterWarpReductionLayout will make sure
+    // that the first one does not cross CTAs.
     auto kAxis = *(regLl.getOutDimNames().begin() + axis);
     auto kBlock = StringAttr::get(ctx, "block");
     bool lastCvtCrossesCTAs = false;
@@ -82,6 +86,7 @@ public:
       ++i;
     }
     assert(i <= 2 && "expected at most 2 rounds of warp reductions");
+    // Remove the axis dimension, which at this point is of size 1.
     regLl = removeStandardDim(regLl, axis);
 
     // Convert to output layout if we didn't fit the warp bases within zero
@@ -254,6 +259,8 @@ private:
     }
   }
 
+  // Reduce along the op axis for elements that are in the same thread. The
+  // accumulated value is stored in accs.
   std::pair<LinearLayout, SmallVector<SmallVector<Value>>>
   reduceWithinThreads(triton::ReduceOp op, LinearLayout layout,
                       SmallVector<SmallVector<Value>> accs,
@@ -269,9 +276,11 @@ private:
       return {std::move(layout), std::move(accs)};
     }
 
+    // Create the vectorized region if needed.
     auto vectorCombineRegion = createVectorCombineRegion(op, axisPack);
     bool vectorize = vectorCombineRegion != nullptr;
 
+    // Bring the registers that move the axis to the front.
     auto perm = ReduceOpHelper::moveAxisBasesToFront(layout, axis, vectorize);
     if (!perm.isIdentity()) {
       layout = perm.apply(layout);
@@ -280,9 +289,11 @@ private:
       }
     }
 
+    // Pack the inputs into vector values.
     if (vectorize)
       packVectorized(accs, rewriter);
 
+    // If we pack along the reduction axis, we need to process half the registers.
     const auto &regBases = layout.getBases().lookup(kReg);
     bool packAlongAxis = vectorize && regBases.front()[axis] != 0;
     if (packAlongAxis)
@@ -297,6 +308,7 @@ private:
     unsigned arity =
         combinerOp ? targetInfo.getReductionTreeArity(combinerOp) : 2;
 
+    // Perform a tree reduction
     unsigned numOperands = accs.size();
     SmallVector<SmallVector<Value>> reduced(numOperands);
     unsigned regs = accs.front().size();
@@ -318,18 +330,22 @@ private:
     }
     accs = std::move(reduced);
 
-    // Packing along the axis leaves one scalar reduction after unpacking.
+    // Unpack the vector values into the accumulator values.
+    // Reduce one last time via the scalar combine op if we packed along the
+    // axis.
     if (vectorize) {
       Region *reduceAfterUnpacking =
           packAlongAxis ? &op.getCombineOp() : nullptr;
       unpackVectorized(loc, accs, rewriter, reduceAfterUnpacking);
     }
 
+    // Update the layout, killing the axis bases along registers.
     layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, axis, kReg);
     layout = layout.removeZeroBasesAlongDim(kReg);
     return {std::move(layout), std::move(accs)};
   }
 
+  // Reduce across threads within each warp.
   std::pair<LinearLayout, SmallVector<SmallVector<Value>>>
   reduceWithinWarps(triton::ReduceOp op, LinearLayout layout,
                     SmallVector<SmallVector<Value>> accs,
@@ -371,6 +387,7 @@ private:
   void warpReduce(triton::ReduceOp op, unsigned reduceLaneIdMask,
                   unsigned broadcastLaneIdMask, SmallVector<Value> &acc,
                   ConversionPatternRewriter &rewriter) const {
+    // No reduction to do.
     if (reduceLaneIdMask == 0)
       return;
     auto moduleOp = op->getParentOfType<ModuleOp>();
@@ -378,11 +395,12 @@ private:
         triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
     assert(reduceLaneIdMask < warpSize &&
            "expected reduce lane ID mask to be strictly less than warp size");
+    // Try to use the redux op if it is supported by the target.
     if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op, reduceLaneIdMask,
                               broadcastLaneIdMask)) {
       return;
     }
-    // Not that it matters a lot, but a more reasonble iteration order would be
+    // Not that it matters a lot, but a more reasonable iteration order would be
     // from bit 0 to bit llvm::Log2_32(warpSize) - 1. Changing this breaks a ton
     // of bitwise comparisons so we stick with the legacy inverse order
     for (int bit = llvm::Log2_32(warpSize) - 1; bit >= 0; --bit) {
@@ -397,6 +415,7 @@ private:
     }
   }
 
+  // Pack the accumulator values and replace the reduce op with the result.
   void packResults(triton::ReduceOp op, SmallVector<SmallVector<Value>> &accs,
                    ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
@@ -425,6 +444,10 @@ private:
     auto baseOffsetAttr = op->getAttrOfType<IntegerAttr>("allocation.offset");
     assert(baseOffsetAttr && "expected allocation.offset on reduce op");
     int64_t baseOffset = baseOffsetAttr.getValue().getZExtValue();
+    // The proper way to lower reduce would be to lower it to:
+    // reduce_threads / reduce_lanes / convert_layout
+    // and let AllocationAnalysis handle the shared memory allocation
+    // and Membar the barriers.
     auto scratch = ReduceOpHelper(op).getScratchConfig(
         srcLayout, dstLayout,
         [&](const LinearLayout &src, const LinearLayout &dst,
