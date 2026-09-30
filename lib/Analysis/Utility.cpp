@@ -185,9 +185,9 @@ ReduceOpHelper::getScratchConfig(const LinearLayout &src,
 
   // All the inputs have the same layout, so, since we order them from largest
   // bit size to smallest and the first one is aligned, by induction they are
-  // all aligned. We therefore don't need to align the byte offsets computed here.
-  // Compute the scratch size and base offsets together, as otherwise it is
-  // quite tricky to find the correct base offsets in the lowering.
+  // all aligned. We therefore don't need to align the byte offsets computed
+  // here. Compute the scratch size and base offsets together, as otherwise it
+  // is quite tricky to find the correct base offsets in the lowering.
   ScratchConfig config;
   config.offsets.resize(inputTypes.size());
   for (unsigned idx : indices) {

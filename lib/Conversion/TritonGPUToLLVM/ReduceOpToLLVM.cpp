@@ -293,7 +293,8 @@ private:
     if (vectorize)
       packVectorized(accs, rewriter);
 
-    // If we pack along the reduction axis, we need to process half the registers.
+    // If we pack along the reduction axis, we need to process half the
+    // registers.
     const auto &regBases = layout.getBases().lookup(kReg);
     bool packAlongAxis = vectorize && regBases.front()[axis] != 0;
     if (packAlongAxis)
