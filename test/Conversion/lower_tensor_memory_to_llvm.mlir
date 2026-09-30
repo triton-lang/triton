@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=103 --triton-nvidia-gpu-tmem-barrier-insertion --test-print-membar --triton-nvidia-gpu-tmem-wait-insertion --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=103 --test-print-buffer-region --triton-nvidia-gpu-tmem-barrier-insertion --test-print-membar --triton-nvidia-gpu-tmem-wait-insertion --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect -verify-diagnostics=only-expected | FileCheck %s
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=103 --test-print-buffer-region -allow-unregistered-dialect -verify-diagnostics=only-expected -o /dev/null
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, CGALayout = [[0, 0]]>
@@ -216,8 +216,7 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num
   // CHECK-NOT: tcgen05.alloc
   // CHECK-NOT: nvvm.barrier0
   // CHECK: llvm.call @tmem_leaf(%[[MIDDLE_VALUE]], %[[MIDDLE_BASE]])
-  // CHECK-SAME: arg_attrs = [{some.attr = "call_preserved"}, {}]
-  // CHECK-SAME: : (i32, !llvm.ptr<6>) -> ()
+  // CHECK-SAME: : (i32 {some.attr = "call_preserved"}, !llvm.ptr<6>) -> ()
   llvm.func internal @tmem_middle(%value: i32) attributes {passthrough = ["noinline"], sym_visibility = "private"} {
     llvm.call @tmem_leaf(%value) {arg_attrs = [{some.attr = "call_preserved"}]} : (i32) -> ()
     llvm.return
