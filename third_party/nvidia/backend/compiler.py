@@ -87,6 +87,17 @@ def get_llvm_flags():
     return ["nvptx-mad-wide-opt", "nvptx-short-ptr"]
 
 
+def _fixup_nounroll_placement(ptx):
+    # LLVM emits nounroll at the start of a machine basic block, before debug
+    # labels. ptxas ignores it if another label separates it from the first
+    # instruction. Move it past only labels, source locations, and comments.
+    # TODO: Remove when LLVM's NVPTX printer emits it after the debug labels.
+    return re.sub(
+        r'(^[ \t]*\.pragma[ \t]+"nounroll";[ \t]*\n)'
+        r'((?:[ \t]*(?://[^\n]*)?\n|[ \t]*\.loc[ \t][^\n]*\n|[ \t]*[\w.$]+:[ \t]*(?://[^\n]*)?\n)+)',
+        r'\2\1', ptx, flags=re.MULTILINE)
+
+
 @functools.lru_cache()
 def get_features(options, arch: int):
     ptx_version = get_ptx_version_from_options(options, arch)
@@ -561,6 +572,7 @@ class CUDABackend(BaseBackend):
         ptx_version = f'{ptx_version//10}.{ptx_version%10}'
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
         ret = re.sub(r'\.target sm_\d+', f'.target sm_{capability}', ret, flags=re.MULTILINE)
+        ret = _fixup_nounroll_placement(ret)
         if not knobs.compilation.dump_ir_extract_di_local_variables:
             # Remove the debug flag that prevents ptxas from optimizing the code
             # Note: if this flag is removed, the source var name and type info will be lost when ptx was compiled into cubin

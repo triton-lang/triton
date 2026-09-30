@@ -86,6 +86,7 @@ from ._core import (
     static_assert,
     static_print,
     static_range,
+    range,
     store,
     sub,
     barrier,

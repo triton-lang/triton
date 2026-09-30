@@ -86,6 +86,31 @@ __all__ = [
 
 T = TypeVar("T", bound=Callable)
 
+
+class range(tl_core.range):
+    """Iterate over a range of integers with optional loop annotations.
+
+    The positional arguments have the same meaning as Python's :class:`range`.
+
+    :param nounroll: If true, disable compiler loop unrolling for this loop.
+        This includes the NVIDIA assembler, where it emits a PTX
+        ``.pragma "nounroll"`` directive. Nested loops are annotated separately.
+        Must be a compile-time boolean.
+
+    .. code-block:: python
+
+        for i in gl.range(0, n, nounroll=True):
+            ...
+    """
+
+    def __init__(self, arg1, arg2=None, step=None, *, nounroll=False):
+        super().__init__(arg1, arg2, step)
+        nounroll = _unwrap_if_constexpr(nounroll)
+        if not isinstance(nounroll, bool):
+            raise TypeError("nounroll must be a compile-time boolean")
+        self.nounroll = nounroll
+
+
 # TODO: split these
 GLUON_BUILTIN = "__triton_builtin__"
 
