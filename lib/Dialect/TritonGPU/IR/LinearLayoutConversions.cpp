@@ -1200,10 +1200,15 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   unsigned numLogicalPieces = partitioned.getNumLogicalPieces();
   unsigned partitionDim = partitioned.getPartitionDim();
 
+  // Each logical piece has this size along the partition dimension
   int64_t pieceSize = shape[partitionDim] / numLogicalPieces;
+
+  // Shape of a single piece (full shape except partitionDim = pieceSize)
   SmallVector<int64_t> partitionShape(shape.begin(), shape.end());
   partitionShape[partitionDim] = pieceSize;
 
+  // baseLayout maps (offset, block) -> coordinates within ONE piece.
+  // For padded partition layouts, use the linear component (without padding).
   auto partitionLayout = partitioned.getPartitionLayout();
   LinearLayout baseLayout =
       isa<PaddedSharedEncodingAttr>(partitionLayout)
@@ -1213,6 +1218,11 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   auto *ctx = partitioned.getContext();
   auto outDimNames = standardOutDimNames(ctx, baseLayout.getNumOutDims());
 
+  // Partitioning is local to each CTA. The wrapped layout may carry a CGA
+  // block mapping, but that mapping must remain outside the partition/group
+  // bits. Otherwise those bits are appended after the block basis and make
+  // each CTA own interleaved fragments of the clustered tile instead of one
+  // contiguous per-CTA tile.
   LinearLayout localLayout = getLayoutWithinBlock(baseLayout);
   auto localPieceShape = getShapePerCTA(
       partitioned.getCGALayout().getCTASplitNum(), partitionShape);
