@@ -110,19 +110,11 @@ private:
 
 class ScanLoweringHelper {
 public:
-  // Masks are indexed by register, lane, and warp. A stage combines the
-  // terminal prefix of the lower half with each prefix in the upper half.
-  struct Stage {
-    std::array<unsigned, 3> lower;
-    std::array<unsigned, 3> current;
-  };
-
   explicit ScanLoweringHelper(triton::ScanOp op);
   ScanLoweringHelper(const triton::LinearLayout &layout, unsigned axis);
   bool isSupported();
   const triton::LinearLayout &getLayout() const { return layout; }
   const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
-  unsigned getLocalScanSize() const { return localScanSize; }
   // Length of a contiguous logical segment contained in one warp.
   unsigned getSegmentSize() const { return segmentSize; }
   const std::optional<triton::LinearLayout> &getSegmentLayout() const {
@@ -131,7 +123,6 @@ public:
   const std::optional<triton::LinearLayout> &getWarpTotalsLayout() const {
     return warpTotalsLayout;
   }
-  ArrayRef<Stage> getStages() const { return stages; }
   unsigned getScratchSizeInBytes(
       ArrayRef<Type> elementTypes,
       GetNumScratchElemsFn numScratchElemsGetter = nullptr) const;
@@ -140,9 +131,7 @@ private:
   unsigned axis;
   triton::LinearLayout layout;
   triton::ColumnAction registerOrder;
-  unsigned localScanSize = 1;
   unsigned segmentSize = 1;
-  SmallVector<Stage> stages;
   std::optional<triton::LinearLayout> segmentLayout;
   std::optional<triton::LinearLayout> warpTotalsLayout;
 };

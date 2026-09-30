@@ -376,36 +376,16 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
   });
   registerOrder = ColumnAction(permutation, kReg, regBases.size());
   layout = registerOrder.apply(layout);
-  localScanSize = factorMaximalIdentityPrefix(layout, kReg, axisDim,
-                                              layout.getOutDimSize(axisDim))
-                      .size;
   if (!isSupported())
     return;
 
   auto kLane = StringAttr::get(ctx, "lane");
   auto kWarp = StringAttr::get(ctx, "warp");
+  // Only scan contiguous warp-local segments before exchanging their totals.
   segmentSize = layout.getOutDimSize(axisDim);
   for (const auto &basis : layout.getBases().lookup(kWarp)) {
     if (basis[axis])
       segmentSize = std::min(segmentSize, unsigned(basis[axis]));
-  }
-
-  // Only scan the contiguous warp-local segments here. All remaining axis
-  // bits are handled together by one exchange of segment totals.
-  SmallVector<StringAttr> dims = {kReg, kLane, kWarp};
-  std::array<unsigned, 3> lower = {};
-  for (unsigned bit = 0; (1u << bit) < segmentSize; ++bit) {
-    std::array<unsigned, 3> current = {};
-    for (auto [d, dim] : llvm::enumerate(dims)) {
-      for (auto [i, basis] : llvm::enumerate(layout.getBases().lookup(dim))) {
-        if (basis[axis] == (1u << bit))
-          current[d] = 1u << i;
-      }
-    }
-    if ((1u << bit) >= localScanSize)
-      stages.push_back({lower, current});
-    for (unsigned d = 0; d < dims.size(); ++d)
-      lower[d] |= current[d];
   }
 
   if (segmentSize == layout.getOutDimSize(axisDim))
