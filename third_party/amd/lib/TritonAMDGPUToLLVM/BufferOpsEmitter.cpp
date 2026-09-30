@@ -34,8 +34,7 @@ namespace mlir::LLVM::AMD {
 BufferEmitter::BufferEmitter(RewriterBase &rw, Location loc, TargetInfo ti)
     : rewriter(rw), loc(loc), targetInfo(ti) {}
 
-Value BufferEmitter::createResourceDescriptor(Value basePtr,
-                                              Value blockStride) {
+Value BufferEmitter::createResourceDescriptor(Value basePtr) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // 1. Create the resource descriptor
   // bits 0-11: dst sel, ignored by these intrinsics
@@ -77,28 +76,6 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   }
 
   Value stride = b.int_val(16, 0);
-  if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
-                         targetInfo.getISAFamily())) {
-#if 0
-    // Turn off cache-swizzling for the time being while we are figuring out
-    // how to safely use it.
-    if (blockStride) {
-      Value enableSwizzle = b.int_val(16, 16384);
-      Value mask14b = b.int_val(16, 16383);
-      // Cache swizzle supports only upto 8k stride. Also simply swizzling the
-      // largest available stride (8k) doesn't help those unsupported large
-      // stride. Especially better to avoid using the stride which is 2^N when
-      // N>13, e.g. by add padding to the buffer.
-      Value stride16b =
-          LLVM::TruncOp::create(rewriter, loc, i16_ty, blockStride);
-      Value strideSat = LLVM::AndOp::create(rewriter, loc, stride16b, mask14b);
-      // stride[13:0] = swizzling stride
-      // stride[14] = swizzle enabling bit
-      stride = LLVM::OrOp::create(rewriter, loc, enableSwizzle, strideSat);
-    }
-#endif
-  }
-
   Value flagsConst = b.int_val(32, flags);
   Type rsrcType = LLVM::LLVMPointerType::get(rewriter.getContext(), 8);
   Value numRecordsByte = b.int_val(64, std::numeric_limits<int>::max() - 1);

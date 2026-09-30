@@ -1,6 +1,5 @@
 #include "TargetInfo.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -858,12 +857,6 @@ bool TargetInfo::supportsHwScaledUpcast() const {
 
 bool TargetInfo::supportsHwScaledDowncast() const {
   return targetFeatures.supportsHwScaledDowncast();
-}
-
-void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                                       Operation *llLoadOp) const {
-  if (requiresAliasInfoForAsyncOps())
-    AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
 }
 
 bool TargetInfo::supportDppBroadcast() const {

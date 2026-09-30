@@ -1376,7 +1376,7 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
       return emitOpError("TDM store padding is only supported when padding "
                          "interval equals the innermost block dimension (got "
                          "padInterval=")
-             << intervals[0] << ", innermost dimension=" << blockShape.back()
+             << intervals[0] << ", innermost dimension=" << shapePerCTA.back()
              << ")";
   }
 
@@ -1423,11 +1423,12 @@ LogicalResult AsyncTDMScatterOp::verify() {
     if (intervals.size() != 1)
       return emitOpError("TDM scatter only supports single interval paddings.");
 
-    if (intervals[0] != blockShape.back())
+    auto shapePerCTA = triton::gpu::getShapePerCTA(paddedEnc, blockShape);
+    if (intervals[0] != shapePerCTA.back())
       return emitOpError("TDM scatter padding is only supported when padding "
                          "interval equals the innermost block dimension (got "
                          "padInterval=")
-             << intervals[0] << ", innermost dimension=" << blockShape.back()
+             << intervals[0] << ", innermost dimension=" << shapePerCTA.back()
              << ")";
   }
 
@@ -1467,6 +1468,7 @@ LogicalResult AsyncTDMGatherOp::verify() {
     return emitOpError("src_row_indices size must be a power of 2, got ")
            << numIndices;
 
+  auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
   auto paddedEnc = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(enc);
   if (paddedEnc) {
     if (!(paddedEnc.getIntervals().size() == 1 &&
@@ -1474,15 +1476,13 @@ LogicalResult AsyncTDMGatherOp::verify() {
       return emitOpError(
           "TDM gather does not support multiple interval-padding pairs");
 
-    if (blockShape.back() % paddedEnc.getIntervals()[0] != 0)
+    if (shapePerCTA.back() % paddedEnc.getIntervals()[0] != 0)
       return emitOpError(
                  "TDM gather padding interval must divide the innermost "
                  "block dimension (got padInterval=")
              << paddedEnc.getIntervals()[0]
-             << ", innermost dimension=" << blockShape.back() << ")";
+             << ", innermost dimension=" << shapePerCTA.back() << ")";
   }
-
-  auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
   auto sharedOrder = triton::gpu::getOrder(
       cast<triton::gpu::SharedEncodingTrait>(smemTy.getEncoding()),
       shapePerCTA);
