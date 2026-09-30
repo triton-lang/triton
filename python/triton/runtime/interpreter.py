@@ -197,6 +197,7 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     bias_input = input_dtype.exponent_bias
     bias_output = output_dtype.exponent_bias
     exponent = ((input_bin >> input_dtype.fp_mantissa_width) & ((1 << input_exponent_width) - 1)).astype(np.int32)
+    downcast = input_dtype.fp_mantissa_width > output_dtype.fp_mantissa_width
     subnormal_index = exponent == 0
     if np.any(subnormal_index):
         # Credit to Phil: phil@openai.com
@@ -213,26 +214,38 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         exponent[subnormal_index] = 1 - bit_pos[subnormal_index]
         # 0 significand and subnormal should be treated as 0
         exponent[zero_significand_index & subnormal_index] = bias_input - bias_output
-        significand[subnormal_index] = (significand[subnormal_index] << bit_pos[subnormal_index]) & (
-            (1 << input_dtype.fp_mantissa_width) - 1)
+        significand[subnormal_index] = (
+            significand[subnormal_index] << bit_pos[subnormal_index].astype(input_uint_dtype)) & (
+                (1 << input_dtype.fp_mantissa_width) - 1)
     # Prevent overflow and underflow
     exponent_output = np.maximum(0, np.minimum((exponent - bias_input + bias_output), (1 << output_exponent_width) - 1))
     exponent_output = exponent_output.astype(output_unint_dtype)
     sign_output = sign.astype(output_unint_dtype)
-    if input_dtype.primitive_bitwidth > output_dtype.primitive_bitwidth:  # Downcast
-        significand_output = (significand >> (input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width)) & (
-            (1 << output_dtype.fp_mantissa_width) - 1)
-        if rounding_mode == _ir.ROUNDING_MODE.RTNE:  # Round to nearst even
-            # find the cut-off bit
-            cut_off = significand & (1 << (input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width - 1))
-            significand_output = significand_output + (cut_off > 0)
-        significand_output = significand_output.astype(output_unint_dtype)
+    if downcast:
+        # Align the full significand, including its leading bit, before rounding subnormals.
+        full_significand = significand.astype(np.uint64) | (1 << input_dtype.fp_mantissa_width)
+        full_significand[(input_bin & ((1 << (input_dtype.primitive_bitwidth - 1)) - 1)) == 0] = 0
+        output_exponent = exponent - bias_input + bias_output
+        shift = input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width + np.maximum(1 - output_exponent, 0)
+        # Larger shifts necessarily round to zero; cap them to keep uint64 shifts defined.
+        shift = np.minimum(shift, input_dtype.fp_mantissa_width + 2).astype(np.uint64)
+        retained = full_significand >> shift
+        discarded = full_significand & ((np.uint64(1) << shift) - np.uint64(1))
+        if rounding_mode == _ir.ROUNDING_MODE.RTNE:
+            halfway = np.uint64(1) << (shift - np.uint64(1))
+            retained += (discarded > halfway) | ((discarded == halfway) & ((retained & 1) != 0))
+        carry = retained >= (1 << (output_dtype.fp_mantissa_width + 1))
+        retained >>= carry.astype(np.uint64)
+        output_exponent = np.maximum(output_exponent, 1) + carry.astype(np.int32)
+        exponent_output = np.minimum(output_exponent, (1 << output_exponent_width) - 1).astype(output_unint_dtype)
+        exponent_output[retained < (1 << output_dtype.fp_mantissa_width)] = 0
+        significand_output = (retained & ((1 << output_dtype.fp_mantissa_width) - 1)).astype(output_unint_dtype)
     else:  # Upcast
         significand_output = (significand.astype(output_unint_dtype) <<
                               (output_dtype.fp_mantissa_width - input_dtype.fp_mantissa_width)) & (
                                   (1 << output_dtype.fp_mantissa_width) - 1)
     subnormal_index = exponent_output == 0
-    if np.any(subnormal_index):  # underflow
+    if not downcast and np.any(subnormal_index):  # underflow
         # normal repr: ((-1.0)**sign) * (2.0**(exp - exp_bias_input)) * (1 + 2^(m0) + 2^(m1) + ... + 2^(mn))
         # where m0, m1, ..., mn are the 1-bit of the mantissa
         # shift = (1 - exp_bias_output) - (exp - exp_bias_input)
@@ -253,14 +266,15 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         sign_output[zero_output] = 0
     output = (sign_output << (output_dtype.primitive_bitwidth - 1)) | (
         exponent_output << output_dtype.fp_mantissa_width) | significand_output
+    if downcast and rounding_mode == _ir.ROUNDING_MODE.RTNE and not output_dtype.is_fp8():
+        # A NaN payload may vanish when its low bits are discarded.
+        input_nan = ((input_bin >> input_dtype.fp_mantissa_width) &
+                     ((1 << input_exponent_width) - 1)) == ((1 << input_exponent_width) - 1)
+        input_nan &= (input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) != 0
+        nan_bits = (((1 << output_exponent_width) - 1) << output_dtype.fp_mantissa_width) | (
+            1 << (output_dtype.fp_mantissa_width - 1))
+        output = np.where(input_nan, (sign_output << (output_dtype.primitive_bitwidth - 1)) | nan_bits, output)
     return output.reshape(input.shape)
-
-
-def _round_fp32_to_bf16(data):
-    # Round to nearest even; NaN is pinned so the carry cannot turn it into inf.
-    bits = data.view(np.uint32)
-    rounded = ((bits + 0x7FFF + ((bits >> 16) & 1)) >> 16).astype(np.uint16)
-    return np.where(np.isnan(data), np.uint16(0x7FC0), rounded)
 
 
 def _erf(x):
@@ -561,14 +575,14 @@ class InterpreterBuilder:
         return _interpreter.store(ptrs.data, value.data, mask.data)
 
     # casting ops
-    def cast_impl(self, src, dst_type):
+    def cast_impl(self, src, dst_type, rounding_mode=None):
         src_element_type = src.dtype.scalar
         dst_element_type = dst_type.scalar
-        if src_element_type == tl.bfloat16 and dst_element_type == tl.float32:
-            data = _convert_float(src.data, src_element_type, dst_element_type, None).view(_get_np_dtype(dst_type))
+        if (src_element_type == tl.bfloat16 and dst_element_type == tl.float32) or \
+           (src_element_type == tl.float32 and dst_element_type == tl.bfloat16):
+            data = _convert_float(src.data, src_element_type, dst_element_type,
+                                  rounding_mode).view(_get_np_dtype(dst_type))
             return TensorHandle(data, dst_type.scalar)
-        elif src_element_type == tl.float32 and dst_element_type == tl.bfloat16:
-            return TensorHandle(_round_fp32_to_bf16(src.data), dst_type.scalar)
         else:
             return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
 
@@ -577,7 +591,7 @@ class InterpreterBuilder:
     create_fp_to_si = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_fp_to_ui = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_fp_ext = lambda self, src, dst_type: self.cast_impl(src, dst_type)
-    create_fp_trunc = lambda self, src, dst_type: self.cast_impl(src, dst_type)
+    create_fp_trunc = lambda self, src, dst_type: self.cast_impl(src, dst_type, _ir.ROUNDING_MODE.RTNE)
     create_int_cast = lambda self, src, dst_type, is_signed: self.cast_impl(src, dst_type)
 
     def create_fp_to_fp(self, src, dst_type, rounding_mode):
@@ -585,7 +599,7 @@ class InterpreterBuilder:
         dst_element_type = dst_type.scalar
         if (src_element_type == tl.bfloat16 and dst_element_type == tl.float16) or \
            (src_element_type == tl.float16 and dst_element_type == tl.bfloat16):
-            return self.cast_impl(self.cast_impl(src, tl.float32), dst_type)
+            return self.cast_impl(self.cast_impl(src, tl.float32), dst_type, rounding_mode)
         data = _convert_float(src.data, src_element_type, dst_element_type, rounding_mode).view(_get_np_dtype(dst_type))
         return TensorHandle(data, dst_type.scalar)
 
