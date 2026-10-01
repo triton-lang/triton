@@ -510,6 +510,11 @@ def matmul(a, b, bias,
         if not is_input_batched:
             ret = ret.squeeze(0)
         return ret
+    # Scatter writeback only touches output rows that some input row maps to (rows whose
+    # scatter index is -1 are dropped). Untargeted rows must read back as zero, matching
+    # `matmul_torch`, so they cannot be left as uninitialized memory.
+    if scatter_indx is not None:
+        memory["output"].zero_()
     # TMA descriptors require a global memory allocation
     if opt_flags.is_persistent:
         triton.set_allocator(get_per_device_per_stream_alloc_fn(a.device))
