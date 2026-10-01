@@ -58,7 +58,7 @@ def round_f32_to_tf32(x: tl.tensor):
     return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
 
 _matmul_repr = make_matmul_repr("_p_matmul", [0, 1, 2])
-@triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
+@triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION", "X_EXPECTED_SLICE_SIZE", "W_EXPECTED_SLICE_SIZE"],
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
 def _p_matmul(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
@@ -81,9 +81,9 @@ def _p_matmul(
              GatherIndx,
              WriteBackIndx, writeback_size,
              RAGGED_DIMENSION: tl.constexpr,
-             XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              XOutputScaleBlockOffs,
-             WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE, W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              # true grid size
              batch_size, grid_m, grid_n,
              # Out scale

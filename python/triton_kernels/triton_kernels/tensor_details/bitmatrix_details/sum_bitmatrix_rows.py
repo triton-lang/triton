@@ -45,7 +45,7 @@ def vpopc(x):
     return y
 
 
-@triton.jit
+@triton.jit(do_not_specialize_on_alignment=["shape_bm", "stride_pn"])
 def _sum_bitmatrix_rows(B, shape_bm, stride_bm, stride_bn,  # input bitmatrix
                         Out, OutPartials, stride_pm: tl.constexpr, stride_pn, shape_pn,  # outputs
                         BLOCK_MM: tl.constexpr, BLOCK_M: tl.constexpr):

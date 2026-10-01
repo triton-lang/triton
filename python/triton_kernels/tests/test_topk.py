@@ -151,3 +151,25 @@ def bench_topk(n_rows, n_cols, k, apply_softmax, all_gather=False):
 
 if __name__ == "__main__":
     bench_topk(1024, 1024, 8, False, all_gather=True)
+
+
+def test_topk_routing_compiles_once_across_n_rows(monkeypatch):
+    # In serving, `n_rows` is the per-batch token count. Routing (topk + bitmatrix metadata)
+    # must not recompile as it changes; each recompile stalls the request path. `n_rows == 1`
+    # keeps its own specialization (a single extra variant), so it is part of the warmup.
+    device = "cuda"
+    n_cols, k = 128, 4
+
+    def route(n_rows):
+        x = torch.randn((n_rows, n_cols), dtype=torch.float32, device=device)
+        return topk(x, k, apply_softmax=True).mask_metadata
+
+    for n_rows in [1, 64]:  # warmup
+        route(n_rows)
+    compiled = []
+    monkeypatch.setattr(triton.knobs.runtime, "jit_cache_hook",
+                        lambda *args, **kwargs: compiled.append(kwargs["fn"].name))
+    for n_rows in [2, 7, 15, 16, 17, 33, 100, 127, 128, 129, 300, 511, 513, 1000, 2047]:
+        route(n_rows)
+    torch.cuda.synchronize()
+    assert compiled == []
