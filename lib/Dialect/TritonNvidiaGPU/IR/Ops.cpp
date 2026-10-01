@@ -1114,6 +1114,94 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
   return success();
 }
 
+static LogicalResult verifyMMAShape(TCGen5MMAOp op) {
+  // Each instruction needs a full K tile in the logical operand.
+  Type atype = op.getA().getType().getElementType();
+  auto kind = getMMAv5DTypeKindAndAcc(atype)->first;
+  int64_t minK = kind == MMADTypeKind::tf32  ? 8
+                 : kind == MMADTypeKind::f16 ? 16
+                                             : 32;
+  int64_t k = op.getA().getType().getDimSize(1);
+  if (k < minK)
+    return op.emitOpError("K dimension must be at least ")
+           << minK << " for " << atype << " operands, but got " << k;
+  return success();
+}
+
+static LogicalResult verifyMMALayout(TCGen5MMAOp op) {
+  auto aEnc = op.getA().getType().getEncoding();
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
+           TensorMemoryEncodingAttr>(aEnc))
+    return op.emitOpError(
+        "LHS operand must have a NVMMAShared or TensorMemory encoding");
+  auto bEnc = op.getB().getType().getEncoding();
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(bEnc))
+    return op.emitOpError("RHS operand must have a NVMMAShared encoding");
+  auto retType = op.getD().getType();
+  auto retEnc = cast<TensorMemoryEncodingAttr>(retType.getEncoding());
+
+  // TMEM inputs occupy consecutive columns.
+  if (auto tmem = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
+    if (tmem.getColStride() != 1)
+      return op.emitOpError("The col stride of the LHS operand must be 1");
+    if (tmem.getFp4Padded())
+      return op.emitOpError(
+          "fp4_padded tensor memory LHS is only supported by scaled MMA");
+  }
+  // Each accumulator value occupies a 32-bit TMEM column.
+  if (retEnc.getColStride() != 32 / retType.getElementTypeBitWidth())
+    return op.emitOpError("The col stride of the return operand must be 32 / ")
+           << retType.getElementTypeBitWidth() << " but got "
+           << retEnc.getColStride();
+  // Each CTA must own the complete reduction dimension.
+  auto aCGA = getCGALayout(aEnc).getLinearLayout();
+  auto bCGA = getCGALayout(bEnc).getLinearLayout();
+  auto outDims = standardOutDimNames(op.getContext(), 2);
+  if (aCGA.getOutDimSize(outDims[1]) != 1) {
+    return op.emitOpError("LHS CTASplit along K should be 1, but got ")
+           << aCGA.getOutDimSize(outDims[1]);
+  }
+  if (bCGA.getOutDimSize(outDims[0]) != 1) {
+    return op.emitOpError("RHS CTASplit along K should be 1, but got ")
+           << bCGA.getOutDimSize(outDims[0]);
+  }
+
+  auto kBlock = StringAttr::get(op.getContext(), "block");
+  if (op.getTwoCtas()) {
+    if (bCGA.getBasis(kBlock, 0) != ArrayRef{0, 1} &&
+        bCGA.getBasis(kBlock, 0) != ArrayRef{0, 0}) {
+      return op.emitOpError("twoCTA mode expects the first basis of the "
+                            "cga_layout of the RHS to be [0, 1] or [0, 0]");
+    }
+  }
+  if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
+    if (tmemEnc.getTwoCTAs() != op.getTwoCtas()) {
+      return op.emitOpError("The LHS operand's encoding must have twoCTA=")
+             << op.getTwoCtas() << " to be used in a "
+             << (op.getTwoCtas() ? "twoCTA" : "non-twoCTA") << " kernel";
+    }
+  }
+
+  // A and B must distribute the output coordinates like D.
+  auto aLayout = toLinearLayout(op.getA().getType());
+  auto bLayout = toLinearLayout(op.getB().getType());
+  auto dLayout = toLinearLayout(op.getD().getType());
+  auto log2nCTAs = dLayout.getInDimSizeLog2(kBlock);
+  for (int i = 0; i < log2nCTAs; i++) {
+    std::vector<int32_t> basis = {aLayout.getBasis(kBlock, i, outDims[0]),
+                                  bLayout.getBasis(kBlock, i, outDims[1])};
+    if (op.getTwoCtas() && i == 0) {
+      basis[1] = 0;
+    }
+    if (dLayout.getBasis(kBlock, i) != ArrayRef<int32_t>(basis)) {
+      return op.emitOpError("expected block basis ")
+             << basis << " at result index " << i << ", but got "
+             << dLayout.getBasis(kBlock, i);
+    }
+  }
+  return success();
+}
+
 LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
@@ -1127,83 +1215,9 @@ LogicalResult TCGen5MMAOp::verify() {
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
 
-  auto kind = getMMAv5DTypeKindAndAcc(atype)->first;
-  int64_t minK = kind == MMADTypeKind::tf32  ? 8
-                 : kind == MMADTypeKind::f16 ? 16
-                                             : 32;
-  int64_t k = getA().getType().getDimSize(1);
-  if (k < minK)
-    return emitOpError("K dimension must be at least ")
-           << minK << " for " << atype << " operands, but got " << k;
-
-  auto aEnc = getA().getType().getEncoding();
-  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
-           TensorMemoryEncodingAttr>(aEnc))
-    return emitOpError(
-        "LHS operand must have a NVMMAShared or TensorMemory encoding");
-  auto bEnc = getB().getType().getEncoding();
-  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(bEnc))
-    return emitOpError("RHS operand must have a NVMMAShared encoding");
-  auto retType = getD().getType();
-  auto retEnc = cast<TensorMemoryEncodingAttr>(retType.getEncoding());
-
-  // Check colStride of TMEM operands
-  if (auto tmem = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
-    if (tmem.getColStride() != 1)
-      return emitOpError("The col stride of the LHS operand must be 1");
-    if (tmem.getFp4Padded())
-      return emitOpError(
-          "fp4_padded tensor memory LHS is only supported by scaled MMA");
-  }
-  if (retEnc.getColStride() != 32 / retType.getElementTypeBitWidth())
-    return emitOpError("The col stride of the return operand must be 32 / ")
-           << retType.getElementTypeBitWidth() << " but got "
-           << retEnc.getColStride();
-  auto aCGA = getCGALayout(aEnc).getLinearLayout();
-  auto bCGA = getCGALayout(bEnc).getLinearLayout();
-  auto outDims = standardOutDimNames(getContext(), 2);
-  if (aCGA.getOutDimSize(outDims[1]) != 1) {
-    return emitOpError("LHS CTASplit along K should be 1, but got ")
-           << aCGA.getOutDimSize(outDims[1]);
-  }
-  if (bCGA.getOutDimSize(outDims[0]) != 1) {
-    return emitOpError("RHS CTASplit along K should be 1, but got ")
-           << bCGA.getOutDimSize(outDims[0]);
-  }
-
-  auto kBlock = StringAttr::get(getContext(), "block");
-  if (getTwoCtas()) {
-    if (bCGA.getBasis(kBlock, 0) != ArrayRef{0, 1} &&
-        bCGA.getBasis(kBlock, 0) != ArrayRef{0, 0}) {
-      return emitOpError("twoCTA mode expects the first basis of the "
-                         "cga_layout of the RHS to be [0, 1] or [0, 0]");
-    }
-  }
-  if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
-    if (tmemEnc.getTwoCTAs() != getTwoCtas()) {
-      return emitOpError("The LHS operand's encoding must have twoCTA=")
-             << getTwoCtas() << " to be used in a "
-             << (getTwoCtas() ? "twoCTA" : "non-twoCTA") << " kernel";
-    }
-  }
-
-  auto aLayout = toLinearLayout(getA().getType());
-  auto bLayout = toLinearLayout(getB().getType());
-  auto dLayout = toLinearLayout(getD().getType());
-  auto log2nCTAs = dLayout.getInDimSizeLog2(kBlock);
-  for (int i = 0; i < log2nCTAs; i++) {
-    std::vector<int32_t> basis = {aLayout.getBasis(kBlock, i, outDims[0]),
-                                  bLayout.getBasis(kBlock, i, outDims[1])};
-    if (getTwoCtas() && i == 0) {
-      basis[1] = 0;
-    }
-    if (dLayout.getBasis(kBlock, i) != ArrayRef<int32_t>(basis)) {
-      return emitOpError("expected block basis ")
-             << basis << " at result index " << i << ", but got "
-             << dLayout.getBasis(kBlock, i);
-    }
-  }
-  return success();
+  if (failed(verifyMMAShape(*this)))
+    return failure();
+  return verifyMMALayout(*this);
 }
 
 void TCGen5MMAOp::getEffects(
@@ -1426,6 +1440,71 @@ static LogicalResult verifyScaleEncoding(TCGen5MMAScaledOp op,
   return success();
 }
 
+static LogicalResult verifyScaledMMAShape(TCGen5MMAScaledOp op) {
+  auto aScaleType = cast<MemDescType>(op.getAScale().getType());
+  auto bScaleType = cast<MemDescType>(op.getBScale().getType());
+  // FP4 instruction kinds determine both K width and transpose support.
+  int64_t k = op.getBlockK();
+  int64_t minK = 32;
+  if (op.getAType() == ScaleDotElemType::E2M1 &&
+      op.getBType() == ScaleDotElemType::E2M1) {
+    // Match getMXFPKind in MMAv5.cpp: only mxf8f6f4 supports transpose.
+    bool transposed =
+        isScaledMMATransposed(op.getA().getType(), /*isLhs=*/true) ||
+        isScaledMMATransposed(op.getB().getType(), /*isLhs=*/false);
+    bool isUE4M3 = isa<Float8E4M3FNType>(aScaleType.getElementType()) &&
+                   isa<Float8E4M3FNType>(bScaleType.getElementType());
+    bool isUE5M3 = aScaleType.getElementType().isInteger(8) &&
+                   bScaleType.getElementType().isInteger(8) &&
+                   aScaleType.getShape().back() * 16 == k &&
+                   bScaleType.getShape().back() * 16 == k;
+    if (transposed && (isUE4M3 || isUE5M3))
+      return op.emitOpError("mxf4nvf4 does not support transposed operands");
+    minK = transposed ? 32 : 64;
+  }
+  if (k < minK)
+    return op.emitOpError("K dimension must be at least ")
+           << minK << " for this scaled MMA, but got " << k;
+  return success();
+}
+
+static LogicalResult verifyScaledMMAScaleLayouts(TCGen5MMAScaledOp op) {
+  auto aScaleType = cast<MemDescType>(op.getAScale().getType());
+  auto bScaleType = cast<MemDescType>(op.getBScale().getType());
+  if (failed(verifyScaleEncoding(op, aScaleType, /*isA=*/true)) ||
+      failed(verifyScaleEncoding(op, bScaleType, /*isA=*/false)))
+    return failure();
+
+  unsigned mmaSizeN = getMMAv5InstructionN(op.getD().getType());
+  // A padded accumulator has no CGA split along N. Its B scales must
+  // reserve every row read by the instruction.
+  if (!isa<TensorMemorySpaceAttr>(bScaleType.getMemorySpace()) ||
+      mmaSizeN <= op.getD().getType().getDimSize(1) ||
+      mmaSizeN <= bScaleType.getDimSize(0))
+    return success();
+  if (bScaleType.getRank() != 2)
+    return op.emitOpError("expected rank-2 B scales for MMA with padded N");
+  if (bScaleType.getDimSize(0) != bScaleType.getAllocShape()[0])
+    return op.emitOpError(
+        "cannot expand the row dimension of a B scale subview");
+  auto dims = standardOutDimNames(op.getContext(), 2);
+  auto scaleEncoding = bScaleType.getEncoding();
+  auto allocShape =
+      dropPipeliningDim(bScaleType.getAllocShape(), scaleEncoding);
+  auto expectedType =
+      MemDescType::get({mmaSizeN, allocShape[1]}, bScaleType.getElementType(),
+                       scaleEncoding, bScaleType.getMemorySpace());
+  if (getTmemAllocSizes(bScaleType).numRows <
+          getTmemAllocSizes(expectedType).numRows ||
+      ensureLayoutNotLargerThan(toLinearLayout(expectedType), dims,
+                                allocShape) !=
+          toLinearLayout(allocShape, scaleEncoding))
+    return op.emitOpError(
+        "B scale layout does not reserve the rows required by "
+        "the MMA instruction");
+  return success();
+}
+
 LogicalResult TCGen5MMAScaledOp::verify() {
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
@@ -1450,59 +1529,9 @@ LogicalResult TCGen5MMAScaledOp::verify() {
                                       getAType(), getBType())))
       return failure();
   }
-  auto aScaleType = cast<MemDescType>(getAScale().getType());
-  auto bScaleType = cast<MemDescType>(getBScale().getType());
-  int64_t k = getBlockK();
-  int64_t minK = 32;
-  if (getAType() == ScaleDotElemType::E2M1 &&
-      getBType() == ScaleDotElemType::E2M1) {
-    // Match getMXFPKind in MMAv5.cpp: only mxf8f6f4 supports transpose.
-    bool transposed = isScaledMMATransposed(getA().getType(), /*isLhs=*/true) ||
-                      isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
-    bool isUE4M3 = isa<Float8E4M3FNType>(aScaleType.getElementType()) &&
-                   isa<Float8E4M3FNType>(bScaleType.getElementType());
-    bool isUE5M3 = aScaleType.getElementType().isInteger(8) &&
-                   bScaleType.getElementType().isInteger(8) &&
-                   aScaleType.getShape().back() * 16 == k &&
-                   bScaleType.getShape().back() * 16 == k;
-    if (transposed && (isUE4M3 || isUE5M3))
-      return emitOpError("mxf4nvf4 does not support transposed operands");
-    minK = transposed ? 32 : 64;
-  }
-  if (k < minK)
-    return emitOpError("K dimension must be at least ")
-           << minK << " for this scaled MMA, but got " << k;
-
-  if (failed(verifyScaleEncoding(*this, aScaleType, /*isA=*/true)) ||
-      failed(verifyScaleEncoding(*this, bScaleType, /*isA=*/false)))
+  if (failed(verifyScaledMMAShape(*this)))
     return failure();
-
-  unsigned mmaSizeN = getMMAv5InstructionN(getD().getType());
-  // A padded accumulator has no CGA split along N.
-  if (isa<TensorMemorySpaceAttr>(bScaleType.getMemorySpace()) &&
-      mmaSizeN > getD().getType().getDimSize(1) &&
-      mmaSizeN > bScaleType.getDimSize(0)) {
-    if (bScaleType.getRank() != 2)
-      return emitOpError("expected rank-2 B scales for MMA with padded N");
-    if (bScaleType.getDimSize(0) != bScaleType.getAllocShape()[0])
-      return emitOpError(
-          "cannot expand the row dimension of a B scale subview");
-    auto dims = standardOutDimNames(getContext(), 2);
-    auto scaleEncoding = bScaleType.getEncoding();
-    auto allocShape =
-        dropPipeliningDim(bScaleType.getAllocShape(), scaleEncoding);
-    auto expectedType =
-        MemDescType::get({mmaSizeN, allocShape[1]}, bScaleType.getElementType(),
-                         scaleEncoding, bScaleType.getMemorySpace());
-    if (getTmemAllocSizes(bScaleType).numRows <
-            getTmemAllocSizes(expectedType).numRows ||
-        ensureLayoutNotLargerThan(toLinearLayout(expectedType), dims,
-                                  allocShape) !=
-            toLinearLayout(allocShape, scaleEncoding))
-      return emitOpError("B scale layout does not reserve the rows required by "
-                         "the MMA instruction");
-  }
-  return success();
+  return verifyScaledMMAScaleLayouts(*this);
 }
 
 void TCGen5MMAScaledOp::getEffects(
