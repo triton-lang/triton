@@ -1215,9 +1215,6 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
           ? cast<PaddedSharedEncodingAttr>(partitionLayout).getLinearComponent()
           : toLinearLayout(partitionShape, partitionLayout);
 
-  auto *ctx = partitioned.getContext();
-  auto outDimNames = standardOutDimNames(ctx, baseLayout.getNumOutDims());
-
   // Partitioning is local to each CTA. Factor the CGA mapping out before
   // adding partition/group bits so each CTA owns contiguous local pieces.
   auto cga = maybeLinearToCGAEncodingAttr(baseLayout);
@@ -1225,6 +1222,9 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   auto maybeLocalLayout = divideRight(baseLayout, cga->getLinearLayout());
   assert(maybeLocalLayout && "failed to factor CGA from partition layout");
   LinearLayout localLayout = *maybeLocalLayout;
+
+  auto *ctx = partitioned.getContext();
+  auto outDimNames = standardOutDimNames(ctx, baseLayout.getNumOutDims());
 
   // partLayout maps "partition" -> piece selection along partitionDim.
   auto kPartition = StringAttr::get(ctx, "partition");
