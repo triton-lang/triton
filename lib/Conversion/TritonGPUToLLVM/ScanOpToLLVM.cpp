@@ -88,17 +88,17 @@ private:
     auto *ctx = op.getContext();
     auto kReg = StringAttr::get(ctx, "register");
     auto kLane = StringAttr::get(ctx, "lane");
-    const auto &layout = helper.getLayout();
+    const auto &permutedLayout = helper.getPermutedLayout();
     unsigned axis = op.getAxis();
     bool reverse = op.getReverse();
 
     // Put the low segment bits in registers and the remaining bits in lanes.
     // Preserve parallel ownership and all bits selecting other segments, so
     // these conversions only move values within a warp.
-    auto bases = layout.getBases();
+    auto bases = permutedLayout.getBases();
     unsigned next = 1;
     for (auto &basis : bases[kReg])
-      if (basis[axis] && basis[axis] < helper.getSegmentSize()) {
+      if (basis[axis] && basis[axis] < helper.getWarpLocalSegmentSize()) {
         basis[axis] = next;
         next *= 2;
       }
@@ -106,15 +106,15 @@ private:
     SmallVector<unsigned> laneBits;
     unsigned laneMask = 0;
     for (auto [bit, basis] : llvm::enumerate(bases[kLane]))
-      if (basis[axis] && basis[axis] < helper.getSegmentSize()) {
+      if (basis[axis] && basis[axis] < helper.getWarpLocalSegmentSize()) {
         basis[axis] = next;
         next *= 2;
         laneBits.push_back(bit);
         laneMask |= 1u << bit;
       }
-    assert(next == helper.getSegmentSize());
-    auto scanLayout = LinearLayout(std::move(bases),
-                                   llvm::to_vector(layout.getOutDimNames()));
+    assert(next == helper.getWarpLocalSegmentSize());
+    auto scanLayout = LinearLayout(
+        std::move(bases), llvm::to_vector(permutedLayout.getOutDimNames()));
     auto convert = [&](const LinearLayout &src, const LinearLayout &dst) {
       if (src == dst)
         return;
@@ -129,7 +129,7 @@ private:
         for (unsigned i = 0; i < operands.size(); ++i)
           values[r][i] = operands[i][r];
     };
-    convert(layout, scanLayout);
+    convert(permutedLayout, scanLayout);
 
     // Scan consecutive elements within each thread, retaining every prefix.
     for (unsigned base = 0; base < values.size(); base += numRegs)
@@ -139,9 +139,9 @@ private:
         values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
                                    values[prev], values[r]);
       }
-    unsigned numLanes = helper.getSegmentSize() / numRegs;
+    unsigned numLanes = helper.getWarpLocalSegmentSize() / numRegs;
     if (numLanes == 1) {
-      convert(scanLayout, layout);
+      convert(scanLayout, permutedLayout);
       return;
     }
 
@@ -193,7 +193,7 @@ private:
         if (r != last)
           values[r] = combineWithPrefix(op, prefix, values[r], rewriter, pred);
     }
-    convert(scanLayout, layout);
+    convert(scanLayout, permutedLayout);
   }
 
   void scanSegmentTotals(triton::ScanOp op, const ScanLoweringHelper &helper,
@@ -206,18 +206,22 @@ private:
     auto kLane = StringAttr::get(ctx, "lane");
     auto kWarp = StringAttr::get(ctx, "warp");
     auto kBlock = StringAttr::get(ctx, "block");
-    const auto &layout = helper.getLayout();
+    const auto &permutedLayout = helper.getPermutedLayout();
     const auto &segments = *helper.getSegmentLayout();
     const auto &totalsLayout = *helper.getWarpTotalsLayout();
-    auto axis = *std::next(layout.getOutDimNames().begin(), op.getAxis());
+    auto axis =
+        *std::next(permutedLayout.getOutDimNames().begin(), op.getAxis());
     bool reverse = op.getReverse();
     unsigned segmentRegs = 1;
     unsigned segmentLaneMask = 0;
-    for (auto basis : layout.getBases().lookup(kReg))
-      if (basis[op.getAxis()] && basis[op.getAxis()] < helper.getSegmentSize())
+    for (auto basis : permutedLayout.getBases().lookup(kReg))
+      if (basis[op.getAxis()] &&
+          basis[op.getAxis()] < helper.getWarpLocalSegmentSize())
         segmentRegs *= 2;
-    for (auto [i, basis] : llvm::enumerate(layout.getBases().lookup(kLane)))
-      if (basis[op.getAxis()] && basis[op.getAxis()] < helper.getSegmentSize())
+    for (auto [i, basis] :
+         llvm::enumerate(permutedLayout.getBases().lookup(kLane)))
+      if (basis[op.getAxis()] &&
+          basis[op.getAxis()] < helper.getWarpLocalSegmentSize())
         segmentLaneMask |= 1u << i;
 
     // Extract the terminal register and broadcast the terminal lane. The
