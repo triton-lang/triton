@@ -631,7 +631,7 @@ def matmul(a, b, bias,
     if a_has_mx and isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout):
         # check if we can use tma for x scale
         assert opt_flags.is_persistent, "swizzled x scale is only supported for persistent case"
-        assert opt_flags.block_m == 128 and opt_flags.block_k >= 128, "block_m and block_k must be at least 128 if x scale is swizzled"
+        assert opt_flags.block_m in (64, 128) and opt_flags.block_k >= 128, "swizzled x scales require block_m 64/128 and block_k >= 128"
         a_scale_has_tma = True
     if a_scale_has_tma:
         scale_layout = a_scale.storage.layout.make_transformation(a_scale.shape_max, is_fp4=False)
@@ -641,7 +641,7 @@ def matmul(a, b, bias,
             assert scale_layout.ragged_metadata is a_ragged_metadata, \
                 "Blackwell activation scales must use the same RaggedTensorMetadata instance as the matmul"
         scale_block_k = opt_flags.block_k // mx_block_size
-        a_scale_tma_block_size = [opt_flags.block_m, scale_block_k]
+        a_scale_tma_block_size = [128, scale_block_k]
         a_scale_tensor_or_tma = make_tma(a_scale, a_scale_tma_block_size, "dense", is_scale=True)
     else:
         a_scale_tensor_or_tma = None if a_scale is None else a_scale.storage.data
@@ -690,6 +690,8 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    if opt_flags.is_persistent and a_scale_has_tma and ragged_dimension == "M":
+        extra_kernel_kwargs["XInputScaleBlockOffs"] = a_ragged_metadata.block_offs(128)
     if opt_flags.clc:
         extra_kernel_kwargs.update(CLC=True, clc=True)
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices

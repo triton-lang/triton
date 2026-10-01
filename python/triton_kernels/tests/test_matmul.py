@@ -24,11 +24,11 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
 from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
-from triton_kernels.swiglu import swiglu, swiglu_fn
+from triton_kernels.swiglu import swiglu, swiglu_fn, swiglu_torch
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor import Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
-from triton_kernels.tensor_details.dtype import FP32
+from triton_kernels.tensor_details.dtype import FP32, FP4
 
 # ---------------
 # numerics stuff
@@ -863,6 +863,52 @@ def test_gathered_ragged_act_scale_indexing(device, scale_slice_sizes):
     if scale_slice_sizes is None:
         expected = upcast_from_mxfp_torch(values, scales, torch.bfloat16, axis=-1)[gather_indx.long()]
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("slice_sizes", [(64,), (257,), (0, 1, 63, 64, 65, 127, 128, 129)],
+                         ids=["dense-aligned", "dense-partial", "ragged-boundaries"])
+@pytest.mark.parametrize("fused_swiglu", [False, True])
+@pytest.mark.parametrize("num_warps", [None, 8])
+def test_mxfp8_bn512_act_scale_tiles(device, opt_flags_scope, slice_sizes, fused_swiglu, num_warps):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("requires Blackwell")
+
+    torch.manual_seed(0)
+    m, k, n = sum(slice_sizes), 256, 1024
+    ragged = len(slice_sizes) > 1
+    metadata = make_ragged_tensor_metadata(
+        torch.tensor(slice_sizes, dtype=torch.int32, device=device), m) if ragged else None
+    a_values, a_scales = downcast_to_mxfp_torch(
+        torch.randn((m, k), dtype=torch.bfloat16, device=device), torch.float8_e4m3fn, axis=-1)
+    b_shape = (len(slice_sizes), k, n) if ragged else (k, n)
+    b_values, b_scales = downcast_to_mxfp_torch(
+        torch.randn(b_shape, dtype=torch.bfloat16, device=device), torch.uint8, axis=-2)
+    a_ref = upcast_from_mxfp_torch(a_values, a_scales, torch.float32, axis=-1)
+    b_ref = upcast_from_mxfp_torch(b_values, b_scales, torch.float32, axis=-2)
+    bias = torch.randn(b_shape[:-2] + (n,), dtype=torch.float32, device=device)
+    if ragged:
+        expected = torch.cat([x @ b_ref[i] + bias[i] for i, x in enumerate(a_ref.split(slice_sizes))])
+    else:
+        expected = a_ref @ b_ref + bias
+
+    a_scale = convert_layout(wrap_torch_tensor(a_scales), layout.BlackwellActMXScaleLayout(metadata))
+    b = convert_layout(wrap_torch_tensor(b_values, FP4, shape=b_shape),
+                       layout.BlackwellMX4ValueShuffledLayout(block_n=512))
+    b_scale = convert_layout(wrap_torch_tensor(b_scales), layout.BlackwellMXScaleLayout())
+    precision = PrecisionConfig(a_mx_scale=a_scale, b_mx_scale=b_scale,
+                                a_microblock_size=32, b_microblock_size=32, out_dtype=torch.bfloat16)
+    activation = None
+    if fused_swiglu:
+        activation = FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
+                                     (1.0, 7.0))
+        expected = swiglu_torch(expected, 1.0, SwiGLUPrecisionConfig(7.0))
+
+    # Leave BLOCK_M unconstrained so the BN512 heuristic must choose a native-compatible tile.
+    # Explicitly requesting eight warps also catches a fallback to a 128-row tile that exceeds TMEM.
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True, "num_warps": num_warps}):
+        actual = matmul(wrap_torch_tensor(a_values), b, bias, metadata,
+                        precision_config=precision, fused_activation=activation)
+    assert_close(expected, actual.reshape(expected.shape), maxtol=0.1, rmstol=0.004)
 
 
 def test_k_ragged_mxfp8_act_scale_swizzling(device):

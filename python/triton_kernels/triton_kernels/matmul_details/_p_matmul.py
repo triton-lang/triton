@@ -136,6 +136,7 @@ def _p_matmul(
              CLC: tl.constexpr = False,
              FLATTEN_LOOPS: tl.constexpr = True,
              W_SHUFFLED: tl.constexpr = False,
+             XInputScaleBlockOffs=None,
              pYPtrs=None,
              map_dst_coord=None,
              all_writes_issued=None,
@@ -423,13 +424,15 @@ def _p_matmul(
                     # Gathered values can use a dense descriptor while their
                     # scales are already padded and ordered by ragged slice.
                     if RAGGED_DIMENSION == "M":
-                        # slice_block_off_m points to the start of the current slice in the padded version
-                        # + off_m points to the current block in the slice
-                        off_m_scale = slice_block_off_m + off_m // 128
+                        # Scale storage uses 128-row blocks, independently of compute BLOCK_M.
+                        off_m_scale = tl.load(XInputScaleBlockOffs + off_w_z) + off_m // 128
                     else:
                         off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
                     x_scales = XMxScale.load([0, off_m_scale, off_k_x // MX_PACK_DIVISOR // 4, 0, 0])
                     x_scales = unswizzle_act_mx_scale_bw(x_scales)
+                    if BLOCK_M == 64:
+                        lo, hi = x_scales.reshape(2, 64, BLOCK_K // MX_PACK_DIVISOR).permute(1, 2, 0).split()
+                        x_scales = tl.where(off_m % 128 == 0, lo, hi)
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
             else:

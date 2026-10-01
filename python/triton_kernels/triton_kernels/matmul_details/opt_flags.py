@@ -346,8 +346,11 @@ def make_default_opt_flags_nvidia(
         block_n = min(block_n, 128)
     # adjust block_m based on is_persistent signal
     if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
-        # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
-        block_m = 128
+        # Read half of a 128-row scale block for BN512 to leave TMEM for scales.
+        if block_n == 512 and lhs_dtype == FP8_E4M3FN and rhs_dtype == FP4:
+            block_m = 64
+        else:
+            block_m = 128
     swap_xw = constraints.get("swap_xw")
     if is_mixed_fp8 and rhs_dtype == FP8_E4M3FN and is_persistent:
         # Convert FP8 in the MMA's lhs registers/TMEM, avoiding a widened RHS buffer.
