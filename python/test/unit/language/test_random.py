@@ -5,6 +5,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton._internal_testing import is_cuda, is_interpreter
 
 #####################################
 # Reference Philox Implementation
@@ -154,6 +155,30 @@ def test_randint(size, seed, device, dtype, const_seed):
     gen = CustomPhilox4x(seed, config=config)
     out_ref = [gen.random_raw()[0] for _ in out_tri]
     assert out_tri == out_ref
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("seed", [0, 0xfedcba9876543210])
+def test_randint4x_all_outputs(seed, device):
+
+    @triton.jit
+    def kernel(Output, N: tl.constexpr, seed, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        r0, r1, r2, r3 = tl.randint4x(seed, offsets)
+        tl.store(Output + offsets, r0, offsets < N)
+        tl.store(Output + N + offsets, r1, offsets < N)
+        tl.store(Output + 2 * N + offsets, r2, offsets < N)
+        tl.store(Output + 3 * N + offsets, r3, offsets < N)
+
+    n = 257
+    output = torch.empty((4, n), dtype=torch.int32, device=device)
+    compiled = kernel[(triton.cdiv(n, 256), )](output, n, seed, BLOCK_SIZE=256)
+    gen = CustomPhilox4x(seed, config=PHILOX_32)
+    expected = np.stack([gen.random_raw() for _ in range(n)], axis=1)
+    np.testing.assert_equal(output.cpu().numpy().view(np.uint32), expected)
+    if not is_interpreter() and is_cuda():
+        assert "mul.wide.u32" in compiled.asm["ptx"]
+        assert "mul.hi.u32" not in compiled.asm["ptx"]
 
 
 # test uniform PRNG

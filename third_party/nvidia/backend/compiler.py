@@ -518,6 +518,8 @@ class CUDABackend(BaseBackend):
             disable_slp_vectorizer=capability == 80,
             expand_masked_div_rem=True,
         )
+        # Keep range simplifications ahead of the opaque wide-multiply assembly.
+        nvidia.optimize_unsigned_multiply(llvm_mod)
 
         # Get some metadata
         # warp-specialization mutates num_warps

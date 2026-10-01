@@ -2806,12 +2806,56 @@ def test_umulhi(dtype_str, device):
             assert "v_mul_hi_u32" in compiled.asm["amdgcn"]
 
 
-@pytest.mark.parametrize("masked", [False, True])
-@pytest.mark.parametrize("dtype_str", ["int32", "int64"])
-def test_umulhi_known_bits(masked, dtype_str, device):
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["int32", "uint32"])
+@pytest.mark.parametrize("swap,high_first", [(False, False), (True, False), (False, True), (True, True)])
+def test_umulhi_pair(dtype_str, swap, high_first, device):
 
     @triton.jit
-    def kernel(X, Z, MASKED: tl.constexpr, DTYPE: tl.constexpr):
+    def kernel(X, Y, Lo, Hi, N: tl.constexpr, SWAP: tl.constexpr, HIGH_FIRST: tl.constexpr):
+        offsets = tl.arange(0, N)
+        x = tl.load(X + offsets)
+        y = tl.load(Y + offsets)
+        if SWAP:
+            a, b = y, x
+        else:
+            a, b = x, y
+        if HIGH_FIRST:
+            hi = tl.umulhi(a, b)
+            lo = tl.mul(x, y, sanitize_overflow=False)
+        else:
+            lo = tl.mul(x, y, sanitize_overflow=False)
+            hi = tl.umulhi(a, b)
+        tl.store(Lo + offsets, lo)
+        tl.store(Hi + offsets, hi)
+
+    edges = np.array([0, 1, 2, 0x7fffffff, 0x80000000, 0xffffffff, 0xcd9e8d57, 0xd2511f53], dtype=np.uint32)
+    random = np.frombuffer(RandomState(17).bytes(24 * 4), dtype=np.uint32)
+    x = np.concatenate((edges, random)).view(dtype_str)
+    y = np.roll(x, 1)
+    product = x.view(np.uint32).astype(np.uint64) * y.view(np.uint32).astype(np.uint64)
+    lo_ref = product.astype(np.uint32).view(dtype_str)
+    hi_ref = (product >> 32).astype(np.uint32).view(dtype_str)
+    x_tri = to_triton(x, device=device, dst_type=dtype_str)
+    y_tri = to_triton(y, device=device, dst_type=dtype_str)
+    lo = to_triton(np.zeros_like(x), device=device, dst_type=dtype_str)
+    hi = to_triton(np.zeros_like(x), device=device, dst_type=dtype_str)
+    compiled = kernel[(1, )](x_tri, y_tri, lo, hi, N=x.size, SWAP=swap, HIGH_FIRST=high_first)
+
+    np.testing.assert_equal(to_numpy(lo), lo_ref)
+    np.testing.assert_equal(to_numpy(hi), hi_ref)
+    if not is_interpreter() and is_cuda():
+        assert "mul.wide.u32" in compiled.asm["ptx"]
+        assert "mul.hi.u32" not in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize("masked", [False, True])
+@pytest.mark.parametrize("dtype_str", ["int32", "int64"])
+@pytest.mark.parametrize("store_low", [False, True])
+def test_umulhi_known_bits(masked, dtype_str, store_low, device):
+
+    @triton.jit
+    def kernel(X, Z, Lo, MASKED: tl.constexpr, DTYPE: tl.constexpr, STORE_LOW: tl.constexpr):
         offsets = tl.arange(0, 32)
         x = tl.load(X + offsets).to(DTYPE)
         if MASKED:
@@ -2821,17 +2865,25 @@ def test_umulhi_known_bits(masked, dtype_str, device):
         else:
             y = tl.full((), 256, DTYPE)
         tl.store(Z + offsets, tl.umulhi(x, y))
+        if STORE_LOW:
+            tl.store(Lo + offsets, tl.mul(x, y, sanitize_overflow=False))
 
     bits = torch.iinfo(getattr(torch, dtype_str)).bits
     half = 1 << (bits // 2)
     x = torch.tensor([0, 1, -1, -2**(bits - 1), 2**(bits - 1) - 1, half - 1, half, -half] * 4,
                      dtype=getattr(torch, dtype_str), device=device)
     output = torch.empty_like(x)
-    compiled = kernel[(1, )](x, output, masked, getattr(tl, f"uint{bits}"))
+    low = torch.empty_like(x)
+    compiled = kernel[(1, )](x, output, low, masked, getattr(tl, f"uint{bits}"), store_low)
     expected = torch.zeros_like(x) if masked else (x >> (bits - 8)) & 255
     torch.testing.assert_close(output, expected)
+    if store_low:
+        low_expected = (x & (half - 1)) * ((x >> (bits // 2)) & (half - 1)) if masked else x * 256
+        torch.testing.assert_close(low, low_expected)
     if is_cuda():
         assert "mul.hi." not in compiled.asm["ptx"]
+        # PTX can still use wide multiplies for pointer offsets.
+        assert "mul.wide.u32" not in compiled.asm["llir"]
     elif is_hip():
         assert "mul_hi" not in compiled.asm["amdgcn"]
 

@@ -11,8 +11,15 @@
 #include "passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Tools/Sys/GetEnv.h"
+#include "llvm/ADT/MapVector.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
+#include "llvm/Support/KnownBits.h"
 #include <dlfcn.h>
+#include <functional>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
@@ -23,6 +30,123 @@ namespace py = nanobind;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
+
+// Identify values with the same low 32 bits after LLVM's integer rewrites.
+llvm::Value *getLow32Value(llvm::Value *value) {
+  using namespace llvm;
+  while (auto *instruction = dyn_cast<Instruction>(value)) {
+    unsigned opcode = instruction->getOpcode();
+    if ((opcode == Instruction::ZExt || opcode == Instruction::Trunc) &&
+        instruction->getOperand(0)->getType()->getIntegerBitWidth() >= 32) {
+      value = instruction->getOperand(0);
+      continue;
+    }
+    if (opcode == Instruction::And) {
+      for (unsigned i = 0; i < 2; ++i) {
+        auto *mask = dyn_cast<ConstantInt>(instruction->getOperand(i));
+        if (mask && mask->getValue().trunc(32).isAllOnes()) {
+          value = instruction->getOperand(1 - i);
+          break;
+        }
+      }
+      if (value != instruction)
+        continue;
+    }
+    break;
+  }
+  if (auto *constant = dyn_cast<llvm::ConstantInt>(value))
+    return llvm::ConstantInt::get(value->getContext(),
+                                  constant->getValue().trunc(32));
+  return value;
+}
+
+void optimizeUnsignedMultiply(llvm::Module &module) {
+  using namespace llvm;
+  if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
+    return;
+
+  struct MultiplyPair {
+    BinaryOperator *wide = nullptr;
+    Instruction *low = nullptr;
+  };
+  using OperandPair = std::pair<Value *, Value *>;
+  auto getKey = [](BinaryOperator *multiply) {
+    Value *lhs = getLow32Value(multiply->getOperand(0));
+    Value *rhs = getLow32Value(multiply->getOperand(1));
+    if (std::less<Value *>{}(rhs, lhs))
+      std::swap(lhs, rhs);
+    return OperandPair{lhs, rhs};
+  };
+  Type *i32 = Type::getInt32Ty(module.getContext());
+  Type *i64 = Type::getInt64Ty(module.getContext());
+  auto *assembly = InlineAsm::get(FunctionType::get(i64, {i32, i32}, false),
+                                  "mul.wide.u32 $0, $1, $2;", "=l,r,r", false);
+  for (Function &function : module) {
+    for (BasicBlock &block : function) {
+      MapVector<OperandPair, MultiplyPair> groups;
+      for (Instruction &instruction : block) {
+        auto *multiply = dyn_cast<BinaryOperator>(&instruction);
+        if (!multiply || multiply->getOpcode() != Instruction::Mul ||
+            multiply->use_empty())
+          continue;
+        if (multiply->getType()->isIntegerTy(32)) {
+          auto &group = groups[getKey(multiply)];
+          if (!isa_and_nonnull<BinaryOperator>(group.low))
+            group.low = multiply;
+          continue;
+        }
+        if (!multiply->getType()->isIntegerTy(64) ||
+            computeKnownBits(multiply->getOperand(0), module.getDataLayout())
+                    .countMinLeadingZeros() < 32 ||
+            computeKnownBits(multiply->getOperand(1), module.getDataLayout())
+                    .countMinLeadingZeros() < 32)
+          continue;
+
+        Instruction *low = nullptr;
+        bool needsHighBits = false;
+        for (User *user : multiply->users()) {
+          auto *truncate = dyn_cast<TruncInst>(user);
+          if (!truncate || truncate->getType()->getIntegerBitWidth() > 32) {
+            needsHighBits = true;
+          } else if (truncate->getType()->isIntegerTy(32) &&
+                     truncate->getParent() == &block &&
+                     !truncate->use_empty()) {
+            low = truncate;
+          }
+        }
+        if (!needsHighBits)
+          continue;
+        auto &group = groups[getKey(multiply)];
+        if (!group.wide)
+          group.wide = multiply;
+        if (!group.low)
+          group.low = low;
+      }
+
+      // Do not consult operand keys after replacements change their values.
+      SmallVector<MultiplyPair> pairs;
+      for (auto &[key, group] : groups)
+        if (group.wide && group.low)
+          pairs.push_back(group);
+      for (auto [wide, low] : pairs) {
+        Instruction *first = low->comesBefore(wide) ? low : wide;
+        IRBuilder<> builder(first);
+        builder.SetCurrentDebugLocation(first->getDebugLoc());
+        Value *lhs =
+            builder.CreateZExtOrTrunc(getLow32Value(wide->getOperand(0)), i32);
+        Value *rhs =
+            builder.CreateZExtOrTrunc(getLow32Value(wide->getOperand(1)), i32);
+        Value *product = builder.CreateCall(assembly, {lhs, rhs}, "mul.wide");
+        builder.SetCurrentDebugLocation(low->getDebugLoc());
+        Value *lowProduct = builder.CreateTrunc(product, i32);
+        low->replaceAllUsesWith(lowProduct);
+        wide->replaceAllUsesWith(product);
+        low->eraseFromParent();
+        wide->eraseFromParent();
+      }
+    }
+  }
+}
 
 using CUresult = int;
 using CUdeviceptr = unsigned long long;
@@ -336,6 +460,8 @@ void init_triton_nvidia(py::module_ &m) {
     auto *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
     mod->addModuleFlag(reflect);
   });
+
+  m.def("optimize_unsigned_multiply", &optimizeUnsignedMultiply);
 
   m.def("device_malloc",
         [](size_t size) { return CudaExampleUtils::get().deviceMalloc(size); });

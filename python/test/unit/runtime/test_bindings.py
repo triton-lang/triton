@@ -24,6 +24,84 @@ def test_llvm_ir_to_bitcode_reports_invalid_ir():
         llvm.to_bitcode("invalid LLVM IR")
 
 
+def test_nvidia_optimize_unsigned_multiply(tmp_path, monkeypatch):
+    from triton._C.libtriton import ir, llvm
+    nvidia = pytest.importorskip("triton._C.libtriton.nvidia")
+
+    source = """
+    module {
+      llvm.func @low_first(%x: i32, %y: i32, %out: !llvm.ptr) -> i64 {
+        %low = llvm.mul %x, %y : i32
+        llvm.store %low, %out : i32, !llvm.ptr
+        %x64 = llvm.zext %x : i32 to i64
+        %y64 = llvm.zext %y : i32 to i64
+        %wide = llvm.mul %x64, %y64 : i64
+        llvm.return %wide : i64
+      }
+      llvm.func @high_first_constant(%x: i32, %out: !llvm.ptr) -> i32 {
+        %x64 = llvm.zext %x : i32 to i64
+        %c64 = llvm.mlir.constant(3528531795 : i64) : i64
+        %wide = llvm.mul %c64, %x64 : i64
+        llvm.store %wide, %out : i64, !llvm.ptr
+        %c32 = llvm.mlir.constant(-766435501 : i32) : i32
+        %low = llvm.mul %x, %c32 : i32
+        llvm.return %low : i32
+      }
+      llvm.func @masked_alias(%x: i64, %y: i32, %out: !llvm.ptr) -> i64 {
+        %x32 = llvm.trunc %x : i64 to i32
+        %low = llvm.mul %x32, %y : i32
+        llvm.store %low, %out : i32, !llvm.ptr
+        %mask = llvm.mlir.constant(4294967295 : i64) : i64
+        %masked = llvm.and %x, %mask : i64
+        %y64 = llvm.zext %y : i32 to i64
+        %wide = llvm.mul %y64, %masked : i64
+        llvm.return %wide : i64
+      }
+      llvm.func @signed_extension(%x: i32, %y: i32, %out: !llvm.ptr) -> i64 {
+        %low = llvm.mul %x, %y : i32
+        llvm.store %low, %out : i32, !llvm.ptr
+        %x64 = llvm.sext %x : i32 to i64
+        %y64 = llvm.zext %y : i32 to i64
+        %wide = llvm.mul %x64, %y64 : i64
+        llvm.return %wide : i64
+      }
+      llvm.func @different_blocks(%x: i32, %y: i32, %cond: i1, %out: !llvm.ptr) -> i64 {
+        %x64 = llvm.zext %x : i32 to i64
+        %y64 = llvm.zext %y : i32 to i64
+        %wide = llvm.mul %x64, %y64 : i64
+        llvm.cond_br %cond, ^then, ^end
+      ^then:
+        %low = llvm.mul %x, %y : i32
+        llvm.store %low, %out : i32, !llvm.ptr
+        llvm.br ^end
+      ^end:
+        llvm.return %wide : i64
+      }
+    }
+    """
+    path = tmp_path / "multiply.mlir"
+    path.write_text(source)
+    context = ir.context()
+    ir.load_dialects(context)
+    module = ir.parse_mlir_module(str(path), context)
+    llvm_module = llvm.to_module(module, llvm.context())
+    monkeypatch.delenv("DISABLE_LLVM_OPT", raising=False)
+    nvidia.optimize_unsigned_multiply(llvm_module)
+    result = str(llvm_module)
+    assert llvm.to_bitcode(result).startswith(b"BC\xc0\xde")
+
+    for name in ["low_first", "high_first_constant", "masked_alias", "signed_extension", "different_blocks"]:
+        body = result.split(f"@{name}(", 1)[1].split("\n}", 1)[0]
+        if name in ["signed_extension", "different_blocks"]:
+            assert "mul.wide.u32" not in body, name
+            assert "mul i32" in body and "mul i64" in body, name
+        else:
+            assert body.count("mul.wide.u32") == 1, name
+            assert "mul i32" not in body and "mul i64" not in body, name
+            # Both early low uses and early high uses must follow the product.
+            assert body.index("mul.wide.u32") < body.index("store "), name
+
+
 @triton.jit
 def add_helper(x, y):
     return x + y
