@@ -82,6 +82,15 @@ def get_amd_codegen_revision() -> str:
     return _load_amd_codegen(get_amd_codegen_path()).triton_amdgpu_revision().decode("utf-8")
 
 
+def get_amd_codegen_target_triple(arch: str) -> str:
+    # TODO: Triton's core LLVM does not know gfx1250-strict, so it cannot derive
+    # the triple that the code generator requires for it. Remove this special
+    # case once core LLVM is bumped.
+    if arch == "gfx1250-strict":
+        return "amdgpu12.50s-amd-amdhsa"
+    return amd.get_target_triple(arch)
+
+
 _NAMED_BARRIER_INTRINSICS = (
     "llvm.amdgcn.s.barrier.init",
     "llvm.amdgcn.s.barrier.signal.var",
@@ -156,7 +165,7 @@ def assemble_amdgcn(assembly: str, processor: str, features: str) -> bytes:
     status = library.triton_amdgpu_assemble(
         source,
         len(source),
-        amd.get_target_triple(processor).encode("utf-8"),
+        get_amd_codegen_target_triple(processor).encode("utf-8"),
         processor.encode("utf-8"),
         features.encode("utf-8"),
         ctypes.byref(object_file),
@@ -703,7 +712,7 @@ class HIPBackend(BaseBackend):
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
         # optimize_module from calls to @llvm.amdgcn.workgroup.id.x/y/z(). We cannot rely on this because a
         # dispatch dimensions might be used even if there is no program_id() call for it.
-        if amd.has_architected_sgprs(options.arch):
+        if amd.has_architected_sgprs(core_llvm_arch):
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-x")
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-y")
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-z")
@@ -739,9 +748,12 @@ class HIPBackend(BaseBackend):
         # llvm -> hsaco
         flags = get_llvm_flags(options.arch)
         features = ''
-        target_triple = amd.get_target_triple(options.arch)
+        target_triple = get_amd_codegen_target_triple(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
+        # MIR dump and swap run Triton's core LLVM, which does not know gfx1250-strict.
+        if options.arch == "gfx1250-strict" and (knobs.amd.dump_mir or knobs.amd.swap_mir):
+            raise ValueError("TRITON_DUMP_MIR and TRITON_SWAP_MIR are not supported for gfx1250-strict")
         if knobs.amd.dump_mir:
             # translate_to_mir dumps both the pre-machine-scheduler MIR and, built
             # from that same MachineFunction, the scheduling DAG (a (bb, position)

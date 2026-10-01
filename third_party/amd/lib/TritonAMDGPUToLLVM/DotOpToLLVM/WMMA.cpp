@@ -672,8 +672,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
                          maybeWmmaScaleIntrinsic->requiredFeature)) {
     return op.emitError("wmma scale intrinsic ")
            << maybeWmmaScaleIntrinsic->name << " is not supported on "
-           << targetFeatures.getArch()
-           << ". Use a 16x16x128 scaled wmma layout instead.";
+           << targetFeatures.getArch();
   }
 
   auto kBaseA = maybeWmmaScaleIntrinsic->kBaseA;

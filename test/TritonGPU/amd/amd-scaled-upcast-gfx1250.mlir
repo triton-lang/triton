@@ -7,9 +7,9 @@
 #mma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, isTranspose = true, instrShape = [16, 16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   // STRICT-LABEL: llvm.func @wmma_dot_scaled_mxfp8_bf16
-  // STRICT-NOT: cvt.scale.pk8
+  // STRICT-NOT: cvt.scale.pk8.bf16
   // STRICT: llvm.fmul
-  // STRICT-NOT: cvt.scale.pk8
+  // STRICT-NOT: cvt.scale.pk8.bf16
   tt.func public @wmma_dot_scaled_mxfp8_bf16(%arg0: tensor<32x128xf8E4M3FN, #blocked>, %arg1: tensor<32x128xi8, #blocked>, %arg2: tensor<32x128x!tt.ptr<bf16>, #blocked>) {
     // Non-broadcast scale layouts use FP8 Block16 mode (opSel=8): byte 0 feeds
     // lanes 0..15 and byte 1 feeds lanes 16..31. Byte 1 is lane (j^16)'s scale,
