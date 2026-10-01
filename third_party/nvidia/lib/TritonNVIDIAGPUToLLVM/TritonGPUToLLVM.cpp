@@ -137,10 +137,9 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   // these large struct types. The normal verifier still checks the cleaned IR.
   RewritePatternSet patterns(mod.getContext());
   LLVM::InsertValueOp::getCanonicalizationPatterns(patterns, mod.getContext());
-  if (failed(applyPatternsGreedily(
-          mod, std::move(patterns),
-          GreedyRewriteConfig().setUseTopDownTraversal(true))))
-    signalPassFailure();
+  (void)applyPatternsGreedily(
+      mod, std::move(patterns),
+      GreedyRewriteConfig().setUseTopDownTraversal(true));
 }
 
 LogicalResult ConvertTritonGPUToLLVM::lowerFunctions(
