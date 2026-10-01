@@ -430,10 +430,9 @@ struct ArriveBarrierOpConversion
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
     Value pred;
-    // Partition starts are whole warps, so the physical lane needs no offset.
-    Value id = op.getPerWarp() ? NVVM::LaneIdOp::create(rewriter, loc,
-                                                        rewriter.getI32Type())
-                               : getThreadId(rewriter, loc);
+    // Warp-aligned partition offsets preserve the lane ID.
+    Value id =
+        op.getPerWarp() ? getLaneId(rewriter, loc) : getThreadId(rewriter, loc);
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
       // Routing may use several lane IDs to address peer CTAs.
       FromCTALowering lowering =

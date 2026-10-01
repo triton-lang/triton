@@ -248,14 +248,16 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
   // A local barrier lets one thread contribute each target's full count.
   // CHECK-LABEL: @distributed_arrival_multicast_routes
+  // CHECK-DAG: %[[C32:.*]] = llvm.mlir.constant(32 : i32)
+  // CHECK-DAG: %[[C5:.*]] = llvm.mlir.constant(5 : i32)
   tt.func @distributed_arrival_multicast_routes(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>) {
     // CHECK: nvvm.bar.warp.sync
     // CHECK-NOT: nvvm.bar.warp.sync
-    // CHECK: %[[LANE:.*]] = nvvm.read.ptx.sreg.laneid : i32
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // CHECK: %[[LANE:.*]] = llvm.urem %{{.*}}, %[[C32]] : i32
     // CHECK: %[[LANE_ZERO:.*]] = llvm.icmp "eq" %[[LANE]], %{{.*}} : i32
     // CHECK: %[[CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
     // CHECK: %[[ROUTED_PRED:.*]] = llvm.and %[[LANE_ZERO]], %{{.*}} : i1
-    // CHECK: %[[C5:.*]] = llvm.mlir.constant(5 : i32)
     // CHECK: %[[MASK_BASE:.*]] = llvm.and %[[CTA]], %[[C5]] : i32
     // CHECK: %[[MASK:.*]] = llvm.shl %[[C5]], %[[MASK_BASE]] : i32
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
@@ -276,11 +278,11 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // A warp-covered direct multicast uses physical lane zero in each warp.
   // CHECK-LABEL: @distributed_arrival_lane_multicast
+  // CHECK-DAG: %[[DIRECT_C32:.*]] = llvm.mlir.constant(32 : i32)
   tt.func @distributed_arrival_lane_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
     // CHECK: nvvm.bar.warp.sync
-    // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
-    // CHECK-NOT: llvm.urem
-    // CHECK: %[[DIRECT_LANE:.*]] = nvvm.read.ptx.sreg.laneid : i32
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // CHECK: %[[DIRECT_LANE:.*]] = llvm.urem %{{.*}}, %[[DIRECT_C32]] : i32
     // CHECK: %[[DIRECT_FIRST:.*]] = llvm.icmp "eq" %[[DIRECT_LANE]], %{{.*}} : i32
     // CHECK: %[[DIRECT_PRED:.*]] = llvm.and %[[DIRECT_FIRST]], %arg1 : i1
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
