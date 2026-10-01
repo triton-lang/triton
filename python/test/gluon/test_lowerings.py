@@ -121,7 +121,12 @@ def _scan_linear_layouts():
                                      [[0, 0], [0, 0]], [], [32, 32])
         for r0, r1, l0, l1, l2 in [(1, 4, 8, 2, 16), (2, 8, 16, 1, 4)]
     ]
-    return [ordinary, broadcast, warp_minor, register_groups, scattered_registers, *alternating]
+    # Making these registers contiguous requires two register/lane bit swaps.
+    # Scan must use warp shuffles even when generic conversion prefers shared memory.
+    transpose = ttgl.DistributedLinearLayout([[4, 0], [8, 0], [16, 0], [0, 1], [0, 2]],
+                                             [[1, 0], [2, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] * (lane_bits - 5),
+                                             [[0, 0], [0, 0]], [], [32, 32])
+    return [ordinary, broadcast, warp_minor, register_groups, scattered_registers, *alternating, transpose]
 
 
 SCAN_EXTRA_LAYOUTS = _filter_layouts([
