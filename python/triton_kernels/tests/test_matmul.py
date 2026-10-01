@@ -1089,3 +1089,36 @@ def test_fused_comm_no_local_output(dtype, n_peers, ragged, is_persistent):
                 torch.cuda.synchronize(destination.device)
             graph.replay()
             torch.testing.assert_close(collected(), reference, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("is_persistent", [False, True])
+def test_scatter_untargeted_rows_are_zero(is_persistent):
+    # Input rows with scatter index -1 are dropped, so the output rows they would have
+    # written are never touched by the kernel. Those rows must read back as zero
+    # (as in `matmul_torch`) rather than whatever the output buffer held before.
+    if not is_cuda():
+        pytest.skip("Requires CUDA")
+    if is_persistent and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Persistent matmul requires compute capability >= 9")
+    torch.manual_seed(0)
+    device, dtype = "cuda", torch.bfloat16
+    m, k, n = 1024, 128, 256
+    a = torch.randn((m, k), device=device, dtype=dtype)
+    b = torch.randn((2, k, n), device=device, dtype=dtype)
+    metadata = make_ragged_tensor_metadata(torch.tensor([m // 2, m // 2], device=device, dtype=torch.int32), m)
+    scatter = torch.randperm(m, device=device, dtype=torch.int32)
+    scatter[::3] = -1
+    keep = scatter != -1
+    targeted = scatter[keep].long()
+    y = torch.cat([a[:m // 2].float() @ b[0].float(), a[m // 2:].float() @ b[1].float()])
+    expected = torch.zeros((m, n), device=device, dtype=torch.float32)
+    expected[targeted] = y[keep]
+    untargeted = torch.ones(m, device=device, dtype=torch.bool)
+    untargeted[targeted] = False
+    assert untargeted.any()
+    with opt_flags.scoped_opt_flags_constraints({"split_k": 1, "is_persistent": is_persistent}):
+        c = torch.full((m, n), float("nan"), device=device, dtype=dtype)
+        out = matmul(a, b, None, a_ragged_metadata=metadata, scatter_indx=scatter,
+                     precision_config=PrecisionConfig(out_dtype=dtype), c=c)
+    assert torch.count_nonzero(out[untargeted]) == 0
+    torch.testing.assert_close(out.float(), expected, rtol=0.02, atol=0.1)
