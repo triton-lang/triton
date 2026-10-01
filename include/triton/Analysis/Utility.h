@@ -108,6 +108,18 @@ private:
   int axis;
 };
 
+// Plan the ownership of values and segment totals; the LLVM lowering emits the
+// arithmetic and communication. A segment is a contiguous logical interval of
+// the scan axis, not necessarily everything owned by a thread or warp. One warp
+// can own several separated segments when register/lane/warp bits interleave.
+//
+// The layout examples below write only the scan-axis component of each basis.
+// A basis belongs to a bit of the hardware index: register=[1,8] maps register
+// indices 0,1,2,3 to logical offsets 0,1,8,9. Contributions from register,
+// lane, and warp indices combine by XOR. A zero basis replicates a logical
+// value; in multiple dimensions, a zero axis component may instead belong to
+// another independent scan. Layout construction preserves those other
+// components.
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
@@ -118,8 +130,11 @@ public:
   }
   const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
   // Number of consecutive logical elements already owned by each thread.
+  // This counts original elements, not the totals subsequently scanned.
   unsigned getThreadLocalSegmentSize() const { return threadLocalSegmentSize; }
   // Thread-segment totals in their original owners, present for lane scans.
+  // An axis coordinate i denotes the total of original segment i, rather than
+  // original element i. These totals coexist with saved original prefixes.
   const std::optional<triton::LinearLayout> &getIntraWarpLayout() const {
     return intraWarpLayout;
   }
@@ -127,7 +142,8 @@ public:
   const std::optional<triton::LinearLayout> &getIntraWarpScanLayout() const {
     return intraWarpScanLayout;
   }
-  // Length of a contiguous logical segment contained in one warp.
+  // Length of a contiguous logical segment contained in one warp, measured in
+  // original elements. It can be smaller than the warp's total element count.
   unsigned getWarpLocalSegmentSize() const { return warpLocalSegmentSize; }
   // Present when segment totals must be exchanged between warps.
   // Describes those totals in the warps that computed them.
