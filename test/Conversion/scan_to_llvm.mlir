@@ -7,6 +7,8 @@
 // RUN: triton-opt %t/tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TUPLE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TRANSPOSE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TRANSPOSE
+// RUN: triton-opt %t/converted-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=RETAIN
+// RUN: triton-opt %t/converted-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-RETAIN
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
 //--- scan.mlir
@@ -445,4 +447,34 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
   tt.return %a_out, %b_out : tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>
 }
 
+}
+
+//--- converted-totals.mlir
+
+// Each warp owns 16 consecutive elements in four strided registers. Scan in
+// register=[1,2], lane=[4,8,0,0,0], then extract its terminal total directly
+// from that layout for the shared-memory exchange. Restore native ownership
+// after the exchange, when applying carries to the saved prefixes.
+#converted = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[16], [0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
+// RETAIN: nvvm.shfl.sync up
+// RETAIN-NOT: nvvm.shfl.sync bfly
+// RETAIN: llvm.store
+// RETAIN: nvvm.barrier
+// RETAIN: llvm.load
+// RETAIN: nvvm.shfl.sync bfly
+// RETAIN: llvm.return
+// AMD-RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
+// AMD-RETAIN: llvm.store
+// AMD-RETAIN: llvm.load
+// AMD-RETAIN: llvm.return
+tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) -> tensor<32xi32, #converted> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<32xi32, #converted>) -> tensor<32xi32, #converted>
+  tt.return %result : tensor<32xi32, #converted>
+}
 }
