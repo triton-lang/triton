@@ -121,8 +121,9 @@ public:
   const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
   // Length of a contiguous logical segment contained in one warp.
   unsigned getWarpLocalSegmentSize() const { return warpLocalSegmentSize; }
-  const std::optional<triton::LinearLayout> &getSegmentLayout() const {
-    return segmentLayout;
+  // Layout of segment totals in the warps that computed them.
+  const std::optional<triton::LinearLayout> &getWarpLocalLayout() const {
+    return warpLocalLayout;
   }
   const std::optional<triton::LinearLayout> &getWarpTotalsLayout() const {
     return warpTotalsLayout;
@@ -133,7 +134,7 @@ public:
 
 private:
   triton::LinearLayout buildPermutedLayout();
-  triton::LinearLayout buildSegmentLayout() const;
+  triton::LinearLayout buildWarpLocalLayout() const;
   triton::LinearLayout buildWarpTotalsLayout() const;
 
   unsigned axis;
@@ -142,7 +143,7 @@ private:
   triton::LinearLayout permutedLayout;
   triton::ColumnAction registerOrder;
   unsigned warpLocalSegmentSize = 1;
-  std::optional<triton::LinearLayout> segmentLayout;
+  std::optional<triton::LinearLayout> warpLocalLayout;
   std::optional<triton::LinearLayout> warpTotalsLayout;
 };
 

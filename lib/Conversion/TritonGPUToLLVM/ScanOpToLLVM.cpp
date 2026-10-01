@@ -47,7 +47,7 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
     // significance. This only reorders SSA values within each thread.
     permuteRegisters(values, helper.getRegisterOrder());
     scanWithinWarps(op, helper, values, laneId, rewriter);
-    if (helper.getSegmentLayout())
+    if (helper.getWarpLocalLayout())
       scanSegmentTotals(op, helper, values, laneId, warpId, rewriter);
     permuteRegisters(values, helper.getRegisterOrder().inverse());
 
@@ -76,6 +76,22 @@ private:
       for (unsigned r = 0; r < values.size(); ++r)
         values[r][i] = operand[r];
     }
+  }
+
+  // Scan each group of numRegs consecutive logical elements within a thread,
+  // retaining every prefix. The caller first converts to contiguous registers.
+  void scanWithinThreads(triton::ScanOp op, ScanValues &values,
+                         unsigned numRegs,
+                         ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    bool reverse = op.getReverse();
+    for (unsigned base = 0; base < values.size(); base += numRegs)
+      for (unsigned i = 1; i < numRegs; ++i) {
+        unsigned r = base + (reverse ? numRegs - 1 - i : i);
+        unsigned prev = reverse ? r + 1 : r - 1;
+        values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
+                                   values[prev], values[r]);
+      }
   }
 
   // Make each thread's segment registers contiguous in logical order, scan
@@ -131,14 +147,7 @@ private:
     };
     convert(permutedLayout, scanLayout);
 
-    // Scan consecutive elements within each thread, retaining every prefix.
-    for (unsigned base = 0; base < values.size(); base += numRegs)
-      for (unsigned i = 1; i < numRegs; ++i) {
-        unsigned r = base + (reverse ? numRegs - 1 - i : i);
-        unsigned prev = reverse ? r + 1 : r - 1;
-        values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
-                                   values[prev], values[r]);
-      }
+    scanWithinThreads(op, values, numRegs, rewriter);
     unsigned numLanes = helper.getWarpLocalSegmentSize() / numRegs;
     if (numLanes == 1) {
       convert(scanLayout, permutedLayout);
@@ -207,7 +216,7 @@ private:
     auto kWarp = StringAttr::get(ctx, "warp");
     auto kBlock = StringAttr::get(ctx, "block");
     const auto &permutedLayout = helper.getPermutedLayout();
-    const auto &segments = *helper.getSegmentLayout();
+    const auto &warpLocalLayout = *helper.getWarpLocalLayout();
     const auto &totalsLayout = *helper.getWarpTotalsLayout();
     auto axis =
         *std::next(permutedLayout.getOutDimNames().begin(), op.getAxis());
@@ -238,8 +247,9 @@ private:
         operands[i].push_back(total);
       }
     }
-    operands = convertLayoutValues(loc, rewriter, op, segments, totalsLayout,
-                                   operands, getTypeConverter(), targetInfo);
+    operands =
+        convertLayoutValues(loc, rewriter, op, warpLocalLayout, totalsLayout,
+                            operands, getTypeConverter(), targetInfo);
     ScanValues totals(operands.front().size());
     for (unsigned r = 0; r < totals.size(); ++r)
       for (const auto &operand : operands)
@@ -256,9 +266,9 @@ private:
     // All segment totals are present in this warp, so only register selects
     // and lane shuffles are needed, even when the sequence spans registers.
     auto inverse = totalsLayout.pseudoinvert();
-    unsigned numSegments = segments.getOutDimSize(axis);
+    unsigned numSegments = warpLocalLayout.getOutDimSize(axis);
     for (unsigned r = 0; r < values.size() / segmentRegs; ++r) {
-      auto coords = applyLinearLayout(loc, rewriter, segments,
+      auto coords = applyLinearLayout(loc, rewriter, warpLocalLayout,
                                       {{kReg, b.i32_val(r)},
                                        {kLane, laneId},
                                        {kWarp, warpId},
@@ -276,9 +286,11 @@ private:
       // Enumerate only the registers reachable by this segment's threads.
       // This also handles the borrow/carry at a register sequence boundary.
       llvm::SmallSetVector<unsigned, 8> candidates;
-      for (unsigned warp = 0; warp < segments.getInDimSize(kWarp); ++warp) {
-        for (unsigned lane = 0; lane < segments.getInDimSize(kLane); ++lane) {
-          auto coordinates = segments.apply(
+      for (unsigned warp = 0; warp < warpLocalLayout.getInDimSize(kWarp);
+           ++warp) {
+        for (unsigned lane = 0; lane < warpLocalLayout.getInDimSize(kLane);
+             ++lane) {
+          auto coordinates = warpLocalLayout.apply(
               {{kReg, r}, {kLane, lane}, {kWarp, warp}, {kBlock, 0}});
           auto &index = coordinates[op.getAxis()].second;
           index = (index + (reverse ? 1 : -1)) & (numSegments - 1);
