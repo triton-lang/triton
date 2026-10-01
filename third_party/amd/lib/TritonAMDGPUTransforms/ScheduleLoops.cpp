@@ -352,8 +352,8 @@ void initSymbolicSchedule(int maxDist, Stages &stages, Clusters &clusters,
   stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
 
   Clusters clusterVec;
-  std::generate(clusterVec.begin(), clusterVec.end(),
-                [&]() { return schedule.clusters.newAtBack(); });
+  std::ranges::generate(clusterVec,
+                        [&] { return schedule.clusters.newAtBack(); });
 
   // This is a symbolic cluster assignment. In this stage, we only focus on
   // global load and compute ops.
@@ -491,8 +491,8 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   LDBG("Build ChainedDotSchedule");
   tt::CoarseSchedule schedule(numStages);
   ChainedDotClusters clusters;
-  std::generate(clusters.begin(), clusters.end(),
-                [&]() { return schedule.clusters.newAtBack(); });
+  std::ranges::generate(clusters,
+                        [&] { return schedule.clusters.newAtBack(); });
 
   // Schedule dots
   auto dotOpsVec = llvm::to_vector(forOp.getBody()->getOps<tt::DotOp>());

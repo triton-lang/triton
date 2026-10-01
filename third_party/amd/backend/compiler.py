@@ -215,10 +215,6 @@ def get_llvm_flags(arch):
     attributes (see make_llir) whenever LLVM offers one.
     """
     flags = []
-    # LLVM has no per-function attribute for the AMDGPU register pressure
-    # trackers yet.
-    if arch in ["gfx942", "gfx950"]:
-        flags.append("amdgpu-use-amdgpu-trackers")
     # Discourage VGPR reuse that creates VALU-to-DS WAR hazards and requires
     # s_wait_alu va_vdst waits in expert scheduling mode.
     if arch == "gfx1250" and is_expert_scheduling_enabled(arch):
@@ -289,7 +285,12 @@ class HIPOptions:
     # Example: llvm_fn_attrs="amdgpu-sched-strategy=iterative-ilp,noinline"
     llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
 
+    # WGP/CU execution mode for gfx10, gfx11 and gfx120x; ignored on other targets.
+    wgp_cu_mode: str = "wgp"
+
     def __post_init__(self):
+        if self.wgp_cu_mode not in ("wgp", "cu"):
+            raise ValueError("wgp_cu_mode must be 'wgp' or 'cu'")
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
@@ -666,6 +667,12 @@ class HIPBackend(BaseBackend):
         for name, value in options.llvm_fn_attrs:
             kernel_fn.remove_fn_attr(name)
             kernel_fn.add_fn_attr(name, value)
+        if options.wgp_cu_mode == "cu":
+            if knobs.compilation.enable_asan:
+                raise ValueError("wgp_cu_mode='cu' is not supported together with TRITON_ENABLE_ASAN")
+            if any(name == "target-features" for name, _ in options.llvm_fn_attrs):
+                raise ValueError("llvm_fn_attrs cannot override 'target-features' when wgp_cu_mode='cu'")
+            kernel_fn.add_fn_target_feature("+cumode")
 
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
@@ -743,10 +750,11 @@ class HIPBackend(BaseBackend):
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
         if knobs.amd.dump_mir:
+            # translate_to_mir dumps both the pre-machine-scheduler MIR and, built
+            # from that same MachineFunction, the scheduling DAG (a (bb, position)
+            # edge list appended after the SCHEDULING DAG marker).
             _ = llvm.translate_to_mir(src, target_triple, options.arch, features, flags, options.enable_fp_fusion,
                                       dump_file_id)
-            llvm.dump_sched_dag(src, target_triple, options.arch, features, flags, options.enable_fp_fusion,
-                                dump_file_id)
         if knobs.amd.swap_mir_enable_misched and not knobs.amd.swap_mir:
             raise ValueError("TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR to be set")
         if knobs.amd.swap_mir:

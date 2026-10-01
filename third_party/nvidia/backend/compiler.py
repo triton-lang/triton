@@ -39,7 +39,10 @@ def min_dot_size(target: GPUTarget):
 
 
 def get_ptxas(arch: int) -> knobs.NvidiaTool:
-    return knobs.nvidia.ptxas_blackwell if arch >= 100 else knobs.nvidia.ptxas
+    if arch < 90:
+        return knobs.nvidia.ptxas
+    # The ptxas-blackwell name is misleading; keep it until legacy ptxas is removed.
+    return knobs.nvidia.ptxas_blackwell
 
 
 @functools.lru_cache()
@@ -420,7 +423,6 @@ class CUDABackend(BaseBackend):
 
         if is_enabled(options, "gsan"):
             # GSan introduces layout conversions, so it must run before shared-memory allocation.
-            mod.set_attr("tti.gsan_launch_pdl", ir.builder(mod.context).get_int32_attr(int(options.launch_pdl)))
             passes.ttgpuir.add_global_sanitizer(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)

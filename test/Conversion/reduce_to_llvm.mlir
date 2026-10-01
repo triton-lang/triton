@@ -7,6 +7,7 @@
 #linear = #ttg.linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>
 #blocked_reduce = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked_packed_reduce = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked_nonaxis_packed_reduce = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked_warp_reduce = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 #even_odd = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -70,6 +71,34 @@ tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<32x16xi32, #linear>) {
   %0 = tt.call @reduce_linear_layout(%arg0) : (tensor<32x16xi32, #linear>) -> tensor<16xi32, #ttg.slice<{dim = 0, parent = #linear}>>
   %1 = builtin.unrealized_conversion_cast %0 : tensor<16xi32, #ttg.slice<{dim = 0, parent = #linear}>> to !llvm.struct<(i32, i32)>
   llvm.store volatile %1, %ptr : !llvm.struct<(i32, i32)>, !llvm.ptr
+  tt.return
+}
+
+// CHECK-LABEL: @reduce_maximum_with_print
+// CHECK: call i32 @vprintf
+// CHECK: store volatile i32
+// TERNARY-LABEL: @reduce_maximum_with_print
+// TERNARY: llvm.call @vprintf
+// TERNARY: %[[PRINT_MAX_A:.*]] = llvm.intr.smax(%{{.*}}, %{{.*}}) : (i32, i32) -> i32
+// TERNARY: llvm.call @vprintf
+// TERNARY: %[[PRINT_MAX_B:.*]] = llvm.intr.smax(%{{.*}}, %[[PRINT_MAX_A]]) : (i32, i32) -> i32
+// TERNARY: llvm.call @vprintf
+// TERNARY: %[[PRINT_MAX_C:.*]] = llvm.intr.smax(%{{.*}}, %[[PRINT_MAX_B]]) : (i32, i32) -> i32
+// TERNARY: %[[PRINT_MAX_PACKED:.*]] = llvm.insertvalue %[[PRINT_MAX_C]], %{{.*}}[0] : !llvm.struct<(i32)>
+// TERNARY: %[[PRINT_MAX_TENSOR:.*]] = builtin.unrealized_conversion_cast %[[PRINT_MAX_PACKED]] : !llvm.struct<(i32)> to tensor<128xi32, {{.*}}>
+// TERNARY: %[[PRINT_MAX_STRUCT:.*]] = builtin.unrealized_conversion_cast %[[PRINT_MAX_TENSOR]] : tensor<128xi32, {{.*}}> to !llvm.struct<(i32)>
+// TERNARY: %[[PRINT_MAX_RESULT:.*]] = llvm.extractvalue %[[PRINT_MAX_STRUCT]][0] : !llvm.struct<(i32)>
+// TERNARY: llvm.store volatile %[[PRINT_MAX_RESULT]],
+tt.func public @reduce_maximum_with_print(%ptr: !llvm.ptr, %arg0: tensor<128x4xi32, #blocked_reduce>) {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    tt.print "combine" {hex = false, isSigned = array<i32: 1>} : %a : i32
+    %maximum = arith.maxsi %b, %a : i32
+    tt.reduce.return %maximum : i32
+  }) : (tensor<128x4xi32, #blocked_reduce>) -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
+  %1 = builtin.unrealized_conversion_cast %0 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>> to !llvm.struct<(i32)>
+  %2 = llvm.extractvalue %1[0] : !llvm.struct<(i32)>
+  llvm.store volatile %2, %ptr : i32, !llvm.ptr
   tt.return
 }
 
@@ -149,6 +178,20 @@ tt.func private @reduce_minui_i16(%arg0: tensor<128x8xi16, #blocked_packed_reduc
     tt.reduce.return %minimum : i16
   }) : (tensor<128x8xi16, #blocked_packed_reduce>) -> tensor<128xi16, #ttg.slice<{dim = 1, parent = #blocked_packed_reduce}>>
   tt.return %0 : tensor<128xi16, #ttg.slice<{dim = 1, parent = #blocked_packed_reduce}>>
+}
+
+// A supported opcode need not combine the block arguments.
+// TERNARY-LABEL: @reduce_captured_combiner
+// TERNARY-NOT: vector<2xi16>
+// TERNARY: llvm.return
+tt.func public @reduce_captured_combiner(%arg0: tensor<256x4xi16, #blocked_nonaxis_packed_reduce>, %value: i16, %out: tensor<256x!tt.ptr<i16>, #ttg.slice<{dim = 1, parent = #blocked_nonaxis_packed_reduce}>>) {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i16, %b: i16):
+    %product = arith.muli %value, %value : i16
+    tt.reduce.return %product : i16
+  }) : (tensor<256x4xi16, #blocked_nonaxis_packed_reduce>) -> tensor<256xi16, #ttg.slice<{dim = 1, parent = #blocked_nonaxis_packed_reduce}>>
+  tt.store %out, %0 : tensor<256x!tt.ptr<i16>, #ttg.slice<{dim = 1, parent = #blocked_nonaxis_packed_reduce}>>
+  tt.return
 }
 
 // TERNARY-LABEL: @reduce_maxnum_f16

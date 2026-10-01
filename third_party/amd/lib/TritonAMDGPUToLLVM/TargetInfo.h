@@ -159,9 +159,6 @@ public:
   bool supportsHwScaledUpcast() const;
   bool supportsHwScaledDowncast() const;
 
-  void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                             Operation *llLoadOp) const override;
-
   // Returns the hardware-specific tiles for shared memory loads and stores.
   // The returned pair is in the format {LoadTile, StoreTile}.
   std::pair<mlir::triton::gpu::LocalMemOpTile,

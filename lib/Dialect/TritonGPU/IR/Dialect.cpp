@@ -1429,16 +1429,15 @@ LinearLayout LinearEncodingTrait::toLinearLayout(const LinearLayout &ll,
                                                  ArrayRef<unsigned> repOrder,
                                                  ArrayRef<int64_t> shape) {
   auto result = ll;
+  auto kRegister = StringAttr::get(getContextFromLL(ll), "register");
   auto canonicalDims = llvm::to_vector(ll.getOutDimNames());
-  llvm::SmallDenseMap<StringAttr, int64_t> namedShape;
   llvm::SmallVector<StringAttr> permutedDims;
   for (auto dim : repOrder) {
     permutedDims.push_back(canonicalDims[dim]);
-    namedShape[canonicalDims[dim]] = shape[dim];
   }
   result = result.transposeOuts(permutedDims);
-  result = ensureLayoutNotSmallerThan(result, namedShape);
-  result = ensureLayoutNotLargerThan(result, namedShape,
+  result = ensureLayoutNotSmallerThan(result, canonicalDims, shape, kRegister);
+  result = ensureLayoutNotLargerThan(result, canonicalDims, shape,
                                      /*broadcastRegisters=*/false);
   result = result.transposeOuts(canonicalDims);
   return result;
@@ -1584,6 +1583,21 @@ Attribute NvidiaMmaEncodingAttr::parse(AsmParser &parser, Type type) {
   return parser.getChecked<NvidiaMmaEncodingAttr>(
       parser.getContext(), versionMajor, versionMinor, warpsPerCTA, *CGALayout,
       instrShape);
+}
+
+LogicalResult NvidiaMmaEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, unsigned versionMajor,
+    unsigned versionMinor, ArrayRef<unsigned> warpsPerCTA,
+    CGAEncodingAttr CGALayout, ArrayRef<unsigned> instrShape) {
+  if (versionMajor == 1) {
+    return emitError()
+           << "Volta (versionMajor = 1) is deprecated and no longer supported";
+  }
+  if (versionMajor != 2 && versionMajor != 3) {
+    return emitError() << "versionMajor must be 2 (Ampere) or 3 (Hopper), got "
+                       << versionMajor;
+  }
+  return success();
 }
 
 void NvidiaMmaEncodingAttr::print(AsmPrinter &printer) const {

@@ -92,10 +92,6 @@ ISAFamily TargetFeatures::getISAFamily() const {
     return ISAFamily::RDNA4m;
   if (major == 11)
     return ISAFamily::RDNA3;
-  if (major == 10 && minor == 3)
-    return ISAFamily::RDNA2;
-  if (major == 10 && minor == 1)
-    return ISAFamily::RDNA1;
 
   return ISAFamily::Unknown;
 }
@@ -273,15 +269,13 @@ bool TargetFeatures::supportsBufferAtomicFadd(Type elementType) const {
 bool TargetFeatures::supportsBufferAtomicFMinMax(Type elementType) const {
   auto isaFamily = getISAFamily();
   if (elementType.isF32()) {
-    return llvm::is_contained({ISAFamily::RDNA1, ISAFamily::RDNA2,
-                               ISAFamily::RDNA3, ISAFamily::RDNA4m,
+    return llvm::is_contained({ISAFamily::RDNA3, ISAFamily::RDNA4m,
                                ISAFamily::RDNA4, ISAFamily::GFX1250},
                               isaFamily);
   }
   if (elementType.isF64()) {
     return llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
-                               ISAFamily::CDNA4, ISAFamily::RDNA1,
-                               ISAFamily::RDNA2, ISAFamily::GFX1250},
+                               ISAFamily::CDNA4, ISAFamily::GFX1250},
                               isaFamily);
   }
   return false;
@@ -365,8 +359,6 @@ bool isCDNA(ISAFamily isaFamily) {
 
 bool isRDNA(ISAFamily isaFamily) {
   switch (isaFamily) {
-  case ISAFamily::RDNA1:
-  case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
