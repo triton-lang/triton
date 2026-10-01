@@ -117,15 +117,11 @@ public:
     return permutedLayout;
   }
   const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
-  // Number of consecutive logical elements already owned by each thread.
+  // Number of consecutive axis elements per thread after normalization.
   unsigned getThreadLocalSegmentSize() const { return threadLocalSegmentSize; }
-  // Thread-segment totals in their original owners, present for lane scans.
+  // Full values with contiguous axis registers, present when lanes must scan.
   const std::optional<triton::LinearLayout> &getIntraWarpLayout() const {
     return intraWarpLayout;
-  }
-  // The same totals with contiguous registers for the intra-warp scan.
-  const std::optional<triton::LinearLayout> &getIntraWarpScanLayout() const {
-    return intraWarpScanLayout;
   }
   // Length of a contiguous logical segment contained in one warp.
   unsigned getWarpLocalSegmentSize() const { return warpLocalSegmentSize; }
@@ -145,7 +141,6 @@ public:
 private:
   triton::LinearLayout buildPermutedLayout();
   triton::LinearLayout buildIntraWarpLayout() const;
-  triton::LinearLayout buildIntraWarpScanLayout() const;
   triton::LinearLayout buildInterWarpLayout() const;
   triton::LinearLayout buildInterWarpScanLayout() const;
 
@@ -157,7 +152,6 @@ private:
   unsigned threadLocalSegmentSize = 1;
   unsigned warpLocalSegmentSize = 1;
   std::optional<triton::LinearLayout> intraWarpLayout;
-  std::optional<triton::LinearLayout> intraWarpScanLayout;
   std::optional<triton::LinearLayout> interWarpLayout;
   std::optional<triton::LinearLayout> interWarpScanLayout;
 };
