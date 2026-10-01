@@ -552,8 +552,8 @@ void TritonIntegerRangeAnalysis::visitControlFlowBlock(Block *block) {
     return;
   for (BlockArgument arg : block->getArguments()) {
     auto *lattice = getLatticeElement(arg);
-    auto summary = controlFlow->getRange(
-        arg, nullptr, [&](Value bound, Block *useBlock) {
+    auto summary =
+        controlFlow->getRange(arg, nullptr, [&](Value bound, Block *useBlock) {
           return getRangeAt(bound, useBlock, point);
         });
     if (summary) {
