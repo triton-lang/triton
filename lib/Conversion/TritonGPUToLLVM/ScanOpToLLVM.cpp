@@ -120,7 +120,7 @@ private:
       }
   }
 
-  // Scan normalized totals across lanes with shuffle-up rounds, then add each
+  // Scan normalized totals across lanes in logical order, then add each
   // lane's exclusive carry to the register prefixes of those totals.
   void scanLaneTotals(triton::ScanOp op, ScanValues &values,
                       const LinearLayout &layout, unsigned numRegs,
@@ -132,44 +132,42 @@ private:
     unsigned axis = op.getAxis();
     bool reverse = op.getReverse();
     unsigned numLanes = segmentSize / numRegs;
-    SmallVector<unsigned> laneBits;
-    unsigned laneMask = 0;
-    for (auto [bit, basis] : llvm::enumerate(layout.getBases().lookup(kLane)))
-      if (basis[axis] && basis[axis] < segmentSize) {
-        laneBits.push_back(bit);
-        laneMask |= 1u << bit;
-      }
+    auto dims = llvm::to_vector(layout.getOutDimNames());
+    auto laneLayout = layout.sublayout({kLane}, dims);
+    auto inverseLaneLayout = layout.pseudoinvert().sublayout(dims, {kLane});
 
-    // The scan lane bits are ordered, but may be separated by bits for
-    // independent scans or other segments. Shift in logical lane order.
-    Value laneIndex = b.i32_val(0);
-    bool contiguous = true;
-    for (auto [i, bit] : llvm::enumerate(laneBits)) {
-      Value digit = b.and_(b.lshr(laneId, b.i32_val(bit)), b.i32_val(1));
-      laneIndex = b.or_(laneIndex, b.shl(digit, b.i32_val(i)));
-      contiguous &= bit == laneBits.front() + i;
-    }
+    // Example: lane=[1,0,2] maps physical lanes 0,1,4,5 to logical positions
+    // 0,1,2,3. Shift the logical coordinate, then use the inverse layout to
+    // find its owning lane. A pseudoinverse picks a valid copy for broadcasts.
+    // Register and warp coordinates stay fixed, so only the lane contribution
+    // is needed. Preserve all coordinates belonging to independent scans.
+    auto coords =
+        applyLinearLayout(loc, rewriter, laneLayout, {{kLane, laneId}});
+    Value index = coords[axis].second;
+    Value segmentIndex = b.and_(index, b.i32_val(segmentSize - 1));
     auto shuffle = [&](SmallVector<Value> input, unsigned offset) {
-      if (contiguous && !reverse) {
-        for (Value &value : input)
-          value = targetInfo.shuffleUp(rewriter, loc, value,
-                                       offset << laneBits.front());
-      } else {
-        // Boundary sources wrap; the combine predicate excludes them.
-        Value index = b.add(laneIndex, b.i32_val(reverse ? offset : -offset));
-        Value lane = b.and_(laneId, b.i32_val(~laneMask));
-        for (auto [i, bit] : llvm::enumerate(laneBits)) {
-          Value digit = b.and_(b.lshr(index, b.i32_val(i)), b.i32_val(1));
-          lane = b.or_(lane, b.shl(digit, b.i32_val(bit)));
-        }
-        for (Value &value : input)
-          value = targetInfo.shuffleIdx(rewriter, loc, value, lane);
-      }
+      // Each lane owns numRegs consecutive totals. Shift by whole groups,
+      // wrapping within this segment; the combine predicate excludes
+      // wraparound.
+      int distance = offset * numRegs;
+      Value shifted =
+          b.and_(b.add(segmentIndex, b.i32_val(reverse ? distance : -distance)),
+                 b.i32_val(segmentSize - 1));
+      auto source = coords;
+      source[axis].second =
+          b.or_(b.and_(index, b.i32_val(~(segmentSize - 1))), shifted);
+      Value lane = applyLinearLayout(loc, rewriter, inverseLaneLayout, source)
+                       .front()
+                       .second;
+      for (Value &value : input)
+        value = targetInfo.shuffleIdx(rewriter, loc, value, lane);
       return input;
     };
     auto hasPrefix = [&](unsigned offset) {
-      return reverse ? b.icmp_ult(laneIndex, b.i32_val(numLanes - offset))
-                     : b.icmp_uge(laneIndex, b.i32_val(offset));
+      unsigned distance = offset * numRegs;
+      return reverse
+                 ? b.icmp_ult(segmentIndex, b.i32_val(segmentSize - distance))
+                 : b.icmp_uge(segmentIndex, b.i32_val(distance));
     };
     for (unsigned base = 0; base < values.size(); base += numRegs) {
       unsigned last = base + (reverse ? 0 : numRegs - 1);
