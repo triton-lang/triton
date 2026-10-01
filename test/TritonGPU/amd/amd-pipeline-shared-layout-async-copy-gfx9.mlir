@@ -121,10 +121,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // -----
 
-// On GFX9 the swizzle is realized as a lane shuffle. Lanes are 4 vec blocks
-// apart here, so the maxPhase=8 XOR leaves the warp and must be clamped.
+// On GFX9 the swizzle is realized as a lane shuffle. CoalesceAsyncCopy narrows
+// the copy to 32-bit loads, so each warp writes two whole rows and the
+// maxPhase=8 XOR stays inside the warp.
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
-// CHECK: #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 1, order = [0, 1]}>
+// CHECK: #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 8, order = [0, 1]}>
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: async_copy_swizzle_clamped_to_warp
