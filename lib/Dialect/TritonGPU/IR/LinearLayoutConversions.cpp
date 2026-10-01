@@ -1165,6 +1165,14 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
           ? cast<PaddedSharedEncodingAttr>(partitionLayout).getLinearComponent()
           : toLinearLayout(partitionShape, partitionLayout);
 
+  // Partitioning is local to each CTA. Factor the CGA mapping out before
+  // adding partition/group bits so each CTA owns contiguous local pieces.
+  auto cga = maybeLinearToCGAEncodingAttr(baseLayout);
+  assert(succeeded(cga) && "partition layout must factor into CTA and CGA");
+  auto maybeLocalLayout = divideRight(baseLayout, cga->getLinearLayout());
+  assert(maybeLocalLayout && "failed to factor CGA from partition layout");
+  LinearLayout localLayout = *maybeLocalLayout;
+
   auto *ctx = partitioned.getContext();
   auto outDimNames = standardOutDimNames(ctx, baseLayout.getNumOutDims());
 
@@ -1178,7 +1186,8 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   LinearLayout extension = LinearLayout::identity1D(
       partitioned.getNumGroups(), kOffset, outDimNames[partitionDim]);
 
-  return baseLayout * partLayout * extension;
+  localLayout = localLayout * partLayout * extension;
+  return combineCtaCgaWithShape(localLayout, partitioned.getCGALayout(), shape);
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
