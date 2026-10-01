@@ -481,62 +481,17 @@ struct MemDescSubsliceOpConversion
       offsetVals.push_back(b.add(oldOffVal, b.i32_val(opOff)));
     }
 
-    // For PartitionedSharedEncoding we need to pick the right base at load
-    // time. Let
-    //   o     = this op's static subslice offsets (one per dim),
-    //   c     = logical base indices for the current subslice op,
-    //   L_cta = the shared LL within one CTA (inputs: offset, partition;
-    //                                            outputs: dim0, dim1, ...).
-    //
-    //   (1) c_src = c + o
-    //   (2) verifier makes o's bits disjoint from c's bits per dim, so:
-    //         c + o = c ^ o                                   (bit-disjoint)
-    //   (3) L_cta^-1 is linear, so projecting (2) onto the partition component:
-    //         partition(L_cta^-1(c_src)) = partition(L_cta^-1(c)) ^ S
-    //       where  S = partition(L_cta^-1(o))
-    //   (4) the existing lowering already computes i = partition(L_cta^-1(c))
-    //       and indexes bases[i]; from (3) the correct base is:
-    //         bases[i ^ S]
-    //   (5) precompute that rotation once here
-    //         newBases[i] = oldBases[i ^ S]
-    //
-    // The offset component of (3) is already XORed in by getShmemOffset at
-    // load time; only the partition component needs this fix.
-    if (newBases.size() > 1) {
-      LinearLayout ll = triton::gpu::toLinearLayoutIgnoringPadding(srcTy);
-      auto kPartition = StringAttr::get(ctx, "partition");
-      assert(ll.hasInDim(kPartition) &&
-             "multiple bases require a partition input dim");
-      auto dimNames = standardOutDimNames(ctx, layoutOffsets.size());
+    // Partition pieces repeat independently within each CTA, with partitions
+    // varying faster than groups. The logical piece selected by the static
+    // offset therefore determines the physical base rotation directly.
+    if (auto part = dyn_cast<PartitionedSharedEncodingAttr>(encoding)) {
+      auto allocShape = dropPipeliningDim(srcTy.getAllocShape(), encoding);
+      auto shapePerCTA = getShapePerCTA(part, allocShape);
+      unsigned dim = part.getPartitionDim();
+      int64_t pieceSize = shapePerCTA[dim] / part.getNumLogicalPieces();
+      unsigned partitionShift =
+          (layoutOffsets[dim] / pieceSize) % part.getNumPartitions();
 
-      // Partition selection repeats independently in every CTA. Remove the
-      // block input and trim the logical outputs to one CTA before inversion,
-      // so block broadcasting is not part of the inverse at all.
-      auto kBlock = StringAttr::get(ctx, "block");
-      assert(ll.hasInDim(kBlock));
-      LinearLayout localLayout = ll.resizeInDim(kBlock, 1);
-      auto layoutShape = dropPipeliningDim(srcTy.getAllocShape(), encoding);
-      auto shapePerCTA = getShapePerCTA(encoding, layoutShape);
-      assert(shapePerCTA.size() == dimNames.size());
-      for (auto [dim, size] : llvm::zip(dimNames, shapePerCTA))
-        localLayout = localLayout.resizeOutDim(dim, size);
-      assert(localLayout.isInvertible() &&
-             "partitioned layout within one CTA must be invertible");
-
-      SmallVector<std::pair<StringAttr, int32_t>> namedOffsets;
-      for (auto [dim, off, size] :
-           llvm::zip(dimNames, layoutOffsets, shapePerCTA)) {
-        // Only the partition-base selection is CTA-local. Keep the original
-        // logical offsets in offsetVals so the subslice itself is unchanged.
-        namedOffsets.push_back({dim, off % size});
-      }
-      // This is a logical tensor subslice; it neither slices the "block" input
-      // nor changes which CTAs share the descriptor. This case is required,
-      // for example, when a multi-CTA dot operand is broadcast along one CGA
-      // axis but subdivided into logical K/M/N tiles.
-      auto partitionLayout =
-          localLayout.invert().sublayout(dimNames, {kPartition});
-      int32_t partitionShift = partitionLayout.apply(namedOffsets)[0].second;
       SmallVector<Value> rotated(newBases.size());
       for (size_t i = 0; i < newBases.size(); ++i)
         rotated[i] = newBases[i ^ partitionShift];

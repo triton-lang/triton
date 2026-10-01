@@ -1218,18 +1218,13 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   auto *ctx = partitioned.getContext();
   auto outDimNames = standardOutDimNames(ctx, baseLayout.getNumOutDims());
 
-  // Partitioning is local to each CTA. The wrapped layout may carry a CGA
-  // block mapping, but that mapping must remain outside the partition/group
-  // bits. Otherwise those bits are appended after the block basis and make
-  // each CTA own interleaved fragments of the clustered tile instead of one
-  // contiguous per-CTA tile.
-  LinearLayout localLayout = getLayoutWithinBlock(baseLayout);
-  auto localPieceShape = getShapePerCTA(
-      partitioned.getCGALayout().getCTASplitNum(), partitionShape);
-  llvm::SmallDenseMap<StringAttr, int64_t> localPieceShapeMap;
-  for (auto [dim, size] : llvm::zip(outDimNames, localPieceShape))
-    localPieceShapeMap[dim] = size;
-  localLayout = ensureLayoutNotLargerThan(localLayout, localPieceShapeMap);
+  // Partitioning is local to each CTA. Factor the CGA mapping out before
+  // adding partition/group bits so each CTA owns contiguous local pieces.
+  auto cga = maybeLinearToCGAEncodingAttr(baseLayout);
+  assert(succeeded(cga) && "partition layout must factor into CTA and CGA");
+  auto maybeLocalLayout = divideRight(baseLayout, cga->getLinearLayout());
+  assert(maybeLocalLayout && "failed to factor CGA from partition layout");
+  LinearLayout localLayout = *maybeLocalLayout;
 
   // partLayout maps "partition" -> piece selection along partitionDim.
   auto kPartition = StringAttr::get(ctx, "partition");

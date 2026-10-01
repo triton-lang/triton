@@ -232,17 +232,12 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     SmallVector<int64_t> pieceShape(blockShape);
     pieceShape[partitionDim] /= numLogicalPieces;
     auto verifyFixedShape = [&](const LinearLayout &layout) -> LogicalResult {
-      auto bases = layout.getBases();
-      auto kBlock = StringAttr::get(ctx, "block");
-      if (layout.hasInDim(kBlock))
-        bases[kBlock] = {};
-      LinearLayout localPiece(std::move(bases),
-                              llvm::to_vector(layout.getOutDimNames()));
-      if (!llvm::equal(localPiece.getOutDimSizes(), pieceShape)) {
+      auto shape = llvm::to_vector_of<int64_t>(layout.getOutDimSizes());
+      auto actual = getShapePerCTA(enc, shape);
+      if (actual != pieceShape) {
         return emitError() << "partitionLayout does not match the per-CTA "
                               "logical piece shape; expected "
-                           << pieceShape << ", got "
-                           << localPiece.getOutDimSizes();
+                           << pieceShape << ", got " << actual;
       }
       return success();
     };
