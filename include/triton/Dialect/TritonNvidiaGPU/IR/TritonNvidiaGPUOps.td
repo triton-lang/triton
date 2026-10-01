@@ -291,15 +291,26 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [
   let description = [{
       Initializes a shared memory allocation with mbarrier information.
       `alloc` is a descriptor to the shared memory allocation. `count` is the
-      number of arrives expected by the barrier.
+      number of arrives expected by the barrier. When preferred cluster fallback
+      is enabled, `fallback_count` optionally gives the count to use when the
+      actual cluster is smaller than the preferred cluster.
+      Both counts are multiplied by the number of CTAs sharing each barrier.
+      Without `fallback_count`, the same count is used for all cluster sizes.
 
       This lowers to PTX mbarrier.init.shared::cta.b64.
   }];
 
   let arguments = (ins
     Arg<TTG_MemDescType, "", GenericSharedWrite>:$alloc,
-    I32Attr:$count
+    I32Attr:$count,
+    OptionalAttr<I32Attr>:$fallback_count
   );
+  let builders = [
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
+      build($_builder, $_state, alloc, $_builder.getI32IntegerAttr(count),
+            /*fallback_count=*/IntegerAttr());
+    }]>
+  ];
   let assemblyFormat = "$alloc `,` $count attr-dict `:` qualified(type($alloc))";
   let hasVerifier = 1;
 }

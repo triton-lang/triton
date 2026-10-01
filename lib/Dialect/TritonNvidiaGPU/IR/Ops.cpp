@@ -386,6 +386,8 @@ LogicalResult WarpGroupDotWaitOp::verify() {
 LogicalResult InitBarrierOp::verify() {
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
+  if (auto count = getFallbackCountAttr(); count && count.getInt() < 1)
+    return emitOpError("fallback count must be greater than or equal to 1");
   auto barrierTy = cast<MemDescType>(getAlloc().getType());
   // We cannot place cluster barriers inside warp-specialize regions, and we
   // need to place a relaxed cluster barrier between barrier.init and the first

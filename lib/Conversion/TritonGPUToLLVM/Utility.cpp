@@ -1490,39 +1490,7 @@ SmallVector<Type> SharedMemoryObject::getTypes() const {
 
 std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
     triton::gpu::MemDescType srcTy) {
-  auto ctx = srcTy.getContext();
-  auto encoding = srcTy.getEncoding();
-  auto shape = triton::gpu::dropPipeliningDim(srcTy.getShape(), encoding);
-  auto allocShape =
-      triton::gpu::dropPipeliningDim(srcTy.getAllocShape(), encoding);
-
-  // Early exist when there is no subview
-  if (allocShape == shape) {
-    return {0, 0};
-  }
-  auto totalLl = triton::gpu::toLinearLayoutIgnoringPadding(
-      allocShape, srcTy.getEncoding());
-  // Map from dimNames to offset, block
-  auto invLl = totalLl.pseudoinvert();
-  SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
-  for (auto dim : standardOutDimNames(ctx, shape.size())) {
-    logicalOffsets.push_back({dim, 0});
-  }
-
-  uint64_t offsetMask = 0;
-  uint64_t blockMask = 0;
-  for (auto [dim, shapes] : llvm::enumerate(llvm::zip(shape, allocShape))) {
-    auto [shape, allocShape] = shapes;
-    for (int j = llvm::Log2_32(shape); j < llvm::Log2_32(allocShape); ++j) {
-      logicalOffsets[dim].second = 1 << j;
-      auto offsetAndBlock = invLl.apply(logicalOffsets);
-      offsetMask |= offsetAndBlock[0].second;
-      blockMask |= offsetAndBlock[1].second;
-    }
-    // Reset the offset for the next dimension
-    logicalOffsets[dim].second = 0;
-  }
-  return {offsetMask, blockMask};
+  return triton::gpu::getMaskSpanOffsetsAndBlocks(srcTy);
 }
 
 uint64_t

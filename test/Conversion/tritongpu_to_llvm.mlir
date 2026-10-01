@@ -1240,7 +1240,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @convert_layout_cta_broadcast
   tt.func @convert_layout_cta_broadcast(%arg0: tensor<64xi32, #src>) {
-    // CHECK: nvg.cluster_id
+    // CHECK: nvg.program_cta_id
     // CHECK-NOT: nvvm.bar
     // CHECK: nvvm.shfl.sync idx
     // CHECK-NOT: nvvm.shfl.sync
@@ -1797,7 +1797,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: convert_layout_loads_local_replica
   // CHECK: llvm.store
-  // CHECK: nvg.cluster_id
+  // CHECK: nvg.program_cta_id
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.load
   // CHECK-NOT: nvvm.cluster.arrive
@@ -2880,7 +2880,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: local_load_uses_local_cta
-  // CHECK: nvg.cluster_id
+  // CHECK: nvg.program_cta_id
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.load
   tt.func public @local_load_uses_local_cta(%arg0: !ttg.memdesc<2xf32, #shared, #smem>) {
@@ -2896,7 +2896,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: local_store_uses_local_cta
-  // CHECK: nvg.cluster_id
+  // CHECK: nvg.program_cta_id
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.store
   tt.func public @local_store_uses_local_cta(%arg0: tensor<2xf32, #reg>, %arg1: !ttg.memdesc<2xf32, #shared, #smem, mutable>) {
@@ -3790,7 +3790,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CTA bit 0 broadcasts the input. Only CTAs 0 and 2 accumulate counts;
   // loading the zero partial histograms from CTAs 1 and 3 is unnecessary.
   // CHECK-LABEL: @histogram_skips_replicated_ctas
-  // CHECK: %[[CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[CTA:.*]] = nvg.program_cta_id
   // CHECK: %[[MASK:.*]] = llvm.mlir.constant(1 : i32)
   // CHECK: %[[MASKED:.*]] = llvm.and %[[CTA]], %[[MASK]]
   // CHECK: %[[PRED:.*]] = llvm.icmp "eq" %[[MASKED]], %{{.*}} : i32

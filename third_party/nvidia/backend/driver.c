@@ -18,6 +18,12 @@
 #define CU_LAUNCH_ATTRIBUTE_SHARED_MEMORY_MODE 18
 #endif
 
+#if defined(CUDA_VERSION) && CUDA_VERSION >= 12080
+#define TRITON_HAS_PREFERRED_CLUSTER_LAUNCH 1
+#else
+#define TRITON_HAS_PREFERRED_CLUSTER_LAUNCH 0
+#endif
+
 typedef struct {
   PyObject_HEAD;
   _Alignas(alignof(CUtensorMap)) CUtensorMap tensorMap;
@@ -980,12 +986,13 @@ cleanup:
 }
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps,
-                    int num_ctas, int launch_cooperative_grid, int launch_pdl,
+                    int num_ctas, int preferred_cluster_fallback_ctas,
+                    int launch_cooperative_grid, int launch_pdl,
                     int shared_memory, CUstream stream, CUfunction function,
                     void **params) {
   if (gridX * gridY * gridZ > 0) {
-    // 4 attributes that we can currently pass maximum
-    CUlaunchAttribute launchAttr[4];
+    // 5 attributes that we can currently pass maximum
+    CUlaunchAttribute launchAttr[5];
     static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
     if (cuLaunchKernelExHandle == NULL) {
       cuLaunchKernelExHandle = getLaunchKernelExHandle();
@@ -1030,14 +1037,30 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
       ++num_attrs;
     }
 
+    int launch_cluster_dim = preferred_cluster_fallback_ctas != 0
+                                 ? preferred_cluster_fallback_ctas
+                                 : num_ctas;
     if (num_ctas != 1) {
       CUlaunchAttribute clusterAttr = {};
       clusterAttr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
-      clusterAttr.value.clusterDim.x = num_ctas;
+      clusterAttr.value.clusterDim.x = launch_cluster_dim;
       clusterAttr.value.clusterDim.y = 1;
       clusterAttr.value.clusterDim.z = 1;
       launchAttr[num_attrs] = clusterAttr;
       ++num_attrs;
+
+#if TRITON_HAS_PREFERRED_CLUSTER_LAUNCH
+      if (preferred_cluster_fallback_ctas != 0) {
+        CUlaunchAttribute preferredClusterAttr = {};
+        preferredClusterAttr.id =
+            CU_LAUNCH_ATTRIBUTE_PREFERRED_CLUSTER_DIMENSION;
+        preferredClusterAttr.value.preferredClusterDim.x = num_ctas;
+        preferredClusterAttr.value.preferredClusterDim.y = 1;
+        preferredClusterAttr.value.preferredClusterDim.z = 1;
+        launchAttr[num_attrs] = preferredClusterAttr;
+        ++num_attrs;
+      }
+#endif
 
       CUlaunchAttribute clusterSchedulingAttr = {};
       clusterSchedulingAttr.id =
@@ -1439,7 +1462,7 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
   uint64_t _function;
   int launch_cooperative_grid;
   int launch_pdl;
-  int num_warps, num_ctas, shared_memory;
+  int num_warps, num_ctas, shared_memory, preferred_cluster_fallback_ctas;
   PyObject *launch_metadata = NULL;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
@@ -1448,14 +1471,21 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
   PyObject *arg_annotations = NULL;
   Py_buffer signature;
   PyObject *kernel_args = NULL;
-  if (!PyArg_ParseTuple(args, "iiiKKpp(iii)OOOOOOy*O", &gridX, &gridY, &gridZ,
+  if (!PyArg_ParseTuple(args, "iiiKKpp(iiii)OOOOOOy*O", &gridX, &gridY, &gridZ,
                         &_stream, &_function, &launch_cooperative_grid,
                         &launch_pdl, &num_warps, &num_ctas, &shared_memory,
-                        &launch_metadata, &launch_enter_hook, &launch_exit_hook,
+                        &preferred_cluster_fallback_ctas, &launch_metadata,
+                        &launch_enter_hook, &launch_exit_hook,
                         &global_scratch_obj, &profile_scratch_obj,
                         &arg_annotations, &signature, &kernel_args)) {
     return NULL;
   }
+
+#if !TRITON_HAS_PREFERRED_CLUSTER_LAUNCH
+  // Older CUDA headers cannot spell the preferred-cluster launch attribute.
+  // Ignore the optional fallback and launch the preferred cluster as required.
+  preferred_cluster_fallback_ctas = 0;
+#endif
 
   // launch entry hook.
   if (!launchHook(launch_enter_hook, launch_metadata)) {
@@ -1522,9 +1552,9 @@ static PyObject *launchKernel(PyObject *self, PyObject *args) {
   }
 
   Py_BEGIN_ALLOW_THREADS;
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid,
-          launch_pdl, shared_memory, (CUstream)_stream, (CUfunction)_function,
-          params);
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas,
+          preferred_cluster_fallback_ctas, launch_cooperative_grid, launch_pdl,
+          shared_memory, (CUstream)_stream, (CUfunction)_function, params);
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {
     goto cleanup;

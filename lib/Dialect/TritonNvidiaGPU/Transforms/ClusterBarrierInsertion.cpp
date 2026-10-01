@@ -94,18 +94,18 @@ bool valueAliasesTrackedBuffers(Value value,
   return false;
 }
 
-bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
+bool requiresCrossCTAMBarrierInitSync(ttg::MBarrierOpInterface initBarrierOp,
                                       FunctionOpInterface funcOp,
                                       Allocation *allocation, int numCTAs) {
   Allocation::BufferIdSetT initBarrierBuffers;
-  for (auto bufferId :
-       allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
+  for (auto bufferId : allocation->getAllBufferIdsWithAliases(
+           initBarrierOp.getBarriers().front())) {
     assert(bufferId != Allocation::InvalidBufferId);
     initBarrierBuffers.insert(bufferId);
   }
 
   return mlir::triton::nvidia_gpu::requiresCrossCTAMBarrierInitSync(
-      funcOp, initBarrierOp.getBarrier(), numCTAs, [&](Value value) {
+      funcOp, initBarrierOp.getBarriers().front(), numCTAs, [&](Value value) {
         return value && valueAliasesTrackedBuffers(value, initBarrierBuffers,
                                                    allocation);
       });
@@ -154,9 +154,7 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
   llvm::SetVector<Operation *> crossCTAInitAnchors;
   Allocation::BufferIdSetT trackedBarrierBuffers;
 
-  // Find all cross-CTA mbarrier.init ops and map each
-  // one to the containing top-level op that bounds the insertion window.
-  funcOp.walk([&](ttng::InitBarrierOp initBarrierOp) {
+  auto processInitBarrier = [&](ttg::MBarrierOpInterface initBarrierOp) {
     if (!requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
                                           numCTAs))
       return;
@@ -164,11 +162,17 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
         topLevelRegion.findAncestorOpInRegion(*initBarrierOp.getOperation());
     assert(topLevelAnchor && "init op must be inside the function region");
     crossCTAInitAnchors.insert(topLevelAnchor);
-    for (auto bufferId :
-         allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
+    for (auto bufferId : allocation->getAllBufferIdsWithAliases(
+             initBarrierOp.getBarriers().front())) {
       assert(bufferId != Allocation::InvalidBufferId);
       trackedBarrierBuffers.insert(bufferId);
     }
+  };
+
+  // Find all cross-CTA mbarrier init ops and map each
+  // one to the containing top-level op that bounds the insertion window.
+  funcOp.walk([&](ttng::InitBarrierOp initBarrierOp) {
+    processInitBarrier(initBarrierOp);
   });
   // Nothing to do
   if (crossCTAInitAnchors.empty())

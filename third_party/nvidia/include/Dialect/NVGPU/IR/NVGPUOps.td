@@ -105,7 +105,7 @@ def NVGPU_WGMMAOp : NVGPU_Op<"wgmma", []> {
   let assemblyFormat = "$opA `,` $opB `,` $useC (`,` $opC^)? attr-dict `:` functional-type(operands, $res)";
 }
 
-def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
+def NVGPU_ProgramCTAIdOp : NVGPU_Op<"program_cta_id", [Pure]> {
   let results = (outs I32:$result);
   let assemblyFormat = "attr-dict";
 }

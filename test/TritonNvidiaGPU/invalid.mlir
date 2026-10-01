@@ -269,6 +269,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @init_barrier_zero_fallback_count(%barrier: !ttg.memdesc<1xi64, #shared, #smem, mutable>) {
+    // expected-error @+1 {{fallback count must be greater than or equal to 1}}
+    ttng.init_barrier %barrier, 1 {fallback_count = 0 : i32} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @init_barrier_negative_fallback_count(%barrier: !ttg.memdesc<1xi64, #shared, #smem, mutable>) {
+    // expected-error @+1 {{fallback count must be greater than or equal to 1}}
+    ttng.init_barrier %barrier, 1 {fallback_count = -1 : i32} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 

@@ -188,18 +188,31 @@ struct InitBarrierOpConversion
       pred = b.and_(pred, *leaderPred);
 
     auto numCTAs = triton::gpu::lookupNumCTAs(op);
-    auto initCount = op.getCount();
     // The lead barrier accounts for all arrives from CTAs that broadcast into
     // the same barrier.
-    initCount *= numCTAs / barrierTy.getNumElements();
+    auto countScale = numCTAs / barrierTy.getNumElements();
+    auto initCount = op.getCount() * countScale;
 
     ::mlir::triton::PTXBuilder ptxBuilder;
-    const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                            std::to_string(initCount) + ";";
-    auto &barSyncOp = *ptxBuilder.create(ptx);
-    barSyncOp({ptxBuilder.newOperand(pred, "b"),
-               ptxBuilder.newOperand(smemObj.getBase(), "r")},
-              /*onlyAttachMLIRArgs=*/true);
+    SmallVector<PTXBuilder::Operand *> operands{
+        ptxBuilder.newOperand(pred, "b"),
+        ptxBuilder.newOperand(smemObj.getBase(), "r")};
+    std::string countOperand = std::to_string(initCount);
+    auto fallbackCount = op.getFallbackCount();
+    if (fallbackCount && *fallbackCount != op.getCount() &&
+        LLVM::NVIDIA::usePreferredClusterFallback(
+            op->getParentOfType<ModuleOp>())) {
+      Value actualNumCTAs =
+          NVVM::ClusterDimBlocksXOp::create(rewriter, loc, i32_ty);
+      Value isFallback = b.icmp_ne(actualNumCTAs, b.i32_val(numCTAs));
+      Value count = b.select(isFallback, b.i32_val(*fallbackCount * countScale),
+                             b.i32_val(initCount));
+      operands.push_back(ptxBuilder.newOperand(count, "r"));
+      countOperand = "$2";
+    }
+    auto &barSyncOp = *ptxBuilder.create(
+        "@$0 mbarrier.init.shared::cta.b64 [$1], " + countOperand + ";");
+    barSyncOp(operands, /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(op->getContext());
     ptxBuilder.launch(rewriter, loc, voidTy);
     rewriter.eraseOp(op);
@@ -505,7 +518,7 @@ struct CLCTryCancelOpConversion
     auto numCTAs = ttg::lookupNumCTAs(op);
     if (numCTAs > 1) {
       TritonLLVMOpBuilder b(loc, rewriter);
-      auto clusterCtaId = targetInfo->getClusterCTAId(rewriter, loc);
+      Value clusterCtaId = NVVM::ClusterId::create(rewriter, loc, i32_ty);
       pred = b.and_(pred, b.icmp_eq(clusterCtaId, b.i32_val(0)));
     }
 

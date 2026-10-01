@@ -79,6 +79,8 @@ PackedArithInstructionSpec getPackedArithInstructionSpec(PackedArithOp op);
 unsigned getPackedArithFp4Axis(PackedArithOp op);
 
 constexpr static char AttrTwoCTAsName[] = "ttng.two-ctas";
+constexpr static char AttrPreferredClusterFallbackCTAsName[] =
+    "ttng.preferred-cluster-fallback-ctas";
 
 inline bool getModuleTwoCTAs(ModuleOp mod) {
   auto attr = mod->getAttrOfType<BoolAttr>(AttrTwoCTAsName);
@@ -94,6 +96,12 @@ inline bool getModuleTwoCTAs(Operation *op) {
 TensorMemoryScalesBlockRepOrder getTensorMemoryScalesBlockRepOrder(
     Operation *op, bool isA, ScaleDotElemType aType, ScaleDotElemType bType,
     Type aScaleElemType, Type bScaleElemType);
+
+inline int getModulePreferredClusterFallbackCTAs(ModuleOp mod) {
+  auto attr =
+      mod->getAttrOfType<IntegerAttr>(AttrPreferredClusterFallbackCTAsName);
+  return attr ? attr.getInt() : 0;
+}
 
 struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
   StringRef getName() const final { return "<TensorMemory>"; }

@@ -247,12 +247,11 @@ instrumentMBarrierOps(ModuleOp module,
     Value scratch = getValueForOp(op, scratchIt->second);
 
     if (auto init = dyn_cast<ttng::InitBarrierOp>(op)) {
-      OpBuilder builder(op);
-      builder.setInsertionPointAfter(op);
-      auto barrierTy = init.getAlloc().getType();
       int32_t expectedCount =
           static_cast<int32_t>(init.getCount() * ttg::lookupNumCTAs(op) /
-                               barrierTy.getNumElements());
+                               init.getAlloc().getType().getNumElements());
+      OpBuilder builder(op);
+      builder.setInsertionPointAfter(op);
       ExperimentalGSanMBarrierInitOp::create(builder, op->getLoc(), scratch,
                                              init.getBarrier(), expectedCount);
       continue;
