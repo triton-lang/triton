@@ -307,7 +307,11 @@ void prepareMBarrierArrivals(ModuleOp mod, BufferRegionAnalysis &regions,
   // Completing arrivals with an explicit count requires SM90.
   if (computeCapability < 90)
     return;
-  if (!mod.walk([](ArriveBarrierOp) { return WalkResult::interrupt(); })
+  if (!mod.walk([](Operation *op) {
+            return isa<ArriveBarrierOp, BarrierExpectOp>(op)
+                       ? WalkResult::interrupt()
+                       : WalkResult::advance();
+          })
            .wasInterrupted())
     return;
   auto forwarding = collectDescriptorForwarding(mod);
