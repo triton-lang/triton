@@ -361,6 +361,7 @@ tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tens
 // conversion heuristic. Scan forces shuffles in both directions, including
 // packed i8 and split i64 values, without requesting an allocation offset.
 #transpose = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[0], [0]], block = []}>
+#native_prefix = #ttg.linear<{register = [[1], [2], [16]], lane = [[4], [8], [0], [0], [0]], warp = [[0], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // TRANSPOSE: ttg.shared = 0 : i32
 // AMD-TRANSPOSE: ttg.shared = 0 : i32
@@ -400,4 +401,48 @@ tt.func private @test_scan_warp_transpose_reverse(%a: tensor<16xi8, #transpose>,
   }) : (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>) -> (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>)
   tt.return %a_out, %b_out : tensor<16xi8, #transpose>, tensor<16xi64, #transpose>
 }
+// Native four-register prefixes must be computed before any lane shuffles.
+// Only their totals undergo the register/lane conversion.
+// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_forward
+// TRANSPOSE-NOT: nvvm.shfl.sync
+// TRANSPOSE: llvm.add
+// TRANSPOSE: nvvm.shfl.sync
+// TRANSPOSE: llvm.return
+// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_forward
+// AMD-TRANSPOSE: llvm.add
+// AMD-TRANSPOSE: llvm.return
+tt.func private @test_scan_native_prefix_forward(%a: tensor<32xi8, #native_prefix>, %b: tensor<32xi64, #native_prefix>) -> (tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>) {
+  %a_out, %b_out = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%a1: i8, %b1: i64, %a2: i8, %b2: i64):
+    %a12 = arith.muli %a1, %a2 : i8
+    %a2_wide = arith.extsi %a2 : i8 to i64
+    %b12 = arith.muli %b1, %a2_wide : i64
+    %b_sum = arith.addi %b12, %b2 : i64
+    tt.scan.return %a12, %b_sum : i8, i64
+  }) : (tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>) -> (tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>)
+  tt.return %a_out, %b_out : tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>
+}
+
+// Native four-register prefixes must be computed before any lane shuffles.
+// Only their totals undergo the register/lane conversion.
+// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
+// TRANSPOSE-NOT: nvvm.shfl.sync
+// TRANSPOSE: llvm.add
+// TRANSPOSE: nvvm.shfl.sync
+// TRANSPOSE: llvm.return
+// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
+// AMD-TRANSPOSE: llvm.add
+// AMD-TRANSPOSE: llvm.return
+tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefix>, %b: tensor<32xi64, #native_prefix>) -> (tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>) {
+  %a_out, %b_out = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%a1: i8, %b1: i64, %a2: i8, %b2: i64):
+    %a12 = arith.muli %a1, %a2 : i8
+    %a2_wide = arith.extsi %a2 : i8 to i64
+    %b12 = arith.muli %b1, %a2_wide : i64
+    %b_sum = arith.addi %b12, %b2 : i64
+    tt.scan.return %a12, %b_sum : i8, i64
+  }) : (tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>) -> (tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>)
+  tt.return %a_out, %b_out : tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>
+}
+
 }
