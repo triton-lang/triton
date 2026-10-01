@@ -388,8 +388,7 @@ private:
       }
       accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, shfl);
     }
-    Operation *combiner = op.getSingleCombiner();
-    if (!combiner || !combiner->hasTrait<OpTrait::IsCommutative>()) {
+    if (!op.isCommutative()) {
       // The lane with all reduction bits clear combines each subtree in the
       // same order. Broadcast its result instead of ordering both operands at
       // every step of the tree.

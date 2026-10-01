@@ -3362,6 +3362,41 @@ def test_reduce_noncommutative(n, order, warps_per_cta, tuple_reduce):
         torch.testing.assert_close(last, x[:, -1:].to(torch.int64).expand_as(last), atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("n", [4, 128])
+@pytest.mark.parametrize("order", [[0, 1], [1, 0]])
+@pytest.mark.parametrize("warps_per_cta", [[4, 1], [1, 4]])
+def test_reduce_commutative_complex_product(n, order, warps_per_cta):
+
+    @gluon.jit
+    def combine(ar, ai, br, bi):
+        return ar * br - ai * bi, ar * bi + ai * br
+
+    @gluon.jit
+    def kernel(Real, Imag, OutReal, OutImag, N: ttgl.constexpr, Layout: ttgl.constexpr):
+        rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, Layout))
+        cols = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, Layout))
+        offsets = rows[:, None] * N + cols[None, :]
+        real = ttgl.load(Real + offsets)
+        imag = ttgl.load(Imag + offsets)
+        real, imag = ttgl.reduce((real, imag), 1, combine)
+        ttgl.store(OutReal + offsets, real[:, None])
+        ttgl.store(OutImag + offsets, imag[:, None])
+
+    torch.manual_seed(123)
+    real = 1 + 0.01 * torch.randn((16, n), device="cuda")
+    imag = 0.01 * torch.randn((16, n), device="cuda")
+    out_real = torch.empty_like(real)
+    out_imag = torch.empty_like(imag)
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], warps_per_cta, order)
+    kernel[(1, )](real, imag, out_real, out_imag, n, layout, enable_fp_fusion=False)
+    expected = torch.complex(real.double(), imag.double()).prod(1, keepdim=True)
+    torch.testing.assert_close(out_real, expected.real.float().expand_as(real), atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(out_imag, expected.imag.float().expand_as(imag), atol=1e-6, rtol=1e-5)
+    # A commutative reduction must still agree exactly across all replicas.
+    torch.testing.assert_close(out_real, out_real[:, :1].expand_as(real), atol=0, rtol=0)
+    torch.testing.assert_close(out_imag, out_imag[:, :1].expand_as(imag), atol=0, rtol=0)
+
+
 @gluon.jit
 def _combine_add2(a, b, c, d):
     parent: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [1, 32], [1, ttgl.num_warps()], [1, 0],

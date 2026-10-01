@@ -575,6 +575,58 @@ tt.func private @reduce_commutative_swapped(%arg0: tensor<4x2xi32, #blocked_warp
   tt.return %0 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
 }
 
+// Each component can be commutative even when there is no single combiner.
+// REDUX-LABEL: @reduce_tuple_sum
+// REDUX-COUNT-2: nvvm.shfl.sync bfly
+// REDUX-NOT: nvvm.shfl
+// REDUX: llvm.return
+tt.func private @reduce_tuple_sum(%arg0: tensor<4x2xf32, #blocked_warp_reduce>, %arg1: tensor<4x2xf32, #blocked_warp_reduce>) -> (tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
+  %0:2 = "tt.reduce"(%arg0, %arg1) <{axis = 1 : i32}> ({
+  ^bb0(%a0: f32, %a1: f32, %b0: f32, %b1: f32):
+    %r0 = arith.addf %a0, %b0 : f32
+    %r1 = arith.addf %b1, %a1 : f32
+    tt.reduce.return %r0, %r1 : f32, f32
+  }) : (tensor<4x2xf32, #blocked_warp_reduce>, tensor<4x2xf32, #blocked_warp_reduce>) -> (tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>)
+  tt.return %0#0, %0#1 : tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+}
+
+// Complex multiplication needs matching exchanged subtrees and a subtraction.
+// REDUX-LABEL: @reduce_complex_product
+// REDUX-COUNT-2: nvvm.shfl.sync bfly
+// REDUX-NOT: nvvm.shfl
+// REDUX: llvm.return
+tt.func private @reduce_complex_product(%arg0: tensor<4x2xf32, #blocked_warp_reduce>, %arg1: tensor<4x2xf32, #blocked_warp_reduce>) -> (tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
+  %0:2 = "tt.reduce"(%arg0, %arg1) <{axis = 1 : i32}> ({
+  ^bb0(%ar: f32, %ai: f32, %br: f32, %bi: f32):
+    %rr = arith.mulf %ar, %br : f32
+    %ii = arith.mulf %ai, %bi : f32
+    %ri = arith.mulf %ar, %bi : f32
+    %ir = arith.mulf %ai, %br : f32
+    %real = arith.subf %rr, %ii : f32
+    %imag = arith.addf %ri, %ir : f32
+    tt.reduce.return %real, %imag : f32, f32
+  }) : (tensor<4x2xf32, #blocked_warp_reduce>, tensor<4x2xf32, #blocked_warp_reduce>) -> (tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>)
+  tt.return %0#0, %0#1 : tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+}
+
+// Changing the imaginary sum to a difference breaks that symmetry.
+// REDUX-LABEL: @reduce_asymmetric_product
+// REDUX-COUNT-2: nvvm.shfl.sync idx
+// REDUX: llvm.return
+tt.func private @reduce_asymmetric_product(%arg0: tensor<4x2xf32, #blocked_warp_reduce>, %arg1: tensor<4x2xf32, #blocked_warp_reduce>) -> (tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
+  %0:2 = "tt.reduce"(%arg0, %arg1) <{axis = 1 : i32}> ({
+  ^bb0(%ar: f32, %ai: f32, %br: f32, %bi: f32):
+    %rr = arith.mulf %ar, %br : f32
+    %ii = arith.mulf %ai, %bi : f32
+    %ri = arith.mulf %ar, %bi : f32
+    %ir = arith.mulf %ai, %br : f32
+    %real = arith.subf %rr, %ii : f32
+    %imag = arith.subf %ri, %ir : f32
+    tt.reduce.return %real, %imag : f32, f32
+  }) : (tensor<4x2xf32, #blocked_warp_reduce>, tensor<4x2xf32, #blocked_warp_reduce>) -> (tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>)
+  tt.return %0#0, %0#1 : tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+}
+
 // Four broadcast values meet the generic one-redux threshold.
 // REDUX-LABEL: @reduce_broadcast_maxsi
 // REDUX: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
