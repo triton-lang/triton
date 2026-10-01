@@ -715,19 +715,32 @@ def _gsan_empty_kernel(out_ptr):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-def test_gsan_uses_all_available_shared_memory(with_gsan):
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_gsan_uses_all_available_shared_memory(with_gsan, monkeypatch, num_ctas):
+    if num_ctas > 1 and not is_hopper_or_newer():
+        pytest.skip("CTA clusters require Hopper or newer")
     out = torch.empty(1, dtype=torch.int32, device="cuda")
-    compiled = _gsan_empty_kernel.warmup(out, grid=(1, ))
+    compiled = _gsan_empty_kernel.warmup(out, grid=(1, ), num_ctas=num_ctas)
 
     device = triton.runtime.driver.active.get_current_device()
     max_shared = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
-    assert compiled.metadata.min_shared_mem == max_shared
-    assert compiled.metadata.shared == max_shared
-    assert compiled.packed_metadata[2] == max_shared
+    assert compiled.metadata.shared < max_shared
+    assert compiled.packed_metadata[2] == compiled.metadata.shared
+    assert compiled.run.shared == max_shared
 
-    _gsan_empty_kernel[(1, )](out)
+    shared_sizes = []
+    original_launch = compiled.run.launch
+
+    def launch(*args):
+        shared_sizes.append(args[7][2])
+        return original_launch(*args)
+
+    monkeypatch.setattr(compiled.run, "launch", launch)
+
+    compiled[(1, 1, 1)](out)
     torch.cuda.synchronize()
     assert out.item() == 0
+    assert shared_sizes == [max_shared]
 
 
 @triton.jit

@@ -280,7 +280,13 @@ class CudaLauncher(object):
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
 
         self.gsan_enabled = is_enabled(metadata, "gsan")
+        self.shared = metadata.shared
         if self.gsan_enabled:
+            # GSan requires at most one CTA per SM. Reserve shared memory here
+            # so compilation does not depend on the current device or driver.
+            active_driver = triton.runtime.driver.active
+            device = active_driver.get_current_device()
+            self.shared = max(self.shared, active_driver.utils.get_device_properties(device)["max_shared_mem"])
             signature["_gsan_globals_ptr"] = "*i8"
             signature["_gsan_launch_table_ptr"] = "*i8"
             signature["_gsan_launch_index"] = "i64"
@@ -337,6 +343,8 @@ class CudaLauncher(object):
             launch_table, launch_index = gsan_stream_sync.get_launch_state(device, stream, self.launch_pdl)
             kernel_args = (*args, gsan_state_ptr, launch_table, launch_index)
 
+        num_warps, num_ctas, _ = kernel_metadata
+        kernel_metadata = (num_warps, num_ctas, self.shared)
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
                     profile_scratch, self.arg_annotations, self.kernel_signature, kernel_args)
