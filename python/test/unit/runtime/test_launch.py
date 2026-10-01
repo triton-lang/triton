@@ -245,3 +245,21 @@ def test_interpreter_implicit_cvt_bool() -> None:
     assert value.dtype == tl.int1
     assert value.handle.data.dtype == np.bool_
     assert bool(value.handle.data[0]) is True
+
+
+@pytest.mark.skipif(not is_hip(), reason="requires HIP")
+def test_wgp_cu_mode_launch_argument():
+    arch = triton.runtime.driver.active.get_current_target().arch
+    if not arch.startswith(("gfx10", "gfx11", "gfx120")):
+        pytest.skip("target has no WGP/CU mode distinction")
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    x = torch.zeros(64, device="cuda")
+    for options, mode in [({}, 1), ({"wgp_cu_mode": "wgp"}, 1), ({"wgp_cu_mode": "cu"}, 0)]:
+        kernel = add_one[(1, )](x, BLOCK=64, **options)
+        assert f".amdhsa_workgroup_processor_mode {mode}" in kernel.asm["amdgcn"]
+    assert torch.equal(x, torch.full_like(x, 3))
