@@ -1,7 +1,7 @@
 // RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck %s --check-prefixes=TERNARY,REDUX,FASTMINMAX
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=80' -cse | FileCheck %s --check-prefixes=PRE100,REDUX,SLOWMINMAX
-// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=80' -cse | FileCheck %s --check-prefixes=PRE100,REDUX,SLOWMINMAX
+// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=80' -cse | FileCheck %s --check-prefixes=PRE100,REDUX,SLOWMINMAX,PACKEDSHFL
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=120 ptx-version=88' -cse | FileCheck %s --check-prefixes=REDUX,FASTMINMAX
 
 #linear = #ttg.linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>
@@ -9,6 +9,8 @@
 #blocked_packed_reduce = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked_nonaxis_packed_reduce = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked_warp_reduce = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+#packed_shuffle = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 #even_odd = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [0, 1]}>
 #halves = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -218,6 +220,105 @@ tt.func public @reduce_minimum_bf16(%arg0: tensor<128x8xbf16, #blocked_packed_re
     tt.reduce.return %minimum : bf16
   }) : (tensor<128x8xbf16, #blocked_packed_reduce>) -> tensor<128xbf16, #ttg.slice<{dim = 1, parent = #blocked_packed_reduce}>>
   tt.return
+}
+
+// PACKEDSHFL-LABEL: @packed_shuffle_maxnum_f16
+// PACKEDSHFL: llvm.bitcast %{{.*}} : vector<2xf16> to i32
+// PACKEDSHFL: nvvm.shfl.sync bfly
+// PACKEDSHFL: llvm.bitcast %{{.*}} : i32 to vector<2xf16>
+// PACKEDSHFL: llvm.intr.maxnum(%{{.*}}, %{{.*}}) : (vector<2xf16>, vector<2xf16>) -> vector<2xf16>
+// PACKEDSHFL-NOT: llvm.zext
+// PACKEDSHFL-NOT: llvm.trunc
+// PACKEDSHFL: llvm.return
+tt.func private @packed_shuffle_maxnum_f16(%arg0: tensor<8x32xf16, #packed_shuffle>) -> tensor<8xf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: f16, %b: f16):
+    %result = arith.maxnumf %a, %b : f16
+    tt.reduce.return %result : f16
+  }) : (tensor<8x32xf16, #packed_shuffle>) -> tensor<8xf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+  tt.return %0 : tensor<8xf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+}
+
+// PACKEDSHFL-LABEL: @packed_shuffle_add_f16
+// PACKEDSHFL: llvm.bitcast %{{.*}} : vector<2xf16> to i32
+// PACKEDSHFL: nvvm.shfl.sync bfly
+// PACKEDSHFL: llvm.bitcast %{{.*}} : i32 to vector<2xf16>
+// PACKEDSHFL: llvm.fadd %{{.*}}, %{{.*}} : vector<2xf16>
+// PACKEDSHFL-NOT: llvm.zext
+// PACKEDSHFL-NOT: llvm.trunc
+// PACKEDSHFL: llvm.return
+tt.func private @packed_shuffle_add_f16(%arg0: tensor<8x32xf16, #packed_shuffle>) -> tensor<8xf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: f16, %b: f16):
+    %result = arith.addf %a, %b : f16
+    tt.reduce.return %result : f16
+  }) : (tensor<8x32xf16, #packed_shuffle>) -> tensor<8xf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+  tt.return %0 : tensor<8xf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+}
+
+// PACKEDSHFL-LABEL: @shuffle_custom_add_f16
+// PACKEDSHFL-NOT: vector<2xf16>
+// PACKEDSHFL: llvm.fadd %{{.*}}, %{{.*}} : f16
+// PACKEDSHFL-NOT: vector<2xf16>
+// PACKEDSHFL: llvm.return
+tt.func private @shuffle_custom_add_f16(%arg0: tensor<8x32xf16, #packed_shuffle>) -> tensor<8xf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: f16, %b: f16):
+    %result = arith.addf %a, %a : f16
+    tt.reduce.return %result : f16
+  }) : (tensor<8x32xf16, #packed_shuffle>) -> tensor<8xf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+  tt.return %0 : tensor<8xf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+}
+
+// PACKEDSHFL-LABEL: @packed_shuffle_mul_bf16
+// PACKEDSHFL: llvm.bitcast %{{.*}} : vector<2xbf16> to i32
+// PACKEDSHFL: nvvm.shfl.sync bfly
+// PACKEDSHFL: llvm.bitcast %{{.*}} : i32 to vector<2xbf16>
+// PACKEDSHFL: llvm.fmul %{{.*}}, %{{.*}} : vector<2xbf16>
+// PACKEDSHFL-NOT: llvm.zext
+// PACKEDSHFL-NOT: llvm.trunc
+// PACKEDSHFL: llvm.return
+tt.func private @packed_shuffle_mul_bf16(%arg0: tensor<8x32xbf16, #packed_shuffle>) -> tensor<8xbf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: bf16, %b: bf16):
+    %result = arith.mulf %a, %b : bf16
+    tt.reduce.return %result : bf16
+  }) : (tensor<8x32xbf16, #packed_shuffle>) -> tensor<8xbf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+  tt.return %0 : tensor<8xbf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+}
+
+// PACKEDSHFL-LABEL: @packed_shuffle_mul_i16
+// PACKEDSHFL: llvm.bitcast %{{.*}} : vector<2xi16> to i32
+// PACKEDSHFL: nvvm.shfl.sync bfly
+// PACKEDSHFL: llvm.bitcast %{{.*}} : i32 to vector<2xi16>
+// PACKEDSHFL: llvm.mul %{{.*}}, %{{.*}} : vector<2xi16>
+// PACKEDSHFL-NOT: llvm.zext
+// PACKEDSHFL-NOT: llvm.trunc
+// PACKEDSHFL: llvm.return
+tt.func private @packed_shuffle_mul_i16(%arg0: tensor<8x32xi16, #packed_shuffle>) -> tensor<8xi16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i16, %b: i16):
+    %result = arith.muli %a, %b : i16
+    tt.reduce.return %result : i16
+  }) : (tensor<8x32xi16, #packed_shuffle>) -> tensor<8xi16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+  tt.return %0 : tensor<8xi16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+}
+
+// PACKEDSHFL-LABEL: @packed_shuffle_minimum_bf16
+// PACKEDSHFL: llvm.bitcast %{{.*}} : vector<2xbf16> to i32
+// PACKEDSHFL: nvvm.shfl.sync bfly
+// PACKEDSHFL: llvm.bitcast %{{.*}} : i32 to vector<2xbf16>
+// PACKEDSHFL: llvm.intr.minimum(%{{.*}}, %{{.*}}) : (vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
+// PACKEDSHFL-NOT: llvm.zext
+// PACKEDSHFL-NOT: llvm.trunc
+// PACKEDSHFL: llvm.return
+tt.func private @packed_shuffle_minimum_bf16(%arg0: tensor<8x32xbf16, #packed_shuffle>) -> tensor<8xbf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: bf16, %b: bf16):
+    %result = arith.minimumf %a, %b : bf16
+    tt.reduce.return %result : bf16
+  }) : (tensor<8x32xbf16, #packed_shuffle>) -> tensor<8xbf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
+  tt.return %0 : tensor<8xbf16, #ttg.slice<{dim = 1, parent = #packed_shuffle}>>
 }
 
 // TERNARY-LABEL: @reduce_maximum_f64

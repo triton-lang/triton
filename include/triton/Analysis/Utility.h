@@ -66,10 +66,8 @@ public:
   unsigned
   getScratchSizeInBytes(GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
-  // axisPack is the number of elements reduced per thread along the axis.
   InThreadVectorizeOpKind
-  getInThreadVectorizeOpKind(unsigned axisPack,
-                             bool supportBitwidth16Elementwise,
+  getInThreadVectorizeOpKind(bool supportBitwidth16Elementwise,
                              bool supportBitwidth32Elementwise);
 
   struct ScratchConfig {

@@ -104,11 +104,8 @@ bool ReduceOpHelper::isAssociative() {
 }
 
 ReduceOpHelper::InThreadVectorizeOpKind
-ReduceOpHelper::getInThreadVectorizeOpKind(unsigned axisPack,
-                                           bool supportBitwidth16Elementwise,
+ReduceOpHelper::getInThreadVectorizeOpKind(bool supportBitwidth16Elementwise,
                                            bool supportBitwidth32Elementwise) {
-  if (axisPack < 4 || op.getCombineOp().front().getOperations().size() != 2)
-    return InThreadVectorizeOpKind::None;
   Operation *combiner = op.getSingleCombiner();
   if (!combiner)
     return InThreadVectorizeOpKind::None;
