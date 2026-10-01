@@ -1089,3 +1089,31 @@ def test_fused_comm_no_local_output(dtype, n_peers, ragged, is_persistent):
                 torch.cuda.synchronize(destination.device)
             graph.replay()
             torch.testing.assert_close(collected(), reference, rtol=0, atol=0)
+
+
+def test_expected_slice_size_does_not_recompile(monkeypatch):
+    # `expected_slice_size` only feeds launch heuristics and profiler annotations, so changing it
+    # with a fixed config must not produce a new kernel specialization.
+    if not is_cuda():
+        pytest.skip("Requires CUDA")
+    device, dtype = "cuda", torch.bfloat16
+    n_slices, k, n = 4, 128, 256
+    b = torch.randn((n_slices, k, n), device=device, dtype=dtype)
+    precision_config = PrecisionConfig(out_dtype=dtype)
+
+    def run(slice_size):
+        m = slice_size * n_slices
+        a = torch.randn((m, k), device=device, dtype=dtype)
+        metadata = make_ragged_tensor_metadata(torch.full((n_slices, ), slice_size, device=device, dtype=torch.int32), m)
+        metadata.expected_slice_size = slice_size
+        return matmul(a, b, None, a_ragged_metadata=metadata, precision_config=precision_config)
+
+    with opt_flags.scoped_opt_flags_constraints({"block_m": 16, "split_k": 1, "is_persistent": False}):
+        run(8)  # warmup
+        compiled = []
+        monkeypatch.setattr(triton.knobs.runtime, "jit_cache_hook",
+                            lambda *args, **kwargs: compiled.append(kwargs["fn"].name))
+        for slice_size in [5, 9, 13, 24, 31, 40]:
+            run(slice_size)
+        torch.cuda.synchronize()
+    assert compiled == []

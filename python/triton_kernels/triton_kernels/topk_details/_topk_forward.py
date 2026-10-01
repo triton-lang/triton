@@ -89,7 +89,7 @@ def streaming_topk(X, stride_xm, n_expts_tot, offs_m, mask_m, N_EXPTS_PAD: tl.co
     return y_values, y_indices
 
 
-@triton.jit
+@triton.jit(do_not_specialize_on_alignment=["n_rows"])
 def _topk_forward(X, stride_xm,  # inputs
                   PeerYvs, PeerYis, stride_ym,  # topk values/indices
                   USE_PROVIDED_INDX: tl.constexpr, PeerBits, stride_rm, stride_rn,  # bitmatrix

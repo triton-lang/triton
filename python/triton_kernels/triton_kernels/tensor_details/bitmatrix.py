@@ -40,7 +40,7 @@ def _keyed_add(x, y):
     return z
 
 
-@triton.jit
+@triton.jit(do_not_specialize_on_alignment=["n_tokens", "stride_pn"])
 def _bitmatrix_metadata_compute_stage2(ColSortedIndx, RowSortedIndx, NonzeroIndx, n_tokens, ColPartialSum, stride_pm,
                                        stride_pn, ColOffs, TOKS_PER_ROW: tl.constexpr, BLOCK_PER_TOK: tl.constexpr):
     BLOCK_SIZE_ACT: tl.constexpr = BLOCK_PER_TOK * TOKS_PER_ROW
@@ -74,7 +74,7 @@ def _bitmatrix_metadata_compute_stage2(ColSortedIndx, RowSortedIndx, NonzeroIndx
     tl.store(ColSortedIndx + row_sorted_indx, offs_global, mask=mask)
 
 
-@triton.jit
+@triton.jit(do_not_specialize_on_alignment=["n_combined_indx", "shape_pm", "stride_pn"])
 def _bitmatrix_metadata_compute_stage1(CombinedIndx, n_combined_indx, sentinel, BLOCK: tl.constexpr, ColSum, ColOffs,
                                        n_cols, PartialColSum, shape_pm, stride_pm, stride_pn, BLOCK_M: tl.constexpr,
                                        BLOCK_N: tl.constexpr):

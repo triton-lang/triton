@@ -39,7 +39,7 @@ def _compute_packed_n_w(N, W_N_DIVISOR: tl.constexpr, SWIZZLE_MX_VALUE: tl.const
     return packed_n_w
 
 _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
-@triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
+@triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION", "X_EXPECTED_SLICE_SIZE", "W_EXPECTED_SLICE_SIZE"],
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
 def _matmul(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
@@ -62,9 +62,9 @@ def _matmul(
              GatherIndx,
              WriteBackIndx, writeback_size,
              RAGGED_DIMENSION: tl.constexpr,
-             XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              XOutputScaleBlockOffs,
-             WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, _W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE, _W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              # true grid size
              batch_size, grid_m, grid_n,
              # Out scale
