@@ -85,3 +85,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %arg : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // The hardware requires 64-row A and accumulator allocations in the same
+  // row half. Per-function allocation cannot constrain an incoming address.
+  tt.func private @tmem_mma_incoming_rows(%a: !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>, %b: !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory>, %bar: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) attributes {noinline = true} {
+    %false = arith.constant false
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %acc = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    // expected-error @below {{64-row MMA tensor memory operands passed through function arguments or results are not supported}}
+    ttng.tc_gen5_mma %a, %b, %acc, %false, %true, %bar[%true] {is_async} : !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>
+    ttng.wait_barrier %bar, %c0 deps %acc : !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
+#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func private @tmem_mma_identity(%a: !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable> attributes {noinline = true} {
+    tt.return %a : !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
+  }
+  tt.func public @tmem_mma_returned_rows(%values: tensor<64x64xf16, #blocked>, %b: !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory>, %bar: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) {
+    %false = arith.constant false
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %a = ttng.tmem_alloc %values : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
+    %acc = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    %alias = tt.call @tmem_mma_identity(%a) : (!ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
+    // expected-error @below {{64-row MMA tensor memory operands passed through function arguments or results are not supported}}
+    ttng.tc_gen5_mma %alias, %b, %acc, %false, %true, %bar[%true] {is_async} : !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>
+    ttng.wait_barrier %bar, %c0 deps %acc : !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}

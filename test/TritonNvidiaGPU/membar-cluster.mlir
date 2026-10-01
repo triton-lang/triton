@@ -1,4 +1,8 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-tensor-memory-allocation --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' | FileCheck --dump-input=fail --dump-input-context=30 %s
+// RUN: split-file %s %t
+// RUN: triton-opt %t/valid.mlir -split-input-file --allocate-shared-memory --triton-tensor-memory-allocation --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' | FileCheck --dump-input=fail --dump-input-context=30 %s
+// RUN: triton-opt %t/invalid.mlir --allocate-shared-memory --triton-tensor-memory-allocation --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=87' -verify-diagnostics
+
+//--- valid.mlir
 
 // -----
 
@@ -1235,6 +1239,104 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#sharedMMA = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrierMMA = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#tmemMMA = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // The caller initializes a per-CTA barrier. Its multicast consumer lives in
+  // a nested noinline helper that owns TMEM. Publish initialization before the
+  // call even though the caller has no local cross-CTA consumer.
+  // CHECK-LABEL: @cluster_mma_noinline_leaf
+  // CHECK: ttng.tmem_alloc
+  // CHECK: ttng.tc_gen5_mma
+  // CHECK: ttng.wait_barrier
+  // CHECK: tt.return
+  tt.func private @cluster_mma_noinline_leaf(%a: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, %b: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, %barrier: !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>) attributes {noinline = true} {
+    %false = arith.constant false
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %acc = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmemMMA, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_mma %a, %b, %acc, %false, %true, %barrier[%true] {is_async, multicast} : !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf32, #tmemMMA, #ttng.tensor_memory, mutable>, !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    ttng.wait_barrier %barrier, %c0 deps %acc : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmemMMA, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @cluster_barrier_identity
+  tt.func private @cluster_barrier_identity(%barrier: !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>) -> !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable> attributes {noinline = true} {
+    tt.return %barrier : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+  }
+
+  // CHECK-LABEL: @cluster_mma_noinline_middle
+  // CHECK: tt.call @cluster_mma_noinline_leaf
+  tt.func private @cluster_mma_noinline_middle(%a: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, %b: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, %barrier: !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>) attributes {noinline = true} {
+    tt.call @cluster_mma_noinline_leaf(%a, %b, %barrier) : (!ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>) -> ()
+    tt.return
+  }
+
+  // CHECK-LABEL: @cluster_mma_noinline_caller
+  // Descriptor forwarding before init is not a barrier use.
+  // CHECK: tt.call @cluster_barrier_identity
+  // CHECK-NEXT: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: tt.call @cluster_mma_noinline_middle
+  tt.func public @cluster_mma_noinline_caller(%a: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, %b: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>) {
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    %alias = tt.call @cluster_barrier_identity(%barrier) : (!ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>) -> !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    ttng.init_barrier %alias, 1 : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    tt.call @cluster_mma_noinline_middle(%a, %b, %alias) : (!ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>) -> ()
+    tt.return
+  }
+
+  // Separate lifecycles cannot share a single insertion window.
+  // CHECK-LABEL: @cluster_mma_noinline_separate_inits
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: tt.call @cluster_mma_noinline_middle
+  // CHECK: ttng.inval_barrier
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: tt.call @cluster_mma_noinline_middle
+  tt.func public @cluster_mma_noinline_separate_inits(%a: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, %b: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>) {
+    %first = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    ttng.init_barrier %first, 1 : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    tt.call @cluster_mma_noinline_middle(%a, %b, %first) : (!ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>) -> ()
+    ttng.inval_barrier %first : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    %second = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    tt.call @cluster_mma_noinline_middle(%a, %b, %second) : (!ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>) -> ()
+    ttng.inval_barrier %second : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    tt.return
+  }
+
+  // Per-CTA initialization in a helper remains supported when no remote
+  // consumer uses it. Do not add a cluster barrier just because num-ctas is 2.
+  // CHECK-LABEL: @local_barrier_noinline_helper
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.arrive_barrier
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: tt.return
+  tt.func private @local_barrier_noinline_helper() attributes {noinline = true} {
+    %c0 = arith.constant 0 : i32
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    ttng.arrive_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<2xi64, #barrierMMA, #smem, mutable>
+    tt.return
+  }
+  // CHECK-LABEL: @local_barrier_noinline_caller
+  tt.func public @local_barrier_noinline_caller() {
+    tt.call @local_barrier_noinline_helper() : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
 #barrierFromCTA = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
 
@@ -1697,5 +1799,33 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %hist = tt.histogram %input : tensor<2048xi32, #histBroadcast> -> tensor<512xi32, #histSplit>
     %next = tt.histogram %local : tensor<2048xi32, #histBroadcast> -> tensor<512xi32, #histBroadcast>
     tt.return %hist, %next : tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>
+  }
+}
+
+//--- invalid.mlir
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // A noinline helper cannot publish its own cross-CTA initialization because
+  // the existing cluster barrier verifier permits barriers only in kernels.
+  // expected-error @below {{cross-CTA mbarrier initialization in noinline functions is not supported}}
+  tt.func private @cluster_mma_helper_init(%a: !ttg.memdesc<128x128xf16, #shared, #smem>, %b: !ttg.memdesc<128x128xf16, #shared, #smem>) attributes {noinline = true} {
+    %false = arith.constant false
+    %true = arith.constant true
+    %c0 = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    %acc = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_mma %a, %b, %acc, %false, %true, %bar[%true] {is_async, multicast} : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 deps %acc : !ttg.memdesc<2xi64, #barrier, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+  tt.func public @cluster_mma_helper_init_caller(%a: !ttg.memdesc<128x128xf16, #shared, #smem>, %b: !ttg.memdesc<128x128xf16, #shared, #smem>) {
+    tt.call @cluster_mma_helper_init(%a, %b) : (!ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared, #smem>) -> ()
+    tt.return
   }
 }

@@ -1779,9 +1779,12 @@ def noinline_tmem_dot_middle_fn(a_ptr, b_ptr, out_ptr, BLOCK: tl.constexpr):
 
 
 @pytest.mark.parametrize("nested", [False, True])
-def test_noinline_tmem_dot(nested, device):
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_noinline_tmem_dot(nested, num_ctas, device):
     if not is_cuda():
         pytest.skip("Requires CUDA")
+    if num_ctas == 2 and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Multiple CTAs require Hopper or newer")
 
     BLOCK = 64
     torch.manual_seed(0)
@@ -1789,7 +1792,7 @@ def test_noinline_tmem_dot(nested, device):
     b = torch.randn((BLOCK, BLOCK), device=device, dtype=torch.float16)
     actual = torch.empty((BLOCK, BLOCK), device=device, dtype=torch.float32)
 
-    compiled = noinline_tmem_dot_kernel[(1, )](a, b, actual, BLOCK=BLOCK, NESTED=nested, num_warps=4)
+    compiled = noinline_tmem_dot_kernel[(1, )](a, b, actual, BLOCK=BLOCK, NESTED=nested, num_warps=4, num_ctas=num_ctas)
 
     expected = a.float() @ b.float()
     torch.testing.assert_close(actual, expected, rtol=2e-3, atol=2e-2)
@@ -1799,6 +1802,9 @@ def test_noinline_tmem_dot(nested, device):
     assert "noinline = true" in ttgir
     if torch.cuda.get_device_capability()[0] >= 10:
         assert "ttng.tmem_alloc" in ttgir
+        # This covers per-CTA MMA; helper-local cross-CTA initialization is
+        # diagnosed separately by the cluster barrier insertion tests.
+        assert ".cta_group::2" not in compiled.asm["ptx"]
 
 
 @triton.jit(noinline=True)

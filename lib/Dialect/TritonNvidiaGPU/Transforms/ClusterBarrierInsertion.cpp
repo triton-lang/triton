@@ -1,14 +1,18 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
+#include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
 
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -84,67 +88,92 @@ bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
          allocation->isExplicitBuffer(bufferId);
 }
 
-bool valueAliasesTrackedBuffers(Value value,
-                                const Allocation::BufferIdSetT &tracked,
-                                Allocation *allocation) {
-  for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
-    if (bufferId != Allocation::InvalidBufferId && tracked.contains(bufferId))
-      return true;
-  }
-  return false;
+bool valueAliasesRoots(Value value, const llvm::DenseSet<Value> &roots,
+                       SharedMemoryAliasAnalysis &aliases) {
+  if (!value)
+    return false;
+  auto *lattice = aliases.getLatticeElement(value);
+  return lattice &&
+         llvm::any_of(lattice->getValue().getAllocs(),
+                      [&](Value root) { return roots.contains(root); });
 }
 
 bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
                                       FunctionOpInterface funcOp,
-                                      Allocation *allocation, int numCTAs) {
-  Allocation::BufferIdSetT initBarrierBuffers;
-  for (auto bufferId :
-       allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
-    assert(bufferId != Allocation::InvalidBufferId);
-    initBarrierBuffers.insert(bufferId);
-  }
-
+                                      SharedMemoryAliasAnalysis &aliases,
+                                      int numCTAs) {
+  // Module-level aliases retain incoming allocation roots across calls, so a
+  // consumer in a nested helper can require publication of a caller's init.
+  const auto &roots = aliases.getLatticeElement(initBarrierOp.getBarrier())
+                          ->getValue()
+                          .getAllocs();
   return mlir::triton::nvidia_gpu::requiresCrossCTAMBarrierInitSync(
-      funcOp, initBarrierOp.getBarrier(), numCTAs, [&](Value value) {
-        return value && valueAliasesTrackedBuffers(value, initBarrierBuffers,
-                                                   allocation);
-      });
+      funcOp->getParentOfType<ModuleOp>(), initBarrierOp.getBarrier(), numCTAs,
+      [&](Value value) { return valueAliasesRoots(value, roots, aliases); });
 }
 
 bool nestedOpUsesTrackedMBarrier(Operation *op,
-                                 const Allocation::BufferIdSetT &tracked,
-                                 Allocation *allocation) {
+                                 const llvm::DenseSet<Value> &roots,
+                                 SharedMemoryAliasAnalysis &aliases,
+                                 SymbolTableCollection &symbols,
+                                 llvm::SmallPtrSetImpl<Operation *> &visited) {
   if (isa<ttng::InitBarrierOp, ttg::LocalAllocOp>(op))
     return false;
+
+  // Calls carry their barrier effects through formal arguments. The caller's
+  // publication must dominate the call, not just its local mbarrier users.
+  if (auto call = dyn_cast<CallOpInterface>(op)) {
+    if (!llvm::any_of(call.getArgOperands(), [&](Value value) {
+          return valueAliasesRoots(value, roots, aliases);
+        }))
+      return false;
+    auto callee = dyn_cast_or_null<FunctionOpInterface>(
+        call.resolveCallableInTable(&symbols));
+    if (!callee || callee.isExternal())
+      return true;
+    if (!visited.insert(callee.getOperation()).second)
+      return false;
+    // A descriptor-only helper can run before init. Anchor only calls that
+    // actually access the barrier, including accesses in transitive callees.
+    return callee
+        ->walk([&](Operation *nested) {
+          return nestedOpUsesTrackedMBarrier(nested, roots, aliases, symbols,
+                                             visited)
+                     ? WalkResult::interrupt()
+                     : WalkResult::advance();
+        })
+        .wasInterrupted();
+  }
 
   if (auto memEffects = dyn_cast<MemoryEffectOpInterface>(op)) {
     SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effects;
     memEffects.getEffects(effects);
     for (const auto &effect : effects) {
       Value value = effect.getValue();
-      if (value && valueAliasesTrackedBuffers(value, tracked, allocation))
+      if (valueAliasesRoots(value, roots, aliases))
         return true;
     }
   }
   return false;
 }
 
-bool opUsesTrackedMBarrier(Operation *op,
-                           const Allocation::BufferIdSetT &tracked,
-                           Allocation *allocation) {
+bool opUsesTrackedMBarrier(Operation *op, const llvm::DenseSet<Value> &roots,
+                           SharedMemoryAliasAnalysis &aliases,
+                           SymbolTableCollection &symbols) {
+  llvm::SmallPtrSet<Operation *, 8> visited;
   return op
       ->walk<WalkOrder::PreOrder>([&](Operation *nestedOp) {
-        if (nestedOpUsesTrackedMBarrier(nestedOp, tracked, allocation))
+        if (nestedOpUsesTrackedMBarrier(nestedOp, roots, aliases, symbols,
+                                        visited))
           return WalkResult::interrupt();
         return WalkResult::advance();
       })
       .wasInterrupted();
 }
 
-LogicalResult
-insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
-                                          Allocation *allocation, int numCTAs,
-                                          OpBuilder &builder) {
+LogicalResult insertCrossCTAMBarrierInitSyncForFunction(
+    FunctionOpInterface funcOp, SharedMemoryAliasAnalysis &aliases, int numCTAs,
+    OpBuilder &builder, ttng::InitBarrierOp onlyInit = {}) {
   if (!funcOp || funcOp->getNumRegions() != 1) {
     return funcOp.emitOpError(
         "cross-CTA mbarrier init sync insertion requires a single function "
@@ -152,32 +181,59 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
   }
   Region &topLevelRegion = funcOp->getRegion(0);
   llvm::SetVector<Operation *> crossCTAInitAnchors;
-  Allocation::BufferIdSetT trackedBarrierBuffers;
+  SmallVector<ttng::InitBarrierOp> crossCTAInits;
+  llvm::DenseSet<Value> trackedBarrierRoots;
 
   // Find all cross-CTA mbarrier.init ops and map each
   // one to the containing top-level op that bounds the insertion window.
   funcOp.walk([&](ttng::InitBarrierOp initBarrierOp) {
-    if (!requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, allocation,
+    if (onlyInit && initBarrierOp != onlyInit)
+      return;
+    if (!requiresCrossCTAMBarrierInitSync(initBarrierOp, funcOp, aliases,
                                           numCTAs))
       return;
     Operation *topLevelAnchor =
         topLevelRegion.findAncestorOpInRegion(*initBarrierOp.getOperation());
     assert(topLevelAnchor && "init op must be inside the function region");
     crossCTAInitAnchors.insert(topLevelAnchor);
-    for (auto bufferId :
-         allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
-      assert(bufferId != Allocation::InvalidBufferId);
-      trackedBarrierBuffers.insert(bufferId);
-    }
+    crossCTAInits.push_back(initBarrierOp);
+    const auto &roots = aliases.getLatticeElement(initBarrierOp.getBarrier())
+                            ->getValue()
+                            .getAllocs();
+    trackedBarrierRoots.insert(roots.begin(), roots.end());
   });
   // Nothing to do
   if (crossCTAInitAnchors.empty())
     return success();
 
+  // Cluster barriers remain unsupported in retained noinline helpers. Diagnose
+  // the required synchronization before constructing an illegal barrier op.
+  if (!isKernel(funcOp)) {
+    auto noinline = funcOp->getAttrOfType<BoolAttr>("noinline");
+    if (noinline && noinline.getValue())
+      return funcOp.emitOpError(
+          "cross-CTA mbarrier initialization in noinline functions is not "
+          "supported");
+  }
+
+  // Prefer one rendezvous for a group of initializations. Separate lifecycles
+  // can have a use before the next init and therefore need separate windows.
+  auto failOrSplit = [&](StringRef message) -> LogicalResult {
+    if (!onlyInit && crossCTAInits.size() > 1) {
+      for (auto init : crossCTAInits)
+        if (failed(insertCrossCTAMBarrierInitSyncForFunction(
+                funcOp, aliases, numCTAs, builder, init)))
+          return failure();
+      return success();
+    }
+    return funcOp.emitOpError(message);
+  };
+
   llvm::SetVector<Operation *> trackedUseAnchors;
+  SymbolTableCollection symbols;
   for (Block &block : topLevelRegion) {
     for (Operation &op : block) {
-      if (opUsesTrackedMBarrier(&op, trackedBarrierBuffers, allocation))
+      if (opUsesTrackedMBarrier(&op, trackedBarrierRoots, aliases, symbols))
         trackedUseAnchors.insert(&op);
     }
   }
@@ -194,7 +250,7 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
   Block *firstInsertionBlock =
       postDomInfo.findNearestCommonDominator(initBlocks);
   if (!firstInsertionBlock) {
-    return funcOp.emitOpError(
+    return failOrSplit(
         "could not find a common post-dominating insertion block for "
         "cross-CTA mbarrier.init");
   }
@@ -219,7 +275,7 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
     useBlocks.insert(trackedUseAnchor->getBlock());
   Block *lastInsertionBlock = domInfo.findNearestCommonDominator(useBlocks);
   if (!lastInsertionBlock) {
-    return funcOp.emitOpError(
+    return failOrSplit(
         "could not find a common insertion block that dominates all tracked "
         "mbarrier uses");
   }
@@ -238,7 +294,7 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
                                        : lastInsertionBlock->getTerminator();
 
   if (!domInfo.dominates(firstInsertionAnchor, lastInsertionAnchor)) {
-    return funcOp.emitOpError(
+    return failOrSplit(
         "could not find an insertion point between cross-CTA mbarrier.init "
         "ops and tracked mbarrier uses");
   }
@@ -354,16 +410,20 @@ runCrossCTAMBarrierInitSyncInsertion(ModuleAllocation &moduleAllocation,
   if (numCTAs == 1)
     return success();
 
+  std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+  auto *aliases = solver->load<SharedMemoryAliasAnalysis>();
+  if (failed(solver->initializeAndRun(mod)))
+    return mod.emitError("failed to analyze cross-call mbarrier aliases");
+
   LogicalResult status = success();
   moduleAllocation.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
       [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
       [&](FunctionOpInterface funcOp) {
         if (failed(status))
           return;
-        auto *allocation = moduleAllocation.getFuncData(funcOp);
         OpBuilder builder(funcOp);
         if (failed(insertCrossCTAMBarrierInitSyncForFunction(
-                funcOp, allocation, numCTAs, builder))) {
+                funcOp, *aliases, numCTAs, builder))) {
           status = failure();
         }
       });

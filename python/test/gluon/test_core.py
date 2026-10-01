@@ -459,6 +459,134 @@ def test_noinline_call_preserves_live_shared_allocation(NESTED, fresh_knobs):
     torch.testing.assert_close(sentinel_output, torch.arange(128, device="cuda", dtype=torch.int32) + 4096)
 
 
+@gluon.jit(noinline=True)
+def _noinline_tmem_read(input, output, shift):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 64], [32, 1], [4, 1], [0, 1])
+    rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))[:, None]
+    cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))[None, :]
+    offsets = rows * 64 + cols
+    values = ttgl.load(input + offsets) + shift
+    buffer = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], 1))
+    buffer.store(ttgl.convert_layout(values, buffer.get_reg_layout()))
+    ttgl.store(output + offsets, buffer.load(layout))
+
+
+@gluon.jit(noinline=True)
+def _noinline_tmem_read_middle(input, output, shift):
+    _noinline_tmem_read(input, output, shift + 2)
+    _noinline_tmem_read(input, output + 128 * 64, shift + 3)
+
+
+@gluon.jit
+def _noinline_tmem_reuse_kernel(input, output, NESTED: ttgl.constexpr, LIVE: ttgl.constexpr,
+                                ITERATIONS: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 64], [32, 1], [4, 1], [0, 1])
+    rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))[:, None]
+    cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))[None, :]
+    offsets = rows * 64 + cols
+    input += ttgl.program_id(0) * 128 * 64
+    output += ttgl.program_id(0) * ITERATIONS * 4 * 128 * 64
+    values = ttgl.load(input + offsets)
+    for iteration in range(ITERATIONS):
+        shift = iteration * 8
+        caller = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], 1))
+        caller.store(ttgl.convert_layout(values + shift + 1, caller.get_reg_layout()))
+        ttgl.store(output + offsets, caller.load(layout))
+        if NESTED:
+            _noinline_tmem_read_middle(input, output + 128 * 64, shift)
+        else:
+            _noinline_tmem_read(input, output + 128 * 64, shift + 2)
+            _noinline_tmem_read(input, output + 2 * 128 * 64, shift + 3)
+        if LIVE:
+            # This allocation survives both helper calls, so its columns must
+            # be disjoint. Loading again checks that helpers did not overwrite it.
+            last = caller.load(layout)
+        else:
+            # Caller storage is dead before the calls. Reuse after returning
+            # requires synchronization with the final helper's pending load.
+            after = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], 1))
+            after.store(ttgl.convert_layout(values + shift + 4, after.get_reg_layout()))
+            last = after.load(layout)
+        ttgl.store(output + 3 * 128 * 64 + offsets, last)
+        output += 4 * 128 * 64
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell tensor memory")
+@pytest.mark.parametrize("NESTED", [False, True], ids=["direct", "nested"])
+@pytest.mark.parametrize("LIVE", [False, True], ids=["reuse", "live"])
+def test_noinline_tmem_call_synchronization(NESTED, LIVE):
+    programs, iterations = 8, 32
+    values = torch.arange(programs * 128 * 64, device="cuda", dtype=torch.float32).reshape(programs, 128, 64)
+    output = torch.empty((programs, iterations, 4, 128, 64), device="cuda", dtype=torch.float32)
+    compiled = _noinline_tmem_reuse_kernel[(programs, )](values, output, NESTED, LIVE, iterations, num_warps=4)
+    shifts = torch.arange(iterations, device="cuda", dtype=torch.float32) * 8
+    tags = torch.tensor([1, 2, 3, 1 if LIVE else 4], device="cuda", dtype=torch.float32)
+    expected = values[:, None, None, :, :] + shifts[None, :, None, None, None] + tags[None, None, :, None, None]
+    torch.testing.assert_close(output, expected, rtol=0, atol=0)
+    assert compiled.metadata.tmem_size == (128 if LIVE else 64)
+    assert compiled.asm["ttgir"].count("noinline = true") == (2 if NESTED else 1)
+    assert "tcgen05.wait::ld" in compiled.asm["ptx"]
+    assert "tcgen05.wait::st" in compiled.asm["ptx"]
+
+
+@gluon.jit(noinline=True)
+def _noinline_tmem_multicast_mma(a, b, barrier, output):
+    acc_layout: ttgl.constexpr = TensorMemoryLayout([128, 64], 1, cga_layout=((1, 0), ))
+    acc = allocate_tensor_memory(ttgl.float32, [256, 64], acc_layout)
+    tcgen05_mma(a, b, acc, use_acc=False, multicast=True, mbarriers=[barrier])
+    mbarrier.wait(barrier, phase=0, deps=[a, b, acc])
+    result = acc.load()
+    rows = ttgl.arange(0, 256, layout=ttgl.SliceLayout(1, result.type.layout))[:, None]
+    cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, result.type.layout))[None, :]
+    ttgl.store(output + rows * 64 + cols, result)
+
+
+@gluon.jit(noinline=True)
+def _noinline_tmem_multicast_middle(a, b, barrier, output):
+    _noinline_tmem_multicast_mma(a, b, barrier, output)
+
+
+@gluon.jit
+def _noinline_tmem_multicast_kernel(a_ptr, b_ptr, output, NESTED: ttgl.constexpr):
+    a_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=((1, 0), ))
+    b_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=((0, 0), ))
+    rows = ttgl.arange(0, 256, layout=ttgl.SliceLayout(1, a_layout))[:, None]
+    a_cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, a_layout))[None, :]
+    b_rows = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, b_layout))[:, None]
+    cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, b_layout))[None, :]
+    a = ttgl.load(a_ptr + rows * 32 + a_cols)
+    b = ttgl.load(b_ptr + b_rows * 64 + cols)
+    shared_a = ttgl.allocate_shared_memory(
+        ttgl.float16, [256, 32], ttgl.NVMMASharedLayout.get_default_for([256, 32], ttgl.float16, cga_layout=((1, 0), )),
+        a)
+    shared_b = ttgl.allocate_shared_memory(
+        ttgl.float16, [32, 64], ttgl.NVMMASharedLayout.get_default_for([32, 64], ttgl.float16, cga_layout=((0, 0), )),
+        b)
+    fence_async_shared()
+    barrier = ttgl.allocate_shared_memory(ttgl.int64, [2], mbarrier.MBarrierLayout(cga_layout=((1, ), )))
+    mbarrier.init(barrier, count=tcgen05_mma_barrier_count([shared_a, shared_b], True, False))
+    if NESTED:
+        _noinline_tmem_multicast_middle(shared_a, shared_b, barrier, output)
+    else:
+        _noinline_tmem_multicast_mma(shared_a, shared_b, barrier, output)
+    mbarrier.invalidate(barrier)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell tensor memory")
+@pytest.mark.parametrize("NESTED", [False, True], ids=["direct", "nested"])
+def test_noinline_tmem_multicast_caller_barrier(NESTED):
+    torch.manual_seed(0)
+    a = torch.randn((256, 32), device="cuda", dtype=torch.float16)
+    b = torch.randn((32, 64), device="cuda", dtype=torch.float16)
+    output = torch.empty((256, 64), device="cuda", dtype=torch.float32)
+    compiled = _noinline_tmem_multicast_kernel[(1, )](a, b, output, NESTED, num_warps=4, num_ctas=2)
+    torch.testing.assert_close(output, a.float() @ b.float(), rtol=2e-3, atol=2e-2)
+    assert compiled.metadata.tmem_size == 64
+    assert "multicast::cluster" in compiled.asm["ptx"]
+    assert "fence.mbarrier_init.release.cluster" in compiled.asm["ptx"]
+    assert compiled.asm["ttgir"].count("noinline = true") == (2 if NESTED else 1)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_copy_kernel_multi_cta():
     XBLOCK = 2048

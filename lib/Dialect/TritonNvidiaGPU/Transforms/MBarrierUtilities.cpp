@@ -66,7 +66,7 @@ bool hasTCGen5CommitCrossCTA(Operation *op) {
 }
 
 bool requiresCrossCTAMBarrierInitSync(
-    FunctionOpInterface funcOp, Value barrier, int numCTAs,
+    Operation *scope, Value barrier, int numCTAs,
     llvm::function_ref<bool(Value)> aliasesBarrier) {
   // Barrier init sync is needed for barriers that are themselves cross-CTA,
   // and also for per-CTA barriers consumed by multi-CTA ops that multicast or
@@ -77,7 +77,7 @@ bool requiresCrossCTAMBarrierInitSync(
 
   // Or if it's used by a multi-CTA consumer that broadcasts barrier state
   // across CTAs even though the barrier allocation itself looks per-CTA.
-  return funcOp
+  return scope
       ->walk<WalkOrder::PreOrder>([&](ttg::MBarrierOpInterface user) {
         Operation *op = user.getOperation();
         bool crossCTA = false;

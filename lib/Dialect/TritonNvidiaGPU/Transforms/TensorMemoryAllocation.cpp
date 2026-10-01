@@ -207,7 +207,7 @@ static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
   return chunk;
 }
 
-static SmallVector<Operation *> getAlloc(Value value) {
+static FailureOr<SmallVector<Operation *>> getAlloc(Value value) {
   SmallVector<Operation *> allocs;
   DenseSet<Value> seen;
   SmallVector<Value> worklist{value};
@@ -244,7 +244,12 @@ static SmallVector<Operation *> getAlloc(Value value) {
       }
 
       // Handle region entry arguments.
-      if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(parentOp)) {
+      if (isa<FunctionOpInterface>(parentOp)) {
+        // Row constraints are allocated per function. An incoming descriptor
+        // can occupy either row half in its callers.
+        return failure();
+      } else if (auto wsOp =
+                     dyn_cast<ttg::WarpSpecializePartitionsOp>(parentOp)) {
         worklist.push_back(wsOp.getExplicitCaptures()[arg.getArgNumber()]);
       } else if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
         unsigned idx = arg.getArgNumber() - 1;
@@ -270,6 +275,9 @@ static SmallVector<Operation *> getAlloc(Value value) {
     unsigned idx = cast<OpResult>(v).getResultNumber();
     if (isa<TMEMAllocOp>(defOp)) {
       allocs.push_back(defOp);
+    } else if (isa<CallOpInterface>(defOp)) {
+      // A descriptor returned across a call has no local row assignment.
+      return failure();
     } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
       worklist.push_back(defOp->getOperand(0));
     } else if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
@@ -329,7 +337,10 @@ allocateTMem(FunctionOpInterface func,
   SmallVector<std::pair<Operation *, int>> tmemCalls;
   DenseMap<Operation *, int> operationId;
   RowIdConstraints rowIdConstraints;
+  LogicalResult rowConstraintStatus = success();
   func->walk<WalkOrder::PostOrder>([&](Operation *op) {
+    if (failed(rowConstraintStatus))
+      return;
     operationId[op] = operationId.size();
     if (auto alloc = dyn_cast<triton::nvidia_gpu::TMEMAllocOp>(op)) {
       allocs.push_back(alloc);
@@ -349,10 +360,16 @@ allocateTMem(FunctionOpInterface func,
         if (allocSize.numRows == 64) {
           // HW restriction, the A alloc and accumulator needs to be in the same
           // rows.
-          SmallVector<Operation *> lhsAllocs = getAlloc(mmaOp.getA());
-          SmallVector<Operation *> accAllocs = getAlloc(mmaOp.getAccumulator());
-          for (Operation *lhsAlloc : lhsAllocs)
-            for (Operation *accAlloc : accAllocs)
+          auto lhsAllocs = getAlloc(mmaOp.getA());
+          auto accAllocs = getAlloc(mmaOp.getAccumulator());
+          if (failed(lhsAllocs) || failed(accAllocs)) {
+            rowConstraintStatus = mmaOp->emitError(
+                "64-row MMA tensor memory operands passed through function "
+                "arguments or results are not supported");
+            return;
+          }
+          for (Operation *lhsAlloc : *lhsAllocs)
+            for (Operation *accAlloc : *accAllocs)
               rowIdConstraints.joinOps(lhsAlloc, accAlloc);
         } else {
           // TODO: we need to handle cases where the format is blockM and we
@@ -368,6 +385,8 @@ allocateTMem(FunctionOpInterface func,
       }
     }
   });
+  if (failed(rowConstraintStatus))
+    return failure();
   // A callee's allocations keep their absolute column offsets in every caller
   // because the lowering passes the kernel's tensor memory base unchanged
   // through direct calls. Model each call as an immovable full-height
