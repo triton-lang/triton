@@ -7,6 +7,8 @@
 
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 
+#include <algorithm>
+
 namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace mlir {
@@ -131,18 +133,10 @@ enum class ThreadSyncKind {
   SharedCompletionNeedsSync,
 };
 
-enum class ThreadSyncIssuer {
-  Unknown,
-  // All effects are issued by thread zero of the current execution partition.
-  Thread0,
-  // A fixed leader of partition-relative warp zero, not necessarily lane zero.
-  Warp0Leader,
-};
-
 struct ThreadSyncInfo {
   // Rendezvous requirements, not barriers provided by the operation itself.
   ThreadSyncKind kind = ThreadSyncKind::Ordinary;
-  ThreadSyncIssuer issuer = ThreadSyncIssuer::Unknown;
+  ThreadIssuer::Kind issuer = ThreadIssuer::Unknown;
 
   bool requiresBefore() const { return kind == ThreadSyncKind::Publication; }
 
@@ -180,7 +174,7 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
   if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(op)) {
     // Init and inval use the same full-mask election, or thread zero before
     // SM90.
-    return {ThreadSyncKind::Ordinary, ThreadSyncIssuer::Warp0Leader};
+    return {ThreadSyncKind::Ordinary, ThreadIssuer::Warp0Leader};
   }
   if (isa<ttng::ArriveBarrierOp, ttng::BarrierExpectOp>(op)) {
     auto fromCTA = isa<ttng::ArriveBarrierOp>(op)
@@ -188,7 +182,7 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
                        : cast<ttng::BarrierExpectOp>(op).getFromCTA();
     // Nonidentity routing may use several lanes to signal the peer CTAs.
     return {ThreadSyncKind::Publication,
-            !fromCTA ? ThreadSyncIssuer::Thread0 : ThreadSyncIssuer::Unknown};
+            !fromCTA ? ThreadIssuer::Thread0 : ThreadIssuer::Unknown};
   }
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
     return {mma.getCompletionBarriers().empty() ? ThreadSyncKind::Ordinary
@@ -207,54 +201,58 @@ bool hasOnlyGlobalReads(Operation *op) {
          });
 }
 
-// Whether both operations use the same fixed issuer in each CTA of one region.
+ThreadIssuer getThreadIssuer(Operation *op) {
+  auto kind = getThreadSyncInfo(op).issuer;
+  return kind == ThreadIssuer::Unknown
+             ? ThreadIssuer{}
+             : ThreadIssuer{kind, op->getParentRegion()};
+}
+
 bool haveSameThreadSyncIssuer(Operation *lhs, Operation *rhs) {
-  // Equal issuer kinds in different regions can denote different physical
-  // threads, including sibling warp-specialized partitions and callees.
-  if (lhs->getParentRegion() != rhs->getParentRegion())
-    return false;
-  auto issuer = getThreadSyncInfo(lhs).issuer;
-  return issuer != ThreadSyncIssuer::Unknown &&
-         issuer == getThreadSyncInfo(rhs).issuer;
+  auto issuer = getThreadIssuer(lhs);
+  return issuer.kind != ThreadIssuer::Unknown && issuer == getThreadIssuer(rhs);
 }
 
 } // namespace
 
-void BlockInfo::joinThreadEffects(const BlockInfo &other) {
-  if (other.threadEffects.empty())
+bool IssuerSummary::hasSameKnownIssuer(const IssuerSummary &other) const {
+  return issuer && issuer->kind != ThreadIssuer::Unknown && *this == other;
+}
+
+void IssuerSummary::join(const IssuerSummary &other) {
+  if (other.empty())
     return;
-  if (threadEffects.empty()) {
-    threadSync = other.threadSync;
-  } else {
-    if (!threadSync.commonIssuer || !other.threadSync.commonIssuer ||
-        !haveSameThreadSyncIssuer(threadSync.commonIssuer,
-                                  other.threadSync.commonIssuer))
-      threadSync.commonIssuer = nullptr;
-    threadSync.completionNeedsSync |= other.threadSync.completionNeedsSync;
-    threadSync.sharedCompletionNeedsSync |=
-        other.threadSync.sharedCompletionNeedsSync;
+  if (empty()) {
+    *this = other;
+  } else if (*this != other) {
+    issuer = ThreadIssuer{};
   }
-  threadEffects.insert(other.threadEffects.begin(), other.threadEffects.end());
+}
+
+void BlockInfo::joinThreadState(const BlockInfo &other) {
+  const auto &sync = other.threadSync;
+  threadSync.effectIssuers.join(sync.effectIssuers);
+  threadSync.completion = std::max(threadSync.completion, sync.completion);
+  const auto &demands = other.threadDemands;
+  threadDemands.hasDemand |= demands.hasDemand;
+  threadDemands.hasDemandBeyondGlobalReads |=
+      demands.hasDemandBeyondGlobalReads;
+  threadDemands.publicationIssuers.join(demands.publicationIssuers);
 }
 
 bool BlockInfo::requiresThreadSync(const BlockInfo &other) const {
-  if (threadEffects.empty() || other.threadDemands.empty())
+  const auto &demands = other.threadDemands;
+  if (threadSync.effectIssuers.empty() || !demands.hasDemand)
     return false;
-  // Only effect -> demand edges require a rendezvous; independent completion
-  // operations can publish together.
   // The maps also include implicit scratch and translated callee accesses.
   bool hasSharedAccesses =
       !other.syncReadSlices.empty() || !other.syncWriteSlices.empty();
-  const auto &sync = threadSync;
-  for (Operation *after : other.threadDemands)
-    if (sync.completionNeedsSync ||
-        (sync.sharedCompletionNeedsSync &&
-         (hasSharedAccesses || !hasOnlyGlobalReads(after))) ||
-        (getThreadSyncInfo(after).requiresBefore() &&
-         (!sync.commonIssuer ||
-          !haveSameThreadSyncIssuer(sync.commonIssuer, after))))
-      return true;
-  return false;
+  return threadSync.completion == CompletionSync::All ||
+         (threadSync.completion == CompletionSync::Shared &&
+          (hasSharedAccesses || demands.hasDemandBeyondGlobalReads)) ||
+         (!demands.publicationIssuers.empty() &&
+          !threadSync.effectIssuers.hasSameKnownIssuer(
+              demands.publicationIssuers));
 }
 
 void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
@@ -265,8 +263,8 @@ void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                      bool afterIsRead, Allocation *allocation) {
     // Effects issued by the same thread are ordered with respect to each other.
     // A fixed thread-zero issuer and an elected warp-zero leader may differ.
-    return (pending.threadEffects.count(before) &&
-            effects.threadEffects.count(after) &&
+    return (!pending.threadSync.effectIssuers.empty() &&
+            !effects.threadSync.effectIssuers.empty() &&
             haveSameThreadSyncIssuer(before, after)) ||
            (filter &&
             filter(before, after, beforeIsRead, afterIsRead, allocation));
@@ -396,15 +394,21 @@ bool MembarAnalysis::hasThreadEffects(Operation *op) {
 
 BlockInfo MembarAnalysis::getThreadEffects(Operation *op) {
   BlockInfo effects;
-  effects.threadEffects.insert(op);
+  effects.threadSync.effectIssuers = IssuerSummary{getThreadIssuer(op)};
   auto sync = getThreadSyncInfo(op);
-  if (sync.issuer != ThreadSyncIssuer::Unknown)
-    effects.threadSync.commonIssuer = op;
-  effects.threadSync.completionNeedsSync =
-      sync.kind == ThreadSyncKind::CompletionNeedsSync;
-  effects.threadSync.sharedCompletionNeedsSync =
-      sync.kind == ThreadSyncKind::SharedCompletionNeedsSync;
+  if (sync.kind == ThreadSyncKind::CompletionNeedsSync)
+    effects.threadSync.completion = CompletionSync::All;
+  else if (sync.kind == ThreadSyncKind::SharedCompletionNeedsSync)
+    effects.threadSync.completion = CompletionSync::Shared;
   return effects;
+}
+
+void MembarAnalysis::addThreadDemand(BlockInfo &effects, Operation *op) {
+  effects.threadDemands.hasDemand = true;
+  effects.threadDemands.hasDemandBeyondGlobalReads = !hasOnlyGlobalReads(op);
+  if (getThreadSyncInfo(op).requiresBefore())
+    effects.threadDemands.publicationIssuers =
+        IssuerSummary{getThreadIssuer(op)};
 }
 
 void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
@@ -426,15 +430,15 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   if (hasEffects) {
     effects = getThreadEffects(op);
     if (!sync.isCompletionOnly())
-      effects.threadDemands.insert(op);
+      addThreadDemand(effects, op);
   }
   if (isReturn && isa<FunctionOpInterface>(op->getParentOp()))
-    effects.threadDemands.insert(op);
+    addThreadDemand(effects, op);
 
   // Finish completions that block every memory demand once before a loop.
   // Shared-copy completions can still overlap independent global reads.
   if (builder && bufferIndexAnalysis.entersLoop(op) &&
-      membarInfo->pending.threadSync.completionNeedsSync) {
+      membarInfo->pending.threadSync.completion == CompletionSync::All) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     membarInfo->sync();
@@ -565,7 +569,7 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
     if (barrierStages.betweenMemoryEffects) {
       // The internal barrier synchronizes all incoming effects. Do not carry
       // them past the operation; only effects after the barrier are outgoing.
-      bool hasThreadEffects = curBlockInfo.threadEffects.count(op);
+      bool hasThreadEffects = !curBlockInfo.threadSync.effectIssuers.empty();
       membarInfo->addBlockInfo(curBlockInfo);
       membarInfo->sync();
       curBlockInfo.sync();

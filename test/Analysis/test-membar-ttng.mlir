@@ -718,6 +718,25 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return
   }
 
+  // Each barrier starts with count one.
+  // CHECK-LABEL: @same_issuer_through_cfg_join
+  tt.func private @same_issuer_through_cfg_join(%pred: i1, %first: !barrier, %second: !barrier, %done: !barrier) {
+    cf.cond_br %pred, ^first, ^second
+  ^first:
+    ttng.arrive_barrier %first, 1 : !barrier
+    cf.br ^join
+  ^second:
+    ttng.arrive_barrier %second, 1 : !barrier
+    cf.br ^join
+  ^join:
+    // CHECK: cf.br ^[[JOIN:bb[0-9]+]]
+    // CHECK: ^[[JOIN]]:
+    // CHECK-NEXT: ttng.arrive_barrier
+    // CHECK-NEXT: tt.return
+    ttng.arrive_barrier %done, 1 : !barrier
+    tt.return
+  }
+
   // The load remains pending when joined with a fixed-thread publication.
   // CHECK-LABEL: @mixed_issuers_through_cfg_join
   tt.func private @mixed_issuers_through_cfg_join(%pred: i1, %src: !tt.ptr<i32>, %first: !barrier, %done: !barrier) {

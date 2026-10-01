@@ -8,6 +8,7 @@
 #include "Function.h"
 
 #include "llvm/Support/raw_ostream.h"
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <set>
@@ -118,6 +119,45 @@ private:
   Allocation::BufferId bufferId;
 };
 
+struct ThreadIssuer {
+  enum Kind {
+    Unknown,
+    // Thread zero of the current execution partition.
+    Thread0,
+    // A fixed leader of partition-relative warp zero.
+    // The leader's lane may be nonzero.
+    Warp0Leader
+  };
+  Kind kind = Unknown;
+  Region *region = nullptr;
+
+  bool operator==(const ThreadIssuer &) const = default;
+};
+
+// Empty summaries contain no operations. Nonempty summaries preserve an issuer
+// only when every operation has the same known kind and execution region.
+class IssuerSummary {
+public:
+  IssuerSummary() = default;
+  explicit IssuerSummary(ThreadIssuer issuer) : issuer(issuer) {}
+
+  bool empty() const { return !issuer; }
+  bool hasSameKnownIssuer(const IssuerSummary &other) const;
+  void join(const IssuerSummary &other);
+
+  bool operator==(const IssuerSummary &) const = default;
+
+private:
+  std::optional<ThreadIssuer> issuer;
+};
+
+enum class CompletionSync : uint8_t {
+  None,
+  // Independent global reads may proceed before the rendezvous.
+  Shared,
+  All,
+};
+
 struct BlockInfo {
   using SliceMapT = std::map<AllocationSlice, std::set<Operation *>>;
 
@@ -125,19 +165,21 @@ struct BlockInfo {
   SliceMapT syncWriteSlices;
 
   // Thread ordering is independent of which physical addresses are accessed.
-  // Effect: something whose effects may need to be ordered before later
-  // operations.
-  std::set<Operation *> threadEffects;
-  // Derived from threadEffects. A representative exists only when all effects
-  // use the same known issuer in the same execution region.
   struct ThreadSyncState {
-    Operation *commonIssuer = nullptr;
-    bool completionNeedsSync = false;
-    bool sharedCompletionNeedsSync = false;
+    IssuerSummary effectIssuers;
+    CompletionSync completion = CompletionSync::None;
+
+    bool operator==(const ThreadSyncState &) const = default;
   } threadSync;
-  // Demand: something that may require previous effects to be ordered before it
-  // executes.
-  std::set<Operation *> threadDemands;
+  struct ThreadDemandState {
+    bool hasDemand = false;
+    // Base membar demands not proven to have only global-read effects.
+    bool hasDemandBeyondGlobalReads = false;
+    // Only publication demands contribute to this issuer summary.
+    IssuerSummary publicationIssuers;
+
+    bool operator==(const ThreadDemandState &) const = default;
+  } threadDemands;
 
   BlockInfo() = default;
 
@@ -150,9 +192,7 @@ struct BlockInfo {
     for (auto &slice : other.syncWriteSlices)
       syncWriteSlices[slice.first].insert(slice.second.begin(),
                                           slice.second.end());
-    joinThreadEffects(other);
-    threadDemands.insert(other.threadDemands.begin(),
-                         other.threadDemands.end());
+    joinThreadState(other);
     return *this;
   }
 
@@ -221,22 +261,11 @@ struct BlockInfo {
   void sync() {
     syncReadSlices.clear();
     syncWriteSlices.clear();
-    threadEffects.clear();
     threadSync = {};
-    threadDemands.clear();
+    threadDemands = {};
   }
 
-  /// Compares two BlockInfo objects.
-  bool operator==(const BlockInfo &other) const {
-    // Equal effect sets imply equivalent summaries, even with different
-    // commonIssuer representatives.
-    return syncReadSlices == other.syncReadSlices &&
-           syncWriteSlices == other.syncWriteSlices &&
-           threadEffects == other.threadEffects &&
-           threadDemands == other.threadDemands;
-  }
-
-  bool operator!=(const BlockInfo &other) const { return !(*this == other); }
+  bool operator==(const BlockInfo &) const = default;
 
 private:
   bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
@@ -256,7 +285,7 @@ private:
     return false;
   }
 
-  void joinThreadEffects(const BlockInfo &other);
+  void joinThreadState(const BlockInfo &other);
 };
 
 /// Tracks memory and thread-ordering state at the current program point and at
@@ -306,10 +335,7 @@ struct MembarInfo {
     entryBlockInfo.transformSlices(transform);
   }
 
-  bool operator==(const MembarInfo &other) const {
-    return pending == other.pending && entryBlockInfo == other.entryBlockInfo &&
-           allPathsFromEntrySynced == other.allPathsFromEntrySynced;
-  }
+  bool operator==(const MembarInfo &) const = default;
 };
 
 /// Classify the barriers that synchronize local memory accesses in `op`
@@ -378,6 +404,7 @@ protected:
 private:
   SmallVector<AllocationSlice> getAllocationSlices(Value value);
   BlockInfo getThreadEffects(Operation *op);
+  void addThreadDemand(BlockInfo &effects, Operation *op);
 
   MembarSliceFilterFn sliceFilter;
   AccessMode accessMode;
