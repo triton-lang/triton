@@ -362,7 +362,7 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
     : axis(axis), originalLayout(inputLayout) {
   // Plan the scan without changing the original layout: remove duplicate
   // registers and order axis register bits, then scan warp-local segments.
-  // If the axis spans warps, segmentLayout describes their extracted totals;
+  // If the axis spans warps, warpLocalLayout describes their extracted totals;
   // converting to warpTotalsLayout gives each participating warp the full
   // sequence to scan. Map exclusive carries back to the saved local prefixes.
   permutedLayout = buildPermutedLayout();
@@ -387,7 +387,7 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
   if (warpLocalSegmentSize == axisSize)
     return;
 
-  segmentLayout = buildSegmentLayout();
+  warpLocalLayout = buildWarpLocalLayout();
   warpTotalsLayout = buildWarpTotalsLayout();
 }
 
@@ -410,7 +410,7 @@ LinearLayout ScanLoweringHelper::buildPermutedLayout() {
   return registerOrder.apply(uniqueLayout);
 }
 
-LinearLayout ScanLoweringHelper::buildSegmentLayout() const {
+LinearLayout ScanLoweringHelper::buildWarpLocalLayout() const {
   // Example: a 1D scan with register=[1,8,16], lane=[2,0,0,0,0], warp=[4]
   // has warp-local segments of size 4. Dividing axis bases by 4 and removing
   // zero register bases gives register=[2,4], lane=[0,0,0,0,0], warp=[1].
@@ -430,7 +430,7 @@ LinearLayout ScanLoweringHelper::buildSegmentLayout() const {
 }
 
 LinearLayout ScanLoweringHelper::buildWarpTotalsLayout() const {
-  // Continuing the segmentLayout example, register=[2,4], lane=[0,0,0,0,0],
+  // Continuing the warpLocalLayout example, register=[2,4], lane=[0,0,0,0,0],
   // warp=[1] becomes register=[], lane=[1,2,4,0,0], warp=[0]. Each warp now
   // holds T0..T7 in lanes 0..7, repeated in the other lane groups. With 64
   // totals and 32 available lanes, use register=[32], lane=[1,2,4,8,16]:
@@ -438,12 +438,12 @@ LinearLayout ScanLoweringHelper::buildWarpTotalsLayout() const {
   // Every participating warp gets the full sequence of segment totals.
   // Keep parallel ownership (including CTA ownership), use available lanes
   // for the low sequence bits, and put any remaining bits in registers.
-  auto *ctx = segmentLayout->getInDimNames().begin()->getContext();
+  auto *ctx = warpLocalLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
-  auto axisDim = *std::next(segmentLayout->getOutDimNames().begin(), axis);
-  unsigned numSegments = segmentLayout->getOutDimSize(axisDim);
-  auto bases = segmentLayout->getBases();
+  auto axisDim = *std::next(warpLocalLayout->getOutDimNames().begin(), axis);
+  unsigned numSegments = warpLocalLayout->getOutDimSize(axisDim);
+  auto bases = warpLocalLayout->getBases();
   for (auto &[dim, dimBases] : bases)
     for (auto &basis : dimBases)
       basis[axis] = 0;
@@ -456,13 +456,13 @@ LinearLayout ScanLoweringHelper::buildWarpTotalsLayout() const {
     }
   }
   while (next < numSegments) {
-    std::vector<int32_t> basis(segmentLayout->getNumOutDims(), 0);
+    std::vector<int32_t> basis(warpLocalLayout->getNumOutDims(), 0);
     basis[axis] = next;
     bases[kReg].push_back(std::move(basis));
     next *= 2;
   }
   return LinearLayout(std::move(bases),
-                      llvm::to_vector(segmentLayout->getOutDimNames()))
+                      llvm::to_vector(warpLocalLayout->getOutDimNames()))
       .removeZeroBasesAlongDim(kReg);
 }
 
@@ -476,9 +476,9 @@ bool ScanLoweringHelper::isSupported() {
 unsigned ScanLoweringHelper::getScratchSizeInBytes(
     ArrayRef<Type> elementTypes,
     GetNumScratchElemsFn numScratchElemsGetter) const {
-  if (!segmentLayout)
+  if (!warpLocalLayout)
     return 0;
-  return getLayoutConversionScratchConfig(*segmentLayout, *warpTotalsLayout,
+  return getLayoutConversionScratchConfig(*warpLocalLayout, *warpTotalsLayout,
                                           elementTypes, numScratchElemsGetter)
       .sizeInBytes;
 }
