@@ -1,7 +1,7 @@
 # isort: off
 # fmt: off
 from contextlib import nullcontext
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 import itertools
 import importlib
 from types import SimpleNamespace
@@ -1089,3 +1089,34 @@ def test_fused_comm_no_local_output(dtype, n_peers, ragged, is_persistent):
                 torch.cuda.synchronize(destination.device)
             graph.replay()
             torch.testing.assert_close(collected(), reference, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("tile_a,tile_b", [(True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("out_dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("accumulate", [False, True])
+def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("requires Blackwell")
+    torch.manual_seed(17)
+    m, n, k = 256, 512, 1024
+    a = wrap_torch_tensor(torch.randn(m, k, device=device).to(torch.float8_e4m3fn))
+    b = wrap_torch_tensor(torch.randn(n, k, device=device).to(torch.float8_e4m3fn).T)
+    a_scale = convert_layout(wrap_torch_tensor(torch.full((m, k // 32), 127, dtype=torch.uint8, device=device)),
+                             layout.BlackwellActMXScaleLayout(None))
+    b_scale = convert_layout(wrap_torch_tensor(torch.full((k // 32, n), 127, dtype=torch.uint8, device=device)),
+                             layout.BlackwellMXScaleLayout())
+    metadata = make_ragged_tensor_metadata(torch.tensor([256, 256, 512, 0], dtype=torch.int32, device=device), k)
+    metadata = replace(metadata, slice_sizes_divisibility=128)
+    precision = PrecisionConfig(a_mx_scale=a_scale, b_mx_scale=b_scale, a_microblock_size=32,
+                                b_microblock_size=32, out_dtype=out_dtype)
+    expected = torch.randn(4, m, n, device=device, dtype=out_dtype)
+    actual = expected.clone()
+    matmul(a, b, None, c=expected, c_acc_in=expected if accumulate else None,
+           precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+    if tile_a:
+        a = convert_layout(a, layout.TiledLayout(-1))
+    if tile_b:
+        b = convert_layout(b, layout.TiledLayout(-2))
+    matmul(a, b, None, c=actual, c_acc_in=actual if accumulate else None,
+           precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)

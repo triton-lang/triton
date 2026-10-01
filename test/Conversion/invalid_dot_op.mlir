@@ -21,3 +21,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.return %D : tensor<16x16xi32, #mma0>
   }
 }
+
+// -----
+
+#a = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 8, colStride = 1>
+#b_mn = #ttg.shared_linear<{offset = [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]]}, alignment = 16>
+!a = !ttg.memdesc<128x128xf8E4M3FN, #a, #ttng.tensor_memory>
+!b = !ttg.memdesc<128x1xf8E4M3FN, #b_mn, #ttg.shared_memory>
+!d = !ttg.memdesc<128x1xf32, #d, #ttng.tensor_memory, mutable>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @mma_requires_contiguous_rhs_atom(%a: !a, %b: !b, %d: !d, %p: i1) {
+    // expected-error @below {{instruction M/N must cover at least 16 contiguous elements of the shared-memory core}}
+    // expected-error @below {{failed to find valid tcgen05.mma layout for operand B in shared memory}}
+    // expected-error @below {{failed to legalize operation 'ttng.tc_gen5_mma' that was explicitly marked illegal}}
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b, !d
+    tt.return
+  }
+}
