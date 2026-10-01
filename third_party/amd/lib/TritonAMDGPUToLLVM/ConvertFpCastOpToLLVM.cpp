@@ -868,8 +868,7 @@ public:
 
   size_t getNumElements() override {
     return isa<Float8E4M3FNType>(srcTy) &&
-                   (isaFamily == ISAFamily::GFX1250 &&
-                    targetInfo.supportsCvtPkScalePk8Block16())
+                   targetInfo.supportsCvtPkScalePk8Upcast()
                ? 8
                : 4;
   }
@@ -888,8 +887,7 @@ public:
       else
         return Fp8E4M3fnuzToFp16SW(loc, rewriter, v);
     } else if (isa<Float8E4M3FNType>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250 &&
-          targetInfo.supportsCvtPkScalePk8Block16()) {
+      if (targetInfo.supportsCvtPkScalePk8Upcast()) {
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F16Fp8Op>(loc,
                                                                    rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1046,10 +1044,7 @@ public:
     if (isa<Float8E5M2FNUZType>(srcTy)) {
       return 4;
     } else if (isa<Float8E5M2Type>(srcTy)) {
-      return (isaFamily == ISAFamily::GFX1250 &&
-              targetInfo.supportsCvtPkScalePk8Block16())
-                 ? 8
-                 : 4;
+      return targetInfo.supportsCvtPkScalePk8Upcast() ? 8 : 4;
     }
     return 0;
   }
@@ -1068,8 +1063,7 @@ public:
       else
         return Fp8E5M2fnuzToFp16SW(loc, rewriter, v);
     } else if (isa<Float8E5M2Type>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250 &&
-          targetInfo.supportsCvtPkScalePk8Block16()) {
+      if (targetInfo.supportsCvtPkScalePk8Upcast()) {
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F16Bf8Op>(loc,
                                                                    rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1191,10 +1185,7 @@ public:
     if (isa<Float8E4M3FNUZType>(srcTy)) {
       return hasFnuzFp8HW(isaFamily) ? 4 : 2;
     } else if (isa<Float8E4M3FNType>(srcTy)) {
-      return (isaFamily == ISAFamily::GFX1250 &&
-              targetInfo.supportsCvtPkScalePk8Block16())
-                 ? 8
-                 : 4;
+      return targetInfo.supportsCvtPkScalePk8Upcast() ? 8 : 4;
     }
     return 0;
   }
@@ -1213,8 +1204,7 @@ public:
       else
         return Fp8E4M3fnuzToBf16SW(loc, rewriter, v);
     } else if (isa<Float8E4M3FNType>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250 &&
-          targetInfo.supportsCvtPkScalePk8Block16()) {
+      if (targetInfo.supportsCvtPkScalePk8Upcast()) {
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8Bf16Fp8Op>(
             loc, rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1311,8 +1301,7 @@ public:
 
   size_t getNumElements() override {
     return isa<Float8E5M2Type>(srcTy) &&
-                   (isaFamily == ISAFamily::GFX1250 &&
-                    targetInfo.supportsCvtPkScalePk8Block16())
+                   targetInfo.supportsCvtPkScalePk8Upcast()
                ? 8
                : 4;
   }
@@ -1331,8 +1320,7 @@ public:
       else
         return Fp8E5M2fnuzToBf16SW(loc, rewriter, v);
     } else if (isa<Float8E5M2Type>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250 &&
-          targetInfo.supportsCvtPkScalePk8Block16()) {
+      if (targetInfo.supportsCvtPkScalePk8Upcast()) {
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8Bf16Bf8Op>(
             loc, rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1386,8 +1374,7 @@ public:
 
   size_t getNumElements() override {
     return isa<Float8E4M3FNType>(srcTy) &&
-                   (isaFamily == ISAFamily::GFX1250 &&
-                    targetInfo.supportsCvtPkScalePk8Block16())
+                   targetInfo.supportsCvtPkScalePk8Upcast()
                ? 8
                : 4;
   }
@@ -1407,8 +1394,7 @@ public:
       else
         useTwoStepConversion = true;
     } else if (isa<Float8E4M3FNType>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250 &&
-          targetInfo.supportsCvtPkScalePk8Block16())
+      if (targetInfo.supportsCvtPkScalePk8Upcast())
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F32Fp8Op>(loc,
                                                                    rewriter, v);
       else if (isaFamily == ISAFamily::CDNA4)
@@ -1448,8 +1434,7 @@ public:
 
   size_t getNumElements() override {
     return isa<Float8E5M2Type>(srcTy) &&
-                   (isaFamily == ISAFamily::GFX1250 &&
-                    targetInfo.supportsCvtPkScalePk8Block16())
+                   targetInfo.supportsCvtPkScalePk8Upcast()
                ? 8
                : 4;
   }
@@ -1469,8 +1454,7 @@ public:
       else
         useTwoStepConversion = true;
     } else if (isa<Float8E5M2Type>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250 &&
-          targetInfo.supportsCvtPkScalePk8Block16())
+      if (targetInfo.supportsCvtPkScalePk8Upcast())
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F32Bf8Op>(loc,
                                                                    rewriter, v);
       else if (isaFamily == ISAFamily::CDNA4)

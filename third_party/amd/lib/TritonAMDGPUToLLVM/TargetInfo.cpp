@@ -855,6 +855,10 @@ bool TargetInfo::supportsCvtPkScalePk8() const {
   return targetFeatures.supportsCvtPkScalePk8();
 }
 
+bool TargetInfo::supportsCvtPkScalePk8Upcast() const {
+  return targetFeatures.supportsCvtPkScalePk8Upcast();
+}
+
 bool TargetInfo::supportsCvtPkScalePk8Block16() const {
   return targetFeatures.supportsCvtPkScalePk8Block16();
 }

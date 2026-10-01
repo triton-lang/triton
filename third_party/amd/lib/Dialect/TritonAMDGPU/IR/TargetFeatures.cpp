@@ -260,7 +260,7 @@ bool TargetFeatures::supportsTDM() const { return isGFX1250(); }
 bool TargetFeatures::supportsMultiCTALaunch() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsMulticast() const {
-  return supportsMultiCTALaunch() && !isGFX1250Strict();
+  return isGFX1250() && !isGFX1250Strict();
 }
 
 unsigned TargetFeatures::getMaxMulticastMaskPopcount() const {
@@ -350,6 +350,14 @@ bool TargetFeatures::supportsPermlaneSwap() const {
 
 bool TargetFeatures::supportsCvtPkScalePk8() const { return isGFX1250(); }
 
+bool TargetFeatures::supportsCvtPkScalePk8Upcast() const {
+  // TODO: gfx1250-strict implements the v_cvt_scale_pk8_* upcasts in Block32
+  // mode, but LLVM gates them behind block16-cvt-scale-insts, which it does
+  // not enable for gfx1250-strict. Drop the strict check once LLVM ticket is merged.
+  // May require LLVM bump
+  return supportsCvtPkScalePk8() && !isGFX1250Strict();
+}
+
 bool TargetFeatures::supportsCvtPkScalePk8Block16() const {
   return supportsCvtPkScalePk8() && !isGFX1250Strict();
 }
@@ -362,7 +370,7 @@ ArrayRef<StringRef> TargetFeatures::getUnsupportedWmmaFeatures() const {
 }
 
 bool TargetFeatures::supportsHwScaledUpcast() const {
-  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8Block16();
+  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8Upcast();
 }
 
 bool TargetFeatures::supportsHwScaledDowncast() const {

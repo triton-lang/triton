@@ -92,6 +92,7 @@ public:
   bool supportDppBroadcast() const;
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
+  bool supportsCvtPkScalePk8Upcast() const;
   bool supportsCvtPkScalePk8Block16() const;
   ArrayRef<StringRef> getUnsupportedWmmaFeatures() const;
   bool supportsHwScaledUpcast() const;
