@@ -5,6 +5,8 @@
 // RUN: triton-opt %t/grouped-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=GROUPS
 // RUN: triton-opt %t/tuple.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TUPLE
 // RUN: triton-opt %t/tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TUPLE
+// RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TRANSPOSE
+// RUN: triton-opt %t/warp-transpose.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TRANSPOSE
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
 //--- scan.mlir
@@ -50,15 +52,13 @@ tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8x
 
 // CHECK-LABEL: @test_warp_register_groups
 // WARP-LABEL: @test_warp_register_groups
-// Scan register-group totals with shuffle-up rounds, then carry between groups.
+// Normalize register ownership with shuffles, then scan the group totals.
 // WARP: @llvm.nvvm.shfl.sync.up.i32
 // WARP: add i32
 // WARP-NOT: @llvm.nvvm.barrier
 // WARP: ret
 tt.func private @test_warp_register_groups(%arg: tensor<128xi32, #layout_reg4>) -> tensor<128xi32, #layout_reg4> {
-  // CHECK-COUNT-10: @llvm.nvvm.shfl.sync.up.i32
-  // CHECK: @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK-NOT: @llvm.nvvm.shfl
+  // CHECK-COUNT-5: @llvm.nvvm.shfl.sync.up.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
@@ -161,9 +161,9 @@ tt.func public @anchor_registers(%ptr: !llvm.ptr, %arg: !llvm.struct<(i32, i32, 
 
 // CHECK-LABEL: @test_permuted_lanes
 // The low logical axis bits belong to lane bits 1, 3, 0 in that order.
-// Reverse traversal shifts by logical distances 1, 2, and 4, preserving
-// broadcast lane bit 2. Indexed shuffles handle the permuted physical bits.
-// CHECK-COUNT-3: @llvm.nvvm.shfl.sync.idx.i32
+// Normalize register/lane ownership, then shift in reverse logical order.
+// The conversions preserve broadcast lane bit 2.
+// CHECK: @llvm.nvvm.shfl.sync.idx.i32
 // CHECK-NOT: @llvm.nvvm.barrier
 // CHECK: ret
 tt.func private @test_permuted_lanes(%arg: tensor<16xi32, #lanes>) -> tensor<16xi32, #lanes> {
@@ -352,5 +352,52 @@ tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tens
     tt.scan.return %a12, %b_sum : i32, i64
   }) : (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>) -> (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>)
   tt.return %a_out, %b_out : tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>
+}
+}
+
+//--- warp-transpose.mlir
+
+// Two register/lane bit swaps would use shared memory under the default
+// conversion heuristic. Scan forces shuffles in both directions, including
+// packed i8 and split i64 values, without requesting an allocation offset.
+#transpose = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[0], [0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// TRANSPOSE: ttg.shared = 0 : i32
+// AMD-TRANSPOSE: ttg.shared = 0 : i32
+// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_warp_transpose_forward
+// TRANSPOSE: nvvm.shfl.sync
+// TRANSPOSE: llvm.add
+// TRANSPOSE: llvm.return
+// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_warp_transpose_forward
+// AMD-TRANSPOSE: llvm.add
+// AMD-TRANSPOSE: llvm.return
+tt.func private @test_scan_warp_transpose_forward(%a: tensor<16xi8, #transpose>, %b: tensor<16xi64, #transpose>) -> (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>) {
+  %a_out, %b_out = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%a1: i8, %b1: i64, %a2: i8, %b2: i64):
+    %a12 = arith.muli %a1, %a2 : i8
+    %a2_wide = arith.extsi %a2 : i8 to i64
+    %b12 = arith.muli %b1, %a2_wide : i64
+    %b_sum = arith.addi %b12, %b2 : i64
+    tt.scan.return %a12, %b_sum : i8, i64
+  }) : (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>) -> (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>)
+  tt.return %a_out, %b_out : tensor<16xi8, #transpose>, tensor<16xi64, #transpose>
+}
+// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_warp_transpose_reverse
+// TRANSPOSE: nvvm.shfl.sync
+// TRANSPOSE: llvm.add
+// TRANSPOSE: llvm.return
+// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_warp_transpose_reverse
+// AMD-TRANSPOSE: llvm.add
+// AMD-TRANSPOSE: llvm.return
+tt.func private @test_scan_warp_transpose_reverse(%a: tensor<16xi8, #transpose>, %b: tensor<16xi64, #transpose>) -> (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>) {
+  %a_out, %b_out = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%a1: i8, %b1: i64, %a2: i8, %b2: i64):
+    %a12 = arith.muli %a1, %a2 : i8
+    %a2_wide = arith.extsi %a2 : i8 to i64
+    %b12 = arith.muli %b1, %a2_wide : i64
+    %b_sum = arith.addi %b12, %b2 : i64
+    tt.scan.return %a12, %b_sum : i8, i64
+  }) : (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>) -> (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>)
+  tt.return %a_out, %b_out : tensor<16xi8, #transpose>, tensor<16xi64, #transpose>
 }
 }
