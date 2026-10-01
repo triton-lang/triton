@@ -32,6 +32,7 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -139,10 +140,44 @@ private:
   std::string arch;
 };
 
-py::object getLayoutClass(
-    const char *name,
-    const char *module = "triton.experimental.gluon.language._layouts") {
-  return py::module_::import_(module).attr(name);
+py::object getLayoutClass(StringRef name) {
+  struct LayoutImport {
+    llvm::StringLiteral name;
+    const char *module;
+    const char *className = nullptr;
+  };
+  static constexpr auto common = "triton.experimental.gluon.language._layouts";
+  static constexpr auto amd = "triton.experimental.gluon.language.amd._layouts";
+  static constexpr auto cdna5 =
+      "triton.experimental.gluon.language.amd.cdna5._layouts";
+  static constexpr auto blackwell =
+      "triton.experimental.gluon.language.nvidia.blackwell";
+  static constexpr auto rubin =
+      "triton.experimental.gluon.language.nvidia.rubin";
+  static constexpr LayoutImport imports[] = {
+      {"AutoLayout", common},
+      {"CoalescedLayout", common},
+      {"BlockedLayout", common},
+      {"SliceLayout", common},
+      {"DistributedLinearLayout", common},
+      {"DotOperandLayout", common},
+      {"NVMMADistributedLayout", common},
+      {"NVMMASharedLayout", common},
+      {"SwizzledSharedLayout", common},
+      {"SharedLinearLayout", common},
+      {"PaddedSharedLayout", common},
+      {"AMDMFMALayout", amd},
+      {"AMDWMMALayout", amd},
+      {"PartitionedSharedLayout", cdna5},
+      {"TensorMemoryLayout", blackwell},
+      {"TensorMemoryScalesLayout", blackwell},
+      {"RubinTensorMemoryScalesLayout", rubin, "TensorMemoryScalesLayout"},
+  };
+  for (const auto &entry : imports)
+    if (entry.name == name)
+      return py::module_::import_(entry.module)
+          .attr(entry.className ? entry.className : entry.name.data());
+  llvm_unreachable("Unhandled Gluon layout class");
 }
 
 bool isConvertLayoutTrivial(RankedTensorType dstTy, Value value) {
@@ -225,8 +260,7 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     return getLayoutClass("CoalescedLayout")();
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(amdMfma.getCGALayout());
-    return getLayoutClass("AMDMFMALayout",
-                          "triton.experimental.gluon.language.amd._layouts")(
+    return getLayoutClass("AMDMFMALayout")(
         amdMfma.getVersion(), toStdVector(amdMfma.getInstrShape()),
         amdMfma.getIsTransposed(), toStdVector(amdMfma.getWarpsPerCTA()),
         amdMfma.getElementBitWidth(), toStdVector(amdMfma.getTilesPerWarp()),
@@ -237,8 +271,7 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     auto ctx = layout.getContext();
     auto kReg = mlir::StringAttr::get(ctx, "register");
     auto kWarp = mlir::StringAttr::get(ctx, "warp");
-    return getLayoutClass("AMDWMMALayout",
-                          "triton.experimental.gluon.language.amd._layouts")(
+    return getLayoutClass("AMDWMMALayout")(
         amdWmma.getVersion(), amdWmma.getIsTransposed(),
         ctaLayout.getBases().lookup(kWarp), ctaLayout.getBases().lookup(kReg),
         toStdVector(amdWmma.getInstrShape()), cgaBases, amdWmma.getRank());
@@ -267,9 +300,7 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
                  dyn_cast<ttg::PartitionedSharedEncodingAttr>(layout)) {
     py::object partitionLayout =
         layoutToGluon(partitioned.getPartitionLayout(), isRubin);
-    return getLayoutClass(
-        "PartitionedSharedLayout",
-        "triton.experimental.gluon.language.amd.cdna5._layouts")(
+    return getLayoutClass("PartitionedSharedLayout")(
         partitioned.getNumPartitions(), partitioned.getNumGroups(),
         partitioned.getPartitionDim(), partitionLayout);
   } else if (auto tmemScales =
@@ -281,17 +312,12 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
                   ttng::TensorMemoryScalesBlockRepOrder::K_THEN_MN
               ? "kThenMn"
               : "mnThenK";
-      return getLayoutClass("TensorMemoryScalesLayout",
-                            "triton.experimental.gluon.language.nvidia.rubin")(
-          cgaLayout, blockRepOrder);
+      return getLayoutClass("RubinTensorMemoryScalesLayout")(cgaLayout,
+                                                             blockRepOrder);
     }
-    return getLayoutClass(
-        "TensorMemoryScalesLayout",
-        "triton.experimental.gluon.language.nvidia.blackwell")(cgaLayout);
+    return getLayoutClass("TensorMemoryScalesLayout")(cgaLayout);
   } else if (auto tmem = dyn_cast<ttng::TensorMemoryEncodingAttr>(layout)) {
-    return getLayoutClass(
-        "TensorMemoryLayout",
-        "triton.experimental.gluon.language.nvidia.blackwell")(
+    return getLayoutClass("TensorMemoryLayout")(
         std::vector<unsigned>{tmem.getBlockM(), tmem.getBlockN()},
         tmem.getColStride(), getCgaLayoutBases(tmem.getCGALayout()),
         tmem.getTwoCTAs(), tmem.getFp4Padded());
