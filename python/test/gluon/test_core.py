@@ -587,6 +587,41 @@ def test_noinline_tmem_multicast_caller_barrier(NESTED):
     assert compiled.asm["ttgir"].count("noinline = true") == (2 if NESTED else 1)
 
 
+@gluon.jit(noinline=True)
+def _noinline_tmem_descriptor_and_allocation(caller, output):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 64], [32, 1], [4, 1], [0, 1])
+    values = caller.load(layout) + 2
+    helper = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], 1))
+    helper.store(ttgl.convert_layout(values, helper.get_reg_layout()))
+    rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))[:, None]
+    cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))[None, :]
+    ttgl.store(output + rows * 64 + cols, helper.load(layout))
+
+
+@gluon.jit
+def _noinline_tmem_descriptor_kernel(input, helper_output, caller_output):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 64], [32, 1], [4, 1], [0, 1])
+    rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))[:, None]
+    cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))[None, :]
+    offsets = rows * 64 + cols
+    values = ttgl.load(input + offsets)
+    caller = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], 1))
+    caller.store(ttgl.convert_layout(values, caller.get_reg_layout()))
+    _noinline_tmem_descriptor_and_allocation(caller, helper_output)
+    ttgl.store(caller_output + offsets, caller.load(layout))
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell tensor memory")
+def test_noinline_tmem_argument_with_private_allocation():
+    values = torch.arange(128 * 64, device="cuda", dtype=torch.float32).reshape(128, 64)
+    helper_output = torch.empty_like(values)
+    caller_output = torch.empty_like(values)
+    compiled = _noinline_tmem_descriptor_kernel[(1, )](values, helper_output, caller_output, num_warps=4)
+    torch.testing.assert_close(helper_output, values + 2, rtol=0, atol=0)
+    torch.testing.assert_close(caller_output, values, rtol=0, atol=0)
+    assert compiled.metadata.tmem_size == 128
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_copy_kernel_multi_cta():
     XBLOCK = 2048

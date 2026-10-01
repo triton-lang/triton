@@ -159,10 +159,15 @@ bool nestedOpUsesTrackedMBarrier(Operation *op,
 
 bool opUsesTrackedMBarrier(Operation *op, const llvm::DenseSet<Value> &roots,
                            SharedMemoryAliasAnalysis &aliases,
-                           SymbolTableCollection &symbols) {
+                           SymbolTableCollection &symbols,
+                           DominanceInfo &domInfo, Operation *afterInit) {
   llvm::SmallPtrSet<Operation *, 8> visited;
   return op
       ->walk<WalkOrder::PreOrder>([&](Operation *nestedOp) {
+        // Per-init fallback must not include an earlier lifecycle of the same
+        // allocation. Test the actual nested use, not its enclosing region op.
+        if (afterInit && !domInfo.dominates(afterInit, nestedOp))
+          return WalkResult::advance();
         if (nestedOpUsesTrackedMBarrier(nestedOp, roots, aliases, symbols,
                                         visited))
           return WalkResult::interrupt();
@@ -231,9 +236,18 @@ LogicalResult insertCrossCTAMBarrierInitSyncForFunction(
 
   llvm::SetVector<Operation *> trackedUseAnchors;
   SymbolTableCollection symbols;
+  DominanceInfo domInfo(funcOp);
+  // A linear entry-block reinit cannot reach uses before itself. For other
+  // blocks, keep all uses: a backedge or reconvergent path can reach a use
+  // that is not dominated by this init, and still needs publication.
+  Operation *afterInit = nullptr;
+  if (onlyInit && onlyInit->getBlock() == &topLevelRegion.front() &&
+      onlyInit->getBlock()->getPredecessors().empty())
+    afterInit = onlyInit.getOperation();
   for (Block &block : topLevelRegion) {
     for (Operation &op : block) {
-      if (opUsesTrackedMBarrier(&op, trackedBarrierRoots, aliases, symbols))
+      if (opUsesTrackedMBarrier(&op, trackedBarrierRoots, aliases, symbols,
+                                domInfo, afterInit))
         trackedUseAnchors.insert(&op);
     }
   }
@@ -269,7 +283,6 @@ LogicalResult insertCrossCTAMBarrierInitSyncForFunction(
                                : &firstInsertionBlock->front();
 
   // Find the latest insertion point that still dominates every tracked use.
-  DominanceInfo domInfo(funcOp);
   llvm::SmallPtrSet<Block *, 8> useBlocks;
   for (Operation *trackedUseAnchor : trackedUseAnchors)
     useBlocks.insert(trackedUseAnchor->getBlock());
