@@ -362,9 +362,9 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
     : axis(axis), originalLayout(inputLayout) {
   // Plan the scan without changing the original layout: remove duplicate
   // registers and order axis register bits, then scan only the consecutive
-  // elements already owned by each thread. For an intra-warp scan, extract
-  // their totals in intraWarpLayout and convert to intraWarpScanLayout;
-  // scan those totals and apply carries to the saved thread-local prefixes.
+  // elements already owned by each thread. The intra-warp scan keeps this
+  // ownership: shuffle the thread totals, then broadcast terminal prefixes
+  // to carry into subsequent register groups in logical order.
   // If the axis spans warps, repeat with the warp-segment totals described by
   // interWarpLayout. interWarpScanLayout replicates their full sequence in
   // each participating warp, so the remaining scan and carries are warp-local.
@@ -394,10 +394,8 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
     if (basis[axis])
       threadLocalSegmentSize =
           std::min(threadLocalSegmentSize, unsigned(basis[axis]));
-  if (threadLocalSegmentSize < warpLocalSegmentSize) {
-    intraWarpLayout = buildIntraWarpLayout();
-    intraWarpScanLayout = buildIntraWarpScanLayout();
-  }
+  if (threadLocalSegmentSize < warpLocalSegmentSize)
+    intraWarpLayout = permutedLayout;
   if (warpLocalSegmentSize == axisSize)
     return;
 
@@ -422,46 +420,6 @@ LinearLayout ScanLoweringHelper::buildPermutedLayout() {
   });
   registerOrder = ColumnAction(permutation, kReg, regBases.size());
   return registerOrder.apply(uniqueLayout);
-}
-
-LinearLayout ScanLoweringHelper::buildIntraWarpLayout() const {
-  // Example: register=[1,8], lane=[2,4,0,0,0], warp=[16] has thread-local
-  // segments of size 2. Their totals use register=[4], lane=[1,2,0,0,0],
-  // warp=[8]. Ti is the total of elements [2*i, 2*i+1]; each total stays in
-  // the thread that computed it while the original local prefixes are saved.
-  auto *ctx = permutedLayout.getInDimNames().begin()->getContext();
-  auto kReg = StringAttr::get(ctx, "register");
-  auto bases = permutedLayout.getBases();
-  for (auto &[dim, dimBases] : bases)
-    for (auto &basis : dimBases)
-      basis[axis] /= threadLocalSegmentSize;
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector(permutedLayout.getOutDimNames()))
-      .removeZeroBasesAlongDim(kReg);
-}
-
-LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
-  // Continuing the intraWarpLayout example, register=[4], lane=[1,2,0,0,0],
-  // warp=[8] becomes register=[1], lane=[2,4,0,0,0], warp=[8]. Each thread
-  // now owns two consecutive totals; each warp scans its eight totals.
-  // Put the low segment bits in registers and the remaining bits in lanes.
-  // Preserve parallel ownership and all bits selecting other segments, so
-  // these conversions only move values within a warp.
-  auto *ctx = intraWarpLayout->getInDimNames().begin()->getContext();
-  auto kReg = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
-  unsigned segmentSize = warpLocalSegmentSize / threadLocalSegmentSize;
-  auto bases = intraWarpLayout->getBases();
-  unsigned next = 1;
-  for (auto dim : {kReg, kLane})
-    for (auto &basis : bases[dim])
-      if (basis[axis] && basis[axis] < segmentSize) {
-        basis[axis] = next;
-        next *= 2;
-      }
-  assert(next == segmentSize);
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector(intraWarpLayout->getOutDimNames()));
 }
 
 LinearLayout ScanLoweringHelper::buildInterWarpLayout() const {
