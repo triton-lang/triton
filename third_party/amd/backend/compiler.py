@@ -285,7 +285,12 @@ class HIPOptions:
     # Example: llvm_fn_attrs="amdgpu-sched-strategy=iterative-ilp,noinline"
     llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
 
+    # WGP/CU execution mode for gfx10, gfx11 and gfx120x; ignored on other targets.
+    wgp_cu_mode: str = "wgp"
+
     def __post_init__(self):
+        if self.wgp_cu_mode not in ("wgp", "cu"):
+            raise ValueError("wgp_cu_mode must be 'wgp' or 'cu'")
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
@@ -662,6 +667,12 @@ class HIPBackend(BaseBackend):
         for name, value in options.llvm_fn_attrs:
             kernel_fn.remove_fn_attr(name)
             kernel_fn.add_fn_attr(name, value)
+        if options.wgp_cu_mode == "cu":
+            if knobs.compilation.enable_asan:
+                raise ValueError("wgp_cu_mode='cu' is not supported together with TRITON_ENABLE_ASAN")
+            if any(name == "target-features" for name, _ in options.llvm_fn_attrs):
+                raise ValueError("llvm_fn_attrs cannot override 'target-features' when wgp_cu_mode='cu'")
+            kernel_fn.add_fn_target_feature("+cumode")
 
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments

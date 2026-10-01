@@ -1144,23 +1144,27 @@ void init_gluon_ir(py::module_ &m) {
           "create_async_tma_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
              Value barrier, Value result, Value pred, bool multicast,
-             std::optional<std::vector<Value>> offsets) {
+             std::optional<std::vector<Value>> offsets, Attribute cachePolicy) {
             multicast &=
                 ttng::hasCGABroadcast(cast<ttg::MemDescType>(result.getType()));
             ValueRange offsetsRange =
                 offsets.has_value() ? ValueRange(*offsets) : ValueRange{};
             self.create<ttng::AsyncTMACopyGlobalToLocalOp>(
-                descPtr, coord, offsetsRange, barrier, result, pred, multicast);
+                descPtr, coord, offsetsRange, barrier, result, pred, multicast,
+                cachePolicy, false);
           },
           py::arg("descPtr"), py::arg("coord"), py::arg("barrier"),
           py::arg("result"), py::arg("pred"), py::arg("multicast"),
-          py::arg("offsets").none())
-      .def("create_async_tma_copy_local_to_global",
-           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
-              Value src) {
-             self.create<ttng::AsyncTMACopyLocalToGlobalOp>(descPtr, coord,
-                                                            src);
-           })
+          py::arg("offsets").none(), py::arg("cachePolicy") = Attribute())
+      .def(
+          "create_async_tma_copy_local_to_global",
+          [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
+             Value src, Attribute cachePolicy) {
+            self.create<ttng::AsyncTMACopyLocalToGlobalOp>(descPtr, coord, src,
+                                                           cachePolicy);
+          },
+          py::arg("descPtr"), py::arg("coord"), py::arg("src"),
+          py::arg("cachePolicy") = Attribute())
       .def("create_async_tma_reduce",
            [](GluonOpBuilder &self, triton::DescriptorReduceKind kind,
               Value descPtr, std::vector<Value> &coord, Value src) {
@@ -1173,18 +1177,26 @@ void init_gluon_ir(py::module_ &m) {
       .def(
           "create_async_tma_gather",
           [](GluonOpBuilder &self, Value descPtr, Value xOffsets, Value yOffset,
-             Value barrier, Value result, Value pred, bool multicast) {
+             Value barrier, Value result, Value pred, bool multicast,
+             Attribute cachePolicy) {
             multicast &=
                 ttng::hasCGABroadcast(cast<ttg::MemDescType>(result.getType()));
-            self.create<ttng::AsyncTMAGatherOp>(
-                descPtr, xOffsets, yOffset, barrier, result, pred, multicast);
-          })
-      .def("create_async_tma_scatter",
-           [](GluonOpBuilder &self, Value descPtr, Value xOffsets,
-              Value yOffset, Value src) {
-             self.create<ttng::AsyncTMAScatterOp>(descPtr, xOffsets, yOffset,
-                                                  src);
-           })
+            self.create<ttng::AsyncTMAGatherOp>(descPtr, xOffsets, yOffset,
+                                                barrier, result, pred,
+                                                multicast, cachePolicy);
+          },
+          py::arg("descPtr"), py::arg("xOffsets"), py::arg("yOffset"),
+          py::arg("barrier"), py::arg("result"), py::arg("pred"),
+          py::arg("multicast"), py::arg("cachePolicy") = Attribute())
+      .def(
+          "create_async_tma_scatter",
+          [](GluonOpBuilder &self, Value descPtr, Value xOffsets, Value yOffset,
+             Value src, Attribute cachePolicy) {
+            self.create<ttng::AsyncTMAScatterOp>(descPtr, xOffsets, yOffset,
+                                                 src, cachePolicy);
+          },
+          py::arg("descPtr"), py::arg("xOffsets"), py::arg("yOffset"),
+          py::arg("src"), py::arg("cachePolicy") = Attribute())
       .def("create_fence_async_shared",
            [](GluonOpBuilder &self, bool bCluster) -> OpState {
              return self.create<ttng::FenceAsyncSharedOp>(bCluster);

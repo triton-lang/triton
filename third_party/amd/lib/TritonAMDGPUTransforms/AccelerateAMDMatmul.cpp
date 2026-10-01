@@ -838,6 +838,22 @@ public:
     return *resultType;
   }
 
+  // Scaled upcasts convert `groupSize` elements along K at a time, so those
+  // elements have to be consecutive in registers within a thread.
+  Attribute getPackedScaledUpcastEncoding(RankedTensorType resultType,
+                                          int32_t kDim,
+                                          unsigned groupSize) const {
+    auto blocked = cast<ttg::BlockedEncodingAttr>(resultType.getEncoding());
+    SmallVector<unsigned> sizePerThread(blocked.getSizePerThread());
+    sizePerThread[kDim] = std::max(sizePerThread[kDim], groupSize);
+    SmallVector<unsigned> order(blocked.getOrder());
+    llvm::erase(order, kDim);
+    order.insert(order.begin(), kDim);
+    return ttg::BlockedEncodingAttr::get(
+        resultType.getContext(), sizePerThread, blocked.getThreadsPerWarp(),
+        blocked.getWarpsPerCTA(), order, ttg::getCGALayout(blocked));
+  }
+
   TensorValue scaleArg(PatternRewriter &rewriter, triton::DotScaledOp dotOp,
                        int opIdx, FloatType computeType) const override {
     TensorValue v = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
@@ -864,6 +880,21 @@ public:
 
     RankedTensorType resultType =
         getScaledUpcastResultType(vType, computeType, kDim, isFp4, loc);
+    unsigned groupSize =
+        isFp4 ? 8 : (targetFeatures.supportsCvtPkScalePk8() ? 8 : 4);
+    Attribute resultEncoding =
+        getPackedScaledUpcastEncoding(resultType, kDim, groupSize);
+    resultType = resultType.cloneWithEncoding(resultEncoding);
+
+    Attribute inputEncoding = resultEncoding;
+    if (isFp4) {
+      auto packedType =
+          mlir::triton::gpu::inferFpToFp4ResultType(resultType, kDim, loc);
+      assert(succeeded(packedType));
+      inputEncoding = packedType->getEncoding();
+    }
+    v = cast<TensorValue>(convertAndCastTensor(rewriter, v, inputEncoding,
+                                               vType.getElementType()));
 
     // Mark scale to simplify pattern matching during deducing TilesPerWarp
     scale.getDefiningOp()->setAttr(AttrDecomposedDotScaledSource,

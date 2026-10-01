@@ -4,6 +4,9 @@
 
 module attributes {"ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: tt.func @instrumented
+  // CHECK-SAME: !tt.ptr<i8> {tti.gsan_global_state}
+  // CHECK-SAME: !tt.ptr<i8> {tti.gsan_launch_table}
+  // CHECK-SAME: i64 {tti.gsan_launch_index}
   tt.func @instrumented(%ptrs: tensor<128x!tt.ptr<f32>, #blocked>,
                         %mask: tensor<128xi1, #blocked>,
                         %other: tensor<128xf32, #blocked>,
@@ -380,19 +383,19 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func public @instrumented_call_in_warp_specialize
   // CHECK-SAME: %[[STATE:[^:, )]+]]: !tt.ptr<i8>
-  // CHECK-SAME: %[[STREAM_CLOCK:[^:, )]+]]: !tt.ptr<i32>
-  // CHECK-SAME: %[[KERNEL_ID:[^:, )]+]]: i64
+  // CHECK-SAME: %[[LAUNCH_TABLE:[^:, )]+]]: !tt.ptr<i8>
+  // CHECK-SAME: %[[LAUNCH_INDEX:[^:, )]+]]: i64
   tt.func public @instrumented_call_in_warp_specialize(%value: i32) {
-    // CHECK: ttg.warp_specialize(%{{.*}}, %[[STATE]], %[[STREAM_CLOCK]], %[[KERNEL_ID]])
+    // CHECK: ttg.warp_specialize(%{{.*}}, %[[STATE]], %[[LAUNCH_TABLE]], %[[LAUNCH_INDEX]])
     ttg.warp_specialize(%value)
     default {
       ttg.warp_yield
     }
     // CHECK: partition0(%[[VALUE:[^:, )]+]]: i32, %[[PARTITION_STATE:[^:, )]+]]: !tt.ptr<i8>,
-    // CHECK-SAME: %[[PARTITION_STREAM_CLOCK:[^:, )]+]]: !tt.ptr<i32>, %[[PARTITION_KERNEL_ID:[^:, )]+]]: i64) num_warps(4)
+    // CHECK-SAME: %[[PARTITION_TABLE:[^:, )]+]]: !tt.ptr<i8>, %[[PARTITION_INDEX:[^:, )]+]]: i64) num_warps(4)
     partition0(%partition_value: i32) num_warps(4) {
-      // CHECK: tt.call @identity(%[[VALUE]], %[[PARTITION_STATE]], %[[PARTITION_STREAM_CLOCK]], %[[PARTITION_KERNEL_ID]])
-      // CHECK-SAME: : (i32, !tt.ptr<i8>, !tt.ptr<i32>, i64) -> i32
+      // CHECK: tt.call @identity(%[[VALUE]], %[[PARTITION_STATE]], %[[PARTITION_TABLE]], %[[PARTITION_INDEX]])
+      // CHECK-SAME: : (i32, !tt.ptr<i8>, !tt.ptr<i8>, i64) -> i32
       %result = tt.call @identity(%partition_value) : (i32) -> i32
       ttg.warp_return
     } : (i32) -> ()

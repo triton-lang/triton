@@ -1822,3 +1822,152 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#tma_cache_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tma_cache_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #tma_cache_shared>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #tma_cache_shared, #ttg.shared_memory, mutable>
+!tma_cache_mbar = !ttg.memdesc<1xi64, #tma_cache_bar, #ttg.shared_memory, mutable>
+
+tt.func @tma_cache_invalid(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  // expected-error @below {{TMA operations do not support cache modifiers}}
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// -----
+
+#tma_cache_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tma_cache_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #tma_cache_shared>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #tma_cache_shared, #ttg.shared_memory, mutable>
+!tma_cache_mbar = !ttg.memdesc<1xi64, #tma_cache_bar, #ttg.shared_memory, mutable>
+
+tt.func @tma_cache_invalid(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  // expected-error @below {{TMA operations do not support cache modifiers}}
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {cachePolicy = #ttng.cache_policy<cache_modifier = cg>} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// -----
+
+#tma_cache_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tma_cache_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #tma_cache_shared>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #tma_cache_shared, #ttg.shared_memory, mutable>
+!tma_cache_mbar = !ttg.memdesc<1xi64, #tma_cache_bar, #ttg.shared_memory, mutable>
+
+tt.func @tma_cache_invalid(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  // expected-error @below {{TMA operations do not support L1 eviction policies}}
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {cachePolicy = #ttng.cache_policy<l1 = evict_first>} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// -----
+
+#tma_cache_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tma_cache_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #tma_cache_shared>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #tma_cache_shared, #ttg.shared_memory, mutable>
+!tma_cache_mbar = !ttg.memdesc<1xi64, #tma_cache_bar, #ttg.shared_memory, mutable>
+
+tt.func @tma_cache_invalid(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  // expected-error @below {{TMA operations do not support L2 prefetch size}}
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {cachePolicy = #ttng.cache_policy<l2_prefetch_size = 128 : i32>} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// -----
+
+#tma_cache_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tma_cache_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #tma_cache_shared>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #tma_cache_shared, #ttg.shared_memory, mutable>
+!tma_cache_mbar = !ttg.memdesc<1xi64, #tma_cache_bar, #ttg.shared_memory, mutable>
+
+tt.func @tma_cache_invalid(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  // expected-error @below {{unsupported TMA cache policy attribute}}
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {cachePolicy = "evict_first"} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// -----
+
+#tma_cache_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tma_cache_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #tma_cache_shared>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #tma_cache_shared, #ttg.shared_memory, mutable>
+!tma_cache_mbar = !ttg.memdesc<1xi64, #tma_cache_bar, #ttg.shared_memory, mutable>
+
+tt.func @tma_cache_invalid(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  // expected-error @below {{volatile TMA loads are not supported}}
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {isVolatile = true} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// -----
+
+#tma_cache_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tma_cache_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #tma_cache_shared>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #tma_cache_shared, #ttg.shared_memory, mutable>
+!tma_cache_mbar = !ttg.memdesc<1xi64, #tma_cache_bar, #ttg.shared_memory, mutable>
+
+tt.func @tma_cache_invalid(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %bar: !tma_cache_mbar, %pred: i1, %coord: i32) {
+  // expected-error @below {{use cachePolicy instead of legacy cache/evict attributes}}
+  ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %dst, %bar, %pred {evict = 1 : i32} : !tma_cache_desc, !tma_cache_mbar -> !tma_cache_dst
+  tt.return
+}
+
+// -----
+
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#smem = #ttg.shared_memory
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #shared1>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #shared1, #smem, mutable>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+tt.func @tma_cache_invalid_gather(%desc: !tt.tensordesc<1x128xbf16, #shared1>, %dst: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %indices: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %coord: i32, %pred: i1) {
+  // expected-error @below {{TMA operations do not support L1 eviction policies}}
+  ttng.async_tma_gather %desc[%indices, %coord] %dst, %bar, %pred {cachePolicy = #ttng.cache_policy<l1 = evict_first>} : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<1xi64, #shared, #smem, mutable>, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, i1
+  tt.return
+}
+}
+
+// -----
+
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#smem = #ttg.shared_memory
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #shared1>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #shared1, #smem, mutable>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+tt.func @tma_cache_invalid_scatter(%desc: !tt.tensordesc<1x128xbf16, #shared1>, %dst: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, %indices: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %coord: i32) {
+  // expected-error @below {{TMA operations do not support L2 prefetch size}}
+  ttng.async_tma_scatter %desc[%indices, %coord] %dst {cachePolicy = #ttng.cache_policy<l2_prefetch_size = 128 : i32>} : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#smem = #ttg.shared_memory
+!tma_cache_desc = !tt.tensordesc<16x64xf16, #shared1>
+!tma_cache_dst = !ttg.memdesc<16x64xf16, #shared1, #smem, mutable>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+tt.func @tma_cache_invalid_store(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %coord: i32) {
+  // expected-error @below {{TMA operations do not support cache modifiers}}
+  ttng.async_tma_copy_local_to_global %desc[%coord, %coord] %dst {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tma_cache_desc, !tma_cache_dst
+  tt.return
+}
+}
