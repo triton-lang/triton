@@ -198,6 +198,19 @@ def _scan_affine_combine(a1, b1, a2, b2):
 
 @pytest.mark.parametrize("layout", [
     *SCAN_EXTRA_LAYOUTS,
+    # On axis 0, skip the lane scan independently of the inter-warp exchange.
+    # Parallel columns occupy all NVIDIA lanes, so exchanged totals must also
+    # scan entirely in registers. Axis 1 exercises a lane scan without exchange.
+    *[
+        pytest.param(
+            ttgl.DistributedLinearLayout([[bit, 0] for bit in registers], [[0, 1 << i] for i in range(5)] + [[0, 0]] *
+                                         (THREADS_PER_WARP.bit_length() - 6), [[bit, 0] for bit in warps], [],
+                                         [32, 32]), id=name) for name, registers, warps in [
+                                             ("thread_only", [1, 2, 4, 8, 16], [0, 0]),
+                                             ("thread_and_interwarp", [1, 2, 8, 16], [4, 0]),
+                                             ("interwarp_only", [4, 8, 16], [1, 2]),
+                                         ]
+    ],
     ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1]),
     # Exercise local prefixes followed by a cross-warp carry on axis 0.
     ttgl.BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1]),

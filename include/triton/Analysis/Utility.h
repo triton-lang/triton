@@ -117,11 +117,18 @@ public:
     return permutedLayout;
   }
   const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
-  // Length of a contiguous logical segment contained in one warp.
-  unsigned getWarpLocalSegmentSize() const { return warpLocalSegmentSize; }
-  // Layout of segment totals in the warps that computed them.
+  // Number of consecutive elements per thread after warp-local conversion.
+  unsigned getThreadLocalSegmentSize() const { return threadLocalSegmentSize; }
+  // Present when scanning a warp-local segment requires combining lanes.
   const std::optional<triton::LinearLayout> &getWarpLocalLayout() const {
     return warpLocalLayout;
+  }
+  // Length of a contiguous logical segment contained in one warp.
+  unsigned getWarpLocalSegmentSize() const { return warpLocalSegmentSize; }
+  // Present when segment totals must be exchanged between warps.
+  // Describes those totals in the warps that computed them.
+  const std::optional<triton::LinearLayout> &getInterWarpLayout() const {
+    return interWarpLayout;
   }
   const std::optional<triton::LinearLayout> &getWarpTotalsLayout() const {
     return warpTotalsLayout;
@@ -133,6 +140,7 @@ public:
 private:
   triton::LinearLayout buildPermutedLayout();
   triton::LinearLayout buildWarpLocalLayout() const;
+  triton::LinearLayout buildInterWarpLayout() const;
   triton::LinearLayout buildWarpTotalsLayout() const;
 
   unsigned axis;
@@ -140,8 +148,10 @@ private:
   // Register zero bases removed, then axis register bits ordered logically.
   triton::LinearLayout permutedLayout;
   triton::ColumnAction registerOrder;
+  unsigned threadLocalSegmentSize = 1;
   unsigned warpLocalSegmentSize = 1;
   std::optional<triton::LinearLayout> warpLocalLayout;
+  std::optional<triton::LinearLayout> interWarpLayout;
   std::optional<triton::LinearLayout> warpTotalsLayout;
 };
 
