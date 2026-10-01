@@ -74,6 +74,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
+  // Keep the assumption before the rendezvous required by the MMA.
+  // CHECK-LABEL: @alloc_assume_then_mma
+  // CHECK: ttng.tmem_alloc
+  // CHECK-NEXT: llvm.intr.assume
+  // CHECK-NEXT: ttng.tmem_wait store
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tc_gen5_mma
+  tt.func @alloc_assume_then_mma(%data: tensor<128x128xf32, #blocked>, %condition: i1,
+                                %a: !ttg.memdesc<128x128xf16, #shared_a, #ttg.shared_memory>,
+                                %b: !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>) {
+    %false = arith.constant false
+    %true = arith.constant true
+    %acc = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    llvm.intr.assume %condition : i1
+    ttng.tc_gen5_mma %a, %b, %acc, %false, %true :
+      !ttg.memdesc<128x128xf16, #shared_a, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
   // CHECK-LABEL: @ld_then_alloc
   // CHECK: ttng.tmem_load
   // CHECK-NEXT: ttng.tmem_wait load

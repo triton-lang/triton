@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/DenseMap.h"
 
@@ -179,6 +180,9 @@ static BlockInfo getTMemAccesses(Operation *op, BufferRegionAnalysis &regions) {
 enum class TMemBoundary { None, Wait, Publication };
 
 static TMemBoundary getTMemBoundary(Operation *op) {
+  // Assumptions do not publish pending TMEM accesses.
+  if (isa<LLVM::AssumeOp>(op))
+    return TMemBoundary::None;
   // An acquire does not publish earlier TMEM accesses. Keep them pending.
   if (isa<WaitBarrierOp>(op))
     return TMemBoundary::None;
