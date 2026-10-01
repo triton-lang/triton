@@ -125,7 +125,6 @@ Syntax:
 
 ```
 operation ::= `ttng.async_tma_copy_global_to_local` $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
-              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
               attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
 ```
 
@@ -134,6 +133,14 @@ asynchronously. This is analogous to tt.load except the data is copied to
 local memory pointed to by the memory descriptor instead of to a distributed
 tensor. The copied data depends on the global memory descriptor pointed to
 by `desc`.
+
+The optional `cachePolicy` attribute accepts a generic `tt.cache_policy`
+or an NVIDIA `ttng.cache_policy` with only an L2 eviction policy. Generic
+first/last eviction policies apply to all lines (fraction 1.0). An absent
+policy emits no cache hint. Explicit detailed L2 policies, including
+`evict_normal`, are preserved. Cache modifiers, L1 policies, L2 prefetch
+sizes, and volatile accesses are not supported. Hints do not change memory
+effects or synchronization.
 
 The tensor mode is determined by the descriptor type:
 - tt.tensordesc: TILED mode - Regular tiled tensor memory access
@@ -158,8 +165,7 @@ Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`, `TMALoadLikeOpInterf
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>multicast</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
@@ -193,9 +199,20 @@ local memory pointed to by the memory descriptor instead of from a
 distributed tensor. The copied data depends on the global memory descriptor
 pointed to by `desc`.
 
+The optional `cachePolicy` attribute has the same L2-only policy contract
+as `async_tma_copy_global_to_local`. An absent policy emits no hint;
+explicit detailed policies, including `evict_normal`, are preserved.
+
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `TMAOpInterface`, `TMAStoreLikeOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
+</table>
 
 #### Operands:
 
@@ -222,6 +239,10 @@ This operation gathers multiple rows of data from a global memory matrix to
 local memory asynchronously. This is similar to
 async_tma_copy_global_to_local except that each row is indexed independently.
 
+The optional `cachePolicy` attribute has the same L2-only policy contract
+as `async_tma_copy_global_to_local`. An absent policy emits no hint;
+explicit detailed policies, including `evict_normal`, are preserved.
+
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`, `TMALoadLikeOpInterface`, `TMAOpInterface`
@@ -231,6 +252,7 @@ Interfaces: `MBarrierOpInterface`, `PredicatedOpInterface`, `TMALoadLikeOpInterf
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>multicast</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 </table>
 
 #### Operands:
@@ -300,9 +322,20 @@ operation scatters a 2D tensor in shared memory, laid out using the core
 tensor tiles nvmma_shared layout, into separately indexed rows in global
 memory at a given `y` offset.
 
+The optional `cachePolicy` attribute has the same L2-only policy contract
+as `async_tma_copy_global_to_local`. An absent policy emits no hint;
+explicit detailed policies, including `evict_normal`, are preserved.
+
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `TMAOpInterface`, `TMAStoreLikeOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
+</table>
 
 #### Operands:
 

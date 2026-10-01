@@ -986,7 +986,7 @@ changed.
 
 Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `EfficientLayoutOpInterface`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -1616,7 +1616,7 @@ The compiler is still free to change it for better performance.
 
 Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `EfficientLayoutOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 

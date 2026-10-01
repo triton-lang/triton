@@ -36,7 +36,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_intro
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -52,7 +52,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_layouts
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -68,7 +68,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_async-copy
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -84,7 +84,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_tma
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -100,7 +100,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_wgmma
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -116,7 +116,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_tcgen05
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -132,7 +132,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_persistence
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -148,7 +148,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_warp-specialization
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -164,7 +164,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_tma-gather-scatter
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -180,7 +180,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_tcgen05-copy
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -196,7 +196,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_tcgen05-mma-scaled
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -212,7 +212,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_cluster-launch-control
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -228,7 +228,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_conv-im2col
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top
@@ -244,7 +244,7 @@ These tutorials can be found in ``python/tutorials/gluon``.
         :link: example_multicta
         :link-type: ref
         :shadow: md
-        :class-card: sd-rounded-2 msg-sd-card sd-border-0
+        :class-card: sd-border-0 msg-sd-card sd-rounded-2
         :class-item: msg-sd-card-hover
         :class-title: msg-sd-card-title
         :class-img-top: msg-sd-card-img-top

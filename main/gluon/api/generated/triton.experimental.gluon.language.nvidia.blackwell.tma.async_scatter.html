@@ -146,7 +146,7 @@
 <h1>triton.experimental.gluon.language.nvidia.blackwell.tma.async_scatter<a class="headerlink" href="#triton-experimental-gluon-language-nvidia-blackwell-tma-async-scatter" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.blackwell.tma.async_scatter">
-<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.blackwell.tma.</span></span><span class="sig-name descname"><span class="pre">async_scatter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensor_desc</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_offsets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_offset</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.tma.async_scatter" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.blackwell.tma.</span></span><span class="sig-name descname"><span class="pre">async_scatter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensor_desc</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x_offsets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y_offset</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_policy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.blackwell.tma.async_scatter" title="Link to this definition"></a></dt>
 <dd><p>Asynchronously scatter elements from shared memory to global memory using TMA.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -155,6 +155,9 @@
 <li><p><strong>x_offsets</strong> (<a class="reference internal" href="triton.experimental.gluon.language.tensor.html#triton.experimental.gluon.language.tensor" title="triton.experimental.gluon.language.tensor"><em>tensor</em></a>) – 1D tensor of X offsets.</p></li>
 <li><p><strong>y_offset</strong> (<em>int</em>) – Scalar Y offset.</p></li>
 <li><p><strong>src</strong> (<a class="reference internal" href="triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor.html#triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor" title="triton.experimental.gluon.language.nvidia.blackwell.tensor_memory_descriptor"><em>tensor_memory_descriptor</em></a>) – The source data, must be in NVMMASharedLayout.</p></li>
+<li><p><strong>cache_policy</strong> – A compile-time <code class="docutils literal notranslate"><span class="pre">CachePolicy</span></code> containing only an L2
+eviction policy. None leaves the policy unspecified. Cache policies
+are performance hints and do not affect synchronization.</p></li>
 </ul>
 </dd>
 </dl>

@@ -1927,8 +1927,11 @@ on the AMD CDNA4 architecture.</p>
 4 bits the second fp4 element.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">axis</span></code> attribute specifies the axis along which the fp4 elements are
 packed.</p>
+<p>The result encoding is always a layout constraint: the conversion consumes
+register-consecutive groups along <code class="docutils literal notranslate"><span class="pre">axis</span></code>, so layout conversion will not
+rewrite this op.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">CastFpOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">CastFpOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">EfficientLayoutOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id64">
 <h3>Attributes:<a class="headerlink" href="#id64" title="Link to this heading"></a></h3>
@@ -1982,8 +1985,10 @@ packed.</p>
 <p>Upcast fp8 (e4m3/e5m2) values and multiply with the given E8M0 scale
 encoded as BF16. This maps to <code class="docutils literal notranslate"><span class="pre">v_cvt_scalef32_*</span></code> intrinsics
 on the AMD CDNA4 architecture.</p>
+<p>The result encoding is always a layout constraint: the conversion consumes
+register-consecutive groups, so layout conversion will not rewrite this op.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">Elementwise</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">CastFpOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">CastFpOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">EfficientLayoutOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id67">
 <h3>Operands:<a class="headerlink" href="#id67" title="Link to this heading"></a></h3>

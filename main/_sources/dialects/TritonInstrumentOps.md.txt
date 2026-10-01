@@ -518,21 +518,14 @@ _Initialize GSan thread_
 Syntax:
 
 ```
-operation ::= `tti.experimental_gsan_init` $acquireStreamClock attr-dict
+operation ::= `tti.experimental_gsan_init` attr-dict
 ```
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>acquireStreamClock</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
-</table>
 
 
 
 ### `tti.experimental_gsan_kernel_exit` (triton::instrument::ExperimentalGSanKernelExitOp)
 
-_Publish a completed GSan thread clock to its launch stream_
+_Publish a completed GSan thread clock to its launch_
 
 Syntax:
 

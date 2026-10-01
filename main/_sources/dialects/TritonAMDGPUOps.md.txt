@@ -1335,9 +1335,13 @@ The lower 4 bits of the i8s represent the first fp4 element, and the upper
 The `axis` attribute specifies the axis along which the fp4 elements are
 packed.
 
+The result encoding is always a layout constraint: the conversion consumes
+register-consecutive groups along `axis`, so layout conversion will not
+rewrite this op.
+
 Traits: `AlwaysSpeculatableImplTrait`
 
-Interfaces: `CastFpOpInterface`, `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `CastFpOpInterface`, `ConditionallySpeculatable`, `EfficientLayoutOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -1378,9 +1382,12 @@ Upcast fp8 (e4m3/e5m2) values and multiply with the given E8M0 scale
 encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
 on the AMD CDNA4 architecture.
 
+The result encoding is always a layout constraint: the conversion consumes
+register-consecutive groups, so layout conversion will not rewrite this op.
+
 Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
 
-Interfaces: `CastFpOpInterface`, `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `CastFpOpInterface`, `ConditionallySpeculatable`, `EfficientLayoutOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 

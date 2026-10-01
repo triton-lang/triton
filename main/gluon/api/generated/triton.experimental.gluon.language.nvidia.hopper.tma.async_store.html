@@ -137,7 +137,7 @@
 <h1>triton.experimental.gluon.language.nvidia.hopper.tma.async_store<a class="headerlink" href="#triton-experimental-gluon-language-nvidia-hopper-tma-async-store" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.hopper.tma.async_store">
-<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.hopper.tma.</span></span><span class="sig-name descname"><span class="pre">async_store</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensor_desc</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">coord</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.hopper.tma.async_store" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.hopper.tma.</span></span><span class="sig-name descname"><span class="pre">async_store</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensor_desc</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">coord</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_policy</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.hopper.tma.async_store" title="Link to this definition"></a></dt>
 <dd><p>Store data from shared memory to global memory using TMA.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -145,6 +145,9 @@
 <li><p><strong>tensor_desc</strong> (<a class="reference internal" href="triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor.html#triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor" title="triton.experimental.gluon.language.nvidia.hopper.tma.tensor_descriptor"><em>tensor_descriptor</em></a>) – Tensor descriptor (tiled).</p></li>
 <li><p><strong>coord</strong> (<em>Sequence</em><em>[</em><em>int</em><em> | </em><em>ttgl.constexpr</em><em> | </em><em>ttgl.tensor</em><em>]</em>) – Coordinates in the destination tensor.</p></li>
 <li><p><strong>src</strong> (<em>ttgl.shared_memory_descriptor</em>) – Source memory descriptor.</p></li>
+<li><p><strong>cache_policy</strong> – A compile-time <code class="docutils literal notranslate"><span class="pre">CachePolicy</span></code> containing only an L2
+eviction policy. None leaves the policy unspecified. Cache policies
+are performance hints and do not affect synchronization.</p></li>
 </ul>
 </dd>
 </dl>
