@@ -112,17 +112,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
-#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[16, 0], [32, 0]], block = []}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
   tt.func private @tmem_mma_identity(%a: !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable> attributes {noinline = true} {
     tt.return %a : !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
   }
-  tt.func public @tmem_mma_returned_rows(%values: tensor<64x64xf16, #blocked>, %b: !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory>, %bar: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) {
+  tt.func public @tmem_mma_returned_rows(%values: tensor<64x64xf16, #linear>, %b: !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory>, %bar: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) {
     %false = arith.constant false
     %true = arith.constant true
     %c0 = arith.constant 0 : i32
-    %a = ttng.tmem_alloc %values : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
+    %a = ttng.tmem_alloc %values : (tensor<64x64xf16, #linear>) -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
     %acc = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
     %alias = tt.call @tmem_mma_identity(%a) : (!ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>
     // expected-error @below {{64-row MMA tensor memory operands passed through function arguments or results are not supported}}
