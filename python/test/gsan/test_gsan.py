@@ -1748,10 +1748,13 @@ def test_explicit_graph_fork_join_replay(with_gsan, pdl, change_stream):
                                    num_warps=1), (root, right)),
         (_graph_join_kernel.warmup(left, right, result, grid=(n, ), num_warps=1), (left, right, result)),
     ]
+    max_shared = triton.runtime.driver.active.utils.get_device_properties(torch.cuda.current_device())["max_shared_mem"]
     stream = torch.cuda.Stream() if change_stream else torch.cuda.current_stream()
     with ExplicitGraph(plan) as executable:
         for compiled, arguments in kernels:
             executable.add_kernel(compiled, arguments, n)
+            # Graph nodes bypass the eager launcher but need the same reservation.
+            assert executable.parameters[-1][0].shared == max_shared
         executable.instantiate()
         # Consume an eager producer before replay and feed an eager consumer after.
         _write_blocks_kernel[(4, )](source, n, BLOCK_SIZE=128)
