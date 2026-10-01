@@ -32,6 +32,7 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/MathExtras.h"
@@ -142,7 +143,6 @@ private:
 
 py::object getLayoutClass(StringRef name) {
   struct LayoutImport {
-    llvm::StringLiteral name;
     const char *module;
     const char *className = nullptr;
   };
@@ -154,30 +154,33 @@ py::object getLayoutClass(StringRef name) {
       "triton.experimental.gluon.language.nvidia.blackwell";
   static constexpr auto rubin =
       "triton.experimental.gluon.language.nvidia.rubin";
-  static constexpr LayoutImport imports[] = {
-      {"AutoLayout", common},
-      {"CoalescedLayout", common},
-      {"BlockedLayout", common},
-      {"SliceLayout", common},
-      {"DistributedLinearLayout", common},
-      {"DotOperandLayout", common},
-      {"NVMMADistributedLayout", common},
-      {"NVMMASharedLayout", common},
-      {"SwizzledSharedLayout", common},
-      {"SharedLinearLayout", common},
-      {"PaddedSharedLayout", common},
-      {"AMDMFMALayout", amd},
-      {"AMDWMMALayout", amd},
-      {"PartitionedSharedLayout", cdna5},
-      {"TensorMemoryLayout", blackwell},
-      {"TensorMemoryScalesLayout", blackwell},
-      {"RubinTensorMemoryScalesLayout", rubin, "TensorMemoryScalesLayout"},
-  };
-  for (const auto &entry : imports)
-    if (entry.name == name)
-      return py::module_::import_(entry.module)
-          .attr(entry.className ? entry.className : entry.name.data());
-  llvm_unreachable("Unhandled Gluon layout class");
+  static const llvm::SmallDenseMap<llvm::StringRef, LayoutImport, 32> imports =
+      {
+          {"AutoLayout", {common}},
+          {"CoalescedLayout", {common}},
+          {"BlockedLayout", {common}},
+          {"SliceLayout", {common}},
+          {"DistributedLinearLayout", {common}},
+          {"DotOperandLayout", {common}},
+          {"NVMMADistributedLayout", {common}},
+          {"NVMMASharedLayout", {common}},
+          {"SwizzledSharedLayout", {common}},
+          {"SharedLinearLayout", {common}},
+          {"PaddedSharedLayout", {common}},
+          {"AMDMFMALayout", {amd}},
+          {"AMDWMMALayout", {amd}},
+          {"PartitionedSharedLayout", {cdna5}},
+          {"TensorMemoryLayout", {blackwell}},
+          {"TensorMemoryScalesLayout", {blackwell}},
+          {"RubinTensorMemoryScalesLayout",
+           {rubin, "TensorMemoryScalesLayout"}},
+      };
+  auto it = imports.find(name);
+  if (it == imports.end())
+    llvm_unreachable("Unhandled Gluon layout class");
+  const auto &entry = it->second;
+  return py::module_::import_(entry.module)
+      .attr(entry.className ? entry.className : it->first.data());
 }
 
 bool isConvertLayoutTrivial(RankedTensorType dstTy, Value value) {
