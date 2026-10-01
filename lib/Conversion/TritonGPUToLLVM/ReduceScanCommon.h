@@ -113,8 +113,7 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
     Location loc, ConversionPatternRewriter &rewriter, SourceOp op,
     const LinearLayout &srcLayout, const LinearLayout &dstLayout,
     const SmallVector<SmallVector<Value>> &inVals,
-    const LLVMTypeConverter *typeConverter, const TargetInfoBase &targetInfo,
-    bool forceWarpShuffle = false) {
+    const LLVMTypeConverter *typeConverter, const TargetInfoBase &targetInfo) {
   SmallVector<SmallVector<Value>> outVals(op.getNumOperands());
   auto *ctx = rewriter.getContext();
   SmallVector<int64_t> shape;
@@ -127,21 +126,15 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
   // reduce_threads / reduce_lanes / convert_layout
   // and let AllocationAnalysis handle the shared memory allocation
   // and Membar the barriers.
-  // Forced warp-local conversions never need an allocation, even when the
-  // default conversion heuristic would choose shared memory.
-  LayoutConversionScratchConfig scratch;
-  if (!forceWarpShuffle)
-    scratch = getLayoutConversionScratchConfig(
-        srcLayout, dstLayout, op.getElementTypes(),
-        [&](const LinearLayout &src, const LinearLayout &dst,
-            unsigned bitwidth) {
-          auto vecBitwidth =
-              triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
-          auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-          return getNumScratchElemsSwizzledCvt(
-              src, dst, bitwidth, targetInfo.getSharedMemoryBanks(), srcTile,
-              dstTile);
-        });
+  auto scratch = getLayoutConversionScratchConfig(
+      srcLayout, dstLayout, op.getElementTypes(),
+      [&](const LinearLayout &src, const LinearLayout &dst, unsigned bitwidth) {
+        auto vecBitwidth = triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
+        auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
+        return getNumScratchElemsSwizzledCvt(src, dst, bitwidth,
+                                             targetInfo.getSharedMemoryBanks(),
+                                             srcTile, dstTile);
+      });
   auto baseOffsetAttr =
       op->template getAttrOfType<IntegerAttr>("allocation.offset");
   assert((!scratch.sizeInBytes || baseOffsetAttr) &&
@@ -159,8 +152,6 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
             .getResult(0);
     auto cvt =
         triton::gpu::ConvertLayoutOp::create(rewriter, loc, dstTy, srcTensor);
-    if (forceWarpShuffle)
-      cvt.setForceWarpShuffleAttr(rewriter.getUnitAttr());
     triton::nvidia_gpu::copyClusterBarrierMbarOffset(op, cvt);
     if (scratch.sizeInBytes)
       cvt->setAttr("allocation.offset",
