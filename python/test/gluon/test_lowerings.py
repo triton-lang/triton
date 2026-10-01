@@ -211,6 +211,14 @@ def _scan_affine_combine(a1, b1, a2, b2):
         ttgl.DistributedLinearLayout(
             [[1, 0], [2, 0], [16, 0], [0, 1], [0, 2]], [[4, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
             (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32]), id="converted_totals_across_warps"),
+    # Lane bits 0,2,4 advance the scan; bits 1,3 select independent columns.
+    # Normalization puts four totals in each thread, so inverse lane lookup
+    # must scale scan distances and preserve the column coordinates.
+    pytest.param(
+        ttgl.DistributedLinearLayout([[8, 0], [16, 0], [0, 4], [0, 8], [0, 16]],
+                                     [[1, 0], [0, 1], [2, 0], [0, 2], [4, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32]),
+        id="inverse_lane_lookup_with_parallel_bits"),
     # On axis 0, skip the lane scan independently of the inter-warp exchange.
     # Parallel columns occupy all NVIDIA lanes, so exchanged totals must also
     # scan entirely in registers. Axis 1 exercises a lane scan without exchange.
