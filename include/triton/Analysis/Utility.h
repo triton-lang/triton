@@ -117,11 +117,15 @@ public:
     return permutedLayout;
   }
   const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
-  // Number of consecutive elements per thread after warp-local conversion.
+  // Number of consecutive logical elements already owned by each thread.
   unsigned getThreadLocalSegmentSize() const { return threadLocalSegmentSize; }
-  // Present when scanning a warp-local segment requires combining lanes.
-  const std::optional<triton::LinearLayout> &getWarpLocalLayout() const {
-    return warpLocalLayout;
+  // Thread-segment totals in their original owners, present for lane scans.
+  const std::optional<triton::LinearLayout> &getIntraWarpLayout() const {
+    return intraWarpLayout;
+  }
+  // The same totals with contiguous registers for the intra-warp scan.
+  const std::optional<triton::LinearLayout> &getIntraWarpScanLayout() const {
+    return intraWarpScanLayout;
   }
   // Length of a contiguous logical segment contained in one warp.
   unsigned getWarpLocalSegmentSize() const { return warpLocalSegmentSize; }
@@ -130,8 +134,9 @@ public:
   const std::optional<triton::LinearLayout> &getInterWarpLayout() const {
     return interWarpLayout;
   }
-  const std::optional<triton::LinearLayout> &getWarpTotalsLayout() const {
-    return warpTotalsLayout;
+  // Full sequence of warp-segment totals replicated in each participating warp.
+  const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
+    return interWarpScanLayout;
   }
   unsigned getScratchSizeInBytes(
       ArrayRef<Type> elementTypes,
@@ -139,9 +144,10 @@ public:
 
 private:
   triton::LinearLayout buildPermutedLayout();
-  triton::LinearLayout buildWarpLocalLayout() const;
+  triton::LinearLayout buildIntraWarpLayout() const;
+  triton::LinearLayout buildIntraWarpScanLayout() const;
   triton::LinearLayout buildInterWarpLayout() const;
-  triton::LinearLayout buildWarpTotalsLayout() const;
+  triton::LinearLayout buildInterWarpScanLayout() const;
 
   unsigned axis;
   triton::LinearLayout originalLayout;
@@ -150,9 +156,10 @@ private:
   triton::ColumnAction registerOrder;
   unsigned threadLocalSegmentSize = 1;
   unsigned warpLocalSegmentSize = 1;
-  std::optional<triton::LinearLayout> warpLocalLayout;
+  std::optional<triton::LinearLayout> intraWarpLayout;
+  std::optional<triton::LinearLayout> intraWarpScanLayout;
   std::optional<triton::LinearLayout> interWarpLayout;
-  std::optional<triton::LinearLayout> warpTotalsLayout;
+  std::optional<triton::LinearLayout> interWarpScanLayout;
 };
 
 // Helper class for lowering `tt.gather` operations. This class shares lowering
