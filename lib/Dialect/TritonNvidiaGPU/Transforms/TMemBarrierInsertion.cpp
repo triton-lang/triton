@@ -309,8 +309,9 @@ private:
   bool requiresThreadSync(const BlockInfo &pending,
                           const BlockInfo &effects) override {
     // Pending accesses require a rendezvous before publication.
-    return !effects.threadDemands.empty() && (!pending.syncReadSlices.empty() ||
-                                              !pending.syncWriteSlices.empty());
+    return effects.threadDemands.hasDemand &&
+           (!pending.syncReadSlices.empty() ||
+            !pending.syncWriteSlices.empty());
   }
 
   void update(Operation *op, MembarInfo *info, FuncMapT *funcMap,
@@ -345,7 +346,7 @@ private:
 
     auto boundary = getTMemBoundary(op);
     if (boundary == TMemBoundary::Publication)
-      effects.threadDemands.insert(op);
+      effects.threadDemands.hasDemand = true;
 
     syncBefore(effects);
 
