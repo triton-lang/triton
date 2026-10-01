@@ -55,6 +55,11 @@ bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy, RankedTensorType regTy,
 }
 
 std::optional<bool> hasCrossCTASharedAccess(Operation *op) {
+  if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp, ttg::LocalAllocOp,
+          ttg::LocalGatherOp, ttg::LocalScatterOp, ttg::LocalAtomicScatterRMWOp,
+          ttng::TMALoadLikeOpInterface>(op) &&
+      ttg::lookupNumCTAs(op) == 1)
+    return false;
   if (auto load = dyn_cast<ttg::LocalLoadOp>(op))
     return isCrossCTALoadStore(load.getSrc().getType(), load.getType());
   if (auto store = dyn_cast<ttg::LocalStoreOp>(op))
@@ -75,8 +80,6 @@ std::optional<bool> hasCrossCTASharedAccess(Operation *op) {
                                    atomic.getValues().getType(),
                                    atomic.getAxis());
   if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-    if (ttg::lookupNumCTAs(op) == 1)
-      return false;
     if (tma.getMulticast())
       return true;
     auto type = cast<ttg::MemDescType>(tma.getResult().getType());
