@@ -1065,12 +1065,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // Choosing [16], [32] avoids bank conflicts and preserves register bit 1.
   // CHECK-LABEL: @ldmatrix_b8_minimise_conflicts_preserve_words
-  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK-DAG: %[[TWO:.*]] = llvm.mlir.constant(2 : i32)
   // CHECK: %[[LOAD:.*]] = nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b8>, layout = #nvvm.mma_layout<col>, num = 2 : i32
   // CHECK: %[[WORD:.*]] = llvm.extractvalue %[[LOAD]][0]
   // CHECK: %[[BYTES:.*]] = llvm.bitcast %[[WORD]] : i32 to vector<4xi8>
   // CHECK: %[[BYTE1:.*]] = llvm.extractelement %[[BYTES]][%[[ONE]] : i32]
-  // CHECK: %[[TWO:.*]] = llvm.mlir.constant(2 : i32)
   // CHECK: %[[BYTE2:.*]] = llvm.extractelement %[[BYTES]][%[[TWO]] : i32]
   // CHECK: llvm.insertvalue %[[BYTE2]], %{{.*}}[2]
   // CHECK: llvm.insertvalue %[[BYTE1]], %{{.*}}[4]
@@ -1080,10 +1080,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   }
   // Selecting register [8] avoids the bank conflict caused by register [64].
   // CHECK-LABEL: @ldmatrix_b16_minimise_conflicts
+  // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
   // CHECK: %[[LOAD:.*]] = nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<col>, num = 4 : i32
   // CHECK: %[[WORD:.*]] = llvm.extractvalue %[[LOAD]][0]
   // CHECK: %[[HALVES:.*]] = llvm.bitcast %[[WORD]] : i32 to vector<2xf16>
-  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
   // CHECK: %[[HALF1:.*]] = llvm.extractelement %[[HALVES]][%[[ONE]] : i32]
   // CHECK: llvm.insertvalue %[[HALF1]], %{{.*}}[2]
   tt.func private @ldmatrix_b16_minimise_conflicts(%A: !ttg.memdesc<256xf16, #shared, #smem>) -> tensor<256xf16, #b16> {
@@ -1092,8 +1092,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   }
   // Selecting register [16] avoids the bank conflict caused by register [128].
   // CHECK-LABEL: @stmatrix_b8_minimise_conflicts
+  // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
   // CHECK: %[[INPUT4:.*]] = llvm.extractvalue %{{.*}}[4]
-  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
   // CHECK: %[[PACK1:.*]] = llvm.insertelement %[[INPUT4]], %{{.*}}[%[[ONE]] : i32]
   // CHECK: %[[PACK2:.*]] = llvm.insertelement %{{.*}}, %[[PACK1]][
   // CHECK: %[[PACK3:.*]] = llvm.insertelement %{{.*}}, %[[PACK2]][
@@ -1104,8 +1104,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.return
   }
   // CHECK-LABEL: @stmatrix_b16_minimise_conflicts
+  // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
   // CHECK: %[[INPUT2:.*]] = llvm.extractvalue %{{.*}}[2]
-  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
   // CHECK: %[[PACK:.*]] = llvm.insertelement %[[INPUT2]], %{{.*}}[%[[ONE]] : i32]
   // CHECK: %[[WORD:.*]] = llvm.bitcast %[[PACK]] : vector<2xf16> to i32
   // CHECK: nvvm.stmatrix %{{[^,]+}}, %[[WORD]], %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b16>, layout = #nvvm.mma_layout<col>, shape = #nvvm.ld_st_matrix_shape<m = 8, n = 8>} : !llvm.ptr<3>, i32, i32, i32, i32
