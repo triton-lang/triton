@@ -811,19 +811,21 @@ def get_nvidia_toolchain_packages():
 
 
 def download_and_copy_dependencies(helper_args: BuildHelperArgs):
-    download_and_copy_amd_codegen(helper_args)
+    if check_env_flag("TRITON_BUILD_AMD_BACKEND", "ON"):
+        download_and_copy_amd_codegen(helper_args)
 
-    for package in get_nvidia_toolchain_packages():
-        download_and_copy(
-            name=package.name,
-            src_func=lambda system, arch, version, package=package:
-            f"{package.archive(system, arch).filename.removesuffix('.tar.xz')}/{package.src_path}",
-            dst_path=package.dst_path,
-            override_path=getattr(helper_args, package.override_attr),
-            version=package.version,
-            url_func=lambda system, arch, version, package=package: package.archive(system, arch).url,
-            helper_args=helper_args,
-        )
+    if check_env_flag("TRITON_BUILD_NVIDIA_BACKEND", "ON"):
+        for package in get_nvidia_toolchain_packages():
+            download_and_copy(
+                name=package.name,
+                src_func=lambda system, arch, version, package=package:
+                f"{package.archive(system, arch).filename.removesuffix('.tar.xz')}/{package.src_path}",
+                dst_path=package.dst_path,
+                override_path=getattr(helper_args, package.override_attr),
+                version=package.version,
+                url_func=lambda system, arch, version, package=package: package.archive(system, arch).url,
+                helper_args=helper_args,
+            )
 
 
 def add_common_args(parser: argparse.ArgumentParser):

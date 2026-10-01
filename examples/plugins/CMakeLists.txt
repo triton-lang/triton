@@ -14,18 +14,22 @@ set(TritonPluginsTestLib_SOURCES
     TritonPlugin.cpp
     )
 
-# Dialect Plugins
-add_subdirectory(DialectPlugins)
+# Dialect Plugins (requires NVIDIA backend)
+if(TRITON_BUILD_NVIDIA_BACKEND)
+  add_subdirectory(DialectPlugins)
+endif()
 
 foreach( plugin ${TRITON_PLUGIN_PASSES} )
     add_library(${plugin} SHARED ${${plugin}_SOURCES})
     add_dependencies(${plugin}
       TritonTableGen
       TritonGPUTableGen
-      TritonNvidiaGPUTableGen
       TritonCanonicalizeIncGen
       TritonPluginsIncGen
     )
+    if(TRITON_BUILD_NVIDIA_BACKEND)
+      add_dependencies(${plugin} TritonNvidiaGPUTableGen)
+    endif()
     target_link_libraries(${plugin} PRIVATE triton)
 
     # CMAKE_LIBRARY_OUTPUT_DIRECTORY is only set during the Python

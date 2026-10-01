@@ -32,13 +32,22 @@ add_triton_library(TritonGPUToLLVM
     MLIRIR
     MLIRPass
     MLIRGPUDialect
-    MLIRGPUToNVVMTransforms
-    MLIRGPUToROCDLTransforms
     MLIRGPUTransforms
+    MLIRFuncToLLVM
     NVGPUIR
+    TritonNVIDIAGPUToLLVMUtility
     TritonAnalysis
     TritonIR
     TritonGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
 )
+
+# The backend-specific MLIR GPU lowering dialects are only available when the
+# respective backends are built.
+if(TRITON_BUILD_NVIDIA_BACKEND)
+  target_link_libraries(TritonGPUToLLVM PUBLIC MLIRGPUToNVVMTransforms)
+endif()
+if(TRITON_BUILD_AMD_BACKEND)
+  target_link_libraries(TritonGPUToLLVM PUBLIC MLIRGPUToROCDLTransforms)
+endif()

@@ -1,3 +1,10 @@
+# Test-analysis helper lib only exists when the AMD backend is built.
+if(TRITON_BUILD_AMD_BACKEND)
+  set(TRITON_AMD_TEST_LIBS TritonAMDGPUTestAnalysis)
+else()
+  set(TRITON_AMD_TEST_LIBS "")
+endif()
+
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
 add_executable(triton-opt triton-opt.cpp)
@@ -8,7 +15,7 @@ target_link_libraries(triton-opt PRIVATE
   # tests
   TritonTestAnalysis
   TritonTestDialect
-  TritonAMDGPUTestAnalysis
+  ${TRITON_AMD_TEST_LIBS}
   TritonTestProton
   # MLIR core
   MLIROptLib
@@ -29,7 +36,7 @@ target_link_libraries(triton-reduce PRIVATE
   # tests
   TritonTestAnalysis
   TritonTestDialect
-  TritonAMDGPUTestAnalysis
+  ${TRITON_AMD_TEST_LIBS}
   TritonTestProton
   # MLIR core
   MLIRReduceLib
@@ -49,7 +56,7 @@ target_link_libraries(triton-lsp PRIVATE
   # tests
   TritonTestAnalysis
   TritonTestDialect
-  TritonAMDGPUTestAnalysis
+  ${TRITON_AMD_TEST_LIBS}
   TritonTestProton
   # MLIR core
   MLIRLspServerLib
@@ -84,8 +91,26 @@ target_link_libraries(triton-tensor-layout PRIVATE
   TritonTestAnalysis
   TritonTestDialect
   TritonTestProton
-  TritonAMDGPUTestAnalysis
+  ${TRITON_AMD_TEST_LIBS}
   MLIRRegisterAllDialects
   MLIRRegisterAllPasses
   MLIRTransforms
 )
+
+# When a backend is disabled, only its tablegen headers are generated (no
+# libraries), so consumers that include backend dialect headers need explicit
+# order-only dependencies on the generation targets.
+foreach(_tg
+    TritonAMDGPUTableGen TritonAMDGPUAttrDefsIncGen TritonAMDGPUTransformsIncGen
+    TritonAMDGPUConversionPassIncGen
+    NVGPUTableGen NVGPUAttrDefsIncGen
+    NVWSTableGen NVWSAttrDefsIncGen NVWSTransformsIncGen
+    NVGPUConversionPassIncGen TritonNVIDIAGPUConversionPassIncGen)
+  if(TARGET ${_tg})
+    foreach(_tool triton-opt triton-reduce triton-lsp triton-tensor-layout)
+      if(TARGET ${_tool})
+        add_dependencies(${_tool} ${_tg})
+      endif()
+    endforeach()
+  endif()
+endforeach()

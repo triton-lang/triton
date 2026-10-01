@@ -349,6 +349,8 @@ class CMakeBuild(build_ext):
         # environment variables we will pass through to cmake
         passthrough_args = [
             "TRITON_BUILD_PROTON",
+            "TRITON_BUILD_NVIDIA_BACKEND",
+            "TRITON_BUILD_AMD_BACKEND",
             "TRITON_BUILD_NVIDIA_GSAN_RUNTIME",
             "TRITON_BUILD_WITH_CCACHE",
             "TRITON_PARALLEL_LINK_JOBS",
@@ -398,7 +400,12 @@ class CMakeBuild(build_ext):
                                   cwd=cmake_dir)
 
 
-backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
+_active_backends = []
+if check_env_flag("TRITON_BUILD_NVIDIA_BACKEND", "ON"):
+    _active_backends.append("nvidia")
+if check_env_flag("TRITON_BUILD_AMD_BACKEND", "ON"):
+    _active_backends.append("amd")
+backends = [*BackendInstaller.copy(_active_backends), *BackendInstaller.copy_externals()]
 
 
 def get_package_dirs():
