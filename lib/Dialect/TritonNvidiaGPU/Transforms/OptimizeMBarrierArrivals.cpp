@@ -263,6 +263,9 @@ void prepareMBarrierArrivals(ModuleOp mod, BufferRegionAnalysis &regions,
   // Completing arrivals with an explicit count requires SM90.
   if (computeCapability < 90)
     return;
+  if (!mod.walk([](ArriveBarrierOp) { return WalkResult::interrupt(); })
+           .wasInterrupted())
+    return;
   auto forwarding = collectDescriptorForwarding(mod);
   mod.walk([&](gpu::LocalAllocOp alloc) {
     BarrierUses uses;
