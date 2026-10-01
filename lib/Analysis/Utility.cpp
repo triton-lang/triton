@@ -314,15 +314,47 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
 
 ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
                                        unsigned axis)
-    : axis(axis), layout(inputLayout) {
-  auto *ctx = layout.getInDimNames().begin()->getContext();
-  auto kReg = StringAttr::get(ctx, "register");
-  auto axisDim = *std::next(layout.getOutDimNames().begin(), axis);
-  layout = layout.removeZeroBasesAlongDim(kReg);
+    : axis(axis), originalLayout(inputLayout) {
+  // Plan the scan without changing the original layout: remove duplicate
+  // registers and order axis register bits, then scan warp-local segments.
+  // If the axis spans warps, segmentLayout describes their extracted totals;
+  // converting to warpTotalsLayout gives each participating warp the full
+  // sequence to scan. Map exclusive carries back to the saved local prefixes.
+  permutedLayout = buildPermutedLayout();
+  if (!isSupported())
+    return;
 
-  // Put axis registers first, in logical order, without changing which thread
+  auto *ctx = originalLayout.getInDimNames().begin()->getContext();
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto axisDim = *std::next(originalLayout.getOutDimNames().begin(), axis);
+  unsigned axisSize = originalLayout.getOutDimSize(axisDim);
+  // Scans across CTAs are unsupported, as checked above, so only warp bases
+  // bound a contiguous warp-local segment along the scan axis. Its size is
+  // the smallest nonzero warp basis on that axis, or the full axis size if
+  // no warp basis affects it. Register and lane bits may be interleaved with
+  // warp bits. Scan each warp-local segment before exchanging their totals.
+  warpLocalSegmentSize = axisSize;
+  for (const auto &basis : originalLayout.getBases().lookup(kWarp)) {
+    if (basis[axis])
+      warpLocalSegmentSize =
+          std::min(warpLocalSegmentSize, unsigned(basis[axis]));
+  }
+  if (warpLocalSegmentSize == axisSize)
+    return;
+
+  segmentLayout = buildSegmentLayout();
+  warpTotalsLayout = buildWarpTotalsLayout();
+}
+
+LinearLayout ScanLoweringHelper::buildPermutedLayout() {
+  // Example for axis 0: register bases [(8,0), (0,1), (2,0), (0,0)]
+  // become [(2,0), (8,0), (0,1)]. Remove the duplicate register bit, then
+  // put axis registers first, in logical order, without changing which thread
   // owns any value. Unlike reduction, scan cannot reorder logical axis bits.
-  const auto &regBases = layout.getBases().lookup(kReg);
+  auto *ctx = originalLayout.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto uniqueLayout = originalLayout.removeZeroBasesAlongDim(kReg);
+  const auto &regBases = uniqueLayout.getBases().lookup(kReg);
   auto permutation = llvm::to_vector(llvm::seq<size_t>(regBases.size()));
   llvm::stable_sort(permutation, [&](size_t a, size_t b) {
     unsigned x = regBases[a][axis];
@@ -330,40 +362,47 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
     return x && (!y || x < y);
   });
   registerOrder = ColumnAction(permutation, kReg, regBases.size());
-  layout = registerOrder.apply(layout);
-  if (!isSupported())
-    return;
+  return registerOrder.apply(uniqueLayout);
+}
 
-  auto kLane = StringAttr::get(ctx, "lane");
-  auto kWarp = StringAttr::get(ctx, "warp");
-  // Only scan contiguous warp-local segments before exchanging their totals.
-  segmentSize = layout.getOutDimSize(axisDim);
-  for (const auto &basis : layout.getBases().lookup(kWarp)) {
-    if (basis[axis])
-      segmentSize = std::min(segmentSize, unsigned(basis[axis]));
-  }
-
-  if (segmentSize == layout.getOutDimSize(axisDim))
-    return;
-
+LinearLayout ScanLoweringHelper::buildSegmentLayout() const {
+  // Example: a 1D scan with register=[1,8,16], lane=[2,0,0,0,0], warp=[4]
+  // has warp-local segments of size 4. Dividing axis bases by 4 and removing
+  // zero register bases gives register=[2,4], lane=[0,0,0,0,0], warp=[1].
+  // Warp 0 keeps totals T0,T2,T4,T6; warp 1 keeps T1,T3,T5,T7, where Ti is
+  // the total of elements [4*i, 4*i+3]. Each total is broadcast across lanes.
   // Collapse each contiguous segment to its terminal value. Broadcast that
   // value along the old segment lane bits and discard duplicate registers.
-  auto bases = layout.getBases();
+  auto *ctx = permutedLayout.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto bases = permutedLayout.getBases();
   for (auto &[dim, dimBases] : bases)
     for (auto &basis : dimBases)
-      basis[axis] /= segmentSize;
-  segmentLayout = LinearLayout(bases, llvm::to_vector(layout.getOutDimNames()))
-                      .removeZeroBasesAlongDim(kReg);
+      basis[axis] /= warpLocalSegmentSize;
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector(permutedLayout.getOutDimNames()))
+      .removeZeroBasesAlongDim(kReg);
+}
 
+LinearLayout ScanLoweringHelper::buildWarpTotalsLayout() const {
+  // Continuing the segmentLayout example, register=[2,4], lane=[0,0,0,0,0],
+  // warp=[1] becomes register=[], lane=[1,2,4,0,0], warp=[0]. Each warp now
+  // holds T0..T7 in lanes 0..7, repeated in the other lane groups. With 64
+  // totals and 32 available lanes, use register=[32], lane=[1,2,4,8,16]:
+  // register 0 holds T0..T31 and register 1 holds T32..T63 in each warp.
   // Every participating warp gets the full sequence of segment totals.
   // Keep parallel ownership (including CTA ownership), use available lanes
   // for the low sequence bits, and put any remaining bits in registers.
-  bases = segmentLayout->getBases();
+  auto *ctx = segmentLayout->getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto axisDim = *std::next(segmentLayout->getOutDimNames().begin(), axis);
+  unsigned numSegments = segmentLayout->getOutDimSize(axisDim);
+  auto bases = segmentLayout->getBases();
   for (auto &[dim, dimBases] : bases)
     for (auto &basis : dimBases)
       basis[axis] = 0;
   unsigned next = 1;
-  unsigned numSegments = layout.getOutDimSize(axisDim) / segmentSize;
   for (auto &basis : bases[kLane]) {
     if (next < numSegments &&
         llvm::all_of(basis, [](int32_t x) { return x == 0; })) {
@@ -372,20 +411,21 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
     }
   }
   while (next < numSegments) {
-    std::vector<int32_t> basis(layout.getNumOutDims(), 0);
+    std::vector<int32_t> basis(segmentLayout->getNumOutDims(), 0);
     basis[axis] = next;
     bases[kReg].push_back(std::move(basis));
     next *= 2;
   }
-  warpTotalsLayout =
-      LinearLayout(std::move(bases), llvm::to_vector(layout.getOutDimNames()))
-          .removeZeroBasesAlongDim(kReg);
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector(segmentLayout->getOutDimNames()))
+      .removeZeroBasesAlongDim(kReg);
 }
 
 bool ScanLoweringHelper::isSupported() {
-  auto *ctx = layout.getInDimNames().begin()->getContext();
-  auto axisDim = *std::next(layout.getOutDimNames().begin(), axis);
-  return layout.sublayoutIsZero({StringAttr::get(ctx, "block")}, {axisDim});
+  auto *ctx = originalLayout.getInDimNames().begin()->getContext();
+  auto axisDim = *std::next(originalLayout.getOutDimNames().begin(), axis);
+  return originalLayout.sublayoutIsZero({StringAttr::get(ctx, "block")},
+                                        {axisDim});
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes(

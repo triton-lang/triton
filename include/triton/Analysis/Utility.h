@@ -111,12 +111,14 @@ private:
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
-  ScanLoweringHelper(const triton::LinearLayout &layout, unsigned axis);
+  ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis);
   bool isSupported();
-  const triton::LinearLayout &getLayout() const { return layout; }
+  const triton::LinearLayout &getPermutedLayout() const {
+    return permutedLayout;
+  }
   const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
   // Length of a contiguous logical segment contained in one warp.
-  unsigned getSegmentSize() const { return segmentSize; }
+  unsigned getWarpLocalSegmentSize() const { return warpLocalSegmentSize; }
   const std::optional<triton::LinearLayout> &getSegmentLayout() const {
     return segmentLayout;
   }
@@ -128,10 +130,16 @@ public:
       GetNumScratchElemsFn numScratchElemsGetter = nullptr) const;
 
 private:
+  triton::LinearLayout buildPermutedLayout();
+  triton::LinearLayout buildSegmentLayout() const;
+  triton::LinearLayout buildWarpTotalsLayout() const;
+
   unsigned axis;
-  triton::LinearLayout layout;
+  triton::LinearLayout originalLayout;
+  // Register zero bases removed, then axis register bits ordered logically.
+  triton::LinearLayout permutedLayout;
   triton::ColumnAction registerOrder;
-  unsigned segmentSize = 1;
+  unsigned warpLocalSegmentSize = 1;
   std::optional<triton::LinearLayout> segmentLayout;
   std::optional<triton::LinearLayout> warpTotalsLayout;
 };
