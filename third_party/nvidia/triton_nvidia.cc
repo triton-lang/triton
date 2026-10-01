@@ -135,12 +135,6 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
           pm.addPass(mlir::triton::createAllocateSharedMemoryNvPass(
               capability, ptxVersion));
         });
-  m.def("add_set_minimum_shared_memory",
-        [](mlir::PassManager &pm, int32_t minimumSize) {
-          mlir::triton::SetMinimumSharedMemoryOptions options;
-          options.minimumSize = minimumSize;
-          pm.addPass(mlir::triton::createSetMinimumSharedMemory(options));
-        });
   ADD_PASS_OPTION_WRAPPER_2("add_membar",
                             mlir::triton::createTritonNvidiaGPUMembar, int32_t,
                             int32_t);

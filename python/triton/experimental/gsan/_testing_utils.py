@@ -149,7 +149,7 @@ class ExplicitGraph:
         compiled._init_handles()
         self.compiled.append(compiled)
         values = tuple(arg.data_ptr() if hasattr(arg, "data_ptr") else arg for arg in arguments)
-        spec = KernelLaunch(compiled.function, grid, compiled.metadata.num_warps * 32, compiled.metadata.shared,
+        spec = KernelLaunch(compiled.function, grid, compiled.metadata.num_warps * 32, compiled.run.shared,
                             (*values, *self.plan.node_launch_args(index), 0, 0))
         deps = tuple(self.nodes[j] for j in node.dependencies)
         if not node.dependencies and not node.programmatic_dependencies:

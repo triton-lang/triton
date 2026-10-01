@@ -146,7 +146,6 @@ class CUDAOptions:
     arch: str = None
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
-    min_shared_mem: Optional[int] = None
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -245,12 +244,6 @@ class CUDABackend(BaseBackend):
                 args["deprecated_fp8_dot_operand_dtypes"] = ("fp8e4b15", )
 
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
-
-        if is_enabled(args, "gsan"):
-            from triton.runtime.driver import driver
-            device = driver.active.get_current_device()
-            device_max = driver.active.utils.get_device_properties(device)["max_shared_mem"]
-            args["min_shared_mem"] = max(args.get("min_shared_mem", 0), device_max)
 
         args["max_num_imprecise_acc_default"] = 2**30 if capability == 90 else 0
 
@@ -447,8 +440,6 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_initialize_ws_cluster_barriers(pm, capability, ptx_version)
-        if options.min_shared_mem is not None:
-            nvidia.passes.ttgpuir.add_set_minimum_shared_memory(pm, options.min_shared_mem)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
         # Lower Proton segment values before warp specialization captures partition operands.
