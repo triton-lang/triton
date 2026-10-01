@@ -61,27 +61,19 @@ inline SmallVector<Value> applyCombineOp(Location loc,
     combineArgs[i] = acc[i];
     combineArgs[acc.size() + i] = cur[i];
   }
+  // Match the cloned combine's inputs/outputs to the LLVM accumulator types.
+  // E.g. gl.where(a < b, a, b) takes/returns FP8, represented as i8 in LLVM.
   TypeConverter::SignatureConversion signature(combineArgs.size());
   for (unsigned i = 0; i < combineArgs.size(); ++i)
     signature.addInputs(i, combineArgs[i].getType());
   newCombine = rewriter.applySignatureConversion(newCombine, signature);
 
-  // Shuffles and branches need the LLVM representation of the combine values.
-  {
-    OpBuilder::InsertionGuard guard(rewriter);
-    Operation *terminator = newCombine->getTerminator();
-    rewriter.setInsertionPoint(terminator);
-    SmallVector<Value> results(terminator->getOperands());
-    for (unsigned i = 0; i < results.size(); ++i) {
-      Type type = acc[i].getType();
-      if (results[i].getType() != type)
-        results[i] =
-            UnrealizedConversionCastOp::create(rewriter, loc, type, results[i])
-                .getResult(0);
-    }
-    rewriter.modifyOpInPlace(terminator,
-                             [&] { terminator->setOperands(results); });
-  }
+  // Match combine results to the lowered accumulator types, e.g. FP8 to i8.
+  auto returnOp = newCombine->getTerminator();
+  auto results = llvm::map_to_vector(returnOp->getOperands(), [&](Value value) {
+    return rewriter.getRemappedValue(value);
+  });
+  rewriter.modifyOpInPlace(returnOp, [&] { returnOp->setOperands(results); });
 
   auto isRegionSpeculatable =
       std::all_of(newCombine->begin(), newCombine->end(),
@@ -104,9 +96,6 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   // }
   // #thenBlock
   Block *thenBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
-
-  auto returnOp = newCombine->getTerminator();
-  auto results = SmallVector<Value>(returnOp->getOperands());
 
   rewriter.setInsertionPointToEnd(currentBlock);
   SmallVector<Value> thenBlockArgs;

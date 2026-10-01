@@ -409,7 +409,7 @@ def test_ternary_math_mixed_scalar_kinds(op, order):
 
 @pytest.mark.parametrize("op", [tl.fma, tl.clamp])
 @pytest.mark.parametrize("dtypes", [(tl.float8e5, tl.int8, tl.int32), (tl.float8e5, tl.int8, tl.bfloat16),
-                                  (tl.float8e5, tl.float8e4nv, tl.int32), (tl.float16, tl.bfloat16, tl.int32)])
+                                    (tl.float8e5, tl.float8e4nv, tl.int32), (tl.float16, tl.bfloat16, tl.int32)])
 @pytest.mark.parametrize("order", list(itertools.permutations(range(3))))
 def test_ternary_math_tensor_promotion(op, dtypes, order):
 

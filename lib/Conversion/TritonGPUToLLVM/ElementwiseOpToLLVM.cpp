@@ -473,7 +473,7 @@ struct AbsFOpConversion
       Value result = b.and_(operands[0][0], maskConst);
       if (isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(
               getElementTypeOrSelf(op.getType()))) {
-        // FNUZ encodes NaN as the sign bit alone.
+        // FNUZ encodes NaN as 0x80; preserve it so abs(NaN) == NaN
         Value isNan = b.icmp_eq(operands[0][0], b.i8_val(0x80));
         result = b.select(isNan, operands[0][0], result);
       }
