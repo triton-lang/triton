@@ -17,6 +17,11 @@ jobs:
     env:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_BUILD_WITH_O1: "true"
+      CC: "/opt/homebrew/opt/llvm@19/bin/clang"
+      CXX: "/opt/homebrew/opt/llvm@19/bin/clang++"
+      CXXFLAGS: "-stdlib=libc++"
+      LDFLAGS: "-L/opt/homebrew/opt/llvm@19/lib"
     name: Build MacOS
     steps:
       - name: Checkout
@@ -27,6 +32,10 @@ jobs:
         run: |
           brew update
           brew install ccache llvm@19 lld coreutils
+      - name: Update PATH
+        run: |
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "/opt/homebrew/opt/llvm@19/bin" >> $GITHUB_PATH
       - name: Compute cache keys
         id: cache-key
         run: |
@@ -46,7 +55,6 @@ jobs:
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "amd=$(sha256sum $amd_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
-          echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
         uses: actions/cache@v6
@@ -59,26 +67,11 @@ jobs:
             ~/.triton/amd
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-amd-${{ steps.cache-key.outputs.amd }}-json-${{ steps.cache-key.outputs.json }}
-      - # Cache ~/.cache/ccache to speed up compilation.
-        #
-        # On branch `main` we always start from an empty cache, i.e. we skip the
-        # "restore" step.  This is to prevent the caches from accumulating stale
-        # files over time.
-        name: Restore cache of ccache and Triton compilation artifacts
-        id: restore-build-cache
-        if: github.ref != 'refs/heads/main'
-        uses: actions/cache/restore@v6
+      - name: Restore C++ compiler cache
+        id: restore-ccache
+        uses: ./.github/actions/restore-ccache
         with:
-          path: |
-            ~/.ccache
-          # Restore the most recent cache entry.
-          restore-keys: |
-            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-
-            triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-
-          # We expect this cache key never to hit and for us to fall back
-          # unconditionally to the restore-key, so it doesn't actually matter
-          # what we put here (so long as it doesn't hit an existing key).
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          key-prefix: macos-${{ env.RUNNER_TYPE }}
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -86,10 +79,6 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
-      - name: Update PATH
-        run: |
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
       - name: Create venv
         run: |
           python3 -m venv ~/.venv
@@ -97,7 +86,6 @@ jobs:
           python3 -m pip install --upgrade pip
       - name: Install Triton
         env:
-          TRITON_BUILD_WITH_O1: "true"
           # macos-latest has 3 vcpus and 7GB DRAM, to save memory we limit the number of jobs to 3
           # https://docs.github.com/en/actions/reference/github-hosted-runners-reference#standard-github-hosted-runners-for-public-repositories
           MAX_JOBS: 3
@@ -107,11 +95,6 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           ccache --zero-stats
-          export PATH="/opt/homebrew/opt/llvm@19/bin:$PATH"
-          export CC="/opt/homebrew/opt/llvm@19/bin/clang"
-          export CXX="/opt/homebrew/opt/llvm@19/bin/clang++"
-          export CXXFLAGS="-stdlib=libc++"
-          export LDFLAGS="-L/opt/homebrew/opt/llvm@19/lib"
           which clang++
           clang++ --version
           make dev-install
@@ -124,15 +107,9 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
-      - # If we're on branch `main`, save the ccache Triton compilation artifacts
-        # to the cache so they can be used by other (non-main) CI runs.
-        #
-        # (It wouldn't be a problem to save the cache on every run, because github
-        # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
-        name: Save ccache and Triton compilation artifacts to cache
-        if: github.ref == 'refs/heads/main'
+      - name: Save C++ compiler cache
+        if: github.ref == 'refs/heads/main' && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: |
-            ~/.ccache
-          key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
+          path: ~/.ccache
+          key: ${{ steps.restore-ccache.outputs.cache-primary-key }}
