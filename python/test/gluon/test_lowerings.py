@@ -198,6 +198,13 @@ def _scan_affine_combine(a1, b1, a2, b2):
 
 @pytest.mark.parametrize("layout", [
     *SCAN_EXTRA_LAYOUTS,
+    # Scan the native four-register prefixes before converting the totals
+    # from strided registers; keep the mixed-width tuple and reverse coverage.
+    pytest.param(
+        ttgl.DistributedLinearLayout([[1, 0], [2, 0], [16, 0], [0, 1], [0, 2]],
+                                     [[4, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[0, 0], [0, 0]], [], [32, 32]),
+        id="native_prefix_with_strided_registers"),
     # On axis 0, skip the lane scan independently of the inter-warp exchange.
     # Parallel columns occupy all NVIDIA lanes, so exchanged totals must also
     # scan entirely in registers. Axis 1 exercises a lane scan without exchange.
