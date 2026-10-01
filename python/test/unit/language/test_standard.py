@@ -442,9 +442,9 @@ def test_argminmax_special_values(dtype, op, propagate_nan, tie_break_left, devi
         quiet = 1 << (mantissa_bits - 1)
         one = ((1 << (exponent_bits - 1)) - 1) << mantissa_bits
         magnitudes = [0, 1, 1 << mantissa_bits, one, exponent - 1, exponent, exponent | quiet, exponent | quiet | 1]
-        # NumPy fmin/fmax propagates signaling NaNs even in ignore-NaN mode.
-        # Exercise those inputs on GPU, where native min/max ignores them.
-        if not is_interpreter():
+        # LLVM minnum/maxnum may propagate signaling NaNs. Only require a
+        # specific result for these inputs when NaN propagation is requested.
+        if propagate_nan:
             magnitudes.append(exponent | 1)
         bits = magnitudes + [value - (1 << (width - 1)) for value in magnitudes]
         values = torch.tensor(bits, dtype=integer_dtype, device=device).view(torch_dtype)

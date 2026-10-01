@@ -210,7 +210,8 @@ def _argminmax_index(input, value, axis, keep_dims):
                             tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
         propagate_nan: core.constexpr = core.PropagateNan.NONE):
-    # Always select the leftmost match, including when ties may be broken arbitrarily.
+    # Reduce matching indices with min to enable native redux instructions.
+    # This selects the leftmost match, which is valid for either tie-breaking mode.
     if not return_indices:
         if core.constexpr(input.dtype.primitive_bitwidth) < core.constexpr(32):
             if core.constexpr(input.dtype.is_floating()):
@@ -255,7 +256,8 @@ def _elementwise_min_propagate_nan(a, b):
                             tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
         propagate_nan: core.constexpr = core.PropagateNan.NONE):
-    # Always select the leftmost match, including when ties may be broken arbitrarily.
+    # Reduce matching indices with min to enable native redux instructions.
+    # This selects the leftmost match, which is valid for either tie-breaking mode.
     if not return_indices:
         if core.constexpr(input.dtype.primitive_bitwidth) < 32:
             if core.constexpr(input.dtype.is_floating()):
