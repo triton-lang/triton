@@ -276,9 +276,8 @@ struct BarrierExpectConversion
     Value multicastMask;
     // Each expectation registers its bytes before consuming its arrival, so
     // pending arrivals keep the phase open even when TMA copies complete first.
-    Value id = op.getPerWarp() ? NVVM::LaneIdOp::create(rewriter, loc,
-                                                        rewriter.getI32Type())
-                               : getThreadId(rewriter, loc);
+    Value id =
+        op.getPerWarp() ? getLaneId(rewriter, loc) : getThreadId(rewriter, loc);
     Value pred = b.icmp_eq(id, b.i32_val(0));
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
       FromCTALowering lowering =

@@ -309,9 +309,10 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 
   // CHECK-LABEL: @expect_barrier_fromCTA0145_distributed_multicast
+  // CHECK-DAG: %[[EXPECT_C32:.*]] = llvm.mlir.constant(32 : i32)
   tt.func @expect_barrier_fromCTA0145_distributed_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
-    // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
-    // CHECK: %[[EXPECT_LANE:.*]] = nvvm.read.ptx.sreg.laneid
+    // CHECK: nvvm.read.ptx.sreg.tid.x
+    // CHECK: %[[EXPECT_LANE:.*]] = llvm.urem %{{.*}}, %[[EXPECT_C32]] : i32
     // CHECK: llvm.icmp "eq" %[[EXPECT_LANE]],
     // CHECK-NOT: llvm.icmp "ult"
     // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
