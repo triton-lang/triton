@@ -16,37 +16,6 @@ namespace mlir::triton::gpu {
 } // namespace mlir::triton::gpu
 
 namespace {
-// Resolve extracts sharing a container in one traversal of its insertion chain.
-// Folding each extract independently repeatedly scans the same wide struct.
-void foldStructExtracts(LLVM::LLVMFuncOp func) {
-  DenseMap<Value, DenseMap<int64_t, SmallVector<LLVM::ExtractValueOp>>> extracts;
-  func.walk([&](LLVM::ExtractValueOp extract) {
-    auto position = extract.getPosition();
-    if (position.size() == 1)
-      extracts[extract.getContainer()][position.front()].push_back(extract);
-  });
-  SmallVector<LLVM::ExtractValueOp> dead;
-  for (auto &[container, fields] : extracts) {
-    Value current = container;
-    while (!fields.empty()) {
-      auto insert = current.getDefiningOp<LLVM::InsertValueOp>();
-      if (!insert || insert.getPosition().size() != 1)
-        break;
-      auto field = fields.find(insert.getPosition().front());
-      if (field != fields.end()) {
-        for (auto extract : field->second) {
-          extract.getResult().replaceAllUsesWith(insert.getValue());
-          dead.push_back(extract);
-        }
-        fields.erase(field);
-      }
-      current = insert.getContainer();
-    }
-  }
-  for (auto extract : dead)
-    extract.erase();
-}
-
 class FoldAbsIntoReduxPattern : public OpRewritePattern<NVVM::ReduxOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -113,7 +82,6 @@ struct CanonicalizeLLVMIR
           CanonicalizeLLVMIR> {
   void runOnOperation() override {
     LLVM::LLVMFuncOp func = getOperation();
-    foldStructExtracts(func);
     RewritePatternSet patterns(&getContext());
     patterns.add<SelectConstantConditionPattern,
                  ElideFullClusterRankMaskPattern, FoldAbsIntoReduxPattern>(

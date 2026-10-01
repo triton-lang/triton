@@ -1214,37 +1214,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %r : f32
   }
 }
-
-// -----
-
-// RUN: triton-opt %s -split-input-file --canonicalize-llvm-ir | FileCheck %s --check-prefix=STRUCT-EXTRACT
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // STRUCT-EXTRACT-LABEL: llvm.func @struct_extract_overwrite(
-  // STRUCT-EXTRACT-SAME: %[[FIRST:arg[0-9]+]]: i32, %[[LAST:arg[0-9]+]]: i32
-  // STRUCT-EXTRACT-NOT: llvm.insertvalue
-  // STRUCT-EXTRACT-NOT: llvm.extractvalue
-  // STRUCT-EXTRACT: %[[SUM:.*]] = llvm.add %[[LAST]], %[[LAST]] : i32
-  // STRUCT-EXTRACT: llvm.return %[[SUM]] : i32
-  llvm.func @struct_extract_overwrite(%first: i32, %last: i32) -> i32 {
-    %base = llvm.mlir.undef : !llvm.struct<(i32, i32)>
-    %s0 = llvm.insertvalue %first, %base[0] : !llvm.struct<(i32, i32)>
-    %s1 = llvm.insertvalue %last, %s0[0] : !llvm.struct<(i32, i32)>
-    %x = llvm.extractvalue %s1[0] : !llvm.struct<(i32, i32)>
-    %y = llvm.extractvalue %s1[0] : !llvm.struct<(i32, i32)>
-    %sum = llvm.add %x, %y : i32
-    llvm.return %sum : i32
-  }
-
-  // STRUCT-EXTRACT-LABEL: llvm.func @struct_extract_partial(
-  // STRUCT-EXTRACT-SAME: %[[BASE:arg[0-9]+]]: !llvm.struct<(i32, i32)>, %[[VALUE:arg[0-9]+]]: i32
-  // STRUCT-EXTRACT: %[[OTHER:.*]] = llvm.extractvalue %[[BASE]][1] : !llvm.struct<(i32, i32)>
-  // STRUCT-EXTRACT: %[[SUM:.*]] = llvm.add %[[VALUE]], %[[OTHER]] : i32
-  // STRUCT-EXTRACT: llvm.return %[[SUM]] : i32
-  llvm.func @struct_extract_partial(%base: !llvm.struct<(i32, i32)>, %value: i32) -> i32 {
-    %s0 = llvm.insertvalue %value, %base[0] : !llvm.struct<(i32, i32)>
-    %x = llvm.extractvalue %s0[0] : !llvm.struct<(i32, i32)>
-    %y = llvm.extractvalue %s0[1] : !llvm.struct<(i32, i32)>
-    %sum = llvm.add %x, %y : i32
-    llvm.return %sum : i32
-  }
-}
