@@ -81,6 +81,11 @@ jobs:
           echo "/venv/bin" >> $GITHUB_PATH
           echo "VIRTUAL_ENV=/venv" >> $GITHUB_ENV
           echo "PYTHONHOME=" >> $GITHUB_ENV
+      - name: Restore C++ compiler cache
+        id: restore-ccache
+        uses: ./.github/actions/restore-ccache
+        with:
+          key-prefix: ${{ matrix.config.runner_type }}
       - name: Install Triton
         env:
           CUDA_HOME: "/usr/local/cuda"
@@ -144,3 +149,9 @@ jobs:
             ~/.triton/amd
             ~/.triton/json
           key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}
+      - name: Save C++ compiler cache
+        if: github.ref == 'refs/heads/main' && steps.restore-ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.ccache
+          key: ${{ steps.restore-ccache.outputs.cache-primary-key }}

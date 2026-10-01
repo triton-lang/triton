@@ -27,17 +27,34 @@ jobs:
         continue-on-error: true
 
       - name: Install dependent packages
-        run: sudo -E make docs-requirements
+        run: sudo -E env "PATH=$PATH" make docs-requirements
 
       #- name: Fetch dependent branches
       #  run: |
       #    git fetch origin main:main
 
+      - name: Restore C++ compiler cache
+        id: restore-ccache
+        uses: ./.github/actions/restore-ccache
+        with:
+          key-prefix: documentation-nvidia-a100
+
       - name: Build docs
         run: |
           # Limit the number of threads to reduce CPU memory usage
           # This CI node has 24 cores
-          MAX_JOBS=24 sudo -E make docs-only
+          MAX_JOBS=24 sudo -E env "PATH=$PATH" "CCACHE_DIR=$CCACHE_DIR" make docs-only
+
+      - name: Restore compiler cache ownership
+        if: github.ref == 'refs/heads/main' && steps.restore-ccache.outputs.cache-hit != 'true'
+        run: sudo chown -R "$(id -u):$(id -g)" "$CCACHE_DIR"
+
+      - name: Save C++ compiler cache
+        if: github.ref == 'refs/heads/main' && steps.restore-ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.ccache
+          key: ${{ steps.restore-ccache.outputs.cache-primary-key }}
 
       - name: Update docs
         run: |

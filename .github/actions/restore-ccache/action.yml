@@ -1,0 +1,53 @@
+name: Restore C++ compiler cache
+description: Restore a private compiler cache with matching toolchain and build settings.
+inputs:
+  key-prefix:
+    description: Runner and build variant used to partition compiler caches.
+    required: true
+outputs:
+  cache-primary-key:
+    description: Revision-specific key to use when saving the cache.
+    value: ${{ steps.restore.outputs.cache-primary-key }}
+  cache-hit:
+    description: Whether the exact revision was restored.
+    value: ${{ steps.restore.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Configure compiler cache
+      id: key
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.ccache"
+        echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+        echo "CCACHE_MAXSIZE=5G" >> "$GITHUB_ENV"
+        echo "CCACHE_COMPILERCHECK=content" >> "$GITHUB_ENV"
+        {
+          if [[ "${TRITON_BUILD_WITH_CLANG_LLD:-}" =~ ^([Tt][Rr][Uu][Ee]|[Oo][Nn]|1|[Yy]|[Yy][Ee][Ss])$ ]]; then
+            clang --version
+            clang++ --version
+            ld.lld --version
+          else
+            "${CC:-cc}" --version
+            "${CXX:-c++}" --version
+          fi
+          ccache --version
+          python3 --version
+          for setting in DEBUG REL_WITH_DEB_INFO TRITON_REL_BUILD_WITH_ASSERTS \
+            TRITON_BUILD_WITH_O1 TRITON_BUILD_WITH_CLANG_LLD TRITON_USE_ASSERT_ENABLED_LLVM \
+            TRITON_BUILD_WITH_ASAN TRITON_BUILD_PROTON TRITON_BUILD_NVIDIA_GSAN_RUNTIME \
+            TRITON_EXT_ENABLED TRITON_STABLE_ABI CC CXX CFLAGS CXXFLAGS LDFLAGS; do
+            printf '%s=%s\n' "$setting" "${!setting-}"
+          done
+          sha256sum cmake/llvm-info.json cmake/nvidia-toolchain-version.json \
+            cmake/amd-llvm-info.json cmake/json-version.txt
+        } > "$RUNNER_TEMP/ccache-toolchain.txt"
+        echo "hash=$(sha256sum "$RUNNER_TEMP/ccache-toolchain.txt" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+    - name: Restore compiler cache
+      id: restore
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.ccache
+        key: ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key-prefix }}-${{ steps.key.outputs.hash }}-${{ github.sha }}
+        restore-keys: |
+          ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key-prefix }}-${{ steps.key.outputs.hash }}-

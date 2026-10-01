@@ -111,6 +111,11 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-amd-${{ steps.cache-key.outputs.amd }}-json-${{ steps.cache-key.outputs.json }}
       - name: Install dependencies
         run: apt-get update && apt-get install -y clang lld ccache
+      - name: Restore C++ compiler cache
+        id: restore-ccache
+        uses: ./.github/actions/restore-ccache
+        with:
+          key-prefix: amd-${{ join(matrix.runner, '-') }}-${{ matrix.image_variant }}
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -256,6 +261,12 @@ jobs:
             ~/.triton/amd
             ~/.triton/json
           key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}
+      - name: Save C++ compiler cache
+        if: github.ref == 'refs/heads/main' && steps.restore-ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.ccache
+          key: ${{ steps.restore-ccache.outputs.cache-primary-key }}
       - name: Clean up caches
         # Always cleanup the worker, even if builds or tests failed given that these directories are
         # mapped from the host and we write files as the root user in the docker.
@@ -334,6 +345,11 @@ jobs:
           test -f "${config}"
           echo "ROCJITSU_CONFIG=${config}" >> "$GITHUB_ENV"
           echo "ROCJITSU=${ROCM_ROOT}/bin/mirage run --in-process --config ${config} --" >> "$GITHUB_ENV"
+      - name: Restore C++ compiler cache
+        id: restore-ccache
+        uses: ./.github/actions/restore-ccache
+        with:
+          key-prefix: amd-rocjitsu
       - name: Install Triton
         shell: bash
         run: |
@@ -440,6 +456,12 @@ jobs:
           HSA_ENABLE_SDMA=0 run_rocjitsu_pytest 4 8 \
             -k "$moe_k_expr" \
             python/triton_kernels/tests/test_matmul.py
+      - name: Save C++ compiler cache
+        if: github.ref == 'refs/heads/main' && steps.restore-ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.ccache
+          key: ${{ steps.restore-ccache.outputs.cache-primary-key }}
       - name: Clean up caches
         if: always()
         run: |
