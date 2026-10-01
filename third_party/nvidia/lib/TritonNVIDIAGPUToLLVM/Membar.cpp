@@ -69,7 +69,7 @@ bool hasOnlySourceAliases(const AllocationSlice &lhs,
     for (const auto &b : after->regionInfo.views) {
       assert(a.allocationFrame && a.allocationFrame == b.allocationFrame &&
              "shared accesses must use the current function frame");
-      if (a.region.intersects(b.region) && a.allocation != b.allocation)
+      if (a.allocation != b.allocation && a.region.intersects(b.region))
         return false;
     }
   }
