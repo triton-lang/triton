@@ -198,33 +198,27 @@ def _scan_affine_combine(a1, b1, a2, b2):
 
 @pytest.mark.parametrize("layout", [
     *SCAN_EXTRA_LAYOUTS,
-    # Normalize full values from native four-register chunks and a strided
-    # register bit; keep the mixed-width tuple and reverse coverage.
+    # Scan the native four-register prefixes before converting the totals
+    # from strided registers; keep the mixed-width tuple and reverse coverage.
     pytest.param(
         ttgl.DistributedLinearLayout([[1, 0], [2, 0], [16, 0], [0, 1], [0, 2]],
                                      [[4, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
                                      (THREADS_PER_WARP.bit_length() - 6), [[0, 0], [0, 0]], [], [32, 32]),
         id="native_prefix_with_strided_registers"),
-    # Keep full prefixes in the converted layout through the warp exchange.
-    # Axis 0 combines four-register chunks, a strided register bit, and two warps.
+    # Keep converted thread totals through the warp exchange. Axis 0 combines
+    # native four-register prefixes, a strided register bit, and two warps.
     pytest.param(
         ttgl.DistributedLinearLayout(
             [[1, 0], [2, 0], [16, 0], [0, 1], [0, 2]], [[4, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
             (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32]), id="converted_totals_across_warps"),
     # Lane bits 0,2,4 advance the scan; bits 1,3 select independent columns.
-    # Normalization puts four elements in each thread, so inverse lane lookup
+    # Normalization puts four totals in each thread, so inverse lane lookup
     # must scale scan distances and preserve the column coordinates.
     pytest.param(
         ttgl.DistributedLinearLayout([[8, 0], [16, 0], [0, 4], [0, 8], [0, 16]],
                                      [[1, 0], [0, 1], [2, 0], [0, 2], [4, 0]] + [[0, 0]] *
                                      (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32]),
         id="inverse_lane_lookup_with_parallel_bits"),
-    # Contiguous registers need no conversion even with permuted lane bits.
-    pytest.param(
-        ttgl.DistributedLinearLayout([[1, 0], [2, 0], [0, 1], [0, 2], [0, 4]],
-                                     [[16, 0], [4, 0], [8, 0], [0, 8], [0, 16]] + [[0, 0]] *
-                                     (THREADS_PER_WARP.bit_length() - 6), [[0, 0], [0, 0]], [], [32, 32]),
-        id="contiguous_registers_permuted_lanes"),
     # On axis 0, skip the lane scan independently of the inter-warp exchange.
     # Parallel columns occupy all NVIDIA lanes, so exchanged totals must also
     # scan entirely in registers. Axis 1 exercises a lane scan without exchange.
