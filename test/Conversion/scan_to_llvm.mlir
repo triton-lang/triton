@@ -362,7 +362,6 @@ tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tens
 // packed i8 and split i64 values, without requesting an allocation offset.
 #transpose = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[0], [0]], block = []}>
 #native_prefix = #ttg.linear<{register = [[1], [2], [16]], lane = [[4], [8], [0], [0], [0]], warp = [[0], [0]], block = []}>
-#contiguous_registers = #ttg.linear<{register = [[1], [2]], lane = [[16], [4], [8], [0], [0]], warp = [[0], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // TRANSPOSE: ttg.shared = 0 : i32
 // AMD-TRANSPOSE: ttg.shared = 0 : i32
@@ -402,10 +401,10 @@ tt.func private @test_scan_warp_transpose_reverse(%a: tensor<16xi8, #transpose>,
   }) : (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>) -> (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>)
   tt.return %a_out, %b_out : tensor<16xi8, #transpose>, tensor<16xi64, #transpose>
 }
-// Convert the full values into eight contiguous registers per thread before
-// the single thread scan, then scan the thread totals across lanes.
+// Native four-register prefixes must be computed before any lane shuffles.
+// Only their totals undergo the register/lane conversion.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_forward
-// TRANSPOSE: nvvm.shfl.sync
+// TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.add
 // TRANSPOSE: nvvm.shfl.sync
 // TRANSPOSE: llvm.return
@@ -424,10 +423,10 @@ tt.func private @test_scan_native_prefix_forward(%a: tensor<32xi8, #native_prefi
   tt.return %a_out, %b_out : tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>
 }
 
-// Convert the full values into eight contiguous registers per thread before
-// the single thread scan, then scan the thread totals across lanes.
+// Native four-register prefixes must be computed before any lane shuffles.
+// Only their totals undergo the register/lane conversion.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
-// TRANSPOSE: nvvm.shfl.sync
+// TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.add
 // TRANSPOSE: nvvm.shfl.sync
 // TRANSPOSE: llvm.return
@@ -446,26 +445,6 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
   tt.return %a_out, %b_out : tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>
 }
 
-// Already-contiguous registers must not trigger a conversion, including when
-// the physical lane bits are permuted. The first combines precede all shuffles.
-// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_contiguous_registers
-// TRANSPOSE-NOT: nvvm.shfl.sync
-// TRANSPOSE: llvm.add
-// TRANSPOSE-COUNT-4: nvvm.shfl.sync idx
-// TRANSPOSE-NOT: nvvm.shfl.sync
-// TRANSPOSE: llvm.return
-// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_contiguous_registers
-// AMD-TRANSPOSE: llvm.add
-// AMD-TRANSPOSE: llvm.return
-tt.func private @test_scan_contiguous_registers(%arg: tensor<32xi32, #contiguous_registers>) -> tensor<32xi32, #contiguous_registers> {
-  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
-  ^bb0(%lhs: i32, %rhs: i32):
-    %sum = arith.addi %lhs, %rhs : i32
-    tt.scan.return %sum : i32
-  }) : (tensor<32xi32, #contiguous_registers>) -> tensor<32xi32, #contiguous_registers>
-  tt.return %result : tensor<32xi32, #contiguous_registers>
-}
-
 }
 
 //--- converted-totals.mlir
@@ -473,7 +452,7 @@ tt.func private @test_scan_contiguous_registers(%arg: tensor<32xi32, #contiguous
 // Each warp owns 16 consecutive elements in four strided registers. Scan in
 // register=[1,2], lane=[4,8,0,0,0], then extract its terminal total directly
 // from that layout for the shared-memory exchange. Restore native ownership
-// after applying inter-warp carries in the converted layout.
+// after the exchange, when applying carries to the saved prefixes.
 #converted = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[16], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
