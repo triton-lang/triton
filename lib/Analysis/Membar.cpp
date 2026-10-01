@@ -220,22 +220,40 @@ bool haveSameThreadSyncIssuer(Operation *lhs, Operation *rhs) {
 
 } // namespace
 
+void BlockInfo::joinThreadEffects(const BlockInfo &other) {
+  if (other.threadEffects.empty())
+    return;
+  if (threadEffects.empty()) {
+    threadSync = other.threadSync;
+  } else {
+    if (!threadSync.commonIssuer || !other.threadSync.commonIssuer ||
+        !haveSameThreadSyncIssuer(threadSync.commonIssuer,
+                                  other.threadSync.commonIssuer))
+      threadSync.commonIssuer = nullptr;
+    threadSync.completionNeedsSync |= other.threadSync.completionNeedsSync;
+    threadSync.sharedCompletionNeedsSync |=
+        other.threadSync.sharedCompletionNeedsSync;
+  }
+  threadEffects.insert(other.threadEffects.begin(), other.threadEffects.end());
+}
+
 bool BlockInfo::requiresThreadSync(const BlockInfo &other) const {
+  if (threadEffects.empty() || other.threadDemands.empty())
+    return false;
   // Only effect -> demand edges require a rendezvous; independent completion
   // operations can publish together.
   // The maps also include implicit scratch and translated callee accesses.
   bool hasSharedAccesses =
       !other.syncReadSlices.empty() || !other.syncWriteSlices.empty();
-  for (Operation *before : threadEffects) {
-    auto sync = getThreadSyncInfo(before);
-    for (Operation *after : other.threadDemands)
-      if ((sync.requiresAfter() &&
-           (sync.kind != ThreadSyncKind::SharedCompletionNeedsSync ||
-            hasSharedAccesses || !hasOnlyGlobalReads(after))) ||
-          (getThreadSyncInfo(after).requiresBefore() &&
-           !haveSameThreadSyncIssuer(before, after)))
-        return true;
-  }
+  const auto &sync = threadSync;
+  for (Operation *after : other.threadDemands)
+    if (sync.completionNeedsSync ||
+        (sync.sharedCompletionNeedsSync &&
+         (hasSharedAccesses || !hasOnlyGlobalReads(after))) ||
+        (getThreadSyncInfo(after).requiresBefore() &&
+         (!sync.commonIssuer ||
+          !haveSameThreadSyncIssuer(sync.commonIssuer, after))))
+      return true;
   return false;
 }
 
@@ -376,6 +394,19 @@ bool MembarAnalysis::hasThreadEffects(Operation *op) {
   });
 }
 
+BlockInfo MembarAnalysis::getThreadEffects(Operation *op) {
+  BlockInfo effects;
+  effects.threadEffects.insert(op);
+  auto sync = getThreadSyncInfo(op);
+  if (sync.issuer != ThreadSyncIssuer::Unknown)
+    effects.threadSync.commonIssuer = op;
+  effects.threadSync.completionNeedsSync =
+      sync.kind == ThreadSyncKind::CompletionNeedsSync;
+  effects.threadSync.sharedCompletionNeedsSync =
+      sync.kind == ThreadSyncKind::SharedCompletionNeedsSync;
+  return effects;
+}
+
 void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
                             FuncMapT *funcMap, OpBuilder *builder) {
   auto sync = getThreadSyncInfo(op);
@@ -393,7 +424,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
 
   BlockInfo effects;
   if (hasEffects) {
-    effects.threadEffects.insert(op);
+    effects = getThreadEffects(op);
     if (!sync.isCompletionOnly())
       effects.threadDemands.insert(op);
   }
@@ -403,10 +434,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   // Finish completions that block every memory demand once before a loop.
   // Shared-copy completions can still overlap independent global reads.
   if (builder && bufferIndexAnalysis.entersLoop(op) &&
-      llvm::any_of(membarInfo->pending.threadEffects, [](Operation *effect) {
-        return getThreadSyncInfo(effect).kind ==
-               ThreadSyncKind::CompletionNeedsSync;
-      })) {
+      membarInfo->pending.threadSync.completionNeedsSync) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     membarInfo->sync();
@@ -543,7 +571,7 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
       curBlockInfo.sync();
       // Final scratch reads still need to finish before a later publication.
       if (hasThreadEffects)
-        curBlockInfo.threadEffects.insert(op);
+        curBlockInfo = getThreadEffects(op);
     }
     curBlockInfo.syncReadSlices[*scratchSlice].insert(op);
   }

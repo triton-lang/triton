@@ -128,6 +128,13 @@ struct BlockInfo {
   // Effect: something whose effects may need to be ordered before later
   // operations.
   std::set<Operation *> threadEffects;
+  // Derived from threadEffects. A representative exists only when all effects
+  // use the same known issuer in the same execution region.
+  struct ThreadSyncState {
+    Operation *commonIssuer = nullptr;
+    bool completionNeedsSync = false;
+    bool sharedCompletionNeedsSync = false;
+  } threadSync;
   // Demand: something that may require previous effects to be ordered before it
   // executes.
   std::set<Operation *> threadDemands;
@@ -143,8 +150,7 @@ struct BlockInfo {
     for (auto &slice : other.syncWriteSlices)
       syncWriteSlices[slice.first].insert(slice.second.begin(),
                                           slice.second.end());
-    threadEffects.insert(other.threadEffects.begin(),
-                         other.threadEffects.end());
+    joinThreadEffects(other);
     threadDemands.insert(other.threadDemands.begin(),
                          other.threadDemands.end());
     return *this;
@@ -216,11 +222,14 @@ struct BlockInfo {
     syncReadSlices.clear();
     syncWriteSlices.clear();
     threadEffects.clear();
+    threadSync = {};
     threadDemands.clear();
   }
 
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
+    // Equal effect sets imply equivalent summaries, even with different
+    // commonIssuer representatives.
     return syncReadSlices == other.syncReadSlices &&
            syncWriteSlices == other.syncWriteSlices &&
            threadEffects == other.threadEffects &&
@@ -246,6 +255,8 @@ private:
                   return true;
     return false;
   }
+
+  void joinThreadEffects(const BlockInfo &other);
 };
 
 /// Tracks memory and thread-ordering state at the current program point and at
@@ -366,6 +377,7 @@ protected:
 
 private:
   SmallVector<AllocationSlice> getAllocationSlices(Value value);
+  BlockInfo getThreadEffects(Operation *op);
 
   MembarSliceFilterFn sliceFilter;
   AccessMode accessMode;

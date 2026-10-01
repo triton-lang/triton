@@ -494,6 +494,29 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return %twice : i32
   }
 
+  // Fixed issuers in different function regions cannot share a rendezvous.
+  // CHECK-LABEL: @callee_thread_publication
+  tt.func private @callee_thread_publication(%done: !barrier) attributes {noinline = true} {
+    // CHECK: ttng.arrive_barrier
+    // CHECK-NEXT: tt.return
+    ttng.arrive_barrier %done, 1 : !barrier
+    tt.return
+  }
+
+  // CHECK-LABEL: @call_thread_publications
+  tt.func private @call_thread_publications(%first: !barrier, %second: !barrier, %third: !barrier) {
+    // CHECK: ttng.arrive_barrier
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: tt.call @callee_thread_publication
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttng.arrive_barrier
+    // CHECK-NEXT: tt.return
+    ttng.arrive_barrier %first, 1 : !barrier
+    tt.call @callee_thread_publication(%second) : (!barrier) -> ()
+    ttng.arrive_barrier %third, 1 : !barrier
+    tt.return
+  }
+
   // Reads need completion before handing storage back, just as writes need
   // publication before handing their results to another partition.
   // CHECK-LABEL: @global_reads_and_writes
@@ -692,6 +715,28 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     // CHECK: ttg.barrier local
     // CHECK-NEXT: tt.store
     tt.store %dst, %value : !ptrs
+    tt.return
+  }
+
+  // The load remains pending when joined with a fixed-thread publication.
+  // CHECK-LABEL: @mixed_issuers_through_cfg_join
+  tt.func private @mixed_issuers_through_cfg_join(%pred: i1, %src: !tt.ptr<i32>, %first: !barrier, %done: !barrier) {
+    cf.cond_br %pred, ^read, ^publish
+  ^read:
+    // CHECK: tt.load
+    // CHECK-NEXT: cf.br
+    %value = tt.load %src : !tt.ptr<i32>
+    cf.br ^join
+  ^publish:
+    // CHECK: ttng.arrive_barrier
+    // CHECK-NEXT: cf.br
+    ttng.arrive_barrier %first, 1 : !barrier
+    cf.br ^join
+  ^join:
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttng.arrive_barrier
+    // CHECK-NEXT: tt.return
+    ttng.arrive_barrier %done, 1 : !barrier
     tt.return
   }
 
