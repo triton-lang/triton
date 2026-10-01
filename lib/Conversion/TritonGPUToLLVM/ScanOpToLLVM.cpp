@@ -46,16 +46,17 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
     // Match the helper's layout: axis register bits first, ordered by logical
     // significance. This only reorders SSA values within each thread.
     permuteRegisters(values, helper.getRegisterOrder());
-    scanWithinThreads(op, values, helper.getThreadLocalSegmentSize(), rewriter);
-    ScanValues intraWarpTotals, interWarpTotals;
     if (helper.getIntraWarpLayout())
-      intraWarpTotals = scanWithinWarps(op, helper, values, laneId, rewriter);
+      convertScanValues(op, values, helper.getPermutedLayout(),
+                        *helper.getIntraWarpLayout(), rewriter);
+    scanWithinThreads(op, values, helper.getThreadLocalSegmentSize(), rewriter);
+    if (helper.getIntraWarpLayout())
+      scanWithinWarps(op, helper, values, laneId, rewriter);
     if (helper.getInterWarpLayout())
-      interWarpTotals = scanAcrossWarps(
-          op, helper, intraWarpTotals.empty() ? values : intraWarpTotals,
-          laneId, warpId, rewriter);
-    applyScanCarries(op, helper, values, intraWarpTotals, interWarpTotals,
-                     laneId, warpId, rewriter);
+      scanAcrossWarps(op, helper, values, laneId, warpId, rewriter);
+    if (helper.getIntraWarpLayout())
+      convertScanValues(op, values, *helper.getIntraWarpLayout(),
+                        helper.getPermutedLayout(), rewriter);
     permuteRegisters(values, helper.getRegisterOrder().inverse());
 
     SmallVector<Value> results;
@@ -85,8 +86,8 @@ private:
     }
   }
 
-  // Convert only the segment totals using warp-local shuffles. The original
-  // prefixes stay in their owning threads. Identity conversions need no work.
+  // Convert values using warp-local shuffles. Keep the scan layout through
+  // the inter-warp stage. Identity conversions need no work.
   void convertScanValues(triton::ScanOp op, ScanValues &values,
                          const LinearLayout &src, const LinearLayout &dst,
                          ConversionPatternRewriter &rewriter) const {
@@ -120,12 +121,14 @@ private:
       }
   }
 
-  // Scan normalized totals across lanes in logical order, then add each
-  // lane's exclusive carry to the register prefixes of those totals.
-  void scanLaneTotals(triton::ScanOp op, ScanValues &values,
-                      const LinearLayout &layout, unsigned numRegs,
-                      unsigned segmentSize, Value laneId,
-                      ConversionPatternRewriter &rewriter) const {
+  // Scan thread totals across lanes in logical order, then add each lane's
+  // exclusive carry to the prefixes computed by scanWithinThreads.
+  void scanWithinWarps(triton::ScanOp op, const ScanLoweringHelper &helper,
+                       ScanValues &values, Value laneId,
+                       ConversionPatternRewriter &rewriter) const {
+    const auto &layout = *helper.getIntraWarpLayout();
+    unsigned numRegs = helper.getThreadLocalSegmentSize();
+    unsigned segmentSize = helper.getWarpLocalSegmentSize();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto kLane = StringAttr::get(op.getContext(), "lane");
@@ -146,7 +149,7 @@ private:
     Value index = coords[axis].second;
     Value segmentIndex = b.and_(index, b.i32_val(segmentSize - 1));
     auto shuffle = [&](SmallVector<Value> input, unsigned offset) {
-      // Each lane owns numRegs consecutive totals. Shift by whole groups,
+      // Each lane owns numRegs consecutive elements. Shift by whole groups,
       // wrapping within this segment; the combine predicate excludes
       // wraparound.
       int distance = offset * numRegs;
@@ -188,62 +191,23 @@ private:
     }
   }
 
-  ScanValues scanWithinWarps(triton::ScanOp op,
-                             const ScanLoweringHelper &helper,
-                             const ScanValues &values, Value laneId,
-                             ConversionPatternRewriter &rewriter) const {
-    const auto &intraWarpLayout = *helper.getIntraWarpLayout();
-    const auto &scanLayout = *helper.getIntraWarpScanLayout();
-    unsigned segmentRegs = helper.getThreadLocalSegmentSize();
-    unsigned numSegments = helper.getWarpLocalSegmentSize() / segmentRegs;
-    bool reverse = op.getReverse();
-
-    // Keep the thread-local prefixes in place and extract only their totals.
-    ScanValues totals;
-    for (unsigned base = 0; base < values.size(); base += segmentRegs)
-      totals.push_back(values[base + (reverse ? 0 : segmentRegs - 1)]);
-    convertScanValues(op, totals, intraWarpLayout, scanLayout, rewriter);
-
-    // After conversion, consecutive totals can share a register group. Scan
-    // those groups first, then combine across lanes in logical order.
-    auto kReg = StringAttr::get(op.getContext(), "register");
-    unsigned numRegs = 1;
-    for (const auto &basis : scanLayout.getBases().lookup(kReg))
-      if (basis[op.getAxis()] && basis[op.getAxis()] < numSegments)
-        numRegs *= 2;
-    scanWithinThreads(op, totals, numRegs, rewriter);
-    scanLaneTotals(op, totals, scanLayout, numRegs, numSegments, laneId,
-                   rewriter);
-    // Keep totals in the scan layout: the inter-warp stage can extract its
-    // terminal values directly, before mapping any carries to local prefixes.
-    return totals;
-  }
-
-  ScanValues scanAcrossWarps(triton::ScanOp op,
-                             const ScanLoweringHelper &helper,
-                             const ScanValues &values, Value laneId,
-                             Value warpId,
-                             ConversionPatternRewriter &rewriter) const {
+  void scanAcrossWarps(triton::ScanOp op, const ScanLoweringHelper &helper,
+                       ScanValues &values, Value laneId, Value warpId,
+                       ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto *ctx = op.getContext();
-    auto kReg = StringAttr::get(ctx, "register");
     auto kLane = StringAttr::get(ctx, "lane");
-    // If a lane scan was needed, values are still the converted thread totals.
-    // Otherwise they are the native thread-local prefixes.
-    const auto &sourceLayout = helper.getIntraWarpScanLayout()
-                                   ? *helper.getIntraWarpScanLayout()
+    // Extract totals directly from the current scan layout. Full prefixes
+    // stay in this layout until the inter-warp carries have been applied.
+    const auto &sourceLayout = helper.getIntraWarpLayout()
+                                   ? *helper.getIntraWarpLayout()
                                    : helper.getPermutedLayout();
     unsigned segmentSize = helper.getWarpLocalSegmentSize();
-    if (helper.getIntraWarpScanLayout())
-      segmentSize /= helper.getThreadLocalSegmentSize();
     const auto &interWarpLayout = *helper.getInterWarpLayout();
     const auto &totalsLayout = *helper.getInterWarpScanLayout();
     bool reverse = op.getReverse();
-    unsigned segmentRegs = 1;
-    for (const auto &basis : sourceLayout.getBases().lookup(kReg))
-      if (basis[op.getAxis()] && basis[op.getAxis()] < segmentSize)
-        segmentRegs *= 2;
+    unsigned segmentRegs = helper.getThreadLocalSegmentSize();
     unsigned segmentLaneMask = 0;
     for (auto [i, basis] :
          llvm::enumerate(sourceLayout.getBases().lookup(kLane)))
@@ -276,71 +240,28 @@ private:
     // sequence is longer than the available lanes.
     ScanLoweringHelper totalsHelper(totalsLayout, op.getAxis());
     permuteRegisters(totals, totalsHelper.getRegisterOrder());
+    if (totalsHelper.getIntraWarpLayout())
+      convertScanValues(op, totals, totalsHelper.getPermutedLayout(),
+                        *totalsHelper.getIntraWarpLayout(), rewriter);
     scanWithinThreads(op, totals, totalsHelper.getThreadLocalSegmentSize(),
                       rewriter);
-    ScanValues intraWarpTotals;
-    if (totalsHelper.getIntraWarpLayout())
-      intraWarpTotals =
-          scanWithinWarps(op, totalsHelper, totals, laneId, rewriter);
-    applyScanCarries(op, totalsHelper, totals, intraWarpTotals, {}, laneId,
-                     warpId, rewriter);
+    if (totalsHelper.getIntraWarpLayout()) {
+      scanWithinWarps(op, totalsHelper, totals, laneId, rewriter);
+      convertScanValues(op, totals, *totalsHelper.getIntraWarpLayout(),
+                        totalsHelper.getPermutedLayout(), rewriter);
+    }
     permuteRegisters(totals, totalsHelper.getRegisterOrder().inverse());
 
-    return totals;
-  }
-
-  // Restore native ownership only after both scans have consumed their totals.
-  // Apply the warp-local carry first, then prepend the inter-warp carry,
-  // keeping the combiner's logical operand order without assuming an identity
-  // value.
-  void applyScanCarries(triton::ScanOp op, const ScanLoweringHelper &helper,
-                        ScanValues &values, ScanValues &intraWarpTotals,
-                        const ScanValues &interWarpTotals, Value laneId,
-                        Value warpId,
-                        ConversionPatternRewriter &rewriter) const {
-    if (helper.getIntraWarpLayout()) {
-      const auto &intraWarpLayout = *helper.getIntraWarpLayout();
-      unsigned segmentRegs = helper.getThreadLocalSegmentSize();
-      unsigned numSegments = helper.getWarpLocalSegmentSize() / segmentRegs;
-      convertScanValues(op, intraWarpTotals, *helper.getIntraWarpScanLayout(),
-                        intraWarpLayout, rewriter);
-
-      // The scanned totals are already the terminal prefixes. Only the other
-      // registers need an exclusive carry; one-element segments are now done.
-      for (unsigned r = 0; r < intraWarpTotals.size(); ++r)
-        values[r * segmentRegs + (op.getReverse() ? 0 : segmentRegs - 1)] =
-            intraWarpTotals[r];
-      if (segmentRegs > 1)
-        applySegmentCarries(op, values, intraWarpTotals, intraWarpLayout,
-                            intraWarpLayout, segmentRegs, numSegments, laneId,
-                            warpId, rewriter, /*skipTerminal=*/true);
-    }
-    if (helper.getInterWarpLayout()) {
-      auto kReg = StringAttr::get(op.getContext(), "register");
-      unsigned segmentRegs = 1;
-      for (const auto &basis :
-           helper.getPermutedLayout().getBases().lookup(kReg))
-        if (basis[op.getAxis()] &&
-            basis[op.getAxis()] < helper.getWarpLocalSegmentSize())
-          segmentRegs *= 2;
-      const auto &interWarpLayout = *helper.getInterWarpLayout();
-      auto axis =
-          *std::next(interWarpLayout.getOutDimNames().begin(), op.getAxis());
-      applySegmentCarries(op, values, interWarpTotals, interWarpLayout,
-                          *helper.getInterWarpScanLayout(), segmentRegs,
-                          interWarpLayout.getOutDimSize(axis), laneId, warpId,
-                          rewriter);
-    }
+    applySegmentCarries(op, values, totals, interWarpLayout, totalsLayout,
+                        segmentRegs, laneId, warpId, rewriter);
   }
 
   void applySegmentCarries(triton::ScanOp op, ScanValues &values,
                            const ScanValues &totals,
                            const LinearLayout &segmentLayout,
                            const LinearLayout &totalsLayout,
-                           unsigned segmentRegs, unsigned segmentsPerScan,
-                           Value laneId, Value warpId,
-                           ConversionPatternRewriter &rewriter,
-                           bool skipTerminal = false) const {
+                           unsigned segmentRegs, Value laneId, Value warpId,
+                           ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto *ctx = op.getContext();
@@ -363,19 +284,11 @@ private:
                                        {kWarp, warpId},
                                        {kBlock, b.i32_val(0)}});
       Value segment = coords[op.getAxis()].second;
-      Value segmentInScan = segment;
-      if (segmentsPerScan != numSegments)
-        segmentInScan = b.and_(segment, b.i32_val(segmentsPerScan - 1));
-      Value pred = b.icmp_ne(segmentInScan,
-                             b.i32_val(reverse ? segmentsPerScan - 1 : 0));
-      // Wrap within this scan's sequence, so an excluded boundary source
-      // cannot introduce register candidates from another warp-local segment.
-      // pred guards the combine without assuming an identity value.
+      Value pred = b.icmp_ne(segment, b.i32_val(reverse ? numSegments - 1 : 0));
+      // Wrap the boundary source into the sequence. pred guards the combine
+      // without assuming an identity value.
       Value preceding = b.and_(b.add(segment, b.i32_val(reverse ? 1 : -1)),
-                               b.i32_val(segmentsPerScan - 1));
-      if (segmentsPerScan != numSegments)
-        preceding = b.or_(b.and_(segment, b.i32_val(~(segmentsPerScan - 1))),
-                          preceding);
+                               b.i32_val(numSegments - 1));
       coords[op.getAxis()].second = preceding;
       auto src = applyLinearLayout(loc, rewriter, inverse, coords);
       Value srcReg = src[0].second;
@@ -390,8 +303,7 @@ private:
           auto coordinates = segmentLayout.apply(
               {{kReg, r}, {kLane, lane}, {kWarp, warp}, {kBlock, 0}});
           auto &index = coordinates[op.getAxis()].second;
-          index = (index & ~(segmentsPerScan - 1)) |
-                  ((index + (reverse ? 1 : -1)) & (segmentsPerScan - 1));
+          index = (index + (reverse ? 1 : -1)) & (numSegments - 1);
           candidates.insert(inverse.apply(coordinates)[0].second);
         }
       }
@@ -410,8 +322,6 @@ private:
       }
       assert(!carry.empty() && "each segment has a warp-local carry");
       for (unsigned j = 0; j < segmentRegs; ++j) {
-        if (skipTerminal && j == (reverse ? 0 : segmentRegs - 1))
-          continue;
         unsigned reg = r * segmentRegs + j;
         values[reg] = combineWithPrefix(op, carry, values[reg], rewriter, pred);
       }
