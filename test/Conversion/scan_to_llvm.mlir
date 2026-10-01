@@ -52,13 +52,15 @@ tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8x
 
 // CHECK-LABEL: @test_warp_register_groups
 // WARP-LABEL: @test_warp_register_groups
-// Normalize register ownership with shuffles, then scan the group totals.
-// WARP: @llvm.nvvm.shfl.sync.up.i32
+// Scan each register group across lanes, then broadcast its terminal prefix
+// to carry into the next register group. No register/lane conversion is needed.
+// WARP-COUNT-10: @llvm.nvvm.shfl.sync.up.i32
+// WARP: @llvm.nvvm.shfl.sync.idx.i32
 // WARP: add i32
 // WARP-NOT: @llvm.nvvm.barrier
 // WARP: ret
 tt.func private @test_warp_register_groups(%arg: tensor<128xi32, #layout_reg4>) -> tensor<128xi32, #layout_reg4> {
-  // CHECK-COUNT-5: @llvm.nvvm.shfl.sync.up.i32
+  // CHECK-COUNT-10: @llvm.nvvm.shfl.sync.up.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
@@ -161,8 +163,8 @@ tt.func public @anchor_registers(%ptr: !llvm.ptr, %arg: !llvm.struct<(i32, i32, 
 
 // CHECK-LABEL: @test_permuted_lanes
 // The low logical axis bits belong to lane bits 1, 3, 0 in that order.
-// Normalize register/lane ownership, then shift in reverse logical order.
-// The conversions preserve broadcast lane bit 2.
+// Preserve register/lane ownership and shift in reverse logical order.
+// The shuffles preserve broadcast lane bit 2.
 // CHECK: @llvm.nvvm.shfl.sync.idx.i32
 // CHECK-NOT: @llvm.nvvm.barrier
 // CHECK: ret
@@ -357,9 +359,9 @@ tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tens
 
 //--- warp-transpose.mlir
 
-// Two register/lane bit swaps would use shared memory under the default
-// conversion heuristic. Scan forces shuffles in both directions, including
-// packed i8 and split i64 values, without requesting an allocation offset.
+// Registers hold strided groups of four elements. Scan each group with
+// shuffles, then broadcast its terminal prefix to carry into the next group.
+// Both directions handle i8/i64 tuples without shared-memory allocation.
 #transpose = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[0], [0]], block = []}>
 #native_prefix = #ttg.linear<{register = [[1], [2], [16]], lane = [[4], [8], [0], [0], [0]], warp = [[0], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
@@ -402,7 +404,7 @@ tt.func private @test_scan_warp_transpose_reverse(%a: tensor<16xi8, #transpose>,
   tt.return %a_out, %b_out : tensor<16xi8, #transpose>, tensor<16xi64, #transpose>
 }
 // Native four-register prefixes must be computed before any lane shuffles.
-// Only their totals undergo the register/lane conversion.
+// Shuffle their totals and broadcast the terminal prefix into the next group.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_forward
 // TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.add
@@ -424,7 +426,7 @@ tt.func private @test_scan_native_prefix_forward(%a: tensor<32xi8, #native_prefi
 }
 
 // Native four-register prefixes must be computed before any lane shuffles.
-// Only their totals undergo the register/lane conversion.
+// Shuffle their totals and broadcast the terminal prefix into the next group.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
 // TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.add

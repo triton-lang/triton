@@ -121,8 +121,8 @@ def _scan_linear_layouts():
                                      [[0, 0], [0, 0]], [], [32, 32])
         for r0, r1, l0, l1, l2 in [(1, 4, 8, 2, 16), (2, 8, 16, 1, 4)]
     ]
-    # Making these registers contiguous requires two register/lane bit swaps.
-    # Scan must use warp shuffles even when generic conversion prefers shared memory.
+    # Scan strided register groups using lane shuffles and terminal broadcasts.
+    # No shared memory is needed within a warp, including for mixed-width tuples.
     transpose = ttgl.DistributedLinearLayout([[4, 0], [8, 0], [16, 0], [0, 1], [0, 2]],
                                              [[1, 0], [2, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] * (lane_bits - 5),
                                              [[0, 0], [0, 0]], [], [32, 32])
@@ -198,13 +198,20 @@ def _scan_affine_combine(a1, b1, a2, b2):
 
 @pytest.mark.parametrize("layout", [
     *SCAN_EXTRA_LAYOUTS,
-    # Scan the native four-register prefixes before converting the totals
-    # from strided registers; keep the mixed-width tuple and reverse coverage.
+    # Scan native four-register prefixes, shuffle their totals, then broadcast
+    # the terminal prefix into the next register group.
     pytest.param(
         ttgl.DistributedLinearLayout([[1, 0], [2, 0], [16, 0], [0, 1], [0, 2]],
                                      [[4, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
                                      (THREADS_PER_WARP.bit_length() - 6), [[0, 0], [0, 0]], [], [32, 32]),
         id="native_prefix_with_strided_registers"),
+    # Native two-register prefixes followed by lane, register, lane, register
+    # groups. Shuffles must follow logical rather than physical lane-bit order.
+    pytest.param(
+        ttgl.DistributedLinearLayout([[1, 0], [4, 0], [16, 0], [0, 1], [0, 2]],
+                                     [[8, 0], [2, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[0, 0], [0, 0]], [], [32, 32]),
+        id="native_prefix_with_alternating_groups"),
     # On axis 0, skip the lane scan independently of the inter-warp exchange.
     # Parallel columns occupy all NVIDIA lanes, so exchanged totals must also
     # scan entirely in registers. Axis 1 exercises a lane scan without exchange.
