@@ -227,8 +227,10 @@ def _byte_pool_atomic_kernel(ptr):
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
-@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
-@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8], indirect=True)
+@pytest.mark.parametrize(
+    "dtype,shadow_granularity",
+    [(dtype, g) for dtype in (torch.float16, torch.int32, torch.int64) for g in (1, 2, 4, 8) if g <= dtype.itemsize],
+    indirect=["shadow_granularity"])
 def test_atomic_updates_every_shadow_cell(with_gsan, dtype):
     target = torch.zeros(1, dtype=dtype, device="cuda")
     _byte_pool_atomic_kernel[(1, )](target, num_warps=1)
@@ -1042,7 +1044,9 @@ def test_atomic_add_updates_atomic_shadow(with_gsan, sem, is_release, scope, exp
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
 @pytest.mark.parametrize("sem", ["relaxed", "acquire"])
-@pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
+@pytest.mark.parametrize("dtype,shadow_granularity",
+                         [(dtype, min(4, dtype.itemsize)) for dtype in ATOMIC_LOAD_STORE_TYPES],
+                         indirect=["shadow_granularity"])
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_atomic_load_only_records_read(with_gsan, dtype, sem, scope, expected_scope):
     value = 1 if dtype == torch.bool else -37 if dtype == torch.int8 else 197
@@ -1057,9 +1061,11 @@ def test_atomic_load_only_records_read(with_gsan, dtype, sem, scope, expected_sc
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("op", ["load", "store"])
-@pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.int32, torch.float64])
-@pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
-@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8], indirect=True)
+@pytest.mark.parametrize("dtype,shadow_granularity",
+                         [(dtype, g)
+                          for dtype in (torch.int8, torch.float16, torch.int32, torch.float64)
+                          for g in (1, 2, 4, 8)
+                          if g <= dtype.itemsize], indirect=["shadow_granularity"])
 def test_atomic_load_store_vectorized_shadow(with_gsan, op, dtype):
 
     @gluon.jit
@@ -1104,7 +1110,9 @@ def test_atomic_load_store_vectorized_shadow(with_gsan, op, dtype):
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
 @pytest.mark.parametrize("sem, is_release", [("relaxed", False), ("release", True)])
-@pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
+@pytest.mark.parametrize("dtype,shadow_granularity",
+                         [(dtype, min(4, dtype.itemsize)) for dtype in ATOMIC_LOAD_STORE_TYPES],
+                         indirect=["shadow_granularity"])
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_atomic_store_only_records_write(with_gsan, dtype, sem, is_release, scope, expected_scope):
     target = torch.zeros(1, dtype=dtype, device="cuda")
@@ -1117,7 +1125,9 @@ def test_atomic_store_only_records_write(with_gsan, dtype, sem, is_release, scop
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-@pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
+@pytest.mark.parametrize("dtype,shadow_granularity",
+                         [(dtype, min(4, dtype.itemsize)) for dtype in ATOMIC_LOAD_STORE_TYPES],
+                         indirect=["shadow_granularity"])
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_gluon_atomic_load_store_updates_shadow(with_gsan, dtype):
     target = torch.zeros(1, dtype=dtype, device="cuda")
@@ -1134,12 +1144,12 @@ def test_gluon_atomic_load_store_updates_shadow(with_gsan, dtype):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-@pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
-@pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
-@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8], indirect=True)
+@pytest.mark.parametrize("dtype,shadow_granularity",
+                         [(dtype, g) for dtype in ATOMIC_LOAD_STORE_TYPES for g in (1, 2, 4, 8) if g <= dtype.itemsize],
+                         indirect=["shadow_granularity"])
 def test_masked_atomic_load_store_only_updates_active_lanes(with_gsan, dtype):
-    # Keep each lane in a separate shadow cell. Byte accesses start inside the
-    # cell so the value checks also catch overwrites of neighboring bytes.
+    # Byte accesses start at an odd offset so the value checks also catch
+    # overwrites of neighboring bytes.
     itemsize = dtype.itemsize
     target = torch.empty(4, dtype=dtype, device="cuda")
     granularity = get_shadow_granularity(target.data_ptr())
@@ -1187,7 +1197,9 @@ def test_atomic_cas_failed_only_records_read(with_gsan, sem, _, scope, expected_
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
 @pytest.mark.parametrize("sem", ["relaxed", "acquire"])
-@pytest.mark.parametrize("dtype", [torch.int16, torch.int32, torch.int64])
+@pytest.mark.parametrize("dtype,shadow_granularity",
+                         [(dtype, min(4, dtype.itemsize)) for dtype in (torch.int16, torch.int32, torch.int64)],
+                         indirect=["shadow_granularity"])
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_atomic_poll_only_records_read(with_gsan, dtype, sem, scope, expected_scope):
     target = torch.ones(1, dtype=dtype, device="cuda")
@@ -1214,7 +1226,9 @@ def test_atomic_poll_timeout_does_not_record_read(with_gsan):
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("block_size", [16, 256])
-@pytest.mark.parametrize("dtype", [torch.int16, torch.int32, torch.int64])
+@pytest.mark.parametrize("dtype,shadow_granularity",
+                         [(dtype, min(4, dtype.itemsize)) for dtype in (torch.int16, torch.int32, torch.int64)],
+                         indirect=["shadow_granularity"])
 @pytest.mark.parametrize("sem", ["relaxed", "acquire"])
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
 @pytest.mark.parametrize("timeout", [None, 0])
@@ -1281,7 +1295,9 @@ def test_atomic_poll_acquire_synchronizes_cross_sm(with_gsan, capfd, scope, expe
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
-@pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
+@pytest.mark.parametrize("dtype,shadow_granularity",
+                         [(dtype, min(4, dtype.itemsize)) for dtype in ATOMIC_LOAD_STORE_TYPES],
+                         indirect=["shadow_granularity"])
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_atomic_load_store_synchronizes_cross_sm(with_gsan, capfd, scope, expected_scope, dtype):
     if dtype == torch.bool:
@@ -1865,7 +1881,10 @@ def test_host_tma_scatter_updates_shadow(fresh_knobs, shadow_granularity):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
-@pytest.mark.parametrize("dtype", (torch.int32, torch.float16, torch.bfloat16, torch.uint64))
+@pytest.mark.parametrize("dtype,shadow_granularity",
+                         [(dtype, min(4, dtype.itemsize))
+                          for dtype in (torch.int32, torch.float16, torch.bfloat16, torch.uint64)],
+                         indirect=["shadow_granularity"])
 @pytest.mark.parametrize("block_x", (1, 8))
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):

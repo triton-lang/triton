@@ -650,7 +650,8 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @vector_atomic_load_store
   // CHECK-DAG: %[[BYTES:.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar({{.*}}, %[[BYTES]],
+  // CHECK-DAG: %[[ELEM_BYTES:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar({{.*}}, %[[BYTES]], %[[ELEM_BYTES]],
   // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar

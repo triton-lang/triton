@@ -368,6 +368,14 @@ GSAN_DEVICE void checkCoarseAccess(uintptr_t address, int nBytes,
              "GSan 16-byte pools require complete aligned 16-byte accesses");
 }
 
+GSAN_DEVICE void checkAtomicGranularity(int granularity, int bytesPerElem,
+                                        Location loc) {
+  // Distinct atomic objects must not share release/acquire metadata, even when
+  // several elements are accessed by one vectorized instruction.
+  assert_msg(loc, granularity <= bytesPerElem,
+             "GSan shadow granularity exceeds atomic access size");
+}
+
 GSAN_DEVICE ShadowCell *acquireShadow(uintptr_t shadowAddr) {
   auto cell = reinterpret_cast<ShadowCell *>(shadowAddr);
   uint16_t actual = 0;
@@ -984,8 +992,7 @@ GSAN_DEVICE void tensorAccessRow(uintptr_t rowPtr, int rowBytes,
   } else {
     assert_msg(handleElement.loc, !isWriteOnceAddress(rowPtr),
                "Atomic operations on write-once memory are not supported");
-    assert_msg(handleElement.loc, granularity != 16,
-               "GSan 16-byte pools do not support atomic accesses");
+    checkAtomicGranularity(granularity, elementGranularity, handleElement.loc);
     elementGranularity = roundUp(elementGranularity, granularity);
   }
   auto range = roundRange(Range{rowPtr, rowPtr + rowBytes}, granularity);
@@ -1173,13 +1180,12 @@ GSAN_DEVICE void checkAtomicAddress(uintptr_t reserveBase, uintptr_t address,
 GSAN_DEVICE void acquireAtomicShadowRange(ThreadState *state,
                                           AtomicEventState *event,
                                           uintptr_t address, int nBytes,
-                                          Location loc) {
+                                          int bytesPerElem, Location loc) {
   checkAtomicAddress(state->reserveBase, address, loc);
   if (!isGsanManaged(address, state->reserveBase))
     return;
   int granularity = getShadowGranularity(address);
-  assert_msg(loc, granularity != 16,
-             "GSan 16-byte pools do not support atomic accesses");
+  checkAtomicGranularity(granularity, bytesPerElem, loc);
   auto range = roundRange(Range{address, address + nBytes}, granularity);
   auto reserveBase = state->reserveBase;
   uint8_t numCells = 0;
@@ -1216,7 +1222,8 @@ GSAN_DEVICE void releaseAtomicShadowRange(AtomicEventState *event) {
 
 GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
                                    AtomicEventState *event, bool pred,
-                                   uintptr_t address, int nBytes, bool doesRead,
+                                   uintptr_t address, int nBytes,
+                                   int bytesPerElem, bool doesRead,
                                    uint32_t semRaw, uint32_t scopeRaw,
                                    Location loc) {
   initAtomicEventState(event);
@@ -1224,7 +1231,7 @@ GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
     return;
 
   auto *state = getThreadState(globals);
-  acquireAtomicShadowRange(state, event, address, nBytes, loc);
+  acquireAtomicShadowRange(state, event, address, nBytes, bytesPerElem, loc);
   if (event->threadState == nullptr)
     return;
 
@@ -1316,7 +1323,7 @@ struct AtomicElementHandler {
   GSAN_DEVICE void operator()(uintptr_t address) const {
     AtomicEventState event;
     beginAtomicAccess(globals, &event, /*pred=*/true, address, bytesPerElem,
-                      /*doesRead=*/true, sem, scope, loc);
+                      bytesPerElem, /*doesRead=*/true, sem, scope, loc);
     endAtomicAccess(&event, /*pred=*/true, /*didWrite=*/true,
                     /*isRmw=*/true, sem, scope, loc);
   }
@@ -1509,14 +1516,14 @@ extern "C" GSAN_DEVICE void __triton_gsan_atomic_tensor_desc(
 
 extern "C" GSAN_DEVICE void
 __triton_gsan_atomic_begin_scalar(void *globalState, void *eventState, int pred,
-                                  gsan::uintptr_t address, int bytesPerElem,
-                                  int doesRead, int sem, int scope,
-                                  const char *file, unsigned line) {
+                                  gsan::uintptr_t address, int nBytes,
+                                  int bytesPerElem, int doesRead, int sem,
+                                  int scope, const char *file, unsigned line) {
   auto loc = gsan::Location{file, line};
   gsan::beginAtomicAccess(
       reinterpret_cast<gsan::GlobalState *>(globalState),
       reinterpret_cast<gsan::AtomicEventState *>(eventState), pred != 0,
-      address, bytesPerElem, doesRead != 0, sem, scope, loc);
+      address, nBytes, bytesPerElem, doesRead != 0, sem, scope, loc);
 }
 
 extern "C" GSAN_DEVICE void

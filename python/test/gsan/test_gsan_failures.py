@@ -779,6 +779,69 @@ def _coarse_pool_tma_tail_kernel(ptr):
     desc.store([0, 32], tl.full((32, 32), 1, tl.int32))
 
 
+@gluon.jit
+def _atomic_granularity_kernel(ptr, out, KIND: gl.constexpr):
+    offsets = gl.arange(0, 256, layout=gl.BlockedLayout([8], [32], [1], [0]))
+    if KIND == "load":
+        value = gl.atomic_load(ptr + offsets, sem="relaxed")
+        gl.store(out + offsets, value)
+    elif KIND == "store":
+        gl.atomic_store(ptr + offsets, 1, sem="relaxed")
+    elif KIND == "rmw":
+        gl.atomic_add(ptr, 1, sem="relaxed")
+    elif KIND == "cas":
+        gl.atomic_cas(ptr, 0, 1, sem="relaxed")
+    else:
+        gl.atomic_poll(ptr, 0, sem="relaxed")
+
+
+@triton.jit
+def _atomic_granularity_tma_kernel(desc):
+    values = tl.full((1, 32), 1, desc.dtype)
+    desc.atomic_add([0, 0], values)
+
+
+@run_with_gsan
+def _run_atomic_granularity_case(kind, dtype):
+    target = torch.zeros((1, 256), dtype=dtype, device="cuda")
+    if kind == "tma":
+        desc = TensorDescriptor.from_tensor(target, [1, 32])
+        _atomic_granularity_tma_kernel[(1, )](desc)
+    else:
+        output = torch.empty_like(target)
+        _atomic_granularity_kernel[(1, )](target, output, kind, num_warps=1)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.parametrize("kind,marker", [
+    ("load", "value = gl.atomic_load"),
+    ("store", "gl.atomic_store"),
+    ("rmw", "gl.atomic_add"),
+    ("cas", "gl.atomic_cas"),
+    ("poll", "gl.atomic_poll"),
+])
+def test_atomic_access_rejects_coarser_granularity(kind, marker):
+    _run_failure_case("atomic_granularity", 8, runner=_run_atomic_granularity_case,
+                      source_function=_atomic_granularity_kernel.fn, marker=marker,
+                      error="GSan shadow granularity exceeds atomic access size", runner_args=(kind, torch.int32))
+
+
+@pytest.mark.parametrize("kind", ["load", "store"])
+@pytest.mark.parametrize("dtype,granularity", [(torch.int8, 2), (torch.int16, 4)])
+def test_subword_atomic_access_rejects_coarser_granularity(kind, dtype, granularity):
+    _run_failure_case("subword_atomic_granularity", granularity, runner=_run_atomic_granularity_case,
+                      source_function=_atomic_granularity_kernel.fn, marker=f"gl.atomic_{kind}",
+                      error="GSan shadow granularity exceeds atomic access size", runner_args=(kind, dtype))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("dtype,granularity", [(torch.float16, 4), (torch.int32, 8)])
+def test_tma_atomic_access_rejects_coarser_granularity(dtype, granularity):
+    _run_failure_case("tma_atomic_granularity", granularity, runner=_run_atomic_granularity_case,
+                      source_function=_atomic_granularity_tma_kernel.fn, marker="desc.atomic_add",
+                      error="GSan shadow granularity exceeds atomic access size", runner_args=("tma", dtype))
+
+
 @run_with_gsan
 def _run_coarse_pool_access_case(kind):
     target = torch.zeros((32, 40), dtype=torch.int32, device="cuda")
@@ -802,7 +865,7 @@ def test_pool_partial_and_atomic_access_restrictions(shadow_granularity, kind, m
                                 kwargs={"shadow_granularity": shadow_granularity})
         assert result.exc is None, result.driver_stderr_output
         return
-    error = ("GSan 16-byte pools do not support atomic accesses"
+    error = ("GSan shadow granularity exceeds atomic access size"
              if kind == "atomic" else "GSan 16-byte pools require complete aligned 16-byte accesses")
     _run_failure_case("coarse_pool", shadow_granularity, runner=_run_coarse_pool_access_case,
                       source_function=_coarse_pool_access_kernel.fn, marker=marker, error=error, runner_args=(kind, ))

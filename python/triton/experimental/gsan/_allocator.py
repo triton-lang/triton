@@ -162,7 +162,9 @@ def create_mem_pool(*, shadow_granularity: int | None = None, write_once: bool =
 
     Granularity is fixed for the lifetime of the underlying allocation, including
     all tensor views and imported aliases. Use 1 for independent byte accesses,
-    or a larger granularity for lower shadow-memory overhead. The 16-byte pool
+    or a larger granularity for lower shadow-memory overhead. Atomic accesses
+    require granularity no larger than their element size, including for
+    vectorized atomics and TMA reductions. The 16-byte pool
     requires every instrumented access to cover complete, aligned 16-byte units
     and does not support atomics (including TMA reductions). Violations are
     diagnosed by GSan. Aligned TMA loads and stores are suitable for this pool.
