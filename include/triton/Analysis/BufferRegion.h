@@ -59,6 +59,9 @@ public:
     return addresses == other.addresses;
   }
   bool operator<(const AddressSet &other) const {
+    // Compare equal footprints by sparse blocks rather than individual addresses.
+    if (addresses == other.addresses)
+      return false;
     auto lhs = begin();
     auto rhs = other.begin();
     while (lhs != end() && rhs != other.end()) {

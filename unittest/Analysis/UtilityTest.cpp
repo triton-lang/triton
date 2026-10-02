@@ -7,6 +7,7 @@
 #include "llvm/Support/Signals.h"
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <deque>
 #include <set>
 
@@ -109,6 +110,8 @@ TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
 
     for (unsigned rhsMask = 0; rhsMask < (1u << universe); ++rhsMask) {
       triton::AddressSet rhs = fromMask(rhsMask);
+      EXPECT_EQ(lhs < rhs, std::lexicographical_compare(
+                               lhs.begin(), lhs.end(), rhs.begin(), rhs.end()));
       EXPECT_EQ(lhs.intersects(rhs), (lhsMask & rhsMask) != 0);
       EXPECT_EQ(lhs.contains(rhs), (rhsMask & ~lhsMask) == 0);
       EXPECT_EQ(lhs.intersection(rhs), fromMask(lhsMask & rhsMask));

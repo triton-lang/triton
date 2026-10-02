@@ -2446,3 +2446,26 @@ tt.func @call_partitioned_padded_footprints(%initial: tensor<8x16xf16>, %input: 
   tt.return %result#0, %result#1 : tensor<4x16xf16>, tensor<4x16xf16>
 }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+// Equal large footprints must merge without losing the required barrier.
+// CHECK-LABEL: equal_large_footprints
+// CHECK: scf.if
+// CHECK: ttg.barrier local
+// CHECK-NEXT: ttg.local_load
+// CHECK: tt.return
+tt.func @equal_large_footprints(%cond: i1) {
+  %zero = arith.constant dense<0> : tensor<32768xi8>
+  %base = ttg.local_alloc %zero : (tensor<32768xi8>) -> !ttg.memdesc<32768xi8, #shared, #smem, mutable>
+  %view = scf.if %cond -> !ttg.memdesc<32768xi8, #shared, #smem, mutable> {
+    scf.yield %base : !ttg.memdesc<32768xi8, #shared, #smem, mutable>
+  } else {
+    scf.yield %base : !ttg.memdesc<32768xi8, #shared, #smem, mutable>
+  }
+  %value = ttg.local_load %view : !ttg.memdesc<32768xi8, #shared, #smem, mutable> -> tensor<32768xi8>
+  tt.return
+}
