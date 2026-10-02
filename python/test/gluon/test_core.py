@@ -7077,6 +7077,49 @@ def test_fabric_store_wait_completion(send_count, completed, aborted, device):
     assert buffer.state.sends_completed.item() == completed
 
 
+@pytest.mark.parametrize("aborted", [False, True])
+@pytest.mark.parametrize("capacity", [8, ttgl.constexpr(8)], ids=["runtime-capacity", "constant-capacity"])
+def test_fabric_submit_pending(aborted, capacity, device):
+    import struct
+
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(Buffer, Out, ABORT: ttgl.constexpr):
+        if ttgl.program_id(0) == 0:
+            view = Buffer + 1
+            success = view.async_store(Buffer.ptr + 2, 7)
+            offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+            ttgl.store(Out + offsets, success)
+        else:
+            # Refreshing the cached head proves the submit reached the full queue.
+            ttgl.atomic_poll(Buffer.queue.cached_head, 1, scope="gpu")
+            if ABORT:
+                ttgl.atomic_xchg(Buffer.state.aborted, 33, sem="release", scope="sys")
+            else:
+                ttgl.atomic_xchg(Buffer.queue.head, 2, sem="release", scope="sys")
+
+    buffer = _make_fabric_buffer(device)._replace(capacity=capacity)
+    buffer.queue.head.fill_(1)
+    buffer.queue.tail.fill_(8)
+    out = torch.full((128, ), aborted, dtype=torch.bool, device=device)
+    kernel[(2, )](buffer, out, aborted)
+    assert out.tolist() == [not aborted] * 128
+    assert buffer.queue.head.item() == (1 if aborted else 2)
+    assert buffer.queue.cached_head.item() == (1 if aborted else 2)
+    assert buffer.queue.tail.item() == (8 if aborted else 9)
+    assert buffer.state.send_count.item() == (0 if aborted else 1)
+    assert buffer.state.aborted.item() == (33 if aborted else 32)
+
+    expected = bytearray(buffer.queue.buffer.numel())
+    if not aborted:
+        struct.pack_into("<I4xI", expected, 0, 1, 1)
+        struct.pack_into("<QQQ", expected, 16, 8, 4, 28)
+        struct.pack_into("<Q", expected, 48, 1 << 63)
+    assert buffer.queue.buffer.cpu().numpy().tobytes() == expected
+
+
 @gluon.jit
 def _fabric_submit_region(Buffer, Out, OP: ttgl.constexpr, REGION: ttgl.constexpr, NREGIONS: ttgl.constexpr):
     index = ttgl.program_id(0) * NREGIONS + REGION
@@ -7087,38 +7130,40 @@ def _fabric_submit_region(Buffer, Out, OP: ttgl.constexpr, REGION: ttgl.constexp
         success = fabric.barrier.arrive(view.peer.ack_barrier)
     else:
         success = view.async_store(Buffer.ptr + index + 2, 0 if OP == "zero_send" else 7)
-    offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+    offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0]))
     ttgl.store(Out + index * 128 + offsets, success)
 
 
 @pytest.mark.parametrize("op", ["send", "zero_send", "ack"])
 @pytest.mark.parametrize("aborted", [False, True])
-@pytest.mark.parametrize("warp_specialized", [False, True])
-@pytest.mark.parametrize("capacity", [8, ttgl.constexpr(8)], ids=["runtime-capacity", "constant-capacity"])
-def test_fabric_submit_one_request_per_region(op, aborted, warp_specialized, capacity, device):
+@pytest.mark.parametrize("constant_capacity", [False, True], ids=["runtime-capacity", "constant-capacity"])
+@pytest.mark.parametrize("worker_warps,capacity", [(0, 8), (4, 8), (1, 7)])
+def test_fabric_submit_one_request_per_region(op, aborted, worker_warps, capacity, constant_capacity, device):
     import struct
 
     if not is_ampere_or_newer():
         pytest.skip("requires Ampere or newer")
 
     @gluon.jit
-    def kernel(Buffer, Out, OP: ttgl.constexpr, WS: ttgl.constexpr):
-        if WS:
+    def kernel(Buffer, Out, OP: ttgl.constexpr, WORKER_WARPS: ttgl.constexpr):
+        if WORKER_WARPS:
             ttgl.warp_specialize([
                 (_fabric_submit_region, (Buffer, Out, OP, 0, 2)),
                 (_fabric_submit_region, (Buffer, Out, OP, 1, 2)),
-            ], [4])
+            ], [WORKER_WARPS])
         else:
             _fabric_submit_region(Buffer, Out, OP, 0, 1)
 
-    buffer = _make_fabric_buffer(device, aborted=33 if aborted else 32)._replace(capacity=capacity)
+    buffer = _make_fabric_buffer(
+        device,
+        aborted=33 if aborted else 32)._replace(capacity=ttgl.constexpr(capacity) if constant_capacity else capacity)
     # Exercise ring wraparound and refresh of the initially stale cached head.
     buffer.queue.head.fill_(6)
     buffer.queue.tail.fill_(6)
-    nrequests = 3 * (2 if warp_specialized else 1)
+    nrequests = 3 * (2 if worker_warps else 1)
     out = torch.empty((nrequests, 128), dtype=torch.bool, device=device)
-    compiled = kernel[(3, )](buffer, out, op, warp_specialized)
-    if isinstance(capacity, ttgl.constexpr):
+    compiled = kernel[(3, )](buffer, out, op, worker_warps)
+    if constant_capacity:
         assert "rem.u64" not in compiled.asm["ptx"]
     assert out.flatten().tolist() == [not aborted] * out.numel()
     assert buffer.queue.tail.item() == 6 + (0 if aborted else nrequests)
@@ -7130,7 +7175,7 @@ def test_fabric_submit_one_request_per_region(op, aborted, warp_specialized, cap
     raw = buffer.queue.buffer.cpu().numpy().tobytes()
     records = []
     for index in range(nrequests):
-        offset = ((6 + index) % 8) * 56
+        offset = ((6 + index) % capacity) * 56
         assert struct.unpack_from("<Q", raw, offset + 48)[0] == 1 << 63
         assert struct.unpack_from("<I", raw, offset)[0] == (6 if op == "ack" else 1)
         assert struct.unpack_from("<I", raw, offset + 8)[0] == 1

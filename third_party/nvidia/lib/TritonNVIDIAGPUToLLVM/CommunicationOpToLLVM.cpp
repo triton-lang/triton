@@ -1,3 +1,4 @@
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 
@@ -8,6 +9,13 @@ namespace ttg = mlir::triton::gpu;
 using Ordering = LLVM::AtomicOrdering;
 
 namespace {
+// Aligned reductions require every thread in the CTA.
+bool isWholeCTA(Operation *op) {
+  auto totalWarps = op->getParentOfType<ModuleOp>()->getAttrOfType<IntegerAttr>(
+      "ttg.total-num-warps");
+  return totalWarps && totalWarps.getInt() == ttg::lookupNumWarps(op);
+}
+
 // The elected thread owns the protocol. Share its result only after it leaves
 // the polling loop, so other warps never participate in that loop.
 Value runProtocol(Operation *op, ConversionPatternRewriter &rewriter,
@@ -41,16 +49,25 @@ struct Protocol {
            const NVIDIA::TargetInfo &targetInfo)
       : rewriter(rewriter), targetInfo(targetInfo), loc(op->getLoc()),
         b(loc, rewriter) {
-    pred = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
-    if (!op->getResult(0).use_empty())
+    pred = targetInfo.getComputeCapability() >= 90
+               ? LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter)
+               : b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
+    reduceResult = isWholeCTA(op) && !op->getResult(0).use_empty();
+    if (!reduceResult && !op->getResult(0).use_empty())
       scratch = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
     Block *before = rewriter.getInsertionBlock();
     join = before->splitBlock(rewriter.getInsertionPoint());
+    if (reduceResult)
+      joinedResult = join->addArgument(i1_ty, loc);
     done = rewriter.createBlock(join);
     result = done->addArgument(i1_ty, loc);
     Block *entry = block();
     rewriter.setInsertionPointToEnd(before);
-    LLVM::CondBrOp::create(rewriter, loc, pred, entry, join);
+    if (reduceResult)
+      LLVM::CondBrOp::create(rewriter, loc, pred, entry, ValueRange{}, join,
+                             ValueRange{b.false_val()});
+    else
+      LLVM::CondBrOp::create(rewriter, loc, pred, entry, join);
     rewriter.setInsertionPointToStart(entry);
   }
 
@@ -66,20 +83,29 @@ struct Protocol {
     rewriter.setInsertionPointToStart(done);
     if (scratch)
       targetInfo.storeShared(rewriter, loc, scratch, result, pred);
-    LLVM::BrOp::create(rewriter, loc, join);
+    LLVM::BrOp::create(rewriter, loc,
+                       reduceResult ? ValueRange{result} : ValueRange{}, join);
     rewriter.setInsertionPointToStart(join);
+    if (reduceResult) {
+      Value id = nvgpu::WarpGroupBarrierIdOp::create(rewriter, loc);
+      return LLVM::createLLVMIntrinsicCallOp(
+                 rewriter, loc, "llvm.nvvm.barrier.cta.red.or.aligned.all",
+                 i1_ty, {id, joinedResult})
+          .getResult(0);
+    }
     targetInfo.barrier(loc, rewriter,
                        ttg::AddrSpace::Local | ttg::AddrSpace::GlobalRead |
                            ttg::AddrSpace::GlobalWrite);
     return scratch ? b.load(i1_ty, scratch) : b.false_val();
   }
 
+  bool reduceResult;
   ConversionPatternRewriter &rewriter;
   const NVIDIA::TargetInfo &targetInfo;
   Location loc;
   TritonLLVMOpBuilder b;
   Block *done, *join;
-  Value pred, result, scratch;
+  Value pred, result, scratch, joinedResult;
 };
 
 template <typename Op>
