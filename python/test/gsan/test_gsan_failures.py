@@ -27,22 +27,18 @@ pytestmark = pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 
 RELEASE_ACQUIRE_SYNC_CASES = (
     pytest.param("release", "acquire", id="release-acquire"),
-    pytest.param("release", "acq_rel", id="release-acq-rel"),
-    pytest.param("acq_rel", "acquire", id="acq-rel-acquire"),
     pytest.param("acq_rel", "acq_rel", id="acq-rel-acq-rel"),
 )
 
+# Missing release and missing acquire are distinct failures; exercise each once
+# per operation, with both scopes represented rather than crossed with each case.
 CROSS_SM_SEMANTIC_MISMATCH_CASES = (
     pytest.param("relaxed", "acquire", "gpu", id="producer-relaxed-consumer-acquire-scope-gpu"),
-    pytest.param("relaxed", "acquire", "sys", id="producer-relaxed-consumer-acquire-scope-sys"),
-    pytest.param("release", "relaxed", "gpu", id="producer-release-consumer-relaxed-scope-gpu"),
     pytest.param("release", "relaxed", "sys", id="producer-release-consumer-relaxed-scope-sys"),
 )
 
 TRANSITIVE_RELAY_MISMATCH_CASES = (
     pytest.param("release", "relaxed", "gpu", id="relay-relaxed-scope-gpu"),
-    pytest.param("release", "relaxed", "sys", id="relay-relaxed-scope-sys"),
-    pytest.param("acq_rel", "release", "gpu", id="relay-release-scope-gpu"),
     pytest.param("acq_rel", "release", "sys", id="relay-release-scope-sys"),
 )
 

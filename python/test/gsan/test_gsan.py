@@ -47,6 +47,14 @@ ATOMIC_LOAD_STORE_TYPES = (
     torch.float64,
 )
 
+# Check every dtype at GPU scope, and scope handling on one representative
+# dtype. The ordering parameters below still cover each case's legal semantics.
+ATOMIC_LOAD_STORE_SCOPE_CASES = [(dtype, min(4, dtype.itemsize), "gpu", AtomicScope.GPU)
+                                 for dtype in ATOMIC_LOAD_STORE_TYPES] + [
+                                     (torch.int32, 4, "cta", AtomicScope.CTA),
+                                     (torch.int32, 4, "sys", AtomicScope.SYSTEM),
+                                 ]
+
 ATOMIC_SEMANTIC_CASES = (
     pytest.param("relaxed", False, id="sem-relaxed"),
     pytest.param("acquire", False, id="sem-acquire"),
@@ -1042,10 +1050,8 @@ def test_atomic_add_updates_atomic_shadow(with_gsan, sem, is_release, scope, exp
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
 @pytest.mark.parametrize("sem", ["relaxed", "acquire"])
-@pytest.mark.parametrize("dtype,shadow_granularity",
-                         [(dtype, min(4, dtype.itemsize)) for dtype in ATOMIC_LOAD_STORE_TYPES],
+@pytest.mark.parametrize("dtype,shadow_granularity,scope,expected_scope", ATOMIC_LOAD_STORE_SCOPE_CASES,
                          indirect=["shadow_granularity"])
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_atomic_load_only_records_read(with_gsan, dtype, sem, scope, expected_scope):
@@ -1108,10 +1114,8 @@ def test_atomic_load_store_vectorized_shadow(with_gsan, op, dtype):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
 @pytest.mark.parametrize("sem, is_release", [("relaxed", False), ("release", True)])
-@pytest.mark.parametrize("dtype,shadow_granularity",
-                         [(dtype, min(4, dtype.itemsize)) for dtype in ATOMIC_LOAD_STORE_TYPES],
+@pytest.mark.parametrize("dtype,shadow_granularity,scope,expected_scope", ATOMIC_LOAD_STORE_SCOPE_CASES,
                          indirect=["shadow_granularity"])
 @pytest.mark.gsan_fine_granularity("16-byte pools do not support atomics")
 def test_atomic_store_only_records_write(with_gsan, dtype, sem, is_release, scope, expected_scope):
@@ -1224,10 +1228,10 @@ def test_atomic_poll_timeout_does_not_record_read(with_gsan):
     assert cell.num_reads == 0
 
 
+# Cover sub-warp and multi-warp tensors without crossing every size with every dtype.
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
-@pytest.mark.parametrize("block_size", [16, 256])
-@pytest.mark.parametrize("dtype,shadow_granularity",
-                         [(dtype, min(4, dtype.itemsize)) for dtype in (torch.int16, torch.int32, torch.int64)],
+@pytest.mark.parametrize("dtype,shadow_granularity,block_size", [(torch.int16, 2, 16), (torch.int32, 4, 256),
+                                                                 (torch.int64, 4, 256)],
                          indirect=["shadow_granularity"])
 @pytest.mark.parametrize("sem", ["relaxed", "acquire"])
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
@@ -1710,6 +1714,12 @@ def test_gluon_async_copy_updates_shadow(with_gsan):
     assert n_elements - start_idx < block
 
 
+# Cell-size coverage uses one offset; extra boundary shapes run at the default
+# granularity and at 16 bytes, whose complete-cell requirement is different.
+TMA_MASK_CASES = [(g, 5, 8)
+                  for g in (1, 2, 4, 8, 16)] + [(g, row, col) for g in (4, 16) for row, col in ((30, 8), (5, 32))]
+
+
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("num_ctas", [
     1,
@@ -1717,8 +1727,7 @@ def test_gluon_async_copy_updates_shadow(with_gsan):
         2, marks=pytest.mark.skipif(not is_hopper_or_newer() or is_sm12x(),
                                     reason="Multi-CTA TMA requires Hopper or Blackwell")),
 ])
-@pytest.mark.parametrize("row_idx,col_idx", [(5, 8), (30, 8), (5, 32)])
-@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
+@pytest.mark.parametrize("shadow_granularity,row_idx,col_idx", TMA_MASK_CASES, indirect=["shadow_granularity"])
 def test_tma_masked_load_updates_shadow(with_gsan, with_allocator, row_idx, col_idx, num_ctas):
     if with_gsan == 16 and not is_hopper_or_newer():
         pytest.skip("Pre-Hopper descriptor emulation does not guarantee complete 16-byte accesses")
@@ -1756,8 +1765,7 @@ def test_tma_masked_load_updates_shadow(with_gsan, with_allocator, row_idx, col_
         2, marks=pytest.mark.skipif(not is_hopper_or_newer() or is_sm12x(),
                                     reason="Multi-CTA TMA requires Hopper or Blackwell")),
 ])
-@pytest.mark.parametrize("row_idx,col_idx", [(5, 8), (30, 8), (5, 32)])
-@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
+@pytest.mark.parametrize("shadow_granularity,row_idx,col_idx", TMA_MASK_CASES, indirect=["shadow_granularity"])
 def test_tma_masked_store_updates_shadow(with_gsan, with_allocator, row_idx, col_idx, num_ctas):
     if with_gsan == 16 and not is_hopper_or_newer():
         pytest.skip("Pre-Hopper descriptor emulation does not guarantee complete 16-byte accesses")

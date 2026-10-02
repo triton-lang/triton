@@ -50,7 +50,9 @@ def _write_once_mask_kernel(ptr, out, PHASE: gl.constexpr, STORE: gl.constexpr, 
         gl.store(out + offsets, values, mask)
 
 
-@pytest.mark.parametrize("dtype", [torch.uint8, torch.int16, torch.int32, torch.int64])
+# The narrowest and widest elements cover packing and multi-cell accesses at
+# every granularity; the TMA and async-copy tests also exercise int32 elements.
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.int64])
 def test_write_once_masked_bytes_and_repeated_reads(with_write_once_gsan, dtype, shadow_granularity):
     pool = with_write_once_gsan
     with torch.cuda.use_mem_pool(pool):

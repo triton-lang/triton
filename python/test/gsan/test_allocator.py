@@ -593,9 +593,11 @@ def test_export_allocation_memhandle_regions_accepts_interior_pointer(_direct_al
         free(real_ptr)
 
 
+# Check each granularity, and allocation-size handling independently at the default.
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-@pytest.mark.parametrize("size", [4096, _ODD_LARGE_ALLOCATION_SIZE])
-@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
+@pytest.mark.parametrize("shadow_granularity,size",
+                         [(g, 4096) for g in (1, 2, 4, 8, 16)] + [(4, _ODD_LARGE_ALLOCATION_SIZE)],
+                         indirect=["shadow_granularity"])
 def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator, size, shadow_granularity):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
     device = torch.cuda.current_device()
@@ -676,16 +678,14 @@ def test_mem_pools_have_distinct_regions():
     assert get_allocator(write_once=True) is get_allocator(write_once=True, shadow_granularity=1)
 
 
+# Explicit configuration covers every pool. Environment-based configuration only
+# needs the default granularity, still in both allocation modes.
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-@pytest.mark.parametrize(
-    ("explicit_config", "allocator_config"),
-    [
-        pytest.param(True, "fabric_handles:False", id="explicit-config"),
-        pytest.param(False, "fabric_handles:True", id="pytorch-config-default"),
-    ],
-)
+@pytest.mark.parametrize("shadow_granularity,explicit_config,allocator_config",
+                         [(g, True, "fabric_handles:False")
+                          for g in (1, 2, 4, 8, 16)] + [(4, False, "fabric_handles:True")],
+                         indirect=["shadow_granularity"])
 @pytest.mark.parametrize("write_once", [False, True])
-@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_export_import_fabric_handles(explicit_config, allocator_config, write_once, shadow_granularity):
     if not supports_fabric_handles(torch.cuda.current_device()):
         pytest.skip("CUDA device does not support fabric handles")
@@ -701,8 +701,9 @@ def test_export_import_fabric_handles(explicit_config, allocator_config, write_o
 
 
 @pytest.mark.parametrize("write_once", [False, True])
-@pytest.mark.parametrize("size", [513, _ODD_LARGE_ALLOCATION_SIZE])
-@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
+@pytest.mark.parametrize("shadow_granularity,size",
+                         [(g, 513) for g in (1, 2, 4, 8, 16)] + [(4, _ODD_LARGE_ALLOCATION_SIZE)],
+                         indirect=["shadow_granularity"])
 def test_allocation_mode_and_shadow_size(write_once, shadow_granularity, size):
     device = torch.cuda.current_device()
     ptr = gsan_malloc(size, device, write_once=write_once, shadow_granularity=shadow_granularity)

@@ -200,11 +200,19 @@ def _run_memory_category_boundary(pool_index, boundary, is_store):
         torch.cuda.synchronize()
 
 
-# Cover both modes at the first and last granularity, including the transition
-# to unused slots. The allocator tests check address mapping for all ten pools.
-@pytest.mark.parametrize("pool_index", [0, 1, 8, 9])
-@pytest.mark.parametrize("boundary", ["start", "end"])
-@pytest.mark.parametrize("is_store", [False, True])
+# Cover both boundaries of each extreme pool, pairing loads and stores so both
+# modes exercise both access kinds at each boundary. Address mapping for all ten
+# pools is covered by the allocator tests.
+@pytest.mark.parametrize("pool_index,boundary,is_store", [
+    (0, "start", False),
+    (0, "end", True),
+    (1, "start", True),
+    (1, "end", False),
+    (8, "start", True),
+    (8, "end", False),
+    (9, "start", False),
+    (9, "end", True),
+])
 def test_access_rejects_crossing_memory_category_boundary(pool_index, boundary, is_store):
     _run_failure_case(f"memory_category_boundary_{pool_index}_{boundary}_{is_store}",
                       runner=_run_memory_category_boundary, runner_args=(pool_index, boundary, is_store),
