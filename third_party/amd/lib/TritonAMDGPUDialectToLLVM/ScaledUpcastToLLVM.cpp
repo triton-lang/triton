@@ -60,15 +60,6 @@ bool scaleIsPreShifted(RankedTensorType scaleTy) {
   return scaleTy.getElementType().isBF16();
 }
 
-LogicalResult checkPk8ScaleType(Operation *op, RankedTensorType scaleTy) {
-  Type elemTy = scaleTy.getElementType();
-  if (elemTy.isInteger(8))
-    return success();
-  return op->emitOpError("v_cvt_scale_pk8 lowering requires a raw E8M0 scale "
-                         "in i8, but got ")
-         << elemTy;
-}
-
 // Software multiplication needs the numeric scale, unlike hardware conversions
 // that read only its exponent field.
 Value scaleToF32(RewriterBase &rewriter, Location loc, Value scale,
@@ -129,9 +120,6 @@ struct ScaledUpcastFp4OpPattern
         computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
 
     if (targetInfo.supportsCvtPkScalePk8Upcast()) {
-      if (failed(checkPk8ScaleType(upcastOp, upcastOp.getScale().getType())))
-        return failure();
-
       // FP4/FP6 v_cvt_scale_pk8 with opSel=0 sources the scale for output
       // lanes 16..31 from byte 1 of the *lower* 16 lanes' Vscale while output
       // lanes 0..15 use byte 0. When the scale layout is not broadcast across
@@ -253,7 +241,10 @@ struct ScaledUpcastFp8OpPattern
     auto scaleVals =
         unpackUniqueTensorElements(loc, adaptor.getScale(), rewriter);
 
-    assert(inputVals.size() % 4 == 0);
+    // The op verifier guarantees whole register-consecutive groups.
+    assert(inputVals.size() %
+               (targetInfo.supportsCvtPkScalePk8Upcast() ? 8 : 4) ==
+           0);
     assert(inputVals.size() == scaleVals.size());
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -264,9 +255,6 @@ struct ScaledUpcastFp8OpPattern
     if (targetInfo.supportsCvtPkScalePk8Upcast() &&
         (broadcast ||
          targetInfo.supportsCvtPkScalePk8Block16())) { // b32 vs b16 needed
-      if (failed(checkPk8ScaleType(upcastOp, upcastOp.getScale().getType())))
-        return failure();
-
       SmallVector<Value> crossScaleVals(scaleVals.size());
       auto getCrossScale = [&](int scaleIdx) -> Value {
         if (broadcast)

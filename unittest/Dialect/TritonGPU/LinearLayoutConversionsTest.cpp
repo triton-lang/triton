@@ -3185,6 +3185,15 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_64) {
       {d0, d1});
   expected4 *= LinearLayout::identity1D(1, kBlock, d0);
   EXPECT_EQ(toLinearLayout({64, 256}, enc), expected4);
+
+  // Smaller M and N retain the tile's physical rows and columns as padding.
+  EXPECT_EQ(
+      toLinearLayout({32, 16}, enc),
+      LinearLayout(
+          {{kRow, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}, {16, 0}, {0, 0}}},
+           {kCol, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}, {0, 0}}},
+           {kBlock, {}}},
+          {d0, d1}));
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
@@ -3203,6 +3212,43 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
   EXPECT_EQ(toLinearLayout({256, 256}, enc),
             tile * LinearLayout::identity1D(2, kCol, d0) *
                 LinearLayout::identity1D(2, kCol, d1));
+  EXPECT_EQ(
+      toLinearLayout({32, 16}, enc),
+      LinearLayout(
+          {{kRow, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 0}, {0, 0}}},
+           {kCol, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}, {0, 0}, {0, 0}}},
+           {kBlock, {}}},
+          {d0, d1}));
+}
+
+TEST_F(LinearLayoutConversionsTest, TensorMemory_narrow_allocation) {
+  auto enc = tmem(128, 8);
+  auto f32 = Float32Type::get(&ctx);
+  auto tmemSpace = TensorMemorySpaceAttr::get(&ctx);
+
+  auto allocation = MemDescType::get({128, 1}, f32, enc, tmemSpace,
+                                     /*mutableMemory=*/true);
+  EXPECT_EQ(toLinearLayout(allocation).getInDimSize(S("col")), 8);
+
+  auto subview = MemDescType::get({128, 1}, f32, enc, tmemSpace,
+                                  /*mutableMemory=*/true, {128, 8});
+  EXPECT_EQ(toLinearLayout(subview).getInDimSize(S("col")), 1);
+}
+
+TEST_F(LinearLayoutConversionsTest, TensorMemory_two_ctas_one_column) {
+  auto cga = CGAEncodingAttr::fromSplitParams(&ctx, {2, 1}, {2, 1}, {1, 0});
+  auto enc = TensorMemoryEncodingAttr::get(&ctx, 64, 16, 1, cga,
+                                           /*twoCTAs=*/true);
+  auto expected = LinearLayout::identity1D(64, S("row"), S("dim0")) *
+                  LinearLayout::zeros1D(2, S("row"), S("dim1")) *
+                  LinearLayout::zeros1D(8, S("col"), S("dim1")) *
+                  LinearLayout::identity1D(2, S("block"), S("dim0"));
+  EXPECT_EQ(toLinearLayout({128, 1}, enc), expected);
+
+  auto oneColumnEnc = TensorMemoryEncodingAttr::get(&ctx, 64, 1, 1, cga,
+                                                    /*twoCTAs=*/true);
+  EXPECT_EQ(toLinearLayout({128, 1}, oneColumnEnc),
+            expected.resizeInDim(S("col"), 1));
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_subview) {
@@ -3290,6 +3336,16 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             toLinearLayout({128, 64}, enc1) *
                 LinearLayout::identity1D(2, kBlock, d1));
+  EXPECT_EQ(toLinearLayout({128, 1}, enc),
+            toLinearLayout({128, 1}, enc1) *
+                LinearLayout::zeros1D(2, kBlock, d1));
+
+  auto scales = TensorMemoryScalesEncodingAttr::get(&ctx, cgaLayout);
+  auto scales1 = TensorMemoryScalesEncodingAttr::get(
+      &ctx, CGAEncodingAttr::get1CTALayout(&ctx, 2));
+  EXPECT_EQ(toLinearLayout({16, 1}, scales),
+            toLinearLayout({16, 1}, scales1) *
+                LinearLayout::zeros1D(2, kBlock, d1));
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemoryScales_BlockRepOrder) {
@@ -3304,18 +3360,27 @@ TEST_F(LinearLayoutConversionsTest, TensorMemoryScales_BlockRepOrder) {
   auto encMnThenK = TensorMemoryScalesEncodingAttr::get(
       &ctx, cgaLayout, nvidia_gpu::TensorMemoryScalesBlockRepOrder::MN_THEN_K);
 
-  LinearLayout expectedKThenMn = LinearLayout::identity1D(32, kRow, d0) *
-                                 LinearLayout::zeros1D(4, kRow, d0) *
-                                 LinearLayout::identity1D(4, kCol, d1) *
-                                 LinearLayout::identity1D(2, kCol, d0) *
-                                 LinearLayout::identity1D(2, kCol, d0) *
+  LinearLayout tile = LinearLayout::identity1D(32, kRow, d0) *
+                      LinearLayout::zeros1D(4, kRow, d0) *
+                      LinearLayout::identity1D(4, kCol, d1) *
+                      LinearLayout::identity1D(2, kCol, d0) *
+                      LinearLayout::identity1D(1, kBlock, d0);
+  LinearLayout expectedKThenMn = tile * LinearLayout::identity1D(2, kCol, d0) *
                                  LinearLayout::identity1D(2, kCol, d1) *
-                                 LinearLayout::identity1D(2, kCol, d0) *
-                                 LinearLayout::identity1D(1, kBlock, d0);
+                                 LinearLayout::identity1D(2, kCol, d0);
   EXPECT_EQ(toLinearLayout({256, 8}, encKThenMn), expectedKThenMn);
 
-  EXPECT_NE(toLinearLayout({256, 8}, encKThenMn),
-            toLinearLayout({256, 8}, encMnThenK));
+  LinearLayout expectedMnThenK = tile * LinearLayout::identity1D(4, kCol, d0) *
+                                 LinearLayout::identity1D(2, kCol, d1);
+  EXPECT_EQ(toLinearLayout({256, 8}, encMnThenK), expectedMnThenK);
+
+  LinearLayout expectedNarrow(
+      {{kRow, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}, {0, 0}, {0, 0}}},
+       {kCol, {{0, 1}, {0, 2}, {0, 0}, {0, 4}}},
+       {kBlock, {}}},
+      {d0, d1});
+  for (auto enc : {encKThenMn, encMnThenK})
+    EXPECT_EQ(toLinearLayout({16, 8}, enc), expectedNarrow);
 }
 
 // Tests for SM120 DotScaled Scale Layout

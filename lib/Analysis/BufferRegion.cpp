@@ -133,7 +133,9 @@ MemDescFootprint getMemDescAddresses(
           addresses.translated(storageBase);
     return footprint;
   }
-  triton::LinearLayout layout = ttg::toLinearLayoutIgnoringPadding(ty);
+  triton::LinearLayout layout = ttg::toLinearLayoutIgnoringPadding(
+      ttg::dropPipeliningDim(ty.getAllocShape(), ty.getEncoding()),
+      ty.getEncoding());
   triton::LinearLayout inverse = layout.pseudoinvert();
   MLIRContext *ctx = ty.getContext();
   SmallVector<StringAttr> dims = triton::standardOutDimNames(ctx, ty.getRank());
@@ -193,30 +195,20 @@ MemDescFootprint getMemDescAddresses(
                        basis(partitionName), block});
     }
   }
-  // The pseudoinverse selects one representative of replicated storage. Zero
-  // block bases in the allocation layout denote a local copy in every replica
-  // CTA. A nonzero block basis excluded by a subview is not a replica.
-  uint32_t broadcastBits = layout.getFreeVariableMasks().lookup(blockName);
-  for (unsigned bit = 0; bit < layout.getInDimSizeLog2(blockName); ++bit) {
-    if (!(broadcastBits & (uint32_t{1} << bit)))
-      continue;
-    PhysicalBasis replica;
-    replica.block = uint32_t{1} << bit;
-    bases.push_back(replica);
-    numPoints *= 2;
-  }
-  if (isTmem) {
-    // Zero row bases at 32 and 64 broadcast across warp-addressable storage;
-    // loads/stores still access every replica. The pseudoinverse chooses only
-    // one. Other zero row/column bases denote undefined storage, not replicas.
-    uint64_t rowBasisMask = triton::getInputBasisMask(layout, rowName, dims);
-    for (unsigned bit : {5, 6}) {
-      if (!(rowBasisMask & (uint64_t{1} << bit))) {
-        PhysicalBasis replica;
-        replica.row = uint32_t{1} << bit;
-        bases.push_back(replica);
-        numPoints *= 2;
-      }
+  // Include storage reserved by zero allocation bases, but not bases excluded
+  // by the subview. The pseudoinverse above selects only one representative.
+  for (StringAttr dim : layout.getInDimNames()) {
+    uint32_t zeroBits = (layout.getInDimSize(dim) - 1) &
+                        ~triton::getInputBasisMask(layout, dim, dims);
+    // A zero row-16 basis leaves half of each warp's rows unallocated.
+    if (dim == rowName)
+      zeroBits &= ~uint32_t{16};
+    for (; zeroBits; zeroBits &= zeroBits - 1) {
+      uint32_t bit = uint32_t{1} << llvm::countr_zero(zeroBits);
+      bases.push_back({dim == offsetName ? bit : 0, dim == rowName ? bit : 0,
+                       dim == colName ? bit : 0, 0,
+                       dim == blockName ? bit : 0});
+      numPoints *= 2;
     }
   }
 

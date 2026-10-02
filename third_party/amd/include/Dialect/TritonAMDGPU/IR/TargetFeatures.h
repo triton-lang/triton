@@ -19,8 +19,6 @@ enum class ISAFamily {
   CDNA2,
   CDNA3,
   CDNA4,
-  RDNA1,
-  RDNA2,
   RDNA3,
   RDNA4m,
   RDNA4,

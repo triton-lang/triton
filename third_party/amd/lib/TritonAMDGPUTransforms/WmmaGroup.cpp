@@ -30,9 +30,12 @@ using WmmaKey =
 // WMMA intrinsic map
 //===----------------------------------------------------------------------===//
 
-using WmmaMapValue =
-    std::tuple<StringRef /*symbol*/, unsigned /*kDim*/, unsigned /*kBase*/,
-               StringRef /*requiredFeature*/>;
+struct WmmaMapValue {
+  StringRef symbol;
+  unsigned kDim;
+  unsigned kBase;
+  StringRef requiredFeature;
+};
 using WmmaMap = llvm::DenseMap<WmmaKey, SmallVector<WmmaMapValue, 2>>;
 
 class WmmaDatabase {
@@ -221,7 +224,7 @@ WmmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
 
   SmallVector<WmmaMapValue, 2> values(it->second);
   llvm::erase_if(values, [&](const WmmaMapValue &val) {
-    return llvm::is_contained(unsupportedFeatures, std::get<3>(val));
+    return llvm::is_contained(unsupportedFeatures, val.requiredFeature);
   });
   if (values.empty())
     return failure();
@@ -258,9 +261,8 @@ FailureOr<WmmaIntrinsic> WmmaIntrinsic::get(int version, unsigned mDim,
     return failure();
 
   const SmallVector<WmmaMapValue, 2> &values = it->second;
-  auto match = llvm::find_if(values, [&](const WmmaMapValue &val) {
-    return std::get<1>(val) == kDim;
-  });
+  auto match = llvm::find_if(
+      values, [&](const WmmaMapValue &val) { return val.kDim == kDim; });
   if (match == values.end())
     return failure();
 
@@ -278,8 +280,11 @@ using WmmaScaleKey =
                TypeID /*dElemType*/, unsigned /*isScale16*/,
                WmmaScaleIntrinsic::IntrinsicFamily>;
 
-using WmmaScaleMapValue = std::tuple<StringRef /*symbol*/, unsigned /*kDim*/,
-                                     StringRef /*requiredFeature*/>;
+struct WmmaScaleMapValue {
+  StringRef symbol;
+  unsigned kDim;
+  StringRef requiredFeature;
+};
 using WmmaScaleMap =
     llvm::DenseMap<WmmaScaleKey, SmallVector<WmmaScaleMapValue, 4>>;
 
@@ -315,11 +320,10 @@ WmmaScaleDatabase::WmmaScaleDatabase(MLIRContext *context) {
 
   // Reference: llvm/include/llvm/IR/IntrinsicsAMDGPU.td
   wmmaScaleMap = {
-      TRITON_WMMA_SCALE_v_feature(
-          3, 16, 16, f32T, 0u /*isScale16*/,
-          WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
-          "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4", 128,
-          kWmmaRestrictedInstsFeature),
+      TRITON_WMMA_SCALE_v_feature(3, 16, 16, f32T, 0u /*isScale16*/,
+                                  WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,
+                                  "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4",
+                                  128, kWmmaRestrictedInstsFeature),
       TRITON_WMMA_SCALE_v_feature(
           3, 16, 16, f32T, 1u /*isScale16*/,
           WmmaScaleIntrinsic::IntrinsicFamily::F8F6F4,

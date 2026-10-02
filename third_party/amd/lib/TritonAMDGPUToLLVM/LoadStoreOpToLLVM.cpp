@@ -296,6 +296,31 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       ModuleAxisInfoAnalysis &axisAnalysisPass)
       : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
+  // Like `getMaskElemsAndUpdateVeclen` but also records the vector sizes the
+  // pointers/offsets and the mask each allow in `vecInfo`
+  SmallVector<Value> getMaskElemsAndDirectToLdsVec(
+      ConversionPatternRewriter &rewriter, Location loc, Value llMask,
+      Value mask, unsigned &vec, LLVM::AMD::DirectToLdsVecInfo &vecInfo) const {
+    vecInfo.fromPtr = vec;
+    SmallVector<Value> maskElems =
+        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
+    vecInfo.fromMask = mask ? getMaskAlignment(mask) : vec;
+    return maskElems;
+  }
+
+  LogicalResult
+  checkCanLoadDirectToLDS(Operation *op, RankedTensorType srcTy,
+                          Attribute dstEnc, ArrayRef<int64_t> dstAllocShape,
+                          unsigned &vec,
+                          LLVM::AMD::DirectToLdsVecInfo vecInfo) const {
+    std::string reason;
+    if (LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstEnc, dstAllocShape,
+                                      vec, vecInfo, &reason))
+      return success();
+    return op->emitError() << "cannot lower '" << op->getName()
+                           << "' to a direct-to-LDS copy: " << reason;
+  }
+
   // For each load emit the computation to get the lane id offset which holds
   // the source pointers/offsets we need to store to shared memory
   SmallVector<Value>
@@ -681,7 +706,6 @@ struct BufferLoadOpConversion
     Value llOffset = adaptor.getOffsets();
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
-    Value llStride = adaptor.getStride();
 
     // Determine the vectorization size
     Type valueTy = op.getType();
@@ -709,7 +733,7 @@ struct BufferLoadOpConversion
           unpackTensorElements(loc, llOther, rewriter, op.getOther().getType());
 
     // Create the resource descriptor and then emit the buffer_load intrinsic(s)
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
     SmallVector<Value> loadedVals;
     Type vecTy = LLVM::getVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
@@ -771,7 +795,6 @@ struct BufferLoadToLocalOpConversion
     Value llDst = adaptor.getDest();
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
-    Value llStride = adaptor.getStride();
 
     RankedTensorType ptrType =
         cast<RankedTensorType>(getPointerTypeWithShape(ptr, offset));
@@ -783,8 +806,9 @@ struct BufferLoadToLocalOpConversion
     //     mask bits are the same.  For example if N=2, the mask must be
     //     [x, x, y, y, ...].
     unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
-    SmallVector<Value> maskElems =
-        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
+    LLVM::AMD::DirectToLdsVecInfo vecInfo;
+    SmallVector<Value> maskElems = getMaskElemsAndDirectToLdsVec(
+        rewriter, loc, llMask, mask, vec, vecInfo);
 
     SmallVector<Value> offsetElems =
         unpackTensorElements(loc, llOffset, rewriter, offset.getType());
@@ -800,10 +824,9 @@ struct BufferLoadToLocalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, ptrType, dstEnc,
-                                       dstTy.getAllocShape(), vec)) {
+    if (failed(checkCanLoadDirectToLDS(op, ptrType, dstEnc,
+                                       dstTy.getAllocShape(), vec, vecInfo)))
       return failure();
-    }
 
     // For swizzled layouts we need to use the non swizzled layout to compute
     // the LDS addresses since we gather into LDS
@@ -837,7 +860,7 @@ struct BufferLoadToLocalOpConversion
 
     // Create the resource descriptor and then emit the buffer_loads to lds
     // based on the collected shared addresses and vector size
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
 
     auto freeVarMasks = getFreeVariableMasks(ptrType);
     Value threadPred = emitRedundantThreadPredicateNonNull(
@@ -953,8 +976,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     //     mask bits are the same.  For example if N=2, the mask must be
     //     [x, x, y, y, ...].
     unsigned vec = getVectorSize(op.getSrc(), axisAnalysisPass);
-    auto maskElements = getMaskElemsAndUpdateVeclen(
-        rewriter, loc, adaptor.getMask(), op.getMask(), vec);
+    LLVM::AMD::DirectToLdsVecInfo vecInfo;
+    auto maskElements = getMaskElemsAndDirectToLdsVec(
+        rewriter, loc, adaptor.getMask(), op.getMask(), vec, vecInfo);
 
     auto srcElems = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
                                          op.getSrc().getType());
@@ -966,10 +990,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, srcTy, dstEnc,
-                                       dstTy.getAllocShape(), vec)) {
+    if (failed(checkCanLoadDirectToLDS(op, srcTy, dstEnc, dstTy.getAllocShape(),
+                                       vec, vecInfo)))
       return failure();
-    }
 
     // For swizzled layouts we need to use the non swizzled layout to compute
     // the LDS addresses since we gather into LDS
@@ -1810,7 +1833,6 @@ struct BufferAtomicRMWOpConversion
     Value llOffset = adaptor.getOffsets();
     Value llMask = adaptor.getMask();
     Value llData = adaptor.getValue();
-    Value llStride = adaptor.getStride();
 
     // Determine the vectorization size
     Type valueTy = data.getType();
@@ -1848,7 +1870,7 @@ struct BufferAtomicRMWOpConversion
       maskElems = unpackUniqueTensorElements(loc, llMask, rewriter);
     }
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
     SmallVector<Value> loadedVals;
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
@@ -1868,8 +1890,7 @@ struct BufferAtomicRMWOpConversion
     //    fences which appear before/after the ops).
 
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
-    auto opUsers = op.getResult().getUsers();
-    auto hasUsers = std::distance(opUsers.begin(), opUsers.end()) > 0;
+    bool hasUsers = !op.getResult().use_empty();
 
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
@@ -1939,7 +1960,6 @@ struct BufferAtomicCASOpConversion
     Value llOffset = adaptor.getOffsets();
     Value llVal = adaptor.getVal();
     Value llCmp = adaptor.getCmp();
-    Value llStride = adaptor.getStride();
 
     // Determine the vectorization size
     Type valueTy = val.getType();
@@ -1961,7 +1981,7 @@ struct BufferAtomicCASOpConversion
     SmallVector<Value> cmpElems =
         unpackUniqueTensorElements(loc, llCmp, rewriter);
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
     SmallVector<Value> loadedVals;
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
@@ -1977,7 +1997,7 @@ struct BufferAtomicCASOpConversion
     mlir::Operation *lastCASOp;
 
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
-    auto hasUsers = !op.getResult().getUsers().empty();
+    bool hasUsers = !op.getResult().use_empty();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
         freeVarMasks, rewriter, loc, targetInfo);
@@ -2053,7 +2073,6 @@ struct BufferStoreOpConversion
     Value llOffset = adaptor.getOffsets();
     Value llMask = adaptor.getMask();
     Value llData = adaptor.getValue();
-    Value llStride = adaptor.getStride();
 
     // Determine the vectorization size
     Type valueTy = data.getType();
@@ -2076,7 +2095,7 @@ struct BufferStoreOpConversion
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
     MLIRContext *ctx = rewriter.getContext();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(

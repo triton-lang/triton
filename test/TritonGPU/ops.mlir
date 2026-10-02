@@ -323,7 +323,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @tmem_reinterpret_packed_subview_owns_column
   tt.func @tmem_reinterpret_packed_subview_owns_column(%arg0: !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable>) {
     %view = ttng.tmem_subslice %arg0 {offset = 0 : i32} : !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4>
-    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4> -> !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable>
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4> -> !ttg.memdesc<128x4xi8, #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>, #ttng.tensor_memory, mutable>
     tt.return
   }
 

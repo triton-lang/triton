@@ -204,6 +204,49 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
 
 
+@pytest.mark.parametrize("op", ["cumsum", "cumprod"])
+@pytest.mark.parametrize("axis", [0, 1, -1])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("dtype, out_dtype", [
+    (torch.int8, None),
+    (torch.uint8, None),
+    (torch.int32, None),
+    (torch.float16, None),
+    (torch.float32, None),
+    (torch.int32, torch.int64),
+    (torch.float16, torch.float32),
+])
+def test_standard_scan(op, axis, reverse, dtype, out_dtype, device):
+
+    @gluon.jit
+    def kernel(X, Y, OP: ttgl.constexpr, AXIS: ttgl.constexpr, REVERSE: ttgl.constexpr, DTYPE: ttgl.constexpr,
+               LAYOUT: ttgl.constexpr):
+        m = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, LAYOUT))[:, None]
+        n = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, LAYOUT))[None, :]
+        x = ttgl.load(X + m * 64 + n)
+        y = OP(x, axis=AXIS, reverse=REVERSE, dtype=DTYPE)
+        ttgl.static_assert(y.dtype == Y.dtype.element_ty)
+        ttgl.static_assert(y.type.layout == x.type.layout)
+        ttgl.store(Y + m * 64 + n, y)
+
+    torch.manual_seed(0)
+    # Small integral values make both scan references exact, including fp16.
+    x = torch.randint(0 if dtype == torch.uint8 else -1, 2, (32, 64), device=device).to(dtype)
+    result_dtype = out_dtype or {torch.int8: torch.int32, torch.uint8: torch.uint32}.get(dtype, dtype)
+    y = torch.empty(x.shape, dtype=result_dtype, device=device)
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0])
+    kernel[(1, )](x, y, getattr(ttgl, op), axis, reverse,
+                  getattr(ttgl,
+                          str(out_dtype).removeprefix("torch.")) if out_dtype else None, layout)
+    ref = x.flip([axis]) if reverse else x
+    # PyTorch does not implement scans on uint32.
+    ref = getattr(torch, op)(ref.to(torch.int64) if dtype == torch.uint8 else ref, dim=axis,
+                             dtype=torch.int64 if result_dtype == torch.uint32 else result_dtype)
+    if reverse:
+        ref = ref.flip([axis])
+    torch.testing.assert_close(y.to(ref.dtype), ref, atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
 def test_convert_1d_to_2d_slice_cga(num_ctas, device):
@@ -1143,14 +1186,16 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
             reduce_fn = np.fmin if op == "min" else np.fmax
     else:
         limits = np.iinfo(numpy_dtype)
-        if op in ("and", "or", "xor"):
+        if op in ("and", "or", "xor") or limits.bits == 64:
             # Exercise every bit, including the sign bit, in both groups.
             x[:] = np.frombuffer(rng.bytes(x.nbytes), dtype=x.dtype).reshape(x.shape)
         x[0], x[1] = limits.min, limits.max
         x[2, 0], x[3, -1] = limits.min, limits.max
         if limits.bits == 64:
             # Equal high words and unsigned low-word comparisons.
-            x[4, :4] = [0x100000000, 0x1FFFFFFFF, 0x180000000, 0x17FFFFFFF][:size]
+            low_words = np.resize(np.array([0xFFFFFFFF, 0, 0x80000000, 0x7FFFFFFF], dtype=np.uint64), size)
+            x[4] = (0x100000000 | low_words).view(x.dtype)
+            x[5] = (0x8000000000000000 | low_words).view(x.dtype)
         reduce_fn = {
             "min": np.minimum, "max": np.maximum, "add": np.add, "and": np.bitwise_and, "or": np.bitwise_or, "xor":
             np.bitwise_xor
@@ -1176,13 +1221,16 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
         profitable = group_stride == 1 or (group_stride == 2 and size >= 8)
     else:
         profitable = (group_stride == 1 and size >= 4) or (group_stride == 2 and size == 16)
-    use_redux = size == 32 or (profitable and "64" not in dtype_str)
+    use_redux = size == 32 or profitable
+    if "64" in dtype_str:
+        use_redux = ((group_stride == 1 and size >= (8 if op == "add" else 4))
+                     or (group_stride == 2 and size >= 16 and op != "add"))
     if is_float and major != 10:
         use_redux = False
     if use_redux:
         expected_count = group_stride
         if "64" in dtype_str:
-            expected_count = 3 if op == "add" else 2
+            expected_count *= 3 if op == "add" else 2
         assert ptx.count("redux.sync.") == expected_count
         assert "shfl.sync.bfly" not in ptx
         for line in ptx.splitlines():
@@ -1201,7 +1249,8 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
 
 @pytest.mark.skipif(not is_cuda(), reason="NVIDIA redux instructions")
 @pytest.mark.parametrize("op", ["add", "xor", "max"])
-def test_reduce_broadcast_across_warps(op, device):
+@pytest.mark.parametrize("dtype_str", ["int32", "int64", "uint64"])
+def test_reduce_broadcast_across_warps(op, dtype_str, device):
     import numpy as np
 
     if torch.cuda.get_device_capability()[0] < 8:
@@ -1219,16 +1268,23 @@ def test_reduce_broadcast_across_warps(op, device):
             y = ttgl.max(x, 0)
         ttgl.store(Y, y)
 
-    values = np.arange(128, dtype=np.int32)
+    values = np.arange(128, dtype=dtype_str)
     values[0] = 257  # Make both the sum and XOR nonzero.
+    if values.dtype.itemsize == 8:
+        values = (values << 32) | (0xFFFFFFFF - values)
+        values[::3] = ~values[::3]
     x = torch.tensor(values, device=device)
-    y = torch.empty((), dtype=torch.int32, device=device)
+    y = torch.empty((), dtype=x.dtype, device=device)
     compiled = kernel[(1, )](x, y, op, num_warps=4)
     reduce_fn = {"add": np.add, "xor": np.bitwise_xor, "max": np.maximum}[op]
-    assert y.item() == reduce_fn.reduce(values)
-    # One full-warp redux, then one redux over four broadcast warp results.
-    assert compiled.asm["ptx"].count("redux.sync.") == 2
-    assert "shfl.sync.bfly" not in compiled.asm["ptx"]
+    assert y.item() == reduce_fn.reduce(values, dtype=values.dtype)
+    # One full-warp reduction, then one over four broadcast warp results.
+    expected_count = 2
+    if values.dtype.itemsize == 8:
+        expected_count = 3 if op == "add" else 4
+    assert compiled.asm["ptx"].count("redux.sync.") == expected_count
+    # Four broadcast values use shuffles for 64-bit addition.
+    assert ("shfl.sync.bfly" in compiled.asm["ptx"]) == (values.dtype.itemsize == 8 and op == "add")
 
 
 @pytest.mark.parametrize("M", [32, 64, 128, 256])

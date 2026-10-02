@@ -296,11 +296,16 @@ class HIPOptions:
     # Example: llvm_fn_attrs="amdgpu-sched-strategy=iterative-ilp,noinline"
     llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
 
+    # WGP/CU execution mode for gfx10, gfx11 and gfx120x; ignored on other targets.
+    wgp_cu_mode: str = "wgp"
+
     def __post_init__(self):
+        if self.wgp_cu_mode not in ("wgp", "cu"):
+            raise ValueError("wgp_cu_mode must be 'wgp' or 'cu'")
         # The arch without the "-strict" suffix.
         base_arch = self.arch.removesuffix("-strict")
         object.__setattr__(self, 'base_arch', base_arch)
-        gfx_major = int(base_arch[3:-2])
+        gfx_major = int(base_arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
@@ -684,6 +689,12 @@ class HIPBackend(BaseBackend):
         for name, value in options.llvm_fn_attrs:
             kernel_fn.remove_fn_attr(name)
             kernel_fn.add_fn_attr(name, value)
+        if options.wgp_cu_mode == "cu":
+            if knobs.compilation.enable_asan:
+                raise ValueError("wgp_cu_mode='cu' is not supported together with TRITON_ENABLE_ASAN")
+            if any(name == "target-features" for name, _ in options.llvm_fn_attrs):
+                raise ValueError("llvm_fn_attrs cannot override 'target-features' when wgp_cu_mode='cu'")
+            kernel_fn.add_fn_target_feature("+cumode")
 
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
@@ -691,7 +702,7 @@ class HIPBackend(BaseBackend):
         #
         # TODO(tyb0807): Disabled when using MIR swap/dump because the value is
         # not serializable to/from MIR YAML
-        if options.base_arch != "gfx1250" and not (knobs.amd.swap_mir or knobs.amd.dump_mir):
+        if not (knobs.amd.swap_mir or knobs.amd.dump_mir):
             amd.set_all_fn_arg_inreg(kernel_fn)
 
         if knobs.compilation.enable_asan:

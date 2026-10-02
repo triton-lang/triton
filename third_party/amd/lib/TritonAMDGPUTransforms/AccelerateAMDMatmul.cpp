@@ -847,6 +847,21 @@ public:
     return *resultType;
   }
 
+  // Scaled upcasts convert `groupSize` elements along K at a time, so those
+  // elements have to be consecutive in registers within a thread.
+  Attribute getPackedScaledUpcastEncoding(RankedTensorType type, int32_t kDim,
+                                          unsigned groupSize) const {
+    auto blocked = cast<ttg::BlockedEncodingAttr>(type.getEncoding());
+    SmallVector<unsigned> sizePerThread(blocked.getSizePerThread());
+    sizePerThread[kDim] = std::max(sizePerThread[kDim], groupSize);
+    SmallVector<unsigned> order(blocked.getOrder());
+    llvm::erase(order, kDim);
+    order.insert(order.begin(), kDim);
+    return ttg::BlockedEncodingAttr::get(
+        type.getContext(), sizePerThread, blocked.getThreadsPerWarp(),
+        blocked.getWarpsPerCTA(), order, ttg::getCGALayout(blocked));
+  }
+
   TensorValue scaleArg(PatternRewriter &rewriter, triton::DotScaledOp dotOp,
                        int opIdx, FloatType computeType) const override {
     TensorValue v = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
@@ -871,8 +886,15 @@ public:
     auto loc = dotOp.getLoc();
     bool isFp4 = (elemType == ScaleDotElemType::E2M1);
 
-    RankedTensorType resultType =
-        getScaledUpcastResultType(vType, computeType, kDim, isFp4, loc);
+    unsigned groupSize =
+        isFp4 ? 8 : (targetFeatures.supportsCvtPkScalePk8() ? 8 : 4);
+
+    Attribute inputEncoding = getPackedScaledUpcastEncoding(
+        vType, kDim, isFp4 ? groupSize / 2 : groupSize);
+    RankedTensorType resultType = getScaledUpcastResultType(
+        vType.cloneWithEncoding(inputEncoding), computeType, kDim, isFp4, loc);
+    v = cast<TensorValue>(convertAndCastTensor(rewriter, v, inputEncoding,
+                                               vType.getElementType()));
 
     // Block arguments have no defining op.
     if (Operation *scaleOp = scale.getDefiningOp()) {

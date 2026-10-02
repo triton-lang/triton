@@ -12,6 +12,153 @@
 
 namespace mlir {
 
+TEST(Analysis, ReduceCommutativity) {
+  MLIRContext context;
+  context.getOrLoadDialect<triton::TritonDialect>();
+  struct TestCase {
+    StringRef name;
+    StringRef body;
+    bool commutative;
+  };
+  TestCase cases[] = {
+      {"independent sums", R"mlir(
+        %r0 = arith.addf %a0, %b0 : f32
+        %r1 = arith.addf %b1, %a1 : f32
+        tt.reduce.return %r0, %r1 : f32, f32
+      )mlir",
+       true},
+      {"complex multiplication", R"mlir(
+        %rr = arith.mulf %a0, %b0 : f32
+        %ii = arith.mulf %a1, %b1 : f32
+        %ri = arith.mulf %a0, %b1 : f32
+        %ir = arith.mulf %a1, %b0 : f32
+        %real = arith.subf %rr, %ii : f32
+        %imag = arith.addf %ri, %ir : f32
+        tt.reduce.return %real, %imag : f32, f32
+      )mlir",
+       true},
+      {"shared symmetric subexpressions", R"mlir(
+        %s0 = arith.addf %a0, %b0 : f32
+        %s1 = arith.addf %a1, %b1 : f32
+        %product = arith.mulf %s0, %s1 : f32
+        %difference = arith.subf %s0, %s1 : f32
+        tt.reduce.return %product, %difference : f32, f32
+      )mlir",
+       true},
+      {"duplicate constants and opaque capture", R"mlir(
+        %one0 = arith.constant 1.0 : f32
+        %one1 = arith.constant 1.0 : f32
+        %scaled0 = arith.mulf %a0, %c : f32
+        %scaled1 = arith.mulf %b0, %c : f32
+        %biased0 = arith.addf %scaled0, %one0 : f32
+        %biased1 = arith.addf %scaled1, %one1 : f32
+        %r0 = arith.addf %biased0, %biased1 : f32
+        tt.reduce.return %r0, %c : f32, f32
+      )mlir",
+       true},
+      {"output order matters", R"mlir(
+        %r0 = arith.addf %a0, %b1 : f32
+        %r1 = arith.addf %a1, %b0 : f32
+        tt.reduce.return %r0, %r1 : f32, f32
+      )mlir",
+       false},
+      {"noncommutative root", R"mlir(
+        %square0 = arith.mulf %a0, %a0 : f32
+        %square1 = arith.mulf %b0, %b0 : f32
+        %r0 = arith.subf %square0, %square1 : f32
+        %r1 = arith.addf %a1, %b1 : f32
+        tt.reduce.return %r0, %r1 : f32, f32
+      )mlir",
+       false},
+      {"distinct constants", R"mlir(
+        %one = arith.constant 1.0 : f32
+        %two = arith.constant 2.0 : f32
+        %biased0 = arith.addf %a0, %one : f32
+        %biased1 = arith.addf %b0, %two : f32
+        %r0 = arith.addf %biased0, %biased1 : f32
+        %r1 = arith.addf %a1, %b1 : f32
+        tt.reduce.return %r0, %r1 : f32, f32
+      )mlir",
+       false},
+      {"distinct captures", R"mlir(
+        %scaled0 = arith.mulf %a0, %c : f32
+        %scaled1 = arith.mulf %b0, %d : f32
+        %r0 = arith.addf %scaled0, %scaled1 : f32
+        %r1 = arith.addf %a1, %b1 : f32
+        tt.reduce.return %r0, %r1 : f32, f32
+      )mlir",
+       false},
+      {"comparison properties matter", R"mlir(
+        %p0 = arith.cmpf olt, %a0, %c : f32
+        %p1 = arith.cmpf ogt, %b0, %c : f32
+        %p = arith.xori %p0, %p1 : i1
+        %r0 = arith.select %p, %c, %d : f32
+        %r1 = arith.addf %a1, %b1 : f32
+        tt.reduce.return %r0, %r1 : f32, f32
+      )mlir",
+       false},
+      {"result indices matter", R"mlir(
+        %ai = arith.bitcast %a0 : f32 to i32
+        %bi = arith.bitcast %b0 : f32 to i32
+        %three = arith.constant 3 : i32
+        %lo0, %hi0 = arith.mulsi_extended %ai, %three : i32
+        %lo1, %hi1 = arith.mulsi_extended %bi, %three : i32
+        %bits = arith.xori %lo0, %hi1 : i32
+        %r0 = arith.bitcast %bits : i32 to f32
+        %r1 = arith.addf %a1, %b1 : f32
+        tt.reduce.return %r0, %r1 : f32, f32
+      )mlir",
+       false},
+      {"do not reassociate floating point", R"mlir(
+        %s0 = arith.addf %a0, %a1 : f32
+        %s1 = arith.addf %s0, %b0 : f32
+        %r0 = arith.addf %s1, %b1 : f32
+        %r1 = arith.addf %a1, %b1 : f32
+        tt.reduce.return %r0, %r1 : f32, f32
+      )mlir",
+       false},
+      {"side effects are unsupported", R"mlir(
+        tt.store %ptr, %a0 : !tt.ptr<f32>
+        %r0 = arith.addf %a0, %b0 : f32
+        %r1 = arith.addf %a1, %b1 : f32
+        tt.reduce.return %r0, %r1 : f32, f32
+      )mlir",
+       false},
+      {"nested regions are unsupported", R"mlir(
+        %r0 = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+        ^bb0(%lhs: f32, %rhs: f32):
+          %sum = arith.addf %lhs, %rhs : f32
+          tt.reduce.return %sum : f32
+        }) : (tensor<2xf32>) -> f32
+        %r1 = arith.addf %a1, %b1 : f32
+        tt.reduce.return %r0, %r1 : f32, f32
+      )mlir",
+       false},
+  };
+  for (const TestCase &test : cases) {
+    SCOPED_TRACE(test.name.str());
+    std::string source = R"mlir(
+      module {
+        tt.func @test(%x: tensor<2xf32>, %y: tensor<2xf32>,
+                      %c: f32, %d: f32, %ptr: !tt.ptr<f32>) {
+          %r:2 = "tt.reduce"(%x, %y) <{axis = 0 : i32}> ({
+          ^bb0(%a0: f32, %a1: f32, %b0: f32, %b1: f32):
+    )mlir";
+    source += test.body.str();
+    source += R"mlir(
+          }) : (tensor<2xf32>, tensor<2xf32>) -> (f32, f32)
+          tt.return
+        }
+      }
+    )mlir";
+    auto module = parseSourceString<ModuleOp>(source, &context);
+    ASSERT_TRUE(module);
+    auto function = cast<triton::FuncOp>(module->getBody()->front());
+    auto reduce = cast<triton::ReduceOp>(function.getBody().front().front());
+    EXPECT_EQ(reduce.isCommutative(), test.commutative);
+  }
+}
+
 TEST(Analysis, reorder) {
   SmallVector<int> shape({10, 20, 30});
   {
