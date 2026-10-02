@@ -70,10 +70,12 @@ static_assert(static_cast<int>(AtomicScope::MAX_VALUE) == 3);
 // TODO: Change to struct-of-array for better coalescing?
 struct alignas(4) ShadowCell {
   static constexpr int kReadClockSize = 4;
+  static constexpr uint32_t kLockBit = 1u << 16;
+  static constexpr uint32_t kReadCountMask = kLockBit - 1;
   ScalarClock readClocks[kReadClockSize];
   ScalarClock writeClock;
-  uint16_t numReads;
-  uint16_t lock;
+  // Keep the saturating 16-bit read count and lock in one native atomic word.
+  uint32_t readCountAndLock;
 };
 static_assert(sizeof(ShadowCell) == 24);
 static_assert(alignof(ShadowCell) == 4);
