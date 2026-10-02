@@ -40,7 +40,7 @@ namespace py = nanobind;
 
 namespace {
 
-std::string getHostTargetTriple() {
+std::string getDefaultTargetOrProcessTriple() {
   std::string triple = llvm::sys::getDefaultTargetTriple();
   if (triple.empty())
     triple = llvm::sys::getProcessTriple();
@@ -137,7 +137,7 @@ std::string translateHostLLVMIRToASM(llvm::Module &module, bool enableFpFusion,
     timePassesStr.clear();
   }
 
-  module.setTargetTriple(llvm::Triple(getHostTargetTriple()));
+  module.setTargetTriple(llvm::Triple(getDefaultTargetOrProcessTriple()));
   auto machine =
       createHostTargetMachine(module, enableFpFusion, enableFastMath);
   module.setDataLayout(machine->createDataLayout());
@@ -162,7 +162,7 @@ std::string translateHostLLVMIRToASM(llvm::Module &module, bool enableFpFusion,
 
 void setHostTarget(llvm::Module &module) {
   initializeHostTarget();
-  module.setTargetTriple(llvm::Triple(getHostTargetTriple()));
+  module.setTargetTriple(llvm::Triple(getDefaultTargetOrProcessTriple()));
 
   std::string error;
   auto target =
@@ -187,7 +187,7 @@ std::set<std::string> getCPUFeatures() {
   // NEON is mandatory on AArch64. Use it as a safe fallback if LLVM feature
   // detection unexpectedly returns an empty set.
   if (result.empty()) {
-    std::string triple = llvm::sys::getProcessTriple();
+    std::string triple = getDefaultTargetOrProcessTriple();
     std::size_t separator = triple.find('-');
     if (separator != std::string::npos) {
       std::string arch = triple.substr(0, separator);
@@ -202,7 +202,7 @@ std::set<std::string> getCPUFeatures() {
 } // namespace
 
 void init_triton_cpu_llvm(py::module_ &m) {
-  m.def("get_cpu_triple", []() { return llvm::sys::getProcessTriple(); });
+  m.def("get_cpu_triple", &getDefaultTargetOrProcessTriple);
   m.def("get_cpu_name", []() { return llvm::sys::getHostCPUName().str(); });
   m.def("get_cpu_features", &getCPUFeatures);
   m.def("set_host_target",

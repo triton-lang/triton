@@ -1,9 +1,12 @@
 import os
+import platform
+import re
 import pytest
 import torch
 
 import triton
 import triton.language as tl
+from triton._C.libtriton import cpu
 """
 This test is only for the CPU backend.
 """
@@ -84,3 +87,25 @@ def test_vec_cdiv(device):
     arg0 = torch.zeros((16, ), dtype=torch.int32)
     arg1 = torch.empty_like(arg0)
     kernel[(1, )](arg0, arg1)
+
+
+@pytest.mark.cpu
+def test_cpu_triple_matches_compiled_target(device):
+    if device != "cpu":
+        pytest.skip("CPU target triple test requires --device cpu.")
+
+    @triton.jit
+    def kernel(dst):
+        tl.store(dst, 1)
+
+    output = torch.empty((), dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](output)
+    assert output.item() == 1
+
+    triple = cpu.llvm.get_cpu_triple()
+    target = re.search(r'target triple = "([^"]+)"', compiled.asm["llir"])
+    assert target is not None
+    assert target.group(1) == triple
+    machine = platform.machine().lower()
+    expected_arch = {"arm64": "aarch64", "amd64": "x86_64"}.get(machine, machine)
+    assert triple.split("-")[0] == expected_arch
