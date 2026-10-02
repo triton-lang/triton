@@ -281,12 +281,16 @@ class CudaLauncher(object):
 
         self.gsan_enabled = is_enabled(metadata, "gsan")
         self.shared = metadata.shared
-        if self.gsan_enabled:
-            # GSan requires at most one CTA per SM. Reserve shared memory here
-            # so compilation does not depend on the current device or driver.
+        max_occupancy = getattr(metadata, "max_occupancy", None)
+        if max_occupancy is not None:
+            # Resolve device-dependent reservations here, keeping compilation
+            # independent of the current device and driver.
             active_driver = triton.runtime.driver.active
             device = active_driver.get_current_device()
-            self.shared = max(self.shared, active_driver.utils.get_device_properties(device)["max_shared_mem"])
+            properties = active_driver.utils.get_device_properties(device)
+            min_shared = properties["max_shared_mem_per_multiprocessor"] // (max_occupancy + 1) + 1
+            self.shared = max(self.shared, min_shared)
+        if self.gsan_enabled:
             signature["_gsan_globals_ptr"] = "*i8"
             signature["_gsan_launch_table_ptr"] = "*i8"
             signature["_gsan_launch_index"] = "i64"
