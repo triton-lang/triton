@@ -35,26 +35,8 @@ bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   if (hasCrossCTAScratch(op) && isRead)
     return true;
 
-  if (auto load = dyn_cast<ttg::LocalLoadOp>(op)) {
-    return isCrossCTALoadStore(load.getSrc().getType(), load.getType());
-  } else if (auto store = dyn_cast<ttg::LocalStoreOp>(op)) {
-    return isCrossCTALoadStore(store.getDst().getType(),
-                               store.getSrc().getType());
-  } else if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op)) {
-    return alloc.getSrc() &&
-           isCrossCTALoadStore(alloc.getType(), alloc.getSrc().getType());
-  } else if (auto gather = dyn_cast<ttg::LocalGatherOp>(op)) {
-    return isCrossCTAGatherScatter(gather.getSrc().getType(), gather.getType(),
-                                   gather.getAxis());
-  } else if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op)) {
-    return isCrossCTAGatherScatter(scatter.getDst().getType(),
-                                   scatter.getValues().getType(),
-                                   scatter.getAxis());
-  } else if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
-    return isCrossCTAGatherScatter(atomic.getDst().getType(),
-                                   atomic.getValues().getType(),
-                                   atomic.getAxis());
-  }
+  if (auto crossCTA = hasCrossCTASharedAccess(op))
+    return *crossCTA;
 
   if (isa<ttng::CLCTryCancelOp>(op)) {
     return ttg::lookupNumCTAs(op) > 1;
@@ -63,8 +45,6 @@ bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
                                store.getSrc().getType());
   } else if (isa<ttng::TMEMCopyOp>(op)) {
     return ttng::getModuleTwoCTAs(op);
-  } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-    return tma.getMulticast();
   } else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
     return arrive.isMulticast();
   }
