@@ -285,21 +285,6 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       ModuleAxisInfoAnalysis &axisAnalysisPass)
       : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
-  // The source pointers are exchanged between lanes, so the swizzle must keep
-  // every element inside the chunk the warp writes with one load.
-  LogicalResult
-  verifySwizzleInsideDirectToLdsChunk(Operation *op, ArrayRef<int64_t> shape,
-                                      SwizzledSharedEncodingAttr enc,
-                                      unsigned vec) const {
-    if (LLVM::AMD::isSwizzleInsideDirectToLdsChunk(
-            shape, enc, vec * targetInfo.getWarpSize()))
-      return success();
-    return op->emitError()
-           << "cannot lower '" << op->getName()
-           << "' to a direct-to-LDS copy: the swizzle moves elements out of "
-              "the chunk a warp writes with one load";
-  }
-
   // For each load emit the computation to get the lane id offset which holds
   // the source pointers/offsets we need to store to shared memory
   SmallVector<Value>
@@ -824,9 +809,6 @@ struct BufferLoadToLocalOpConversion
                                    maybeSwizzledEnc &&
                                    maybeSwizzledEnc.getMaxPhase() != 1;
     if (requiresSrcPtrSwizzling) {
-      if (failed(verifySwizzleInsideDirectToLdsChunk(op, dstTy.getShape(),
-                                                     maybeSwizzledEnc, vec)))
-        return failure();
       // TODO (alex): this is only correct as long as the lds view is a
       // contiguous block. So this can break if we slice along the 2 minor
       // dimensions.
@@ -991,9 +973,6 @@ struct AsyncCopyGlobalToLocalOpConversion
                                    maybeSwizzledEnc &&
                                    maybeSwizzledEnc.getMaxPhase() != 1;
     if (requiresSrcPtrSwizzling) {
-      if (failed(verifySwizzleInsideDirectToLdsChunk(op, dstTy.getShape(),
-                                                     maybeSwizzledEnc, vec)))
-        return failure();
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
           op->getContext(), maybeSwizzledEnc.getVec(), 1, 1,
           maybeSwizzledEnc.getOrder(), maybeSwizzledEnc.getCGALayout());

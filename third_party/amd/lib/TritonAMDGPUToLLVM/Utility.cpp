@@ -10,7 +10,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
-#include "llvm/Support/MathExtras.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::amdgpu::ISAFamily;
@@ -927,35 +926,6 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
     return false;
   }
 
-  return true;
-}
-
-bool isSwizzleInsideDirectToLdsChunk(ArrayRef<int64_t> shape,
-                                     tt::gpu::SwizzledSharedEncodingAttr enc,
-                                     int64_t chunkSize) {
-  assert(llvm::isPowerOf2_64(chunkSize) &&
-         "chunk size must be a power of two for the low-bit test");
-  if (enc.getMaxPhase() == 1)
-    return true;
-
-  MLIRContext *ctx = enc.getContext();
-  auto flatEnc = tt::gpu::SwizzledSharedEncodingAttr::get(
-      ctx, enc.getVec(), /*perPhase=*/1, /*maxPhase=*/1, enc.getOrder(),
-      enc.getCGALayout());
-  // Maps the offset of an element without swizzling to its swizzled offset.
-  LinearLayout flatToSwizzled =
-      tt::gpu::toLinearLayout(shape, flatEnc)
-          .invertAndCompose(tt::gpu::toLinearLayout(shape, enc));
-
-  // The map is linear over XOR, so it keeps every offset inside its chunk iff
-  // each basis offset only moves within the low log2(chunkSize) bits.
-  auto kOffset = StringAttr::get(ctx, "offset");
-  for (int32_t i = 0; i < flatToSwizzled.getInDimSizeLog2(kOffset); ++i) {
-    int64_t flatOffset = int64_t(1) << i;
-    if ((flatOffset ^ flatToSwizzled.getBasis(kOffset, i, kOffset)) >=
-        chunkSize)
-      return false;
-  }
   return true;
 }
 

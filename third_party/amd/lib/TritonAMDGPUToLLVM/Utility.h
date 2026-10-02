@@ -124,15 +124,6 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
                         ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize);
 
-// Returns true if the swizzle of |enc| keeps every element of a |shape| tile
-// inside its aligned chunk of |chunkSize| consecutive elements. Without scatter
-// support each direct-to-LDS load of a warp writes one such chunk, and the
-// swizzle is applied by exchanging source pointers between the lanes.
-// |chunkSize| must be a power of two.
-bool isSwizzleInsideDirectToLdsChunk(
-    ArrayRef<int64_t> shape, triton::gpu::SwizzledSharedEncodingAttr enc,
-    int64_t chunkSize);
-
 // Check if the result of this tl.dot is used as opA or opB of another tl.dot.
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
 

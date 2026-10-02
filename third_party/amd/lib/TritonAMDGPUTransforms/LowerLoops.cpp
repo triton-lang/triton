@@ -3,7 +3,6 @@
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
-#include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/CGAEncodingAttr.h"
@@ -377,38 +376,65 @@ bool hasEnoughCTABytesForDirectToLds(tt::LoadOp loadOp,
   return ctaTileBits >= 32 * targetInfo.getWarpSize();
 }
 
-// Return whether the lane shuffle that applies the shared-memory swizzle to a
-// direct-to-LDS copy of srcTy stays inside the warp.
+// Return whether the shared-memory swizzle maps every register and lane of
+// srcTy to a source lane within the same warp.
 static bool swizzlesInsideWarp(RankedTensorType srcTy,
-                               ttg::SwizzledSharedEncodingAttr enc,
-                               unsigned loadVec,
-                               const triton::AMD::TargetInfo &targetInfo) {
+                               ttg::SwizzledSharedEncodingAttr enc) {
   // maxPhase == 1 means no swizzling, so `requiresSrcPtrSwizzling` is false in
   // the lowering and there is no lane shuffle.
   if (!enc || enc.getMaxPhase() == 1)
     return true;
 
+  MLIRContext *ctx = srcTy.getContext();
   auto shape = srcTy.getShape();
 
+  // Compare against an otherwise identical unswizzled layout to isolate the
+  // lane displacement introduced by the candidate swizzle.
+  auto flatEnc = ttg::SwizzledSharedEncodingAttr::get(
+      ctx, enc.getVec(), /*perPhase=*/1, /*maxPhase=*/1, enc.getOrder(),
+      enc.getCGALayout());
+
   auto regLayout = triton::gpu::toLinearLayout(srcTy);
-  auto regToSharedSwizzled =
-      regLayout.invertAndCompose(triton::gpu::toLinearLayout(shape, enc));
+  auto sharedSwizz = triton::gpu::toLinearLayout(shape, enc);
+  auto sharedFlat = triton::gpu::toLinearLayout(shape, flatEnc);
 
-  // The lowering loads the width CoalesceAsyncCopy picks, loadVec capped by the
-  // register-to-shared run and by the widths the target can write to LDS.
-  int64_t vec = triton::AMD::fitToValidDirectToLdsVecSize(
-      std::min<unsigned>(loadVec, regToSharedSwizzled.getNumConsecutiveInOut()),
-      srcTy.getElementTypeBitWidth(), targetInfo);
-  // No supported width means the load cannot go direct-to-LDS at all, so the
-  // shuffle this guards against is never emitted.
-  if (vec == 0)
-    return true;
+  auto regToSharedSwizzled = regLayout.invertAndCompose(sharedSwizz);
+  auto regToSharedFlat = regLayout.invertAndCompose(sharedFlat);
 
-  // CoalesceAsyncCopy may still rewrite srcTy, so check the chunk each warp
-  // writes rather than the lanes of the current layout.
-  int64_t lanes =
-      regLayout.getInDimSize(StringAttr::get(srcTy.getContext(), "lane"));
-  return LLVM::AMD::isSwizzleInsideDirectToLdsChunk(shape, enc, lanes * vec);
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto kBlock = StringAttr::get(ctx, "block");
+
+  // Mirror emitSwizzledLaneOffsets, which normalizes the swizzled-vs-flat
+  // offset delta by the vector size to turn it into a lane offset.
+  int64_t vec = enc.getVec();
+  // Enumerate lanes over the layout's own lane dimension: apply() silently
+  // ignores index bits above the in-dim size, so an out-of-range lane would
+  // alias onto a smaller one and yield a meaningless offset.
+  int64_t warpSize = regToSharedSwizzled.getInDimSize(kLane);
+  int64_t numRegs = regToSharedSwizzled.getInDimSize(kRegister);
+
+  for (int32_t regId = 0; regId < numRegs; regId += vec) {
+    for (int64_t lane = 0; lane < warpSize; ++lane) {
+      int32_t swizzledOff = regToSharedSwizzled
+                                .apply({{kRegister, regId},
+                                        {kLane, static_cast<int32_t>(lane)},
+                                        {kWarp, 0},
+                                        {kBlock, 0}})[0]
+                                .second;
+      int32_t flatOff = regToSharedFlat
+                            .apply({{kRegister, regId},
+                                    {kLane, static_cast<int32_t>(lane)},
+                                    {kWarp, 0},
+                                    {kBlock, 0}})[0]
+                            .second;
+      int64_t shuffledLane = lane + (swizzledOff - flatOff) / vec;
+      if (shuffledLane < 0 || shuffledLane >= warpSize)
+        return false;
+    }
+  }
+  return true;
 }
 
 // If a swizzled shared encoding would make the GFX9 direct-to-LDS lane shuffle
@@ -416,9 +442,8 @@ static bool swizzlesInsideWarp(RankedTensorType srcTy,
 // maxPhase monotonically reduces the swizzle reach, and maxPhase == 1 always
 // passes, so the search terminates on the largest safe value.
 static ttg::SharedEncodingTrait
-clampSwizzleForDirectToLds(RankedTensorType srcTy, ttg::SharedEncodingTrait enc,
-                           unsigned loadVec,
-                           const triton::AMD::TargetInfo &targetInfo) {
+clampSwizzleForDirectToLds(RankedTensorType srcTy,
+                           ttg::SharedEncodingTrait enc) {
   auto swizz = dyn_cast_or_null<ttg::SwizzledSharedEncodingAttr>(enc);
   if (!swizz)
     return enc;
@@ -430,7 +455,7 @@ clampSwizzleForDirectToLds(RankedTensorType srcTy, ttg::SharedEncodingTrait enc,
             : ttg::SwizzledSharedEncodingAttr::get(
                   swizz.getContext(), swizz.getVec(), swizz.getPerPhase(),
                   maxPhase, swizz.getOrder(), swizz.getCGALayout());
-    if (swizzlesInsideWarp(srcTy, candidate, loadVec, targetInfo)) {
+    if (swizzlesInsideWarp(srcTy, candidate)) {
       if (candidate != swizz)
         LDBG("Clamped direct-to-LDS swizzle maxPhase "
              << swizz.getMaxPhase() << " -> " << maxPhase
@@ -554,30 +579,14 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
         loadOp && useAsyncCopy &&
         canBeConvertedToAsyncLoad(numBuffers, loadOp, sharedEncoding,
                                   axisInfoAnalysis, targetInfo);
-    unsigned asyncCopyVec = 1;
-    if (canUseAsyncCopy) {
-      asyncCopyVec = axisInfoAnalysis.getContiguity(loadOp.getPtr());
-      if (auto mask = loadOp.getMask())
-        asyncCopyVec = std::min<unsigned>(
-            asyncCopyVec, axisInfoAnalysis.getMaskAlignment(mask));
-    }
     // On non-scatter targets, direct-to-LDS realizes the shared-memory swizzle
     // by shuffling source pointers between lanes, which must stay in one warp.
     if (canUseAsyncCopy && !targetInfo.supportsDirectToLdsScatter()) {
-      auto clampedEncoding = clampSwizzleForDirectToLds(
-          ty, sharedEncoding, asyncCopyVec, targetInfo);
-      // A memdesc user pins the unclamped encoding and the pipeliner cannot
-      // stage a conversion between the two, so stream copy such a load.
-      bool pinned = clampedEncoding != sharedEncoding &&
-                    llvm::any_of(loadOp->getUsers(), [](Operation *user) {
-                      return user->getNumResults() == 1 &&
-                             isa<ttg::MemDescType>(user->getResultTypes()[0]);
-                    });
+      auto clampedEncoding = clampSwizzleForDirectToLds(ty, sharedEncoding);
       // Clamping changes the shared layout used by the final eligibility
       // check, so verify that the load remains convertible.
-      canUseAsyncCopy = !pinned && canBeConvertedToAsyncLoad(
-                                       numBuffers, loadOp, clampedEncoding,
-                                       axisInfoAnalysis, targetInfo);
+      canUseAsyncCopy = canBeConvertedToAsyncLoad(
+          numBuffers, loadOp, clampedEncoding, axisInfoAnalysis, targetInfo);
       if (canUseAsyncCopy)
         sharedEncoding = clampedEncoding;
     }
@@ -600,8 +609,10 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     }
 
     if (canUseAsyncCopy) {
-      loadToStreamOp[loadOp] =
-          createAsyncCopy(loadOp, alloc, extractIdx, asyncCopyVec);
+      unsigned vec = axisInfoAnalysis.getContiguity(loadOp.getPtr());
+      if (auto mask = loadOp.getMask())
+        vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+      loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx, vec);
       continue;
     }
 
