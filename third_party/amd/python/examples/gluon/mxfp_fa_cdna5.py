@@ -26,6 +26,12 @@ from triton.experimental.gluon.language.amd.cdna5 import buffer_load, buffer_sto
 from triton.experimental.gluon.language.amd.cdna5 import get_wmma_scale_layout
 from triton.experimental.gluon.language.amd.cdna5 import cluster
 
+
+def skip_if_gfx1250_strict_wmma():
+    if triton.runtime.driver.active.get_current_target().arch == "gfx1250-strict":
+        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
+
+
 # ===-----------------------------------------------------------------------===#
 # Kernel Utilities
 # ===-----------------------------------------------------------------------===#
@@ -3163,6 +3169,7 @@ def get_fwd_test_cases(block_scaling: bool):
                          get_fwd_test_cases(True))
 def test_block_scaled_attn_fwd(q_type, kv_type, batch, seqlen_q, seqlen_k, num_q_heads, num_k_heads, head_sz,  #
                                pipelined, pingpong):
+    skip_if_gfx1250_strict_wmma()
     torch.manual_seed(0)
 
     q, q_ref = create_operand(q_type, batch, seqlen_q, num_q_heads, head_sz)
@@ -3241,6 +3248,7 @@ def test_block_scaled_attn_fwd(q_type, kv_type, batch, seqlen_q, seqlen_k, num_q
                          get_fwd_test_cases(False))
 def test_global_scaled_attn_fwd(q_type, kv_type, batch, seqlen_q, seqlen_k, num_q_heads, num_k_heads, head_sz,  #
                                 pipelined, pingpong):
+    skip_if_gfx1250_strict_wmma()
     torch.manual_seed(0)
 
     q, q_ref = create_operand(q_type, batch, seqlen_q, num_q_heads, head_sz)
