@@ -252,8 +252,6 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape);
 // If shape is empty, it means no shared memory is needed.
 unsigned getNumScratchElements(ArrayRef<unsigned> shape);
 
-bool supportWMMA(triton::DotOp op);
-
 bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(triton::DotOpInterface op, int version);
@@ -270,10 +268,6 @@ bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
 
 // The conversion requires data exchange through shared memory.
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);
-
-// TODO: Move utility functions that belong to ConvertLayoutOp to class
-// ConvertLayoutOpHelper in the future
-bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
 
 /// Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();

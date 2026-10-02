@@ -487,24 +487,6 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   llvm_unreachable("Unimplemented usage of getCTASplitNum");
 }
 
-SmallVector<unsigned> getCTAOrder(Attribute layout) {
-  auto kBlock = StringAttr::get(layout.getContext(), "block");
-  if (auto linearEnc = dyn_cast<LinearEncodingTrait>(layout)) {
-    return linearEnc.orderPerDim(kBlock, linearEnc.getOrder());
-  } else if (auto sharedLinearLayout =
-                 dyn_cast<SharedLinearEncodingAttr>(layout)) {
-    return sharedLinearLayout.orderPerDim(kBlock,
-                                          sharedLinearLayout.getOrder());
-  } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
-    if (auto slicedLinear = getSlicedLinearEncoding(sliceLayout))
-      return slicedLinear.orderPerDim(kBlock, slicedLinear.getOrder());
-    return cast<LayoutEncodingTrait>(sliceLayout).getCGALayout().getCTAOrder();
-  } else if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout)) {
-    return ttgLayout.getCGALayout().getCTAOrder();
-  }
-  llvm_unreachable("Unimplemented usage of getCTAOrder");
-}
-
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape) {
   unsigned rank = shape.size();
