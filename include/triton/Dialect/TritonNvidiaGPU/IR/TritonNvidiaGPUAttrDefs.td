@@ -9,6 +9,27 @@ include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 
+def TTNG_RequestLayoutAttr
+    : AttrDef<TritonNvidiaGPU_Dialect, "RequestLayout"> {
+  let mnemonic = "request_layout";
+  let description = [{
+    Byte stride and field offsets of a fabric host-queue request. Fields must
+    be naturally aligned, fit within the stride, and not overlap.
+  }];
+  let parameters = (ins
+    "int32_t":$stride,
+    "int32_t":$ready_offset,
+    "int32_t":$type_offset,
+    "int32_t":$handle_offset,
+    "int32_t":$src_offset,
+    "int32_t":$dst_offset,
+    "int32_t":$length_offset,
+    "int32_t":$bypass_ar_offset
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
+
 class TTNG_DefaultCacheModifierParameter
     : EnumParameter<TT_CacheModifierAttr> {
   let defaultValue = "::mlir::triton::CacheModifier::NONE";

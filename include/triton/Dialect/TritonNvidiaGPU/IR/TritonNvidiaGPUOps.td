@@ -49,6 +49,86 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
+// Unknown memory effects preserve ordering of payload accesses across these
+// block-wide synchronization operations.
+class TTNG_CommunicationOp<string mnemonic> : TTNG_Op<mnemonic> {
+  let results = (outs I1:$result);
+  let assemblyFormat = "operands attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
+def TTNG_CommunicationWaitOp : TTNG_CommunicationOp<"comm_wait"> {
+  let summary = "Wait for a fabric communication counter or an abort";
+  let description = [{
+    The block waits for `count` receives or acknowledgments, or for all submitted
+    sends. Returns false on abort. A successful receive or acknowledgment wait
+    advances `cursor` when `consume` is true. A successful receive wait acquires
+    the payload. `monitor_ptr` records the wait target.
+    A zero-count receive or acknowledgment wait only checks abort and
+    synchronizes the block; it neither acquires payload nor advances `cursor`.
+    It still publishes the target when `monitor` is true.
+    A consuming wait exclusively owns cursor updates from target calculation
+    until it returns. Non-consuming observers may run concurrently.
+    With `blocking` false, check readiness once, returning false if pending or
+    aborted without acquiring the payload or advancing `cursor`.
+    With `monitor` true, publish the target to `monitor_ptr` before checking
+    abort or readiness. Otherwise only blocking waits publish, on their slow
+    path. Concurrent observers must coordinate their monitoring targets.
+    The caller must provide a nonnegative count and aligned global pointers.
+    Notification, send, and completion counters and wait targets must remain
+    below 2**63 to fit TW's signed int64 bookkeeping. Completion starts at -1;
+    other counters are nonnegative. These bounds apply over the registration
+    lifetime, not just one kernel launch. Counter rollover is unsupported.
+    For a send wait, callers must complete and synchronize submissions
+    sharing `cursor` before waiting, and exclude new submissions until the
+    wait and source updates finish.
+  }];
+  let arguments = (ins
+    TT_PtrOf<[I64]>:$counter, TT_PtrOf<[I64]>:$cursor,
+    TT_PtrOf<[I64]>:$aborted, TT_PtrOf<[I64]>:$monitor_ptr, I64:$count,
+    TTNG_CommunicationWaitKindAttr:$kind, BoolAttr:$consume, I64Attr:$aborted_value,
+    DefaultValuedAttr<BoolAttr, "true">:$blocking,
+    DefaultValuedAttr<BoolAttr, "false">:$monitor
+  );
+  let assemblyFormat = "$kind operands attr-dict `:` functional-type(operands, results)";
+  let hasCanonicalizeMethod = 1;
+}
+
+def TTNG_CommunicationSubmitOp : TTNG_CommunicationOp<"comm_submit"> {
+  let summary = "Publish a fabric send or acknowledgment to the host queue";
+  let description = [{
+    The block publishes one request and returns false if aborted before
+    reserving a queue slot. A reserved slot is always published. Sends advance
+    `send_count`; acknowledgments do not. Publication orders preceding payload
+    accesses. The caller provides aligned global pointers, a compile-time
+    capacity of at least two, and nonnegative byte offsets and length within the
+    registered buffers.
+    Queue positions are monotonically increasing uint64 values, initialized
+    with synchronization; they must not roll over or reset while in use.
+    The queue has one host consumer, which releases `head` after reading each
+    request and clearing its ready field. All GPU producers share one device
+    and memory synchronization domain. Advancing `cached_head` must release
+    the corresponding system-acquired host progress.
+    Incrementing `send_count` must not overflow int64.
+    `request_layout` specifies the byte stride and named field offsets of each
+    queue request.
+  }];
+  let arguments = (ins
+    TT_PtrOf<[I64]>:$head, TT_PtrOf<[I64]>:$tail,
+    TT_PtrOf<[I64]>:$cached_head, TT_PtrOf<[I8]>:$buffer,
+    I64Attr:$capacity, I32:$handle, I64:$src_offset, I64:$dst_offset, I64:$nbytes,
+    TT_PtrOf<[I64]>:$send_count, TT_PtrOf<[I64]>:$aborted,
+    BoolAttr:$is_send, TTNG_RequestLayoutAttr:$request_layout,
+    I32Attr:$request_type, I32Attr:$bypass_value,
+    I64Attr:$ready_value, I64Attr:$aborted_value
+  );
+}
+
+def TTNG_CommunicationIsAbortedOp : TTNG_CommunicationOp<"comm_is_aborted"> {
+  let summary = "Check the fabric abort flag with system acquire ordering";
+  let arguments = (ins TT_PtrOf<[I64]>:$aborted, I64Attr:$aborted_value);
+}
+
 def TTNG_PackedArithOperandElement : AnyTypeOf<[
   I8, F8E8M0FNU, F8E4M3FN, F8E5M2, F16, BF16, F32
 ], "packed arithmetic operand element">;
