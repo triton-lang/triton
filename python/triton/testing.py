@@ -768,7 +768,7 @@ def get_max_simd_tflops(dtype, clock_rate, device=None):
         device = torch.cuda.current_device()
 
     num_subcores = driver.active.utils.get_device_properties(device)["multiprocessor_count"] * 4
-    capability = torch.cuda.get_device_capability()
+    capability = torch.cuda.get_device_capability(device)
     if capability[0] < 8:
         if dtype == torch.float32:
             ops_per_sub_core = 32  # 2*16

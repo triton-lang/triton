@@ -72,11 +72,23 @@ def verify_mir_content(mir_content, kernel_name):
 
 
 def _find_llc():
+    """Locate an llc to cross-check the DAG against.
+
+    Prefer the LLVM Triton itself was built against. A stray system llc can be
+    many major versions away from it -- old enough not to know the target we
+    are compiling for -- and the DAG it prints would not be comparable, so it
+    is only a last resort. The prebuilt package Triton downloads carries a
+    matching llc, which is what makes this work on a bare CI image.
+    """
+    import glob
     import os
     import shutil
+    llvm_pkgs = os.path.join(os.environ.get("TRITON_HOME", os.path.expanduser("~/")), ".triton", "llvm", "*", "bin",
+                             "llc")
     for cand in (
             os.path.join(os.environ.get("LLVM_SYSPATH", ""), "bin", "llc"),
             os.path.join(os.environ.get("LLVM_BUILD_DIR", ""), "bin", "llc"),
+            *sorted(glob.glob(llvm_pkgs)),
             shutil.which("llc") or "",
     ):
         if cand and os.path.isfile(cand):
