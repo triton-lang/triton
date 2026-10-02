@@ -804,7 +804,8 @@ class tuple_type(base_type):
         for ty in self.types:
             value, cursor = ty._unflatten_ir(handles, cursor)
             values.append(value)
-        return tuple(values, self), cursor
+        # [Correctness] Custom arguments can reconstruct a different internal value type.
+        return tuple(values, _type_for_tuple_values(values, self.fields)), cursor
 
     def mangle(self):
         return 'T' + '_'.join(ty.mangle() for ty in self.types) + 'T'
