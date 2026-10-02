@@ -1,12 +1,33 @@
 from ..runtime.jit import jit
 from . import core as tl
-from . import math
+from . import math, target_info
 
 N_ROUNDS_DEFAULT = tl.constexpr(10)  # Default number of rounds for philox
 
 # -------------------
 # randint
 # -------------------
+
+
+@jit
+def _philox_mulhilo(a, b):
+    b = tl.cast(b, a.dtype)
+    if a.dtype == tl.uint32 and target_info.is_cuda():
+        # Keep both halves together: ptxas can miss combining separate multiplies
+        # when other round operations are scheduled between them.
+        return tl.inline_asm_elementwise(
+            """{
+                .reg .b64 product;
+                mul.wide.u32 product, $2, $3;
+                mov.b64 {$0, $1}, product;
+            }""",
+            constraints="=r,=r,r,r",
+            args=[a, b],
+            dtype=(tl.uint32, tl.uint32),
+            is_pure=True,
+            pack=1,
+        )
+    return tl.mul(a, b, sanitize_overflow=False), math.umulhi(a, b)
 
 
 @jit
@@ -31,11 +52,9 @@ def philox_impl(c0, c1, c2, c3, k0, k1, n_rounds: tl.constexpr = N_ROUNDS_DEFAUL
         # update random state
         A = PHILOX_ROUND_A
         B = PHILOX_ROUND_B
-        _c0, _c2 = c0, c2
-        c0 = math.umulhi(B, _c2) ^ c1 ^ k0
-        c2 = math.umulhi(A, _c0) ^ c3 ^ k1
-        c1 = tl.mul(B, _c2, sanitize_overflow=False)
-        c3 = tl.mul(A, _c0, sanitize_overflow=False)
+        lo0, hi0 = _philox_mulhilo(c0, A)
+        lo2, hi2 = _philox_mulhilo(c2, B)
+        c0, c1, c2, c3 = hi2 ^ c1 ^ k0, lo2, hi0 ^ c3 ^ k1, lo0
         # raise key
         k0 = tl.add(k0, PHILOX_KEY_A, sanitize_overflow=False)
         k1 = tl.add(k1, PHILOX_KEY_B, sanitize_overflow=False)
