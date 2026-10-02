@@ -71,6 +71,44 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+@pytest.mark.parametrize("seed_type, dtype", [("u32", tl.uint32), ("u64", tl.uint32), ("u64", tl.uint64)])
+def test_umulhi_truncated_input(seed_type, dtype):
+    from triton._C.libtriton import ir
+    from triton.compiler.compiler import make_backend
+
+    @triton.jit
+    def kernel(seed, out, DTYPE: tl.constexpr):
+        x = seed.to(DTYPE)
+        tl.store(out, tl.umulhi(x, x))
+
+    target = GPUTarget("cuda", 100, 32)
+    backend = make_backend(target)
+    options = backend.parse_options({"num_warps": 1, "ptx_version": 94})
+    bits = dtype.primitive_bitwidth
+    source = ASTSource(kernel, signature={"seed": seed_type, "out": f"*u{bits}", "DTYPE": "constexpr"},
+                       constexprs={"DTYPE": dtype})
+    context = ir.context()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
+    module = source.make_ir(target, options, backend.get_codegen_implementation(options), backend.get_module_map(),
+                            context)
+    metadata = {"target": target, **vars(options)}
+    stages = {}
+    backend.add_stages(stages, options, source.language)
+    # Stop at PTX so this regression test needs neither a GPU nor ptxas.
+    for kind, stage in stages.items():
+        module = stage(module, metadata)
+        if kind == "llir":
+            intrinsic = "ui" if bits == 32 else "ull"
+            assert f"@llvm.nvvm.mulhi.{intrinsic}" in str(module)
+        if kind == "ptx":
+            assert f"mul.hi.u{bits}" in module
+            assert "mul.lo." not in module
+            break
+    else:
+        pytest.fail("PTX stage not found")
+
+
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
 def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
     packed_type = f"{element_type}x2"
