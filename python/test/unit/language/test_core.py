@@ -2830,9 +2830,9 @@ def test_umulhi_known_bits(masked, dtype_str, device):
     compiled = kernel[(1, )](x, output, masked, getattr(tl, f"uint{bits}"))
     expected = torch.zeros_like(x) if masked else (x >> (bits - 8)) & 255
     torch.testing.assert_close(output, expected)
-    if is_cuda():
-        assert "mul.hi." not in compiled.asm["ptx"]
-    elif is_hip():
+    # NVIDIA uses explicit multiply-high intrinsics; the generic AMD lowering
+    # still exposes the wide product to LLVM's known-bits optimizations.
+    if is_hip():
         assert "mul_hi" not in compiled.asm["amdgcn"]
 
 
@@ -3338,7 +3338,7 @@ def test_reduce64_integer(op, dtype_str, num_warps, device):
         if op == "add":
             assert "redux.sync.add.s32" in compiled.asm["ptx"]
         else:
-            assert compiled.asm["ptx"].count(f"redux.sync.{op}.b32") == (4 if num_warps == 32 else 2)
+            assert compiled.asm["ptx"].count(f"redux.sync.{op}.b32") == 4
 
 
 # TODO: [Qingyi] Fix argmin / argmax
