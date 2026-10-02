@@ -48,6 +48,11 @@ namespace py = nanobind;
 
 namespace {
 llvm::Triple getAMDTargetTriple(const std::string &arch) {
+  // Core LLVM has no gfx1250-strict processor. Returning the triple string
+  // does not build a target machine; callers that do must pass a base triple.
+  if (arch == "gfx1250-strict")
+    return llvm::Triple("amdgpu12.50s-amd-amdhsa");
+
   llvm::AMDGPU::GPUKind gpuKind = llvm::AMDGPU::parseArchAMDGCN(arch);
   llvm::Triple::SubArchType subArch = llvm::AMDGPU::getSubArch(gpuKind);
   if (subArch == llvm::Triple::NoSubArch)
@@ -388,6 +393,12 @@ void init_triton_amd(py::module_ &m) {
           module->setTargetTriple(getAMDTargetTriple(arch));
         });
 
+  // Set a triple string without core LLVM
+  m.def("set_target_triple",
+        [](llvm::Module *module, const std::string &triple) {
+          module->setTargetTriple(llvm::Triple(triple));
+        });
+
   // Set target architecture ISA version
   m.def("set_isa_version", [](llvm::Module *module, const std::string &arch) {
     llvm::AMDGPU::IsaVersion version = llvm::AMDGPU::getIsaVersion(arch);
@@ -452,11 +463,13 @@ void init_triton_amd(py::module_ &m) {
   });
 
   m.def("assemble_amdgcn", [](const std::string &assembly,
+                              const std::string &tripleStr,
                               const std::string &arch,
                               const std::string &features) {
     std::string error;
 
-    llvm::Triple triple = getAMDTargetTriple(arch);
+    // tripleStr must be one this LLVM can assemble. amdgpu12.50s is not.
+    llvm::Triple triple(tripleStr);
     const llvm::Target *target =
         llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target)
@@ -510,9 +523,12 @@ void init_triton_amd(py::module_ &m) {
     return py::bytes(result.data(), result.size());
   });
 
-  m.def("has_architected_sgprs", [](const std::string &arch) {
+  m.def("has_architected_sgprs", [](const std::string &tripleStr,
+                                     const std::string &arch) {
     std::string error;
-    llvm::Triple triple = getAMDTargetTriple(arch);
+    // tripleStr must be one this LLVM can build a subtarget for. The strict
+    // triple is amdgpu12.50s, which aborts here; pass the base triple instead.
+    llvm::Triple triple(tripleStr);
     const llvm::Target *target =
         llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target)

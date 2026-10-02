@@ -114,3 +114,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // STRICT-LABEL: llvm.func @scaled_upcast_fp8_per_element_scale
+  // STRICT-NOT: cvt.scale.pk8
+  // STRICT-COUNT-8: llvm.intr.umax
+  // STRICT-NOT: llvm.intr.umax
+  // STRICT: llvm.return
+  tt.func public @scaled_upcast_fp8_per_element_scale(%arg0: tensor<128x16xf8E5M2, #blocked>, %arg1: tensor<128x16xi8, #blocked>, %arg2: tensor<128x16x!tt.ptr<bf16>, #blocked>) {
+    %0 = amdg.scaled_upcast_fp8 %arg0 scale %arg1 : tensor<128x16xf8E5M2, #blocked>, tensor<128x16xi8, #blocked> -> tensor<128x16xbf16, #blocked>
+    tt.store %arg2, %0 : tensor<128x16x!tt.ptr<bf16>, #blocked>
+    tt.return
+  }
+}

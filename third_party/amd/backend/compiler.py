@@ -204,10 +204,12 @@ def is_async_copy_enabled(base_arch):
     return (base_arch in ["gfx950", "gfx1250"]) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
 
 
-def is_coexec_scheduler_enabled(base_arch):
+def is_coexec_scheduler_enabled(arch):
     if knobs.amd.use_coexec_scheduler is not None:
         return knobs.amd.use_coexec_scheduler
-    return base_arch == "gfx1250"
+    # Not on gfx1250-strict: lacking most WMMA instructions, its dots become large FMA kernels whose register
+    # allocation takes minutes under the coexec schedule.
+    return arch == "gfx1250"
 
 
 def is_expert_scheduling_enabled(base_arch):
@@ -621,12 +623,18 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         core_llvm_arch = options.base_arch
-        target_triple = amd.get_target_triple(core_llvm_arch)
-        amd.attach_target_triple(llvm_mod, core_llvm_arch)
+        # target_triple is the code generator's triple, including gfx1250-strict.
+        # Core LLVM aborts if a target machine is built for amdgpu12.50s, so
+        # every core-LLVM target machine (the module triple during
+        # optimize_module, the data layout, and the architected-SGPR check)
+        # uses layout_triple. The strict triple is stamped on afterwards.
+        target_triple = get_amd_codegen_target_triple(options.arch)
+        layout_triple = amd.get_target_triple(core_llvm_arch)
+        amd.set_target_triple(llvm_mod, layout_triple)
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
-        llvm.attach_datalayout(llvm_mod, target_triple, core_llvm_arch, target_features, get_llvm_flags(options.arch))
+        llvm.attach_datalayout(llvm_mod, layout_triple, core_llvm_arch, target_features, get_llvm_flags(options.arch))
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -663,7 +671,8 @@ class HIPBackend(BaseBackend):
         if options.waves_per_eu != 0:
             kernel_fn.add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu},{options.waves_per_eu}")
 
-        if is_coexec_scheduler_enabled(options.base_arch) and options.num_warps <= 4:
+        # disabled for gfx1250-strict due to slow compilation
+        if is_coexec_scheduler_enabled(options.arch) and options.num_warps <= 4:
             kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
 
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
@@ -707,12 +716,14 @@ class HIPBackend(BaseBackend):
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, core_llvm_arch, '', get_llvm_flags(options.arch),
                              options.enable_fp_fusion, disable_vector_combine=True)
+        if target_triple != layout_triple:
+            amd.set_target_triple(llvm_mod, target_triple)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
         # optimize_module from calls to @llvm.amdgcn.workgroup.id.x/y/z(). We cannot rely on this because a
         # dispatch dimensions might be used even if there is no program_id() call for it.
-        if amd.has_architected_sgprs(core_llvm_arch):
+        if amd.has_architected_sgprs(layout_triple, core_llvm_arch):
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-x")
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-y")
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-z")

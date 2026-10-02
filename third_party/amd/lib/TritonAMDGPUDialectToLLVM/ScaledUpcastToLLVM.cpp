@@ -328,20 +328,16 @@ struct ScaledUpcastFp8OpPattern
       // Software emulation: convert fp8 to f32, then multiply by scale.
       bool isE4M3FN = isa<Float8E4M3FNType>(fp8ElemType);
       bool toFp16 = elemType.isF16();
-      for (size_t i = 0; i < inputVals.size(); i += 4) {
+      for (size_t i = 0; i < inputVals.size(); ++i) {
         Value scaleF32 = scaleToF32(rewriter, loc, scaleVals[i], preShifted);
-
-        for (int j : llvm::seq(4)) {
-          Value f32Val =
-              convertF8ToF32_SW(rewriter, loc, inputVals[i + j], isE4M3FN);
-          Value mulF32 = b.fmul(f32Val, scaleF32);
-          if (toFp16) {
-            results.push_back(b.fptrunc(f16_ty, mulF32));
-          } else {
-            Value mulI16 = b.trunc(
-                i16_ty, b.lshr(b.bitcast(mulF32, i32_ty), b.i32_val(16)));
-            results.push_back(b.bitcast(mulI16, bf16_ty));
-          }
+        Value f32Val = convertF8ToF32_SW(rewriter, loc, inputVals[i], isE4M3FN);
+        Value mulF32 = b.fmul(f32Val, scaleF32);
+        if (toFp16) {
+          results.push_back(b.fptrunc(f16_ty, mulF32));
+        } else {
+          Value mulI16 =
+              b.trunc(i16_ty, b.lshr(b.bitcast(mulF32, i32_ty), b.i32_val(16)));
+          results.push_back(b.bitcast(mulI16, bf16_ty));
         }
       }
     }

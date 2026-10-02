@@ -101,6 +101,8 @@ def get_test_gemm_shapes():
 def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
+    if get_current_target().arch == "gfx1250-strict" and not (a_dtype == "float32" and k_dim == 4):
+        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
 
     a_dtype = str_to_triton_dtype(a_dtype).name
     b_dtype = str_to_triton_dtype(b_dtype).name
@@ -580,6 +582,7 @@ def gemm_3d_kernel(a_ptr, b_ptr, c_ptr,  #
 ])
 @pytest.mark.parametrize("BLOCK_B,BLOCK_M,BLOCK_N,BLOCK_K", [(4, 32, 32, 32)])
 def test_compile_gemm_3d(a_dtype, b_dtype, k_dim, BLOCK_B, BLOCK_M, BLOCK_N, BLOCK_K):
+    skip_if_gfx1250_strict_wmma()
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
 
@@ -831,6 +834,7 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.parametrize("RESOLVE_PARTITION_CONFLICTS", [True, False])
 def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, ASYNC_LOAD_TYPE, B_K_CONTIG,
                                       RESOLVE_PARTITION_CONFLICTS):
+    skip_if_gfx1250_strict_wmma()
     if RESOLVE_PARTITION_CONFLICTS:
         if ASYNC_LOAD_TYPE == "ASYNC_COPY":
             pytest.skip("AsyncCopy is not supported with partition shared layouts")
@@ -1038,6 +1042,7 @@ def gemm_async_kernel(a_ptr, b_ptr, c_ptr,  #
 ])
 @pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "TDM"])
 def test_compile_gemm_async(BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim, ASYNC_LOAD_TYPE):
+    skip_if_gfx1250_strict_wmma()
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
 
@@ -2685,6 +2690,7 @@ def mxgemm_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, str
 @pytest.mark.parametrize("DTYPE_A", ["float8_e5m2", "float8_e4m3", "float4"])
 @pytest.mark.parametrize("DTYPE_B", ["float8_e5m2", "float8_e4m3", "float4"])
 def test_compile_mxgemm(BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B):
+    skip_if_gfx1250_strict_wmma()
     scale_block = 32
 
     triton_dtype_converter = {'float8_e5m2': "fp8e5", "float8_e4m3": "fp8e4nv", "float4": "u8"}
@@ -3039,6 +3045,7 @@ def scaled_wmma_scale_preshuffle(a_base, stride_am, stride_ak, a_scale, b_base, 
 @pytest.mark.parametrize("type_b", ["e5m2", "e2m1", "e4m3"])
 @pytest.mark.parametrize("TRANSPOSED_WMMA", [True, False])
 def test_compile_wmma_scale_preshuffle(M, N, K, type_a, type_b, TRANSPOSED_WMMA):
+    skip_if_gfx1250_strict_wmma()
     dtype_converter = {'e5m2': "fp8e5", "e4m3": "fp8e4nv", "e2m1": "u8"}
 
     signature = {
