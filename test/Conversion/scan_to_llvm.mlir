@@ -445,6 +445,42 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
   tt.return %a_out, %b_out : tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>
 }
 
+
+// After conversion, each of four logical lanes owns four consecutive values.
+// Two scan rounds compute both the inclusive total and the exclusive carry:
+// there must be no third indexed shuffle to fetch the preceding lane's prefix.
+// The register/lane conversions use butterfly shuffles.
+// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
+// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
+// TRANSPOSE-NOT: nvvm.shfl.sync idx
+// TRANSPOSE: llvm.return
+// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
+// AMD-TRANSPOSE: llvm.add
+// AMD-TRANSPOSE: llvm.return
+tt.func private @test_scan_exclusive_carry_forward(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose>
+  tt.return %result : tensor<16xi32, #transpose>
+}
+// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
+// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
+// TRANSPOSE-NOT: nvvm.shfl.sync idx
+// TRANSPOSE: llvm.return
+// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
+// AMD-TRANSPOSE: llvm.add
+// AMD-TRANSPOSE: llvm.return
+tt.func private @test_scan_exclusive_carry_reverse(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose>
+  tt.return %result : tensor<16xi32, #transpose>
+}
+
 }
 
 //--- converted-totals.mlir
