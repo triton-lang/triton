@@ -300,8 +300,12 @@ def str_to_ty(name, c):
     from builtins import tuple
 
     if isinstance(name, tuple):
+        types = [str_to_ty(x, c) for x in name]
+        # Custom views retain the ordinary tuple launch ABI.
+        if converter := getattr(type(name), "__triton_type__", None):
+            return converter(types)
         fields = type(name).__dict__.get("_fields", None)
-        return tuple_type([str_to_ty(x, c) for x in name], fields)
+        return tuple_type(types, fields)
 
     if name[0] == "*":
         name = name[1:]

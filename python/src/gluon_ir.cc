@@ -839,6 +839,45 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);
            })
+      .def("create_comm_wait",
+           [](GluonOpBuilder &self, Value counter, Value cursor, Value aborted,
+              Value monitorPtr, Value count, const std::string &kind,
+              bool consume, int64_t abortedValue, bool blocking,
+              bool monitor) -> Value {
+             auto waitKind = ttng::symbolizeCommunicationWaitKind(kind);
+             check(waitKind.has_value(), "unknown communication wait kind");
+             return self.create<ttng::CommunicationWaitOp>(
+                 self.getBuilder().getI1Type(), counter, cursor, aborted,
+                 monitorPtr, count, *waitKind, consume, abortedValue, blocking,
+                 monitor);
+           })
+      .def("create_comm_submit",
+           [](GluonOpBuilder &self, Value head, Value tail, Value cachedHead,
+              Value buffer, int64_t capacity, Value handle, Value srcOffset,
+              Value dstOffset, Value nbytes, Value sendCount, Value aborted,
+              bool isSend, py::object requestLayout, int32_t requestType,
+              int32_t bypassValue, uint64_t readyValue,
+              int64_t abortedValue) -> Value {
+             auto field = [&](const char *name) {
+               return py::cast<int32_t>(requestLayout.attr(name));
+             };
+             auto layout = self.getChecked<ttng::RequestLayoutAttr>(
+                 self.getContext(), field("stride"), field("ready_offset"),
+                 field("type_offset"), field("handle_offset"),
+                 field("src_offset"), field("dst_offset"),
+                 field("length_offset"), field("bypass_ar_offset"));
+             return self.create<ttng::CommunicationSubmitOp>(
+                 self.getBuilder().getI1Type(), head, tail, cachedHead, buffer,
+                 capacity, handle, srcOffset, dstOffset, nbytes, sendCount,
+                 aborted, isSend, layout, requestType, bypassValue,
+                 static_cast<int64_t>(readyValue), abortedValue);
+           })
+      .def("create_comm_is_aborted",
+           [](GluonOpBuilder &self, Value aborted,
+              int64_t abortedValue) -> Value {
+             return self.create<ttng::CommunicationIsAbortedOp>(
+                 self.getBuilder().getI1Type(), aborted, abortedValue);
+           })
       .def("create_local_gather",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc, Value indices,
               int32_t axis) -> Value {
