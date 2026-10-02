@@ -164,6 +164,33 @@ Important caveat:
 
 - This is ring arithmetic modulo ``2^w``, not IEEE arithmetic.
 
+Absolute Value
+==============
+
+Supported operation:
+
+- ``tl.abs(x)``
+
+Rewrite:
+
+- clear the sign bit of ``x``, preserving all other bits, including NaN bits
+
+This is implemented with signed integer absolute value on ``embed(x)``,
+mapping the most negative payload to zero before unembedding.
+
+Exact preserved properties:
+
+- ``abs(x) = abs(-x)``
+- ``abs(abs(x)) = abs(x)``
+- ``embed(abs(x)) >= 0`` in signed payload order
+
+Important caveat:
+
+- ``abs(x) = maximum(x, -x)`` except for negative zero. Its payload is the
+  most negative signed integer, which wraps back to itself under FPSan
+  negation. Thus ``maximum(x, -x)`` returns negative zero, while ``abs(x)``
+  returns positive zero.
+
 Min, Max, and Clamp
 ===================
 

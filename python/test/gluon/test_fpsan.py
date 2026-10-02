@@ -1030,6 +1030,36 @@ def test_unary_math_identity(device, op, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+def test_absf_payload_semantics(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    rs = np.random.RandomState(0)
+    x_bits = rs.randint(-(2**31), 2**31 - 1, n_elements, dtype=np.int32)
+    # Zero, a subnormal, one, infinity, and signaling/quiet NaNs.
+    edges = np.array([0, 1, 0x3F800000, 0x7F800000, 0x7F800001, 0x7FC00001], dtype=np.uint32)
+    # Set the sign bit to add negative versions. The int32 view preserves the bits.
+    x_bits[:2 * len(edges)] = np.concatenate([edges, edges | np.uint32(0x80000000)]).view(np.int32)
+    x = torch.tensor(x_bits, dtype=torch.int32, device=device)
+    out = torch.empty_like(x)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _unary_math_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        OP="abs",
+        BLOCK=BLOCK,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    # Clear only the sign bit, including for NaNs and negative zero.
+    _assert_payload_equal(out, x_bits & np.int32(0x7FFFFFFF))
+
+
 def test_exp2_payload_f64(device, fresh_knobs):
     _require_cuda_backend(device)
 
