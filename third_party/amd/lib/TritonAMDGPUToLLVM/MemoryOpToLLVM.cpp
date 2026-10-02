@@ -629,7 +629,13 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!mlir::triton::amdgpu::isCDNA(targetInfo.getISAFamily()))
+    // A local-only fence omits the vector cache invalidate. This is safe only
+    // when all waves share one L0, so an acquire in one wave covers the others.
+    auto isaFamily = targetInfo.getISAFamily();
+    bool workgroupSharesOneL0 = mlir::triton::amdgpu::isCDNA(isaFamily) ||
+                                (mlir::triton::amdgpu::isRDNA(isaFamily) &&
+                                 targetInfo.isCuModeEnabled());
+    if (!workgroupSharesOneL0)
       return failure();
     // Check no other memory addrspaces are selected.
     // TensorRead/Write are allowed but noop.
