@@ -369,19 +369,16 @@ GSAN_DEVICE Range roundRange(Range x,
 
 GSAN_DEVICE ShadowCell *acquireShadow(uintptr_t shadowAddr) {
   auto cell = reinterpret_cast<ShadowCell *>(shadowAddr);
-  uint16_t actual = 0;
-
-  while (!__scoped_atomic_compare_exchange_n(&cell->lock, &actual, 1, true,
-                                             __ATOMIC_ACQUIRE, __ATOMIC_RELAXED,
-                                             __MEMORY_SCOPE_SYSTEM)) {
-    actual = 0;
+  while (__scoped_atomic_fetch_or(&cell->readCountAndLock, ShadowCell::kLockBit,
+                                  __ATOMIC_ACQUIRE, __MEMORY_SCOPE_SYSTEM) &
+         ShadowCell::kLockBit) {
   }
   return cell;
 }
 
 GSAN_DEVICE void releaseShadow(ShadowCell *cell) {
-  __scoped_atomic_store_n(&cell->lock, 0, __ATOMIC_RELEASE,
-                          __MEMORY_SCOPE_SYSTEM);
+  __scoped_atomic_fetch_and(&cell->readCountAndLock, ~ShadowCell::kLockBit,
+                            __ATOMIC_RELEASE, __MEMORY_SCOPE_SYSTEM);
 }
 
 GSAN_DEVICE epoch_t appendClockBufferSnapshot(ThreadState *state,
@@ -781,9 +778,16 @@ GSAN_DEVICE ScalarClock makePublishedClock(ThreadState *state,
 
 GSAN_DEVICE void recordRead(ThreadState *state, ShadowCell *cell,
                             AtomicScope scope) {
-  auto numReads = cell->numReads;
+  auto numReads =
+      __scoped_atomic_load_n(&cell->readCountAndLock, __ATOMIC_RELAXED,
+                             __MEMORY_SCOPE_SYSTEM) &
+      ShadowCell::kReadCountMask;
+  // Only the lock owner changes the count. Use an atomic store because waiters
+  // concurrently OR the lock bit, which stays set throughout this update.
   if (numReads < kMaxUint16)
-    ++cell->numReads;
+    __scoped_atomic_store_n(&cell->readCountAndLock,
+                            ShadowCell::kLockBit | (numReads + 1),
+                            __ATOMIC_RELAXED, __MEMORY_SCOPE_SYSTEM);
 
   auto scalarClock = makeScalarClock(state, scope);
   for (int iRead = 0; iRead < ShadowCell::kReadClockSize; ++iRead) {

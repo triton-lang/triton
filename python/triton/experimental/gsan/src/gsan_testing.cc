@@ -181,7 +181,7 @@ PyShadowCell toPyShadowCell(const gsan::ShadowCell &cell) {
   for (size_t i = 0; i < gsan::ShadowCell::kReadClockSize; ++i)
     out.readClocks[i] = toPyScalarClock(cell.readClocks[i]);
   out.writeClock = toPyScalarClock(cell.writeClock);
-  out.numReads = cell.numReads;
+  out.numReads = cell.readCountAndLock & gsan::ShadowCell::kReadCountMask;
   return out;
 }
 
