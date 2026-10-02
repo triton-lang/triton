@@ -5,6 +5,7 @@
 
 #include "mlir/Parser/Parser.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/ADT/SparseBitVector.h"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -119,6 +120,163 @@ TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
       triton::AddressSet difference = lhs;
       difference.subtract(rhs);
       EXPECT_EQ(difference, fromMask(lhsMask & ~rhsMask));
+    }
+  }
+}
+
+TEST(Analysis, SymbolicAddressSetMatchesExplicitAddresses) {
+  for (uint32_t a = 0; a < 8; ++a) {
+    for (uint32_t b = 0; b < 8; ++b) {
+      for (uint32_t c = 0; c < 8; ++c) {
+        for (uint32_t offset = 0; offset < 8; ++offset) {
+          const uint32_t base = 73;
+          auto symbolic = triton::AddressSet::fromXorLayout(
+              base, offset, {a, b, c});
+          auto equivalent = triton::AddressSet::fromXorLayout(
+              base, offset ^ a, {c, b, a, a ^ b, 0});
+          triton::AddressSet explicitSet;
+          for (unsigned mask = 0; mask < 8; ++mask)
+            explicitSet.set(base + (offset ^ ((mask & 1) ? a : 0) ^
+                                    ((mask & 2) ? b : 0) ^
+                                    ((mask & 4) ? c : 0)));
+          EXPECT_EQ(symbolic, equivalent);
+          EXPECT_EQ(symbolic, explicitSet);
+          EXPECT_FALSE(symbolic < explicitSet);
+          EXPECT_FALSE(explicitSet < symbolic);
+          EXPECT_EQ(symbolic.translated(0), explicitSet);
+          EXPECT_EQ(symbolic.translated(19), explicitSet.translated(19));
+          EXPECT_EQ(symbolic.translated(uint32_t(-80)),
+                    explicitSet.translated(uint32_t(-80)));
+
+          auto other = triton::AddressSet::fromRange(base + 2, 4);
+          EXPECT_EQ(symbolic.intersects(other), explicitSet.intersects(other));
+          EXPECT_EQ(symbolic.contains(other), explicitSet.contains(other));
+          EXPECT_EQ(symbolic.intersection(other),
+                    explicitSet.intersection(other));
+          EXPECT_EQ(symbolic < other, explicitSet < other);
+          auto difference = symbolic;
+          auto expectedDifference = explicitSet;
+          difference.subtract(other);
+          expectedDifference.subtract(other);
+          EXPECT_EQ(difference, expectedDifference);
+          auto combined = symbolic;
+          auto expectedCombined = explicitSet;
+          combined.insert(other);
+          expectedCombined.insert(other);
+          EXPECT_EQ(combined, expectedCombined);
+          auto modified = symbolic;
+          modified.set(999);
+          EXPECT_EQ(symbolic, explicitSet);
+          EXPECT_FALSE(modified == symbolic);
+        }
+      }
+    }
+  }
+}
+
+TEST(Analysis, SymbolicAddressSetRepresentationsMatchBitvector) {
+  using triton::AddressSet;
+  using Oracle = llvm::SparseBitVector<>;
+  struct Sample {
+    AddressSet actual;
+    Oracle expected;
+  };
+  SmallVector<Sample> samples;
+  auto check = [](const AddressSet &actual, const Oracle &expected) {
+    SmallVector<uint32_t> expectedAddresses;
+    for (uint32_t address : expected)
+      expectedAddresses.push_back(address);
+    EXPECT_EQ(llvm::to_vector(actual), expectedAddresses);
+    EXPECT_EQ(actual.empty(), expected.empty());
+  };
+  for (uint32_t begin : {0u, 7u, uint32_t(-3)}) {
+    for (uint32_t length : {0u, 1u, 3u, 8u}) {
+      Oracle expected;
+      for (uint32_t i = 0; i < length; ++i)
+        expected.set(begin + i);
+      samples.push_back({AddressSet::fromRange(begin, length), expected});
+    }
+  }
+  for (uint32_t offset : {0u, 3u, 17u}) {
+    Oracle expected;
+    for (uint32_t i = 0; i < 8; ++i)
+      expected.set(7 + (offset ^ ((i & 1) ? 1 : 0) ^
+                       ((i & 2) ? 4 : 0) ^ ((i & 4) ? 8 : 0)));
+    samples.push_back({AddressSet::fromXorLayout(7, offset, {1, 4, 8}), expected});
+  }
+  for (uint32_t bytes : {1u, 2u, 3u, 4u}) {
+    for (uint32_t affine : {0u, 1u, 7u}) {
+      AddressSet::SharedLayout layout{11, affine, bytes, 2, {1, 4, 8}, {{4, 2}, {16, 4}}};
+      Oracle expected;
+      for (uint32_t i = 0; i < 8; ++i) {
+        uint32_t offset = 2 ^ ((i & 1) ? 1 : 0) ^ ((i & 2) ? 4 : 0) ^ ((i & 4) ? 8 : 0);
+        uint32_t byte = affine ^ (offset * bytes);
+        uint32_t element = byte / bytes;
+        uint32_t begin = 11 + (element + (element / 4) * 2 + (element / 16) * 4) * bytes + byte % bytes;
+        for (uint32_t j = 0; j < bytes; ++j)
+          expected.set(begin + j);
+      }
+      samples.push_back({AddressSet::fromSharedLayout(layout), expected});
+    }
+  }
+  for (uint32_t width : {4u, 8u, 16u, 32u, 64u}) {
+    AddressSet::TensorLayout layout{13, 5, width, 8, 3, {{1, 0}, {0, 1}, {2, 4}}};
+    Oracle expected;
+    for (uint32_t i = 0; i < 8; ++i) {
+      uint32_t row = 8 ^ ((i & 1) ? 1 : 0) ^ ((i & 4) ? 2 : 0);
+      uint32_t col = 3 ^ ((i & 2) ? 1 : 0) ^ ((i & 4) ? 4 : 0);
+      uint32_t first = col * width / 32;
+      uint32_t end = (col * width + width + 31) / 32;
+      for (uint32_t word = first; word < end; ++word)
+        expected.set(18 + ((row << 16) | first) + word - first);
+    }
+    samples.push_back({AddressSet::fromTensorLayout(layout), expected});
+  }
+  // Preserve unevaluated compositions to exercise every translation visitor.
+  for (unsigned i = 1; i < 12; ++i) {
+    auto lhs = samples[i];
+    auto rhs = samples[i + 12];
+    auto joined = lhs;
+    joined.actual.insert(rhs.actual);
+    joined.expected |= rhs.expected;
+    samples.push_back(joined);
+    samples.push_back({lhs.actual.intersection(rhs.actual), lhs.expected & rhs.expected});
+    lhs.actual.subtract(rhs.actual);
+    lhs.expected.intersectWithComplement(rhs.expected);
+    samples.push_back(lhs);
+  }
+  for (const auto &sample : samples) {
+    for (uint32_t delta : {0u, 19u, uint32_t(-23)}) {
+      Oracle expected;
+      for (uint32_t address : sample.expected)
+        expected.set(address + delta);
+      auto shifted = sample.actual.translated(delta);
+      check(shifted, expected);
+      check(shifted.translated(uint32_t(-delta)), sample.expected);
+    }
+    check(sample.actual, sample.expected);
+    auto copy = sample.actual;
+    copy.set(999);
+    auto expected = sample.expected;
+    expected.set(999);
+    check(copy, expected);
+    check(sample.actual, sample.expected);
+    for (const auto &other : samples) {
+      EXPECT_EQ(sample.actual == other.actual, sample.expected == other.expected);
+      EXPECT_EQ(sample.actual < other.actual,
+                std::lexicographical_compare(sample.expected.begin(), sample.expected.end(),
+                                             other.expected.begin(), other.expected.end()));
+      EXPECT_EQ(sample.actual.intersects(other.actual), sample.expected.intersects(other.expected));
+      EXPECT_EQ(sample.actual.contains(other.actual), sample.expected.contains(other.expected));
+      check(sample.actual.intersection(other.actual), sample.expected & other.expected);
+      auto joined = sample.actual;
+      joined.insert(other.actual);
+      check(joined, sample.expected | other.expected);
+      auto difference = sample.actual;
+      difference.subtract(other.actual);
+      auto expectedDifference = sample.expected;
+      expectedDifference.intersectWithComplement(other.expected);
+      check(difference, expectedDifference);
     }
   }
 }

@@ -14,6 +14,8 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <algorithm>
+
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
@@ -150,30 +152,6 @@ MemDescFootprint getMemDescAddresses(
   StringAttr colName = StringAttr::get(ctx, "col");
 
   MemDescFootprint footprint;
-  auto addPhysicalAddress = [&](uint32_t offset, uint32_t row, uint32_t col,
-                                uint32_t partition, uint32_t block) {
-    uint32_t cta = block ^ affineCTAOffset;
-    auto &addresses = getAddressesForCTA(footprint, cta);
-    if (isTmem) {
-      uint32_t bitBegin = col * bitWidth;
-      uint32_t firstWord = bitBegin / 32;
-      uint32_t lastWord = llvm::divideCeil(bitBegin + bitWidth, uint32_t{32});
-      uint32_t relative = (row << 16) | firstWord;
-      uint32_t begin = storageBase + affineOffset + relative;
-      for (uint32_t word = firstWord; word < lastWord; ++word)
-        addresses.set(begin + word - firstWord);
-    } else {
-      uint32_t base = storageBase;
-      if (!partitionBases.empty())
-        base = partitionBases[partition ^ affinePartitionOffset];
-      uint32_t relative = offset * (bitWidth / 8);
-      uint32_t combined = affineOffset ^ relative;
-      uint32_t begin = base + applySharedPadding(combined, ty);
-      for (uint32_t byte = 0; byte < bitWidth / 8; ++byte)
-        addresses.set(begin + byte);
-    }
-  };
-
   struct PhysicalBasis {
     uint32_t offset = 0;
     uint32_t row = 0;
@@ -212,18 +190,47 @@ MemDescFootprint getMemDescAddresses(
     }
   }
 
-  PhysicalBasis physical;
-  for (uint64_t index = 0; index < numPoints; ++index) {
-    if (index != 0) {
-      const PhysicalBasis &basis = bases[llvm::countr_zero(index)];
-      physical.offset ^= basis.offset;
-      physical.row ^= basis.row;
-      physical.col ^= basis.col;
-      physical.partition ^= basis.partition;
-      physical.block ^= basis.block;
+  assert(llvm::isPowerOf2_64(numPoints) &&
+         bases.size() == llvm::Log2_64(numPoints) &&
+         "descriptor domain must be an XOR basis image");
+  SmallVector<PhysicalBasis> addressBases, selectorBases;
+  for (const PhysicalBasis &basis : bases) {
+    if (basis.block || (!isTmem && basis.partition))
+      selectorBases.push_back(basis);
+    else
+      addressBases.push_back(basis);
+  }
+  assert(selectorBases.size() < 64);
+  PhysicalBasis selected;
+  for (uint64_t i = 0, count = uint64_t{1} << selectorBases.size(); i < count; ++i) {
+    if (i) {
+      const auto &basis = selectorBases[llvm::countr_zero(i)];
+      selected.offset ^= basis.offset;
+      selected.row ^= basis.row;
+      selected.col ^= basis.col;
+      selected.partition ^= basis.partition;
+      selected.block ^= basis.block;
     }
-    addPhysicalAddress(physical.offset, physical.row, physical.col,
-                       physical.partition, physical.block);
+    auto &addresses = getAddressesForCTA(footprint, selected.block ^ affineCTAOffset);
+    if (isTmem) {
+      triton::AddressSet::TensorLayout description{
+          storageBase, affineOffset, bitWidth, selected.row, selected.col, {}};
+      for (const auto &basis : addressBases)
+        description.bases.emplace_back(basis.row, basis.col);
+      addresses.insert(triton::AddressSet::fromTensorLayout(std::move(description)));
+    } else {
+      uint32_t base = partitionBases.empty()
+                          ? storageBase
+                          : partitionBases[selected.partition ^ affinePartitionOffset];
+      triton::AddressSet::SharedLayout description{
+          base, affineOffset, bitWidth / 8, selected.offset, {}, {}};
+      for (const auto &basis : addressBases)
+        description.bases.push_back(basis.offset);
+      if (auto padded = ttg::getPaddedEncoding(ty.getEncoding()))
+        for (auto [interval, padding] : llvm::zip_equal(padded.getIntervals(), padded.getPaddings()))
+          description.padding.emplace_back(interval, padding);
+      addresses.insert(triton::AddressSet::fromSharedLayout(std::move(description)));
+    }
   }
   return footprint;
 }
@@ -308,42 +315,365 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
 
 namespace mlir::triton {
 
-AddressSet AddressSet::fromRange(uint32_t begin, uint32_t length) {
-  AddressSet result;
-  for (uint32_t offset = 0; offset < length; ++offset)
-    result.set(begin + offset);
+namespace {
+// No catch-all overload: extending Description must update every visitor.
+template <class... Visitors> struct AddressVisitor : Visitors... {
+  using Visitors::operator()...;
+};
+template <class... Visitors> AddressVisitor(Visitors...) -> AddressVisitor<Visitors...>;
+using AddressIntervals = SmallVector<std::pair<uint64_t, uint64_t>, 4>;
+constexpr uint64_t addressSpaceSize = uint64_t{1} << 32;
+
+void appendAddressRange(AddressIntervals &ranges, uint32_t begin, uint64_t length) {
+  if (!length)
+    return;
+  uint64_t end = uint64_t(begin) + length;
+  ranges.emplace_back(begin, std::min(end, addressSpaceSize));
+  if (end > addressSpaceSize)
+    ranges.emplace_back(0, end - addressSpaceSize);
+}
+
+void coalesceAddressRanges(AddressIntervals &ranges) {
+  llvm::sort(ranges);
+  size_t size = 0;
+  for (auto range : ranges) {
+    if (size && range.first <= ranges[size - 1].second)
+      ranges[size - 1].second = std::max(ranges[size - 1].second, range.second);
+    else
+      ranges[size++] = range;
+  }
+  ranges.resize(size);
+}
+
+AddressIntervals intersectAddressRanges(const AddressIntervals &lhs,
+                                         const AddressIntervals &rhs) {
+  AddressIntervals result;
+  size_t i = 0, j = 0;
+  while (i < lhs.size() && j < rhs.size()) {
+    uint64_t begin = std::max(lhs[i].first, rhs[j].first);
+    uint64_t end = std::min(lhs[i].second, rhs[j].second);
+    if (begin < end)
+      result.emplace_back(begin, end);
+    if (lhs[i].second < rhs[j].second)
+      ++i;
+    else
+      ++j;
+  }
   return result;
 }
 
-void AddressSet::set(uint32_t address) { addresses.set(address); }
+AddressIntervals subtractAddressRanges(const AddressIntervals &lhs,
+                                        const AddressIntervals &rhs) {
+  AddressIntervals result;
+  size_t j = 0;
+  for (auto [begin, end] : lhs) {
+    while (j < rhs.size() && rhs[j].second <= begin)
+      ++j;
+    size_t k = j;
+    while (k < rhs.size() && rhs[k].first < end) {
+      if (rhs[k].first > begin)
+        result.emplace_back(begin, rhs[k].first);
+      begin = std::max(begin, rhs[k].second);
+      if (begin >= end)
+        break;
+      ++k;
+    }
+    if (begin < end)
+      result.emplace_back(begin, end);
+  }
+  return result;
+}
+} // namespace
+
+AddressSet AddressSet::fromDescription(Description description) {
+  return AddressSet(std::make_shared<Storage>(std::move(description)));
+}
+
+AddressSet AddressSet::fromXorLayout(uint32_t storageBase, uint32_t xorOffset,
+                                      ArrayRef<uint32_t> bases) {
+  uint32_t rows[32] = {};
+  for (uint32_t value : bases) {
+    while (value) {
+      unsigned pivot = llvm::Log2_32(value);
+      if (!rows[pivot]) {
+        rows[pivot] = value;
+        break;
+      }
+      value ^= rows[pivot];
+    }
+  }
+  for (unsigned pivot = 0; pivot < 32; ++pivot)
+    if (rows[pivot])
+      for (unsigned above = pivot + 1; above < 32; ++above)
+        if (rows[above] & (uint32_t{1} << pivot))
+          rows[above] ^= rows[pivot];
+  for (int pivot = 31; pivot >= 0; --pivot)
+    if (xorOffset & (uint32_t{1} << pivot))
+      xorOffset ^= rows[pivot];
+  XorLayout layout{storageBase, xorOffset, {}};
+  for (uint32_t row : rows)
+    if (row)
+      layout.bases.push_back(row);
+  return fromDescription(std::move(layout));
+}
+
+AddressSet AddressSet::fromRange(uint32_t begin, uint32_t length) {
+  if (!length)
+    return {};
+  return fromDescription(Range{begin, length});
+}
+
+AddressSet AddressSet::fromSharedLayout(SharedLayout layout) {
+  if (!layout.elementBytes)
+    return {};
+  if (layout.padding.empty() && llvm::isPowerOf2_32(layout.elementBytes) &&
+      layout.affineOffset % layout.elementBytes == 0) {
+    SmallVector<uint32_t> bases;
+    for (uint32_t basis : layout.bases)
+      bases.push_back(basis * layout.elementBytes);
+    for (unsigned bit = 0; bit < llvm::Log2_32(layout.elementBytes); ++bit)
+      bases.push_back(uint32_t{1} << bit);
+    return fromXorLayout(layout.storageBase,
+                         layout.affineOffset ^ (layout.elementOffset * layout.elementBytes),
+                         bases);
+  }
+  return fromDescription(std::move(layout));
+}
+
+AddressSet AddressSet::fromTensorLayout(TensorLayout layout) {
+  return fromDescription(std::move(layout));
+}
+
+bool AddressSet::sameDescription(const AddressSet &other) const {
+  if (storage == other.storage)
+    return true;
+  if (!storage || !other.storage)
+    return false;
+  auto same = [&](const auto &value) {
+    auto *rhs = std::get_if<std::decay_t<decltype(value)>>(&other.storage->description);
+    return rhs && value == *rhs;
+  };
+  return std::visit(AddressVisitor{
+      [&](const Range &v) { return same(v); },
+      [&](const XorLayout &v) { return same(v); },
+      [&](const SharedLayout &v) { return same(v); },
+      [&](const TensorLayout &v) { return same(v); },
+      [&](const Union &v) { return same(v); },
+      [&](const Intersection &v) { return same(v); },
+      [&](const Difference &v) { return same(v); },
+      [&](const Translation &v) { return same(v); }}, storage->description);
+}
+
+const AddressSet::Intervals &AddressSet::intervals() const {
+  static const Intervals empty;
+  if (!storage)
+    return empty;
+  if (storage->evaluated)
+    return *storage->evaluated;
+  storage->evaluated = std::visit(AddressVisitor{
+      [](const Range &v) {
+        Intervals result;
+        appendAddressRange(result, v.begin, v.length);
+        coalesceAddressRanges(result);
+        return result;
+      },
+      [](const XorLayout &v) {
+        // Canonical low unit bases span whole contiguous intervals.
+        unsigned lowBits = 0;
+        while (lowBits < v.bases.size() && v.bases[lowBits] == (uint64_t{1} << lowBits))
+          ++lowBits;
+        Intervals result;
+        uint32_t value = v.xorOffset;
+        uint64_t count = uint64_t{1} << (v.bases.size() - lowBits);
+        for (uint64_t i = 0; i < count; ++i) {
+          if (i)
+            value ^= v.bases[lowBits + llvm::countr_zero(i)];
+          appendAddressRange(result, v.storageBase + value, uint64_t{1} << lowBits);
+        }
+        coalesceAddressRanges(result);
+        return result;
+      },
+      [](const SharedLayout &v) {
+        Intervals result;
+        uint32_t offset = v.elementOffset;
+        assert(v.bases.size() < 64);
+        for (uint64_t i = 0, count = uint64_t{1} << v.bases.size(); i < count; ++i) {
+          if (i)
+            offset ^= v.bases[llvm::countr_zero(i)];
+          uint32_t byte = v.affineOffset ^ (offset * v.elementBytes);
+          uint32_t element = byte / v.elementBytes;
+          uint32_t padded = element;
+          for (auto [interval, padding] : v.padding)
+            padded += (element / interval) * padding;
+          uint32_t begin = v.storageBase + padded * v.elementBytes + byte % v.elementBytes;
+          appendAddressRange(result, begin, v.elementBytes);
+        }
+        coalesceAddressRanges(result);
+        return result;
+      },
+      [](const TensorLayout &v) {
+        Intervals result;
+        uint32_t row = v.row, column = v.column;
+        assert(v.bases.size() < 64);
+        for (uint64_t i = 0, count = uint64_t{1} << v.bases.size(); i < count; ++i) {
+          if (i) {
+            auto basis = v.bases[llvm::countr_zero(i)];
+            row ^= basis.first;
+            column ^= basis.second;
+          }
+          uint32_t bitBegin = column * v.bitWidth;
+          uint32_t firstWord = bitBegin / 32;
+          uint32_t lastWord = llvm::divideCeil(bitBegin + v.bitWidth, uint32_t{32});
+          appendAddressRange(result, v.storageBase + v.affineOffset + ((row << 16) | firstWord),
+                              lastWord - firstWord);
+        }
+        coalesceAddressRanges(result);
+        return result;
+      },
+      [](const Union &v) {
+        Intervals result = AddressSet(v.lhs).intervals();
+        const auto &rhs = AddressSet(v.rhs).intervals();
+        result.append(rhs.begin(), rhs.end());
+        coalesceAddressRanges(result);
+        return result;
+      },
+      [](const Intersection &v) {
+        return intersectAddressRanges(AddressSet(v.lhs).intervals(), AddressSet(v.rhs).intervals());
+      },
+      [](const Difference &v) {
+        return subtractAddressRanges(AddressSet(v.lhs).intervals(), AddressSet(v.rhs).intervals());
+      },
+      [](const Translation &v) {
+        Intervals result;
+        for (auto [begin, end] : AddressSet(v.source).intervals())
+          appendAddressRange(result, uint32_t(begin) + v.delta, end - begin);
+        coalesceAddressRanges(result);
+        return result;
+      }}, storage->description);
+  return *storage->evaluated;
+}
+
+AddressSet::const_iterator &AddressSet::const_iterator::operator++() {
+  if (++address == (*ranges)[index].second) {
+    ++index;
+    address = index < ranges->size() ? (*ranges)[index].first : 0;
+  }
+  return *this;
+}
+
+bool AddressSet::empty() const {
+  if (!storage)
+    return true;
+  if (storage->evaluated)
+    return storage->evaluated->empty();
+  return std::visit(AddressVisitor{
+      [](const Range &v) { return v.length == 0; },
+      [](const XorLayout &) { return false; },
+      [](const SharedLayout &v) { return v.elementBytes == 0; },
+      [](const TensorLayout &v) { return v.bitWidth == 0; },
+      [](const Union &v) { return AddressSet(v.lhs).empty() && AddressSet(v.rhs).empty(); },
+      [&](const Intersection &) { return intervals().empty(); },
+      [&](const Difference &) { return intervals().empty(); },
+      [](const Translation &v) { return AddressSet(v.source).empty(); }}, storage->description);
+}
+
+void AddressSet::set(uint32_t address) { insert(fromRange(address, 1)); }
 
 void AddressSet::insert(const AddressSet &other) {
-  addresses |= other.addresses;
+  if (other.empty() || sameDescription(other))
+    return;
+  if (empty()) {
+    *this = other;
+    return;
+  }
+  *this = fromDescription(Union{storage, other.storage});
 }
 
 AddressSet AddressSet::intersection(const AddressSet &other) const {
-  AddressSet result = *this;
-  result.addresses &= other.addresses;
-  return result;
+  if (sameDescription(other))
+    return *this;
+  if (empty() || other.empty())
+    return {};
+  return fromDescription(Intersection{storage, other.storage});
 }
 
 void AddressSet::subtract(const AddressSet &other) {
-  addresses.intersectWithComplement(other.addresses);
+  if (sameDescription(other)) {
+    storage.reset();
+    return;
+  }
+  if (!empty() && !other.empty())
+    *this = fromDescription(Difference{storage, other.storage});
 }
 
 bool AddressSet::intersects(const AddressSet &other) const {
-  return addresses.intersects(other.addresses);
+  if (sameDescription(other))
+    return !empty();
+  const auto &lhs = intervals();
+  const auto &rhs = other.intervals();
+  size_t i = 0, j = 0;
+  while (i < lhs.size() && j < rhs.size()) {
+    if (lhs[i].first < rhs[j].second && rhs[j].first < lhs[i].second)
+      return true;
+    if (lhs[i].second < rhs[j].second)
+      ++i;
+    else
+      ++j;
+  }
+  return false;
 }
 
 bool AddressSet::contains(const AddressSet &other) const {
-  return addresses.contains(other.addresses);
+  if (sameDescription(other))
+    return true;
+  const auto &lhs = intervals();
+  size_t i = 0;
+  for (auto [begin, end] : other.intervals()) {
+    while (i < lhs.size() && lhs[i].second <= begin)
+      ++i;
+    if (i == lhs.size() || lhs[i].first > begin || lhs[i].second < end)
+      return false;
+  }
+  return true;
+}
+
+bool AddressSet::operator==(const AddressSet &other) const {
+  return sameDescription(other) || intervals() == other.intervals();
+}
+
+bool AddressSet::operator<(const AddressSet &other) const {
+  if (sameDescription(other))
+    return false;
+  const auto &lhs = intervals();
+  const auto &rhs = other.intervals();
+  size_t i = 0, j = 0;
+  while (i < lhs.size() && j < rhs.size()) {
+    if (lhs[i].first != rhs[j].first)
+      return lhs[i].first < rhs[j].first;
+    // The shorter interval either ends a prefix or leaves a gap.
+    if (lhs[i].second < rhs[j].second)
+      return i + 1 == lhs.size();
+    if (lhs[i].second > rhs[j].second)
+      return j + 1 != rhs.size();
+    ++i;
+    ++j;
+  }
+  return i == lhs.size() && j != rhs.size();
 }
 
 AddressSet AddressSet::translated(uint32_t delta) const {
-  AddressSet result;
-  for (uint32_t address : addresses)
-    result.set(address + delta);
-  return result;
+  if (!delta || !storage)
+    return *this;
+  return std::visit(AddressVisitor{
+      [=](Range v) { v.begin += delta; return fromDescription(v); },
+      [=](XorLayout v) { v.storageBase += delta; return fromDescription(std::move(v)); },
+      [=](SharedLayout v) { v.storageBase += delta; return fromDescription(std::move(v)); },
+      [=](TensorLayout v) { v.storageBase += delta; return fromDescription(std::move(v)); },
+      [&](const Union &) { return fromDescription(Translation{storage, delta}); },
+      [&](const Intersection &) { return fromDescription(Translation{storage, delta}); },
+      [&](const Difference &) { return fromDescription(Translation{storage, delta}); },
+      [=](const Translation &v) { return fromDescription(Translation{v.source, v.delta + delta}); }},
+      storage->description);
 }
 
 BufferRegionView

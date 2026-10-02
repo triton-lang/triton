@@ -1,11 +1,15 @@
 #ifndef TRITON_ANALYSIS_BUFFER_REGION_H
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <memory>
+#include <variant>
 #include <optional>
 #include <set>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
@@ -17,7 +21,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/UniqueVector.h"
 
 namespace mlir {
@@ -38,43 +41,138 @@ namespace mlir::triton {
 /// An exact set of physical storage units. Shared-memory addresses are bytes.
 /// Tensor-memory addresses are 32-bit words encoded as (row << 16) | column.
 class AddressSet {
-public:
-  AddressSet() = default;
+  using Intervals = llvm::SmallVector<std::pair<uint64_t, uint64_t>, 4>;
 
+public:
+  // Layout coordinates are element offsets before byte scaling and padding.
+  struct SharedLayout {
+    uint32_t storageBase, affineOffset, elementBytes, elementOffset;
+    llvm::SmallVector<uint32_t, 8> bases;
+    llvm::SmallVector<std::pair<uint32_t, uint32_t>, 2> padding;
+    bool operator==(const SharedLayout &other) const {
+      return std::tie(storageBase, affineOffset, elementBytes, elementOffset,
+                      bases, padding) ==
+             std::tie(other.storageBase, other.affineOffset, other.elementBytes,
+                      other.elementOffset, other.bases, other.padding);
+    }
+  };
+  struct TensorLayout {
+    uint32_t storageBase, affineOffset, bitWidth, row, column;
+    llvm::SmallVector<std::pair<uint32_t, uint32_t>, 8> bases;
+    bool operator==(const TensorLayout &other) const {
+      return std::tie(storageBase, affineOffset, bitWidth, row, column, bases) ==
+             std::tie(other.storageBase, other.affineOffset, other.bitWidth,
+                      other.row, other.column, other.bases);
+    }
+  };
+
+  AddressSet() = default;
   static AddressSet fromRange(uint32_t begin, uint32_t length);
+  static AddressSet fromXorLayout(uint32_t storageBase, uint32_t xorOffset,
+                                  llvm::ArrayRef<uint32_t> bases);
+  static AddressSet fromSharedLayout(SharedLayout layout);
+  static AddressSet fromTensorLayout(TensorLayout layout);
 
   void set(uint32_t address);
   void insert(const AddressSet &other);
   AddressSet intersection(const AddressSet &other) const;
   void subtract(const AddressSet &other);
-
-  auto begin() const { return addresses.begin(); }
-  auto end() const { return addresses.end(); }
-  bool empty() const { return addresses.empty(); }
+  bool empty() const;
   bool intersects(const AddressSet &other) const;
   bool contains(const AddressSet &other) const;
   AddressSet translated(uint32_t delta) const;
+  bool operator==(const AddressSet &other) const;
+  bool operator<(const AddressSet &other) const;
 
-  bool operator==(const AddressSet &other) const {
-    return addresses == other.addresses;
-  }
-  bool operator<(const AddressSet &other) const {
-    // Compare equal footprints by sparse blocks rather than individual addresses.
-    if (addresses == other.addresses)
-      return false;
-    auto lhs = begin();
-    auto rhs = other.begin();
-    while (lhs != end() && rhs != other.end()) {
-      if (*lhs != *rhs)
-        return *lhs < *rhs;
-      ++lhs;
-      ++rhs;
+  class const_iterator {
+  public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = uint32_t;
+    using difference_type = std::ptrdiff_t;
+    using pointer = void;
+    using reference = uint32_t;
+    const_iterator() = default;
+    uint32_t operator*() const { return address; }
+    const_iterator &operator++();
+    const_iterator operator++(int) {
+      auto previous = *this;
+      ++*this;
+      return previous;
     }
-    return lhs == end() && rhs != other.end();
-  }
+    bool operator==(const const_iterator &other) const {
+      return ranges == other.ranges && index == other.index &&
+             address == other.address;
+    }
+    bool operator!=(const const_iterator &other) const { return !(*this == other); }
+
+  private:
+    friend class AddressSet;
+    const_iterator(const Intervals *ranges, size_t index)
+        : ranges(ranges), index(index),
+          address(index < ranges->size() ? (*ranges)[index].first : 0) {}
+    const Intervals *ranges = nullptr;
+    size_t index = 0;
+    uint64_t address = 0;
+  };
+  const_iterator begin() const { return {&intervals(), 0}; }
+  const_iterator end() const { return {&intervals(), intervals().size()}; }
 
 private:
-  llvm::SparseBitVector<> addresses;
+  struct Range {
+    uint32_t begin, length;
+    bool operator==(const Range &other) const {
+      return std::tie(begin, length) == std::tie(other.begin, other.length);
+    }
+  };
+  struct XorLayout {
+    uint32_t storageBase, xorOffset;
+    llvm::SmallVector<uint32_t, 8> bases;
+    bool operator==(const XorLayout &other) const {
+      return std::tie(storageBase, xorOffset, bases) ==
+             std::tie(other.storageBase, other.xorOffset, other.bases);
+    }
+  };
+  struct Storage;
+  using Node = std::shared_ptr<const Storage>;
+  struct Union {
+    Node lhs, rhs;
+    bool operator==(const Union &other) const {
+      return lhs == other.lhs && rhs == other.rhs;
+    }
+  };
+  struct Intersection {
+    Node lhs, rhs;
+    bool operator==(const Intersection &other) const {
+      return lhs == other.lhs && rhs == other.rhs;
+    }
+  };
+  struct Difference {
+    Node lhs, rhs;
+    bool operator==(const Difference &other) const {
+      return lhs == other.lhs && rhs == other.rhs;
+    }
+  };
+  struct Translation {
+    Node source;
+    uint32_t delta;
+    bool operator==(const Translation &other) const {
+      return source == other.source && delta == other.delta;
+    }
+  };
+  using Description = std::variant<Range, XorLayout, SharedLayout, TensorLayout,
+                                   Union, Intersection, Difference, Translation>;
+  struct Storage {
+    explicit Storage(Description description)
+        : description(std::move(description)) {}
+    Description description;
+    // Canonical half-open intervals cache exact evaluation, never a bitvector.
+    mutable std::optional<Intervals> evaluated;
+  };
+  explicit AddressSet(Node storage) : storage(std::move(storage)) {}
+  static AddressSet fromDescription(Description description);
+  bool sameDescription(const AddressSet &other) const;
+  const Intervals &intervals() const;
+  Node storage;
 };
 
 //===----------------------------------------------------------------------===//
