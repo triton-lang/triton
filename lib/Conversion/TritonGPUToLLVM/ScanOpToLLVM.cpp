@@ -5,7 +5,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -78,14 +77,6 @@ private:
       if (basis[axis] && basis[axis] < segmentSize)
         mask |= 1u << bit;
     return mask;
-  }
-
-  static unsigned getSegmentRegisterCount(const LinearLayout &layout,
-                                          unsigned axis, unsigned segmentSize) {
-    auto kReg = StringAttr::get(layout.getInDimNames().begin()->getContext(),
-                                "register");
-    return 1u << llvm::popcount(
-               getSegmentMask(layout, kReg, axis, segmentSize));
   }
 
   static ScanValues transposeValues(const ScanValues &values) {
@@ -242,8 +233,10 @@ private:
     auto totals = extractSegmentTotals(values, segmentRegs, reverse);
     convertScanValues(op, totals, intraWarpLayout, scanLayout, rewriter);
 
+    auto kReg = StringAttr::get(op.getContext(), "register");
+    auto axis = *std::next(scanLayout.getOutDimNames().begin(), op.getAxis());
     unsigned numRegs =
-        getSegmentRegisterCount(scanLayout, op.getAxis(), numSegments);
+        scanLayout.sublayout({kReg}, {axis}).getNumConsecutiveInOut();
     scanWithinThreads(op, totals, numRegs, rewriter);
     scanLaneTotals(op, totals, scanLayout, numRegs, numSegments, laneId,
                    rewriter);
@@ -273,8 +266,9 @@ private:
     const auto &interWarpLayout = *helper.getInterWarpLayout();
     const auto &totalsLayout = *helper.getInterWarpScanLayout();
     bool reverse = op.getReverse();
+    auto kReg = StringAttr::get(ctx, "register");
     unsigned segmentRegs =
-        getSegmentRegisterCount(sourceLayout, op.getAxis(), segmentSize);
+        sourceLayout.getInDimSize(kReg) / interWarpLayout.getInDimSize(kReg);
     unsigned segmentLaneMask =
         getSegmentMask(sourceLayout, kLane, op.getAxis(), segmentSize);
 
@@ -336,10 +330,10 @@ private:
                             warpId, rewriter, /*skipTerminal=*/true);
     }
     if (helper.getInterWarpLayout()) {
-      unsigned segmentRegs =
-          getSegmentRegisterCount(helper.getPermutedLayout(), op.getAxis(),
-                                  helper.getWarpLocalSegmentSize());
       const auto &interWarpLayout = *helper.getInterWarpLayout();
+      auto kReg = StringAttr::get(op.getContext(), "register");
+      unsigned segmentRegs = helper.getPermutedLayout().getInDimSize(kReg) /
+                             interWarpLayout.getInDimSize(kReg);
       auto axis =
           *std::next(interWarpLayout.getOutDimNames().begin(), op.getAxis());
       applySegmentCarries(op, values, interWarpTotals, interWarpLayout,
