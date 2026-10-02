@@ -172,14 +172,45 @@ def test_maxnreg_instrumentation_mode(instrumentation_mode, monkeypatch, fresh_t
 
     src = ASTSource(fn=kernel, signature={"out": "*i32"})
     compiled = triton.compile(src, target=GPUTarget("cuda", 90, 32),
-                              options={"maxnreg": 42, "instrumentation_mode": instrumentation_mode})
+                              options={"maxnreg": 42, "max_occupancy": 4, "instrumentation_mode": instrumentation_mode})
     assert compiled.module is None
+    assert compiled.metadata.max_occupancy == (1 if "gsan" in instrumentation_mode else 4)
     if instrumentation_mode:
         assert compiled.metadata.maxnreg is None
         assert ".maxnreg" not in compiled.asm["ptx"]
     else:
         assert compiled.metadata.maxnreg == 42
         assert ".maxnreg 42" in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize("max_occupancy", [None, 1, 4])
+def test_max_occupancy_compile_only(max_occupancy, monkeypatch, fresh_triton_cache):
+
+    class UnavailableDriver:
+
+        def __getattr__(self, name):
+            raise AssertionError(f"Compilation accessed the driver: {name}")
+
+    monkeypatch.setattr(driver, "_active", UnavailableDriver())
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    src = ASTSource(fn=kernel, signature={"out": "*i32"})
+    compiled = triton.compile(src, target=GPUTarget("cuda", 90, 32), options={"max_occupancy": max_occupancy})
+    assert compiled.module is None
+    assert compiled.metadata.max_occupancy == max_occupancy
+    assert compiled.metadata.shared == 0
+
+
+@pytest.mark.parametrize("max_occupancy", [0, -1, 1.5, True, "2"])
+def test_max_occupancy_invalid(max_occupancy):
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
+    with pytest.raises(ValueError, match="max_occupancy must be a positive integer or None"):
+        backend.parse_options({"max_occupancy": max_occupancy})
 
 
 def test_compile_only_expect_zero() -> None:
