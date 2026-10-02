@@ -114,7 +114,7 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
     const LinearLayout &srcLayout, const LinearLayout &dstLayout,
     const SmallVector<SmallVector<Value>> &inVals,
     const LLVMTypeConverter *typeConverter, const TargetInfoBase &targetInfo,
-    bool forceWarpShuffle = false) {
+    bool forceWarpShuffle = false, Value storePred = {}) {
   SmallVector<SmallVector<Value>> outVals(op.getNumOperands());
   auto *ctx = rewriter.getContext();
   SmallVector<int64_t> shape;
@@ -142,6 +142,11 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
               src, dst, bitwidth, targetInfo.getSharedMemoryBanks(), srcTile,
               dstTile);
         });
+  assert((!storePred || (!forceWarpShuffle && scratch.sizeInBytes)) &&
+         "selected source threads require a shared-memory conversion");
+  Value smemBase;
+  if (storePred)
+    smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
   auto baseOffsetAttr =
       op->template getAttrOfType<IntegerAttr>("allocation.offset");
   assert((!scratch.sizeInBytes || baseOffsetAttr) &&
@@ -150,6 +155,16 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
   auto offsetTy = IntegerType::get(ctx, 32);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
     auto elemTy = op.getElementTypes()[i];
+    if (storePred) {
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      Value operandBase = b.gep(smemBase.getType(), rewriter.getI8Type(),
+                                smemBase, b.i32_val(scratch.offsets[i]));
+      outVals[i] = convertLayoutViaSharedMemory(
+          loc, rewriter, srcLayout, dstLayout, inVals[i],
+          typeConverter->convertType(elemTy), operandBase, op, targetInfo,
+          storePred);
+      continue;
+    }
     auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
     auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
     Value packed = packUniqueTensorElements(loc, typeConverter, inVals[i],

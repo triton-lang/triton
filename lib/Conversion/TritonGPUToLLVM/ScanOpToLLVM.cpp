@@ -273,21 +273,17 @@ private:
     unsigned segmentLaneMask =
         getSegmentMask(sourceLayout, kLane, op.getAxis(), segmentSize);
 
-    // Broadcast the terminal value within each segment.
+    // Only terminal lanes store complete segment totals; conversion loads
+    // distribute them to the destination layout.
     auto totals = extractSegmentTotals(values, segmentRegs, reverse);
-    if (segmentLaneMask) {
-      Value terminalLane;
-      if (reverse)
-        terminalLane = b.and_(laneId, b.i32_val(~segmentLaneMask));
-      else
-        terminalLane = b.or_(laneId, b.i32_val(segmentLaneMask));
-      for (auto &total : totals)
-        total = shuffleValues(loc, total, terminalLane, rewriter);
-    }
-    // Exchange totals across warps using shared memory when needed.
+    Value storePred;
+    if (segmentLaneMask)
+      storePred = b.icmp_eq(b.and_(laneId, b.i32_val(segmentLaneMask)),
+                            b.i32_val(reverse ? 0 : segmentLaneMask));
     auto operands = convertLayoutValues(loc, rewriter, op, interWarpLayout,
                                         totalsLayout, transposeValues(totals),
-                                        getTypeConverter(), targetInfo);
+                                        getTypeConverter(), targetInfo,
+                                        /*forceWarpShuffle=*/false, storePred);
     totals = transposeValues(operands);
 
     // Reuse the warp-local scan, including sequences spanning registers.
