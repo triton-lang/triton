@@ -448,6 +448,16 @@ private:
       }
       accumulate(op.getLoc(), rewriter, combineRegion, acc, shfl);
     }
+    if (!op.isCommutative()) {
+      // The lane with all reduction bits clear combines each subtree in the
+      // same order. Broadcast its result instead of ordering both operands at
+      // every step of the tree.
+      auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+      Value leader = b.and_(getLaneId(rewriter, op.getLoc()),
+                            b.i32_val(~reduceLaneIdMask));
+      for (Value &value : acc)
+        value = targetInfo.shuffleIdx(rewriter, op.getLoc(), value, leader);
+    }
   }
 
   // Pack the accumulator values and replace the reduce op with the result.

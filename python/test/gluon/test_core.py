@@ -3488,6 +3488,79 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
     assert (output == ref_output).all()
 
 
+@pytest.mark.parametrize("n", [4, 128])
+@pytest.mark.parametrize("order", [[0, 1], [1, 0]])
+@pytest.mark.parametrize("warps_per_cta", [[4, 1], [1, 4]])
+@pytest.mark.parametrize("tuple_reduce", [False, True])
+def test_reduce_noncommutative(n, order, warps_per_cta, tuple_reduce):
+
+    @gluon.jit
+    def take_first(a, b):
+        return a
+
+    @gluon.jit
+    def take_endpoints(a_first, a_last, b_first, b_last):
+        return a_first, b_last
+
+    @gluon.jit
+    def kernel(X, First, Last, N: ttgl.constexpr, Layout: ttgl.constexpr, Tuple: ttgl.constexpr):
+        rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, Layout))
+        cols = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, Layout))
+        offsets = rows[:, None] * N + cols[None, :]
+        x = ttgl.load(X + offsets)
+        if Tuple:
+            first, last = ttgl.reduce((x, x.to(ttgl.int64)), 1, take_endpoints)
+            ttgl.store(Last + offsets, last[:, None])
+        else:
+            first = ttgl.reduce(x, 1, take_first)
+        # Read every replica of the result, including lanes that supplied RHS.
+        ttgl.store(First + offsets, first[:, None])
+
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], warps_per_cta, order)
+    x = torch.arange(16 * n, device="cuda", dtype=torch.int32).reshape(16, n)
+    first = torch.empty_like(x)
+    last = torch.empty_like(x, dtype=torch.int64)
+    kernel[(1, )](x, first, last, n, layout, tuple_reduce)
+    torch.testing.assert_close(first, x[:, :1].expand_as(x), atol=0, rtol=0)
+    if tuple_reduce:
+        torch.testing.assert_close(last, x[:, -1:].to(torch.int64).expand_as(last), atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("n", [4, 128])
+@pytest.mark.parametrize("order", [[0, 1], [1, 0]])
+@pytest.mark.parametrize("warps_per_cta", [[4, 1], [1, 4]])
+def test_reduce_commutative_complex_product(n, order, warps_per_cta):
+
+    @gluon.jit
+    def combine(ar, ai, br, bi):
+        return ar * br - ai * bi, ar * bi + ai * br
+
+    @gluon.jit
+    def kernel(Real, Imag, OutReal, OutImag, N: ttgl.constexpr, Layout: ttgl.constexpr):
+        rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, Layout))
+        cols = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, Layout))
+        offsets = rows[:, None] * N + cols[None, :]
+        real = ttgl.load(Real + offsets)
+        imag = ttgl.load(Imag + offsets)
+        real, imag = ttgl.reduce((real, imag), 1, combine)
+        ttgl.store(OutReal + offsets, real[:, None])
+        ttgl.store(OutImag + offsets, imag[:, None])
+
+    torch.manual_seed(123)
+    real = 1 + 0.01 * torch.randn((16, n), device="cuda")
+    imag = 0.01 * torch.randn((16, n), device="cuda")
+    out_real = torch.empty_like(real)
+    out_imag = torch.empty_like(imag)
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], warps_per_cta, order)
+    kernel[(1, )](real, imag, out_real, out_imag, n, layout, enable_fp_fusion=False)
+    expected = torch.complex(real.double(), imag.double()).prod(1, keepdim=True)
+    torch.testing.assert_close(out_real, expected.real.float().expand_as(real), atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(out_imag, expected.imag.float().expand_as(imag), atol=1e-6, rtol=1e-5)
+    # A commutative reduction must still agree exactly across all replicas.
+    torch.testing.assert_close(out_real, out_real[:, :1].expand_as(real), atol=0, rtol=0)
+    torch.testing.assert_close(out_imag, out_imag[:, :1].expand_as(imag), atol=0, rtol=0)
+
+
 @gluon.jit
 def _combine_add2(a, b, c, d):
     parent: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [1, 32], [1, ttgl.num_warps()], [1, 0],
