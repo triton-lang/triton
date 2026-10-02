@@ -67,6 +67,11 @@ tools = [
 if config.triton_ext_enabled:
     config.available_features.add("triton-ext-enabled")
 
+# Same feature names LLVM's own suites use, so a build without a given backend
+# skips the tests that need it instead of failing.
+for arch in config.targets_to_build.split():
+    config.available_features.add(arch.lower() + "-registered-target")
+
 llvm_config.add_tool_substitutions(tools, tool_dirs)
 
 # TODO: what's this?
