@@ -360,23 +360,8 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
 ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
                                        unsigned axis)
     : axis(axis), originalLayout(inputLayout) {
-  // Plan the scan without changing the original layout: remove duplicate
-  // registers and order axis register bits, then scan only the consecutive
-  // elements already owned by each thread. For an intra-warp scan, extract
-  // their totals in intraWarpLayout and convert to intraWarpScanLayout;
-  // scan those totals and keep them in that layout for the inter-warp stage.
-  // If the axis spans warps, extract the warp-segment totals directly from
-  // intraWarpScanLayout (or permutedLayout when no lane scan is needed).
-  // interWarpLayout describes these totals; interWarpScanLayout replicates
-  // their full sequence in each participating warp. Finally, map the carries
-  // back to the saved thread-local prefixes.
-  //
-  // There are two units of "segment total": thread totals summarize runs of
-  // threadLocalSegmentSize original elements; warp totals summarize runs of
-  // warpLocalSegmentSize original elements. Each layout pair describes the
-  // same totals before/after communication, not a different tensor of inputs.
-  // For register=[1,8], lane=[2,4,0,0,0], warp=[16], those sizes are 2 and 16:
-  // a thread owns several pairs, while each warp owns one 16-element interval.
+  // Plan thread prefixes, intra-warp totals, and inter-warp totals separately.
+  // Communicate totals, then map their carries back to the native prefixes.
   permutedLayout = buildPermutedLayout();
   if (!isSupported())
     return;
@@ -385,27 +370,15 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
   auto kWarp = StringAttr::get(ctx, "warp");
   auto axisDim = *std::next(originalLayout.getOutDimNames().begin(), axis);
   unsigned axisSize = originalLayout.getOutDimSize(axisDim);
-  // Scans across CTAs are unsupported, as checked above, so only warp bases
-  // bound a contiguous warp-local segment along the scan axis. Its size is
-  // the smallest nonzero warp basis on that axis, or the full axis size if
-  // no warp basis affects it. Register and lane bits may be interleaved with
-  // warp bits. Scan each warp-local segment before exchanging their totals.
-  // For example, warp=[4], lane=[1,2,...], register=[8,16] gives
-  //   warp 0: [0..3], [8..11], [16..19], [24..27]
-  //   warp 1: [4..7], [12..15], [20..23], [28..31].
-  // The segment size is 4, although each warp owns 16 elements. If warp=[1]
-  // and lane=[2,...], the segment size is 1: physical warp/lane index order
-  // does not imply logical adjacency.
+  // Cross-CTA scans are unsupported, so the lowest warp axis bit bounds
+  // a contiguous warp-local segment.
   warpLocalSegmentSize = axisSize;
   for (const auto &basis : originalLayout.getBases().lookup(kWarp)) {
     if (basis[axis])
       warpLocalSegmentSize =
           std::min(warpLocalSegmentSize, unsigned(basis[axis]));
   }
-  // A thread-local segment also stops at the first lane-owned axis bit.
-  // With register=[1,8], lane=[2,4,...], warp=[16], the registers of lane 0
-  // hold x0,x1,x8,x9. Scan [x0,x1] and [x8,x9] separately; their intervening
-  // elements belong to other lanes. The lowest lane basis, 2, sets this limit.
+  // The lowest lane axis bit also bounds a thread-local segment.
   auto kLane = StringAttr::get(ctx, "lane");
   threadLocalSegmentSize = warpLocalSegmentSize;
   for (const auto &basis : originalLayout.getBases().lookup(kLane))
@@ -424,13 +397,8 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
 }
 
 LinearLayout ScanLoweringHelper::buildPermutedLayout() {
-  // Example for axis 0: register bases [(8,0), (0,1), (2,0), (0,0)]
-  // become [(2,0), (8,0), (0,1)]. Remove the duplicate register bit, then
-  // put axis registers first, in logical order, without changing which thread
-  // owns any value. Unlike reduction, scan cannot reorder logical axis bits.
-  // Sorting the basis columns renumbers registers; it does not change a basis
-  // from 8 to 1 or move a value to another lane. The lowering applies the same
-  // permutation to its SSA-value array and undoes it before packing results.
+  // Remove duplicate registers and order axis register bits logically.
+  // This renumbers registers without changing thread ownership.
   auto *ctx = originalLayout.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto uniqueLayout = originalLayout.removeZeroBasesAlongDim(kReg);
@@ -445,43 +413,28 @@ LinearLayout ScanLoweringHelper::buildPermutedLayout() {
   return registerOrder.apply(uniqueLayout);
 }
 
-LinearLayout ScanLoweringHelper::buildIntraWarpLayout() const {
-  // Example: register=[1,8], lane=[2,4,0,0,0], warp=[16] has thread-local
-  // segments of size 2. Their totals use register=[4], lane=[1,2,0,0,0],
-  // warp=[8]. Ti is the total of elements [2*i, 2*i+1]; each total stays in
-  // the thread that computed it while the original local prefixes are saved.
-  // Dividing by 2 changes coordinates from element indices to pair indices.
-  // The old register basis 1 becomes 0 because a pair contributes one total;
-  // removing that zero basis describes the extracted terminal registers.
-  // Zero lane/warp bases stay: the hardware threads still exist, and may hold
-  // replicated totals. No communication occurs merely by building this layout.
-  auto *ctx = permutedLayout.getInDimNames().begin()->getContext();
+// Collapse axis coordinates from element indices to segment indices.
+static LinearLayout getScanTotalsLayout(const LinearLayout &layout,
+                                        unsigned axis, unsigned segmentSize) {
+  auto *ctx = layout.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
-  auto bases = permutedLayout.getBases();
+  auto bases = layout.getBases();
   for (auto &[dim, dimBases] : bases)
     for (auto &basis : dimBases)
-      basis[axis] /= threadLocalSegmentSize;
+      basis[axis] /= segmentSize;
   return LinearLayout(std::move(bases),
-                      llvm::to_vector(permutedLayout.getOutDimNames()))
+                      llvm::to_vector(layout.getOutDimNames()))
       .removeZeroBasesAlongDim(kReg);
 }
 
+LinearLayout ScanLoweringHelper::buildIntraWarpLayout() const {
+  // Collapse each thread-local segment to one total in its original owner.
+  return getScanTotalsLayout(permutedLayout, axis, threadLocalSegmentSize);
+}
+
 LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
-  // Continuing the intraWarpLayout example, register=[4], lane=[1,2,0,0,0],
-  // warp=[8] becomes register=[1], lane=[2,4,0,0,0], warp=[8]. Each thread
-  // now owns two consecutive totals; each warp scans its eight totals.
-  // Put the low segment bits in registers and the remaining bits in lanes.
-  // Preserve parallel ownership and all bits selecting other segments, so
-  // these conversions only move values within a warp.
-  // For the four distinct lanes of warp 0, the conversion is:
-  //                    lane 0   lane 1   lane 2   lane 3
-  //   before, reg 0:      T0       T1       T2       T3
-  //   before, reg 1:      T4       T5       T6       T7
-  //   after,  reg 0:      T0       T2       T4       T6
-  //   after,  reg 1:      T1       T3       T5       T7
-  // Each lane can now scan its two adjacent totals, then exchange its last
-  // total with other lanes. Original element prefixes never take this trip.
-  // Axis bases >= segmentSize select other warp-local segments and stay put.
+  // Put low segment bits in registers, then lanes. Preserve other segments
+  // and independent scans so the conversion stays within a warp.
   auto *ctx = intraWarpLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -500,51 +453,18 @@ LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
 }
 
 LinearLayout ScanLoweringHelper::buildInterWarpLayout() const {
-  // Example: a 1D scan with register=[1,8,16], lane=[2,0,0,0,0], warp=[4]
-  // has warp-local segments of size 4. Dividing axis bases by 4 and removing
-  // zero register bases gives register=[2,4], lane=[0,0,0,0,0], warp=[1].
-  // Warp 0 keeps totals T0,T2,T4,T6; warp 1 keeps T1,T3,T5,T7, where Ti is
-  // the total of elements [4*i, 4*i+3]. Each total is broadcast across lanes.
-  // With an intra-warp conversion, these become thread totals in
-  // register=[4,8], lane=[1,0,0,0,0], warp=[2], with segments of size 2.
-  // Collapsing that layout gives the same warp totals without first restoring
-  // native ownership. Only bits within the warp-local segment were rearranged.
-  // Broadcast the terminal value along the segment lane bits and discard
-  // duplicate registers.
-  // Here the divisor depends on the source: a warp-local segment contains 4
-  // original elements, or 2 thread totals if each thread segment has size 2.
-  // Both collapse to the same segment index. Thus T0..T7 above always denote
-  // warp-segment totals, regardless of which source representation we use.
+  // Collapse warp-local segments in the layout that holds their prefixes.
   const auto &sourceLayout =
       intraWarpScanLayout ? *intraWarpScanLayout : permutedLayout;
   unsigned segmentSize = warpLocalSegmentSize;
   if (intraWarpScanLayout)
     segmentSize /= threadLocalSegmentSize;
-  auto *ctx = sourceLayout.getInDimNames().begin()->getContext();
-  auto kReg = StringAttr::get(ctx, "register");
-  auto bases = sourceLayout.getBases();
-  for (auto &[dim, dimBases] : bases)
-    for (auto &basis : dimBases)
-      basis[axis] /= segmentSize;
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector(sourceLayout.getOutDimNames()))
-      .removeZeroBasesAlongDim(kReg);
+  return getScanTotalsLayout(sourceLayout, axis, segmentSize);
 }
 
 LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
-  // Continuing the interWarpLayout example, register=[2,4], lane=[0,0,0,0,0],
-  // warp=[1] becomes register=[], lane=[1,2,4,0,0], warp=[0]. Each warp now
-  // holds T0..T7 in lanes 0..7, repeated in the other lane groups. With 64
-  // totals and 32 available lanes, use register=[32], lane=[1,2,4,8,16]:
-  // register 0 holds T0..T31 and register 1 holds T32..T63 in each warp.
-  // Every participating warp gets the full sequence of segment totals.
-  // Keep parallel ownership (including CTA ownership), use available lanes
-  // for the low sequence bits, and put any remaining bits in registers.
-  // Clearing the axis component of warp bases replicates this sequence across
-  // warps; it does not merge independent scans carried by their other axes.
-  // Only entirely zero lane bases are available for reassignment. For example,
-  // a lane basis (0,1) in an axis-0 scan must keep selecting the independent
-  // column, so that lane bit cannot also index the totals sequence.
+  // Replicate the full totals sequence in each warp. Use available lanes
+  // for low axis bits and registers for the rest; preserve independent scans.
   auto *ctx = interWarpLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -585,9 +505,7 @@ bool ScanLoweringHelper::isSupported() {
 unsigned ScanLoweringHelper::getScratchSizeInBytes(
     ArrayRef<Type> elementTypes,
     GetNumScratchElemsFn numScratchElemsGetter) const {
-  // Only the exchange of warp-segment totals may use shared memory. Intra-warp
-  // conversions and all carry lookups use shuffles. Use the same conversion
-  // scratch calculation as lowering, including the target-specific callback.
+  // Use the same target-specific scratch sizing as the inter-warp conversion.
   if (!interWarpLayout)
     return 0;
   return getLayoutConversionScratchConfig(*interWarpLayout,
