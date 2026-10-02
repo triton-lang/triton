@@ -72,6 +72,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #a = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 8, colStride = 1>
 #d64 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#d4 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>
+#d512 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 512, colStride = 1>
 #b = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0], [0, 0], [0, 0], [16, 0], [32, 0], [64, 0]]}, alignment = 16>
 #b_k = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0], [0, 0], [0, 0], [16, 0], [32, 0], [64, 0], [128, 0]]}, alignment = 16>
 #b_compact = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]]}, alignment = 16>
@@ -89,10 +91,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 !d = !ttg.memdesc<128x1xf32, #d, #ttng.tensor_memory, mutable>
 !d_m_view = !ttg.memdesc<128x1xf32, #d, #ttng.tensor_memory, mutable, 256x1>
 !d64 = !ttg.memdesc<128x1xf32, #d64, #ttng.tensor_memory, mutable>
+!d4 = !ttg.memdesc<128x1xf32, #d4, #ttng.tensor_memory, mutable>
+!d512 = !ttg.memdesc<128x1xf32, #d512, #ttng.tensor_memory, mutable>
 !sa = !ttg.memdesc<128x4xi8, #scale, #ttng.tensor_memory>
 !sb = !ttg.memdesc<1x4xi8, #scale, #ttng.tensor_memory, 64x4>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @mma_rejects_instruction_n_too_small(%a: !a, %b: !b, %d: !d4, %p: i1) {
+    // expected-error @below {{MMA instruction N must be between 8 and 256; got 4}}
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b, !d4
+    tt.return
+  }
+
+  tt.func @scaled_mma_rejects_instruction_n_too_large(%a: !a, %b: !b, %d: !d512, %sa: !sa, %sb: !sb, %p: i1) {
+    // expected-error @below {{MMA instruction N must be between 8 and 256; got 512}}
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %sa, %sb, %p, %p lhs = e4m3 rhs = e4m3 : !a, !b, !d512, !sa, !sb
+    tt.return
+  }
+
   tt.func @padded_mma_accepts_overlapping_rhs(%a: !a, %b: !b_overlap, %d: !d, %p: i1) {
     ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b_overlap, !d
     tt.return
