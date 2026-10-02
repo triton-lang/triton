@@ -1,5 +1,9 @@
 // RUN: triton-opt %s --nvgpu-warp-specialization=num-stages=2 | FileCheck %s --check-prefix=CHECK
 // RUN: triton-opt %s --nvgpu-warp-specialization=num-stages=2 | FileCheck %s --check-prefix=FALLBACK
+// RUN: triton-opt %s --nvgpu-warp-specialization=num-stages=2 --debug-only=nvgpu-ws-data-partition 2>&1 | FileCheck %s --check-prefix=DEBUG
+
+// DEBUG: dim <unassigned>
+// DEBUG: @gather_after_loop_falls_back
 
 // CHECK-LABEL: @gather_falls_back
 // CHECK: tt.gather
