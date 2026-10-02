@@ -3338,7 +3338,7 @@ def test_reduce64_integer(op, dtype_str, num_warps, device):
         if op == "add":
             assert "redux.sync.add.s32" in compiled.asm["ptx"]
         else:
-            assert compiled.asm["ptx"].count(f"redux.sync.{op}.b32") == (4 if num_warps == 32 else 2)
+            assert compiled.asm["ptx"].count(f"redux.sync.{op}.b32") == 4
 
 
 # TODO: [Qingyi] Fix argmin / argmax

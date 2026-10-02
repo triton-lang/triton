@@ -1186,14 +1186,16 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
             reduce_fn = np.fmin if op == "min" else np.fmax
     else:
         limits = np.iinfo(numpy_dtype)
-        if op in ("and", "or", "xor"):
+        if op in ("and", "or", "xor") or limits.bits == 64:
             # Exercise every bit, including the sign bit, in both groups.
             x[:] = np.frombuffer(rng.bytes(x.nbytes), dtype=x.dtype).reshape(x.shape)
         x[0], x[1] = limits.min, limits.max
         x[2, 0], x[3, -1] = limits.min, limits.max
         if limits.bits == 64:
             # Equal high words and unsigned low-word comparisons.
-            x[4, :4] = [0x100000000, 0x1FFFFFFFF, 0x180000000, 0x17FFFFFFF][:size]
+            low_words = np.resize(np.array([0xFFFFFFFF, 0, 0x80000000, 0x7FFFFFFF], dtype=np.uint64), size)
+            x[4] = (0x100000000 | low_words).view(x.dtype)
+            x[5] = (0x8000000000000000 | low_words).view(x.dtype)
         reduce_fn = {
             "min": np.minimum, "max": np.maximum, "add": np.add, "and": np.bitwise_and, "or": np.bitwise_or, "xor":
             np.bitwise_xor
@@ -1219,13 +1221,13 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
         profitable = group_stride == 1 or (group_stride == 2 and size >= 8)
     else:
         profitable = (group_stride == 1 and size >= 4) or (group_stride == 2 and size == 16)
-    use_redux = size == 32 or (profitable and "64" not in dtype_str)
+    use_redux = size == 32 or profitable
     if is_float and major != 10:
         use_redux = False
     if use_redux:
         expected_count = group_stride
         if "64" in dtype_str:
-            expected_count = 3 if op == "add" else 2
+            expected_count *= 3 if op == "add" else 2
         assert ptx.count("redux.sync.") == expected_count
         assert "shfl.sync.bfly" not in ptx
         for line in ptx.splitlines():
@@ -1244,7 +1246,8 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
 
 @pytest.mark.skipif(not is_cuda(), reason="NVIDIA redux instructions")
 @pytest.mark.parametrize("op", ["add", "xor", "max"])
-def test_reduce_broadcast_across_warps(op, device):
+@pytest.mark.parametrize("dtype_str", ["int32", "int64", "uint64"])
+def test_reduce_broadcast_across_warps(op, dtype_str, device):
     import numpy as np
 
     if torch.cuda.get_device_capability()[0] < 8:
@@ -1262,15 +1265,21 @@ def test_reduce_broadcast_across_warps(op, device):
             y = ttgl.max(x, 0)
         ttgl.store(Y, y)
 
-    values = np.arange(128, dtype=np.int32)
+    values = np.arange(128, dtype=dtype_str)
     values[0] = 257  # Make both the sum and XOR nonzero.
+    if values.dtype.itemsize == 8:
+        values = (values << 32) | (0xFFFFFFFF - values)
+        values[::3] = ~values[::3]
     x = torch.tensor(values, device=device)
-    y = torch.empty((), dtype=torch.int32, device=device)
+    y = torch.empty((), dtype=x.dtype, device=device)
     compiled = kernel[(1, )](x, y, op, num_warps=4)
     reduce_fn = {"add": np.add, "xor": np.bitwise_xor, "max": np.maximum}[op]
-    assert y.item() == reduce_fn.reduce(values)
-    # One full-warp redux, then one redux over four broadcast warp results.
-    assert compiled.asm["ptx"].count("redux.sync.") == 2
+    assert y.item() == reduce_fn.reduce(values, dtype=values.dtype)
+    # One full-warp reduction, then one over four broadcast warp results.
+    expected_count = 2
+    if values.dtype.itemsize == 8:
+        expected_count *= 3 if op == "add" else 2
+    assert compiled.asm["ptx"].count("redux.sync.") == expected_count
     assert "shfl.sync.bfly" not in compiled.asm["ptx"]
 
 
