@@ -150,7 +150,10 @@
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>block</strong> (<em>Tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – Number of contiguous elements per row / column in a CTA.</p></li>
+<li><p><strong>block</strong> (<em>Tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – Number of contiguous elements per row / column in a CTA.
+A full allocation narrower than <code class="docutils literal notranslate"><span class="pre">block[1]</span></code> retains the unused columns as padding.
+For an MMA accumulator, <code class="docutils literal notranslate"><span class="pre">block[1]</span></code> selects the instruction N.
+An N subslice can use a smaller instruction to fit its visible width.</p></li>
 <li><p><strong>col_stride</strong> (<em>int</em>) – Number of 32-bit columns to advance between logically
 adjacent columns. Packed layouts use a stride of 1. Unpacked
 layouts use <code class="docutils literal notranslate"><span class="pre">32</span> <span class="pre">/</span> <span class="pre">bitwidth</span></code>.</p></li>
