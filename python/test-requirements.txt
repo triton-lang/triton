@@ -1,4 +1,5 @@
 autopep8
+cloudpickle
 isort
 numpy
 pytest

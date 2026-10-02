@@ -44,6 +44,7 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // SYNC:   scf.yield
 
     // ASYNC: ttg.async_copy_global_to_local
+    // ASYNC-SAME: cachePolicy = #tt.cache_policy<cache_modifier = ca
     // ASYNC: scf.for
     // ASYNC:  ttg.async_wait
     // ASYNC:  ttg.async_copy_global_to_local
@@ -51,7 +52,7 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     // ASYNC:  tt.dot
     // ASYNC:  scf.yield
     %17:2 = scf.for %arg2 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg3 = %cst_1, %arg4 = %cst_2) -> (tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>)  : i32 {
-      %18 = tt.load %16 : tensor<64x16x!tt.ptr<f16>, #blocked>
+      %18 = tt.load %16 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : tensor<64x16x!tt.ptr<f16>, #blocked>
       %19 = ttg.convert_layout %9 : tensor<128x64xf16, #blocked1> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
       %20 = ttg.convert_layout %18 : tensor<64x16xf16, #blocked> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %21 = tt.dot %19, %20, %cst_1 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
@@ -803,13 +804,13 @@ tt.func @reject_oversubscribed_async_copy_gfx950(
 // Main loop
 //         COMMON: scf.for
 //         COMMON:   ttg.local_load
-//         COMMON:   amdg.local_load_packed_tranposed
+//         COMMON:   amdg.local_load_packed_transposed
 //         COMMON:   tt.dot_scaled
 //         COMMON:   scf.yield
 
 // Epilogue
 //         COMMON:   ttg.local_load
-//         COMMON: amdg.local_load_packed_tranposed
+//         COMMON: amdg.local_load_packed_transposed
 //         COMMON: scf.if
 //         COMMON:   tt.dot_scaled
 // COMMON-COUNT-2:   scf.yield
@@ -877,7 +878,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %61 = tt.load %arg13 : tensor<128x64x!tt.ptr<i8>, #blocked1>
       %62 = ttg.convert_layout %60 : tensor<128x128xf8E5M2, #blocked> -> tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
       %63 = ttg.local_alloc %61 : (tensor<128x64xi8, #blocked1>) -> !ttg.memdesc<128x64xi8, #shared, #smem>
-      %64 = amdg.local_load_packed_tranposed %63 : !ttg.memdesc<128x64xi8, #shared, #smem> -> tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
+      %64 = amdg.local_load_packed_transposed %63 : !ttg.memdesc<128x64xi8, #shared, #smem> -> tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
       %65 = tt.dot_scaled %62, %64, %arg11 lhs = e5m2 rhs = e2m1 {fastMath = false} : tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>> * tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>> -> tensor<128x128xf32, #mma>
       %66 = tt.addptr %arg12, %cst : tensor<128x128x!tt.ptr<f8E5M2>, #blocked>, tensor<128x128xi32, #blocked>
       %67 = tt.addptr %arg13, %cst_0 : tensor<128x64x!tt.ptr<i8>, #blocked1>, tensor<128x64xi32, #blocked1>

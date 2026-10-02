@@ -39,13 +39,12 @@ struct CircularStoreOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-
     auto dataPack =
-        lowerCircularStoreOpHelper(op, adaptor.getSegment(), rewriter);
-
+        lowerCircularStore(op, adaptor.getSegment(), adaptor.getCounter(),
+                           adaptor.getDynamicScopeId(), rewriter);
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {
-      auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+      auto mod = op->getParentOfType<ModuleOp>();
       int numWarps = proton::gpu::getTotalNumWarps(mod);
       PTXBuilder builder;
       auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -63,7 +62,7 @@ struct CircularStoreOpConversion
         builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
       } else {
         // Non-vectorized version for num_warps=1 to handle potential
-        // misalignment
+        // misalignment.
         auto stInst = builder.create<>("st")->o("global").o("cg").b(32);
 
         auto unPackedVals = unpackLLVector(loc, dataPack.record, rewriter);

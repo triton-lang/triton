@@ -438,3 +438,163 @@ tt.func @still_has_ssa_deps(%lb: i32, %ub: i32, %step: i32) {
 }
 
 }
+
+// -----
+
+#clc_pl_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#clc_pl_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @partition_clc_while
+  tt.func @partition_clc_while(
+      %response: !ttg.memdesc<2xi64, #clc_pl_shared, #clc_pl_smem, mutable>,
+      %initial_pid: i32, %initial_work: i1) {
+    // CHECK: nvws.warp_group
+    scf.while (%pid = %initial_pid, %has_work = %initial_work) : (i32, i1) -> (i32, i1) {
+      scf.condition(%has_work) {ttg.partition = array<i32: 0, 1, 2, 3>} %pid, %has_work : i32, i1
+    } do {
+    ^bb0(%pid: i32, %has_work: i1):
+      // CHECK: partition0 num_warps(4)
+      // CHECK-NEXT: {{%.*}}:2 = scf.while
+      // CHECK: "epilogue"
+      // CHECK: ttng.clc_is_canceled
+      // CHECK: scf.if
+      // CHECK: ttng.clc_get_program_id
+      "epilogue"(%pid) {ttg.partition = array<i32: 0>} : (i32) -> ()
+      // CHECK: partition1 num_warps(4)
+      // CHECK-NEXT: {{%.*}} = scf.while
+      // CHECK: "mma"
+      // CHECK: ttng.clc_is_canceled
+      // CHECK: scf.if
+      // CHECK: ttng.clc_get_program_id
+      "mma"(%pid) {ttg.partition = array<i32: 1>} : (i32) -> ()
+      // CHECK: partition2 num_warps(4)
+      // CHECK-NEXT: {{%.*}} = scf.while
+      // CHECK: "load"
+      // CHECK: ttng.clc_is_canceled
+      // CHECK: scf.if
+      // CHECK: ttng.clc_get_program_id
+      "load"(%pid) {ttg.partition = array<i32: 2>} : (i32) -> ()
+      // CHECK: partition3 num_warps(4)
+      // CHECK-NEXT: {{%.*}} = scf.while
+      // CHECK: nvws.clc_try_cancel
+      // CHECK-NOT: nvws.clc_try_cancel
+      // CHECK: ttng.clc_is_canceled
+      // CHECK: scf.if
+      // CHECK: ttng.clc_get_program_id
+      nvws.clc_try_cancel %response {ttg.partition = array<i32: 3>} : !ttg.memdesc<2xi64, #clc_pl_shared, #clc_pl_smem, mutable>
+      %raw = "response"() {ttg.partition = array<i32: 0, 1, 2, 3>} : () -> i128
+      %next_work = ttng.clc_is_canceled %raw {ttg.partition = array<i32: 0, 1, 2, 3>} : i128 -> i1
+      %next_pid = scf.if %next_work -> i32 {
+        %stolen = ttng.clc_get_program_id %raw, x {ttg.partition = array<i32: 0, 1, 2, 3>} : i128 -> i32
+        scf.yield {ttg.partition = array<i32: 0, 1, 2, 3>} %stolen : i32
+      } else {
+        scf.yield {ttg.partition = array<i32: 0, 1, 2, 3>} %pid : i32
+      } {ttg.partition = array<i32: 0, 1, 2, 3>, ttg.partition.outputs = [array<i32: 0, 1, 2, 3>]}
+      // CHECK: nvws.warp_group.return
+      // CHECK-NOT: nvws.warp_group
+      // CHECK-NOT: ttg.partition
+      scf.yield {ttg.partition = array<i32: 0, 1, 2, 3>} %next_pid, %next_work : i32, i1
+    } attributes {tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2, 3>, ttg.partition.outputs = [array<i32: 0, 1, 2, 3>, array<i32: 0, 1, 2, 3>], ttg.partition.stages = [0, 0, 0, 0], ttg.warp_specialize.tag = 7 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @while_result_direct_partitioned_use
+  tt.func @while_result_direct_partitioned_use(%initial: i32) {
+    %c1 = arith.constant 1 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    // CHECK: nvws.warp_group
+    %loop:2 = scf.while (%state = %initial, %keep_going = %true) : (i32, i1) -> (i32, i1) {
+      // CHECK-NEXT: partition0 num_warps(4)
+      // CHECK-NEXT: {{%.*}} = scf.while
+      scf.condition(%keep_going) {ttg.partition = array<i32: 0, 1>} %state, %keep_going : i32, i1
+    } do {
+    ^bb0(%state: i32, %keep_going: i1):
+      // CHECK: partition1 num_warps(4)
+      // CHECK-NEXT: %[[RESULT:.*]] = scf.while
+      %next = arith.addi %state, %c1 {ttg.partition = array<i32: 1>} : i32
+      scf.yield {ttg.partition = array<i32: 0, 1>} %next, %false : i32, i1
+    } attributes {tt.warp_specialize, ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 1>, array<i32: 0, 1>], ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
+    // CHECK: %[[AFTER_VALUE:.*]] = arith.addi %[[RESULT]],
+    %after_value = arith.addi %loop#0, %c1 {ttg.partition = array<i32: 1>, ttg.warp_specialize.tag = 0 : i32} : i32
+    // CHECK-NEXT: "after"(%[[AFTER_VALUE]])
+    "after"(%after_value) {ttg.partition = array<i32: 1>, ttg.warp_specialize.tag = 0 : i32} : (i32) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @aref_phi_for
+  tt.func @aref_phi_for(%lb: i32, %ub: i32, %step: i32) {
+    scf.for %i = %lb to %ub step %step : i32 {
+      %local = "local"() {ttg.partition = array<i32: 1>} : () -> i32
+      %remote = "remote"() {ttg.partition = array<i32: 0>} : () -> i32
+      // CHECK: partition0
+      // CHECK: %[[REMOTE:.*]] = "remote"
+      // CHECK: "consume"(%[[REMOTE]])
+      // CHECK: partition1
+      // CHECK: %[[LOCAL:.*]] = "local"
+      // CHECK: "consume"(%[[LOCAL]])
+      // CHECK-NOT: nvws.aref.phi
+      %selected = nvws.aref.phi %local, %remote {ttg.partition = array<i32: 0, 1>} : i32
+      "consume"(%selected) {ttg.partition = array<i32: 0, 1>} : (i32) -> ()
+      scf.yield {ttg.partition = array<i32: 0, 1>}
+    } {tt.warp_specialize, ttg.partition = array<i32: 0, 1>, ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @aref_phi_for_iter_arg
+  tt.func @aref_phi_for_iter_arg(%lb: i32, %ub: i32, %step: i32, %initial: i32) {
+    %result = scf.for %i = %lb to %ub step %step iter_args(%state = %initial) -> i32 : i32 {
+      %remote = "remote"() {ttg.partition = array<i32: 0>} : () -> i32
+      // CHECK: partition0
+      // CHECK: %[[REMOTE:.*]] = "remote"
+      // CHECK: "consume"(%[[REMOTE]])
+      // CHECK: partition1
+      // CHECK: "consume"(%{{.*}})
+      // CHECK-NOT: nvws.aref.phi
+      %selected = nvws.aref.phi %state, %remote {ttg.partition = array<i32: 0, 1>} : i32
+      "consume"(%selected) {ttg.partition = array<i32: 0, 1>} : (i32) -> ()
+      %next = "update"(%selected) {ttg.partition = array<i32: 1>} : (i32) -> i32
+      scf.yield {ttg.partition = array<i32: 1>} %next : i32
+    } {tt.warp_specialize, ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 1>], ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @aref_phi_while
+  tt.func @aref_phi_while(%run: i1) {
+    scf.while (%keep_going = %run) : (i1) -> i1 {
+      scf.condition(%keep_going) {ttg.partition = array<i32: 0, 1>} %keep_going : i1
+    } do {
+    ^bb0(%keep_going: i1):
+      %local = "local"() {ttg.partition = array<i32: 1>} : () -> i32
+      %remote = "remote"() {ttg.partition = array<i32: 0>} : () -> i32
+      // CHECK: partition0
+      // CHECK: %[[WHILE_REMOTE:.*]] = "remote"
+      // CHECK: "consume"(%[[WHILE_REMOTE]])
+      // CHECK: partition1
+      // CHECK: %[[WHILE_LOCAL:.*]] = "local"
+      // CHECK: "consume"(%[[WHILE_LOCAL]])
+      // CHECK-NOT: nvws.aref.phi
+      %selected = nvws.aref.phi %local, %remote {ttg.partition = array<i32: 0, 1>} : i32
+      "consume"(%selected) {ttg.partition = array<i32: 0, 1>} : (i32) -> ()
+      scf.yield {ttg.partition = array<i32: 0, 1>} %keep_going : i1
+    } attributes {tt.warp_specialize, ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 0, 1>], ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
+    tt.return
+  }
+}

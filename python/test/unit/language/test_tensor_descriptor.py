@@ -4,10 +4,10 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_hip_gfx1250, is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy, run_in_process
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3
+from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton import CompilationError
 
@@ -257,6 +257,7 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK, device):
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.skip("CTAs is unsupported for these cards")
@@ -322,6 +323,7 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devic
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.skip("CTAs is unsupported for these cards")
@@ -424,6 +426,10 @@ def test_tensor_descriptor_padding(device):
     M_BLOCK = 32
     N_BLOCK = 32
     padding = "nan"
+
+    if is_hip_gfx1250() and padding != "zero":
+        pytest.skip("TDM load with padding on GFX1250 does not support non-zero padding.")
+
     input = torch.arange(IM * IN, device=device, dtype=torch.float32)
     input = input.reshape(IM, IN)
     out_device_tma = torch.zeros((OM, ON), device=device, dtype=torch.float32)
@@ -967,7 +973,7 @@ def test_tensor_descriptor_batched_gemm_3d_tma(device):
 
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("ndim", [3, 4, 5])
-@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128, 1024])
 def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK, device):
 
     @triton.jit
@@ -1311,10 +1317,11 @@ def mxfp8_mxfp4_matmul_tma(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
+@pytest.mark.enable_warmup(min_capability=9, priority=1)
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (8192, 8192, 8192)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
-                                                       (128, 256, 256)])
+                                                       (128, 256, 256), (128, 128, 32), (128, 128, 64)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.skipif(is_hip(), reason="HIP devices don't have full support for MX formats")
 def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
@@ -1554,6 +1561,7 @@ REDUCE_SKIP_HIP_CDNA3 = [
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("descriptor", ["host", "device"])
 @pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128), (512, 32), (1, 1024)])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK, N_BLOCK, device):
     is_native = is_cuda() and torch.cuda.get_device_capability()[0] >= 9
     if not is_native:
@@ -1628,13 +1636,46 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
     fallback_supported = dtype in FALLBACK_SUPPORTED_REDUCE_DTYPES[kind]
     supported = native_supported if is_native else fallback_supported
     if not supported:
+        if is_compile_warmup():
+            pytest.skip("unsupported descriptor reduction cannot be compiled")
         with pytest.raises(CompilationError):
             kernel[(grid_m, grid_n)](out_desc, out, inp, M, N, M_BLOCK, N_BLOCK, kind, num_ctas=num_ctas)
         return
 
-    expect = REDUCE_OP[kind](inp, out)
+    expect = out if is_compile_warmup() else REDUCE_OP[kind](inp, out)
     kernel[(grid_m, grid_n)](out_desc, out, inp, M, N, M_BLOCK, N_BLOCK, kind, num_ctas=num_ctas)
     torch.testing.assert_close(expect, unwrap_tensor(out), check_dtype=False)
+
+
+@pytest.mark.interpreter()
+def test_host_tensor_descriptor_round_f32_to_tf32(device):
+    if is_hip_gfx1250():
+        pytest.skip("TDM descriptor loads on GFX1250 do not apply tf32 rounding.")
+
+    @triton.jit
+    def kernel(out_ptr, desc):
+        block = desc.load([0, 0])
+        idx = tl.arange(0, 16)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    def round_to_tf32(x: torch.Tensor) -> torch.Tensor:
+        bits = x.view(torch.int32).to(torch.int64) & 0xFFFFFFFF
+        exp_mask = 0x7F800000
+        is_special = (bits & exp_mask) == exp_mask
+        round_bias = ((bits >> 13) & 1) + 0x00000FFF
+        rounded = (bits + round_bias) & 0xFFFFE000
+        return (torch.where(is_special, bits, rounded) & 0xFFFFFFFF).to(torch.int32).view(torch.float32)
+
+    torch.manual_seed(17)
+    inp = torch.randn((1, 16), device=device, dtype=torch.float32)
+    # a tie that rounds to even, one that rounds up, a mantissa that carries out, and the specials
+    inp[0, :6] = torch.tensor(
+        [1.0 + 2.0**-11, 1.0 + 2.0**-10 + 2.0**-11, 2.0 - 2.0**-23,
+         float("nan"), float("inf"), -3.0])
+    out = torch.empty_like(inp)
+    desc = TensorDescriptor.from_tensor(inp, [1, 16], round_f32_to_tf32=True)
+    kernel[(1, )](out, desc)
+    torch.testing.assert_close(out, round_to_tf32(inp), rtol=0, atol=0, equal_nan=True)
 
 
 @pytest.mark.interpreter()
@@ -1814,3 +1855,76 @@ def test_tensor_descriptor_store_downcast(dtype_str, device):
     kernel[(grid_m, grid_n)](desc, M, N, M_BLOCK=M_BLOCK, N_BLOCK=N_BLOCK)
     ref = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N).to(torch_dtype)
     torch.testing.assert_close(out, ref)
+
+
+@pytest.mark.parametrize("dtype_str, misaligned_stride, aligned_stride",
+                         [("float16", 511, 512),  # 2 bytes: 1022 B rejected, 1024 B ok
+                          ("bfloat16", 511, 512),  # 2 bytes
+                          ("float32", 255, 256),  # 4 bytes: 1020 B rejected, 1024 B ok
+                          ])
+def test_tensor_descriptor_stride_alignment(dtype_str, misaligned_stride, aligned_stride, device, with_allocator):
+    if not is_cuda():
+        pytest.skip("Requires TMA support")
+    dtype = getattr(torch, dtype_str)
+
+    @triton.jit
+    def kernel(a_ptr, M, N, stride_m: tl.constexpr, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        desc = tl.make_tensor_descriptor(a_ptr, shape=[M, N], strides=[stride_m, 1], block_shape=[M_BLOCK, N_BLOCK])
+        desc.load([0, 0])
+
+    a = torch.empty((32, aligned_stride), dtype=dtype, device=device)
+
+    with pytest.raises(CompilationError, match="16-byte aligned"):
+        kernel[(1, )](a, 32, misaligned_stride, stride_m=misaligned_stride, M_BLOCK=8, N_BLOCK=64)
+
+    kernel[(1, )](a, 32, aligned_stride, stride_m=aligned_stride, M_BLOCK=8, N_BLOCK=64)
+
+
+def _run_tensor_descriptor_dynamic_iisan(device, stride_m_val, base_byte_offset=0):
+    triton.knobs.refresh_knobs()
+
+    @triton.jit
+    def kernel(a_ptr, M, N, stride_m, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        desc = tl.make_tensor_descriptor(
+            a_ptr,
+            shape=[M, N],
+            strides=[stride_m, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+        )
+        desc.load([0, 0])
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    n_bytes = 32 * 512 * 2  # bfloat16
+    buf = torch.empty(n_bytes + base_byte_offset, dtype=torch.int8, device=device)
+    a = buf[base_byte_offset:base_byte_offset + n_bytes].view(torch.bfloat16).reshape(32, 512)
+
+    kernel[(1, )](a, 32, 512, stride_m_val, M_BLOCK=8, N_BLOCK=64)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires TMA (Hopper+)")
+def test_tensor_descriptor_alignment_iisan_dynamic(device):
+
+    base_env = {"CUDA_LAUNCH_BLOCKING": "1", "TRITON_INSTRUMENTATION_MODE": "iisan"}
+
+    ok = run_in_process(_run_tensor_descriptor_dynamic_iisan, (device, 512, 0), env=base_env)
+    assert ok.exc is None, ok.exc
+
+    bad_stride = run_in_process(_run_tensor_descriptor_dynamic_iisan, (device, 511, 0), env=base_env)
+    assert bad_stride.exc is not None
+    assert "device-side assert" in str(bad_stride.exc).lower(), bad_stride.exc
+
+    bad_ptr = run_in_process(_run_tensor_descriptor_dynamic_iisan, (device, 512, 8), env=base_env)
+    assert bad_ptr.exc is not None
+    assert "device-side assert" in str(bad_ptr.exc).lower(), bad_ptr.exc
+
+    without_iisan = run_in_process(
+        _run_tensor_descriptor_dynamic_iisan,
+        (device, 511, 0),
+        env={"CUDA_LAUNCH_BLOCKING": "1", "TRITON_INSTRUMENTATION_MODE": ""},
+    )
+    assert without_iisan.exc is None, without_iisan.exc

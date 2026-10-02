@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import is_cuda, is_hip
+from triton._internal_testing import is_cuda, is_hip, run_in_process
 
 
 def test_metadata() -> None:
@@ -39,7 +39,7 @@ def test_metadata() -> None:
     assert used_hook
 
 
-def test_memory_leak(device) -> None:
+def _check_memory_leak(device) -> None:
 
     @triton.jit
     def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
@@ -62,9 +62,17 @@ def test_memory_leak(device) -> None:
             kernel[(10, )](inp, out, 10, XBLOCK=16)
         gc.collect()
         end, _ = tracemalloc.get_traced_memory()
-        assert end - begin < 30000
+        assert end - begin < 1000
     finally:
         tracemalloc.stop()
+
+
+def test_memory_leak(device) -> None:
+    # tracemalloc counts allocations from every thread, including xdist's
+    # concurrent work-stealing requests. Measure launches in a separate process.
+    result = run_in_process(_check_memory_leak, (device, ))
+    if result is not None:
+        assert result.exc is None, result.exc
 
 
 def test_load_hook() -> None:
@@ -152,7 +160,7 @@ def test_multiple_hooks() -> None:
     {"enable_fp_fusion": False},
     {"extern_libs": {}},
 ])
-def test_launch_with_options(options) -> None:
+def test_launch_with_options(options, monkeypatch) -> None:
     if "extern_libs" in options:
         # copied from tutorials/07-extern-functions.py
         current_dir = pathlib.Path(os.path.dirname(os.path.abspath(__file__)))
@@ -178,8 +186,8 @@ def test_launch_with_options(options) -> None:
     def kernel(x):
         pass
 
-    triton.knobs.runtime.jit_post_compile_hook = compile_info_hook
-    triton.knobs.runtime.jit_cache_hook = cache_hook
+    monkeypatch.setattr(triton.knobs.runtime, "jit_post_compile_hook", compile_info_hook)
+    monkeypatch.setattr(triton.knobs.runtime, "jit_cache_hook", cache_hook)
 
     # run first without options
     kernel[(1, 1, 1)](6)
@@ -202,9 +210,6 @@ def test_launch_with_options(options) -> None:
             assert compile_info[option_key] == tuple(option_val.items())
     else:
         assert compile_info[option_key] == option_val
-
-    triton.knobs.runtime.jit_post_compile_hook = None
-    triton.knobs.runtime.jit_cache_hook = None
 
 
 @pytest.mark.interpreter
@@ -240,3 +245,21 @@ def test_interpreter_implicit_cvt_bool() -> None:
     assert value.dtype == tl.int1
     assert value.handle.data.dtype == np.bool_
     assert bool(value.handle.data[0]) is True
+
+
+@pytest.mark.skipif(not is_hip(), reason="requires HIP")
+def test_wgp_cu_mode_launch_argument():
+    arch = triton.runtime.driver.active.get_current_target().arch
+    if not arch.startswith(("gfx10", "gfx11", "gfx120")):
+        pytest.skip("target has no WGP/CU mode distinction")
+
+    @triton.jit
+    def add_one(x_ptr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(x_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+    x = torch.zeros(64, device="cuda")
+    for options, mode in [({}, 1), ({"wgp_cu_mode": "wgp"}, 1), ({"wgp_cu_mode": "cu"}, 0)]:
+        kernel = add_one[(1, )](x, BLOCK=64, **options)
+        assert f".amdhsa_workgroup_processor_mode {mode}" in kernel.asm["amdgcn"]
+    assert torch.equal(x, torch.full_like(x, 3))

@@ -18,10 +18,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: @convert_layout_swizzled
 tt.func @convert_layout_swizzled(%arg0: tensor<256x256xi32, #blocked1>) {
   // CHECK-NEXT: allocation.offset = 0 : i32
+  // CHECK-SAME: allocation.size = 131072 : i32
   %0 = ttg.convert_layout %arg0 : tensor<256x256xi32, #blocked1> -> tensor<256x256xi32, #blocked2>
   tt.return
 }
 
+}
+
+// -----
+
+#forced_src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+#forced_dst = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: @convert_layout_forced_warp_shuffle
+tt.func @convert_layout_forced_warp_shuffle(%arg0: tensor<16x16xi32, #forced_src>) {
+  // CHECK-NEXT: %0 = ttg.convert_layout %arg0 {force_warp_shuffle}
+  %0 = ttg.convert_layout %arg0 {force_warp_shuffle} : tensor<16x16xi32, #forced_src> -> tensor<16x16xi32, #forced_dst>
+  tt.return
+}
 }
 
 // -----

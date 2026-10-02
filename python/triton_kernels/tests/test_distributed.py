@@ -76,7 +76,7 @@ def _distributed_worker(rank, fn, world_size, kwargs):
 
 
 @pytest.fixture
-def distributed_launcher(request):
+def distributed_launcher(request, monkeypatch):
     n_gpus = getattr(request, "param", None)
     if not torch.cuda.is_available():
         pytest.skip("CUDA required for distributed GPU test")
@@ -85,9 +85,11 @@ def distributed_launcher(request):
 
     master_port = _get_free_tcp_port()
 
-    os.environ["WORLD_SIZE"] = str(n_gpus)
-    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
-    os.environ.setdefault("MASTER_PORT", str(master_port))
+    monkeypatch.setenv("WORLD_SIZE", str(n_gpus))
+    if "MASTER_ADDR" not in os.environ:
+        monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
+    if "MASTER_PORT" not in os.environ:
+        monkeypatch.setenv("MASTER_PORT", str(master_port))
 
     def launch(fn, **kwargs):
         mp.spawn(

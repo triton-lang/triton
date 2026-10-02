@@ -105,7 +105,7 @@ def memcpy_1d_tma_kernel(in_desc, out_desc, XBLOCK: gl.constexpr):
 
     # Since the TMA store reads from shared memory, we don't even need to load
     # the result into registers. We can just store the result directly.
-    tma.async_copy_shared_to_global(out_desc, [pid * XBLOCK], smem)
+    tma.async_store(out_desc, [pid * XBLOCK], smem)
 
     # Unlike TMA reads, the completion of TMA stores is tracked by commit
     # groups, just like async copies. Each async TMA store is implicitly
@@ -141,7 +141,7 @@ def tma_message_passing_kernel(message_desc, ready, output, MESSAGE_SIZE: gl.con
         # TMA to write it to HBM.
         smem.store(offsets + 1000)
         fence_async_shared()
-        tma.async_copy_shared_to_global(message_desc, [0], smem)
+        tma.async_store(message_desc, [0], smem)
 
         # Before signaling CTA 1, wait for the TMA write to become visible in HBM.
         tma.store_wait(pendings=0, read_only=False)
@@ -228,16 +228,16 @@ def test_memcpy_1d_tma(XBLOCK, xnumel):
 # tma.async_load(desc, [0, 0], bar, smem)
 # ```
 #
-# Without the fence, async_copy_global_to_shared can start copying into `smem`
+# Without the fence, async_load can start copying into `smem`
 # while the shared memory load is still in progress.
 #
 # ```python
 # smem.store(value)
 # fence_async_shared()
-# tma.async_copy_shared_to_global(desc, [0, 0], smem)
+# tma.async_store(desc, [0, 0], smem)
 # ```
 #
-# Without the fence, async_copy_shared_to_global can start copying from `smem`
+# Without the fence, async_store can start copying from `smem`
 # before the shared memory store is complete.
 #
 # Note that certain cases imply total completion of a memory transaction and
@@ -259,7 +259,7 @@ def test_memcpy_1d_tma(XBLOCK, xnumel):
 # mbarrier.arrive(bar, count=1)
 # mbarrier.wait(bar, phase=0)
 # fence_async_shared()
-# tma.async_copy_shared_to_global(desc, [0, 0], smem)
+# tma.async_store(desc, [0, 0], smem)
 # ```
 
 
@@ -290,7 +290,7 @@ def perform_add(read_index, bars, a_smem, b_smem, c_smem, c_desc, xoff, layout: 
     c_smem.store(c_val)
     fence_async_shared()
     # Issue the store without waiting for it.
-    tma.async_copy_shared_to_global(c_desc, [xoff, yoff], c_smem)
+    tma.async_store(c_desc, [xoff, yoff], c_smem)
     return read_index + 1
 
 
@@ -418,7 +418,7 @@ if __name__ == "__main__":
 #
 # Note the following restrctions for TMA operations:
 # - The innermost coordinate must be 16-byte aligned. For example, for dtype float16,
-#   an async_copy_global_to_shared with coordinates [8, 4] is illegal, but [4, 8] is legal.
+#   an async_load with coordinates [8, 4] is illegal, but [4, 8] is legal.
 # - If the shared memory layout is fp4_padded, the innermost coordinate must be 128-byte aligned.
 #
 # Main takeaways:

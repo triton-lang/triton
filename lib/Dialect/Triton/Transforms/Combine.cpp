@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -100,9 +101,13 @@ public:
     if (splatCond != condSelect)
       return failure();
 
-    rewriter.replaceOpWithNewOp<LoadOp>(
-        op, loadOp.getPtr(), loadOp.getMask(), /*other=*/falseValue,
-        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+    if (!loadOp.getResult().hasOneUse() ||
+        !DominanceInfo().properlyDominates(falseValue, loadOp))
+      return failure();
+
+    rewriter.modifyOpInPlace(
+        loadOp, [&] { loadOp.getOtherMutable().assign(falseValue); });
+    rewriter.replaceOp(op, loadOp.getResult());
     return success();
   }
 };
@@ -143,11 +148,7 @@ public:
     if (reduceOp.getAxis() != 1)
       return failure();
     // only support reduce with simple addition
-    Region &combineOp = reduceOp.getCombineOp();
-    bool isReduceAdd = combineOp.hasOneBlock() &&
-                       combineOp.front().getOperations().size() == 2 &&
-                       isAddF32(&*combineOp.front().getOperations().begin());
-    if (!isReduceAdd)
+    if (!isAddF32(reduceOp.getSingleCombiner()))
       return failure();
     // operand of reduce has to be mul
     auto mulOp = reduceOp.getOperand(0).getDefiningOp<arith::MulFOp>();

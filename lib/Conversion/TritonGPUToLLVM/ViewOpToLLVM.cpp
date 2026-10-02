@@ -125,36 +125,6 @@ struct ArithConstantSplatOpConversion
   }
 };
 
-struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
-  using OpAdaptor = typename CatOp::Adaptor;
-  explicit CatOpConversion(LLVMTypeConverter &typeConverter,
-                           PatternBenefit benefit = patternBenefitDefault)
-      : ConvertOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
-  LogicalResult
-  matchAndRewrite(CatOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto resultTy = cast<RankedTensorType>(op.getType());
-    // Unpack input values.
-    auto lhsVals = unpackUniqueTensorElements(loc, adaptor.getLhs(), rewriter);
-    auto rhsVals = unpackUniqueTensorElements(loc, adaptor.getRhs(), rewriter);
-
-    // concatenate (and potentially reorder) values
-    SmallVector<Value> retVals;
-    for (Value v : lhsVals)
-      retVals.push_back(v);
-    for (Value v : rhsVals)
-      retVals.push_back(v);
-
-    assert(retVals.size() == getUniqueElemsPerThread(resultTy));
-
-    // pack and replace
-    Value ret = packUniqueTensorElements(loc, getTypeConverter(), retVals,
-                                         rewriter, resultTy);
-    rewriter.replaceOp(op, ret);
-    return success();
-  }
-};
 struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
   using OpAdaptor = typename JoinOp::Adaptor;
   explicit JoinOpConversion(LLVMTypeConverter &typeConverter,
@@ -511,40 +481,17 @@ struct MemDescSubsliceOpConversion
       offsetVals.push_back(b.add(oldOffVal, b.i32_val(opOff)));
     }
 
-    // For PartitionedSharedEncoding we need to pick the right base at load
-    // time. Let
-    //   o     = this op's static subslice offsets (one per dim),
-    //   c     = a logical base indices to the current subslice op,
-    //   L     = the shared LL (inputs: offset, partition, block;
-    //                          outputs: dim0, dim1, ...).
-    //
-    //   (1) c_src = c + o
-    //   (2) verifier makes o's bits disjoint from c's bits per dim, so:
-    //         c + o = c ^ o                                   (bit-disjoint)
-    //   (3) L^-1 is linear, so projecting (2) onto the partition component:
-    //         partition(L^-1(c_src)) = partition(L^-1(c)) ^ S
-    //       where  S = partition(L^-1(o))
-    //   (4) the existing lowering already computes i = partition(L^-1(c))
-    //       and indexes bases[i]; from (3) the correct base is:
-    //         bases[i ^ S]
-    //   (5) precompute that rotation once here
-    //         newBases[i] = oldBases[i ^ S]
-    //
-    // The offset component of (3) is already XORed in by getShmemOffset at
-    // load time; only the partition component needs this fix.
-    if (newBases.size() > 1) {
-      LinearLayout ll = triton::gpu::isPaddedEncoding(srcTy.getEncoding())
-                            ? triton::gpu::paddedLinearLayout(srcTy)
-                            : triton::gpu::toLinearLayout(srcTy);
-      auto kPartition = StringAttr::get(ctx, "partition");
-      assert(ll.hasInDim(kPartition) &&
-             "multiple bases require a partition input dim");
-      auto dimNames = standardOutDimNames(ctx, layoutOffsets.size());
-      SmallVector<std::pair<StringAttr, int32_t>> namedOffsets;
-      for (auto [dim, off] : llvm::zip(dimNames, layoutOffsets))
-        namedOffsets.push_back({dim, off});
-      auto partitionLayout = ll.invert().sublayout(dimNames, {kPartition});
-      int32_t partitionShift = partitionLayout.apply(namedOffsets)[0].second;
+    // Partition pieces repeat independently within each CTA, with partitions
+    // varying faster than groups. The logical piece selected by the static
+    // offset therefore determines the physical base rotation directly.
+    if (auto part = dyn_cast<PartitionedSharedEncodingAttr>(encoding)) {
+      auto allocShape = dropPipeliningDim(srcTy.getAllocShape(), encoding);
+      auto shapePerCTA = getShapePerCTA(part, allocShape);
+      unsigned dim = part.getPartitionDim();
+      int64_t pieceSize = shapePerCTA[dim] / part.getNumLogicalPieces();
+      unsigned partitionShift =
+          (layoutOffsets[dim] / pieceSize) % part.getNumPartitions();
+
       SmallVector<Value> rotated(newBases.size());
       for (size_t i = 0; i < newBases.size(); ++i)
         rotated[i] = newBases[i ^ partitionShift];
@@ -596,7 +543,6 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
-  patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);
   patterns.add<MemDescTransOpConversion, MemDescReshapeOpConversion>(

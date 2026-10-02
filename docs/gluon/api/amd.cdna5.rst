@@ -1,0 +1,31 @@
+AMD CDNA 5
+==========
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+    :template: autosummary/gluon-module.rst
+
+    async_copy
+    cluster
+    mbarrier
+    tdm
+
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    buffer_load
+    buffer_store
+    get_scaled_upcast_fp4_scale_layout
+    get_wmma_scale_layout
+    load_shared_fp4_repacked
+    make_partitioned_dot_layouts
+    scaled_downcast
+    scaled_upcast
+    wmma
+    wmma_scaled
+    PartitionedSharedLayout

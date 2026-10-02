@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --dump-input-context 20 --implicit-check-not=tti.
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
@@ -7,10 +7,10 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK: global internal constant @tensor_constant_0([0, 42]) {addr_space = 0 : i32} : !llvm.array<2 x i64>
 
 // CHECK-LABEL: @experimental_buffer_descriptors_tmem
-// CHECK: llvm.mlir.constant(4294967295 : i64) : i64
-tt.func private @experimental_buffer_descriptors_tmem() {
-  tti.experimental_buffer_descriptors [0, 42], [8, 16], tensor_mem : tensor<2xi64, #blocked>
-  tt.return
+// CHECK-DAG: llvm.mlir.constant(4294967295 : i64) : i64
+tt.func private @experimental_buffer_descriptors_tmem() -> tensor<2xi64, #blocked> {
+  %result = tti.experimental_buffer_descriptors [0, 42], [8, 16], tensor_mem : tensor<2xi64, #blocked>
+  tt.return %result : tensor<2xi64, #blocked>
 }
 }
 
@@ -23,9 +23,28 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK: global internal constant @tensor_constant_0([0, 42])
 
 // CHECK-LABEL: @experimental_buffer_descriptors_shared
-// CHECK: llvm.mlir.constant(16777215 : i64) : i64
-tt.func private @experimental_buffer_descriptors_shared() {
-  tti.experimental_buffer_descriptors [0, 42], [4, 12], shared_mem : tensor<2xi64, #blocked>
+// CHECK-DAG: llvm.mlir.constant(16777215 : i64) : i64
+tt.func private @experimental_buffer_descriptors_shared() -> tensor<2xi64, #blocked> {
+  %result = tti.experimental_buffer_descriptors [0, 42], [4, 12], shared_mem : tensor<2xi64, #blocked>
+  tt.return %result : tensor<2xi64, #blocked>
+}
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_assert_uniform(
+// CHECK-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// CHECK: %[[RAW_TID:.*]] = nvvm.read.ptx.sreg.tid.x
+// CHECK: %[[TID:.*]] = llvm.and %[[RAW_TID]], %{{.*}} : i32
+// CHECK: %[[NOT_THREAD_ZERO:.*]] = llvm.icmp "ne" %[[TID]], %[[ZERO]] : i32
+// CHECK: %[[CONDITION:.*]] = llvm.or %[[NOT_THREAD_ZERO]], %arg0 : i1
+// CHECK: llvm.cond_br
+// CHECK: llvm.call @__assertfail
+// CHECK-NOT: llvm.cond_br
+// CHECK: llvm.return
+tt.func private @experimental_assert_uniform(%arg0: i1) {
+  tti.experimental_assert_uniform %arg0, "uniform assertion"
   tt.return
 }
 }
@@ -73,12 +92,28 @@ tt.func private @experimental_lock_release(
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_memdesc_to_i32
-// CHECK:  llvm.ptrtoint %1 : !llvm.ptr<3> to i32
+// CHECK:  llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
 tt.func private @experimental_memdesc_to_i32(
   %memdesc: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-) {
-  tti.experimental_memdesc_to_i32 %memdesc : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-  tt.return
+) -> i32 {
+  %result = tti.experimental_memdesc_to_i32 %memdesc : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+  tt.return %result : i32
+}
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_pointer_memdesc_to_i32
+// CHECK-DAG: %[[POINTER_BYTES:.*]] = llvm.mlir.constant(8 : i32) : i32
+// CHECK: llvm.mul {{.*}}, %[[POINTER_BYTES]] : i32
+tt.func private @experimental_pointer_memdesc_to_i32(
+  %memdesc: !ttg.memdesc<4x!tt.ptr<i32>, #shared, #smem, mutable>
+) -> i32 {
+  %result = tti.experimental_memdesc_to_i32 %memdesc : !ttg.memdesc<4x!tt.ptr<i32>, #shared, #smem, mutable>
+  tt.return %result : i32
 }
 }
 
@@ -87,52 +122,24 @@ tt.func private @experimental_memdesc_to_i32(
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 // CHECK-LABEL: @experimental_memory_offset_to_i32_shared
+// CHECK-DAG: %[[OFFSET:.*]] = llvm.mlir.constant(42 : i32)
+// CHECK-DAG: %[[MASK:.*]] = llvm.mlir.constant(16777215 : i32)
 // CHECK: %[[BASE:.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<3> to i32
-// CHECK: %[[OFFSET:.*]] = llvm.mlir.constant(42 : i32)
 // CHECK: %[[ADDRESS:.*]] = llvm.add %[[BASE]], %[[OFFSET]] : i32
-// CHECK: %[[MASK:.*]] = llvm.mlir.constant(16777215 : i32)
 // CHECK: llvm.and %[[ADDRESS]], %[[MASK]] : i32
-tt.func private @experimental_memory_offset_to_i32_shared() {
-  tti.experimental_memory_offset_to_i32 42, shared_mem
-  tt.return
+tt.func private @experimental_memory_offset_to_i32_shared() -> i32 {
+  %result = tti.experimental_memory_offset_to_i32 42, shared_mem
+  tt.return %result : i32
 }
 
 // CHECK-LABEL: @experimental_memory_offset_to_i32_tensor
+// CHECK-DAG: %[[OFFSET:.*]] = llvm.mlir.constant(65539 : i32)
 // CHECK: %[[BASE_PTR:.*]] = nvg.tensor_memory_base
 // CHECK: %[[BASE:.*]] = llvm.ptrtoint %[[BASE_PTR]] : !llvm.ptr<6> to i32
-// CHECK: %[[OFFSET:.*]] = llvm.mlir.constant(65539 : i32)
 // CHECK: llvm.add %[[BASE]], %[[OFFSET]] : i32
-tt.func private @experimental_memory_offset_to_i32_tensor() {
-  tti.experimental_memory_offset_to_i32 65539, tensor_mem
-  tt.return
-}
-}
-
-// -----
-
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
-module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_gsan_tensordesc_info
-// CHECK-NOT: llvm.getelementptr
-// CHECK-NOT: llvm.inttoptr
-// CHECK-NOT: llvm.lshr
-// CHECK: %[[DESC:.*]] = llvm.load %arg0 : !llvm.ptr -> !llvm.struct<
-// CHECK: %[[BASE:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<
-// CHECK: %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC]][8] : !llvm.struct<
-// CHECK: llvm.zext %[[SHAPE0]] : i32 to i64
-// CHECK: llvm.add %{{.*}}, %{{.*}} : i64
-// CHECK: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][7] : !llvm.struct<
-// CHECK: llvm.zext %[[SHAPE1]] : i32 to i64
-// CHECK: llvm.add %{{.*}}, %{{.*}} : i64
-// CHECK: %[[STRIDE:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<
-// CHECK: llvm.zext %[[STRIDE]] : i32 to i64
-// CHECK: llvm.mul %{{.*}}, %{{.*}} : i64
-// CHECK: llvm.udiv %{{.*}}, %{{.*}} : i64
-tt.func private @experimental_gsan_tensordesc_info(
-  %desc: !tt.tensordesc<32x32xf32, #shared>
-) {
-  %0:5 = "tti.experimental_gsan_tensordesc_info"(%desc) : (!tt.tensordesc<32x32xf32, #shared>) -> (!tt.ptr<f32, 1>, i64, i64, i64, i64)
-  tt.return
+tt.func private @experimental_memory_offset_to_i32_tensor() -> i32 {
+  %result = tti.experimental_memory_offset_to_i32 65539, tensor_mem
+  tt.return %result : i32
 }
 }
 

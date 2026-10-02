@@ -29,11 +29,9 @@ struct CircularStoreOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-
     auto dataPack =
-        lowerCircularStoreOpHelper(op, adaptor.getSegment(), rewriter);
-
+        lowerCircularStore(op, adaptor.getSegment(), adaptor.getCounter(),
+                           adaptor.getDynamicScopeId(), rewriter);
     uint32_t addrSpace = dataPack.addrSpace;
     if (addrSpace == 1) {
       // TODO(crobeck): see what buffer ops performance looks like here for

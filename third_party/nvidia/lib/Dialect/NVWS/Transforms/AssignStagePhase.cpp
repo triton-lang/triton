@@ -71,17 +71,25 @@ template <class T> struct AssignStagePhase {
     Value token;
   };
   Value aref;
-  int partitionId;
+  SetVector<int> partitionIds;
   DenseMap<std::pair<Operation *, Value>, int> tokToStagePosMap;
 
-  AssignStagePhase(Value aref, int partitionId)
-      : aref(aref), partitionId(partitionId) {}
+  AssignStagePhase(Value aref, SetVector<int> partitionIds)
+      : aref(aref), partitionIds(std::move(partitionIds)) {}
+
+  bool owns(Operation *op) const {
+    if (!hasPartition(op))
+      return true;
+    auto ids = getPartitionIds(op);
+    return llvm::all_of(partitionIds, [&](int id) { return ids.contains(id); });
+  }
+
+  SetVector<int> getOwnerPartitions() const { return partitionIds; }
 
   T getTypedOp(Operation *op) {
     if (auto opT = dyn_cast<T>(op)) {
       if (opT.getAref() == aref) {
-        if (!hasPartition(op) ||
-            llvm::is_contained(getPartitionIds(op), partitionId))
+        if (owns(op))
           return opT;
       }
     }
@@ -105,6 +113,14 @@ template <class T> struct AssignStagePhase {
           newTok = forOp.getRegionIterArgs()[*pos];
         }
         if (analyzeArefUseInBlock(forOp.getBody(), newTok))
+          return true;
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
+        Value afterTok = token;
+        if (auto pos = findValuePosInRange(whileOp.getInits(), token))
+          afterTok = whileOp.getAfterArguments()[*pos];
+        // The before region computes the condition in the same partitions as
+        // the While and does not use arefs, so only inspect the after region.
+        if (analyzeArefUseInBlock(&whileOp.getAfter().front(), afterTok))
           return true;
       } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
         if (analyzeArefUseInBlock(ifOp.thenBlock(), token))
@@ -190,6 +206,9 @@ template <class T> struct AssignStagePhase {
           argIds.insert(ids.begin(), ids.end());
         }
       }
+      // Unchanged stage/phase inherits this aref put/get group's owners.
+      if (argIds.empty())
+        argIds = getOwnerPartitions();
       forOpIds.insert(argIds.begin(), argIds.end());
       forOpOutputsIds.push_back(argIds);
     }
@@ -201,6 +220,71 @@ template <class T> struct AssignStagePhase {
       *arefIndexRefs[idx - nArgs] = forOp.getResult(idx);
     for (auto [idx, arefTokenRef] : arefTokenRefs)
       *arefTokenRef = forOp.getResult(idx);
+  }
+
+  void assignArefIndexInWhileOp(scf::WhileOp whileOp, StagePhase &index) {
+
+    Value newTok;
+    if (auto pos = findValuePosInRange(whileOp.getInits(), index.token))
+      newTok = whileOp.getAfterArguments()[*pos];
+    // find uses of arefs in the While body, only inspect after region
+    if (!analyzeArefUseInBlock(&whileOp.getAfter().front(), newTok))
+      return;
+
+    // add extra iterArgs to the While
+    SmallVector<Value> extraIterArgs{index.stage, index.phase};
+    SmallVector<Value *> arefIndexRefs{&index.stage, &index.phase};
+    llvm::MapVector<int, Value *> arefTokenRefs;
+    if (auto pos = findValuePosInRange(whileOp.getInits(), index.token))
+      arefTokenRefs[*pos] = &index.token;
+
+    // create new While with extra iterArgs
+    OpBuilder builder(whileOp);
+    auto nArgs = whileOp.getNumResults();
+    auto whileOpIds = getPartitionIds(whileOp);
+    auto whileOpOutputsIds = getPartitionOutputs(whileOp);
+    auto oldWhileOp = whileOp;
+    whileOp = replaceWhileOpWithNewSignature(
+        builder, whileOp, extraIterArgs,
+        TypeRange{index.stage.getType(), index.phase.getType()});
+    oldWhileOp.erase();
+
+    // forward the new state from the before region to the body
+    whileOp.getConditionOp().getArgsMutable().append(
+        whileOp.getBeforeArguments().drop_front(nArgs));
+
+    // update arefIndex with iterArgs in the While body
+    for (size_t idx = nArgs; idx < whileOp.getAfterArguments().size(); ++idx)
+      *arefIndexRefs[idx - nArgs] = whileOp.getAfterArguments()[idx];
+    for (auto [idx, arefTokenRef] : arefTokenRefs)
+      *arefTokenRef = whileOp.getAfterArguments()[idx];
+
+    // assign arefIndex in the While body
+    auto indexInBlock =
+        assignArefIndexInBlock(&whileOp.getAfter().front(), index);
+
+    // update yieldOp to return new indexes
+    auto yield = whileOp.getYieldOp();
+    SmallVector<Value> extraYieldArgs{indexInBlock.stage, indexInBlock.phase};
+    yield.getResultsMutable().append(extraYieldArgs);
+    for (auto [idx, _] : arefTokenRefs) {
+      if (yield.getOperand(idx) == indexInBlock.token)
+        tokToStagePosMap[{yield, indexInBlock.token}] = nArgs;
+    }
+
+    // update partitions of the While
+    auto ownerIds = getOwnerPartitions();
+    whileOpIds.insert(ownerIds.begin(), ownerIds.end());
+    whileOpOutputsIds.resize(whileOpOutputsIds.size() + extraYieldArgs.size(),
+                             ownerIds);
+    setPartition(whileOp, whileOpIds);
+    setPartitionOutputs(whileOp, whileOpOutputsIds);
+
+    // update arefIndex with results from new While
+    for (size_t idx = nArgs; idx < whileOp.getNumResults(); ++idx)
+      *arefIndexRefs[idx - nArgs] = whileOp.getResult(idx);
+    for (auto [idx, arefTokenRef] : arefTokenRefs)
+      *arefTokenRef = whileOp.getResult(idx);
   }
 
   void assignArefIndexInIfOp(scf::IfOp ifOp, StagePhase &index) {
@@ -330,6 +414,8 @@ template <class T> struct AssignStagePhase {
         opT.getPhaseMutable().assign(index.phase);
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         assignArefIndexInForOp(forOp, index);
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
+        assignArefIndexInWhileOp(whileOp, index);
       } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
         assignArefIndexInIfOp(ifOp, index);
       }
@@ -372,34 +458,57 @@ template <class T> struct AssignStagePhase {
         auto iterTok = forOp.getRegionIterArg(tokPos);
         auto stagePos = tokToStagePosMap.at({forOp, iterTok});
         propagateStage(iterTok, forOp.getRegionIterArgs()[stagePos], visited);
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(owner)) {
+        auto tokPos = tokUse.getOperandNumber();
+        auto stagePos = *findValuePosInRange(whileOp.getInits(), stage);
+        propagateStageAcrossWhile(whileOp, tokPos, stagePos, visited);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(owner)) {
         auto tokPos = tokUse.getOperandNumber();
         auto stagePos = tokToStagePosMap.at({yieldOp, token});
         auto parentOp = yieldOp->getParentOp();
-        propagateStage(parentOp->getResult(tokPos),
-                       parentOp->getResult(stagePos), visited);
+        if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
+          propagateStageAcrossWhile(whileOp, tokPos, stagePos, visited);
+        } else {
+          propagateStage(parentOp->getResult(tokPos),
+                         parentOp->getResult(stagePos), visited);
+        }
       }
     }
   }
 
+  void propagateStageAcrossWhile(scf::WhileOp whileOp, unsigned tokenPos,
+                                 unsigned stagePos,
+                                 DenseSet<Operation *> &visited) {
+    propagateStage(whileOp.getAfterArguments()[tokenPos],
+                   whileOp.getAfterArguments()[stagePos], visited);
+    propagateStage(whileOp.getResult(tokenPos), whileOp.getResult(stagePos),
+                   visited);
+  }
+
   static LogicalResult run(ArefCreateOp arefOp) {
-    std::set<int> partitionIds;
+    SmallVector<SetVector<int>> ownerGroups;
     for (auto user : arefOp->getUsers()) {
-      // Each partition requires its own stage/phase tracking for proper
-      // multi-user handling; collect partition IDs in which this aref is used
-      if (isa<T>(user)) {
-        if (hasPartition(user)) {
-          auto ids = getPartitionIds(user);
-          partitionIds.insert(ids.begin(), ids.end());
-        }
-      }
+      // Track stage/phase once per distinct aref owner group.
+      if (!isa<T>(user) || !hasPartition(user))
+        continue;
+      auto ids = getPartitionIds(user);
+      bool exists = llvm::any_of(ownerGroups, [&](const SetVector<int> &group) {
+        return ids.size() == group.size() &&
+               llvm::all_of(ids, [&](int id) { return group.contains(id); });
+      });
+      if (!exists)
+        ownerGroups.push_back(std::move(ids));
     }
-    if (partitionIds.empty()) {
-      // if partitionIds is an empty set, it means aref ops used outside ttg.ws
-      // so we to insert a dummy partitionId for this aref, since we still need
-      // to assign correct phase
-      partitionIds.insert({0, 0});
+    if (ownerGroups.empty()) {
+      // No partition metadata means the aref is outside ttg.ws. Use one dummy
+      // owner so it still receives a valid stage and phase.
+      SetVector<int> singleton;
+      singleton.insert(0);
+      ownerGroups.push_back(std::move(singleton));
     }
+    llvm::sort(ownerGroups, [](const auto &lhs, const auto &rhs) {
+      return lhs.getArrayRef() < rhs.getArrayRef();
+    });
 
     // initialize indexes
     StagePhase index;
@@ -415,22 +524,22 @@ template <class T> struct AssignStagePhase {
     auto initPhase = std::is_same_v<T, ArefPutEnterOp> ? 0 : 1;
     index.phase = arith::ConstantIntOp::create(b, initPhase, 32);
 
-    for (auto partitionId : partitionIds) {
-      // assign stage/phase to enter/exit Ops in each partition aref is used
-      AssignStagePhase arefIndex(arefOp.getResult(), partitionId);
+    for (const SetVector<int> &ownerGroup : ownerGroups) {
+      // Assign stage/phase to enter/exit Ops in partitions aref is used
+      AssignStagePhase arefIndex(arefOp.getResult(), ownerGroup);
 
-      // assign stage/phase to enterOps
+      // Assign stage/phase to enter operations.
       arefIndex.assignArefIndexInBlock(arefOp->getBlock(), index);
 
-      // propagate stage to exitOps following enterOp token
-      for (auto user : arefOp->getUsers())
-        if (auto enterOp = dyn_cast<T>(user);
-            enterOp && (!hasPartition(enterOp) ||
-                        getPartitionIds(enterOp).front() == partitionId)) {
-          DenseSet<Operation *> visited;
-          arefIndex.propagateStage(enterOp.getToken(), enterOp.getStage(),
-                                   visited);
-        }
+      // Propagate stage to exit operations following each enter token.
+      for (auto user : arefOp->getUsers()) {
+        auto enterOp = dyn_cast<T>(user);
+        if (!enterOp || !arefIndex.owns(enterOp))
+          continue;
+        DenseSet<Operation *> visited;
+        arefIndex.propagateStage(enterOp.getToken(), enterOp.getStage(),
+                                 visited);
+      }
     }
 
     return success();

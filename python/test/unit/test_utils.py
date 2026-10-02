@@ -1,6 +1,38 @@
 import pytest
 
+import triton
 from triton._utils import is_power_of_two, validate_block_shape
+
+
+@pytest.mark.parametrize("y", [1, 32])
+def test_cdiv_symbolic_numerator(y):
+
+    class Expr:
+
+        def __init__(self, evaluate):
+            self.evaluate = evaluate
+
+        def __add__(self, other):
+            return Expr(lambda x: self.evaluate(x) + other)
+
+        def __floordiv__(self, other):
+            return Expr(lambda x: self.evaluate(x) // other)
+
+    result = triton.cdiv(Expr(lambda x: x), y)
+    assert isinstance(result, Expr)
+    for x in [0, 1, 31, 32, 33, 64, 65]:
+        assert result.evaluate(x) == -(-x // y)
+
+
+@pytest.mark.parametrize("x", [-33, -1, 0, 1, 31, 32, 33, 2**100, 2**100 + 1])
+@pytest.mark.parametrize("y", [1, 2, 32, 2**64])
+def test_cdiv_integers(x, y):
+    assert triton.cdiv(x, y) == -(-x // y)
+
+
+def test_cdiv_zero_divisor():
+    with pytest.raises(ZeroDivisionError):
+        triton.cdiv(1, 0)
 
 
 def test_is_power_of_two():

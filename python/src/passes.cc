@@ -27,8 +27,8 @@ void init_triton_analysis(py::module_ &m) {
   py::class_<mlir::ModuleAllocation>(m, "allocation")
       .def(py::init<mlir::ModuleOp>());
   py::class_<mlir::ModuleMembarAnalysis>(m, "membar")
-      .def(py::init<mlir::ModuleAllocation *>())
-      .def("run", &mlir::ModuleMembarAnalysis::run);
+      .def(py::init<mlir::ModuleAllocation &>())
+      .def("run", [](mlir::ModuleMembarAnalysis &analysis) { analysis.run(); });
 }
 
 void init_triton_passes_common(py::module_ &m) {

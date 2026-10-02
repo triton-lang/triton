@@ -54,9 +54,9 @@ PayloadMixConfig getPayloadMixConfig(FloatType floatTy) {
   unsigned shift = llvm::countr_zero(oneBits);
   assert(shift != 0 && "expected even 1.0 bit pattern");
 
-  // we firstly multiply by an arbitrary odd constant to mix from low
-  // bits to high whilst remaining invertible:
-  uint64_t mulA = 922291u & magMask;
+  // This odd multiplier reduces trailing zeros for common model constants
+  // while mixing low bits into high bits invertibly:
+  uint64_t mulA = 14940041u & magMask;
   uint64_t oneMixed = (oneBits * mulA) & magMask;
   oneMixed ^= oneMixed >> shift;
   assert((oneMixed & 1) == 1 && "expected odd mixed 1.0");

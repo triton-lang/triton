@@ -44,6 +44,13 @@ class MemWaitOpTrait
   // Optional: Add methods or verification logic here
 };
 
+// Copies from global memory into local memory. Such copies are asynchronous
+template <typename ConcreteType>
+class GlobalToLocalCopyTrait
+    : public mlir::OpTrait::TraitBase<ConcreteType, GlobalToLocalCopyTrait> {
+  // Optional: Add methods or verification logic here
+};
+
 } // namespace OpTrait
 } // namespace mlir
 

@@ -148,7 +148,7 @@ def mxfp_to_bf16_kernel(
     tl.static_assert(scale.dtype == tl.uint8)
     tl.static_assert(x.dtype == tl.uint8)
 
-    scale_bf16 = (scale.to(tl.uint16) << 7).to(tl.bfloat16, bitcast=True)
+    scale_bf16 = tl.maximum(scale.to(tl.uint16) << 7, 0x0040).to(tl.uint16).to(tl.bfloat16, bitcast=True)
     if is_fp8:
         if e_bits == 5 and m_bits == 2:
             x_f8 = x.to(tl.float8e5, bitcast=True)

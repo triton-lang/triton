@@ -28,14 +28,16 @@ struct ScheduleBufferStorePass
     auto endStoreMap = llvm::SmallDenseMap<int, CircularStoreOp, 8>();
 
     func.walk([&](CircularStoreOp store) {
+      if (store.getDynamicScopeId())
+        return;
       if (store.getIsStart())
         startStoreList.push_back(store);
       else
-        endStoreMap[store.getScopeId()] = store;
+        endStoreMap[store.getScopeIdAttr().getInt()] = store;
     });
 
     for (auto store : startStoreList) {
-      int scopeId = store.getScopeId();
+      int scopeId = store.getScopeIdAttr().getInt();
       auto endStore = endStoreMap[scopeId];
       if (!endStore) {
         mlir::emitError(func.getLoc(), "proton end store not found");

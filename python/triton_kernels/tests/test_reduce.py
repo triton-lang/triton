@@ -38,6 +38,27 @@ def plus_a_reduce(x, a):
     return tl.sum(y.reshape([x.shape[0], x.shape[1] // 2, 2]), axis=2)
 
 
+@pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e5m2, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("k", [4, 16])
+@pytest.mark.parametrize("scale", [0, 1, 127, 128, 255])
+@pytest.mark.parametrize("scale_dtype", [torch.uint8, torch.int8])
+def test_reduce_mxfp_scale_boundaries(dtype, k, scale, scale_dtype, device):
+    if dtype == torch.float8_e4m3fn and is_cuda() and torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
+
+    x = torch.full((k, 3, 128), 4, dtype=dtype, device=device).requires_grad_()
+    scales = torch.full((k, 3, 4), scale, dtype=torch.uint8, device=device).view(scale_dtype)
+    y, _ = reduce(x, dim=0, x_mxscale=scales, y_has_mx=False, y_dtype=torch.float32)
+    decoded = float("nan") if scale == 255 else 2.0**(scale - 127)
+    expected = torch.full_like(y, 4 * k * decoded)
+    torch.testing.assert_close(y, expected, rtol=0, atol=0, equal_nan=True)
+
+    dy = 2.0**120 if scale < 127 else 1.0
+    y.backward(torch.full_like(y, dy))
+    expected_grad = torch.full_like(x, dy * decoded)
+    torch.testing.assert_close(x.grad.float(), expected_grad.float(), rtol=0, atol=0, equal_nan=True)
+
+
 @pytest.mark.parametrize("B, M, N, postprocess_fn", [
     (311, 384, 384, None),
     (384, 311, 384, None),
@@ -63,6 +84,7 @@ def plus_a_reduce(x, a):
     "broadcast_n",  # broadcast over N: [B,M,1]
 ])
 @pytest.mark.parametrize("dim", [0, 1, 2])
+@pytest.mark.enable_warmup(min_capability=9)
 def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
     # Check float8 hardware support
     if "float8" in dtype_str:
@@ -153,6 +175,7 @@ def test_op_empty_forward_backward(B, M, N, dtype, mask_mode):
     assert torch.allclose(x_tri.grad.float(), x_ref.grad.float(), atol=1e-3, rtol=1e-3)
 
 
+@pytest.mark.enable_warmup(min_capability=9, priority=1)
 def test_unpadded_batch_size_rowidxs_subtile():
     if not torch.cuda.is_available() or not is_cuda():
         pytest.skip("rowidxs path requires CUDA")

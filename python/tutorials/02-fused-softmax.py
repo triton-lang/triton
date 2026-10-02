@@ -214,8 +214,6 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
     ))
 def benchmark(M, N, provider):
     x = torch.randn(M, N, device=DEVICE, dtype=torch.float32)
-    stream = getattr(torch, DEVICE.type).Stream()
-    getattr(torch, DEVICE.type).set_stream(stream)
     if provider == 'torch':
         ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':

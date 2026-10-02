@@ -9,8 +9,8 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
-from ..hopper import async_store, fence_async_shared, mbarrier
-from ..ampere import async_copy, mma_v2
+from ..hopper import async_store, cluster, fence_async_shared, mbarrier
+from ..ampere import CachePolicy, FractionalEvictionPolicy, async_copy, mma_v2
 
 from triton._C.libtriton import ir
 import triton._C.libtriton.gluon_ir as gluon_ir
@@ -19,13 +19,22 @@ if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
+    "CachePolicy",
+    "FractionalEvictionPolicy",
+    "add2",
     "allocate_tensor_memory",
     "async_copy",
     "async_store",
     "clc",
+    "cluster",
     "fence_async_shared",
+    "fma2",
     "mbarrier",
+    "max2",
+    "min2",
     "mma_v2",
+    "mul2",
+    "sub2",
     "tensor_memory_descriptor",
     "tensor_memory_descriptor_type",
     "TensorMemoryLayout",
@@ -35,6 +44,92 @@ __all__ = [
 ]
 
 
+def _packed_arith(operation, operands, dtype, semantic):
+    """Build packed arithmetic with inferred result types and FP4 layouts."""
+    operands = tuple(_unwrap_if_constexpr(operand) for operand in operands)
+    operand_types = tuple(operand.type if isinstance(operand, ttgl.tensor) else semantic.to_tensor_type(operand)
+                          for operand in operands)
+    _check(any(isinstance(ty, ttgl.distributed_type) for ty in operand_types),
+           lambda: "packed arithmetic requires at least one distributed tensor operand")
+    floating = [
+        operand for operand, ty in zip(operands, operand_types)
+        if isinstance(ty, ttgl.distributed_type) and ty.scalar.is_floating()
+    ]
+    reference = max(floating, key=lambda operand: operand.numel.value, default=None)
+    dtype = _unwrap_if_constexpr(dtype)
+
+    if reference is None:
+        _check(dtype is not None, lambda: "packed FP4 operands require an explicit result dtype")
+        shape = list(operand_types[0].shape)
+        shape[-1] *= 2
+    else:
+        shape = reference.type.shape
+        if dtype is None:
+            addend_dtype = operand_types[-1].scalar
+            dtype = addend_dtype if operation in ("add", "sub", "fma") and addend_dtype.is_fp8() else reference.dtype
+            for operand, ty in zip(operands, operand_types):
+                if not ty.scalar.is_floating() or (dtype.is_fp8() and ty.scalar.is_fp8()):
+                    continue
+                dtype = semantic.computation_type_impl(dtype, False, ty.scalar, not isinstance(operand, ttgl.tensor),
+                                                       False)
+
+    _check(isinstance(dtype, ttgl.dtype), lambda: f"expected 'dtype' to be a dtype but got {dtype}")
+    normalized = []
+    for operand in operands:
+        if not isinstance(operand, ttgl.tensor):
+            operand = semantic.scalar_constant(operand, dtype)
+        is_packed_fp4 = (isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_int()
+                         and operand.dtype.primitive_bitwidth == 8 and operand.type.shape != shape)
+        if not is_packed_fp4:
+            _check(reference is not None, lambda: "packed FP4 operands require a floating-point tensor operand")
+            if not operand.type.is_block():
+                operand = semantic.cast(operand, dtype)
+            _, operand = semantic.broadcast_impl_value(reference, operand)
+        normalized.append(operand.handle)
+
+    builder = semantic.builder
+    result_type = dtype if reference is None else reference.type.with_element_ty(dtype)
+    result_ir_type = result_type.to_ir(builder)
+    handle = builder.create_packed_arith(result_ir_type, operation, normalized)
+    return semantic._wrap_handle_infer_layout(handle, dtype, shape)
+
+
+@builtin
+def add2(lhs, rhs, dtype=None, _semantic=None):
+    """Add two tensors using a native two-lane packed instruction."""
+    return _packed_arith("add", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def sub2(lhs, rhs, dtype=None, _semantic=None):
+    """Subtract two tensors using a native two-lane packed instruction."""
+    return _packed_arith("sub", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def mul2(lhs, rhs, dtype=None, _semantic=None):
+    """Multiply two tensors using a native two-lane packed instruction."""
+    return _packed_arith("mul", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def fma2(lhs, rhs, acc, dtype=None, _semantic=None):
+    """Perform a native two-lane packed fused multiply-add."""
+    return _packed_arith("fma", (lhs, rhs, acc), dtype, _semantic)
+
+
+@builtin
+def min2(lhs, rhs, dtype=None, _semantic=None):
+    """Select the minimum with a native packed half-precision instruction."""
+    return _packed_arith("min", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def max2(lhs, rhs, dtype=None, _semantic=None):
+    """Select the maximum with a native packed half-precision instruction."""
+    return _packed_arith("max", (lhs, rhs), dtype, _semantic)
+
+
 @dataclass(frozen=True, eq=True)
 class TensorMemoryLayout:
     """
@@ -42,6 +137,9 @@ class TensorMemoryLayout:
 
     Args:
         block (Tuple[int, int]): Number of contiguous elements per row / column in a CTA.
+            A full allocation narrower than ``block[1]`` retains the unused columns as padding.
+            For an MMA accumulator, ``block[1]`` selects the instruction N.
+            An N subslice can use a smaller instruction to fit its visible width.
         col_stride (int): Number of 32-bit columns to advance between logically
             adjacent columns. Packed layouts use a stride of 1. Unpacked
             layouts use ``32 / bitwidth``.
@@ -130,7 +228,9 @@ class _TensorMemoryLinearLayout:
         raise RuntimeError("TensorMemoryLinearLayout is print-only; IR materialization is unsupported")
 
     def mangle(self):
-        return f"TMLL_{self.shape}_TMLL"
+        rows = "_".join("~".join(map(str, b)) for b in self.rows)
+        cols = "_".join("~".join(map(str, b)) for b in self.cols)
+        return f"TMLL_{rows}_{cols}_{self.shape}_TMLL"
 
     def __hash__(self):
         return hash((tuple(map(tuple, self.rows)), tuple(map(tuple, self.cols)), tuple(self.shape)))
@@ -410,8 +510,8 @@ class tensor_memory_descriptor(base_value):
         return ret
 
     @builtin
-    def _reinterpret(self, dtype=None, shape=None, layout=None,
-                     _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
+    def reinterpret(self, dtype=None, shape=None, layout=None,
+                    _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
         """
         Reinterpret tensor memory descriptor with a new dtype, shape, and layout.
 
@@ -478,6 +578,9 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
 
+    For N smaller than the instruction width, the layouts must reserve the full
+    instruction tile.
+
     Args:
         a (shared_memory_descriptor or tensor_memory_descriptor): Left hand side operand in shared or tensor memory.
         b (shared_memory_descriptor): Right hand side operand in shared memory.
@@ -485,7 +588,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
-        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
     use_acc = _semantic.to_tensor(use_acc)
@@ -526,7 +629,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
-        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
     use_acc = _semantic.to_tensor(use_acc)

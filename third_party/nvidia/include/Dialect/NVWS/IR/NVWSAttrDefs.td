@@ -56,6 +56,7 @@ def NVWS_AsyncOpAttr: I32EnumAttr<
     I32EnumAttrCase<"TMEMCopy", 3, "tmem_copy">,
     I32EnumAttrCase<"CpAsync", 4, "cp_async">,
     I32EnumAttrCase<"WGMMA", 5, "wgmma">,
+    I32EnumAttrCase<"CLC", 6, "clc">,
   ]> {
   let cppNamespace = "::mlir::triton::nvws";
   let genSpecializedAttr = 0;

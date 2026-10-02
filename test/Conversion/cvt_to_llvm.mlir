@@ -1,10 +1,12 @@
 // RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
+// RUN: triton-opt %s --allocate-shared-memory-nv | FileCheck %s --check-prefix=ALLOC
 
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [16, 64, 16]}>
+#dot = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
@@ -103,6 +105,7 @@ tt.func private @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xi32, #bl
 }
 
 // CHECK-LABEL: convert_layout_blocked_blocked
+// ALLOC-LABEL: @convert_layout_blocked_blocked
 tt.func private @convert_layout_blocked_blocked(%arg0: tensor<16x16xi32, #blocked0>) -> tensor<16x16xi32, #blocked1> {
   // This conversion looks like:
   //             dst_lane
@@ -124,13 +127,31 @@ tt.func private @convert_layout_blocked_blocked(%arg0: tensor<16x16xi32, #blocke
   // CHECK-NOT: shfl.sync.idx
   // CHECK: store
 
+  // ALLOC: ttg.convert_layout %arg0 {allocation.offset = 0 : i32, allocation.size = 1024 : i32}
   %0 = ttg.convert_layout %arg0 : tensor<16x16xi32, #blocked0> -> tensor<16x16xi32, #blocked1>
   tt.return %0 : tensor<16x16xi32, #blocked1>
 }
 
-tt.func private @cvt_mma_to_dot_fp8(%a: tensor<128x64xi32, #mma>) -> tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> {
-  %opA = ttg.convert_layout %a : tensor<128x64xi32, #mma> -> tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
-  tt.return %opA : tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+// CHECK-LABEL: convert_layout_blocked_blocked_forced
+// CHECK-NOT: store
+// CHECK: @llvm.nvvm.shfl.sync.idx.i32
+// ALLOC-LABEL: @convert_layout_blocked_blocked_forced
+tt.func private @convert_layout_blocked_blocked_forced(%arg0: tensor<16x16xi32, #blocked0>) -> tensor<16x16xi32, #blocked1> {
+  // ALLOC: ttg.convert_layout %arg0 {force_warp_shuffle}
+  %0 = ttg.convert_layout %arg0 {force_warp_shuffle} : tensor<16x16xi32, #blocked0> -> tensor<16x16xi32, #blocked1>
+  tt.return %0 : tensor<16x16xi32, #blocked1>
+}
+
+// CHECK-LABEL: @cvt_mma_to_dot_fp8(
+tt.func @cvt_mma_to_dot_fp8(%a: tensor<128x64xi32, #mma>, %out: tensor<128x64x!tt.ptr<i32>, #dot>) {
+  // CHECK: select i1
+  // CHECK-COUNT-4: call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: select i1
+  // CHECK: asm sideeffect {{.*}}st.global.b32
+  // CHECK: ret void
+  %opA = ttg.convert_layout %a : tensor<128x64xi32, #mma> -> tensor<128x64xi32, #dot>
+  tt.store %out, %opA : tensor<128x64x!tt.ptr<i32>, #dot>
+  tt.return
 }
 
 tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<16x16xi32, #blocked0>, %arg1: tensor<128x64xi32, #mma>) {
@@ -141,6 +162,10 @@ tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<16x16xi32, #blocked0>, %arg1: ten
   %2 = tt.call @convert_layout_blocked_blocked_vec(%arg0) : (tensor<16x16xi32, #blocked0>) -> tensor<16x16xi32, #blocked2>
   %3 = builtin.unrealized_conversion_cast %2 : tensor<16x16xi32, #blocked2> to !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
   llvm.store volatile %3, %ptr : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>, !llvm.ptr
+
+  %4 = tt.call @convert_layout_blocked_blocked_forced(%arg0) : (tensor<16x16xi32, #blocked0>) -> tensor<16x16xi32, #blocked1>
+  %5 = builtin.unrealized_conversion_cast %4 : tensor<16x16xi32, #blocked1> to !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
+  llvm.store volatile %5, %ptr : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>, !llvm.ptr
 
   tt.return
 }

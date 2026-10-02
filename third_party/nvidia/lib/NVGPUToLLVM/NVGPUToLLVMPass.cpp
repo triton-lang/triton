@@ -206,7 +206,8 @@ public:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    if (triton::gpu::lookupNumWarps(op) == 1) {
+    int numWarps = triton::gpu::lookupNumWarps(op);
+    if (numWarps == 1) {
       // If there is only one warp, the warp ID is always 0.
       rewriter.replaceOp(op, b.i32_val(0));
       return success();
@@ -214,6 +215,12 @@ public:
 
     Value tid = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
     Value warpId = b.udiv(tid, b.i32_val(32));
+    auto func = op->getParentOfType<FunctionOpInterface>();
+    if (auto offset = func->getAttrOfType<IntegerAttr>(
+            triton::gpu::AttrWarpIdOffsetName)) {
+      warpId = b.sub(warpId, b.i32_val(offset.getInt()));
+      warpId = b.and_(warpId, b.i32_val(numWarps - 1));
+    }
     if (!op.getOmitUniformHint()) {
       // This indicates to PTXAS that the result and its derived values are
       // uniform across the warp. For example, if a branch condition derives
@@ -565,8 +572,10 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, std::string exclusive,
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
     // Multi-CTA kernels already synchronize the cluster before every return.
-    if (!twoCTAs)
-      NVVM::BarrierOp::create(b, loc);
+    if (!twoCTAs) {
+      // Warp-specialized groups may reach different copies of this barrier.
+      NVVM::BarrierOp::create(b, loc, Value{}, Value{}, /*aligned=*/false);
+    }
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long
     // liveranges.

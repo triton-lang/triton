@@ -6,7 +6,7 @@ import inspect
 import hashlib
 import json
 from functools import cached_property
-from typing import Dict, Tuple, List, Optional
+from typing import Any, Dict, Tuple, List, Optional
 
 from .. import knobs
 from .jit import KernelInterface, JITFunction
@@ -45,6 +45,21 @@ class Autotuner(KernelInterface):
         self.restore_value = []
         if restore_value is not None:
             self.restore_value = list(restore_value)
+
+        # `key`, `reset_to_zero` and `restore_value` are all documented as lists of
+        # argument names. A name that is not one is silently dropped from the tuning
+        # key by `run()`, so a typo makes the kernel tune once and never re-tune.
+        for param, names in (("key", self.keys), ("reset_to_zero", self.reset_to_zero), ("restore_value",
+                                                                                         self.restore_value)):
+            unknown = [name for name in names if name not in self.arg_names]
+            if unknown:
+                raise ValueError(f"{param} contains names that are not kernel arguments: "
+                                 f"{', '.join(unknown)}. Valid argument names are: {', '.join(self.arg_names)}.")
+
+        # Populated by the default pre_hook when `restore_value` is set. Initialized here
+        # because a user-supplied pre_hook replaces that default while the default
+        # post_hook, which reads this, stays installed.
+        self.restore_copies: Dict[str, Any] = {}
 
         # Hook to reset or restore for required tensors
         self.pre_hook = lambda kwargs, reset_only=False: 0

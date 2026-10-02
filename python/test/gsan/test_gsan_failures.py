@@ -8,10 +8,19 @@ import pytest
 import torch
 import triton
 import triton.language as tl
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
+from triton.experimental.gluon.language.nvidia import hopper
+from triton.experimental.gluon.language.nvidia.blackwell import (
+    TensorMemoryLayout,
+    allocate_tensor_memory,
+    tcgen05_commit,
+    tcgen05_mma,
+)
 
 from triton._internal_testing import is_blackwell, is_cuda, is_hopper_or_newer, run_in_process
 from triton.experimental.gsan import create_mem_pool
-from triton.experimental.gsan._testing_utils import atomic_poll
+from triton.experimental.gsan._testing_utils import atomic_poll, shadow_cell_from_address
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 pytestmark = pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
@@ -141,6 +150,23 @@ def _atomic_poll_cross_sm_sync_kernel(payload_ptr, flag_ptr, scratch_ptr, produc
 
 
 @triton.jit
+def _atomic_load_store_cross_sm_sync_kernel(payload_ptr, flag_ptr, counter_ptr, scratch_ptr, producer_sem: tl.constexpr,
+                                            consumer_sem: tl.constexpr, scope: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_store(flag_ptr, 1, sem=producer_sem, scope=scope)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
+    elif pid == 1:
+        atomic_poll(counter_ptr, 1)
+        ready = tl.atomic_load(flag_ptr, sem=consumer_sem, scope=scope)
+        while ready != 1:
+            ready = tl.atomic_load(flag_ptr, sem=consumer_sem, scope=scope)
+        result = tl.load(payload_ptr)
+        tl.store(scratch_ptr, result)
+
+
+@triton.jit
 def _transitive_atomic_sync_kernel(payload_ptr, flag0_ptr, flag1_ptr, counter_ptr, scratch_ptr,
                                    release_sem: tl.constexpr, relay_sem: tl.constexpr, scope: tl.constexpr):
     pid = tl.program_id(0)
@@ -255,6 +281,92 @@ def _mixed_scope_release_rmw_kernel(counter_ptr, ready_ptr):
         tl.atomic_add(counter_ptr, 1, sem="release", scope="sys")
 
 
+@gluon.jit
+def _gluon_cluster_barrier_kernel(payload_ptr, out_ptr, RELAXED: gl.constexpr):
+    data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+
+    offsets = gl.arange(0, 256, data_layout)
+    payload_ptrs = payload_ptr + offsets * 0
+    out_ptrs = out_ptr + offsets * 0
+    gl.barrier(cluster=True)
+    gl.store(payload_ptrs, 1, mask=offsets == 0)
+    if RELAXED:
+        hopper.cluster.barrier(relaxed=True)
+    else:
+        gl.barrier(cluster=True)
+    value = gl.load(payload_ptrs, mask=offsets == 128, other=0)
+    gl.store(out_ptrs, value, mask=offsets == 128)
+
+
+@gluon.jit
+def _gluon_mbarrier_current_epoch_kernel(payload_ptr, out_ptr, AFTER_ARRIVAL: gl.constexpr):
+    data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+
+    barrier = hopper.mbarrier.allocate_mbarrier(two_ctas=True)
+    hopper.mbarrier.init(barrier, count=1)
+    offsets = gl.arange(0, 256, data_layout)
+
+    payload_ptrs = payload_ptr + offsets * 0
+    if not AFTER_ARRIVAL:
+        gl.store(payload_ptrs, 1, mask=offsets == 128)
+    hopper.mbarrier.arrive(barrier, count=1)
+    hopper.mbarrier.wait(barrier, phase=0)
+    if AFTER_ARRIVAL:
+        gl.store(payload_ptrs, 1, mask=offsets == 128)
+    hopper.cluster.barrier(relaxed=True)
+    value = gl.load(payload_ptrs, mask=offsets == 0, other=0)
+    gl.store(out_ptr + offsets * 0, value, mask=offsets == 0)
+    hopper.mbarrier.invalidate(barrier)
+
+
+@gluon.jit
+def _gluon_tcgen05_commit_no_release_kernel(payload_ptr, out_ptr):
+    data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+    signal_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([128, 128], gl.float16, cga_layout=((0, 0), ))
+    signal_desc = gl.allocate_shared_memory(gl.float16, [128, 128], signal_layout)
+
+    barrier = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(barrier, count=2)
+    offsets = gl.arange(0, 256, data_layout)
+    payload_ptrs = payload_ptr + offsets * 0
+    out_ptrs = out_ptr + offsets * 0
+    gl.store(payload_ptrs, 1, mask=offsets == 0)
+    tcgen05_commit(barrier, descs=[signal_desc])
+    hopper.mbarrier.wait(barrier, phase=0)
+    value = gl.load(payload_ptrs, mask=offsets == 128, other=0)
+    gl.store(out_ptrs, value, mask=offsets == 128)
+    hopper.mbarrier.invalidate(barrier)
+
+
+@gluon.jit
+def _gluon_mbarrier_multicast_partial_wait_kernel(input_desc, payload_ptr, out_ptr):
+    data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1], [2]])
+    signal = gl.allocate_shared_memory(gl.float16, [256, 128], input_desc.layout)
+    b_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([128, 256], gl.float16, cga_layout=((0, 1), (0, 2)))
+    b = gl.allocate_shared_memory(gl.float16, [128, 256], b_layout)
+    acc_layout: gl.constexpr = TensorMemoryLayout([128, 128], col_stride=1, cga_layout=((1, 0), (0, 1)), two_ctas=True)
+    acc = allocate_tensor_memory(gl.float32, [256, 256], acc_layout)
+
+    # Four CTAs lower this to a two-element mbarrier with CGA layout [[0], [1]].
+    # Each pair of CTAs arrives on a different barrier, and only its leader CTA
+    # executes the lowered wait because the first CTA-layout basis is zero.
+    barrier = hopper.mbarrier.allocate_mbarrier(two_ctas=True)
+    hopper.mbarrier.init(barrier, count=1)
+    offsets = gl.arange(0, 512, data_layout)
+    payload_ptrs = payload_ptr + offsets * 0
+    out_ptrs = out_ptr + offsets * 0
+    gl.store(payload_ptrs, 1, mask=offsets == 0)
+    hopper.cluster.barrier(relaxed=True)
+    hopper.mbarrier.expect(barrier, input_desc.nbytes_per_cta)
+    hopper.tma.async_load(input_desc, [0, 0], barrier, signal, multicast=True)
+    hopper.mbarrier.wait(barrier, phase=0, deps=[signal])
+    value = gl.load(payload_ptrs, mask=offsets == 128, other=0)
+    gl.store(out_ptrs, value, mask=offsets == 128)
+    tcgen05_mma(signal, b, acc, use_acc=False)
+    hopper.cluster.barrier(relaxed=True)
+    hopper.mbarrier.invalidate(barrier)
+
+
 def _cuda_byte_allocator(size: int, _align: int, _stream):
     return torch.empty(size, dtype=torch.int8, device="cuda")
 
@@ -314,6 +426,59 @@ def _run_pdl_missing_wait_case() -> None:
     torch.cuda.synchronize()
 
 
+@triton.jit
+def _graph_unordered_write_kernel(payload, REVERSE: tl.constexpr):
+    pid = tl.program_id(0)
+    if REVERSE:
+        pid = tl.num_programs(0) - 1 - pid
+    tl.store(payload + pid, 1)
+
+
+@triton.jit
+def _graph_pdl_consumer_before_wait_kernel(payload_ptr, scratch_ptr, BLOCK: tl.constexpr):
+    # Read every producer CTA's output so the race does not depend on a single
+    # writer and this consumer being scheduled on different SMs.
+    offsets = tl.arange(0, BLOCK)
+    values = tl.load(payload_ptr + offsets)
+    # Wait after the read so only the access ordering is invalid.
+    tl.extra.cuda.gdc_wait()
+    tl.store(scratch_ptr + offsets, values)
+
+
+@run_with_gsan
+def _run_explicit_graph_failure_case(kind: str) -> None:
+    from triton.experimental.gsan import graph
+    from triton.experimental.gsan._testing_utils import ExplicitGraph
+
+    n = 512
+    payload = torch.zeros(n, dtype=torch.int32, device="cuda")
+    scratch = torch.zeros(n, dtype=torch.int32, device="cuda")
+    should_wait = torch.zeros(1, dtype=torch.int32, device="cuda")
+    pdl = kind != "unordered"
+    nodes = [graph.GraphNode(), graph.GraphNode((), (0, )) if pdl else graph.GraphNode()]
+    plan = graph.GraphPlan(torch.cuda.current_device(), nodes)
+    with ExplicitGraph(plan) as executable:
+        if pdl:
+            producer = _pdl_producer_kernel.warmup(payload, grid=(n, ), num_warps=1)
+            if kind == "missing_wait":
+                consumer = _pdl_conditional_wait_kernel.warmup(should_wait, scratch, grid=(1, ), num_warps=1,
+                                                               launch_pdl=True)
+                arguments = (should_wait, scratch)
+            else:
+                consumer = _graph_pdl_consumer_before_wait_kernel.warmup(payload, scratch, BLOCK=n, grid=(1, ),
+                                                                         num_warps=1, launch_pdl=True)
+                arguments = (payload, scratch)
+            executable.add_kernel(producer, (payload, ), n)
+            executable.add_kernel(consumer, arguments, 1)
+        else:
+            for reverse in (False, True):
+                kernel = _graph_unordered_write_kernel.warmup(payload, REVERSE=reverse, grid=(n, ), num_warps=1)
+                executable.add_kernel(kernel, (payload, ), n)
+        executable.instantiate()
+        executable.launch()
+        torch.cuda.synchronize()
+
+
 @run_with_gsan
 def _run_pdl_persistent_state_without_wait_case() -> None:
     num_sms = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
@@ -330,6 +495,44 @@ def _run_mixed_scope_release_rmw_case() -> None:
     counter = torch.zeros(1, dtype=torch.int32, device="cuda")
     ready = torch.zeros(1, dtype=torch.int32, device="cuda")
     _mixed_scope_release_rmw_kernel[(2, )](counter, ready, num_warps=1)
+
+
+@run_with_gsan
+def _run_gluon_relaxed_cluster_barrier_case() -> None:
+    probe_payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    probe_out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_cluster_barrier_kernel[(1, )](probe_payload, probe_out, RELAXED=False, num_warps=4, num_ctas=2)
+    torch.cuda.synchronize()
+    probe_cell = shadow_cell_from_address(probe_payload.data_ptr())
+    assert probe_cell.write_clock.thread_id != probe_cell.read_clocks[0].thread_id
+
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_cluster_barrier_kernel[(1, )](payload, out, RELAXED=True, num_warps=4, num_ctas=2)
+
+
+@run_with_gsan
+def _run_gluon_mbarrier_current_epoch_case(after_arrival: bool) -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_mbarrier_current_epoch_kernel[(1, )](payload, out, after_arrival, num_warps=4, num_ctas=2)
+
+
+@run_with_gsan
+def _run_gluon_tcgen05_commit_no_release_case() -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_tcgen05_commit_no_release_kernel[(1, )](payload, out, num_warps=4, num_ctas=2)
+
+
+@run_with_gsan
+def _run_gluon_mbarrier_multicast_partial_wait_case() -> None:
+    source = torch.zeros((256, 128), dtype=torch.float16, device="cuda")
+    signal_layout = gl.NVMMASharedLayout.get_default_for([256, 128], gl.float16, cga_layout=((1, 0), (0, 0)))
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(source, [256, 128], signal_layout)
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_mbarrier_multicast_partial_wait_kernel[(1, )](input_desc, payload, out, num_warps=4, num_ctas=4)
 
 
 @run_with_gsan
@@ -458,6 +661,24 @@ def _run_atomic_poll_cross_sm_sync_case(producer_sem: str, consumer_sem: str, sc
 
 
 @run_with_gsan
+def _run_atomic_load_store_cross_sm_sync_case(producer_sem: str, consumer_sem: str, scope: str) -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _atomic_load_store_cross_sm_sync_kernel[(2, )](
+        payload,
+        flag,
+        counter,
+        scratch,
+        producer_sem=producer_sem,
+        consumer_sem=consumer_sem,
+        scope=scope,
+        num_warps=1,
+    )
+
+
+@run_with_gsan
 def _run_transitive_atomic_sync_case(release_sem: str, relay_sem: str, scope: str) -> None:
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     flag0 = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -481,7 +702,7 @@ def _expected_file_line(source_function, marker: str) -> str:
     source_lines, starting_line = inspect.getsourcelines(source_function)
     for line_offset, line in enumerate(source_lines):
         if marker in line:
-            return f"{Path(__file__).name}:{starting_line + line_offset}"
+            return f"{Path(inspect.getsourcefile(source_function)).name}:{starting_line + line_offset}"
     raise AssertionError(f"Could not find marker {marker!r} for function {source_function!r}")
 
 
@@ -499,7 +720,7 @@ def _run_failure_case(case: str, *, runner, source_function, marker: str, error:
                                                   f"exc={result.exc!r}\n"
                                                   f"driver stderr:\n{result.driver_stderr_output}")
     assert "GSanLibrary.cu" not in result.driver_stderr_output
-    assert Path(__file__).name in result.driver_stderr_output
+    assert Path(inspect.getsourcefile(source_function)).name in result.driver_stderr_output
     assert _expected_file_line(source_function, marker) in result.driver_stderr_output
     assert error in result.driver_stderr_output
 
@@ -517,6 +738,23 @@ def test_write_after_read():
 def test_write_after_write():
     _run_failure_case("waw", runner=_run_waw_case, source_function=_waw_kernel.fn, marker="tl.store(ptr, 2)",
                       error="Write after write race detected")
+
+
+def test_explicit_graph_unordered_nodes_report_race():
+    _run_failure_case("graph_unordered", runner=_run_explicit_graph_failure_case, runner_args=("unordered", ),
+                      source_function=_graph_unordered_write_kernel.fn, marker="tl.store(payload + pid, 1)",
+                      error="Write after write race detected")
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Graph PDL requires SM90 or newer")
+@pytest.mark.parametrize("missing_wait", [False, True])
+def test_explicit_graph_programmatic_edge_requires_wait(missing_wait):
+    source = _pdl_conditional_wait_kernel if missing_wait else _graph_pdl_consumer_before_wait_kernel
+    _run_failure_case(
+        "graph_pdl", runner=_run_explicit_graph_failure_case,
+        runner_args=("missing_wait" if missing_wait else "before_wait", ), source_function=source.fn,
+        marker="def _pdl_conditional_wait_kernel" if missing_wait else "values = tl.load(payload_ptr + offsets)",
+        error="did not call gdc_wait" if missing_wait else "Read after write race detected")
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
@@ -559,6 +797,52 @@ def test_mixed_scope_release_rmw_accumulation():
         source_function=_mixed_scope_release_rmw_kernel.fn,
         marker='tl.atomic_add(counter_ptr, 1, sem="release", scope="sys")',
         error="GSan detected atomic release accumulation with mixed scopes, which is not supported.",
+    )
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
+def test_relaxed_cluster_barrier_does_not_synchronize_vector_clocks():
+    _run_failure_case(
+        "relaxed_cluster_barrier",
+        runner=_run_gluon_relaxed_cluster_barrier_case,
+        source_function=_gluon_cluster_barrier_kernel.fn,
+        marker="value = gl.load(payload_ptr",
+        error="Read after write race detected",
+    )
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
+@pytest.mark.parametrize("after_arrival", [False, True], ids=["before-arrival", "after-arrival"])
+def test_mbarrier_wait_does_not_acquire_current_epoch(after_arrival):
+    _run_failure_case(
+        f"mbarrier_current_epoch_{after_arrival}",
+        runner=_run_gluon_mbarrier_current_epoch_case,
+        runner_args=(after_arrival, ),
+        source_function=_gluon_mbarrier_current_epoch_kernel.fn,
+        marker="value = gl.load(payload_ptrs",
+        error="Read after write race detected",
+    )
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_commit_does_not_publish_vector_clock():
+    _run_failure_case(
+        "tcgen05_commit_no_release",
+        runner=_run_gluon_tcgen05_commit_no_release_case,
+        source_function=_gluon_tcgen05_commit_no_release_kernel.fn,
+        marker="value = gl.load(payload_ptrs",
+        error="Read after write race detected",
+    )
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_mbarrier_multicast_partial_wait_only_acquires_on_leader_ctas():
+    _run_failure_case(
+        "mbarrier_multicast_partial_wait",
+        runner=_run_gluon_mbarrier_multicast_partial_wait_case,
+        source_function=_gluon_mbarrier_multicast_partial_wait_kernel.fn,
+        marker="value = gl.load(payload_ptrs",
+        error="Read after write race detected",
     )
 
 
@@ -610,6 +894,14 @@ def test_atomic_poll_semantic_mismatch_read_after_write(producer_sem, consumer_s
                       runner=_run_atomic_poll_cross_sm_sync_case, runner_args=(producer_sem, consumer_sem, scope),
                       source_function=_atomic_poll_cross_sm_sync_kernel.fn, marker="result = tl.load(payload_ptr)",
                       error="Read after write race detected")
+
+
+@pytest.mark.parametrize("producer_sem, consumer_sem, scope", CROSS_SM_SEMANTIC_MISMATCH_CASES)
+def test_atomic_load_store_semantic_mismatch_read_after_write(producer_sem, consumer_sem, scope):
+    _run_failure_case(f"atomic_load_store_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}",
+                      runner=_run_atomic_load_store_cross_sm_sync_case, runner_args=(producer_sem, consumer_sem, scope),
+                      source_function=_atomic_load_store_cross_sm_sync_kernel.fn,
+                      marker="result = tl.load(payload_ptr)", error="Read after write race detected")
 
 
 @pytest.mark.parametrize("producer_sem, consumer_sem", RELEASE_ACQUIRE_SYNC_CASES)

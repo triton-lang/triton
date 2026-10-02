@@ -31,13 +31,13 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setLinkage(LLVM::Linkage::External);
     } else {
       SmallVector<Attribute> passthroughAttrs = {
-          rewriter.getStringAttr("noinline")};
-      if (funcOp->hasAttrOfType<UnitAttr>("always_use_warp_shuffle"))
-        passthroughAttrs.push_back(rewriter.getStringAttr("convergent"));
+          rewriter.getStringAttr("noinline"),
+          rewriter.getStringAttr("convergent")};
       newFuncOp.setPassthroughAttr(ArrayAttr::get(ctx, passthroughAttrs));
       newFuncOp.setLinkage(LLVM::Linkage::Internal);
-      if (Attribute numWarps = funcOp->getAttr(triton::gpu::AttrNumWarpsName))
-        newFuncOp->setAttr("ws_num_warps", numWarps);
+      newFuncOp->setAttr(
+          "ws_num_warps",
+          rewriter.getI32IntegerAttr(triton::gpu::lookupNumWarps(funcOp)));
     }
 
     rewriter.eraseOp(funcOp);

@@ -323,7 +323,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @tmem_reinterpret_packed_subview_owns_column
   tt.func @tmem_reinterpret_packed_subview_owns_column(%arg0: !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable>) {
     %view = ttng.tmem_subslice %arg0 {offset = 0 : i32} : !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4>
-    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4> -> !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory, mutable>
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x2xi8, #tmem, #ttng.tensor_memory, mutable, 128x4> -> !ttg.memdesc<128x4xi8, #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>, #ttng.tensor_memory, mutable>
     tt.return
   }
 
@@ -524,5 +524,18 @@ module attributes {"ttg.threads-per-warp" = 4 : i32, "ttg.num-warps" = 1 : i32} 
     ttg.local_store %arg0, %alloc : tensor<4x4xf32, #blocked> -> !ttg.memdesc<4x4xf32, #shared, #smem, mutable>
     %loaded = ttg.local_load %alloc : !ttg.memdesc<4x4xf32, #shared, #smem, mutable> -> tensor<4x4xf32, #blocked>
     tt.return %loaded : tensor<4x4xf32, #blocked>
+  }
+}
+
+// -----
+
+#mma_assert = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {register = [[0, 1], [2, 0]], warp = [[2, 2], [1, 0]]}, instrShape = [16, 16, 32]}>
+
+module attributes {"ttg.target" = "hip:gfx1260", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @assert_generic_wmma_slice_layout
+  tt.func @assert_generic_wmma_slice_layout(%cond: tensor<64xi1, #ttg.slice<{dim = 1, parent = #mma_assert}>>) {
+    // CHECK: tt.assert
+    tt.assert %cond, "assert generic wmma slice layout" : tensor<64xi1, #ttg.slice<{dim = 1, parent = #mma_assert}>>
+    tt.return
   }
 }

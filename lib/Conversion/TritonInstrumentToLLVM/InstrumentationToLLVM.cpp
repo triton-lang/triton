@@ -7,6 +7,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -27,30 +28,6 @@ namespace ttng = mlir::triton::nvidia_gpu;
 constexpr uint32_t kSharedMemoryObjectMask = (1u << 24) - 1;
 
 ////////////////////////////////////////////
-// Utility functions
-////////////////////////////////////////////
-
-Value createMemDescToI32(RewriterBase &rewriter, Location loc,
-                         const LLVMTypeConverter *typeConverter,
-                         ttg::MemDescType memDescTy, Value sharedMemStruct) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  auto i32Ty = rewriter.getIntegerType(32);
-  if (isa<ttng::TensorMemorySpaceAttr>(memDescTy.getMemorySpace())) {
-    return b.ptrtoint(i32Ty, sharedMemStruct);
-  }
-  assert(isa<ttg::SharedEncodingTrait>(memDescTy.getEncoding()) &&
-         "Unsupported memory encoding");
-  Type srcElemTy = typeConverter->convertType(memDescTy.getElementType());
-  auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, sharedMemStruct,
-                                                       srcElemTy, rewriter);
-  auto offset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
-  auto elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
-  offset = b.mul(offset, b.i32_val(elemSize));
-  return b.and_(b.add(offset, b.ptrtoint(i32Ty, smemObj.getBase())),
-                b.i32_val(kSharedMemoryObjectMask));
-}
-
-////////////////////////////////////////////
 // Patterns
 ////////////////////////////////////////////
 
@@ -62,15 +39,10 @@ struct AssertUniformOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     TritonLLVMIRRewriter b(op.getLoc(), rewriter);
     Value tid = getThreadId(b, op.getLoc());
-    Value threadIdIsZero = b.icmp_eq(tid, b.i32_val(0));
-
-    auto [prevBlock, ifBlock, thenBlock] =
-        createIfBlock(rewriter, op.getLoc(), threadIdIsZero);
-    rewriter.setInsertionPointToStart(ifBlock);
-    AssertOp::create(rewriter, op.getLoc(), adaptor.getCondition(),
-                     adaptor.getMessage());
+    Value threadIdIsNotZero = b.icmp_ne(tid, b.i32_val(0));
+    Value condition = b.or_(threadIdIsNotZero, adaptor.getCondition());
+    AssertOp::create(rewriter, op.getLoc(), condition, adaptor.getMessage());
     rewriter.eraseOp(op);
-    rewriter.setInsertionPointToStart(thenBlock);
     return success();
   }
 };
@@ -187,8 +159,8 @@ struct LockAcquireOpConversion
     // Build: do { old = atom.global.acquire.cas.b32 [lock], 0, 1; } while (old
     // != 0);
     Block *prevBlock2 = b.getInsertionBlock();
-    Block *whileBlock = b.splitBlock(prevBlock2, b.getInsertionPoint());
-    Block *endBlock = b.splitBlock(whileBlock, whileBlock->begin());
+    Block *whileBlock = prevBlock2->splitBlock(b.getInsertionPoint());
+    Block *endBlock = whileBlock->splitBlock(whileBlock->begin());
     b.setInsertionPointToEnd(prevBlock2);
 
     Value elect;
@@ -319,8 +291,8 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value converted =
-        createMemDescToI32(rewriter, loc, getTypeConverter(),
-                           op.getMemdesc().getType(), adaptor.getMemdesc());
+        getMemDescAddress(rewriter, loc, getTypeConverter(),
+                          op.getMemdesc().getType(), adaptor.getMemdesc());
     rewriter.replaceOp(op, converted);
     return success();
   }
@@ -389,9 +361,7 @@ computeLocalOffsetsWithLogicalOffsets(Location loc, ttg::MemDescType memDescTy,
                                       const TargetInfoBase &targetInfo) {
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto sharedLayout = ttg::isPaddedEncoding(memDescTy.getEncoding())
-                          ? ttg::paddedLinearLayout(memDescTy)
-                          : ttg::toLinearLayout(memDescTy);
+  auto sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
   LinearLayout invSharedLayout = sharedLayout.pseudoinvert();
   auto allDims = tt::standardOutDimNames(ctx, memDescTy.getRank());
   auto kOffset = str_attr("offset");

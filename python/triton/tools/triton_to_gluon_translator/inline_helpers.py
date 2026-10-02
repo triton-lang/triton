@@ -35,7 +35,7 @@ def convert_host_descriptor(desc):
     layout = gl.PaddedSharedLayout.with_identity_for(
         [[block_shape[-1], 4]], list(block_shape), [1, 0]
     )
-    return gluon.amd.gfx1250.TensorDescriptor(
+    return gluon.amd.cdna5.TensorDescriptor(
         desc.base, list(desc.shape), list(desc.strides), block_shape, layout
     )
 """,

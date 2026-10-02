@@ -39,6 +39,7 @@ struct AllocateSharedMemoryNv
     mlir::triton::gpu::attachAllocationSizeAndOffsetAttr(mod, allocation);
   }
 };
+
 } // namespace
 
 namespace mlir::triton::nvidia_gpu {
@@ -72,7 +73,7 @@ getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
     if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtOp.getSrc().getType();
       auto dstTy = cvtOp.getType();
-      if (!cvtNeedsSharedMemory(srcTy, dstTy))
+      if (!cvtNeedsSharedMemory(cvtOp))
         return 0;
       // In cuda we always swizzle
       auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy, targetInfo);

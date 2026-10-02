@@ -34,23 +34,6 @@
 namespace mlir::triton::AMD {
 namespace {
 
-static std::optional<mlir::triton::LinearLayout>
-wmmaRepLayoutForTensor(const mlir::triton::LinearLayout &wholeTileLL,
-                       const mlir::triton::LinearLayout &tileLL) {
-  llvm::SmallDenseMap<StringAttr, int64_t> shape;
-  for (auto outDim : wholeTileLL.getOutDimNames())
-    shape[outDim] = wholeTileLL.getOutDimSize(outDim);
-
-  // Clamp the tileLL to the tensor's output dims so that divideLeft succeeds
-  // when the tensor is smaller than the WMMA instruction shape.
-  auto clampedTileLL = ensureLayoutNotLargerThan(tileLL, shape);
-
-  auto quot = divideLeft(wholeTileLL, clampedTileLL);
-  if (quot.has_value())
-    return zerosLike(clampedTileLL) * *quot;
-  return {};
-}
-
 #define S(v) StringAttr::get(ctx, (v))
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -442,12 +425,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto rank = resShape.size();
   auto K = aTensorTy.getShape()[rank - 1];
 
-  auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile);
-  if (!repLayout.has_value()) {
-    return op.emitError("failed to divide wmma layout by tile layout");
-  }
   const unsigned numRepK = std::max(static_cast<unsigned>(K / kInstrSize), 1u);
 
   Value loadedA = adaptor.getA();
@@ -479,14 +457,18 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
   StringAttr kBlock = S("block");
+  assert(wmmaLayout.getTileLayout(rank).getInDimSize(kRegister) ==
+             dElemsToStorePerThread &&
+         "WMMA loop stride must skip the instruction tile register bits");
 
   llvm::DenseSet<uint64_t> mnProcessed;
   int tiedGroup = 1;
 
-  for (int reg = 0; reg < repLayout->getInDimSize(kRegister);
+  // Instruction-sized strides skip the intra-tile register bits.
+  for (int reg = 0; reg < wmmaLL.getInDimSize(kRegister);
        reg += dElemsToStorePerThread) {
-    auto repIndices = repLayout->apply(
-        {{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    auto repIndices =
+        wmmaLL.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     int batchIdx = (rank == 3 ? repIndices[0].second : 0);
     int m = repIndices[rank == 3 ? 1 : 0].second;
     int n = repIndices[rank == 3 ? 2 : 1].second;
@@ -494,10 +476,10 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
     int nextMReg = reg + dElemsToStorePerThread;
     std::optional<int> nextM;
     if (paddedOutputElemSize == 2) {
-      if (mnProcessed.count(packMN((uint32_t)m, (uint32_t)n))) {
+      if (mnProcessed.contains(packMN((uint32_t)m, (uint32_t)n))) {
         continue;
       }
-      nextM = findNextM(*repLayout, nextMReg, dElemsToStorePerThread, m, rank);
+      nextM = findNextM(wmmaLL, nextMReg, dElemsToStorePerThread, m, rank);
       if (nextM.has_value()) {
         tiedGroup = 2;
         mnProcessed.insert(packMN((uint32_t)m, (uint32_t)n));
@@ -667,12 +649,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto K = aTensorTy.getShape()[rank - 1];
   auto resShape = dTensorTy.getShape();
 
-  auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile);
-  if (!repLayout.has_value()) {
-    return op.emitError("failed to divide wmma layout by tile layout");
-  }
 
   Value loadedA = adaptor.getA();
   Value loadedAScale = adaptor.getAScale();
@@ -702,12 +679,16 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto elemsPerVec = mnkDim[0] * mnkDim[1] / warpSize;
   auto dElemsToStorePerThread = mnkDim[0] * mnkDim[1] / warpSize;
   auto vecTy = vec_ty(dstElemTy, elemsPerVec);
+  assert(wmmaLayout.getTileLayout(rank).getInDimSize(kRegister) ==
+             elemsPerVec &&
+         "scaled WMMA loop stride must skip the instruction tile register "
+         "bits");
 
-  for (int reg = 0; reg < repLayout->getInDimSize(kRegister);
-       reg += elemsPerVec) {
+  // Instruction-sized strides skip the intra-tile register bits.
+  for (int reg = 0; reg < wmmaLL.getInDimSize(kRegister); reg += elemsPerVec) {
 
-    auto repIndices = repLayout->apply(
-        {{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    auto repIndices =
+        wmmaLL.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     int batchIdx = (rank == 3 ? repIndices[0].second : 0);
     int m = repIndices[rank == 3 ? 1 : 0].second;
     int n = repIndices[rank == 3 ? 2 : 1].second;

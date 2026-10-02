@@ -3,26 +3,26 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Tools/LayoutUtils.h"
 
+#include <bit>
+
 namespace mlir {
 namespace triton {
 namespace NVIDIA {
 
 // The descriptor format is described in the spec:
 // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-shared-memory-layout-matrix-descriptor
-// Unnamed fields are not used
-union SMEMDescriptor {
-  uint64_t descriptor;
-  struct {
-    uint64_t baseAddress : 14;
-    uint64_t : 2;
-    uint64_t leadDimensionBaseOffset : 14;
-    uint64_t : 2;
-    uint64_t strideDimensionBaseOffset : 14;
-    uint64_t : 3;
-    uint64_t matrixBaseOffset : 3;
-    uint64_t : 10;
-    uint64_t swizzlingMode : 2;
-  };
+// Reserved fields are named so bit_cast preserves every descriptor bit.
+struct SMEMDescriptor {
+  uint64_t baseAddress : 14;
+  uint64_t reserved0 : 2;
+  uint64_t leadDimensionBaseOffset : 14;
+  uint64_t reserved1 : 2;
+  uint64_t strideDimensionBaseOffset : 14;
+  uint64_t reserved2 : 3;
+  uint64_t matrixBaseOffset : 3;
+  uint64_t leadDimensionAbsoluteMode : 1;
+  uint64_t reserved3 : 9;
+  uint64_t swizzlingMode : 2;
 };
 
 struct MMASMEMDescriptor {
@@ -46,7 +46,7 @@ public:
   // ctaTileSize), return the associated memory descriptor for SMEM / TMEM.
   virtual MemDescOperand memLoad(int a, int b,
                                  ConversionPatternRewriter &rewriter,
-                                 Location loc) const = 0;
+                                 Location loc, int kSize = 0) const = 0;
 };
 
 class DotOpMmaSmemLoader : public DotOpMmaMemLoader {
@@ -61,26 +61,20 @@ public:
         Value smemBase, ArrayRef<unsigned> instrShape, unsigned MNdim,
         int mmaVersion, bool isFp4 = false,
         std::optional<RankedTensorType> mmaTy = std::nullopt) {
-    auto ctx = rewriter.getContext();
+    auto ctx = memTy.getContext();
     auto kOffset = str_attr("offset");
-    // The handling of subviews is not as fine as it could be
-    // We could compose with the identity of the memTy.getShape()
-    // (at the moment llInv will be of allocShape), but then
-    // we would need to handle the getReps part more carefuly
-    // This way we could support more subviews that we don't
-    // We can implement this generalisation in the future if needed
-    auto llInv = toLinearLayout(memTy).pseudoinvert();
-    auto bitwidth = memTy.getElementType().getIntOrFloatBitWidth();
+    // Keep the allocation layout so descriptor tiling can handle subviews.
+    auto ll = toLinearLayout(memTy);
+    unsigned bitwidth = memTy.getElementTypeBitWidth();
     if (isFp4) {
-      // hacky but well
-      auto dims = to_vector(llInv.getInDimNames());
-      auto trans = llInv.getBasis(dims[0], 0, kOffset) == 1;
-      llInv = LinearLayout::identity1D(2, dims[trans ? 0 : 1], kOffset) * llInv;
+      auto dims = to_vector(ll.getOutDimNames());
+      auto trans = ll.getBasis(kOffset, 0, dims[0]) == 1;
+      ll = (LinearLayout::identity1D(2, kOffset, dims[trans ? 0 : 1]) * ll)
+               .transposeOuts(dims);
       bitwidth /= 2;
-      // The instr_shape comes in number of elements already
     }
-    return build(loc, rewriter, llInv, bitwidth, smemBase, instrShape, MNdim,
-                 mmaVersion, mmaTy);
+    return build(loc, rewriter, ll.pseudoinvert(), bitwidth, smemBase,
+                 instrShape, MNdim, mmaVersion, mmaTy);
   }
 
   static FailureOr<DotOpMmaSmemLoader>
@@ -139,26 +133,22 @@ public:
       baseSrcb128 = b.add(baseSrcb128, warpStrideb128);
     }
 
-    for (auto [dim, instrSize] : llvm::zip(ll.getInDimNames(), instrShape)) {
-      if (instrSize <= ll.getInDimSize(dim))
-        continue;
-      auto inDims = ll.getInDims();
-      return mlir::emitError(loc)
-             << "instruction shape [" << instrShape[0] << ", " << instrShape[1]
-             << "] is too large for the layout with block size ["
-             << inDims[0].second << ", " << inDims[1].second << "]";
-    }
+    // Padding may supply unused result columns, but not reduction elements.
+    auto dims = to_vector(ll.getInDimNames());
+    if (instrShape[1 - MNdim] > ll.getInDimSize(dims[1 - MNdim]))
+      return mlir::emitError(loc,
+                             "MMA instruction exceeds the logical K dimension");
 
     auto desc = getDescriptor(loc, ll, instrShape, bitwidth, MNdim, mmaVersion);
     if (failed(desc))
       return failure();
 
-    Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x7FFF)));
+    Value baseb128 = b.and_(baseSrcb128, b.i32_val(0x7FFF));
     return DotOpMmaSmemLoader{*desc, baseb128, ll};
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc) const {
+                 Location loc, int kSize = 0) const {
     auto *ctx = loc.getContext();
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto dims = to_vector(ll.getInDimNames());
@@ -174,16 +164,35 @@ public:
     // Take the next 0/1/2/3 bits after the 128b tile
     uint32_t mask = (desc.swizzlingByteWidth >> 4) - 1;
     currDesc.matrixBaseOffset = (smemByteOffsetb8 / 128) & mask;
+    // Packed FP4 K96 may straddle a 128-byte swizzle sector. SM103 can
+    // address the second chunk through an absolute leading dimension.
+    // The caller selects this only for K-major, 128-byte-swizzled operands
+    // whose MN tile origins preserve a zero matrix base offset.
+    int k = desc.transposed ? a : b;
+    bool useAbsolute = kSize == 96 && k % 256 + kSize > 256;
+    if (useAbsolute) {
+      currDesc.leadDimensionAbsoluteMode = 1;
+      currDesc.leadDimensionBaseOffset = 0;
+    }
     int32_t smemByteOffsetb128 = smemByteOffsetb8 >> 4;
-    Value descValBase =
-        tb.int_val(64, currDesc.descriptor + smemByteOffsetb128);
+    uint64_t descBits = std::bit_cast<uint64_t>(currDesc) + smemByteOffsetb128;
     // Add the base address to the descriptor
-    Value descVal = tb.add(descValBase, baseb128);
-    return descVal;
+    Value low = tb.add(tb.i32_val(uint32_t(descBits)), baseb128);
+    Value high = tb.i32_val(descBits >> 32);
+    Value descWords = packLLVector(loc, {low, high}, rewriter);
+    Value result = tb.bitcast(descWords, i64_ty);
+    if (useAbsolute) {
+      int nextK = (k / 256 + 1) * 256;
+      Value next = smemLoad(desc.transposed ? nextK : a,
+                            desc.transposed ? b : nextK, rewriter, loc);
+      Value nextAddress = tb.and_(next, tb.i64_val(0x3fff));
+      result = tb.or_(result, tb.shl(nextAddress, tb.i64_val(16)));
+    }
+    return result;
   }
   MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                         Location loc) const override {
-    return {smemLoad(a, b, rewriter, loc), std::nullopt};
+                         Location loc, int kSize = 0) const override {
+    return {smemLoad(a, b, rewriter, loc, kSize), std::nullopt};
   }
 
   MMASMEMDescriptor &getDescriptor() { return desc; }
@@ -206,6 +215,22 @@ private:
       return failure();
 
     auto [attrs, shmemTileInv] = std::move(*attrsAndCandidate);
+    unsigned atomMN = shmemTileInv.transposeIns({dims[MNdim], dims[1 - MNdim]})
+                          .getNumConsecutiveInOut();
+    if (mmaVersion == 5 && instrShape[MNdim] < atomMN)
+      return mlir::emitError(loc, "instruction M/N must cover at least ")
+             << atomMN << " contiguous elements of the shared-memory core";
+    if (instrShape[MNdim] > std::max(ll.getInDimSize(dims[MNdim]),
+                                     shmemTileInv.getInDimSize(dims[MNdim])) &&
+        (attrs.swizzlingByteWidth != 0 ||
+         ll.getInDimSize(dims[MNdim]) >
+             shmemTileInv.getInDimSize(dims[MNdim]))) {
+      auto inDims = ll.getInDims();
+      return mlir::emitError(loc)
+             << "instruction shape [" << instrShape[0] << ", " << instrShape[1]
+             << "] is too large for the layout with block size ["
+             << inDims[0].second << ", " << inDims[1].second << "]";
+    }
     int swizzling = attrs.swizzlingByteWidth;
     bool transposed = attrs.transposed;
     bool fp4Padded = attrs.fp4Padded;
@@ -228,25 +253,29 @@ private:
     }
 
     auto log2ColsTile = shmemTileInv.getInDimSizeLog2(dims[stridedDim]);
-    if (llvm::Log2_32(instrShape[stridedDim]) > log2ColsTile) {
+    // Keep SBO zero when the remaining M/N coordinates are all padding.
+    if (llvm::Log2_32(instrShape[stridedDim]) > log2ColsTile &&
+        log2ColsTile < ll.getInDimSizeLog2(dims[stridedDim])) {
       sbo = ll.getBasis(dims[stridedDim], log2ColsTile, kOffset);
     }
+    if ((lbo * bitwidth) % 128 || (sbo * bitwidth) % 128)
+      return mlir::emitError(loc,
+                             "MMA descriptor strides must be 16-byte aligned");
 
     // Pad the tile up to the full instruction shape with the relevant
     // stride if the instruction shape is larger than the tile
     auto bases = shmemTileInv.getBases();
     for (int d : {0, 1}) {
+      auto stride = d == leadingDim ? lbo : sbo;
       // 'tile' with the atom tile according to the lbo/sbo rules
       for (int i = 1; i < instrShape[d] / shmemTileInv.getInDimSize(dims[d]);
            i *= 2) {
-        auto stride = ll.getBasis(
-            dims[d], shmemTileInv.getInDimSizeLog2(dims[d]), kOffset);
         bases[dims[d]].push_back({stride * i});
       }
     }
     auto maxBasis = 0;
-    for (auto dimBases : llvm::make_second_range(bases)) {
-      for (auto basis : dimBases) {
+    for (const auto &dimBases : llvm::make_second_range(bases)) {
+      for (const auto &basis : dimBases) {
         maxBasis = std::max(maxBasis, basis[0]);
       }
     }
@@ -254,14 +283,12 @@ private:
     shmemTileInv = LinearLayout(std::move(bases),
                                 {{kOffset, llvm::NextPowerOf2(maxBasis)}},
                                 /*requireSurjective=*/false);
-    // Add a trivial block dimension as getReps expects both layouts to
-    // have the same outdims
-    shmemTileInv *= LinearLayout::identity1D(1, dims[0], str_attr("block"));
+    if (!attrs.isCompatibleWith(ll, shmemTileInv))
+      return mlir::emitError(
+          loc, "MMA instruction exceeds the shared-memory layout");
 
-    assert(getReps(ll, shmemTileInv).has_value());
-
-    SMEMDescriptor desc;
-    desc.descriptor = mmaVersion == 5 ? 1ULL << 46 : 0ULL;
+    auto desc =
+        std::bit_cast<SMEMDescriptor>(mmaVersion == 5 ? 1ULL << 46 : 0ULL);
     // The lbo / sbo is defined wrt. the 128b elements
     desc.leadDimensionBaseOffset = (lbo * bitwidth / 8) >> 4;
     desc.strideDimensionBaseOffset = (sbo * bitwidth / 8) >> 4;

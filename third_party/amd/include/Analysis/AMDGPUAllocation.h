@@ -6,20 +6,17 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
+namespace mlir::triton::gpu {
+class ConvertLayoutOp;
+}
+
 namespace mlir::triton::AMD {
 
-unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
-                                        RankedTensorType dstTy,
+unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
                                         TargetInfoBase &targetInfo);
 
 unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
                                             TargetInfoBase &targetInfo);
-
-// For a layout conversion between `srcTy` and `dstTy`, return the vector length
-// that can be used for the stores to and loads from shared memory,
-// respectively.
-std::pair</*inVec*/ unsigned, /*outVec*/ unsigned>
-getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy);
 
 } // namespace mlir::triton::AMD
 

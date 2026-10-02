@@ -525,7 +525,7 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
     WarpSpecializeOp ws = wsOps[i];
     auto &stateMap = warpToState[i];
     Block *before = ws->getBlock();
-    Block *after = b.splitBlock(before, ws->getIterator());
+    Block *after = before->splitBlock(ws->getIterator());
     TritonLLVMIRRewriter b(ws.getLoc(), OpBuilder::atBlockEnd(before));
     Type int8Type = b.getIntegerType(8);
     Value statePtrWs =

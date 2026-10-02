@@ -4,15 +4,18 @@ from typing import TYPE_CHECKING
 from triton import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
-from ..._core import builtin, int8, uint8, uint16, bfloat16, _unwrap_if_constexpr
-from .._ops import _scaled_upcast
+from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
+from .._layouts import AMDMFMALayout
+from .._ops import _scaled_upcast, get_scaled_upcast_fp4_scale_layout
+from ..._semantic import _check
 
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
     "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or",
-    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast"
+    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast",
+    "get_scaled_upcast_fp4_scale_layout"
 ]
 
 _atomic_op_str_to_op = {
@@ -106,7 +109,7 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
         offsets (tensor): Offsets tensor for the load operation.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
-        cache_modifier (str): Cache modifier specifier. Defaults to "".
+        cache (str, optional): Cache modifier specifier. Defaults to ``None``.
     """
     _verify_buffer_ops(ptr, offsets, mask, other)
 
@@ -142,7 +145,7 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
         ptr (pointer to scalar): Global memory scalar base pointer to store to.
         offsets (tensor): Offsets tensor for the store operation.
         mask (tensor, optional): Mask tensor for predicated store. Defaults to None.
-        cache_modifier (str): Cache modifier specifier. Defaults to "".
+        cache (str, optional): Cache modifier specifier. Defaults to ``None``.
     """
     _verify_buffer_ops(ptr, offsets, mask)
 
@@ -162,33 +165,49 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
 
 
+# Attribute that carries `cd_regclass` on the dot op; read by the MFMA lowering.
+_CD_REGCLASS_ATTR = "amdg.cd_regclass"
+
+
+def _check_cd_regclass(cd_regclass, acc):
+    """Validate `cd_regclass` ("a" = AGPRs, "v" = VGPRs, None) for an MFMA on `acc`, and return it unwrapped."""
+    cd_regclass = _unwrap_if_constexpr(cd_regclass)
+    if cd_regclass is not None:
+        _check(cd_regclass in ("a", "v"), lambda: f"cd_regclass must be None, 'a' or 'v', got {cd_regclass!r}")
+        _check(isinstance(acc.type.layout, AMDMFMALayout),
+               lambda: f"cd_regclass requires an accumulator with AMDMFMALayout, got {acc.type.layout}")
+    return cd_regclass
+
+
+def _set_cd_regclass(handle, cd_regclass, semantic):
+    """Record a checked `cd_regclass` on the dot op that defines `handle`."""
+    if cd_regclass is not None:
+        handle.set_attr(_CD_REGCLASS_ATTR, semantic.builder.get_string_attr(cd_regclass))
+
+
 @builtin
-def mfma(a, b, acc, _semantic: GluonSemantic = None):
+def mfma(a, b, acc, cd_regclass=None, _semantic: GluonSemantic = None):
     """
-    Computes matrix-multiplication of a * b + acc using AMD native matrix core units.
+    Computes matrix multiplication ``a * b + acc`` using AMD native matrix core units.
+
     Args:
         a (tensor): The first operand of mfma.
         b (tensor): The second operand of mfma.
         acc (tensor): The accumulator tensor.
+        cd_regclass (str, optional): Experimental. Register class for the accumulator input (C)
+            and result (D) of the MFMA instructions: ``"a"`` for AGPRs or ``"v"`` for VGPRs.
+            Requires an ``AMDMFMALayout`` accumulator. ``None`` (default) leaves the choice to
+            the compiler.
     """
     assert acc is not None, "acc is required"
     ret_type = acc.type
     acc = ttgl._unwrap_if_constexpr(acc)
 
+    cd_regclass = _check_cd_regclass(cd_regclass, acc)
     handle = _semantic.dot(a, b, acc, input_precision=knobs.language.fp32_default, max_num_imprecise_acc=None,
                            out_dtype=acc.dtype).handle
+    _set_cd_regclass(handle, cd_regclass, _semantic)
     return ttgl.tensor(handle, ret_type)
-
-
-def _convert_e8m0_scale_to_bf16(scale, _semantic=None):
-    # Mirror scaleTo16() for BF16 compute: reinterpret raw E8M0 bytes as the
-    # shifted BF16 payload expected by the non-gfx1250 scaled-upcast path.
-    if scale.dtype == int8:
-        scale = _semantic.bitcast(scale, uint8)
-    scale = _semantic.cast(scale, uint16)
-    shift = _semantic.cast(_semantic.to_tensor(7), uint16)
-    scale = _semantic.shl(scale, shift)
-    return _semantic.bitcast(scale, bfloat16)
 
 
 @builtin
@@ -200,17 +219,15 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
     CDNA3 lowers this through the software-emulated scaled-upcast path; it
     does not use native hardware scaled-upcast instructions.
 
-    The scale tensor must use raw E8M0 payload in `int8` or `uint8`, and must
+    The ``scale`` tensor must use raw E8M0 payload in ``int8`` or ``uint8``, and must
     already have the expanded output shape and scaled-upcast result layout.
-    For fp4 inputs, that is the canonical unpacked layout implied by `src`
-    and `axis`. `elem_type` must be `fp16` or `bf16`. CDNA3 converts those
-    bytes to the internal `bf16` scale form expected by the AMD op.
+    For fp4 inputs, that is the canonical unpacked layout implied by ``src``
+    and ``axis``. ``elem_type`` must be ``fp16`` or ``bf16``.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _unwrap_if_constexpr(elem_type)
     assert scale.dtype in (int8, uint8), \
         f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
-    scale = _convert_e8m0_scale_to_bf16(scale, _semantic)
     return _scaled_upcast(src, scale, elem_type, axis, _semantic)
 
 

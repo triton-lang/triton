@@ -29,16 +29,23 @@
 #include <numeric>
 
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
+
+#include <cmath>
 
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.cpp.inc"
 
@@ -49,6 +56,45 @@ using namespace mlir::triton::nvidia_gpu;
 namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
+
+LogicalResult
+CachePolicyAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                        triton::CacheModifier cacheModifier,
+                        CacheEvictionPriority l1, CacheEvictionPriority primary,
+                        CacheEvictionPriority secondary, FloatAttr fraction,
+                        IntegerAttr prefetchSize) {
+  using Priority = CacheEvictionPriority;
+  if (cacheModifier != triton::CacheModifier::NONE && l1 != Priority::NONE)
+    return emitError()
+           << "cache modifier cannot be combined with an L1 eviction priority";
+
+  if (primary == Priority::NO_ALLOCATE)
+    return emitError() << "invalid L2 primary eviction priority '"
+                       << stringifyCacheEvictionPriority(primary) << "'";
+
+  if (primary != Priority::NONE) {
+    if (secondary == Priority::NONE || !fraction)
+      return emitError() << "L2 policy requires l2_secondary and l2_fraction";
+    if (secondary != Priority::EVICT_FIRST &&
+        secondary != Priority::EVICT_UNCHANGED)
+      return emitError() << "invalid L2 secondary eviction priority '"
+                         << stringifyCacheEvictionPriority(secondary) << "'";
+    double value = fraction.getValueAsDouble();
+    if (!fraction.getType().isF32() || !std::isfinite(value) || value <= 0.0 ||
+        value > 1.0)
+      return emitError() << "L2 fraction must be a finite f32 in (0, 1]";
+  } else if (secondary != Priority::NONE || fraction) {
+    return emitError() << "l2_secondary and l2_fraction require l2_primary";
+  }
+
+  if (prefetchSize) {
+    int64_t size = prefetchSize.getInt();
+    if (!prefetchSize.getType().isInteger(32) ||
+        (size != 64 && size != 128 && size != 256))
+      return emitError() << "L2 prefetch size must be 64, 128, or 256";
+  }
+  return success();
+}
 
 namespace {
 
@@ -439,7 +485,8 @@ LogicalResult TensorMemoryEncodingAttr::verify(
   if (twoCTAs) {
     auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
     auto cgaLL = cgaLayout.getLinearLayout();
-    if (cgaLL.getBasis(kBlock, 0) != ArrayRef{1, 0}) {
+    if (cgaLL.getInDimSizeLog2(kBlock) == 0 ||
+        cgaLL.getBasis(kBlock, 0) != ArrayRef{1, 0}) {
       return emitError()
              << "twoCTAs layout requires the first CGALayout block basis to "
                 "be [1, 0]";
@@ -476,19 +523,174 @@ LogicalResult TensorMemoryScalesEncodingAttr::verify(
   return success();
 }
 
+unsigned getMMAv5InstructionN(MemDescType type) {
+  auto encoding = cast<TensorMemoryEncodingAttr>(type.getEncoding());
+  unsigned n = encoding.getBlockN();
+  if (type.getShape().back() < type.getAllocShape().back())
+    n = std::min<unsigned>(n, getShapePerCTA(type).back());
+  return n;
+}
+
 LogicalResult impl::verifyMMAv5Op(Operation *op) {
+  auto itf = cast<MMAv5OpInterface>(op);
+  auto aType = itf.getA().getType();
+  auto bType = itf.getB().getType();
+  auto dType = itf.getAccumulator().getType();
+  auto barriers = itf.getCompletionBarriers();
+  if (!itf.isAsync() && !barriers.empty())
+    return op->emitOpError("The op is synchronous but a barrier is present.");
+  auto encoding = dyn_cast<TensorMemoryEncodingAttr>(dType.getEncoding());
+  if (!encoding || aType.getRank() != 2 || bType.getRank() != 2 ||
+      dType.getRank() != 2 ||
+      !isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
+           SwizzledSharedEncodingAttr>(bType.getEncoding()) ||
+      cast<LayoutEncodingTrait>(aType.getEncoding()).getRank() != 2 ||
+      cast<LayoutEncodingTrait>(bType.getEncoding()).getRank() != 2 ||
+      !bType.getElementType().isIntOrFloat())
+    return op->emitOpError("expected rank-2 MMA operands, a shared-memory RHS, "
+                           "and a tensor-memory accumulator");
+  if (encoding.getFp4Padded())
+    return op->emitOpError("accumulator layout must not be fp4_padded");
+
+  if (aType.getElementType().isF32()) {
+    auto aAttrs = isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(
+                      aType.getEncoding())
+                      ? getNvmmaSmemAttrs(aType)
+                      : std::nullopt;
+    auto bAttrs = getNvmmaSmemAttrs(bType);
+    if ((aAttrs && aAttrs->transposed) || (bAttrs && !bAttrs->transposed))
+      return op->emitOpError(
+          "transposed float32 shared-memory operands require "
+          "unsupported 32-byte swizzle atomicity");
+  }
+
   auto isInterleaved = [](MemDescType memdesc) {
     auto enc = dyn_cast<TensorMemoryEncodingAttr>(memdesc.getEncoding());
-    return enc && getTmemAllocSizes(memdesc).numRows != 64 &&
-           enc.getBlockM() == 64;
+    return enc && enc.getBlockM() == 64 &&
+           getTmemAllocSizes(memdesc).numRows != 64;
   };
 
-  auto itf = cast<MMAv5OpInterface>(op);
-  if (isInterleaved(itf.getA().getType()) &&
-      isInterleaved(itf.getAccumulator().getType())) {
+  if (isInterleaved(aType) && isInterleaved(dType)) {
     return op->emitOpError(
         "does not support blockM=64 with interleaved blocks in TMEM layout");
   }
+  if (encoding.getTwoCTAs() != itf.getTwoCtas())
+    return op->emitOpError("accumulator layout must match the MMA CTA group");
+
+  auto *ctx = op->getContext();
+  auto dims = standardOutDimNames(ctx, 2);
+  unsigned ctaGroupSize = itf.getTwoCtas() ? 2 : 1;
+  unsigned n = getMMAv5InstructionN(dType);
+  if (n < 8 * ctaGroupSize || n > 256)
+    return op->emitOpError("MMA instruction N must be between ")
+           << 8 * ctaGroupSize << " and 256; got " << n;
+
+  int64_t nPerCTA = getShapePerCTA(dType)[1];
+  auto scaled = dyn_cast<TCGen5MMAScaledOp>(op);
+  bool bIsFp4 = scaled && scaled.getBType() == ScaleDotElemType::E2M1;
+  if (itf.getTwoCtas()) {
+    // [Note: numRepN > 1 and two_ctas]
+    // Consider, just as an example, num_ctas=16, and a huge tile of shape
+    // MNK = 512x64x2048
+    // This is an example of layout with numRepN=2 and two_ctas=true:
+    // Layout RHS:
+    // #ttg.memdesc<64x2048xf16,
+    //   #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true,
+    //                      elementBitWidth = 16,
+    //                      CGALayout = [[0, 1], [0, 2], [0, 4], [0, 0]]}>>
+    //
+    // As a LinearLayout:
+    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
+    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [32, 0]]
+    // block = [[0, 256], [0, 512], [0, 1024], [0, 0]]
+    //
+    // The issue is that the data from the CTA1 should be next to that of the
+    // first part of the instruction. Now, the max instruction size is 128x256,
+    // so the layout we should use is
+    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
+    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 256], [32, 0]]
+    // block = [[0, 128], [0, 512], [0, 1024], [0, 0]]
+    // (note how we swapped the bases [0, 256] and [0, 128])
+    // The issue with this layout is that it breaks the invariant that the
+    // CGALayout splits the CGA tile into contiguous CTA tiles,
+    // i.e. total_layout = cta_layout * cga_layout.
+    // This is used all over the place, to the point that for all legacy layouts
+    // we represent the CGALayout as the `cga_layout` we have to multiply on the
+    // right.
+    // We could allow with a bit of effort SharedLinearLayouts that did not
+    // divide on the right by a CGALayout, but for now we throw a lovely error.
+    if (nPerCTA > n)
+      return op->emitOpError(
+          "two-CTA MMA requires a single instruction along N");
+    auto bLayout = toLinearLayout(bType);
+    auto block = StringAttr::get(ctx, "block");
+    if (bLayout.getInDimSize(block) < 2)
+      return op->emitOpError("B layout must contain a CTA pair");
+    unsigned bCtaOffset = bLayout.getBasis(block, 0, dims[1]);
+    if (bIsFp4) {
+      auto attrs = getNvmmaSmemAttrs(bType);
+      if (!attrs)
+        return op->emitOpError(
+            "B shared-memory layout is not compatible with MMA");
+      if (!attrs->transposed)
+        bCtaOffset *= 2;
+    }
+    unsigned expectedN = n / 2 < nPerCTA ? n / 2 : 0;
+    if (bCtaOffset != expectedN)
+      return op->emitOpError("B CTA layout does not match MMA instruction N = ")
+             << n;
+  }
+
+  if (nPerCTA < n) {
+    auto bLayout = toLinearLayout(bType).pseudoinvert();
+    for (auto [dim, size] : llvm::zip_equal(dims, bType.getShape()))
+      bLayout = bLayout.resizeInDim(dim, size);
+    auto attrsAndCore =
+        getNvmmaSmemAttrs(bLayout, bType.getElementTypeBitWidth());
+    if (!attrsAndCore)
+      return op->emitOpError(
+          "B shared-memory layout is not compatible with MMA");
+    const auto &[attrs, coreLayout] = *attrsAndCore;
+    unsigned requiredN = n / ctaGroupSize;
+    if (bIsFp4 && !attrs.transposed)
+      requiredN /= 2;
+    if (requiredN > bType.getDimSize(1) &&
+        bType.getDimSize(1) != bType.getAllocShape().back())
+      return op->emitOpError(
+          "cannot expand the N dimension of a shared-memory subview");
+    if (bType.getShape() !=
+            dropPipeliningDim(bType.getAllocShape(), bType.getEncoding()) &&
+        !getReps(bLayout, coreLayout))
+      return op->emitOpError(
+          "overlapping MMA core matrices require a complete allocation");
+    if (requiredN > std::max(bLayout.getInDimSize(dims[1]),
+                             coreLayout.getInDimSize(dims[1])) &&
+        (attrs.swizzlingByteWidth != 0 ||
+         bLayout.getInDimSize(dims[1]) > coreLayout.getInDimSize(dims[1])))
+      return op->emitOpError(
+                 "B shared-memory layout does not support MMA instruction N = ")
+             << n;
+  }
+
+  // Complete allocations already have the declared instruction layout.
+  auto allocShape = dropPipeliningDim(dType.getAllocShape(), encoding);
+  if (dType.getShape() == allocShape)
+    return success();
+
+  auto instrEncoding = TensorMemoryEncodingAttr::get(
+      ctx, encoding.getBlockM(), n, encoding.getColStride(),
+      encoding.getCGALayout(), encoding.getTwoCTAs());
+  SmallVector<int64_t> instrShape = {encoding.getBlockM(), n};
+  auto expected = ensureLayoutNotLargerThan(
+      toLinearLayout(dType.getShape(), instrEncoding), dims, instrShape);
+  auto actual = ensureLayoutNotLargerThan(toLinearLayout(allocShape, encoding),
+                                          dims, instrShape);
+  auto col = StringAttr::get(ctx, "col");
+  if (expected.getInDimSize(col) > actual.getInDimSize(col) ||
+      expected.resizeInDim(col, actual.getInDimSize(col)) != actual)
+    return op->emitOpError(
+               "accumulator layout does not match MMA instruction N = ")
+           << n;
   return success();
 }
 
@@ -567,6 +769,26 @@ TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
 
 namespace {
 //===----------------------------------------------------------------------===//
+// Cache Policy Interface
+//===----------------------------------------------------------------------===//
+class TritonNvidiaGPUCachePolicyInterface
+    : public triton::DialectCachePolicyInterface {
+public:
+  using DialectCachePolicyInterface::DialectCachePolicyInterface;
+
+  LogicalResult verifyCachePolicy(
+      Attribute cachePolicy, triton::CachePolicyOperation operation,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+    auto policy = dyn_cast<CachePolicyAttr>(cachePolicy);
+    if (!policy)
+      return emitError() << "unsupported NVIDIA cache policy attribute "
+                         << cachePolicy;
+    return triton::verifyCacheModifier(policy.getCacheModifier(), operation,
+                                       emitError);
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Verify Tensor/MemDesc Layout Interface
 //===----------------------------------------------------------------------===//
 class TritonNvidiaGPUVerifyTensorLayoutInterface
@@ -620,6 +842,53 @@ public:
     return OpAsmDialectInterface::getAlias(attr, os);
   }
 };
+
+struct DivFByConstant : public OpRewritePattern<arith::DivFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::DivFOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isa<Float32Type, RankedTensorType>(op.getType()) ||
+        !getElementTypeOrSelf(op.getType()).isF32())
+      return failure();
+
+    auto targetInfo =
+        triton::TargetInfoBase::fromModuleOp(op->getParentOfType<ModuleOp>());
+    if (!targetInfo || !targetInfo->isCuda())
+      return failure();
+
+    // This range keeps both the denominator and its reciprocal normal.
+    auto inRange = [](APFloat value) {
+      value.clearSign();
+      return value >= APFloat(0x1p-126f) && value <= APFloat(0x1p126f);
+    };
+    APFloat denominator(0.0f);
+    DenseFPElementsAttr denominators;
+    Value divisor = op.getRhs();
+    if (matchPattern(op.getRhs(), m_ConstantFloat(&denominator))) {
+      if (!inRange(denominator))
+        return failure();
+      if (isa<RankedTensorType>(op.getType()))
+        divisor = arith::ConstantOp::create(
+            rewriter, op.getLoc(),
+            rewriter.getFloatAttr(rewriter.getF32Type(), denominator));
+    } else if (!matchPattern(op.getRhs(), m_Constant(&denominators)) ||
+               !llvm::all_of(denominators.getValues<APFloat>(), inRange)) {
+      return failure();
+    }
+
+    auto one = arith::ConstantOp::create(
+        rewriter, op.getLoc(), rewriter.getOneAttr(divisor.getType()));
+    Value reciprocal = triton::ApproxDivFOp::create(
+        rewriter, op.getLoc(), divisor.getType(), one, divisor);
+    if (reciprocal.getType() != op.getType())
+      reciprocal = triton::SplatOp::create(rewriter, op.getLoc(), op.getType(),
+                                           reciprocal);
+    rewriter.replaceOpWithNewOp<arith::MulFOp>(op, op.getLhs(), reciprocal);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -637,9 +906,15 @@ void TritonNvidiaGPUDialect::initialize() {
 #define GET_TYPEDEF_LIST
 #include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
       >();
+  addInterfaces<TritonNvidiaGPUCachePolicyInterface>();
   addInterfaces<TritonNvidiaGPUVerifyTensorLayoutInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonInlinerInterface>();
+}
+
+void TritonNvidiaGPUDialect::getCanonicalizationPatterns(
+    RewritePatternSet &patterns) const {
+  patterns.add<DivFByConstant>(getContext());
 }
 
 // verify TritonNvidiaGPU ops

@@ -131,8 +131,7 @@ struct ClusterBarrierArriveOpConversion
     Value isFirstWarp = b.icmp_eq(warpId, b.i32_val(0));
 
     Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterBlock =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *afterBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
     Block *signalBlock = rewriter.createBlock(afterBlock);
     rewriter.setInsertionPointToEnd(currentBlock);
     LLVM::CondBrOp::create(rewriter, loc, isFirstWarp, signalBlock, afterBlock);
