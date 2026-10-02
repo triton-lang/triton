@@ -407,6 +407,26 @@ def test_ternary_math_mixed_scalar_kinds(op, order):
     run_parser(kernel, args=(MockTensor(tl.int16), op, order))
 
 
+@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
+@pytest.mark.parametrize("dtypes", [(tl.float8e5, tl.int8, tl.int32), (tl.float8e5, tl.int8, tl.bfloat16),
+                                    (tl.float8e5, tl.float8e4nv, tl.int32), (tl.float16, tl.bfloat16, tl.int32)])
+@pytest.mark.parametrize("order", list(itertools.permutations(range(3))))
+def test_ternary_math_tensor_promotion(op, dtypes, order):
+
+    @triton.jit
+    def kernel(X, Y, Z, op: tl.constexpr):
+        offsets = tl.arange(0, 8)
+        x = tl.load(X + offsets[:, None])
+        y = tl.load(Y + offsets[None, :])
+        z = tl.load(Z)
+        result = op(x, y, z)
+        tl.static_assert(result.dtype == tl.float32)
+        tl.static_assert(result.shape == [8, 8])
+        anchor(result)
+
+    run_parser(kernel, args=tuple(MockTensor(dtypes[i]) for i in order) + (op, ))
+
+
 @pytest.mark.parametrize("op", ["minimum", "maximum", "clamp", "cumsum", "cumprod"])
 @pytest.mark.parametrize("dtype", [tl.bfloat16, tl.float16, tl.float32], ids=str)
 def test_bfloat16_promotion_elementwise_and_scan(op, dtype):
@@ -1476,12 +1496,8 @@ def test_return_promotion():
     run_parser(kernel)
 
 
-def test_fp8_div_mod_promotion():
-    # `/` and `%` do not exist natively for floats narrower than fp32, so the
-    # result of a division or modulo with a floating operand is promoted to
-    # fp32 -- one rule covering fp8, fp16 and bfloat16, tensor and scalar
-    # operands alike. Other ops keep the existing promotions (same fp8 stays
-    # that fp8, mixed fp8 goes to float16).
+def test_fp8_arithmetic_promotion():
+    # FP8 computation uses FP16, or FP32 for division and modulo.
 
     @triton.jit
     def kernel():
@@ -1495,8 +1511,14 @@ def test_fp8_div_mod_promotion():
         tl.static_assert((x / y).dtype == tl.float32)
         tl.static_assert((x / z).dtype == tl.float32)
         tl.static_assert((x % y).dtype == tl.float32)
-        tl.static_assert((x * y).dtype == tl.float8e5)
+        tl.static_assert((x * y).dtype == tl.float16)
         tl.static_assert((x * z).dtype == tl.float16)
+        tl.static_assert((x + i.to(tl.int8)).dtype == tl.float16)
+        tl.static_assert((i + x).dtype == tl.float32)
+        tl.static_assert(tl.fma(x, y, b).dtype == tl.float32)
+        tl.static_assert(tl.clamp(b, x, y).dtype == tl.float32)
+        tl.static_assert(tl.where(i == 0, x, y).dtype == tl.float8e5)
+        tl.static_assert(tl.where(i == 0, 0, x).dtype == tl.float8e5)
         # fp16 and bfloat16 division/modulo upcast through the same rule
         tl.static_assert((h / h).dtype == tl.float32)
         tl.static_assert((h % h).dtype == tl.float32)
@@ -1506,16 +1528,14 @@ def test_fp8_div_mod_promotion():
         # integer division and modulo keep integer promotion
         tl.static_assert((i // i).dtype == tl.int32)
         tl.static_assert((i % i).dtype == tl.int32)
-        # A scalar operand doesn't participate in promotion, so / and % against
-        # a narrow float tensor must upcast to fp32 for the same reason, while other
-        # ops keep the tensor's type.
+        # Weak scalars follow the tensor's computation type.
         tl.static_assert((2.0 / x).dtype == tl.float32)
         tl.static_assert((x / 2.0).dtype == tl.float32)
         tl.static_assert((x % 2).dtype == tl.float32)
         tl.static_assert((h / 2.0).dtype == tl.float32)
         tl.static_assert((d / 2.0).dtype == tl.float64)
         tl.static_assert((d % 2.0).dtype == tl.float64)
-        tl.static_assert((x * 2.0).dtype == tl.float8e5)
+        tl.static_assert((x * 2.0).dtype == tl.float16)
         tl.static_assert((h * 2.0).dtype == tl.float16)
         tl.static_assert((i // 2).dtype == tl.int32)
 

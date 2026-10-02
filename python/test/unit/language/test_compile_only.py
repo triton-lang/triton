@@ -182,7 +182,8 @@ def test_maxnreg_instrumentation_mode(instrumentation_mode, monkeypatch, fresh_t
         assert ".maxnreg 42" in compiled.asm["ptx"]
 
 
-def test_compile_only_expect_zero() -> None:
+@pytest.mark.parametrize("dtype", ["fp32", "fp8e4nv", "fp8e5"])
+def test_compile_only_expect_zero(dtype) -> None:
 
     @triton.jit
     def expect_zero_kernel(x_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
@@ -193,7 +194,7 @@ def test_compile_only_expect_zero() -> None:
 
     src = triton.compiler.ASTSource(
         fn=expect_zero_kernel,
-        signature={"x_ptr": "*fp32", "out_ptr": "*fp32", "BLOCK_SIZE": "constexpr"},
+        signature={"x_ptr": f"*{dtype}", "out_ptr": f"*{dtype}", "BLOCK_SIZE": "constexpr"},
         constexprs={"BLOCK_SIZE": 16},
     )
     target = GPUTarget("cuda", 100, 32)
@@ -205,6 +206,8 @@ def test_compile_only_expect_zero() -> None:
     debug = triton.compile(src, target=target, options={"debug": True})
     assert "arith.select" not in debug.asm["ttir"]
     assert "tt.assert" in debug.asm["ttir"]
+    if dtype.startswith("fp8"):
+        assert re.search(r"arith.cmpf.*tensor<16xf16>", debug.asm["ttir"])
 
     fpsan = triton.compile(src, target=target, options={"instrumentation_mode": "fpsan"})
     assert "arith.select" in fpsan.asm["ttir"]

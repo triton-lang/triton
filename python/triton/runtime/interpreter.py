@@ -732,6 +732,9 @@ class InterpreterBuilder:
         data = arg.data.view(np_uint_dtype)
         mask = (1 << mask_bitwidth) - 1
         ret = (data & mask).view(_get_np_dtype(dtype_tt))
+        if dtype_tt in (tl.float8e4b8, tl.float8e5b16):
+            # FNUZ encodes NaN as the sign bit alone.
+            ret = np.where(data == 0x80, data, ret)
         return TensorHandle(ret, arg.dtype.scalar)
 
     create_cos = lambda self, arg: self.unary_op(arg, np.cos)
