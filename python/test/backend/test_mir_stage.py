@@ -587,6 +587,7 @@ def test_mir_swap_pipeline_passes(tmp_path):
     import re
     import os
     import subprocess
+    import sys
 
     script_file = tmp_path / "test_kernel.py"
     script_file.write_text(_SIMPLE_KERNEL_SCRIPT)
@@ -596,7 +597,7 @@ def test_mir_swap_pipeline_passes(tmp_path):
     env["TRITON_DUMP_MIR"] = str(tmp_path)
     env["TRITON_ALWAYS_COMPILE"] = "1"
 
-    result = subprocess.run(["python", str(script_file)], capture_output=True, text=True, env=env, timeout=120)
+    result = subprocess.run([sys.executable, str(script_file)], capture_output=True, text=True, env=env, timeout=120)
 
     assert result.returncode == 0, \
         f"Dump phase should succeed. stderr: {result.stderr[:1000]}"
@@ -622,7 +623,7 @@ def test_mir_swap_pipeline_passes(tmp_path):
     env["TRITON_ALWAYS_COMPILE"] = "1"
     env["LLVM_IR_ENABLE_DUMP"] = "1"
 
-    result = subprocess.run(["python", str(script_file)], capture_output=True, text=True, env=env, timeout=120)
+    result = subprocess.run([sys.executable, str(script_file)], capture_output=True, text=True, env=env, timeout=120)
 
     assert result.returncode == 0, \
         f"Swap phase should succeed. stderr: {result.stderr[:1000]}"
@@ -706,12 +707,13 @@ def _dump_and_prepare_mir(tmp_path, script_file):
     """Dump MIR for a kernel script and strip it for swapping. Returns the cleaned MIR file path."""
     import os
     import subprocess
+    import sys
 
     env = os.environ.copy()
     env["TRITON_DUMP_MIR"] = str(tmp_path)
     env["TRITON_ALWAYS_COMPILE"] = "1"
 
-    result = subprocess.run(["python", str(script_file)], capture_output=True, text=True, env=env, timeout=120)
+    result = subprocess.run([sys.executable, str(script_file)], capture_output=True, text=True, env=env, timeout=120)
     assert result.returncode == 0, \
         f"Dump phase should succeed. stderr: {result.stderr[:1000]}"
 
@@ -733,6 +735,7 @@ def _swap_mir_and_get_output(tmp_path, script_file, enable_misched):
     """Swap MIR with LLVM_IR_ENABLE_DUMP and return stderr output."""
     import os
     import subprocess
+    import sys
 
     env = os.environ.copy()
     env["TRITON_SWAP_MIR"] = str(tmp_path)
@@ -741,7 +744,7 @@ def _swap_mir_and_get_output(tmp_path, script_file, enable_misched):
     if enable_misched:
         env["TRITON_SWAP_MIR_ENABLE_MISCHED"] = "1"
 
-    result = subprocess.run(["python", str(script_file)], capture_output=True, text=True, env=env, timeout=120)
+    result = subprocess.run([sys.executable, str(script_file)], capture_output=True, text=True, env=env, timeout=120)
     assert result.returncode == 0, \
         f"Swap phase (misched={'enabled' if enable_misched else 'disabled'}) should succeed. stderr: {result.stderr[:1000]}"
     return result.stderr
@@ -842,6 +845,7 @@ def test_mir_swap_enable_misched_requires_swap_mir(tmp_path):
     """Test that TRITON_SWAP_MIR_ENABLE_MISCHED raises an error without TRITON_SWAP_MIR."""
     import os
     import subprocess
+    import sys
 
     script_file = tmp_path / "test_kernel.py"
     script_file.write_text(_SIMPLE_KERNEL_SCRIPT)
@@ -851,6 +855,6 @@ def test_mir_swap_enable_misched_requires_swap_mir(tmp_path):
     env["TRITON_ALWAYS_COMPILE"] = "1"
     # TRITON_SWAP_MIR is NOT set
 
-    result = subprocess.run(["python", str(script_file)], capture_output=True, text=True, env=env, timeout=120)
+    result = subprocess.run([sys.executable, str(script_file)], capture_output=True, text=True, env=env, timeout=120)
     assert result.returncode != 0
     assert "TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR" in result.stderr
