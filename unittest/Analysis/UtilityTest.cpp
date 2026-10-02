@@ -187,6 +187,10 @@ TEST(Analysis, SymbolicAddressSetRepresentationsMatchBitvector) {
     for (uint32_t address : expected)
       expectedAddresses.push_back(address);
     EXPECT_EQ(llvm::to_vector(actual), expectedAddresses);
+    auto it = actual.begin();
+    for (uint32_t address : expectedAddresses)
+      EXPECT_EQ(*it++, address);
+    EXPECT_EQ(it, actual.end());
     EXPECT_EQ(actual.empty(), expected.empty());
   };
   for (uint32_t begin : {0u, 7u, uint32_t(-3)}) {

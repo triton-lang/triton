@@ -22,6 +22,7 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/UniqueVector.h"
+#include "llvm/ADT/iterator.h"
 
 namespace mlir {
 class Allocation;
@@ -84,26 +85,19 @@ public:
   bool operator==(const AddressSet &other) const;
   bool operator<(const AddressSet &other) const;
 
-  class const_iterator {
+  class const_iterator
+      : public llvm::iterator_facade_base<const_iterator,
+                                          std::forward_iterator_tag, uint32_t,
+                                          std::ptrdiff_t, void, uint32_t> {
   public:
-    using iterator_category = std::forward_iterator_tag;
-    using value_type = uint32_t;
-    using difference_type = std::ptrdiff_t;
-    using pointer = void;
-    using reference = uint32_t;
+    using iterator_facade_base::operator++;
     const_iterator() = default;
     uint32_t operator*() const { return address; }
     const_iterator &operator++();
-    const_iterator operator++(int) {
-      auto previous = *this;
-      ++*this;
-      return previous;
-    }
     bool operator==(const const_iterator &other) const {
       return ranges == other.ranges && index == other.index &&
              address == other.address;
     }
-    bool operator!=(const const_iterator &other) const { return !(*this == other); }
 
   private:
     friend class AddressSet;
@@ -159,6 +153,7 @@ private:
       return source == other.source && delta == other.delta;
     }
   };
+  // Visitors have no catch-all: adding a form requires handling it everywhere.
   using Description = std::variant<Range, XorLayout, SharedLayout, TensorLayout,
                                    Union, Intersection, Difference, Translation>;
   struct Storage {

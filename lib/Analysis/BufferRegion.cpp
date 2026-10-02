@@ -316,11 +316,6 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
 namespace mlir::triton {
 
 namespace {
-// No catch-all overload: extending Description must update every visitor.
-template <class... Visitors> struct AddressVisitor : Visitors... {
-  using Visitors::operator()...;
-};
-template <class... Visitors> AddressVisitor(Visitors...) -> AddressVisitor<Visitors...>;
 using AddressIntervals = SmallVector<std::pair<uint64_t, uint64_t>, 4>;
 constexpr uint64_t addressSpaceSize = uint64_t{1} << 32;
 
@@ -453,7 +448,7 @@ bool AddressSet::sameDescription(const AddressSet &other) const {
     auto *rhs = std::get_if<std::decay_t<decltype(value)>>(&other.storage->description);
     return rhs && value == *rhs;
   };
-  return std::visit(AddressVisitor{
+  return std::visit(llvm::makeVisitor(
       [&](const Range &v) { return same(v); },
       [&](const XorLayout &v) { return same(v); },
       [&](const SharedLayout &v) { return same(v); },
@@ -461,7 +456,7 @@ bool AddressSet::sameDescription(const AddressSet &other) const {
       [&](const Union &v) { return same(v); },
       [&](const Intersection &v) { return same(v); },
       [&](const Difference &v) { return same(v); },
-      [&](const Translation &v) { return same(v); }}, storage->description);
+      [&](const Translation &v) { return same(v); }), storage->description);
 }
 
 const AddressSet::Intervals &AddressSet::intervals() const {
@@ -470,7 +465,7 @@ const AddressSet::Intervals &AddressSet::intervals() const {
     return empty;
   if (storage->evaluated)
     return *storage->evaluated;
-  storage->evaluated = std::visit(AddressVisitor{
+  storage->evaluated = std::visit(llvm::makeVisitor(
       [](const Range &v) {
         Intervals result;
         appendAddressRange(result, v.begin, v.length);
@@ -549,7 +544,7 @@ const AddressSet::Intervals &AddressSet::intervals() const {
           appendAddressRange(result, uint32_t(begin) + v.delta, end - begin);
         coalesceAddressRanges(result);
         return result;
-      }}, storage->description);
+      }), storage->description);
   return *storage->evaluated;
 }
 
@@ -566,7 +561,7 @@ bool AddressSet::empty() const {
     return true;
   if (storage->evaluated)
     return storage->evaluated->empty();
-  return std::visit(AddressVisitor{
+  return std::visit(llvm::makeVisitor(
       [](const Range &v) { return v.length == 0; },
       [](const XorLayout &) { return false; },
       [](const SharedLayout &v) { return v.elementBytes == 0; },
@@ -574,7 +569,7 @@ bool AddressSet::empty() const {
       [](const Union &v) { return AddressSet(v.lhs).empty() && AddressSet(v.rhs).empty(); },
       [&](const Intersection &) { return intervals().empty(); },
       [&](const Difference &) { return intervals().empty(); },
-      [](const Translation &v) { return AddressSet(v.source).empty(); }}, storage->description);
+      [](const Translation &v) { return AddressSet(v.source).empty(); }), storage->description);
 }
 
 void AddressSet::set(uint32_t address) { insert(fromRange(address, 1)); }
@@ -646,25 +641,20 @@ bool AddressSet::operator<(const AddressSet &other) const {
     return false;
   const auto &lhs = intervals();
   const auto &rhs = other.intervals();
-  size_t i = 0, j = 0;
-  while (i < lhs.size() && j < rhs.size()) {
-    if (lhs[i].first != rhs[j].first)
-      return lhs[i].first < rhs[j].first;
-    // The shorter interval either ends a prefix or leaves a gap.
-    if (lhs[i].second < rhs[j].second)
-      return i + 1 == lhs.size();
-    if (lhs[i].second > rhs[j].second)
-      return j + 1 != rhs.size();
-    ++i;
-    ++j;
-  }
-  return i == lhs.size() && j != rhs.size();
+  auto [l, r] = std::mismatch(lhs.begin(), lhs.end(), rhs.begin(), rhs.end());
+  if (l == lhs.end() || r == rhs.end())
+    return l == lhs.end() && r != rhs.end();
+  if (l->first != r->first)
+    return l->first < r->first;
+  // Equal starts: the shorter interval either ends a prefix or leaves a gap.
+  return l->second < r->second ? std::next(l) == lhs.end()
+                               : std::next(r) != rhs.end();
 }
 
 AddressSet AddressSet::translated(uint32_t delta) const {
   if (!delta || !storage)
     return *this;
-  return std::visit(AddressVisitor{
+  return std::visit(llvm::makeVisitor(
       [=](Range v) { v.begin += delta; return fromDescription(v); },
       [=](XorLayout v) { v.storageBase += delta; return fromDescription(std::move(v)); },
       [=](SharedLayout v) { v.storageBase += delta; return fromDescription(std::move(v)); },
@@ -672,7 +662,7 @@ AddressSet AddressSet::translated(uint32_t delta) const {
       [&](const Union &) { return fromDescription(Translation{storage, delta}); },
       [&](const Intersection &) { return fromDescription(Translation{storage, delta}); },
       [&](const Difference &) { return fromDescription(Translation{storage, delta}); },
-      [=](const Translation &v) { return fromDescription(Translation{v.source, v.delta + delta}); }},
+      [=](const Translation &v) { return fromDescription(Translation{v.source, v.delta + delta}); }),
       storage->description);
 }
 
