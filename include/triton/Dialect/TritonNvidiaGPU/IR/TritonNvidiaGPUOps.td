@@ -49,6 +49,57 @@ class TTNG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
+// Unknown memory effects preserve ordering of payload accesses across these
+// block-wide synchronization operations.
+class TTNG_CommunicationOp<string mnemonic> : TTNG_Op<mnemonic> {
+  let results = (outs I1:$result);
+  let assemblyFormat = "operands attr-dict `:` functional-type(operands, results)";
+  let hasVerifier = 1;
+}
+
+def TTNG_CommunicationWaitOp : TTNG_CommunicationOp<"comm_wait"> {
+  let summary = "Wait for a fabric communication counter or an abort";
+  let description = [{
+    The block waits for `count` receives or acknowledgments, or for all submitted
+    sends. Returns false on abort. A successful receive or acknowledgment wait
+    advances `cursor` when `consume` is true. `acquire` orders subsequent payload
+    accesses after completion. `monitor` records the target of a pending wait.
+    The caller must provide a nonnegative count and aligned global pointers.
+  }];
+  let arguments = (ins
+    TT_PtrOf<[I64]>:$counter, TT_PtrOf<[I64]>:$cursor,
+    TT_PtrOf<[I64]>:$aborted, TT_PtrOf<[I64]>:$monitor, I64:$count,
+    StrAttr:$kind, BoolAttr:$consume, BoolAttr:$acquire, I64Attr:$aborted_value
+  );
+}
+
+def TTNG_CommunicationSubmitOp : TTNG_CommunicationOp<"comm_submit"> {
+  let summary = "Publish a fabric send or acknowledgment to the host queue";
+  let description = [{
+    The block publishes one request and returns false if aborted before
+    reserving a queue slot. A reserved slot is always published. Sends advance
+    `send_count`; acknowledgments do not. Publication orders preceding payload
+    accesses. The caller provides aligned global pointers, a capacity of at least
+    two, and nonnegative byte offsets and length within the registered buffers.
+    `request_layout` contains the request stride followed by offsets of its ready,
+    type, handle, source, destination, length, and bypass fields.
+  }];
+  let arguments = (ins
+    TT_PtrOf<[I64]>:$head, TT_PtrOf<[I64]>:$tail,
+    TT_PtrOf<[I64]>:$cached_head, TT_PtrOf<[I8]>:$buffer,
+    I64:$capacity, I32:$handle, I64:$src_offset, I64:$dst_offset, I64:$nbytes,
+    TT_PtrOf<[I64]>:$send_count, TT_PtrOf<[I64]>:$aborted,
+    BoolAttr:$is_send, DenseI32ArrayAttr:$request_layout,
+    I32Attr:$request_type, I32Attr:$bypass_value,
+    I64Attr:$ready_value, I64Attr:$aborted_value
+  );
+}
+
+def TTNG_CommunicationIsAbortedOp : TTNG_CommunicationOp<"comm_is_aborted"> {
+  let summary = "Check the fabric abort flag with system acquire ordering";
+  let arguments = (ins TT_PtrOf<[I64]>:$aborted, I64Attr:$aborted_value);
+}
+
 def TTNG_PackedArithOperandElement : AnyTypeOf<[
   I8, F8E8M0FNU, F8E4M3FN, F8E5M2, F16, BF16, F32
 ], "packed arithmetic operand element">;

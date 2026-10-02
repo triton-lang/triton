@@ -839,6 +839,35 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);
            })
+      .def("create_comm_wait",
+           [](GluonOpBuilder &self, Value counter, Value cursor, Value aborted,
+              Value monitor, Value count, const std::string &kind, bool consume,
+              bool acquire, int64_t abortedValue) -> Value {
+             return self.create<ttng::CommunicationWaitOp>(
+                 self.getBuilder().getI1Type(), counter, cursor, aborted,
+                 monitor, count, kind, consume, acquire, abortedValue);
+           })
+      .def("create_comm_submit",
+           [](GluonOpBuilder &self, Value head, Value tail, Value cachedHead,
+              Value buffer, Value capacity, Value handle, Value srcOffset,
+              Value dstOffset, Value nbytes, Value sendCount, Value aborted,
+              bool isSend, const std::vector<int32_t> &requestLayout,
+              int32_t requestType, int32_t bypassValue, uint64_t readyValue,
+              int64_t abortedValue) -> Value {
+             return self.create<ttng::CommunicationSubmitOp>(
+                 self.getBuilder().getI1Type(), head, tail, cachedHead, buffer,
+                 capacity, handle, srcOffset, dstOffset, nbytes, sendCount,
+                 aborted, isSend,
+                 self.getBuilder().getDenseI32ArrayAttr(requestLayout),
+                 requestType, bypassValue, static_cast<int64_t>(readyValue),
+                 abortedValue);
+           })
+      .def("create_comm_is_aborted",
+           [](GluonOpBuilder &self, Value aborted,
+              int64_t abortedValue) -> Value {
+             return self.create<ttng::CommunicationIsAbortedOp>(
+                 self.getBuilder().getI1Type(), aborted, abortedValue);
+           })
       .def("create_local_gather",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc, Value indices,
               int32_t axis) -> Value {

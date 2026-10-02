@@ -180,9 +180,11 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
   bool hasScratchBarrier = scratchBufferId != Allocation::InvalidBufferId &&
                            !scratchBufferUsesWarpSync(op);
 
-  // Atomic polls always end in a rendezvous. With scratch, the rendezvous is
+  // Polls and communication ops end in a rendezvous. With scratch, it is
   // between the scratch write and read; otherwise it follows all effects.
-  if (isa<triton::AtomicPollOp>(op)) {
+  if (isa<triton::AtomicPollOp, ttng::CommunicationWaitOp,
+          ttng::CommunicationSubmitOp, ttng::CommunicationIsAbortedOp>(op)) {
+    stages.beforeMemoryEffects = isa<ttng::CommunicationSubmitOp>(op);
     stages.betweenMemoryEffects = hasScratchBarrier;
     stages.afterMemoryEffects = !hasScratchBarrier;
     return stages;

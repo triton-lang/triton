@@ -1,5 +1,27 @@
 // RUN: triton-opt %s | FileCheck %s
 
+module attributes {"ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @communication
+  tt.func @communication(%p: !tt.ptr<i64>, %buffer: !tt.ptr<i8>, %capacity: i64, %handle: i32, %offset: i64, %count: i64) {
+    %zero = arith.constant 0 : i64
+    // CHECK: ttng.comm_wait {{.*}}kind = "recv"
+    %recv = ttng.comm_wait %p, %p, %p, %p, %count {kind = "recv", consume = true, acquire = true, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    // CHECK: ttng.comm_wait {{.*}}kind = "ack"
+    %ack = ttng.comm_wait %p, %p, %p, %p, %zero {kind = "ack", consume = false, acquire = false, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    // CHECK: ttng.comm_wait {{.*}}kind = "send"
+    %send = ttng.comm_wait %p, %p, %p, %p, %zero {kind = "send", consume = false, acquire = true, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    // CHECK: ttng.comm_submit {{.*}}ready_value = -9223372036854775808 : i64
+    // CHECK-SAME: request_layout = array<i32: 56, 48, 0, 8, 16, 24, 32, 40>
+    %submitted = ttng.comm_submit %p, %p, %p, %buffer, %capacity, %handle, %offset, %offset, %offset, %p, %p
+        {is_send = true, request_layout = array<i32: 56, 48, 0, 8, 16, 24, 32, 40>, request_type = 0 : i32,
+         bypass_value = 0 : i32, ready_value = -9223372036854775808 : i64, aborted_value = 1 : i64}
+        : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i8>, i64, i32, i64, i64, i64, !tt.ptr<i64>, !tt.ptr<i64>) -> i1
+    // CHECK: ttng.comm_is_aborted
+    %aborted = ttng.comm_is_aborted %p {aborted_value = 1 : i64} : (!tt.ptr<i64>) -> i1
+    tt.return
+  }
+}
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

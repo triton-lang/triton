@@ -59,6 +59,77 @@ static LogicalResult verifyTcgen05Target(Operation *op) {
   return success();
 }
 
+// -- Communication operations --
+static LogicalResult verifyCommunicationOp(Operation *op) {
+  if (gpu::lookupNumCTAs(op) != 1)
+    return op->emitOpError("requires ttg.num-ctas = 1");
+  for (Value operand : op->getOperands())
+    if (auto ptr = dyn_cast<PointerType>(operand.getType()))
+      if (ptr.getAddressSpace() != PtrAddrSpace::Global)
+        return op->emitOpError("requires global memory pointers");
+  return success();
+}
+
+static LogicalResult verifyNonnegativeCommunicationValue(Operation *op,
+                                                         Value value,
+                                                         StringRef name) {
+  APInt constant;
+  if (matchPattern(value, m_ConstantInt(&constant)) && constant.isNegative())
+    return op->emitOpError() << "requires nonnegative " << name;
+  return success();
+}
+
+LogicalResult CommunicationWaitOp::verify() {
+  if (failed(verifyCommunicationOp(*this)))
+    return failure();
+  if (getKind() != "recv" && getKind() != "ack" && getKind() != "send")
+    return emitOpError("kind must be recv, ack, or send");
+  if (getKind() == "send") {
+    APInt count;
+    if (!matchPattern(getCount(), m_ConstantInt(&count)) || !count.isZero() ||
+        getConsume())
+      return emitOpError("send wait requires count = 0 and consume = false");
+  }
+  return verifyNonnegativeCommunicationValue(*this, getCount(), "count");
+}
+
+LogicalResult CommunicationSubmitOp::verify() {
+  if (failed(verifyCommunicationOp(*this)))
+    return failure();
+  APInt capacity;
+  if (matchPattern(getCapacity(), m_ConstantInt(&capacity)) && capacity.slt(2))
+    return emitOpError("requires capacity >= 2");
+  for (auto [value, name] :
+       {std::pair<Value, StringRef>{getSrcOffset(), "src_offset"},
+        {getDstOffset(), "dst_offset"},
+        {getNbytes(), "nbytes"}})
+    if (failed(verifyNonnegativeCommunicationValue(*this, value, name)))
+      return failure();
+
+  auto layout = getRequestLayout();
+  if (layout.size() != 8)
+    return emitOpError(
+        "request_layout must contain a stride and seven offsets");
+  int64_t stride = layout[0];
+  if (stride <= 0 || stride % 8)
+    return emitOpError("request stride must be a positive multiple of 8");
+  constexpr int64_t widths[] = {8, 4, 4, 8, 8, 8, 4};
+  auto offsets = layout.drop_front();
+  for (unsigned i = 0; i < offsets.size(); ++i) {
+    int64_t offset = offsets[i];
+    if (offset < 0 || offset % widths[i] || offset + widths[i] > stride)
+      return emitOpError("request field must be aligned and fit within stride");
+    for (unsigned j = 0; j < i; ++j)
+      if (offset < offsets[j] + widths[j] && offsets[j] < offset + widths[i])
+        return emitOpError("request fields must not overlap");
+  }
+  return success();
+}
+
+LogicalResult CommunicationIsAbortedOp::verify() {
+  return verifyCommunicationOp(*this);
+}
+
 // -- PackedArithOp --
 namespace {
 constexpr llvm::StringLiteral Half = "hb";
