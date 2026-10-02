@@ -5,9 +5,14 @@
 
 namespace mlir {
 
-// Unsupported is reported before data-partition rewriting so the pass can
-// remove generated task IDs and loop markers before falling back.
-enum class DataPartitionResult { Success, Retry, Unsupported };
+// Retry and Unsupported precede structural rewriting. A failed rewrite must
+// terminate the pass because removing task IDs cannot undo it.
+enum class DataPartitionResult {
+  Success,
+  Retry,
+  Unsupported,
+  FailedAfterRewrite
+};
 
 DataPartitionResult doDataPartition(triton::FuncOp &funcOp,
                                     unsigned numConsumerGroups);
