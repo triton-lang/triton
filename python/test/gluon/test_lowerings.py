@@ -354,6 +354,35 @@ def test_scan_rejects_axis_split_across_ctas(device, capfd):
     assert "scan axis distributed across CTAs is not supported" in captured.out + captured.err
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("lane_bit", [1, 2])
+def test_scan_boolean_terminal_store(reverse, lane_bit, device):
+    lane_bases = [[0] for _ in range(THREADS_PER_WARP.bit_length() - 1)]
+    lane_bases[0], lane_bases[lane_bit] = [1], [2]
+    layout = ttgl.DistributedLinearLayout([[4], [8]], lane_bases, [[16], [0]], [], [32])
+
+    @gluon.jit
+    def combine(lhs, rhs):
+        return lhs | rhs
+
+    @gluon.jit
+    def kernel(X, Y, layout: ttgl.constexpr, reverse: ttgl.constexpr):
+        offsets = ttgl.arange(0, 32, layout=layout)
+        x = ttgl.load(X + offsets)
+        y = ttgl.associative_scan(x, 0, combine, reverse=reverse)
+        ttgl.store(Y + offsets, y)
+
+    # The terminal lane must store each warp's complete total as an i8.
+    x = torch.zeros(32, dtype=torch.bool, device=device)
+    x[13], x[27] = True, True
+    y = torch.empty_like(x)
+    kernel[(1, )](x, y, layout, reverse, num_warps=4)
+    expected = (x.flip([0]) if reverse else x).cumsum(0).bool()
+    if reverse:
+        expected = expected.flip([0])
+    torch.testing.assert_close(y, expected, rtol=0, atol=0)
+
+
 def test_scan_blocked_broadcast_layout(device):
     if not is_cuda():
         pytest.skip("requires CUDA")

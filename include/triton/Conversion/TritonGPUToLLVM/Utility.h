@@ -690,6 +690,17 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
           LowerLdStCallback lowerInst);
 
+// Convert distributed values through shared memory. When storePred is present,
+// only selected threads need valid input values. They must cover every source
+// element; loads and synchronization still execute in all participating
+// threads.
+SmallVector<Value> convertLayoutViaSharedMemory(
+    Location loc, ConversionPatternRewriter &rewriter,
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
+    Operation *sourceOp, const TargetInfoBase &targetInfo,
+    Value storePred = {});
+
 // Lower local_load/local_store via ld.shared/st.shared
 SmallVector<Value>
 lowerLocalLdSt(Location loc, MLIRContext *ctx,

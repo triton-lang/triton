@@ -997,6 +997,134 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   return outVals;
 }
 
+SmallVector<Value> convertLayoutViaSharedMemory(
+    Location loc, ConversionPatternRewriter &rewriter,
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
+    Operation *sourceOp, const TargetInfoBase &targetInfo, Value storePred) {
+  auto *ctx = rewriter.getContext();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (!storePred)
+    storePred = b.true_val();
+  // We handle transformations recursively as they all need a preprocessing
+  // and a postprocessing step.
+
+  // Handle pointer types as 64-bit integers
+  if (isa<LLVM::LLVMPointerType>(llvmElemTy)) {
+    auto llvmElemTyPtr = i64_ty;
+    auto newInVals = llvm::to_vector(llvm::map_range(inVals, [&](Value v) {
+      return b.ptrtoint(llvmElemTyPtr, v).getResult();
+    }));
+    auto outVals = convertLayoutViaSharedMemory(
+        loc, rewriter, srcLayout, dstLayout, newInVals, llvmElemTyPtr, smemBase,
+        sourceOp, targetInfo, storePred);
+    for (auto &v : outVals) {
+      v = b.inttoptr(llvmElemTy, v);
+    }
+    return outVals;
+  }
+
+  // Handle sub-byte elements like i1
+  if (llvmElemTy.getIntOrFloatBitWidth() < 8) {
+    // Upcast to i8
+    auto i8ElemTy = i8_ty;
+    auto newInVals = llvm::to_vector(llvm::map_range(
+        inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
+    auto outVals = convertLayoutViaSharedMemory(
+        loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase,
+        sourceOp, targetInfo, storePred);
+    for (auto &v : outVals) {
+      v = b.trunc(llvmElemTy, v, LLVM::IntegerOverflowFlags::nuw);
+    }
+    return outVals;
+  }
+
+  // At this point we have a type that's at least 8-bit
+  // and we don't have broadcasting in the registers
+  auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+  int numBanks = targetInfo.getSharedMemoryBanks();
+  int32_t vecBitwidth =
+      triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
+  auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
+  auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth, numBanks,
+                                   srcTile, dstTile);
+
+  // Extract reps from smem
+  auto kReg = str_attr("register");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+  auto kReps = str_attr("reps");
+  auto nReps = smem.getInDimSize(kReps);
+  auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
+
+  auto totalStoreCvt = srcLayout.invertAndCompose(smem);
+  auto totalLoadCvt = invertAndComposeLocal(smem, dstLayout, {kBlock});
+
+  // The permutation exists by construction of the reps dimension in
+  // optimalSwizzling
+  auto permStore =
+      regPermForDivide(totalStoreCvt, reps, /*left=*/false).value();
+  totalStoreCvt = permStore.apply(totalStoreCvt);
+  auto permutedInVals = permStore.apply(inVals);
+  auto permLoad = regPermForDivide(totalLoadCvt, reps, /*left=*/false).value();
+  totalLoadCvt = permLoad.apply(totalLoadCvt);
+
+  // Remove the reps and flatten into offset
+  auto storeCvt = *divideRight(totalStoreCvt, reps);
+  auto loadCvt = *divideRight(totalLoadCvt, reps);
+  auto kOffset = str_attr("offset");
+  auto nBlock = storeCvt.getInDimSize(kBlock);
+  storeCvt = storeCvt.reshapeOuts(
+      {{kOffset, storeCvt.getTotalOutDimSize() / nBlock}, {kBlock, nBlock}});
+  loadCvt = loadCvt.reshapeOuts(
+      {{kOffset, loadCvt.getTotalOutDimSize() / nBlock}, {kBlock, nBlock}});
+
+  auto tileSize = storeCvt.getInDimSize(kReg);
+
+  assert(permutedInVals.size() == tileSize * nReps);
+  SmallVector<Value> outVals;
+  auto affineOffset = b.i32_val(0);
+  auto maskSpanAffineOffset = 0;
+
+  bool isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
+  bool isBlockSync = mlir::isCvtDimSync(srcLayout, dstLayout, kBlock);
+  auto emitBarrier = [&]() {
+    if (isWarpSync) {
+      targetInfo.warpSync(loc, rewriter);
+    } else if (isBlockSync) {
+      targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+    } else {
+      targetInfo.clusterBarrier(loc, rewriter, sourceOp);
+    }
+  };
+
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  for (int i = 0; i < nReps; ++i) {
+    if (i > 0)
+      emitBarrier();
+    auto tileInVals =
+        ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
+    // Store
+    lowerLdSt(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
+              /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
+              /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0, laneId,
+              warpId, rewriter, targetInfo, /*maybeMaxVecElems=*/{},
+              makeSharedStoreEmitter(targetInfo, storePred));
+    emitBarrier();
+    // Load
+    auto tileOutVals = lowerLdSt(
+        loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
+        affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
+        /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
+        /*maybeMaxVecElems=*/{}, makeSharedLoadEmitter(targetInfo));
+    llvm::append_range(outVals, tileOutVals);
+  }
+
+  // Undo the permLoad used to divideRight
+  outVals = permLoad.inverse().apply(outVals);
+  return outVals;
+}
+
 SmallVector<Value>
 lowerLocalLdSt(Location loc, MLIRContext *ctx,
                LinearLayout cvt, // Map from registers to offset[, partition]
