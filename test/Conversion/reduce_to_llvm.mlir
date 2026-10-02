@@ -649,13 +649,13 @@ tt.func private @reduce_broadcast_xor_small(%arg0: tensor<4x2xi32, #blocked_warp
 
 // Broadcast the leader's consistently ordered result for a noncommutative combiner.
 // REDUX-LABEL: @reduce_noncommutative
-// REDUX: %[[INPUT:.*]] = llvm.extractvalue
-// REDUX: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+// REDUX-DAG: %[[INPUT:.*]] = llvm.extractvalue
+// REDUX-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32)
+// REDUX-DAG: %[[LEADER_MASK:.*]] = llvm.mlir.constant(-2 : i32)
 // REDUX-NOT: llvm.select
 // REDUX: %[[SHFL:.*]] = nvvm.shfl.sync bfly %{{.*}}, %[[INPUT]], %[[ONE]],
 // REDUX-NOT: llvm.select
 // REDUX: %[[RESULT:.*]] = llvm.sub %[[INPUT]], %[[SHFL]]
-// REDUX: %[[LEADER_MASK:.*]] = llvm.mlir.constant(-2 : i32)
 // REDUX: %[[LEADER:.*]] = llvm.and %{{.*}}, %[[LEADER_MASK]]
 // REDUX: nvvm.shfl.sync idx %{{.*}}, %[[RESULT]], %[[LEADER]],
 // REDUX: llvm.return
