@@ -10,6 +10,8 @@ namespace triton {
 class TargetInfoBase;
 
 namespace nvidia_gpu {
+bool isWholeCTA(Operation *op);
+bool isSingleWarpPoll(Operation *op);
 std::function<unsigned(Operation *)>
 getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo);
 

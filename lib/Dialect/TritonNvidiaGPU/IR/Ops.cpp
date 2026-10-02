@@ -59,6 +59,71 @@ static LogicalResult verifyTcgen05Target(Operation *op) {
   return success();
 }
 
+// -- Communication operations --
+static LogicalResult verifyCommunicationOp(Operation *op) {
+  if (gpu::lookupNumCTAs(op) != 1)
+    return op->emitOpError("requires ttg.num-ctas = 1");
+  for (Value operand : op->getOperands())
+    if (auto ptr = dyn_cast<PointerType>(operand.getType()))
+      if (ptr.getAddressSpace() != PtrAddrSpace::Global)
+        return op->emitOpError("requires global memory pointers");
+  return success();
+}
+
+static LogicalResult verifyNonnegativeCommunicationValue(Operation *op,
+                                                         Value value,
+                                                         StringRef name) {
+  APInt constant;
+  if (matchPattern(value, m_ConstantInt(&constant)) && constant.isNegative())
+    return op->emitOpError() << "requires nonnegative " << name;
+  return success();
+}
+
+LogicalResult CommunicationWaitOp::verify() {
+  if (failed(verifyCommunicationOp(*this)))
+    return failure();
+  if (getKind() == CommunicationWaitKind::Send) {
+    APInt count;
+    if (!matchPattern(getCount(), m_ConstantInt(&count)) || !count.isZero() ||
+        getConsume())
+      return emitOpError("send wait requires count = 0 and consume = false");
+  }
+  return verifyNonnegativeCommunicationValue(*this, getCount(), "count");
+}
+
+LogicalResult CommunicationWaitOp::canonicalize(CommunicationWaitOp op,
+                                                PatternRewriter &rewriter) {
+  if (op.getKind() == CommunicationWaitKind::Send || op.getMonitor() ||
+      !matchPattern(op.getCount(), m_Zero()))
+    return failure();
+  Value aborted = CommunicationIsAbortedOp::create(
+      rewriter, op.getLoc(), op.getType(), op.getAborted(),
+      op.getAbortedValueAttr());
+  Value trueValue =
+      arith::ConstantIntOp::create(rewriter, op.getLoc(), true, 1);
+  rewriter.replaceOpWithNewOp<arith::XOrIOp>(op, aborted, trueValue);
+  return success();
+}
+
+LogicalResult CommunicationSubmitOp::verify() {
+  if (failed(verifyCommunicationOp(*this)))
+    return failure();
+  if (getCapacity() < 2)
+    return emitOpError("requires capacity >= 2");
+  for (auto [value, name] :
+       {std::pair<Value, StringRef>{getSrcOffset(), "src_offset"},
+        {getDstOffset(), "dst_offset"},
+        {getNbytes(), "nbytes"}})
+    if (failed(verifyNonnegativeCommunicationValue(*this, value, name)))
+      return failure();
+
+  return success();
+}
+
+LogicalResult CommunicationIsAbortedOp::verify() {
+  return verifyCommunicationOp(*this);
+}
+
 // -- PackedArithOp --
 namespace {
 constexpr llvm::StringLiteral Half = "hb";
