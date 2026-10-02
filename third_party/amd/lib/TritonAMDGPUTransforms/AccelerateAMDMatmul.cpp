@@ -896,7 +896,6 @@ public:
     v = cast<TensorValue>(convertAndCastTensor(rewriter, v, inputEncoding,
                                                vType.getElementType()));
 
-    // Block arguments have no defining op.
     if (Operation *scaleOp = scale.getDefiningOp()) {
       scaleOp->setAttr(AttrDecomposedDotScaledSource,
                        BoolAttr::get(rewriter.getContext(), true));

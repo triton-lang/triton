@@ -251,6 +251,8 @@ struct ScaledUpcastFp8OpPattern
     bool preShifted = scaleIsPreShifted(upcastOp.getScale().getType());
     SmallVector<Value> results;
     results.reserve(inputVals.size());
+    // Broadcast layouts can use FP8 Block32 (opSel=0). Otherwise use Block16
+    // (opSel=8) and pack lane j^16's scale into byte 1.
     bool broadcast = isScaleLane16Broadcast(upcastOp.getScale().getType());
     if (targetInfo.supportsCvtPkScalePk8Upcast() &&
         (broadcast ||

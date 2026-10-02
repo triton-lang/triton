@@ -207,8 +207,6 @@ def is_async_copy_enabled(base_arch):
 def is_coexec_scheduler_enabled(arch):
     if knobs.amd.use_coexec_scheduler is not None:
         return knobs.amd.use_coexec_scheduler
-    # Not on gfx1250-strict: lacking most WMMA instructions, its dots become large FMA kernels whose register
-    # allocation takes minutes under the coexec schedule.
     return arch == "gfx1250"
 
 
@@ -676,7 +674,6 @@ class HIPBackend(BaseBackend):
         if options.waves_per_eu != 0:
             kernel_fn.add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu},{options.waves_per_eu}")
 
-        # disabled for gfx1250-strict due to slow compilation
         if is_coexec_scheduler_enabled(options.arch) and options.num_warps <= 4:
             kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
 
