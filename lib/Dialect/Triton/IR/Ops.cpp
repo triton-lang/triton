@@ -361,6 +361,10 @@ LogicalResult DotOp::verify() {
       bTy.getElementType().getIntOrFloatBitWidth())
     return emitError(
         "element types of operands A and B must have same bit width");
+  if (getIsUnsigned() &&
+      (!aTy.getElementType().isInteger(8) ||
+       !bTy.getElementType().isInteger(8)))
+    return emitError("unsigned interpretation requires 8-bit integer operands");
   auto aEncoding = aTy.getEncoding();
   auto bEncoding = bTy.getEncoding();
   if (!aEncoding && !bEncoding)

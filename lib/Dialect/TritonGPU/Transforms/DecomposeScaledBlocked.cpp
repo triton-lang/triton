@@ -40,7 +40,9 @@ DecomposeScaledBlocked::matchAndRewrite(DotScaledOp scaledDotOp,
   auto scaledB = scaleArg(rewriter, scaledDotOp, 1, computeType);
   scaledB = cvtDotOperand(rewriter, scaledDotOp, 1, scaledB);
   auto newDot = DotOp::create(rewriter, scaledDotOp.getLoc(), scaledA, scaledB,
-                              scaledDotOp.getC());
+                              scaledDotOp.getC(), InputPrecision::IEEE,
+                              /*maxNumImpreciseAcc=*/0,
+                              /*isUnsigned=*/false);
 
   rewriter.replaceOpWithNewOp<ConvertLayoutOp>(scaledDotOp,
                                                scaledDotOp.getType(), newDot);

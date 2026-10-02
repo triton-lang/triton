@@ -757,6 +757,8 @@ def TT_DotOp : TT_Op<"dot", [Pure,
         bf16x6: implement the 6xBF16 trick. For more info see the pass in F32DotTC.cpp
         ieee: don't use TC, implement dot in software.
         If the GPU does not have Tensor cores or the inputs are not f32, this flag is ignored.
+        $isUnsigned records that integer operands use unsigned rather than signed
+        interpretation. It is only valid for 8-bit integer operands.
     }];
 
     let arguments = (
@@ -765,7 +767,8 @@ def TT_DotOp : TT_Op<"dot", [Pure,
       TT_FpIntTensor:$b,
       TT_FpIntTensor:$c,
       DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
-      DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc
+      DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
+      DefaultValuedAttr<BoolAttr, "false">:$isUnsigned
     );
 
     let results = (outs TT_FpIntTensor:$d);

@@ -44,7 +44,12 @@ static bool isUnsupportedMMAv5Int8Dot(int computeCapability, DotOp op) {
 static int getMMAVersionSafe(int computeCapability, DotOp op) {
   // List supported mma version in order of preference.
   SmallVector<int> versionsSupported;
-  if (computeCapability < 75) {
+  if (op.getIsUnsigned() && computeCapability >= 75 &&
+      computeCapability < 100) {
+    // WGMMA only supports signed integer operands. Use MMA v2, which has an
+    // unsigned integer variant, on Turing through Hopper.
+    versionsSupported = {2};
+  } else if (computeCapability < 75) {
     versionsSupported = {1};
   } else if (computeCapability < 90) {
     versionsSupported = {2};
@@ -500,9 +505,13 @@ public:
   mlir::LogicalResult
   matchAndRewrite(triton::DotOp dotOp,
                   mlir::PatternRewriter &rewriter) const override {
+    if (dotOp.getIsUnsigned() && computeCapability < 75) {
+      return dotOp.emitError(
+          "uint8 dot requires NVIDIA MMA v2 or Tensor Core Gen5 support");
+    }
     if (computeCapability < 70)
       return failure();
-    if (computeCapability < 80) {
+    if (computeCapability < 80 && !dotOp.getIsUnsigned()) {
       dotOp.emitRemark()
           << "Dot op using MMA for compute capability " << computeCapability
           << " has been deprecated. It falls back to the FMA path.";
@@ -584,7 +593,8 @@ public:
                                   rewriter);
       newDot = DotOp::create(rewriter, dotOp.getLoc(), mmaResult.newRetType, a,
                              b, mmaResult.newAcc, dotOp.getInputPrecision(),
-                             dotOp.getMaxNumImpreciseAcc());
+                             dotOp.getMaxNumImpreciseAcc(),
+                             dotOp.getIsUnsigned());
     }
 
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, dotOp.getType(),
@@ -714,8 +724,9 @@ public:
     auto vTrue = arith::ConstantIntOp::create(rewriter, dotOp.getLoc(), 1, 1);
     auto mma = triton::nvidia_gpu::TCGen5MMAOp::create(
         rewriter, loc, tokType, a, b, acc, acc.getToken(), /*useD=*/vTrue,
-        /*pred=*/vTrue);
-    mma.setTwoCtas(useTwoCTAs);
+        /*pred=*/vTrue, /*twoCtas=*/useTwoCTAs, /*multicast=*/false,
+        /*barriers=*/{}, /*barrierPreds=*/{}, /*isAsync=*/false,
+        /*isUnsigned=*/dotOp.getIsUnsigned());
 
     auto ld = triton::nvidia_gpu::TMEMLoadOp::create(
         rewriter, loc, newAccType, tokType, acc, /*dep=*/mma.getToken());

@@ -202,6 +202,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  // CHECK-LABEL: wmma2_dot_uint8_32
+  tt.func @wmma2_dot_uint8_32(%arg0: tensor<16x16xi8, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>>, %arg1: tensor<16x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>>, %arg2: tensor<16x16xi32, #mma2>, %arg3: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK: %[[UNSIGNED:.*]] = llvm.mlir.constant(false) : i1
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.wmma.i32.16x16x16.iu8"(%[[UNSIGNED]], %{{.*}}, %[[UNSIGNED]], %{{.*}}, %{{.*}}, %[[UNSIGNED]])
+    %0 = tt.dot %arg0, %arg1, %arg2 {isUnsigned = true} : tensor<16x16xi8, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>> * tensor<16x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>> -> tensor<16x16xi32, #mma2>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<i32> -> tensor<16x16x!tt.ptr<i32>, #mma2>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<i32>, #mma2>
+    tt.return
+  }
+
   // Regression test: non-scaled WMMA v2 dot with fp8 operands (kBase=8).
   // Operands must be bitcast to i32, not i64 (i64 is only for scale operands).
   // WMMA2FP8-LABEL: wmma2_dot_fp8

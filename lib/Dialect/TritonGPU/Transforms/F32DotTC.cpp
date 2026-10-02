@@ -49,7 +49,7 @@ Value dot(Value lhs, Value rhs, Value acc, PatternRewriter &rewriter,
           InputPrecision precision = InputPrecision::IEEE,
           uint32_t maxNumImpreciseAcc = 0) {
   return DotOp::create(rewriter, lhs.getLoc(), lhs, rhs, acc, precision,
-                       maxNumImpreciseAcc);
+                       maxNumImpreciseAcc, /*isUnsigned=*/false);
 };
 
 Value replaceNansWithZeros(Value value, PatternRewriter &rewriter) {

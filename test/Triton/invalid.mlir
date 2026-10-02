@@ -767,3 +767,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     tt.return
   }
 }
+
+// -----
+
+tt.func @dot_unsigned_non_i8(%a: tensor<16x16xf16>, %b: tensor<16x16xf16>) {
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  // expected-error @below {{unsigned interpretation requires 8-bit integer operands}}
+  %result = tt.dot %a, %b, %cst {isUnsigned = true} : tensor<16x16xf16> * tensor<16x16xf16> -> tensor<16x16xf32>
+  tt.return
+}
