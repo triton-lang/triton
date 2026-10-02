@@ -832,6 +832,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     @staticmethod
     def _operator_priority(value):
+        if priority := getattr(type(value), "__triton_operator_priority__", None):
+            return priority
         if getattr(type(value), "__triton_aggregate__", False):
             return 2
         if isinstance(value, tensor):

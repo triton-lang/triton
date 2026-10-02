@@ -11,6 +11,7 @@ from triton.experimental.gluon.language._core import _unwrap_if_constexpr, built
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import rubin
+from triton.experimental.gluon.language.nvidia import fabric
 from triton.experimental.gluon.language.nvidia.ampere import mbarrier as ampere_mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import cluster
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
@@ -86,6 +87,61 @@ def anonymize_ir(ir):
 
 def make_args(*args, **kwargs):
     return args, kwargs
+
+
+@pytest.mark.parametrize("case,message", [
+    ("wait_peer", "wait requires a local receive or acknowledgement barrier"),
+    ("arrive_local", "arrive requires a peer acknowledgement barrier"),
+    ("negative_count", "count must be nonnegative"),
+    ("float_count", "count must be a scalar integer"),
+    ("vector_count", "count must be a scalar integer"),
+    ("negative_numel", "numel must be nonnegative"),
+    ("float_numel", "numel must be a scalar integer"),
+    ("float_offset", "offset must be a scalar integer"),
+    ("vector_offset", "offset must be a scalar integer"),
+    ("vector_src", "src must be a scalar pointer with the buffer's element type"),
+    ("wrong_src_dtype", "src must be a scalar pointer with the buffer's element type"),
+    ("runtime_consume", "consume must be a constexpr bool"),
+])
+def test_fabric_frontend_invalid(case, message):
+    from triton.experimental.gluon.nvidia.fabric import _Protocol, _Queue, _State, _SynchronizedBufferArgs
+
+    ptr = MockTensor(ttgl.float32)
+    state = _State(*(MockTensor(ttgl.int64) for _ in _State._fields))
+    queue = _Queue(*(MockTensor(ttgl.int8 if name == "buffer" else ttgl.int64) for name in _Queue._fields))
+    protocol = _Protocol((56, 48, 0, 8, 16, 24, 32, 40), 1, 6, 0, 1 << 63, 33)
+    buffer = _SynchronizedBufferArgs(ptr, state, queue, 0, 8, ttgl.constexpr(protocol), ptr)
+
+    @gluon.jit
+    def kernel(buf, CASE: ttgl.constexpr):
+        offsets = ttgl.arange(0, 32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        if CASE == "wait_peer":
+            fabric.barrier.wait(buf.peer.ack_barrier)
+        elif CASE == "arrive_local":
+            fabric.barrier.arrive(buf.ack_barrier)
+        elif CASE == "negative_count":
+            fabric.barrier.wait(buf.recv_barrier, count=-1)
+        elif CASE == "float_count":
+            fabric.barrier.wait(buf.recv_barrier, count=1.5)
+        elif CASE == "vector_count":
+            fabric.barrier.wait(buf.recv_barrier, count=offsets)
+        elif CASE == "negative_numel":
+            buf.async_store(buf.ptr, -1)
+        elif CASE == "float_numel":
+            buf.async_store(buf.ptr, 1.5)
+        elif CASE == "float_offset":
+            buf = buf + 1.5
+        elif CASE == "vector_offset":
+            buf = buf + offsets
+        elif CASE == "vector_src":
+            buf.async_store(buf.ptr + offsets, 1)
+        elif CASE == "wrong_src_dtype":
+            buf.async_store(buf.ptr.to(ttgl.pointer_type(ttgl.int32)), 1)
+        elif CASE == "runtime_consume":
+            fabric.barrier.wait(buf.recv_barrier, consume=ttgl.program_id(0) == 0)
+
+    with pytest.raises(CompilationError, match=message):
+        run_parser(kernel, *make_args(buffer, case), target=AMPERE_TARGET)
 
 
 @gluon.constexpr_function
