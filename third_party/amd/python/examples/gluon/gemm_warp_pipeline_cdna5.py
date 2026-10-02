@@ -37,6 +37,11 @@ MXFP8 requires explicit --mxfp8-tile and --mxfp8-cluster selections, including
 when --dtype all is used. Unsupported configurations are rejected.
 M/N must be divisible by CTA size times cluster width.
 The other dtypes require M/N multiples of 1024. K constraints are checked before launch.
+MXFP8 --mxfp8-output-buffers 2 overlaps the BK256 N-half output stores using
+two LDS buffers; the default is 1. BK512 supports only 1.
+--input positive_mxfp8 generates positive FP8 values from uniform [0, 0.1),
+with random scales rounded up to E8M0: K128 for A and N128xK128 for B, expanded
+to block-32 scales. It requires --dtype mxfp8. --input-mode is an alias for --input.
 The default inputs match the performance experiments: trig for BF16/MXFP8/
 MXFP4 and seed-42 random for FP8 x MXFP4. Timing excludes input generation,
 compilation and correctness checking. No workspace-specific imports are needed.
@@ -111,13 +116,16 @@ def _tdm_store_full_tile(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc, S
 
 @gluon.jit
 def _mxfp8_tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc0, acc1,
-                              OUTPUT_CGA_LAYOUT: gl.constexpr, CTA_M: gl.constexpr, CTA_N: gl.constexpr):
+                              OUTPUT_CGA_LAYOUT: gl.constexpr, CTA_M: gl.constexpr, CTA_N: gl.constexpr,
+                              TWO_BUFFERS: gl.constexpr = False):
     cta_m: gl.constexpr = 256
     cta_n: gl.constexpr = 256
     half_n: gl.constexpr = 128
     shared_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[half_n, 8]], [CTA_M, CTA_N, cta_m, half_n],
                                                                           [3, 2, 1, 0], OUTPUT_CGA_LAYOUT)
     shared = gl.allocate_shared_memory(c_ptr.type.element_ty, [CTA_M, CTA_N, cta_m, half_n], shared_layout)
+    if TWO_BUFFERS:
+        shared1 = gl.allocate_shared_memory(c_ptr.type.element_ty, [CTA_M, CTA_N, cta_m, half_n], shared_layout)
     output0 = acc0.reshape((CTA_M, cta_m, CTA_N, half_n)).permute((0, 2, 1, 3))
     output1 = acc1.reshape((CTA_M, cta_m, CTA_N, half_n)).permute((0, 2, 1, 3))
     desc = tdm.make_tensor_descriptor(base=c_ptr, shape=(M // cta_m, N // cta_n, cta_m, cta_n),
@@ -127,9 +135,13 @@ def _mxfp8_tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, a
     base_n = pid_n * CTA_N
     shared.store(output0.to(c_ptr.type.element_ty))
     tdm.async_store(desc, [base_m, base_n, 0, 0], shared)
-    tdm.async_wait(0)
-    shared.store(output1.to(c_ptr.type.element_ty))
-    tdm.async_store(desc, [base_m, base_n, 0, half_n], shared)
+    if TWO_BUFFERS:
+        shared1.store(output1.to(c_ptr.type.element_ty))
+        tdm.async_store(desc, [base_m, base_n, 0, half_n], shared1)
+    else:
+        tdm.async_wait(0)
+        shared.store(output1.to(c_ptr.type.element_ty))
+        tdm.async_store(desc, [base_m, base_n, 0, half_n], shared)
     tdm.async_wait(0)
 
 
@@ -381,7 +393,7 @@ def mxfp8_gemm_warp_pipeline(a_ptr, b_ptr, c_ptr, a_scale_ptr, b_scale_ptr, M, N
                              SHARED_SCALE_A: gl.constexpr, SHARED_SCALE_B: gl.constexpr, WMMA_LAYOUT: gl.constexpr,
                              LOAD_WMMA_LAYOUT: gl.constexpr, B2_LOAD_LAYOUT: gl.constexpr,
                              OUTPUT_CGA_LAYOUT: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr,
-                             CTA_M: gl.constexpr, CTA_N: gl.constexpr):
+                             CTA_M: gl.constexpr, CTA_N: gl.constexpr, TWO_BUFFER_OUTPUT: gl.constexpr = False):
     gl.static_assert(gl.num_ctas() == CTA_M * CTA_N)
     pid_m, pid_n = _get_xcd_swizzled_pids(M, N, BLOCK_M, BLOCK_N, GRID_MN, 8, 4)
     dot_a: gl.constexpr = gl.DotOperandLayout(0, WMMA_LAYOUT, 16)
@@ -462,7 +474,7 @@ def mxfp8_gemm_warp_pipeline(a_ptr, b_ptr, c_ptr, a_scale_ptr, b_scale_ptr, M, N
     as_buf._keep_alive()
     bs_buf._keep_alive()
     _mxfp8_tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc0, acc1, OUTPUT_CGA_LAYOUT, CTA_M,
-                              CTA_N)
+                              CTA_N, TWO_BUFFER_OUTPUT)
 
 
 @gluon.jit
@@ -1165,10 +1177,30 @@ def mxfp8_config(M, N, K, tile, cluster):
 
 def make_mxfp8_case(args):
     tile, block_k, cluster = mxfp8_config(args.M, args.N, args.K, args.mxfp8_tile, args.mxfp8_cluster)
+    if args.mxfp8_output_buffers == 2 and block_k != 256:
+        raise ValueError('--mxfp8-output-buffers 2 requires the 256x256x256 tile')
     block_m = block_n = tile * cluster
     print(f'CTA tile={tile}x{tile}x{block_k}, cluster={cluster}x{cluster}', flush=True)
     torch.manual_seed(args.seed)
-    if args.input_mode == 'trig':
+    if args.input_mode == 'positive_mxfp8':
+        # Positive E4M3 values with independent K128 scales for A and N128xK128 scales for B.
+        a = (torch.rand((args.M, args.K), device='cuda', dtype=torch.float32) / 10).to(torch.float8_e4m3fn)
+        b = (torch.rand((args.N, args.K), device='cuda', dtype=torch.float32) / 10).to(torch.float8_e4m3fn).T
+        scale_values = [
+            torch.rand((args.M, args.K // 128), device='cuda', dtype=torch.float32),
+            torch.rand((args.N // 128, args.K // 128), device='cuda', dtype=torch.float32)
+        ]
+        scale_codes = []
+        for values in scale_values:
+            # Match FP8 E8M0 RoundUp conversion, including the normalization arithmetic.
+            bits = ((values * 448.0) / 448.0).view(torch.int32)
+            exponent = (bits >> 23) & 255
+            scale_codes.append((exponent + (((bits & 0x7fffff) != 0) & (exponent < 255))).to(torch.uint8))
+        a_scale_obj = MXScaleTensor(size=(args.M, args.K // 32))
+        b_scale_obj = MXScaleTensor(size=(args.N, args.K // 32))
+        a_scale_obj.data = scale_codes[0].repeat_interleave(4, dim=1)
+        b_scale_obj.data = scale_codes[1].repeat_interleave(128, dim=0).repeat_interleave(4, dim=1)
+    elif args.input_mode == 'trig':
         a_bits, a_scale_bits = _make_hipblaslt_mxfp8_trig_matrix(args.M, args.K)
         b_bits, b_scale_bits = _make_hipblaslt_mxfp8_trig_matrix(args.N, args.K)
         a_scale_obj = MXScaleTensor(size=a_scale_bits.shape)
@@ -1184,7 +1216,7 @@ def make_mxfp8_case(args):
         a_scale_obj = MXScaleTensor(size=(args.M, scale_k)).random(low=1.0, high=32.0)
         b_scale_obj = MXScaleTensor(size=(args.N, scale_k)).random(low=1.0, high=32.0)
     reference = None
-    if args.check:
+    if args.check and args.input_mode != 'positive_mxfp8':
         reference = torch_gemm_mxfp(a, b, a_scale_obj, b_scale_obj, 32, args.M, args.N, args.K).to(torch.bfloat16)
     a_d = a.contiguous().cuda()
     b_d = b.T.contiguous().cuda()
@@ -1259,13 +1291,23 @@ def make_mxfp8_case(args):
                                               SHARED_SCALE_B=shared_bs, WMMA_LAYOUT=wmma, LOAD_WMMA_LAYOUT=load_wmma,
                                               B2_LOAD_LAYOUT=b2_load, OUTPUT_CGA_LAYOUT=output_cga, BLOCK_M=block_m,
                                               BLOCK_N=block_n, CTA_M=cluster, CTA_N=cluster, num_warps=8,
-                                              waves_per_eu=2, num_ctas=cluster * cluster, llvm_fn_attrs=AGPR_ATTRS)
+                                              waves_per_eu=2, num_ctas=cluster * cluster, llvm_fn_attrs=AGPR_ATTRS,
+                                              TWO_BUFFER_OUTPUT=args.mxfp8_output_buffers == 2)
 
     def check():
         c_d.zero_()
         launch()
         torch.cuda.synchronize()
-        torch.testing.assert_close(c_d.cpu(), reference, rtol=0.01, atol=0.5)
+        if args.input_mode == 'positive_mxfp8':
+            # Check every output in row chunks without materializing a full MxK FP32 A.
+            b_f32 = b_d.float() * torch.exp2(b_scale_obj.data.float() - 127).repeat_interleave(32, dim=1)
+            for begin in range(0, args.M, 256):
+                a_f32 = a_d[begin:begin + 256].float() * torch.exp2(a_scale_obj.data[begin:begin + 256].float() -
+                                                                    127).repeat_interleave(32, dim=1)
+                expected = a_f32 @ b_f32.T
+                torch.testing.assert_close(c_d[begin:begin + 256].float(), expected, rtol=0.008, atol=1e-5)
+        else:
+            torch.testing.assert_close(c_d.cpu(), reference, rtol=0.01, atol=0.5)
         print('result verified', flush=True)
 
     return (launch, check, (a_d, b_d, c_d, as_d, bs_d))
@@ -1415,12 +1457,16 @@ def main():
     parser.add_argument('-M', type=int, default=4096)
     parser.add_argument('-N', type=int, default=4096)
     parser.add_argument('-K', type=int, default=65536)
-    parser.add_argument('--input-mode', choices=['auto', 'random', 'trig'], default='auto',
-                        help='auto uses trig except for FP8 x MXFP4, which uses random inputs')
+    parser.add_argument(
+        '--input', '--input-mode', dest='input_mode', choices=['auto', 'random', 'trig',
+                                                               'positive_mxfp8'], default='auto',
+        help='auto uses trig except for FP8 x MXFP4; positive_mxfp8 is MXFP8-only positive FP8 data and scales')
     parser.add_argument('--mxfp8-tile', choices=list(MXFP8_TILES),
                         help='MXFP8 CTA MxNxK tile; required when dtype is mxfp8 or all')
     parser.add_argument('--mxfp8-cluster', choices=['2x2', '4x4'],
                         help='MXFP8 CGA cluster; required when dtype is mxfp8 or all')
+    parser.add_argument('--mxfp8-output-buffers', type=int, choices=[1, 2], default=1,
+                        help='MXFP8 output LDS buffers: default 1; 2 overlaps BK256 N-half stores')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--benchmark', action='store_true')
@@ -1434,6 +1480,10 @@ def main():
     parser.add_argument('--iters-per-graph', type=int,
                         help='launches per graph: default 50; with --rotate-inputs must equal --repeats')
     args = parser.parse_args()
+    if args.input_mode == 'positive_mxfp8' and args.dtype != 'mxfp8':
+        parser.error('--input positive_mxfp8 requires --dtype mxfp8')
+    if args.mxfp8_output_buffers == 2 and (args.dtype not in ('mxfp8', 'all') or args.mxfp8_tile != '256x256x256'):
+        parser.error('--mxfp8-output-buffers 2 requires MXFP8 with --mxfp8-tile 256x256x256')
     if args.rotate_inputs:
         args.benchmark = True
         args.repeats = 100 if args.repeats is None else args.repeats
