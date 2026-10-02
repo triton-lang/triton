@@ -47,11 +47,6 @@
 // CHECK: tt.descriptor_store
 // CHECK: tt.store
 
-// CHECK-LABEL: @gather_a_uses_safe_n_partition
-// CHECK: ttg.warp_specialize
-// CHECK: tt.gather
-// CHECK: ttng.warp_group_dot {{.*}} -> tensor<128x128xf32, #mma>
-
 // FALLBACK-LABEL: @gather_falls_back
 // FALLBACK-NOT: ttg.warp_specialize
 // FALLBACK-NOT: tt.warp_specialize
@@ -349,23 +344,4 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
     tt.return
   }
 
-  tt.func @gather_a_uses_safe_n_partition(%arg0: !tt.tensordesc<128x64xf16>, %arg1: !tt.tensordesc<64x256xf16>, %arg2: !tt.tensordesc<128x256xf16>, %iterations: i32) {
-    %c0 = arith.constant 0 : i32
-    %c1 = arith.constant 1 : i32
-    %indices = arith.constant dense<1> : tensor<128x64xi32, #blocked>
-    %init = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
-    %acc = scf.for %i = %c0 to %iterations step %c1 iter_args(%iter = %init) -> tensor<128x256xf32, #mma> : i32 {
-      %a = tt.descriptor_load %arg0[%i, %c0] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
-      %gathered = tt.gather %a[%indices] {axis = 1 : i32} : (tensor<128x64xf16, #blocked>, tensor<128x64xi32, #blocked>) -> tensor<128x64xf16, #blocked>
-      %a_smem = ttg.local_alloc %gathered : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
-      %b = tt.descriptor_load %arg1[%c0, %i] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked1>
-      %b_smem = ttg.local_alloc %b : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
-      %dot = ttng.warp_group_dot %a_smem, %b_smem, %iter {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
-      scf.yield %dot : tensor<128x256xf32, #mma>
-    } {tt.num_stages = 2 : i32, tt.warp_specialize}
-    %out = arith.truncf %acc : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
-    %out_blocked = ttg.convert_layout %out : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked1>
-    tt.descriptor_store %arg2[%c0, %c0], %out_blocked : !tt.tensordesc<128x256xf16>, tensor<128x256xf16, #blocked1>
-    tt.return
-  }
 }

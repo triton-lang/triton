@@ -1393,7 +1393,9 @@ DataPartitionResult doDataPartition(triton::FuncOp &funcOp,
   // Make sure original ops are not used
   if (!doDeepCleanup(funcOp, partitionScheme)) {
     LDBG("final cleanup failed");
-    return DataPartitionResult::Retry;
+    funcOp.emitError(
+        "warp-specialization data partition failed after rewriting");
+    return DataPartitionResult::FailedAfterRewrite;
   }
 
   // Make sure original ops are not used
