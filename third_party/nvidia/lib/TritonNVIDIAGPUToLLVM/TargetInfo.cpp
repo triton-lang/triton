@@ -709,6 +709,16 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   };
   Value value = acc[0];
   if (value.getType().isInteger(64)) {
+    // The i64 tree uses two shuffles per stage for all groups, while REDUX
+    // needs one instruction per piece and group. Require at least two
+    // shuffles per REDUX to cover splitting, masking, and merging.
+    unsigned groupMask = 31 & ~(reduceLaneIdMask | broadcastLaneIdMask);
+    unsigned stages = llvm::popcount(reduceLaneIdMask);
+    unsigned groups = 1u << llvm::popcount(groupMask);
+    unsigned pieces = *kind == NVVM::ReductionKind::ADD ? 3 : 2;
+    if (stages < pieces * groups)
+      return false;
+
     Value high = b.trunc(i32_ty, b.lshr(value, b.i64_val(32)));
     Value highResult = reduce32(high, *kind);
     if (!highResult)

@@ -1222,6 +1222,9 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
     else:
         profitable = (group_stride == 1 and size >= 4) or (group_stride == 2 and size == 16)
     use_redux = size == 32 or profitable
+    if "64" in dtype_str:
+        use_redux = ((group_stride == 1 and size >= (8 if op == "add" else 4))
+                     or (group_stride == 2 and size >= 16 and op != "add"))
     if is_float and major != 10:
         use_redux = False
     if use_redux:
@@ -1278,9 +1281,10 @@ def test_reduce_broadcast_across_warps(op, dtype_str, device):
     # One full-warp reduction, then one over four broadcast warp results.
     expected_count = 2
     if values.dtype.itemsize == 8:
-        expected_count *= 3 if op == "add" else 2
+        expected_count = 3 if op == "add" else 4
     assert compiled.asm["ptx"].count("redux.sync.") == expected_count
-    assert "shfl.sync.bfly" not in compiled.asm["ptx"]
+    # Four broadcast values use shuffles for 64-bit addition.
+    assert ("shfl.sync.bfly" in compiled.asm["ptx"]) == (values.dtype.itemsize == 8 and op == "add")
 
 
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
