@@ -340,6 +340,49 @@ private:
     }
   }
 
+  // Enumerate the source registers that the lanes of this segment can request.
+  static SmallVector<unsigned>
+  getCarryRegisters(const LinearLayout &segmentLayout,
+                    const LinearLayout &inverseTotalsLayout, unsigned reg,
+                    unsigned axis, unsigned segmentsPerScan, bool reverse) {
+    auto *ctx = segmentLayout.getInDimNames().begin()->getContext();
+    auto kReg = StringAttr::get(ctx, "register");
+    auto kLane = StringAttr::get(ctx, "lane");
+    auto kWarp = StringAttr::get(ctx, "warp");
+    auto kBlock = StringAttr::get(ctx, "block");
+    unsigned mask = segmentsPerScan - 1;
+    llvm::SmallSetVector<unsigned, 8> candidates;
+    for (unsigned warp = 0; warp < segmentLayout.getInDimSize(kWarp); ++warp)
+      for (unsigned lane = 0; lane < segmentLayout.getInDimSize(kLane);
+           ++lane) {
+        auto coords = segmentLayout.apply(
+            {{kReg, reg}, {kLane, lane}, {kWarp, warp}, {kBlock, 0}});
+        auto &index = coords[axis].second;
+        index = (index & ~mask) | ((index + (reverse ? 1 : -1)) & mask);
+        candidates.insert(inverseTotalsLayout.apply(coords).front().second);
+      }
+    return llvm::to_vector(candidates);
+  }
+
+  // Select after shuffling: each destination lane may request a different
+  // register from its source lane.
+  SmallVector<Value> shuffleCarry(Location loc, const ScanValues &totals,
+                                  ArrayRef<unsigned> candidates, Value srcReg,
+                                  Value srcLane,
+                                  ConversionPatternRewriter &rewriter) const {
+    assert(!candidates.empty() && "each segment has a warp-local carry");
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto carry =
+        shuffleValues(loc, totals[candidates.front()], srcLane, rewriter);
+    for (unsigned candidate : candidates.drop_front()) {
+      auto incoming = shuffleValues(loc, totals[candidate], srcLane, rewriter);
+      Value select = b.icmp_eq(srcReg, b.i32_val(candidate));
+      for (auto [value, source] : llvm::zip(carry, incoming))
+        value = b.select(select, source, value);
+    }
+    return carry;
+  }
+
   // Map each native segment to its exclusive carry in the totals layout.
   void applySegmentCarries(triton::ScanOp op, ScanValues &values,
                            const ScanValues &totals,
@@ -360,8 +403,11 @@ private:
         *std::next(segmentLayout.getOutDimNames().begin(), op.getAxis());
     bool reverse = op.getReverse();
     // All required totals are present in this warp.
-    auto inverse = totalsLayout.pseudoinvert();
+    auto inverse = totalsLayout.pseudoinvert().sublayout(
+        llvm::to_vector(totalsLayout.getOutDimNames()), {kReg, kLane});
     unsigned numSegments = segmentLayout.getOutDimSize(axis);
+    unsigned begin = skipTerminal && reverse ? 1 : 0;
+    unsigned end = segmentRegs - (skipTerminal && !reverse);
     for (unsigned r = 0; r < values.size() / segmentRegs; ++r) {
       // Evaluate the logical segment before shifting. CTA ownership is
       // unchanged.
@@ -382,37 +428,11 @@ private:
       auto src = applyLinearLayout(loc, rewriter, inverse, coords);
       Value srcReg = src[0].second;
       Value srcLane = src[1].second;
-      // Shuffle each candidate before selecting: source and destination lanes
-      // may request different registers.
-      llvm::SmallSetVector<unsigned, 8> candidates;
-      for (unsigned warp = 0; warp < segmentLayout.getInDimSize(kWarp);
-           ++warp) {
-        for (unsigned lane = 0; lane < segmentLayout.getInDimSize(kLane);
-             ++lane) {
-          auto coordinates = segmentLayout.apply(
-              {{kReg, r}, {kLane, lane}, {kWarp, warp}, {kBlock, 0}});
-          auto &index = coordinates[op.getAxis()].second;
-          index = (index & ~(segmentsPerScan - 1)) |
-                  ((index + (reverse ? 1 : -1)) & (segmentsPerScan - 1));
-          candidates.insert(inverse.apply(coordinates)[0].second);
-        }
-      }
-      SmallVector<Value> carry;
-      for (unsigned candidate : candidates) {
-        auto incoming =
-            shuffleValues(loc, totals[candidate], srcLane, rewriter);
-        if (carry.empty()) {
-          carry = std::move(incoming);
-        } else {
-          Value select = b.icmp_eq(srcReg, b.i32_val(candidate));
-          for (unsigned i = 0; i < carry.size(); ++i)
-            carry[i] = b.select(select, incoming[i], carry[i]);
-        }
-      }
-      assert(!carry.empty() && "each segment has a warp-local carry");
-      for (unsigned j = 0; j < segmentRegs; ++j) {
-        if (skipTerminal && j == (reverse ? 0 : segmentRegs - 1))
-          continue;
+      auto candidates = getCarryRegisters(
+          segmentLayout, inverse, r, op.getAxis(), segmentsPerScan, reverse);
+      auto carry =
+          shuffleCarry(loc, totals, candidates, srcReg, srcLane, rewriter);
+      for (unsigned j = begin; j < end; ++j) {
         unsigned reg = r * segmentRegs + j;
         values[reg] = combineWithPrefix(op, carry, values[reg], rewriter, pred);
       }
