@@ -523,20 +523,21 @@ void init_triton_amd(py::module_ &m) {
     return py::bytes(result.data(), result.size());
   });
 
-  m.def("has_architected_sgprs", [](const std::string &tripleStr,
-                                     const std::string &arch) {
-    std::string error;
-    // tripleStr must be one this LLVM can build a subtarget for. The strict
-    // triple is amdgpu12.50s, which aborts here; pass the base triple instead.
-    llvm::Triple triple(tripleStr);
-    const llvm::Target *target =
-        llvm::TargetRegistry::lookupTarget(triple, error);
-    if (!target)
-      throw std::runtime_error("target lookup error: " + error);
-    std::unique_ptr<llvm::MCSubtargetInfo> sti(
-        target->createMCSubtargetInfo(triple, arch, ""));
-    return sti->checkFeatures("+architected-sgprs");
-  });
+  m.def("has_architected_sgprs",
+        [](const std::string &tripleStr, const std::string &arch) {
+          std::string error;
+          // tripleStr must be one this LLVM can build a subtarget for. The
+          // strict triple is amdgpu12.50s, which aborts here; pass the base
+          // triple instead.
+          llvm::Triple triple(tripleStr);
+          const llvm::Target *target =
+              llvm::TargetRegistry::lookupTarget(triple, error);
+          if (!target)
+            throw std::runtime_error("target lookup error: " + error);
+          std::unique_ptr<llvm::MCSubtargetInfo> sti(
+              target->createMCSubtargetInfo(triple, arch, ""));
+          return sti->checkFeatures("+architected-sgprs");
+        });
 
   m.def("supports_multi_cta_launch", [](const std::string &arch) {
     return mlir::triton::AMD::TargetInfo(arch).supportsMultiCTALaunch();
