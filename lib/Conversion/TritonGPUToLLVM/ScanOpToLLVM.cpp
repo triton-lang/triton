@@ -234,7 +234,8 @@ private:
     convertScanValues(op, totals, intraWarpLayout, scanLayout, rewriter);
 
     auto kReg = StringAttr::get(op.getContext(), "register");
-    auto axis = *std::next(scanLayout.getOutDimNames().begin(), op.getAxis());
+    auto axis =
+        StringAttr::get(op.getContext(), "dim" + std::to_string(op.getAxis()));
     unsigned numRegs =
         scanLayout.sublayout({kReg}, {axis}).getNumConsecutiveInOut();
     scanWithinThreads(op, totals, numRegs, rewriter);
