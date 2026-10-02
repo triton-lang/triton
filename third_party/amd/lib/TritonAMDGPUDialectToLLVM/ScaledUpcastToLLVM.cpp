@@ -119,7 +119,7 @@ struct ScaledUpcastFp4OpPattern
     auto groupScaleReg =
         computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
 
-    if (targetInfo.supportsCvtPkScalePk8()) {
+    if (targetInfo.supportsCvtPkScalePk8Upcast()) {
       // FP4/FP6 v_cvt_scale_pk8 with opSel=0 sources the scale for output
       // lanes 16..31 from byte 1 of the *lower* 16 lanes' Vscale while output
       // lanes 0..15 use byte 0. When the scale layout is not broadcast across
@@ -242,7 +242,8 @@ struct ScaledUpcastFp8OpPattern
         unpackUniqueTensorElements(loc, adaptor.getScale(), rewriter);
 
     // The op verifier guarantees whole register-consecutive groups.
-    assert(inputVals.size() % (targetInfo.supportsCvtPkScalePk8() ? 8 : 4) ==
+    assert(inputVals.size() %
+               (targetInfo.supportsCvtPkScalePk8Upcast() ? 8 : 4) ==
            0);
     assert(inputVals.size() == scaleVals.size());
 
@@ -250,10 +251,12 @@ struct ScaledUpcastFp8OpPattern
     bool preShifted = scaleIsPreShifted(upcastOp.getScale().getType());
     SmallVector<Value> results;
     results.reserve(inputVals.size());
-    if (targetInfo.supportsCvtPkScalePk8()) {
-      // Broadcast layouts can use FP8 Block32 (opSel=0). Otherwise use Block16
-      // (opSel=8) and pack lane j^16's scale into byte 1.
-      bool broadcast = isScaleLane16Broadcast(upcastOp.getScale().getType());
+    // Broadcast layouts can use FP8 Block32 (opSel=0). Otherwise use Block16
+    // (opSel=8) and pack lane j^16's scale into byte 1.
+    bool broadcast = isScaleLane16Broadcast(upcastOp.getScale().getType());
+    if (targetInfo.supportsCvtPkScalePk8Upcast() &&
+        (broadcast ||
+         targetInfo.supportsCvtPkScalePk8Block16())) { // b32 vs b16 needed
       SmallVector<Value> crossScaleVals(scaleVals.size());
       auto getCrossScale = [&](int scaleIdx) -> Value {
         if (broadcast)
@@ -286,7 +289,8 @@ struct ScaledUpcastFp8OpPattern
 
         results.append(converted.begin(), converted.end());
       }
-    } else if (targetInfo.supportsHwScaledUpcast()) {
+    } else if (targetInfo.supportsHwScaledUpcast() &&
+               !targetInfo.supportsCvtPkScalePk8()) {
       for (int i = 0; i < inputVals.size(); i += 4) {
         SmallVector<Value, 2> v2i32 =
             elemType.isF16()
@@ -314,20 +318,16 @@ struct ScaledUpcastFp8OpPattern
       // Software emulation: convert fp8 to f32, then multiply by scale.
       bool isE4M3FN = isa<Float8E4M3FNType>(fp8ElemType);
       bool toFp16 = elemType.isF16();
-      for (size_t i = 0; i < inputVals.size(); i += 4) {
+      for (size_t i = 0; i < inputVals.size(); ++i) {
         Value scaleF32 = scaleToF32(rewriter, loc, scaleVals[i], preShifted);
-
-        for (int j : llvm::seq(4)) {
-          Value f32Val =
-              convertF8ToF32_SW(rewriter, loc, inputVals[i + j], isE4M3FN);
-          Value mulF32 = b.fmul(f32Val, scaleF32);
-          if (toFp16) {
-            results.push_back(b.fptrunc(f16_ty, mulF32));
-          } else {
-            Value mulI16 = b.trunc(
-                i16_ty, b.lshr(b.bitcast(mulF32, i32_ty), b.i32_val(16)));
-            results.push_back(b.bitcast(mulI16, bf16_ty));
-          }
+        Value f32Val = convertF8ToF32_SW(rewriter, loc, inputVals[i], isE4M3FN);
+        Value mulF32 = b.fmul(f32Val, scaleF32);
+        if (toFp16) {
+          results.push_back(b.fptrunc(f16_ty, mulF32));
+        } else {
+          Value mulI16 =
+              b.trunc(i16_ty, b.lshr(b.bitcast(mulF32, i32_ty), b.i32_val(16)));
+          results.push_back(b.bitcast(mulI16, bf16_ty));
         }
       }
     }
