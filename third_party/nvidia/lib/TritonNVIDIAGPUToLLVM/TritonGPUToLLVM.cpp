@@ -11,6 +11,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -131,6 +132,14 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   }
 
   finalizeModule(mod);
+
+  // Fold temporary aggregate packing before the pass-boundary verifier walks
+  // these large struct types. The normal verifier still checks the cleaned IR.
+  RewritePatternSet patterns(mod.getContext());
+  LLVM::InsertValueOp::getCanonicalizationPatterns(patterns, mod.getContext());
+  (void)applyPatternsGreedily(
+      mod, std::move(patterns),
+      GreedyRewriteConfig().setUseTopDownTraversal(true));
 }
 
 LogicalResult ConvertTritonGPUToLLVM::lowerFunctions(

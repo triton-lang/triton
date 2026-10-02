@@ -87,14 +87,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 
   // CHECK-LABEL: arrive_barrier
+  // CHECK-DAG: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
+  // CHECK-DAG: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   tt.func @arrive_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
     // CHECK-NEXT: [[BASE:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
-    // CHECK-NEXT: llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NEXT: nvvm.barrier
     // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
-    // CHECK-NEXT: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
     // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
-    // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
     // CHECK-NEXT: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
     // CHECK-NEXT: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[IS_ZERO]], [[BASE]]
     ttng.arrive_barrier %alloc, 2 : !ttg.memdesc<1xi64, #shared0, #smem>
@@ -102,14 +101,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 
   // CHECK-LABEL: arrive_barrier_pred
+  // CHECK-DAG: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
+  // CHECK-DAG: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   tt.func @arrive_barrier_pred(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
     // CHECK-NEXT: [[BASE:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
-    // CHECK-NEXT: llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NEXT: nvvm.barrier
     // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
-    // CHECK-NEXT: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
     // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
-    // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
     // CHECK-NEXT: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
     // CHECK-NEXT: [[PRED:%.*]] = llvm.and [[IS_ZERO]], %arg1
     // CHECK-NEXT: "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], 2;", "b,r" [[PRED]], [[BASE]]
@@ -229,8 +227,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_shared_store_predicates_redundant_threads
+  // CHECK-DAG: %[[REDUNDANT_MASK:.*]] = llvm.mlir.constant(3 : i32)
   // CHECK: %[[WARP:.*]] = ttg.warp_id
-  // CHECK: %[[REDUNDANT_MASK:.*]] = llvm.mlir.constant(3 : i32)
   // CHECK: %[[REDUNDANT_WARP:.*]] = llvm.and %[[WARP]], %[[REDUNDANT_MASK]]
   // CHECK: %[[UNIQUE_THREAD:.*]] = llvm.icmp "eq" %[[REDUNDANT_WARP]]
   // CHECK: "@$3 st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
@@ -247,11 +245,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: expect_barrier_fromCTA0145
+  // CHECK-DAG: llvm.mlir.constant(2 : i32)
   tt.func @expect_barrier_fromCTA0145(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
-    // CHECK: llvm.mlir.constant(2 : i32)
     // CHECK: llvm.icmp "ult"
     // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
-    // CHECK: llvm.mlir.constant(2 : i32)
     // CHECK: llvm.shl
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.xor
@@ -397,19 +394,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: tma_copy_global_to_local_im2col_multi_msg
+  // CHECK-DAG: llvm.mlir.constant(8 : i32)
+  // CHECK-DAG: llvm.mlir.constant(1 : i32)
+  // CHECK-DAG: llvm.mlir.constant(2 : i32)
+  // CHECK-DAG: llvm.mlir.constant(3 : i32)
   // CHECK: elect.sync
   // Verify 4 TMA messages are generated with offsets computed via shift-left by 8 (multiply by 256)
-  // CHECK-DAG: llvm.mlir.constant(8 : i32)
   // Message 1 (copyIdx=0): offset = 0 << 8 = 0
   // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
   // Message 2 (copyIdx=1): offset = 1 << 8 = 256
-  // CHECK: llvm.mlir.constant(1 : i32)
   // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
   // Message 3 (copyIdx=2): offset = 2 << 8 = 512
-  // CHECK: llvm.mlir.constant(2 : i32)
   // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
   // Message 4 (copyIdx=3): offset = 3 << 8 = 768
-  // CHECK: llvm.mlir.constant(3 : i32)
   // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
   // CHECK: return
   tt.func @tma_copy_global_to_local_im2col_multi_msg(%tma: !ttng.tensordesc_im2col<64x1024xf32, #shared2>, %alloc: !ttg.memdesc<64x1024xf32, #shared2, #smem, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
@@ -432,19 +429,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #smem_swz = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: tma_copy_global_to_local_im2col_multi_msg_swizzle
+  // CHECK-DAG: llvm.mlir.constant(6 : i32)
+  // CHECK-DAG: llvm.mlir.constant(1 : i32)
+  // CHECK-DAG: llvm.mlir.constant(2 : i32)
+  // CHECK-DAG: llvm.mlir.constant(3 : i32)
   // CHECK: elect.sync
   // Verify 4 TMA messages are generated with offsets computed via shift-left by 6 (multiply by 64)
-  // CHECK-DAG: llvm.mlir.constant(6 : i32)
   // Message 1 (copyIdx=0): offset = 0 << 6 = 0
   // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
   // Message 2 (copyIdx=1): offset = 1 << 6 = 64
-  // CHECK: llvm.mlir.constant(1 : i32)
   // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
   // Message 3 (copyIdx=2): offset = 2 << 6 = 128
-  // CHECK: llvm.mlir.constant(2 : i32)
   // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
   // Message 4 (copyIdx=3): offset = 3 << 6 = 192
-  // CHECK: llvm.mlir.constant(3 : i32)
   // CHECK: cp.async.bulk.tensor.4d.shared::cta.global.im2col.mbarrier::complete_tx::bytes
   // CHECK: return
   tt.func @tma_copy_global_to_local_im2col_multi_msg_swizzle(%tma: !ttng.tensordesc_im2col<64x256xf16, #shared_swz>, %alloc: !ttg.memdesc<64x256xf16, #shared_swz, #smem_swz, mutable>, %x: i32, %barrier: !ttg.memdesc<1xi64, #shared0_swz, #smem_swz>, %pred: i1) {
@@ -534,11 +531,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: expect_barrier
+  // CHECK-DAG: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
+  // CHECK-DAG: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: nvvm.barrier
   // CHECK: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
-  // CHECK: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
   // CHECK: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
-  // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
   // CHECK: [[PRED:%.*]] = llvm.and [[IS_ZERO]], %arg1
   // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], 16384;
@@ -869,15 +866,15 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 1 : i32, "ttg.th
   }
 
   // CHECK-LABEL: @local_gather_partial_broadcast_16_ctas
+  // CHECK-DAG: %[[LO_SHIFT:.*]] = llvm.mlir.constant(5 : i32)
+  // CHECK-DAG: %[[BIT_MASK:.*]] = llvm.mlir.constant(256 : i32)
+  // CHECK-DAG: %[[REPLICA_HI:.*]] = llvm.mlir.constant(12 : i32)
   // CHECK: %[[CTA:.*]] = nvg.cluster_id
   // CHECK: %[[CTA_SHIFTED:.*]] = llvm.shl %[[CTA]], %{{.*}} : i32
   // CHECK: %[[PACKED:.*]] = llvm.or %{{.*}}, %[[CTA_SHIFTED]] : i32
-  // CHECK: %[[LO_SHIFT:.*]] = llvm.mlir.constant(5 : i32)
   // CHECK: %[[REPLICA_LO:.*]] = llvm.lshr %{{.*}}, %[[LO_SHIFT]] : i32
-  // CHECK: %[[BIT_MASK:.*]] = llvm.mlir.constant(256 : i32)
   // CHECK: %[[BROADCAST_BIT:.*]] = llvm.and %[[PACKED]], %[[BIT_MASK]] : i32
   // CHECK: %[[IS_ZERO:.*]] = llvm.icmp "eq" %[[BROADCAST_BIT]], %{{.*}} : i32
-  // CHECK: %[[REPLICA_HI:.*]] = llvm.mlir.constant(12 : i32)
   // CHECK: %[[REPLICA:.*]] = llvm.select %[[IS_ZERO]], %{{.*}}, %[[REPLICA_HI]] : i1, i32
   // CHECK: llvm.or disjoint %[[REPLICA_LO]], %[[REPLICA]] : i32
   // CHECK: nvvm.mapa
@@ -989,11 +986,11 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // RUBIN-LABEL: @cluster_barrier_inside_warp_specialize_rubin
   // RUBIN-COUNT-2: mbarrier.init.shared::cta.b64 [$1], 3;
   // RUBIN: nvvm.cluster.wait
+  // RUBIN-DAG: %[[ALL_CTAS:.*]] = llvm.mlir.constant(15 : i32) : i32
   // RUBIN-NOT: nvvm.barrier
   // RUBIN: %[[RUBIN_COUNTER:.*]] = llvm.load
   // RUBIN-NEXT: nvvm.barrier
   // RUBIN: %[[CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
-  // RUBIN: %[[ALL_CTAS:.*]] = llvm.mlir.constant(15 : i32) : i32
   // RUBIN: %[[SELF_MASK:.*]] = llvm.shl %{{.*}}, %[[CTA]] : i32
   // RUBIN: %[[PEER_MASK:.*]] = llvm.xor %[[ALL_CTAS]], %[[SELF_MASK]] : i32
   // RUBIN-COUNT-1: mbarrier.arrive.release.cluster.shared::cluster.multicast::cluster::32b.b64 _, [$1], $2;
@@ -1048,7 +1045,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: ttg.ws_cluster_barrier_count = 1 : i32
   // CHECK-LABEL: @cluster_barrier_created_during_conversion
-  // CHECK: llvm.mlir.constant(8 : i32)
+  // CHECK-DAG: llvm.mlir.constant(8 : i32)
   // CHECK: mbarrier.init.shared::cta.b64
   // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
   tt.func @cluster_barrier_created_during_conversion(%arg0: !tt.ptr<i32>) {

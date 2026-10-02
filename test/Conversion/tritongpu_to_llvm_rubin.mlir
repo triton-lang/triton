@@ -41,7 +41,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem_scales_b = #ttng.tensor_memory_scales_encoding<>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @tc_gen5_mma_block_scale_nvfp4_sm107_m256
-  // CHECK: %[[DESC:.+]] = llvm.mlir.constant(136316040 : i32) : i32
+  // CHECK-DAG: %[[DESC:.+]] = llvm.mlir.constant(136316040 : i32) : i32
   // CHECK-COUNT-4: tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.block32
   // CHECK-NOT: tcgen05.mma
   tt.func @tc_gen5_mma_block_scale_nvfp4_sm107_m256(%a: !ttg.memdesc<256x128xi8, #shared, #ttg.shared_memory>,
@@ -155,6 +155,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   }
 
   // CHECK-LABEL: @tc_gen5_mma_ab_reuse_b_major
+  // CHECK-DAG: %[[BM_TRUE:.+]] = llvm.mlir.constant(true) : i1
   // Equal-sized A and B tiles retain B-major traversal. Reverse M at the N
   // boundary to keep A as well, without changing any accumulator's K order.
   // CHECK: %[[BM_BASE:.+]] = llvm.ptrtoint %arg2 : !llvm.ptr<3> to i32
@@ -163,7 +164,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // CHECK: kind::f16.collector::a::fill.collector::b::lastuse [ $0 + 128 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A1:[^,]+]], %[[BM_B0]], %{{[^,]+}}, %arg3, %[[BM_E]]
   // CHECK: kind::f16.collector::a::lastuse.collector::b::fill [ $0 + 384 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A1]], %[[BM_B1:[^,]+]], %{{[^,]+}}, %arg3, %[[BM_E]]
   // CHECK: kind::f16.collector::b::lastuse [ $0 + 256 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A0]], %[[BM_B1]], %{{[^,]+}}, %arg3, %[[BM_E]]
-  // CHECK: %[[BM_TRUE:.+]] = llvm.mlir.constant(true) : i1
   // CHECK: kind::f16.collector::b::fill [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A2:[^,]+]], %[[BM_B2:[^,]+]], %{{[^,]+}}, %[[BM_TRUE]], %[[BM_E]]
   // CHECK: kind::f16.collector::a::fill.collector::b::lastuse [ $0 + 128 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A3:[^,]+]], %[[BM_B2]], %{{[^,]+}}, %[[BM_TRUE]], %[[BM_E]]
   // CHECK: kind::f16.collector::a::lastuse.collector::b::fill [ $0 + 384 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A3]], %[[BM_B3:[^,]+]], %{{[^,]+}}, %[[BM_TRUE]], %[[BM_E]]
@@ -248,6 +248,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @expect_barrier_fromCTA0145_multicast
+  // CHECK-DAG: llvm.mlir.constant(5 : i32)
   tt.func @expect_barrier_fromCTA0145_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
     // CHECK: nvvm.barrier
     // CHECK: nvvm.read.ptx.sreg.tid.x
@@ -255,7 +256,6 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-NOT: llvm.icmp "ult"
     // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
     // CHECK: nvg.cluster_id
-    // CHECK: llvm.mlir.constant(5 : i32)
     // CHECK: llvm.shl
     // CHECK-NOT: llvm.ptrtoint
     // CHECK-NOT: llvm.xor
@@ -314,11 +314,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @tc_gen5_mma_block_scale_nvfp4_ue5m3_sm107
+  // CHECK-DAG: %[[DESC:.+]] = llvm.mlir.constant(153093256 : i32) : i32
   // CHECK: %[[TMEM_BASE:.+]] = llvm.ptrtoint %arg2 : !llvm.ptr<3> to i32
   // UE5M3 uses i8 block16 scales, so split-K lowering must keep the UE5M3
   // scale kind in the descriptor for both K=128 sub-instructions of a
   // logical BLOCK_K=256 tile.
-  // CHECK: %[[DESC:.+]] = llvm.mlir.constant(153093256 : i32) : i32
   // CHECK-COUNT-2: tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.block16
   // CHECK-NOT: tcgen05.mma
   tt.func @tc_gen5_mma_block_scale_nvfp4_ue5m3_sm107(%a: !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
@@ -374,14 +374,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith_fp4_axis0
   // CHECK-COUNT-3: llvm.inline_asm {{.*}} "add.e4m3x4.e2m1x4 $0, $1, $2;", "=r,h,r"
-  tt.func @packed_arith_fp4_axis0(
+  tt.func private @packed_arith_fp4_axis0(
       %a: tensor<2x256xi8, #fp4>,
       %b: tensor<4x256xf8E4M3FN, #result>,
       %narrow_a: tensor<1x256xi8, #narrow_fp4>,
-      %narrow_b: tensor<2x256xf8E4M3FN, #narrow_result>) {
+      %narrow_b: tensor<2x256xf8E4M3FN, #narrow_result>) -> (tensor<4x256xf8E4M3FN, #result>, tensor<2x256xf8E4M3FN, #narrow_result>) {
     %0 = ttng.packed_arith add %a, %b : (tensor<2x256xi8, #fp4>, tensor<4x256xf8E4M3FN, #result>) -> tensor<4x256xf8E4M3FN, #result>
     %1 = ttng.packed_arith add %narrow_a, %narrow_b : (tensor<1x256xi8, #narrow_fp4>, tensor<2x256xf8E4M3FN, #narrow_result>) -> tensor<2x256xf8E4M3FN, #narrow_result>
-    tt.return
+    tt.return %0, %1 : tensor<4x256xf8E4M3FN, #result>, tensor<2x256xf8E4M3FN, #narrow_result>
   }
 }
 
@@ -407,19 +407,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NOT: {{prmt|shfl\.sync}}
   // CHECK: llvm.inline_asm {{.*}} "add.e4m3x4.e2m1x4 $0, $1, $2;", "=r,h,r"
   // CHECK-NOT: {{prmt|shfl\.sync}}
-  tt.func @packed_arith_register_layouts(
+  tt.func private @packed_arith_register_layouts(
       %pa: tensor<512xf32, #perm>,
       %pb: tensor<512xf32, #perm>,
       %ba: tensor<256xf32, #bcast>,
       %bb: tensor<256xf32, #bcast>,
       %fp4: tensor<256xi8, #fp4>,
-      %f8: tensor<512xf8E4M3FN, #perm>) {
+      %f8: tensor<512xf8E4M3FN, #perm>) -> (tensor<512xf32, #perm>, tensor<256xf32, #bcast>, tensor<512xf8E4M3FN, #perm>) {
     %perm = ttng.packed_arith add %pa, %pb : (tensor<512xf32, #perm>, tensor<512xf32, #perm>) -> tensor<512xf32, #perm>
     %bcast = ttng.packed_arith mul %ba, %bb : (tensor<256xf32, #bcast>, tensor<256xf32, #bcast>) -> tensor<256xf32, #bcast>
     %canonical = ttg.convert_layout %f8 : tensor<512xf8E4M3FN, #perm> -> tensor<512xf8E4M3FN, #canonical>
     %result = ttng.packed_arith add %fp4, %canonical : (tensor<256xi8, #fp4>, tensor<512xf8E4M3FN, #canonical>) -> tensor<512xf8E4M3FN, #canonical>
     %restored = ttg.convert_layout %result : tensor<512xf8E4M3FN, #canonical> -> tensor<512xf8E4M3FN, #perm>
-    tt.return
+    tt.return %perm, %bcast, %restored : tensor<512xf32, #perm>, tensor<256xf32, #bcast>, tensor<512xf8E4M3FN, #perm>
   }
 }
 
@@ -440,13 +440,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: llvm.inline_asm {{.*}} "fma.rn.bf16x2 $0, $1, $2, $3;", "=r,r,r,r"
   // CHECK: llvm.inline_asm {{.*}} "min.bf16x2 $0, $1, $2;", "=r,r,r"
   // CHECK: llvm.inline_asm {{.*}} "max.bf16x2 $0, $1, $2;", "=r,r,r"
-  tt.func @packed_arith_homogeneous_half(
+  tt.func private @packed_arith_homogeneous_half(
       %f16a: tensor<128x2xf16, #blocked>,
       %f16b: tensor<128x2xf16, #blocked>,
       %f16c: tensor<128x2xf16, #blocked>,
       %bf16a: tensor<128x2xbf16, #blocked>,
       %bf16b: tensor<128x2xbf16, #blocked>,
-      %bf16c: tensor<128x2xbf16, #blocked>) {
+      %bf16c: tensor<128x2xbf16, #blocked>) -> (tensor<128x2xf16, #blocked>, tensor<128x2xbf16, #blocked>) {
     %f16add = ttng.packed_arith add %f16a, %f16b : (tensor<128x2xf16, #blocked>, tensor<128x2xf16, #blocked>) -> tensor<128x2xf16, #blocked>
     %f16sub = ttng.packed_arith sub %f16add, %f16b : (tensor<128x2xf16, #blocked>, tensor<128x2xf16, #blocked>) -> tensor<128x2xf16, #blocked>
     %f16mul = ttng.packed_arith mul %f16sub, %f16b : (tensor<128x2xf16, #blocked>, tensor<128x2xf16, #blocked>) -> tensor<128x2xf16, #blocked>
@@ -459,7 +459,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %bf16fma = ttng.packed_arith fma %bf16mul, %bf16b, %bf16c : (tensor<128x2xbf16, #blocked>, tensor<128x2xbf16, #blocked>, tensor<128x2xbf16, #blocked>) -> tensor<128x2xbf16, #blocked>
     %bf16min = ttng.packed_arith min %bf16fma, %bf16b : (tensor<128x2xbf16, #blocked>, tensor<128x2xbf16, #blocked>) -> tensor<128x2xbf16, #blocked>
     %bf16max = ttng.packed_arith max %bf16min, %bf16b : (tensor<128x2xbf16, #blocked>, tensor<128x2xbf16, #blocked>) -> tensor<128x2xbf16, #blocked>
-    tt.return
+    tt.return %f16max, %bf16max : tensor<128x2xf16, #blocked>, tensor<128x2xbf16, #blocked>
   }
 }
 
@@ -478,12 +478,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: llvm.inline_asm {{.*}} "add.e4m3x4.ue8m0x4 $0, $1, $2;", "=r,r,r" {{.*}} : (i32, i32) -> i32
   // CHECK: llvm.inline_asm {{.*}} "mul.e4m3x4.e2m1x4.e2m1x4 $0, $1, $2;", "=r,h,h" {{.*}} : (i16, i16) -> i32
   // CHECK: llvm.inline_asm {{.*}} "fma.e4m3x4.ue8m0x4.e2m1x4 $0, $1, $2, $3;", "=r,r,h,r" {{.*}} : (i32, i16, i32) -> i32
-  tt.func @packed_arith_alternate_x4(
+  tt.func private @packed_arith_alternate_x4(
       %e5m2: tensor<128x4xf8E5M2, #blocked>,
       %e4m3: tensor<128x4xf8E4M3FN, #blocked>,
       %ue8m0: tensor<128x4xf8E8M0FNU, #blocked>,
       %e2m1: tensor<128x2xi8, #fp4>,
-      %e2m1b: tensor<128x2xi8, #fp4>) {
+      %e2m1b: tensor<128x2xi8, #fp4>) -> (
+        tensor<128x4xf8E4M3FN, #blocked>,
+        tensor<128x4xf8E5M2, #blocked>,
+        tensor<128x4xf8E4M3FN, #blocked>,
+        tensor<128x4xf8E5M2, #blocked>,
+        tensor<128x4xf8E4M3FN, #blocked>,
+        tensor<128x4xf8E4M3FN, #blocked>,
+        tensor<128x4xf8E4M3FN, #blocked>) {
     %add = ttng.packed_arith add %e5m2, %e4m3 : (tensor<128x4xf8E5M2, #blocked>, tensor<128x4xf8E4M3FN, #blocked>) -> tensor<128x4xf8E4M3FN, #blocked>
     %sub = ttng.packed_arith sub %e2m1, %e5m2 : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E5M2, #blocked>) -> tensor<128x4xf8E5M2, #blocked>
     %mul = ttng.packed_arith mul %e2m1, %e5m2 : (tensor<128x2xi8, #fp4>, tensor<128x4xf8E5M2, #blocked>) -> tensor<128x4xf8E4M3FN, #blocked>
@@ -491,7 +498,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %scale = ttng.packed_arith add %ue8m0, %e4m3 : (tensor<128x4xf8E8M0FNU, #blocked>, tensor<128x4xf8E4M3FN, #blocked>) -> tensor<128x4xf8E4M3FN, #blocked>
     %two_fp4 = ttng.packed_arith mul %e2m1, %e2m1b : (tensor<128x2xi8, #fp4>, tensor<128x2xi8, #fp4>) -> tensor<128x4xf8E4M3FN, #blocked>
     %scale_fp4 = ttng.packed_arith fma %ue8m0, %e2m1, %e4m3 : (tensor<128x4xf8E8M0FNU, #blocked>, tensor<128x2xi8, #fp4>, tensor<128x4xf8E4M3FN, #blocked>) -> tensor<128x4xf8E4M3FN, #blocked>
-    tt.return
+    tt.return %add, %sub, %mul, %fma, %scale, %two_fp4, %scale_fp4 :
+        tensor<128x4xf8E4M3FN, #blocked>,
+        tensor<128x4xf8E5M2, #blocked>,
+        tensor<128x4xf8E4M3FN, #blocked>,
+        tensor<128x4xf8E5M2, #blocked>,
+        tensor<128x4xf8E4M3FN, #blocked>,
+        tensor<128x4xf8E4M3FN, #blocked>,
+        tensor<128x4xf8E4M3FN, #blocked>
   }
 }
 
@@ -516,11 +530,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: llvm.inline_asm {{.*}} "mul.f16x2.f16x2.bf16x2 $0, $1, $2;", "=r,r,r" {{.*}} : (i32, i32) -> i32
   // CHECK: llvm.inline_asm {{.*}} "fma.rn.f32x2.f16x2.f32x2.f32x2 $0, $1, $2, $3;", "=l,r,l,l" {{.*}} : (i32, i64, i64) -> i64
   // CHECK: llvm.inline_asm {{.*}} "fma.rn.f32x2.bf16x2.f32x2.f32x2 $0, $1, $2, $3;", "=l,r,l,l" {{.*}} : (i32, i64, i64) -> i64
-  tt.func @packed_arith_mixed(
+  tt.func private @packed_arith_mixed(
       %f32a: tensor<128x2xf32, #blocked>,
       %f32b: tensor<128x2xf32, #blocked>,
       %f16: tensor<128x2xf16, #blocked>,
-      %bf16: tensor<128x2xbf16, #blocked>) {
+      %bf16: tensor<128x2xbf16, #blocked>) -> (
+        tensor<128x2xf16, #blocked>,
+        tensor<128x2xbf16, #blocked>,
+        tensor<128x2xf32, #blocked>,
+        tensor<128x2xf32, #blocked>,
+        tensor<128x2xf32, #blocked>,
+        tensor<128x2xf32, #blocked>,
+        tensor<128x2xf16, #blocked>,
+        tensor<128x2xbf16, #blocked>,
+        tensor<128x2xf16, #blocked>,
+        tensor<128x2xbf16, #blocked>,
+        tensor<128x2xf16, #blocked>,
+        tensor<128x2xbf16, #blocked>,
+        tensor<128x2xbf16, #blocked>,
+        tensor<128x2xf16, #blocked>,
+        tensor<128x2xf32, #blocked>,
+        tensor<128x2xf32, #blocked>) {
     %hom_f16 = ttng.packed_arith mul %f16, %f16 : (tensor<128x2xf16, #blocked>, tensor<128x2xf16, #blocked>) -> tensor<128x2xf16, #blocked>
     %hom_bf16 = ttng.packed_arith fma %bf16, %bf16, %bf16 : (tensor<128x2xbf16, #blocked>, tensor<128x2xbf16, #blocked>, tensor<128x2xbf16, #blocked>) -> tensor<128x2xbf16, #blocked>
     %add_up_f16 = ttng.packed_arith add %f16, %f32a : (tensor<128x2xf16, #blocked>, tensor<128x2xf32, #blocked>) -> tensor<128x2xf32, #blocked>
@@ -537,7 +567,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %mul_cross_reverse = ttng.packed_arith mul %f16, %bf16 : (tensor<128x2xf16, #blocked>, tensor<128x2xbf16, #blocked>) -> tensor<128x2xf16, #blocked>
     %fma_f16 = ttng.packed_arith fma %f16, %f32a, %f32b : (tensor<128x2xf16, #blocked>, tensor<128x2xf32, #blocked>, tensor<128x2xf32, #blocked>) -> tensor<128x2xf32, #blocked>
     %fma_bf16 = ttng.packed_arith fma %bf16, %f32a, %f32b : (tensor<128x2xbf16, #blocked>, tensor<128x2xf32, #blocked>, tensor<128x2xf32, #blocked>) -> tensor<128x2xf32, #blocked>
-    tt.return
+    tt.return %hom_f16,
+        %hom_bf16,
+        %add_up_f16,
+        %add_up_bf16,
+        %sub_up_f16,
+        %sub_up_bf16,
+        %down_f16,
+        %add_down_bf16,
+        %sub_down_f16,
+        %down_bf16,
+        %mul_down,
+        %mul_down_bf16,
+        %mul_cross,
+        %mul_cross_reverse,
+        %fma_f16,
+        %fma_bf16 :
+        tensor<128x2xf16, #blocked>,
+        tensor<128x2xbf16, #blocked>,
+        tensor<128x2xf32, #blocked>,
+        tensor<128x2xf32, #blocked>,
+        tensor<128x2xf32, #blocked>,
+        tensor<128x2xf32, #blocked>,
+        tensor<128x2xf16, #blocked>,
+        tensor<128x2xbf16, #blocked>,
+        tensor<128x2xf16, #blocked>,
+        tensor<128x2xbf16, #blocked>,
+        tensor<128x2xf16, #blocked>,
+        tensor<128x2xbf16, #blocked>,
+        tensor<128x2xbf16, #blocked>,
+        tensor<128x2xf16, #blocked>,
+        tensor<128x2xf32, #blocked>,
+        tensor<128x2xf32, #blocked>
   }
 }
 
