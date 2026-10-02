@@ -300,6 +300,12 @@ def async_store(tensor_desc, coord, src, cache_policy=None, _semantic=None):
     """
     Store data from shared memory to global memory using TMA.
 
+    .. warning::
+
+        TMA stores write only in whole 16-byte chunks. If the innermost
+        dimension's size in bytes is not a multiple of 16, a store may overwrite
+        padding beyond the tensor's shape up to the next 16-byte boundary.
+
     Args:
         tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
@@ -342,6 +348,12 @@ def async_atomic_add(tensor_desc, coord, src, _semantic=None):
     """
     Atomically add data from shared memory into global memory using TMA.
 
+    .. warning::
+
+        TMA reductions may update padding beyond the tensor's shape up to the
+        next 16-byte boundary if the innermost dimension's size in bytes is not
+        a multiple of 16.
+
     Args:
         tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
@@ -355,6 +367,12 @@ def async_atomic_add(tensor_desc, coord, src, _semantic=None):
 def async_atomic_min(tensor_desc, coord, src, _semantic=None):
     """
     Atomically compute the minimum of shared memory data and global memory using TMA.
+
+    .. warning::
+
+        TMA reductions may update padding beyond the tensor's shape up to the
+        next 16-byte boundary if the innermost dimension's size in bytes is not
+        a multiple of 16.
 
     Args:
         tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
@@ -370,6 +388,12 @@ def async_atomic_max(tensor_desc, coord, src, _semantic=None):
     """
     Atomically compute the maximum of shared memory data and global memory using TMA.
 
+    .. warning::
+
+        TMA reductions may update padding beyond the tensor's shape up to the
+        next 16-byte boundary if the innermost dimension's size in bytes is not
+        a multiple of 16.
+
     Args:
         tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
@@ -383,6 +407,12 @@ def async_atomic_max(tensor_desc, coord, src, _semantic=None):
 def async_atomic_and(tensor_desc, coord, src, _semantic=None):
     """
     Atomically bitwise-and data from shared memory into global memory using TMA.
+
+    .. warning::
+
+        TMA reductions may update padding beyond the tensor's shape up to the
+        next 16-byte boundary if the innermost dimension's size in bytes is not
+        a multiple of 16.
 
     Args:
         tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
@@ -398,6 +428,12 @@ def async_atomic_or(tensor_desc, coord, src, _semantic=None):
     """
     Atomically bitwise-or data from shared memory into global memory using TMA.
 
+    .. warning::
+
+        TMA reductions may update padding beyond the tensor's shape up to the
+        next 16-byte boundary if the innermost dimension's size in bytes is not
+        a multiple of 16.
+
     Args:
         tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
@@ -411,6 +447,12 @@ def async_atomic_or(tensor_desc, coord, src, _semantic=None):
 def async_atomic_xor(tensor_desc, coord, src, _semantic=None):
     """
     Atomically bitwise-xor data from shared memory into global memory using TMA.
+
+    .. warning::
+
+        TMA reductions may update padding beyond the tensor's shape up to the
+        next 16-byte boundary if the innermost dimension's size in bytes is not
+        a multiple of 16.
 
     Args:
         tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
