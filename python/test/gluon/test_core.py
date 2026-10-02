@@ -7094,7 +7094,8 @@ def _fabric_submit_region(Buffer, Out, OP: ttgl.constexpr, REGION: ttgl.constexp
 @pytest.mark.parametrize("op", ["send", "zero_send", "ack"])
 @pytest.mark.parametrize("aborted", [False, True])
 @pytest.mark.parametrize("warp_specialized", [False, True])
-def test_fabric_submit_one_request_per_region(op, aborted, warp_specialized, device):
+@pytest.mark.parametrize("capacity", [8, ttgl.constexpr(8)], ids=["runtime-capacity", "constant-capacity"])
+def test_fabric_submit_one_request_per_region(op, aborted, warp_specialized, capacity, device):
     import struct
 
     if not is_ampere_or_newer():
@@ -7110,13 +7111,15 @@ def test_fabric_submit_one_request_per_region(op, aborted, warp_specialized, dev
         else:
             _fabric_submit_region(Buffer, Out, OP, 0, 1)
 
-    buffer = _make_fabric_buffer(device, aborted=33 if aborted else 32)
+    buffer = _make_fabric_buffer(device, aborted=33 if aborted else 32)._replace(capacity=capacity)
     # Exercise ring wraparound and refresh of the initially stale cached head.
     buffer.queue.head.fill_(6)
     buffer.queue.tail.fill_(6)
     nrequests = 3 * (2 if warp_specialized else 1)
     out = torch.empty((nrequests, 128), dtype=torch.bool, device=device)
-    kernel[(3, )](buffer, out, op, warp_specialized)
+    compiled = kernel[(3, )](buffer, out, op, warp_specialized)
+    if isinstance(capacity, ttgl.constexpr):
+        assert "rem.u64" not in compiled.asm["ptx"]
     assert out.flatten().tolist() == [not aborted] * out.numel()
     assert buffer.queue.tail.item() == 6 + (0 if aborted else nrequests)
     assert buffer.state.send_count.item() == (nrequests if not aborted and op != "ack" else 0)

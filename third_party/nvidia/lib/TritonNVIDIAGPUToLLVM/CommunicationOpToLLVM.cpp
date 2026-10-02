@@ -5,6 +5,7 @@ using namespace mlir;
 using namespace mlir::triton;
 namespace ttng = mlir::triton::nvidia_gpu;
 namespace ttg = mlir::triton::gpu;
+using Ordering = LLVM::AtomicOrdering;
 
 namespace {
 // The elected thread owns the protocol. Share its result only after it leaves
@@ -33,6 +34,54 @@ Value runProtocol(Operation *op, ConversionPatternRewriter &rewriter,
   return scratch ? b.load(i1_ty, scratch) : b.false_val();
 }
 
+// Only the elected thread runs the protocol; all participating threads join
+// before reading its result or accessing the transferred payload.
+struct Protocol {
+  Protocol(Operation *op, ConversionPatternRewriter &rewriter,
+           const NVIDIA::TargetInfo &targetInfo)
+      : rewriter(rewriter), targetInfo(targetInfo), loc(op->getLoc()),
+        b(loc, rewriter) {
+    pred = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
+    if (!op->getResult(0).use_empty())
+      scratch = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+    Block *before = rewriter.getInsertionBlock();
+    join = before->splitBlock(rewriter.getInsertionPoint());
+    done = rewriter.createBlock(join);
+    result = done->addArgument(i1_ty, loc);
+    Block *entry = block();
+    rewriter.setInsertionPointToEnd(before);
+    LLVM::CondBrOp::create(rewriter, loc, pred, entry, join);
+    rewriter.setInsertionPointToStart(entry);
+  }
+
+  Block *block() { return rewriter.createBlock(done); }
+
+  Value load(Value ptr, Ordering order, StringRef scope = {}) {
+    return b.load(i64_ty, ptr, /*alignment=*/8, /*isVolatile=*/false,
+                  /*isNonTemporal=*/false, /*isInvariant=*/false,
+                  /*isInvariantGroup=*/false, order, scope);
+  }
+
+  Value finish() {
+    rewriter.setInsertionPointToStart(done);
+    if (scratch)
+      targetInfo.storeShared(rewriter, loc, scratch, result, pred);
+    LLVM::BrOp::create(rewriter, loc, join);
+    rewriter.setInsertionPointToStart(join);
+    targetInfo.barrier(loc, rewriter,
+                       ttg::AddrSpace::Local | ttg::AddrSpace::GlobalRead |
+                           ttg::AddrSpace::GlobalWrite);
+    return scratch ? b.load(i1_ty, scratch) : b.false_val();
+  }
+
+  ConversionPatternRewriter &rewriter;
+  const NVIDIA::TargetInfo &targetInfo;
+  Location loc;
+  TritonLLVMOpBuilder b;
+  Block *done, *join;
+  Value pred, result, scratch;
+};
+
 template <typename Op>
 struct CommunicationConversion : ConvertOpToLLVMPattern<Op> {
   CommunicationConversion(LLVMTypeConverter &converter,
@@ -49,6 +98,7 @@ struct WaitConversion : CommunicationConversion<ttng::CommunicationWaitOp> {
   LogicalResult
   matchAndRewrite(ttng::CommunicationWaitOp op, OpAdaptor a,
                   ConversionPatternRewriter &rewriter) const override {
+    // LLVM loop rewrites increased polling cost and ready-wait latency.
     bool completion = op.getKind() == "send";
     std::string abortValue = std::to_string(op.getAbortedValue());
     std::string code = R"({
@@ -118,12 +168,103 @@ struct SubmitConversion : CommunicationConversion<ttng::CommunicationSubmitOp> {
   LogicalResult
   matchAndRewrite(ttng::CommunicationSubmitOp op, OpAdaptor a,
                   ConversionPatternRewriter &rewriter) const override {
-    auto layout = op.getRequestLayout();
-    // The release publication also orders payload stores and acknowledgement
-    // readers from every participating thread, via this rendezvous.
-    targetInfo.barrier(op.getLoc(), rewriter,
+    auto loc = op.getLoc();
+    // Order every participating thread's payload stores and acknowledgement
+    // reads.
+    targetInfo.barrier(loc, rewriter,
                        ttg::AddrSpace::Local | ttg::AddrSpace::GlobalRead |
                            ttg::AddrSpace::GlobalWrite);
+    // LLVM folds constant-capacity remainders; the original PTX is faster for
+    // runtime capacities. This intrinsic removes the unused path before
+    // codegen.
+    Value constant =
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.is.constant.i64",
+                                        i1_ty, {a.getCapacity()})
+            .getResult(0);
+    Block *before = rewriter.getInsertionBlock();
+    Block *done = before->splitBlock(rewriter.getInsertionPoint());
+    Value result = done->addArgument(i1_ty, loc);
+    Block *known = rewriter.createBlock(done);
+    Block *dynamic = rewriter.createBlock(done);
+    rewriter.setInsertionPointToEnd(before);
+    LLVM::CondBrOp::create(rewriter, loc, constant, known, dynamic);
+    rewriter.setInsertionPointToStart(known);
+    Value value = emitLLVM(op, a, rewriter);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{value}, done);
+    rewriter.setInsertionPointToStart(dynamic);
+    value = emitPTX(op, a, rewriter);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{value}, done);
+    rewriter.setInsertionPointToStart(done);
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+  Value emitLLVM(ttng::CommunicationSubmitOp op, OpAdaptor a,
+                 ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto layout = op.getRequestLayout();
+    Protocol p(op, rewriter, targetInfo);
+    auto &b = p.b;
+    Block *entry = rewriter.getInsertionBlock();
+    Block *reserve = p.block();
+    Block *refresh = p.block();
+    Block *claim = p.block();
+    Block *publish = p.block();
+    rewriter.setInsertionPointToStart(entry);
+    Value aborted = b.icmp_eq(p.load(a.getAborted(), Ordering::acquire),
+                              b.i64_val(op.getAbortedValue()));
+    LLVM::CondBrOp::create(rewriter, loc, aborted, p.done,
+                           ValueRange{b.false_val()}, reserve, ValueRange{});
+    rewriter.setInsertionPointToStart(reserve);
+    Value head = p.load(a.getCachedHead(), Ordering::acquire, "device");
+    Value tail = p.load(a.getTail(), Ordering::monotonic, "device");
+    Value free = b.sub(a.getCapacity(), b.sub(tail, head));
+    LLVM::CondBrOp::create(rewriter, loc, b.icmp_ugt(free, b.i64_val(1)), claim,
+                           refresh);
+    rewriter.setInsertionPointToStart(refresh);
+    head = p.load(a.getHead(), Ordering::acquire);
+    LLVM::AtomicRMWOp::create(rewriter, loc, LLVM::AtomicBinOp::umax,
+                              a.getCachedHead(), head, Ordering::monotonic,
+                              "device");
+    LLVM::BrOp::create(rewriter, loc, entry);
+    rewriter.setInsertionPointToStart(claim);
+    Value cas = LLVM::AtomicCmpXchgOp::create(
+        rewriter, loc, a.getTail(), tail, b.add(tail, b.i64_val(1)),
+        Ordering::monotonic, Ordering::monotonic, "device");
+    LLVM::CondBrOp::create(rewriter, loc, b.extract_val(i1_ty, cas, 1), publish,
+                           entry);
+
+    rewriter.setInsertionPointToStart(publish);
+    // A reserved slot must be published even if abort races with the CAS.
+    Value slot = b.mul(b.urem(tail, a.getCapacity()), b.i64_val(layout[0]));
+    Value ptr = b.gep(a.getBuffer().getType(), i8_ty, a.getBuffer(), slot);
+    auto store = [&](int offset, Value value,
+                     Ordering order = Ordering::not_atomic) {
+      Value field = b.gep(ptr.getType(), i8_ty, ptr, b.i64_val(offset));
+      b.store(value, field, value.getType().getIntOrFloatBitWidth() / 8,
+              /*isVolatile=*/false, /*isNonTemporal=*/false,
+              /*isInvariantGroup=*/false, order);
+    };
+    store(layout[2], b.i32_val(op.getRequestType()));
+    store(layout[3], a.getHandle());
+    if (op.getIsSend()) {
+      store(layout[4], a.getSrcOffset());
+      store(layout[5], a.getDstOffset());
+      store(layout[6], a.getNbytes());
+      store(layout[7], b.i32_val(op.getBypassValue()));
+    }
+    store(layout[1], b.i64_val(op.getReadyValue()), Ordering::release);
+    if (op.getIsSend())
+      LLVM::AtomicRMWOp::create(rewriter, loc, LLVM::AtomicBinOp::add,
+                                a.getSendCount(), b.i64_val(1),
+                                Ordering::monotonic, "device");
+    LLVM::BrOp::create(rewriter, loc, ValueRange{b.true_val()}, p.done);
+    return p.finish();
+  }
+
+  Value emitPTX(ttng::CommunicationSubmitOp op, OpAdaptor a,
+                ConversionPatternRewriter &rewriter) const {
+    auto layout = op.getRequestLayout();
     std::string code = R"({
       .reg .pred p;
       .reg .b64 head, tail, free, next, old, slot, state, ready;
@@ -181,15 +322,12 @@ struct SubmitConversion : CommunicationConversion<ttng::CommunicationSubmitOp> {
     done:
       mov.u32 $0, result;
     })";
-    rewriter.replaceOp(
-        op,
-        runProtocol(op, rewriter, targetInfo, code,
-                    {a.getHead(), a.getTail(), a.getCachedHead(), a.getBuffer(),
-                     a.getCapacity(), a.getHandle(), a.getSrcOffset(),
-                     a.getDstOffset(), a.getNbytes(), a.getSendCount(),
-                     a.getAborted()},
-                    {"l", "l", "l", "l", "l", "r", "l", "l", "l", "l", "l"}));
-    return success();
+    return runProtocol(op, rewriter, targetInfo, code,
+                       {a.getHead(), a.getTail(), a.getCachedHead(),
+                        a.getBuffer(), a.getCapacity(), a.getHandle(),
+                        a.getSrcOffset(), a.getDstOffset(), a.getNbytes(),
+                        a.getSendCount(), a.getAborted()},
+                       {"l", "l", "l", "l", "l", "r", "l", "l", "l", "l", "l"});
   }
 };
 
@@ -200,21 +338,11 @@ struct IsAbortedConversion
   LogicalResult
   matchAndRewrite(ttng::CommunicationIsAbortedOp op, OpAdaptor a,
                   ConversionPatternRewriter &rewriter) const override {
-    std::string code = R"({
-      .reg .pred p;
-      .reg .b64 state;
-      .reg .u32 result;
-      mov.u32 result, 0;
-      @!$1 bra done;
-      ld.acquire.sys.global.b64 state, [$2];
-      setp.eq.u64 p, state, )" +
-                       std::to_string(op.getAbortedValue()) + R"(;
-      selp.u32 result, 1, 0, p;
-    done:
-      mov.u32 $0, result;
-    })";
-    rewriter.replaceOp(op, runProtocol(op, rewriter, targetInfo, code,
-                                       {a.getAborted()}, {"l"}));
+    Protocol p(op, rewriter, targetInfo);
+    Value aborted = p.b.icmp_eq(p.load(a.getAborted(), Ordering::acquire),
+                                p.b.i64_val(op.getAbortedValue()));
+    LLVM::BrOp::create(rewriter, op.getLoc(), ValueRange{aborted}, p.done);
+    rewriter.replaceOp(op, p.finish());
     return success();
   }
 };
