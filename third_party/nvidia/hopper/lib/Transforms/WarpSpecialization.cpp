@@ -95,6 +95,8 @@ public:
         break;
       case DataPartitionResult::Retry:
         break;
+      case DataPartitionResult::FailedAfterRewrite:
+        return signalPassFailure();
       case DataPartitionResult::Unsupported:
         if (hasPreexistingTaskIds) {
           funcOp.emitError()
