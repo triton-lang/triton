@@ -189,7 +189,7 @@ def _get_np_dtype(tt_dtype):
 def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     input_uint_dtype = getattr(np, f"uint{input_dtype.primitive_bitwidth}")
     output_unint_dtype = getattr(np, f"uint{output_dtype.primitive_bitwidth}")
-    input_bin = np.frombuffer(input.tobytes(), dtype=input_uint_dtype)
+    input_bin = np.frombuffer(input.tobytes(), dtype=input_uint_dtype).astype(np.int64)
     sign = (input_bin >> (input_dtype.primitive_bitwidth - 1)) & 0x01
     input_exponent_width = input_dtype.primitive_bitwidth - input_dtype.fp_mantissa_width - 1
     output_exponent_width = output_dtype.primitive_bitwidth - output_dtype.fp_mantissa_width - 1
@@ -197,14 +197,14 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     bias_input = input_dtype.exponent_bias
     bias_output = output_dtype.exponent_bias
     input_exponent = (input_bin >> input_dtype.fp_mantissa_width) & ((1 << input_exponent_width) - 1)
-    exponent = input_exponent.astype(np.int32)
+    exponent = input_exponent.copy()
     subnormal_index = exponent == 0
     if np.any(subnormal_index):
         # Credit to Phil: phil@openai.com
         # subnormal repr: ((-1.0)**sign) * (2.0**(1 - exp_bias)) * (2^(m0) + 2^(m1) + ... + 2^(mn))
         # where m0, m1, ..., mn are the 1-bit of the mantissa
         # convert it to normal repr: ((-1.0)**sign) * (2.0**(1 + m0 - exp_bias)) * (1 + 2^(m1 - m0) + ... + 2^(mn - m0))
-        bit_pos = np.zeros_like(input_bin, dtype=np.int32)
+        bit_pos = np.zeros_like(input_bin)
         # Find the most significant bit of the mantissa in the significand
         for i in range(input_dtype.fp_mantissa_width):
             bit_index = ((significand >> i) & 0x01)
@@ -214,30 +214,29 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         exponent[subnormal_index] = 1 - bit_pos[subnormal_index]
         # 0 significand and subnormal should be treated as 0
         exponent[zero_significand_index & subnormal_index] = bias_input - bias_output
-        significand[subnormal_index] = (
-            significand[subnormal_index] << bit_pos[subnormal_index].astype(input_uint_dtype)) & (
-                (1 << input_dtype.fp_mantissa_width) - 1)
-    sign_output = sign.astype(output_unint_dtype)
+        significand[subnormal_index] = (significand[subnormal_index] << bit_pos[subnormal_index]) & (
+            (1 << input_dtype.fp_mantissa_width) - 1)
+    sign_output = sign
     # Include the leading bit and align subnormal results before rounding.
-    full_significand = significand.astype(np.uint64) | (1 << input_dtype.fp_mantissa_width)
+    full_significand = significand | (1 << input_dtype.fp_mantissa_width)
     full_significand[(input_bin & ((1 << (input_dtype.primitive_bitwidth - 1)) - 1)) == 0] = 0
     output_exponent = exponent - bias_input + bias_output
     shift = input_dtype.fp_mantissa_width - output_dtype.fp_mantissa_width + np.maximum(1 - output_exponent, 0)
     # Larger right shifts necessarily round to zero; widening shifts left instead.
-    right_shift = np.clip(shift, 0, input_dtype.fp_mantissa_width + 2).astype(np.uint64)
-    left_shift = np.maximum(-shift, 0).astype(np.uint64)
+    right_shift = np.clip(shift, 0, input_dtype.fp_mantissa_width + 2)
+    left_shift = np.maximum(-shift, 0)
     retained = (full_significand >> right_shift) << left_shift
-    discarded = full_significand & ((np.uint64(1) << right_shift) - np.uint64(1))
     if rounding_mode == _ir.ROUNDING_MODE.RTNE:
-        halfway = np.uint64(1) << (np.maximum(right_shift, np.uint64(1)) - np.uint64(1))
+        discarded = full_significand & ((1 << right_shift) - 1)
+        halfway = 1 << (np.maximum(right_shift, 1) - 1)
         retained += (right_shift > 0) & ((discarded > halfway) | ((discarded == halfway) & ((retained & 1) != 0)))
     carry = retained >= (1 << (output_dtype.fp_mantissa_width + 1))
-    retained >>= carry.astype(np.uint64)
-    output_exponent = np.maximum(output_exponent, 1) + carry.astype(np.int32)
+    retained >>= carry
+    output_exponent = np.maximum(output_exponent, 1) + carry
     max_exponent = (1 << output_exponent_width) - 1
-    exponent_output = np.minimum(output_exponent, max_exponent).astype(output_unint_dtype)
+    exponent_output = np.minimum(output_exponent, max_exponent)
     exponent_output[retained < (1 << output_dtype.fp_mantissa_width)] = 0
-    significand_output = (retained & ((1 << output_dtype.fp_mantissa_width) - 1)).astype(output_unint_dtype)
+    significand_output = retained & ((1 << output_dtype.fp_mantissa_width) - 1)
     if not input_dtype.is_fp8() and not output_dtype.is_fp8():
         # Reserved source exponents represent infinities/NaNs, not finite exponents.
         nonfinite = input_exponent == (1 << input_exponent_width) - 1
@@ -260,7 +259,7 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         sign_output[zero_output] = 0
     output = (sign_output << (output_dtype.primitive_bitwidth - 1)) | (
         exponent_output << output_dtype.fp_mantissa_width) | significand_output
-    return output.reshape(input.shape)
+    return output.astype(output_unint_dtype).reshape(input.shape)
 
 
 def _erf(x):
