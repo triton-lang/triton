@@ -15,7 +15,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip
+from triton._internal_testing import is_cuda, is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
 
 
@@ -1215,3 +1215,27 @@ def test_module_load_unload(device, fresh_knobs):
     assert pre_compile.module is None
     # turn on garbage collector
     gc.enable()
+
+
+def test_module_unload_during_cuda_graph_capture(device: str) -> None:
+    if not is_cuda():
+        pytest.skip("CUDA graph capture is CUDA only")
+
+    @triton.jit
+    def kernel(out_ptr, val) -> None:
+        tl.store(out_ptr, val)
+
+    out = torch.zeros(1, dtype=torch.float32, device=device)
+    pre_compile = kernel.warmup(out, 1, grid=(1, ))
+    pre_compile._init_handles()
+
+    x = torch.randn(1024, device=device)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        y = x + 1
+        # The garbage collector can free a kernel at any point during a capture.
+        pre_compile.__del__()
+    graph.replay()
+
+    assert pre_compile.module is None
+    torch.testing.assert_close(y, x + 1)
