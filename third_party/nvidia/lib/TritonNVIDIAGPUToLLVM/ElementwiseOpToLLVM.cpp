@@ -447,7 +447,9 @@ struct FpToFpOpConversion
             // F8 -> BF16
             // mul{.rnd}.bf16 and mul{.rnd}.bf16x2 requires sm_90 or higher.
             {{F8E5M2TyID, BF16TyID, undefRounding},
-             Fp8E5M2_to_Bf16(computeCapability >= 90)},
+             hasPackedBf16
+                 ? Fp8ConversionDesc{"cvt.rn.bf16x2.e5m2x2 $0, $1;", 16, 32, 2}
+                 : Fp8E5M2_to_Bf16(computeCapability >= 90)},
             // cvt with .bf16.f16' requires .target sm_90 or higher
             {{F8E4M3TyID, BF16TyID, undefRounding},
              hasPackedBf16
