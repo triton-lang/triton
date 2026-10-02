@@ -150,8 +150,9 @@ private:
   // Example: after scanning two totals per lane, four logical lanes hold
   //   [T0, T0+T1], [T2, T2+T3], [T4, T4+T5], [T6, T6+T7].
   // Scan only their terminal registers using shuffle distances 1,2. They
-  // become sums through T1,T3,T5,T7. A final distance-1 shuffle supplies the
-  // carry for each lane's other register, yielding sums through T0,T2,T4,T6.
+  // become sums through T1,T3,T5,T7. Reuse each round's incoming value to
+  // accumulate the exclusive carry too, then apply it to the other registers
+  // to obtain sums through T0,T2,T4,T6 without another shuffle.
   // '+' here abbreviates the ordered combiner, not necessarily numeric add.
   void scanLaneTotals(triton::ScanOp op, ScanValues &values,
                       const LinearLayout &layout, unsigned numRegs,
@@ -211,18 +212,33 @@ private:
     for (unsigned base = 0; base < values.size(); base += numRegs) {
       unsigned last = base + (reverse ? 0 : numRegs - 1);
       auto acc = values[last];
+      SmallVector<Value> prefix;
       // Each round consumes the previous round's inclusive prefixes:
       // distance 1 joins neighboring lanes, distance 2 joins pairs, etc.
       // Reverse scans read toward higher logical indices instead.
-      for (unsigned offset = 1; offset < numLanes; offset *= 2)
-        acc = combineWithPrefix(op, shuffle(acc, offset), acc, rewriter,
-                                hasPrefix(offset));
+      for (unsigned offset = 1; offset < numLanes; offset *= 2) {
+        auto incoming = shuffle(acc, offset);
+        Value pred = hasPrefix(offset);
+        if (numRegs > 1) {
+          // The first round supplies the preceding lane's total directly;
+          // later rounds prepend earlier groups to that exclusive prefix.
+          // For lane 3 with lane totals A,B,C,D, incoming is C at offset 1
+          // and A+B at offset 2: prefix becomes A+B+C while acc becomes
+          // A+B+C+D. Both accumulators reuse the same shuffled tuple.
+          // The boundary lane's first incoming value is only a placeholder:
+          // all later predicates are false, and hasPrefix(1) prevents its use.
+          if (offset == 1)
+            prefix = incoming;
+          else
+            prefix = combineWithPrefix(op, incoming, prefix, rewriter, pred);
+        }
+        acc = combineWithPrefix(op, incoming, acc, rewriter, pred);
+      }
       values[last] = acc;
-      if (numRegs == 1)
+      if (numRegs == 1 || numLanes == 1)
         continue;
-      // One more shuffle gives the exclusive carry for the local prefixes.
-      // Skip the first lane without assuming an identity value.
-      auto prefix = shuffle(acc, 1);
+      // The exclusive carry is already available. Skip the first lane in
+      // traversal order without assuming an identity value.
       Value pred = hasPrefix(1);
       for (unsigned r = base; r < base + numRegs; ++r)
         if (r != last)
