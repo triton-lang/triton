@@ -9,6 +9,8 @@
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TRANSPOSE
 // RUN: triton-opt %t/converted-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=RETAIN
 // RUN: triton-opt %t/converted-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-RETAIN
+// RUN: triton-opt %t/converted-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=TERMINAL
+// RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=REUSE
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
 //--- scan.mlir
@@ -361,6 +363,7 @@ tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tens
 // conversion heuristic. Scan forces shuffles in both directions, including
 // packed i8 and split i64 values, without requesting an allocation offset.
 #transpose = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[0], [0]], block = []}>
+#parallel = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
 #native_prefix = #ttg.linear<{register = [[1], [2], [16]], lane = [[4], [8], [0], [0], [0]], warp = [[0], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // TRANSPOSE: ttg.shared = 0 : i32
@@ -481,6 +484,29 @@ tt.func private @test_scan_exclusive_carry_reverse(%arg: tensor<16xi32, #transpo
   tt.return %result : tensor<16xi32, #transpose>
 }
 
+// Independent register groups share each round's lane lookup and predicate.
+// REUSE-LABEL: llvm.func {{.*}}@test_scan_reuse_lane_lookups
+// REUSE: %[[P1:.*]] = llvm.icmp
+// REUSE: %[[P2:.*]] = llvm.icmp
+// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC1:[a-zA-Z0-9_]+]],
+// REUSE: llvm.select %[[P1]],
+// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC2:[a-zA-Z0-9_]+]],
+// REUSE: llvm.select %[[P2]],
+// REUSE-NOT: llvm.icmp
+// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC1]],
+// REUSE: llvm.select %[[P1]],
+// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC2]],
+// REUSE: llvm.select %[[P2]],
+// REUSE: llvm.return
+tt.func private @test_scan_reuse_lane_lookups(%arg: tensor<4x2xi32, #parallel>) -> tensor<4x2xi32, #parallel> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<4x2xi32, #parallel>) -> tensor<4x2xi32, #parallel>
+  tt.return %result : tensor<4x2xi32, #parallel>
+}
+
 }
 
 //--- converted-totals.mlir
@@ -491,6 +517,12 @@ tt.func private @test_scan_exclusive_carry_reverse(%arg: tensor<16xi32, #transpo
 // after the exchange, when applying carries to the saved prefixes.
 #converted = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[16], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Terminal selection directly sets or clears the segment's lane bits.
+// TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals(
+// TERMINAL: %[[LANE:.*]] = llvm.urem
+// TERMINAL: %[[LAST:.*]] = llvm.or %[[LANE]], %{{.*}} : i32
+// TERMINAL: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[LAST]],
+// TERMINAL: llvm.return
 // RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
 // RETAIN: nvvm.shfl.sync idx
 // RETAIN-NOT: nvvm.shfl.sync bfly
@@ -505,6 +537,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // AMD-RETAIN: llvm.return
 tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) -> tensor<32xi32, #converted> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<32xi32, #converted>) -> tensor<32xi32, #converted>
+  tt.return %result : tensor<32xi32, #converted>
+}
+
+// TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse(
+// TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
+// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(-4 : i32)
+// TERMINAL: %[[FIRST:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
+// TERMINAL: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[FIRST]],
+// TERMINAL: llvm.return
+// RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse
+// RETAIN: llvm.store
+// RETAIN: nvvm.barrier
+// RETAIN: llvm.load
+// RETAIN: llvm.return
+// AMD-RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse
+// AMD-RETAIN: llvm.store
+// AMD-RETAIN: llvm.load
+// AMD-RETAIN: llvm.return
+tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #converted>) -> tensor<32xi32, #converted> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
     tt.scan.return %sum : i32
