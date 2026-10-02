@@ -181,6 +181,7 @@ jobs:
                 --ignore=third_party/amd/python/test/test_gluon_cdna5.py
           pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/test_gluon_cdna5.py -k "test_compile"
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
+          pytest --capture=tee-sys -rfs -n 8 python/test/backend/test_mir_stage.py
           cd python/test/unit
           TRITON_CI_CACHE_PHASE=unit pytest --capture=tee-sys -rfs -n 12 \
                  --ignore=blackwell \
