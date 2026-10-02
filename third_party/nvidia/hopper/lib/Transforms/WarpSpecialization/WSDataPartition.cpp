@@ -155,8 +155,12 @@ struct DataPartitionScheme {
       if (dotPartitionOperand.contains(op)) {
         operand = "operand " + std::to_string(dotPartitionOperand.at(op));
       }
-      assert(opPartitionDims.contains(op) && "missing partition dim");
-      LDBG(" dim " << opPartitionDims.at(op) << " " << operand);
+      // Failed trials can contain an op before its partition dim is known.
+      auto dim = opPartitionDims.find(op);
+      if (dim == opPartitionDims.end())
+        LDBG(" dim <unassigned> " << operand);
+      else
+        LDBG(" dim " << dim->second << " " << operand);
       op->dump();
     }
     LDBG("\n");
@@ -410,7 +414,7 @@ getForwardSliceToPartition(Value v, DataPartitionScheme &partitionScheme,
     auto onlyUsedByAtomicStore = [](Value v) {
       SetVector<Operation *> forwardSlice;
       getForwardSlice(v, &forwardSlice);
-      Operation *atomicStore;
+      Operation *atomicStore = nullptr;
       for (auto op : forwardSlice) {
         if (isa<AtomicRMWOp, DescriptorReduceOp>(op)) {
           atomicStore = op;
