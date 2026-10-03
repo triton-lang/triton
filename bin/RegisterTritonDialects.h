@@ -50,6 +50,7 @@
 #include "triton/Tools/PluginUtils.h"
 #include "triton/Tools/Sys/GetEnv.h"
 
+#ifdef TRITON_BUILD_TESTS
 namespace mlir {
 namespace test {
 void registerTestAliasPass();
@@ -66,6 +67,7 @@ void registerTestScopeIdAllocationPass();
 } // namespace proton
 } // namespace test
 } // namespace mlir
+#endif
 
 inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::NVIDIA::registerTargetInfo();
@@ -77,6 +79,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::nvidia_gpu::registerConSanNVIDIAHooks();
   mlir::triton::instrument::registerTritonInstrumentPasses();
   mlir::triton::gluon::registerGluonPasses();
+#ifdef TRITON_BUILD_TESTS
   mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerAMDTestAlignmentPass();
@@ -86,6 +89,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestLoopPeelingPass();
   mlir::test::registerTestAMDGPUMembarPass();
   mlir::test::registerTestTritonAMDGPURangeAnalysis();
+#endif
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
@@ -147,7 +151,9 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerNVHopperTransformsPasses();
 
   // Proton passes
+#ifdef TRITON_BUILD_TESTS
   mlir::test::proton::registerTestScopeIdAllocationPass();
+#endif
   mlir::triton::proton::registerConvertProtonToProtonGPU();
   mlir::triton::proton::gpu::registerConvertProtonNvidiaGPUToLLVM();
   mlir::triton::proton::gpu::registerConvertProtonAMDGPUToLLVM();
