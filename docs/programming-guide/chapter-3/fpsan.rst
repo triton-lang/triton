@@ -192,6 +192,35 @@ Important caveats:
 - NaN handling, and the exact signed-zero contract, are not modeled.
 - Both ``propagate_nan`` modes use the same payload semantics.
 
+Comparisons
+===========
+
+Supported operations:
+
+- ``x == y`` and ``x != y``
+- ``x < y``, ``x <= y``, ``x > y``, and ``x >= y``
+
+Rewrite:
+
+- exact equality or signed integer comparison on embedded payloads
+- ordered and unordered predicates use the same payload comparison;
+  ``ord`` is always true and ``uno`` is always false
+
+Float-to-boolean casts (``x.to(tl.int1)``) lower to comparisons with zero,
+so they become ``embed(x) != 0``.
+
+Exact preserved properties:
+
+- ``x == x``, including NaN carriers produced by sanitized arithmetic
+- ``where(x < y, x, y) = minimum(x, y)``
+- ``where(x > y, x, y) = maximum(x, y)``
+
+Important caveats:
+
+- Payload order can differ from floating-point order.
+- Positive and negative zero compare unequal; negative zero casts to true.
+- Comparisons optimized away before FPSan runs are not rewritten.
+
 Division
 ========
 
