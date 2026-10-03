@@ -12,6 +12,7 @@ from triton.runtime.build import compile_module_from_file
 
 _THIS_DIR = Path(__file__).resolve().parent
 _GSAN_SOURCE_PATH = _THIS_DIR / "src" / "GSanAllocator.cc"
+_GSAN_HIP_SOURCE_PATH = _THIS_DIR / "src" / "GSanAllocatorHIP.cc"
 
 
 class ShareableHandleType(IntEnum):
@@ -21,8 +22,13 @@ class ShareableHandleType(IntEnum):
 
 @functools.lru_cache()
 def _load_gsan_module() -> ModuleType:
-    if runtime_driver.active.get_current_target().backend != "cuda":
-        raise RuntimeError("GSan allocator requires the CUDA backend.")
+    backend = runtime_driver.active.get_current_target().backend
+
+    if backend == "hip":
+        return _load_gsan_module_hip()
+
+    if backend != "cuda":
+        raise RuntimeError(f"GSan allocator requires the CUDA or HIP backend, got '{backend}'.")
 
     from triton.backends.nvidia.driver import library_dirs, include_dirs
 
@@ -32,6 +38,37 @@ def _load_gsan_module() -> ModuleType:
         library_dirs=library_dirs(),
         include_dirs=include_dirs,
         libraries=["libcuda.so.1"],
+    )
+
+
+@functools.lru_cache()
+def _load_gsan_module_hip() -> ModuleType:
+    """Compile and load GSanAllocatorHIP.cc against ROCm headers."""
+    import os
+
+    # Find ROCm installation — honour ROCM_PATH env var, then common defaults.
+    rocm_root = (os.environ.get("ROCM_PATH") or os.environ.get("ROCM_HOME") or "/opt/rocm")
+    rocm_include = os.path.join(rocm_root, "include")
+    rocm_lib = os.path.join(rocm_root, "lib")
+
+    # Triton's AMD driver exposes its own include directory for HIP utils.
+    from triton.backends.amd.driver import include_dirs as amd_include_dirs
+
+    include_dirs = list(amd_include_dirs) + [
+        rocm_include,
+        str(_THIS_DIR / "src" / "hip_shim"),  # dummy cuda.h to satisfy #include <cuda.h>
+        str(_THIS_DIR / "src"),  # for GSan.h and friends
+    ]
+
+    # The embedded GSanAllocator.cc defines PyInit_gsan_allocator, so use that
+    # as the module name so Python finds the right init symbol.
+    return compile_module_from_file(
+        src_path=str(_GSAN_HIP_SOURCE_PATH),
+        name="gsan_allocator",
+        library_dirs=[rocm_lib],
+        include_dirs=include_dirs,
+        libraries=["amdhip64"],
+        ccflags=["-std=c++17", "-D__HIP_PLATFORM_AMD__"],
     )
 
 
