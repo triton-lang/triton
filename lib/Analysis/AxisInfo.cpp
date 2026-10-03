@@ -1,6 +1,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
@@ -311,6 +312,29 @@ int64_t getDivisibilityFromContiguity(const AxisInfo &lhs, const AxisInfo &rhs,
   }
 }
 
+// Whether `cmp` compares `subject` against a constant so that a true result
+// means `subject >= 0`: `x >= c` with `c >= 0`, `x > c` with `c >= -1`, and
+// the mirrored forms.
+bool provesNonNegative(arith::CmpIOp cmp, Value &subject) {
+  APInt bound;
+  bool boundOnRight = matchPattern(cmp.getRhs(), m_ConstantInt(&bound));
+  if (!boundOnRight && !matchPattern(cmp.getLhs(), m_ConstantInt(&bound)))
+    return false;
+  subject = boundOnRight ? cmp.getLhs() : cmp.getRhs();
+  switch (cmp.getPredicate()) {
+  case arith::CmpIPredicate::sge:
+    return boundOnRight && bound.isNonNegative();
+  case arith::CmpIPredicate::sgt:
+    return boundOnRight && (bound.isNonNegative() || bound.isAllOnes());
+  case arith::CmpIPredicate::sle:
+    return !boundOnRight && bound.isNonNegative();
+  case arith::CmpIPredicate::slt:
+    return !boundOnRight && (bound.isNonNegative() || bound.isAllOnes());
+  default:
+    return false;
+  }
+}
+
 // Base class for all operations
 template <typename OpTy> class AxisInfoVisitorImpl : public AxisInfoVisitor {
 public:
@@ -352,13 +376,19 @@ public:
       constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
       divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
     }
-    return AxisInfo(contiguity, divisibility, constancy);
+    return AxisInfo(contiguity, divisibility, constancy, std::nullopt,
+                    getNonNegative(op, lhsInfo, rhsInfo));
   }
 
 protected:
   virtual int64_t getContiguity(OpTy op, const AxisInfo &lhs,
                                 const AxisInfo &rhs, int dim) {
     return 1;
+  }
+
+  virtual bool getNonNegative(OpTy op, const AxisInfo &lhs,
+                              const AxisInfo &rhs) {
+    return false;
   }
 
   virtual int64_t getDivisibility(OpTy op, const AxisInfo &lhs,
@@ -383,8 +413,14 @@ public:
     const AxisInfo &info = operands[0]->getValue();
     // Exact casts are handled before the bound visitors. An unproven or poison
     // cast must not retain its operand's constant value.
+    bool nonNegative = info.isNonNegative();
+    // Zero extension clears the sign; truncation can set it.
+    if constexpr (std::is_same_v<OpTy, arith::ExtUIOp>)
+      nonNegative = true;
+    else if constexpr (std::is_same_v<OpTy, arith::TruncIOp>)
+      nonNegative = false;
     return AxisInfo(info.getContiguity(), info.getDivisibility(),
-                    info.getConstancy());
+                    info.getConstancy(), std::nullopt, nonNegative);
   }
 };
 
@@ -425,7 +461,8 @@ public:
       if (info.getContiguity(dim) > 1)
         divisibility[dim] = gcd(divisibility[dim], srcBytes);
     return AxisInfo(AxisInfo::DimVectorT(info.getRank(), 1), divisibility,
-                    info.getConstancy(), info.getConstantValue());
+                    info.getConstancy(), info.getConstantValue(),
+                    info.isNonNegative());
   }
 };
 
@@ -451,7 +488,7 @@ public:
     if (op.getOperand(0).getType() == op.getResult(0).getType())
       return info;
     return AxisInfo(info.getContiguity(), info.getDivisibility(),
-                    info.getConstancy());
+                    info.getConstancy(), std::nullopt, info.isNonNegative());
   }
 };
 
@@ -465,9 +502,25 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     auto start = op.getStart();
     auto end = op.getEnd();
+    // The attribute is signless; read the sign from its signed value.
+    bool nonNegative = op.getStartAttr().getInt() >= 0;
     return AxisInfo(/*contiguity=*/{end - start},
                     /*divisibility=*/{highestPowOf2Divisor(start)},
-                    /*constancy=*/{1});
+                    /*constancy=*/{1}, std::nullopt, nonNegative);
+  }
+};
+
+// Program ids and grid sizes are non-negative scalars.
+template <typename OpTy>
+class ProgramIdOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    return AxisInfo(/*contiguity=*/{1}, /*divisibility=*/{1},
+                    /*constancy=*/{1}, std::nullopt, /*nonNegative=*/true);
   }
 };
 
@@ -586,6 +639,14 @@ private:
       }
     }
   }
+
+  bool getNonNegative(OpTy op, const AxisInfo &lhs,
+                      const AxisInfo &rhs) override {
+    // Like the rules above, this assumes the addition does not wrap.
+    if constexpr (std::is_same_v<OpTy, arith::AddIOp>)
+      return lhs.isNonNegative() && rhs.isNonNegative();
+    return false;
+  }
 };
 
 class MulIOpAxisInfoVisitor final : public BinaryOpVisitorImpl<arith::MulIOp> {
@@ -628,6 +689,11 @@ private:
     }
     return multiplyDivisor(lhsDivisibility, rhsDivisibility);
   }
+
+  bool getNonNegative(arith::MulIOp op, const AxisInfo &lhs,
+                      const AxisInfo &rhs) override {
+    return lhs.isNonNegative() && rhs.isNonNegative();
+  }
 };
 
 template <typename OpTy>
@@ -660,8 +726,12 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
+    // Signed division truncates toward zero, so a negative group splits at
+    // its first element: [-64, -63, ..., -33] / 32 = [-2, -1, ..., -1]. The
+    // rule needs a non-negative dividend.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        (std::is_same_v<OpTy, arith::DivUIOp> || lhs.isNonNegative())) {
       constancy = std::max(constancy,
                            gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                                rhs.getDivisibility(dim)));
@@ -691,6 +761,11 @@ private:
     // otherwise: return 1
     return 1;
   }
+
+  bool getNonNegative(OpTy op, const AxisInfo &lhs,
+                      const AxisInfo &rhs) override {
+    return lhs.isNonNegative() && rhs.isNonNegative();
+  }
 };
 
 template <typename OpTy>
@@ -715,8 +790,12 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
+    // The signed remainder of a negative group is not contiguous:
+    // [-64, -63, ..., -33] % 32 = [0, -31, ..., -1]. The rule needs a
+    // non-negative dividend.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        (std::is_same_v<OpTy, arith::RemUIOp> || lhs.isNonNegative())) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                        rhs.getDivisibility(dim));
     }
@@ -734,6 +813,12 @@ private:
       divisibility = gcd(divisibility, contiguity);
     return divisibility;
   };
+
+  bool getNonNegative(OpTy op, const AxisInfo &lhs,
+                      const AxisInfo &rhs) override {
+    // The remainder takes the sign of the dividend.
+    return lhs.isNonNegative();
+  }
 };
 
 class SplatOpAxisInfoVisitor final
@@ -756,7 +841,7 @@ public:
       constancy.push_back(retTy.getShape()[d]);
     }
     return AxisInfo(contiguity, divisibility, constancy,
-                    operands[0]->getValue().getConstantValue());
+                    opInfo.getConstantValue(), opInfo.isNonNegative());
   }
 };
 
@@ -818,7 +903,8 @@ public:
     contiguity.insert(contiguity.begin() + op.getAxis(), 1);
     divisibility.insert(divisibility.begin() + op.getAxis(), newDivisibility);
     constancy.insert(constancy.begin() + op.getAxis(), 1);
-    return AxisInfo(contiguity, divisibility, constancy);
+    return AxisInfo(contiguity, divisibility, constancy, std::nullopt,
+                    opInfo.isNonNegative());
   }
 };
 
@@ -847,7 +933,7 @@ public:
                                           : opInfo.getConstancy(d));
     }
     return AxisInfo(contiguity, divisibility, constancy,
-                    operands[0]->getValue().getConstantValue());
+                    opInfo.getConstantValue(), opInfo.isNonNegative());
   }
 };
 
@@ -964,7 +1050,8 @@ public:
       }
     }
 
-    return AxisInfo(contiguity, divisibility, constancy);
+    return AxisInfo(contiguity, divisibility, constancy, std::nullopt,
+                    srcInfo.isNonNegative());
   }
 };
 
@@ -1090,7 +1177,24 @@ public:
               contiguity.back()));
     }
 
-    return AxisInfo(contiguity, divisibility, constancy);
+    return AxisInfo(contiguity, divisibility, constancy, std::nullopt,
+                    lhsInfo.isNonNegative() && rhsInfo.isNonNegative());
+  }
+};
+
+template <typename OpTy>
+class LogicalOpAxisInfoVisitor final : public BinaryOpVisitorImpl<OpTy> {
+public:
+  using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
+
+private:
+  bool getNonNegative(OpTy op, const AxisInfo &lhs,
+                      const AxisInfo &rhs) override {
+    // A clear sign bit survives `and` from either side, `or` and `xor` only
+    // from both.
+    if constexpr (std::is_same_v<OpTy, arith::AndIOp>)
+      return lhs.isNonNegative() || rhs.isNonNegative();
+    return lhs.isNonNegative() && rhs.isNonNegative();
   }
 };
 
@@ -1151,6 +1255,18 @@ private:
     unsigned shift = amount->getLimitedValue(kMaxDivisorLog2);
     return std::max<int64_t>(1, lhsDivisibility >> shift);
   }
+
+  bool getNonNegative(OpTy op, const AxisInfo &lhs,
+                      const AxisInfo &rhs) override {
+    if constexpr (std::is_same_v<OpTy, arith::ShRUIOp>) {
+      // A logical shift by at least one bit clears the sign.
+      const auto &amount = rhs.getConstantValue();
+      if (amount && !amount->isZero() &&
+          amount->ult(getIntegerBitWidth(op.getType())))
+        return true;
+    }
+    return lhs.isNonNegative();
+  }
 };
 
 template <typename OpTy>
@@ -1161,7 +1277,19 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    return AxisInfo::join(operands[0]->getValue(), operands[1]->getValue());
+    const AxisInfo &lhs = operands[0]->getValue();
+    const AxisInfo &rhs = operands[1]->getValue();
+    AxisInfo info = AxisInfo::join(lhs, rhs);
+    // A signed maximum or an unsigned minimum is non-negative as soon as one
+    // operand is; a signed minimum or an unsigned maximum needs both.
+    bool nonNegative;
+    if constexpr (std::is_same_v<OpTy, arith::MaxSIOp> ||
+                  std::is_same_v<OpTy, arith::MinUIOp>)
+      nonNegative = lhs.isNonNegative() || rhs.isNonNegative();
+    else
+      nonNegative = lhs.isNonNegative() && rhs.isNonNegative();
+    return AxisInfo(info.getContiguity(), info.getDivisibility(),
+                    info.getConstancy(), info.getConstantValue(), nonNegative);
   }
 };
 
@@ -1190,7 +1318,7 @@ public:
     }
 
     return AxisInfo(contiguity, divisibility, constancy,
-                    srcInfo.getConstantValue());
+                    srcInfo.getConstantValue(), srcInfo.isNonNegative());
   }
 };
 
@@ -1215,6 +1343,8 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   BitcastOpAxisInfoVisitor,
                   IdentityOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
+  visitors.append<ProgramIdOpAxisInfoVisitor<triton::GetProgramIdOp>,
+                  ProgramIdOpAxisInfoVisitor<triton::GetNumProgramsOp>>();
   visitors.append<PoisonOpAxisInfoVisitor>();
   visitors.append<AddSubOpAxisInfoVisitor<triton::AddPtrOp>,
                   AddSubOpAxisInfoVisitor<arith::AddIOp>,
@@ -1229,9 +1359,9 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<ExpandDimsOpAxisInfoVisitor>();
   visitors.append<ReshapeOpAxisInfoVisitor>();
   visitors.append<CmpOpAxisInfoVisitor<arith::CmpIOp>>();
-  visitors.append<BinaryOpVisitorImpl<arith::AndIOp>,
-                  BinaryOpVisitorImpl<arith::OrIOp>,
-                  BinaryOpVisitorImpl<arith::XOrIOp>>();
+  visitors.append<LogicalOpAxisInfoVisitor<arith::AndIOp>,
+                  LogicalOpAxisInfoVisitor<arith::OrIOp>,
+                  LogicalOpAxisInfoVisitor<arith::XOrIOp>>();
   visitors.append<SelectOpAxisInfoVisitor<mlir::arith::SelectOp>>();
   visitors.append<ShLIOpAxisInfoVisitor, ShROpAxisInfoVisitor<arith::ShRUIOp>,
                   ShROpAxisInfoVisitor<arith::ShRSIOp>>();
@@ -1243,9 +1373,34 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<TransOpAxisInfoVisitor>();
 }
 
+LogicalResult AxisInfoAnalysis::initialize(Operation *top) {
+  top->walk([&](LLVM::AssumeOp assume) {
+    auto func = assume->getParentOfType<FunctionOpInterface>();
+    if (!func || func.getFunctionBody().empty() ||
+        assume->getBlock() != &func.getFunctionBody().front())
+      return;
+    auto cmp = assume.getCond().getDefiningOp<arith::CmpIOp>();
+    Value subject;
+    if (cmp && provesNonNegative(cmp, subject))
+      assumedNonNegative.insert(subject);
+  });
+  return dataflow::SparseForwardDataFlowAnalysis<
+      dataflow::Lattice<AxisInfo>>::initialize(top);
+}
+
+AxisInfo AxisInfoAnalysis::applyAssumptions(Value value, AxisInfo info) const {
+  if (info.isNonNegative() || !assumedNonNegative.contains(value))
+    return info;
+  return AxisInfo(info.getContiguity(), info.getDivisibility(),
+                  info.getConstancy(), info.getConstantValue(),
+                  /*nonNegative=*/true);
+}
+
 void AxisInfoAnalysis::setToEntryState(dataflow::Lattice<AxisInfo> *lattice) {
-  propagateIfChanged(lattice, lattice->join(AxisInfo::getPessimisticValueState(
-                                  lattice->getAnchor())));
+  Value value = lattice->getAnchor();
+  propagateIfChanged(lattice,
+                     lattice->join(applyAssumptions(
+                         value, AxisInfo::getPessimisticValueState(value))));
 }
 
 void AxisInfoAnalysis::visitNonControlFlowArguments(
@@ -1283,8 +1438,9 @@ LogicalResult AxisInfoAnalysis::visitOperation(
         curr = AxisInfo::getConstantValueState(op->getResult(0).getType(),
                                                *constant);
       } else {
-        curr = AxisInfo(curr.getContiguity(), curr.getDivisibility(),
-                        curr.getConstancy());
+        curr =
+            AxisInfo(curr.getContiguity(), curr.getDivisibility(),
+                     curr.getConstancy(), std::nullopt, curr.isNonNegative());
       }
     }
   }
@@ -1303,10 +1459,11 @@ LogicalResult AxisInfoAnalysis::visitOperation(
   AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.constancy"),
                                   &newConstancy);
   curr = AxisInfo(newContiguity, newDivisibility, newConstancy,
-                  curr.getConstantValue());
+                  curr.getConstantValue(), curr.isNonNegative());
   // join all lattice elements
   for (auto *result : results)
-    propagateIfChanged(result, result->join(curr));
+    propagateIfChanged(
+        result, result->join(applyAssumptions(result->getAnchor(), curr)));
   return success();
 }
 
@@ -1326,8 +1483,10 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   AxisInfo::DimVectorT knownConstancy(1, 1);
   knownDivisibility[0] = gcd(lbLattice->getValue().getDivisibility(0),
                              stepLattice->getValue().getDivisibility(0));
-  auto inductionVar =
-      AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
+  bool nonNegative = lbLattice->getValue().isNonNegative() &&
+                     stepLattice->getValue().isNonNegative();
+  auto inductionVar = AxisInfo(knownContiguity, knownDivisibility,
+                               knownConstancy, std::nullopt, nonNegative);
   (void)argLattices[0]->join(inductionVar);
 }
 
@@ -1430,8 +1589,8 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
       lhsConstant->getBitWidth() == rhsConstant->getBitWidth() &&
       *lhsConstant == *rhsConstant)
     constantValue = lhsConstant;
-  return AxisInfo(contiguity, divisibility, constancy,
-                  std::move(constantValue));
+  return AxisInfo(contiguity, divisibility, constancy, std::move(constantValue),
+                  lhs.isNonNegative() && rhs.isNonNegative());
 }
 
 AxisInfoAnalysis *
