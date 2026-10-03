@@ -39,9 +39,9 @@ M/N must be divisible by CTA size times cluster width.
 The other dtypes require M/N multiples of 1024. K constraints are checked before launch.
 MXFP8 --mxfp8-output-buffers 2 overlaps the BK256 N-half output stores using
 two LDS buffers; the default is 1. BK512 supports only 1.
---flat-pipeline selects a separate BK256 body with compile-time K and
+--flat-pipeline selects separate BK256/BK512 bodies with compile-time K and
 fully expanded stages, including tails. It is opt-in and requires
---dtype mxfp8 and the 256x256x256 tile; large K increases compilation time and code size.
+--dtype mxfp8; all supported MXFP8 tiles are accepted; large K increases compilation time and code size.
 --input positive_mxfp8 generates positive FP8 values from uniform [0, 0.1),
 with random scales rounded up to E8M0: K128 for A and N128xK128 for B, expanded
 to block-32 scales. It requires --dtype mxfp8. --input-mode is an alias for --input.
@@ -685,6 +685,54 @@ def mxfp8_gemm_warp_pipeline_bk512(a_ptr, b_ptr, c_ptr, a_scale_ptr, b_scale_ptr
 
 
 @gluon.jit
+def mxfp8_gemm_warp_pipeline_bk512_flat(a_ptr, b_ptr, c_ptr, a_scale_ptr, b_scale_ptr, M, N, K: gl.constexpr, stride_am,
+                                        stride_ak, stride_bk, stride_bn, stride_cm, stride_cn, stride_as, stride_bs,
+                                        GRID_MN: gl.constexpr, SHARED_A: gl.constexpr, SHARED_B: gl.constexpr,
+                                        SHARED_AS: gl.constexpr, SHARED_BS: gl.constexpr, WMMA: gl.constexpr,
+                                        BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, CLUSTER: gl.constexpr):
+    gl.static_assert(gl.num_ctas() == CLUSTER * CLUSTER)
+    pid_m, pid_n = _get_xcd_swizzled_pids(M, N, BLOCK_M, BLOCK_N, GRID_MN, 8, 4)
+    dot_a: gl.constexpr = gl.DotOperandLayout(0, WMMA, 16)
+    dot_b: gl.constexpr = gl.DotOperandLayout(1, WMMA, 16)
+    scale_a_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(dot_a, [BLOCK_M, 4])
+    scale_b_layout: gl.constexpr = gl.amd.cdna5.get_wmma_scale_layout(dot_b, [BLOCK_N, 4])
+    a_buf = gl.allocate_shared_memory(a_ptr.type.element_ty, [2, BLOCK_M, 512], SHARED_A)
+    b_buf = gl.allocate_shared_memory(b_ptr.type.element_ty, [2, BLOCK_N, 512], SHARED_B)
+    as_buf = gl.allocate_shared_memory(a_scale_ptr.type.element_ty, [2, BLOCK_M, 16], SHARED_AS)
+    bs_buf = gl.allocate_shared_memory(b_scale_ptr.type.element_ty, [2, BLOCK_N, 16], SHARED_BS)
+    a_desc = tdm.make_tensor_descriptor(base=a_ptr + pid_m * BLOCK_M * stride_am, shape=(M, K),
+                                        strides=(stride_am, stride_ak), block_shape=(BLOCK_M, 512), layout=SHARED_A)
+    b_desc = tdm.make_tensor_descriptor(base=b_ptr + pid_n * BLOCK_N * stride_bn, shape=(N, K),
+                                        strides=(stride_bn, stride_bk), block_shape=(BLOCK_N, 512), layout=SHARED_B)
+    as_desc = tdm.make_tensor_descriptor(base=a_scale_ptr + pid_m * BLOCK_M * stride_as, shape=(M, K // 32),
+                                         strides=(stride_as, 1), block_shape=(BLOCK_M, 16), layout=SHARED_AS)
+    bs_desc = tdm.make_tensor_descriptor(base=b_scale_ptr + pid_n * BLOCK_N * stride_bs, shape=(N, K // 32),
+                                         strides=(stride_bs, 1), block_shape=(BLOCK_N, 16), layout=SHARED_BS)
+    for slot in gl.static_range(2):
+        a_desc, b_desc, as_desc, bs_desc = _mxfp8_tiled_issue_refill(a_desc, b_desc, as_desc, bs_desc, a_buf, b_buf,
+                                                                     as_buf, bs_buf, slot, 512, 16)
+    acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=WMMA)
+    iter_max: gl.constexpr = K // 512
+    gl.static_assert(K % 512 == 0 and iter_max >= 3)
+    for tile in gl.static_range(iter_max - 2):
+        a_desc, b_desc, as_desc, bs_desc, acc = _mxfp8_tiled_bk512_five(a_buf, b_buf, as_buf, bs_buf, tile % 2, a_desc,
+                                                                        b_desc, as_desc, bs_desc, acc, dot_a, dot_b,
+                                                                        scale_a_layout, scale_b_layout)
+    tdm.async_wait(3)
+    acc = _mxfp8_tiled_consume_tail(a_buf, b_buf, as_buf, bs_buf, (iter_max - 2) % 2, acc, dot_a, dot_b, scale_a_layout,
+                                    scale_b_layout, 512)
+    tdm.async_wait(0)
+    acc = _mxfp8_tiled_consume_tail(a_buf, b_buf, as_buf, bs_buf, (iter_max - 1) % 2, acc, dot_a, dot_b, scale_a_layout,
+                                    scale_b_layout, 512)
+    _cluster_sync()
+    a_buf._keep_alive()
+    b_buf._keep_alive()
+    as_buf._keep_alive()
+    bs_buf._keep_alive()
+    _tdm_store_full_tile(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc, WMMA, BLOCK_M, BLOCK_N, CLUSTER)
+
+
+@gluon.jit
 def _fp8_mxfp4_load_scale(scale_buffer, slot, start_k: gl.constexpr, LAYOUT: gl.constexpr, BLOCK_N: gl.constexpr):
     scale_slice = scale_buffer.index(slot).reshape((BLOCK_N // 128, 2, 32, 4, 4)).permute((0, 3, 2, 1, 4)).reshape(
         (BLOCK_N, 8))
@@ -1259,9 +1307,8 @@ def mxfp8_config(M, N, K, tile, cluster):
 def make_mxfp8_case(args):
     tile, block_k, cluster = mxfp8_config(args.M, args.N, args.K, args.mxfp8_tile, args.mxfp8_cluster)
     flat_pipeline = getattr(args, 'flat_pipeline', False)
-    if flat_pipeline and block_k != 256:
-        raise ValueError('--flat-pipeline requires --mxfp8-tile 256x256x256')
     bk256_kernel = mxfp8_gemm_warp_pipeline_flat if flat_pipeline else mxfp8_gemm_warp_pipeline
+    bk512_kernel = mxfp8_gemm_warp_pipeline_bk512_flat if flat_pipeline else mxfp8_gemm_warp_pipeline_bk512
     if args.mxfp8_output_buffers == 2 and block_k != 256:
         raise ValueError('--mxfp8-output-buffers 2 requires the 256x256x256 tile')
     block_m = block_n = tile * cluster
@@ -1361,14 +1408,12 @@ def make_mxfp8_case(args):
 
     def launch(a_d=a_d, b_d=b_d, c_d=c_d, as_d=as_d, bs_d=bs_d):
         if block_k == 512:
-            return mxfp8_gemm_warp_pipeline_bk512[grid](a_d, b_d, c_d, as_d, bs_d, args.M, args.N,
-                                                        args.K, a_d.stride(0), a_d.stride(1), b_d.stride(1),
-                                                        b_d.stride(0), c_d.stride(0), c_d.stride(1), as_d.stride(0),
-                                                        bs_d.stride(0), GRID_MN=grid[0], SHARED_A=shared_a,
-                                                        SHARED_B=shared_b, SHARED_AS=shared_as, SHARED_BS=shared_bs,
-                                                        WMMA=wmma, BLOCK_M=block_m, BLOCK_N=block_n, CLUSTER=cluster,
-                                                        num_warps=8, num_ctas=cluster * cluster, waves_per_eu=2,
-                                                        llvm_fn_attrs=AGPR_ATTRS)
+            return bk512_kernel[grid](a_d, b_d, c_d, as_d, bs_d, args.M, args.N, args.K, a_d.stride(0), a_d.stride(1),
+                                      b_d.stride(1), b_d.stride(0), c_d.stride(0), c_d.stride(1), as_d.stride(0),
+                                      bs_d.stride(0), GRID_MN=grid[0], SHARED_A=shared_a, SHARED_B=shared_b,
+                                      SHARED_AS=shared_as, SHARED_BS=shared_bs, WMMA=wmma, BLOCK_M=block_m,
+                                      BLOCK_N=block_n, CLUSTER=cluster, num_warps=8, num_ctas=cluster * cluster,
+                                      waves_per_eu=2, llvm_fn_attrs=AGPR_ATTRS)
         return bk256_kernel[grid](a_d, b_d, c_d, as_d, bs_d, args.M, args.N, args.K, a_d.stride(0), a_d.stride(1),
                                   b_d.stride(1), b_d.stride(0), c_d.stride(0), c_d.stride(1), as_d.stride(0),
                                   bs_d.stride(0), GRID_MN=grid[0], SHARED_LAYOUT_A=shared_a, SHARED_LAYOUT_B2=b2_shared,
@@ -1552,7 +1597,7 @@ def main():
     parser.add_argument('--mxfp8-output-buffers', type=int, choices=[1, 2], default=1,
                         help='MXFP8 output LDS buffers: default 1; 2 overlaps BK256 N-half stores')
     parser.add_argument('--flat-pipeline', action='store_true',
-                        help='fully expand the BK256 K traversal, including tails; specializes the kernel for K')
+                        help='fully expand the MXFP8 K traversal, including tails; specializes the kernel for K')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--benchmark', action='store_true')
@@ -1572,8 +1617,6 @@ def main():
         parser.error('--mxfp8-output-buffers 2 requires MXFP8 with --mxfp8-tile 256x256x256')
     if args.flat_pipeline and args.dtype != 'mxfp8':
         parser.error('--flat-pipeline is unsupported yet for non-MXFP8 GEMMs; use --dtype mxfp8')
-    if args.flat_pipeline and args.mxfp8_tile != '256x256x256':
-        parser.error('--flat-pipeline requires --mxfp8-tile 256x256x256')
     if args.rotate_inputs:
         args.benchmark = True
         args.repeats = 100 if args.repeats is None else args.repeats
