@@ -1,7 +1,9 @@
 #include <iterator>
 #include <numeric>
+#include <optional>
 
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -27,8 +29,9 @@ namespace gpu {
 // destination layout will affect the shared memory load/store generated. So we
 // still want to allow vectorization for the src/destination layout up to
 // 16bytes.
-static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
-                                               RankedTensorType type) {
+static Attribute pickDescriptorLoadStoreLayout(
+    int numWarps, int threadsPerWarp, RankedTensorType type,
+    std::optional<unsigned> reductionAxis = std::nullopt) {
   auto shapePerCTA = triton::gpu::getShapePerCTA(type);
   int numElems = product<int64_t>(shapePerCTA);
   int numThreads = numWarps * threadsPerWarp;
@@ -37,29 +40,69 @@ static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
   int maxVectorSize = 128 / type.getElementTypeBitWidth();
 
   int vectorSize = std::min(numElemsPerThread, maxVectorSize);
-  SmallVector<unsigned> sizePerThread(type.getRank(), 1);
-  sizePerThread.back() = vectorSize;
-
   SmallVector<unsigned> order =
       getMatrixOrder(type.getRank(), /*rowMajor*/ true);
   auto cgaLayout = triton::gpu::getCGALayout(type.getEncoding());
+  auto makeLayout = [&](int vectorSize) {
+    SmallVector<unsigned> sizePerThread(type.getRank(), 1);
+    sizePerThread.back() = vectorSize;
+    return triton::gpu::BlockedEncodingAttr::get(
+        type.getContext(), type.getShape(), sizePerThread, order, numWarps,
+        threadsPerWarp, cgaLayout);
+  };
+  auto defaultLayout = makeLayout(vectorSize);
+  if (!reductionAxis || *reductionAxis == type.getRank() - 1)
+    return defaultLayout;
 
-  Attribute layout = triton::gpu::BlockedEncodingAttr::get(
-      type.getContext(), type.getShape(), sizePerThread, order, numWarps,
-      threadsPerWarp, cgaLayout);
-  return layout;
+  // Smaller vectors can distribute more threads over the contiguous dimension
+  // at the cost of shared-memory load vectorization. Choose that layout only
+  // when it reduces communication along the reduction axis.
+  int candidateVectorSize = std::min<int64_t>(
+      vectorSize, std::max<int64_t>(1, shapePerCTA.back() / numThreads));
+  if (candidateVectorSize == vectorSize)
+    return defaultLayout;
+  auto candidateLayout = makeLayout(candidateVectorSize);
+  auto reductionFanout = [&](triton::gpu::BlockedEncodingAttr layout) {
+    return layout.getThreadsPerWarp()[*reductionAxis] *
+           layout.getWarpsPerCTA()[*reductionAxis];
+  };
+  return reductionFanout(candidateLayout) < reductionFanout(defaultLayout)
+             ? candidateLayout
+             : defaultLayout;
+}
+
+static std::optional<unsigned> getSingleUseReductionAxis(Operation *load) {
+  auto singleUser = [](Value value) -> Operation * {
+    if (!value.hasOneUse())
+      return nullptr;
+    return *value.getUsers().begin();
+  };
+  Operation *user = singleUser(load->getResult(0));
+  if (auto ext = dyn_cast_or_null<arith::ExtFOp>(user))
+    user = singleUser(ext.getResult());
+  auto reduce = dyn_cast_or_null<triton::ReduceOp>(user);
+  if (!reduce || reduce->getNumOperands() != 1)
+    return std::nullopt;
+  return reduce.getAxis();
 }
 
 static void pickDescriptorLoadStoreLayout(
     ModuleOp moduleOp, llvm::MapVector<Operation *, Attribute> &layoutMap) {
   int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(moduleOp);
+  auto target = moduleOp->getAttrOfType<StringAttr>("ttg.target");
+  bool isNvidia = target && target.getValue().starts_with("cuda:");
   moduleOp.walk([&](Operation *op) {
     int numWarps = lookupNumWarps(op);
     if (auto load = dyn_cast<DescriptorOpInterface>(op)) {
-      if (load->getNumResults() == 1)
+      if (load->getNumResults() == 1) {
+        std::optional<unsigned> reductionAxis;
+        if (isNvidia && isa<DescriptorLoadOp>(op))
+          reductionAxis = getSingleUseReductionAxis(op);
         layoutMap[op] = pickDescriptorLoadStoreLayout(
             numWarps, threadsPerWarp,
-            cast<RankedTensorType>(load->getResult(0).getType()));
+            cast<RankedTensorType>(load->getResult(0).getType()),
+            reductionAxis);
+      }
     }
     if (auto store = dyn_cast<DescriptorStoreLikeOpInterface>(op)) {
       layoutMap[op] = pickDescriptorLoadStoreLayout(numWarps, threadsPerWarp,
