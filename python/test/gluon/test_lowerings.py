@@ -3,6 +3,7 @@ import torch
 import pytest
 
 import triton
+from triton.language import PropagateNan
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import (
@@ -2656,3 +2657,46 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
 
     # Verify output matches input
     torch.testing.assert_close(output_tensor, input_tensor, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("axis, keep_dims", [(None, False), (0, False), (0, True), (1, False), (1, True)])
+@pytest.mark.parametrize("op", ["max", "min"])
+@pytest.mark.parametrize("propagate_nan", [False, True])
+def test_min_max_nan_keep_dims(axis, keep_dims, op, propagate_nan, device):
+
+    @gluon.jit
+    def kernel(X, Values, AXIS: ttgl.constexpr, KEEP: ttgl.constexpr, OP: ttgl.constexpr, NAN_MODE: ttgl.constexpr,
+               layout: ttgl.constexpr):
+        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+        x = ttgl.load(X + rows[:, None] * 32 + cols[None, :])
+        if OP == "max":
+            value = ttgl.max(x, AXIS, keep_dims=KEEP, propagate_nan=NAN_MODE)
+        else:
+            value = ttgl.min(x, AXIS, keep_dims=KEEP, propagate_nan=NAN_MODE)
+        if AXIS is None:
+            ttgl.store(Values, ttgl.reshape(value, ()))
+        else:
+            if AXIS == 0:
+                out = cols
+            else:
+                out = rows
+            value = ttgl.convert_layout(ttgl.reshape(value, (out.numel, )), out.type.layout)
+            ttgl.store(Values + out, value)
+
+    torch.manual_seed(9840)
+    x = torch.randint(-3, 4, (8, 32), device=device).float()
+    x[0, :] = torch.nan
+    x[:, 0] = torch.nan
+    source = x.flatten() if axis is None else x
+    dim = 0 if axis is None else axis
+    nan = torch.isnan(source)
+    numeric = source.masked_fill(nan, -torch.inf if op == "max" else torch.inf)
+    extreme = numeric.amax(dim, keepdim=True) if op == "max" else numeric.amin(dim, keepdim=True)
+    nan_wins = nan.any(dim, keepdim=True) if propagate_nan else nan.all(dim, keepdim=True)
+    expected_values = extreme.masked_fill(nan_wins, torch.nan).flatten()
+    values = torch.empty_like(expected_values)
+    mode = PropagateNan.ALL if propagate_nan else PropagateNan.NONE
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0])
+    kernel[(1, )](x, values, axis, keep_dims, op, mode, layout)
+    torch.testing.assert_close(values, expected_values, rtol=0, atol=0, equal_nan=True)
