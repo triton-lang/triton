@@ -429,6 +429,9 @@ class HookChain(Generic[F]):
         if func in self.calls:
             self.calls.remove(func)
 
+    def __bool__(self) -> bool:
+        return bool(self.calls)
+
     def __call__(self, *args, **kwargs):
         for call in self.calls if not self.reversed else reversed(self.calls):
             call(*args, **kwargs)
@@ -470,6 +473,7 @@ class PipelineStagesHook(Protocol):
 
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
+    use_prebound_launcher: env_bool = env_bool("TRITON_USE_PREBOUND_LAUNCHER", True)
     # debug is on critical path for kernel launches
     # avoid repeated reads from env-var by calling get directly
     debug: bool = env_bool("TRITON_DEBUG").get()
