@@ -1,6 +1,18 @@
 from .._core import builtin, _unwrap_if_constexpr
 
-__all__ = ["sched_barrier"]
+__all__ = ["disable_xdl_arb_stall", "sched_barrier"]
+
+
+@builtin
+def disable_xdl_arb_stall(_semantic=None):
+    """Allow a gfx1250 wave to issue independent WMMAs back-to-back."""
+    return _semantic.inline_asm(
+        "s_setreg_imm32_b32 hwreg(HW_REG_WAVE_SCHED_MODE, 2, 1), 1",
+        "",
+        (),
+        (),
+        False,
+    )
 
 
 @builtin

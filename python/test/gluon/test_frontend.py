@@ -4955,6 +4955,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+def test_amd_disable_xdl_arb_stall():
+
+    @gluon.jit
+    def kernel():
+        ttgl.amd.hint.disable_xdl_arb_stall()
+
+    module = run_parser(kernel, target=HIP_TARGET_CDNA5)
+    ir_str = module.str_nodebug()
+    assert ("s_setreg_imm32_b32 hwreg(HW_REG_WAVE_SCHED_MODE, 2, 1), 1" in ir_str)
+    assert "pure = false" in ir_str
+
+
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
 def test_amd_sched_barrier_placement(target):
 
