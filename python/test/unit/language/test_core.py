@@ -2538,11 +2538,11 @@ def test_tensor_atomic_use_result(dtype_str, size, op, device):
                                                            for x in [8, 16, 32, 64]] +
                          (([(dtype_x, dtype_z, False, size)
                             for dtype_x in torch_float8_dtypes
-                            for dtype_z in ["float16", "float32", "bfloat16"]
+                            for dtype_z in ["float16", "float32", "bfloat16", "float64"]
                             for size in [1024, 32]]  #
                            + [(dtype_x, dtype_z, False, size)
                               for dtype_z in torch_float8_dtypes
-                              for dtype_x in ["float16", "float32", "bfloat16"]
+                              for dtype_x in ["float16", "float32", "bfloat16", "float64"]
                               for size in [1024, 32]]) if torch.__version__ >= "2.1" else []))
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
@@ -2632,6 +2632,27 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         else:
             z_ref = x.astype(getattr(np, dtype_z_np))
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0, atol=0)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_z", torch_float8_dtypes)
+def test_cast_fp64_to_fp8_rounding(dtype_z, device):
+    check_type_supported(dtype_z, device)
+    if is_hip() and dtype_z == 'float8_e4m3fn' and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx1250()):
+        pytest.skip(f'{dtype_z} is only supported on HIP CDNA3/CDNA4 and above.')
+
+    @triton.jit
+    def kernel(X, Z):
+        offs = tl.arange(0, 16)
+        tl.store(Z + offs, tl.load(X + offs).to(Z.dtype.element_ty))
+
+    # Rounding ties, rounding up into the next binade, and subnormal results.
+    x = torch.tensor(
+        [0.0, -0.0, 1.0, -3.3, 1.97, -1.97, 31.6, 126.24, 9.0, 9.5, 11.0, -11.0, 3 * 2**-10, 3 * 2**-17, 2**-12, 200.0],
+        dtype=torch.float64, device=device)
+    z = torch.empty_like(x, dtype=getattr(torch, dtype_z))
+    kernel[(1, )](x, z)
+    torch.testing.assert_close(z.view(torch.uint8), x.to(z.dtype).view(torch.uint8), rtol=0, atol=0)
 
 
 @pytest.mark.interpreter
