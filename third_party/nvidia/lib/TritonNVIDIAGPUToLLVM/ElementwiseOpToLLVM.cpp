@@ -4,6 +4,7 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -973,6 +974,13 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
       typeConverter, axisInfoAnalysis, "llvm.nvvm.div.rn.f", benefit);
   patterns.add<ElementwiseToIntrinsicOpConversion<triton::ApproxDivFOp>>(
       typeConverter, axisInfoAnalysis, "llvm.nvvm.div.approx.f", benefit);
+  // Bypass libdevice while retaining approximate FP32 square root and FP32/FP64
+  // reciprocal square root. NVVM defaults to preserving subnormal inputs.
+  patterns.add<ElementwiseToIntrinsicOpConversion<math::SqrtOp>>(
+      typeConverter, axisInfoAnalysis, "llvm.sqrt", benefit.getBenefit() + 1,
+      LLVM::FastmathFlags::afn);
+  patterns.add<ElementwiseOpConversion<math::RsqrtOp, NVVM::RsqrtOp>>(
+      typeConverter, axisInfoAnalysis, benefit.getBenefit() + 1);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);

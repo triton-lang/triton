@@ -184,20 +184,24 @@ struct ElementwiseToIntrinsicOpConversion
   explicit ElementwiseToIntrinsicOpConversion(
       LLVMTypeConverter &typeConverter,
       ModuleAxisInfoAnalysis &axisAnalysisPass, StringRef intrinsic,
-      PatternBenefit benefit = patternBenefitDefault)
-      : Base(typeConverter, axisAnalysisPass, benefit), intrinsic(intrinsic) {}
+      PatternBenefit benefit = patternBenefitDefault,
+      LLVM::FastmathFlags fastmathFlags = LLVM::FastmathFlags::none)
+      : Base(typeConverter, axisAnalysisPass, benefit), intrinsic(intrinsic),
+        fastmathFlags(fastmathFlags) {}
 
   SmallVector<Value> createDestOps(SourceOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, elemTy,
-                                            operands[0])
-                .getResult(0)};
+    auto call = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic,
+                                                elemTy, operands[0]);
+    call.setFastmathFlags(fastmathFlags);
+    return {call.getResult(0)};
   }
 
 private:
   StringRef intrinsic;
+  LLVM::FastmathFlags fastmathFlags;
 };
 
 } // namespace gpu
