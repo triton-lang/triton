@@ -19,7 +19,8 @@ constexpr char AttrBypassLDS[] = "amdg.bypass_lds_load";
 //   possible.
 // - schedule these new ops.
 // - serialize schedule to IR for the next expandLoops function.
-void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong);
+void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong,
+                bool useL2Prefetch);
 
 // Pipeline the TDM stores and scatter in the loop.
 bool pipelineTDMStores(scf::ForOp forOp);
@@ -68,6 +69,7 @@ namespace SingleDotSchedule {
 // 5. ASYNC_WAIT:  ttg.async_wait
 // Note that ttg ops mentioned in the above list are created during scheduling.
 enum SchedType {
+  SCHED_GLOBAL_PREFETCH,
   SCHED_GLOBAL_LOAD,
   SCHED_LOCAL_STORE,
   SCHED_LOCAL_LOAD,
