@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -triton-tensor-memory-allocation | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -triton-tensor-memory-allocation -triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=87' -triton-nvidia-gpu-tmem-wait-insertion | FileCheck %s --check-prefix=SYNC
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -558,5 +559,327 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %after = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>
     "use"(%after) : (!ttg.memdesc<128x32xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
     tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100"} {
+  // The kernel has no allocations of its own; its size is the callee's
+  // footprint.
+  // CHECK: ttg.tensor_memory_size = 128
+  // CHECK-LABEL: @tmem_helper_only
+  tt.func private @tmem_helper_only() {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %cst, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @kernel_call_tmem_helper
+  tt.func public @kernel_call_tmem_helper() {
+    tt.call @tmem_helper_only() : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100"} {
+  // The kernel's allocation is live across both calls, so it must be placed
+  // above the callee's footprint.
+  // CHECK: ttg.tensor_memory_size = 256
+  // CHECK-LABEL: @tmem_live_helper
+  tt.func private @tmem_live_helper() {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %cst, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @kernel_live_across_call
+  tt.func public @kernel_live_across_call() {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.call @tmem_live_helper() : () -> ()
+    tt.call @tmem_live_helper() : () -> ()
+    ttng.tmem_store %cst, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100"} {
+  // The kernel's allocation is dead before the call, so it can share columns
+  // with the callee.
+  // CHECK: ttg.tensor_memory_size = 128
+  // CHECK-LABEL: @tmem_disjoint_helper
+  tt.func private @tmem_disjoint_helper() {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %cst, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @kernel_dead_before_call
+  tt.func public @kernel_dead_before_call() {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %cst, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.call @tmem_disjoint_helper() : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100"} {
+  // Footprints accumulate transitively: the middle function's allocation is
+  // placed above the leaf's, and the kernel's above both.
+  // CHECK: ttg.tensor_memory_size = 256
+  // CHECK-LABEL: @tmem_leaf
+  tt.func private @tmem_leaf() {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc %cst : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %cst, %0, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tmem_middle
+  tt.func private @tmem_middle() {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc %cst : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.call @tmem_leaf() : () -> ()
+    ttng.tmem_store %cst, %0, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @kernel_transitive
+  tt.func public @kernel_transitive() {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc %cst : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.call @tmem_middle() : () -> ()
+    ttng.tmem_store %cst, %0, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100"} {
+  // Two kernels share a helper; the module size is the maximum over kernels.
+  // CHECK: ttg.tensor_memory_size = 256
+  // CHECK-LABEL: @tmem_shared_helper
+  tt.func private @tmem_shared_helper() {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %cst, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @kernel_shared_first
+  tt.func public @kernel_shared_first() {
+    tt.call @tmem_shared_helper() : () -> ()
+    tt.return
+  }
+
+  // CHECK-LABEL: @kernel_shared_second
+  tt.func public @kernel_shared_second() {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.call @tmem_shared_helper() : () -> ()
+    ttng.tmem_store %cst, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // A helper with no allocations can return a caller-owned descriptor. The
+  // returned alias keeps the caller's allocation live across subsequent calls,
+  // including when it is forwarded through another helper and a CFG edge.
+  // CHECK: ttg.tensor_memory_size = 256
+  // CHECK-LABEL: @descriptor_identity
+  tt.func private @descriptor_identity(%arg: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> {
+    tt.return %arg : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  }
+
+  // CHECK-LABEL: @tmem_overwrite_helper
+  tt.func private @tmem_overwrite_helper() {
+    %two = arith.constant dense<2.0> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %buf = ttng.tmem_alloc %two : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %read = ttng.tmem_load %buf : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @kernel_returned_alias
+  tt.func public @kernel_returned_alias() {
+    %one = arith.constant dense<1.0> : tensor<128x128xf32, #blocked>
+    // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32}
+    %buf = ttng.tmem_alloc %one : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %alias = tt.call @descriptor_identity(%buf) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %alias2 = tt.call @descriptor_identity(%alias) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    cf.br ^next(%alias2 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>)
+  ^next(%live: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>):
+    tt.call @tmem_overwrite_helper() : () -> ()
+    %read = ttng.tmem_load %live : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // Use the allocator's actual offsets, without explicit barriers or waits.
+  // Each helper owns column 0. Its caller can reuse those columns only after
+  // both the asynchronous access and the cross-warp hazard are synchronized.
+  // SYNC-LABEL: @tmem_sync_read
+  // SYNC: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+  // SYNC-NEXT: ttng.tmem_wait store
+  // SYNC-NEXT: ttg.barrier local
+  // SYNC-NEXT: ttng.tmem_load
+  // SYNC-NEXT: ttng.tmem_wait load
+  // SYNC-NEXT: tt.return
+  tt.func private @tmem_sync_read(%src: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
+    %buf = ttng.tmem_alloc %src : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %read = ttng.tmem_load %buf : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %read : tensor<128x128xf32, #blocked>
+  }
+
+  // SYNC-LABEL: @tmem_sync_write
+  // SYNC: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+  // SYNC-NEXT: ttng.tmem_wait store
+  // SYNC-NEXT: tt.return
+  tt.func private @tmem_sync_write(%src: tensor<128x128xf32, #blocked>) attributes {noinline = true} {
+    %buf = ttng.tmem_alloc %src : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // The read helper's unsynchronized exit propagates through another call.
+  // SYNC-LABEL: @tmem_sync_middle
+  // SYNC: tt.call @tmem_sync_read
+  // SYNC-NEXT: tt.return
+  tt.func private @tmem_sync_middle(%src: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
+    %read = tt.call @tmem_sync_read(%src) : (tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked>
+    tt.return %read : tensor<128x128xf32, #blocked>
+  }
+
+  // RAW inside each allocation and WAR on each reuse, including repeated
+  // nested calls and an allocation after the final call.
+  // SYNC-LABEL: @kernel_tmem_sync_reuse_read
+  // SYNC: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+  // SYNC-NEXT: ttng.tmem_wait store
+  // SYNC-NEXT: ttg.barrier local
+  // SYNC-NEXT: ttng.tmem_load
+  // SYNC-NEXT: ttng.tmem_wait load
+  // SYNC-NEXT: ttg.barrier local
+  // SYNC-NEXT: {{.*}}tt.call @tmem_sync_middle
+  // SYNC-NEXT: ttg.barrier local
+  // SYNC-NEXT: {{.*}}tt.call @tmem_sync_middle
+  // SYNC-NEXT: ttg.barrier local
+  // SYNC-NEXT: {{.*}}ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+  // SYNC-NEXT: ttng.tmem_wait store
+  // SYNC-NEXT: ttg.barrier local
+  // SYNC-NEXT: ttng.tmem_load
+  // SYNC: ttng.tmem_wait load
+  // SYNC-NEXT: tt.return
+  tt.func public @kernel_tmem_sync_reuse_read(%src: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+    %buf = ttng.tmem_alloc %src : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %before = ttng.tmem_load %buf : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    %first = tt.call @tmem_sync_middle(%src) : (tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked>
+    %second = tt.call @tmem_sync_middle(%src) : (tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked>
+    %after_buf = ttng.tmem_alloc %src : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %after = ttng.tmem_load %after_buf : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    %sum0 = arith.addf %before, %first : tensor<128x128xf32, #blocked>
+    %sum1 = arith.addf %second, %after : tensor<128x128xf32, #blocked>
+    %sum = arith.addf %sum0, %sum1 : tensor<128x128xf32, #blocked>
+    tt.return %sum : tensor<128x128xf32, #blocked>
+  }
+
+  // WAW reuse needs a CTA barrier even when the callee only writes and has
+  // already waited for its store before returning.
+  // SYNC-LABEL: @kernel_tmem_sync_reuse_write
+  // SYNC: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+  // SYNC-NEXT: ttng.tmem_wait store
+  // SYNC-NEXT: ttg.barrier local
+  // SYNC-NEXT: tt.call @tmem_sync_write
+  // SYNC-NEXT: ttg.barrier local
+  // SYNC-NEXT: tt.call @tmem_sync_write
+  // SYNC-NEXT: ttg.barrier local
+  // SYNC-NEXT: {{.*}}ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+  // SYNC-NEXT: ttng.tmem_wait store
+  // SYNC-NEXT: ttg.barrier local
+  // SYNC-NEXT: ttng.tmem_load
+  // SYNC-NEXT: ttng.tmem_wait load
+  // SYNC-NEXT: tt.return
+  tt.func public @kernel_tmem_sync_reuse_write(%src: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+    %buf = ttng.tmem_alloc %src : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.call @tmem_sync_write(%src) : (tensor<128x128xf32, #blocked>) -> ()
+    tt.call @tmem_sync_write(%src) : (tensor<128x128xf32, #blocked>) -> ()
+    %after_buf = ttng.tmem_alloc %src : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %after = ttng.tmem_load %after_buf : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %after : tensor<128x128xf32, #blocked>
+  }
+
+  // A live caller allocation uses column 128, while the helper uses column 0.
+  // Wait before the call, but do not insert a CTA barrier for disjoint accesses.
+  // The helper's internal barrier also publishes the caller's earlier store.
+  // SYNC-LABEL: @kernel_tmem_sync_disjoint
+  // SYNC: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32}
+  // SYNC-NEXT: ttng.tmem_wait store
+  // SYNC-NEXT: {{.*}}tt.call @tmem_sync_read
+  // SYNC-NEXT: {{.*}}ttng.tmem_load
+  // SYNC: ttng.tmem_wait load
+  // SYNC-NEXT: tt.return
+  tt.func public @kernel_tmem_sync_disjoint(%src: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+    %buf = ttng.tmem_alloc %src : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %callee = tt.call @tmem_sync_read(%src) : (tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked>
+    %caller = ttng.tmem_load %buf : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    %sum = arith.addf %caller, %callee : tensor<128x128xf32, #blocked>
+    tt.return %sum : tensor<128x128xf32, #blocked>
   }
 }
