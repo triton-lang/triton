@@ -6,7 +6,7 @@
 
 module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @sm120_mmav2_dot_scaled
-  // CHECK: mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X
+  // CHECK: call { float, float, float, float } @llvm.nvvm.mma.block.scale.m16n8k32.row.col.mxf8f6f4.scale.1x.f32.e5m2.e5m2.f32.ue8m0(
   tt.func public @sm120_mmav2_dot_scaled(
     %a: tensor<128x32xf8E5M2, #blocked_k>,
     %sa: tensor<128x1xi8, #blocked>,
