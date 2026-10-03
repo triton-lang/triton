@@ -146,7 +146,12 @@ def upcast_from_mxfp(
         reshaped_out = out.view(-1, out.shape[-1])
 
         is_fp4 = reshaped_tensor.dtype == torch.uint8
-        scale_block_size = MXFP_BLOCK_SIZE.value if scale.dtype == torch.uint8 else NVFP_BLOCK_SIZE.value
+        if scale.dtype == torch.uint8:
+            scale_block_size = MXFP_BLOCK_SIZE.value
+        else:
+            scale_block_size = logical_quant_dim // scale.shape[-1]
+            assert scale_block_size in (NVFP_BLOCK_SIZE.value, MXFP_BLOCK_SIZE.value), \
+                f"Unsupported direct scale block size {scale_block_size}"
 
         # performance hyper-parameters
         BLOCK_OUT_DIM = 64
