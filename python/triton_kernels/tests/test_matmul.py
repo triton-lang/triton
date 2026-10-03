@@ -669,6 +669,34 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("output_kind", ["none", "separate", "alias"])
+def test_matmul_accumulation_output(batched, output_kind, device):
+    torch.manual_seed(0)
+    m, n, k = 35, 67, 33
+    batch_shape = (2,) if batched else ()
+    # Use small integers and a nonzero accumulator to expose missing accumulation.
+    a = torch.randint(-2, 3, (*batch_shape, m, k), device=device, dtype=torch.float16)
+    b = torch.randint(-2, 3, (*batch_shape, k, n), device=device, dtype=torch.float16)
+    acc = torch.randint(1, 5, (*batch_shape, m, n), device=device, dtype=torch.float16)
+    original_acc = acc.clone()
+    expected = (a.float() @ b.float() + acc.float()).to(a.dtype)
+    if output_kind == "none":
+        c = None
+    elif output_kind == "separate":
+        c = torch.empty_like(acc)
+    else:
+        c = acc
+
+    actual = matmul(a, b, None, c=c, c_acc_in=acc)
+
+    torch.testing.assert_close(actual, expected)
+    if c is not None:
+        assert actual.data_ptr() == c.data_ptr()
+    if output_kind != "alias":
+        torch.testing.assert_close(acc, original_acc, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("shape, fp8_lhs, constraints", [
     ((273, 544, 576), True, dict(block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True)),
     ((273, 544, 576), False, dict(block_m=128, block_n=256, block_k=128, split_k=1, is_persistent=True, swap_xw=False)),
