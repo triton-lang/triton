@@ -447,6 +447,116 @@ def test_dag_regions_split_at_scheduling_boundaries(tmp_path, monkeypatch):
             f"region {cur}: edge {src} -> {dst} leaves the region"
 
 
+def _mir_opcodes_by_bb(mir):
+    """Map `bb.N` -> the opcodes of its instructions, in order.
+
+    Indices line up with the DAG's `pos`, which counts every instruction in the
+    block including scheduling boundaries (which get no node).
+    """
+    import re
+
+    blocks, cur = {}, None
+    for line in mir.splitlines():
+        m = re.match(r'^  bb\.(\d+)', line)
+        if m:
+            cur = int(m.group(1))
+            blocks[cur] = []
+            continue
+        if cur is None or not line.strip():
+            continue
+        if not line.startswith('    '):  # left the block body
+            cur = None
+            continue
+        body = line.strip()
+        if body.startswith((';', 'successors:', 'liveins:')):
+            continue
+        # Drop the def list, then skip lowercase flag words (nuw, exact,
+        # disjoint, renamable, ...) to reach the opcode.
+        if ' = ' in body:
+            body = body.split(' = ', 1)[1]
+        blocks[cur].append(next((t for t in body.split() if t[:1].isupper()), '<unparsed>'))
+    return blocks
+
+
+def test_dag_region_bb_matches_mir_block(tmp_path, monkeypatch):
+    """`region <bb>` names the block the MIR printer labels `bb.<bb>`.
+
+    The DAG keys instruction identity on (bb, pos), so a consumer looks up
+    `region <bb>` against the `bb.N` label in the MIR dumped beside it. Those
+    two numbers come from different places and used to disagree: the DAG was
+    built by re-parsing the dumped text, and the MIR parser numbers blocks in
+    the order it reads them, so the number was really the block's LAYOUT
+    POSITION. Whenever layout order differs from numbering -- a block laid out
+    `bb.73 bb.76 bb.74 bb.75` is enough -- one block's dependencies were
+    published under another block's name.
+
+    Cross-check every node's opcode against the instruction actually sitting at
+    that (bb, pos) in the MIR.
+    """
+
+    monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+
+    @triton.jit
+    def blocky_kernel(a_ptr, b_ptr, c_ptr, M, N, K, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        offs_m = pid_m * BM + tl.arange(0, BM)
+        offs_n = pid_n * BN + tl.arange(0, BN)
+        offs_k = tl.arange(0, BK)
+        acc = tl.zeros((BM, BN), dtype=tl.float32)
+        for k in range(0, K, BK):
+            a = tl.load(a_ptr + offs_m[:, None] * K + (k + offs_k)[None, :])
+            b = tl.load(b_ptr + (k + offs_k)[:, None] * N + offs_n[None, :])
+            acc += tl.dot(a, b)
+        tl.store(c_ptr + offs_m[:, None] * N + offs_n[None, :], acc)
+
+    # Compile only, so this does not need a working runtime for the target.
+    from triton.compiler import ASTSource
+    from triton.backends.compiler import GPUTarget
+    src = ASTSource(
+        fn=blocky_kernel, signature={
+            "a_ptr": "*fp16", "b_ptr": "*fp16", "c_ptr": "*fp32", "M": "i32", "N": "i32", "K": "i32", "BM": "constexpr",
+            "BN": "constexpr", "BK": "constexpr"
+        }, constexprs={"BM": 64, "BN": 64, "BK": 32})
+    triton.compile(src, target=GPUTarget("hip", "gfx1250", 32))
+
+    mir_files = list(tmp_path.glob("blocky_kernel_*.txt"))
+    assert len(mir_files) == 1, "exactly one MIR file should have been dumped"
+    mir, _, dag = mir_files[0].read_text().partition("========== SCHEDULING DAG ==========")
+
+    blocks = _mir_opcodes_by_bb(mir)
+    assert blocks, "no basic blocks parsed out of the MIR dump"
+
+    # Anti-vacuity: unless this kernel's blocks are laid out in an order other
+    # than their numbering, the two numberings coincide and the cross-check
+    # below cannot catch the regression. If scheduling changes make the layout
+    # monotonic, pick a kernel where it is not.
+    layout = list(blocks)
+    assert layout != sorted(layout), \
+        f"block layout order {layout[-6:]} is monotonic, so this test cannot detect bb mis-keying"
+
+    cur, checked, mismatches = None, 0, []
+    for line in dag.splitlines():
+        toks = line.split()
+        if not toks:
+            continue
+        if toks[0] == "region":
+            cur = int(toks[1])
+            assert cur in blocks, f"region names bb.{cur}, which the MIR does not contain"
+        elif toks[0] == "node":
+            pos, opcode = int(toks[1]), toks[3]
+            actual = blocks[cur]
+            found = actual[pos] if pos < len(actual) else "<past end of block>"
+            checked += 1
+            if found != opcode:
+                mismatches.append(f"bb.{cur} pos {pos}: DAG says {opcode}, MIR has {found}")
+
+    assert checked, "the DAG section contained no nodes"
+    assert not mismatches, (f"{len(mismatches)} of {checked} DAG nodes do not match the instruction at their "
+                            f"(bb, pos) in the MIR:\n  " + "\n  ".join(mismatches[:10]))
+
+
 def test_mir_dump_pipeline(tmp_path, monkeypatch):
     monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
     monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")

@@ -15,6 +15,7 @@
 #include "llvm/CodeGen/MachineInstr.h"
 
 #include <memory>
+#include <string>
 
 namespace llvm {
 class AAResults;
@@ -140,23 +141,29 @@ SmallVector<SchedulingRegion, 8> getSchedulingRegions(MachineBasicBlock &MBB);
 void emitSchedulingDAGForMF(raw_ostream &os, MachineFunction &MF,
                             LiveIntervals *LIS = nullptr);
 
-/// Parse `mirText` into a fresh MachineFunction (for the given target) and
-/// return its scheduling DAG as a (bb, position)-keyed edge list (see
-/// emitSchedulingDAGForMF). Identity is (bb, pos), not register names, so the
-/// parser's virtual-register renumbering does not matter: the parsed MF
-/// enumerates instructions in mirText's order, so (bb, pos) maps 1:1 onto the
-/// dumped MIR body lines. Returns "" on parse failure.
+/// Arm DAG emission from the live codegen pipeline: the next
+/// addPassesToEmitFile run for an AMDGCN target will emit its scheduling DAG
+/// into \p Sink, built on the MachineFunction the pipeline itself produced.
 ///
-/// TODO(tyb0807): re-parsing the just-emitted MIR is a pragmatic choice. The
-/// alternative -- building the DAG from the SAME MachineFunction the codegen
-/// pipeline produced -- avoids the extra parse but requires either replicating
-/// addPassesToGenerateCode and omitting its trailing FreeMachineFunctionPass,
-/// or inserting a MachineFunctionPass at the machine-scheduler anchor via
-/// TargetPassConfig::insertPass. Both are more (LLVM-version-fragile) glue;
-/// revisit if the re-parse ever proves too costly or semantically divergent.
-/// Re-parse is safe here because identity is positional, not register-based.
-std::string buildSchedulingDAGText(StringRef mirText, StringRef triple,
-                                   StringRef cpu);
+/// The caller must run that pipeline with
+/// `-stop-after=<livePipelineDAGPassName()>` instead of
+/// `-stop-before=machine-scheduler`: the emitting pass takes the machine
+/// scheduler's slot, so it runs at the same point with the same LiveIntervals
+/// and preserves all analyses. Building the DAG does perturb the MF --
+/// buildSchedGraph clears `undef` on subregister defs, expecting the scheduler
+/// to re-add it -- so the pass restores those flags itself, leaving the dumped
+/// MIR unchanged. Must be paired with disarmLivePipelineDAGEmission().
+///
+/// Emitting from the live MF means the `region <bb-number>` key is the same
+/// block number the MIR printer puts in the `bb.N` labels, which re-parsing the
+/// dumped text cannot guarantee (see DAGBuilder.cpp).
+///
+/// Not thread-safe: arming is process-global (see DAGBuilder.cpp).
+void armLivePipelineDAGEmission(std::string *Sink);
+void disarmLivePipelineDAGEmission();
+
+/// Command-line name of the DAG-emitting pass, for `-stop-after`.
+const char *livePipelineDAGPassName();
 
 } // namespace mir_dag
 } // namespace llvm
