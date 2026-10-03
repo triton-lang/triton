@@ -1,5 +1,6 @@
 import os
 import sys
+import linecache
 from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.connection import Client
 from pathlib import Path
@@ -292,6 +293,34 @@ def test_compile_warmup_serializes_patched_source_globals(monkeypatch):
     monkeypatch.setitem(kernel.fn.__globals__, name, helper)
     kernel._unsafe_update_src(kernel.src.replace("tl.store(output, value)", f"tl.store(output, {name}(value))"))
     assert cloudpickle.loads(_jit_dumps(kernel)).cache_key == kernel.cache_key
+
+
+def test_compile_warmup_serializes_dynamic_source_coordinates(monkeypatch):
+    filename = "<compile-warmup-dynamic>"
+    source = """
+def identity(fn):
+    return fn
+
+def make_kernel():
+    @identity
+    @triton.jit
+    def kernel(output):
+        tl.store(output, 1)
+    return kernel
+
+kernel = make_kernel()
+"""
+    monkeypatch.setitem(linecache.cache, filename, (len(source), None, source.splitlines(keepends=True), filename))
+    namespace = {"__name__": "compile_warmup_dynamic", "triton": triton, "tl": tl}
+    exec(compile(source, filename, "exec"), namespace)
+    kernel = namespace["kernel"]
+    restored = cloudpickle.loads(_jit_dumps(kernel))
+
+    attributes = ("file_name", "starting_line_number", "def_file_line_number", "def_file_col_number")
+    restored_coordinates = tuple(getattr(restored, attr) for attr in attributes)
+    original_coordinates = tuple(getattr(kernel, attr) for attr in attributes)
+    assert restored_coordinates == original_coordinates
+    assert restored.cache_key == kernel.cache_key
 
 
 def test_compile_warmup_reuses_equivalent_kernel_payloads(monkeypatch):
