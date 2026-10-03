@@ -3949,6 +3949,29 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xbf16, #blocked> -> tensor<128xf8E5M2, #blocked>
     tt.return %out : tensor<128xf8E5M2, #blocked>
   }
+
+  // SM89-LABEL: @fp8e5_to_bf16
+  // SM89-NOT: cvt.bf16.f16
+  // SM89: cvt.f32.f16
+  // SM89-SAME: prmt.b32 $0, f0, f1, 0x7632;
+  // CHECK-LABEL: @fp8e5_to_bf16
+  // CHECK-NOT: cvt.bf16.f16
+  // CHECK: llvm.inline_asm
+  // CHECK-SAME: prmt.b32 a0, 0, $2, 0x5140;
+  // CHECK-SAME: prmt.b32 a1, 0, $2, 0x7362;
+  // CHECK-SAME: cvt.f32.f16 f0,
+  // CHECK-SAME: cvt.f32.f16 f1,
+  // CHECK-SAME: cvt.f32.f16 f2,
+  // CHECK-SAME: cvt.f32.f16 f3,
+  // CHECK-SAME: prmt.b32 $0, f0, f1, 0x7632;
+  // CHECK-SAME: prmt.b32 $1, f2, f3, 0x7632;
+  // CHECK-SAME: "=r,=r,r"
+  // CHECK-NOT: llvm.inline_asm
+  // CHECK: llvm.return
+  tt.func private @fp8e5_to_bf16(%in: tensor<128xf8E5M2, #blocked>) -> tensor<128xbf16, #blocked> {
+    %out = tt.fp_to_fp %in : tensor<128xf8E5M2, #blocked> -> tensor<128xbf16, #blocked>
+    tt.return %out : tensor<128xbf16, #blocked>
+  }
 }
 
 // -----
