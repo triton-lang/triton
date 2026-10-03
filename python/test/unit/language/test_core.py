@@ -2520,6 +2520,31 @@ def test_tensor_atomic_use_result(dtype_str, size, op, device):
     assert (out == 5).all()
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["int32", "int64", "float32", "float64"])
+@pytest.mark.parametrize("use_result", [True, False])
+def test_tensor_atomic_xchg(dtype_str, use_result, device):
+    check_type_supported(dtype_str, device)
+
+    @triton.jit
+    def kernel(X, Z, Old, SIZE: tl.constexpr, USE_RESULT: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        old = tl.atomic_xchg(Z + offs, tl.load(X + offs), sem="acq_rel")
+        if USE_RESULT:
+            tl.store(Old + offs, old)
+
+    size = 256
+    dtype = getattr(torch, dtype_str)
+    x = torch.arange(size, device=device).to(dtype) * 3 - 7
+    z = torch.arange(size, device=device).to(dtype) - 100
+    z_ref = z.clone()
+    old = torch.zeros_like(z)
+    kernel[(1, )](x, z, old, size, use_result)
+    torch.testing.assert_close(z, x, rtol=0, atol=0)
+    if use_result:
+        torch.testing.assert_close(old, z_ref, rtol=0, atol=0)
+
+
 # ---------------
 # test cast
 # ---------------
