@@ -15,28 +15,9 @@ def get_iterable_path(iterable: IterableType, path: ObjPath) -> Any:
     return reduce(lambda a, idx: a[idx], path, iterable)  # type: ignore[index]
 
 
-def set_iterable_path(iterable: IterableType, path: tuple[int, ...], val: Any):
-    from .language import core
-    assert len(path) != 0
-    prev = iterable if len(path) == 1 else get_iterable_path(iterable, path[:-1])
-    assert isinstance(prev, core.tuple)
-    prev._setitem(path[-1], val)
-
-
 def is_iterable(x):
     from .language import core
     return isinstance(x, (list, tuple, core.tuple, core.tuple_type))
-
-
-def apply_with_path(value: Any, fn: Callable[[ObjPath, Any], None], _path=None) -> None:
-    if _path is None:
-        _path = ()
-
-    if is_iterable(value):
-        for idx, item in enumerate(value):
-            apply_with_path(item, fn, _path=(*_path, idx))
-    else:
-        fn(_path, value)
 
 
 def find_paths_if(iterable: Union[IterableType, Any], pred: Callable[[ObjPath, Any], bool]) -> list[ObjPath]:

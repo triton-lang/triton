@@ -1323,7 +1323,7 @@ class tuple(base_value):
         self.values = [i for i in args]
         if isinstance(type, tuple_type):
             self.type = type
-        elif type is not None:  # make_template in ASTFunction.deserialize may pass us a list/tuple
+        elif type is not None:
             self.type = tuple_type(type)
         else:
             self.type = _type_for_tuple_values(self.values)
@@ -1342,13 +1342,6 @@ class tuple(base_value):
         if fields is None or name not in fields:
             raise AttributeError(f"'tuple' object has no attribute {name}")
         return self.values[fields.index(name)]
-
-    # TODO: remove
-    def _setitem(self, idx, value):
-        idx = _unwrap_if_constexpr(idx)
-        assert isinstance(idx, int)
-        self.values[idx] = value
-        self.type = _type_for_tuple_values(self.values, self.type.fields)
 
     def __add__(self, other):
         other = _normalize_tuple(other)

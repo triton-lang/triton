@@ -17,7 +17,7 @@ from ..language import constexpr, str_to_ty, tensor, tuple as tl_tuple
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 # ideally we wouldn't need any runtime component
 from ..runtime.jit import get_full_name, JITCallable, BoundConstexprFunction, ConstexprFunction, JITFunction
-from .._utils import apply_with_path, set_iterable_path, is_namedtuple
+from .._utils import is_namedtuple
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
@@ -260,29 +260,22 @@ class ASTFunction:
         ret_types_ir = self.return_types_ir(builder)
         return builder.get_function_ty(arg_types_ir, ret_types_ir)
 
-    def deserialize(self, fn):
-        # create "template"
-        def make_template(ty):
-            if isinstance(ty, (list, tuple, language.tuple_type)):
-                return language.tuple([make_template(x) for x in ty], ty)
-            return language.constexpr(None)
-
-        vals = make_template(self.arg_types)
-        handles = [fn.args(i) for i in range(fn.get_num_args())]
-        cursor = 0
-
-        def build_value(path, ty):
-            nonlocal cursor, handles
-            # > set attributes
-            attr_specs = self.attrs.get(path, [])
+    def deserialize(self, fn, builder):
+        # Attribute paths follow nested launch arguments, including custom types.
+        for path, attr_specs in self.attrs.items():
+            if not attr_specs:
+                continue
+            types = self.arg_types
+            offset = 0
+            for index in path:
+                preceding = [types[i] for i in range(index)]
+                offset += len(self.flatten_ir_types(builder, preceding))
+                types = types[index]
             for attr_name, attr_val in attr_specs:
-                fn.set_arg_attr(cursor, attr_name, attr_val)
-            # > build frontend value
-            val, cursor = ty._unflatten_ir(handles, cursor)
-            set_iterable_path(vals, path, val)
+                fn.set_arg_attr(offset, attr_name, attr_val)
 
-        apply_with_path(self.arg_types, build_value)
-        return vals
+        handles = [fn.args(i) for i in range(fn.get_num_args())]
+        return language.tuple(unflatten_ir_values(handles, self.arg_types))
 
 
 @dataclass(frozen=True)
@@ -679,7 +672,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.fn = self.builder.get_or_insert_function(self.module, self.function_name, fn_ty, visibility, self.noinline)
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
-        arg_values = self.prototype.deserialize(self.fn)
+        arg_values = self.prototype.deserialize(self.fn, self.builder)
         if self.caller_context is not None:
             self.caller_context.initialize_callee(self.fn, self.builder)
         # bind arguments to symbols
