@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 import torch
 
 import triton
@@ -727,3 +729,40 @@ def test_prune_all_configs(device):
         assert e is not None and str(
             e
         ) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_warmup_prunes_before_config_hooks(device, fresh_triton_cache, asynchronous):
+    from contextlib import nullcontext
+
+    prepared = []
+
+    def prepare(args):
+        prepared.append(args["BLOCK"])
+
+    def prune(configs, named_args, **kwargs):
+        assert named_args["X"] is x
+        assert kwargs["Y"] is y
+        return configs[1:]
+
+    def unexpected_hook(*args, **kwargs):
+        pytest.fail("Warmup must not invoke benchmarking hooks")
+
+    @triton.autotune(configs=[triton.Config({"BLOCK": b}, pre_hook=prepare) for b in (32, 64, 128)], key=[],
+                     prune_configs_by={"early_config_prune": prune}, pre_hook=unexpected_hook,
+                     post_hook=unexpected_hook, do_bench=unexpected_hook)
+    @triton.jit
+    def kernel(X, Y, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        tl.store(Y + offsets, tl.load(X + offsets))
+
+    x = torch.ones(128, device=device)
+    y = torch.zeros_like(x)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        with triton.AsyncCompileMode(executor) if asynchronous else nullcontext():
+            kernels = kernel.warmup(x, Y=y, grid=(1, ))
+    assert prepared == [64, 128]
+    assert len(kernels) == 2
+    assert kernel.nargs is None
+    assert not kernel.cache
+    torch.testing.assert_close(y, torch.zeros_like(y))
