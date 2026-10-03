@@ -549,8 +549,18 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
       /*onlyAttachMLIRArgs=*/true);
   ptxBuilder.launch(rewriter, loc, void_ty(func->getContext()));
   NVVM::BarrierOp::create(rewriter, loc);
-  Value address = b.load(i32_ty, sharedMem);
-  NVVM::BarrierOp::create(rewriter, loc);
+  // Allocations of at least 512 columns always start at column zero. Avoid
+  // reading back the base address in that case. The barrier above is still
+  // needed to ensure that the allocation completes before other warps use it.
+  Value address;
+  if (size >= 512) {
+    address = b.i32_val(0);
+  } else {
+    address = b.load(i32_ty, sharedMem);
+    // Do not let another shared-memory use overwrite the allocation result
+    // until every thread has read it.
+    NVVM::BarrierOp::create(rewriter, loc);
+  }
   address = b.inttoptr(ptr_ty(func.getContext(), 6), address);
   return address;
 }
