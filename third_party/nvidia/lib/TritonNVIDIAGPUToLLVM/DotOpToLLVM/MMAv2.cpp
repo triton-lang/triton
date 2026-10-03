@@ -345,71 +345,63 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxTuring = {
      "mma.sync.aligned.m16n8k8.row.col.f16.f16.f16.f16"},
 };
 
-inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
+inline static const std::map<TensorCoreType, std::string> mmaIntrinsicAmpere = {
     {TensorCoreType::FP32_FP16_FP16_FP32,
-     "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"},
+     "llvm.nvvm.mma.m16n8k16.row.col.f32.f32"},
     {TensorCoreType::FP32_BF16_BF16_FP32,
-     "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"},
-    {TensorCoreType::FP32_TF32_TF32_FP32,
-     "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32"},
+     "llvm.nvvm.mma.m16n8k16.row.col.bf16"},
+    {TensorCoreType::FP32_TF32_TF32_FP32, "llvm.nvvm.mma.m16n8k8.row.col.tf32"},
 
     {TensorCoreType::INT32_INT1_INT1_INT32,
-     "mma.sync.aligned.m16n8k256.row.col.s32.b1.b1.s32.xor.popc"},
+     "llvm.nvvm.mma.xor.popc.m16n8k256.row.col.b1"},
     {TensorCoreType::INT32_INT4_INT4_INT32,
-     "mma.sync.aligned.m16n8k64.row.col.satfinite.s32.s4.s4.s32"},
+     "llvm.nvvm.mma.m16n8k64.row.col.satfinite.s4"},
     {TensorCoreType::INT32_INT8_INT8_INT32,
-     "mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32"},
+     "llvm.nvvm.mma.m16n8k32.row.col.satfinite.s8"},
 
     {TensorCoreType::FP16_FP16_FP16_FP16,
-     "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16"},
+     "llvm.nvvm.mma.m16n8k16.row.col.f16.f16"},
 
     {TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32,
-     "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32"},
+     "llvm.nvvm.mma.m16n8k32.row.col.f32.e5m2.e5m2.f32"},
     {TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32,
-     "mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e4m3.f32"},
+     "llvm.nvvm.mma.m16n8k32.row.col.f32.e5m2.e4m3.f32"},
     {TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32,
-     "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e5m2.f32"},
+     "llvm.nvvm.mma.m16n8k32.row.col.f32.e4m3.e5m2.f32"},
     {TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32,
-     "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32"},
+     "llvm.nvvm.mma.m16n8k32.row.col.f32.e4m3.e4m3.f32"},
 
     {TensorCoreType::FP16_FP8E5M2_FP8E5M2_FP16,
-     "mma.sync.aligned.m16n8k32.row.col.f16.e5m2.e5m2.f16"},
+     "llvm.nvvm.mma.m16n8k32.row.col.f16.e5m2.e5m2.f16"},
     {TensorCoreType::FP16_FP8E5M2_FP8E4M3FN_FP16,
-     "mma.sync.aligned.m16n8k32.row.col.f16.e5m2.e4m3.f16"},
+     "llvm.nvvm.mma.m16n8k32.row.col.f16.e5m2.e4m3.f16"},
     {TensorCoreType::FP16_FP8E4M3FN_FP8E5M2_FP16,
-     "mma.sync.aligned.m16n8k32.row.col.f16.e4m3.e5m2.f16"},
+     "llvm.nvvm.mma.m16n8k32.row.col.f16.e4m3.e5m2.f16"},
     {TensorCoreType::FP16_FP8E4M3FN_FP8E4M3FN_FP16,
-     "mma.sync.aligned.m16n8k32.row.col.f16.e4m3.e4m3.f16"},
+     "llvm.nvvm.mma.m16n8k32.row.col.f16.e4m3.e4m3.f16"},
 
-    {TensorCoreType::FP64_FP64_FP64_FP64,
-     "mma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64"},
+    {TensorCoreType::FP64_FP64_FP64_FP64, "llvm.nvvm.mma.m8n8k4.row.col.f64"},
 };
 
-inline static const std::map<TensorCoreType, std::string> mmaInstrPtxScaled = {
+inline static const std::map<TensorCoreType, std::string> mmaIntrinsicScaled = {
     {TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32_SCALE_VEC_1X,
-     "mma.sync.aligned.m16n8k32.row.col."
-     "kind::mxf8f6f4.block_scale.scale_vec::"
-     "1X.f32.e5m2.e5m2.f32.ue8m0"},
+     "llvm.nvvm.mma.block.scale.m16n8k32.row.col."
+     "mxf8f6f4.scale.1x.f32.e5m2.e5m2.f32.ue8m0"},
     {TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32_SCALE_VEC_1X,
-     "mma.sync.aligned.m16n8k32.row.col."
-     "kind::mxf8f6f4.block_scale.scale_vec::"
-     "1X.f32.e5m2.e4m3.f32.ue8m0"},
+     "llvm.nvvm.mma.block.scale.m16n8k32.row.col."
+     "mxf8f6f4.scale.1x.f32.e5m2.e4m3.f32.ue8m0"},
     {TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32_SCALE_VEC_1X,
-     "mma.sync.aligned.m16n8k32.row.col."
-     "kind::mxf8f6f4.block_scale.scale_vec::"
-     "1X.f32.e4m3.e5m2.f32.ue8m0"},
+     "llvm.nvvm.mma.block.scale.m16n8k32.row.col."
+     "mxf8f6f4.scale.1x.f32.e4m3.e5m2.f32.ue8m0"},
     {TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32_SCALE_VEC_1X,
-     "mma.sync.aligned.m16n8k32.row.col."
-     "kind::mxf8f6f4.block_scale.scale_vec::"
-     "1X.f32.e4m3.e4m3.f32.ue8m0"},
+     "llvm.nvvm.mma.block.scale.m16n8k32.row.col."
+     "mxf8f6f4.scale.1x.f32.e4m3.e4m3.f32.ue8m0"},
     {TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X,
-     "mma.sync.aligned.m16n8k64.row.col."
-     "kind::mxf4nvf4.block_scale.scale_vec::"
-     "2X.f32.e2m1.e2m1.f32.ue8m0"},
+     "llvm.nvvm.mma.block.scale.m16n8k64.row.col."
+     "mxf4nvf4.scale.2x.f32.e2m1.e2m1.f32.ue8m0"},
     {TensorCoreType::FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X,
-     "mma.sync.aligned.m16n8k64.row.col."
-     "kind::mxf4nvf4.block_scale.scale_vec::"
-     "4X.f32.e2m1.e2m1.f32.ue4m3"},
+     "llvm.nvvm.mma.block.scale.m16n8k64.row.col."
+     "mxf4nvf4.scale.4x.f32.e2m1.e2m1.f32.ue4m3"},
 };
 
 static void callMmaTuringInt8(PTXBuilder &builder, int b,
@@ -417,7 +409,7 @@ static void callMmaTuringInt8(PTXBuilder &builder, int b,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               ValueTableV2 &ha, ValueTableV2 &hb,
-                              const SmallVector<Value> &fc) {
+                              ArrayRef<Value> fc) {
   auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=r");
   auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=r");
   auto cArgs1 = builder.newListOperand();
@@ -465,7 +457,7 @@ static void callMmaTuringFp16(PTXBuilder &builder, int b,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               ValueTableV2 &ha, ValueTableV2 &hb,
-                              const SmallVector<Value> &fc, bool isAccF16) {
+                              ArrayRef<Value> fc, bool isAccF16) {
   auto retArgs = builder.newListOperand(numMmaRets, isAccF16 ? "=r" : "=f");
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i) {
@@ -488,138 +480,54 @@ static void callMmaTuringFp16(PTXBuilder &builder, int b,
   mma(retArgs, aArgs2, bArgs2, cArgs);
 }
 
-// Emit m8n8k4 fp64 MMA instructions.
-// With numRegisters.m=1, numRegisters.k=1: emits a single m8n8k4.
-// With numRegisters.m=2, numRegisters.k=2: emits 2*2=4 m8n8k4 grouped as
-// m16n8k8
-static void callMmaAmpereFp64(PTXBuilder &builder, int b,
-                              const BaseOffset &base,
-                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
-                              unsigned colsPerThread, int numCPackedElem,
-                              unsigned batchOffset, ValueTableV2 &ha,
-                              ValueTableV2 &hb, const SmallVector<Value> &fc,
-                              int kRegs, int mRegs) {
-  // Each m sub-tile gets numMmaRets/mRegs results (2 f64 values per m8n8k4).
-  int retsPerM = numMmaRets / mRegs;
+static SmallVector<Value>
+getMmaOperands(Location loc, ConversionPatternRewriter &rewriter, int batch,
+               const BaseOffset &base, const NumRegisters &numRegisters,
+               unsigned numMmaRets, unsigned colsPerThread,
+               unsigned batchOffset, Type operandTy, ValueTableV2 &ha,
+               ValueTableV2 &hb, ArrayRef<Value> accumulators) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value> operands;
+  for (int k = 0; k < numRegisters.k; ++k)
+    for (int m = 0; m < numRegisters.m; ++m)
+      operands.push_back(
+          b.bitcast(ha[{batch, base.m + m, base.k + k}], operandTy));
+  for (int k = 0; k < numRegisters.k; ++k)
+    operands.push_back(b.bitcast(hb[{batch, base.n, base.k + k}], operandTy));
 
-  // Build ret/c operand lists for each m sub-tile.
-  SmallVector<PTXBuilder::Operand *> retArgsList, cArgsList;
-  for (int vm = 0; vm < mRegs; ++vm) {
-    auto *retArgs = builder.newListOperand(retsPerM, "=d");
-    auto *cArgs = builder.newListOperand();
-    for (int i = 0; i < retsPerM; ++i) {
-      cArgs->listAppend(
-          builder.newOperand(fc[((base.m + vm) * colsPerThread +
-                                 numMmaRets * numCPackedElem * base.n) /
-                                    numCPackedElem +
-                                i + batchOffset * b],
-                             std::to_string(i)));
-    }
-    retArgsList.push_back(retArgs);
-    cArgsList.push_back(cArgs);
-  }
-
-  for (int vk = 0; vk < kRegs; ++vk) {
-    auto bArgs = builder.newListOperand({{hb[{b, base.n, base.k + vk}], "d"}});
-    for (int vm = 0; vm < mRegs; ++vm) {
-      auto aArgs =
-          builder.newListOperand({{ha[{b, base.m + vm, base.k + vk}], "d"}});
-      mma(retArgsList[vm], aArgs, bArgs, cArgsList[vm]);
-    }
-  }
+  int numCPackedElem = operandTy.isF64() ? 1 : 4 / numMmaRets;
+  int offset = (base.m * colsPerThread + numMmaRets * numCPackedElem * base.n) /
+                   numCPackedElem +
+               batchOffset * batch;
+  llvm::append_range(operands, accumulators.slice(offset, numMmaRets));
+  return operands;
 }
 
-// Unified MMAV2 function for Ampere and HopperF64 architectures
-static void callMmaV2(PTXBuilder &builder, int b, const BaseOffset &base,
-                      mlir::triton::PTXInstr &mma, unsigned numMmaRets,
-                      unsigned colsPerThread, int numCPackedElem,
-                      unsigned batchOffset, ValueTableV2 &ha, ValueTableV2 &hb,
-                      const SmallVector<Value> &fc,
-                      const std::string &constraintRet,
-                      const std::string &constraintAB, int kRegs) {
-  auto retArgs = builder.newListOperand(numMmaRets, constraintRet);
-  auto cArgs = builder.newListOperand();
-  for (int i = 0; i < numMmaRets; ++i) {
-    cArgs->listAppend(builder.newOperand(
-        fc[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i +
-           batchOffset * b],
-        std::to_string(i)));
-    // reuse the output registers
-  }
-
-  auto aArgs = builder.newListOperand();
-  for (int vk = 0; vk < kRegs; ++vk) {
-    aArgs->listAppend(
-        builder.newOperand(ha[{b, base.m, base.k + vk}], constraintAB));
-    aArgs->listAppend(
-        builder.newOperand(ha[{b, base.m + 1, base.k + vk}], constraintAB));
-  }
-
-  auto bArgs = builder.newListOperand();
-  for (int vk = 0; vk < kRegs; ++vk) {
-    bArgs->listAppend(
-        builder.newOperand(hb[{b, base.n, base.k + vk}], constraintAB));
-  }
-
-  mma(retArgs, aArgs, bArgs, cArgs);
+static Value callMmaIntrinsic(DotOpInterface op, StringRef intrinsic,
+                              Type resultTy, ValueRange operands,
+                              ConversionPatternRewriter &rewriter) {
+  auto func = triton::gpu::appendOrGetExternFuncOp(
+      rewriter, op, intrinsic,
+      triton::gpu::getFunctionType(resultTy, operands));
+  // The pinned LLVM MMA intrinsics omit convergence from their declarations.
+  func.setConvergent(true);
+  auto call = LLVM::createLLVMCallOp(rewriter, op.getLoc(), func, operands);
+  call.setConvergent(true);
+  return call.getResult();
 }
 
-static void callMmaScaled(PTXBuilder &builder, int b, const BaseOffset &base,
-                          mlir::triton::PTXInstr &mma, unsigned numMmaRets,
-                          unsigned colsPerThread, ValueTableV2 &aTable,
-                          ValueTableV2 &bTable,
-                          const SmallVector<Value> &cValues, Value aScaleValue,
-                          Value bScaleValue, int kRegs) {
-  int numCPackedElem = 4 / static_cast<int>(numMmaRets);
-  auto retArgs = builder.newListOperand(numMmaRets, "=f");
-  auto cArgs = builder.newListOperand();
-  for (int i = 0; i < numMmaRets; ++i)
-    cArgs->listAppend(builder.newOperand(
-        cValues[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i],
-        std::to_string(i)));
-
-  auto aArgs = builder.newListOperand();
-  for (int vk = 0; vk < kRegs; ++vk) {
-    aArgs->listAppend(
-        builder.newOperand(aTable[{b, base.m, base.k + vk}], "r"));
-    aArgs->listAppend(
-        builder.newOperand(aTable[{b, base.m + 1, base.k + vk}], "r"));
-  }
-
-  auto bArgs = builder.newListOperand();
-  for (int vk = 0; vk < kRegs; ++vk)
-    bArgs->listAppend(
-        builder.newOperand(bTable[{b, base.n, base.k + vk}], "r"));
-
-  SmallVector<PTXBuilder::Operand *> ops{retArgs, aArgs, bArgs, cArgs};
-
-  auto appendScale = [&](Value scale, unsigned byteId, unsigned threadId) {
-    ops.push_back(builder.newOperand(scale, "r"));
-    auto sel = builder.newListOperand();
-    sel->listAppend(builder.newConstantOperand(std::to_string(byteId)));
-    sel->listAppend(builder.newConstantOperand(std::to_string(threadId)));
-    ops.push_back(sel);
-  };
-
-  // Use only byteId=0 since each thread sign-extends a single i8 scale
-  // into i32 instead of packing 4 bytes.
-  appendScale(aScaleValue, 0, 0);
-  appendScale(bScaleValue, 0, 0);
-
-  mma(ops);
-}
-
-using EmitMmaCallback = std::function<void(
-    PTXBuilder &builder, int b, int m, int n, int k,
-    mlir::triton::PTXInstr &mma, unsigned numMmaRets, unsigned colsPerThread,
+using EmitMmaCallback = std::function<Value(
+    int b, int m, int n, int k, unsigned numMmaRets, unsigned colsPerThread,
     unsigned batchOffset, ValueTableV2 &ha, ValueTableV2 &hb,
-    const SmallVector<Value> &fc, RankedTensorType dTensorTy, int repK)>;
+    ArrayRef<Value> fc, Type resultTy, int repK)>;
 
-LogicalResult convertMMAImpl(
-    DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
-    const LLVMTypeConverter *typeConverter, ConversionPatternRewriter &rewriter,
-    TensorCoreType mmaType, const NumRegisters &numRegisters,
-    const std::string &mmaInstruction, const EmitMmaCallback &emitMma) {
+LogicalResult convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB,
+                             Value llvmC,
+                             const LLVMTypeConverter *typeConverter,
+                             ConversionPatternRewriter &rewriter,
+                             TensorCoreType mmaType,
+                             const NumRegisters &numRegisters,
+                             const EmitMmaCallback &emitMma) {
   auto loc = op.getLoc();
   auto aType = cast<RankedTensorType>(op.getA().getType());
   auto bType = cast<RankedTensorType>(op.getB().getType());
@@ -679,17 +587,12 @@ LogicalResult convertMMAImpl(
   auto elemsPerThread = triton::gpu::getElemsPerThread(dTensorTy);
   auto batchOffset =
       elemsPerThread[rank - 2] * elemsPerThread[rank - 1] / numCPackedElem;
+  Type resultTy = getMmaRetType(mmaType, op->getContext());
   auto callMma = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
-    PTXBuilder builder;
-    auto &mma = *builder.create(mmaInstruction);
-    // using =r for float32 works but leads to less readable ptx.
     unsigned colsPerThread = repN * 2;
-    emitMma(builder, b, static_cast<int>(m), static_cast<int>(n),
-            static_cast<int>(k), mma, numMmaRets, colsPerThread, batchOffset,
-            ha, hb, fc, dTensorTy, repK);
-
-    Value mmaOut =
-        builder.launch(rewriter, loc, getMmaRetType(mmaType, op->getContext()));
+    Value mmaOut = emitMma(b, static_cast<int>(m), static_cast<int>(n),
+                           static_cast<int>(k), numMmaRets, colsPerThread,
+                           batchOffset, ha, hb, fc, resultTy, repK);
 
     Type elemTy = cast<LLVM::LLVMStructType>(mmaOut.getType()).getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
@@ -735,18 +638,19 @@ LogicalResult convertMMAWithInstruction(
                                   ? NumRegisters{1, 1, 1}
                                   : NumRegisters{2, 1, 2};
 
-  EmitMmaCallback emit = [&](PTXBuilder &builder, int b, int m, int n, int k,
-                             mlir::triton::PTXInstr &mma, unsigned numMmaRets,
+  EmitMmaCallback emit = [&](int b, int m, int n, int k, unsigned numMmaRets,
                              unsigned colsPerThread, unsigned batchOffset,
                              ValueTableV2 &ha, ValueTableV2 &hb,
-                             const SmallVector<Value> &fc, RankedTensorType dTy,
-                             int /*repK*/) {
+                             ArrayRef<Value> fc, Type resultTy, int /*repK*/) {
+    auto dTy = cast<RankedTensorType>(op.getD().getType());
     bool isIntMMA = dTy.getElementType().isInteger(32);
     bool isAccF16 = dTy.getElementType().isF16();
     bool isFp64MMA = dTy.getElementType().isF64();
     const unsigned numCPackedElem = isFp64MMA ? 1u : 4u / numMmaRets;
     BaseOffset base{numRegisters.m * m, numRegisters.n * n, numRegisters.k * k};
     if (isTuring) {
+      PTXBuilder builder;
+      auto &mma = *builder.create(mmaInstruction);
       assert(b == 0 && "Turing only supports batch size 1");
       if (isIntMMA)
         callMmaTuringInt8(builder, b, base, mma, numMmaRets, colsPerThread,
@@ -754,21 +658,23 @@ LogicalResult convertMMAWithInstruction(
       else
         callMmaTuringFp16(builder, b, base, mma, numMmaRets, colsPerThread,
                           numCPackedElem, ha, hb, fc, isAccF16);
-    } else {
-      if (isFp64MMA) {
-        callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
-                          numCPackedElem, batchOffset, ha, hb, fc,
-                          numRegisters.k, numRegisters.m);
-      } else {
-        callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
-                  numCPackedElem, batchOffset, ha, hb, fc,
-                  isIntMMA || isAccF16 ? "=r" : "=f", "r", numRegisters.k);
-      }
+      return builder.launch(rewriter, op.getLoc(), resultTy);
     }
+
+    Type operandTy = rewriter.getI32Type();
+    if (isFp64MMA)
+      operandTy = rewriter.getF64Type();
+    else if (mmaType == TensorCoreType::FP32_FP16_FP16_FP32 ||
+             mmaType == TensorCoreType::FP16_FP16_FP16_FP16)
+      operandTy = vec_ty(rewriter.getF16Type(), 2);
+    auto operands =
+        getMmaOperands(op.getLoc(), rewriter, b, base, numRegisters, numMmaRets,
+                       colsPerThread, batchOffset, operandTy, ha, hb, fc);
+    return callMmaIntrinsic(op, mmaInstruction, resultTy, operands, rewriter);
   };
 
   return convertMMAImpl(op, llvmA, llvmB, llvmC, typeConverter, rewriter,
-                        mmaType, numRegisters, mmaInstruction, emit);
+                        mmaType, numRegisters, emit);
 }
 
 } // namespace
@@ -781,7 +687,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   auto dTensorTy = op.getD().getType();
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
-  const auto &instrMap = isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
+  const auto &instrMap = isTuring ? mmaInstrPtxTuring : mmaIntrinsicAmpere;
   if (!instrMap.contains(mmaType))
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
@@ -795,11 +701,17 @@ LogicalResult convertMMA(triton::instrument::DotI8Op op,
                          triton::instrument::DotI8Op::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, bool isTuring) {
-  std::string mmaInstruction = isTuring
-                                   ? "mma.sync.aligned.m8n8k16.row.col.s32."
-                                   : "mma.sync.aligned.m16n8k32.row.col.s32.";
-  mmaInstruction += op.getASigned() ? "s8." : "u8.";
-  mmaInstruction += op.getBSigned() ? "s8.s32" : "u8.s32";
+  std::string mmaInstruction;
+  if (isTuring) {
+    mmaInstruction = "mma.sync.aligned.m8n8k16.row.col.s32.";
+    mmaInstruction += op.getASigned() ? "s8." : "u8.";
+    mmaInstruction += op.getBSigned() ? "s8.s32" : "u8.s32";
+  } else {
+    mmaInstruction = "llvm.nvvm.mma.m16n8k32.row.col.";
+    mmaInstruction += op.getASigned() ? "s8" : "u8";
+    if (op.getASigned() != op.getBSigned())
+      mmaInstruction += op.getBSigned() ? ".s8" : ".u8";
+  }
   return convertMMAWithInstruction(op, adaptor.getA(), adaptor.getB(),
                                    adaptor.getC(), typeConverter, rewriter,
                                    TensorCoreType::INT32_INT8_INT8_INT32,
@@ -816,7 +728,7 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   TensorCoreType mmaType =
       getMmaTypeDotScaled(op, aTensorTy, bTensorTy, dTensorTy);
-  if (!mmaInstrPtxScaled.contains(mmaType))
+  if (!mmaIntrinsicScaled.contains(mmaType))
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
 
@@ -826,12 +738,10 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
       op.getLoc(), adaptor.getBScale(), rewriter, op.getBScale().getType());
 
   NumRegisters numRegisters = {2, 1, 2};
-  EmitMmaCallback emit = [&](PTXBuilder &builder, int b, int m, int n, int k,
-                             mlir::triton::PTXInstr &mma, unsigned numMmaRets,
+  EmitMmaCallback emit = [&](int b, int m, int n, int k, unsigned numMmaRets,
                              unsigned colsPerThread, unsigned batchOffset,
                              ValueTableV2 &aTable, ValueTableV2 &bTable,
-                             const SmallVector<Value> &cValues,
-                             RankedTensorType dTy, int repK) {
+                             ArrayRef<Value> cValues, Type resultTy, int repK) {
     auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
     auto i32 = IntegerType::get(op->getContext(), 32);
 
@@ -846,16 +756,11 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
       return packed;
     };
 
-    int scaleVecMode;
-    if (mmaInstrPtxScaled.at(mmaType).find("1X") != std::string::npos) {
-      scaleVecMode = 1;
-    } else if (mmaType ==
-               TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X) {
+    int scaleVecMode = 1;
+    if (mmaType == TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X) {
       scaleVecMode = 2;
     } else if (mmaType == TensorCoreType::FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X) {
       scaleVecMode = 4;
-    } else {
-      llvm_unreachable("Unsupported scale vector mode!");
     }
     Value aScaleValue =
         packElements(unpackedAScale, m * repK * scaleVecMode + k * scaleVecMode,
@@ -865,11 +770,15 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
                      scaleVecMode);
 
     BaseOffset base{numRegisters.m * m, numRegisters.n * n, numRegisters.k * k};
-    callMmaScaled(builder, b, base, mma, numMmaRets, colsPerThread, aTable,
-                  bTable, cValues, aScaleValue, bScaleValue, numRegisters.k);
+    auto operands = getMmaOperands(op.getLoc(), rewriter, b, base, numRegisters,
+                                   numMmaRets, colsPerThread, batchOffset, i32,
+                                   aTable, bTable, cValues);
+    Value zero = tb.int_val(16, 0);
+    operands.append({aScaleValue, zero, zero, bScaleValue, zero, zero});
+    return callMmaIntrinsic(op, mmaIntrinsicScaled.at(mmaType), resultTy,
+                            operands, rewriter);
   };
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                        typeConverter, rewriter, mmaType, numRegisters,
-                        mmaInstrPtxScaled.at(mmaType), emit);
+                        typeConverter, rewriter, mmaType, numRegisters, emit);
 }
