@@ -3,6 +3,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Matchers.h"
+#include "triton/Analysis/RangeAnalysis.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -356,6 +357,13 @@ public:
   }
 
 protected:
+  bool canUseUnsignedBounds(OpTy op) {
+    if constexpr (std::is_same_v<OpTy, arith::DivSIOp> ||
+                  std::is_same_v<OpTy, arith::RemSIOp>)
+      return this->hasNonNegativeLhs(op);
+    return true;
+  }
+
   virtual int64_t getContiguity(OpTy op, const AxisInfo &lhs,
                                 const AxisInfo &rhs, int dim) {
     return 1;
@@ -660,8 +668,10 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
+    // Negative numerators break the plateau: (-8, -7) / 8 is (-1, 0).
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        this->canUseUnsignedBounds(op)) {
       constancy = std::max(constancy,
                            gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                                rhs.getDivisibility(dim)));
@@ -716,7 +726,8 @@ private:
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        this->canUseUnsignedBounds(op)) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                        rhs.getDivisibility(dim));
     }
@@ -1200,9 +1211,11 @@ public:
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
-AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
+AxisInfoAnalysis::AxisInfoAnalysis(
+    DataFlowSolver &solver, const DenseSet<Operation *> &nonNegativeDivRems)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
-          solver) {
+          solver),
+      visitors(nonNegativeDivRems) {
   // UnrealizedConversionCast:
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
@@ -1434,9 +1447,9 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
                   std::move(constantValue));
 }
 
-AxisInfoAnalysis *
-AxisInfoAnalysis::loadDefaultAnalysis(DataFlowSolver *solver) {
-  return solver->load<AxisInfoAnalysis>();
+AxisInfoAnalysis *AxisInfoAnalysis::loadDefaultAnalysis(
+    DataFlowSolver *solver, const DenseSet<Operation *> &nonNegativeDivRems) {
+  return solver->load<AxisInfoAnalysis>(nonNegativeDivRems);
 }
 
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
@@ -1533,10 +1546,49 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
+// Keep the proof at each use: a loop-carried value can be nonnegative in
+// the body and negative at the exit.
+static DenseSet<Operation *>
+collectNonNegativeDivRems(FunctionOpInterface funcOp) {
+  SmallVector<Operation *> divRems;
+  funcOp.walk([&](Operation *op) {
+    if (isa<arith::DivSIOp, arith::RemSIOp>(op) &&
+        isa<RankedTensorType>(op->getResult(0).getType()))
+      divRems.push_back(op);
+  });
+  if (divRems.empty())
+    return {};
+
+  auto assumptions = TritonIntegerRangeAnalysis::collectAssumptions(funcOp);
+  DominanceInfo domInfo(funcOp);
+  auto solver = createDataFlowSolver();
+  auto *rangeAnalysis =
+      solver->load<TritonIntegerRangeAnalysis>(assumptions, &domInfo);
+  auto module = funcOp->getParentOfType<ModuleOp>();
+  auto target = module->getAttrOfType<StringAttr>(gpu::AttrTargetName);
+  if (target && target.getValue().starts_with("cuda:")) {
+    // CUDA grids have at most 65535 blocks in the y and z dimensions.
+    rangeAnalysis->setPidBound(1, 65534);
+    rangeAnalysis->setPidBound(2, 65534);
+  }
+  initializeFuncOps(funcOp, rangeAnalysis);
+  if (failed(solver->initializeAndRun(funcOp)))
+    return {};
+
+  DenseSet<Operation *> nonNegativeDivRems;
+  for (Operation *op : divRems) {
+    auto range = rangeAnalysis->getRangeAt(op->getOperand(0), op);
+    if (!range.isUninitialized() && range.getValue().smin().isNonNegative())
+      nonNegativeDivRems.insert(op);
+  }
+  return nonNegativeDivRems;
+}
+
 void ModuleAxisInfoAnalysis::initialize(
     FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback loadAnalysis) {
+  auto nonNegativeDivRems = collectNonNegativeDivRems(funcOp);
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = loadAnalysis(solver.get());
+  AxisInfoAnalysis *analysis = loadAnalysis(solver.get(), nonNegativeDivRems);
   if (failed(solver->initializeAndRun(funcOp)))
     return;
 

@@ -3,6 +3,7 @@
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "mlir/Support/LLVM.h"
@@ -176,7 +177,8 @@ private:
 
 class AxisInfoVisitor {
 public:
-  AxisInfoVisitor() = default;
+  explicit AxisInfoVisitor(const DenseSet<Operation *> &nonNegativeDivRems)
+      : nonNegativeDivRems(nonNegativeDivRems) {}
   virtual ~AxisInfoVisitor() = default;
 
   bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape, int dim) {
@@ -192,13 +194,25 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) = 0;
 
   virtual bool match(Operation *op) = 0;
+
+protected:
+  bool hasNonNegativeLhs(Operation *op) const {
+    return nonNegativeDivRems.contains(op);
+  }
+
+private:
+  // Signed div/rem operations whose dividend is nonnegative at that use.
+  const DenseSet<Operation *> &nonNegativeDivRems;
 };
 
 class AxisInfoVisitorList {
 public:
+  explicit AxisInfoVisitorList(const DenseSet<Operation *> &nonNegativeDivRems)
+      : nonNegativeDivRems(nonNegativeDivRems) {}
+
   template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
   void append() {
-    (visitors.emplace_back(std::make_unique<Ts>()), ...);
+    (visitors.emplace_back(std::make_unique<Ts>(nonNegativeDivRems)), ...);
   }
 
   AxisInfo apply(Operation *op,
@@ -211,6 +225,7 @@ public:
 
 private:
   std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
+  const DenseSet<Operation *> &nonNegativeDivRems;
 };
 
 class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
@@ -230,7 +245,8 @@ protected:
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 
 public:
-  AxisInfoAnalysis(DataFlowSolver &solver);
+  AxisInfoAnalysis(DataFlowSolver &solver,
+                   const DenseSet<Operation *> &nonNegativeDivRems);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
 
@@ -239,7 +255,9 @@ public:
                  ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
                  ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
 
-  static AxisInfoAnalysis *loadDefaultAnalysis(DataFlowSolver *solver);
+  static AxisInfoAnalysis *
+  loadDefaultAnalysis(DataFlowSolver *solver,
+                      const DenseSet<Operation *> &nonNegativeDivRems);
   using LoadCallback = decltype(&AxisInfoAnalysis::loadDefaultAnalysis);
 };
 

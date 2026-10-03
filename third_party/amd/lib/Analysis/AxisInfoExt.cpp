@@ -60,14 +60,15 @@ public:
 };
 } // namespace
 
-AxisInfoAnalysisExt::AxisInfoAnalysisExt(DataFlowSolver &solver)
-    : triton::AxisInfoAnalysis(solver) {
+AxisInfoAnalysisExt::AxisInfoAnalysisExt(
+    DataFlowSolver &solver, const DenseSet<Operation *> &nonNegativeDivRems)
+    : triton::AxisInfoAnalysis(solver, nonNegativeDivRems) {
   visitors.append<ExtractSliceOpAxisInfoVisitor>();
 }
 
-triton::AxisInfoAnalysis *
-AxisInfoAnalysisExt::loadAnalysis(DataFlowSolver *solver) {
-  return solver->load<AxisInfoAnalysisExt>();
+triton::AxisInfoAnalysis *AxisInfoAnalysisExt::loadAnalysis(
+    DataFlowSolver *solver, const DenseSet<Operation *> &nonNegativeDivRems) {
+  return solver->load<AxisInfoAnalysisExt>(nonNegativeDivRems);
 }
 
 } // namespace mlir::triton::AMD
