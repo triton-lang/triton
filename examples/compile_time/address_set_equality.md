@@ -5,10 +5,12 @@ possible descriptor views. Expanding equal layouts into individual addresses
 can make those comparisons expensive.
 
 `AddressSet` retains ranges, normalized XOR layouts, shared-memory layouts
-(including padding), tensor-memory layouts, unions, intersections, differences,
-and translations as immutable symbolic descriptions. Explicit `std::variant`
-visitors require each representation to be handled. Exact evaluation caches
-sorted half-open intervals when a symbolic comparison is insufficient.
+(including padding), tensor-memory layouts, or explicit intervals as immutable
+flat values. Descriptions never reference other address sets. Set operations
+reuse a compact value when possible and otherwise compute canonical intervals
+immediately; they do not retain an expression graph or operation history.
+Explicit `std::variant` visitors require each representation to be handled.
+Layout evaluation caches sorted half-open intervals when needed.
 `SparseBitVector` is used only as an independent test oracle for address sets.
 This enforces representation coverage, not a proof of mathematical correctness.
 
@@ -67,17 +69,18 @@ of compilation, not GPU execution.
 
 | Workload | Master | New | Speedup |
 | --- | ---: | ---: | ---: |
-| Synthetic | 69.962 | 0.744 | 94.1x |
-| Overlapping accumulator | 2.340 | 0.550 | 4.26x |
-| Multi-CTA tutorial | 1.462 | 0.561 | 2.61x |
-| Attention | 6.529 | 3.539 | 1.85x |
-| Broad tutorial/example sweep total | 71.175 | 47.336 | 1.50x |
+| Synthetic | 70.076 | 0.706 | 99.24x |
+| Overlapping accumulator | 2.340 | 0.564 | 4.15x |
+| Multi-CTA tutorial | 1.478 | 0.604 | 2.45x |
+| Attention | 6.541 | 3.580 | 1.83x |
+| Broad tutorial/example sweep total | 73.645 | 48.496 | 1.52x |
 
-The individual rows average two cold runs. The synthetic runs took 69.557 and
-70.367 seconds on master, and 0.709 and 0.779 seconds on the candidate. The
-broad sweep is one run per compiler, summing 135 kernel compilations from 142
-sampled tests across the Gluon tutorials and examples and the standard fused
-attention tutorial. It is a sampled suite, not the full tutorial parameter grid.
+The individual rows average two cold runs. The synthetic runs took
+69.857 and 70.295 seconds on master, and 0.712 and 0.700 seconds on the
+candidate. The broad sweep is one run per compiler, summing 135 kernel
+compilations from 142 sampled tests across the Gluon tutorials and examples
+and the standard fused attention tutorial. It is a sampled suite, not the
+full tutorial parameter grid.
 
 The focused tutorial/example cases were:
 
@@ -89,10 +92,10 @@ All compared GPU binaries were byte-identical; the synthetic case also produced
 identical source IR, Gluon IR, Triton GPU IR, LLVM IR, and PTX. Correctness checks
 include an independent bitvector oracle for symbolic set operations and existing
 barrier, alias, padding, and tensor-memory tests. A separate negative compilation
-check added an unhandled ninth variant in a shadow header; C++ rejected the
+check added an unhandled sixth variant in a shadow header; C++ rejected the
 incomplete visitors.
 
-Some symbolic operations still enumerate addresses when evaluating exact
+Some layouts still enumerate address combinations when evaluating exact
 intervals. Highly fragmented footprints can require many intervals. The
 synthetic speedup intentionally amplifies repeated equal-footprint comparisons
 and should not be treated as a typical application-wide speedup.

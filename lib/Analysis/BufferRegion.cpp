@@ -384,6 +384,17 @@ AddressSet AddressSet::fromDescription(Description description) {
   return AddressSet(std::make_shared<Storage>(std::move(description)));
 }
 
+AddressSet AddressSet::fromIntervals(Intervals ranges) {
+  if (ranges.empty())
+    return {};
+  if (ranges.size() == 1) {
+    auto [begin, end] = ranges.front();
+    if (end - begin < addressSpaceSize)
+      return fromRange(uint32_t(begin), uint32_t(end - begin));
+  }
+  return fromDescription(ExplicitIntervals{std::move(ranges)});
+}
+
 AddressSet AddressSet::fromXorLayout(uint32_t storageBase, uint32_t xorOffset,
                                       ArrayRef<uint32_t> bases) {
   uint32_t rows[32] = {};
@@ -453,16 +464,16 @@ bool AddressSet::sameDescription(const AddressSet &other) const {
       [&](const XorLayout &v) { return same(v); },
       [&](const SharedLayout &v) { return same(v); },
       [&](const TensorLayout &v) { return same(v); },
-      [&](const Union &v) { return same(v); },
-      [&](const Intersection &v) { return same(v); },
-      [&](const Difference &v) { return same(v); },
-      [&](const Translation &v) { return same(v); }), storage->description);
+      [&](const ExplicitIntervals &v) { return same(v); }), storage->description);
 }
 
 const AddressSet::Intervals &AddressSet::intervals() const {
   static const Intervals empty;
   if (!storage)
     return empty;
+  // Materialized results already own their intervals; do not cache a copy.
+  if (auto *explicitSet = std::get_if<ExplicitIntervals>(&storage->description))
+    return explicitSet->ranges;
   if (storage->evaluated)
     return *storage->evaluated;
   storage->evaluated = std::visit(llvm::makeVisitor(
@@ -525,25 +536,8 @@ const AddressSet::Intervals &AddressSet::intervals() const {
         coalesceAddressRanges(result);
         return result;
       },
-      [](const Union &v) {
-        Intervals result = AddressSet(v.lhs).intervals();
-        const auto &rhs = AddressSet(v.rhs).intervals();
-        result.append(rhs.begin(), rhs.end());
-        coalesceAddressRanges(result);
-        return result;
-      },
-      [](const Intersection &v) {
-        return intersectAddressRanges(AddressSet(v.lhs).intervals(), AddressSet(v.rhs).intervals());
-      },
-      [](const Difference &v) {
-        return subtractAddressRanges(AddressSet(v.lhs).intervals(), AddressSet(v.rhs).intervals());
-      },
-      [](const Translation &v) {
-        Intervals result;
-        for (auto [begin, end] : AddressSet(v.source).intervals())
-          appendAddressRange(result, uint32_t(begin) + v.delta, end - begin);
-        coalesceAddressRanges(result);
-        return result;
+      [](const ExplicitIntervals &v) {
+        return v.ranges;
       }), storage->description);
   return *storage->evaluated;
 }
@@ -566,10 +560,7 @@ bool AddressSet::empty() const {
       [](const XorLayout &) { return false; },
       [](const SharedLayout &v) { return v.elementBytes == 0; },
       [](const TensorLayout &v) { return v.bitWidth == 0; },
-      [](const Union &v) { return AddressSet(v.lhs).empty() && AddressSet(v.rhs).empty(); },
-      [&](const Intersection &) { return intervals().empty(); },
-      [&](const Difference &) { return intervals().empty(); },
-      [](const Translation &v) { return AddressSet(v.source).empty(); }), storage->description);
+      [](const ExplicitIntervals &v) { return v.ranges.empty(); }), storage->description);
 }
 
 void AddressSet::set(uint32_t address) { insert(fromRange(address, 1)); }
@@ -581,7 +572,11 @@ void AddressSet::insert(const AddressSet &other) {
     *this = other;
     return;
   }
-  *this = fromDescription(Union{storage, other.storage});
+  Intervals result = intervals();
+  const auto &rhs = other.intervals();
+  result.append(rhs.begin(), rhs.end());
+  coalesceAddressRanges(result);
+  *this = fromIntervals(std::move(result));
 }
 
 AddressSet AddressSet::intersection(const AddressSet &other) const {
@@ -589,7 +584,7 @@ AddressSet AddressSet::intersection(const AddressSet &other) const {
     return *this;
   if (empty() || other.empty())
     return {};
-  return fromDescription(Intersection{storage, other.storage});
+  return fromIntervals(intersectAddressRanges(intervals(), other.intervals()));
 }
 
 void AddressSet::subtract(const AddressSet &other) {
@@ -598,7 +593,7 @@ void AddressSet::subtract(const AddressSet &other) {
     return;
   }
   if (!empty() && !other.empty())
-    *this = fromDescription(Difference{storage, other.storage});
+    *this = fromIntervals(subtractAddressRanges(intervals(), other.intervals()));
 }
 
 bool AddressSet::intersects(const AddressSet &other) const {
@@ -659,10 +654,13 @@ AddressSet AddressSet::translated(uint32_t delta) const {
       [=](XorLayout v) { v.storageBase += delta; return fromDescription(std::move(v)); },
       [=](SharedLayout v) { v.storageBase += delta; return fromDescription(std::move(v)); },
       [=](TensorLayout v) { v.storageBase += delta; return fromDescription(std::move(v)); },
-      [&](const Union &) { return fromDescription(Translation{storage, delta}); },
-      [&](const Intersection &) { return fromDescription(Translation{storage, delta}); },
-      [&](const Difference &) { return fromDescription(Translation{storage, delta}); },
-      [=](const Translation &v) { return fromDescription(Translation{v.source, v.delta + delta}); }),
+      [=](const ExplicitIntervals &v) {
+        Intervals result;
+        for (auto [begin, end] : v.ranges)
+          appendAddressRange(result, uint32_t(begin) + delta, end - begin);
+        coalesceAddressRanges(result);
+        return fromIntervals(std::move(result));
+      }),
       storage->description);
 }
 

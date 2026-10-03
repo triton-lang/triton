@@ -126,36 +126,16 @@ private:
              std::tie(other.storageBase, other.xorOffset, other.bases);
     }
   };
-  struct Storage;
-  using Node = std::shared_ptr<const Storage>;
-  struct Union {
-    Node lhs, rhs;
-    bool operator==(const Union &other) const {
-      return lhs == other.lhs && rhs == other.rhs;
+  struct ExplicitIntervals {
+    Intervals ranges;
+    bool operator==(const ExplicitIntervals &other) const {
+      return ranges == other.ranges;
     }
   };
-  struct Intersection {
-    Node lhs, rhs;
-    bool operator==(const Intersection &other) const {
-      return lhs == other.lhs && rhs == other.rhs;
-    }
-  };
-  struct Difference {
-    Node lhs, rhs;
-    bool operator==(const Difference &other) const {
-      return lhs == other.lhs && rhs == other.rhs;
-    }
-  };
-  struct Translation {
-    Node source;
-    uint32_t delta;
-    bool operator==(const Translation &other) const {
-      return source == other.source && delta == other.delta;
-    }
-  };
+  // A flat value: no representation may retain operands or operation history.
   // Visitors have no catch-all: adding a form requires handling it everywhere.
   using Description = std::variant<Range, XorLayout, SharedLayout, TensorLayout,
-                                   Union, Intersection, Difference, Translation>;
+                                   ExplicitIntervals>;
   struct Storage {
     explicit Storage(Description description)
         : description(std::move(description)) {}
@@ -163,11 +143,14 @@ private:
     // Canonical half-open intervals cache exact evaluation, never a bitvector.
     mutable std::optional<Intervals> evaluated;
   };
-  explicit AddressSet(Node storage) : storage(std::move(storage)) {}
+  explicit AddressSet(std::shared_ptr<const Storage> storage)
+      : storage(std::move(storage)) {}
   static AddressSet fromDescription(Description description);
+  // Each interval is nonempty; the sequence is sorted, disjoint and nonadjacent.
+  static AddressSet fromIntervals(Intervals ranges);
   bool sameDescription(const AddressSet &other) const;
   const Intervals &intervals() const;
-  Node storage;
+  std::shared_ptr<const Storage> storage;
 };
 
 //===----------------------------------------------------------------------===//

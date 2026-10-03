@@ -236,7 +236,7 @@ TEST(Analysis, SymbolicAddressSetRepresentationsMatchBitvector) {
     }
     samples.push_back({AddressSet::fromTensorLayout(layout), expected});
   }
-  // Preserve unevaluated compositions to exercise every translation visitor.
+  // Exercise materialized operation results as well as compact layouts.
   for (unsigned i = 1; i < 12; ++i) {
     auto lhs = samples[i];
     auto rhs = samples[i + 12];
@@ -283,6 +283,38 @@ TEST(Analysis, SymbolicAddressSetRepresentationsMatchBitvector) {
       check(difference, expectedDifference);
     }
   }
+}
+
+TEST(Analysis, AddressSetRepeatedOperationsPreserveValues) {
+  using triton::AddressSet;
+  AddressSet adjacent;
+  // This many unions must not leave a recursively evaluated/destructed chain.
+  for (uint32_t i = 0; i < 32768; ++i)
+    adjacent.insert(AddressSet::fromRange(i, 1));
+  EXPECT_EQ(adjacent, AddressSet::fromRange(0, 32768));
+
+  AddressSet sparse = AddressSet::fromRange(3, 2);
+  sparse.insert(AddressSet::fromRange(11, 2));
+  const AddressSet expected = sparse;
+  for (unsigned i = 0; i < 4096; ++i) {
+    sparse.insert(AddressSet::fromRange(7, 1));
+    sparse = sparse.intersection(AddressSet::fromRange(0, 16));
+    sparse.subtract(AddressSet::fromRange(7, 1));
+    sparse = sparse.translated(uint32_t(-8)).translated(8);
+  }
+  EXPECT_EQ(sparse, expected);
+  EXPECT_EQ(llvm::to_vector(sparse), (SmallVector<uint32_t>{3, 4, 11, 12}));
+}
+
+TEST(Analysis, AddressSetFullDomainPreservesWraparound) {
+  using triton::AddressSet;
+  auto almostFull = AddressSet::fromRange(0, uint32_t(-1));
+  auto full = almostFull;
+  full.set(uint32_t(-1));
+  EXPECT_EQ(full.translated(17), full);
+  EXPECT_TRUE(full.contains(AddressSet::fromRange(uint32_t(-3), 8)));
+  full.subtract(almostFull);
+  EXPECT_EQ(full, AddressSet::fromRange(uint32_t(-1), 1));
 }
 
 TEST(Analysis, BufferRegionViewPreservesSubviewProvenance) {
