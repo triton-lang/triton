@@ -4102,6 +4102,67 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#arg_tma_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func @arg_ptr_alignment(
+  // CHECK-SAME: %{{[^:]+}}: !llvm.ptr<1> {llvm.align = 16 : i64
+  // CHECK-SAME: %{{[^:]+}}: !llvm.ptr<1> {llvm.align = 64 : i32
+  // CHECK-SAME: %{{[^:]+}}: !llvm.ptr<1> {llvm.align = 32 : i64
+  // CHECK-SAME: %{{[^:]+}}: !llvm.ptr<1> {tt.pointee_type = i32}
+  // CHECK-SAME: %{{[^:]+}}: i32
+  // CHECK-SAME: %{{[^:]+}}: i64
+  // CHECK-SAME: llvm.align = 64 : i32
+  // CHECK-SAME: llvm.byval = !llvm.array<128 x i8>
+  tt.func public @arg_ptr_alignment(
+      %ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32},
+      %aligned: !tt.ptr<i32> {llvm.align = 64 : i32, tt.divisibility = 16 : i32},
+      %weaker: !tt.ptr<i32> {llvm.align = 16 : i32, tt.divisibility = 32 : i32},
+      %plain: !tt.ptr<i32>,
+      %n: i32 {tt.divisibility = 16 : i32},
+      %stride: i64 {tt.divisibility = 32 : i32},
+      %desc: !tt.tensordesc<16x64xf16, #arg_tma_shared> {tt.divisibility = 128 : i32}) {
+    // CHECK-NOT: llvm.intr.assume
+    // CHECK: llvm.return
+    tt.return
+  }
+}
+
+// -----
+
+#arg_divisibility_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#arg_divisibility_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func internal @device_arg_ptr_alignment(
+  // CHECK-SAME: %{{[^:]+}}: !llvm.ptr<1> {llvm.align = 32 : i64
+  // CHECK-SAME: %{{[^:]+}}: !llvm.struct<(i32)>
+  // CHECK-SAME: %{{[^:]+}}: !llvm.struct<(ptr<3>, i32)>
+  tt.func private @device_arg_ptr_alignment(
+      %ptr: !tt.ptr<i32> {tt.divisibility = 32 : i64},
+      %values: tensor<128xi32, #arg_divisibility_layout> {tt.divisibility = 16 : i32},
+      %storage: !ttg.memdesc<16xi32, #arg_divisibility_shared, #ttg.shared_memory, mutable> {tt.divisibility = 16 : i32}) {
+    // CHECK-NOT: llvm.intr.assume
+    // CHECK: llvm.return
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func internal @unproven_arg_alignment(
+  // CHECK-NOT: llvm.align
+  // CHECK-NOT: llvm.intr.assume
+  // CHECK: llvm.return
+  // A byte-offset pointer and an unused poison pointer passed to a noinline function.
+  tt.func private @unproven_arg_alignment(
+      %one: !tt.ptr<i32> {tt.divisibility = 1 : i64},
+      %poison: !tt.ptr<i32> {tt.divisibility = 4611686018427387904 : i64}) {
+    tt.return
+  }
+}
+
+// -----
+
 //--- masked-store-barrier.mlir
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
