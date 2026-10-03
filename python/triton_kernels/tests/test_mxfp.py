@@ -76,7 +76,8 @@ def _upcast_mxfp4_tile_kernel(
 
 
 def _mxfp_scale_boundary_data(src_dtype, dst_dtype, device):
-    values = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, get_max_quant_val(src_dtype)], dtype=torch.float64)
+    min_val = 0.5 if src_dtype == torch.uint8 else torch.finfo(src_dtype).tiny * torch.finfo(src_dtype).eps
+    values = torch.tensor([0, min_val, 1, 1.5, 2, 3, 4, get_max_quant_val(src_dtype)], dtype=torch.float64)
     values = torch.cat((values, -values)).repeat(2)
     scale = torch.tensor([0, 1, 2, 125, 126, 127, 128, 255], dtype=torch.uint8).repeat(64, 1)
     expected = torch.ldexp(values[None, None, :], scale.to(torch.int32)[..., None] - 127)
