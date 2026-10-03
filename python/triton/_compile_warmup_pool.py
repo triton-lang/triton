@@ -221,17 +221,14 @@ def _warmup_kernel(kernel, args, grid, kwargs):
     if not isinstance(kernel, Autotuner):
         return kernel.warmup(*args, grid=grid, **kwargs)
 
-    kernel.nargs = dict(zip(kernel.arg_names, args))
-    try:
-        results = []
-        for config in kernel.prune_configs(kwargs):
-            config_kwargs = config.all_kwargs()
-            if config.pre_hook is not None:
-                config.pre_hook({**kernel.nargs, **kwargs, **config_kwargs})
-            results.append(kernel.fn.warmup(*args, grid=grid, **kwargs, **config_kwargs))
-        return results
-    finally:
-        kernel.nargs = None
+    nargs = dict(zip(kernel.arg_names, args))
+    results = []
+    for config in kernel.prune_configs(nargs, kwargs):
+        config_kwargs = config.all_kwargs()
+        if config.pre_hook is not None:
+            config.pre_hook({**nargs, **kwargs, **config_kwargs})
+        results.append(kernel.fn.warmup(*args, grid=grid, **kwargs, **config_kwargs))
+    return results
 
 
 _SHUTDOWN_STDERR_SILENCED = False
