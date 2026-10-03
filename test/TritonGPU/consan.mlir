@@ -987,6 +987,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: call {{.*}}fill_global_tensor{{.*}}(%[[READ_TRACKING_GLOB]], %c0_i32
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
+    // Single-CTA poisoning retains a CTA-local fence after synchronization.
+    // CHECK: %[[TMA_BUFFER:.*]] = ttg.local_alloc {allocation.offset = 0 : i32}
+    // CHECK: ttg.local_store {{.*}}, %[[TMA_BUFFER]]
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_set_proxy_access
@@ -1064,9 +1069,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   tt.func public @clc_try_cancel_diagonal_effect_recipients() {
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
+    // Acquire peer poison stores before the multicast CLC writes the result.
+    // CHECK: %[[CLC_RESULT:.*]] = ttg.local_alloc {allocation.offset = 0 : i32}
+    // CHECK: ttg.local_store {{.*}}, %[[CLC_RESULT]]
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = true}
     %result = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    // CHECK: ttng.init_barrier
     // CHECK: tti.experimental_cluster_cta_id
     // CHECK: arith.cmpi eq
     // CHECK: %[[CLC_THREAD:.*]] = arith.constant 1 : i32
@@ -1142,6 +1153,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttng.tw
     %c2 = arith.constant 2 : index
     %x_offsets = arith.constant dense<0> : tensor<32xi32, #offsets>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    // Acquire peer poison stores before making them visible to async TMA.
+    // CHECK: %[[RESULT:.*]] = ttg.local_alloc {allocation.offset = 0 : i32}
+    // CHECK: ttg.local_store {{.*}}, %[[RESULT]]
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: ttng.fence_async_shared {bCluster = true}
     %result = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: scf.for
@@ -2482,12 +2498,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttng.tmem_store %[[TMEM_POISON]], %[[TMEM]], %[[TRUE]]
     // CHECK-NEXT: ttng.tmem_wait store
     // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: tt.return
     // NO-INIT-NOT: ttg.local_store
     // NO-INIT-NOT: ttng.tmem_store
     // NO-INIT-NOT: ttng.tmem_wait
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     %tmem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     // NO-INIT: tt.return
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.shared = 0 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @initialize_tmem_two_ctas
+  // NO-INIT-LABEL: @initialize_tmem_two_ctas
+  tt.func public @initialize_tmem_two_ctas() {
+    // The leader must not issue an MMA until the peer's poison stores finish.
+    // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
+    // CHECK-NEXT: ttng.tmem_wait load
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
+    // CHECK: ttng.tmem_store {{.*}}, %[[TMEM]],
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttng.cluster_barrier
+    // NO-INIT: ttng.tmem_alloc
+    // NO-INIT-NOT: ttng.tmem_store
+    // NO-INIT-NOT: ttng.tmem_wait
+    // NO-INIT-NOT: ttng.cluster_barrier
+    %tmem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    // NO-INIT: tt.return
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [0, 1]]>
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 256 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @initialize_multibuffer_tmem_multi_cta
+  tt.func public @initialize_multibuffer_tmem_multi_cta() {
+    // Synchronize all CTAs after poisoning every buffer, even without 2CTA MMA.
+    // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
+    // CHECK: %[[TMEM_0:.*]] = ttg.memdesc_index %[[TMEM]]
+    // CHECK: %[[TMEM_1:.*]] = ttg.memdesc_index %[[TMEM]]
+    // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_0]],
+    // CHECK-NOT: ttng.cluster_barrier
+    // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_1]],
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttng.cluster_barrier
+    %tmem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x256x256xf32, #tmem, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
@@ -2624,6 +2689,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-SAME: (%[[CHOOSE:.*]]: i1)
   tt.func public @cross_cta_affine_subslice_recipients(%choose: i1) {
     // CHECK: %[[AFFINE_PARENT:.*]] = ttg.local_alloc
+    // Poisoning must finish on every CTA before a peer DSM access.
+    // CHECK: ttg.local_store {{.*}}, %[[AFFINE_PARENT]]
+    // CHECK-NEXT: ttng.cluster_barrier
     %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #shared, #smem, mutable>
     // CHECK: %[[LOCAL_VIEW:.*]] = ttg.memdesc_subslice %[[AFFINE_PARENT]][0, 0]
     %local = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<4x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
