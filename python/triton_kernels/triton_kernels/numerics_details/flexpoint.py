@@ -52,6 +52,20 @@ def rcp_max_finite(dtype):
         tl.static_assert(tl.constexpr(False), f"{dtype} not supported in flexpoint")
 
 
+@tl.core.extern
+def _min_nan_xorsign_abs_f32(a, b, _semantic=None):
+    return tl.core.extern_elementwise("", "", [a, b], {
+        (tl.float32, tl.float32): ("llvm.nvvm.fmin.nan.xorsign.abs.f", tl.float32),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@tl.core.extern
+def _max_nan_xorsign_abs_f32(a, b, _semantic=None):
+    return tl.core.extern_elementwise("", "", [a, b], {
+        (tl.float32, tl.float32): ("llvm.nvvm.fmax.nan.xorsign.abs.f", tl.float32),
+    }, is_pure=True, _semantic=_semantic)
+
+
 @triton.jit
 def sm86_min_nan_xorsign_abs_f32(a, b):
     """Wrapper for min.NaN.xorsign.abs.f32 PTX instruction.
@@ -65,16 +79,7 @@ def sm86_min_nan_xorsign_abs_f32(a, b):
     tl.static_assert(a.dtype == tl.float32, "min.NaN.xorsign.abs.f32 requires float32 inputs")
     tl.static_assert(b.dtype == tl.float32, "min.NaN.xorsign.abs.f32 requires float32 inputs")
 
-    return tl.inline_asm_elementwise(
-        """{
-    min.NaN.xorsign.abs.f32 $0, $1, $2;
-    }""",
-        "=r,r,r",
-        [a, b],
-        dtype=tl.float32,
-        is_pure=True,
-        pack=1,
-    )
+    return _min_nan_xorsign_abs_f32(a, b)
 
 
 @triton.jit
@@ -90,16 +95,7 @@ def sm86_max_nan_xorsign_abs_f32(a, b):
     tl.static_assert(a.dtype == tl.float32, "max.NaN.xorsign.abs.f32 requires float32 inputs")
     tl.static_assert(b.dtype == tl.float32, "max.NaN.xorsign.abs.f32 requires float32 inputs")
 
-    return tl.inline_asm_elementwise(
-        """{
-    max.NaN.xorsign.abs.f32 $0, $1, $2;
-    }""",
-        "=r,r,r",
-        [a, b],
-        dtype=tl.float32,
-        is_pure=True,
-        pack=1,
-    )
+    return _max_nan_xorsign_abs_f32(a, b)
 
 
 @triton.jit
