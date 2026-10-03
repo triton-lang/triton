@@ -49,7 +49,6 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
             torch.float8_e4m3fn: FP8_E4M3FN,
             torch.float8_e5m2: FP8_E5M2,
         }[out_dtype]
-    assert x.shape[axis] % microblock_size == 0, f"axis dim must be divisible by {microblock_size}. Got {x.shape[axis]}"
     assert isinstance(x.storage.layout, StridedLayout), "input data must be strided"
     assert -x.ndim <= axis < x.ndim, f"Invalid axis {axis=}"
     assert out_dtype in (FP4, FP8_E4M3FN, FP8_E5M2), f"Invalid output dtype {out_dtype=}"
@@ -61,7 +60,10 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
     axis = axis if axis >= 0 else axis + x.ndim
     # downcast
     L = x.shape[axis]
-    # Ensure last dimension is a multiple of the microblock size. This is expected by the kernel.
+    # The quantized axis need not be a multiple of the microblock size: the kernel masks
+    # the tail, so the last scale covers a partial microblock (as in `downcast_to_mxfp_torch`).
+    if out_dtype == FP4:
+        assert L % 2 == 0, f"For mxfp4 conversion the quantized axis length must be even. Got {L}"
     # output value storage
     y_layout = StridedLayout(major_dim=axis - x.ndim)
     y_scale_shape = (*x.shape[:axis], triton.cdiv(L, microblock_size), *x.shape[axis+1:])
@@ -404,8 +406,11 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
         scale_block_size = MXFP_BLOCK_SIZE.value
     else:
         dq_scale = scale.to(torch.float32)
-        scale_block_size = logical_quant_dim // scale.shape[-1]
-        assert scale_block_size in (NVFP_BLOCK_SIZE.value, MXFP_BLOCK_SIZE.value), f"Unsupported direct scale block size {scale_block_size}"
+        # The last scale may cover a partial block, so match on cdiv rather than exact division.
+        block_sizes = [b for b in (NVFP_BLOCK_SIZE.value, MXFP_BLOCK_SIZE.value)
+                       if triton.cdiv(logical_quant_dim, b) == scale.shape[-1]]
+        assert block_sizes, f"Unsupported direct scale block size for {logical_quant_dim=} and {scale.shape[-1]} scales"
+        scale_block_size = block_sizes[0]
     axis_shape = fp32_tensor.size(-1)
     padded_axis_shape = triton.cdiv(logical_quant_dim, scale_block_size) * scale_block_size
     pad_size = padded_axis_shape - axis_shape
