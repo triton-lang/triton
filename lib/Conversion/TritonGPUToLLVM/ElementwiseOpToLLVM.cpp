@@ -175,11 +175,20 @@ struct ExternElementwiseOpConversion
     if (funcName.empty())
       llvm::errs() << "ExternElementwiseOpConversion";
 
-    Type funcType = getFunctionType(elemTy, operands[0]);
+    // Keep TF32 as f32 in Triton IR; NVVM returns its raw i32 bits.
+    bool bitcastTf32 = elemTy.isF32() && operands[0].size() == 1 &&
+                       operands[0][0].getType().isF32() &&
+                       (funcName == "llvm.nvvm.f2tf32.rn" ||
+                        funcName == "llvm.nvvm.f2tf32.rna");
+    Type funcType = getFunctionType(
+        bitcastTf32 ? rewriter.getI32Type() : elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
         rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
-    return {
-        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+    Value result =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult();
+    if (bitcastTf32)
+      result = LLVM::BitcastOp::create(rewriter, loc, elemTy, result);
+    return {result};
   }
 };
 
