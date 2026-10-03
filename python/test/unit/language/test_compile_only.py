@@ -10,6 +10,27 @@ from triton.runtime.driver import driver
 
 
 @triton.jit
+def atomic_after_dot_ws_kernel(
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    K: tl.constexpr,
+):
+    om = tl.arange(0, M)
+    on = tl.arange(0, N)
+    ok = tl.arange(0, K)
+    acc = tl.zeros([M, N], dtype=tl.float32)
+    for i in tl.range(0, 4, warp_specialize=True):
+        a = tl.load(a_ptr + om[:, None] * K + ok[None, :] + i * M * K)
+        b = tl.load(b_ptr + ok[:, None] * N + on[None, :] + i * K * N)
+        acc += tl.dot(a, b)
+        tl.atomic_add(c_ptr + om[:, None] * N + on[None, :], acc)
+    tl.store(c_ptr + om[:, None] * N + on[None, :], acc)
+
+
+@triton.jit
 def topk_kernel(K: tl.constexpr):
     x = tl.arange(0, 8)
     tl.topk(x, K)
@@ -53,6 +74,21 @@ def test_compile_only_sort_keeps_comparisons_boolean() -> None:
     source = ASTSource(fn=sort_kernel, signature={"values": "*i32", "result": "*i32"})
     compiled = triton.compile(source, target=GPUTarget("cuda", 100, 32))
     assert "arith.extui" not in compiled.asm["ttgir"]
+
+
+def test_compile_only_ws_atomic_rmw_falls_back():
+    src = ASTSource(
+        fn=atomic_after_dot_ws_kernel,
+        signature={"a_ptr": "*fp16", "b_ptr": "*fp16", "c_ptr": "*fp32"},
+        constexprs={"M": 128, "N": 128, "K": 128},
+    )
+    compiled = triton.compile(
+        src,
+        target=GPUTarget("cuda", 90, 32),
+        options={"num_warps": 4, "num_stages": 3},
+    )
+    assert "tt.atomic_rmw" in compiled.asm["ttgir"]
+    assert "ttg.warp_specialize" not in compiled.asm["ttgir"]
 
 
 def test_compile_only_sm100() -> None:
