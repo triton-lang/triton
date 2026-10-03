@@ -163,10 +163,12 @@ struct TestBufferRegionAliasPass
         container.memorySpace != contained.memorySpace ||
         container.regionInfo.isUnknown() || contained.regionInfo.isUnknown())
       return false;
-    return llvm::all_of(contained.regionInfo.views, [&](const auto &b) {
-      return llvm::any_of(container.regionInfo.views,
-                          [&](const auto &a) { return a.contains(b); });
-    });
+    return llvm::all_of(
+        contained.regionInfo.views, [&](const tt::BufferRegionView &b) {
+          return llvm::any_of(
+              container.regionInfo.views,
+              [&](const tt::BufferRegionView &a) { return a.contains(b); });
+        });
   }
 
   static void printMask(InFlightDiagnostic &diag,

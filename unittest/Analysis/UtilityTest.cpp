@@ -9,6 +9,7 @@
 
 #include <deque>
 #include <set>
+#include <type_traits>
 
 namespace mlir {
 
@@ -142,7 +143,7 @@ TEST(Analysis, BufferRegionViewPreservesSubviewProvenance) {
   EXPECT_EQ(physicalRegions.size(), 1);
 }
 
-TEST(Analysis, RegionInfoHashCollisionsPreserveExactFootprints) {
+TEST(Analysis, RegionInfoPreservesDistinctFootprints) {
   using triton::AddressSet;
   using triton::BufferRegionView;
   using triton::RegionInfo;
@@ -158,9 +159,6 @@ TEST(Analysis, RegionInfoHashCollisionsPreserveExactFootprints) {
     values.push_back(view);
     expected.insert(view);
     forward.insert(view);
-    // All views have the same hashed metadata but distinct exact geometry.
-    EXPECT_EQ(RegionInfo::ViewList::hasher{}(view),
-              RegionInfo::ViewList::hasher{}(values.front()));
   }
   for (const auto &view : llvm::reverse(values))
     reverse.insert(view);
@@ -389,6 +387,71 @@ TEST(Analysis, BufferStatePlanKeepsLargeSparsePartitionsExact) {
   }
 
   expectFullCoveragePartition(regions);
+}
+
+TEST(Analysis, CachedViewHashTracksTheStoredValue) {
+  using triton::AddressSet;
+  using triton::BufferRegionView;
+  using triton::BufferRegionViewHash;
+  using Cached = triton::CachedBufferRegionView;
+  static_assert(
+      std::is_convertible_v<const Cached &, const BufferRegionView &>);
+  static_assert(!std::is_convertible_v<Cached &, BufferRegionView &>);
+  static_assert(!std::is_copy_assignable_v<Cached>);
+  static_assert(!std::is_move_assignable_v<Cached>);
+  BufferRegionView source{{0, 72, {{0, AddressSet::fromRange(0, 8)}}}};
+  source.region.ctaAddresses.front().second.insert(
+      AddressSet::fromRange(64, 8));
+  source.region.ctaAddresses.front().second.set(10);
+  Cached original(source);
+  const size_t originalHash = Cached::Hash{}(original);
+  source.region.ctaAddresses.front().second.subtract(
+      AddressSet::fromRange(10, 1));
+  source.region.ctaAddresses.front().second.set(11);
+  Cached changed(source);
+  EXPECT_NE(Cached::Hash{}(changed), originalHash);
+  EXPECT_FALSE(original == changed);
+  EXPECT_EQ(Cached::Hash{}(original), originalHash);
+  EXPECT_EQ(Cached::Hash{}(changed), BufferRegionViewHash{}(source));
+  auto copy = original;
+  EXPECT_EQ(copy, original);
+  Cached moved(std::move(copy));
+  EXPECT_EQ(moved, original);
+  EXPECT_EQ(Cached::Hash{}(copy), BufferRegionViewHash{}(copy));
+  EXPECT_EQ(Cached::Hash{}(moved), BufferRegionViewHash{}(moved));
+  BufferRegionView translated =
+      static_cast<const BufferRegionView &>(original).translated(16, 3);
+  Cached translatedKey(translated);
+  EXPECT_EQ(Cached::Hash{}(translatedKey), BufferRegionViewHash{}(translated));
+  EXPECT_FALSE(translatedKey == original);
+}
+
+TEST(Analysis, CachedViewPreservesValuesWhenTableHashesCollide) {
+  using triton::AddressSet;
+  using triton::BufferRegionView;
+  using Cached = triton::CachedBufferRegionView;
+  struct ConstantHash {
+    size_t operator()(const Cached &) const { return 0; }
+  };
+  std::unordered_set<Cached, ConstantHash> collided;
+  std::set<BufferRegionView> oracle;
+  for (unsigned mask = 0; mask < 256; ++mask) {
+    AddressSet addresses;
+    for (unsigned bit = 0; bit < 8; ++bit)
+      if (mask & (1u << bit))
+        addresses.set(bit);
+    BufferRegionView view{{0, 8, {{0, addresses}}}};
+    collided.insert(view);
+    collided.insert(view);
+    oracle.insert(view);
+  }
+  auto copied = collided;
+  copied = collided;
+  auto moved = std::move(copied);
+  EXPECT_EQ(moved, collided);
+  EXPECT_EQ(collided.size(), oracle.size());
+  for (const auto &view : oracle)
+    EXPECT_EQ(collided.count(view), 1);
 }
 
 } // namespace mlir
