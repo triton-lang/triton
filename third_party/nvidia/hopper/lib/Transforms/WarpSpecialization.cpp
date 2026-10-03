@@ -113,7 +113,6 @@ public:
       }
       if (success)
         break;
-      // Clear async_task.
     }
     if (!success) {
       mlir::emitError(
