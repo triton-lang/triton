@@ -142,7 +142,7 @@ static const Fp8ConversionDesc Fp16_to_Fp8E4M3Nv = {
     32, 16, 2};
 
 static Fp8ConversionDesc Fp8_to_Bf16(int computeCapability, bool isE5M2) {
-  if (isE5M2 && computeCapability < 90) {
+  if (isE5M2 && computeCapability < 89) {
     // E5M2 embeds exactly in FP16. Widening preserves infinities and quiets
     // NaNs; every finite result is exactly representable in BF16.
     return {R"({

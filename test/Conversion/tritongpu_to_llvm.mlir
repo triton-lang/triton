@@ -3999,8 +3999,10 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
   // SM89-LABEL: @fp8e5_to_bf16
   // SM89-NOT: cvt.bf16.f16
-  // SM89: cvt.f32.f16
-  // SM89-SAME: prmt.b32 $0, f0, f1, 0x7632;
+  // SM89: cvt.rn.f16x2.e5m2x2 a, $1;
+  // SM89-SAME: cvt.f32.f16
+  // SM89-SAME: cvt.rn.bf16.f32
+  // SM89-SAME: "=r,h"
   // CHECK-LABEL: @fp8e5_to_bf16
   // CHECK-NOT: cvt.bf16.f16
   // CHECK: llvm.inline_asm
