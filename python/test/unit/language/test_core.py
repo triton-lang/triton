@@ -3142,6 +3142,14 @@ def test_argmax_argmin_with_nan(dtype, device):
     assert val.item() == 5.0, f"expected 5.0, got {val.item()}"
     assert idx.item() == 1, f"expected 1, got {idx.item()}"
 
+    # argmin: NaN at end in odd lane [-13, -1, 17, nan] -> min=-13.0, argmin=0
+    x_nan_odd = torch.tensor([-13.0, -1.0, 17.0, float("nan")], dtype=dtype, device=device)
+    val.zero_()
+    idx.zero_()
+    argmin_kernel[(1, )](x_nan_odd, val, idx, N=4, BLOCK=4)
+    assert val.item() == -13.0, f"expected -13.0, got {val.item()}"
+    assert idx.item() == 0, f"expected 0, got {idx.item()}"
+
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -3202,6 +3210,14 @@ def test_argmax_argmin_tie_break_fast_with_nan(dtype, device):
     argmin_fast_kernel[(1, )](x_nan_mid, val, idx, N=3, BLOCK=4)
     assert val.item() == 1.0, f"expected 1.0, got {val.item()}"
     assert idx.item() == 2, f"expected 2, got {idx.item()}"
+
+    # argmin: NaN at end in odd lane [-13, -1, 17, nan] -> min=-13.0, argmin=0
+    x_nan_odd = torch.tensor([-13.0, -1.0, 17.0, float("nan")], dtype=dtype, device=device)
+    val.zero_()
+    idx.zero_()
+    argmin_fast_kernel[(1, )](x_nan_odd, val, idx, N=4, BLOCK=4)
+    assert val.item() == -13.0, f"expected -13.0, got {val.item()}"
+    assert idx.item() == 0, f"expected 0, got {idx.item()}"
 
 
 def get_reduced_dtype(dtype_str, op):

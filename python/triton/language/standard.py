@@ -171,11 +171,17 @@ def zeros_like(input):
 
 @jit
 def _argmax_combine(value1, index1, value2, index2, tie_break_left):
+    nan1 = value1 != value1  # noqa: PLR0124
+    nan2 = value2 != value2  # noqa: PLR0124
+
     if tie_break_left:
         tie = value1 == value2 and index1 < index2
+        nan_tie = index1 < index2
     else:
         tie = False
-    gt = value1 > value2 or tie
+        nan_tie = False
+
+    gt = (~nan1 & nan2) | ((~nan1 & ~nan2) & (value1 > value2 or tie)) | (nan1 & nan2 & nan_tie)
     v_ret = core.where(gt, value1, value2)
     i_ret = core.where(gt, index1, index2)
     return v_ret, i_ret
@@ -229,11 +235,17 @@ def argmax(input, axis, tie_break_left=True, keep_dims=False):
 
 @jit
 def _argmin_combine(value1, index1, value2, index2, tie_break_left):
+    nan1 = value1 != value1  # noqa: PLR0124
+    nan2 = value2 != value2  # noqa: PLR0124
+
     if tie_break_left:
         tie = value1 == value2 and index1 < index2
+        nan_tie = index1 < index2
     else:
         tie = False
-    lt = value1 < value2 or tie
+        nan_tie = False
+
+    lt = (~nan1 & nan2) | ((~nan1 & ~nan2) & (value1 < value2 or tie)) | (nan1 & nan2 & nan_tie)
     value_ret = core.where(lt, value1, value2)
     index_ret = core.where(lt, index1, index2)
     return value_ret, index_ret
