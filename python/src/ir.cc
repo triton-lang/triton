@@ -939,6 +939,16 @@ void init_triton_ir(py::module_ &m) {
                      licmAttr, {}, {}, {}, {}, {}, {}, {}, {}, {});
              return la;
            })
+      .def("get_nounroll_loop_attr",
+           [](TritonOpBuilder &self) -> Attribute {
+             auto &builder = self.getBuilder();
+             auto unroll = LLVM::LoopUnrollAttr::get(
+                 builder.getContext(), builder.getBoolAttr(true), {}, {}, {},
+                 {}, {}, {});
+             return LLVM::LoopAnnotationAttr::get(
+                 builder.getContext(), {}, {}, {}, unroll, {}, {}, {}, {}, {},
+                 {}, {}, {}, {}, {}, {});
+           })
       // Use arith.ConstantOp to create constants
       // Constants
       .def("get_int1",
