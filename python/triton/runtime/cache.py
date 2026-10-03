@@ -86,7 +86,13 @@ class FileCacheManager(CacheManager):
         if child_paths is None:
             return None
         result = {}
+        grp_dir = os.path.dirname(grp_filepath)
         for c, p in child_paths.items():
+            # Child paths are stored relative to the group file so a copied or
+            # relocated cache resolves against its own directory. Absolute
+            # paths are legacy entries and are used as-is.
+            if not os.path.isabs(p):
+                p = os.path.normpath(os.path.join(grp_dir, p))
             if not os.path.exists(p):
                 return None
             result[c] = p
@@ -96,7 +102,20 @@ class FileCacheManager(CacheManager):
     def put_group(self, filename: str, group: Dict[str, str]) -> str:
         if not self.cache_dir:
             raise RuntimeError("Could not create or locate cache dir")
-        grp_contents = json.dumps({"child_paths": group})
+        # Store child paths relative to the cache dir so the group stays valid
+        # when the cache is copied or relocated. A child outside the cache dir
+        # keeps its absolute path.
+        relative_group = {}
+        for c, p in group.items():
+            try:
+                rel = os.path.relpath(p, self.cache_dir)
+            except ValueError:
+                # e.g. different drives on Windows
+                rel = p
+            if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+                rel = p
+            relative_group[c] = rel
+        grp_contents = json.dumps({"child_paths": relative_group})
         grp_filename = f"__grp__{filename}"
         return self.put(grp_contents, grp_filename, binary=False)
 

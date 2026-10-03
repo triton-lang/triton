@@ -5,6 +5,7 @@ import multiprocessing
 import os
 import re
 import gc
+import json
 import shutil
 import pathlib
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
@@ -56,6 +57,47 @@ def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_pat
 
     os.remove(artifact_path)
     assert manager.get_group("kernel.json") is None
+
+
+def test_file_cache_manager_group_survives_cache_relocation(fresh_knobs, tmp_path):
+    # Group files must store child paths relative to the group file, so a
+    # copied cache resolves against its own directory and keeps hitting once
+    # the original directory is gone (#11999).
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    fresh_knobs.cache.dir = str(src_root)
+    manager = FileCacheManager("key")
+    metadata_path = manager.put("{}", "kernel.json", binary=False)
+    artifact_path = manager.put("binary", "kernel.cubin", binary=False)
+    manager.put_group("kernel.json", {
+        "kernel.json": metadata_path,
+        "kernel.cubin": artifact_path,
+    })
+
+    dst_root = tmp_path / "dst"
+    shutil.copytree(src_root, dst_root)
+    fresh_knobs.cache.dir = str(dst_root)
+    moved = FileCacheManager("key")
+    # While the original is still around the copy must load its own files,
+    # not silently read from the original cache dir.
+    group = moved.get_group("kernel.json")
+    assert group is not None
+    assert all(p.startswith(str(dst_root)) for p in group.values())
+
+    shutil.rmtree(src_root)
+    assert moved.get_group("kernel.json") is not None
+
+
+def test_file_cache_manager_group_reads_legacy_absolute_paths(fresh_knobs, tmp_path):
+    # Caches written before child paths became relative store absolute paths;
+    # those entries must keep working unchanged.
+    fresh_knobs.cache.dir = str(tmp_path)
+    manager = FileCacheManager("key")
+    metadata_path = manager.put("{}", "kernel.json", binary=False)
+    grp_contents = json.dumps({"child_paths": {"kernel.json": metadata_path}})
+    manager.put(grp_contents, "__grp__kernel.json", binary=False)
+
+    assert manager.get_group("kernel.json") == {"kernel.json": metadata_path}
 
 
 def test_remote_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
