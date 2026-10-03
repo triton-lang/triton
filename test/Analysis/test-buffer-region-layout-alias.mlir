@@ -885,26 +885,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
-
-// -----
-
-#padded = #ttg.padded_shared<[4:+2, 16:+4] {order = [1, 0], shape = [4, 8]}>
-#dense = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-
-// Symbolic padding must preserve holes after translating the storage base.
-// CHECK-LABEL: symbolic_a_padded vs symbolic_a_padded: alias=true
-// CHECK: symbolic_a_padded vs symbolic_b_hole: alias=false
-// CHECK: symbolic_a_padded vs symbolic_c_payload: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=false
-// CHECK: symbolic_b_hole vs symbolic_c_payload: alias=false
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  tt.func public @symbolic_padding_preserves_holes() {
-    %padded = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<4x8xi8, #padded, #smem, mutable>
-    %hole = ttg.local_alloc {allocation.offset = 20 : i32} : () -> !ttg.memdesc<2xi8, #dense, #smem, mutable>
-    %payload = ttg.local_alloc {allocation.offset = 22 : i32} : () -> !ttg.memdesc<2xi8, #dense, #smem, mutable>
-    %0 = ttg.local_load %padded {test.region_name = "symbolic_a_padded"} : !ttg.memdesc<4x8xi8, #padded, #smem, mutable> -> tensor<4x8xi8>
-    %1 = ttg.local_load %hole {test.region_name = "symbolic_b_hole"} : !ttg.memdesc<2xi8, #dense, #smem, mutable> -> tensor<2xi8>
-    %2 = ttg.local_load %payload {test.region_name = "symbolic_c_payload"} : !ttg.memdesc<2xi8, #dense, #smem, mutable> -> tensor<2xi8>
-    tt.return
-  }
-}

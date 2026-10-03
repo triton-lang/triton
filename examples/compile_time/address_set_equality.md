@@ -1,18 +1,18 @@
-# Equal shared-memory footprint compilation benchmark
+# Hash-based buffer-view deduplication benchmark
 
-Buffer-region analysis compares physical memory footprints while joining
-possible descriptor views. Expanding equal layouts into individual addresses
-can make those comparisons expensive.
+Buffer-region analysis joins sets of possible descriptor views. Ordered-set
+insertion compares their physical footprints lexicographically, walking each
+set address when two footprints are equal.
 
-`AddressSet` retains ranges, normalized XOR layouts, shared-memory layouts
-(including padding), tensor-memory layouts, or explicit intervals as immutable
-flat values. Descriptions never reference other address sets. Set operations
-reuse a compact value when possible and otherwise compute canonical intervals
-immediately; they do not retain an expression graph or operation history.
-Explicit `std::variant` visitors require each representation to be handled.
-Layout evaluation caches sorted half-open intervals when needed.
-`SparseBitVector` is used only as an independent test oracle for address sets.
-This enforces representation coverage, not a proof of mathematical correctness.
+`RegionInfo::ViewList` uses `std::unordered_set` with a hash of inexpensive
+descriptor metadata. Full `BufferRegionView` equality resolves collisions,
+including exact `SparseBitVector` equality for physical addresses. Distinct
+geometries may share a hash but remain distinct views. Bitvector equality
+compares machine words rather than iterating over every set address.
+
+Diagnostic views and emitted concurrency-sanitizer cases are sorted at their
+output boundaries for deterministic output. Address construction and set
+operations continue to use `SparseBitVector`.
 
 The benchmark allocates a 128 KiB shared-memory region replicated across eight
 CTAs, obtains two views with runtime indices, and conditionally swaps them 128
@@ -69,14 +69,14 @@ of compilation, not GPU execution.
 
 | Workload | Master | New | Speedup |
 | --- | ---: | ---: | ---: |
-| Synthetic | 70.076 | 0.706 | 99.24x |
-| Overlapping accumulator | 2.340 | 0.564 | 4.15x |
-| Multi-CTA tutorial | 1.478 | 0.604 | 2.45x |
-| Attention | 6.541 | 3.580 | 1.83x |
-| Broad tutorial/example sweep total | 73.645 | 48.496 | 1.52x |
+| Synthetic | 70.308 | 1.453 | 48.40x |
+| Overlapping accumulator | 2.325 | 0.663 | 3.51x |
+| Multi-CTA tutorial | 1.477 | 0.624 | 2.37x |
+| Attention | 6.531 | 3.707 | 1.76x |
+| Broad tutorial/example sweep total | 72.545 | 50.545 | 1.44x |
 
 The individual rows average two cold runs. The synthetic runs took
-69.857 and 70.295 seconds on master, and 0.712 and 0.700 seconds on the
+70.141 and 70.475 seconds on master, and 1.450 and 1.455 seconds on the
 candidate. The broad sweep is one run per compiler, summing 135 kernel
 compilations from 142 sampled tests across the Gluon tutorials and examples
 and the standard fused attention tutorial. It is a sampled suite, not the
@@ -89,13 +89,13 @@ The focused tutorial/example cases were:
 - `python/examples/gluon/01-attention-forward.py::test_op[4ctas-True-dtype2-True-128-8192-32-4]`
 
 All compared GPU binaries were byte-identical; the synthetic case also produced
-identical source IR, Gluon IR, Triton GPU IR, LLVM IR, and PTX. Correctness checks
-include an independent bitvector oracle for symbolic set operations and existing
-barrier, alias, padding, and tensor-memory tests. A separate negative compilation
-check added an unhandled sixth variant in a shadow header; C++ rejected the
-incomplete visitors.
+identical source IR, Gluon IR, Triton GPU IR, LLVM IR, and PTX. Collision coverage
+constructs 32 distinct footprints with the same metadata hash and checks exact
+membership, insertion-order independence, and idempotent joins. Existing
+barrier, alias, padding, and tensor-memory tests check the analysis consumers.
 
-Some layouts still enumerate address combinations when evaluating exact
-intervals. Highly fragmented footprints can require many intervals. The
-synthetic speedup intentionally amplifies repeated equal-footprint comparisons
-and should not be treated as a typical application-wide speedup.
+Metadata-only hashing can put distinct geometries in the same bucket, where
+full equality determines membership. It does not guarantee constant-time
+lookups, and footprint construction and copying still have a cost. The
+synthetic intentionally amplifies repeated equal-footprint comparisons and
+should not be treated as a typical application-wide speedup.
