@@ -5657,6 +5657,36 @@ def test_assume(device):
         assert 'llvm.assume' in pgm.asm['llir']
 
 
+@pytest.mark.skipif(not is_hip(), reason="AMD-specific assumption folding")
+@pytest.mark.parametrize("assume_nonzero", [False, True])
+@pytest.mark.parametrize("n, step", [(1, 1), (7, 1), (7, 3)])
+def test_assume_nonzero_trip_count(n, step, assume_nonzero, device):
+
+    @triton.jit(do_not_specialize=["n", "step"])
+    def kernel(X, Y, n, step, ASSUME_NONZERO: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        acc = tl.full((BLOCK, ), 0, tl.float32)
+        if ASSUME_NONZERO:
+            tl.assume(n > 0)
+        # A runtime step keeps LLVM from unrolling the loop.
+        for i in range(0, n, step):
+            acc += tl.load(X + i * BLOCK + offsets)
+        tl.store(Y + offsets, acc)
+
+    block = 128
+    x = torch.arange(n * block, dtype=torch.float32, device=device).reshape(n, block)
+    y = torch.empty((block, ), dtype=torch.float32, device=device)
+    compiled = kernel[(1, )](x, y, n, step, assume_nonzero, block)
+    torch.testing.assert_close(y, x[::step].sum(dim=0), atol=0, rtol=0)
+
+    # Lowering scf.for introduces a zero-trip check after FoldTrueCmpIOp runs.
+    # LLVM can remove it only if the user-provided assumption survives that pass.
+    # The loop backedge remains in both versions.
+    branches = re.findall(r"^\s*br (i1|label)\b", compiled.asm["llir"], re.MULTILINE)
+    assert branches[0] == ("label" if assume_nonzero else "i1")
+    assert branches.count("i1") == (1 if assume_nonzero else 2)
+
+
 # ---------------
 # test store
 # ---------------
