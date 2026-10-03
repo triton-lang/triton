@@ -71,6 +71,17 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+def test_compile_only_sm107_requires_ptx94():
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    source = ASTSource(kernel, signature={"out": "*i32"})
+    with pytest.raises(ValueError, match="SM107 requires PTX 9.4 or later"):
+        triton.compile(source, target=GPUTarget("cuda", 107, 32), options={"ptx_version": 93})
+
+
 @pytest.mark.parametrize("seed_type, dtype", [("u32", tl.uint32), ("u64", tl.uint32), ("u64", tl.uint64)])
 def test_umulhi_truncated_input(seed_type, dtype):
     from triton._C.libtriton import ir
