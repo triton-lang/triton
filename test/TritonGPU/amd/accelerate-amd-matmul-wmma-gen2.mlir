@@ -242,3 +242,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// With batch extent one, distribute all four warps over M/N.
+// CHECK: #[[$MMA:.+]] = #ttg.amd_wmma<{{.*}}ctaLayout = {warp = {{\[\[0, 0, 1\], \[0, 1, 0\]\]}}}
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 4, 8], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @wmma_bmm_b1(
+  tt.func @wmma_bmm_b1(%a: tensor<1x64x32xf16, #dot0>, %b: tensor<1x32x64xf16, #dot1>) -> tensor<1x64x64xf32, #blocked> {
+    %zero = arith.constant dense<0.0> : tensor<1x64x64xf32, #blocked>
+    // CHECK: tt.dot {{.*}} -> tensor<1x64x64xf32, #[[$MMA]]>
+    %result = tt.dot %a, %b, %zero : tensor<1x64x32xf16, #dot0> * tensor<1x32x64xf16, #dot1> -> tensor<1x64x64xf32, #blocked>
+    tt.return %result : tensor<1x64x64xf32, #blocked>
+  }
+}
