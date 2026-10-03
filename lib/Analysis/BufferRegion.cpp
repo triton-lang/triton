@@ -575,9 +575,10 @@ BufferRegionAnalysis::getFootprint(Value value,
   }
   const auto *footprint = it->second.get();
   if (footprint && allocationFrame &&
-      llvm::any_of(footprint->regionInfo.views, [&](const auto &view) {
-        return view.allocationFrame != getOperationId(allocationFrame);
-      }))
+      llvm::any_of(
+          footprint->regionInfo.views, [&](const BufferRegionView &view) {
+            return view.allocationFrame != getOperationId(allocationFrame);
+          }))
     return nullptr;
   return footprint;
 }
@@ -624,9 +625,10 @@ const BufferRegionFootprint *BufferRegionAnalysis::translateToCallsite(
   if (!footprint)
     return nullptr;
   uint32_t calleeFrame = getOperationId(callee);
-  if (llvm::none_of(footprint->regionInfo.views, [&](const auto &view) {
-        return view.allocationFrame == calleeFrame;
-      }))
+  if (llvm::none_of(footprint->regionInfo.views,
+                    [&](const BufferRegionView &view) {
+                      return view.allocationFrame == calleeFrame;
+                    }))
     return footprint;
   auto [it, inserted] =
       callsiteFootprints.try_emplace({footprint, call.getOperation()});

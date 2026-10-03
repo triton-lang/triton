@@ -6,6 +6,7 @@
 #include <optional>
 #include <set>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
@@ -14,6 +15,7 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -155,6 +157,42 @@ public:
   }
 };
 
+// Hash every equality field, including the exact address sets.
+struct BufferRegionViewHash {
+  size_t operator()(const BufferRegionView &view) const {
+    auto hash = llvm::hash_combine(
+        view.allocationFrame, view.region.baseOffset, view.region.length,
+        view.storageBase, view.affineOffset, view.affinePartitionOffset,
+        view.affineCTAOffset, view.allocation,
+        llvm::hash_combine_range(view.partitionBases.begin(),
+                                 view.partitionBases.end()));
+    for (const auto &[cta, addresses] : view.region.ctaAddresses)
+      hash = llvm::hash_combine(
+          hash, cta,
+          llvm::hash_combine_range(addresses.begin(), addresses.end()));
+    return hash;
+  }
+};
+
+// Stored keys expose only a const view, so the cached hash cannot become stale.
+class CachedBufferRegionView {
+  const BufferRegionView view;
+  const size_t cachedHash;
+
+public:
+  CachedBufferRegionView(BufferRegionView view = {})
+      : view(std::move(view)), cachedHash(BufferRegionViewHash{}(this->view)) {}
+  operator const BufferRegionView &() const { return view; }
+  bool operator==(const CachedBufferRegionView &other) const {
+    return cachedHash == other.cachedHash && view == other.view;
+  }
+  struct Hash {
+    size_t operator()(const CachedBufferRegionView &key) const noexcept {
+      return key.cachedHash;
+    }
+  };
+};
+
 //===----------------------------------------------------------------------===//
 // Buffer state planning
 //===----------------------------------------------------------------------===//
@@ -178,7 +216,8 @@ BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions,
 //
 struct RegionInfo {
   enum class Kind { Uninitialized, Exact, Unknown };
-  using ViewList = std::set<BufferRegionView>;
+  using ViewList =
+      std::unordered_set<CachedBufferRegionView, CachedBufferRegionView::Hash>;
 
   Kind kind = Kind::Uninitialized;
   ViewList views;
@@ -209,7 +248,11 @@ struct RegionInfo {
       os << "unknown";
       return;
     }
-    llvm::interleaveComma(views, os, [&](const BufferRegionView &view) {
+    // Keep diagnostics stable even though the lattice container is unordered.
+    llvm::SmallVector<BufferRegionView> orderedViews(views.begin(),
+                                                     views.end());
+    llvm::sort(orderedViews);
+    llvm::interleaveComma(orderedViews, os, [&](const BufferRegionView &view) {
       view.region.print(os);
     });
   }
