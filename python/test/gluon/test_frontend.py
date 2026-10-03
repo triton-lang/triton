@@ -241,6 +241,22 @@ def test_fabric_frontend_invalid(case, message, fabric_descriptor_fields):
         run_parser(kernel, *make_args(buffer, case), target=AMPERE_TARGET)
 
 
+@pytest.mark.parametrize("aligned", [False, True])
+def test_fabric_nested_argument_alignment(aligned, fabric_descriptor_fields):
+    fabric_descriptor_fields["address"] = 0x1000 if aligned else 0x1004
+    buffer = SynchronizedBuffer(**fabric_descriptor_fields)
+
+    @gluon.jit
+    def kernel(nested, out):
+        view = nested[1] + nested[0]
+        ttgl.store(out, ttgl.load(view.ptr))
+
+    module = run_parser(kernel, args=((ttgl.constexpr(7), buffer), MockTensor(ttgl.float32)))
+    pointers = re.findall(r"%arg\d+: !tt.ptr<f32>(?: \{[^}]*\})?", module.str_nodebug())
+    assert len(pointers) == 2
+    assert ["tt.divisibility = 16" in arg for arg in pointers] == [aligned, True]
+
+
 @gluon.constexpr_function
 def _inline_asm_frontend_generator(outputs, inputs):
     values, scalar = outputs
