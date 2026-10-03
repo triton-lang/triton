@@ -209,21 +209,21 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
         tensor<128xf8E4M3FN, #blocked>,
         tensor<128xf8E5M2, #blocked>,
         tensor<128xf8E4M3FN, #blocked>) {
-    // CHECK-COUNT-2: cvt.rn.f16x2.e5m2x2 {{.*}} "=r,h" %{{.*}} : (i16) -> vector<2xf16>
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.nvvm.e5m2x2.to.f16x2.rn"{{.*}} : (i16) -> vector<2xf16>
     %out0 = tt.fp_to_fp %in0 : tensor<128xf8E5M2, #blocked> -> tensor<128xf16, #blocked>
-    // CHECK-COUNT-2: cvt.rn.f16x2.e4m3x2 {{.*}} "=r,h" %{{.*}} : (i16) -> vector<2xf16>
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.nvvm.e4m3x2.to.f16x2.rn"{{.*}} : (i16) -> vector<2xf16>
     %out1 = tt.fp_to_fp %in1 : tensor<128xf8E4M3FN, #blocked> -> tensor<128xf16, #blocked>
     // CHECK-COUNT-2: mul.rn.bf16x2
     %out2 = tt.fp_to_fp %in0 : tensor<128xf8E5M2, #blocked> -> tensor<128xbf16, #blocked>
 
-    // CHECK-COUNT-2: cvt.rn.satfinite.e5m2x2.f16x2 {{.*}} "=h,r" %{{.*}} : (i32) -> vector<2xi8>
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.nvvm.f16x2.to.e5m2x2.rn"{{.*}} : (vector<2xf16>) -> i16
     %out3 = tt.fp_to_fp %in2, rounding = rtne : tensor<128xf16, #blocked> -> tensor<128xf8E5M2, #blocked>
-    // CHECK-COUNT-2: cvt.rn.satfinite.e4m3x2.f16x2 {{.*}} "=h,r" %{{.*}} : (i32) -> vector<2xi8>
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.nvvm.f16x2.to.e4m3x2.rn"{{.*}} : (vector<2xf16>) -> i16
     %out4 = tt.fp_to_fp %in2, rounding = rtne : tensor<128xf16, #blocked> -> tensor<128xf8E4M3FN, #blocked>
 
-    // CHECK-COUNT-2: cvt.rn.satfinite.e5m2x2.f32 {{.*}} "=h,r,r" %{{.*}}, %{{.*}} : (i32, i32) -> vector<2xi8>
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.nvvm.ff.to.e5m2x2.rn"{{.*}} : (f32, f32) -> i16
     %out5 = tt.fp_to_fp %in3, rounding = rtne : tensor<128xf32, #blocked> -> tensor<128xf8E5M2, #blocked>
-    // CHECK-COUNT-2: cvt.rn.satfinite.e4m3x2.f32 {{.*}} "=h,r,r" %{{.*}}, %{{.*}} : (i32, i32) -> vector<2xi8>
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.nvvm.ff.to.e4m3x2.rn"{{.*}} : (f32, f32) -> i16
     %out6 = tt.fp_to_fp %in3, rounding = rtne : tensor<128xf32, #blocked> -> tensor<128xf8E4M3FN, #blocked>
     tt.return %out0, %out1, %out2, %out3, %out4, %out5, %out6 :
         tensor<128xf16, #blocked>,
@@ -659,7 +659,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 16]}>
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: test_fp8_to_fp16_dot_operand
-  // CHECK-COUNT-16: cvt.rn.f16x2.e5m2x2
+  // CHECK-COUNT-16: llvm.call_intrinsic "llvm.nvvm.e5m2x2.to.f16x2.rn"
   tt.func private @test_fp8_to_fp16_dot_operand(%arg: tensor<128x32xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>) -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> {
     %r = tt.fp_to_fp %arg : tensor<128x32xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
     tt.return %r : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>

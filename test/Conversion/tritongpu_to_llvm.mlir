@@ -3922,8 +3922,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // SM89-LABEL: @fp32_to_fp8e5_rtne
-  // SM89-NOT: cvt.rz.f16.f32
-  // SM89: cvt.rn.satfinite.e5m2x2.f32
+  // SM89-NOT: llvm.nvvm.f2f16.rz
+  // SM89: llvm.call_intrinsic "llvm.nvvm.ff.to.e5m2x2.rn"
   // CHECK-LABEL: @fp32_to_fp8e5_rtne
   // CHECK-NOT: llvm.fpext
   // CHECK-NOT: llvm.fcmp
@@ -3963,7 +3963,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
   // CHECK-LABEL: @bf16_to_fp8e5_rtne
   // CHECK: llvm.fpext
-  // CHECK: cvt.rn.f16.f32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2f16.rn"
   // CHECK: llvm.inline_asm {{.*}}min.f16x2
   // CHECK-SAME: prmt.b32 $0, a0, a1, 0x7531;
   // CHECK: llvm.return
@@ -3978,9 +3978,9 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @bf16_to_fp16_fallback
   // CHECK: llvm.fpext {{.*}} : bf16 to f32
-  // CHECK: llvm.inline_asm {{.*}} "cvt.rn.f16.f32 $0, $1;", "=h,r"
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2f16.rn"
   // CHECK: llvm.fpext {{.*}} : bf16 to f32
-  // CHECK: llvm.inline_asm {{.*}} "cvt.rz.f16.f32 $0, $1;", "=h,r"
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2f16.rz"
   tt.func private @bf16_to_fp16_fallback(%arg: bf16) -> (f16, f16) {
     %rn = tt.fp_to_fp %arg : bf16 -> f16
     %rz = tt.fp_to_fp %arg, rounding = rtz : bf16 -> f16
