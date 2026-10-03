@@ -452,6 +452,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 
 // -----
 
+#select_layout = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: global_store_selected_pointer_vec4
+  tt.func @global_store_selected_pointer_vec4(
+      %lhs: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+      %rhs: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+      %split: i32 {tt.divisibility = 4 : i32}) {
+    %offsets = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #select_layout>
+    %a = tt.splat %lhs : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #select_layout>
+    %b = tt.splat %rhs : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #select_layout>
+    %pa = tt.addptr %a, %offsets : tensor<128x!tt.ptr<f32>, #select_layout>, tensor<128xi32, #select_layout>
+    %pb = tt.addptr %b, %offsets : tensor<128x!tt.ptr<f32>, #select_layout>, tensor<128xi32, #select_layout>
+    %limit = tt.splat %split : i32 -> tensor<128xi32, #select_layout>
+    %cond = arith.cmpi slt, %offsets, %limit : tensor<128xi32, #select_layout>
+    %ptrs = arith.select %cond, %pa, %pb : tensor<128xi1, #select_layout>, tensor<128x!tt.ptr<f32>, #select_layout>
+    %value = arith.constant dense<1.0> : tensor<128xf32, #select_layout>
+    // The selection boundary cannot split a sixteen-byte store.
+    // CHECK: st.global.v4.b32
+    tt.store %ptrs, %value : tensor<128x!tt.ptr<f32>, #select_layout>
+    tt.return
+  }
+}
+
+// -----
+
 // This test verifies the vectorization of Load and Store Ops.
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
 // Note, the %n_elements doesn't have a "tt.divisibility" hint, so Triton assumes it's divisibility is 1, this should effect the mask's alignment and further restrict the load/store ops' vector width to be 1.
