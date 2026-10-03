@@ -157,16 +157,11 @@ public:
   }
 };
 
-// Geometry is deliberately omitted to keep hashing cheap. Exact equality
-// still checks every field, including the address sets, on hash collisions.
+// Hash only the base offset. Exact equality still checks every field,
+// including the address sets, on hash collisions.
 struct BufferRegionViewHash {
   size_t operator()(const BufferRegionView &view) const {
-    return llvm::hash_combine(
-        view.allocationFrame, view.region.baseOffset, view.region.length,
-        view.storageBase, view.affineOffset, view.affinePartitionOffset,
-        view.affineCTAOffset, view.allocation,
-        llvm::hash_combine_range(view.partitionBases.begin(),
-                                view.partitionBases.end()));
+    return llvm::hash_combine(view.region.baseOffset);
   }
 };
 
