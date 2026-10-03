@@ -266,8 +266,10 @@ class Autotuner(KernelInterface):
                         benchmark()
 
                     if knobs.autotuning.listener is not None:
+                        # Unwrap to the @triton.jit kernel, i.e. the object wrapping `self.base_fn`. Under
+                        # TRITON_INTERPRET=1 this is an InterpretedFunction rather than a JITFunction.
                         jit_fn = self.fn
-                        while not isinstance(jit_fn, JITFunction):
+                        while not inspect.isfunction(jit_fn.fn):
                             jit_fn = jit_fn.fn
                         knobs.autotuning.listener(
                             fn=jit_fn,

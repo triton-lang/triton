@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 import triton
@@ -154,3 +155,34 @@ def test_autotune_listener_single_config(device: str, fresh_knobs) -> None:
 
     # Single config: no autotune benchmarking, listener should not fire
     assert len(captured) == 0
+
+
+@pytest.mark.interpreter
+def test_autotune_listener_interpreter(device: str) -> None:
+    """Test that the listener fires under TRITON_INTERPRET=1, where @triton.jit returns an InterpretedFunction."""
+    captured = []
+
+    def fake_bench(kernel_call, quantiles):
+        kernel_call()
+        return [1.0, 1.0, 1.0]
+
+    configs = [triton.Config({"BLOCK_SIZE": 32}), triton.Config({"BLOCK_SIZE": 128})]
+
+    @triton.autotune(configs=configs, key=["N"], do_bench=fake_bench)
+    @triton.jit
+    def _kernel(dst, src, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(src + offsets, mask=offsets < N)
+        tl.store(dst + offsets, x, mask=offsets < N)
+
+    N = 1024
+    src = torch.randn(N, device=device)
+    dst = torch.empty(N, device=device)
+    # Scope only the autotuning knobs: fresh_knobs would also clear TRITON_INTERPRET.
+    with triton.knobs.autotuning.scope():
+        triton.knobs.autotuning.listener = lambda **kwargs: captured.append(kwargs)
+        _kernel[(triton.cdiv(N, 32), )](dst, src, N=N)
+
+    assert len(captured) == 1
+    # fn is the @triton.jit kernel: a JITFunction, or an InterpretedFunction under the interpreter
+    assert captured[0]["fn"] is _kernel.fn
