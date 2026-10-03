@@ -4575,7 +4575,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         else:
             assert 'st.global.v4' in ptx
 
-    is_tcgen5 = (capability[0] == 10) and (num_warps % 4) == 0 and (M % 64) == 0 and (N % 8) == 0
+    # MMA v5 is used on SM100 through SM119 for supported dot types.
+    is_tcgen5 = capability[0] in (10, 11) and (num_warps % 4) == 0 and (M % 64) == 0 and (N % 8) == 0
+    # MMA v5 int8 is only supported on SM100.
+    supports_tcgen5_int8 = capability == (10, 0)
 
     if in_dtype == 'float32' and input_precision != "ieee":
         if is_tcgen5:
@@ -4602,7 +4605,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
     elif in_dtype == 'int8':
-        if is_tcgen5 and capability[1] not in (3, 7):
+        if is_tcgen5 and supports_tcgen5_int8:
             assert re.search(r'tcgen05.mma.cta_group::1.kind::i8', ptx)
         elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx
