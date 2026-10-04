@@ -3,4 +3,5 @@ add_triton_library(TritonAMDMIRDAG
 
   LINK_LIBS PUBLIC
   LLVMCodeGen
+  LLVMTarget
 )
