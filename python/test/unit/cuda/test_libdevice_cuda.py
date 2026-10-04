@@ -15,6 +15,33 @@ from triton.language.extra import libdevice
 # -----------------------
 
 
+@pytest.mark.parametrize("op", ["min", "max"])
+def test_cuda_minmax_nan_xorsign_abs(op):
+    if not is_cuda() or torch.cuda.get_device_capability() < (8, 6):
+        pytest.skip("requires CUDA compute capability 8.6+")
+
+    @triton.jit
+    def kernel(A, B, Out, OP: tl.constexpr):
+        offsets = tl.arange(0, 8)
+        a = tl.load(A + offsets)
+        b = tl.load(B + offsets)
+        if OP == "min":
+            result = tl.extra.cuda.min_nan_xorsign_abs_f32(a, b)
+        else:
+            result = tl.extra.cuda.max_nan_xorsign_abs_f32(a, b)
+        tl.store(Out + offsets, result)
+
+    a = torch.tensor([2., -2., 2., -2., float("nan"), 1., -0., 0.], device="cuda")
+    b = torch.tensor([3., 3., -3., -3., 1., float("nan"), 0., -0.], device="cuda")
+    out = torch.empty_like(a)
+    kernel[(1,)](a, b, out, op)
+    magnitude = 2. if op == "min" else 3.
+    expected = torch.tensor([magnitude, -magnitude, -magnitude, magnitude, float("nan"), float("nan"), -0., -0.],
+                            device="cuda")
+    torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
+    assert torch.equal(torch.signbit(out[6:]), torch.signbit(expected[6:]))
+
+
 @triton.jit
 def tanh_kernel(
     x_ptr,
