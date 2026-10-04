@@ -37,11 +37,13 @@ struct LayoutConversionScratchConfig {
 };
 
 // Byte offsets in operand order, packed widest first to preserve alignment.
-// Register-only and warp-shuffle conversions require no scratch storage.
+// Register-only and warp-shuffle conversions require no scratch storage unless
+// the caller explicitly requests a shared-memory exchange.
 LayoutConversionScratchConfig getLayoutConversionScratchConfig(
     const triton::LinearLayout &src, const triton::LinearLayout &dst,
     ArrayRef<Type> elementTypes,
-    GetNumScratchElemsFn numScratchElemsGetter = nullptr);
+    GetNumScratchElemsFn numScratchElemsGetter = nullptr,
+    bool forceSharedMemory = false);
 
 class ReduceOpHelper {
 public:
@@ -108,11 +110,19 @@ private:
   int axis;
 };
 
+// Reserve the complete CTA-local totals array so tuple operands can share a
+// single store/load barrier instead of recycling a tile independently.
+LayoutConversionScratchConfig
+getScanScratchConfig(const triton::LinearLayout &src,
+                     const triton::LinearLayout &dst,
+                     ArrayRef<Type> elementTypes);
+
 // Plan layouts for contiguous thread/warp segments and their totals.
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
-  ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis);
+  ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis,
+                     bool preserveLaneOrder = false);
   bool isSupported();
   const triton::LinearLayout &getPermutedLayout() const {
     return permutedLayout;
@@ -136,18 +146,17 @@ public:
   const std::optional<triton::LinearLayout> &getInterWarpLayout() const {
     return interWarpLayout;
   }
-  // Full sequence of warp-segment totals replicated in each participating warp.
+  // Contiguous partitions of long total sequences; short sequences are
+  // replicated within each participating warp.
   const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
     return interWarpScanLayout;
   }
-  unsigned getScratchSizeInBytes(
-      ArrayRef<Type> elementTypes,
-      GetNumScratchElemsFn numScratchElemsGetter = nullptr) const;
+  unsigned getScratchSizeInBytes(ArrayRef<Type> elementTypes) const;
 
 private:
   triton::LinearLayout buildPermutedLayout();
   triton::LinearLayout buildIntraWarpLayout() const;
-  triton::LinearLayout buildIntraWarpScanLayout() const;
+  triton::LinearLayout buildIntraWarpScanLayout(bool preserveLaneOrder) const;
   triton::LinearLayout buildInterWarpLayout() const;
   triton::LinearLayout buildInterWarpScanLayout() const;
 
