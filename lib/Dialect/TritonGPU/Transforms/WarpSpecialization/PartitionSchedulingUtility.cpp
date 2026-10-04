@@ -78,7 +78,10 @@ size_t computeCost(Operation *op) {
     return cycles;
   }
 
-  if (isa<math::Exp2Op, ElementwiseInlineAsmOp>(op)) {
+  bool isNVVMIntrinsic = false;
+  if (auto externOp = dyn_cast<ExternElementwiseOp>(op))
+    isNVVMIntrinsic = externOp.getSymbol().starts_with("llvm.nvvm.");
+  if (isa<math::Exp2Op, ElementwiseInlineAsmOp>(op) || isNVVMIntrinsic) {
     int elementCount = 0;
     for (Type type : op->getResultTypes()) {
       if (auto tensorTy = dyn_cast<RankedTensorType>(type))
