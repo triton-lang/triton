@@ -17,7 +17,7 @@ bool isCrossCTAGatherScatter(::mlir::triton::gpu::MemDescType memDescTy,
 bool hasTCGen5CommitCrossCTA(Operation *op);
 
 bool requiresCrossCTAMBarrierInitSync(
-    FunctionOpInterface funcOp, Value barrier, int numCTAs,
+    Operation *scope, Value barrier, int numCTAs,
     llvm::function_ref<bool(Value)> aliasesBarrier);
 
 } // namespace mlir::triton::nvidia_gpu
