@@ -1,4 +1,5 @@
 // RUN: split-file %s %t
+// RUN: triton-opt %t/blocked-rows.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=ROWS
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
 // RUN: triton-opt %t/parallel-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=CARRIES
@@ -16,6 +17,9 @@
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
 // RUN: triton-opt %t/ship-chunks.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=SHIP
+
+// RUN: triton-opt %t/flat-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=FLAT
+// RUN: triton-opt %t/flat-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=FLAT
 
 //--- scan.mlir
 
@@ -88,7 +92,6 @@ tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<
   // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK: st.shared::cta
   // CHECK: @llvm.nvvm.barrier
-  // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: load i32, ptr addrspace(3)
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
@@ -191,13 +194,13 @@ tt.func public @anchor_permuted_lanes(%ptr: !llvm.ptr, %arg: !llvm.struct<(i32, 
 }
 
 // CHECK-LABEL: @test_interleaved
-// Exchange partitions, scan their totals, then return exclusive carries to
-// their original owners. Each exchange publishes the whole totals array.
+// Scan all segment totals within each warp, then return carries to their
+// owners even when register, lane, and warp ownership is interleaved.
 // CHECK-NOT: @llvm.nvvm.barrier
 // CHECK: st.shared::cta
 // CHECK: @llvm.nvvm.barrier
 // CHECK: load i32, ptr addrspace(3)
-// CHECK-COUNT-4: @llvm.nvvm.barrier
+// CHECK-COUNT-2: @llvm.nvvm.barrier
 // CHECK: load i32, ptr addrspace(3)
 // CHECK-NOT: @llvm.nvvm.barrier
 // CHECK: ret
@@ -241,12 +244,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // CARRIES-LABEL: @test_parallel_carries
-// Scan contiguous partitions and return their carries to the original owners.
+// Load raw totals into their carry consumers with one shared-memory exchange.
 // CARRIES: st.shared::cta
 // CARRIES: @llvm.nvvm.barrier
-// CARRIES: load {{.*}}, ptr addrspace(3)
-// CARRIES: @llvm.nvvm.shfl.sync.idx.i32
-// CARRIES-COUNT-4: @llvm.nvvm.barrier
 // CARRIES: load {{.*}}, ptr addrspace(3)
 // CARRIES-NOT: @llvm.nvvm.barrier
 // CARRIES: ret
@@ -281,15 +281,11 @@ tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // GROUPS-LABEL: @test_grouped_carries
-// Distribute the 128 segment totals over four warps, scan each partition,
-// then scan its terminal total and return the complete carries.
+// Accumulate raw segment totals in the consumer lanes without a return exchange.
 // GROUPS: st.shared::cta
 // GROUPS: @llvm.nvvm.barrier
 // GROUPS: load {{.*}}, ptr addrspace(3)
-// GROUPS: @llvm.nvvm.shfl.sync.idx.i32
 // GROUPS: fadd float
-// GROUPS-COUNT-4: @llvm.nvvm.barrier
-// GROUPS: load {{.*}}, ptr addrspace(3)
 // GROUPS-NOT: @llvm.nvvm.barrier
 // GROUPS: ret
 tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
@@ -333,7 +329,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
 // TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
-// TUPLE: nvvm.shfl.sync
 // TUPLE: llvm.mul
 // TUPLE: llvm.add
 // TUPLE: llvm.return
@@ -455,18 +450,16 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
 }
 
 
-// After conversion, each of four logical lanes owns four consecutive values.
-// Two scan rounds compute both the inclusive total and the exclusive carry:
-// there must be no third indexed shuffle to fetch the preceding lane's prefix.
-// The register/lane conversions use butterfly shuffles.
-// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
-// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
+// Four strided register chunks each use two scan rounds. Three terminal
+// broadcasts carry their prefixes to the next chunk; no conversion is needed.
+// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_strided_chunk_carry_forward
+// TRANSPOSE-COUNT-11: nvvm.shfl.sync idx
 // TRANSPOSE-NOT: nvvm.shfl.sync idx
 // TRANSPOSE: llvm.return
-// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
+// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_strided_chunk_carry_forward
 // AMD-TRANSPOSE: llvm.add
 // AMD-TRANSPOSE: llvm.return
-tt.func private @test_scan_exclusive_carry_forward(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
+tt.func private @test_scan_strided_chunk_carry_forward(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
@@ -474,14 +467,14 @@ tt.func private @test_scan_exclusive_carry_forward(%arg: tensor<16xi32, #transpo
   }) : (tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose>
   tt.return %result : tensor<16xi32, #transpose>
 }
-// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
-// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
+// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_strided_chunk_carry_reverse
+// TRANSPOSE-COUNT-11: nvvm.shfl.sync idx
 // TRANSPOSE-NOT: nvvm.shfl.sync idx
 // TRANSPOSE: llvm.return
-// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
+// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_strided_chunk_carry_reverse
 // AMD-TRANSPOSE: llvm.add
 // AMD-TRANSPOSE: llvm.return
-tt.func private @test_scan_exclusive_carry_reverse(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
+tt.func private @test_scan_strided_chunk_carry_reverse(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
@@ -517,17 +510,18 @@ tt.func private @test_scan_reuse_lane_lookups(%arg: tensor<4x2xi32, #parallel>) 
 
 //--- converted-totals.mlir
 
-// Each warp owns 16 consecutive elements in four strided registers. Scan in
-// register=[1,2], lane=[4,8,0,0,0], then extract its terminal total directly
+// Each warp owns 32 consecutive elements in four strided registers. Scan in
+// register=[1,2], lane=[4,8,16,0,0], then extract its terminal total directly
 // from that layout for the shared-memory exchange. Restore native ownership
 // after the exchange, when applying carries to the saved prefixes.
-#converted = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[16], [0]], block = []}>
+#converted = #ttg.linear<{register = [[2], [16]], lane = [[1], [4], [8], [0], [0]], warp = [[32], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Terminal lanes store directly, without a broadcast shuffle before the store.
+// Four conversion shuffles and three scan rounds precede the direct terminal
+// stores. There is no broadcast shuffle before the shared-memory exchange.
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals(
-// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
+// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(7 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
-// TERMINAL-COUNT-2: nvvm.shfl.sync idx
+// TERMINAL-COUNT-7: nvvm.shfl.sync idx
 // TERMINAL-NOT: nvvm.shfl.sync idx
 // TERMINAL: %[[LANE_IN_SEGMENT:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
 // TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[MASK]] : i32
@@ -538,32 +532,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // TERMINAL-NEXT: nvvm.barrier
 // TERMINAL: llvm.return
 // RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
-// RETAIN: nvvm.shfl.sync idx
-// RETAIN-NOT: nvvm.shfl.sync bfly
+// RETAIN-COUNT-7: nvvm.shfl.sync idx
+// RETAIN-NOT: nvvm.shfl.sync
 // RETAIN: llvm.inline_asm {{.*}}st.shared::cta
 // RETAIN: nvvm.barrier
 // RETAIN: llvm.load
-// RETAIN: nvvm.shfl.sync bfly
+// RETAIN-COUNT-4: nvvm.shfl.sync idx
 // RETAIN: llvm.return
 // AMD-RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
 // AMD-RETAIN: llvm.cond_br
 // AMD-RETAIN: llvm.store
 // AMD-RETAIN: llvm.load
 // AMD-RETAIN: llvm.return
-tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) -> tensor<32xi32, #converted> {
+tt.func private @test_scan_converted_totals(%arg: tensor<64xi32, #converted>) -> tensor<64xi32, #converted> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
     tt.scan.return %sum : i32
-  }) : (tensor<32xi32, #converted>) -> tensor<32xi32, #converted>
-  tt.return %result : tensor<32xi32, #converted>
+  }) : (tensor<64xi32, #converted>) -> tensor<64xi32, #converted>
+  tt.return %result : tensor<64xi32, #converted>
 }
 
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse(
-// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
+// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(7 : i32)
 // TERMINAL-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
-// TERMINAL-COUNT-2: nvvm.shfl.sync idx
+// TERMINAL-COUNT-7: nvvm.shfl.sync idx
 // TERMINAL-NOT: nvvm.shfl.sync idx
 // TERMINAL: %[[LANE_IN_SEGMENT:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
 // TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[ZERO]] : i32
@@ -583,13 +577,13 @@ tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) ->
 // AMD-RETAIN: llvm.store
 // AMD-RETAIN: llvm.load
 // AMD-RETAIN: llvm.return
-tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #converted>) -> tensor<32xi32, #converted> {
+tt.func private @test_scan_converted_totals_reverse(%arg: tensor<64xi32, #converted>) -> tensor<64xi32, #converted> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
     tt.scan.return %sum : i32
-  }) : (tensor<32xi32, #converted>) -> tensor<32xi32, #converted>
-  tt.return %result : tensor<32xi32, #converted>
+  }) : (tensor<64xi32, #converted>) -> tensor<64xi32, #converted>
+  tt.return %result : tensor<64xi32, #converted>
 }
 }
 
@@ -597,11 +591,10 @@ tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #conver
 
 #parallel_totals = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Four segment totals and eight columns fit in the lanes of one warp.
-// The totals scan needs two adds, rather than repeating them in eight registers.
-// Together with 40 intra-warp adds and eight carry adds, this gives 50.
+// The consumer plan avoids carry-mapping shuffles. There are 40 warp-scan
+// adds, 16 adds for exclusive warp totals, and eight carry applications.
 // COLUMNS-LABEL: llvm.func {{.*}}@test_scan_parallel_totals(
-// COLUMNS-COUNT-50: llvm.fadd
+// COLUMNS-COUNT-64: llvm.fadd
 // COLUMNS-NOT: llvm.fadd
 // COLUMNS: llvm.return
 tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals> {
@@ -618,9 +611,10 @@ tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_tot
 
 #ship = #ttg.linear<{register = [[32], [64], [128], [256]], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Each of two chunks uses three exchanges with four shuffles in both directions.
+// Four four-register chunks each use two exchanges with two shuffles
+// in both directions. Include conversion selects in the tile cost.
 // SHIP-LABEL: llvm.func {{.*}}@test_scan_register_lane_exchanges(
-// SHIP-COUNT-48: nvvm.shfl.sync bfly
+// SHIP-COUNT-32: nvvm.shfl.sync bfly
 // SHIP-NOT: nvvm.shfl.sync bfly
 // SHIP: llvm.return
 tt.func private @test_scan_register_lane_exchanges(%arg: tensor<512xf32, #ship>) -> tensor<512xf32, #ship> {
@@ -630,5 +624,224 @@ tt.func private @test_scan_register_lane_exchanges(%arg: tensor<512xf32, #ship>)
     tt.scan.return %sum : f32
   }) : (tensor<512xf32, #ship>) -> tensor<512xf32, #ship>
   tt.return %result : tensor<512xf32, #ship>
+}
+
+// The longer scan uses the same four-register tile: 64 chunks, two exchanges
+// and two shuffles in both directions.
+// SHIP-LABEL: llvm.func {{.*}}@test_scan_long_register_lane_exchanges(
+// SHIP-COUNT-512: nvvm.shfl.sync bfly
+// SHIP-NOT: nvvm.shfl.sync bfly
+// SHIP: llvm.return
+tt.func private @test_scan_long_register_lane_exchanges(%arg: tensor<8192xf32, #ship>) -> tensor<8192xf32, #ship> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: f32, %rhs: f32):
+    %sum = arith.addf %lhs, %rhs : f32
+    tt.scan.return %sum : f32
+  }) : (tensor<8192xf32, #ship>) -> tensor<8192xf32, #ship>
+  tt.return %result : tensor<8192xf32, #ship>
+}
+}
+
+//--- flat-totals.mlir
+
+#flat = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// The blocked baseline publishes warp totals once, then each consumer
+// computes its carries without another shared-memory exchange.
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_64_totals(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_64_totals(%arg: tensor<2048xi32, #flat>) -> tensor<2048xi32, #flat> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<2048xi32, #flat>) -> tensor<2048xi32, #flat>
+  tt.return %result : tensor<2048xi32, #flat>
+}
+
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_64_totals_reverse(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_64_totals_reverse(%arg: tensor<2048xi32, #flat>) -> tensor<2048xi32, #flat> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<2048xi32, #flat>) -> tensor<2048xi32, #flat>
+  tt.return %result : tensor<2048xi32, #flat>
+}
+
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_128_totals(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_128_totals(%arg: tensor<4096xi32, #flat>) -> tensor<4096xi32, #flat> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<4096xi32, #flat>) -> tensor<4096xi32, #flat>
+  tt.return %result : tensor<4096xi32, #flat>
+}
+
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_128_totals_reverse(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_128_totals_reverse(%arg: tensor<4096xi32, #flat>) -> tensor<4096xi32, #flat> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<4096xi32, #flat>) -> tensor<4096xi32, #flat>
+  tt.return %result : tensor<4096xi32, #flat>
+}
+
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_256_totals(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_256_totals(%arg: tensor<8192xi32, #flat>) -> tensor<8192xi32, #flat> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8192xi32, #flat>) -> tensor<8192xi32, #flat>
+  tt.return %result : tensor<8192xi32, #flat>
+}
+
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_256_totals_reverse(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_256_totals_reverse(%arg: tensor<8192xi32, #flat>) -> tensor<8192xi32, #flat> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8192xi32, #flat>) -> tensor<8192xi32, #flat>
+  tt.return %result : tensor<8192xi32, #flat>
+}
+
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_512_totals(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_512_totals(%arg: tensor<16384xi32, #flat>) -> tensor<16384xi32, #flat> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<16384xi32, #flat>) -> tensor<16384xi32, #flat>
+  tt.return %result : tensor<16384xi32, #flat>
+}
+
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_512_totals_reverse(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_512_totals_reverse(%arg: tensor<16384xi32, #flat>) -> tensor<16384xi32, #flat> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<16384xi32, #flat>) -> tensor<16384xi32, #flat>
+  tt.return %result : tensor<16384xi32, #flat>
+}
+
+}
+
+#wide4 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// Lane parallelism still amortizes the replicated scan of 128 wide totals.
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_128_totals_i64_4_warps(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_128_totals_i64_4_warps(%arg: tensor<4096xi64, #wide4>) -> tensor<4096xi64, #wide4> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i64, %rhs: i64):
+    %sum = arith.addi %lhs, %rhs : i64
+    tt.scan.return %sum : i64
+  }) : (tensor<4096xi64, #wide4>) -> tensor<4096xi64, #wide4>
+  tt.return %result : tensor<4096xi64, #wide4>
+}
+}
+
+#wide8 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// Wider totals and more participating warps retain partitioned scans.
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_256_totals_i32_8_warps(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_256_totals_i32_8_warps(%arg: tensor<8192xi32, #wide8>) -> tensor<8192xi32, #wide8> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8192xi32, #wide8>) -> tensor<8192xi32, #wide8>
+  tt.return %result : tensor<8192xi32, #wide8>
+}
+}
+
+
+#columns = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// Lanes hold independent columns: repartitioning these 128 singleton segments
+// would require five barriers. Accumulating in the consumers needs only one.
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_register_segments(
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT: llvm.return
+tt.func private @test_scan_register_segments(%arg: tensor<128x32xf32, #columns>) -> tensor<128x32xf32, #columns> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: f32, %rhs: f32):
+    %sum = arith.addf %lhs, %rhs : f32
+    tt.scan.return %sum : f32
+  }) : (tensor<128x32xf32, #columns>) -> tensor<128x32xf32, #columns>
+  tt.return %result : tensor<128x32xf32, #columns>
+}
+
+// The model selects direct reverse carries, avoiding main's lane flips.
+// FLAT-LABEL: llvm.func {{.*}}@test_scan_register_segments_reverse(
+// FLAT-NOT: nvvm.shfl.sync
+// FLAT-COUNT-1: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: {{nvvm.barrier|rocdl.s.barrier}}
+// FLAT-NOT: nvvm.shfl.sync
+// FLAT: llvm.return
+tt.func private @test_scan_register_segments_reverse(%arg: tensor<128x32xf32, #columns>) -> tensor<128x32xf32, #columns> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: f32, %rhs: f32):
+    %sum = arith.addf %lhs, %rhs : f32
+    tt.scan.return %sum : f32
+  }) : (tensor<128x32xf32, #columns>) -> tensor<128x32xf32, #columns>
+  tt.return %result : tensor<128x32xf32, #columns>
+}
+
+}
+
+//--- blocked-rows.mlir
+
+#rows = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Converting these eight independent rows saves shuffles but adds more
+// selection instructions. Keep main's shuffle-up schedule.
+// ROWS-LABEL: llvm.func {{.*}}@test_scan_blocked_rows(
+// ROWS-NOT: nvvm.shfl.sync bfly
+// ROWS-COUNT-1280: nvvm.shfl.sync up
+// ROWS-NOT: nvvm.shfl.sync bfly
+// ROWS-NOT: nvvm.barrier
+// ROWS: llvm.return
+tt.func private @test_scan_blocked_rows(%arg: tensor<32x1024xf32, #rows>) -> tensor<32x1024xf32, #rows> {
+  %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = false}> ({
+  ^bb0(%lhs: f32, %rhs: f32):
+    %sum = arith.addf %lhs, %rhs : f32
+    tt.scan.return %sum : f32
+  }) : (tensor<32x1024xf32, #rows>) -> tensor<32x1024xf32, #rows>
+  tt.return %result : tensor<32x1024xf32, #rows>
 }
 }

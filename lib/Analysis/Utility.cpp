@@ -7,6 +7,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -19,6 +20,9 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "triton-scan-cost"
 
 namespace mlir {
 
@@ -520,14 +524,207 @@ unsigned BlockedScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
+ScanCost &ScanCost::operator+=(const ScanCost &other) {
+  barriers += other.barriers;
+  shuffles += other.shuffles;
+  arithmetic += other.arithmetic;
+  return *this;
+}
+
+uint64_t ScanCost::score() const {
+  // Relative instruction costs. Selects and lane-address arithmetic count as
+  // arithmetic; wide shuffles count once per 32-bit word.
+  return 128 * barriers + 4 * shuffles + arithmetic;
+}
+
+static unsigned scanValueWords(TypeRange types) {
+  unsigned words = 0;
+  for (Type type : types) {
+    type = getElementTypeOrSelf(type);
+    unsigned width = isa<triton::PointerType>(type) ? kPtrBitWidth
+                     : type.isIntOrFloat() ? type.getIntOrFloatBitWidth()
+                                           : 32;
+    words += llvm::divideCeil(width, 32u);
+  }
+  return words;
+}
+
+static unsigned scanCombineCost(triton::ScanOp op) {
+  unsigned cost = 0;
+  op.getCombineOp().walk([&](Operation *nested) {
+    if (nested->hasTrait<OpTrait::IsTerminator>() ||
+        isa<arith::ConstantOp>(nested))
+      return;
+    cost += std::max(1u, scanValueWords(nested->getResultTypes()));
+  });
+  return std::max(1u, cost);
+}
+
+static void printScanCost(StringRef plan, const ScanCost &cost) {
+  LLVM_DEBUG(llvm::dbgs() << "scan " << plan << ": score=" << cost.score()
+                          << " barriers=" << cost.barriers
+                          << " shuffles=" << cost.shuffles
+                          << " arithmetic=" << cost.arithmetic << '\n');
+}
+
+// Main's schedule scans each register segment with shuffle-up, then applies
+// carries from earlier segments. Count only the combiner work that survives
+// for ordinary arithmetic; its boundary selects can become predication.
+static ScanCost blockedScanCost(triton::ScanOp op) {
+  BlockedScanLoweringHelper helper(op);
+  unsigned regs =
+      triton::gpu::getUniqueElemsPerThread(op.getInputTypes().front());
+  unsigned contiguous = helper.getAxisNumElementsPerThread();
+  unsigned lanes = helper.getAxisNumThreadsPerWarpWithUniqueData();
+  unsigned warps = helper.getAxisNumWarpsWithUniqueData();
+  unsigned groups = regs / contiguous;
+  unsigned chunks = helper.getAxisNumBlocks();
+  unsigned independent = groups / chunks;
+  unsigned words = scanValueWords(op.getElementTypes());
+  unsigned combine = scanCombineCost(op);
+  ScanCost result;
+  result.arithmetic = uint64_t(regs - groups) * combine;
+  result.shuffles = uint64_t(groups) * llvm::Log2_32(lanes) * words;
+  result.arithmetic += uint64_t(groups) * llvm::Log2_32(lanes) * combine;
+  if (warps > 1) {
+    result.barriers = 1;
+    // Every consumer loads the warp totals in order. The last complete total
+    // is dead, because no subsequent chunk consumes it.
+    result.arithmetic +=
+        uint64_t(groups * warps - independent + groups - independent) * combine;
+    result.arithmetic += uint64_t(groups * (warps - 1)) * words;
+    result.arithmetic += uint64_t(regs - groups) * combine;
+    if (contiguous > 1)
+      result.shuffles += uint64_t(groups) * words;
+  } else if (lanes > 1) {
+    result.arithmetic +=
+        uint64_t(groups - independent + regs - groups) * combine;
+    if (chunks > 1)
+      result.shuffles += uint64_t(groups - independent) * words;
+    if (contiguous > 1)
+      result.shuffles += uint64_t(groups) * words;
+  }
+  // Flipping lanes does no work when every lane owns the same values.
+  if (op.getReverse() && product(helper.getEncoding().getThreadsPerWarp()) > 1)
+    result.shuffles += uint64_t(2 * regs) * words;
+  return result;
+}
+
+bool useBlockedScan(triton::ScanOp op) {
+  if (!BlockedScanLoweringHelper(op).isSupported())
+    return false;
+  ScanCost baseline = blockedScanCost(op);
+  ScanCost candidate = ScanLoweringHelper(op).getCost();
+  printScanCost("blocked", baseline);
+  printScanCost("linear", candidate);
+  // Require improvement without increasing another kind of work. A weighted
+  // shuffle saving alone cannot justify extra arithmetic or synchronization.
+  // Keep main's schedule on ties.
+  bool cheaper = candidate.barriers <= baseline.barriers &&
+                 candidate.shuffles <= baseline.shuffles &&
+                 candidate.arithmetic <= baseline.arithmetic &&
+                 candidate.score() < baseline.score();
+  LLVM_DEBUG(llvm::dbgs() << "scan selected "
+                          << (cheaper ? "linear" : "blocked") << '\n');
+  return !cheaper;
+}
+
+bool DecomposedWarpConversion::canUseShip() const {
+  auto kLane =
+      StringAttr::get(shuffleMap.getInDimNames().begin()->getContext(), "lane");
+  unsigned m = mixedTranspositions.size();
+  return squareSublayoutIsIdentity(shuffleMap, kLane) && m > 0 &&
+         (m == 1 || (m <= 3 && nPack == 0)) &&
+         llvm::all_of(mixedTranspositions, [](const TranspositionInfo &t) {
+           // Ship cannot mix elements from different registers in the same
+           // lane. These selectors represent cycles such as (l0 r1), (l0 r2),
+           // and (l0 r0 r1), without mixing high and low register bits.
+           return t.topPreSel == t.topPostSel ||
+                  (t.topPreSel == 0x5140 && t.topPostSel == 0x6240) ||
+                  (t.topPreSel == 0x6420 && t.topPostSel == 0x5410) ||
+                  (t.topPreSel == 0x3210 && t.topPostSel == 0x3120);
+         });
+}
+
+static ScanCost scanConversionCost(const LinearLayout &src,
+                                   const LinearLayout &dst,
+                                   ArrayRef<Type> types) {
+  ScanCost cost;
+  if (src == dst)
+    return cost;
+  auto *ctx = src.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  for (Type type : types) {
+    unsigned width = isa<triton::PointerType>(type)
+                         ? kPtrBitWidth
+                         : type.getIntOrFloatBitWidth();
+    auto d = getWarpLayoutConvertDecomposition(src, dst, width);
+    uint64_t regs =
+        (d.pReg.getInDimSize(kReg) >> d.nPack) * llvm::divideCeil(width, 32u);
+    unsigned m = d.mixedTranspositions.size();
+    bool ship = d.canUseShip();
+    uint64_t shuffles = ship ? m * regs / 2
+                        : squareSublayoutIsIdentity(d.shuffleMap, kLane)
+                            ? regs - (regs >> m)
+                            : regs;
+    cost.shuffles += shuffles;
+    cost.arithmetic += ship ? 3 * m * regs / 2 : 2 * m * regs;
+  }
+  return cost;
+}
+
+static ScanCost scanWarpCost(const LinearLayout &src, const LinearLayout &dst,
+                             unsigned axis, unsigned segmentSize,
+                             ArrayRef<Type> types, unsigned combineCost,
+                             unsigned nativeSegmentSize, bool stream) {
+  auto *ctx = src.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto dim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  unsigned regs = dst.getInDimSize(kReg);
+  unsigned tile = dst.sublayout({kReg}, {dim}).getNumConsecutiveInOut();
+  unsigned lanes = 1;
+  for (const auto &basis : dst.getBases().lookup(kLane))
+    if (basis[axis] && basis[axis] < segmentSize)
+      lanes *= 2;
+  unsigned rounds = llvm::Log2_32(lanes);
+  unsigned groups = regs / tile;
+  unsigned chunks = segmentSize / (tile * lanes);
+  unsigned words = scanValueWords(types);
+  auto cost = scanConversionCost(src, dst, types);
+  cost += scanConversionCost(dst, src, types);
+  cost.arithmetic += uint64_t(regs - groups) * combineCost;
+  unsigned masked = groups * rounds;
+  if (tile > 1 && rounds)
+    masked += groups * (rounds - 1) + regs - groups;
+  cost.arithmetic += uint64_t(masked) * (combineCost + words);
+  cost.shuffles += uint64_t(groups) * rounds * words;
+  if (chunks > 1) {
+    unsigned independent = groups / chunks;
+    // Streamed chunks carry their terminal prefix directly. The batched path
+    // first scans the chunk totals and then adds those carries to prefixes.
+    cost.shuffles += uint64_t(groups - (stream ? independent : 0)) * words;
+    cost.arithmetic += uint64_t((stream ? 0 : groups - independent) +
+                                independent * (chunks - 1) * tile *
+                                    (stream ? nativeSegmentSize : 1)) *
+                       combineCost;
+  }
+  return cost;
+}
+
 ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
     : ScanLoweringHelper(
-          triton::gpu::toLinearLayout(op.getInputTypes().front()),
-          op.getAxis()) {}
+          triton::gpu::toLinearLayout(op.getInputTypes().front()), op.getAxis(),
+          op.getElementTypes(), false, scanCombineCost(op),
+          /*allowWarpChunks=*/true) {}
 
-ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
-                                       unsigned axis, bool preserveLaneOrder)
-    : axis(axis), originalLayout(inputLayout) {
+ScanLoweringHelper::ScanLoweringHelper(
+    const LinearLayout &inputLayout, unsigned axis, ArrayRef<Type> elementTypes,
+    bool preserveLaneOrder, unsigned combineCost, bool allowWarpChunks)
+    : axis(axis), elementTypes(elementTypes.begin(), elementTypes.end()),
+      combineCost(combineCost ? combineCost : scanValueWords(elementTypes)),
+      allowWarpChunks(allowWarpChunks), originalLayout(inputLayout) {
   // Plan thread prefixes, intra-warp totals, and inter-warp totals separately.
   // Communicate totals, then map their carries back to the native prefixes.
   permutedLayout = buildPermutedLayout();
@@ -557,11 +754,38 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
     intraWarpLayout = buildIntraWarpLayout();
     intraWarpScanLayout = buildIntraWarpScanLayout(preserveLaneOrder);
   }
-  if (warpLocalSegmentSize == axisSize)
-    return;
-
-  interWarpLayout = buildInterWarpLayout();
-  interWarpScanLayout = buildInterWarpScanLayout();
+  auto kReg = StringAttr::get(ctx, "register");
+  unsigned regs = permutedLayout.getInDimSize(kReg);
+  unsigned words = scanValueWords(elementTypes);
+  cost.arithmetic =
+      uint64_t(regs - regs / threadLocalSegmentSize) * this->combineCost;
+  if (intraWarpLayout) {
+    cost += estimateWarpCost(*intraWarpScanLayout);
+    if (threadLocalSegmentSize > 1) {
+      unsigned totals = intraWarpLayout->getInDimSize(kReg);
+      cost.shuffles += uint64_t(totals) * words;
+      cost.arithmetic += uint64_t(regs - totals) * (this->combineCost + words);
+    }
+  }
+  if (warpLocalSegmentSize != axisSize) {
+    interWarpLayout = buildInterWarpLayout();
+    selectInterWarpPlan();
+    cost += interWarpCost;
+    unsigned totals =
+        intraWarpLayout ? intraWarpLayout->getInDimSize(kReg) : regs;
+    unsigned predicated = totals;
+    if (consumerTotalsLayout) {
+      unsigned axisWarps = 1u << llvm::popcount(getInputBasisMask(
+                               *interWarpLayout, kWarp, {axisDim}));
+      unsigned segmentsPerWarp =
+          interWarpLayout->getOutDimSize(axisDim) / axisWarps;
+      // Only the first segment in each independent scan has a boundary
+      // predicate. Later consumer carries are unconditionally valid.
+      predicated /= segmentsPerWarp;
+    }
+    cost.arithmetic +=
+        uint64_t(totals) * this->combineCost + uint64_t(predicated) * words;
+  }
 }
 
 LinearLayout ScanLoweringHelper::buildPermutedLayout() {
@@ -600,8 +824,86 @@ LinearLayout ScanLoweringHelper::buildIntraWarpLayout() const {
   return getScanTotalsLayout(permutedLayout, axis, threadLocalSegmentSize);
 }
 
+bool ScanLoweringHelper::canStreamWarpScan() const {
+  return intraWarpScanLayout && canStreamWarpScan(*intraWarpScanLayout);
+}
+
+bool ScanLoweringHelper::canStreamWarpScan(
+    const LinearLayout &scanLayout) const {
+  if (!allowWarpChunks)
+    return false;
+  auto *ctx = scanLayout.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto dim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  if (warpLocalSegmentSize != originalLayout.getOutDimSize(dim))
+    return false;
+  unsigned chunkSize =
+      scanLayout.sublayout({kReg}, {dim}).getNumConsecutiveInOut();
+  for (const auto &basis : scanLayout.getBases().lookup(kLane))
+    if (basis[axis])
+      chunkSize *= 2;
+  if (chunkSize == warpLocalSegmentSize / threadLocalSegmentSize)
+    return false;
+  // The same native registers must comprise each chunk before and after its
+  // conversion. Lane bits cannot cross a chunk boundary.
+  return llvm::all_of(intraWarpLayout->getBases().lookup(kLane),
+                      [&](const auto &b) { return b[axis] < chunkSize; }) &&
+         llvm::all_of(llvm::zip(intraWarpLayout->getBases().lookup(kReg),
+                                scanLayout.getBases().lookup(kReg)),
+                      [&](auto pair) {
+                        const auto &[a, b] = pair;
+                        return (a[axis] < chunkSize && b[axis] < chunkSize) ||
+                               a == b;
+                      });
+}
+
+ScanCost
+ScanLoweringHelper::estimateWarpCost(const LinearLayout &scanLayout) const {
+  return scanWarpCost(*intraWarpLayout, scanLayout, axis,
+                      warpLocalSegmentSize / threadLocalSegmentSize,
+                      elementTypes, combineCost, threadLocalSegmentSize,
+                      canStreamWarpScan(scanLayout));
+}
+
 LinearLayout
 ScanLoweringHelper::buildIntraWarpScanLayout(bool preserveLaneOrder) const {
+  auto *ctx = intraWarpLayout->getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  unsigned segmentSize = warpLocalSegmentSize / threadLocalSegmentSize;
+  unsigned bits = llvm::count_if(
+      intraWarpLayout->getBases().lookup(kReg),
+      [&](const auto &b) { return b[axis] && b[axis] < segmentSize; });
+  unsigned maxBits = std::min(bits, 3u);
+  // A streamed chunk already has its register extent selected by the parent.
+  if (preserveLaneOrder)
+    return buildIntraWarpScanLayout(maxBits, true);
+  auto build = [&](unsigned tileBits) {
+    auto layout = buildIntraWarpScanLayout(tileBits, false);
+    // Chunk lowering preserves native lane order. Price the conversion it
+    // actually emits, rather than a full-sequence lane permutation.
+    return canStreamWarpScan(layout) ? buildIntraWarpScanLayout(tileBits, true)
+                                     : layout;
+  };
+  auto best = build(0);
+  auto bestCost = estimateWarpCost(best);
+  printScanCost("warp tile=1", bestCost);
+  for (unsigned tileBits = 1; tileBits <= maxBits; ++tileBits) {
+    auto candidate = build(tileBits);
+    auto candidateCost = estimateWarpCost(candidate);
+    printScanCost("warp tile=" + std::to_string(1u << tileBits), candidateCost);
+    if (candidateCost.score() < bestCost.score()) {
+      best = std::move(candidate);
+      bestCost = candidateCost;
+    }
+  }
+  return best;
+}
+
+LinearLayout
+ScanLoweringHelper::buildIntraWarpScanLayout(unsigned tileBits,
+                                             bool preserveLaneOrder) const {
   // Put low segment bits in registers, then lanes. Preserve other segments
   // and independent scans so the conversion stays within a warp.
   auto *ctx = intraWarpLayout->getInDimNames().begin()->getContext();
@@ -613,7 +915,6 @@ ScanLoweringHelper::buildIntraWarpScanLayout(bool preserveLaneOrder) const {
   for (auto [i, basis] : llvm::enumerate(bases[kReg]))
     if (basis[axis] && basis[axis] < segmentSize)
       registers.push_back(i);
-  unsigned tileBits = std::min<unsigned>(registers.size(), 3);
   if (preserveLaneOrder) {
     // Preserve lane order when bit exchanges alone form complete chunks. This
     // avoids a lane permutation and allows cheaper register/lane exchanges.
@@ -621,7 +922,8 @@ ScanLoweringHelper::buildIntraWarpScanLayout(bool preserveLaneOrder) const {
       auto lane = llvm::find_if(bases[kLane], [&](const auto &basis) {
         return basis[axis] == (1u << i);
       });
-      assert(lane != bases[kLane].end() && "thread totals start in lanes");
+      if (lane == bases[kLane].end())
+        return buildIntraWarpScanLayout(tileBits, false);
       std::swap(bases[kReg][registers[i]], *lane);
     }
     unsigned chunkSize = 1u << tileBits;
@@ -642,8 +944,7 @@ ScanLoweringHelper::buildIntraWarpScanLayout(bool preserveLaneOrder) const {
                           llvm::to_vector(intraWarpLayout->getOutDimNames()));
     bases = intraWarpLayout->getBases();
   }
-  // Bound the full transpose to eight values per thread. Higher register bits
-  // select chunks scanned separately.
+  // Higher register bits select chunks scanned separately.
   unsigned next = 1;
   for (unsigned i = 0; i < tileBits; ++i) {
     bases[kReg][registers[i]][axis] = next;
@@ -673,9 +974,10 @@ LinearLayout ScanLoweringHelper::buildInterWarpLayout() const {
   return getScanTotalsLayout(sourceLayout, axis, segmentSize);
 }
 
-LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
-  // Assign contiguous ranges to warps when the sequence needs register axis
-  // bits. A second scan then exchanges just one total per range.
+LinearLayout
+ScanLoweringHelper::buildInterWarpScanLayout(bool partition) const {
+  // Construct either a replicated sequence or contiguous warp partitions.
+  // The cost model compares their scans and the required carry exchanges.
   auto *ctx = interWarpLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -693,12 +995,11 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
   auto isZero = [](const auto &basis) {
     return llvm::all_of(basis, [](int32_t x) { return x == 0; });
   };
-  unsigned availableLanes = 1;
-  for (const auto &basis : bases[kLane])
-    if (isZero(basis))
-      availableLanes *= 2;
   unsigned perWarp = numSegments;
-  if (numSegments > availableLanes && numSegments > (1u << warpBits.size())) {
+  unsigned numWarps = 1u << warpBits.size();
+  if (partition) {
+    assert(numSegments > numWarps &&
+           "partitions must reduce the totals sequence");
     perWarp >>= warpBits.size();
     for (auto [i, bit] : llvm::enumerate(warpBits))
       bases[kWarp][bit][axis] = perWarp << i;
@@ -726,6 +1027,135 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
   return LinearLayout(std::move(bases),
                       llvm::to_vector(interWarpLayout->getOutDimNames()))
       .removeZeroBasesAlongDim(kReg);
+}
+
+// Put each consecutive group of warp totals in every consumer's registers.
+// For warp=[1], register=[2,4], each thread loads S0..S7; warp w consumes
+// the carry preceding S(2*r+w). Independent scan coordinates stay in place.
+std::optional<LinearLayout>
+ScanLoweringHelper::buildConsumerTotalsLayout() const {
+  const auto &layout = *interWarpLayout;
+  auto *ctx = layout.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  if (!layout.sublayoutIsZero({StringAttr::get(ctx, "lane")}, {axisDim}))
+    return std::nullopt;
+  auto bases = layout.getBases();
+  std::vector<std::vector<int32_t>> warpBases;
+  for (auto &basis : bases[kWarp]) {
+    if (!basis[axis])
+      continue;
+    // Moving a warp bit must not change ownership of independent scans.
+    if (llvm::count_if(basis, [](int32_t x) { return x != 0; }) != 1)
+      return std::nullopt;
+    warpBases.push_back(basis);
+    basis[axis] = 0;
+  }
+  llvm::sort(warpBases, [this](const auto &a, const auto &b) {
+    return a[axis] < b[axis];
+  });
+  unsigned next = 1;
+  for (const auto &basis : warpBases) {
+    if (basis[axis] != next)
+      return std::nullopt;
+    next *= 2;
+  }
+  bool independent = false;
+  for (const auto &basis : bases[kReg]) {
+    if (!basis[axis]) {
+      independent = true;
+      continue;
+    }
+    if (independent || basis[axis] != next ||
+        llvm::count_if(basis, [](int32_t x) { return x != 0; }) != 1)
+      return std::nullopt;
+    next *= 2;
+  }
+  if (next != layout.getOutDimSize(axisDim))
+    return std::nullopt;
+  bases[kReg].insert(bases[kReg].begin(), warpBases.begin(), warpBases.end());
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector(layout.getOutDimNames()));
+}
+
+ScanCost
+ScanLoweringHelper::estimateInterWarpCost(const LinearLayout &scanLayout,
+                                          bool consumer) const {
+  auto *ctx = interWarpLayout->getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto dim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  unsigned words = scanValueWords(elementTypes);
+  unsigned srcRegs = interWarpLayout->getInDimSize(kReg);
+  unsigned dstRegs = scanLayout.getInDimSize(kReg);
+  ScanCost result;
+  result.barriers = 1;
+  if (consumer) {
+    unsigned numSegments = scanLayout.getOutDimSize(dim);
+    unsigned numWarps = dstRegs / srcRegs;
+    unsigned independent = dstRegs / numSegments;
+    // The first total initializes the carry, without a select. The final
+    // total is unused by exclusive carries, so it needs no combine either.
+    result.arithmetic =
+        uint64_t(dstRegs - 2 * independent) * combineCost +
+        (uint64_t(srcRegs) * (numWarps - 1) - independent) * words;
+    return result;
+  }
+  ScanLoweringHelper totals(scanLayout, axis, elementTypes, false, combineCost);
+  result += totals.getCost();
+  if (totals.getInterWarpLayout())
+    result.barriers++; // Finish reading before reusing the shared allocation.
+  bool sharedReturn = totals.getInterWarpLayout() ||
+                      (totals.getIntraWarpLayout() &&
+                       !scanLayout.sublayoutIsZero({kReg}, {dim}));
+  if (sharedReturn) {
+    result.barriers += 2;
+  } else {
+    auto kWarp = StringAttr::get(ctx, "warp");
+    unsigned candidateBits = std::min(
+        llvm::popcount(getInputBasisMask(scanLayout, kReg, {dim})),
+        llvm::popcount(getInputBasisMask(*interWarpLayout, kLane, {dim})) +
+            llvm::popcount(getInputBasisMask(*interWarpLayout, kWarp, {dim})));
+    unsigned candidates = 1u << candidateBits;
+    result.shuffles += uint64_t(srcRegs) * candidates * words;
+    result.arithmetic += uint64_t(srcRegs) * (candidates - 1) * words;
+  }
+  return result;
+}
+
+void ScanLoweringHelper::selectInterWarpPlan() {
+  auto *ctx = interWarpLayout->getInDimNames().begin()->getContext();
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto dim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  unsigned axisWarps =
+      1u << llvm::popcount(getInputBasisMask(*interWarpLayout, kWarp, {dim}));
+  LLVM_DEBUG(llvm::dbgs() << "scan inter-warp totals="
+                          << interWarpLayout->getOutDimSize(dim)
+                          << " warps=" << axisWarps << '\n');
+  interWarpScanLayout = buildInterWarpScanLayout(false);
+  interWarpCost = estimateInterWarpCost(*interWarpScanLayout, false);
+  printScanCost("replicated", interWarpCost);
+  if (interWarpLayout->getOutDimSize(dim) > axisWarps) {
+    auto candidate = buildInterWarpScanLayout(true);
+    auto candidateCost = estimateInterWarpCost(candidate, false);
+    printScanCost("partitioned", candidateCost);
+    if (candidateCost.score() < interWarpCost.score()) {
+      interWarpScanLayout = std::move(candidate);
+      interWarpCost = candidateCost;
+    }
+  }
+  if (auto candidate = buildConsumerTotalsLayout()) {
+    auto candidateCost = estimateInterWarpCost(*candidate, true);
+    printScanCost("consumer", candidateCost);
+    if (candidateCost.score() < interWarpCost.score()) {
+      consumerTotalsLayout = std::move(candidate);
+      interWarpCost = candidateCost;
+    }
+  }
+  printScanCost(consumerTotalsLayout ? "selected consumer"
+                                     : "selected parallel",
+                interWarpCost);
 }
 
 bool ScanLoweringHelper::isSupported() {

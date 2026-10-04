@@ -129,9 +129,9 @@ struct ConvertLayoutOpConversion
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     int bitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
 
-    auto [pReg, shuffleMap, mixedTranspositions, nPack] =
+    auto decomposition =
         getWarpLayoutConvertDecomposition(srcLayout, dstLayout, bitwidth);
-    int m = mixedTranspositions.size();
+    auto &[pReg, shuffleMap, mixedTranspositions, nPack] = decomposition;
     bool isXorShuffle = squareSublayoutIsIdentity(shuffleMap, kLane);
 
     // In permutation cases, the desired layout conversion can be expressed as
@@ -197,19 +197,8 @@ struct ConvertLayoutOpConversion
       inVals = std::move(packedVals);
     }
 
-    auto isShippable = [](const TranspositionInfo &t) {
-      // The `Ship` method cannot mix elements from different registers in the
-      // same lane, so we are restricted to cycles like (l0 r1), (l0 r2), and
-      // (l0 r0 r1) which do not use both high and low register bits.
-      return t.topPreSel == t.topPostSel ||
-             (t.topPreSel == 0x5140 && t.topPostSel == 0x6240) ||
-             (t.topPreSel == 0x6420 && t.topPostSel == 0x5410) ||
-             (t.topPreSel == 0x3210 && t.topPostSel == 0x3120);
-    };
-
     SmallVector<Value> outVals;
-    if (isXorShuffle && m > 0 && (m == 1 || (m <= 3 && nPack == 0)) &&
-        llvm::all_of(mixedTranspositions, isShippable)) {
+    if (decomposition.canUseShip()) {
       // For a few disjoint exchanges, shipping reduces selects and temporary
       // values at the cost of additional shuffles.
       outVals = std::move(inVals);

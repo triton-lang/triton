@@ -191,6 +191,25 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, reverse, device
     torch.testing.assert_close(z_tri, z_ref, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("M, N, axis_lanes, warps",
+                         [(128, 32, 1, 4),  # Consumer carries: lanes own independent columns.
+                          (4096, 1, THREADS_PER_WARP, 2),  # Totals can use lane parallelism.
+                          (16384, 1, THREADS_PER_WARP, 2),  # Long totals sequence.
+                          (512, 1, THREADS_PER_WARP, 1),  # Warp-local chunks.
+                          ])
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.float32])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_cost_model_strategies(M, N, axis_lanes, warps, dtype, reverse, device):
+    layout = ttgl.BlockedLayout([1, 1], [axis_lanes, THREADS_PER_WARP // axis_lanes], [warps, 1], [1, 0])
+    x = torch.randint(-10, 11, (M, N), device=device, dtype=torch.int32).to(dtype)
+    out = torch.empty_like(x)
+    scan_kernel[(1, )](x, out, M, N, layout, 0, reverse, num_warps=warps)
+    expected = torch.cumsum(x.flip([0]) if reverse else x, dim=0, dtype=dtype)
+    if reverse:
+        expected = expected.flip([0])
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
 @gluon.jit
 def _scan_affine_combine(a1, b1, a2, b2):
     return a1 * a2, b1 * a2 + b2
@@ -335,6 +354,17 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
     (ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 4096, 8),
     (ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 16 * THREADS_PER_WARP, 4),
     (ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 2048, 4),
+    # Exercise consumer-local and parallel carries across lengths and warp counts
+    # with a mixed-width, side-effectful combiner.
+    *[(ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [warps, 1], [0, 1]), totals * THREADS_PER_WARP, 1)
+      for warps in [2, 4, 8]
+      for totals in [64, 128, 256, 512]],
+    # A short sequence with no axis lanes uses consumer-local tuple carries.
+    (ttgl.BlockedLayout([2, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 16, 32),
+    # Consumer-local carries use logical warp order and preserve other scans.
+    (ttgl.DistributedLinearLayout(
+        [[128, 0], [256, 0], [512, 0], [0, 2]], [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]] + [[0, 0]] *
+        (THREADS_PER_WARP.bit_length() - 6), [[0, 1], [64, 0], [32, 0]], [], [1024, 4]), 1024, 4),
     # No intra-warp carry in the original layout; totals span registers.
     (ttgl.BlockedLayout([2, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 512, 32),
 ])
@@ -358,7 +388,11 @@ def test_scan_carry_predicates(layout, M, N, reverse, device):
     column_start = torch.arange(N, dtype=torch.int32, device=device) * M
     x = index[:, None] + column_start[None, :]
     lo, hi = torch.empty_like(x), torch.empty_like(x, dtype=torch.int64)
-    kernel[(1, )](x, lo, hi, M, N, layout, reverse, num_warps=4, debug=True)
+    if isinstance(layout, ttgl.DistributedLinearLayout):
+        num_warps = 1 << len(layout.warp_bases)
+    else:
+        num_warps = math.prod(layout.warps_per_cta)
+    kernel[(1, )](x, lo, hi, M, N, layout, reverse, num_warps=num_warps, debug=True)
     torch.testing.assert_close(lo, column_start[None, :].expand(M, N), rtol=0, atol=0)
     torch.testing.assert_close(hi, x.to(torch.int64), rtol=0, atol=0)
 

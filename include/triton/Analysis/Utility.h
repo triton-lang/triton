@@ -117,6 +117,17 @@ getScanScratchConfig(const triton::LinearLayout &src,
                      const triton::LinearLayout &dst,
                      ArrayRef<Type> elementTypes);
 
+// Static work estimates for one hardware thread. Scores rank scan plans;
+// they are not predictions of execution time.
+struct ScanCost {
+  uint64_t barriers = 0;
+  uint64_t shuffles = 0;
+  uint64_t arithmetic = 0;
+
+  ScanCost &operator+=(const ScanCost &other);
+  uint64_t score() const;
+};
+
 // Main's blocked-layout scan plan: shuffle-up followed by one shared exchange.
 class BlockedScanLoweringHelper {
 public:
@@ -171,12 +182,17 @@ private:
   SmallVector<unsigned> order;
 };
 
+// Prefer main's method unless a cheaper linear-layout plan also reduces work.
+bool useBlockedScan(triton::ScanOp op);
+
 // Plan layouts for contiguous thread/warp segments and their totals.
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
   ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis,
-                     bool preserveLaneOrder = false);
+                     ArrayRef<Type> elementTypes,
+                     bool preserveLaneOrder = false, unsigned combineCost = 0,
+                     bool allowWarpChunks = false);
   bool isSupported();
   const triton::LinearLayout &getPermutedLayout() const {
     return permutedLayout;
@@ -200,21 +216,42 @@ public:
   const std::optional<triton::LinearLayout> &getInterWarpLayout() const {
     return interWarpLayout;
   }
-  // Contiguous partitions of long total sequences; short sequences are
-  // replicated within each participating warp.
+  // Parallel totals plan: replicate the sequence or partition it across warps.
+  // A selected consumer layout below replaces this plan with direct carries.
   const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
     return interWarpScanLayout;
   }
+  bool canStreamWarpScan() const;
   unsigned getScratchSizeInBytes(ArrayRef<Type> elementTypes) const;
+  const ScanCost &getCost() const { return cost; }
+  unsigned getCombineCost() const { return combineCost; }
+  // Set when each carry consumer should load and accumulate raw totals.
+  const std::optional<triton::LinearLayout> &getConsumerTotalsLayout() const {
+    return consumerTotalsLayout;
+  }
 
 private:
+  bool canStreamWarpScan(const triton::LinearLayout &scanLayout) const;
+  ScanCost estimateWarpCost(const triton::LinearLayout &scanLayout) const;
   triton::LinearLayout buildPermutedLayout();
   triton::LinearLayout buildIntraWarpLayout() const;
   triton::LinearLayout buildIntraWarpScanLayout(bool preserveLaneOrder) const;
+  triton::LinearLayout buildIntraWarpScanLayout(unsigned tileBits,
+                                                bool preserveLaneOrder) const;
   triton::LinearLayout buildInterWarpLayout() const;
-  triton::LinearLayout buildInterWarpScanLayout() const;
+  triton::LinearLayout buildInterWarpScanLayout(bool partition) const;
+  std::optional<triton::LinearLayout> buildConsumerTotalsLayout() const;
+  void selectInterWarpPlan();
+  ScanCost estimateInterWarpCost(const triton::LinearLayout &scanLayout,
+                                 bool consumer) const;
 
   unsigned axis;
+  SmallVector<Type> elementTypes;
+  unsigned combineCost;
+  bool allowWarpChunks;
+  ScanCost cost;
+  ScanCost interWarpCost;
+  std::optional<triton::LinearLayout> consumerTotalsLayout;
   triton::LinearLayout originalLayout;
   // Register zero bases removed, then axis register bits ordered logically.
   triton::LinearLayout permutedLayout;
@@ -273,6 +310,7 @@ struct DecomposedWarpConversion {
   triton::LinearLayout pReg, shuffleMap;
   SmallVector<TranspositionInfo> mixedTranspositions;
   int nPack;
+  bool canUseShip() const;
 };
 
 // Produces a warp-local decomposition.

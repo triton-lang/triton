@@ -106,7 +106,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   }
   if (auto scanOp = dyn_cast<ScanOp>(op)) {
     BlockedScanLoweringHelper blocked(scanOp);
-    if (blocked.isSupported())
+    if (useBlockedScan(scanOp))
       return blocked.getScratchSizeInBytes();
     ScanLoweringHelper helper(scanOp);
     return helper.getScratchSizeInBytes(scanOp.getElementTypes());
