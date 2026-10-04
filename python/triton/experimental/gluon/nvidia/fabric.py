@@ -51,6 +51,7 @@ class Protocol:
 
 
 class _SynchronizedBufferArgs(namedtuple("_SynchronizedBufferArgsBase", "ptr state queue handle capacity protocol")):
+    __triton_do_not_specialize__ = ("handle", )
 
     @staticmethod
     def __triton_type__(types):
@@ -68,8 +69,8 @@ class SynchronizedBuffer(_SynchronizedBufferArgs):
     and ``periscope_sends_completed``. Queue requires ``head``, ``tail``,
     ``cached_head`` and ``buffer``. Additional mapping entries are ignored.
 
-    The handle must be a nonnegative int32; capacity and protocol are constexprs.
-    Pointer alignment is specialized. Offline compilation can use placeholder addresses
+    The handle is a runtime int32; capacity and protocol are constexprs. Pointer
+    alignment is specialized. Offline compilation can use placeholder addresses
     with alignment guaranteed by the runtime allocations.
 
     Construction requires no TW runtime or device allocation. The caller must

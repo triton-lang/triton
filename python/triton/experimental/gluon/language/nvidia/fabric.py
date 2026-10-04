@@ -195,11 +195,10 @@ class _synchronized_buffer(base_value):
         queue = self._queue
         bypass_value = protocol.bypass_ar_true if bypass_ar else protocol.bypass_ar_false
         result = semantic.builder.create_comm_submit(queue.head.handle, queue.tail.handle, queue.cached_head.handle,
-                                                     queue.buffer.handle, capacity,
-                                                     semantic.cast(semantic.to_tensor(self._handle),
-                                                                   gl.int32).handle, src_offset.handle,
-                                                     dst_offset.handle, nbytes.handle, self._state.send_count.handle,
-                                                     self._state.aborted.handle, is_send, protocol.request_layout,
+                                                     queue.buffer.handle, capacity, self._handle.handle,
+                                                     src_offset.handle, dst_offset.handle, nbytes.handle,
+                                                     self._state.send_count.handle, self._state.aborted.handle, is_send,
+                                                     protocol.request_layout,
                                                      protocol.send_type if is_send else protocol.recv_ack_type,
                                                      bypass_value, protocol.ready_value, protocol.aborted_value)
         return gl.tensor(result, gl.int1)

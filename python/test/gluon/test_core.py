@@ -57,6 +57,7 @@ from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.nvidia.fabric import (
     Protocol,
     RequestLayout,
+    SynchronizedBuffer,
     _Queue,
     _State,
     _SynchronizedBufferArgs,
@@ -7435,6 +7436,48 @@ def _make_fabric_buffer(device, *, request_layout=None, **values):
                    torch.zeros(8 * request_layout.stride, dtype=torch.int8, device=device))
     ptr = torch.arange(64, dtype=torch.float32, device=device)
     return _SynchronizedBufferArgs(ptr, state, queue, 1, ttgl.constexpr(8), ttgl.constexpr(protocol))
+
+
+def test_fabric_descriptor_nested_selection(device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def offset_second(buffers):
+        return ((buffers[0][0], buffers[0][1] + 2), buffers[1])
+
+    @gluon.jit
+    def kernel(Buffers, Out):
+        pid = ttgl.program_id(0)
+        selected = Buffers[0][0]
+        for i in range(pid):
+            if i == 0:
+                Buffers = offset_second(Buffers)
+                selected = Buffers[0][1]
+            else:
+                selected = Buffers[1][0]
+        ttgl.static_assert(selected._handle.type == ttgl.int32)
+        ttgl.store(Out + 2 * pid, selected._handle)
+        ttgl.store(Out + 2 * pid + 1, ttgl.load(selected.ptr).to(ttgl.int32))
+
+    allocations = [_make_fabric_buffer(device)._replace(handle=handle) for handle in (1, 7, 9)]
+    for index, buffer in enumerate(allocations):
+        buffer.ptr.add_(21 + index)
+    buffers = [
+        SynchronizedBuffer(address=buffer.ptr.data_ptr(), dtype=buffer.ptr.dtype,
+                           state={name: ptr.data_ptr()
+                                  for name, ptr in buffer.state._asdict().items()},
+                           queue={name: ptr.data_ptr()
+                                  for name, ptr in buffer.queue._asdict().items()}, handle=buffer.handle,
+                           capacity=buffer.capacity.value, protocol=buffer.protocol.value)
+        for buffer in allocations
+    ]
+    out = torch.empty((3, 2), dtype=torch.int32, device=device)
+    compiled = kernel[(3, )](((buffers[0], buffers[1]), (buffers[2], )), out)
+    assert out.tolist() == [[1, 21], [7, 24], [9, 23]]
+    buffers = [buffer._replace(handle=handle) for buffer, handle in zip(buffers, (9, 1, 7))]
+    assert kernel[(3, )](((buffers[0], buffers[1]), (buffers[2], )), out) is compiled
+    assert out.tolist() == [[9, 21], [1, 24], [7, 23]]
 
 
 @pytest.mark.parametrize("kind", ["recv", "ack"])
