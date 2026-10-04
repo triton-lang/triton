@@ -385,19 +385,22 @@ def test_scan_cta_local(num_ctas, replicate, reverse, device):
 
 @pytest.mark.parametrize("M, N, src_layout, axis, num_ctas", [
     pytest.param(2, 2, ttgl.BlockedLayout([2, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0]), 0, 1, id="registers"),
+    pytest.param(8, 4, ttgl.BlockedLayout([4, 2], [THREADS_PER_WARP, 1], [4, 1], [1, 0]), 0, 1, id="strided_registers"),
     pytest.param(2, 4 * THREADS_PER_WARP, ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [0, 1]), 1, 1,
                  id="multiwarp"),
     pytest.param(256, 4, ttgl.BlockedLayout([2, 1], [32, 1], [1, 4], [1, 0], [[0, 1]]), 0, 2, id="nonaxis_split"),
     pytest.param(256, 4, ttgl.BlockedLayout([2, 1], [32, 1], [1, 4], [1, 0], [[0, 0]]), 0, 2, id="broadcast"),
     pytest.param(1, 64, ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [[1, 0]]), 0, 2, id="clipped_axis_split"),
 ])
-def test_scan_blocked_shape_clipping(M, N, src_layout, axis, num_ctas, device):
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_blocked_shape_clipping(M, N, src_layout, axis, num_ctas, reverse, device):
     if num_ctas > 1 and not is_hopper_or_newer():
         pytest.skip("Requires Hopper or newer")
     x = torch.arange(1, M * N + 1, dtype=torch.int32, device=device).reshape(M, N)
     y = torch.empty_like(x)
-    scan_kernel[(1, )](x, y, M, N, src_layout, axis, num_warps=4, num_ctas=num_ctas)
-    torch.testing.assert_close(y, x.cumsum(axis, dtype=torch.int32))
+    scan_kernel[(1, )](x, y, M, N, src_layout, axis, reverse, num_warps=4, num_ctas=num_ctas)
+    expected = (x.flip([axis]) if reverse else x).cumsum(axis, dtype=torch.int32)
+    torch.testing.assert_close(y, expected.flip([axis]) if reverse else expected)
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
