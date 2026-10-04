@@ -28,6 +28,7 @@ from ._common import (
     matmul_launch_metadata,
     compute_pids,
     output_mx_scale_store_ptr,
+    round_f32_to_tf32,
 )
 
 
@@ -63,11 +64,6 @@ def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
     mask = offs != -1
     return (offs, mask)
 
-
-@triton.jit
-def round_f32_to_tf32(x: tl.tensor):
-    ASM: tl.constexpr = "cvt.rn.tf32.f32 $0, $1;" if cuda_capability_geq(9, 0) else "cvt.rna.tf32.f32 $0, $1;"
-    return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
 
 _matmul_repr = make_matmul_repr("_p_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
