@@ -121,8 +121,7 @@ getScanScratchConfig(const triton::LinearLayout &src,
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
-  ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis,
-                     bool preserveLaneOrder = false);
+  ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis);
   bool isSupported();
   const triton::LinearLayout &getPermutedLayout() const {
     return permutedLayout;
@@ -134,7 +133,7 @@ public:
   const std::optional<triton::LinearLayout> &getIntraWarpLayout() const {
     return intraWarpLayout;
   }
-  // The same totals with contiguous registers for the intra-warp scan.
+  // Order lane-owned totals before higher register chunks for the warp scan.
   const std::optional<triton::LinearLayout> &getIntraWarpScanLayout() const {
     return intraWarpScanLayout;
   }
@@ -146,8 +145,7 @@ public:
   const std::optional<triton::LinearLayout> &getInterWarpLayout() const {
     return interWarpLayout;
   }
-  // Contiguous partitions of long total sequences; short sequences are
-  // replicated within each participating warp.
+  // Raw segment totals in logical register order, replicated to consumers.
   const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
     return interWarpScanLayout;
   }
@@ -156,7 +154,7 @@ public:
 private:
   triton::LinearLayout buildPermutedLayout();
   triton::LinearLayout buildIntraWarpLayout() const;
-  triton::LinearLayout buildIntraWarpScanLayout(bool preserveLaneOrder) const;
+  triton::LinearLayout buildIntraWarpScanLayout() const;
   triton::LinearLayout buildInterWarpLayout() const;
   triton::LinearLayout buildInterWarpScanLayout() const;
 

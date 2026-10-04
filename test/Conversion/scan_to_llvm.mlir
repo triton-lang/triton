@@ -32,7 +32,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
 
 // CHECK-LABEL: @test_1d_simple
 tt.func private @test_1d_simple(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
-  // CHECK-COUNT-3: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK-COUNT-3: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
@@ -45,7 +45,7 @@ tt.func private @test_1d_simple(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, 
 
 // CHECK-LABEL: @test_1d_grouped
 tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8xi32, #layout_adj> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
@@ -58,13 +58,15 @@ tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8x
 
 // CHECK-LABEL: @test_warp_register_groups
 // WARP-LABEL: @test_warp_register_groups
-// Normalize register ownership with shuffles, then scan the group totals.
+// Scan native chunks with shuffle-up and carry the terminal prefix between them.
 // WARP: @llvm.nvvm.shfl.sync.idx.i32
 // WARP: add i32
 // WARP-NOT: @llvm.nvvm.barrier
 // WARP: ret
 tt.func private @test_warp_register_groups(%arg: tensor<128xi32, #layout_reg4>) -> tensor<128xi32, #layout_reg4> {
-  // CHECK-COUNT-5: @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK-COUNT-9: @llvm.nvvm.shfl.sync.up.i32
+  // CHECK: @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: @llvm.nvvm.shfl.sync.up.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
@@ -85,7 +87,7 @@ tt.func public @anchor_warp_register_groups(%ptr: !llvm.ptr, %arg: !llvm.struct<
 
 // CHECK-LABEL: @test_2d_grouped
 tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK: st.shared::cta
   // CHECK: @llvm.nvvm.barrier
   // CHECK: load i32, ptr addrspace(3)
@@ -100,9 +102,9 @@ tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<
 
 // CHECK-LABEL: @test_1d_reversed
 tt.func private @test_1d_reversed(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
-  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
-  // CHECK-COUNT-3: @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK-COUNT-3: @llvm.nvvm.shfl.sync.up.i32
+  // CHECK: @llvm.nvvm.shfl.sync.bfly.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = true}> ({
@@ -196,7 +198,7 @@ tt.func public @anchor_permuted_lanes(%ptr: !llvm.ptr, %arg: !llvm.struct<(i32, 
 // CHECK: st.shared::cta
 // CHECK: @llvm.nvvm.barrier
 // CHECK: load i32, ptr addrspace(3)
-// CHECK-COUNT-4: @llvm.nvvm.barrier
+// CHECK-NOT: @llvm.nvvm.barrier
 // CHECK: load i32, ptr addrspace(3)
 // CHECK-NOT: @llvm.nvvm.barrier
 // CHECK: ret
@@ -240,12 +242,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // CARRIES-LABEL: @test_parallel_carries
-// Scan contiguous partitions and return their carries to the original owners.
+// Publish raw totals once and accumulate prefixes directly in their consumers.
 // CARRIES: st.shared::cta
 // CARRIES: @llvm.nvvm.barrier
-// CARRIES: load {{.*}}, ptr addrspace(3)
-// CARRIES: @llvm.nvvm.shfl.sync.idx.i32
-// CARRIES-COUNT-4: @llvm.nvvm.barrier
 // CARRIES: load {{.*}}, ptr addrspace(3)
 // CARRIES-NOT: @llvm.nvvm.barrier
 // CARRIES: ret
@@ -280,15 +279,11 @@ tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // GROUPS-LABEL: @test_grouped_carries
-// Distribute the 128 segment totals over four warps, scan each partition,
-// then scan its terminal total and return the complete carries.
+// Accumulate the 128 raw segment totals in each consumer after one exchange.
 // GROUPS: st.shared::cta
 // GROUPS: @llvm.nvvm.barrier
 // GROUPS: load {{.*}}, ptr addrspace(3)
-// GROUPS: @llvm.nvvm.shfl.sync.idx.i32
 // GROUPS: fadd float
-// GROUPS-COUNT-4: @llvm.nvvm.barrier
-// GROUPS: load {{.*}}, ptr addrspace(3)
 // GROUPS-NOT: @llvm.nvvm.barrier
 // GROUPS: ret
 tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
@@ -318,34 +313,33 @@ tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
 //--- tuple.mlir
 
 // Thirty-two totals, with parallel lanes leaving only two lane bits available
-// for their sequence. Distribute them over warps and preserve reverse tuple
+// for their sequence. Load raw totals in consumers and preserve reverse tuple
 // ordering; the operands' shared scratch allocations must not overlap.
 #tuple = #ttg.linear<{register = [[8, 0], [16, 0], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4]], warp = [[4, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // TUPLE: ttg.shared = 3072 : i32
 // TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
 // TUPLE: llvm.getelementptr %arg2[2048]
-// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.v4.b32
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.b32
 // TUPLE-NOT: nvvm.barrier
-// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.v2.b64
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.b64
 // TUPLE: nvvm.barrier
-// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i32
 // TUPLE-NOT: nvvm.barrier
-// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
-// TUPLE: nvvm.shfl.sync
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i64
 // TUPLE: llvm.mul
 // TUPLE: llvm.add
 // TUPLE: llvm.return
 // AMD-TUPLE: ttg.shared = 3072 : i32
 // AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
 // AMD-TUPLE: llvm.getelementptr %arg2[2048]
-// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i32>, !llvm.ptr<3>
+// AMD-TUPLE: llvm.store {{.*}} : i32, !llvm.ptr<3>
 // AMD-TUPLE-NOT: rocdl.s.barrier
-// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
+// AMD-TUPLE: llvm.store {{.*}} : i64, !llvm.ptr<3>
 // AMD-TUPLE: rocdl.s.barrier
-// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i32
 // AMD-TUPLE-NOT: rocdl.s.barrier
-// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i64
 // AMD-TUPLE: llvm.mul
 // AMD-TUPLE: llvm.add
 // AMD-TUPLE: llvm.return
@@ -364,9 +358,8 @@ tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tens
 
 //--- warp-transpose.mlir
 
-// Two register/lane bit swaps would use shared memory under the default
-// conversion heuristic. Scan forces shuffles in both directions, including
-// packed i8 and split i64 values, without requesting an allocation offset.
+// Warp-local chunks use shuffles, including packed i8 and split i64 values,
+// without requesting a shared-memory allocation offset.
 #transpose = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[0], [0]], block = []}>
 #parallel = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
 #native_prefix = #ttg.linear<{register = [[1], [2], [16]], lane = [[4], [8], [0], [0], [0]], warp = [[0], [0]], block = []}>
@@ -410,7 +403,7 @@ tt.func private @test_scan_warp_transpose_reverse(%a: tensor<16xi8, #transpose>,
   tt.return %a_out, %b_out : tensor<16xi8, #transpose>, tensor<16xi64, #transpose>
 }
 // Native four-register prefixes must be computed before any lane shuffles.
-// Only their totals undergo the register/lane conversion.
+// Only their totals participate in the lane scan.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_forward
 // TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.add
@@ -431,12 +424,13 @@ tt.func private @test_scan_native_prefix_forward(%a: tensor<32xi8, #native_prefi
   tt.return %a_out, %b_out : tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>
 }
 
-// Native four-register prefixes must be computed before any lane shuffles.
-// Only their totals undergo the register/lane conversion.
+// Reverse coordinates before scanning native prefixes. Only their totals
+// participate in the forward lane scan.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
-// TRANSPOSE-NOT: nvvm.shfl.sync
+// TRANSPOSE: nvvm.shfl.sync bfly
+// TRANSPOSE-NOT: nvvm.shfl.sync up
 // TRANSPOSE: llvm.add
-// TRANSPOSE: nvvm.shfl.sync
+// TRANSPOSE: nvvm.shfl.sync up
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
 // AMD-TRANSPOSE: llvm.add
@@ -454,13 +448,10 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
 }
 
 
-// After conversion, each of four logical lanes owns four consecutive values.
-// Two scan rounds compute both the inclusive total and the exclusive carry:
-// there must be no third indexed shuffle to fetch the preceding lane's prefix.
-// The register/lane conversions use butterfly shuffles.
+// Scan four native chunks and broadcast each terminal prefix to the next.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
-// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
-// TRANSPOSE-NOT: nvvm.shfl.sync idx
+// TRANSPOSE-COUNT-12: nvvm.shfl.sync up
+// TRANSPOSE-NOT: nvvm.shfl.sync up
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
 // AMD-TRANSPOSE: llvm.add
@@ -474,8 +465,10 @@ tt.func private @test_scan_exclusive_carry_forward(%arg: tensor<16xi32, #transpo
   tt.return %result : tensor<16xi32, #transpose>
 }
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
-// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
-// TRANSPOSE-NOT: nvvm.shfl.sync idx
+// TRANSPOSE-COUNT-4: nvvm.shfl.sync bfly
+// TRANSPOSE-COUNT-12: nvvm.shfl.sync up
+// TRANSPOSE-NOT: nvvm.shfl.sync up
+// TRANSPOSE-COUNT-4: nvvm.shfl.sync bfly
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
 // AMD-TRANSPOSE: llvm.add
@@ -491,16 +484,16 @@ tt.func private @test_scan_exclusive_carry_reverse(%arg: tensor<16xi32, #transpo
 
 // Independent register groups share each round's lane lookup and predicate.
 // REUSE-LABEL: llvm.func {{.*}}@test_scan_reuse_lane_lookups
+// REUSE: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SRC1:[a-zA-Z0-9_]+]],
 // REUSE: %[[P1:.*]] = llvm.icmp
-// REUSE: %[[P2:.*]] = llvm.icmp
-// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC1:[a-zA-Z0-9_]+]],
 // REUSE: llvm.select %[[P1]],
-// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC2:[a-zA-Z0-9_]+]],
+// REUSE: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SRC2:[a-zA-Z0-9_]+]],
+// REUSE: %[[P2:.*]] = llvm.icmp
 // REUSE: llvm.select %[[P2]],
 // REUSE-NOT: llvm.icmp
-// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC1]],
+// REUSE: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SRC1]],
 // REUSE: llvm.select %[[P1]],
-// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC2]],
+// REUSE: nvvm.shfl.sync up %{{.*}}, %{{.*}}, %[[SRC2]],
 // REUSE: llvm.select %[[P2]],
 // REUSE: llvm.return
 tt.func private @test_scan_reuse_lane_lookups(%arg: tensor<4x2xi32, #parallel>) -> tensor<4x2xi32, #parallel> {
@@ -516,18 +509,15 @@ tt.func private @test_scan_reuse_lane_lookups(%arg: tensor<4x2xi32, #parallel>) 
 
 //--- converted-totals.mlir
 
-// Each warp owns 16 consecutive elements in four strided registers. Scan in
-// register=[1,2], lane=[4,8,0,0,0], then extract its terminal total directly
-// from that layout for the shared-memory exchange. Restore native ownership
-// after the exchange, when applying carries to the saved prefixes.
+// Each warp owns 16 elements in four chunks. Scan the lanes of each chunk,
+// then its register-ordered chunk totals, before publishing the warp total.
 #converted = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[16], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // Terminal lanes store directly, without a broadcast shuffle before the store.
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals(
 // TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
-// TERMINAL-COUNT-2: nvvm.shfl.sync idx
-// TERMINAL-NOT: nvvm.shfl.sync idx
+// TERMINAL: nvvm.shfl.sync
 // TERMINAL: %[[LANE_IN_SEGMENT:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
 // TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[MASK]] : i32
 // TERMINAL-NOT: nvvm.shfl.sync idx
@@ -542,7 +532,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // RETAIN: llvm.inline_asm {{.*}}st.shared::cta
 // RETAIN: nvvm.barrier
 // RETAIN: llvm.load
-// RETAIN: nvvm.shfl.sync bfly
+// RETAIN-NOT: nvvm.shfl.sync bfly
 // RETAIN: llvm.return
 // AMD-RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
 // AMD-RETAIN: llvm.cond_br
@@ -560,12 +550,10 @@ tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) ->
 
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse(
 // TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
-// TERMINAL-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
-// TERMINAL-COUNT-2: nvvm.shfl.sync idx
-// TERMINAL-NOT: nvvm.shfl.sync idx
+// TERMINAL: nvvm.shfl.sync
 // TERMINAL: %[[LANE_IN_SEGMENT:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
-// TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[ZERO]] : i32
+// TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[MASK]] : i32
 // TERMINAL-NOT: nvvm.shfl.sync idx
 // TERMINAL: %[[LANE_PRED:.*]] = llvm.and %[[PRED]], {{.*}} : i1
 // TERMINAL: %[[STORE_PRED:.*]] = llvm.and %[[LANE_PRED]], {{.*}} : i1
@@ -596,11 +584,10 @@ tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #conver
 
 #parallel_totals = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Four segment totals and eight columns fit in the lanes of one warp.
-// The totals scan needs two adds, rather than repeating them in eight registers.
-// Together with 40 intra-warp adds and eight carry adds, this gives 50.
+// Each of eight columns scans raw totals directly in its consumers. Two
+// prefix adds per column, 40 lane-scan adds, and eight carry adds give 64.
 // COLUMNS-LABEL: llvm.func {{.*}}@test_scan_parallel_totals(
-// COLUMNS-COUNT-50: llvm.fadd
+// COLUMNS-COUNT-64: llvm.fadd
 // COLUMNS-NOT: llvm.fadd
 // COLUMNS: llvm.return
 tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals> {
@@ -617,9 +604,9 @@ tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_tot
 
 #ship = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Each of two chunks uses three exchanges with four shuffles in both directions.
+// Sixteen native chunks each use five shuffle-up rounds, with no transpose.
 // SHIP-LABEL: llvm.func {{.*}}@test_scan_register_lane_exchanges(
-// SHIP-COUNT-48: nvvm.shfl.sync bfly
+// SHIP-COUNT-96: nvvm.shfl.sync up
 // SHIP-NOT: nvvm.shfl.sync bfly
 // SHIP: llvm.return
 tt.func private @test_scan_register_lane_exchanges(%arg: tensor<512xf32, #ship>) -> tensor<512xf32, #ship> {

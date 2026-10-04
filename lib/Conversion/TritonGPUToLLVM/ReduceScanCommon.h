@@ -110,19 +110,20 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   return SmallVector<Value>(thenBlock->getArguments());
 }
 
-inline SmallVector<SmallVector<Value>> convertScanTotals(
+inline void visitScanTotals(
     Location loc, ConversionPatternRewriter &rewriter, triton::ScanOp op,
     const LinearLayout &src, const LinearLayout &dst,
     const SmallVector<SmallVector<Value>> &values,
     const LLVMTypeConverter *typeConverter, const TargetInfoBase &targetInfo,
-    Value storePred = {}, int shiftedAxis = -1, int distance = 0) {
+    Value storePred, Value laneId, Value warpId, ArrayRef<unsigned> storeOrder,
+    ArrayRef<unsigned> loadOrder, llvm::function_ref<void()> initialize,
+    llvm::function_ref<void(unsigned, ValueRange)> visit) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto *ctx = rewriter.getContext();
   auto kBlock = StringAttr::get(ctx, "block");
   auto kOffset = StringAttr::get(ctx, "offset");
   auto scratch = getScanScratchConfig(src, dst, op.getElementTypes());
   auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   if (!storePred) {
     storePred = b.true_val();
     auto free = src.getFreeVariableMasks();
@@ -134,85 +135,115 @@ inline SmallVector<SmallVector<Value>> convertScanTotals(
             b.and_(storePred,
                    b.icmp_eq(b.and_(id, b.i32_val(free[dim])), b.i32_val(0)));
   }
+  // Preserve native register order in shared memory. Independent hardware
+  // scans occupy low bits, followed by warp totals, then native register bits.
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto kReg = StringAttr::get(ctx, "register");
+  SmallVector<size_t> permutation;
+  for (unsigned bit = 0; (1u << bit) < storeOrder.size(); ++bit)
+    permutation.push_back(llvm::Log2_32(storeOrder[1u << bit]));
+  ColumnAction registerOrder(permutation, kReg, permutation.size());
+  auto storeSource = registerOrder.apply(src);
+  auto free = storeSource.getFreeVariableMasks();
+  std::vector<std::vector<int32_t>> hardware;
+  for (auto dim : {kLane, kWarp})
+    for (auto [bit, basis] :
+         llvm::enumerate(storeSource.getBases().lookup(dim)))
+      if (!(free[dim] & (1u << bit)))
+        hardware.push_back(basis);
+  std::stable_partition(
+      hardware.begin(), hardware.end(),
+      [&](const auto &basis) { return !basis[op.getAxis()]; });
+  for (auto [bit, basis] : llvm::enumerate(storeSource.getBases().lookup(kReg)))
+    if (!(free[kReg] & (1u << bit)))
+      hardware.push_back(basis);
+  LinearLayout shared({{kOffset, std::move(hardware)},
+                       {kBlock, storeSource.getBases().lookup(kBlock)}},
+                      llvm::to_vector(src.getOutDimNames()));
+  auto storeLayout = storeSource.invertAndCompose(shared);
+  auto loadLayout = shared.pseudoinvert();
   struct SharedOperand {
-    LinearLayout layout;
     Value base;
     Type type;
   };
   SmallVector<SharedOperand> operands;
-  // Keep every operand in its own part of the allocation, then synchronize
-  // once. Fold the swizzle's repetition dimension into the shared offset.
+  SmallVector<SmallVector<Value>> storedValues;
   for (auto [i, input] : llvm::enumerate(values)) {
     Type type = typeConverter->convertType(op.getElementTypes()[i]);
     Type storageType = type;
-    auto stored = input;
-    if (isa<LLVM::LLVMPointerType>(type)) {
+    if (isa<LLVM::LLVMPointerType>(type))
       storageType = rewriter.getI64Type();
-      for (auto &v : stored)
-        v = b.ptrtoint(storageType, v);
-    } else if (type.getIntOrFloatBitWidth() < 8) {
+    else if (type.getIntOrFloatBitWidth() < 8)
       storageType = rewriter.getI8Type();
-      for (auto &v : stored)
-        v = b.zext(storageType, v);
-    }
-    unsigned width = storageType.getIntOrFloatBitWidth();
-    auto [dstTile, srcTile] =
-        targetInfo.getSharedLdStTiles(gpu::getVecBitwidthLdSt(src, dst, width));
-    auto shared = gpu::optimalSwizzlingLdSt(
-        src, dst, width, targetInfo.getSharedMemoryBanks(), srcTile, dstTile);
-    auto order = llvm::to_vector(shared.getInDimNames());
-    order.erase(llvm::find(order, kBlock));
-    order.push_back(kBlock);
-    unsigned blocks = shared.getInDimSize(kBlock);
-    shared = shared.transposeIns(order).reshapeIns(
-        {{kOffset, shared.getTotalInDimSize() / blocks}, {kBlock, blocks}});
     Value operandBase = b.gep(base.getType(), rewriter.getI8Type(), base,
                               b.i32_val(scratch.offsets[i]));
-    lowerLdSt(loc, ctx, src.invertAndCompose(shared), stored, storageType,
-              operandBase, {}, b.i32_val(0), 0, {}, 0, laneId, warpId, rewriter,
-              targetInfo, {}, makeSharedStoreEmitter(targetInfo, storePred));
-    operands.push_back({std::move(shared), operandBase, storageType});
+    operands.push_back({operandBase, storageType});
+    storedValues.push_back(registerOrder.apply(input));
+  }
+  // Warp coordinates are already bounded by the execution region. Preserve
+  // an identity mapping directly instead of masking it again.
+  auto warpOffset = storeLayout.sublayout({kWarp}, {kOffset});
+  bool warpIsOffset =
+      warpOffset.getNumConsecutiveInOut() == warpOffset.getInDimSize(kWarp) &&
+      storeLayout.sublayoutIsZero({kLane}, {kOffset});
+  // Publish all operands of one native chunk together, as in main. Keeping
+  // tuple stores together avoids extending the other operands' lifetimes.
+  for (unsigned reg = 0; reg < storeSource.getInDimSize(kReg); ++reg) {
+    Value offset;
+    if (warpIsOffset) {
+      unsigned regOffset =
+          storeLayout.apply({{kReg, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})
+              .front()
+              .second;
+      offset = b.add(warpId, b.i32_val(regOffset));
+    } else {
+      offset = applyLinearLayout(loc, rewriter, storeLayout,
+                                 {{kReg, b.i32_val(reg)},
+                                  {kLane, laneId},
+                                  {kWarp, warpId},
+                                  {kBlock, b.i32_val(0)}})
+                   .front()
+                   .second;
+    }
+    for (auto [i, operand] : llvm::enumerate(operands)) {
+      Value value = storedValues[i][reg];
+      if (value.getType() != operand.type)
+        value = isa<LLVM::LLVMPointerType>(value.getType())
+                    ? Value(b.ptrtoint(operand.type, value))
+                    : Value(b.zext(operand.type, value));
+      Value ptr =
+          b.gep(operand.base.getType(), operand.type, operand.base, offset);
+      targetInfo.storeShared(rewriter, loc, ptr, value, storePred);
+    }
   }
   targetInfo.barrier(loc, rewriter, gpu::AddrSpace::Local);
-  SmallVector<SmallVector<Value>> result;
-  for (auto [i, operand] : llvm::enumerate(operands)) {
+  initialize();
+  // Emit each load next to its accumulation, as in main. Loading the full
+  // sequence up front would keep many raw totals live unnecessarily.
+  for (unsigned reg : loadOrder) {
+    auto coords = applyLinearLayout(loc, rewriter, dst,
+                                    {{kReg, b.i32_val(reg)},
+                                     {StringAttr::get(ctx, "lane"), laneId},
+                                     {StringAttr::get(ctx, "warp"), warpId},
+                                     {kBlock, b.i32_val(0)}});
     SmallVector<Value> loaded;
-    if (shiftedAxis < 0) {
-      loaded = lowerLdSt(
-          loc, ctx, invertAndComposeLocal(operand.layout, dst, {kBlock}), {},
-          operand.type, operand.base, {}, b.i32_val(0), 0, {}, 0, laneId,
-          warpId, rewriter, targetInfo, {}, makeSharedLoadEmitter(targetInfo));
-    } else {
-      // Fetch the preceding prefix directly into its consumer's ownership.
-      // The wrapped boundary value is never combined by the scan lowering.
-      auto kReg = StringAttr::get(ctx, "register");
-      auto axis = StringAttr::get(ctx, "dim" + std::to_string(shiftedAxis));
-      auto inverse = operand.layout.pseudoinvert();
-      for (unsigned r = 0; r < dst.getInDimSize(kReg); ++r) {
-        auto coords = applyLinearLayout(loc, rewriter, dst,
-                                        {{kReg, b.i32_val(r)},
-                                         {StringAttr::get(ctx, "lane"), laneId},
-                                         {StringAttr::get(ctx, "warp"), warpId},
-                                         {kBlock, b.i32_val(0)}});
-        auto &index = coords[shiftedAxis].second;
-        index = b.and_(b.add(index, b.i32_val(distance)),
-                       b.i32_val(dst.getOutDimSize(axis) - 1));
-        Value offset =
-            applyLinearLayout(loc, rewriter, inverse, coords)[0].second;
-        Value ptr =
-            b.gep(operand.base.getType(), operand.type, operand.base, offset);
-        loaded.push_back(targetInfo.loadShared(rewriter, loc, ptr, operand.type,
-                                               b.true_val()));
-      }
+    for (auto [operandIdx, operand] : llvm::enumerate(operands)) {
+      Value offset =
+          applyLinearLayout(loc, rewriter, loadLayout, coords).front().second;
+      Value ptr =
+          b.gep(operand.base.getType(), operand.type, operand.base, offset);
+      Value value =
+          targetInfo.loadShared(rewriter, loc, ptr, operand.type, b.true_val());
+      Type type = typeConverter->convertType(op.getElementTypes()[operandIdx]);
+      if (type != operand.type)
+        value = isa<LLVM::LLVMPointerType>(type)
+                    ? Value(b.inttoptr(type, value))
+                    : Value(b.trunc(type, value));
+      loaded.push_back(value);
     }
-    Type type = typeConverter->convertType(op.getElementTypes()[i]);
-    if (type != operand.type)
-      for (auto &v : loaded)
-        v = isa<LLVM::LLVMPointerType>(type) ? Value(b.inttoptr(type, v))
-                                             : Value(b.trunc(type, v));
-    result.push_back(std::move(loaded));
+    visit(reg, loaded);
   }
-  return result;
 }
 
 template <typename SourceOp>

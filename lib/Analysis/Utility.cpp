@@ -359,7 +359,7 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
           op.getAxis()) {}
 
 ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
-                                       unsigned axis, bool preserveLaneOrder)
+                                       unsigned axis)
     : axis(axis), originalLayout(inputLayout) {
   // Plan thread prefixes, intra-warp totals, and inter-warp totals separately.
   // Communicate totals, then map their carries back to the native prefixes.
@@ -388,7 +388,7 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
           std::min(threadLocalSegmentSize, unsigned(basis[axis]));
   if (threadLocalSegmentSize < warpLocalSegmentSize) {
     intraWarpLayout = buildIntraWarpLayout();
-    intraWarpScanLayout = buildIntraWarpScanLayout(preserveLaneOrder);
+    intraWarpScanLayout = buildIntraWarpScanLayout();
   }
   if (warpLocalSegmentSize == axisSize)
     return;
@@ -433,64 +433,22 @@ LinearLayout ScanLoweringHelper::buildIntraWarpLayout() const {
   return getScanTotalsLayout(permutedLayout, axis, threadLocalSegmentSize);
 }
 
-LinearLayout
-ScanLoweringHelper::buildIntraWarpScanLayout(bool preserveLaneOrder) const {
-  // Put low segment bits in registers, then lanes. Preserve other segments
-  // and independent scans so the conversion stays within a warp.
+LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
+  // Main's warp scan processes one thread total per lane. Register bits above
+  // the lanes select subsequent chunks. Native blocked layouts already have
+  // this order; interleaved layouts need only a warp-local conversion.
   auto *ctx = intraWarpLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   unsigned segmentSize = warpLocalSegmentSize / threadLocalSegmentSize;
   auto bases = intraWarpLayout->getBases();
-  SmallVector<unsigned> registers;
-  for (auto [i, basis] : llvm::enumerate(bases[kReg]))
-    if (basis[axis] && basis[axis] < segmentSize)
-      registers.push_back(i);
-  unsigned tileBits = std::min<unsigned>(registers.size(), 3);
-  if (preserveLaneOrder) {
-    // Preserve lane order when bit exchanges alone form complete chunks. This
-    // avoids a lane permutation and allows cheaper register/lane exchanges.
-    for (unsigned i = 0; i < tileBits; ++i) {
-      auto lane = llvm::find_if(bases[kLane], [&](const auto &basis) {
-        return basis[axis] == (1u << i);
-      });
-      assert(lane != bases[kLane].end() && "thread totals start in lanes");
-      std::swap(bases[kReg][registers[i]], *lane);
-    }
-    unsigned chunkSize = 1u << tileBits;
-    for (const auto &basis : bases[kLane])
-      if (basis[axis] && basis[axis] < segmentSize)
-        chunkSize *= 2;
-    bool contiguous =
-        llvm::all_of(bases[kLane],
-                     [&](const auto &basis) {
-                       return basis[axis] >= segmentSize ||
-                              basis[axis] < chunkSize;
-                     }) &&
-        llvm::all_of(
-            ArrayRef<unsigned>(registers).drop_front(tileBits),
-            [&](unsigned r) { return bases[kReg][r][axis] >= chunkSize; });
-    if (contiguous)
-      return LinearLayout(std::move(bases),
-                          llvm::to_vector(intraWarpLayout->getOutDimNames()));
-    bases = intraWarpLayout->getBases();
-  }
-  // Bound the full transpose to eight values per thread. Higher register bits
-  // select chunks scanned separately.
   unsigned next = 1;
-  for (unsigned i = 0; i < tileBits; ++i) {
-    bases[kReg][registers[i]][axis] = next;
-    next *= 2;
-  }
-  for (auto &basis : bases[kLane])
-    if (basis[axis] && basis[axis] < segmentSize) {
-      basis[axis] = next;
-      next *= 2;
-    }
-  for (unsigned i = tileBits; i < registers.size(); ++i) {
-    bases[kReg][registers[i]][axis] = next;
-    next *= 2;
-  }
+  for (auto dim : {kLane, kReg})
+    for (auto &basis : bases[dim])
+      if (basis[axis] && basis[axis] < segmentSize) {
+        basis[axis] = next;
+        next *= 2;
+      }
   assert(next == segmentSize);
   return LinearLayout(std::move(bases),
                       llvm::to_vector(intraWarpLayout->getOutDimNames()));
@@ -507,58 +465,30 @@ LinearLayout ScanLoweringHelper::buildInterWarpLayout() const {
 }
 
 LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
-  // Assign contiguous ranges to warps when the sequence needs register axis
-  // bits. A second scan then exchanges just one total per range.
+  // Put the complete sequence of raw warp-segment totals in each consumer's
+  // registers. For warp=[1], register=[2,4], every thread loads S0..S7 and
+  // consumes the prefix preceding S(2*r+warp). Independent scans stay in place.
   auto *ctx = interWarpLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
-  auto kWarp = StringAttr::get(ctx, "warp");
   auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
-  unsigned numSegments = interWarpLayout->getOutDimSize(axisDim);
   auto bases = interWarpLayout->getBases();
-  SmallVector<unsigned> warpBits;
-  for (auto [i, basis] : llvm::enumerate(bases[kWarp]))
-    if (basis[axis])
-      warpBits.push_back(i);
   for (auto &[dim, dimBases] : bases)
     for (auto &basis : dimBases)
       basis[axis] = 0;
-  auto isZero = [](const auto &basis) {
-    return llvm::all_of(basis, [](int32_t x) { return x == 0; });
-  };
-  unsigned availableLanes = 1;
-  for (const auto &basis : bases[kLane])
-    if (isZero(basis))
-      availableLanes *= 2;
-  unsigned perWarp = numSegments;
-  if (numSegments > availableLanes && numSegments > (1u << warpBits.size())) {
-    perWarp >>= warpBits.size();
-    for (auto [i, bit] : llvm::enumerate(warpBits))
-      bases[kWarp][bit][axis] = perWarp << i;
-  }
-  unsigned next = 1;
-  for (auto &basis : bases[kLane])
-    if (next < perWarp && isZero(basis)) {
-      basis[axis] = next;
-      next *= 2;
-    }
-  for (auto &laneBasis : bases[kLane]) {
-    if (!isZero(laneBasis))
-      continue;
-    auto reg = llvm::find_if_not(bases[kReg], isZero);
-    if (reg == bases[kReg].end())
-      break;
-    std::swap(laneBasis, *reg);
-  }
-  while (next < perWarp) {
+  auto zeroed = LinearLayout(std::move(bases),
+                             llvm::to_vector(interWarpLayout->getOutDimNames()))
+                    .removeZeroBasesAlongDim(kReg);
+  bases = zeroed.getBases();
+  std::vector<std::vector<int32_t>> axisBases;
+  for (unsigned bit = 1; bit < interWarpLayout->getOutDimSize(axisDim);
+       bit *= 2) {
     std::vector<int32_t> basis(interWarpLayout->getNumOutDims(), 0);
-    basis[axis] = next;
-    bases[kReg].push_back(std::move(basis));
-    next *= 2;
+    basis[axis] = bit;
+    axisBases.push_back(std::move(basis));
   }
+  bases[kReg].insert(bases[kReg].begin(), axisBases.begin(), axisBases.end());
   return LinearLayout(std::move(bases),
-                      llvm::to_vector(interWarpLayout->getOutDimNames()))
-      .removeZeroBasesAlongDim(kReg);
+                      llvm::to_vector(interWarpLayout->getOutDimNames()));
 }
 
 bool ScanLoweringHelper::isSupported() {
@@ -586,8 +516,7 @@ getScanScratchConfig(const LinearLayout &src, const LinearLayout &dst,
 
 unsigned
 ScanLoweringHelper::getScratchSizeInBytes(ArrayRef<Type> elementTypes) const {
-  // Store the complete CTA-local array. Nested exchanges hold fewer totals
-  // and reuse this allocation.
+  // Publish the complete CTA-local totals array once for all consumers.
   if (!interWarpLayout)
     return 0;
   return getScanScratchConfig(*interWarpLayout, *interWarpScanLayout,
