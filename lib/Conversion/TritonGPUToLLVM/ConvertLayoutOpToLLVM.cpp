@@ -208,9 +208,13 @@ struct ConvertLayoutOpConversion
     };
 
     SmallVector<Value> outVals;
-    if (m == 1 && isXorShuffle && isShippable(mixedTranspositions[0])) {
-      outVals = transferWithinWarpShipImpl(loc, rewriter, inVals, nPack,
-                                           mixedTranspositions[0]);
+    if (isXorShuffle && m > 0 && (m == 1 || (m <= 3 && nPack == 0)) &&
+        llvm::all_of(mixedTranspositions, isShippable)) {
+      // For a few disjoint exchanges, shipping reduces selects and temporary
+      // values at the cost of additional shuffles.
+      outVals = std::move(inVals);
+      for (const auto &t : mixedTranspositions)
+        outVals = transferWithinWarpShipImpl(loc, rewriter, outVals, nPack, t);
     } else {
       outVals =
           transferWithinWarpSwapImpl(loc, rewriter, inVals, nPack, shuffleMap,
