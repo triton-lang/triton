@@ -242,17 +242,31 @@ def test_fabric_frontend_invalid(case, message, fabric_descriptor_fields):
 
 
 @pytest.mark.parametrize("aligned", [False, True])
-def test_fabric_nested_argument_alignment(aligned, fabric_descriptor_fields):
-    fabric_descriptor_fields["address"] = 0x1000 if aligned else 0x1004
+@pytest.mark.parametrize("handle,runtime_handle", [(1, True), (9, True), (ttgl.constexpr(9), False)],
+                         ids=["one", "nine", "explicit-constexpr"])
+def test_fabric_nested_argument_alignment(aligned, handle, runtime_handle, fabric_descriptor_fields):
+    fabric_descriptor_fields.update(address=0x1000 if aligned else 0x1004,
+                                    handle=handle if runtime_handle else handle.value)
     buffer = SynchronizedBuffer(**fabric_descriptor_fields)
+    if not runtime_handle:
+        # Explicit constexpr arguments retain their meaning in Triton's tuple specialization.
+        buffer = buffer._replace(handle=handle)
 
     @gluon.jit
-    def kernel(nested, out):
+    def kernel(nested, out, RUNTIME_HANDLE: ttgl.constexpr):
         view = nested[1] + nested[0]
+        if RUNTIME_HANDLE:
+            ttgl.static_assert(view._handle.type == ttgl.int32)
+        else:
+            ttgl.static_assert(view._handle.type == tl.constexpr_type(9))
+        ttgl.static_assert(view._capacity.type == tl.constexpr_type(8))
+        ttgl.static_assert(isinstance(view._protocol.type, tl.constexpr_type))
         ttgl.store(out, ttgl.load(view.ptr))
 
-    module = run_parser(kernel, args=((ttgl.constexpr(7), buffer), MockTensor(ttgl.float32)))
-    pointers = re.findall(r"%arg\d+: !tt.ptr<f32>(?: \{[^}]*\})?", module.str_nodebug())
+    module = run_parser(kernel, args=((ttgl.constexpr(7), buffer), MockTensor(ttgl.float32), runtime_handle))
+    signature = next(line for line in module.str_nodebug().splitlines() if "tt.func public @" in line)
+    assert len(re.findall(r"%arg\d+: i32\b", signature)) == int(runtime_handle)
+    pointers = re.findall(r"%arg\d+: !tt.ptr<f32>(?: \{[^}]*\})?", signature)
     assert len(pointers) == 2
     assert ["tt.divisibility = 16" in arg for arg in pointers] == [aligned, True]
 
