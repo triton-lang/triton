@@ -558,6 +558,9 @@ private:
 };
 
 template <typename SourceOp>
+  requires(std::is_same_v<SourceOp, PreciseSqrtOp> ||
+           std::is_same_v<SourceOp, PreciseDivFOp> ||
+           std::is_same_v<SourceOp, ApproxDivFOp>)
 struct MathOpToNVVMConversion
     : ElementwiseOpConversionBase<SourceOp, MathOpToNVVMConversion<SourceOp>> {
   using Base =
@@ -579,38 +582,6 @@ struct MathOpToNVVMConversion
           approx ? NVVM::FPRoundingMode::NONE : NVVM::FPRoundingMode::RN,
           /*ftz=*/false, approx)};
     }
-  }
-};
-
-struct ExternElementwiseOpToNVVMConversion
-    : ElementwiseOpConversionBase<ExternElementwiseOp,
-                                  ExternElementwiseOpToNVVMConversion> {
-  using Base = ElementwiseOpConversionBase<ExternElementwiseOp,
-                                           ExternElementwiseOpToNVVMConversion>;
-  using Base::Base;
-  using OpAdaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(ExternElementwiseOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    StringRef symbol = op.getSymbol();
-    auto args = operands[0];
-    if (!op.getPure() || !op.getLibname().empty() || !op.getLibpath().empty())
-      return {};
-    if (symbol == "llvm.nvvm.ex2.approx.ftz.f32" && args.size() == 1 &&
-        args[0].getType().isF32() && elemTy.isF32())
-      return {
-          NVVM::Ex2Op::create(rewriter, loc, elemTy, args[0], /*ftz=*/true)};
-    if (symbol == "llvm.nvvm.ff.to.e2m1x2.rn.satfinite" && args.size() == 2 &&
-        args[0].getType().isF32() && args[1].getType().isF32() &&
-        elemTy.isInteger(16)) {
-      Value result = NVVM::ConvertF32x2ToF4x2Op::create(
-          rewriter, loc, rewriter.getI8Type(), args[0], args[1], false,
-          Float4E2M1FNType::get(rewriter.getContext()));
-      return {LLVM::ZExtOp::create(rewriter, loc, elemTy, result)};
-    }
-    return {};
   }
 };
 
@@ -1003,8 +974,6 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
                MathOpToNVVMConversion<PreciseDivFOp>,
                MathOpToNVVMConversion<ApproxDivFOp>>(typeConverter,
                                                      axisInfoAnalysis, benefit);
-  patterns.add<ExternElementwiseOpToNVVMConversion>(
-      typeConverter, axisInfoAnalysis, benefit.getBenefit() + 1);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
