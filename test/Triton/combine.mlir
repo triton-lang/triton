@@ -661,3 +661,25 @@ tt.func @test_combine_broadcast_mul_reduce_multiple_results(%arg0: tensor<32x16x
     }) : (tensor<32x16x32xf32>, tensor<32x16x32xf32>) -> (tensor<32x32xf32>, tensor<32x32xf32>)
     tt.return %5#0 : tensor<32x32xf32>
 }
+
+// CHECK-LABEL: test_reshape_multi_operand_reduce
+tt.func @test_reshape_multi_operand_reduce(%0: tensor<32x4x2xi32>, %idx: tensor<256xi32>) -> (i32, i32) {
+  // CHECK: tt.reshape %{{[^ ]+}} : tensor<32x4x2xi32> -> tensor<256xi32>
+  %1 = tt.reshape %0 : tensor<32x4x2xi32> -> tensor<256xi32>
+  %2:2 = "tt.reduce" (%1, %idx) ({
+    ^bb0(%v0: i32, %i0: i32, %v1: i32, %i1: i32):
+      %lt = arith.cmpi slt, %v0, %v1 : i32
+      %v = arith.select %lt, %v0, %v1 : i32
+      %i = arith.select %lt, %i0, %i1 : i32
+      tt.reduce.return %v, %i : i32, i32
+    }) {axis = 0 : i32} : (tensor<256xi32>, tensor<256xi32>) -> (i32, i32)
+  tt.return %2#0, %2#1 : i32, i32
+}
+
+// CHECK-LABEL: test_reshape_histogram_with_mask
+tt.func @test_reshape_histogram_with_mask(%0: tensor<32x4x2xi32>, %m: tensor<256xi1>) -> tensor<16xi32> {
+  // CHECK: tt.reshape %{{[^ ]+}} : tensor<32x4x2xi32> -> tensor<256xi32>
+  %1 = tt.reshape %0 : tensor<32x4x2xi32> -> tensor<256xi32>
+  %h = tt.histogram %1, %m : tensor<256xi32> -> tensor<16xi32>
+  tt.return %h : tensor<16xi32>
+}

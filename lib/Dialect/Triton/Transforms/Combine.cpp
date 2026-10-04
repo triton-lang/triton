@@ -195,7 +195,9 @@ public:
 };
 
 // When reducing a 1D tensor the order of elements of the tensor doesn't matter.
-// Therefore we can relax the reshape to allow it to re-order elements.
+// Therefore we can relax the reshape to allow it to re-order elements. This
+// does not hold for a reduce with several operands (e.g. argmax) or a histogram
+// with a mask, which pair the elements with another tensor by position.
 class CombineReshapeReducePatterns : public mlir::OpRewritePattern<ReshapeOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -208,8 +210,15 @@ public:
     if (reshapeOp.getType().getRank() != 1)
       return failure();
     for (Operation *user : reshapeOp->getUsers()) {
-      if (!isa<triton::ReduceOp, triton::HistogramOp>(user))
+      if (auto reduceOp = dyn_cast<triton::ReduceOp>(user)) {
+        if (reduceOp.getNumOperands() != 1)
+          return failure();
+      } else if (auto histogramOp = dyn_cast<triton::HistogramOp>(user)) {
+        if (histogramOp.getMask())
+          return failure();
+      } else {
         return failure();
+      }
     }
     rewriter.modifyOpInPlace(reshapeOp,
                              [&]() { reshapeOp.setAllowReorder(true); });

@@ -3114,6 +3114,29 @@ def test_max_returns_zero(device):
     assert z[0] == 0
 
 
+@pytest.mark.parametrize("op", ["argmax", "argmin"])
+@pytest.mark.parametrize("M, N, num_warps", [(8, 32, 4), (16, 16, 2), (4, 16, 1), (8, 32, 8)])
+@pytest.mark.parametrize("transposed", [False, True])
+def test_arg_reduce_of_reshaped_tile(op, M, N, num_warps, transposed, device):
+
+    @triton.jit
+    def kernel(X, Z, stride_m, stride_n, M: tl.constexpr, N: tl.constexpr, OP: tl.constexpr):
+        x = tl.load(X + tl.arange(0, M)[:, None] * stride_m + tl.arange(0, N)[None, :] * stride_n)
+        flat = tl.reshape(x, (M * N, ))
+        if OP == "argmax":
+            z = tl.argmax(flat, axis=0)
+        else:
+            z = tl.argmin(flat, axis=0)
+        tl.store(Z, z)
+
+    x = torch.randperm(M * N, device=device, dtype=torch.int32).reshape(M, N)
+    if transposed:
+        x = x.t().contiguous().t()
+    z = torch.zeros((1, ), dtype=torch.int32, device=device)
+    kernel[(1, )](x, z, x.stride(0), x.stride(1), M=M, N=N, OP=op, num_warps=num_warps)
+    assert z.item() == getattr(torch, op)(x.flatten()).item()
+
+
 @pytest.mark.interpreter
 def test_max_min_with_nan(device):
     # In triton, we implement a "nan ignore" style, which means if there is NaN
