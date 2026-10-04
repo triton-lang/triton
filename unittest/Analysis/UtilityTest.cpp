@@ -147,24 +147,33 @@ TEST(Analysis, RegionInfoPreservesDistinctFootprints) {
   using triton::AddressSet;
   using triton::BufferRegionView;
   using triton::RegionInfo;
+  struct ConstantHash {
+    size_t operator()(const BufferRegionView &) const { return 0; }
+  };
+  std::unordered_set<BufferRegionView, ConstantHash> collided;
   std::set<BufferRegionView> expected;
   RegionInfo::ViewList forward, reverse;
   SmallVector<BufferRegionView> values;
-  for (unsigned mask = 0; mask < 32; ++mask) {
+  for (unsigned mask = 0; mask < 256; ++mask) {
     AddressSet addresses;
-    for (unsigned bit = 0; bit < 5; ++bit)
+    for (unsigned bit = 0; bit < 8; ++bit)
       if (mask & (1u << bit))
         addresses.set(bit);
-    BufferRegionView view{{0, 5, {{0, addresses}}}};
+    BufferRegionView view{{0, 8, {{0, addresses}}}};
     values.push_back(view);
     expected.insert(view);
     forward.insert(view);
+    collided.insert(view);
+    collided.insert(view);
   }
   for (const auto &view : llvm::reverse(values))
     reverse.insert(view);
   EXPECT_EQ(forward.size(), expected.size());
-  for (const auto &view : expected)
+  EXPECT_EQ(collided.size(), expected.size());
+  for (const auto &view : expected) {
     EXPECT_EQ(forward.count(view), 1);
+    EXPECT_EQ(collided.count(view), 1);
+  }
   RegionInfo lhs(forward), rhs(reverse);
   EXPECT_EQ(lhs, rhs);
   EXPECT_EQ(RegionInfo::join(lhs, rhs), lhs);
@@ -175,9 +184,9 @@ TEST(Analysis, BufferRegionFootprintUnknownIsNotEmpty) {
   MLIRContext context;
   context.getOrLoadDialect<triton::gpu::TritonGPUDialect>();
   Attribute space = triton::gpu::SharedMemorySpaceAttr::get(&context);
-  triton::BufferRegionView view{
-      {0, 8, {{0, triton::AddressSet::fromRange(0, 8)}}}};
-  view.allocationFrame = 1;
+  triton::BufferRegionView view(
+      {0, 8, {{0, triton::AddressSet::fromRange(0, 8)}}}, 0, 0, {}, 0, 0,
+      /*allocationFrame=*/1);
   triton::BufferRegionFootprint known{space, triton::RegionInfo({view})};
   triton::BufferRegionFootprint uninitialized{space, {}};
   triton::BufferRegionFootprint unknown{
@@ -192,8 +201,8 @@ TEST(Analysis, BufferRegionFootprintUnknownIsNotEmpty) {
     EXPECT_TRUE(triton::mayOverlap(&known, footprint));
   }
 
-  view.region = {};
-  triton::BufferRegionFootprint empty{space, triton::RegionInfo({view})};
+  triton::BufferRegionView emptyView{{}, 0, 0, {}, 0, 0, /*allocationFrame=*/1};
+  triton::BufferRegionFootprint empty{space, triton::RegionInfo({emptyView})};
   EXPECT_FALSE(triton::mayOverlap(&empty, &known));
   EXPECT_FALSE(triton::mayOverlap(&known, &empty));
   EXPECT_TRUE(triton::mayOverlap(&empty, &unknown));
@@ -389,69 +398,48 @@ TEST(Analysis, BufferStatePlanKeepsLargeSparsePartitionsExact) {
   expectFullCoveragePartition(regions);
 }
 
-TEST(Analysis, CachedViewHashTracksTheStoredValue) {
+TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
   using triton::AddressSet;
+  using triton::BufferRegion;
   using triton::BufferRegionView;
-  using triton::BufferRegionViewHash;
-  using Cached = triton::CachedBufferRegionView;
+  using Hash = BufferRegionView::Hash;
+  static_assert(std::is_const_v<decltype(BufferRegionView::region)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::storageBase)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::affineOffset)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::partitionBases)>);
   static_assert(
-      std::is_convertible_v<const Cached &, const BufferRegionView &>);
-  static_assert(!std::is_convertible_v<Cached &, BufferRegionView &>);
-  static_assert(!std::is_copy_assignable_v<Cached>);
-  static_assert(!std::is_move_assignable_v<Cached>);
-  BufferRegionView source{{0, 72, {{0, AddressSet::fromRange(0, 8)}}}};
-  source.region.ctaAddresses.front().second.insert(
-      AddressSet::fromRange(64, 8));
-  source.region.ctaAddresses.front().second.set(10);
-  Cached original(source);
-  const size_t originalHash = Cached::Hash{}(original);
-  source.region.ctaAddresses.front().second.subtract(
-      AddressSet::fromRange(10, 1));
-  source.region.ctaAddresses.front().second.set(11);
-  Cached changed(source);
-  EXPECT_NE(Cached::Hash{}(changed), originalHash);
+      std::is_const_v<decltype(BufferRegionView::affinePartitionOffset)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::affineCTAOffset)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::allocationFrame)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::allocation)>);
+  static_assert(!std::is_copy_assignable_v<BufferRegionView>);
+  static_assert(!std::is_move_assignable_v<BufferRegionView>);
+  BufferRegion source{0, 72, {{0, AddressSet::fromRange(0, 8)}}};
+  source.ctaAddresses.front().second.insert(AddressSet::fromRange(64, 8));
+  source.ctaAddresses.front().second.set(10);
+  BufferRegionView original(source, 5, 7, {5, 100}, 1, 2, 9);
+  const size_t originalHash = Hash{}(original);
+  source.ctaAddresses.front().second.subtract(AddressSet::fromRange(10, 1));
+  source.ctaAddresses.front().second.set(11);
+  BufferRegionView changed(source, 5, 7, {5, 100}, 1, 2, 9);
+  EXPECT_NE(Hash{}(changed), originalHash);
   EXPECT_FALSE(original == changed);
-  EXPECT_EQ(Cached::Hash{}(original), originalHash);
-  EXPECT_EQ(Cached::Hash{}(changed), BufferRegionViewHash{}(source));
+  EXPECT_EQ(Hash{}(original), originalHash);
   auto copy = original;
   EXPECT_EQ(copy, original);
-  Cached moved(std::move(copy));
+  BufferRegionView moved(std::move(copy));
   EXPECT_EQ(moved, original);
-  EXPECT_EQ(Cached::Hash{}(copy), BufferRegionViewHash{}(copy));
-  EXPECT_EQ(Cached::Hash{}(moved), BufferRegionViewHash{}(moved));
-  BufferRegionView translated =
-      static_cast<const BufferRegionView &>(original).translated(16, 3);
-  Cached translatedKey(translated);
-  EXPECT_EQ(Cached::Hash{}(translatedKey), BufferRegionViewHash{}(translated));
-  EXPECT_FALSE(translatedKey == original);
-}
-
-TEST(Analysis, CachedViewPreservesValuesWhenTableHashesCollide) {
-  using triton::AddressSet;
-  using triton::BufferRegionView;
-  using Cached = triton::CachedBufferRegionView;
-  struct ConstantHash {
-    size_t operator()(const Cached &) const { return 0; }
-  };
-  std::unordered_set<Cached, ConstantHash> collided;
-  std::set<BufferRegionView> oracle;
-  for (unsigned mask = 0; mask < 256; ++mask) {
-    AddressSet addresses;
-    for (unsigned bit = 0; bit < 8; ++bit)
-      if (mask & (1u << bit))
-        addresses.set(bit);
-    BufferRegionView view{{0, 8, {{0, addresses}}}};
-    collided.insert(view);
-    collided.insert(view);
-    oracle.insert(view);
-  }
-  auto copied = collided;
-  copied = collided;
-  auto moved = std::move(copied);
-  EXPECT_EQ(moved, collided);
-  EXPECT_EQ(collided.size(), oracle.size());
-  for (const auto &view : oracle)
-    EXPECT_EQ(collided.count(view), 1);
+  EXPECT_EQ(Hash{}(copy), originalHash);
+  EXPECT_EQ(Hash{}(moved), originalHash);
+  auto translated = original.translated(16, 3);
+  AddressSet translatedAddresses = AddressSet::fromRange(16, 8);
+  translatedAddresses.insert(AddressSet::fromRange(80, 8));
+  translatedAddresses.set(26);
+  BufferRegionView expected({16, 72, {{0, translatedAddresses}}}, 21, 7,
+                            {21, 116}, 1, 2, /*allocationFrame=*/3);
+  EXPECT_EQ(translated, expected);
+  EXPECT_EQ(Hash{}(translated), Hash{}(expected));
+  EXPECT_FALSE(translated == original);
 }
 
 } // namespace mlir

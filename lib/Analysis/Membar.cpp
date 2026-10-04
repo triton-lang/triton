@@ -316,7 +316,7 @@ SmallVector<AllocationSlice> MembarAnalysis::getAllocationSlices(Value value) {
   } else if (footprint) {
     // Use every lattice origin: function-local alias analysis can miss roots
     // returned through calls or joined with descriptor arguments.
-    for (const triton::BufferRegionView &view : footprint->regionInfo.views) {
+    for (const auto &view : footprint->regionInfo.views) {
       auto ids = view.allocation
                      ? allocation.getBufferIds(view.allocation->getResult(0))
                      : SmallVector<Allocation::BufferId>{};
