@@ -2,7 +2,7 @@
 #include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
-#include "third_party/amd/lib/Target/MIRDAG/DAGBuilder.h"
+#include "third_party/amd/backend/codegen/DAGBuilder.h"
 #include "triton/Tools/LLVMOptions.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "triton/Version.h"
