@@ -35,6 +35,38 @@ def round_f32_to_tf32(x, rounding: core.constexpr, _semantic=None):
     }, is_pure=True, _semantic=_semantic)
 
 
+@core.extern
+def min_nan_xorsign_abs_f32(a, b, _semantic=None):
+    """Minimum magnitude with NaN propagation and XORed signs."""
+    return core.extern_elementwise("", "", [a, b], {
+        (core.float32, core.float32): ("llvm.nvvm.fmin.nan.xorsign.abs.f", core.float32),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def max_nan_xorsign_abs_f32(a, b, _semantic=None):
+    """Maximum magnitude with NaN propagation and XORed signs."""
+    return core.extern_elementwise("", "", [a, b], {
+        (core.float32, core.float32): ("llvm.nvvm.fmax.nan.xorsign.abs.f", core.float32),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def f32_to_e2m1x2(hi, lo, _semantic=None):
+    """Round two float32 values to finite E2M1, with hi in the high nibble."""
+    return core.extern_elementwise("", "", [hi, lo], {
+        (core.float32, core.float32): ("llvm.nvvm.ff.to.e2m1x2.rn.satfinite", core.uint16),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def exp2_ftz(x, _semantic=None):
+    """Approximate 2**x with flush-to-zero behavior."""
+    return core.extern_elementwise("", "", [x], {
+        (core.float32, ): ("llvm.nvvm.ex2.approx.ftz.f32", core.float32),
+    }, is_pure=True, _semantic=_semantic)
+
+
 # ----- FP8E4M3B15 ------
 # This data-type is a variant of the standard FP8E4M3 format.
 # It was designed for fast software conversion to FP16 on
