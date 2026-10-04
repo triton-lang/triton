@@ -183,7 +183,7 @@ struct TestBufferRegionAliasPass
     SmallVector<tt::BufferRegion> regions;
     for (const auto &[name, footprint] : namedRegions)
       for (const tt::BufferRegionView &view : footprint.regionInfo.views)
-        regions.push_back(view.region);
+        regions.push_back(view.getRegion());
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
 
@@ -204,7 +204,7 @@ struct TestBufferRegionAliasPass
       }
       SmallVector<tt::BufferRegion> candidates;
       for (const tt::BufferRegionView &view : info.views)
-        candidates.push_back(view.region);
+        candidates.push_back(view.getRegion());
       llvm::sort(candidates);
       for (const tt::BufferRegion &candidate : candidates) {
         auto it = llvm::lower_bound(regions, candidate);

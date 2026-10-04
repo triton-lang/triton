@@ -783,7 +783,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
       BufferStateCandidates stateCandidates;
       stateCandidates.unknown = regionInfo.isUnknown();
       for (const BufferRegionView &view : regionInfo.views) {
-        const BufferRegion &candidate = view.region;
+        const BufferRegion &candidate = view.getRegion();
         auto it = llvm::lower_bound(regions, candidate);
         if (it == regions.end() || !(*it == candidate)) {
           InFlightDiagnostic diag = emitError(
@@ -794,7 +794,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
           return failure();
         }
         uint32_t id = std::distance(regions.begin(), it);
-        uint32_t ctaMask = 1u << view.affineCTAOffset;
+        uint32_t ctaMask = 1u << view.getAffineCTAOffset();
 
         auto existing = llvm::find_if(
             stateCandidates.cases, [&](const BufferStateCandidate &state) {

@@ -131,7 +131,7 @@ TEST(Analysis, BufferRegionViewPreservesSubviewProvenance) {
   triton::BufferRegionView fromAllocation{region, /*storageBase=*/16,
                                           /*affineOffset=*/0};
 
-  EXPECT_EQ(fromSubview.region, fromAllocation.region);
+  EXPECT_EQ(fromSubview.getRegion(), fromAllocation.getRegion());
   EXPECT_FALSE(fromSubview == fromAllocation);
   triton::RegionInfo joined = triton::RegionInfo::join(
       triton::RegionInfo({fromSubview}), triton::RegionInfo({fromAllocation}));
@@ -139,7 +139,7 @@ TEST(Analysis, BufferRegionViewPreservesSubviewProvenance) {
 
   std::set<triton::BufferRegion> physicalRegions;
   for (const triton::BufferRegionView &view : joined.views)
-    physicalRegions.insert(view.region);
+    physicalRegions.insert(view.getRegion());
   EXPECT_EQ(physicalRegions.size(), 1);
 }
 
@@ -403,15 +403,12 @@ TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
   using triton::BufferRegion;
   using triton::BufferRegionView;
   using Hash = BufferRegionView::Hash;
-  static_assert(std::is_const_v<decltype(BufferRegionView::region)>);
-  static_assert(std::is_const_v<decltype(BufferRegionView::storageBase)>);
-  static_assert(std::is_const_v<decltype(BufferRegionView::affineOffset)>);
-  static_assert(std::is_const_v<decltype(BufferRegionView::partitionBases)>);
   static_assert(
-      std::is_const_v<decltype(BufferRegionView::affinePartitionOffset)>);
-  static_assert(std::is_const_v<decltype(BufferRegionView::affineCTAOffset)>);
-  static_assert(std::is_const_v<decltype(BufferRegionView::allocationFrame)>);
-  static_assert(std::is_const_v<decltype(BufferRegionView::allocation)>);
+      std::is_same_v<decltype(std::declval<BufferRegionView &>().getRegion()),
+                     const BufferRegion &>);
+  static_assert(std::is_same_v<
+                decltype(std::declval<BufferRegionView &>().getPartitionBases()),
+                llvm::ArrayRef<uint32_t>>);
   static_assert(!std::is_copy_assignable_v<BufferRegionView>);
   static_assert(!std::is_move_assignable_v<BufferRegionView>);
   BufferRegion source{0, 72, {{0, AddressSet::fromRange(0, 8)}}};
@@ -429,7 +426,9 @@ TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
   EXPECT_EQ(copy, original);
   BufferRegionView moved(std::move(copy));
   EXPECT_EQ(moved, original);
-  EXPECT_EQ(Hash{}(copy), originalHash);
+  BufferRegionView movedFrom({0, 72}, 5, 7, {}, 1, 2, 9);
+  EXPECT_EQ(copy, movedFrom);
+  EXPECT_EQ(Hash{}(copy), Hash{}(movedFrom));
   EXPECT_EQ(Hash{}(moved), originalHash);
   auto translated = original.translated(16, 3);
   AddressSet translatedAddresses = AddressSet::fromRange(16, 8);
@@ -440,6 +439,29 @@ TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
   EXPECT_EQ(translated, expected);
   EXPECT_EQ(Hash{}(translated), Hash{}(expected));
   EXPECT_FALSE(translated == original);
+}
+
+TEST(Analysis, BufferRegionViewInsertionTransfersStorage) {
+  using triton::AddressSet;
+  using triton::BufferRegion;
+  using triton::BufferRegionView;
+  // Exceed inline capacity so this checks transfer of the owning allocation.
+  BufferRegion region{0, 65536};
+  for (unsigned cta = 0; cta < 8; ++cta)
+    region.ctaAddresses.emplace_back(cta, AddressSet::fromRange(0, 65536));
+  BufferRegionView view(std::move(region), 0, 0, {0, 16, 32, 48});
+  auto *addresses = view.getRegion().ctaAddresses.data();
+  auto *partitions = view.getPartitionBases().data();
+  auto hash = BufferRegionView::Hash{}(view);
+  triton::RegionInfo::ViewList views;
+  auto [it, inserted] = views.insert(std::move(view));
+  ASSERT_TRUE(inserted);
+  EXPECT_EQ(it->getRegion().ctaAddresses.data(), addresses);
+  EXPECT_EQ(it->getPartitionBases().data(), partitions);
+  EXPECT_EQ(BufferRegionView::Hash{}(*it), hash);
+  BufferRegionView movedFrom({0, 65536});
+  EXPECT_EQ(view, movedFrom);
+  EXPECT_EQ(BufferRegionView::Hash{}(view), BufferRegionView::Hash{}(movedFrom));
 }
 
 } // namespace mlir

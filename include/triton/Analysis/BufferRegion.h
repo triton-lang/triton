@@ -120,11 +120,11 @@ struct BufferRegion {
 };
 
 /// A physical region and the provenance required to compose descriptor views.
-struct BufferRegionView {
-  const BufferRegion region;
+class BufferRegionView {
+  BufferRegion region;
   const uint32_t storageBase;
   const uint32_t affineOffset;
-  const llvm::SmallVector<uint32_t, 2> partitionBases;
+  llvm::SmallVector<uint32_t, 2> partitionBases;
   const uint32_t affinePartitionOffset;
   const uint32_t affineCTAOffset;
   /// Deterministically interned identity of the owning allocation frame.
@@ -132,6 +132,7 @@ struct BufferRegionView {
   /// Descriptor allocation supplying these views; null for implicit scratch.
   Operation *const allocation;
 
+public:
   BufferRegionView(BufferRegion region = {}, uint32_t storageBase = 0,
                    uint32_t affineOffset = 0,
                    llvm::SmallVector<uint32_t, 2> partitionBases = {},
@@ -143,6 +144,30 @@ struct BufferRegionView {
         affinePartitionOffset(affinePartitionOffset),
         affineCTAOffset(affineCTAOffset), allocationFrame(allocationFrame),
         allocation(allocation), cachedHash(computeHash()) {}
+
+  BufferRegionView(const BufferRegionView &) = default;
+  BufferRegionView(BufferRegionView &&other)
+      : region(std::move(other.region)), storageBase(other.storageBase),
+        affineOffset(other.affineOffset),
+        partitionBases(std::move(other.partitionBases)),
+        affinePartitionOffset(other.affinePartitionOffset),
+        affineCTAOffset(other.affineCTAOffset),
+        allocationFrame(other.allocationFrame), allocation(other.allocation),
+        cachedHash(other.cachedHash) {
+    // Keep moved-from views valid without rehashing the transferred addresses.
+    other.region.ctaAddresses.clear();
+    other.partitionBases.clear();
+    other.cachedHash = other.computeHash();
+  }
+
+  const BufferRegion &getRegion() const { return region; }
+  uint32_t getStorageBase() const { return storageBase; }
+  uint32_t getAffineOffset() const { return affineOffset; }
+  llvm::ArrayRef<uint32_t> getPartitionBases() const { return partitionBases; }
+  uint32_t getAffinePartitionOffset() const { return affinePartitionOffset; }
+  uint32_t getAffineCTAOffset() const { return affineCTAOffset; }
+  uint32_t getAllocationFrame() const { return allocationFrame; }
+  Operation *getAllocation() const { return allocation; }
 
   bool contains(const BufferRegionView &other) const {
     return allocationFrame == other.allocationFrame &&
@@ -175,8 +200,8 @@ public:
   };
 
 private:
-  // Const equality fields keep the cached hash valid.
-  const size_t cachedHash;
+  // Equality fields are only exposed through read-only accessors.
+  size_t cachedHash;
 
   size_t computeHash() const {
     auto hash = llvm::hash_combine(
@@ -252,7 +277,7 @@ struct RegionInfo {
     llvm::sort(orderedViews,
                [](const auto *lhs, const auto *rhs) { return *lhs < *rhs; });
     llvm::interleaveComma(orderedViews, os, [&](const BufferRegionView *view) {
-      view->region.print(os);
+      view->getRegion().print(os);
     });
   }
 
