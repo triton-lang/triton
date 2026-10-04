@@ -194,147 +194,50 @@ createTensorMemoryLoad(Location loc, MLIRContext *ctx, Value address,
                        std::optional<TMEMLoadReduceModifier> redOp, bool useAbs,
                        bool useNaN, Type elemTy,
                        ConversionPatternRewriter &rewriter) {
-  PTXBuilder ptxBuilder;
-  // If the memory is unpacked we need to pack on the fly when loading.
-  std::string packedStr = unpacked ? ".pack::16b" : "";
-  unsigned numRepeats = numRegPerMessage / getElementsPerThread(atom);
-
-  std::string opcode = std::string("tcgen05.ld.") + (redOp ? "red." : "");
-  opcode += "sync.aligned.";
-  opcode += getOpShape(atom);
-  opcode += ".x" + std::to_string(numRepeats);
-
-  if (redOp) {
-    if (unpacked) {
-      llvm_unreachable("Unpacked is unsupported with TMEM reduction");
-    }
-    // Add reduction modifier: .min or .max
-    switch (*redOp) {
-    case TMEMLoadReduceModifier::MIN:
-      opcode += ".min";
-      break;
-    case TMEMLoadReduceModifier::MAX:
-      opcode += ".max";
-      break;
-    default:
-      llvm_unreachable("Unsupported reduction modifier");
-    }
-    if (useAbs)
-      opcode += ".abs";
-    if (useNaN)
-      opcode += ".NaN";
-
-    std::string redStr;
-    if (elemTy.isF32()) {
-      redStr = ".f32";
-    } else {
-      llvm_unreachable("Unsupported type for TMEM reduction");
-    }
-    opcode += redStr;
-  } else {
-    opcode += packedStr + ".b32";
-  }
-
-  opcode += " {";
-
-  SmallVector<PTXInstr::Operand *> operands;
-  for (int i = 0; i < numRegPerMessage; i++) {
-    opcode += "$" + std::to_string(i);
-    auto *resultOp = ptxBuilder.newOperand("=r");
-    operands.push_back(resultOp);
-    if (i < numRegPerMessage - 1)
-      opcode += ", ";
-  }
-  opcode += "}";
-
-  int nextOperandIdx = numRegPerMessage;
-
-  // Add redval output operand if reduction is enabled
-  if (redOp) {
-    opcode += ", {$" + std::to_string(nextOperandIdx) + "}";
-    auto *redvalOp = ptxBuilder.newOperand("=r");
-    operands.push_back(redvalOp);
-    nextOperandIdx++;
-  }
-
-  opcode += ", [$" + std::to_string(nextOperandIdx) + " + " +
-            std::to_string(colOffset) + "]";
-  if (secondHalfOffset)
-    opcode += ", " + std::to_string(*secondHalfOffset);
-  opcode += ";";
-  operands.push_back(ptxBuilder.newOperand(address, "r"));
-  auto &ld = *ptxBuilder.create(opcode);
-  ld(operands, /*onlyAttachMLIRArgs=*/true);
-
-  // Build return type: data registers + optional redval register
-  int totalResults = numRegPerMessage + (redOp ? 1 : 0);
-  Type retTy;
-  if (totalResults == 1) {
-    retTy = i32_ty;
-  } else {
-    SmallVector<Type> elemTypes(totalResults, i32_ty);
-    retTy = struct_ty(elemTypes);
-  }
-  Value ret = ptxBuilder.launch(rewriter, loc, retTy);
-
-  // Extract load result and redval if needed
-  Value loadResult = ret;
-  Value redvalResult = nullptr;
-
-  if (redOp) {
-    // Per PTX spec: .num must be at least .x2 when .red is specified,
-    // so numRegPerMessage >= 2 * getElementsPerThread(atom) >= 2.
-    // ret is a struct with numRegPerMessage + 1 elements: {loadVals..., redval}
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    SmallVector<Type> loadElemTypes(numRegPerMessage, i32_ty);
-    Type loadStructTy = struct_ty(loadElemTypes);
-    Value loadStruct = b.undef(loadStructTy);
-    for (int i = 0; i < numRegPerMessage; i++) {
-      Value elem = b.extract_val(i32_ty, ret, i);
-      loadStruct = b.insert_val(loadStructTy, loadStruct, elem, i);
-    }
-    loadResult = loadStruct;
-    redvalResult = b.extract_val(i32_ty, ret, numRegPerMessage);
-    // Bitcast redval from i32 to the target element type
-    if (redvalResult && elemTy != i32_ty) {
-      redvalResult = b.bitcast(redvalResult, elemTy);
-    }
-  }
-
-  return {loadResult, redvalResult};
-}
-
-static SmallVector<Value> unpackResults(Value packedValues, Type elemTy,
-                                        int numCols, Location loc,
-                                        ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> resultVals;
-  int numElementsPer32B = 32 / elemTy.getIntOrFloatBitWidth();
-  Type packedType = elemTy;
-  if (numElementsPer32B > 1)
-    packedType = vec_ty(elemTy, numElementsPer32B);
-
-  auto unpackElement = [&](Value result) {
-    result = b.bitcast(result, packedType);
-    if (numElementsPer32B > 1) {
-      for (int j = 0; j < numElementsPer32B; j++) {
-        Value elem = b.extract_element(elemTy, result, b.i32_val(j));
-        resultVals.push_back(elem);
-      }
-    } else {
-      resultVals.push_back(result);
+  auto shape = [&] {
+    switch (atom) {
+    case TMemAccessAtom::I32x32b:
+      return NVVM::Tcgen05LdStShape::SHAPE_32X32B;
+    case TMemAccessAtom::I16x64b:
+      return NVVM::Tcgen05LdStShape::SHAPE_16X64B;
+    case TMemAccessAtom::I16x128b:
+      return NVVM::Tcgen05LdStShape::SHAPE_16X128B;
+    case TMemAccessAtom::I16x256b:
+      return NVVM::Tcgen05LdStShape::SHAPE_16X256B;
+    case TMemAccessAtom::I16x32bx2:
+      return NVVM::Tcgen05LdStShape::SHAPE_16X32BX2;
     }
-  };
+    llvm_unreachable("Unknown TMemAccessAtom");
+  }();
+  auto shapeAttr = NVVM::Tcgen05LdStShapeAttr::get(ctx, shape);
 
-  if (isa<LLVM::LLVMStructType>(packedValues.getType())) {
-    for (int i = 0; i < numCols; i++) {
-      Value result = b.extract_val(i32_ty, packedValues, i);
-      unpackElement(result);
-    }
-  } else {
-    unpackElement(packedValues);
+  auto tmemPtrTy = ptr_ty(ctx, 6);
+  Value tmemPtr = b.inttoptr(tmemPtrTy, address);
+  tmemPtr = b.gep(tmemPtrTy, i8_ty, tmemPtr, LLVM::GEPArg(colOffset));
+  Value offset = secondHalfOffset ? b.i64_val(*secondHalfOffset) : Value();
+
+  if (!redOp) {
+    // Pack adjacent 16-bit columns when the memory uses an unpacked layout.
+    Type resultTy = vec_ty(i32_ty, numRegPerMessage);
+    Value result = NVVM::Tcgen05LdOp::create(
+        rewriter, loc, resultTy, unpacked ? rewriter.getUnitAttr() : UnitAttr(),
+        shapeAttr, tmemPtr, offset);
+    return {result, Value()};
   }
-  return resultVals;
+
+  assert(!unpacked && "Unpacked is unsupported with TMEM reduction");
+  assert(elemTy.isF32() && "Unsupported type for TMEM reduction");
+  Type dataTy = vec_ty(elemTy, numRegPerMessage);
+  auto reduction = *redOp == TMEMLoadReduceModifier::MIN
+                       ? NVVM::ReductionKind::MIN
+                       : NVVM::ReductionKind::MAX;
+  auto result = NVVM::Tcgen05LdRedOp::create(
+      rewriter, loc, dataTy, elemTy, shapeAttr,
+      NVVM::ReductionKindAttr::get(ctx, reduction),
+      useAbs ? rewriter.getUnitAttr() : UnitAttr(),
+      useNaN ? rewriter.getUnitAttr() : UnitAttr(), tmemPtr, offset);
+  return {result.getData(), result.getRedVal()};
 }
 
 // Returns {resultVals, redvalVals} where redvalVals is empty if no reduction.
@@ -400,8 +303,8 @@ std::pair<SmallVector<Value>, SmallVector<Value>> lowerTMemLdSt(
                                  /*unpacked=*/unpacked,
                                  /*numRegPerMessage=*/valsPerMessage, atom,
                                  redOp, useAbs, useNaN, llvmElemTy, rewriter);
-      resultVals.append(
-          unpackResults(outVals, llvmElemTy, valsPerMessage, loc, rewriter));
+      auto loadedValues = unpackLLVector(loc, outVals, rewriter);
+      resultVals.append(unpack(loadedValues, llvmElemTy, loc, rewriter));
       if (redval)
         redvalVals.push_back(redval);
     }
