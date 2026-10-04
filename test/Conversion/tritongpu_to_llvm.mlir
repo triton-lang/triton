@@ -4021,16 +4021,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 
   // CHECK-LABEL: @extern_fp4_pack
-  // CHECK: %[[PACKED:.*]] = nvvm.convert.f32x2.to.f4x2 %arg0, %arg1 : i8(f4E2M1FN)
-  // CHECK: %[[EXT:.*]] = llvm.zext %[[PACKED]] : i8 to i16
-  // CHECK: llvm.return %[[EXT]] : i16
+  // CHECK: %[[PACKED:.*]] = llvm.call @llvm.nvvm.ff.to.e2m1x2.rn.satfinite(%arg0, %arg1) : (f32, f32) -> i16
+  // CHECK: llvm.return %[[PACKED]] : i16
   tt.func private @extern_fp4_pack(%hi: f32, %lo: f32) -> i16 {
     %packed = tt.extern_elementwise %hi, %lo {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.ff.to.e2m1x2.rn.satfinite"} : (f32, f32) -> i16
     tt.return %packed : i16
   }
 
   // CHECK-LABEL: @extern_exp2_ftz
-  // CHECK: %[[EXP2:.*]] = nvvm.ex2 %arg0 {ftz = true} : f32
+  // CHECK: %[[EXP2:.*]] = llvm.call @llvm.nvvm.ex2.approx.ftz.f32(%arg0) : (f32) -> f32
   // CHECK: llvm.return %[[EXP2]] : f32
   tt.func private @extern_exp2_ftz(%arg: f32) -> f32 {
     %result = tt.extern_elementwise %arg {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.ex2.approx.ftz.f32"} : (f32) -> f32

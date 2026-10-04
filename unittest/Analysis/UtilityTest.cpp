@@ -1,8 +1,10 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PartitionSchedulingUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "mlir/IR/Builders.h"
 #include "mlir/Parser/Parser.h"
 #include "llvm/Support/Signals.h"
 #include <gtest/gtest.h>
@@ -12,6 +14,40 @@
 #include <type_traits>
 
 namespace mlir {
+
+TEST(Analysis, ExternElementwisePartitionCost) {
+  using triton::gpu::partition_scheduling_detail::computeCost;
+  MLIRContext context;
+  context.getOrLoadDialect<triton::TritonDialect>();
+  OpBuilder builder(&context);
+  auto loc = builder.getUnknownLoc();
+  Block block;
+  builder.setInsertionPointToEnd(&block);
+  auto f32 = block.addArgument(
+      RankedTensorType::get({256}, builder.getF32Type()), loc);
+  auto f16 = block.addArgument(
+      RankedTensorType::get({256}, builder.getF16Type()), loc);
+  struct TestCase {
+    StringRef symbol;
+    Value operand;
+    unsigned numOperands;
+    size_t cost;
+  };
+  TestCase cases[] = {
+      {"llvm.nvvm.ex2.approx.ftz.f32", f32, 1, 256},
+      {"llvm.nvvm.ex2.approx.f16", f16, 1, 256},
+      {"llvm.nvvm.fmin.nan.xorsign.abs.f", f32, 2, 0},
+      {"__nv_fsub_rn", f32, 2, 0},
+      {"__nv_exp2f", f32, 1, 0},
+  };
+  for (const auto &test : cases) {
+    SmallVector<Value> operands(test.numOperands, test.operand);
+    auto op = triton::ExternElementwiseOp::create(
+        builder, loc, test.operand.getType(), operands, "", "", test.symbol,
+        true);
+    EXPECT_EQ(computeCost(op), test.cost) << test.symbol.str();
+  }
+}
 
 TEST(Analysis, ReduceCommutativity) {
   MLIRContext context;

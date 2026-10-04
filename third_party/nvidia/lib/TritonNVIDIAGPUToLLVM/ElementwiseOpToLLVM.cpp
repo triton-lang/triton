@@ -517,63 +517,6 @@ private:
   int ptxVersion;
 };
 
-template <typename SourceOp>
-struct MathOpToNVVMConversion
-    : ElementwiseOpConversionBase<SourceOp, MathOpToNVVMConversion<SourceOp>> {
-  using Base =
-      ElementwiseOpConversionBase<SourceOp, MathOpToNVVMConversion<SourceOp>>;
-  using Base::Base;
-  using OpAdaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(SourceOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    if constexpr (std::is_same_v<SourceOp, PreciseSqrtOp>) {
-      return {NVVM::SqrtOp::create(rewriter, loc, elemTy, operands[0][0],
-                                   NVVM::FPRoundingMode::RN)};
-    } else {
-      constexpr bool approx = std::is_same_v<SourceOp, ApproxDivFOp>;
-      return {NVVM::DivFOp::create(
-          rewriter, loc, elemTy, operands[0][0], operands[0][1],
-          approx ? NVVM::FPRoundingMode::NONE : NVVM::FPRoundingMode::RN,
-          /*ftz=*/false, approx)};
-    }
-  }
-};
-
-struct ExternElementwiseOpToNVVMConversion
-    : ElementwiseOpConversionBase<ExternElementwiseOp,
-                                  ExternElementwiseOpToNVVMConversion> {
-  using Base = ElementwiseOpConversionBase<ExternElementwiseOp,
-                                           ExternElementwiseOpToNVVMConversion>;
-  using Base::Base;
-  using OpAdaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(ExternElementwiseOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    StringRef symbol = op.getSymbol();
-    auto args = operands[0];
-    if (!op.getPure() || !op.getLibname().empty() || !op.getLibpath().empty())
-      return {};
-    if (symbol == "llvm.nvvm.ex2.approx.ftz.f32" && args.size() == 1 &&
-        args[0].getType().isF32() && elemTy.isF32())
-      return {
-          NVVM::Ex2Op::create(rewriter, loc, elemTy, args[0], /*ftz=*/true)};
-    if (symbol == "llvm.nvvm.ff.to.e2m1x2.rn.satfinite" && args.size() == 2 &&
-        args[0].getType().isF32() && args[1].getType().isF32() &&
-        elemTy.isInteger(16)) {
-      Value result = NVVM::ConvertF32x2ToF4x2Op::create(
-          rewriter, loc, rewriter.getI8Type(), args[0], args[1], false,
-          Float4E2M1FNType::get(rewriter.getContext()));
-      return {LLVM::ZExtOp::create(rewriter, loc, elemTy, result)};
-    }
-    return {};
-  }
-};
-
 struct FDivOpConversion
     : ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion>;
@@ -944,9 +887,6 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
-
-  patterns.add<ExternElementwiseOpToNVVMConversion>(
-      typeConverter, axisInfoAnalysis, benefit.getBenefit() + 1);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
