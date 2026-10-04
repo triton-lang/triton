@@ -66,7 +66,12 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
     elif isinstance(arg, constexpr):
         return ("constexpr", arg)
     elif isinstance(arg, tuple):
-        spec = [reference_specialize_impl(backend, x, False, True, True) for x in arg]
+        fields = getattr(arg, "_fields", ())
+        do_not_specialize = getattr(type(arg), "__triton_do_not_specialize__", ())
+        spec = [
+            reference_specialize_impl(backend, x, False, not (fields and fields[i] in do_not_specialize), True)
+            for i, x in enumerate(arg)
+        ]
         make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
         tys = make_tuple([x[0] for x in spec])
         keys = make_tuple([x[1] for x in spec])
@@ -168,6 +173,24 @@ def test_specialize_gluon_fp4_descriptor_without_active_target(monkeypatch):
 
 def mock_tensors_to_specialize():
     return [mock_tensor_from_tensor(tensor) for tensor in tensors_to_specialize()]
+
+
+@pytest.mark.parametrize("handle", [1, 7, 16, constexpr(9)])
+def test_specialize_nested_namedtuple_fields(handle):
+
+    class Arguments(namedtuple("Arguments", "handle constant aligned unaligned")):
+        __triton_do_not_specialize__ = ("handle", )
+
+    tensor = torch.empty(2, dtype=torch.float32, device="cpu")
+    arg = ((Arguments(handle, 1, tensor, tensor[1:]), ), )
+    types, keys = native_specialize_impl(CUDABackend, arg, False, True, True)
+    assert type(types[0][0]) is Arguments
+    assert type(keys[0][0]) is Arguments
+    handle_type = "constexpr" if isinstance(handle, constexpr) else "i32"
+    handle_key = handle if isinstance(handle, constexpr) else None
+    assert types == ((Arguments(handle_type, "constexpr", "*fp32", "*fp32"), ), )
+    assert keys == ((Arguments(handle_key, 1, "D", ""), ), )
+    assert (types, keys) == reference_specialize_impl(CUDABackend, arg, False, True, True)
 
 
 @pytest.mark.parametrize("input_generator", [
