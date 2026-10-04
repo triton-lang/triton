@@ -59,7 +59,11 @@ jobs:
       PROTON_SKIP_PC_SAMPLING_TEST: ${{ matrix.image_variant == 'rocm10.1' && '0' || '1' }}
       PROTON_SKIP_CUDAGRAPH_TEST: 1
       PYTHON: "python3"
-      PYTEST_ADDOPTS: "-p triton._compile_warmup"
+      # Time out individual tests so a hang names the test instead of silently
+      # running out the job's timeout-minutes. The thread method is used rather
+      # than the default signal method because signal needs the main thread to
+      # regain control, which a wedged GPU queue may never give back.
+      PYTEST_ADDOPTS: "-p triton._compile_warmup --timeout=600 --timeout-method=thread"
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
     container:
@@ -133,6 +137,7 @@ jobs:
             pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
             pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
           fi
+          pip install pytest-timeout
           make dev-install
       - name: Print ccache stats
         run: ccache --print-stats
@@ -275,7 +280,7 @@ jobs:
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
       TRITON_DISABLE_LINE_INFO: 1
       PYTHON: "python3"
-      PYTEST_ADDOPTS: "-p triton._compile_warmup"
+      PYTEST_ADDOPTS: "-p triton._compile_warmup --timeout=600 --timeout-method=thread"
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
     container:
@@ -406,18 +411,15 @@ jobs:
 
           run_rocjitsu_pytest 8 4 \
             -k "$k_runtime and not test_hooks" -p no:forked \
-            --timeout=600 --timeout-method=thread \
             python/test/unit/test_debug.py \
             python/test/unit/runtime
           run_rocjitsu_pytest 24 2 \
             -k "$k_core and $k_tdesc" -p no:forked \
-            --timeout=600 --timeout-method=thread \
             python/test/unit/language/test_core.py \
             python/test/unit/language/test_tensor_descriptor.py \
             python/triton_kernels/tests/test_topk.py::test_topk
           run_rocjitsu_pytest 32 2 \
             -k "$k_matmul" -p no:forked \
-            --timeout=600 --timeout-method=thread \
             python/test/unit/language/test_matmul.py
           run_rocjitsu_pytest 48 1 \
             third_party/amd/python/test/ \
@@ -428,7 +430,7 @@ jobs:
             --ignore=third_party/amd/python/test/test_tdm_copy.py \
             --ignore=third_party/amd/python/test/test_int8_dot_small_block_k.py
           run_rocjitsu_pytest 1 8 -p no:forked \
-            --timeout=300 --timeout-method=thread \
+            --timeout=300 \
             python/test/unit/language/test_pipeliner.py::test_scatter_pipeline
           moe_tests=(
             "test_op[None-False-False-True-True-None-128-768-512-1024-batched-float16-float16-None-10-1-False-False-False-False-None-False-False-False-True-None]"
