@@ -988,6 +988,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
                     int num_ctas, int launch_cooperative_grid, int launch_pdl,
                     int shared_memory, CUstream stream, CUfunction function,
                     void **params) {
+  // prevent 32-bit wrap around to zero for massive grids
   if ((uint64_t)gridX * (uint64_t)gridY * (uint64_t)gridZ > 0) {
     // 4 attributes that we can currently pass maximum
     CUlaunchAttribute launchAttr[4];
