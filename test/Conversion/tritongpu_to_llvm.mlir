@@ -4163,6 +4163,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func internal @inferred_arg_ptr_alignment(
+  // CHECK-SAME: %{{[^:]+}}: !llvm.ptr<1> {llvm.align = 4 : i64
+  tt.func private @inferred_arg_ptr_alignment(%ptr: !tt.ptr<i32>) attributes {noinline = true} {
+    tt.return
+  }
+
+  tt.func public @call_with_different_alignments(%ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+    %one = arith.constant 1 : i32
+    %offset = tt.addptr %ptr, %one : !tt.ptr<i32>, i32
+    tt.call @inferred_arg_ptr_alignment(%ptr) : (!tt.ptr<i32>) -> ()
+    tt.call @inferred_arg_ptr_alignment(%offset) : (!tt.ptr<i32>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
 //--- masked-store-barrier.mlir
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {

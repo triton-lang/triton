@@ -3,7 +3,6 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "llvm/IR/Value.h"
 
 namespace {
 
@@ -28,28 +27,6 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter,
                    const TargetInfoBase &targetInfo, PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
-
-  // Preserve pointer argument alignment through LLVM conversion.
-  static void handleArgPtrAlignment(triton::FuncOp funcOp,
-                                    LLVM::LLVMFuncOp llvmFuncOp,
-                                    ConversionPatternRewriter &rewriter) {
-    for (auto [i, argType] : llvm::enumerate(funcOp.getArgumentTypes())) {
-      if (!isa<triton::PointerType>(argType))
-        continue;
-      auto attr = funcOp.getArgAttrOfType<IntegerAttr>(i, "tt.divisibility");
-      if (!attr)
-        continue;
-      auto alignment = attr.getValue().getZExtValue();
-      // AxisInfo gives poison pointer arguments a maximal divisor.
-      if (alignment == 1 || alignment > llvm::Value::MaximumAlignment)
-        continue;
-      auto alignName = LLVM::LLVMDialect::getAlignAttrName();
-      auto existing = llvmFuncOp.getArgAttrOfType<IntegerAttr>(i, alignName);
-      if (!existing || existing.getValue().ult(alignment))
-        llvmFuncOp.setArgAttr(i, alignName,
-                              rewriter.getI64IntegerAttr(alignment));
-    }
-  }
 
   // Map the MLIR attribute `tt.nv_tma_desc` to the appropriate LLVM and NVVM
   // attributes.
@@ -141,7 +118,6 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
     handleArgPtrDatatype(funcOp, newFuncOp);
-    handleArgPtrAlignment(funcOp, newFuncOp, rewriter);
 
     auto ctx = funcOp->getContext();
 
