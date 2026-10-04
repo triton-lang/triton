@@ -119,10 +119,8 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
               Value selector) {
-  Value args[] = {a, b, selector};
-  auto op =
-      createLLVMIntrinsicCallOp(rewriter, loc, "llvm.nvvm.prmt", i32_ty, args);
-  return op.getResult(0);
+  return NVVM::PermuteOp::create(rewriter, loc, i32_ty, a, b, selector,
+                                 NVVM::PermuteMode::DEFAULT);
 }
 
 /// Create a predicate with just single active thread.
