@@ -7,6 +7,8 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "triton/Tools/GenericSwizzling.h"
+#include "triton/Tools/LayoutUtils.h"
 
 //
 #include "mlir/IR/TypeUtilities.h"
@@ -108,13 +110,118 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   return SmallVector<Value>(thenBlock->getArguments());
 }
 
+inline SmallVector<SmallVector<Value>> convertScanTotals(
+    Location loc, ConversionPatternRewriter &rewriter, triton::ScanOp op,
+    const LinearLayout &src, const LinearLayout &dst,
+    const SmallVector<SmallVector<Value>> &values,
+    const LLVMTypeConverter *typeConverter, const TargetInfoBase &targetInfo,
+    Value storePred = {}, int shiftedAxis = -1, int distance = 0) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto *ctx = rewriter.getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto scratch = getScanScratchConfig(src, dst, op.getElementTypes());
+  auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  if (!storePred) {
+    storePred = b.true_val();
+    auto free = src.getFreeVariableMasks();
+    for (auto [dim, id] : SmallVector<std::pair<StringAttr, Value>>{
+             {StringAttr::get(ctx, "lane"), laneId},
+             {StringAttr::get(ctx, "warp"), warpId}})
+      if (free[dim])
+        storePred =
+            b.and_(storePred,
+                   b.icmp_eq(b.and_(id, b.i32_val(free[dim])), b.i32_val(0)));
+  }
+  struct SharedOperand {
+    LinearLayout layout;
+    Value base;
+    Type type;
+  };
+  SmallVector<SharedOperand> operands;
+  // Keep every operand in its own part of the allocation, then synchronize
+  // once. Fold the swizzle's repetition dimension into the shared offset.
+  for (auto [i, input] : llvm::enumerate(values)) {
+    Type type = typeConverter->convertType(op.getElementTypes()[i]);
+    Type storageType = type;
+    auto stored = input;
+    if (isa<LLVM::LLVMPointerType>(type)) {
+      storageType = rewriter.getI64Type();
+      for (auto &v : stored)
+        v = b.ptrtoint(storageType, v);
+    } else if (type.getIntOrFloatBitWidth() < 8) {
+      storageType = rewriter.getI8Type();
+      for (auto &v : stored)
+        v = b.zext(storageType, v);
+    }
+    unsigned width = storageType.getIntOrFloatBitWidth();
+    auto [dstTile, srcTile] =
+        targetInfo.getSharedLdStTiles(gpu::getVecBitwidthLdSt(src, dst, width));
+    auto shared = gpu::optimalSwizzlingLdSt(
+        src, dst, width, targetInfo.getSharedMemoryBanks(), srcTile, dstTile);
+    auto order = llvm::to_vector(shared.getInDimNames());
+    order.erase(llvm::find(order, kBlock));
+    order.push_back(kBlock);
+    unsigned blocks = shared.getInDimSize(kBlock);
+    shared = shared.transposeIns(order).reshapeIns(
+        {{kOffset, shared.getTotalInDimSize() / blocks}, {kBlock, blocks}});
+    Value operandBase = b.gep(base.getType(), rewriter.getI8Type(), base,
+                              b.i32_val(scratch.offsets[i]));
+    lowerLdSt(loc, ctx, src.invertAndCompose(shared), stored, storageType,
+              operandBase, {}, b.i32_val(0), 0, {}, 0, laneId, warpId, rewriter,
+              targetInfo, {}, makeSharedStoreEmitter(targetInfo, storePred));
+    operands.push_back({std::move(shared), operandBase, storageType});
+  }
+  targetInfo.barrier(loc, rewriter, gpu::AddrSpace::Local);
+  SmallVector<SmallVector<Value>> result;
+  for (auto [i, operand] : llvm::enumerate(operands)) {
+    SmallVector<Value> loaded;
+    if (shiftedAxis < 0) {
+      loaded = lowerLdSt(
+          loc, ctx, invertAndComposeLocal(operand.layout, dst, {kBlock}), {},
+          operand.type, operand.base, {}, b.i32_val(0), 0, {}, 0, laneId,
+          warpId, rewriter, targetInfo, {}, makeSharedLoadEmitter(targetInfo));
+    } else {
+      // Fetch the preceding prefix directly into its consumer's ownership.
+      // The wrapped boundary value is never combined by the scan lowering.
+      auto kReg = StringAttr::get(ctx, "register");
+      auto axis = StringAttr::get(ctx, "dim" + std::to_string(shiftedAxis));
+      auto inverse = operand.layout.pseudoinvert();
+      for (unsigned r = 0; r < dst.getInDimSize(kReg); ++r) {
+        auto coords = applyLinearLayout(loc, rewriter, dst,
+                                        {{kReg, b.i32_val(r)},
+                                         {StringAttr::get(ctx, "lane"), laneId},
+                                         {StringAttr::get(ctx, "warp"), warpId},
+                                         {kBlock, b.i32_val(0)}});
+        auto &index = coords[shiftedAxis].second;
+        index = b.and_(b.add(index, b.i32_val(distance)),
+                       b.i32_val(dst.getOutDimSize(axis) - 1));
+        Value offset =
+            applyLinearLayout(loc, rewriter, inverse, coords)[0].second;
+        Value ptr =
+            b.gep(operand.base.getType(), operand.type, operand.base, offset);
+        loaded.push_back(targetInfo.loadShared(rewriter, loc, ptr, operand.type,
+                                               b.true_val()));
+      }
+    }
+    Type type = typeConverter->convertType(op.getElementTypes()[i]);
+    if (type != operand.type)
+      for (auto &v : loaded)
+        v = isa<LLVM::LLVMPointerType>(type) ? Value(b.inttoptr(type, v))
+                                             : Value(b.trunc(type, v));
+    result.push_back(std::move(loaded));
+  }
+  return result;
+}
+
 template <typename SourceOp>
 SmallVector<SmallVector<Value>> convertLayoutValues(
     Location loc, ConversionPatternRewriter &rewriter, SourceOp op,
     const LinearLayout &srcLayout, const LinearLayout &dstLayout,
     const SmallVector<SmallVector<Value>> &inVals,
     const LLVMTypeConverter *typeConverter, const TargetInfoBase &targetInfo,
-    bool forceWarpShuffle = false, Value storePred = {}) {
+    bool forceWarpShuffle = false) {
   SmallVector<SmallVector<Value>> outVals(op.getNumOperands());
   auto *ctx = rewriter.getContext();
   SmallVector<int64_t> shape;
@@ -142,11 +249,6 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
               src, dst, bitwidth, targetInfo.getSharedMemoryBanks(), srcTile,
               dstTile);
         });
-  assert((!storePred || (!forceWarpShuffle && scratch.sizeInBytes)) &&
-         "selected source threads require a shared-memory conversion");
-  Value smemBase;
-  if (storePred)
-    smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
   auto baseOffsetAttr =
       op->template getAttrOfType<IntegerAttr>("allocation.offset");
   assert((!scratch.sizeInBytes || baseOffsetAttr) &&
@@ -155,16 +257,6 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
   auto offsetTy = IntegerType::get(ctx, 32);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
     auto elemTy = op.getElementTypes()[i];
-    if (storePred) {
-      auto b = TritonLLVMOpBuilder(loc, rewriter);
-      Value operandBase = b.gep(smemBase.getType(), rewriter.getI8Type(),
-                                smemBase, b.i32_val(scratch.offsets[i]));
-      outVals[i] = convertLayoutViaSharedMemory(
-          loc, rewriter, srcLayout, dstLayout, inVals[i],
-          typeConverter->convertType(elemTy), operandBase, op, targetInfo,
-          storePred);
-      continue;
-    }
     auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
     auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
     Value packed = packUniqueTensorElements(loc, typeConverter, inVals[i],
