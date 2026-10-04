@@ -5306,6 +5306,22 @@ def test_full(dtype_str, shape, device):
     assert torch.all(out_dynamic == 2)
 
 
+@pytest.mark.parametrize("value", [1e-8, 3e-7, -2.5e-7, 1.5e-6, 1e-40, 0.1, 3.14159265])
+def test_full_bf16_small_constant(value, device):
+    check_type_supported(torch.bfloat16, device)
+
+    @triton.jit
+    def kernel(X, Z, VALUE: tl.constexpr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(Z + offs, tl.full([BLOCK], VALUE, tl.bfloat16))
+        tl.store(Z + BLOCK + offs, tl.load(X + offs) * VALUE)
+
+    x = torch.ones(16, dtype=torch.bfloat16, device=device)
+    z = torch.empty(32, dtype=torch.bfloat16, device=device)
+    kernel[(1, )](x, z, VALUE=value, BLOCK=16)
+    torch.testing.assert_close(z, torch.full((32, ), value, dtype=torch.bfloat16, device=device), rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("literal, dtype_str", [(1e+50, "f64"), (1e+10, "f32"), (1.0, "f32"), ('float("inf")', "f32"),
                                                 ('float("-inf")', "f32"), ('float("nan")', "f32"),
                                                 ('float("-nan")', "f32"), (0., "f32"), (5, "i32"), (2**40, "i64")])

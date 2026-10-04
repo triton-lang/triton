@@ -992,8 +992,8 @@ void init_triton_ir(py::module_ &m) {
       .def("get_bf16",
            [](TritonOpBuilder &self, float v) -> Value {
              auto type = self.getBuilder().getBF16Type();
-             return self.create<arith::ConstantFloatOp>(
-                 type, APFloat(type.getFloatSemantics(), std::to_string(v)));
+             return self.create<arith::ConstantOp>(
+                 self.getBuilder().getFloatAttr(type, v));
            })
       .def("get_fp16",
            [](TritonOpBuilder &self, float v) -> Value {
