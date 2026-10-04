@@ -642,6 +642,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
                     int num_ctas, int launch_cooperative_grid,
                     int shared_memory, int warp_size, hipStream_t stream,
                     hipFunction_t function, void **params) {
+  // prevent 32-bit wrap around to zero for massive grids
   if ((uint64_t)gridX * (uint64_t)gridY * (uint64_t)gridZ == 0)
     return;
   if (num_ctas > 1) {
