@@ -8379,3 +8379,25 @@ def test_libdevice_rint(dtype_str, device):
     rint_kernel[(triton.cdiv(numel, BLOCK_SIZE), )](res_out, x_tri, numel, BLOCK_SIZE)
     ref_out = np.rint(x_np)
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("aliased", [True, False])
+def test_loop_carry_aliased_initial_value(aliased, device):
+
+    @triton.jit
+    def kernel(out_ptr, n, ALIASED: tl.constexpr):
+        cur = 0
+        if ALIASED:
+            prev = cur
+        else:
+            prev = cur + 0
+        for i in range(n):
+            prev = cur
+            cur = cur + 1
+        tl.store(out_ptr, prev)
+        tl.store(out_ptr + 1, cur)
+
+    n = 5
+    out = torch.zeros(2, dtype=torch.int32, device=device)
+    kernel[(1, )](out, n, aliased)
+    assert out.tolist() == [n - 1, n]

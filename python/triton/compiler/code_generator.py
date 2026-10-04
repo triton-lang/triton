@@ -493,6 +493,17 @@ class CodeGenerator(ast.NodeVisitor):
         self.scf_stack.pop()
         block.erase()
 
+        # A name that is assigned in the loop and bound to the same IR value as another name (`prev = cur` after
+        # `prev = cur`) may have copied it, which an unchanged handle doesn't show: treat it as carried.
+        assigned = {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+        holders = {}
+        for name, live_val in liveins.items():
+            if name in ignore:
+                continue
+            if _is_triton_value(live_val):
+                for handle in flatten_values_to_ir([live_val]):
+                    holders.setdefault(handle.id(), set()).add(name)
+
         # If a variable (name) has changed value within the loop, then it's
         # a loop-carried variable. (The new and old value must be of the
         # same type)
@@ -510,7 +521,8 @@ class CodeGenerator(ast.NodeVisitor):
 
                 live_handles = flatten_values_to_ir([live_val])
                 loop_handles = flatten_values_to_ir([loop_val])
-                if live_handles != loop_handles:
+                aliased = name in assigned and any(len(holders[h.id()]) > 1 for h in live_handles)
+                if aliased or live_handles != loop_handles:
                     names.append(name)
                     init_tys.append(live_val.type)
                     init_handles.extend(live_handles)
