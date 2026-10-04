@@ -12,18 +12,10 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import (
 # -----------------------------------------------------------------------------
 
 
-@tl.core.extern
-def _round_f32_to_tf32(x, use_rn, _semantic=None):
-    intrinsic = "llvm.nvvm.f2tf32.rn" if use_rn else "llvm.nvvm.f2tf32.rna"
-    return tl.core.extern_elementwise("", "", [x], {
-        (tl.float32, ): (intrinsic, tl.float32),
-    }, is_pure=True, _semantic=_semantic)
-
-
 @triton.jit
 def round_f32_to_tf32(x):
     # Use round-to-nearest-even on Hopper+ to match TMA.
-    return _round_f32_to_tf32(x, cuda_capability_geq(9, 0))
+    return tl.extra.cuda.round_f32_to_tf32(x, cuda_capability_geq(9, 0))
 
 
 @triton.constexpr_function
