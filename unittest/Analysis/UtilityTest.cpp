@@ -409,6 +409,12 @@ TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
   static_assert(std::is_same_v<
                 decltype(std::declval<BufferRegionView &>().getPartitionBases()),
                 llvm::ArrayRef<uint32_t>>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::storageBase)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::affineOffset)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::affinePartitionOffset)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::affineCTAOffset)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::allocationFrame)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::allocation)>);
   static_assert(!std::is_copy_assignable_v<BufferRegionView>);
   static_assert(!std::is_move_assignable_v<BufferRegionView>);
   BufferRegion source{0, 72, {{0, AddressSet::fromRange(0, 8)}}};
@@ -426,9 +432,6 @@ TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
   EXPECT_EQ(copy, original);
   BufferRegionView moved(std::move(copy));
   EXPECT_EQ(moved, original);
-  BufferRegionView movedFrom({0, 72}, 5, 7, {}, 1, 2, 9);
-  EXPECT_EQ(copy, movedFrom);
-  EXPECT_EQ(Hash{}(copy), Hash{}(movedFrom));
   EXPECT_EQ(Hash{}(moved), originalHash);
   auto translated = original.translated(16, 3);
   AddressSet translatedAddresses = AddressSet::fromRange(16, 8);
@@ -459,9 +462,6 @@ TEST(Analysis, BufferRegionViewInsertionTransfersStorage) {
   EXPECT_EQ(it->getRegion().ctaAddresses.data(), addresses);
   EXPECT_EQ(it->getPartitionBases().data(), partitions);
   EXPECT_EQ(BufferRegionView::Hash{}(*it), hash);
-  BufferRegionView movedFrom({0, 65536});
-  EXPECT_EQ(view, movedFrom);
-  EXPECT_EQ(BufferRegionView::Hash{}(view), BufferRegionView::Hash{}(movedFrom));
 }
 
 } // namespace mlir

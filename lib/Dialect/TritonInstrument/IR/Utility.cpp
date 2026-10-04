@@ -794,7 +794,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
           return failure();
         }
         uint32_t id = std::distance(regions.begin(), it);
-        uint32_t ctaMask = 1u << view.getAffineCTAOffset();
+        uint32_t ctaMask = 1u << view.affineCTAOffset;
 
         auto existing = llvm::find_if(
             stateCandidates.cases, [&](const BufferStateCandidate &state) {

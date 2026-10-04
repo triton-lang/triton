@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace ttg = mlir::triton::gpu;
@@ -346,6 +347,28 @@ AddressSet AddressSet::translated(uint32_t delta) const {
   return result;
 }
 
+BufferRegionView::BufferRegionView(
+    BufferRegion region, uint32_t storageBase, uint32_t affineOffset,
+    SmallVector<uint32_t, 2> partitionBases, uint32_t affinePartitionOffset,
+    uint32_t affineCTAOffset, uint32_t allocationFrame, Operation *allocation)
+    : storageBase(storageBase), affineOffset(affineOffset),
+      affinePartitionOffset(affinePartitionOffset),
+      affineCTAOffset(affineCTAOffset), allocationFrame(allocationFrame),
+      allocation(allocation), region(std::move(region)),
+      partitionBases(std::move(partitionBases)), cachedHash(computeHash()) {}
+
+size_t BufferRegionView::computeHash() const {
+  auto hash = llvm::hash_combine(
+      allocationFrame, region.baseOffset, region.length, storageBase,
+      affineOffset, affinePartitionOffset, affineCTAOffset, allocation,
+      llvm::hash_combine_range(partitionBases.begin(), partitionBases.end()));
+  for (const auto &[cta, addresses] : region.ctaAddresses)
+    hash = llvm::hash_combine(
+        hash, cta,
+        llvm::hash_combine_range(addresses.begin(), addresses.end()));
+  return hash;
+}
+
 BufferRegionView
 BufferRegionView::translated(uint32_t offset,
                              uint32_t newAllocationFrame) const {
@@ -490,15 +513,14 @@ BufferRegionAnalysis::getSubView(Type type, const BufferRegionView &view,
                                  uint32_t storageOffset, uint32_t byteOffset,
                                  uint32_t partitionOffset, uint32_t ctaOffset) {
   auto ty = cast<ttg::MemDescType>(type);
-  uint32_t storageBase = view.getStorageBase() + storageOffset;
+  uint32_t storageBase = view.storageBase + storageOffset;
   SmallVector<uint32_t, 2> partitionBases =
       advancePartitionBases(view.getPartitionBases(), storageOffset);
   uint32_t affineOffset = isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())
-                              ? view.getAffineOffset() + byteOffset
-                              : view.getAffineOffset() ^ byteOffset;
-  uint32_t affinePartitionOffset =
-      view.getAffinePartitionOffset() ^ partitionOffset;
-  uint32_t affineCTAOffset = view.getAffineCTAOffset() ^ ctaOffset;
+                              ? view.affineOffset + byteOffset
+                              : view.affineOffset ^ byteOffset;
+  uint32_t affinePartitionOffset = view.affinePartitionOffset ^ partitionOffset;
+  uint32_t affineCTAOffset = view.affineCTAOffset ^ ctaOffset;
   MemDescFootprint footprint = getMemDescAddresses(
       storageBase, affineOffset, ty, &footprintCache, partitionBases,
       affinePartitionOffset, affineCTAOffset);
@@ -512,7 +534,7 @@ BufferRegionAnalysis::getSubView(Type type, const BufferRegionView &view,
   return BufferRegionView(
       {baseOffset, getMemDescSize(ty), std::move(footprint)}, storageBase,
       affineOffset, std::move(partitionBases), affinePartitionOffset,
-      affineCTAOffset, view.getAllocationFrame(), view.getAllocation());
+      affineCTAOffset, view.allocationFrame, view.allocation);
 }
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
@@ -551,8 +573,8 @@ bool mayOverlap(const BufferRegionFootprint *lhs,
     return true;
   return llvm::any_of(left.views, [&](const BufferRegionView &a) {
     return llvm::any_of(right.views, [&](const BufferRegionView &b) {
-      bool sameFrame = a.getAllocationFrame() &&
-                       a.getAllocationFrame() == b.getAllocationFrame();
+      bool sameFrame =
+          a.allocationFrame && a.allocationFrame == b.allocationFrame;
       return !sameFrame || a.getRegion().intersects(b.getRegion());
     });
   });
@@ -574,7 +596,7 @@ BufferRegionAnalysis::getFootprint(Value value,
   const auto *footprint = it->second.get();
   if (footprint && allocationFrame &&
       llvm::any_of(footprint->regionInfo.views, [&](const auto &view) {
-        return view.getAllocationFrame() != getOperationId(allocationFrame);
+        return view.allocationFrame != getOperationId(allocationFrame);
       }))
     return nullptr;
   return footprint;
@@ -628,7 +650,7 @@ const BufferRegionFootprint *BufferRegionAnalysis::translateToCallsite(
     return nullptr;
   uint32_t calleeFrame = getOperationId(callee);
   if (llvm::none_of(footprint->regionInfo.views, [&](const auto &view) {
-        return view.getAllocationFrame() == calleeFrame;
+        return view.allocationFrame == calleeFrame;
       }))
     return footprint;
   auto [it, inserted] =
@@ -639,7 +661,7 @@ const BufferRegionFootprint *BufferRegionAnalysis::translateToCallsite(
     uint32_t offset = getCallOffset(call);
     RegionInfo info(RegionInfo::ViewList{});
     for (const BufferRegionView &view : footprint->regionInfo.views) {
-      if (view.getAllocationFrame() == calleeFrame)
+      if (view.allocationFrame == calleeFrame)
         info.views.insert(view.translated(offset, callerFrame));
       else
         info.views.insert(view);

@@ -15,7 +15,6 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -121,10 +120,9 @@ struct BufferRegion {
 
 /// A physical region and the provenance required to compose descriptor views.
 class BufferRegionView {
-  BufferRegion region;
+public:
   const uint32_t storageBase;
   const uint32_t affineOffset;
-  llvm::SmallVector<uint32_t, 2> partitionBases;
   const uint32_t affinePartitionOffset;
   const uint32_t affineCTAOffset;
   /// Deterministically interned identity of the owning allocation frame.
@@ -132,42 +130,15 @@ class BufferRegionView {
   /// Descriptor allocation supplying these views; null for implicit scratch.
   Operation *const allocation;
 
-public:
   BufferRegionView(BufferRegion region = {}, uint32_t storageBase = 0,
                    uint32_t affineOffset = 0,
                    llvm::SmallVector<uint32_t, 2> partitionBases = {},
                    uint32_t affinePartitionOffset = 0,
                    uint32_t affineCTAOffset = 0, uint32_t allocationFrame = 0,
-                   Operation *allocation = nullptr)
-      : region(std::move(region)), storageBase(storageBase),
-        affineOffset(affineOffset), partitionBases(std::move(partitionBases)),
-        affinePartitionOffset(affinePartitionOffset),
-        affineCTAOffset(affineCTAOffset), allocationFrame(allocationFrame),
-        allocation(allocation), cachedHash(computeHash()) {}
-
-  BufferRegionView(const BufferRegionView &) = default;
-  BufferRegionView(BufferRegionView &&other)
-      : region(std::move(other.region)), storageBase(other.storageBase),
-        affineOffset(other.affineOffset),
-        partitionBases(std::move(other.partitionBases)),
-        affinePartitionOffset(other.affinePartitionOffset),
-        affineCTAOffset(other.affineCTAOffset),
-        allocationFrame(other.allocationFrame), allocation(other.allocation),
-        cachedHash(other.cachedHash) {
-    // Keep moved-from views valid without rehashing the transferred addresses.
-    other.region.ctaAddresses.clear();
-    other.partitionBases.clear();
-    other.cachedHash = other.computeHash();
-  }
+                   Operation *allocation = nullptr);
 
   const BufferRegion &getRegion() const { return region; }
-  uint32_t getStorageBase() const { return storageBase; }
-  uint32_t getAffineOffset() const { return affineOffset; }
   llvm::ArrayRef<uint32_t> getPartitionBases() const { return partitionBases; }
-  uint32_t getAffinePartitionOffset() const { return affinePartitionOffset; }
-  uint32_t getAffineCTAOffset() const { return affineCTAOffset; }
-  uint32_t getAllocationFrame() const { return allocationFrame; }
-  Operation *getAllocation() const { return allocation; }
 
   bool contains(const BufferRegionView &other) const {
     return allocationFrame == other.allocationFrame &&
@@ -200,20 +171,12 @@ public:
   };
 
 private:
-  // Equality fields are only exposed through read-only accessors.
+  // Private containers allow moves without exposing mutation of hashed fields.
+  BufferRegion region;
+  llvm::SmallVector<uint32_t, 2> partitionBases;
   size_t cachedHash;
 
-  size_t computeHash() const {
-    auto hash = llvm::hash_combine(
-        allocationFrame, region.baseOffset, region.length, storageBase,
-        affineOffset, affinePartitionOffset, affineCTAOffset, allocation,
-        llvm::hash_combine_range(partitionBases.begin(), partitionBases.end()));
-    for (const auto &[cta, addresses] : region.ctaAddresses)
-      hash = llvm::hash_combine(
-          hash, cta,
-          llvm::hash_combine_range(addresses.begin(), addresses.end()));
-    return hash;
-  }
+  size_t computeHash() const;
 };
 
 //===----------------------------------------------------------------------===//
