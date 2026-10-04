@@ -117,60 +117,6 @@ getScanScratchConfig(const triton::LinearLayout &src,
                      const triton::LinearLayout &dst,
                      ArrayRef<Type> elementTypes);
 
-// Main's blocked-layout scan plan: shuffle-up followed by one shared exchange.
-class BlockedScanLoweringHelper {
-public:
-  explicit BlockedScanLoweringHelper(triton::ScanOp op);
-  // Return true if the lowering of the scan op is supported.
-  bool isSupported();
-  // Return the number of elements per thread along axis dim.
-  unsigned getAxisNumElementsPerThread();
-  // Return the number of elements per thread along non-axis dims.
-  unsigned getNonAxisNumElementsPerThread();
-  // Return the number of threads per warp along non-axis dims.
-  unsigned getNonAxisNumThreadsPerWarp();
-  // Return the flat numbers of threads computing independent scan results.
-  unsigned getNonAxisNumThreadsPerCTA();
-  // Return the number of warps per CTA along axis dim with unique data.
-  unsigned getAxisNumWarpsWithUniqueData();
-  // Return the number of threads per warp along axis dim with unique data.
-  unsigned getAxisNumThreadsPerWarpWithUniqueData();
-  // Return the number of blocks along axis dim.
-  unsigned getAxisNumBlocks();
-  // Return the number of blocks along non axis dim.
-  unsigned getNonAxisNumBlocks();
-  // Return the size of the scratch space needed for scan lowering.
-  unsigned getScratchSizeInBytes();
-  // Return the number of elements of the scratch space needed for scan
-  // lowering.
-  unsigned getScratchSizeInElems();
-
-  // Stride between contiguous element along axis dim.
-  unsigned getAxisElementStride();
-  // Stride between contiguous threads along axis dim.
-  unsigned getAxisThreadStride();
-  // Stride between contiguous blocks along axis dim.
-  unsigned getAxisBlockStride();
-
-  Location getLoc() { return scanOp.getLoc(); }
-  unsigned getAxis() { return scanOp.getAxis(); }
-  bool getReverse() { return scanOp.getReverse(); }
-  triton::gpu::LinearEncodingAttr getEncoding() { return srcEncoding; }
-  llvm::ArrayRef<int64_t> getShape() { return srcShape; }
-  unsigned getNumOperands() { return scanOp.getNumOperands(); }
-  SmallVector<Type> getElementTypes() { return srcElementTypes; }
-  SmallVector<unsigned> getOrder() { return order; }
-  Region &getCombineOp();
-
-private:
-  triton::ScanOp scanOp;
-  triton::gpu::LinearEncodingAttr srcEncoding;
-  Attribute legacyEncoding;
-  llvm::ArrayRef<int64_t> srcShape;
-  SmallVector<Type> srcElementTypes;
-  SmallVector<unsigned> order;
-};
-
 // Plan layouts for contiguous thread/warp segments and their totals.
 class ScanLoweringHelper {
 public:

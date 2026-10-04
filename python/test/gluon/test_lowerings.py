@@ -386,6 +386,8 @@ def test_scan_cta_local(num_ctas, replicate, reverse, device):
 @pytest.mark.parametrize("M, N, src_layout, axis, num_ctas", [
     pytest.param(2, 2, ttgl.BlockedLayout([2, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0]), 0, 1, id="registers"),
     pytest.param(8, 4, ttgl.BlockedLayout([4, 2], [THREADS_PER_WARP, 1], [4, 1], [1, 0]), 0, 1, id="strided_registers"),
+    pytest.param(8, 16 * THREADS_PER_WARP, ttgl.BlockedLayout([2, 4], [1, THREADS_PER_WARP], [1, 4], [0, 1]), 1, 1,
+                 id="strided_multiwarp"),
     pytest.param(2, 4 * THREADS_PER_WARP, ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [0, 1]), 1, 1,
                  id="multiwarp"),
     pytest.param(256, 4, ttgl.BlockedLayout([2, 1], [32, 1], [1, 4], [1, 0], [[0, 1]]), 0, 2, id="nonaxis_split"),
