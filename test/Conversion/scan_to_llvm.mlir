@@ -32,7 +32,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
 
 // CHECK-LABEL: @test_1d_simple
 tt.func private @test_1d_simple(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
-  // CHECK-COUNT-3: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK-COUNT-3: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
@@ -45,7 +45,7 @@ tt.func private @test_1d_simple(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, 
 
 // CHECK-LABEL: @test_1d_grouped
 tt.func private @test_1d_grouped(%arg0: tensor<8xi32, #layout_adj>) -> tensor<8xi32, #layout_adj> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
@@ -85,9 +85,10 @@ tt.func public @anchor_warp_register_groups(%ptr: !llvm.ptr, %arg: !llvm.struct<
 
 // CHECK-LABEL: @test_2d_grouped
 tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d> {
-  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.up.i32
   // CHECK: st.shared::cta
   // CHECK: @llvm.nvvm.barrier
+  // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: load i32, ptr addrspace(3)
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({
@@ -100,9 +101,9 @@ tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<
 
 // CHECK-LABEL: @test_1d_reversed
 tt.func private @test_1d_reversed(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
-  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
-  // CHECK-COUNT-3: @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK-COUNT-3: @llvm.nvvm.shfl.sync.up.i32
+  // CHECK: @llvm.nvvm.shfl.sync.bfly.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = true}> ({
@@ -594,7 +595,7 @@ tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #conver
 
 //--- parallel-totals.mlir
 
-#parallel_totals = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#parallel_totals = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // Four segment totals and eight columns fit in the lanes of one warp.
 // The totals scan needs two adds, rather than repeating them in eight registers.
@@ -615,7 +616,7 @@ tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_tot
 
 //--- ship-chunks.mlir
 
-#ship = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#ship = #ttg.linear<{register = [[32], [64], [128], [256]], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // Each of two chunks uses three exchanges with four shuffles in both directions.
 // SHIP-LABEL: llvm.func {{.*}}@test_scan_register_lane_exchanges(

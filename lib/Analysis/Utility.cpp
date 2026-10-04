@@ -353,6 +353,173 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
   return reduced;
 }
 
+BlockedScanLoweringHelper::BlockedScanLoweringHelper(triton::ScanOp op)
+    : scanOp(op) {
+  auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
+  srcShape = firstTy.getShape();
+  legacyEncoding = firstTy.getEncoding();
+  // Remove broadcasting in the registers
+  // We also remove it in the lowering and re-add it when we pack the results
+  auto origLayout = triton::gpu::toLinearLayout(firstTy);
+  auto removeBroadcastRegs = actionRemoveBroadcastedRegs(origLayout);
+  origLayout = removeBroadcastRegs.apply(origLayout);
+  srcEncoding = triton::gpu::LinearEncodingAttr::get(op.getContext(),
+                                                     std::move(origLayout));
+  srcElementTypes = op.getElementTypes();
+  // The codegen does not support different element/thread/warp order so
+  // we choose one a priori. We choose that of the blocked encoding.
+  // When we generalise this code to other layouts we'll probably need to
+  // get rid of all this logic and the *Stride auxiliary methods
+  // and replace them by transposes and reshapes on the LinearLayout
+  if (auto blockedEncoding =
+          dyn_cast<triton::gpu::BlockedEncodingAttr>(legacyEncoding)) {
+    order = llvm::to_vector(blockedEncoding.getOrder());
+  } else {
+    order = srcEncoding.getOrder();
+  }
+
+  for (const auto &t : op.getInputTypes()) {
+    if (t.getShape() != srcShape) {
+      op.emitError() << "shape mismatch";
+    }
+    if (t.getEncoding() != legacyEncoding) {
+      op.emitError() << "encoding mismatch";
+    }
+  }
+}
+
+unsigned BlockedScanLoweringHelper::getAxisNumElementsPerThread() {
+  return getEncoding().getContigPerThread()[getAxis()];
+}
+
+unsigned BlockedScanLoweringHelper::getNonAxisNumElementsPerThread() {
+  auto contigPerThread = getEncoding().getContigPerThread();
+  contigPerThread[getAxis()] = 1;
+  return product<unsigned>(contigPerThread);
+}
+
+Region &BlockedScanLoweringHelper::getCombineOp() {
+  return scanOp.getCombineOp();
+}
+
+unsigned BlockedScanLoweringHelper::getAxisNumThreadsPerWarpWithUniqueData() {
+  return getEncoding().getThreadsPerWarp()[getAxis()];
+}
+
+unsigned BlockedScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
+  auto nThreads = product(getEncoding().getThreadsPerWarp());
+  return nThreads / getAxisNumThreadsPerWarpWithUniqueData();
+}
+
+// Return the flat numbers of threads computing independent scan results.
+unsigned BlockedScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
+  auto nWarps = product(getEncoding().getWarpsPerCTA());
+  return (nWarps / getAxisNumWarpsWithUniqueData()) *
+         getNonAxisNumThreadsPerWarp();
+}
+
+unsigned BlockedScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
+  return getEncoding().getWarpsPerCTA()[getAxis()];
+}
+
+unsigned BlockedScanLoweringHelper::getAxisNumBlocks() {
+  auto contigPerThread = getEncoding().getContigPerThread();
+  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
+  auto warpsPerCTA = getEncoding().getWarpsPerCTA();
+  unsigned axis = getAxis();
+  return ceil<unsigned>(
+      getShape()[axis],
+      (contigPerThread[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
+}
+
+unsigned BlockedScanLoweringHelper::getNonAxisNumBlocks() {
+  auto shapePerCTA = getShapePerCTA(getEncoding(), getShape());
+  auto contigPerThread = getEncoding().getContigPerThread();
+  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
+  auto warpsPerCTA = getEncoding().getWarpsPerCTA();
+  auto rank = contigPerThread.size();
+  unsigned axis = getAxis();
+  unsigned numBlocks = 1;
+  for (unsigned i = 0; i < rank; i++) {
+    if (i == axis)
+      continue;
+    numBlocks *=
+        ceil<unsigned>(shapePerCTA[i], (contigPerThread[i] * threadsPerWarp[i] *
+                                        warpsPerCTA[i]));
+  }
+  return numBlocks;
+}
+
+bool BlockedScanLoweringHelper::isSupported() {
+  // TODO: Support the following cases:
+  // 1. Scan on non-blocking encodings
+  if (!isa<BlockedEncodingAttr>(legacyEncoding))
+    return false;
+  // Partial results are only combined within each CTA.
+  return getCTASplitNum(srcEncoding)[getAxis()] == 1;
+}
+
+unsigned BlockedScanLoweringHelper::getScratchSizeInElems() {
+  unsigned numWarps = product(getEncoding().getWarpsPerCTA());
+  unsigned numNonAxisElementsPerWarp =
+      getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
+  unsigned numElements = numWarps * numNonAxisElementsPerWarp *
+                         getAxisNumBlocks() * getNonAxisNumBlocks();
+  return numElements;
+}
+
+unsigned BlockedScanLoweringHelper::getScratchSizeInBytes() {
+  // Lowering will fail later if the layout is not supported.
+  if (!isSupported())
+    return 0;
+
+  unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
+  if (axisNumWarps == 1)
+    return 0;
+  unsigned elementSizeInBytes = 0;
+  for (const auto &ty : srcElementTypes) {
+    elementSizeInBytes += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
+  }
+  return elementSizeInBytes * getScratchSizeInElems();
+}
+
+unsigned BlockedScanLoweringHelper::getAxisElementStride() {
+  auto order = getEncoding().getOrder();
+  unsigned stride = 1;
+  for (unsigned dim : order) {
+    if (dim == getAxis())
+      return stride;
+    stride *= getEncoding().getContigPerThread()[dim];
+  }
+  llvm_unreachable("Axis not found in order");
+}
+
+unsigned BlockedScanLoweringHelper::getAxisThreadStride() {
+  auto encoding = getEncoding();
+  auto ll = encoding.getLinearLayout();
+  auto kThread = StringAttr::get(encoding.getContext(), "lane");
+  auto outDims = llvm::to_vector(ll.getOutDimNames());
+  uint64_t bases = getInputBasisMask(ll, kThread, {outDims[getAxis()]});
+  return bases ? uint64_t{1} << llvm::countr_zero(bases) : 1;
+}
+
+unsigned BlockedScanLoweringHelper::getAxisBlockStride() {
+  auto order = getOrder();
+  auto shapePerCTA = getShapePerCTA(getEncoding(), getShape());
+  unsigned stride = 1;
+  auto contigPerThread = getEncoding().getContigPerThread();
+  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
+  auto warpsPerCTA = getEncoding().getWarpsPerCTA();
+  for (unsigned dim : order) {
+    if (dim == getAxis())
+      return stride;
+    stride *= ceil<unsigned int>(shapePerCTA[dim], contigPerThread[dim] *
+                                                       threadsPerWarp[dim] *
+                                                       warpsPerCTA[dim]);
+  }
+  llvm_unreachable("Axis not found in order");
+}
+
 ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
     : ScanLoweringHelper(
           triton::gpu::toLinearLayout(op.getInputTypes().front()),
