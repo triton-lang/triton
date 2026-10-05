@@ -317,6 +317,12 @@
 mbarrier object in shared memory. The operation requires a <code class="docutils literal notranslate"><span class="pre">count</span></code> attribute
 of at least 1 and decreases the pending arrival count of the mbarrier by
 the specified count.</p>
+<p>The compiler-owned <code class="docutils literal notranslate"><span class="pre">per_warp</span></code> flag selects an arrival from each of the
+execution region’s warps. The compiler may set this flag before final count
+scaling. Before lowering, the count must be divisible by the warp count;
+it remains the total decrement per source CTA and target barrier. Membar
+inserts the required warp synchronization before each warp contributes its
+equal share to every routed target.</p>
 <p>When <code class="docutils literal notranslate"><span class="pre">multicastCTA</span></code> is non-zero, the arrive is multicast across the cluster.
 Each bit set in the mask identifies a CTA ID dimension to multicast
 along. CTA IDs <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code> belong to the same equivalence class iff
@@ -344,6 +350,7 @@ ttng.arrive_barrier %barrier, 1 {multicastCTA = 1 : i32} : !ttg.memdesc&lt;2xi64
 <tr><td><code>count</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>fromCTA</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>multicastCTA</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>per_warp</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 </section>
 <section id="operands">
@@ -747,6 +754,11 @@ associated barrier wait will block until the expected number of bytes has
 been copied. The optional <code class="docutils literal notranslate"><span class="pre">fromCTA</span></code> attribute is a CTA-ID
 basis-selection mask: set bits are preserved and unset bits are zeroed
 when selecting the CTA that routes the arrival to each per-CTA barrier.</p>
+<p>The compiler-owned <code class="docutils literal notranslate"><span class="pre">per_warp</span></code> flag distributes each contributing CTA’s
+expectation across its execution region’s warps. Each warp publishes its
+prior effects and contributes one arrival and an equal share of the
+expected bytes. The barrier’s initialization count must be scaled to match;
+<code class="docutils literal notranslate"><span class="pre">size</span></code> remains the byte count per contributing CTA and target barrier.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">PredicatedOpInterface</span></code></p>
 <section id="id15">
@@ -755,6 +767,7 @@ when selecting the CTA that routes the arrival to each per-CTA barrier.</p>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>size</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 <tr><td><code>fromCTA</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>per_warp</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 </section>
 <section id="id16">

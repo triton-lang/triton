@@ -441,18 +441,20 @@ in addition to this operation.</p>
 </section>
 <section id="ttg-barrier-triton-gpu-barrierop">
 <h2><code class="docutils literal notranslate"><span class="pre">ttg.barrier</span></code> (triton::gpu::BarrierOp)<a class="headerlink" href="#ttg-barrier-triton-gpu-barrierop" title="Link to this heading"></a></h2>
-<p><em>Synchronizes execution and reads/writes to the selected address spaces for all threads in the CTA.</em></p>
-<p>The <code class="docutils literal notranslate"><span class="pre">barrier</span></code> op synchronises the execution and all operations between the selected address spaces for all
+<p><em>Synchronizes execution and memory accesses within a CTA or warp.</em></p>
+<p>At the default CTA scope, the <code class="docutils literal notranslate"><span class="pre">barrier</span></code> op synchronises the execution and all operations between the selected address spaces for all
 threads in the CTA. It is used to coordinate communication between threads in the CTA.</p>
 <p>This operation waits until all threads in the CTA have reached a <code class="docutils literal notranslate"><span class="pre">barrier</span></code> (for synchronization) and operations
 between the selected address spaces made by these threads prior to the op are visible to all threads in the CTA.</p>
 <p>Data hazards between threads accessing the same memory can be avoided by synchronising the
 specified scope in-between these accesses with a <code class="docutils literal notranslate"><span class="pre">barrier</span></code>.</p>
 <p>A <code class="docutils literal notranslate"><span class="pre">barrier</span></code> operation only provides synchronization and memory guarantees on the selected address spaces in the CTA.</p>
+<p>Warp scope currently supports only the <code class="docutils literal notranslate"><span class="pre">local</span></code> address space. It synchronizes
+all lanes of each participating warp and orders their shared memory accesses.</p>
 <p>The mandatory <code class="docutils literal notranslate"><span class="pre">addrspace</span></code> attribute is a bitmask describing which address spaces will be visible when the <code class="docutils literal notranslate"><span class="pre">barrier</span></code> completes:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">none</span></code>         control-only synchronization (no memory ordering).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">local</span></code>        shared-memory operations are complete and visible CTA-wide.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">local</span></code>        shared-memory operations are complete and visible within the selected scope.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">global_read</span></code>  global memory reads are complete and visible CTA-wide.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">global_write</span></code> global memory writes are complete and visible CTA-wide.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">tensor_read</span></code>  tensor memory read operations are complete and visible CTA-wide.</p></li>
@@ -463,6 +465,7 @@ specified scope in-between these accesses with a <code class="docutils literal n
 <p>Example:</p>
 <div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>ttg.barrier local
 ttg.barrier local|global_read|global_write
+ttg.barrier warp local
 </pre></div>
 </div>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyMemDescLayoutsTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
@@ -471,6 +474,7 @@ ttg.barrier local|global_read|global_write
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>addrSpace</code></td><td>::mlir::triton::gpu::AddrSpaceAttr</td><td></td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::gpu::BarrierScopeAttr</td><td>barrier synchronization scope</td></tr>
 </table>
 </section>
 </section>

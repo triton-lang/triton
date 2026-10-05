@@ -129,9 +129,9 @@ Interfaces: `InferTypeOpInterface`
 
 ### `ttg.barrier` (triton::gpu::BarrierOp)
 
-_Synchronizes execution and reads/writes to the selected address spaces for all threads in the CTA._
+_Synchronizes execution and memory accesses within a CTA or warp._
 
-The `barrier` op synchronises the execution and all operations between the selected address spaces for all
+At the default CTA scope, the `barrier` op synchronises the execution and all operations between the selected address spaces for all
 threads in the CTA. It is used to coordinate communication between threads in the CTA.
 
 This operation waits until all threads in the CTA have reached a `barrier` (for synchronization) and operations
@@ -142,10 +142,13 @@ specified scope in-between these accesses with a `barrier`.
 
 A `barrier` operation only provides synchronization and memory guarantees on the selected address spaces in the CTA.
 
+Warp scope currently supports only the `local` address space. It synchronizes
+all lanes of each participating warp and orders their shared memory accesses.
+
 The mandatory `addrspace` attribute is a bitmask describing which address spaces will be visible when the `barrier` completes:
 
 * `none`         control-only synchronization (no memory ordering).
-* `local`        shared-memory operations are complete and visible CTA-wide.
+* `local`        shared-memory operations are complete and visible within the selected scope.
 * `global_read`  global memory reads are complete and visible CTA-wide.
 * `global_write` global memory writes are complete and visible CTA-wide.
 * `tensor_read`  tensor memory read operations are complete and visible CTA-wide.
@@ -159,6 +162,7 @@ Example:
 ```mlir
 ttg.barrier local
 ttg.barrier local|global_read|global_write
+ttg.barrier warp local
 ```
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
@@ -168,6 +172,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>addrSpace</code></td><td>::mlir::triton::gpu::AddrSpaceAttr</td><td></td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::gpu::BarrierScopeAttr</td><td>barrier synchronization scope</td></tr>
 </table>
 
 
