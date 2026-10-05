@@ -102,9 +102,9 @@ tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<
 
 // CHECK-LABEL: @test_1d_reversed
 tt.func private @test_1d_reversed(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
-  // CHECK: @llvm.nvvm.shfl.sync.bfly.i32
-  // CHECK-COUNT-3: @llvm.nvvm.shfl.sync.up.i32
-  // CHECK: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK-COUNT-3: @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = true}> ({
@@ -424,13 +424,13 @@ tt.func private @test_scan_native_prefix_forward(%a: tensor<32xi8, #native_prefi
   tt.return %a_out, %b_out : tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>
 }
 
-// Reverse coordinates before scanning native prefixes. Only their totals
-// participate in the forward lane scan.
+// Scan native prefixes backward without moving the input values. Only their
+// totals participate in the reverse lane scan.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
-// TRANSPOSE: nvvm.shfl.sync bfly
-// TRANSPOSE-NOT: nvvm.shfl.sync up
+// TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.add
-// TRANSPOSE: nvvm.shfl.sync up
+// TRANSPOSE: nvvm.shfl.sync idx
+// TRANSPOSE-NOT: nvvm.shfl.sync bfly
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
 // AMD-TRANSPOSE: llvm.add
@@ -465,10 +465,9 @@ tt.func private @test_scan_exclusive_carry_forward(%arg: tensor<16xi32, #transpo
   tt.return %result : tensor<16xi32, #transpose>
 }
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
-// TRANSPOSE-COUNT-4: nvvm.shfl.sync bfly
-// TRANSPOSE-COUNT-12: nvvm.shfl.sync up
-// TRANSPOSE-NOT: nvvm.shfl.sync up
-// TRANSPOSE-COUNT-4: nvvm.shfl.sync bfly
+// TRANSPOSE-NOT: nvvm.shfl.sync bfly
+// TRANSPOSE-COUNT-15: nvvm.shfl.sync idx
+// TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
 // AMD-TRANSPOSE: llvm.add
@@ -550,10 +549,11 @@ tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) ->
 
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse(
 // TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
+// TERMINAL-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
 // TERMINAL: nvvm.shfl.sync
 // TERMINAL: %[[LANE_IN_SEGMENT:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
-// TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[MASK]] : i32
+// TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[ZERO]] : i32
 // TERMINAL-NOT: nvvm.shfl.sync idx
 // TERMINAL: %[[LANE_PRED:.*]] = llvm.and %[[PRED]], {{.*}} : i1
 // TERMINAL: %[[STORE_PRED:.*]] = llvm.and %[[LANE_PRED]], {{.*}} : i1

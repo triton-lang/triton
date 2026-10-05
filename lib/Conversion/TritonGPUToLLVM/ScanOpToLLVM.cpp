@@ -68,19 +68,6 @@ private:
                         ConversionPatternRewriter &rewriter) const {
     // Keep native thread prefixes in place and communicate only segment totals.
     permuteRegisters(values, helper.getRegisterOrder());
-    // Reverse the register/lane coordinates, then use the same forward
-    // algorithm. A virtual warp coordinate reverses shared-memory ownership.
-    auto kWarp = StringAttr::get(op.getContext(), "warp");
-    if (op.getReverse()) {
-      unsigned mask =
-          getSegmentMask(helper.getPermutedLayout(), kWarp, op.getAxis(),
-                         op.getInputTypes()[0].getShape()[op.getAxis()]);
-      auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
-      warpId = mask + 1 == helper.getPermutedLayout().getInDimSize(kWarp)
-                   ? Value(b.sub(b.i32_val(mask), warpId))
-                   : Value(b.xor_(warpId, b.i32_val(mask)));
-      flipValues(op.getLoc(), values, helper, rewriter);
-    }
     if (!scanWarpChunks(op, helper, values, laneId, rewriter)) {
       auto order = getNativeRegisterOrder(
           helper, values.size() / helper.getThreadLocalSegmentSize());
@@ -116,20 +103,13 @@ private:
         applyScanCarries(op, helper, values, intraWarpTotals, interWarpCarries,
                          laneId, warpId, rewriter);
     }
-    if (op.getReverse())
-      flipValues(op.getLoc(), values, helper, rewriter);
     permuteRegisters(values, helper.getRegisterOrder().inverse());
   }
 
-  void flipValues(Location loc, ScanValues &values,
-                  const ScanLoweringHelper &helper,
-                  ConversionPatternRewriter &rewriter) const {
-    auto kLane = StringAttr::get(rewriter.getContext(), "lane");
-    unsigned mask = helper.getPermutedLayout().getInDimSize(kLane) - 1;
-    std::reverse(values.begin(), values.end());
-    for (auto &row : values)
-      for (auto &value : row)
-        value = targetInfo.shuffleXor(rewriter, loc, value, mask);
+  // Reverse logical traversal without moving values between their owners.
+  static unsigned getScanIndex(triton::ScanOp op, unsigned index,
+                               unsigned size) {
+    return op.getReverse() ? size - 1 - index : index;
   }
 
   static unsigned getSegmentMask(const LinearLayout &layout, StringAttr dim,
@@ -142,8 +122,9 @@ private:
   }
 
   static Value getTerminalLane(TritonLLVMOpBuilder &b, Value laneId,
-                               unsigned laneMask) {
-    return b.or_(laneId, b.i32_val(laneMask));
+                               unsigned laneMask, bool reverse) {
+    return reverse ? Value(b.and_(laneId, b.i32_val(~laneMask)))
+                   : Value(b.or_(laneId, b.i32_val(laneMask)));
   }
 
   static ScanValues transposeValues(const ScanValues &values) {
@@ -154,11 +135,12 @@ private:
     return result;
   }
 
-  static ScanValues extractSegmentTotals(const ScanValues &values,
+  static ScanValues extractSegmentTotals(triton::ScanOp op,
+                                         const ScanValues &values,
                                          unsigned numRegs) {
     ScanValues totals;
     for (unsigned base = 0; base < values.size(); base += numRegs)
-      totals.push_back(values[base + numRegs - 1]);
+      totals.push_back(values[base + getScanIndex(op, numRegs - 1, numRegs)]);
     return totals;
   }
 
@@ -241,8 +223,9 @@ private:
     auto loc = op.getLoc();
     for (unsigned group = 0; group < values.size() / numRegs; ++group)
       for (unsigned i = 1; i < numRegs; ++i) {
-        unsigned r = (order.empty() ? group : order[group]) * numRegs + i;
-        unsigned prev = r - 1;
+        unsigned base = (order.empty() ? group : order[group]) * numRegs;
+        unsigned r = base + getScanIndex(op, i, numRegs);
+        unsigned prev = base + getScanIndex(op, i - 1, numRegs);
         values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
                                    values[prev], values[r]);
       }
@@ -300,10 +283,13 @@ private:
     SmallVector<Round> rounds;
     for (unsigned offset = 1; offset < numLanes; offset *= 2) {
       Value source;
-      if (!stride) {
+      if (stride && op.getReverse()) {
+        source = b.add(laneId, b.i32_val(offset * stride));
+      } else if (!stride) {
         auto previous = coords;
-        previous[op.getAxis()].second =
-            shiftWithinSegment(b, index, -int(offset), numLanes, axisSize);
+        previous[op.getAxis()].second = shiftWithinSegment(
+            b, index, op.getReverse() ? int(offset) : -int(offset), numLanes,
+            axisSize);
         source =
             applyLinearLayout(loc, rewriter, inverse, previous).front().second;
       }
@@ -318,7 +304,9 @@ private:
                          : targetInfo.shuffleUp(rewriter, loc, value,
                                                 offset * stride);
         if (!pred)
-          pred = b.icmp_uge(laneIndex, b.i32_val(offset));
+          pred = op.getReverse()
+                     ? b.icmp_ult(laneIndex, b.i32_val(numLanes - offset))
+                     : b.icmp_uge(laneIndex, b.i32_val(offset));
         acc = combineWithPrefix(op, incoming, acc, rewriter, pred);
       }
     }
@@ -349,7 +337,7 @@ private:
     unsigned segmentRegs = helper.getThreadLocalSegmentSize();
     auto order = getNativeRegisterOrder(helper, values.size() / segmentRegs);
     scanWithinThreads(op, values, segmentRegs, rewriter, order);
-    auto totals = extractSegmentTotals(values, segmentRegs);
+    auto totals = extractSegmentTotals(op, values, segmentRegs);
     scanLaneTotals(op, totals, dst, chunkSize, laneId, rewriter, order);
 
     auto chunkLayout = helper.getPermutedLayout()
@@ -359,19 +347,25 @@ private:
     unsigned nativeLaneMask = getSegmentMask(chunkLayout, kLane, op.getAxis(),
                                              chunkSize * segmentRegs);
     auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
-    Value terminalLane = getTerminalLane(b, laneId, nativeLaneMask);
+    Value terminalLane =
+        getTerminalLane(b, laneId, nativeLaneMask, op.getReverse());
     ScanValues carries(totals.size() / numChunks);
     preserveLogicalOrder(order, numChunks);
-    for (unsigned reg : order) {
+    for (unsigned index : order) {
+      unsigned reg = index / numChunks * numChunks +
+                     getScanIndex(op, index % numChunks, numChunks);
       auto &prefix = carries[reg / numChunks];
       ScanCarry carry{prefix.empty() ? totals[reg] : prefix,
                       prefix.empty() ? Value(b.false_val())
                                      : Value(b.true_val())};
       applyWarpCarry(op, chunkHelper, values, totals, reg, carry, laneId,
                      rewriter);
-      if (reg % numChunks + 1 < numChunks)
-        prefix = shuffleValues(op.getLoc(), values[(reg + 1) * segmentRegs - 1],
-                               terminalLane, rewriter);
+      if (index % numChunks + 1 < numChunks) {
+        unsigned terminalReg =
+            reg * segmentRegs + getScanIndex(op, segmentRegs - 1, segmentRegs);
+        prefix = shuffleValues(op.getLoc(), values[terminalReg], terminalLane,
+                               rewriter);
+      }
     }
     return true;
   }
@@ -386,7 +380,7 @@ private:
     unsigned segmentRegs = helper.getThreadLocalSegmentSize();
     unsigned numSegments = helper.getWarpLocalSegmentSize() / segmentRegs;
 
-    auto totals = extractSegmentTotals(values, segmentRegs);
+    auto totals = extractSegmentTotals(op, values, segmentRegs);
     convertScanValues(op, totals, intraWarpLayout, scanLayout, rewriter);
 
     auto kReg = StringAttr::get(op.getContext(), "register");
@@ -414,8 +408,8 @@ private:
                        unsigned numChunks, unsigned laneMask, Value laneId,
                        ConversionPatternRewriter &rewriter) const {
     auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
-    auto chunkTotals = extractSegmentTotals(totals, numRegs);
-    Value terminal = getTerminalLane(b, laneId, laneMask);
+    auto chunkTotals = extractSegmentTotals(op, totals, numRegs);
+    Value terminal = getTerminalLane(b, laneId, laneMask, op.getReverse());
     for (auto &total : chunkTotals)
       total = shuffleValues(op.getLoc(), total, terminal, rewriter);
     scanWithinThreads(op, chunkTotals, numChunks, rewriter);
@@ -423,8 +417,8 @@ private:
     // complete total, in traversal order, without requiring an identity.
     for (unsigned base = 0; base < chunkTotals.size(); base += numChunks)
       for (unsigned i = 1; i < numChunks; ++i) {
-        unsigned chunk = base + i;
-        unsigned prev = chunk - 1;
+        unsigned chunk = base + getScanIndex(op, i, numChunks);
+        unsigned prev = base + getScanIndex(op, i - 1, numChunks);
         for (unsigned r = chunk * numRegs; r < (chunk + 1) * numRegs; ++r)
           totals[r] =
               combineWithPrefix(op, chunkTotals[prev], totals[r], rewriter, {});
@@ -460,11 +454,11 @@ private:
 
     // Only terminal lanes store complete segment totals; conversion loads
     // distribute them to the destination layout.
-    auto totals = extractSegmentTotals(values, segmentRegs);
+    auto totals = extractSegmentTotals(op, values, segmentRegs);
     Value storePred;
     if (segmentLaneMask)
       storePred = b.icmp_eq(b.and_(laneId, b.i32_val(segmentLaneMask)),
-                            b.i32_val(segmentLaneMask));
+                            b.i32_val(op.getReverse() ? 0 : segmentLaneMask));
     auto free = sourceLayout.getFreeVariableMasks();
     for (auto [dim, id] : SmallVector<std::pair<StringAttr, Value>>{
              {kLane, laneId}, {StringAttr::get(ctx, "warp"), warpId}})
@@ -503,8 +497,13 @@ private:
                                           {kWarp, 0},
                                           {kBlock, 0}})[op.getAxis()]
                                   .second;
-        carries[r].pred = regSegment ? Value(b.true_val())
-                                     : b.icmp_ne(threadSegment, b.i32_val(0));
+        unsigned firstReg = op.getReverse() ? registerMask : 0;
+        unsigned firstThread =
+            op.getReverse() ? (numSegments - 1) & ~registerMask : 0;
+        carries[r].pred =
+            regSegment != firstReg
+                ? Value(b.true_val())
+                : b.icmp_ne(threadSegment, b.i32_val(firstThread));
       }
     };
     auto nativeOrder = getNativeRegisterOrder(helper, carries.size());
@@ -526,6 +525,9 @@ private:
     // Native register bits may themselves be reordered. Never let emission
     // order violate the logical dependencies of any one scan.
     preserveLogicalOrder(loadOrder, numSegments);
+    for (unsigned &reg : loadOrder)
+      reg = reg / numSegments * numSegments +
+            getScanIndex(op, reg % numSegments, numSegments);
     ScanValues accumulators(loadOrder.size() / numSegments);
     visitScanTotals(
         loc, rewriter, op, interWarpLayout, totalsLayout,
@@ -542,13 +544,16 @@ private:
             return inverseRegs.apply(coords).front().second +
                    (reg / numSegments) * numRegs;
           };
-          auto *carry = segment + 1 < numSegments
-                            ? &carries[ownerOf(segment + 1)].values
-                            : nullptr;
+          unsigned index = getScanIndex(op, segment, numSegments);
+          unsigned next = op.getReverse() ? segment - 1 : segment + 1;
+          auto *carry = index + 1 < numSegments ? &carries[ownerOf(next)].values
+                                                : nullptr;
           Value before;
           if (carry && !carry->empty()) {
-            unsigned threshold = (segment + 1) & ~registerMask;
-            before = b.icmp_uge(threadSegment, b.i32_val(threshold));
+            unsigned threshold = next & ~registerMask;
+            before = op.getReverse()
+                         ? b.icmp_ule(threadSegment, b.i32_val(threshold))
+                         : b.icmp_uge(threadSegment, b.i32_val(threshold));
           }
           acc = applyCombineOp(loc, rewriter, op.getCombineOp(), acc, rawTotal);
           if (carry) {
@@ -559,7 +564,8 @@ private:
                 value = b.select(before, prefix, value);
             }
           }
-          unsigned lastOwner = (numSegments - 1) & ~registerMask;
+          unsigned lastOwner =
+              op.getReverse() ? 0 : (numSegments - 1) & ~registerMask;
           if (consume && (segment & ~registerMask) == lastOwner) {
             unsigned owner = ownerOf(segment);
             consume(owner, carries[owner]);
@@ -576,7 +582,7 @@ private:
                       ConversionPatternRewriter &rewriter) const {
     unsigned count = helper.getThreadLocalSegmentSize();
     unsigned begin = reg * count;
-    unsigned last = begin + count - 1;
+    unsigned last = begin + getScanIndex(op, count - 1, count);
     auto total = combineWithPrefix(op, carry.values,
                                    totals.empty() ? values[last] : totals[reg],
                                    rewriter, carry.pred);
@@ -598,15 +604,19 @@ private:
                           {{kLane, laneId}})
             .front()
             .second;
-    Value hasLocalCarry =
-        b.icmp_ne(b.and_(index, b.i32_val(lanes - 1)), b.i32_val(0));
+    Value hasLocalCarry = b.icmp_ne(b.and_(index, b.i32_val(lanes - 1)),
+                                    b.i32_val(op.getReverse() ? lanes - 1 : 0));
+    Value source;
+    if (op.getReverse())
+      source = b.add(laneId, b.i32_val(stride));
     for (auto [value, warpCarry] : llvm::zip(total, carry.values)) {
-      value = targetInfo.shuffleUp(rewriter, loc, value, stride);
+      value = source ? targetInfo.shuffleIdx(rewriter, loc, value, source)
+                     : targetInfo.shuffleUp(rewriter, loc, value, stride);
       value = b.select(hasLocalCarry, value, warpCarry);
     }
     Value pred = b.or_(hasLocalCarry, carry.pred);
     for (unsigned i = 1; i < count; ++i) {
-      unsigned r = last - i;
+      unsigned r = begin + getScanIndex(op, count - 1 - i, count);
       values[r] = combineWithPrefix(op, total, values[r], rewriter, pred);
     }
   }
@@ -644,7 +654,8 @@ private:
 
     // Terminal prefixes are complete; only the other registers need carries.
     for (unsigned r = 0; r < intraWarpTotals.size(); ++r)
-      values[r * segmentRegs + (segmentRegs - 1)] = intraWarpTotals[r];
+      values[r * segmentRegs + getScanIndex(op, segmentRegs - 1, segmentRegs)] =
+          intraWarpTotals[r];
     if (segmentRegs == 1)
       return;
 
@@ -671,7 +682,7 @@ private:
   static SmallVector<unsigned>
   getCarryRegisters(const LinearLayout &segmentLayout,
                     const LinearLayout &inverseTotalsLayout, unsigned reg,
-                    unsigned axis, unsigned segmentsPerScan) {
+                    unsigned axis, unsigned segmentsPerScan, bool reverse) {
     auto *ctx = segmentLayout.getInDimNames().begin()->getContext();
     auto kReg = StringAttr::get(ctx, "register");
     auto kLane = StringAttr::get(ctx, "lane");
@@ -685,7 +696,7 @@ private:
         auto coords = segmentLayout.apply(
             {{kReg, reg}, {kLane, lane}, {kWarp, warp}, {kBlock, 0}});
         auto &index = coords[axis].second;
-        index = (index & ~mask) | ((index - 1) & mask);
+        index = (index & ~mask) | ((index + (reverse ? 1 : -1)) & mask);
         candidates.insert(inverseTotalsLayout.apply(coords).front().second);
       }
     return llvm::to_vector(candidates);
@@ -746,22 +757,28 @@ private:
       Value segmentInScan = segment;
       if (segmentsPerScan != numSegments)
         segmentInScan = b.and_(segment, b.i32_val(segmentsPerScan - 1));
-      Value pred = b.icmp_ne(segmentInScan, b.i32_val(0));
+      Value pred = b.icmp_ne(
+          segmentInScan, b.i32_val(op.getReverse() ? segmentsPerScan - 1 : 0));
       if (stride) {
         auto carry = totals[r];
+        Value source;
+        if (op.getReverse())
+          source = b.add(laneId, b.i32_val(stride));
         for (auto &value : carry)
-          value = targetInfo.shuffleUp(rewriter, loc, value, stride);
+          value = source ? targetInfo.shuffleIdx(rewriter, loc, value, source)
+                         : targetInfo.shuffleUp(rewriter, loc, value, stride);
         carries.push_back({std::move(carry), pred});
         continue;
       }
       // Wrap within this scan; pred excludes the boundary without an identity.
-      coords[op.getAxis()].second =
-          shiftWithinSegment(b, segment, -1, segmentsPerScan, numSegments);
+      coords[op.getAxis()].second = shiftWithinSegment(
+          b, segment, op.getReverse() ? 1 : -1, segmentsPerScan, numSegments);
       auto src = applyLinearLayout(loc, rewriter, inverse, coords);
       Value srcReg = src[0].second;
       Value srcLane = src[1].second;
-      auto candidates = getCarryRegisters(segmentLayout, inverse, r,
-                                          op.getAxis(), segmentsPerScan);
+      auto candidates =
+          getCarryRegisters(segmentLayout, inverse, r, op.getAxis(),
+                            segmentsPerScan, op.getReverse());
       auto carry =
           shuffleCarry(loc, totals, candidates, srcReg, srcLane, rewriter);
       carries.push_back({std::move(carry), pred});
@@ -774,8 +791,8 @@ private:
                            ConversionPatternRewriter &rewriter,
                            bool skipTerminal = false) const {
     assert(values.size() == carries.size() * segmentRegs);
-    unsigned begin = 0;
-    unsigned end = segmentRegs - skipTerminal;
+    unsigned begin = skipTerminal && op.getReverse();
+    unsigned end = segmentRegs - (skipTerminal && !op.getReverse());
     for (auto [r, carry] : llvm::enumerate(carries))
       for (unsigned j = begin; j < end; ++j) {
         unsigned reg = r * segmentRegs + j;
