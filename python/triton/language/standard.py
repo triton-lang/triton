@@ -551,13 +551,14 @@ def flip(x, dim=None):
     core.static_assert(0 <= _dim and _dim < len(x.shape), "flip: dim must be None or in [-rank, rank)")
     core.static_assert(_is_power_of_two(x.shape[_dim]))
     steps: core.constexpr = _log2(x.shape[_dim])
-
-    # reshape the swap dimension to (2, 2, ..., 2)
-    idtype = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
-    y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + [2] * steps + x.shape[_dim + 1:])
-    for i in core.static_range(steps):
-        y = y ^ xor_sum(y, _dim + i, True)
-    x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
+    # Flipping a dimension of size 1 is a no-op.
+    if steps > 0:
+        # reshape the swap dimension to (2, 2, ..., 2)
+        idtype = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+        y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + [2] * steps + x.shape[_dim + 1:])
+        for i in core.static_range(steps):
+            y = y ^ xor_sum(y, _dim + i, True)
+        x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 
 
