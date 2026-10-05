@@ -81,7 +81,7 @@ except ImportError:
 
 BF16_BLOCK_K = 128
 NUM_WARPS = 8
-HIPBLASLT_TRIG_SEED = 1713573849
+TRIG_SEED = 1713573849
 
 
 @gluon.jit
@@ -1056,7 +1056,7 @@ def mxfp4_gemm_warp_pipeline(a_ptr, b_ptr, c_ptr, a_scale_ptr, b_scale_ptr, M, N
     _tdm_store_full_tile(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc, WMMA_LAYOUT, 1024, 1024, 4)
 
 
-def _make_hipblaslt_mxfp8_trig_matrix(rows, k):
+def _make_mxfp8_trig_matrix(rows, k):
     """Port hipBLASLt's E4M3/E8M0 ``trig_float`` CPU generator.
 
     hipBLASLt uses 32 independently seeded ``std::mt19937`` streams over
@@ -1069,7 +1069,7 @@ def _make_hipblaslt_mxfp8_trig_matrix(rows, k):
         raise ValueError('MXFP8 trig generation requires K divisible by 32')
     block_size = 32
     num_threads = 32
-    seed = HIPBLASLT_TRIG_SEED
+    seed = TRIG_SEED
     blocks = rows * k // block_size
     if blocks % num_threads:
         raise ValueError('MXFP8 trig generation requires scale blocks divisible by 32')
@@ -1216,7 +1216,6 @@ def make_fp8_mxfp4_case(args):
     b_d = b.to_packed_tensor(dim=0).data.T.contiguous().cuda()
     bs_d = pack_scale(b_scale_obj.data).cuda()
     c_d = torch.empty((args.M, args.N), dtype=torch.bfloat16, device='cuda')
-    block_m = block_n = 1024
     packed_n = 512
     cga = make_cga_layout([4, 4], [4, 4], [0, 1])
     output_cga = tuple((tuple(basis) + (0, 0) for basis in cga))
@@ -1315,8 +1314,8 @@ def make_mxfp8_case(args):
         a_scale_obj.data = scale_codes[0].repeat_interleave(4, dim=1)
         b_scale_obj.data = scale_codes[1].repeat_interleave(128, dim=0).repeat_interleave(4, dim=1)
     elif args.input_mode == 'trig':
-        a_bits, a_scale_bits = _make_hipblaslt_mxfp8_trig_matrix(args.M, args.K)
-        b_bits, b_scale_bits = _make_hipblaslt_mxfp8_trig_matrix(args.N, args.K)
+        a_bits, a_scale_bits = _make_mxfp8_trig_matrix(args.M, args.K)
+        b_bits, b_scale_bits = _make_mxfp8_trig_matrix(args.N, args.K)
         a_scale_obj = MXScaleTensor(size=a_scale_bits.shape)
         b_scale_obj = MXScaleTensor(size=b_scale_bits.shape)
         a_scale_obj.data = a_scale_bits
@@ -1431,8 +1430,8 @@ def make_mxfp4_case(args):
         raise ValueError('MXFP4 requires an even number of at least four K tiles')
     torch.manual_seed(args.seed)
     if args.input_mode == 'trig':
-        a_bits, as_bits = _make_hipblaslt_mxfp4_trig_matrix(args.M, args.K)
-        b_bits, bs_bits = _make_hipblaslt_mxfp4_trig_matrix(args.N, args.K)
+        a_bits, as_bits = _make_mxfp4_trig_matrix(args.M, args.K)
+        b_bits, bs_bits = _make_mxfp4_trig_matrix(args.N, args.K)
         a = MXFP4Tensor(size=(args.M, args.K))
         b = MXFP4Tensor(size=(args.K, args.N))
         a.data = a_bits
@@ -1494,7 +1493,7 @@ def make_mxfp4_case(args):
     return (launch, check, (a_d, b_d, c_d, as_d, bs_d))
 
 
-def _make_hipblaslt_mxfp4_trig_matrix(rows, k):
+def _make_mxfp4_trig_matrix(rows, k):
     """Port hipBLASLt's E2M1/E8M0 ``trig_float`` CPU generator.
 
     hipBLASLt uses 32 independently seeded ``std::mt19937`` streams over
@@ -1507,7 +1506,7 @@ def _make_hipblaslt_mxfp4_trig_matrix(rows, k):
         raise ValueError('MXFP4 trig generation requires K divisible by 32')
     block_size = 32
     num_threads = 32
-    seed = HIPBLASLT_TRIG_SEED
+    seed = TRIG_SEED
     blocks = rows * k // block_size
     if blocks % num_threads:
         raise ValueError('MXFP4 trig generation requires scale blocks divisible by 32')
@@ -1642,7 +1641,7 @@ def main():
     for dtype in dtypes:
         args.input_mode = ('random' if dtype == 'fp8_mxfp4' else 'trig') if mode == 'auto' else mode
         if args.input_mode == 'trig' and dtype in ('mxfp8', 'mxfp4'):
-            seed_info = f'seed={HIPBLASLT_TRIG_SEED} (fixed hipBLASLt)'
+            seed_info = f'seed={TRIG_SEED} (fixed trig seed)'
         elif args.input_mode == 'trig' and dtype == 'bf16':
             seed_info = 'seed=none (deterministic trig)'
         elif args.input_mode == 'trig':
