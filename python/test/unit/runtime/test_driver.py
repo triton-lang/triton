@@ -561,3 +561,29 @@ def test_wrap_tensordesc_is_noop_without_tensordesc():
 
     wrapped = wrap_handle_tensordesc_impl(launcher, {0: "i32", 1: ("i64", "constexpr")}, None, lambda *_: [])
     assert wrapped is launcher
+
+
+@pytest.mark.parametrize("name, variant", [
+    ("NVIDIA H200", "h200"),
+    ("NVIDIA H200 NVL", "h200"),
+    ("NVIDIA H100 80GB HBM3", "h100"),
+    ("NVIDIA H100-NVL", "h100"),
+    ("NVIDIA GH200", None),
+    ("NVIDIA H2000", None),
+])
+def test_cuda_target_device_variant(name, variant):
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.nvidia.driver import CudaDriver
+
+    driver = CudaDriver.__new__(CudaDriver)
+    driver.get_current_device = lambda: 3
+    driver.get_device_capability = lambda device: (9, 0)
+    devices = []
+
+    def get_device_properties(device):
+        devices.append(device)
+        return {"name": name}
+
+    driver.utils = SimpleNamespace(get_device_properties=get_device_properties)
+    assert driver.get_current_target() == GPUTarget("cuda", 90, 32, variant)
+    assert devices == [3]

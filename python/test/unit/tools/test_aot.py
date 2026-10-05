@@ -9,7 +9,7 @@ import tempfile
 import numpy as np
 
 import triton
-from triton.backends.compiler import GPUTarget
+from triton.backends.compiler import CUDADeviceVariant, CUDATargetAlias, GPUTarget
 from triton._internal_testing import is_cuda, is_hip
 
 if is_cuda():
@@ -317,7 +317,8 @@ def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, 
         str(num_warps), "-g", grid
     ]
     if target:
-        cmd_args.extend(["-t", "%s:%s:%i" % (target.backend, target.arch, target.warp_size)])
+        target_arg = target if isinstance(target, str) else "%s:%s:%i" % (target.backend, target.arch, target.warp_size)
+        cmd_args.extend(["-t", target_arg])
     cmd_args.append(kernel_path)
     subprocess.run(cmd_args, check=True, cwd=dir)
 
@@ -676,7 +677,9 @@ def test_aot_target_parsing_with_explicit_target():
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-def test_aot_h200_target(tmp_path, monkeypatch):
+@pytest.mark.parametrize("alias", list(CUDATargetAlias))
+@pytest.mark.parametrize("structured", [False, True])
+def test_aot_h200_target(tmp_path, monkeypatch, alias, structured):
     from triton.tools.compile import CompileArgs, compile_kernel
 
     kernel_path = write_triton_kernels(str(tmp_path), kernel_src, kernel_utils_src)
@@ -686,7 +689,7 @@ def test_aot_h200_target(tmp_path, monkeypatch):
     def compile_with_target(src, target, options):
         targets.append(target)
         compiled = compile(src, target=target, options=options)
-        assert compiled.metadata.target == GPUTarget("cuda", 90, 32)
+        assert compiled.metadata.target == GPUTarget("cuda", 90, 32, CUDADeviceVariant.H200)
         assert ".target sm_90" in compiled.asm["ptx"]
         return compiled
 
@@ -695,9 +698,42 @@ def test_aot_h200_target(tmp_path, monkeypatch):
         CompileArgs(
             path=kernel_path,
             kernel_name="kernel",
-            target="cuda-90-h200",
+            target=f"cuda:{alias.value}:32" if structured else alias.value,
             signature="*fp32, *fp16, *fp16, i32, i32, i32, i32, i32, i32, i32, i32, i32, 16, 16, 16",
             grid="M/16, N/16, 1",
             out_path=tmp_path / "matmul",
         ))
-    assert targets == [GPUTarget("cuda", 90, 32)]
+    assert targets == [GPUTarget("cuda", 90, 32, CUDADeviceVariant.H200)]
+    target_arg = f"cuda:{alias.value}:32" if structured else alias.value
+    compile_aot_kernel_no_specialization(str(tmp_path), kernel_path, "fp16", 16, 16, 16, target=target_arg)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.parametrize("alias", list(CUDATargetAlias))
+@pytest.mark.parametrize("entry", ["option", "environment"])
+def test_h200_alias_kernel_launch(alias, entry, monkeypatch, fresh_knobs):
+    import torch
+    import triton.language as tl
+
+    if torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Requires Hopper or newer")
+
+    @triton.jit
+    def kernel(x, y, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        tl.store(y + offsets, tl.load(x + offsets) + 1)
+
+    options = {}
+    if entry == "option":
+        options["arch"] = alias.value
+    else:
+        monkeypatch.setenv("TRITON_OVERRIDE_ARCH", alias.value)
+        assert fresh_knobs.runtime.override_arch == alias.value
+    x = torch.arange(128, device="cuda", dtype=torch.int32)
+    y = torch.empty_like(x)
+    compiled = kernel[(1, )](x, y, 128, **options)
+    assert compiled.metadata.arch == "sm90"
+    assert compiled.metadata.target.device_variant is CUDADeviceVariant.H200
+    assert compiled.metadata.target.arch == torch.cuda.get_device_capability(
+    )[0] * 10 + torch.cuda.get_device_capability()[1]
+    torch.testing.assert_close(y, x + 1, rtol=0, atol=0)

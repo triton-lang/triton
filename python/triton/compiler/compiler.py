@@ -4,7 +4,7 @@ import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
 from ..backends.compiler import Language
-from ..backends.compiler import BaseBackend, GPUTarget
+from ..backends.compiler import BaseBackend, CUDATargetAlias, GPUTarget
 from .. import __version__, knobs
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager, get_cache_key
@@ -230,8 +230,17 @@ def compile(src, target=None, options=None, _env_vars=None):
 
     if target is None:
         target = driver.active.get_current_target()
-    assert isinstance(target, GPUTarget), "target must be of GPUTarget type"
     backend = make_backend(target)
+    target = backend.target
+    arch = (options or {}).get("arch", knobs.runtime.override_arch)
+    alias = CUDATargetAlias.parse(arch)
+    if target.backend == "cuda":
+        variant = (options or {}).get("device_variant") or target.device_variant
+        if alias is not None:
+            target = GPUTarget("cuda", alias, target.warp_size)
+        elif variant != target.device_variant:
+            target = GPUTarget("cuda", target.arch, target.warp_size, variant)
+        backend = make_backend(target)
     ir_source = not isinstance(src, ASTSource)
     # create backend
     if ir_source:
@@ -243,6 +252,9 @@ def compile(src, target=None, options=None, _env_vars=None):
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
     env_vars = get_cache_invalidating_env_vars() if _env_vars is None else _env_vars
+    override = CUDATargetAlias.parse(env_vars.get("TRITON_OVERRIDE_ARCH"))
+    if override is not None:
+        env_vars = {**env_vars, "TRITON_OVERRIDE_ARCH": f"sm{override.compute_capability}"}
     key = get_cache_key(src, backend, options, env_vars=env_vars)
     if knobs.runtime.add_stages_inspection_hook is not None:
         inspect_stages_key, inspect_stages_hash = knobs.runtime.add_stages_inspection_hook()
@@ -363,7 +375,11 @@ def compile(src, target=None, options=None, _env_vars=None):
     return CompiledKernel(src, metadata_group, hash)
 
 
-def make_backend(target: GPUTarget) -> BaseBackend:
+def make_backend(target: GPUTarget | str) -> BaseBackend:
+    alias = CUDATargetAlias.parse(target) if isinstance(target, str) else None
+    if alias is not None:
+        target = GPUTarget("cuda", alias, 32)
+    assert isinstance(target, GPUTarget), "target must be of GPUTarget type"
     actives = [x.compiler for x in backends.values() if x.compiler.supports_target(target)]
     if len(actives) != 1:
         raise RuntimeError(
@@ -412,7 +428,8 @@ class CompiledKernel:
         metadata = json.loads(metadata_path.read_text())
         # JSON serialization dumps the target as a dict. Restore it to a GPUTarget.
         target = metadata['target']
-        metadata['target'] = GPUTarget(target['backend'], target['arch'], target['warp_size'])
+        metadata['target'] = GPUTarget(target['backend'], target['arch'], target['warp_size'],
+                                       target.get('device_variant'))
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
         self.metadata = KernelMetadata(**metadata)
         backend = make_backend(self.metadata.target)

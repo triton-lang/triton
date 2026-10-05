@@ -953,3 +953,37 @@ def test_slice_kernel_public_imports():
     assert callable(translate_paths)
     assert callable(convert_triton_to_gluon)
     assert callable(convert_host_descriptor)
+
+
+@pytest.mark.parametrize("target", ["cuda-90-h200", "sm90-h200"])
+@pytest.mark.parametrize("entry", ["python", "slice_cli", "translate_cli"])
+def test_slice_kernel_h200_alias(tmp_path, target, entry, monkeypatch):
+    _, mod = _make_package(
+        tmp_path, {
+            "kernel_mod.py":
+            """
+            import triton
+            import triton.language as tl
+
+            @triton.jit
+            def kernel(x):
+                offsets = tl.arange(0, 16)
+                pointers = x + offsets[:, None] * 16 + offsets[None, :]
+                values = tl.load(pointers)
+                tl.store(pointers, tl.dot(values, values))
+        """,
+        })
+    kernel_path = f"{mod('kernel_mod')}:kernel"
+    if entry == "python":
+        output = slice_kernel([kernel_path], ["triton", "torch"], translate_to_gluon=True, target=target)
+    else:
+        module_name = "slice_kernel" if entry == "slice_cli" else "translator"
+        module = importlib.import_module(f"triton.tools.triton_to_gluon_translator.{module_name}")
+        output_path = tmp_path / "translated.py"
+        args = [module_name, kernel_path, "--target", target, "--output-path", str(output_path)]
+        if entry == "slice_cli":
+            args.extend(["--leaf-module", "triton", "--leaf-module", "torch", "--translate-to-gluon"])
+        monkeypatch.setattr(sys, "argv", args)
+        module._main_cli()
+        output = output_path.read_text()
+    assert "triton.tools.triton_to_gluon_translator.hopper_helpers" in output

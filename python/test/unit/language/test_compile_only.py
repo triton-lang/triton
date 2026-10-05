@@ -3,7 +3,7 @@ import re
 
 import triton
 import triton.language as tl
-from triton.backends.compiler import GPUTarget
+from triton.backends.compiler import CUDADeviceVariant, CUDATargetAlias, GPUTarget
 from triton.compiler import ASTSource
 from triton.compiler.errors import CompileTimeAssertionFailure
 from triton.runtime.driver import driver
@@ -479,3 +479,88 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
+
+
+@pytest.mark.parametrize("alias", list(CUDATargetAlias))
+@pytest.mark.parametrize("entry", ["target", "string", "enum", "option", "parsed_options", "environment"])
+def test_h200_alias_compile_only(alias, entry, monkeypatch, fresh_knobs, fresh_triton_cache):
+    from triton.backends.nvidia.compiler import CUDAOptions
+
+    class UnavailableDriver:
+
+        def __getattr__(self, name):
+            raise AssertionError(f"Compilation accessed the driver: {name}")
+
+    monkeypatch.setattr(driver, "_active", UnavailableDriver())
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    source = ASTSource(fn=kernel, signature={"out": "*i32"})
+    canonical = GPUTarget("cuda", 90, 32, CUDADeviceVariant.H200)
+    assert triton.compiler.make_backend(alias.value).target == canonical
+    target = GPUTarget("cuda", 90, 32)
+    options = {}
+    if entry == "target":
+        target = GPUTarget("cuda", alias, 32)
+        assert target == canonical
+        assert hash(target) == hash(canonical)
+    elif entry in ("string", "enum"):
+        target = alias.value if entry == "string" else alias
+    elif entry == "option":
+        options["arch"] = alias.value
+    elif entry == "parsed_options":
+        options = CUDAOptions(arch=alias.value).__dict__
+    else:
+        monkeypatch.setenv("TRITON_OVERRIDE_ARCH", alias.value)
+        assert fresh_knobs.runtime.override_arch == alias.value
+
+    compiled = triton.compile(source, target=target, options=options)
+    if entry == "environment":
+        monkeypatch.setenv("TRITON_OVERRIDE_ARCH", "sm90")
+    reference_options = options if entry == "parsed_options" else None
+    reference = triton.compile(source, target=canonical, options=reference_options)
+    assert compiled.module is None
+    assert compiled.metadata.target == canonical
+    assert compiled.metadata.arch == "sm90"
+    assert ".target sm_90" in compiled.asm["ptx"]
+    assert compiled.hash == reference.hash
+    assert reference.metadata.target == canonical
+    h100_options = {**options, "device_variant": CUDADeviceVariant.H100} if entry == "parsed_options" else None
+    h100 = triton.compile(source, target=GPUTarget("cuda", 90, 32, CUDADeviceVariant.H100), options=h100_options)
+    assert h100.metadata.target.device_variant is CUDADeviceVariant.H100
+    assert compiled.hash != h100.hash
+    assert CUDAOptions(arch=alias.value).arch == "sm90"
+    assert CUDAOptions(arch=alias.value).device_variant is CUDADeviceVariant.H200
+
+
+@pytest.mark.parametrize("alias", ["cuda-90-unknown", "sm90-unknown", "cuda-100-h200"])
+def test_h200_alias_unknown_rejected(alias):
+    from triton.backends.nvidia.compiler import CUDABackend
+    from triton.tools.triton_to_gluon_translator.target import TranslatorTarget
+
+    with pytest.raises(ValueError, match="numeric arch"):
+        CUDABackend(GPUTarget("cuda", alias, 32))
+    with pytest.raises(ValueError, match="TRITON_OVERRIDE_ARCH"):
+        CUDABackend(GPUTarget("cuda", 90, 32)).parse_options({"arch": alias})
+    with pytest.raises(ValueError):
+        TranslatorTarget(alias)
+
+
+@pytest.mark.parametrize("alias", list(CUDATargetAlias))
+def test_h200_alias_rejects_conflicting_variant(alias):
+    with pytest.raises(ValueError, match="conflicts"):
+        GPUTarget("cuda", alias, 32, CUDADeviceVariant.H100)
+    with pytest.raises(ValueError, match="require CUDA arch 90"):
+        GPUTarget("cuda", 100, 32, CUDADeviceVariant.H200)
+
+
+def test_h200_alias_unspecified_variant_serialization():
+    from dataclasses import asdict
+
+    target = GPUTarget(**{"backend": "cuda", "arch": 90, "warp_size": 32})
+    assert target.device_variant is None
+    h200 = GPUTarget("cuda", "cuda-90-h200", 32)
+    assert target != h200
+    assert GPUTarget(**asdict(h200)) == h200

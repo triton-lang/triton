@@ -4,6 +4,7 @@ import torch
 import triton
 import triton.language as tl
 import pytest
+from triton.backends.compiler import CUDATargetAlias
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
@@ -65,14 +66,13 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr):
     tl.store(out_ptr + offsets, x + y)
 
 
-@pytest.mark.parametrize("target", [None, "cuda-90-h200"])
+@pytest.mark.parametrize("target", [None, *CUDATargetAlias])
 def test_simple_kernel(tmp_path, target):
-    if target == "cuda-90-h200":
+    if target is not None:
         if not is_cuda() or not is_hopper_or_newer():
             pytest.skip("Requires Hopper or newer")
-        target = TranslatorTarget(target)
-        assert target is TranslatorTarget.SM90
-        assert target.helpers_module.endswith(".hopper_helpers")
+        assert TranslatorTarget(target) is TranslatorTarget.SM90
+        assert TranslatorTarget(target).helpers_module.endswith(".hopper_helpers")
     kernel = convert_kernel(add_kernel, "add_kernel", tmp_path, target=target)
 
     n = 1024

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from enum import Enum
 
+from triton.backends.compiler import CUDATargetAlias
+
 
 class TranslatorTarget(str, Enum):
     """Target architecture for the Triton-to-Gluon translator.
 
     Known targets are listed as explicit members for discoverability.
+    CUDA hardware aliases in CUDATargetAlias resolve to their SM target.
     Unknown ``gfx*`` strings are accepted via ``_missing_()`` so that
     new AMD architectures work without adding an enum member.
     """
@@ -25,8 +28,9 @@ class TranslatorTarget(str, Enum):
 
     @classmethod
     def _missing_(cls, value: object) -> "TranslatorTarget | None":
-        if value == "cuda-90-h200":
-            return cls.SM90
+        alias = CUDATargetAlias.parse(value)
+        if alias is not None:
+            return cls(f"sm{alias.compute_capability}")
         if value not in cls._value2member_map_:
             return None
         if isinstance(value, str):

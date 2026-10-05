@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, Language
+from triton.backends.compiler import BaseBackend, CUDADeviceVariant, CUDATargetAlias, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
@@ -147,10 +147,19 @@ class CUDAOptions:
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
     arch: str = None
+    device_variant: Optional[CUDADeviceVariant] = None
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
 
     def __post_init__(self):
+        variant = CUDADeviceVariant(self.device_variant) if self.device_variant is not None else None
+        alias = CUDATargetAlias.parse(self.arch)
+        if alias is not None:
+            if variant is not None and variant != alias.device_variant:
+                raise ValueError("CUDA architecture alias conflicts with device_variant")
+            object.__setattr__(self, "arch", f"sm{alias.compute_capability}")
+            variant = alias.device_variant
+        object.__setattr__(self, "device_variant", variant)
         if self.max_occupancy is not None and (type(self.max_occupancy) is not int or self.max_occupancy <= 0):
             raise ValueError("max_occupancy must be a positive integer or None")
         default_libdir = Path(__file__).parent / 'lib'
@@ -186,10 +195,13 @@ class CUDABackend(BaseBackend):
         return target.backend == 'cuda'
 
     def _parse_arch(self, arch):
+        alias = CUDATargetAlias.parse(arch)
+        if alias is not None:
+            return alias.compute_capability
         pattern = r"^sm(\d+)$"
         match = re.fullmatch(pattern, arch)
         if not match:
-            raise ValueError(f"TRITON_OVERRIDE_ARCH must have the form {pattern}")
+            raise ValueError(f"TRITON_OVERRIDE_ARCH must have the form {pattern} or be a CUDATargetAlias")
         return int(match.group(1))
 
     def get_target_name(self, options) -> str:
@@ -212,7 +224,7 @@ class CUDABackend(BaseBackend):
                 raise ValueError(f"CUDA backend expects a numeric warp_size, got '{target.warp_size}'")
 
         if arch is not target.arch or warp_size is not target.warp_size:
-            target = GPUTarget(target.backend, arch, warp_size)
+            target = GPUTarget(target.backend, arch, warp_size, target.device_variant)
 
         super().__init__(target)
         self.binary_ext = "cubin"
@@ -223,7 +235,9 @@ class CUDABackend(BaseBackend):
             opts["debug"] = True
             opts["sanitize_overflow"] = False
 
-        args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
+        args = {
+            'arch': knobs.runtime.override_arch or f"sm{self.target.arch}", 'device_variant': self.target.device_variant
+        }
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
         if args.get("instrumentation_mode", ""):
             # Instrumentation can require more registers than the user-specified limit.
@@ -232,6 +246,9 @@ class CUDABackend(BaseBackend):
             # GSan identifies CTAs by SM and requires at most one CTA per SM.
             args["max_occupancy"] = 1
         capability = int(self._parse_arch(args["arch"]))
+        alias = CUDATargetAlias.parse(args["arch"])
+        if alias is not None and opts.get("device_variant") is None:
+            args["device_variant"] = alias.device_variant
 
         if args.get("clc", False) and capability < 100:
             raise ValueError(f"clc=True requires NVIDIA SM100+ (Blackwell); current target is sm_{capability}")
@@ -673,4 +690,7 @@ please share the reproducer above with Triton project.
     @functools.lru_cache()
     def hash(self):
         version = get_ptxas_version(self.target.arch)
-        return f'{version}-{self.target.arch}'
+        key = f'{version}-{self.target.arch}'
+        if self.target.device_variant is not None:
+            key += f'-{self.target.device_variant.value}'
+        return key

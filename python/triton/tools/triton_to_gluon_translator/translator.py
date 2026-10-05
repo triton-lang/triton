@@ -205,7 +205,8 @@ class Translator(ReferenceRewriter):
         return self.generic_visit(node)
 
 
-def translate_kernels(kernels: list[GlobalValue], target: TranslatorTarget) -> str:
+def translate_kernels(kernels: list[GlobalValue], target: TranslatorTarget | str) -> str:
+    target = TranslatorTarget(target)
 
     def filter(value: ModuleType | GlobalValue) -> bool:
         if isinstance(value, ModuleType):
@@ -257,12 +258,12 @@ def translate_kernels(kernels: list[GlobalValue], target: TranslatorTarget) -> s
     return output
 
 
-def translate_paths(kernel_paths: list[str], target: TranslatorTarget) -> str:
+def translate_paths(kernel_paths: list[str], target: TranslatorTarget | str) -> str:
     kernels = [get_base_value(kernel_path) for kernel_path in kernel_paths]
     return translate_kernels(kernels, target=target)
 
 
-def convert_triton_to_gluon(src: list[JITCallable], target: TranslatorTarget) -> str:
+def convert_triton_to_gluon(src: list[JITCallable], target: TranslatorTarget | str) -> str:
 
     def wrap_global(kernel):
         name = getattr(getattr(kernel, "fn", kernel), "__name__", "")
@@ -272,7 +273,7 @@ def convert_triton_to_gluon(src: list[JITCallable], target: TranslatorTarget) ->
     return translate_kernels(kernels, target=target)
 
 
-def main(kernels: list[str], output_path: str, target: TranslatorTarget) -> None:
+def main(kernels: list[str], output_path: str, target: TranslatorTarget | str) -> None:
     output = translate_paths(kernels, target=target)
     with open(output_path, "w") as f:
         f.write(output)
@@ -282,7 +283,8 @@ def _main_cli() -> None:
     parser = argparse.ArgumentParser(description="Translate Triton kernels to Gluon source.")
     parser.add_argument("kernels", nargs="+", help="Kernel symbols in module.path:object format.")
     parser.add_argument("--output-path", required=True, help="Path to write the translated source.")
-    parser.add_argument("--target", required=True, help="Target architecture (e.g. nvidia, gfx1250).")
+    parser.add_argument("--target", required=True,
+                        help="Target architecture (e.g. sm90, gfx1250) or a named CUDA hardware alias.")
     args = parser.parse_args()
     main(args.kernels, args.output_path, target=TranslatorTarget(args.target))
 

@@ -1,8 +1,37 @@
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Union
+from typing import Dict, Union, Optional
 from types import ModuleType
+
+
+class CUDADeviceVariant(str, Enum):
+    H100 = "h100"
+    H200 = "h200"
+
+
+class CUDATargetAlias(str, Enum):
+    """Hardware-specific names that compile for an existing CUDA architecture."""
+
+    CUDA_90_H200 = ("cuda-90-h200", 90, CUDADeviceVariant.H200)
+    SM90_H200 = ("sm90-h200", 90, CUDADeviceVariant.H200)
+
+    compute_capability: int
+    device_variant: CUDADeviceVariant
+
+    def __new__(cls, value: str, compute_capability: int, device_variant: CUDADeviceVariant):
+        alias = str.__new__(cls, value)
+        alias._value_ = value
+        alias.compute_capability = compute_capability
+        alias.device_variant = device_variant
+        return alias
+
+    @classmethod
+    def parse(cls, value: object) -> Optional["CUDATargetAlias"]:
+        try:
+            return cls(value)
+        except ValueError:
+            return None
 
 
 @dataclass(frozen=True)
@@ -12,6 +41,20 @@ class GPUTarget(object):
     # Target architecture, e.g., 90 (for cuda compute capability), gfx940 (for hip)
     arch: Union[int, str]
     warp_size: int
+    device_variant: Optional[CUDADeviceVariant] = None
+
+    def __post_init__(self):
+        if self.backend == "cuda":
+            variant = CUDADeviceVariant(self.device_variant) if self.device_variant is not None else None
+            alias = CUDATargetAlias.parse(self.arch)
+            if alias is not None:
+                if variant is not None and variant != alias.device_variant:
+                    raise ValueError("CUDA target alias conflicts with device_variant")
+                object.__setattr__(self, "arch", alias.compute_capability)
+                variant = alias.device_variant
+            if variant is not None and int(self.arch) != 90:
+                raise ValueError("H100 and H200 device variants require CUDA arch 90")
+            object.__setattr__(self, "device_variant", variant)
 
 
 class Language(Enum):
