@@ -2477,6 +2477,58 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
         print('✅Pass')
 
 
+@pytest.mark.parametrize("SCHEDULE,NUM_WARPS,CGA_LAYOUT,DTYPE_A,DTYPE_B,ASYNC_COPY_SCALE,PINGPONG,OPTIONS", [
+    pytest.param('baseline', 4, ((0, 1), ), 'float8_e4m3', 'float8_e5m2', False, False, {}, id='baseline-n'),
+    pytest.param('sliceK', 4,
+                 ((1, 0),
+                  (0, 1)), 'float4', 'float8_e4m3', False, False, {'l2_prefetch_distance': 1}, id='sliceK-mn-prefetch'),
+    pytest.param('sliceNK', 4, ((1, 0), ), 'float4', 'float8_e4m3', True, False, {'l2_prefetch_distance': 2},
+                 id='sliceNK-m-async-scales-prefetch'),
+    pytest.param('baseline', 8, ((1, 0), (0, 1)), 'float4', 'float8_e4m3', False, True, {'l2_prefetch_distance': 2},
+                 id='baseline-mn-pingpong-prefetch'),
+    pytest.param(
+        'baseline', 4, ((1, 0), (0, 1)), 'float8_e5m2', 'float4', False, False, {
+            'shape':
+            (192, 160, 640), 'transpose_b': False, 'scale_preshuffle': False, 'with_a_scale': False, 'partial_tdm': True
+        }, id='baseline-mn-unshuffled-masked'),
+    pytest.param('sliceK', 4, ((1, 0), (0, 1)), 'float4', 'float4', False, False,
+                 {'shape': (128, 128, 768), 'partial_tdm': True}, id='sliceK-mn-fp4-masked'),
+    pytest.param('sliceNK', 4, ((1, 0), ), 'float8_e4m3', 'float4', True, False, {'with_a_scale': False},
+                 id='sliceNK-m-async-scales-no-a-scale'),
+    pytest.param('baseline', 4, ((0, 1), ), 'float4', 'float8_e4m3', False, False,
+                 {'shape': (384, 192, 640), 'block_n': 128, 'activation': 'swiglu'}, id='baseline-n-swiglu-masked'),
+    pytest.param('baseline', 4,
+                 ((0, 1), (0, 2)), 'float4', 'float8_e4m3', False, False, {'block_n': 512}, id='baseline-n-four-ctas'),
+    pytest.param('sliceK', 8, ((1, 0), ), 'float4', 'float8_e4m3', False, True, {'partial_tdm': True},
+                 id='sliceK-m-pingpong-partial-tdm'),
+    pytest.param('baseline', 4, ((1, 0), ), 'float8_e4m3', 'float8_e5m2', False, False,
+                 {'scale_preshuffle': False, 'partial_tdm': True, 'l2_prefetch_distance': 1},
+                 id='baseline-m-unshuffled-a-b-scales-prefetch'),
+])
+def test_runtime_mxgemm_tdm_multi_cta(SCHEDULE, NUM_WARPS, CGA_LAYOUT, DTYPE_A, DTYPE_B, ASYNC_COPY_SCALE, PINGPONG,
+                                      OPTIONS):
+    M, N, K = OPTIONS.get('shape', (512, 512, 768))
+    BLOCK_M, BLOCK_N = 256, OPTIONS.get('block_n', 256)
+    BLOCK_K = 128 if SCHEDULE == 'baseline' else 256
+    NUM_BUFFERS = 3 if PINGPONG else 2
+    TRANSPOSE_B = OPTIONS.get('transpose_b', True)
+    SCALE_PRESHUFFLE = OPTIONS.get('scale_preshuffle', True)
+    WITH_A_SCALE = OPTIONS.get('with_a_scale', True)
+    PARTIAL_TDM = OPTIONS.get('partial_tdm', False)
+    L2_PREFETCH_DISTANCE = OPTIONS.get('l2_prefetch_distance', 0)
+    if NUM_WARPS == 8:
+        test_runtime_mxgemm_tdm_8warps_pipeline(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B,
+                                                NUM_BUFFERS, SCALE_PRESHUFFLE, WITH_A_SCALE, SCHEDULE, ASYNC_COPY_SCALE,
+                                                8, PINGPONG, L2_PREFETCH_DISTANCE, PARTIAL_TDM=PARTIAL_TDM,
+                                                CGA_LAYOUT=CGA_LAYOUT)
+    else:
+        test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B,
+                                          NUM_BUFFERS, SCALE_PRESHUFFLE, WITH_A_SCALE,
+                                          SCHEDULE, ASYNC_COPY_SCALE, 8, L2_PREFETCH_DISTANCE,
+                                          OPTIONS.get('activation',
+                                                      ''), PARTIAL_TDM, False, False, CGA_LAYOUT=CGA_LAYOUT)
+
+
 if __name__ == '__main__':
     import argparse
 
