@@ -14,13 +14,4 @@ struct BreakStructPhiNodesPass
   static StringRef name() { return "BreakStructPhiNodesPass"; }
 };
 
-// Split FP32 arithmetic pairs with only one demanded lane on NVPTX. Run after
-// vectorization, followed by InstSimplify to clean up extracts and repacking.
-struct ScalarizePackedFOpsPass
-    : OptionalPassInfoMixin<ScalarizePackedFOpsPass> {
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-
-  static StringRef name() { return "ScalarizePackedFOpsPass"; }
-};
-
 } // namespace llvm

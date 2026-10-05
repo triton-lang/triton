@@ -6,6 +6,7 @@ from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, Sl
 from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
 from triton._C.libtriton import ir
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
+from triton.runtime.jit import BoundConstexprFunction, ConstexprFunction
 
 TensorTy = TypeVar("TensorTy")
 
@@ -104,6 +105,59 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def __init__(self, builder: GluonOpBuilder):
         self.builder = builder
+
+    def to_inline_asm_operand(self, arg):
+        from .nvidia.blackwell import tensor_memory_descriptor
+
+        arg = ttgl._unwrap_if_constexpr(arg)
+        if isinstance(arg, (ttgl.shared_memory_descriptor, tensor_memory_descriptor)):
+            return arg
+        return self.to_tensor(arg)
+
+    def inline_asm(self, asm, constraints, args, result_types, is_pure):
+        asm = ttgl._unwrap_if_constexpr(asm)
+        constraints = ttgl._unwrap_if_constexpr(constraints)
+        result_types = ttgl._unwrap_if_constexpr(result_types)
+        is_pure = ttgl._unwrap_if_constexpr(is_pure)
+        multiple_outputs = not isinstance(result_types, ttgl.base_type)
+        if not multiple_outputs:
+            result_types = (result_types, )
+        result_types = tuple(ttgl._unwrap_if_constexpr(ty) for ty in result_types)
+        args = tuple(self.to_inline_asm_operand(arg) for arg in args)
+
+        def tensor_count(ty):
+            if isinstance(ty, ttgl.distributed_type):
+                _check(not isinstance(ty.layout, (AutoLayout, CoalescedLayout)),
+                       lambda: "inline_asm requires explicit distributed tensor layouts")
+            else:
+                _check(isinstance(ty, ttgl.dtype), lambda: "inline_asm requires scalar or distributed result types")
+            return self.builder.get_total_elems_per_thread(ty.to_ir(self.builder))
+
+        output_counts = [tensor_count(ty) for ty in result_types]
+        input_counts = [tensor_count(arg.type) if isinstance(arg, ttgl.tensor) else 1 for arg in args]
+        counts = output_counts + input_counts
+        if isinstance(asm, (ConstexprFunction, BoundConstexprFunction)):
+            groups = []
+            cursor = 0
+            for count in counts:
+                groups.append(tuple(f"${i}" for i in range(cursor, cursor + count)))
+                cursor += count
+            asm = asm(tuple(groups[:len(output_counts)]), tuple(groups[len(output_counts):]))
+        _check(isinstance(asm, str), lambda: "inline_asm expects a string or constexpr function returning a string",
+               TypeError)
+        if not isinstance(constraints, str):
+            _check(
+                len(constraints) == len(counts),
+                lambda: "inline_asm requires one constraint per output and input group")
+            constraints = ",".join(
+                ttgl._unwrap_if_constexpr(constraint)
+                for constraint, count in zip(constraints, counts)
+                for _ in range(count))
+
+        call = self.builder.create_threadwise_inline_asm(asm, constraints, [arg.handle for arg in args],
+                                                         [ty.to_ir(self.builder) for ty in result_types], is_pure)
+        results = tuple(self.tensor(call.get_result(i), ty) for i, ty in enumerate(result_types))
+        return results if multiple_outputs else results[0]
 
     def _wrap_handle_infer_layout(self, handle, scalar_ty, shape):
         if shape == []:

@@ -314,7 +314,8 @@ Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
 }
 
 static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
-                                 RankedTensorType tensorType) {
+                                 RankedTensorType tensorType,
+                                 ArrayRef<int64_t> explicitStrides = {}) {
   auto encoding = cast<DistributedEncodingTrait>(tensorType.getEncoding());
   Value ptrTensor = SplatOp::create(
       b, loc,
@@ -322,10 +323,16 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
       base);
   auto offsetsType =
       RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
-  SmallVector<int> strides(tensorType.getRank());
-  strides[0] = 1;
-  for (int i = 1; i < tensorType.getRank(); ++i) {
-    strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
+  assert(
+      (explicitStrides.empty() ||
+       explicitStrides.size() == static_cast<size_t>(tensorType.getRank())) &&
+      "expected one stride per scratch tensor dimension");
+  SmallVector<int64_t> strides(explicitStrides.begin(), explicitStrides.end());
+  if (strides.empty()) {
+    strides.resize(tensorType.getRank());
+    strides[0] = 1;
+    for (int i = 1; i < tensorType.getRank(); ++i)
+      strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
   }
   for (int i = 0; i < tensorType.getRank(); ++i) {
     auto arangeType = getSlicedTensorType(tensorType, {i}, b.getI32Type());
@@ -360,7 +367,8 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
 
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType,
-                                    bool currentCTAOnly, Value storeMask) {
+                                    bool currentCTAOnly, Value storeMask,
+                                    ArrayRef<int64_t> strides) {
   if (currentCTAOnly) {
     assert(tensorType.getRank() >= 1 &&
            "expected currentCTAOnly tensor to have a leading CTA dimension");
@@ -372,23 +380,20 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
       if (storeMask) {
         storeMask = arith::AndIOp::create(b, loc, storeMask, currentCTAMask);
       } else {
-        Value oldTensor = createLoadScratchMemory(b, loc, alloc, tensorType);
-        tensor =
-            arith::SelectOp::create(b, loc, currentCTAMask, tensor, oldTensor);
+        storeMask = currentCTAMask;
       }
     }
   }
-  auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
+  auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType, strides);
   return StoreOp::create(b, loc, ptrTensor, tensor, storeMask,
-                         CacheModifier::NONE, EvictionPolicy::NORMAL,
                          /*ignore_cta=*/true);
 }
 
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                              RankedTensorType tensorType) {
-  auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  Value value = LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
-                               EvictionPolicy::NORMAL, false);
+                              RankedTensorType tensorType,
+                              ArrayRef<int64_t> strides) {
+  auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType, strides);
+  Value value = LoadOp::create(b, loc, ptrTensor);
   // Finish replicated reads before another thread can update the scratch.
   auto freeVarMasks = toLinearLayout(tensorType).getFreeVariableMasks();
   if (freeVarMasks.lookup(b.getStringAttr("lane")) ||
@@ -418,7 +423,7 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
     if (auto wsOp = dyn_cast<WarpSpecializePartitionsOp>(op))
       layout.numBaseThreads = std::max<int>(
           layout.numBaseThreads, wsOp.getPartitionRegions().size() + 1);
-    hasTMA |= hooks.isTMAOp(op);
+    hasTMA |= hooks.isTMAOp(op) || isa<AsyncCopyMbarrierArriveOp>(op);
     hasTC |= isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op);
     hasCLC |= hooks.isCLCOp(op);
   });
@@ -493,6 +498,9 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(entryPoint, hooks);
+  entryPoint.walk(
+      [&](AsyncCopyMbarrierArriveOp) { hasAsyncCopyMbarriers = true; });
+  int frontierBitWidth = threadLayout.totalNumThreads <= 32 ? 32 : 64;
   hasAsyncProxyFenceTracking =
       hooks.needsAsyncProxyFenceTracking(module) &&
       bufferStatePlans[(int)MemType::SHARED_MEM].numLanes != 0;
@@ -527,8 +535,8 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     int numBufs = llvm::NextPowerOf2(bufferStatePlans[iMemType].numLanes - 1);
 
     writeVisibility[iMemType].insert(
-        entryRegion,
-        createZeroInitStateTensor(b, {numCTAs, numBufs, numCTAs}, 64, fb));
+        entryRegion, createZeroInitStateTensor(b, {numCTAs, numBufs, numCTAs},
+                                               frontierBitWidth, fb));
     passValueToWarpSpecialize(writeVisibility[iMemType].at(entryRegion),
                               writeVisibility[iMemType]);
     readVisibility[iMemType].insert(
@@ -536,7 +544,7 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
         createZeroInitStateTensor(
             b,
             {numCTAs, numBufs, numCTAs, threadLayout.numThreadSlots, numCTAs},
-            64, fb));
+            frontierBitWidth, fb));
     passValueToWarpSpecialize(readVisibility[iMemType].at(entryRegion),
                               readVisibility[iMemType]);
 
@@ -595,8 +603,8 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
         readTracking[iMemType].insert(
             entryRegion,
             createZeroInitStateTensor(
-                b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs, 2}, 64,
-                fb));
+                b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs, 2},
+                frontierBitWidth, fb));
         passValueToWarpSpecialize(readTracking[iMemType].at(entryRegion),
                                   readTracking[iMemType]);
       }

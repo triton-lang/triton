@@ -474,6 +474,51 @@ tt.func @rem() {
   %15 = arith.remsi %12, %4 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %16 = arith.remsi %4, %12 : tensor<128xi32>
+  %short_range = tt.make_range {end = 36 : i32, start = 32 : i32} : tensor<4xi32>
+  %large_divisor = arith.constant dense<64> : tensor<4xi32>
+  // Preserving the input group preserves divisibility larger than contiguity.
+  // expected-remark @below {{contiguity = [4], divisibility = [32]}}
+  %preserved_group = arith.remui %short_range, %large_divisor : tensor<4xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @rem_partial_groups(%divisor: tensor<32xi32> {tt.divisibility = 2 : i32, tt.constancy = 16 : i32}) {
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  // Inferred unit contiguity exposes odd elements within the input group.
+  // expected-remark @below {{contiguity = [1], divisibility = [1]}}
+  %partial_rhs_signed = arith.remsi %range, %divisor : tensor<32xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1]}}
+  %partial_rhs_unsigned = arith.remui %range, %divisor : tensor<32xi32>
+
+  %eight = arith.constant dense<8> : tensor<32xi32>
+  %two = arith.constant dense<2> : tensor<32xi32>
+  %partial_range = arith.remui %range, %eight : tensor<32xi32>
+  // The same issue occurs with a partially contiguous dividend.
+  // expected-remark @below {{contiguity = [1], divisibility = [1]}}
+  %partial_lhs_signed = arith.remsi %partial_range, %two : tensor<32xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1]}}
+  %partial_lhs_unsigned = arith.remui %partial_range, %two : tensor<32xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @rem_unit_contiguity(
+    %lhs: tensor<8xi32> {tt.divisibility = 4 : i32},
+    %rhs: tensor<8xi32> {tt.divisibility = 2 : i32},
+    %scalar_lhs: i32 {tt.divisibility = 8 : i32},
+    %scalar_rhs: i32 {tt.divisibility = 4 : i32}) {
+  // Divisibility holds for every element, even when the divisor varies.
+  // expected-remark @below {{contiguity = [1], divisibility = [2]}}
+  %tensor_signed = arith.remsi %lhs, %rhs : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [2]}}
+  %tensor_unsigned = arith.remui %lhs, %rhs : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [4]}}
+  %scalar_signed = arith.remsi %scalar_lhs, %scalar_rhs : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [4]}}
+  %scalar_unsigned = arith.remui %scalar_lhs, %scalar_rhs : i32
   tt.return
 }
 
@@ -1027,7 +1072,7 @@ tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32
 
 // -----
 
-tt.func @load_constancy(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 1 : i32}) {
+tt.func @load_constancy(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 1 : i32}) {
   // expected-remark @below {{divisibility = [16]}}
   %sixteen = arith.constant dense<16> : tensor<1024xi32>
   // expected-remark @below {{divisibility = [8]}}
@@ -1037,7 +1082,7 @@ tt.func @load_constancy(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1:
   // expected-remark @below {{constancy = [16]}}
   %2 = arith.divsi %1, %sixteen : tensor<1024xi32>
   // expected-remark @below {{constancy = [1024]}}
-  %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+  %3 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<1024x!tt.ptr<i32>>
   // expected-remark @below {{constancy = [1024]}}
   %4 = tt.splat %arg1 : i32 -> tensor<1024xi32>
   // expected-remark @below {{constancy = [8]}}
@@ -1045,11 +1090,15 @@ tt.func @load_constancy(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1:
   // expected-remark @below {{constancy = [8]}}
   %6 = arith.cmpi slt, %5, %4 : tensor<1024xi32>
   // expected-remark @below {{constancy = [16]}}
-  %7 = tt.addptr %3, %2 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+  %7 = tt.addptr %3, %2 : tensor<1024x!tt.ptr<i32>>, tensor<1024xi32>
   // expected-remark @below {{constancy = [16]}}
-  %8 = tt.load %7 : tensor<1024x!tt.ptr<f32>>
+  %8 = tt.load %7 : tensor<1024x!tt.ptr<i32>>
   // expected-remark @below {{constancy = [8]}}
-  %9 = tt.load %7, %6 : tensor<1024x!tt.ptr<f32>>
+  %9 = tt.load %7, %6 : tensor<1024x!tt.ptr<i32>>
+  // expected-remark @below {{constancy = [1]}}
+  %10 = tt.load %7, %6, %1 : tensor<1024x!tt.ptr<i32>>
+  // expected-remark @below {{constancy = [8]}}
+  %11 = tt.load %7, %6, %5 : tensor<1024x!tt.ptr<i32>>
   tt.return
 }
 
@@ -1421,6 +1470,72 @@ tt.func @select_cond_constancy_clamps_divisibility(%arg0: tensor<8xi1>) {
   // collapse to gcd(8, 8, 1) = 1; divisibility must clamp to 1 (not gcd(8, 16) = 8).
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %sel = arith.select %arg0, %lhs, %rhs : tensor<8xi1>, tensor<8xi32>
+  tt.return
+}
+
+// -----
+
+// Equal pointer groups retain their alignment; splitting a group accounts for
+// the byte offset of each new group base.
+tt.func @select_pointer_groups(
+    %lhs: tensor<8x!tt.ptr<f32>> {tt.contiguity = 8 : i32, tt.divisibility = 64 : i32},
+    %rhs: tensor<8x!tt.ptr<f32>> {tt.contiguity = 8 : i32, tt.divisibility = 64 : i32},
+    %whole: tensor<8xi1> {tt.constancy = 8 : i32},
+    %half: tensor<8xi1> {tt.constancy = 4 : i32},
+    %each: tensor<8xi1>) {
+  // expected-remark @below {{contiguity = [8], divisibility = [64], constancy = [1]}}
+  %same_groups = arith.select %whole, %lhs, %rhs : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  // expected-remark @below {{contiguity = [4], divisibility = [16], constancy = [1]}}
+  %split_groups = arith.select %half, %lhs, %rhs : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [1]}}
+  %split_elements = arith.select %each, %lhs, %rhs : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  tt.return
+}
+
+// -----
+
+tt.func @select_pointer_mixed_groups(
+    %lhs: tensor<8x!tt.ptr<f32>> {tt.contiguity = 8 : i32, tt.divisibility = 64 : i32},
+    %rhs: tensor<8x!tt.ptr<f32>> {tt.contiguity = 4 : i32, tt.divisibility = 64 : i32},
+    %cond: tensor<8xi1> {tt.constancy = 8 : i32}) {
+  // The second output group starts sixteen bytes into the first lhs group.
+  // expected-remark @below {{contiguity = [4], divisibility = [16], constancy = [1]}}
+  %mixed = arith.select %cond, %lhs, %rhs : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  %poison = ub.poison : tensor<8x!tt.ptr<f32>>
+  // An unresolved arm does not introduce a known interior group base.
+  // expected-remark @below {{contiguity = [8], divisibility = [64], constancy = [1]}}
+  %defined = arith.select %cond, %lhs, %poison : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  tt.return
+}
+
+// -----
+
+tt.func @select_aligned_splats(
+    %lhs: !tt.ptr<f32> {tt.divisibility = 64 : i32},
+    %rhs: !tt.ptr<f32> {tt.divisibility = 32 : i32}, %cond: tensor<8xi1>) {
+  %a = tt.splat %lhs : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+  %b = tt.splat %rhs : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+  // Every element is already an aligned group base.
+  // expected-remark @below {{contiguity = [1], divisibility = [32], constancy = [1]}}
+  %pointers = arith.select %cond, %a, %b : tensor<8xi1>, tensor<8x!tt.ptr<f32>>
+  %c64 = arith.constant dense<64> : tensor<8xi32>
+  %c32 = arith.constant dense<32> : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [32], constancy = [1]}}
+  %integers = arith.select %cond, %c64, %c32 : tensor<8xi1>, tensor<8xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @select_integer_groups(%whole: tensor<8xi1> {tt.constancy = 8 : i32},
+                               %half: tensor<8xi1> {tt.constancy = 4 : i32}) {
+  %lhs = tt.make_range {end = 72 : i32, start = 64 : i32} : tensor<8xi32>
+  %rhs = tt.make_range {end = 136 : i32, start = 128 : i32} : tensor<8xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [64], constancy = [1]}}
+  %same_groups = arith.select %whole, %lhs, %rhs : tensor<8xi1>, tensor<8xi32>
+  // Integer groups advance by one, independent of the integer bit width.
+  // expected-remark @below {{contiguity = [4], divisibility = [4], constancy = [1]}}
+  %split_groups = arith.select %half, %lhs, %rhs : tensor<8xi1>, tensor<8xi32>
   tt.return
 }
 

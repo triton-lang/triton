@@ -50,6 +50,10 @@ def MBarrierOpInterface : OpInterface<"MBarrierOpInterface"> {
     backend-agnostic barrier identification without direct dialect dependencies.
   }];
 
+  let verify = [{
+    return ::mlir::triton::gpu::verifyMBarrierOpInterface($_op);
+  }];
+
   let cppNamespace = "::mlir::triton::gpu";
 
   let methods = [
@@ -73,6 +77,16 @@ def MBarrierOpInterface : OpInterface<"MBarrierOpInterface"> {
         if (::mlir::Value barrier = $_op.getBarrier())
           return {barrier};
         return {};
+      }]
+    >,
+    InterfaceMethod<
+      /*desc=*/"Whether each warp publishes its prior effects through its own arrival.",
+      /*retType=*/"bool",
+      /*methodName=*/"isPerWarp",
+      /*args=*/(ins),
+      /*methodBody=*/[{}],
+      /*defaultImplementation=*/[{
+        return false;
       }]
     >
   ];

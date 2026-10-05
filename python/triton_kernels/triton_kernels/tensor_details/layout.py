@@ -8,6 +8,7 @@ from .layout_details.hopper_value import HopperMXValueLayout
 from .layout_details.cdna4_scale import CDNA4MXScaleLayout
 from .layout_details.gfx1250_scale import GFX1250MXScaleLayout
 from .layout_details.strided import StridedLayout
+from .layout_details.tiled import TiledLayout
 from ..target_info import cuda_capability_geq, is_hip_cdna4, is_hip_gfx1250
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "CDNA4MXScaleLayout",
     "GFX1250MXScaleLayout",
     "StridedLayout",
+    "TiledLayout",
     "BlackwellActMXScaleLayout",
 ]
 

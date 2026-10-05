@@ -1,11 +1,20 @@
 // RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx950" --canonicalize --cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx942" --canonicalize --cse | FileCheck %s --check-prefix=SW
 
 #packed = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #unpacked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #scale = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: llvm.func @cvt_scalef32_bf16_fp4_compact_e8m0
+  // SW-LABEL: llvm.func @cvt_scalef32_bf16_fp4_compact_e8m0
   tt.func public @cvt_scalef32_bf16_fp4_compact_e8m0(%output: tensor<8x512x!tt.ptr<bf16>, #unpacked>, %x: tensor<8x256xi8, #packed>, %scale: tensor<8x16xi8, #scale>) {
+    // Software multiplication needs numeric scales, including byte 0 and NaN.
+    // SW-DAG: %[[ZERO:.+]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
+    // SW-DAG: %[[MIN:.+]] = llvm.mlir.constant(4194304 : i32) : i32
+    // SW: %[[BITS:.+]] = llvm.intr.umax(%{{.+}}, %[[MIN]]) : (i32, i32) -> i32
+    // SW: %[[VALUE:.+]] = llvm.bitcast %[[BITS]] : i32 to f32
+    // SW: %[[SCALE:.+]] = llvm.intr.fma(%[[VALUE]], %[[ZERO]], %[[VALUE]]) : (f32, f32, f32) -> f32
+    // SW: llvm.fmul %{{.+}}, %[[SCALE]] : f32
     // A raw E8M0 payload is shifted into the f32 exponent by 23.
     // CHECK-DAG: %[[C23:.+]] = llvm.mlir.constant(23 : i32) : i32
     // The 8 pk groups a thread holds span 2 scale blocks: groups 0-3 (16
@@ -34,7 +43,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #scale = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: llvm.func @cvt_scalef32_bf16_fp4_compact_bf16
+  // SW-LABEL: llvm.func @cvt_scalef32_bf16_fp4_compact_bf16
   tt.func public @cvt_scalef32_bf16_fp4_compact_bf16(%output: tensor<8x512x!tt.ptr<bf16>, #unpacked>, %x: tensor<8x256xi8, #packed>, %scale: tensor<8x16xbf16, #scale>) {
+    // Pre-shifted scales still require NaN restoration for software arithmetic.
+    // SW: %[[ZERO:.+]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
+    // SW: %[[VALUE:.+]] = llvm.bitcast %{{.+}} : i32 to f32
+    // SW: %[[SCALE:.+]] = llvm.intr.fma(%[[VALUE]], %[[ZERO]], %[[VALUE]]) : (f32, f32, f32) -> f32
+    // SW: llvm.fmul %{{.+}}, %[[SCALE]] : f32
     // A bf16 scale is pre-shifted by 7, so it only needs 16 more bits.
     // CHECK-DAG: %[[C16:.+]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: %[[R0:.+]] = llvm.extractvalue %{{.+}}[0] : !llvm.struct<(bf16, bf16)>

@@ -1,5 +1,22 @@
 // RUN: triton-opt %s -split-input-file -canonicalize -allow-unregistered-dialect | FileCheck %s
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+// A false copy mask still fills shared memory with the other value.
+// CHECK-LABEL: @false_async_copy_keeps_fill
+// CHECK: %[[TOKEN:.*]] = ttg.async_copy_global_to_local
+// CHECK-NEXT: tt.return %[[TOKEN]] : !ttg.async.token
+tt.func @false_async_copy_keeps_fill(%ptr: tensor<128x!tt.ptr<f32>, #blocked>, %mem: !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>) -> !ttg.async.token {
+  %false = arith.constant dense<false> : tensor<128xi1, #blocked>
+  %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+  %token = ttg.async_copy_global_to_local %ptr, %mem mask %false other %zero : tensor<128x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  tt.return %token : !ttg.async.token
+}
+}
+
+// -----
+
 
 // CHECK-LABEL: @test_canonicalize_convert_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<64x64xf32
@@ -377,4 +394,22 @@ tt.func @fold_subslice_chain() {
   // CHECK: ttg.local_store %{{.*}}, %[[SUBSLICE]]
   ttg.local_store %dummy_value, %subslice2 : tensor<8x16xf8E5M2> -> !ttg.memdesc<8x16xf8E5M2, #shared, #smem, mutable, 32x64>
   tt.return
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 0, parent = #parent}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // The broadcast source is not a slice, so expand_dims cannot move before it.
+  // CHECK-LABEL: @expand_dims_after_broadcast_layout_change
+  // CHECK: %[[B:.*]] = tt.broadcast
+  // CHECK: %[[E:.*]] = tt.expand_dims %[[B]]
+  // CHECK: tt.return %[[E]]
+  tt.func @expand_dims_after_broadcast_layout_change(%arg: tensor<1xi32, #src>) -> tensor<1x32xi32, #parent> {
+    %0 = tt.broadcast %arg : tensor<1xi32, #src> -> tensor<32xi32, #slice>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #slice> -> tensor<1x32xi32, #parent>
+    tt.return %1 : tensor<1x32xi32, #parent>
+  }
 }

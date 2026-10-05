@@ -2,7 +2,6 @@
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
 
 #include "TargetInfo.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -13,6 +12,10 @@
 #include <cstdint>
 
 namespace mlir::LLVM::AMD {
+
+// Decode the target-independent compatibility payload accepted by Triton
+// memory operations. Target-specific cache policy attributes are rejected.
+FailureOr<triton::CacheModifier> getCacheModifier(Attribute cachePolicy);
 
 // Here is a partial definition of DppCtrl enums. For the complete definition,
 // please check:
@@ -111,14 +114,27 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
                                       const LinearLayout &srcToSharedLayout,
                                       unsigned threadsPerWarp);
 
+// The vector sizes the pointers/offsets and the mask each allow. Zero means
+// unknown, in which case no attribution is made.
+struct DirectToLdsVecInfo {
+  unsigned fromPtr = 0;
+  unsigned fromMask = 0;
+
+  bool maskIsLimiting() const { return fromPtr != 0 && fromMask < fromPtr; }
+};
+
 // Returns true if we can load directly from global |srcTy| to shared memory
 // |dstEnc| for the given target.
 // This function expects the caller to pass in |vectorSize| as the vector size
 // reading from global memory, after factoring in axis information and alignment
 // hints. It will be updated to factor in shared memory |dstEnc| constraints.
+// On failure |*failureReason|, if non-null, is set to an explanation of the
+// check that failed and how to satisfy it.
 bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
-                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize);
+                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize,
+                        DirectToLdsVecInfo vecInfo = {},
+                        std::string *failureReason = nullptr);
 
 // Check if the result of this tl.dot is used as opA or opB of another tl.dot.
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
@@ -133,12 +149,9 @@ Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
 
 // Software implementation of converting an 8-element vector of MXFP4 elements
 // to a wider type: BF16 or FP16 for target before CDNA4.
-// for CDNA3, we have optimized sequence that can combine scale during the
-// conversion
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
-                                    mlir::triton::amdgpu::ISAFamily isaFamily,
-                                    Value scale = nullptr);
+                                    mlir::triton::amdgpu::ISAFamily isaFamily);
 
 template <typename ConvertOp>
 SmallVector<Value, 4>

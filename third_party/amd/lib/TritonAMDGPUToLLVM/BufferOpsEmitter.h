@@ -2,7 +2,6 @@
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_BUFFEROPSEMITTER_H_
 
 #include "TargetInfo.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -64,7 +63,7 @@ struct BufferEmitter {
 
   // Create a resource descriptor that points to the area of memory we want to
   // load from
-  Value createResourceDescriptor(Value basePtr, Value inferredStride = nullptr);
+  Value createResourceDescriptor(Value basePtr);
 
   // Emit a predicated rocdl.raw.ptr.buffer.load
   Value emitLoad(Type type, Value rsrcDesc, Value offset, Value pred,

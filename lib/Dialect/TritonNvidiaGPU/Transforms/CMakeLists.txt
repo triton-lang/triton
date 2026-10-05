@@ -11,9 +11,11 @@ add_triton_library(TritonNvidiaGPUTransforms
   InterleaveTMem.cpp
   MBarrierUtilities.cpp
   MMALowering.cpp
+  OptimizeCTALocality.cpp
   OptimizeDescriptorEncoding.cpp
+  OptimizeMBarrierArrivals.cpp
   OptimizeTMemLayouts.cpp
-  PlanCTA.cpp
+  AssignCGALayouts.cpp
   PromoteLHSToTMem.cpp
   ProxyFenceInsertion.cpp
   RemoveTMEMTokens.cpp

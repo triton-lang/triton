@@ -3,6 +3,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -37,6 +38,23 @@ static int __builtin_ctz(unsigned x) {
 #endif
 
 namespace mlir {
+
+Value triton::getMemDescAddress(RewriterBase &rewriter, Location loc,
+                                const LLVMTypeConverter *typeConverter,
+                                gpu::MemDescType type, Value lowered) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  auto i32Ty = rewriter.getIntegerType(32);
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace()))
+    return b.ptrtoint(i32Ty, lowered);
+  Type elemTy = typeConverter->convertType(type.getElementType());
+  auto object =
+      LLVM::getSharedMemoryObjectFromStruct(loc, lowered, elemTy, rewriter);
+  auto offset = object.getShmemOffset(loc, rewriter, type);
+  offset = b.mul(offset, b.i32_val(getIntOrFloatOrPtrBitWidth(elemTy) / 8));
+  // Strip the cluster CTA index from shared addresses.
+  return b.and_(b.add(offset, b.ptrtoint(i32Ty, object.getBase())),
+                b.i32_val((1u << 24) - 1));
+}
 
 namespace triton::gpu {
 
@@ -399,10 +417,14 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
 
   TritonLLVMOpBuilder b(loc, rewriter);
 
-  // If this is being created inside a warp specialize op, compute the relative
-  // thread ID within the warp group.
-  if (std::optional<int> startId =
-          getWarpGroupStartThreadId(rewriter.getInsertionBlock())) {
+  std::optional<int> startId =
+      getWarpGroupStartThreadId(rewriter.getInsertionBlock());
+  auto func = lookupPt->getParentOfType<FunctionOpInterface>();
+  auto offset =
+      func->getAttrOfType<IntegerAttr>(triton::gpu::AttrWarpIdOffsetName);
+  if (!startId && offset)
+    startId = offset.getInt() * threadsPerWarp;
+  if (startId) {
     tid = arith::SubIOp::create(rewriter, loc, tid, b.i32_val(*startId));
   }
 
@@ -580,7 +602,8 @@ SmallVector<std::pair<Value, Value>> computeBlockLocalOffsets(
       LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
                                axisDim);
   indexedLayout = indexedLayout.transposeOuts(allDims);
-  LinearLayout cvt = invertAndComposeBlockLocal(sharedLayout, indexedLayout);
+  LinearLayout cvt =
+      invertAndComposeLocal(sharedLayout, indexedLayout, {kBlock});
   bool crossCTA = !cvt.isIdentityOnOutDim(kBlock);
   bool blockAffectsOffset = !cvt.sublayoutIsZero({kBlock}, {kOffset});
 
@@ -1182,6 +1205,46 @@ std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
   }
 }
 
+unsigned getAtomicLoadStoreVectorSize(Value ptr, Value mask,
+                                      ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                      const TargetInfoBase &targetInfo) {
+  unsigned vec = std::min(axisInfoAnalysis.getContiguity(ptr),
+                          targetInfo.getMaxAtomicLoadStoreVectorSize(
+                              getPointeeBitWidth(ptr.getType())));
+  if (mask)
+    vec = std::min(vec, axisInfoAnalysis.getMaskAlignment(mask));
+  return vec;
+}
+
+SmallVector<Value>
+emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
+               ValueRange falseValues,
+               llvm::function_ref<SmallVector<Value>()> bodyBuilder) {
+  if (!pred) {
+    SmallVector<Value> bodyResults = bodyBuilder();
+    assert(bodyResults.size() == falseValues.size());
+    return bodyResults;
+  }
+
+  auto [prevBlock, ifBlock, thenBlock] = createIfBlock(rewriter, loc, pred);
+  SmallVector<Value> results;
+  for (Value falseValue : falseValues)
+    results.push_back(thenBlock->addArgument(falseValue.getType(), loc));
+
+  cast<LLVM::CondBrOp>(prevBlock->getTerminator())
+      .getFalseDestOperandsMutable()
+      .append(falseValues);
+  rewriter.setInsertionPointToStart(ifBlock);
+  SmallVector<Value> bodyResults = bodyBuilder();
+  assert(bodyResults.size() == results.size());
+  cast<LLVM::BrOp>(ifBlock->getTerminator())
+      .getDestOperandsMutable()
+      .append(bodyResults);
+
+  rewriter.setInsertionPointToStart(thenBlock);
+  return results;
+}
+
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
                                   bool emitBarrierAfter, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo) {
@@ -1207,7 +1270,7 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
 }
 
 bool atomicResultHasOrderingBarrier(Operation *op) {
-  if (!op->hasAttr("allocation.offset"))
+  if (triton::getAtomicResultShuffleMask(op->getResult(0)))
     return false;
   return triton::gpu::lookupNumCTAs(op) == 1 ||
          triton::atomicResultHasCTABroadcast(op);
@@ -1218,8 +1281,7 @@ Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
                                   ConversionPatternRewriter &rewriter,
                                   TritonLLVMOpBuilder &b, Value threadPred,
                                   const TargetInfoBase &targetInfo) {
-  if (!op->hasAttr("allocation.offset"))
-    return resultVal;
+  assert(op->hasAttr("allocation.offset"));
 
   auto loc = op->getLoc();
   Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
@@ -1237,7 +1299,7 @@ Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
 
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
   // Mask where all elements are redundant
-  auto kReg = str_attr("reg");
+  auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
@@ -2112,22 +2174,15 @@ std::tuple<Block *, Block *, Block *> createIfBlock(RewriterBase &b,
   return {prevBlock, ifBlock, thenBlock};
 }
 
-void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
-                                 ConversionPatternRewriter &rewriter,
-                                 SmallVector<Value> &resultVals,
-                                 Type valueElemTy, TritonLLVMOpBuilder &b,
-                                 Value threadPred,
-                                 const TargetInfoBase &targetInfo,
-                                 const LLVMTypeConverter *typeConverter) {
+SmallVector<Value>
+broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
+                      ConversionPatternRewriter &rewriter,
+                      ArrayRef<Value> uniqueResultVals, Type valueElemTy,
+                      TritonLLVMOpBuilder &b, Value threadPred,
+                      const TargetInfoBase &targetInfo) {
+  assert(op->hasAttr("allocation.offset"));
   auto *ctx = rewriter.getContext();
   auto loc = op->getLoc();
-  if (!op->hasAttr("allocation.offset")) {
-    // No broadcasting, just pack the values into a struct
-    Value resultStruct =
-        packTensorElements(loc, typeConverter, resultVals, rewriter, tensorTy);
-    rewriter.replaceOp(op, {resultStruct});
-    return;
-  }
 
   auto kOffset = str_attr("offset");
   auto kBlock = str_attr("block");
@@ -2135,7 +2190,6 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
   auto regLayout = triton::gpu::toLinearLayout(tensorTy);
   auto removeRegBroadcast = actionRemoveBroadcastedRegs(regLayout);
   auto uniqueRegLayout = removeRegBroadcast.apply(regLayout);
-  auto uniqueResultVals = removeRegBroadcast.apply(resultVals);
 
   auto shapePerCTA =
       convertType<unsigned>(triton::gpu::getShapePerCTA(tensorTy));
@@ -2172,16 +2226,54 @@ void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
   else
     targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
 
-  resultVals =
-      lowerLdSt(loc, ctx, loadCvt, /*valsArray=*/{}, valueElemTy, smemBases,
-                /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
-                /*maskSpanAffineOffset=*/0, /*affineBlockOffset=*/Value(),
-                /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
-                /*maybeMaxVecElems=*/{}, makeSharedLoadEmitter(targetInfo));
-  // Create the result struct and replace the operation
-  Value resultStruct = packUniqueTensorElements(loc, typeConverter, resultVals,
-                                                rewriter, tensorTy);
-  rewriter.replaceOp(op, {resultStruct});
+  return lowerLdSt(loc, ctx, loadCvt, /*valsArray=*/{}, valueElemTy, smemBases,
+                   /*paddingShifts=*/{}, /*affineOffset=*/b.i32_val(0),
+                   /*maskSpanAffineOffset=*/0, /*affineBlockOffset=*/Value(),
+                   /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter,
+                   targetInfo,
+                   /*maybeMaxVecElems=*/{}, makeSharedLoadEmitter(targetInfo));
+}
+
+static Value synchronizeAtomicResults(Operation *op,
+                                      ConversionPatternRewriter &rewriter,
+                                      SmallVector<Value> &resultVals,
+                                      Type valueElemTy, TritonLLVMOpBuilder &b,
+                                      Value threadPred,
+                                      const TargetInfoBase &targetInfo,
+                                      const LLVMTypeConverter *typeConverter) {
+  auto loc = op->getLoc();
+  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  if (auto laneMask = triton::getAtomicResultShuffleMask(op->getResult(0))) {
+    if (*laneMask) {
+      Value srcLane = b.i32_val(0);
+      if (*laneMask != triton::gpu::lookupThreadsPerWarp(rewriter) - 1)
+        srcLane = b.and_(getLaneAndWarpId(rewriter, loc).first,
+                         b.i32_val(~*laneMask));
+      for (Value &value : resultVals)
+        value = targetInfo.shuffleIdx(rewriter, loc, value, srcLane);
+    }
+  } else if (!tensorTy) {
+    return broadcastScalarAtomicResult(op, valueElemTy, resultVals[0], rewriter,
+                                       b, threadPred, targetInfo);
+  } else {
+    resultVals = broadcastTensorResult(op, tensorTy, rewriter, resultVals,
+                                       valueElemTy, b, threadPred, targetInfo);
+  }
+  if (!tensorTy)
+    return resultVals[0];
+  return packUniqueTensorElements(loc, typeConverter, resultVals, rewriter,
+                                  tensorTy);
+}
+
+void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,
+                           SmallVector<Value> &resultVals, Type valueElemTy,
+                           TritonLLVMOpBuilder &b, Value threadPred,
+                           const TargetInfoBase &targetInfo,
+                           const LLVMTypeConverter *typeConverter) {
+  Value result =
+      synchronizeAtomicResults(op, rewriter, resultVals, valueElemTy, b,
+                               threadPred, targetInfo, typeConverter);
+  rewriter.replaceOp(op, result);
 }
 
 // Only retain those attributes that are not constructed by

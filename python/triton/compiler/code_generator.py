@@ -557,7 +557,9 @@ class CodeGenerator(ast.NodeVisitor):
 
         results = []
         for item in iter:
-            self.set_value(comp.target.id, item)
+            if isinstance(comp.target, ast.Tuple):
+                item = self._sanitize_target_value(comp.target, item, sanitize_leaf=False)
+            self.assignTarget(comp.target, item)
             # Apply the comprehension's `if` filters (the conditions are constexpr).
             if all(self.visit(cond) for cond in comp.ifs):
                 results.append(self.visit(node.elt))
@@ -748,8 +750,8 @@ class CodeGenerator(ast.NodeVisitor):
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
 
-    def visit_Assign(self, node):
-        # construct values to assign
+    def _sanitize_target_value(self, target, value, sanitize_leaf=True):
+
         def _sanitize_value(value):
             if isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, _sanitize_value)
@@ -761,36 +763,38 @@ class CodeGenerator(ast.NodeVisitor):
                 value = self.semantic.to_tensor(value)
             return value
 
-        def _sanitize_target_value(target, value):
-            if isinstance(target, ast.Tuple) and isinstance(value, language.tuple):
-                if any(isinstance(elt, ast.Starred) for elt in target.elts):
-                    raise NotImplementedError("starred assignment targets are not supported")
-                num_targets, num_values = len(target.elts), len(value.values)
-                if num_targets != num_values:
-                    # Match CPython's errors for mismatched unpacking.
-                    if num_values > num_targets:
-                        message = f"too many values to unpack (expected {num_targets})"
-                    else:
-                        message = f"not enough values to unpack (expected {num_targets}, got {num_values})"
-                    raise ValueError(message)
-                vals = [_sanitize_target_value(elt, val) for elt, val in zip(target.elts, value.values)]
-                vals = [constexpr(val) if val is None else val for val in vals]
-                types = [val.type for val in vals]
-                return language.tuple(vals, language.tuple_type(types, value.type.fields))
-            if isinstance(target, ast.Name):
-                annotation = self.pending_annotations.pop(target.id, None)
-                if annotation == constexpr:
-                    return normalize_value(value)
-            return _sanitize_value(value)
+        if isinstance(target, ast.Tuple):
+            if not isinstance(value, language.tuple):
+                raise TypeError("cannot unpack non-iterable value")
+            if any(isinstance(elt, ast.Starred) for elt in target.elts):
+                raise NotImplementedError("starred assignment targets are not supported")
+            num_targets, num_values = len(target.elts), len(value.values)
+            if num_targets != num_values:
+                # Match CPython's errors for mismatched unpacking.
+                if num_values > num_targets:
+                    message = f"too many values to unpack (expected {num_targets})"
+                else:
+                    message = f"not enough values to unpack (expected {num_targets}, got {num_values})"
+                raise ValueError(message)
+            vals = [self._sanitize_target_value(elt, val, sanitize_leaf) for elt, val in zip(target.elts, value.values)]
+            vals = [constexpr(val) if val is None else val for val in vals]
+            types = [val.type for val in vals]
+            return language.tuple(vals, language.tuple_type(types, value.type.fields))
+        if isinstance(target, ast.Name):
+            annotation = self.pending_annotations.pop(target.id, None)
+            if annotation == constexpr:
+                return normalize_value(value)
+        return _sanitize_value(value) if sanitize_leaf else value
 
+    def visit_Assign(self, node):
         targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
         assert len(targets) == 1
         target = targets[0]
         if isinstance(target, ast.Name):
             with self._name_loc_prefix(target.id):
-                values = _sanitize_target_value(target, self.visit(node.value))
+                values = self._sanitize_target_value(target, self.visit(node.value))
         else:
-            values = _sanitize_target_value(target, self.visit(node.value))
+            values = self._sanitize_target_value(target, self.visit(node.value))
         self.assignTarget(target, values)
 
     def visit_AugAssign(self, node):
@@ -1147,18 +1151,25 @@ class CodeGenerator(ast.NodeVisitor):
         pass
 
     def visit_Compare(self, node):
-        if not (len(node.comparators) == 1 and len(node.ops) == 1):
-            raise self._unsupported(node, "simultaneous multiple comparison is not supported")
-        lhs = self.visit(node.left)
-        rhs = self.visit(node.comparators[0])
-        lhs_value = _unwrap_if_constexpr(lhs)
-        rhs_value = _unwrap_if_constexpr(rhs)
-        if type(node.ops[0]) is ast.Is:
-            return constexpr(lhs_value is rhs_value)
-        if type(node.ops[0]) is ast.IsNot:
-            return constexpr(lhs_value is not rhs_value)
-        operator = self._get_operator(node, node.ops[0], "comparison")
-        return self._apply_binary_method(node, operator, lhs, rhs)
+
+        def comparisons():
+            lhs = self.visit(node.left)
+            for op, comparator in zip(node.ops, node.comparators):
+                rhs = self.visit(comparator)
+                if isinstance(op, ast.Is):
+                    yield constexpr(_unwrap_if_constexpr(lhs) is _unwrap_if_constexpr(rhs))
+                elif isinstance(op, ast.IsNot):
+                    yield constexpr(_unwrap_if_constexpr(lhs) is not _unwrap_if_constexpr(rhs))
+                else:
+                    operator = self._get_operator(node, op, "comparison")
+                    yield self._apply_binary_method(node, operator, lhs, rhs)
+                # Reuse the middle operand without evaluating its side effects again.
+                lhs = rhs
+
+        values = comparisons()
+        if len(node.ops) == 1:
+            return next(values)
+        return self._apply_boolean_values(node, self._operators[ast.And], values)
 
     def visit_UnaryOp(self, node):
         operand = self.visit(node.operand)
@@ -1557,14 +1568,15 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_BoolOp(self, node: ast.BoolOp):
         operator = self._get_operator(node, node.op, "boolean")
-        method_name = operator[0]
+        values = (self.visit(subnode) for subnode in node.values)
+        return self._apply_boolean_values(node, operator, values, warn_non_scalar=True)
 
+    def _apply_boolean_values(self, node, operator, values, warn_non_scalar=False):
+        method_name = operator[0]
         nontrivial_values = []
 
-        for subnode in node.values:
-            # we visit the values in order, executing their side-effects
-            # and possibly early-exiting:
-            value = self.visit(subnode)
+        # Consume values lazily so compile-time short-circuiting skips side effects.
+        for value in values:
             if not _is_dynamic_boolean_operand(value):
                 # this is a constexpr, so we might be able to short-circuit:
                 bv = bool(value)
@@ -1577,7 +1589,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # otherwise, our constexpr has no effect on the output of the
                 # expression so we do not append it to nontrivial_values.
             else:
-                if _is_triton_tensor(value) and value.type.is_block():
+                if warn_non_scalar and _is_triton_tensor(value) and value.type.is_block():
                     lineno = getattr(node, "lineno", None)
                     if lineno is not None:
                         lineno += self.begin_line

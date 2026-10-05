@@ -26,8 +26,14 @@ struct LocalMemOpTile {
   // If laneAddr.size() < 3, we assume that the first
   // 3 - laneAddr.size() bases are registers
   llvm::SmallVector<int32_t> laneAddr;
+  // A set of bitmasks representing the basis vectors whose span defines the
+  // phase 0 lane ID subspace. This is used to track which parallel lane
+  // addresses are processed together in the same hardware execution phase for
+  // shared memory bank conflict accounting.
+  llvm::SmallVector<int32_t> laneMask;
 
   llvm::SmallVector<int32_t> getLaneAddr(llvm::ArrayRef<int32_t> lane) const;
+  llvm::SmallVector<int32_t> getLaneMask(llvm::ArrayRef<int32_t> lane) const;
 };
 
 // Given a set of possible instructions given by

@@ -499,12 +499,9 @@ private:
   bool analyzeSmallTensorOfst;
 };
 
-// Workaround to allow static_assert(false) on older compilers as it was
-// ill-formed before defect report CWG2518
-// (https://cplusplus.github.io/CWG/issues/2518.html)
-template <typename T> struct always_false : std::false_type {};
-
 template <typename SourceOp>
+  requires llvm::is_one_of<SourceOp, triton::LoadOp,
+                           triton::gpu::AsyncCopyGlobalToLocalOp>::value
 struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   using OpRewritePattern<SourceOp>::OpRewritePattern;
 
@@ -547,17 +544,13 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
                 contig, axisAnalysisPass.getMaskAlignment(maybeMask));
           return triton::amdgpu::BufferLoadOp::create(
               rewriter, op->getLoc(), op.getType(), basePtr, tensorOffset,
-              blockStride, op.getCache(), maybeMask, maybeOther, contig);
-        } else if constexpr (std::is_same_v<
-                                 SourceOp,
-                                 triton::gpu::AsyncCopyGlobalToLocalOp>) {
+              blockStride, op.getCachePolicyAttr(), maybeMask, maybeOther,
+              contig);
+        } else {
           return triton::amdgpu::BufferLoadToLocalOp::create(
               rewriter, op->getLoc(), op.getType(), op.getResult(), basePtr,
-              tensorOffset, maybeMask, maybeOther, blockStride, op.getCache(),
-              op.getContiguity());
-        } else {
-          static_assert(always_false<SourceOp>::value,
-                        "Unsupported type in ConvertTritonLoadToBufferLoad");
+              tensorOffset, maybeMask, maybeOther, blockStride,
+              op.getCachePolicyAttr(), op.getContiguity());
         }
       }();
 
@@ -619,8 +612,8 @@ struct ConvertTritonStoreToBufferStore
           op->getLoc(), op);
 
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
-          op, op.getValue(), basePtr, tensorOffset, blockStride, op.getCache(),
-          maybeMask, contig);
+          op, op.getValue(), basePtr, tensorOffset, blockStride,
+          op.getCachePolicyAttr(), maybeMask, contig);
       return success();
     }
     LDBG("Failed to convert: " << op);

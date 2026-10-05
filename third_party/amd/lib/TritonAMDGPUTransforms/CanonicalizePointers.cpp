@@ -2084,9 +2084,11 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   patterns.add<
       ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
       ConvertConvertLayoutOp, ConvertAddPtrOp, ConvertExtractSliceOp,
+      MaterializeFatPointer<tt::AtomicLoadOp>,
       MaterializeFatPointer<tt::AtomicCASOp>,
       MaterializeFatPointer<tt::AtomicPollOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
+      MaterializeFatPointer<tt::AtomicStoreOp>,
       MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,
       MaterializeFatPointer<triton::gpu::AsyncCopyGlobalToLocalOp>,
       MaterializeFatPointer<tt::PtrToIntOp>, MaterializeFatPointer<tt::StoreOp>,

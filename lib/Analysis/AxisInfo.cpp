@@ -725,18 +725,14 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
-    if (rhs.getConstancy(dim) > 1) {
-      // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
-      // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
-      // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
-      // r must be divisible by gcd(d_lhs, d_rhs)
-      return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
-    }
-    // Otherwise we shouldn't assume any divisibility.
-    // For example:
-    // lhs: [2, 2, 4, 4], rhs: [0, 1, 2, 3]
-    // lhs % rhs = [0, 0, 0, 1]
-    return 1;
+    auto contiguity = getContiguity(op, lhs, rhs, dim);
+    auto divisibility = gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+    // New group bases inside an operand's contiguous group have offsets that
+    // are multiples of the result contiguity.
+    if (lhs.getContiguity(dim) > contiguity ||
+        rhs.getContiguity(dim) > contiguity)
+      divisibility = gcd(divisibility, contiguity);
+    return divisibility;
   };
 };
 
@@ -771,13 +767,8 @@ public:
   AxisInfo
   getAxisInfo(triton::LoadOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    // If pointers and mask both have constancy properties, those properties
-    // will also extend to output.
+    // Repeated pointers, masks, and fallback values produce repeated results.
     AxisInfo ptrInfo = operands[0]->getValue();
-    std::optional<AxisInfo> maskInfo;
-    if (operands.size() > 1) {
-      maskInfo = operands[1]->getValue();
-    }
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
@@ -785,9 +776,11 @@ public:
     for (int d = 0; d < ptrInfo.getRank(); ++d) {
       contiguity.push_back(1);
       divisibility.push_back(1);
-      constancy.push_back(
-          gcd(ptrInfo.getConstancy(d),
-              maskInfo.has_value() ? maskInfo->getConstancy(d) : 0));
+      int64_t resultConstancy = ptrInfo.getConstancy(d);
+      for (const auto *operand : operands.drop_front())
+        resultConstancy =
+            gcd(resultConstancy, operand->getValue().getConstancy(d));
+      constancy.push_back(resultConstancy);
     }
 
     return AxisInfo(contiguity, divisibility, constancy);
@@ -1082,6 +1075,10 @@ public:
     if (isa<IntegerType>(op.getOperand(0).getType()))
       return AxisInfo::join(lhsInfo, rhsInfo);
 
+    int64_t elemBytes = 1;
+    if (isa<PointerType>(getElementTypeOrSelf(op.getType())))
+      elemBytes = std::max<int64_t>(1, getPointeeBitWidth(op.getType()) / 8);
+
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     for (int d = 0; d < lhsInfo.getRank(); ++d) {
       constancy.push_back(gcd(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d),
@@ -1089,12 +1086,16 @@ public:
       contiguity.push_back(gcd(lhsInfo.getContiguity(d),
                                rhsInfo.getContiguity(d),
                                condInfo.getConstancy(d)));
-      // getDivisibilityFromContiguity does not see condConstancy; clamp
-      // by the just-computed output contiguity so the result remains
-      // sound when condConstancy reduces it below the input contiguities.
-      divisibility.push_back(
-          gcd(getDivisibilityFromContiguity(lhsInfo, rhsInfo, d),
-              contiguity.back()));
+      auto divisor =
+          gcd(lhsInfo.getDivisibility(d), rhsInfo.getDivisibility(d));
+      // Smaller groups introduce new bases inside an input group. Pointer
+      // divisibility measures those offsets in bytes, not elements.
+      if ((lhsInfo.getContiguity(d) != kMaxDivisor &&
+           contiguity.back() < lhsInfo.getContiguity(d)) ||
+          (rhsInfo.getContiguity(d) != kMaxDivisor &&
+           contiguity.back() < rhsInfo.getContiguity(d)))
+        divisor = gcd(divisor, multiplyDivisor(contiguity.back(), elemBytes));
+      divisibility.push_back(divisor);
     }
 
     return AxisInfo(contiguity, divisibility, constancy);

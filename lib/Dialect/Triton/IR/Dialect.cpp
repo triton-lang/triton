@@ -14,9 +14,31 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+#define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/Triton/IR/AttrDefs.cpp.inc"
+
 //===----------------------------------------------------------------------===//
 // TritonDialect Dialect Interfaces
 //===----------------------------------------------------------------------===//
+
+namespace {
+
+class TritonCachePolicyInterface : public DialectCachePolicyInterface {
+public:
+  using DialectCachePolicyInterface::DialectCachePolicyInterface;
+
+  LogicalResult verifyCachePolicy(
+      Attribute cachePolicy, CachePolicyOperation operation,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+    auto policy = dyn_cast<CachePolicyAttr>(cachePolicy);
+    if (!policy)
+      return emitError() << "unsupported Triton cache policy attribute "
+                         << cachePolicy;
+    return verifyCacheModifier(policy.getCacheModifier(), operation, emitError);
+  }
+};
+
+} // namespace
 
 bool TritonInlinerInterface::isLegalToInline(Operation *call,
                                              Operation *callable,
@@ -77,12 +99,18 @@ Value TritonInlinerInterface::handleResult(OpBuilder &, Operation *call,
 void TritonDialect::initialize() {
   registerTypes();
 
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "triton/Dialect/Triton/IR/AttrDefs.cpp.inc"
+      >();
+
   addOperations<
 #define GET_OP_LIST
 #include "triton/Dialect/Triton/IR/Ops.cpp.inc"
       >();
 
   // We can also add interface here.
+  addInterfaces<TritonCachePolicyInterface>();
   addInterfaces<TritonInlinerInterface>();
 }
 

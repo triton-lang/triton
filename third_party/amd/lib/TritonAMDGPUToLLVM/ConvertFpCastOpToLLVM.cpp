@@ -441,11 +441,10 @@ SmallVector<Value> PkF4ToFp32(Location loc, ConversionPatternRewriter &rewriter,
 
 // OCP Bf8/Fp8 -> Bf16
 template <typename SrcFPType>
+  requires llvm::is_one_of<SrcFPType, Float8E4M3FNType, Float8E5M2Type>::value
 SmallVector<Value> OcpF8ToBf16SW(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const SmallVector<Value> &v) {
-  static_assert(std::is_same_v<SrcFPType, Float8E4M3FNType> ||
-                std::is_same_v<SrcFPType, Float8E5M2Type>);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = b.undef(fp8x4VecTy);
@@ -631,16 +630,14 @@ SmallVector<Value> scalePk8DowncastToFp8(Location loc,
 // normal number, i.e. ±448. NaNs are converted to NaNs.
 // For UZ formats please check: https://onnx.ai/onnx/technical/float8.html
 template <typename SrcFPType, typename DstFPType>
+  requires llvm::is_one_of<SrcFPType, Float32Type, Float16Type,
+                           BFloat16Type>::value &&
+           llvm::is_one_of<DstFPType, Float8E4M3FNType, Float8E4M3FNUZType,
+                           Float8E5M2FNUZType>::value
 Value downcastToFp8rtneOneValue(Location loc,
                                 ConversionPatternRewriter &rewriter, Value v) {
-  static_assert((std::is_same_v<SrcFPType, Float32Type>) ||
-                (std::is_same_v<SrcFPType, Float16Type>) ||
-                (std::is_same_v<SrcFPType, BFloat16Type>));
-  static_assert((std::is_same_v<DstFPType, Float8E4M3FNType> ||
-                 std::is_same_v<DstFPType, Float8E4M3FNUZType> ||
-                 std::is_same_v<DstFPType, Float8E5M2FNUZType>));
-  constexpr bool isFp8UZ = (std::is_same_v<DstFPType, Float8E4M3FNUZType> ||
-                            std::is_same_v<DstFPType, Float8E5M2FNUZType>);
+  constexpr bool isFp8UZ =
+      llvm::is_one_of<DstFPType, Float8E4M3FNUZType, Float8E5M2FNUZType>::value;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   FPTypeInfo<SrcFPType> srcFpInfo(loc, rewriter);
@@ -906,13 +903,15 @@ protected:
 class CvtFp8E4M3ToFp16 : public ConverterInterface {
 public:
   explicit CvtFp8E4M3ToFp16(Type srcTy, ISAFamily isaFamily,
+                            const AMD::TargetInfo &targetInfo,
                             size_t maxElementsPerThread,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy),
+      : srcTy(srcTy), targetInfo(targetInfo),
         ConverterInterface(isaFamily, maxElementsPerThread, roundingMode) {}
 
   size_t getNumElements() override {
-    return isa<Float8E4M3FNType>(srcTy) && (isaFamily == ISAFamily::GFX1250)
+    return isa<Float8E4M3FNType>(srcTy) &&
+                   targetInfo.supportsCvtPkScalePk8Upcast()
                ? 8
                : 4;
   }
@@ -931,7 +930,7 @@ public:
       else
         return Fp8E4M3fnuzToFp16SW(loc, rewriter, v);
     } else if (isa<Float8E4M3FNType>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250) {
+      if (targetInfo.supportsCvtPkScalePk8Upcast()) {
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F16Fp8Op>(loc,
                                                                    rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1072,21 +1071,23 @@ public:
 
 private:
   Type srcTy;
+  const AMD::TargetInfo &targetInfo;
 };
 
 class CvtFp8E5M2ToFp16 : public ConverterInterface {
 public:
   explicit CvtFp8E5M2ToFp16(Type srcTy, ISAFamily isaFamily,
+                            const AMD::TargetInfo &targetInfo,
                             size_t maxElementsPerThread,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy),
+      : srcTy(srcTy), targetInfo(targetInfo),
         ConverterInterface(isaFamily, maxElementsPerThread, roundingMode) {}
 
   size_t getNumElements() override {
     if (isa<Float8E5M2FNUZType>(srcTy)) {
       return 4;
     } else if (isa<Float8E5M2Type>(srcTy)) {
-      return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      return targetInfo.supportsCvtPkScalePk8Upcast() ? 8 : 4;
     }
     return 0;
   }
@@ -1105,7 +1106,7 @@ public:
       else
         return Fp8E5M2fnuzToFp16SW(loc, rewriter, v);
     } else if (isa<Float8E5M2Type>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250) {
+      if (targetInfo.supportsCvtPkScalePk8Upcast()) {
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F16Bf8Op>(loc,
                                                                    rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1211,21 +1212,23 @@ public:
 
 private:
   Type srcTy;
+  const AMD::TargetInfo &targetInfo;
 };
 
 class CvtFp8E4M3ToBf16 : public ConverterInterface {
 public:
   explicit CvtFp8E4M3ToBf16(Type srcTy, ISAFamily isaFamily,
+                            const AMD::TargetInfo &targetInfo,
                             size_t maxElementsPerThread,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy),
+      : srcTy(srcTy), targetInfo(targetInfo),
         ConverterInterface(isaFamily, maxElementsPerThread, roundingMode) {}
 
   size_t getNumElements() override {
     if (isa<Float8E4M3FNUZType>(srcTy)) {
       return hasFnuzFp8HW(isaFamily) ? 4 : 2;
     } else if (isa<Float8E4M3FNType>(srcTy)) {
-      return isaFamily == ISAFamily::GFX1250 ? 8 : 4;
+      return targetInfo.supportsCvtPkScalePk8Upcast() ? 8 : 4;
     }
     return 0;
   }
@@ -1244,7 +1247,7 @@ public:
       else
         return Fp8E4M3fnuzToBf16SW(loc, rewriter, v);
     } else if (isa<Float8E4M3FNType>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250) {
+      if (targetInfo.supportsCvtPkScalePk8Upcast()) {
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8Bf16Fp8Op>(
             loc, rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1327,19 +1330,23 @@ public:
 
 private:
   Type srcTy;
+  const AMD::TargetInfo &targetInfo;
 };
 
 class CvtFp8E5M2ToBf16 : public ConverterInterface {
 public:
   explicit CvtFp8E5M2ToBf16(Type srcTy, ISAFamily isaFamily,
+                            const AMD::TargetInfo &targetInfo,
                             size_t maxElementsPerThread,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy),
+      : srcTy(srcTy), targetInfo(targetInfo),
         ConverterInterface(isaFamily, maxElementsPerThread, roundingMode) {}
 
   size_t getNumElements() override {
-    return isa<Float8E5M2Type>(srcTy) && isaFamily == ISAFamily::GFX1250 ? 8
-                                                                         : 4;
+    return isa<Float8E5M2Type>(srcTy) &&
+                   targetInfo.supportsCvtPkScalePk8Upcast()
+               ? 8
+               : 4;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1356,7 +1363,7 @@ public:
       else
         return Fp8E5M2fnuzToBf16SW(loc, rewriter, v);
     } else if (isa<Float8E5M2Type>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250) {
+      if (targetInfo.supportsCvtPkScalePk8Upcast()) {
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8Bf16Bf8Op>(
             loc, rewriter, v);
       } else if (isaFamily == ISAFamily::CDNA4) {
@@ -1382,8 +1389,8 @@ public:
                                          ConversionPatternRewriter &rewriter,
                                          const SmallVector<Value> &v) {
     assert(v.size() == 4);
-    auto cvt =
-        CvtFp8E5M2ToFp16(srcTy, isaFamily, maxElementsPerThread, roundingMode);
+    auto cvt = CvtFp8E5M2ToFp16(srcTy, isaFamily, targetInfo,
+                                maxElementsPerThread, roundingMode);
     SmallVector<Value> fp16Vec = cvt.Fp8E5M2fnuzToFp16SW(loc, rewriter, v);
     SmallVector<Value> result(4);
     for (size_t i = 0; i < 4; i++) {
@@ -1396,24 +1403,28 @@ public:
 
 private:
   Type srcTy;
+  const AMD::TargetInfo &targetInfo;
 };
 
 class CvtFp8E4M3ToFp32 : public ConverterInterface {
 public:
   explicit CvtFp8E4M3ToFp32(Type srcTy, ISAFamily isaFamily,
+                            const AMD::TargetInfo &targetInfo,
                             size_t maxElementsPerThread,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy),
+      : srcTy(srcTy), targetInfo(targetInfo),
         ConverterInterface(isaFamily, maxElementsPerThread, roundingMode) {}
 
   size_t getNumElements() override {
-    // A lone ocp fp8 value upcasts in one hardware step; larger groups take
+    // A lone ocp bf8 value upcasts in one hardware step; larger groups take
     // the software path.
     if (maxElementsPerThread == 1 && hasUnscaledOcpFp8Cvt(isaFamily) &&
-        isa<Float8E4M3FNType>(srcTy))
+        isa<Float8E5M2Type>(srcTy))
       return 1;
-    return isa<Float8E4M3FNType>(srcTy) && isaFamily == ISAFamily::GFX1250 ? 8
-                                                                           : 4;
+    return isa<Float8E5M2Type>(srcTy) &&
+                   targetInfo.supportsCvtPkScalePk8Upcast()
+               ? 8
+               : 4;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1431,7 +1442,7 @@ public:
       else
         useTwoStepConversion = true;
     } else if (isa<Float8E4M3FNType>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250)
+      if (targetInfo.supportsCvtPkScalePk8Upcast())
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F32Fp8Op>(loc,
                                                                    rewriter, v);
       else if (isaFamily == ISAFamily::CDNA4)
@@ -1446,8 +1457,8 @@ public:
 
     // FP8 -> FP16 -> FP32
     if (useTwoStepConversion) {
-      auto converter = CvtFp8E4M3ToFp16(srcTy, isaFamily, maxElementsPerThread,
-                                        roundingMode);
+      auto converter = CvtFp8E4M3ToFp16(srcTy, isaFamily, targetInfo,
+                                        maxElementsPerThread, roundingMode);
       auto result = converter.convert(loc, rewriter, v);
       assert(result.has_value() && "fp8 to fp16 conversion must be completed");
       for (Value &v : *result)
@@ -1460,14 +1471,16 @@ public:
 
 private:
   Type srcTy;
+  const AMD::TargetInfo &targetInfo;
 };
 
 class CvtFp8E5M2ToFp32 : public ConverterInterface {
 public:
   explicit CvtFp8E5M2ToFp32(Type srcTy, ISAFamily isaFamily,
+                            const AMD::TargetInfo &targetInfo,
                             size_t maxElementsPerThread,
                             std::optional<RoundingMode> roundingMode)
-      : srcTy(srcTy),
+      : srcTy(srcTy), targetInfo(targetInfo),
         ConverterInterface(isaFamily, maxElementsPerThread, roundingMode) {}
 
   size_t getNumElements() override {
@@ -1476,8 +1489,10 @@ public:
     if (maxElementsPerThread == 1 && hasUnscaledOcpFp8Cvt(isaFamily) &&
         isa<Float8E5M2Type>(srcTy))
       return 1;
-    return isa<Float8E5M2Type>(srcTy) && isaFamily == ISAFamily::GFX1250 ? 8
-                                                                         : 4;
+    return isa<Float8E5M2Type>(srcTy) &&
+                   targetInfo.supportsCvtPkScalePk8Upcast()
+               ? 8
+               : 4;
   }
 
   std::optional<SmallVector<Value>> convert(Location loc,
@@ -1495,7 +1510,7 @@ public:
       else
         useTwoStepConversion = true;
     } else if (isa<Float8E5M2Type>(srcTy)) {
-      if (isaFamily == ISAFamily::GFX1250)
+      if (targetInfo.supportsCvtPkScalePk8Upcast())
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8F32Bf8Op>(loc,
                                                                    rewriter, v);
       else if (isaFamily == ISAFamily::CDNA4)
@@ -1510,8 +1525,8 @@ public:
 
     // BF8 -> FP16 -> FP32
     if (useTwoStepConversion) {
-      auto converter = CvtFp8E5M2ToFp16(srcTy, isaFamily, maxElementsPerThread,
-                                        roundingMode);
+      auto converter = CvtFp8E5M2ToFp16(srcTy, isaFamily, targetInfo,
+                                        maxElementsPerThread, roundingMode);
       auto result = converter.convert(loc, rewriter, v);
       assert(result.has_value() && "fp8 to fp16 conversion must be completed");
       for (Value &v : *result)
@@ -1524,6 +1539,7 @@ public:
 
 private:
   Type srcTy;
+  const AMD::TargetInfo &targetInfo;
 };
 
 class CvtFp16ToFp8E4M3 : public ConverterInterface {
@@ -2398,10 +2414,10 @@ struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<triton::FpToFpOp, FpToFpOpConversion> {
   explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              ISAFamily isaFamily,
+                              const AMD::TargetInfo &targetInfo,
                               PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        isaFamily(isaFamily) {}
+        targetInfo(targetInfo), isaFamily(targetInfo.getISAFamily()) {}
 
   std::unique_ptr<ConverterInterface>
   getConverter(Type srcTy, Type dstTy, size_t maxElementsPerThread,
@@ -2409,32 +2425,32 @@ struct FpToFpOpConversion
     if ((isa<Float8E4M3FNUZType, Float8E4M3FNType>(srcTy)) &&
         (isa<Float16Type>(dstTy))) {
       return std::make_unique<CvtFp8E4M3ToFp16>(
-          srcTy, isaFamily, maxElementsPerThread, roundingMode);
+          srcTy, isaFamily, targetInfo, maxElementsPerThread, roundingMode);
     }
     if ((isa<Float8E5M2FNUZType, Float8E5M2Type>(srcTy)) &&
         (isa<Float16Type>(dstTy))) {
       return std::make_unique<CvtFp8E5M2ToFp16>(
-          srcTy, isaFamily, maxElementsPerThread, roundingMode);
+          srcTy, isaFamily, targetInfo, maxElementsPerThread, roundingMode);
     }
     if ((isa<Float8E4M3FNUZType, Float8E4M3FNType>(srcTy)) &&
         (isa<BFloat16Type>(dstTy))) {
       return std::make_unique<CvtFp8E4M3ToBf16>(
-          srcTy, isaFamily, maxElementsPerThread, roundingMode);
+          srcTy, isaFamily, targetInfo, maxElementsPerThread, roundingMode);
     }
     if ((isa<Float8E5M2FNUZType, Float8E5M2Type>(srcTy)) &&
         (isa<BFloat16Type>(dstTy))) {
       return std::make_unique<CvtFp8E5M2ToBf16>(
-          srcTy, isaFamily, maxElementsPerThread, roundingMode);
+          srcTy, isaFamily, targetInfo, maxElementsPerThread, roundingMode);
     }
     if ((isa<Float8E4M3FNUZType, Float8E4M3FNType>(srcTy)) &&
         (isa<Float32Type>(dstTy))) {
       return std::make_unique<CvtFp8E4M3ToFp32>(
-          srcTy, isaFamily, maxElementsPerThread, roundingMode);
+          srcTy, isaFamily, targetInfo, maxElementsPerThread, roundingMode);
     }
     if ((isa<Float8E5M2FNUZType, Float8E5M2Type>(srcTy)) &&
         (isa<Float32Type>(dstTy))) {
       return std::make_unique<CvtFp8E5M2ToFp32>(
-          srcTy, isaFamily, maxElementsPerThread, roundingMode);
+          srcTy, isaFamily, targetInfo, maxElementsPerThread, roundingMode);
     }
     if ((isa<Float16Type>(srcTy)) &&
         (isa<Float8E4M3FNUZType, Float8E4M3FNType>(dstTy))) {
@@ -2508,7 +2524,7 @@ struct FpToFpOpConversion
     if (!layoutTy)
       return std::nullopt;
     auto order = triton::gpu::getThreadOrder(layoutTy, tensorTy.getShape());
-    auto elemsPerThread = layoutTy.getElemsPerThread(tensorTy.getShape());
+    auto elemsPerThread = triton::gpu::getElemsPerThread(tensorTy);
     return elemsPerThread[order.back()];
   }
 
@@ -2530,8 +2546,14 @@ struct FpToFpOpConversion
     }
     const size_t maxElementsPerThread = maybeMaxElementsPerThread.value();
 
-    auto converter = getConverter(srcElementType, dstElementType,
-                                  maxElementsPerThread, roundingMode);
+    bool useFp32Intermediate =
+        (srcElementType.isBF16() && dstElementType.isF16()) ||
+        (srcElementType.isF16() && dstElementType.isBF16());
+    if (useFp32Intermediate)
+      roundingMode = roundingMode.value_or(RoundingMode::RTNE);
+    auto converter =
+        getConverter(useFp32Intermediate ? f32_ty : srcElementType,
+                     dstElementType, maxElementsPerThread, roundingMode);
     if (converter == nullptr) {
       std::string rmError;
       if (roundingMode.has_value())
@@ -2558,6 +2580,11 @@ struct FpToFpOpConversion
     inVals.resize(numElements,
                   b.undef(typeConverter->convertType(srcElementType)));
 
+    if (useFp32Intermediate)
+      for (Value &v : inVals)
+        v = srcElementType.isBF16() ? AMD::convertBf16ToFp32(loc, rewriter, v)
+                                    : Fp16ToFp32OneValue(loc, rewriter, v);
+
     auto maybeOutVals = converter->convert(loc, rewriter, inVals);
     assert(maybeOutVals.has_value());
     auto outVals = maybeOutVals.value();
@@ -2568,6 +2595,7 @@ struct FpToFpOpConversion
   }
 
 private:
+  const AMD::TargetInfo &targetInfo;
   ISAFamily isaFamily;
 };
 } // namespace
@@ -2580,7 +2608,7 @@ void populateFpCastOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     const TargetInfo &targetInfo,
                                     PatternBenefit benefit) {
 
-  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
-                                   targetInfo.getISAFamily(), benefit);
+  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
+                                   benefit);
 }
 } // namespace mlir::triton::AMD

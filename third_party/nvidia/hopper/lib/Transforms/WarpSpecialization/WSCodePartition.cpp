@@ -234,7 +234,7 @@ SmallVector<Operation *> getActualConsumers(Operation *consumerOp) {
           visited.insert(transUser);
           if (isa<tt::TransOp, ttg::MemDescTransOp>(transUser)) {
             for (auto transitiveUser : transUser->getUsers()) {
-              if (!visited.count(transitiveUser))
+              if (!visited.contains(transitiveUser))
                 transUsers.push_back(transitiveUser);
             }
           } else {
@@ -351,7 +351,7 @@ void groupChannels(
     }
     if (!merged) { // Create a new entry.
       auto *keyOp = c0->getDstOp();
-      if (!consumerChannels.count(keyOp))
+      if (!consumerChannels.contains(keyOp))
         orderedChannels.push_back(c0);
       consumerChannels[keyOp].push_back(c0);
     }
@@ -624,7 +624,7 @@ void createToken(
         auto mmaOp = cast<ttng::TCGen5MMAOp>(consumerOp);
         // If the gen5 barrier for this mmaOp is already used for another
         // channel, do not use it for this channel.
-        if (gen5Barriers.count(mmaOp) && gen5Barriers[mmaOp] != channel) {
+        if (gen5Barriers.contains(mmaOp) && gen5Barriers[mmaOp] != channel) {
           useGen5Barrier = false;
           LDBG("-- mmaOp already has a channel associated");
         }
@@ -723,13 +723,12 @@ DenseMap<Channel *, Value> createBuffer(
   for (auto &item : channelsGroupedByProducers) {
     auto &channels = item.second;
     for (auto c : channels) {
-      assert(!visited.count(c));
+      assert(!visited.contains(c));
       visited.insert(c);
     }
   }
   for (auto *channelInOrder : orderedChannels) {
-    if (channelsGroupedByProducers.find(channelInOrder) ==
-        channelsGroupedByProducers.end())
+    if (!channelsGroupedByProducers.contains(channelInOrder))
       continue;
     auto &channels = channelsGroupedByProducers[channelInOrder];
     auto srcValue = channelInOrder->getSrcOperand();
@@ -1019,7 +1018,7 @@ void insertAsyncComm(
     auto producerBlock = kv.second.front()->getSrcOp()->getBlock();
     Operation *headProducer = nullptr;
     for (auto &op : producerBlock->getOperations()) {
-      if (producerOps.count(&op)) {
+      if (producerOps.contains(&op)) {
         headProducer = &op;
         break;
       }
@@ -1027,7 +1026,7 @@ void insertAsyncComm(
     // Find tail producer
     Operation *tailProducer = nullptr;
     for (auto &op : reverse(producerBlock->getOperations())) {
-      if (producerOps.count(&op)) {
+      if (producerOps.contains(&op)) {
         tailProducer = &op;
         break;
       }
@@ -1037,14 +1036,14 @@ void insertAsyncComm(
     auto consumerBlock = kv.second.front()->getDstOp()->getBlock();
     Operation *headConsumer = nullptr;
     for (auto &op : consumerBlock->getOperations()) {
-      if (consumerOps.count(&op)) {
+      if (consumerOps.contains(&op)) {
         headConsumer = &op;
         break;
       }
     }
     Operation *tailConsumer = nullptr;
     for (auto &op : reverse(consumerBlock->getOperations())) {
-      if (consumerOps.count(&op)) {
+      if (consumerOps.contains(&op)) {
         tailConsumer = &op;
         break;
       }
@@ -1127,7 +1126,7 @@ void insertAsyncComm(
         SmallVector<AsyncTaskId> asyncTasksMma = getAsyncTaskIds(mmaOp);
         assert(asyncTasksMma.size() == 1 && asyncTasksMma[0] == consumerTaskId);
       }
-      if (mmaOp && commChannel.consumerBarriers.count(consumerTaskId)) {
+      if (mmaOp && commChannel.consumerBarriers.contains(consumerTaskId)) {
         LLVM_DEBUG({
           LDBG("unique actual consumer is gen5 mma ");
           mmaOp->dump();
@@ -1158,7 +1157,7 @@ void insertAsyncComm(
         if (masterChannel->channelKind == DataChannelKind::TMEM) {
           ttng::TmemDataChannel *tmemChannel =
               static_cast<ttng::TmemDataChannel *>(masterChannel);
-          assert(tmemWaitBarriers.count(tmemChannel->tmemMmaOp) &&
+          assert(tmemWaitBarriers.contains(tmemChannel->tmemMmaOp) &&
                  "Failed to find tmemWaitBarriers");
           producerCommitPoint = tmemWaitBarriers[tmemChannel->tmemMmaOp];
         } else {

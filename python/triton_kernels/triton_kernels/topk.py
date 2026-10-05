@@ -83,7 +83,7 @@ def topk_backward(x, y_indx, dy_vals, k, n_rows, apply_softmax):
         y_indx, y_indx.stride(0), dy_vals, dy_vals.stride(0), x, x.stride(0),  # inputs
         dx,  # outputs
         dx.stride(0), x.shape[0], n_rows, x.shape[-1], APPLY_SOFTMAX=apply_softmax, N_EXPTS_ACT=k,
-        N_EXPTS_PAD=n_expts_pad)
+        N_EXPTS_PAD=n_expts_pad, enable_fp_fusion=True)
     return dx
 
 

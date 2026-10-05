@@ -17,7 +17,9 @@ extern "C" {
 
 // Compute warp distribution across dimensions.
 // Distributes warps starting from the first dimension, assigning as many
-// warps as possible without exceeding the block shape.
+// warps as possible without exceeding the block shape. Warps left over once
+// every dimension is saturated stay undistributed and are predicated off by
+// the lowering.
 static inline void tdmGetWarpDistribution(const int64_t *blockShape,
                                           int numDims, int numWarps,
                                           int *warpsOut) {
@@ -31,9 +33,6 @@ static inline void tdmGetWarpDistribution(const int64_t *blockShape,
       remainingWarps /= 2;
     }
   }
-
-  if (remainingWarps > 1)
-    warpsOut[numDims - 1] *= remainingWarps;
 }
 
 // Compute per-warp block sizes after distributing warps.

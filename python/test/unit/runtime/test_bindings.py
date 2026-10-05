@@ -3,9 +3,55 @@ import triton.language as tl
 
 import torch
 import math
+import subprocess
+import sys
+import textwrap
 import pytest
 
 _BLOCK_SIZE = 16
+
+
+def test_llvm_ir_to_bitcode():
+    from triton._C.libtriton import llvm
+
+    bitcode = llvm.to_bitcode("define void @kernel() { ret void }")
+    assert isinstance(bitcode, bytes)
+    assert bitcode.startswith(b"BC\xc0\xde")
+    assert b"\x00" in bitcode
+
+
+def test_llvm_ir_to_bitcode_reports_invalid_ir():
+    from triton._C.libtriton import llvm
+
+    with pytest.raises(RuntimeError, match="failed to parse LLVM IR.*expected top-level entity"):
+        llvm.to_bitcode("invalid LLVM IR")
+
+
+def test_binding_classes_released_at_shutdown():
+    script = textwrap.dedent("""
+        import os
+        from triton._C.libtriton import gluon_ir, ir
+        from triton.experimental.gluon.language import BlockedLayout
+
+        class ShutdownSentinel:
+            def __init__(self, message):
+                self.message = message
+
+            def __del__(self, write=os.write):
+                write(1, self.message)
+
+        ir.builder._shutdown_sentinel = ShutdownSentinel(b"builder released\\n")
+        context = ir.context()
+        ir.load_dialects(context)
+        builder = gluon_ir.GluonOpBuilder(context)
+        layout = BlockedLayout([1], [32], [4], [0])._to_ir(builder)
+        result = builder.to_linear_layout(layout, [128])
+        type(result)._shutdown_sentinel = ShutdownSentinel(b"layout released\\n")
+        del result, layout, builder, context
+    """)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+    assert set(result.stdout.splitlines()) == {"builder released", "layout released"}, result.stderr
+    assert "nanobind: leaked" not in result.stderr
 
 
 @triton.jit
@@ -121,31 +167,3 @@ def test_python_func_in_visit_call(device):
     x = torch.randn(4, device=device)
     out = torch.zeros_like(x)
     test_py_call_const_kernel[(4, )](x, out, 4, 4)
-
-
-@pytest.mark.parametrize("scalarize", [False, True])
-def test_scalarize_packed_fops_llvm_pipeline(tmp_path, scalarize):
-    from triton._C.libtriton import ir, llvm
-
-    # NVIDIA requests this pass explicitly: its module does not yet have a
-    # target triple when optimize_module runs. Other backends retain the default.
-    source = tmp_path / "fma.mlir"
-    source.write_text("""
-module {
-  llvm.func @fma_lane(%a: vector<2xf32>, %b: vector<2xf32>, %c: vector<2xf32>) -> f32 {
-    %v = llvm.call_intrinsic "llvm.fma"(%a, %b, %c) : (vector<2xf32>, vector<2xf32>, vector<2xf32>) -> vector<2xf32>
-    %index = llvm.mlir.constant(1 : i32) : i32
-    %r = llvm.extractelement %v[%index : i32] : vector<2xf32>
-    llvm.return %r : f32
-  }
-}
-""")
-    context = ir.context()
-    ir.load_dialects(context)
-    module = ir.parse_mlir_module(str(source), context)
-    llvm_context = llvm.context()
-    llvm_module = llvm.to_module(module, llvm_context)
-    options = {"scalarize_packed_fops": True} if scalarize else {}
-    llvm.optimize_module(llvm_module, llvm.OPTIMIZE_O3, **options)
-    expected = "call float @llvm.fma.f32" if scalarize else "call <2 x float> @llvm.fma.v2f32"
-    assert expected in str(llvm_module)
