@@ -159,6 +159,7 @@ class HIPUtils(object):
         self.create_tdm_descriptor = mod.create_tdm_descriptor
         self.launch = mod.launch
         self.build_signature_metadata = mod.build_signature_metadata
+        self._HIPPreboundLauncher = mod._HIPPreboundLauncher
         global PyTDMDescriptor
         global PyKernelArg
         global ARG_CONSTEXPR
@@ -299,7 +300,14 @@ class HIPLauncher(object):
         expanded_signature = expand_signature(signature.values(), tensordesc_meta, "tensordesc")
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = make_kernel_signature(expanded_signature)
+        self.prebound_arg_indices = None
+        if all(not isinstance(ty, tuple) and not str(ty).startswith("tensordesc") for ty in signature.values()):
+            self.prebound_arg_indices = tuple(i for i, ty in enumerate(signature.values()) if ty != "constexpr")
+        self.num_call_args = len(signature)
         self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta)
+        self.num_warps = metadata.num_warps
+        self.num_ctas = metadata.num_ctas
+        self.shared = metadata.shared
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.warp_size = metadata.warp_size
         # Check if cooperative groups are supported on the device.
@@ -314,6 +322,21 @@ class HIPLauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
         self.profile_scratch_align = metadata.profile_scratch_align
+
+    def make_prebound_launcher(self, function):
+        if (self.prebound_arg_indices is None or self.global_scratch_size or self.profile_scratch_size):
+            return None
+        return triton.runtime.driver.active.utils._HIPPreboundLauncher(
+            function=function,
+            num_warps=self.num_warps,
+            num_ctas=self.num_ctas,
+            shared_mem=self.shared,
+            launch_cooperative_grid=self.launch_cooperative_grid,
+            warp_size=self.warp_size,
+            arg_type_codes=self.kernel_signature,
+            arg_indices=self.prebound_arg_indices,
+            num_call_args=self.num_call_args,
+        )
 
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
