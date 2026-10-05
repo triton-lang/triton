@@ -35,6 +35,18 @@ def test_fp16_to_bf16_exact_values():
     np.testing.assert_array_equal(result.data, expected)
 
 
+@pytest.mark.parametrize("src_dtype, dst_dtype, bits, expected", [
+    (tl.float32, tl.bfloat16, [0x00008000, 0x00018000, 0x007F8000, 0x80008000], [0x0000, 0x0002, 0x0080, 0x8000]),
+    (tl.float16, tl.bfloat16, [0x0001, 0x8001], [0x3380, 0xB380]),
+    (tl.float8e4nv, tl.float8e5, [0x01, 0x02, 0x07], [0x18, 0x1C, 0x23]),
+])
+def test_float_conversion_subnormal_rounding(src_dtype, dst_dtype, bits, expected):
+    uint_dtype = getattr(np, f"uint{src_dtype.primitive_bitwidth}")
+    data = np.array(bits, dtype=uint_dtype).view(interpreter._get_np_dtype(src_dtype))
+    result = interpreter._convert_float(data, src_dtype, dst_dtype, ir.ROUNDING_MODE.RTNE)
+    np.testing.assert_array_equal(result, expected)
+
+
 def test_atomic_poll_tensor_shares_timeout(monkeypatch) -> None:
     builder = interpreter.InterpreterBuilder()
     data = np.array([0, 0, 1], dtype=np.int32)

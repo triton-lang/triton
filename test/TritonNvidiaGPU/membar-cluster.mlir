@@ -1,4 +1,31 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-tensor-memory-allocation --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' | FileCheck --dump-input=fail --dump-input-context=30 %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-tensor-memory-allocation --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals | FileCheck --dump-input=fail --dump-input-context=30 %s
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Each CTA waits for its own copy before overwriting the destination.
+  // CHECK-LABEL: @tma_payload_generic_store
+  // CHECK: ttng.wait_barrier
+  // CHECK-NEXT: ttg.local_store
+  tt.func @tma_payload_generic_store(%desc: !tt.tensordesc<16x64xf16, #shared>, %value: tensor<16x64xf16, #blocked>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, 2048, %true : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<2xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttg.local_store %value, %mem : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %result = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+}
 
 // -----
 
@@ -174,6 +201,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.wait_barrier
   tt.func @insert_fence_and_relaxed_cluster_barrier_at_window_end_after_existing_fence() {
     %c0 = arith.constant 0 : i32
@@ -197,6 +225,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.wait_barrier
   tt.func @insert_fence_right_before_existing_relaxed_cluster_barrier() {
     %c0 = arith.constant 0 : i32
@@ -256,6 +285,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ^bb3:
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.wait_barrier
   tt.func @insert_fence_and_relaxed_cluster_barrier_at_cf_join_after_branch_inits(%pred: i1) {
     %c0 = arith.constant 0 : i32
@@ -901,10 +931,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // and come out of the for loop analysis with a read dependency on the last reduce
 
   // CHECK-LABEL: @scf_for_reduce_cluster_barrier
-  // CHECK: scf.for
+  // CHECK: cf.cond_br
   // CHECK: ttng.cluster_barrier
   // CHECK: tt.reduce
-  // CHECK: scf.yield
+  // CHECK: cf.br
   // CHECK: ttng.cluster_barrier
   // CHECK-NEXT: ttg.local_alloc
   tt.func @scf_for_reduce_cluster_barrier() -> tensor<128xf16, #slice0> {
@@ -1076,6 +1106,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.clc_try_cancel
   // CHECK: tt.return
   tt.func @cluster_clc_with_per_cta_barrier() {
@@ -1124,6 +1155,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.async_shared_store
   // CHECK: tt.return
   tt.func @cluster_async_shared_store_with_per_cta_barrier(%src: tensor<128xi32, #blockedStore>) {
@@ -1197,6 +1229,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tc_gen5_commit
   // CHECK: tt.return
   tt.func @cluster_tc_gen5_commit_multicast_with_per_cta_barrier(%desc: !ttg.memdesc<128x128xf16, #sharedCommit, #smem>) {
@@ -1221,6 +1254,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tc_gen5_mma
   // CHECK: tt.return
   tt.func @cluster_tc_gen5_mma_multicast_with_per_cta_barrier(%a: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, %b: !ttg.memdesc<128x128xf16, #sharedMMA, #smem>, %acc: !ttg.memdesc<128x128xf32, #tmemMMA, #ttng.tensor_memory, mutable>) {
@@ -1245,6 +1279,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.barrier_expect
   tt.func @cluster_fromCTA_with_per_cta_barrier() {
     %true = arith.constant true
@@ -1269,6 +1304,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK: tt.return
   tt.func @cluster_tma_multicast_with_per_cta_barrier(%desc: !tt.tensordesc<64x128xf16, #nvmma>) -> tensor<64x128xf16, #blocked> {
@@ -1380,18 +1416,17 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK: ttng.tmem_alloc
   // CHECK: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
-  // CHECK: scf.for
+  // CHECK: cf.cond_br
   // CHECK: ttng.barrier_expect
   // CHECK-NOT: ttng.cluster_barrier
-  // CHECK: ttg.barrier local
-  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
-  // CHECK-NOT: ttng.cluster_barrier
-  // CHECK: ttg.barrier local
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttng.async_tma_copy_global_to_local
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK-NOT: ttng.cluster_barrier
   // CHECK: ttng.wait_barrier
   // CHECK-NOT: ttng.cluster_barrier
-  // CHECK: ttng.tc_gen5_mma
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttng.tc_gen5_mma
   // CHECK: ttng.wait_barrier
   tt.func @example_matmul(%a_desc: !tt.tensordesc<256x16xf16, #sharedA>, %b_desc: !tt.tensordesc<16x64xf16, #sharedB>) {
     %c0 = arith.constant 0 : i32
@@ -1455,6 +1490,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK: ttng.tmem_copy
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.wait_barrier
   tt.func @insert_fence_and_relaxed_cluster_barrier_before_wait_after_tmem_copy() {
     %c0 = arith.constant 0 : i32
@@ -1482,6 +1518,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttg.local_alloc
   // CHECK: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK: ttng.wait_barrier
   // CHECK: ttg.local_dealloc
@@ -1593,6 +1630,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.arrive_barrier
   tt.func @cluster_arrive_barrier_multicast_init_sync() {
     %c0 = arith.constant 0 : i32

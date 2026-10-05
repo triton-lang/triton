@@ -1,6 +1,33 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --implicit-check-not=cluster_waiting --implicit-check-not=always_use_warp_shuffle
 // RUN: env TRITON_CONSAN_INIT_ALLOCATIONS=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --check-prefix=NO-INIT
 
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 2056 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // Track four total arrivals and the original total bytes, not per-warp bytes.
+  // CHECK-LABEL: @distributed_expect
+  // CHECK: ttng.init_barrier
+  // CHECK: %[[COUNT:.*]] = arith.constant 4 : i32
+  // CHECK-NEXT: %[[BYTES:.*]] = arith.constant 2048 : i64
+  // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{.*}}({{[^,]+}}, {{[^,]+}}, %[[COUNT]], %[[BYTES]],
+  // CHECK: ttng.barrier_expect {{.*}}, 2048 {per_warp},
+  tt.func public @distributed_expect(%desc: !tt.tensordesc<16x64xf16, #shared>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %mem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %bar, 4 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, 2048 {per_warp}, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory

@@ -805,6 +805,10 @@ bool TargetInfo::supportsMultiCTALaunch() const {
   return targetFeatures.supportsMultiCTALaunch();
 }
 
+bool TargetInfo::supportsMulticast() const {
+  return targetFeatures.supportsMulticast();
+}
+
 unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
   return targetFeatures.getMaxMulticastMaskPopcount();
 }
@@ -851,6 +855,14 @@ bool TargetInfo::supportsCvtPkScalePk8() const {
   return targetFeatures.supportsCvtPkScalePk8();
 }
 
+bool TargetInfo::supportsCvtPkScalePk8Upcast() const {
+  return targetFeatures.supportsCvtPkScalePk8Upcast();
+}
+
+bool TargetInfo::supportsCvtPkScalePk8Block16() const {
+  return targetFeatures.supportsCvtPkScalePk8Block16();
+}
+
 bool TargetInfo::supportsHwScaledUpcast() const {
   return targetFeatures.supportsHwScaledUpcast();
 }
@@ -861,6 +873,10 @@ bool TargetInfo::supportsHwScaledDowncast() const {
 
 bool TargetInfo::supportDppBroadcast() const {
   return targetFeatures.supportDppBroadcast();
+}
+
+bool TargetInfo::isGFX1250Strict() const {
+  return targetFeatures.isGFX1250Strict();
 }
 
 std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>

@@ -11,6 +11,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -20,6 +21,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/IR/Value.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
@@ -79,6 +81,28 @@ void createSharedMemoryGlobal(ModuleOp mod, LLVMTypeConverter &typeConverter) {
       /*alignment=*/16, static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
 }
 
+void propagatePointerAlignment(ModuleOp mod) {
+  Builder builder(mod.getContext());
+  mod.walk([&](LLVM::LLVMFuncOp funcOp) {
+    for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
+      // Only original Triton pointers carry this attribute, not descriptors.
+      if (!funcOp.getArgAttr(i, "tt.pointee_type"))
+        continue;
+      auto attr = funcOp.getArgAttrOfType<IntegerAttr>(i, "tt.divisibility");
+      if (!attr)
+        continue;
+      auto alignment = attr.getValue().getZExtValue();
+      // AxisInfo gives poison pointer arguments a maximal divisor.
+      if (alignment == 1 || alignment > llvm::Value::MaximumAlignment)
+        continue;
+      auto alignName = LLVM::LLVMDialect::getAlignAttrName();
+      auto existing = funcOp.getArgAttrOfType<IntegerAttr>(i, alignName);
+      if (!existing || existing.getValue().ult(alignment))
+        funcOp.setArgAttr(i, alignName, builder.getI64IntegerAttr(alignment));
+    }
+  });
+}
+
 struct ConvertTritonGPUToLLVM
     : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
   using ConvertTritonGPUToLLVMBase::ConvertTritonGPUToLLVMBase;
@@ -131,6 +155,14 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   }
 
   finalizeModule(mod);
+
+  // Fold temporary aggregate packing before the pass-boundary verifier walks
+  // these large struct types. The normal verifier still checks the cleaned IR.
+  RewritePatternSet patterns(mod.getContext());
+  LLVM::InsertValueOp::getCanonicalizationPatterns(patterns, mod.getContext());
+  (void)applyPatternsGreedily(
+      mod, std::move(patterns),
+      GreedyRewriteConfig().setUseTopDownTraversal(true));
 }
 
 LogicalResult ConvertTritonGPUToLLVM::lowerFunctions(
@@ -213,6 +245,8 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
 LogicalResult ConvertTritonGPUToLLVM::lowerTritonGPUOps(
     ModuleOp mod, LLVMTypeConverter &typeConverter, TargetInfo &targetInfo) {
   ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+  // Infer all call sites before turning divisibility into an LLVM contract.
+  propagatePointerAlignment(mod);
   RewritePatternSet patterns(mod.getContext());
   populateConversionPatterns(typeConverter, patterns, axisInfoAnalysis,
                              targetInfo);

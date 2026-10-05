@@ -1,6 +1,7 @@
 import torch
 import pytest
 import triton
+from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental import gluon
 import triton.experimental.gluon.language as gl
 from triton.experimental.gluon.language.amd.cdna5 import tdm
@@ -25,12 +26,12 @@ def swiglu_epilogue(acc):
 
 
 @gluon.constexpr_function
-def get_scale_blocked_layout(num_warps: gl.constexpr):
-    return gl.BlockedLayout([1, 8], [1, 32], [num_warps // 2, 2], [1, 0])
+def get_scale_blocked_layout(num_warps: gl.constexpr, cga_layout=()):
+    return gl.BlockedLayout([1, 8], [1, 32], [num_warps // 2, 2], [1, 0], cga_layout=cga_layout)
 
 
 @gluon.constexpr_function
-def get_wmma_layout(num_warps, packed, scale_preshuffle, instr_m=16):
+def get_wmma_layout(num_warps, packed, scale_preshuffle, instr_m=16, cga_layout=()):
     assert (num_warps in (4, 8))
     assert (instr_m in (16, 32))
     if scale_preshuffle:
@@ -47,7 +48,7 @@ def get_wmma_layout(num_warps, packed, scale_preshuffle, instr_m=16):
 
     instr_shape = [instr_m, 16, 64] if packed else [instr_m, 16, 128]
 
-    return gl.amd.AMDWMMALayout(3, True, warp_bases, reg_bases, instr_shape)
+    return gl.amd.AMDWMMALayout(3, True, warp_bases, reg_bases, instr_shape, cga_layout=cga_layout)
 
 
 @gluon.constexpr_function
@@ -60,6 +61,20 @@ def reverse_tdm_warp_used_hint(x: gl.constexpr, num_warps: gl.constexpr):
         if x & (1 << i):
             result |= 1 << (num_warps - 1 - i)
     return result
+
+
+@gluon.constexpr_function
+def validate_cga_layout(cga_layout, block_m, block_n, scale_preshuffle):
+    """Validate that preshuffled scale groups stay within each CTA.
+
+    BLOCK_M/BLOCK_N describe the full cluster tile. With preshuffled scales,
+    each CTA must own whole groups of 128 rows on its partitioned axis.
+    """
+    if cga_layout and scale_preshuffle:
+        split_m = max(1, 2 * max(m for m, _ in cga_layout))
+        split_n = max(1, 2 * max(n for _, n in cga_layout))
+        assert block_m // split_m >= 128 and block_n // split_n >= 128, \
+            "Preshuffled scales require at least 128 M/N rows per CTA"
 
 
 @gluon.aggregate
@@ -111,11 +126,13 @@ class MXFPGEMMConfig:
     ACTIVATION: gl.constexpr
 
     TDM_SPLIT: gl.constexpr
+    CGA_LAYOUT: gl.constexpr
 
     @gluon.constexpr_function
     def __init__(self, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B, SCALE_BLOCK, NUM_BUFFERS, TRANSPOSE_B, WITH_A_SCALE,
                  SCALE_PRESHUFFLE, NUM_WARPS, TDM_WARP_USED_HINT=None, ASYNC_COPY_SCALE=False, NUM_SUBTILES=(1, 1, 1),
-                 L2_PREFETCH_DISTANCE=0, ACTIVATION="", RESOLVE_PARTITION_CONFLICTS=False, TDM_SPLIT=False):
+                 L2_PREFETCH_DISTANCE=0, ACTIVATION="", RESOLVE_PARTITION_CONFLICTS=False, TDM_SPLIT=False,
+                 CGA_LAYOUT=()):
         self.BLOCK_M = gl.constexpr(BLOCK_M)
         self.BLOCK_N = gl.constexpr(BLOCK_N)
         self.BLOCK_K = gl.constexpr(BLOCK_K)
@@ -137,6 +154,10 @@ class MXFPGEMMConfig:
         self.L2_PREFETCH_DISTANCE = gl.constexpr(L2_PREFETCH_DISTANCE)
         self.ACTIVATION = gl.constexpr(ACTIVATION)
         self.TDM_SPLIT = gl.constexpr(TDM_SPLIT)
+        self.CGA_LAYOUT = gl.constexpr(CGA_LAYOUT)
+        cga_a = [[m, 0] for m, _ in CGA_LAYOUT]
+        cga_b = [[n, 0] for _, n in CGA_LAYOUT]
+        cga_b_data = cga_b if TRANSPOSE_B else [[0, n] for _, n in CGA_LAYOUT]
         if ACTIVATION == "swiglu":
             assert (BLOCK_N // NUM_SUBTILES[1]) % 2 == 0, \
             "SwiGLU requires (BLOCK_N // NUM_SUBTILES[1]) % 2 == 0"
@@ -168,13 +189,15 @@ class MXFPGEMMConfig:
         LAYOUT_BLOCK_N = (BLOCK_N // NUM_SUBTILES_N) if TDM_SPLIT else BLOCK_N
 
         padded_a = gl.PaddedSharedLayout.with_identity_for([[PAD_INTERVAL_A, 16]], [LAYOUT_BLOCK_M, BLOCK_K_PACKED_A],
-                                                           [1, 0])
+                                                           [1, 0], cga_layout=cga_a)
         if TRANSPOSE_B:
             padded_b = gl.PaddedSharedLayout.with_identity_for([[PAD_INTERVAL_B, 16]],
-                                                               [LAYOUT_BLOCK_N, BLOCK_K_PACKED_B], [1, 0])
+                                                               [LAYOUT_BLOCK_N, BLOCK_K_PACKED_B], [1, 0],
+                                                               cga_layout=cga_b_data)
         else:
             padded_b = gl.PaddedSharedLayout.with_identity_for([[LAYOUT_BLOCK_N, 16]],
-                                                               [BLOCK_K_PACKED_B, LAYOUT_BLOCK_N], [1, 0])
+                                                               [BLOCK_K_PACKED_B, LAYOUT_BLOCK_N], [1, 0],
+                                                               cga_layout=cga_b_data)
 
         if RESOLVE_PARTITION_CONFLICTS:
             # Split each operand tile along its M (A) / N (B) axis into partitioned
@@ -192,8 +215,8 @@ class MXFPGEMMConfig:
             self.shared_layout_a = gl.constexpr(shared_a)
             self.shared_layout_b = gl.constexpr(shared_b)
         else:
-            WMMA_LAYOUT = get_wmma_layout(NUM_WARPS, False, SCALE_PRESHUFFLE, INSTR_M)
-            WMMA_LAYOUT_PACKED = get_wmma_layout(NUM_WARPS, True, SCALE_PRESHUFFLE, INSTR_M)
+            WMMA_LAYOUT = get_wmma_layout(NUM_WARPS, False, SCALE_PRESHUFFLE, INSTR_M, CGA_LAYOUT)
+            WMMA_LAYOUT_PACKED = get_wmma_layout(NUM_WARPS, True, SCALE_PRESHUFFLE, INSTR_M, CGA_LAYOUT)
             self.shared_layout_a = gl.constexpr(padded_a)
             self.shared_layout_b = gl.constexpr(padded_b)
 
@@ -213,10 +236,12 @@ class MXFPGEMMConfig:
 
         self.shared_layout_a_scale = gl.constexpr(
             gl.PaddedSharedLayout.with_identity_for([[256, 8]],
-                                                    [self.BLOCK_M_PRESHUFFLED, self.BLOCK_K_SCALE_PRESHUFFLED], [1, 0]))
+                                                    [self.BLOCK_M_PRESHUFFLED, self.BLOCK_K_SCALE_PRESHUFFLED], [1, 0],
+                                                    cga_layout=cga_a))
         self.shared_layout_b_scale = gl.constexpr(
             gl.PaddedSharedLayout.with_identity_for([[256, 8]],
-                                                    [self.BLOCK_N_PRESHUFFLED, self.BLOCK_K_SCALE_PRESHUFFLED], [1, 0]))
+                                                    [self.BLOCK_N_PRESHUFFLED, self.BLOCK_K_SCALE_PRESHUFFLED], [1, 0],
+                                                    cga_layout=cga_b))
 
 
 @gluon.aggregate
@@ -253,7 +278,7 @@ class ScaleAsyncCopyDescriptor:
             BLOCK_NONK: gl.constexpr = cfg.BLOCK_N_PRESHUFFLED
         BLOCK_K: gl.constexpr = cfg.BLOCK_K_SCALE_PRESHUFFLED
 
-        blocked_layout: gl.constexpr = get_scale_blocked_layout(cfg.NUM_WARPS)
+        blocked_layout: gl.constexpr = get_scale_blocked_layout(cfg.NUM_WARPS, layout.cga_layout)
         offs_non_k = gl.arange(0, BLOCK_NONK, gl.SliceLayout(1, blocked_layout))
         offs_k = gl.arange(0, BLOCK_K, gl.SliceLayout(0, blocked_layout))
         offs = off + offs_non_k[:, None] * stride + offs_k[None, :]
@@ -1967,15 +1992,17 @@ def create_split_data_tensor_descriptor(cfg: MXFPGEMMConfig, a_ptr, a_offs, b_pt
 
 
 @gluon.jit
-def mxgemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, stride_ak, stride_bk,
-                                stride_bn, stride_cm, stride_cn, stride_scale, DTYPE_A: gl.constexpr,
-                                DTYPE_B: gl.constexpr, SCALE_BLOCK: gl.constexpr, BLOCK_M: gl.constexpr,
-                                BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr, GROUP_SIZE_M: gl.constexpr,
-                                TRANSPOSE_B: gl.constexpr, NUM_BUFFERS: gl.constexpr, SCALE_PRESHUFFLE: gl.constexpr,
-                                ASYNC_COPY_SCALE: gl.constexpr, WITH_A_SCALE: gl.constexpr, SCHEDULE: gl.constexpr,
-                                NUM_WARPS: gl.constexpr, PINGPONG: gl.constexpr, L2_PREFETCH_DISTANCE: gl.constexpr = 0,
-                                ACTIVATION: gl.constexpr = "", PARTIAL_TDM: gl.constexpr = False,
-                                RESOLVE_PARTITION_CONFLICTS: gl.constexpr = False, TDM_SPLIT: gl.constexpr = False):
+def mxgemm_tdm_pipelined_kernel(
+    a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+    stride_scale, DTYPE_A: gl.constexpr, DTYPE_B: gl.constexpr, SCALE_BLOCK: gl.constexpr, BLOCK_M: gl.constexpr,
+    BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr, GROUP_SIZE_M: gl.constexpr, TRANSPOSE_B: gl.constexpr,
+    NUM_BUFFERS: gl.constexpr, SCALE_PRESHUFFLE: gl.constexpr, ASYNC_COPY_SCALE: gl.constexpr,
+    WITH_A_SCALE: gl.constexpr, SCHEDULE: gl.constexpr, NUM_WARPS: gl.constexpr, PINGPONG: gl.constexpr,
+    L2_PREFETCH_DISTANCE: gl.constexpr = 0, ACTIVATION: gl.constexpr = "", PARTIAL_TDM: gl.constexpr = False,
+    RESOLVE_PARTITION_CONFLICTS: gl.constexpr = False, TDM_SPLIT: gl.constexpr = False, CGA_LAYOUT: gl.constexpr = ()):
+
+    gl.static_assert(gl.num_ctas() == 2**len(CGA_LAYOUT), "num_ctas must match CGA_LAYOUT")
+    validate_cga_layout(CGA_LAYOUT, BLOCK_M, BLOCK_N * (2 if ACTIVATION == "swiglu" else 1), SCALE_PRESHUFFLE)
 
     if PINGPONG:
         gl.static_assert(NUM_WARPS == 8 and (SCHEDULE == 'baseline' or SCHEDULE == 'sliceK'))
@@ -2011,7 +2038,7 @@ def mxgemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, 
 
     cfg = MXFPGEMMConfig(BLOCK_M, BLOCK_N_PACKED, BLOCK_K, DTYPE_A, DTYPE_B, SCALE_BLOCK, NUM_BUFFERS, TRANSPOSE_B,
                          WITH_A_SCALE, SCALE_PRESHUFFLE, NUM_WARPS, TDM_WARP_USED_HINT, ASYNC_COPY_SCALE, NUM_SUBTILES,
-                         L2_PREFETCH_DISTANCE, ACTIVATION, RESOLVE_PARTITION_CONFLICTS, TDM_SPLIT)
+                         L2_PREFETCH_DISTANCE, ACTIVATION, RESOLVE_PARTITION_CONFLICTS, TDM_SPLIT, CGA_LAYOUT)
 
     pid = gl.program_id(axis=0)
     num_pid_m = gl.cdiv(M, BLOCK_M)
@@ -2032,7 +2059,7 @@ def mxgemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, 
                                                                           N_PACKED, K, stride_am, stride_ak, stride_bk,
                                                                           stride_bn, stride_scale)
 
-    shared_layout_acc: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+    shared_layout_acc: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=CGA_LAYOUT)
     c_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
                                                      block_shape=(BLOCK_M, BLOCK_N), layout=shared_layout_acc)
     c_off_m = pid_m * BLOCK_M
@@ -2145,10 +2172,10 @@ def test_runtime_mxgemm_tdm_8warps_pipeline(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, 
                                             NUM_BUFFERS, SCALE_PRESHUFFLE, WITH_A_SCALE, SCHEDULE, ASYNC_COPY_SCALE,
                                             GROUP_SIZE_M, PINGPONG, L2_PREFETCH_DISTANCE,
                                             RESOLVE_PARTITION_CONFLICTS=False, PARTIAL_TDM=False, BENCHMARK_MODE=None,
-                                            BENCHMARK_NUM_ITERS=32):
+                                            BENCHMARK_NUM_ITERS=32, CGA_LAYOUT=()):
     SCALE_BLOCK = 32
     numWarps = 8
-    numCtas = 1
+    numCtas = 2**len(CGA_LAYOUT)
 
     torch.manual_seed(0)
 
@@ -2219,12 +2246,13 @@ def test_runtime_mxgemm_tdm_8warps_pipeline(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, 
 
     dtype_converter = {'float8_e5m2': "e5m2", "float8_e4m3": "e4m3", "float4": "e2m1"}
 
-    fn = lambda: mxgemm_tdm_pipelined_kernel[grid](
-        a_d, b_d, c_d, a_scale_d, b_scale_d, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
-        stride_scale, dtype_converter[DTYPE_A], dtype_converter[DTYPE_B], SCALE_BLOCK, BLOCK_M, BLOCK_N, BLOCK_K,
-        GROUP_SIZE_M, TRANSPOSE_B, NUM_BUFFERS, SCALE_PRESHUFFLE, ASYNC_COPY_SCALE, WITH_A_SCALE, SCHEDULE, numWarps,
-        PINGPONG, L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE, PARTIAL_TDM=PARTIAL_TDM, RESOLVE_PARTITION_CONFLICTS=
-        RESOLVE_PARTITION_CONFLICTS, num_warps=numWarps, num_ctas=numCtas, waves_per_eu=(numWarps // 4))
+    fn = lambda: mxgemm_tdm_pipelined_kernel[
+        grid](a_d, b_d, c_d, a_scale_d, b_scale_d, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm,
+              stride_cn, stride_scale, dtype_converter[DTYPE_A], dtype_converter[
+                  DTYPE_B], SCALE_BLOCK, BLOCK_M, BLOCK_N, BLOCK_K, GROUP_SIZE_M, TRANSPOSE_B, NUM_BUFFERS,
+              SCALE_PRESHUFFLE, ASYNC_COPY_SCALE, WITH_A_SCALE, SCHEDULE, numWarps, PINGPONG, L2_PREFETCH_DISTANCE=
+              L2_PREFETCH_DISTANCE, PARTIAL_TDM=PARTIAL_TDM, RESOLVE_PARTITION_CONFLICTS=RESOLVE_PARTITION_CONFLICTS,
+              CGA_LAYOUT=CGA_LAYOUT, num_warps=numWarps, num_ctas=numCtas, waves_per_eu=(numWarps // 4))
 
     if BENCHMARK_MODE == 'graph':
         time = triton.testing.do_bench_cudagraph(fn, rep=BENCHMARK_NUM_ITERS)
@@ -2276,7 +2304,7 @@ def test_runtime_mxgemm_tdm_8warps_pipeline(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, 
 def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B, NUM_BUFFERS,
                                       SCALE_PRESHUFFLE, WITH_A_SCALE, SCHEDULE, ASYNC_COPY_SCALE, GROUP_SIZE_M,
                                       L2_PREFETCH_DISTANCE, ACTIVATION, PARTIAL_TDM, RESOLVE_PARTITION_CONFLICTS,
-                                      TDM_SPLIT, BENCHMARK_MODE=None, BENCHMARK_NUM_ITERS=32):
+                                      TDM_SPLIT, BENCHMARK_MODE=None, BENCHMARK_NUM_ITERS=32, CGA_LAYOUT=()):
     """
     Pipelined mxfp GEMM with optional fused SwiGLU epilogue.
 
@@ -2285,7 +2313,7 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
     """
     SCALE_BLOCK = 32
     numWarps = 4
-    numCtas = 1
+    numCtas = 2**len(CGA_LAYOUT)
     IS_SWIGLU = ACTIVATION == "swiglu"
     EFFECTIVE_BLOCK_N = BLOCK_N * 2 if IS_SWIGLU else BLOCK_N
     is_fp4fp4 = DTYPE_A == "float4" and DTYPE_B == "float4"
@@ -2407,13 +2435,13 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
 
     dtype_converter = {'float8_e5m2': "e5m2", "float8_e4m3": "e4m3", "float4": "e2m1"}
 
-    fn = lambda: mxgemm_tdm_pipelined_kernel[
-        grid](a_d, b_d, c_d, a_scale_d, b_scale_d, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm,
-              stride_cn, stride_scale, dtype_converter[DTYPE_A], dtype_converter[DTYPE_B], SCALE_BLOCK, BLOCK_M,
-              BLOCK_N, BLOCK_K, GROUP_SIZE_M, TRANSPOSE_B, NUM_BUFFERS, SCALE_PRESHUFFLE, ASYNC_COPY_SCALE,
-              WITH_A_SCALE, SCHEDULE, NUM_WARPS=numWarps, PINGPONG=False, L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE,
-              ACTIVATION=ACTIVATION, PARTIAL_TDM=PARTIAL_TDM, RESOLVE_PARTITION_CONFLICTS=RESOLVE_PARTITION_CONFLICTS,
-              TDM_SPLIT=TDM_SPLIT, num_warps=numWarps, num_ctas=numCtas, waves_per_eu=numWarps // 4)
+    fn = lambda: mxgemm_tdm_pipelined_kernel[grid](
+        a_d, b_d, c_d, a_scale_d, b_scale_d, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+        stride_scale, dtype_converter[DTYPE_A], dtype_converter[DTYPE_B], SCALE_BLOCK, BLOCK_M, BLOCK_N, BLOCK_K,
+        GROUP_SIZE_M, TRANSPOSE_B, NUM_BUFFERS, SCALE_PRESHUFFLE, ASYNC_COPY_SCALE, WITH_A_SCALE, SCHEDULE, NUM_WARPS=
+        numWarps, PINGPONG=False, L2_PREFETCH_DISTANCE=L2_PREFETCH_DISTANCE, ACTIVATION=ACTIVATION, PARTIAL_TDM=
+        PARTIAL_TDM, RESOLVE_PARTITION_CONFLICTS=RESOLVE_PARTITION_CONFLICTS, TDM_SPLIT=TDM_SPLIT, CGA_LAYOUT=
+        CGA_LAYOUT, num_warps=numWarps, num_ctas=numCtas, waves_per_eu=numWarps // 4)
 
     if BENCHMARK_MODE == 'graph':
         time = triton.testing.do_bench_cudagraph(fn, rep=BENCHMARK_NUM_ITERS)
@@ -2449,6 +2477,58 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
         print('✅Pass')
 
 
+@pytest.mark.parametrize("SCHEDULE,NUM_WARPS,CGA_LAYOUT,DTYPE_A,DTYPE_B,ASYNC_COPY_SCALE,PINGPONG,OPTIONS", [
+    pytest.param('baseline', 4, ((0, 1), ), 'float8_e4m3', 'float8_e5m2', False, False, {}, id='baseline-n'),
+    pytest.param('sliceK', 4,
+                 ((1, 0),
+                  (0, 1)), 'float4', 'float8_e4m3', False, False, {'l2_prefetch_distance': 1}, id='sliceK-mn-prefetch'),
+    pytest.param('sliceNK', 4, ((1, 0), ), 'float4', 'float8_e4m3', True, False, {'l2_prefetch_distance': 2},
+                 id='sliceNK-m-async-scales-prefetch'),
+    pytest.param('baseline', 8, ((1, 0), (0, 1)), 'float4', 'float8_e4m3', False, True, {'l2_prefetch_distance': 2},
+                 id='baseline-mn-pingpong-prefetch'),
+    pytest.param(
+        'baseline', 4, ((1, 0), (0, 1)), 'float8_e5m2', 'float4', False, False, {
+            'shape':
+            (192, 160, 640), 'transpose_b': False, 'scale_preshuffle': False, 'with_a_scale': False, 'partial_tdm': True
+        }, id='baseline-mn-unshuffled-masked'),
+    pytest.param('sliceK', 4, ((1, 0), (0, 1)), 'float4', 'float4', False, False,
+                 {'shape': (128, 128, 768), 'partial_tdm': True}, id='sliceK-mn-fp4-masked'),
+    pytest.param('sliceNK', 4, ((1, 0), ), 'float8_e4m3', 'float4', True, False, {'with_a_scale': False},
+                 id='sliceNK-m-async-scales-no-a-scale'),
+    pytest.param('baseline', 4, ((0, 1), ), 'float4', 'float8_e4m3', False, False,
+                 {'shape': (384, 192, 640), 'block_n': 128, 'activation': 'swiglu'}, id='baseline-n-swiglu-masked'),
+    pytest.param('baseline', 4,
+                 ((0, 1), (0, 2)), 'float4', 'float8_e4m3', False, False, {'block_n': 512}, id='baseline-n-four-ctas'),
+    pytest.param('sliceK', 8, ((1, 0), ), 'float4', 'float8_e4m3', False, True, {'partial_tdm': True},
+                 id='sliceK-m-pingpong-partial-tdm'),
+    pytest.param('baseline', 4, ((1, 0), ), 'float8_e4m3', 'float8_e5m2', False, False,
+                 {'scale_preshuffle': False, 'partial_tdm': True, 'l2_prefetch_distance': 1},
+                 id='baseline-m-unshuffled-a-b-scales-prefetch'),
+])
+def test_runtime_mxgemm_tdm_multi_cta(SCHEDULE, NUM_WARPS, CGA_LAYOUT, DTYPE_A, DTYPE_B, ASYNC_COPY_SCALE, PINGPONG,
+                                      OPTIONS):
+    M, N, K = OPTIONS.get('shape', (512, 512, 768))
+    BLOCK_M, BLOCK_N = 256, OPTIONS.get('block_n', 256)
+    BLOCK_K = 128 if SCHEDULE == 'baseline' else 256
+    NUM_BUFFERS = 3 if PINGPONG else 2
+    TRANSPOSE_B = OPTIONS.get('transpose_b', True)
+    SCALE_PRESHUFFLE = OPTIONS.get('scale_preshuffle', True)
+    WITH_A_SCALE = OPTIONS.get('with_a_scale', True)
+    PARTIAL_TDM = OPTIONS.get('partial_tdm', False)
+    L2_PREFETCH_DISTANCE = OPTIONS.get('l2_prefetch_distance', 0)
+    if NUM_WARPS == 8:
+        test_runtime_mxgemm_tdm_8warps_pipeline(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B,
+                                                NUM_BUFFERS, SCALE_PRESHUFFLE, WITH_A_SCALE, SCHEDULE, ASYNC_COPY_SCALE,
+                                                8, PINGPONG, L2_PREFETCH_DISTANCE, PARTIAL_TDM=PARTIAL_TDM,
+                                                CGA_LAYOUT=CGA_LAYOUT)
+    else:
+        test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B,
+                                          NUM_BUFFERS, SCALE_PRESHUFFLE, WITH_A_SCALE,
+                                          SCHEDULE, ASYNC_COPY_SCALE, 8, L2_PREFETCH_DISTANCE,
+                                          OPTIONS.get('activation',
+                                                      ''), PARTIAL_TDM, False, False, CGA_LAYOUT=CGA_LAYOUT)
+
+
 if __name__ == '__main__':
     import argparse
 
@@ -2461,6 +2541,8 @@ if __name__ == '__main__':
     parser.add_argument('-BM', type=int, default=256, help='BLOCK_M')
     parser.add_argument('-BN', type=int, default=256, help='BLOCK_N')
     parser.add_argument('-BK', type=int, default=128, help='BLOCK_K')
+    parser.add_argument('--ctas_m', type=int, default=1, choices=[1, 2, 4], help='CTAs partitioning M')
+    parser.add_argument('--ctas_n', type=int, default=1, choices=[1, 2, 4], help='CTAs partitioning N')
     parser.add_argument('--num_warps', type=int, default=4, choices=[4, 8])
     parser.add_argument('--num_buffers', type=int, default=2, choices=[2, 3, 4])
     parser.add_argument('--group_size_m', type=int, default=8, choices=[1, 2, 4, 8])
@@ -2498,6 +2580,10 @@ if __name__ == '__main__':
         help="Number of iterations (rep) to run when benchmarking.",
     )
     args = parser.parse_args()
+    ctas_per_cga = [args.ctas_m, args.ctas_n]
+    CGA_LAYOUT = tuple(map(tuple, make_cga_layout(ctas_per_cga, ctas_per_cga, [0, 1])))
+    validate_cga_layout(CGA_LAYOUT, args.BM, args.BN * (2 if args.activation == "swiglu" else 1),
+                        args.scale_preshuffled)
     BENCHMARK_MODE = None if args.benchmark_mode == "none" else args.benchmark_mode
 
     if args.pingpong:
@@ -2520,7 +2606,7 @@ if __name__ == '__main__':
                                                 PARTIAL_TDM=args.partial_tdm,  #
                                                 RESOLVE_PARTITION_CONFLICTS=args.resolve_partition_conflicts,  #
                                                 BENCHMARK_MODE=BENCHMARK_MODE,  #
-                                                BENCHMARK_NUM_ITERS=args.benchmark_num_iters)
+                                                BENCHMARK_NUM_ITERS=args.benchmark_num_iters, CGA_LAYOUT=CGA_LAYOUT)
     else:
         assert (args.num_buffers in (2, 3, 4))
         test_runtime_mxgemm_tdm_pipelined(args.dtype_a, args.dtype_b,  #
@@ -2539,4 +2625,4 @@ if __name__ == '__main__':
                                           RESOLVE_PARTITION_CONFLICTS=args.resolve_partition_conflicts,  #
                                           BENCHMARK_MODE=BENCHMARK_MODE,  #
                                           BENCHMARK_NUM_ITERS=args.benchmark_num_iters,  #
-                                          TDM_SPLIT=args.tdm_split)
+                                          TDM_SPLIT=args.tdm_split, CGA_LAYOUT=CGA_LAYOUT)
