@@ -47,14 +47,6 @@ struct TritonNvidiaGPUMembar
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             bool /*beforeIsRead*/, bool /*afterIsRead*/,
                             Allocation * /*allocation*/) {
-  // These mbarrier ops are single threaded, so are always synchronized wrt.
-  // each other.
-  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
-          before) &&
-      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
-          after))
-    return true;
-
   // wait_barrier will never run ahead of the load it's waiting on
   if (isa<ttng::TMALoadLikeOpInterface>(before) &&
       isa<ttng::WaitBarrierOp>(after))
