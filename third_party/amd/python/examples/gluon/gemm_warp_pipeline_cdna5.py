@@ -805,15 +805,7 @@ def fp8_mxfp4_gemm_warp_pipeline(a_ptr, b_ptr, c_ptr, b_scale_ptr, M, N, K, stri
         pid = gl.program_id(axis=0)
         num_pid_m = gl.cdiv(M, BLOCK_M)
         num_pid_n = gl.cdiv(N, BLOCK_N)
-        pids_per_xcd = (GRID_MN + 8 - 1) // 8
-        tall_xcds = GRID_MN % 8
-        tall_xcds = 8 if tall_xcds == 0 else tall_xcds
-        xcd = pid % 8
-        local_pid = pid // 8
-        if xcd < tall_xcds:
-            pid = xcd * pids_per_xcd + local_pid
-        else:
-            pid = tall_xcds * pids_per_xcd + (xcd - tall_xcds) * (pids_per_xcd - 1) + local_pid
+        pid = chiplet_transform(pid, GRID_MN, 8)
         num_pid_in_group = GROUP_SIZE * num_pid_m
         group_id = pid // num_pid_in_group
         first_pid_n = group_id * GROUP_SIZE
