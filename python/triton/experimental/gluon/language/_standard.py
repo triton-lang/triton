@@ -16,6 +16,8 @@ def _import_from_triton(fn: JITFunction[T]) -> GluonJITFunction[T]:
     return gluon_fn
 
 
+all = _import_from_triton(tl_standard.all)
+any = _import_from_triton(tl_standard.any)
 cdiv = _import_from_triton(tl_standard.cdiv)
 sum = _import_from_triton(tl_standard.sum)
 max = _import_from_triton(tl_standard.max)
