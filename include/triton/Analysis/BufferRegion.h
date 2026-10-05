@@ -203,14 +203,23 @@ BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions,
 //
 struct RegionInfo {
   enum class Kind { Uninitialized, Exact, Unknown };
-  using ViewList =
-      std::unordered_set<BufferRegionViewWithHash, BufferRegionViewWithHash::Hash>;
+  using ViewList = std::unordered_set<BufferRegionViewWithHash,
+                                      BufferRegionViewWithHash::Hash>;
 
   Kind kind = Kind::Uninitialized;
   ViewList views;
 
   RegionInfo() = default;
   RegionInfo(ViewList views) : kind(Kind::Exact), views(std::move(views)) {}
+  RegionInfo(const RegionInfo &) = default;
+  RegionInfo(RegionInfo &&) = default;
+
+  // Replace the container: immutable keys cannot be assigned by libc++.
+  RegionInfo &operator=(RegionInfo other) {
+    kind = other.kind;
+    views.swap(other.views);
+    return *this;
+  }
 
   bool isUnknown() const { return kind == Kind::Unknown; }
 

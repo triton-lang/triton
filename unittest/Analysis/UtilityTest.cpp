@@ -290,12 +290,32 @@ TEST(Analysis, BufferRegionViewPreservesSubviewProvenance) {
   EXPECT_EQ(physicalRegions.size(), 1);
 }
 
+TEST(Analysis, RegionInfoAssignmentPreservesImmutableViews) {
+  using triton::BufferRegionView;
+  using triton::RegionInfo;
+  RegionInfo source({BufferRegionView{{0, 8}}});
+  RegionInfo target({BufferRegionView{{16, 8}}});
+  target = source;
+  EXPECT_EQ(target, source);
+  const RegionInfo &self = target;
+  target = self;
+  EXPECT_EQ(target, source);
+  target = RegionInfo::getPessimisticValueState();
+  EXPECT_TRUE(target.isUnknown());
+  EXPECT_TRUE(target.views.empty());
+  RegionInfo moved(source);
+  target = std::move(moved);
+  EXPECT_EQ(target, source);
+}
+
 TEST(Analysis, RegionInfoPreservesDistinctFootprints) {
   using triton::AddressSet;
   using triton::BufferRegionView;
   using triton::RegionInfo;
   struct ConstantHash {
-    size_t operator()(const triton::BufferRegionViewWithHash &) const { return 0; }
+    size_t operator()(const triton::BufferRegionViewWithHash &) const {
+      return 0;
+    }
   };
   std::unordered_set<triton::BufferRegionViewWithHash, ConstantHash> collided;
   std::set<BufferRegionView> expected;
@@ -556,11 +576,13 @@ TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
                                        const BufferRegionView &>);
   BufferRegionView source{
       {0, 72, {{0, AddressSet::fromRange(0, 8)}}}, 5, 7, {5, 100}, 1, 2, 9};
-  source.region.ctaAddresses.front().second.insert(AddressSet::fromRange(64, 8));
+  source.region.ctaAddresses.front().second.insert(
+      AddressSet::fromRange(64, 8));
   source.region.ctaAddresses.front().second.set(10);
   BufferRegionViewWithHash original(source);
   const size_t originalHash = Hash{}(original);
-  source.region.ctaAddresses.front().second.subtract(AddressSet::fromRange(10, 1));
+  source.region.ctaAddresses.front().second.subtract(
+      AddressSet::fromRange(10, 1));
   source.region.ctaAddresses.front().second.set(11);
   BufferRegionViewWithHash changed(source);
   EXPECT_NE(Hash{}(changed), originalHash);
@@ -575,9 +597,14 @@ TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
   AddressSet translatedAddresses = AddressSet::fromRange(16, 8);
   translatedAddresses.insert(AddressSet::fromRange(80, 8));
   translatedAddresses.set(26);
-  BufferRegionViewWithHash expected(BufferRegionView{
-      {16, 72, {{0, translatedAddresses}}}, 21, 7, {21, 116}, 1, 2,
-      /*allocationFrame=*/3});
+  BufferRegionViewWithHash expected(
+      BufferRegionView{{16, 72, {{0, translatedAddresses}}},
+                       21,
+                       7,
+                       {21, 116},
+                       1,
+                       2,
+                       /*allocationFrame=*/3});
   EXPECT_EQ(translated, expected);
   EXPECT_EQ(Hash{}(translated), Hash{}(expected));
   EXPECT_FALSE(translated == original);

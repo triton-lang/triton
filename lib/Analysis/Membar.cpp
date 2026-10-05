@@ -311,7 +311,7 @@ bool MembarAnalysis::isRegionLocal(Value value) {
   auto *footprint = regions.getFootprint(value);
   return footprint &&
          llvm::all_of(footprint->regionInfo.views, [&](auto &view) {
-           Value root = view.allocation->getResult(0);
+           Value root = view.view.allocation->getResult(0);
            auto [it, inserted] =
                regionLocalAllocations.try_emplace(root, false);
            if (inserted)
@@ -585,9 +585,10 @@ SmallVector<AllocationSlice> MembarAnalysis::getAllocationSlices(
     // Use every lattice origin: function-local alias analysis can miss roots
     // returned through calls or joined with descriptor arguments.
     for (const auto &view : footprint->regionInfo.views) {
-      auto ids = view.view.allocation
-                     ? allocation.getBufferIds(view.view.allocation->getResult(0))
-                     : SmallVector<Allocation::BufferId>{};
+      auto ids =
+          view.view.allocation
+              ? allocation.getBufferIds(view.view.allocation->getResult(0))
+              : SmallVector<Allocation::BufferId>{};
       if (ids.empty()) {
         bufferIds.clear();
         break;

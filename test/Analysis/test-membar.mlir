@@ -2494,7 +2494,7 @@ tt.func @call_partitioned_padded_footprints(%initial: tensor<8x16xf16>, %input: 
 
 // Equal large footprints must merge without losing the required barrier.
 // CHECK-LABEL: equal_large_footprints
-// CHECK: scf.if
+// CHECK: cf.cond_br
 // CHECK: ttg.barrier local
 // CHECK-NEXT: ttg.local_load
 // CHECK: tt.return
