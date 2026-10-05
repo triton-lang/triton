@@ -138,9 +138,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
     return NULL;
   // Get device handle
   CUdevice device;
-  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGet(&device, device_id));
-  char name[256];
-  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetName(name, sizeof(name), device));
+  cuDeviceGet(&device, device_id);
 
   // create a struct to hold device properties
   int max_shared_mem;
@@ -188,8 +186,8 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
       &mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
 
   return Py_BuildValue(
-      "{s:s, s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "name", name,
-      "max_shared_mem", max_shared_mem, "max_shared_mem_per_multiprocessor",
+      "{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
+      max_shared_mem, "max_shared_mem_per_multiprocessor",
       max_shared_mem_per_multiprocessor, "max_num_regs", max_num_regs,
       "multiprocessor_count", multiprocessor_count, "warpSize", warp_size,
       "sm_clock_rate", sm_clock_rate, "mem_clock_rate", mem_clock_rate,

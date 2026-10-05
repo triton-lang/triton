@@ -1,5 +1,4 @@
 import functools
-import re
 import os
 import subprocess
 import triton
@@ -10,7 +9,7 @@ from triton._C.libtriton.gsan_testing import PER_DEVICE_STATE_STRIDE_BYTES as GS
 from triton._instrumentation import is_enabled
 from triton.runtime.build import compile_module_from_file
 from triton.runtime import _allocation
-from triton.backends.compiler import CUDADeviceVariant, GPUTarget
+from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
 
 dirname = os.path.dirname(os.path.realpath(__file__))
@@ -388,11 +387,7 @@ class CudaDriver(GPUDriver):
         capability = self.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
         warp_size = 32
-        variant = None
-        if capability == 90:
-            name = self.utils.get_device_properties(device)["name"]
-            variant = next((v for v in CUDADeviceVariant if re.search(rf"\b{v.value}\b", name, re.IGNORECASE)), None)
-        return GPUTarget("cuda", capability, warp_size, variant)
+        return GPUTarget("cuda", capability, warp_size)
 
     def get_active_torch_device(self):
         import torch
