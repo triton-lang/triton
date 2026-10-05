@@ -312,6 +312,22 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff, device=device)
 
 
+@pytest.mark.parametrize("BLOCK_SIZE", [128, 1024])
+def test_typeconvert_e5m2_bf16_all_encodings(BLOCK_SIZE, device):
+    if not is_cuda():
+        pytest.skip("tests NVIDIA E5M2 conversion")
+
+    # Cover every encoding and mix signs and magnitudes in packed conversions.
+    bits = (torch.arange(1024) * 73 + 19).to(torch.uint8)
+    expected = bits.view(torch.float8_e5m2).to(torch.bfloat16)
+    actual = launch_type_convert_triton(bits.to(device), tl.float8e5, tl.bfloat16, device,
+                                       BLOCK_SIZE=BLOCK_SIZE).cpu().view(torch.bfloat16)
+
+    torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
+    mask = ~torch.isnan(expected)
+    torch.testing.assert_close(actual.view(torch.int16)[mask], expected.view(torch.int16)[mask], rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("src_dtype, src_type", [
     (torch.float16, tl.float16),
     (torch.bfloat16, tl.bfloat16),
