@@ -7,6 +7,8 @@
 #include <optional>
 
 namespace mlir::triton::AMD {
+void registerTargetInfo();
+
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   explicit TargetInfo(std::optional<StringRef> arch) : targetFeatures(arch) {}
@@ -14,6 +16,7 @@ public:
   llvm::AMDGPU::IsaVersion getIsaVersion() const;
 
   StringRef getArch() const { return targetFeatures.getArch(); }
+  StringRef getBaseArch() const { return targetFeatures.getBaseArch(); }
   amdgpu::ISAFamily getISAFamily() const {
     return targetFeatures.getISAFamily();
   }
@@ -32,6 +35,8 @@ public:
 
   bool supportDppBroadcast() const;
 
+  bool isGFX1250Strict() const;
+
   Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
 
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -40,6 +45,13 @@ public:
   Value getGlobalTimer(RewriterBase &rewriter, Location loc) const override;
 
   StringRef getAtomicSyncScope(MemSyncScope scope) const override;
+
+  Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Type valueTy, Value pred,
+                    MemSyncScope scope) const override;
+
+  void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Value value, Value pred, MemSyncScope scope) const override;
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
@@ -78,10 +90,8 @@ public:
                   ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                  triton::ReduceOp op,
-                  unsigned reduceLaneIdMask) const override;
-
-  std::string getMulhiFuncName(Type resultElementTy) const override;
+                  triton::ReduceOp op, unsigned reduceLaneIdMask,
+                  unsigned broadcastLaneIdMask) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,
@@ -123,6 +133,7 @@ public:
   bool useAsyncMarks() const;
 
   bool supportsMultiCTALaunch() const;
+  bool supportsMulticast() const;
   unsigned getMaxMulticastMaskPopcount() const;
   bool supportsTDM() const;
   bool supportsClusterLoadBitWidth(int biwWidth) const;
@@ -149,11 +160,10 @@ public:
   bool supportsWaveId() const;
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
+  bool supportsCvtPkScalePk8Upcast() const;
+  bool supportsCvtPkScalePk8Block16() const;
   bool supportsHwScaledUpcast() const;
   bool supportsHwScaledDowncast() const;
-
-  void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                             Operation *llLoadOp) const override;
 
   // Returns the hardware-specific tiles for shared memory loads and stores.
   // The returned pair is in the format {LoadTile, StoreTile}.

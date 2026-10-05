@@ -56,8 +56,11 @@ MfmaKey composeMfmaKeyFor(Location loc, unsigned version, unsigned mDim,
 // MFMA intrinsic map
 //===----------------------------------------------------------------------===//
 
-using MfmaMapValue =
-    std::tuple<StringRef /*symbol*/, unsigned /*kDim*/, unsigned /*kBase*/>;
+struct MfmaMapValue {
+  StringRef symbol;
+  unsigned kDim;
+  unsigned kBase;
+};
 using MfmaMap = llvm::DenseMap<MfmaKey, SmallVector<MfmaMapValue, 2>>;
 
 class MfmaDatabase {
@@ -314,9 +317,8 @@ FailureOr<MfmaIntrinsic> MfmaIntrinsic::get(Location loc, int version,
     return failure();
 
   const SmallVector<MfmaMapValue, 2> &values = it->second;
-  auto match = llvm::find_if(values, [&](const MfmaMapValue &val) {
-    return std::get<1>(val) == kDim;
-  });
+  auto match = llvm::find_if(
+      values, [&](const MfmaMapValue &val) { return val.kDim == kDim; });
   if (match == values.end())
     return failure();
 

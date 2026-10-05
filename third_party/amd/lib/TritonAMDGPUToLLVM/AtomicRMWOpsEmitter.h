@@ -17,8 +17,7 @@ public:
         scopeStr(scopeStr) {}
 
   Value emitAtomicRMW(RewriterBase &rewriter, Value rmwPtr, Value valElem,
-                      Value rmwMask, std::optional<Value> sharedMemBase,
-                      bool enableIntraWaveReduce) const;
+                      Value rmwMask, bool enableIntraWaveReduce) const;
 
   Value emitPairedAtomicForEvenTID(RewriterBase &rewriter, Value rmwPtr,
                                    Value valElem, Value rmwMask) const;

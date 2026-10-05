@@ -857,6 +857,9 @@ public:
                    llvm::equal(action, llvm::seq<size_t>(action.size()));
   }
 
+  // Return the source column mapped to output column i.
+  size_t getSourceIndex(size_t i) const { return action[i]; }
+
   // Act on the columns of a layout
   // Examples:
   //  - if action = [2, 0, 1] and layout.getBases()[inDim] = [[1], [2], [4]]

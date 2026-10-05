@@ -89,6 +89,10 @@ public:
                             Attribute &resultEncoding,
                             std::optional<Location> loc) const = 0;
 
+  virtual LogicalResult
+  verifyBroadcastOpEncoding(RankedTensorType srcType,
+                            RankedTensorType dstType) const = 0;
+
   // Note: This function only verifies the operand encoding.  It doesn't infer
   // the result encoding.
   virtual LogicalResult

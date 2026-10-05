@@ -41,7 +41,8 @@ bool isSafeToPipeline(scf::ForOp forOp) {
   if (isOuterLoop(forOp))
     return false;
   // Skip loops with barriers, asserts or prints
-  if (containsAny<ttg::BarrierOp, tt::AssertOp, tt::PrintOp>(forOp))
+  if (containsAny<ttg::BarrierOp, tt::GridDependencyWaitOp, tt::AssertOp,
+                  tt::PrintOp>(forOp))
     return false;
 
   return true;
@@ -56,7 +57,7 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
   // Mapping from the cluster to the cluster before it.
   DenseMap<CoarseSchedule::ClusterHash, CoarseSchedule::Cluster> dist1Cluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0)
+    if (!schedule.contains(&op))
       continue;
     auto [stage, cluster] = schedule[&op];
     // Can't schedule past the last stage.
@@ -68,7 +69,7 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
           auto yieldOp = op.getBlock()->getTerminator();
           Value v = yieldOp->getOperand(arg.getArgNumber() - 1);
           Operation *defOp = v.getDefiningOp();
-          if (defOp && schedule.count(defOp) == 0) {
+          if (defOp && !schedule.contains(defOp)) {
             if (isa<tt::LoadOp>(defOp)) {
               // Exception: Schedule loads with a distance of 1 together
               // with the current op.
@@ -79,7 +80,7 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
             } else {
               CoarseSchedule::ClusterHash clusterHash =
                   CoarseSchedule::hashCluster(cluster);
-              if (dist1Cluster.count(clusterHash) == 0) {
+              if (!dist1Cluster.contains(clusterHash)) {
                 dist1Cluster[clusterHash] =
                     schedule.clusters.newBefore(cluster);
               }
@@ -105,7 +106,7 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
   // cluster before the definition.
   DenseMap<Operation *, CoarseSchedule::Cluster> opToCluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0) {
+    if (!schedule.contains(&op)) {
       opToCluster[&op] = afterPrologue;
     }
   }
@@ -120,10 +121,10 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
   while (!queue.empty()) {
     Operation *op = queue.pop_back_val();
     for (auto user : op->getUsers()) {
-      if (opToCluster.count(user)) {
+      if (opToCluster.contains(user)) {
         CoarseSchedule::Cluster userCluster = opToCluster[user];
         CoarseSchedule::Cluster opCluster;
-        if (schedule.count(op))
+        if (schedule.contains(op))
           opCluster = schedule[op].second;
         else
           opCluster = opToCluster[op];
@@ -143,7 +144,7 @@ namespace {
 bool hasLatenciesAssigned(scf::ForOp forOp,
                           const DenseMap<Operation *, int> &opLatency) {
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (opLatency.count(&op))
+    if (opLatency.contains(&op))
       return true;
   }
   return false;
@@ -157,7 +158,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   // Determine all operations that have a non-zero latency
   SmallVector<Operation *> latOps;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (opLatency.count(&op))
+    if (opLatency.contains(&op))
       latOps.push_back(&op);
   }
   // If no latency ops, nothing to schedule
@@ -184,7 +185,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
         maxDist = distUser;
     }
     int lat = 0;
-    if (opLatency.count(op))
+    if (opLatency.contains(op))
       lat = opLatency.lookup(op);
     // If an op has no users (maxDist == -1) but has latency, we include its
     // latency otherwise it contributes 0 to the distance.
@@ -238,7 +239,8 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
     // this will cause the `scf.if` to be scheduled after its dependents.
     SetVector<Operation *> slice;
     getForwardSlice(ifOp, &slice);
-    if (llvm::any_of(slice, [&](Operation *op) { return opToStage.count(op); }))
+    if (llvm::any_of(slice,
+                     [&](Operation *op) { return opToStage.contains(op); }))
       continue;
     schedule.insert(ifOp, stage, epilogue);
   }
@@ -266,7 +268,7 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
     // have a partial view of the original loop stages. Re-schedule the loop
     // root at the stages of the latency ops to prune unnecessary stages.
     auto isLatencyOp = [&](Operation &op) {
-      return opLatency.count(&op) ||
+      return opLatency.contains(&op) ||
              isa<LoadOp, DescriptorLoadLikeOpInterface, LocalStoreOp,
                  LocalLoadOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp,
                  AsyncCopyGlobalToLocalOp, ttng::TMAOpInterface,
@@ -281,7 +283,7 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
     auto ops = forOp.getBody()->without_terminator();
     for (Operation &op : llvm::make_filter_range(ops, isLatencyOp)) {
       // FIXME: This should assert all latency ops have an assigned stage.
-      if (schedule.count(&op))
+      if (schedule.contains(&op))
         latencyStages.insert(schedule[&op].first);
     }
     if (latencyStages.size() <= 1) {
@@ -339,7 +341,7 @@ CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
   CoarseSchedule::Cluster epilogueCluster = schedule.clusters.newAtBack();
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      if (ifsToStage.count(ifOp) == 0) {
+      if (!ifsToStage.contains(ifOp)) {
         schedule.insertIfAbsent(ifOp, numStages - 1,
                                 epilogueCluster); // after prefetch extracts
       }

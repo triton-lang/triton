@@ -45,6 +45,18 @@ def get_dtype(tensor_or_desc: tl.tensor | tl.tensor_descriptor) -> tl.dtype:
         raise ValueError(f"Invalid type: {type(tensor_or_desc)}")
 
 @triton.jit
+def _load_matrix(desc, batch, row, column):
+    if len(desc.shape) == 5:
+        tile_m: tl.constexpr = desc.block_shape[-2]
+        tile_n: tl.constexpr = desc.block_shape[-1]
+        values = desc.load([batch, row // tile_m, column // tile_n, 0, 0])
+        tl.static_assert(desc.block_shape[2] == 1)
+        return values.reshape(desc.block_shape[1] * tile_m, desc.block_shape[2] * tile_n)
+    else:
+        return desc.load([batch, row, column]).reshape(desc.block_shape[1:])
+
+
+@triton.jit
 def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
     mask = mask & (offs < writeback_size)
     offs = tl.load(WriteBackIndx + offs, mask=mask, other=-1)
@@ -317,7 +329,8 @@ def _p_matmul(
 
         XMxScalePtrs = None
         if is_x_microscaled and stride_x_mx_z is not None: # x is mx but not using TMA
-            offs_m = off_m + tl.arange(0, BLOCK_M)
+            if X_TMA_MODE is not None:
+                offs_m = off_m + tl.arange(0, BLOCK_M)
             XMxScalePtrs = XMxScale + off_x_z.to(index_type) * stride_x_mx_z
             if GatherIndx is None:
                 XMxScalePtrs += slice_off_m * stride_x_mx_m
@@ -366,10 +379,10 @@ def _p_matmul(
                 x = X.gather(offs_x_m, off_k_x // block_div)
             elif X_TMA_MODE == "dense":
                 if X_TRANSPOSE:
-                    x = X.load([off_x_z, off_k_x // block_div, slice_off_m + off_m])
+                    x = _load_matrix(X, off_x_z, off_k_x // block_div, slice_off_m + off_m)
                     x = x.reshape(BLOCK_K // block_div, BLOCK_M).T
                 else:
-                    x = X.load([off_x_z, slice_off_m + off_m, off_k_x // block_div])
+                    x = _load_matrix(X, off_x_z, slice_off_m + off_m, off_k_x // block_div)
                     x = x.reshape(BLOCK_M, BLOCK_K // block_div)
             elif X_TMA_MODE == "ragged":
                 x = load_ragged(X, slice_off_m, shape_m, [off_x_z, off_m, off_k_x // block_div], ragged_dim=1)
@@ -406,13 +419,15 @@ def _p_matmul(
                         mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
                     mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
                     x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
-                else: # use TMA for x scale load - only cover batched case for now
-                    if X_TMA_MODE == "dense":
-                        off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
-                    else:
+                else: # use TMA for x scale load
+                    # Gathered values can use a dense descriptor while their
+                    # scales are already padded and ordered by ragged slice.
+                    if RAGGED_DIMENSION == "M":
                         # slice_block_off_m points to the start of the current slice in the padded version
                         # + off_m points to the current block in the slice
                         off_m_scale = slice_block_off_m + off_m // 128
+                    else:
+                        off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
                     x_scales = XMxScale.load([0, off_m_scale, off_k_x // MX_PACK_DIVISOR // 4, 0, 0])
                     x_scales = unswizzle_act_mx_scale_bw(x_scales)
             elif x_format == "fp16" or x_format == "bf16":
@@ -434,9 +449,9 @@ def _p_matmul(
                     (BLOCK_N, PACKED_BLOCK_K_W),
                 ).T
             elif W_TRANSPOSE:
-                w = tl.reshape(W.load([off_w_z, off_w_n, off_k_w]), W.block_shape[1:]).T
+                w = _load_matrix(W, off_w_z, off_w_n, off_k_w).T
             else:
-                w = tl.reshape(W.load([off_w_z, off_k_w, off_w_n]), W.block_shape[1:])
+                w = _load_matrix(W, off_w_z, off_k_w, off_w_n)
 
             # --- load w_scale ---
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
@@ -630,7 +645,7 @@ def _p_matmul(
             if SWAP_XW:
                 acc_tile = acc_tile.T
 
-            acc_tile = acc_tile + biases[a_i][None, :] * betas[:, None]
+            acc_tile = tl.fma(biases[a_i][None, :], betas[:, None], acc_tile)
             if out_alpha is not None:
                 acc_tile *= out_alpha
 

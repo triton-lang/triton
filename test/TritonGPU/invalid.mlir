@@ -31,6 +31,49 @@ tt.func public @memdesc_non_power_of_two_layout_allocation(%arg0: !ttg.memdesc<2
 
 // -----
 
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  // expected-error @+1 {{per-CTA allocation extent along partitionDim must be divisible by numPartitions * numGroups; got 2 and 4}}
+  tt.func public @partitioned_extent_too_small_per_cta(%arg0: !ttg.memdesc<8x16xi32, #partitioned, #smem, mutable>) {
+    tt.return
+  }
+}
+
+// -----
+
+#inner = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [16, 16]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{partitionLayout does not match the per-CTA logical piece shape}}
+tt.func public @partitioned_padded_inner_shape_mismatch(%arg0: !ttg.memdesc<16x16xi32, #partitioned, #smem, mutable>) {
+  tt.return
+}
+
+// -----
+
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
+#nested = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #partitioned}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{nested PartitionedSharedEncodingAttr is not supported}}
+tt.func public @nested_partitioned_layout(%arg0: !ttg.memdesc<16x16xi32, #nested, #smem, mutable>) {
+  tt.return
+}
+
+// -----
+
+#inner = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{NVMMASharedEncodingAttr is not supported as a partitionLayout}}
+tt.func public @partitioned_nvmma_inner_layout(%arg0: !ttg.memdesc<16x16xi32, #partitioned, #smem, mutable>) {
+  tt.return
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 // expected-error @+1 {{shape has 0 dimension}}
@@ -983,4 +1026,29 @@ tt.func @pure_elementwise_asm_tensor_descriptor(%offset: i32, %mem: !desc) {
   // expected-error @+1 {{requires pure=false for memory descriptor operands}}
   %value = tt.elementwise_inline_asm "add.u32 $0, $1, $2;" {constraints = "=r,r,r", pure = true, packed_element = 1 : i32} %offset, %mem : i32, !desc -> i32
   tt.return
+}
+
+// -----
+
+#src = #ttg.linear<{register = [], lane = [[1, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#dst = #ttg.linear<{register = [[1, 0], [0, 1]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @broadcast_requires_lane_movement(%arg: tensor<2x1xi32, #src>) {
+    // expected-error @+1 {{requires matching source and result layouts up to broadcasting}}
+    %result = tt.broadcast %arg : tensor<2x1xi32, #src> -> tensor<2x2xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register = [[1, 0], [2, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#dst = #ttg.linear<{register = [[2, 0], [0, 1], [1, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Register permutations require an explicit layout conversion.
+  tt.func @broadcast_requires_register_permutation(%arg: tensor<4x1xi32, #src>) {
+    // expected-error @+1 {{requires matching source and result layouts up to broadcasting}}
+    %result = tt.broadcast %arg : tensor<4x1xi32, #src> -> tensor<4x2xi32, #dst>
+    tt.return
+  }
 }

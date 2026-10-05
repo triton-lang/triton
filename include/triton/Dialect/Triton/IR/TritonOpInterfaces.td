@@ -158,6 +158,28 @@ def PredicatedOpInterface : OpInterface<"PredicatedOpInterface"> {
   ];
 }
 
+def EfficientLayoutOpInterface : OpInterface<"EfficientLayoutOpInterface"> {
+  let description = [{
+    Operations that can pin a compiler-chosen result layout.
+
+    `getEfficientLayout` is a hint that the current result encoding should be
+    kept. Layout conversion treats the operation as a layout anchor and will
+    not rewrite or rematerialize it in a different encoding. When false, the
+    operation participates in layout propagation normally.
+  }];
+
+  let cppNamespace = "::mlir::triton";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Return true if the compiler has pinned the current result layout.",
+      /*retType=*/"bool",
+      /*methodName=*/"getEfficientLayout",
+      /*args=*/(ins)
+    >
+  ];
+}
+
 def AtomicOpInterface : OpInterface<"AtomicOpInterface"> {
   let description = [{
     Common interface for atomic operations with memory-ordering semantics.

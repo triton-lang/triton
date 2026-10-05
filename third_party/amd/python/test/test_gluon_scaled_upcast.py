@@ -7,11 +7,12 @@ import triton.experimental.gluon.language as ttgl
 
 IS_CDNA3_OR_CDNA4 = is_hip_cdna3() or is_hip_cdna4()
 
+AMD_ARCH_MODULE = ttgl.amd.cdna4 if is_hip_cdna4() else ttgl.amd.cdna3
+
 
 @gluon.jit
 def _compact_scaled_upcast_fp4_kernel(x_ptr, scale_ptr, out_ptr, M: ttgl.constexpr, K_PACKED: ttgl.constexpr,
-                                      OUT_K: ttgl.constexpr, SCALE_K: ttgl.constexpr, SPT_PACKED: ttgl.constexpr,
-                                      USE_CDNA4: ttgl.constexpr):
+                                      OUT_K: ttgl.constexpr, SCALE_K: ttgl.constexpr, SPT_PACKED: ttgl.constexpr):
     packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, SPT_PACKED], [8, 8], [1, 1], [1, 0])
 
     offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, packed_layout))
@@ -20,16 +21,14 @@ def _compact_scaled_upcast_fp4_kernel(x_ptr, scale_ptr, out_ptr, M: ttgl.constex
     x = ttgl.load(x_ptr + x_offsets)
 
     scale_factor: ttgl.constexpr = OUT_K // SCALE_K
-    scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(x, scale_factor, ttgl.bfloat16, axis=1)
+    scale_layout: ttgl.constexpr = AMD_ARCH_MODULE.get_scaled_upcast_fp4_scale_layout(
+        x, scale_factor, ttgl.bfloat16, axis=1)
     offs_scale_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_layout))
     offs_scale_k = ttgl.arange(0, SCALE_K, layout=ttgl.SliceLayout(0, scale_layout))
     scale_offsets = offs_scale_m[:, None] * SCALE_K + offs_scale_k[None, :]
     scale = ttgl.load(scale_ptr + scale_offsets)
 
-    if USE_CDNA4:
-        out = ttgl.amd.cdna4.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
-    else:
-        out = ttgl.amd.cdna3.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
+    out = AMD_ARCH_MODULE.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)
 
     out_layout: ttgl.constexpr = out.type.layout
     offs_out_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, out_layout))
@@ -55,21 +54,20 @@ def test_runtime_scaled_upcast_fp4_compact_scale(k_packed, scale_k, spt_packed):
     scale = (scale_exponents + 0x7f).to(torch.uint8)
     out = torch.empty((M, out_k), dtype=torch.bfloat16, device="cuda")
 
-    use_cdna4 = is_hip_cdna4()
     program = _compact_scaled_upcast_fp4_kernel[(1, )](x, scale, out, M, k_packed, out_k, scale_k, spt_packed,
-                                                       use_cdna4, num_warps=1)
+                                                       num_warps=1)
 
     expected = torch.ldexp(torch.full_like(scale_exponents, 0.5, dtype=torch.float32),
                            scale_exponents).repeat_interleave(elements_per_scale, dim=1).to(torch.bfloat16)
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
-    if use_cdna4:
+    if is_hip_cdna4():
         assert "v_cvt_scalef32_pk_bf16_fp4" in program.asm["amdgcn"]
     else:
         assert "v_cvt_scalef32_pk_bf16_fp4" not in program.asm["amdgcn"]
 
 
 @gluon.jit
-def _scaled_upcast_scale_edges_kernel(x_ptr, scale_ptr, out_ptr, FP4: ttgl.constexpr, USE_CDNA4: ttgl.constexpr):
+def _scaled_upcast_scale_edges_kernel(x_ptr, scale_ptr, out_ptr, FP4: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 8], [1, 1], [1, 0])
     input_k: ttgl.constexpr = 32 if FP4 else 64
     dtype: ttgl.constexpr = out_ptr.dtype.element_ty
@@ -78,8 +76,8 @@ def _scaled_upcast_scale_edges_kernel(x_ptr, scale_ptr, out_ptr, FP4: ttgl.const
     x = ttgl.load(x_ptr + rows[:, None] * input_k + cols[None, :])
 
     if FP4:
-        scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(x, 32, out_ptr.dtype.element_ty,
-                                                                                   axis=1)
+        scale_layout: ttgl.constexpr = AMD_ARCH_MODULE.get_scaled_upcast_fp4_scale_layout(
+            x, 32, out_ptr.dtype.element_ty, axis=1)
         scale_k: ttgl.constexpr = 2
     else:
         scale_layout: ttgl.constexpr = layout
@@ -88,10 +86,7 @@ def _scaled_upcast_scale_edges_kernel(x_ptr, scale_ptr, out_ptr, FP4: ttgl.const
     scale_cols = ttgl.arange(0, scale_k, layout=ttgl.SliceLayout(0, scale_layout))
     scale = ttgl.load(scale_ptr + scale_rows[:, None] * scale_k + scale_cols[None, :])
     axis: ttgl.constexpr = 1 if FP4 else None
-    if USE_CDNA4:
-        out = ttgl.amd.cdna4.scaled_upcast(x, scale, dtype, axis)
-    else:
-        out = ttgl.amd.cdna3.scaled_upcast(x, scale, dtype, axis)
+    out = AMD_ARCH_MODULE.scaled_upcast(x, scale, dtype, axis)
 
     out_layout: ttgl.constexpr = out.type.layout
     out_rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, out_layout))
@@ -111,7 +106,7 @@ def test_scaled_upcast_scale_edges(dtype, out_dtype, nan_scale):
     scale = torch.tensor([255] * 8 if nan_scale else [0, 1, 127, 254] * 2, dtype=torch.uint8, device="cuda")
     scale = scale[:, None].expand(8, 2 if fp4 else 64).contiguous()
     out = torch.empty((8, 64), dtype=out_dtype, device="cuda")
-    _scaled_upcast_scale_edges_kernel[(1, )](x, scale, out, fp4, is_hip_cdna4(), num_warps=1, allow_flush_denorm=False)
+    _scaled_upcast_scale_edges_kernel[(1, )](x, scale, out, fp4, num_warps=1, allow_flush_denorm=False)
 
     # Both subnormal and normal BF16 results survive; the smallest FP16
     # results underflow after scaling.

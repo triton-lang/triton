@@ -12,7 +12,7 @@ set(TRITON_AMD_LLVM_REVISION "unknown" CACHE STRING
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../..")
 add_library(triton_amd_codegen SHARED amdgpu_codegen.cc
             "${TRITON_SOURCE_DIR}/lib/Tools/LLVMOptions.cpp")
-target_compile_features(triton_amd_codegen PRIVATE cxx_std_17)
+target_compile_features(triton_amd_codegen PRIVATE cxx_std_20)
 target_include_directories(triton_amd_codegen PRIVATE
                            "${TRITON_SOURCE_DIR}/include")
 target_include_directories(triton_amd_codegen SYSTEM PRIVATE

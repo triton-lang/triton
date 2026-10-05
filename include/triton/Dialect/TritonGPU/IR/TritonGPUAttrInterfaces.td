@@ -33,10 +33,14 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
   let methods = [
     InterfaceMethod<"Return the default alignment for the layout.",
                     "int32_t", "getAlignment", (ins), [{}], [{ return 16; }]>,
+    InterfaceMethod<"Convert to LinearLayout.",
+                    "LinearLayout",
+                    "toLinearLayout",
+                    (ins "ArrayRef<int64_t>":$shape)>,
   ];
 }
 def DeclareSharedEncodingMethods : DeclareAttrInterfaceMethods<
-  SharedEncodingTrait, ["getAlignment"]>;
+  SharedEncodingTrait, ["getAlignment", "toLinearLayout"]>;
 
 def DistributedEncodingTrait : AttrInterface<"DistributedEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";

@@ -94,6 +94,20 @@ def test_flip(M, N, K, dtype_str, dim, device):
 
 
 @pytest.mark.interpreter
+def test_flip_size_one(device):
+
+    @triton.jit
+    def flip_kernel(X, Z):
+        off = tl.arange(0, 1)
+        tl.store(Z + off, tl.flip(tl.load(X + off)))
+
+    x = torch.tensor([42], dtype=torch.int32, device=device)
+    z = torch.empty_like(x)
+    flip_kernel[(1, )](x, z)
+    assert z.item() == 42
+
+
+@pytest.mark.interpreter
 def test_flip_inf(device):
     # Reproducer for https://github.com/triton-lang/triton/issues/5439
 
