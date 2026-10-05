@@ -282,6 +282,45 @@ def argmin(input, axis, tie_break_left=True, keep_dims=False):
     return ret
 
 
+# logical reductions
+
+
+@core._tensor_member_fn
+@jit
+def all(input, axis=None, keep_dims=False):
+    """
+    Returns whether all elements in :code:`input` are nonzero along the provided :code:`axis`.
+
+    The result has dtype :code:`int1`. NaN and infinity are treated as nonzero.
+
+    :param input: the input values
+    :type input: Tensor
+    :param axis: the dimension to reduce. If None, reduce all dimensions
+    :type axis: int | None
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
+    """
+    return core.reduce(input.to(core.int1), axis, _elementwise_min, keep_dims=keep_dims)
+
+
+@core._tensor_member_fn
+@jit
+def any(input, axis=None, keep_dims=False):
+    """
+    Returns whether any element in :code:`input` is nonzero along the provided :code:`axis`.
+
+    The result has dtype :code:`int1`. NaN and infinity are treated as nonzero.
+
+    :param input: the input values
+    :type input: Tensor
+    :param axis: the dimension to reduce. If None, reduce all dimensions
+    :type axis: int | None
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
+    """
+    return core.reduce(input.to(core.int1), axis, _elementwise_max, keep_dims=keep_dims)
+
+
 @jit
 def _sum_combine(a, b):
     return a + b
