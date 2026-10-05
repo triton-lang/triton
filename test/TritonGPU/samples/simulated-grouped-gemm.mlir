@@ -134,8 +134,9 @@
 // CHECK:             %[[VAL_119:.*]] = arith.cmpi ne, %[[VAL_66]], %[[VAL_44]] : i32
 // CHECK:             scf.if %[[VAL_118]] {
 // CHECK:               %[[VAL_120:.*]] = arith.truncf %[[VAL_117]]#0 : tensor<128x256xf32, #[[$ATTR_1]]> to tensor<128x256xf16, #[[$ATTR_1]]>
+// CHECK:               %[[STORE_VALUE:.*]] = ttg.convert_layout %[[VAL_120]] : tensor<128x256xf16, #[[$ATTR_1]]> -> tensor<128x256xf16, [[STORE_LAYOUT:#[^>]+]]>
 // CHECK:               ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
-// CHECK:               ttg.local_store %[[VAL_120]], %[[VAL_45]] : tensor<128x256xf16, #[[$ATTR_1]]> -> !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
+// CHECK:               ttg.local_store %[[STORE_VALUE]], %[[VAL_45]] : tensor<128x256xf16, [[STORE_LAYOUT]]> -> !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:               ttng.fence_async_shared {bCluster = false}
 // CHECK:               ttng.async_tma_copy_local_to_global %[[VAL_111]]#2{{\[}}%[[VAL_111]]#5, %[[VAL_111]]#6] %[[VAL_45]] : !tt.tensordesc<128x256xf16, #[[$ATTR_2]]>, !ttg.memdesc<128x256xf16, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:             }

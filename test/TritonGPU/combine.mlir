@@ -4765,3 +4765,186 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return %r#0, %r#1, %converted : tensor<128xi32, #slice>, tensor<128xf32, #slice>, tensor<128xf32, #dst>
   }
 }
+
+// -----
+
+// Propagate source layouts through elementwise producers into operands whose
+// layout is independent of the result. Histogram masks must follow the source,
+// while gather indices must continue to follow the result.
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#dst = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#other = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @histogram_independent_source(
+  // CHECK-SAME: %[[SRC:.*]]: tensor<256xi32, [[SRC_LAYOUT:#[^>]+]]>) -> tensor<32xi32, [[DST_LAYOUT:#[^>]+]]>
+  // CHECK-NEXT: %[[SUM:.*]] = arith.addi %[[SRC]], %[[SRC]] : tensor<256xi32, [[SRC_LAYOUT]]>
+  // CHECK-NEXT: %[[HIST:.*]] = tt.histogram %[[SUM]] : tensor<256xi32, [[SRC_LAYOUT]]> -> tensor<32xi32, [[DST_LAYOUT]]>
+  // CHECK-NEXT: tt.return %[[HIST]]
+  tt.func @histogram_independent_source(%src: tensor<256xi32, #src>) -> tensor<32xi32, #dst> {
+    %cvt = ttg.convert_layout %src : tensor<256xi32, #src> -> tensor<256xi32, #dst>
+    %sum = arith.addi %cvt, %cvt : tensor<256xi32, #dst>
+    %hist = tt.histogram %sum : tensor<256xi32, #dst> -> tensor<32xi32, #dst>
+    tt.return %hist : tensor<32xi32, #dst>
+  }
+
+  // CHECK-LABEL: @histogram_independent_source_and_mask(
+  // CHECK-SAME: %[[SRC:.*]]: tensor<256xi32, [[SRC_LAYOUT:#[^>]+]]>, %[[MASK:.*]]: tensor<256xi1, [[MASK_LAYOUT:#[^>]+]]>) -> tensor<32xi32, [[DST_LAYOUT:#[^>]+]]>
+  // CHECK-DAG: %[[SUM:.*]] = arith.addi %[[SRC]], %[[SRC]] : tensor<256xi32, [[SRC_LAYOUT]]>
+  // CHECK-DAG: %[[M:.*]] = ttg.convert_layout %[[MASK]] : tensor<256xi1, [[MASK_LAYOUT]]> -> tensor<256xi1, [[SRC_LAYOUT]]>
+  // CHECK-NEXT: %[[HIST:.*]] = tt.histogram %[[SUM]], %[[M]] : tensor<256xi32, [[SRC_LAYOUT]]> -> tensor<32xi32, [[DST_LAYOUT]]>
+  // CHECK-NEXT: tt.return %[[HIST]]
+  tt.func @histogram_independent_source_and_mask(%src: tensor<256xi32, #src>, %mask: tensor<256xi1, #other>) -> tensor<32xi32, #dst> {
+    %cvt = ttg.convert_layout %src : tensor<256xi32, #src> -> tensor<256xi32, #dst>
+    %sum = arith.addi %cvt, %cvt : tensor<256xi32, #dst>
+    %m = ttg.convert_layout %mask : tensor<256xi1, #other> -> tensor<256xi1, #dst>
+    %hist = tt.histogram %sum, %m : tensor<256xi32, #dst> -> tensor<32xi32, #dst>
+    tt.return %hist : tensor<32xi32, #dst>
+  }
+
+  // CHECK-LABEL: @shared_memory_independent_source(
+  // CHECK-SAME: %[[SRC:.*]]: tensor<256xi32, [[SRC_LAYOUT:#[^>]+]]>
+  // CHECK-NEXT: %[[SUM:.*]] = arith.addi %[[SRC]], %[[SRC]] : tensor<256xi32, [[SRC_LAYOUT]]>
+  // CHECK-NEXT: %[[ALLOC:.*]] = ttg.local_alloc %[[SUM]] : (tensor<256xi32, [[SRC_LAYOUT]]>)
+  // CHECK-NEXT: ttg.local_store %[[SUM]], %[[ALLOC]] : tensor<256xi32, [[SRC_LAYOUT]]>
+  // CHECK-NEXT: %[[LOAD:.*]] = ttg.local_load %[[ALLOC]]
+  // CHECK-NEXT: tt.return %[[LOAD]]
+  tt.func @shared_memory_independent_source(%src: tensor<256xi32, #src>) -> tensor<256xi32, #dst> {
+    %cvt = ttg.convert_layout %src : tensor<256xi32, #src> -> tensor<256xi32, #dst>
+    %sum = arith.addi %cvt, %cvt : tensor<256xi32, #dst>
+    %alloc = ttg.local_alloc %sum : (tensor<256xi32, #dst>) -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
+    ttg.local_store %sum, %alloc : tensor<256xi32, #dst> -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
+    %load = ttg.local_load %alloc : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> tensor<256xi32, #dst>
+    tt.return %load : tensor<256xi32, #dst>
+  }
+
+  // CHECK-LABEL: @gather_independent_source_and_result(
+  // CHECK-SAME: %[[SRC:.*]]: tensor<256xi32, [[SRC_LAYOUT:#[^>]+]]>, %[[IDX:.*]]: tensor<32xi32, [[IDX_LAYOUT:#[^>]+]]>
+  // CHECK-NEXT: %[[SUM:.*]] = arith.addi %[[SRC]], %[[SRC]] : tensor<256xi32, [[SRC_LAYOUT]]>
+  // CHECK-NEXT: %[[GATHER:.*]] = tt.gather %[[SUM]][%[[IDX]]] {{.*}} : (tensor<256xi32, [[SRC_LAYOUT]]>, tensor<32xi32, [[IDX_LAYOUT]]>) -> tensor<32xi32, [[IDX_LAYOUT]]>
+  // CHECK-NEXT: tt.return %[[GATHER]]
+  tt.func @gather_independent_source_and_result(%src: tensor<256xi32, #src>, %idx: tensor<32xi32, #other>) -> tensor<32xi32, #other> {
+    %cvt = ttg.convert_layout %src : tensor<256xi32, #src> -> tensor<256xi32, #dst>
+    %sum = arith.addi %cvt, %cvt : tensor<256xi32, #dst>
+    %i = ttg.convert_layout %idx : tensor<32xi32, #other> -> tensor<32xi32, #dst>
+    %gather = tt.gather %sum[%i] {axis = 0 : i32} : (tensor<256xi32, #dst>, tensor<32xi32, #dst>) -> tensor<32xi32, #dst>
+    %out = ttg.convert_layout %gather : tensor<32xi32, #dst> -> tensor<32xi32, #other>
+    tt.return %out : tensor<32xi32, #other>
+  }
+
+  // CHECK-LABEL: @gather_independent_source_fixed_result(
+  // CHECK-SAME: %[[SRC:.*]]: tensor<256xi32, [[SRC_LAYOUT:#[^>]+]]>, %[[IDX:.*]]: tensor<32xi32, [[IDX_LAYOUT:#[^>]+]]>
+  // CHECK-NEXT: %[[SUM:.*]] = arith.addi %[[SRC]], %[[SRC]] : tensor<256xi32, [[SRC_LAYOUT]]>
+  // CHECK-NEXT: %[[GATHER:.*]] = tt.gather %[[SUM]][%[[IDX]]] {{.*}} : (tensor<256xi32, [[SRC_LAYOUT]]>, tensor<32xi32, [[IDX_LAYOUT]]>) -> tensor<32xi32, [[IDX_LAYOUT]]>
+  // CHECK-NEXT: tt.return %[[GATHER]]
+  tt.func @gather_independent_source_fixed_result(%src: tensor<256xi32, #src>, %idx: tensor<32xi32, #dst>) -> tensor<32xi32, #dst> {
+    %cvt = ttg.convert_layout %src : tensor<256xi32, #src> -> tensor<256xi32, #dst>
+    %sum = arith.addi %cvt, %cvt : tensor<256xi32, #dst>
+    %gather = tt.gather %sum[%idx] {axis = 0 : i32} : (tensor<256xi32, #dst>, tensor<32xi32, #dst>) -> tensor<32xi32, #dst>
+    tt.return %gather : tensor<32xi32, #dst>
+  }
+
+  // CHECK-LABEL: @gather_preserve_efficient_operand_layouts(
+  // CHECK-SAME: %[[SRC:.*]]: tensor<256xi32, [[SRC_LAYOUT:#[^>]+]]>, %[[IDX:.*]]: tensor<32xi32, [[IDX_LAYOUT:#[^>]+]]>) -> tensor<32xi32, [[DST_LAYOUT:#[^>]+]]>
+  // CHECK-NEXT: %[[SUM:.*]] = arith.addi %[[SRC]], %[[SRC]] : tensor<256xi32, [[SRC_LAYOUT]]>
+  // CHECK-NEXT: %[[S:.*]] = ttg.convert_layout %[[SUM]] : tensor<256xi32, [[SRC_LAYOUT]]> -> tensor<256xi32, [[DST_LAYOUT]]>
+  // CHECK-NEXT: %[[I:.*]] = ttg.convert_layout %[[IDX]] : tensor<32xi32, [[IDX_LAYOUT]]> -> tensor<32xi32, [[DST_LAYOUT]]>
+  // CHECK-NEXT: %[[GATHER:.*]] = tt.gather %[[S]][%[[I]]] {{.*}}efficient_layout{{.*}} : (tensor<256xi32, [[DST_LAYOUT]]>, tensor<32xi32, [[DST_LAYOUT]]>) -> tensor<32xi32, [[DST_LAYOUT]]>
+  // CHECK-NEXT: tt.return %[[GATHER]]
+  tt.func @gather_preserve_efficient_operand_layouts(%src: tensor<256xi32, #src>, %idx: tensor<32xi32, #other>) -> tensor<32xi32, #dst> {
+    %cvt = ttg.convert_layout %src : tensor<256xi32, #src> -> tensor<256xi32, #dst>
+    %sum = arith.addi %cvt, %cvt : tensor<256xi32, #dst>
+    %i = ttg.convert_layout %idx : tensor<32xi32, #other> -> tensor<32xi32, #dst>
+    %gather = tt.gather %sum[%i] {axis = 0 : i32, efficient_layout} : (tensor<256xi32, #dst>, tensor<32xi32, #dst>) -> tensor<32xi32, #dst>
+    tt.return %gather : tensor<32xi32, #dst>
+  }
+
+  tt.func private @make_independent_source(%value: i32) -> tensor<256xi32, #src> {
+    %src = tt.splat %value : i32 -> tensor<256xi32, #src>
+    tt.return %src : tensor<256xi32, #src>
+  }
+
+  tt.func private @make_independent_mask(%value: i1) -> tensor<256xi1, #other> {
+    %mask = tt.splat %value : i1 -> tensor<256xi1, #other>
+    tt.return %mask : tensor<256xi1, #other>
+  }
+
+  tt.func private @keep_independent_layout(%src: tensor<256xi32, #dst>) -> tensor<256xi32, #dst> {
+    tt.return %src : tensor<256xi32, #dst>
+  }
+
+  // Propagation does not cross calls producing these values. Independent uses
+  // must still bypass conversions, including one retained by another user.
+  // CHECK-LABEL: @independent_inputs_without_anchor(
+  // CHECK-SAME: %[[IDX:.*]]: tensor<32xi32, [[IDX_LAYOUT:#[^>]+]]>
+  // CHECK-NEXT: %[[SRC:.*]] = tt.call @make_independent_source{{.*}} : (i32) -> tensor<256xi32, [[SRC_LAYOUT:#[^>]+]]>
+  // CHECK-NEXT: %[[MASK:.*]] = tt.call @make_independent_mask{{.*}} : (i1) -> tensor<256xi1, [[IDX_LAYOUT]]>
+  // CHECK-DAG: %[[M:.*]] = ttg.convert_layout %[[MASK]] : tensor<256xi1, [[IDX_LAYOUT]]> -> tensor<256xi1, [[SRC_LAYOUT]]>
+  // CHECK-DAG: %[[CVT:.*]] = ttg.convert_layout %[[SRC]] : tensor<256xi32, [[SRC_LAYOUT]]> -> tensor<256xi32, [[DST_LAYOUT:#[^>]+]]>
+  // CHECK-NEXT: %[[KEPT:.*]] = tt.call @keep_independent_layout(%[[CVT]])
+  // CHECK-NEXT: %[[HIST:.*]] = tt.histogram %[[SRC]], %[[M]] : tensor<256xi32, [[SRC_LAYOUT]]> -> tensor<32xi32, [[DST_LAYOUT]]>
+  // CHECK-NEXT: %[[GATHER:.*]] = tt.gather %[[SRC]][%[[IDX]]]
+  // CHECK-NEXT: %[[ALLOC:.*]] = ttg.local_alloc %[[SRC]] : (tensor<256xi32, [[SRC_LAYOUT]]>)
+  // CHECK-NEXT: ttg.local_store %[[SRC]], %[[ALLOC]] : tensor<256xi32, [[SRC_LAYOUT]]>
+  // CHECK-NEXT: %[[LOAD:.*]] = ttg.local_load %[[ALLOC]]
+  // CHECK-NEXT: tt.return %[[HIST]], %[[GATHER]], %[[LOAD]], %[[KEPT]]
+  tt.func @independent_inputs_without_anchor(%idx: tensor<32xi32, #other>, %value: i32, %pred: i1) -> (tensor<32xi32, #dst>, tensor<32xi32, #other>, tensor<256xi32, #dst>, tensor<256xi32, #dst>) {
+    %src = tt.call @make_independent_source(%value) : (i32) -> tensor<256xi32, #src>
+    %mask = tt.call @make_independent_mask(%pred) : (i1) -> tensor<256xi1, #other>
+    %cvt = ttg.convert_layout %src : tensor<256xi32, #src> -> tensor<256xi32, #dst>
+    %m = ttg.convert_layout %mask : tensor<256xi1, #other> -> tensor<256xi1, #dst>
+    %kept = tt.call @keep_independent_layout(%cvt) : (tensor<256xi32, #dst>) -> tensor<256xi32, #dst>
+    %hist = tt.histogram %cvt, %m : tensor<256xi32, #dst> -> tensor<32xi32, #dst>
+    %gather = tt.gather %cvt[%idx] {axis = 0 : i32} : (tensor<256xi32, #dst>, tensor<32xi32, #other>) -> tensor<32xi32, #other>
+    %alloc = ttg.local_alloc %cvt : (tensor<256xi32, #dst>) -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
+    ttg.local_store %cvt, %alloc : tensor<256xi32, #dst> -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
+    %load = ttg.local_load %alloc : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> tensor<256xi32, #dst>
+    tt.return %hist, %gather, %load, %kept : tensor<32xi32, #dst>, tensor<32xi32, #other>, tensor<256xi32, #dst>, tensor<256xi32, #dst>
+  }
+}
+
+// -----
+
+// CHECK-LABEL: @test_remove_convert_histogram
+// CHECK-SAME: (%[[SRC:.+]]: tensor<256xi32
+// CHECK-SAME: %[[MASK:.+]]: tensor<256xi1
+//       CHECK:   %[[M:.+]] = ttg.convert_layout %[[MASK]]
+//       CHECK:   %[[V:.+]] = tt.histogram %[[SRC]], %[[M]]
+//   CHECK-NOT:   ttg.convert_layout
+//       CHECK:   tt.return %[[V]]
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
+  tt.func @test_remove_convert_histogram(%arg0: tensor<256xi32, #blocked1>, %arg1: tensor<256xi1, #blocked2>) -> tensor<512xi32, #blocked2> {
+    %0 = ttg.convert_layout %arg0 : tensor<256xi32, #blocked1> -> tensor<256xi32, #blocked>
+    %1 = ttg.convert_layout %arg1 : tensor<256xi1, #blocked2> -> tensor<256xi1, #blocked>
+    %2 = tt.histogram %0, %1 : tensor<256xi32, #blocked> -> tensor<512xi32, #blocked>
+    %3 = ttg.convert_layout %2 : tensor<512xi32, #blocked> -> tensor<512xi32, #blocked2>
+    tt.return %3 : tensor<512xi32, #blocked2>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: convert_layout_gather_src
+  tt.func @convert_layout_gather_src(%arg0: tensor<16x16xf16, #blocked>, %arg1: tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked> {
+    %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
+    // CHECK-NEXT: tt.gather %arg0[%arg1]
+    %1 = tt.gather %0[%arg1] {axis = 0 : i32} : (tensor<16x16xf16, #blocked1>, tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked>
+    tt.return %1 : tensor<16x16xf16, #blocked>
+  }
+
+  // CHECK-LABEL: gather_efficient_layout
+  tt.func @gather_efficient_layout(%arg0: tensor<16x16xf16, #blocked>, %arg1: tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked> {
+    // CHECK-NEXT: convert_layout
+    %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
+    // CHECK-NEXT: tt.gather {{.*}} (tensor<16x16xf16, #blocked1>
+    %1 = tt.gather %0[%arg1] {axis = 0 : i32, efficient_layout} : (tensor<16x16xf16, #blocked1>, tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked>
+    tt.return %1 : tensor<16x16xf16, #blocked>
+  }
+}

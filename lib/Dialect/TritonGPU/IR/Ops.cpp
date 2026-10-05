@@ -194,96 +194,6 @@ struct CanonicalizeConvertFromTranspose
   }
 };
 
-// histogram(cvt) -> histogram
-struct CanonicalizeConvertFromHistogram
-    : public mlir::OpRewritePattern<triton::HistogramOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::HistogramOp op,
-                  PatternRewriter &rewriter) const override {
-    auto src = op.getSrc();
-    auto convert = src.getDefiningOp<ConvertLayoutOp>();
-    if (!convert) {
-      return failure();
-    }
-    src = convert.getSrc();
-
-    // If mask is present, convert the layout of mask to match new src layout
-    auto mask = op.getMask();
-    if (mask) {
-      auto sharedType = getI1SameShape(src.getType());
-      rewriter.setInsertionPoint(op);
-      mask = ConvertLayoutOp::create(rewriter, op.getLoc(), sharedType, mask);
-    }
-
-    rewriter.replaceOpWithNewOp<triton::HistogramOp>(
-        op, op->getResult(0).getType(), src, mask);
-    return success();
-  }
-};
-
-// If the gather does not have an optimized layout attached, then the source
-// layout does not matter since the gather will be codegen'd by storing the
-// source tensor into shared memory. Thus, we can fold conversions into the
-// source operand.
-//
-// gather(cvt(src), idx) -> gather(src, idx)
-struct CanonicalizeConvertFromGatherSource : public OpRewritePattern<GatherOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(GatherOp op, PatternRewriter &rewriter) const override {
-    // Don't do this if the compiler picked an optimized layout.
-    if (op.getEfficientLayout())
-      return failure();
-
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
-      return failure();
-
-    rewriter.replaceOpWithNewOp<GatherOp>(op, convert.getSrc(), op.getIndices(),
-                                          op.getAxis());
-    return success();
-  }
-};
-
-// alloc(cvt) -> alloc
-struct CanonicalizeConvertFromAlloc
-    : public mlir::OpRewritePattern<triton::gpu::LocalAllocOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::gpu::LocalAllocOp op,
-                  PatternRewriter &rewriter) const override {
-    if (!op.getSrc())
-      return failure();
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
-      return failure();
-    rewriter.replaceOpWithNewOp<triton::gpu::LocalAllocOp>(
-        op, op->getResult(0).getType(), convert.getSrc());
-    return mlir::success();
-  }
-};
-
-// local_store(cvt) -> local_store
-struct CanonicalizeConvertFromLocalStore
-    : public mlir::OpRewritePattern<triton::gpu::LocalStoreOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::gpu::LocalStoreOp op,
-                  PatternRewriter &rewriter) const override {
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
-      return failure();
-    rewriter.replaceOpWithNewOp<triton::gpu::LocalStoreOp>(op, convert.getSrc(),
-                                                           op.getDst());
-    return mlir::success();
-  }
-};
-
 struct CanonicalizeConvertFromSplit
     : public mlir::OpRewritePattern<triton::SplitOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -430,10 +340,6 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   patterns.add<CanonicalizeConvertFromConvert>(context);
   patterns.add<CanonicalizeConvertFromReshape>(context);
   patterns.add<CanonicalizeConvertFromTranspose>(context);
-  patterns.add<CanonicalizeConvertFromGatherSource>(context);
-  patterns.add<CanonicalizeConvertFromHistogram>(context);
-  patterns.add<CanonicalizeConvertFromAlloc>(context);
-  patterns.add<CanonicalizeConvertFromLocalStore>(context);
   patterns.add<CanonicalizeConvertFromSplit>(context);
   patterns.add<CanonicalizeConvertFromTMEMStore>(context);
 }

@@ -92,8 +92,7 @@ public:
   void rewriteIfOp(scf::IfOp ifOp);
   void rewriteYieldOp(scf::YieldOp yieldOp);
   void rewriteConditionOp(scf::ConditionOp conditionOp);
-  void rewriteReduceToScalar(Operation *reduceOp);
-  void rewriteAssertOp(AssertOp assertOp);
+  void rewriteOperands(Operation *op, Attribute encoding = {});
   Attribute getEncodingBeforeRewrite(Value value) const;
   void setEncodingInPlace(Value value, Attribute encoding);
   void rewriteGenericOpInPlace(Operation *op, Attribute encoding);
@@ -413,10 +412,31 @@ void LayoutPropagation::dump() {
 
 void LayoutPropagation::rewrite() { rewriteRegion(funcOp->getRegion(0)); }
 
-bool reduceToScalar(Operation *op) {
-  // For reductions returning a scalar we can change the src encoding without
-  // affecting the output.
-  return isa<ReduceOp>(op) && !isa<RankedTensorType>(op->getResultTypes()[0]);
+// These operands share an encoding, but it can be chosen independently of the
+// results and the remaining operands. Keep them separate from the operands
+// whose encodings are inferred from the results during forward propagation.
+SmallVector<OpOperand *> getIndependentOperands(Operation *op) {
+  if (isa<HistogramOp>(op) ||
+      (isa<ReduceOp>(op) && !isa<RankedTensorType>(op->getResultTypes()[0]))) {
+    SmallVector<OpOperand *> operands;
+    for (OpOperand &operand : op->getOpOperands())
+      operands.push_back(&operand);
+    return operands;
+  }
+  // An unoptimized gather stages the source through shared memory, so only
+  // its indices constrain the result layout.
+  if (auto gather = dyn_cast<GatherOp>(op);
+      gather && !gather.getEfficientLayout())
+    return {&gather.getSrcMutable()};
+  if (auto alloc = dyn_cast<LocalAllocOp>(op); alloc && alloc.getSrc()) {
+    MutableArrayRef<OpOperand> source = alloc.getSrcMutable();
+    return {&source.front()};
+  }
+  if (auto store = dyn_cast<LocalStoreOp>(op))
+    return {&store.getSrcMutable()};
+  if (auto assertOp = dyn_cast<AssertOp>(op))
+    return {&assertOp.getConditionMutable()};
+  return {};
 }
 
 void LayoutPropagation::rewriteRegion(Region &region) {
@@ -449,20 +469,10 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         rewriteYieldOp(yieldOp);
       } else if (auto conditionOp = dyn_cast<scf::ConditionOp>(&op)) {
         rewriteConditionOp(conditionOp);
-      } else if (reduceToScalar(&op)) {
-        rewriteReduceToScalar(&op);
-      } else if (auto assertOp = dyn_cast<AssertOp>(&op)) {
-        rewriteAssertOp(assertOp);
       } else {
         // If we don't need to rewrite the op we still need to remap the
         // operands.
-        for (OpOperand &operand : op.getOpOperands()) {
-          if (!layouts.contains(operand.get()))
-            continue;
-          Attribute encoding = getEncodingBeforeRewrite(operand.get());
-          Value newOperand = getValueAs(operand.get(), encoding);
-          op.setOperand(operand.getOperandNumber(), newOperand);
-        }
+        rewriteOperands(&op);
         for (Region &R : op.getRegions())
           queue.push_back(&R);
       }
@@ -503,10 +513,13 @@ void LayoutPropagation::setEncodingInPlace(Value value, Attribute encoding) {
 
 void LayoutPropagation::rewriteGenericOpInPlace(Operation *op,
                                                 Attribute encoding) {
+  auto independentOperands = getIndependentOperands(op);
   Attribute operandEnc;
   if (op->getNumOperands() > 0) {
-    for (Value operand : op->getOperands()) {
-      auto it = layouts.find(operand);
+    for (OpOperand &operand : op->getOpOperands()) {
+      if (llvm::is_contained(independentOperands, &operand))
+        continue;
+      auto it = layouts.find(operand.get());
       if (it == layouts.end())
         continue;
       Attribute enc = it->second.encodings[0];
@@ -519,10 +532,7 @@ void LayoutPropagation::rewriteGenericOpInPlace(Operation *op,
       operandEnc = inferSrcEncoding(op, encoding);
     assert(operandEnc);
   }
-  for (OpOperand &operand : op->getOpOperands()) {
-    op->setOperand(operand.getOperandNumber(),
-                   getValueAs(operand.get(), operandEnc));
-  }
+  rewriteOperands(op, operandEnc);
   for (Value result : op->getResults()) {
     auto tensorType = dyn_cast<RankedTensorType>(result.getType());
     if (!tensorType)
@@ -612,36 +622,45 @@ void LayoutPropagation::rewriteConditionOp(scf::ConditionOp conditionOp) {
   }
 }
 
-void LayoutPropagation::rewriteReduceToScalar(Operation *reduceOp) {
-  OpBuilder rewriter(reduceOp);
-  Attribute srcEncoding;
-  // Since all the operands need to have the same encoding pick the first one
-  // and use it for all the operands.
-  for (Value operand : reduceOp->getOperands()) {
-    auto it = layouts.find(operand);
+void LayoutPropagation::rewriteOperands(Operation *op, Attribute encoding) {
+  auto independentOperands = getIndependentOperands(op);
+  Attribute independentEncoding;
+  // Prefer the first propagated layout or bypassed conversion's source layout
+  // for the independent group. For a histogram this prefers the source over
+  // the mask; for a scalar reduction this keeps all inputs in the same layout.
+  for (OpOperand *operand : independentOperands) {
+    Value original = operand->get();
+    Value source = original;
+    // A direct conversion can be bypassed even if propagation did not reach
+    // this operand, e.g. because its producer is not a supported operation.
+    while (auto convert = source.getDefiningOp<ConvertLayoutOp>())
+      source = convert.getSrc();
+    operand->set(source);
+    if (independentEncoding)
+      continue;
+    auto it = layouts.find(source);
     if (it != layouts.end()) {
-      srcEncoding = it->second.encodings[0];
-      break;
+      independentEncoding = it->second.encodings[0];
+    } else if (source != original) {
+      independentEncoding =
+          cast<RankedTensorType>(source.getType()).getEncoding();
     }
   }
-  if (!srcEncoding)
-    return;
-  for (OpOperand &operand : reduceOp->getOpOperands()) {
-    Value newOperand = getValueAs(operand.get(), srcEncoding);
-    reduceOp->setOperand(operand.getOperandNumber(), newOperand);
-  }
-}
+  if (!independentEncoding && !independentOperands.empty())
+    independentEncoding =
+        getEncodingBeforeRewrite(independentOperands.front()->get());
 
-void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
-  Attribute srcEncoding;
-  // Only need to deal with the first operand which is the condition tensor.
-  Value operand = assertOp->getOperand(0);
-  auto it = layouts.find(operand);
-  if (it == layouts.end())
-    return;
-  srcEncoding = it->second.encodings[0];
-  Value newOperand = getValueAs(operand, srcEncoding);
-  assertOp->setOperand(0, newOperand);
+  for (OpOperand &operand : op->getOpOperands()) {
+    if (!isa<RankedTensorType>(operand.get().getType()))
+      continue;
+    Attribute operandEncoding;
+    if (llvm::is_contained(independentOperands, &operand))
+      operandEncoding = independentEncoding;
+    else
+      operandEncoding =
+          encoding ? encoding : getEncodingBeforeRewrite(operand.get());
+    operand.set(getValueAs(operand.get(), operandEncoding));
+  }
 }
 
 void LayoutPropagation::rewriteOp(Operation *op) {

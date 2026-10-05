@@ -97,21 +97,18 @@ tt.func @test_canonicalize_convert_view(%arg0: tensor<64x64xf32, #blocked0>) -> 
 
 // -----
 
-// CHECK-LABEL: @test_canonicalize_convert_histogram
+// CHECK-LABEL: @test_canonicalize_convert_histogram_result
 // CHECK-SAME: (%[[SRC:.+]]: tensor<256xi32
 // CHECK-SAME: %[[MASK:.+]]: tensor<256xi1
-//       CHECK:   %[[M:.+]] = ttg.convert_layout %[[MASK]]
-//       CHECK:   %[[V:.+]] = tt.histogram %[[SRC]], %[[M]]
+//   CHECK-NOT:   ttg.convert_layout
+//       CHECK:   %[[V:.+]] = tt.histogram %[[SRC]], %[[MASK]]
 //   CHECK-NOT:   ttg.convert_layout
 //       CHECK:   tt.return %[[V]]
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
-tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>, %arg1: tensor<256xi1, #blocked2>) -> tensor<512xi32, #blocked2> {
-    %0 = ttg.convert_layout %arg0 : tensor<256xi32, #blocked1> -> tensor<256xi32, #blocked>
-    %1 = ttg.convert_layout %arg1 : tensor<256xi1, #blocked2> -> tensor<256xi1, #blocked>
-    %2 = tt.histogram %0, %1 : tensor<256xi32, #blocked> -> tensor<512xi32, #blocked>
+tt.func @test_canonicalize_convert_histogram_result(%arg0: tensor<256xi32, #blocked>, %arg1: tensor<256xi1, #blocked>) -> tensor<512xi32, #blocked2> {
+    %2 = tt.histogram %arg0, %arg1 : tensor<256xi32, #blocked> -> tensor<512xi32, #blocked>
     %3 = ttg.convert_layout %2 : tensor<512xi32, #blocked> -> tensor<512xi32, #blocked2>
     tt.return %3 : tensor<512xi32, #blocked2>
 }
@@ -216,29 +213,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.return %2 : !ttg.memdesc<16x16xf16, #shared, #smem>
   }
 }  // end module
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
-  // CHECK-LABEL: convert_layout_gather_src
-  tt.func @convert_layout_gather_src(%arg0: tensor<16x16xf16, #blocked>, %arg1: tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked> {
-    %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
-    // CHECK-NEXT: tt.gather %arg0[%arg1]
-    %1 = tt.gather %0[%arg1] {axis = 0 : i32} : (tensor<16x16xf16, #blocked1>, tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked>
-    tt.return %1 : tensor<16x16xf16, #blocked>
-  }
-
-  // CHECK-LABEL: gather_efficient_layout
-  tt.func @gather_efficient_layout(%arg0: tensor<16x16xf16, #blocked>, %arg1: tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked> {
-    // CHECK-NEXT: convert_layout
-    %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
-    // CHECK-NEXT: tt.gather {{.*}} (tensor<16x16xf16, #blocked1>
-    %1 = tt.gather %0[%arg1] {axis = 0 : i32, efficient_layout} : (tensor<16x16xf16, #blocked1>, tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked>
-    tt.return %1 : tensor<16x16xf16, #blocked>
-  }
-}
 
 // -----
 
