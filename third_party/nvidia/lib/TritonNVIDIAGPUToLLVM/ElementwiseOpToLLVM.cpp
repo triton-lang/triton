@@ -677,20 +677,6 @@ private:
   int computeCapability;
 };
 
-struct FPToSIOpConversion
-    : ElementwiseOpConversionBase<arith::FPToSIOp, FPToSIOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::FPToSIOp, FPToSIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::FPToSIOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    return {LLVM::FPToSIOp::create(rewriter, loc, elemTy, operands[0][0])};
-  }
-};
-
 struct ExpOpConversionApprox
     : ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox> {
   using Base = ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox>;
@@ -989,11 +975,11 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 
   POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);
+  POPULATE_OP(arith::FPToSIOp, LLVM::FPToSIOp);
 
 #undef POPULATE_OP
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,

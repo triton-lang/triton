@@ -63,20 +63,6 @@ struct PackedArithOpConversion
   }
 };
 
-struct FDivOpConversion
-    : ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion> {
-  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
-
-  SmallVector<Value> createDestOps(arith::DivFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-
-    return {LLVM::FDivOp::create(rewriter, loc, elemTy, operands[0][0],
-                                 operands[0][1])};
-  }
-};
-
 struct FMulOpConversion
     : ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion> {
   using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
@@ -502,7 +488,8 @@ void populateElementwiseOpToLLVMPatterns(
         typeConverter, axisInfoAnalysis, gfx1250Benefit);
   }
 
-  patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
