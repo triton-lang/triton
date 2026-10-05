@@ -336,6 +336,32 @@ def test_atomic_load_store_vectorization(op, dtype, stride, offset, mask_group, 
     assert f"{opcode}.relaxed.gpu.global{suffix}.b{word_bits}" in compiled.asm["ptx"]
 
 
+@pytest.mark.parametrize("num_iters", [1, 2])
+@pytest.mark.parametrize("divisor", [-32, 32])
+def test_signed_div_rem_loop_exit(num_iters, divisor, device):
+
+    @gluon.jit(do_not_specialize=["num_iters", "divisor"])
+    def kernel(Quotients, Remainders, num_iters, divisor, Layout: ttgl.constexpr):
+        ttgl.assume(num_iters >= 1)
+        ttgl.assume(num_iters <= 2)
+        offsets = ttgl.arange(0, 128, layout=Layout)
+        values = offsets
+        for i in range(num_iters):
+            ttgl.store(Quotients + i * 128 + offsets, values // divisor)
+            ttgl.store(Remainders + i * 128 + offsets, values % divisor)
+            values -= 128
+        ttgl.store(Quotients + num_iters * 128 + offsets, values // divisor)
+        ttgl.store(Remainders + num_iters * 128 + offsets, values % divisor)
+
+    quotients = torch.empty((num_iters + 1, 128), dtype=torch.int32, device=device)
+    remainders = torch.empty_like(quotients)
+    layout = ttgl.BlockedLayout([8], [THREADS_PER_WARP], [4], [0])
+    kernel[(1, )](quotients, remainders, num_iters, divisor, layout)
+    values = torch.arange(128, device=device)[None, :] - 128 * torch.arange(num_iters + 1, device=device)[:, None]
+    torch.testing.assert_close(quotients, torch.div(values, divisor, rounding_mode="trunc").int())
+    torch.testing.assert_close(remainders, torch.fmod(values, divisor).int())
+
+
 @pytest.mark.parametrize("block_size", [1, 16, 128, 512])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("timeout", [None, 0])
