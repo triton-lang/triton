@@ -348,7 +348,7 @@ AddressSet AddressSet::translated(uint32_t delta) const {
 }
 
 // Hash every equality field, including the exact address sets.
-static size_t hashBufferRegionView(const BufferRegionView &view) {
+size_t BufferRegionViewWithHash::computeHash(const BufferRegionView &view) {
   auto hash = llvm::hash_combine(
       view.allocationFrame, view.region.baseOffset, view.region.length,
       view.storageBase, view.affineOffset, view.affinePartitionOffset,
@@ -361,9 +361,6 @@ static size_t hashBufferRegionView(const BufferRegionView &view) {
         llvm::hash_combine_range(addresses.begin(), addresses.end()));
   return hash;
 }
-
-BufferRegionViewWithHash::BufferRegionViewWithHash(BufferRegionView view)
-    : view(std::move(view)), hash(hashBufferRegionView(this->view)) {}
 
 BufferRegionView
 BufferRegionView::translated(uint32_t offset,
@@ -570,8 +567,8 @@ bool mayOverlap(const BufferRegionFootprint *lhs,
   if (left.kind != RegionInfo::Kind::Exact || left.views.empty() ||
       right.kind != RegionInfo::Kind::Exact || right.views.empty())
     return true;
-  return llvm::any_of(left.views, [&](const auto &a) {
-    return llvm::any_of(right.views, [&](const auto &b) {
+  return llvm::any_of(left.views, [&](const BufferRegionViewWithHash &a) {
+    return llvm::any_of(right.views, [&](const BufferRegionViewWithHash &b) {
       bool sameFrame = a.view.allocationFrame &&
                        a.view.allocationFrame == b.view.allocationFrame;
       return !sameFrame || a.view.region.intersects(b.view.region);
@@ -594,9 +591,11 @@ BufferRegionAnalysis::getFootprint(Value value,
   }
   const auto *footprint = it->second.get();
   if (footprint && allocationFrame &&
-      llvm::any_of(footprint->regionInfo.views, [&](const auto &entry) {
-        return entry.view.allocationFrame != getOperationId(allocationFrame);
-      }))
+      llvm::any_of(footprint->regionInfo.views,
+                   [&](const BufferRegionViewWithHash &view) {
+                     return view.view.allocationFrame !=
+                            getOperationId(allocationFrame);
+                   }))
     return nullptr;
   return footprint;
 }
@@ -643,9 +642,10 @@ const BufferRegionFootprint *BufferRegionAnalysis::translateToCallsite(
   if (!footprint)
     return nullptr;
   uint32_t calleeFrame = getOperationId(callee);
-  if (llvm::none_of(footprint->regionInfo.views, [&](const auto &entry) {
-        return entry.view.allocationFrame == calleeFrame;
-      }))
+  if (llvm::none_of(footprint->regionInfo.views,
+                    [&](const BufferRegionViewWithHash &view) {
+                      return view.view.allocationFrame == calleeFrame;
+                    }))
     return footprint;
   auto [it, inserted] =
       callsiteFootprints.try_emplace({footprint, call.getOperation()});
@@ -654,10 +654,10 @@ const BufferRegionFootprint *BufferRegionAnalysis::translateToCallsite(
         getOperationId(call->getParentOfType<FunctionOpInterface>());
     uint32_t offset = getCallOffset(call);
     RegionInfo info(RegionInfo::ViewList{});
-    for (const auto &entry : footprint->regionInfo.views)
-      info.views.insert(entry.view.allocationFrame == calleeFrame
-                            ? entry.view.translated(offset, callerFrame)
-                            : entry.view);
+    for (const BufferRegionViewWithHash &view : footprint->regionInfo.views)
+      info.views.insert(view.view.allocationFrame == calleeFrame
+                            ? view.view.translated(offset, callerFrame)
+                            : view.view);
     it->second = std::make_unique<BufferRegionFootprint>(
         BufferRegionFootprint{footprint->memorySpace, std::move(info)});
   }
@@ -728,12 +728,12 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       firstSubBuffer = index;
       endSubBuffer = index + 1;
     }
-    for (const auto &entry : in.views) {
+    for (const BufferRegionViewWithHash &view : in.views) {
       for (int i = firstSubBuffer; i < endSubBuffer; ++i) {
         uint32_t stageOffset =
             getMemDescStorageOffset(memdescIndexOp.getType(), i);
         regionInfo.views.insert(
-            getSubView(memdescIndexOp.getType(), entry.view, stageOffset));
+            getSubView(memdescIndexOp.getType(), view.view, stageOffset));
       }
     }
 
@@ -745,9 +745,9 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       return propagateRegions(in);
     MemDescSubsliceOffsets relativeOffset =
         getMemDescSubsliceUnpaddedOffsets(memdescSubsliceOp);
-    for (const auto &entry : in.views)
+    for (const BufferRegionViewWithHash &view : in.views)
       regionInfo.views.insert(
-          getSubView(memdescSubsliceOp.getType(), entry.view,
+          getSubView(memdescSubsliceOp.getType(), view.view,
                      relativeOffset.storageOffset, relativeOffset.byteOffset,
                      relativeOffset.partitionOffset, relativeOffset.ctaOffset));
     return propagateRegions(regionInfo);
@@ -759,8 +759,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     uint32_t relativeOffset = ttng::getTMemSubSliceOffset(
         tmemSubsliceOp.getSrc().getType(), tmemSubsliceOp.getOffset(),
         tmemSubsliceOp.getDim());
-    for (const auto &entry : in.views)
-      regionInfo.views.insert(getSubView(tmemSubsliceOp.getType(), entry.view,
+    for (const BufferRegionViewWithHash &view : in.views)
+      regionInfo.views.insert(getSubView(tmemSubsliceOp.getType(), view.view,
                                          /*storageOffset=*/0, relativeOffset));
     return propagateRegions(regionInfo);
   }
@@ -775,8 +775,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     const RegionInfo &in = operands[0]->getValue();
     if (in.isUnknown())
       return propagateRegions(in);
-    for (const auto &entry : in.views)
-      regionInfo.views.insert(getSubView(reinterpretOp.getType(), entry.view));
+    for (const BufferRegionViewWithHash &view : in.views)
+      regionInfo.views.insert(getSubView(reinterpretOp.getType(), view.view));
     return propagateRegions(regionInfo);
   }
   if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp>(op))
@@ -802,8 +802,8 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
       auto addRegions = [&](RegionType regionType) {
         if (regionInfo.isUnknown())
           usedUnknownBufferRegions[regionType] = true;
-        for (const auto &entry : regionInfo.views)
-          usedBufferRegions[regionType].insert(entry.view.region);
+        for (const BufferRegionViewWithHash &view : regionInfo.views)
+          usedBufferRegions[regionType].insert(view.view.region);
       };
 
       bool isTensorMemory = isa<ttng::TensorMemorySpaceAttr>(

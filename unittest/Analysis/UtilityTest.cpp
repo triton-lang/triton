@@ -138,8 +138,8 @@ TEST(Analysis, BufferRegionViewPreservesSubviewProvenance) {
   EXPECT_EQ(joined.views.size(), 2);
 
   std::set<triton::BufferRegion> physicalRegions;
-  for (const auto &entry : joined.views)
-    physicalRegions.insert(entry.view.region);
+  for (const triton::BufferRegionViewWithHash &view : joined.views)
+    physicalRegions.insert(view.view.region);
   EXPECT_EQ(physicalRegions.size(), 1);
 }
 
@@ -402,7 +402,7 @@ TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
   using triton::AddressSet;
   using triton::BufferRegionView;
   using triton::BufferRegionViewWithHash;
-  using Hash = std::hash<BufferRegionViewWithHash>;
+  using Hash = BufferRegionViewWithHash::Hash;
   static_assert(std::is_const_v<decltype(BufferRegionViewWithHash::view)>);
   static_assert(std::is_const_v<decltype(BufferRegionViewWithHash::hash)>);
   static_assert(!std::is_convertible_v<BufferRegionViewWithHash &,

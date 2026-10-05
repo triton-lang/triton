@@ -2,7 +2,6 @@
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
@@ -162,23 +161,22 @@ struct BufferRegionViewWithHash {
   const BufferRegionView view;
   const size_t hash;
 
-  BufferRegionViewWithHash(BufferRegionView view);
+  BufferRegionViewWithHash(BufferRegionView view)
+      : view(std::move(view)), hash(computeHash(this->view)) {}
 
   bool operator==(const BufferRegionViewWithHash &other) const {
     return hash == other.hash && view == other.view;
   }
+
+  struct Hash {
+    size_t operator()(const BufferRegionViewWithHash &key) const noexcept {
+      return key.hash;
+    }
+  };
+
+private:
+  static size_t computeHash(const BufferRegionView &view);
 };
-
-} // namespace mlir::triton
-
-template <> struct std::hash<mlir::triton::BufferRegionViewWithHash> {
-  size_t operator()(const mlir::triton::BufferRegionViewWithHash &key) const
-      noexcept {
-    return key.hash;
-  }
-};
-
-namespace mlir::triton {
 
 //===----------------------------------------------------------------------===//
 // Buffer state planning
@@ -203,7 +201,8 @@ BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions,
 //
 struct RegionInfo {
   enum class Kind { Uninitialized, Exact, Unknown };
-  using ViewList = std::unordered_set<BufferRegionViewWithHash>;
+  using ViewList =
+      std::unordered_set<BufferRegionViewWithHash, BufferRegionViewWithHash::Hash>;
 
   Kind kind = Kind::Uninitialized;
   ViewList views;
@@ -236,8 +235,8 @@ struct RegionInfo {
     }
     // Keep diagnostics stable even though the lattice container is unordered.
     llvm::SmallVector<const BufferRegionView *> orderedViews;
-    for (const auto &entry : views)
-      orderedViews.push_back(&entry.view);
+    for (const BufferRegionViewWithHash &view : views)
+      orderedViews.push_back(&view.view);
     llvm::sort(orderedViews,
                [](const auto *lhs, const auto *rhs) { return *lhs < *rhs; });
     llvm::interleaveComma(orderedViews, os, [&](const BufferRegionView *view) {

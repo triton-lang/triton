@@ -164,9 +164,9 @@ struct TestBufferRegionAliasPass
         container.regionInfo.isUnknown() || contained.regionInfo.isUnknown())
       return false;
     return llvm::all_of(
-        contained.regionInfo.views, [&](const auto &b) {
+        contained.regionInfo.views, [&](const tt::BufferRegionViewWithHash &b) {
           return llvm::any_of(container.regionInfo.views,
-                              [&](const auto &a) {
+                              [&](const tt::BufferRegionViewWithHash &a) {
                                 return a.view.contains(b.view);
                               });
         });
@@ -183,8 +183,8 @@ struct TestBufferRegionAliasPass
                             ArrayRef<NamedRegion> namedRegions) {
     SmallVector<tt::BufferRegion> regions;
     for (const auto &[name, footprint] : namedRegions)
-      for (const auto &entry : footprint.regionInfo.views)
-        regions.push_back(entry.view.region);
+      for (const tt::BufferRegionViewWithHash &view : footprint.regionInfo.views)
+        regions.push_back(view.view.region);
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
 
@@ -204,8 +204,8 @@ struct TestBufferRegionAliasPass
         continue;
       }
       SmallVector<tt::BufferRegion> candidates;
-      for (const auto &entry : info.views)
-        candidates.push_back(entry.view.region);
+      for (const tt::BufferRegionViewWithHash &view : info.views)
+        candidates.push_back(view.view.region);
       llvm::sort(candidates);
       for (const tt::BufferRegion &candidate : candidates) {
         auto it = llvm::lower_bound(regions, candidate);

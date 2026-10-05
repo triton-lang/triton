@@ -782,8 +782,8 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
     for (const auto &[value, regionInfo] : candidates[iMemType]) {
       BufferStateCandidates stateCandidates;
       stateCandidates.unknown = regionInfo.isUnknown();
-      for (const auto &entry : regionInfo.views) {
-        const BufferRegion &candidate = entry.view.region;
+      for (const BufferRegionViewWithHash &view : regionInfo.views) {
+        const BufferRegion &candidate = view.view.region;
         auto it = llvm::lower_bound(regions, candidate);
         if (it == regions.end() || !(*it == candidate)) {
           InFlightDiagnostic diag = emitError(
@@ -794,7 +794,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
           return failure();
         }
         uint32_t id = std::distance(regions.begin(), it);
-        uint32_t ctaMask = 1u << entry.view.affineCTAOffset;
+        uint32_t ctaMask = 1u << view.view.affineCTAOffset;
 
         auto existing = llvm::find_if(
             stateCandidates.cases, [&](const BufferStateCandidate &state) {
