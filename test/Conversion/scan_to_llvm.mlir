@@ -190,13 +190,11 @@ tt.func public @anchor_permuted_lanes(%ptr: !llvm.ptr, %arg: !llvm.struct<(i32, 
 }
 
 // CHECK-LABEL: @test_interleaved
-// Exchange partitions, scan their totals, then return exclusive carries to
-// their original owners. Each exchange publishes the whole totals array.
+// Exchange the full sequence once, scan it within each warp, then map the
+// exclusive carries back to their original owners.
 // CHECK-NOT: @llvm.nvvm.barrier
 // CHECK: st.shared::cta
 // CHECK: @llvm.nvvm.barrier
-// CHECK: load i32, ptr addrspace(3)
-// CHECK-COUNT-4: @llvm.nvvm.barrier
 // CHECK: load i32, ptr addrspace(3)
 // CHECK-NOT: @llvm.nvvm.barrier
 // CHECK: ret
@@ -240,13 +238,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // CARRIES-LABEL: @test_parallel_carries
-// Scan contiguous partitions and return their carries to the original owners.
+// Scan the replicated sequence and return carries to the original owners.
 // CARRIES: st.shared::cta
 // CARRIES: @llvm.nvvm.barrier
 // CARRIES: load {{.*}}, ptr addrspace(3)
 // CARRIES: @llvm.nvvm.shfl.sync.idx.i32
-// CARRIES-COUNT-4: @llvm.nvvm.barrier
-// CARRIES: load {{.*}}, ptr addrspace(3)
 // CARRIES-NOT: @llvm.nvvm.barrier
 // CARRIES: ret
 tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
@@ -280,15 +276,13 @@ tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // GROUPS-LABEL: @test_grouped_carries
-// Distribute the 128 segment totals over four warps, scan each partition,
-// then scan its terminal total and return the complete carries.
+// Replicate all 128 segment totals within each warp, including register
+// sequences, and scan them after a single shared-memory exchange.
 // GROUPS: st.shared::cta
 // GROUPS: @llvm.nvvm.barrier
 // GROUPS: load {{.*}}, ptr addrspace(3)
 // GROUPS: @llvm.nvvm.shfl.sync.idx.i32
 // GROUPS: fadd float
-// GROUPS-COUNT-4: @llvm.nvvm.barrier
-// GROUPS: load {{.*}}, ptr addrspace(3)
 // GROUPS-NOT: @llvm.nvvm.barrier
 // GROUPS: ret
 tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
@@ -596,11 +590,11 @@ tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #conver
 
 #parallel_totals = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Four segment totals and eight columns fit in the lanes of one warp.
-// The totals scan needs two adds, rather than repeating them in eight registers.
-// Together with 40 intra-warp adds and eight carry adds, this gives 50.
+// Preserve the eight independent register columns while replicating four
+// segment totals in each warp. The totals scan uses two adds per column,
+// plus 40 intra-warp adds and eight carry adds, for 64 in total.
 // COLUMNS-LABEL: llvm.func {{.*}}@test_scan_parallel_totals(
-// COLUMNS-COUNT-50: llvm.fadd
+// COLUMNS-COUNT-64: llvm.fadd
 // COLUMNS-NOT: llvm.fadd
 // COLUMNS: llvm.return
 tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals> {
@@ -617,10 +611,12 @@ tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_tot
 
 #ship = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Each of two chunks uses three exchanges with four shuffles in both directions.
+// Convert the full register/lane sequence within the warp, then scan it.
+// SHIP: ttg.shared = 0 : i32
 // SHIP-LABEL: llvm.func {{.*}}@test_scan_register_lane_exchanges(
-// SHIP-COUNT-48: nvvm.shfl.sync bfly
-// SHIP-NOT: nvvm.shfl.sync bfly
+// SHIP: nvvm.shfl.sync
+// SHIP: llvm.fadd
+// SHIP-NOT: nvvm.barrier
 // SHIP: llvm.return
 tt.func private @test_scan_register_lane_exchanges(%arg: tensor<512xf32, #ship>) -> tensor<512xf32, #ship> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({

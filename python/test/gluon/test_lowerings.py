@@ -280,7 +280,7 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=
     # Eight warp-segment totals leave lanes available for independent columns.
     (ttgl.BlockedLayout([8, 1], [THREADS_PER_WARP, 1], [4, 1], [0, 1]), 2048),
     (ttgl.BlockedLayout([16, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 2048),
-    # Multiple bounded register/lane transposes within one warp-local scan.
+    # Full register/lane transposes within one warp-local scan.
     (ttgl.BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0]), 256),
     (ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 4096),
     (ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 16 * THREADS_PER_WARP),
@@ -330,11 +330,13 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
     (ttgl.DistributedLinearLayout([[1, 0], [4, 0], [16, 0], [64, 0], [0, 0], [0, 1], [0, 2]],
                                   [[2, 0], [8, 0], [0, 4], [0, 8], [0, 0]] + [[0, 0]] *
                                   (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [128, 16]), 128, 16),
-    # Chunk boundaries must preserve side-effectful, noncommutative combines.
+    # Long warp-local scans must preserve side-effectful, noncommutative combines.
     (ttgl.BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0]), 256, 64),
     (ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 4096, 8),
     (ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 16 * THREADS_PER_WARP, 4),
     (ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 2048, 4),
+    # The replicated total sequence must remain ordered even with no free lanes.
+    (ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [1, 0]), 128, 32),
     # No intra-warp carry in the original layout; totals span registers.
     (ttgl.BlockedLayout([2, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 512, 32),
 ])
