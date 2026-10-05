@@ -798,10 +798,11 @@ def fp8_mxfp4_gemm_warp_pipeline(a_ptr, b_ptr, c_ptr, b_scale_ptr, M, N, K, stri
                                  SHARED_LAYOUT_A: gl.constexpr, SHARED_LAYOUT_B: gl.constexpr,
                                  SHARED_SCALE_B: gl.constexpr, WMMA_LAYOUT: gl.constexpr,
                                  LOAD_WMMA_LAYOUT: gl.constexpr, OUTPUT_CGA_LAYOUT: gl.constexpr, BLOCK_M: gl.constexpr,
-                                 BLOCK_N: gl.constexpr, CTA_M: gl.constexpr, CTA_N: gl.constexpr, REUSE_A: gl.constexpr,
-                                 GROUP_SIZE: gl.constexpr):
+                                 BLOCK_N: gl.constexpr, CTA_M: gl.constexpr, CTA_N: gl.constexpr,
+                                 GROUP_ALONG_N: gl.constexpr, GROUP_SIZE: gl.constexpr):
     gl.static_assert(gl.num_ctas() == CTA_M * CTA_N)
-    if REUSE_A:
+    # Group neighboring N tiles to favor A cache locality.
+    if GROUP_ALONG_N:
         pid = gl.program_id(axis=0)
         num_pid_m = gl.cdiv(M, BLOCK_M)
         num_pid_n = gl.cdiv(N, BLOCK_N)
@@ -1056,32 +1057,24 @@ def mxfp4_gemm_warp_pipeline(a_ptr, b_ptr, c_ptr, a_scale_ptr, b_scale_ptr, M, N
     _tdm_store_full_tile(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc, WMMA_LAYOUT, 1024, 1024, 4)
 
 
-def _make_mxfp8_trig_matrix(rows, k):
-    """Port hipBLASLt's E4M3/E8M0 ``trig_float`` CPU generator.
+def _trig_scale_chunks(rows, k):
+    """Yield value bits and block-32 scales matching hipBLASLt's trig generator.
 
-    hipBLASLt uses 32 independently seeded ``std::mt19937`` streams over
-    contiguous scale-block ranges. Each stream draws doubles with libstdc++'s
-    ``uniform_real_distribution``, takes ``cos(2*pi*u)``, truncates each value
-    to an individually scaled E4M3 value, then replaces the 32 individual
-    E8M0 exponents with their rounded mean and adjusts the E4M3 exponents.
+    Preserve its 32 independently seeded MT19937 streams, contiguous block
+    ranges, and libstdc++ double generation order. Chunking bounds memory use.
     """
     if k % 32:
-        raise ValueError('MXFP8 trig generation requires K divisible by 32')
+        raise ValueError('MXFP trig generation requires K divisible by 32')
     block_size = 32
     num_threads = 32
-    seed = TRIG_SEED
     blocks = rows * k // block_size
     if blocks % num_threads:
-        raise ValueError('MXFP8 trig generation requires scale blocks divisible by 32')
-    data = torch.empty((rows, k), dtype=torch.uint8)
-    scales = torch.empty((rows, k // block_size), dtype=torch.uint8)
-    data_flat = data.numpy().reshape(-1)
-    scale_flat = scales.numpy().reshape(-1)
+        raise ValueError('MXFP trig generation requires scale blocks divisible by 32')
     blocks_per_thread = blocks // num_threads
     blocks_per_chunk = 32 * 1024
     output_block = 0
     for thread in range(num_threads):
-        rng = np.random.RandomState(seed + thread)
+        rng = np.random.RandomState(TRIG_SEED + thread)
         remaining = blocks_per_thread
         while remaining:
             chunk_blocks = min(remaining, blocks_per_chunk)
@@ -1089,39 +1082,74 @@ def _make_mxfp8_trig_matrix(rows, k):
             # Match libstdc++ generate_canonical<double, 53>: low word first.
             raw = rng.randint(0, 2**32, size=(count, 2), dtype=np.uint32)
             uniform = (raw[:, 0].astype(np.float64) + raw[:, 1].astype(np.float64) * 2.0**32) * 2.0**(-64)
-            values = np.cos(uniform * (2.0 * np.pi))
-            bits = values.view(np.uint64)
-            sign = (bits >> 63 << 7).astype(np.uint8)
+            bits = np.cos(uniform * (2.0 * np.pi)).view(np.uint64).reshape(chunk_blocks, block_size)
             exponent = (bits >> 52 & 2047).astype(np.int32) - 1023
-            mantissa = ((bits & (1 << 52) - 1) >> 49).astype(np.uint8)
-            # Average block-32 E8M0 exponents, then adjust the data exponent.
             element_scales = np.maximum(exponent, -127) + 127
-            element_scales = element_scales.reshape(chunk_blocks, block_size)
             block_scales = np.floor(element_scales.mean(axis=1) + 0.5).astype(np.int32)
             adjusted = element_scales - block_scales[:, None]
-            sign = sign.reshape(chunk_blocks, block_size)
-            mantissa = mantissa.reshape(chunk_blocks, block_size)
-            encoded = np.zeros((chunk_blocks, block_size), dtype=np.uint8)
-            normal = adjusted >= -6
-            encoded[normal] = sign[normal] | (adjusted[normal] + 7).astype(np.uint8) << 3 | mantissa[normal]
-            subnormal = (adjusted >= -9) & (adjusted < -6)
-            subnormal_mantissa = mantissa[subnormal] >> 1 | 4
-            subnormal_mantissa >>= (-7 - adjusted[subnormal]).astype(np.uint8)
-            encoded[subnormal] = sign[subnormal] | subnormal_mantissa
-            data_begin = output_block * block_size
-            data_end = data_begin + count
-            data_flat[data_begin:data_end] = encoded.reshape(-1)
-            scale_flat[output_block:output_block + chunk_blocks] = block_scales.astype(np.uint8)
+            yield output_block, bits, adjusted, block_scales.astype(np.uint8)
             output_block += chunk_blocks
             remaining -= chunk_blocks
+
+
+def _make_mxfp8_trig_matrix(rows, k):
+    """Encode trig inputs as E4M3 values with E8M0 block scales."""
+    data = torch.empty((rows, k), dtype=torch.uint8)
+    scales = torch.empty((rows, k // 32), dtype=torch.uint8)
+    data_flat = data.numpy().reshape(-1)
+    scale_flat = scales.numpy().reshape(-1)
+    for output_block, bits, adjusted, block_scales in _trig_scale_chunks(rows, k):
+        sign = (bits >> 63 << 7).astype(np.uint8)
+        mantissa = ((bits & (1 << 52) - 1) >> 49).astype(np.uint8)
+        encoded = np.zeros(bits.shape, dtype=np.uint8)
+        normal = adjusted >= -6
+        encoded[normal] = sign[normal] | (adjusted[normal] + 7).astype(np.uint8) << 3 | mantissa[normal]
+        subnormal = (adjusted >= -9) & (adjusted < -6)
+        subnormal_mantissa = mantissa[subnormal] >> 1 | 4
+        subnormal_mantissa >>= (-7 - adjusted[subnormal]).astype(np.uint8)
+        encoded[subnormal] = sign[subnormal] | subnormal_mantissa
+        data_begin = output_block * 32
+        data_flat[data_begin:data_begin + encoded.size] = encoded.reshape(-1)
+        scale_flat[output_block:output_block + block_scales.size] = block_scales
     return (data, scales)
 
 
+def _make_mxfp4_trig_matrix(rows, k):
+    """Encode trig inputs as E2M1 values with E8M0 block scales."""
+    data = torch.empty((rows, k), dtype=torch.uint8)
+    scales = torch.empty((rows, k // 32), dtype=torch.uint8)
+    data_flat = data.numpy().reshape(-1)
+    scale_flat = scales.numpy().reshape(-1)
+    for output_block, bits, adjusted, block_scales in _trig_scale_chunks(rows, k):
+        sign = (bits >> 63 << 3).astype(np.uint8)
+        mantissa = ((bits & (1 << 52) - 1) >> 51).astype(np.uint8)
+        encoded = np.zeros(bits.shape, dtype=np.uint8)
+        normal = adjusted >= 0
+        encoded[normal] = sign[normal] | np.minimum((adjusted[normal] + 1) * 2 + mantissa[normal], 7).astype(np.uint8)
+        subnormal = adjusted == -1
+        encoded[subnormal] = sign[subnormal] | 1
+        data_begin = output_block * 32
+        data_flat[data_begin:data_begin + encoded.size] = encoded.reshape(-1)
+        scale_flat[output_block:output_block + block_scales.size] = block_scales
+    return (data, scales)
+
+
+def validate_gemm_shape(dtype, M, N, K, tile=None, cluster=None):
+    """Apply the same dimension constraints to CLI and Python callers."""
+    if dtype == 'mxfp8':
+        return mxfp8_config(M, N, K, tile, cluster)
+    constraints = {'bf16': (256, 256), 'mxfp4': (1024, 2048), 'fp8_mxfp4': (256, 1024)}
+    if dtype not in constraints:
+        raise ValueError(f'unsupported GEMM dtype: {dtype}')
+    if M <= 0 or N <= 0 or M % 1024 or N % 1024:
+        raise ValueError('M and N must be positive multiples of 1024')
+    multiple, minimum = constraints[dtype]
+    if K < minimum or K % multiple:
+        raise ValueError(f'{dtype} requires K >= {minimum} and divisible by {multiple}')
+
+
 def make_bf16_case(args):
-    if args.M % 1024 or args.N % 1024 or args.K % 128:
-        raise ValueError('BF16 requires M/N divisible by 1024 and K by 128')
-    if args.K // 128 < 2 or args.K // 128 % 2:
-        raise ValueError('BF16 requires an even number of at least two K tiles')
+    validate_gemm_shape('bf16', args.M, args.N, args.K)
     torch.manual_seed(args.seed)
     if args.input_mode == 'random':
         a = torch.randn((args.M, args.K), dtype=torch.bfloat16, device='cuda')
@@ -1180,11 +1208,8 @@ def make_bf16_case(args):
 
 
 def make_fp8_mxfp4_case(args):
+    validate_gemm_shape('fp8_mxfp4', args.M, args.N, args.K)
     block_m = block_n = 1024
-    if args.M % block_m or args.N % block_n or args.K % 256:
-        raise ValueError('FP8xMXFP4 requires M/N divisible by 1024 and K by 256')
-    if args.K // 256 < 4:
-        raise ValueError('FP8xMXFP4 requires at least four K tiles')
     torch.manual_seed(args.seed)
     if args.input_mode == 'trig':
         a = torch.empty((args.M, args.K), dtype=torch.float8_e4m3fn)
@@ -1244,14 +1269,12 @@ def make_fp8_mxfp4_case(args):
     group_size = 8 if args.K <= 8192 else 4
 
     def launch(a_d=a_d, b_d=b_d, c_d=c_d, bs_d=bs_d):
-        return fp8_mxfp4_gemm_warp_pipeline[grid](a_d, b_d, c_d, bs_d, args.M, args.N, args.K, a_d.stride(0),
-                                                  a_d.stride(1), b_d.stride(1), b_d.stride(0), c_d.stride(0),
-                                                  c_d.stride(1), bs_d.stride(0), GRID_MN=grid[0],
-                                                  SHARED_LAYOUT_A=shared_a, SHARED_LAYOUT_B=shared_b,
-                                                  SHARED_SCALE_B=shared_bs, WMMA_LAYOUT=wmma,
-                                                  LOAD_WMMA_LAYOUT=load_wmma, OUTPUT_CGA_LAYOUT=output_cga,
-                                                  BLOCK_M=block_m, BLOCK_N=block_n, CTA_M=4, CTA_N=4, REUSE_A=True,
-                                                  GROUP_SIZE=group_size, num_warps=8, waves_per_eu=2, num_ctas=16)
+        return fp8_mxfp4_gemm_warp_pipeline[grid](
+            a_d, b_d, c_d, bs_d, args.M, args.N, args.K, a_d.stride(0), a_d.stride(1), b_d.stride(1), b_d.stride(0),
+            c_d.stride(0), c_d.stride(1), bs_d.stride(0), GRID_MN=grid[0], SHARED_LAYOUT_A=shared_a,
+            SHARED_LAYOUT_B=shared_b, SHARED_SCALE_B=shared_bs, WMMA_LAYOUT=wmma, LOAD_WMMA_LAYOUT=load_wmma,
+            OUTPUT_CGA_LAYOUT=output_cga, BLOCK_M=block_m, BLOCK_N=block_n, CTA_M=4, CTA_N=4, GROUP_ALONG_N=True,
+            GROUP_SIZE=group_size, num_warps=8, waves_per_eu=2, num_ctas=16)
 
     def check():
         c_d.zero_()
@@ -1286,7 +1309,7 @@ def mxfp8_config(M, N, K, tile, cluster):
 
 
 def make_mxfp8_case(args):
-    tile, block_k, cluster = mxfp8_config(args.M, args.N, args.K, args.mxfp8_tile, args.mxfp8_cluster)
+    tile, block_k, cluster = validate_gemm_shape('mxfp8', args.M, args.N, args.K, args.mxfp8_tile, args.mxfp8_cluster)
     flat_pipeline = getattr(args, 'flat_pipeline', False)
     bk256_kernel = mxfp8_gemm_warp_pipeline_flat if flat_pipeline else mxfp8_gemm_warp_pipeline
     bk512_kernel = mxfp8_gemm_warp_pipeline_bk512_flat if flat_pipeline else mxfp8_gemm_warp_pipeline_bk512
@@ -1424,10 +1447,7 @@ def make_mxfp8_case(args):
 
 
 def make_mxfp4_case(args):
-    if args.M % 1024 or args.N % 1024 or args.K % 512:
-        raise ValueError('MXFP4 requires M/N divisible by 1024 and K by 512')
-    if args.K // 512 < 4 or args.K // 512 % 2:
-        raise ValueError('MXFP4 requires an even number of at least four K tiles')
+    validate_gemm_shape('mxfp4', args.M, args.N, args.K)
     torch.manual_seed(args.seed)
     if args.input_mode == 'trig':
         a_bits, as_bits = _make_mxfp4_trig_matrix(args.M, args.K)
@@ -1491,66 +1511,6 @@ def make_mxfp4_case(args):
         print('result verified', flush=True)
 
     return (launch, check, (a_d, b_d, c_d, as_d, bs_d))
-
-
-def _make_mxfp4_trig_matrix(rows, k):
-    """Port hipBLASLt's E2M1/E8M0 ``trig_float`` CPU generator.
-
-    hipBLASLt uses 32 independently seeded ``std::mt19937`` streams over
-    contiguous scale-block ranges. Each stream draws doubles with libstdc++'s
-    ``uniform_real_distribution``, takes ``cos(2*pi*u)``, truncates each value
-    to an individually scaled E2M1 value, then replaces the 32 individual
-    E8M0 exponents with their rounded mean and adjusts the E2M1 exponents.
-    """
-    if k % 32:
-        raise ValueError('MXFP4 trig generation requires K divisible by 32')
-    block_size = 32
-    num_threads = 32
-    seed = TRIG_SEED
-    blocks = rows * k // block_size
-    if blocks % num_threads:
-        raise ValueError('MXFP4 trig generation requires scale blocks divisible by 32')
-    data = torch.empty((rows, k), dtype=torch.uint8)
-    scales = torch.empty((rows, k // block_size), dtype=torch.uint8)
-    data_flat = data.numpy().reshape(-1)
-    scale_flat = scales.numpy().reshape(-1)
-    blocks_per_thread = blocks // num_threads
-    blocks_per_chunk = 32 * 1024
-    output_block = 0
-    for thread in range(num_threads):
-        rng = np.random.RandomState(seed + thread)
-        remaining = blocks_per_thread
-        while remaining:
-            chunk_blocks = min(remaining, blocks_per_chunk)
-            count = chunk_blocks * block_size
-            # Match libstdc++ generate_canonical<double, 53>: low word first.
-            raw = rng.randint(0, 2**32, size=(count, 2), dtype=np.uint32)
-            uniform = (raw[:, 0].astype(np.float64) + raw[:, 1].astype(np.float64) * 2.0**32) * 2.0**(-64)
-            values = np.cos(uniform * (2.0 * np.pi))
-            bits = values.view(np.uint64)
-            sign = (bits >> 63 << 3).astype(np.uint8)
-            exponent = (bits >> 52 & 2047).astype(np.int32) - 1023
-            mantissa = ((bits & (1 << 52) - 1) >> 51).astype(np.uint8)
-            # Average block-32 E8M0 exponents, then adjust the data exponent.
-            element_scales = np.maximum(exponent, -127) + 127
-            element_scales = element_scales.reshape(chunk_blocks, block_size)
-            block_scales = np.floor(element_scales.mean(axis=1) + 0.5).astype(np.int32)
-            adjusted = element_scales - block_scales[:, None]
-            sign = sign.reshape(chunk_blocks, block_size)
-            mantissa = mantissa.reshape(chunk_blocks, block_size)
-            encoded = np.zeros((chunk_blocks, block_size), dtype=np.uint8)
-            normal = adjusted >= 0
-            encoded[normal] = sign[normal] | np.minimum(
-                (adjusted[normal] + 1) * 2 + mantissa[normal], 7).astype(np.uint8)
-            subnormal = adjusted == -1
-            encoded[subnormal] = sign[subnormal] | 1
-            data_begin = output_block * block_size
-            data_end = data_begin + count
-            data_flat[data_begin:data_end] = encoded.reshape(-1)
-            scale_flat[output_block:output_block + chunk_blocks] = block_scales.astype(np.uint8)
-            output_block += chunk_blocks
-            remaining -= chunk_blocks
-    return (data, scales)
 
 
 CASE_BUILDERS = {
@@ -1622,14 +1582,7 @@ def main():
     dtypes = list(CASE_BUILDERS) if args.dtype == 'all' else [args.dtype]
     try:
         for dtype in dtypes:
-            if dtype == 'mxfp8':
-                mxfp8_config(args.M, args.N, args.K, args.mxfp8_tile, args.mxfp8_cluster)
-            else:
-                if args.M <= 0 or args.N <= 0 or args.M % 1024 or args.N % 1024:
-                    raise ValueError('M and N must be positive multiples of 1024')
-                multiple, minimum = {'bf16': (256, 256), 'mxfp4': (1024, 2048), 'fp8_mxfp4': (256, 1024)}[dtype]
-                if args.K < minimum or args.K % multiple:
-                    raise ValueError(f'{dtype} requires K >= {minimum} and divisible by {multiple}')
+            validate_gemm_shape(dtype, args.M, args.N, args.K, args.mxfp8_tile, args.mxfp8_cluster)
     except ValueError as error:
         parser.error(str(error))
     if not torch.cuda.is_available():
