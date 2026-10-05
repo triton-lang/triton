@@ -4352,6 +4352,67 @@ def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype, scale_dtype,
     assert f"scale_format = {scale_format}" in module_text
 
 
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
+@pytest.mark.parametrize("format,op_name", [("e2m1", "fp4"), ("e4m3", "fp8"), ("e5m2", "fp8")])
+@pytest.mark.parametrize("constant_scale", [True, False], ids=["constant", "runtime"])
+@pytest.mark.parametrize("axis", [0, 1])
+def test_amd_scaled_downcast_scalar_fp32_scale(target, format, op_name, constant_scale, axis):
+    scaled_downcast = _get_amd_scaled_downcast(target)
+    lanes_along_axis = 8
+    lanes = [target.warp_size // lanes_along_axis, lanes_along_axis]
+    if axis == 1:
+        layout = ttgl.BlockedLayout([1, 8], lanes, [1, 1], [1, 0])
+        scale_shape = "64x1"
+    else:
+        layout = ttgl.BlockedLayout([8, 1], lanes[::-1], [1, 1], [0, 1])
+        scale_shape = "1x64"
+
+    @gluon.jit
+    def kernel(scale, FORMAT: ttgl.constexpr, CONSTANT_SCALE: ttgl.constexpr, AXIS: ttgl.constexpr,
+               LAYOUT: ttgl.constexpr):
+        input = ttgl.full([64, 64], 1.0, ttgl.bfloat16, LAYOUT)
+        if CONSTANT_SCALE:
+            scaled_downcast(input, 0.25, FORMAT, axis=AXIS)
+        else:
+            scaled_downcast(input, scale, FORMAT, axis=AXIS)
+
+    module = run_parser(kernel, *make_args(0.25, format, constant_scale, axis, layout, num_warps=1), target=target)
+    module_text = module.str_nodebug()
+    # The scalar is splatted into a single scale block spanning the whole axis, in the input's layout.
+    assert re.search(
+        rf"amdg\.scaled_downcast_{op_name} .* scale_format = e8m0_f32 .* : tensor<64x64xbf16, (#\w+)>, "
+        rf"tensor<{scale_shape}xf32, \1> -> ", module_text)
+    if constant_scale:
+        assert f"arith.constant dense<2.500000e-01> : tensor<{scale_shape}xf32" in module_text
+    else:
+        assert f"tt.splat %arg0 : f32 -> tensor<{scale_shape}xf32" in module_text
+
+
+@pytest.mark.parametrize("scale, message", [
+    (3.0, "must be positive, normal powers of two"),
+    (-2.0, "must be positive, normal powers of two"),
+    (0.0, "must be positive, normal powers of two"),
+    (2.0**-127, "must be positive, normal powers of two"),
+    (2.0**128, "must be positive, normal powers of two"),
+    (2, "Expected scale to be a tensor, an fp32 scalar, or a float constant"),
+    ("fp16", "Expected scalar scale to be fp32"),
+])
+def test_amd_scaled_downcast_scalar_scale_invalid(scale, message):
+
+    @gluon.jit
+    def kernel(SCALE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
+        input = ttgl.full([16, 64], 1.0, ttgl.bfloat16, layout)
+        if SCALE == "fp16":
+            ttgl.amd.cdna4.scaled_downcast(input, ttgl.to_tensor(0.25).to(ttgl.float16), "e4m3", axis=1)
+        else:
+            ttgl.amd.cdna4.scaled_downcast(input, SCALE, "e4m3", axis=1)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(scale, num_warps=1), target=HIP_TARGET_CDNA4)
+    assert message in str(e.value.__cause__ or e.value)
+
+
 @pytest.mark.parametrize("target, threads_per_warp, expect_layout", [
     (HIP_TARGET_CDNA3, [8, 8],
      ttgl.DistributedLinearLayout(reg_bases=[[8, 0]], lane_bases=[[0, 0], [0, 0], [0, 1], [1, 0], [2, 0], [4, 0]],

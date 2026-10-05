@@ -85,3 +85,61 @@ def test_runtime_scaled_downcast_fp4(dtype, instruction_suffix, scale_byte):
     expected = torch.full((block_m, block_k), expected_byte, dtype=torch.uint8)
     torch.testing.assert_close(output.cpu(), expected)
     assert (f"v_cvt_scalef32_pk_fp4_{instruction_suffix}" in program.asm["amdgcn"])
+
+
+@gluon.jit
+def scaled_downcast_scalar_scale_kernel(input_ptr, scale, output_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                        OUT_K: ttgl.constexpr, FORMAT: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
+    offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))
+    offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, layout))
+    input = ttgl.load(input_ptr + offs_m[:, None] * BLOCK_K + offs_k[None, :])
+
+    output = ttgl.amd.cdna4.scaled_downcast(input, scale, FORMAT, axis=1)
+
+    out_layout: ttgl.constexpr = output.type.layout
+    offs_out_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, out_layout))
+    offs_out_k = ttgl.arange(0, OUT_K, layout=ttgl.SliceLayout(0, out_layout))
+    ttgl.store(output_ptr + offs_out_m[:, None] * OUT_K + offs_out_k[None, :], output)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("format", ["e2m1", "e4m3", "e5m2"])
+@pytest.mark.parametrize(
+    "dtype,instruction_suffix",
+    [
+        (torch.float16, "f16"),
+        (torch.bfloat16, "bf16"),
+        (torch.float32, "f32"),
+    ],
+)
+@pytest.mark.parametrize("scale", [0.25, 8.0])
+@pytest.mark.parametrize("constant_scale", [False, True], ids=["runtime", "constant"])
+def test_runtime_scaled_downcast_scalar_scale(format, dtype, instruction_suffix, scale, constant_scale):
+    block_m, block_k = 16, 64
+    # Indexed by e2m1 code; every value is also exact in e4m3 and e5m2.
+    fp4_values = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0])
+    fp4_values = torch.cat([fp4_values, -fp4_values])
+    torch.manual_seed(0)
+    codes = torch.randint(0, 15, (block_m, block_k), dtype=torch.uint8)
+    # Skip code 8 (-0.0).
+    codes = (codes + (codes >= 8)).to(torch.uint8)
+    values = fp4_values[codes.long()]
+    input = (values * scale).to(dtype).cuda()
+
+    if format == "e2m1":
+        expected = codes[:, 0::2] | (codes[:, 1::2] << 4)
+        output = torch.empty(expected.shape, dtype=torch.uint8, device="cuda")
+        mnemonic = "fp4"
+    else:
+        torch_fp8 = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[format]
+        expected = values.to(torch_fp8).view(torch.uint8)
+        output = torch.empty(expected.shape, dtype=torch_fp8, device="cuda")
+        mnemonic = {"e4m3": "fp8", "e5m2": "bf8"}[format]
+
+    scale_arg = ttgl.constexpr(scale) if constant_scale else scale
+    program = scaled_downcast_scalar_scale_kernel[(1, )](input, scale_arg, output, block_m, block_k, expected.shape[1],
+                                                         format, num_warps=1)
+
+    torch.testing.assert_close(output.view(torch.uint8).cpu(), expected, atol=0, rtol=0)
+    assert f"v_cvt_scalef32_pk_{mnemonic}_{instruction_suffix}" in program.asm["amdgcn"]
