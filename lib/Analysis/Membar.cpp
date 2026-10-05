@@ -128,6 +128,8 @@ namespace {
 enum class ThreadSyncKind {
   Ordinary,
   Publication,
+  // Each warp publishes its completed effects without a CTA rendezvous.
+  WarpPublication,
   // Completions only establish completion or acquire state; they do
   // not access payload or consume another completion's unpublished effects.
   Completion,
@@ -145,16 +147,18 @@ struct ThreadSyncInfo {
 
   bool requiresBefore() const { return kind == ThreadSyncKind::Publication; }
 
+  bool requiresWarpBefore() const {
+    return kind == ThreadSyncKind::WarpPublication;
+  }
+
   bool requiresAfter() const {
     return kind == ThreadSyncKind::CompletionNeedsSync ||
            kind == ThreadSyncKind::SharedCompletionNeedsSync;
   }
 
-  bool isCompletionOnly() const {
-    return kind == ThreadSyncKind::Completion ||
-           kind == ThreadSyncKind::CompletionNeedsSync ||
-           kind == ThreadSyncKind::SharedCompletionNeedsSync ||
-           kind == ThreadSyncKind::MBarrierWait;
+  bool hasThreadDemand() const {
+    return kind == ThreadSyncKind::Ordinary ||
+           kind == ThreadSyncKind::Publication;
   }
 };
 
@@ -184,6 +188,9 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
     // SM90.
     return {ThreadSyncKind::Ordinary, ThreadIssuer::Warp0Leader};
   }
+  if (auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(op);
+      barrier && barrier.isPerWarp())
+    return {ThreadSyncKind::WarpPublication};
   if (isa<ttng::ArriveBarrierOp, ttng::BarrierExpectOp>(op)) {
     auto fromCTA = isa<ttng::ArriveBarrierOp>(op)
                        ? cast<ttng::ArriveBarrierOp>(op).getFromCTA()
@@ -347,6 +354,8 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
 Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                                         MembarInfo *membarInfo,
                                         OpBuilder *builder, bool cluster) {
+  if (!builder)
+    return nullptr;
   auto &pending = membarInfo->pending;
   auto canSkip = [&](Operation *before, Operation *after, bool beforeIsRead,
                      bool afterIsRead, Allocation *allocation) {
@@ -506,6 +515,11 @@ void MembarAnalysis::addThreadDemand(BlockInfo &effects, Operation *op) {
 
 void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
                             FuncMapT *funcMap, OpBuilder *builder) {
+  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op);
+      barrier && barrier.isWarp()) {
+    membarInfo->syncWarps();
+    return;
+  }
   auto sync = getThreadSyncInfo(op);
   // Region control flow is visited by the dataflow engine. Its children
   // contribute their own effects; implicit scratch belongs to this op.
@@ -522,7 +536,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   BlockInfo effects;
   if (hasEffects) {
     effects = getThreadEffects(op);
-    if (!sync.isCompletionOnly())
+    if (sync.hasThreadDemand())
       addThreadDemand(effects, op);
   }
   if (isReturn && isa<FunctionOpInterface>(op->getParentOp()))
@@ -657,6 +671,15 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
   }
 
   syncIfNeeded(op, curBlockInfo, membarInfo, builder, cluster);
+
+  if (builder && !cluster && getThreadSyncInfo(op).requiresWarpBefore() &&
+      !membarInfo->warpsSynced) {
+    builder->setInsertionPoint(op);
+    triton::gpu::BarrierOp::create(*builder, op->getLoc(),
+                                   triton::gpu::AddrSpace::Local,
+                                   triton::gpu::BarrierScope::Warp);
+    membarInfo->syncWarps();
+  }
 
   if (scratchSlice) {
     if (barrierStages.betweenMemoryEffects) {

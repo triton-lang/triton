@@ -183,6 +183,9 @@ static TMemBoundary getTMemBoundary(Operation *op) {
   // Assumptions do not publish pending TMEM accesses.
   if (isa<LLVM::AssumeOp>(op))
     return TMemBoundary::None;
+  if (auto barrier = dyn_cast<gpu::MBarrierOpInterface>(op);
+      barrier && barrier.isPerWarp())
+    return TMemBoundary::Wait;
   // An acquire does not publish earlier TMEM accesses. Keep them pending.
   if (isa<WaitBarrierOp>(op))
     return TMemBoundary::None;
@@ -322,6 +325,14 @@ private:
               OpBuilder *builder) override {
     waitsBefore.erase(op);
     BlockInfo &pending = info->pending;
+
+    if (auto barrier = dyn_cast<gpu::BarrierOp>(op);
+        barrier && barrier.isWarp()) {
+      // Complete each warp's accesses before its rendezvous, retaining
+      // dependencies on other warps for later hazards and publications.
+      flush(op, pending);
+      return;
+    }
 
     // Choose the barrier before placing waits.
     auto syncBefore = [&](const BlockInfo &effects) {
