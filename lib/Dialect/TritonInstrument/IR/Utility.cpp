@@ -783,7 +783,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
       BufferStateCandidates stateCandidates;
       stateCandidates.unknown = regionInfo.isUnknown();
       for (const BufferRegionView &view : regionInfo.views) {
-        const BufferRegion &candidate = view.getRegion();
+        const BufferRegion &candidate = view.region;
         auto it = llvm::lower_bound(regions, candidate);
         if (it == regions.end() || !(*it == candidate)) {
           InFlightDiagnostic diag = emitError(

@@ -119,26 +119,17 @@ struct BufferRegion {
 };
 
 /// A physical region and the provenance required to compose descriptor views.
-class BufferRegionView {
-public:
-  const uint32_t storageBase;
-  const uint32_t affineOffset;
-  const uint32_t affinePartitionOffset;
-  const uint32_t affineCTAOffset;
+struct BufferRegionView {
+  BufferRegion region;
+  uint32_t storageBase = 0;
+  uint32_t affineOffset = 0;
+  llvm::SmallVector<uint32_t, 2> partitionBases;
+  uint32_t affinePartitionOffset = 0;
+  uint32_t affineCTAOffset = 0;
   /// Deterministically interned identity of the owning allocation frame.
-  const uint32_t allocationFrame;
+  uint32_t allocationFrame = 0;
   /// Descriptor allocation supplying these views; null for implicit scratch.
-  Operation *const allocation;
-
-  BufferRegionView(BufferRegion region = {}, uint32_t storageBase = 0,
-                   uint32_t affineOffset = 0,
-                   llvm::SmallVector<uint32_t, 2> partitionBases = {},
-                   uint32_t affinePartitionOffset = 0,
-                   uint32_t affineCTAOffset = 0, uint32_t allocationFrame = 0,
-                   Operation *allocation = nullptr);
-
-  const BufferRegion &getRegion() const { return region; }
-  llvm::ArrayRef<uint32_t> getPartitionBases() const { return partitionBases; }
+  Operation *allocation = nullptr;
 
   bool contains(const BufferRegionView &other) const {
     return allocationFrame == other.allocationFrame &&
@@ -157,26 +148,31 @@ private:
 
 public:
   bool operator==(const BufferRegionView &other) const {
-    return cachedHash == other.cachedHash && key() == other.key();
+    return key() == other.key();
   }
 
   bool operator<(const BufferRegionView &other) const {
     return key() < other.key();
   }
+};
+
+// Keep stored views immutable so their cached hashes cannot become stale.
+struct BufferRegionViewWithHash {
+  const BufferRegionView view;
+  const size_t hash;
+
+  BufferRegionViewWithHash(BufferRegionView view);
+  operator const BufferRegionView &() const { return view; }
+
+  bool operator==(const BufferRegionViewWithHash &other) const {
+    return hash == other.hash && view == other.view;
+  }
 
   struct Hash {
-    size_t operator()(const BufferRegionView &view) const noexcept {
-      return view.cachedHash;
+    size_t operator()(const BufferRegionViewWithHash &key) const noexcept {
+      return key.hash;
     }
   };
-
-private:
-  // Private containers allow moves without exposing mutation of hashed fields.
-  BufferRegion region;
-  llvm::SmallVector<uint32_t, 2> partitionBases;
-  size_t cachedHash;
-
-  size_t computeHash() const;
 };
 
 //===----------------------------------------------------------------------===//
@@ -202,7 +198,8 @@ BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions,
 //
 struct RegionInfo {
   enum class Kind { Uninitialized, Exact, Unknown };
-  using ViewList = std::unordered_set<BufferRegionView, BufferRegionView::Hash>;
+  using ViewList =
+      std::unordered_set<BufferRegionViewWithHash, BufferRegionViewWithHash::Hash>;
 
   Kind kind = Kind::Uninitialized;
   ViewList views;
@@ -240,7 +237,7 @@ struct RegionInfo {
     llvm::sort(orderedViews,
                [](const auto *lhs, const auto *rhs) { return *lhs < *rhs; });
     llvm::interleaveComma(orderedViews, os, [&](const BufferRegionView *view) {
-      view->getRegion().print(os);
+      view->region.print(os);
     });
   }
 

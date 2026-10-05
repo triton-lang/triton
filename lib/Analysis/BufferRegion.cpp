@@ -347,42 +347,36 @@ AddressSet AddressSet::translated(uint32_t delta) const {
   return result;
 }
 
-BufferRegionView::BufferRegionView(
-    BufferRegion region, uint32_t storageBase, uint32_t affineOffset,
-    SmallVector<uint32_t, 2> partitionBases, uint32_t affinePartitionOffset,
-    uint32_t affineCTAOffset, uint32_t allocationFrame, Operation *allocation)
-    : storageBase(storageBase), affineOffset(affineOffset),
-      affinePartitionOffset(affinePartitionOffset),
-      affineCTAOffset(affineCTAOffset), allocationFrame(allocationFrame),
-      allocation(allocation), region(std::move(region)),
-      partitionBases(std::move(partitionBases)), cachedHash(computeHash()) {}
-
-size_t BufferRegionView::computeHash() const {
+// Hash every equality field, including the exact address sets.
+static size_t hashBufferRegionView(const BufferRegionView &view) {
   auto hash = llvm::hash_combine(
-      allocationFrame, region.baseOffset, region.length, storageBase,
-      affineOffset, affinePartitionOffset, affineCTAOffset, allocation,
-      llvm::hash_combine_range(partitionBases.begin(), partitionBases.end()));
-  for (const auto &[cta, addresses] : region.ctaAddresses)
+      view.allocationFrame, view.region.baseOffset, view.region.length,
+      view.storageBase, view.affineOffset, view.affinePartitionOffset,
+      view.affineCTAOffset, view.allocation,
+      llvm::hash_combine_range(view.partitionBases.begin(),
+                               view.partitionBases.end()));
+  for (const auto &[cta, addresses] : view.region.ctaAddresses)
     hash = llvm::hash_combine(
         hash, cta,
         llvm::hash_combine_range(addresses.begin(), addresses.end()));
   return hash;
 }
 
+BufferRegionViewWithHash::BufferRegionViewWithHash(BufferRegionView view)
+    : view(std::move(view)), hash(hashBufferRegionView(this->view)) {}
+
 BufferRegionView
 BufferRegionView::translated(uint32_t offset,
                              uint32_t newAllocationFrame) const {
-  BufferRegion translatedRegion = region;
-  translatedRegion.baseOffset += offset;
-  for (auto &[cta, addresses] : translatedRegion.ctaAddresses)
+  BufferRegionView result = *this;
+  result.region.baseOffset += offset;
+  for (auto &[cta, addresses] : result.region.ctaAddresses)
     addresses = addresses.translated(offset);
-  auto translatedPartitionBases = partitionBases;
-  for (uint32_t &base : translatedPartitionBases)
+  result.storageBase += offset;
+  for (uint32_t &base : result.partitionBases)
     base += offset;
-  return BufferRegionView(std::move(translatedRegion), storageBase + offset,
-                          affineOffset, std::move(translatedPartitionBases),
-                          affinePartitionOffset, affineCTAOffset,
-                          newAllocationFrame, allocation);
+  result.allocationFrame = newAllocationFrame;
+  return result;
 }
 
 BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
@@ -494,17 +488,18 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
 BufferRegionView
 BufferRegionAnalysis::getAllocView(Value allocation, uint32_t storageBase,
                                    ArrayRef<uint32_t> partitionBases) {
+  BufferRegionView view;
+  view.storageBase = storageBase;
+  view.partitionBases = llvm::to_vector<2>(partitionBases);
   Operation *op = allocation.getDefiningOp();
+  view.allocation = op;
   // TMEM allocation assigns module-wide addresses; only shared allocations
   // need a per-function frame and translation by a call's shared-memory offset.
   auto memory = cast<ttg::MemDescType>(allocation.getType());
-  uint32_t allocationFrame =
+  view.allocationFrame =
       isa<ttng::TensorMemorySpaceAttr>(memory.getMemorySpace())
           ? getOperationId(op->getParentOfType<ModuleOp>())
           : getOperationId(op->getParentOfType<FunctionOpInterface>());
-  BufferRegionView view(
-      {}, storageBase, /*affineOffset=*/0, llvm::to_vector<2>(partitionBases),
-      /*affinePartitionOffset=*/0, /*affineCTAOffset=*/0, allocationFrame, op);
   return getSubView(allocation.getType(), view);
 }
 
@@ -515,7 +510,7 @@ BufferRegionAnalysis::getSubView(Type type, const BufferRegionView &view,
   auto ty = cast<ttg::MemDescType>(type);
   uint32_t storageBase = view.storageBase + storageOffset;
   SmallVector<uint32_t, 2> partitionBases =
-      advancePartitionBases(view.getPartitionBases(), storageOffset);
+      advancePartitionBases(view.partitionBases, storageOffset);
   uint32_t affineOffset = isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())
                               ? view.affineOffset + byteOffset
                               : view.affineOffset ^ byteOffset;
@@ -531,10 +526,14 @@ BufferRegionAnalysis::getSubView(Type type, const BufferRegionView &view,
                         (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())
                              ? affineOffset
                              : applySharedPadding(affineOffset, ty));
-  return BufferRegionView(
-      {baseOffset, getMemDescSize(ty), std::move(footprint)}, storageBase,
-      affineOffset, std::move(partitionBases), affinePartitionOffset,
-      affineCTAOffset, view.allocationFrame, view.allocation);
+  BufferRegionView result = view;
+  result.region = {baseOffset, getMemDescSize(ty), std::move(footprint)};
+  result.storageBase = storageBase;
+  result.affineOffset = affineOffset;
+  result.partitionBases = std::move(partitionBases);
+  result.affinePartitionOffset = affinePartitionOffset;
+  result.affineCTAOffset = affineCTAOffset;
+  return result;
 }
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
@@ -575,7 +574,7 @@ bool mayOverlap(const BufferRegionFootprint *lhs,
     return llvm::any_of(right.views, [&](const BufferRegionView &b) {
       bool sameFrame =
           a.allocationFrame && a.allocationFrame == b.allocationFrame;
-      return !sameFrame || a.getRegion().intersects(b.getRegion());
+      return !sameFrame || a.region.intersects(b.region);
     });
   });
 }
@@ -595,7 +594,7 @@ BufferRegionAnalysis::getFootprint(Value value,
   }
   const auto *footprint = it->second.get();
   if (footprint && allocationFrame &&
-      llvm::any_of(footprint->regionInfo.views, [&](const auto &view) {
+      llvm::any_of(footprint->regionInfo.views, [&](const BufferRegionView &view) {
         return view.allocationFrame != getOperationId(allocationFrame);
       }))
     return nullptr;
@@ -623,23 +622,18 @@ BufferRegionAnalysis::getScratchFootprint(Operation *op) {
     base = offset.getInt();
     length = size.getInt();
   }
-  BufferRegion region{base, length};
-  uint32_t allocationFrame =
+  BufferRegionView view{{base, length}, /*storageBase=*/base};
+  view.allocationFrame =
       getOperationId(op->getParentOfType<FunctionOpInterface>());
   AddressSet addresses = AddressSet::fromRange(base, length);
   unsigned numCTAs = ttg::lookupNumCTAs(op);
   uint32_t broadcastMask = getAtomicScratchBroadcastMask(op).value_or(0);
   for (unsigned cta = 0; cta < numCTAs; ++cta)
     if (!(cta & broadcastMask))
-      region.ctaAddresses.emplace_back(cta, addresses);
-  BufferRegionView view(std::move(region), base, /*affineOffset=*/0, {},
-                        /*affinePartitionOffset=*/0, /*affineCTAOffset=*/0,
-                        allocationFrame);
-  RegionInfo info(RegionInfo::ViewList{});
-  info.views.insert(std::move(view));
+      view.region.ctaAddresses.emplace_back(cta, addresses);
   it->second = std::make_unique<BufferRegionFootprint>(
       BufferRegionFootprint{ttg::SharedMemorySpaceAttr::get(op->getContext()),
-                            std::move(info)});
+                            RegionInfo({std::move(view)})});
   return it->second.get();
 }
 
@@ -649,7 +643,7 @@ const BufferRegionFootprint *BufferRegionAnalysis::translateToCallsite(
   if (!footprint)
     return nullptr;
   uint32_t calleeFrame = getOperationId(callee);
-  if (llvm::none_of(footprint->regionInfo.views, [&](const auto &view) {
+  if (llvm::none_of(footprint->regionInfo.views, [&](const BufferRegionView &view) {
         return view.allocationFrame == calleeFrame;
       }))
     return footprint;
@@ -660,12 +654,10 @@ const BufferRegionFootprint *BufferRegionAnalysis::translateToCallsite(
         getOperationId(call->getParentOfType<FunctionOpInterface>());
     uint32_t offset = getCallOffset(call);
     RegionInfo info(RegionInfo::ViewList{});
-    for (const BufferRegionView &view : footprint->regionInfo.views) {
-      if (view.allocationFrame == calleeFrame)
-        info.views.insert(view.translated(offset, callerFrame));
-      else
-        info.views.insert(view);
-    }
+    for (const BufferRegionView &view : footprint->regionInfo.views)
+      info.views.insert(view.allocationFrame == calleeFrame
+                            ? view.translated(offset, callerFrame)
+                            : view);
     it->second = std::make_unique<BufferRegionFootprint>(
         BufferRegionFootprint{footprint->memorySpace, std::move(info)});
   }
@@ -811,7 +803,7 @@ void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
         if (regionInfo.isUnknown())
           usedUnknownBufferRegions[regionType] = true;
         for (const BufferRegionView &view : regionInfo.views)
-          usedBufferRegions[regionType].insert(view.getRegion());
+          usedBufferRegions[regionType].insert(view.region);
       };
 
       bool isTensorMemory = isa<ttng::TensorMemorySpaceAttr>(
