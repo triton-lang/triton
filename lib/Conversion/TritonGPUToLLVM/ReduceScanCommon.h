@@ -110,12 +110,13 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   return SmallVector<Value>(thenBlock->getArguments());
 }
 
-inline SmallVector<SmallVector<Value>> convertScanTotals(
-    Location loc, ConversionPatternRewriter &rewriter, triton::ScanOp op,
-    const LinearLayout &src, const LinearLayout &dst,
-    const SmallVector<SmallVector<Value>> &values,
-    const LLVMTypeConverter *typeConverter, const TargetInfoBase &targetInfo,
-    Value storePred = {}, int shiftedAxis = -1, int distance = 0) {
+inline SmallVector<SmallVector<Value>>
+convertScanTotals(Location loc, ConversionPatternRewriter &rewriter,
+                  triton::ScanOp op, const LinearLayout &src,
+                  const LinearLayout &dst,
+                  const SmallVector<SmallVector<Value>> &values,
+                  const LLVMTypeConverter *typeConverter,
+                  const TargetInfoBase &targetInfo, Value storePred = {}) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto *ctx = rewriter.getContext();
   auto kBlock = StringAttr::get(ctx, "block");
@@ -176,35 +177,10 @@ inline SmallVector<SmallVector<Value>> convertScanTotals(
   targetInfo.barrier(loc, rewriter, gpu::AddrSpace::Local);
   SmallVector<SmallVector<Value>> result;
   for (auto [i, operand] : llvm::enumerate(operands)) {
-    SmallVector<Value> loaded;
-    if (shiftedAxis < 0) {
-      loaded = lowerLdSt(
-          loc, ctx, invertAndComposeLocal(operand.layout, dst, {kBlock}), {},
-          operand.type, operand.base, {}, b.i32_val(0), 0, {}, 0, laneId,
-          warpId, rewriter, targetInfo, {}, makeSharedLoadEmitter(targetInfo));
-    } else {
-      // Fetch the preceding prefix directly into its consumer's ownership.
-      // The wrapped boundary value is never combined by the scan lowering.
-      auto kReg = StringAttr::get(ctx, "register");
-      auto axis = StringAttr::get(ctx, "dim" + std::to_string(shiftedAxis));
-      auto inverse = operand.layout.pseudoinvert();
-      for (unsigned r = 0; r < dst.getInDimSize(kReg); ++r) {
-        auto coords = applyLinearLayout(loc, rewriter, dst,
-                                        {{kReg, b.i32_val(r)},
-                                         {StringAttr::get(ctx, "lane"), laneId},
-                                         {StringAttr::get(ctx, "warp"), warpId},
-                                         {kBlock, b.i32_val(0)}});
-        auto &index = coords[shiftedAxis].second;
-        index = b.and_(b.add(index, b.i32_val(distance)),
-                       b.i32_val(dst.getOutDimSize(axis) - 1));
-        Value offset =
-            applyLinearLayout(loc, rewriter, inverse, coords)[0].second;
-        Value ptr =
-            b.gep(operand.base.getType(), operand.type, operand.base, offset);
-        loaded.push_back(targetInfo.loadShared(rewriter, loc, ptr, operand.type,
-                                               b.true_val()));
-      }
-    }
+    auto loaded = lowerLdSt(
+        loc, ctx, invertAndComposeLocal(operand.layout, dst, {kBlock}), {},
+        operand.type, operand.base, {}, b.i32_val(0), 0, {}, 0, laneId, warpId,
+        rewriter, targetInfo, {}, makeSharedLoadEmitter(targetInfo));
     Type type = typeConverter->convertType(op.getElementTypes()[i]);
     if (type != operand.type)
       for (auto &v : loaded)
