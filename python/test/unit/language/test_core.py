@@ -1342,6 +1342,9 @@ def test_fdiv_constant_in_range(denominator, ieee_rounding, device):
     if not is_interpreter() and not ieee_rounding:
         if is_cuda():
             assert len(re.findall(r"tt\.approx_divf [^\n]* : f32", compiled.asm["ttgir"])) == 1
+            # LLVM folds the constant reciprocal before PTX generation.
+            assert "div." not in compiled.asm["ptx"]
+            assert "rcp." not in compiled.asm["ptx"]
         else:
             assert "arith.divf" in compiled.asm["ttgir"]
 
