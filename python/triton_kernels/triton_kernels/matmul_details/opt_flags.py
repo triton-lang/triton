@@ -421,7 +421,18 @@ def make_default_opt_flags_nvidia(
     reg_per_sm = 64 * 1024
     max_reg_per_thread = 256
     is_blackwell_or_newer = cuda_capability_geq(10, 0)
-    if is_persistent and not is_blackwell_or_newer:
+    # CUDA 13.4 can allocate over 128 registers for this non-persistent
+    # Hopper MXFP4 tile, halving occupancy despite the shared-memory budget.
+    # Keep the register budget consistent with its two-block target.
+    cap_hopper_mxfp4 = (
+        is_hopper_scale and occupancy_target == 2
+        and (block_m, block_n, block_k, num_warps) == (16, 256, 128, 8)
+        and lhs_dtype == torch_dtype_to_dtype(torch.bfloat16)
+        and out_dtype == torch_dtype_to_dtype(torch.bfloat16)
+        and precision_config.a_mx_scale is None
+        and precision_config.c_mx_scale is None
+    )
+    if (is_persistent or cap_hopper_mxfp4) and not is_blackwell_or_newer:
         maxnreg = reg_per_sm // (num_warps * threads_per_warp * occupancy_target)
         maxnreg = min(max_reg_per_thread, maxnreg)
     else:
