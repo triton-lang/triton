@@ -122,16 +122,28 @@ struct BufferRegion {
 
 /// A physical region and the provenance required to compose descriptor views.
 struct BufferRegionView {
-  BufferRegion region;
-  uint32_t storageBase = 0;
-  uint32_t affineOffset = 0;
-  llvm::SmallVector<uint32_t, 2> partitionBases;
-  uint32_t affinePartitionOffset = 0;
-  uint32_t affineCTAOffset = 0;
+  const BufferRegion region;
+  const uint32_t storageBase;
+  const uint32_t affineOffset;
+  const llvm::SmallVector<uint32_t, 2> partitionBases;
+  const uint32_t affinePartitionOffset;
+  const uint32_t affineCTAOffset;
   /// Deterministically interned identity of the owning allocation frame.
-  uint32_t allocationFrame = 0;
+  const uint32_t allocationFrame;
   /// Descriptor allocation supplying these views; null for implicit scratch.
-  Operation *allocation = nullptr;
+  Operation *const allocation;
+
+  BufferRegionView(BufferRegion region = {}, uint32_t storageBase = 0,
+                   uint32_t affineOffset = 0,
+                   llvm::SmallVector<uint32_t, 2> partitionBases = {},
+                   uint32_t affinePartitionOffset = 0,
+                   uint32_t affineCTAOffset = 0, uint32_t allocationFrame = 0,
+                   Operation *allocation = nullptr)
+      : region(std::move(region)), storageBase(storageBase),
+        affineOffset(affineOffset), partitionBases(std::move(partitionBases)),
+        affinePartitionOffset(affinePartitionOffset),
+        affineCTAOffset(affineCTAOffset), allocationFrame(allocationFrame),
+        allocation(allocation) {}
 
   bool contains(const BufferRegionView &other) const {
     return allocationFrame == other.allocationFrame &&
@@ -150,34 +162,25 @@ private:
 
 public:
   bool operator==(const BufferRegionView &other) const {
+    if (cachedHash && other.cachedHash && cachedHash != other.cachedHash)
+      return false;
     return key() == other.key();
   }
 
   bool operator<(const BufferRegionView &other) const {
     return key() < other.key();
   }
-};
-
-// Keep stored views immutable so their cached hashes cannot become stale.
-struct BufferRegionViewWithHash {
-  const BufferRegionView view;
-  const size_t hash;
-
-  BufferRegionViewWithHash(BufferRegionView view)
-      : view(std::move(view)), hash(computeHash(this->view)) {}
-
-  bool operator==(const BufferRegionViewWithHash &other) const {
-    return hash == other.hash && view == other.view;
-  }
 
   struct Hash {
-    size_t operator()(const BufferRegionViewWithHash &key) const noexcept {
-      return key.hash;
+    size_t operator()(const BufferRegionView &view) const noexcept {
+      return view.hash();
     }
   };
 
 private:
-  static size_t computeHash(const BufferRegionView &view);
+  size_t hash() const;
+  // Equality fields are immutable; only the derived cache changes.
+  mutable std::optional<size_t> cachedHash;
 };
 
 //===----------------------------------------------------------------------===//
@@ -203,8 +206,7 @@ BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions,
 //
 struct RegionInfo {
   enum class Kind { Uninitialized, Exact, Unknown };
-  using ViewList = std::unordered_set<BufferRegionViewWithHash,
-                                      BufferRegionViewWithHash::Hash>;
+  using ViewList = std::unordered_set<BufferRegionView, BufferRegionView::Hash>;
 
   Kind kind = Kind::Uninitialized;
   ViewList views;
@@ -246,8 +248,8 @@ struct RegionInfo {
     }
     // Keep diagnostics stable even though the lattice container is unordered.
     llvm::SmallVector<const BufferRegionView *> orderedViews;
-    for (const BufferRegionViewWithHash &view : views)
-      orderedViews.push_back(&view.view);
+    for (const BufferRegionView &view : views)
+      orderedViews.push_back(&view);
     llvm::sort(orderedViews,
                [](const auto *lhs, const auto *rhs) { return *lhs < *rhs; });
     llvm::interleaveComma(orderedViews, os, [&](const BufferRegionView *view) {

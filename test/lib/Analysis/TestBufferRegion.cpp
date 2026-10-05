@@ -136,11 +136,11 @@ struct TestBufferRegionAliasPass
           addressSet.set(address);
         region.ctaAddresses.emplace_back(0, std::move(addressSet));
       }
-      tt::BufferRegionView view{std::move(region), /*storageBase=*/base,
-                                /*affineOffset=*/0};
       // Explicit address sets share one synthetic allocation frame.
-      view.allocationFrame =
+      uint32_t allocationFrame =
           analysis->getOperationId(op->getParentOfType<ModuleOp>());
+      tt::BufferRegionView view{std::move(region), base, 0, {}, 0, 0,
+                                allocationFrame};
       return tt::BufferRegionFootprint{
           ttg::SharedMemorySpaceAttr::get(op->getContext()),
           tt::RegionInfo({std::move(view)})};
@@ -163,13 +163,10 @@ struct TestBufferRegionAliasPass
         container.memorySpace != contained.memorySpace ||
         container.regionInfo.isUnknown() || contained.regionInfo.isUnknown())
       return false;
-    return llvm::all_of(
-        contained.regionInfo.views, [&](const tt::BufferRegionViewWithHash &b) {
-          return llvm::any_of(container.regionInfo.views,
-                              [&](const tt::BufferRegionViewWithHash &a) {
-                                return a.view.contains(b.view);
-                              });
-        });
+    return llvm::all_of(contained.regionInfo.views, [&](const auto &b) {
+      return llvm::any_of(container.regionInfo.views,
+                          [&](const auto &a) { return a.contains(b); });
+    });
   }
 
   static void printMask(InFlightDiagnostic &diag,
@@ -183,9 +180,8 @@ struct TestBufferRegionAliasPass
                             ArrayRef<NamedRegion> namedRegions) {
     SmallVector<tt::BufferRegion> regions;
     for (const auto &[name, footprint] : namedRegions)
-      for (const tt::BufferRegionViewWithHash &view :
-           footprint.regionInfo.views)
-        regions.push_back(view.view.region);
+      for (const tt::BufferRegionView &view : footprint.regionInfo.views)
+        regions.push_back(view.region);
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
 
@@ -205,8 +201,8 @@ struct TestBufferRegionAliasPass
         continue;
       }
       SmallVector<tt::BufferRegion> candidates;
-      for (const tt::BufferRegionViewWithHash &view : info.views)
-        candidates.push_back(view.view.region);
+      for (const tt::BufferRegionView &view : info.views)
+        candidates.push_back(view.region);
       llvm::sort(candidates);
       for (const tt::BufferRegion &candidate : candidates) {
         auto it = llvm::lower_bound(regions, candidate);

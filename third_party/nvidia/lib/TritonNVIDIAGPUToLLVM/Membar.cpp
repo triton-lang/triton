@@ -64,14 +64,12 @@ bool hasOnlySourceAliases(const AllocationSlice &lhs,
   if (!before || !after)
     return false;
   for (const auto &a : before->regionInfo.views) {
-    assert(isa_and_nonnull<gpu::LocalAllocOp>(a.view.allocation) &&
+    assert(isa_and_nonnull<gpu::LocalAllocOp>(a.allocation) &&
            "shared descriptor footprints must have allocation origins");
     for (const auto &b : after->regionInfo.views) {
-      assert(a.view.allocationFrame &&
-             a.view.allocationFrame == b.view.allocationFrame &&
+      assert(a.allocationFrame && a.allocationFrame == b.allocationFrame &&
              "shared accesses must use the current function frame");
-      if (a.view.allocation != b.view.allocation &&
-          a.view.region.intersects(b.view.region))
+      if (a.allocation != b.allocation && a.region.intersects(b.region))
         return false;
     }
   }

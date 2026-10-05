@@ -50,24 +50,22 @@ public:
       return false;
     for (const auto &a : lhs->footprint->regionInfo.views)
       for (const auto &b : rhs->footprint->regionInfo.views) {
-        assert(a.view.allocationFrame &&
-               a.view.allocationFrame == b.view.allocationFrame &&
+        assert(a.allocationFrame && a.allocationFrame == b.allocationFrame &&
                "TMEM allocations share a module frame");
-        assert(!a.view.affineCTAOffset && !b.view.affineCTAOffset &&
+        assert(!a.affineCTAOffset && !b.affineCTAOffset &&
                "TMEM views do not shift CTA coordinates");
-        if (a.view.region.baseOffset == b.view.region.baseOffset &&
+        if (a.region.baseOffset == b.region.baseOffset &&
             lhs->warps == rhs->warps)
           continue;
-        for (const auto &[cta, addresses] : a.view.region.ctaAddresses)
-          for (const auto &[otherCTA, otherAddresses] :
-               b.view.region.ctaAddresses) {
+        for (const auto &[cta, addresses] : a.region.ctaAddresses)
+          for (const auto &[otherCTA, otherAddresses] : b.region.ctaAddresses) {
             if (cta != otherCTA)
               continue;
             auto overlap = addresses.intersection(otherAddresses);
             // Descriptor offsets use integer addition, not layout XOR.
             for (uint32_t address : overlap) {
-              if (lhs->getWarp(address - a.view.region.baseOffset) !=
-                  rhs->getWarp(address - b.view.region.baseOffset))
+              if (lhs->getWarp(address - a.region.baseOffset) !=
+                  rhs->getWarp(address - b.region.baseOffset))
                 return false;
             }
           }

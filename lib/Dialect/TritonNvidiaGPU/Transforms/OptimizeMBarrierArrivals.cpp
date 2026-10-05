@@ -79,7 +79,7 @@ static LogicalResult collectBarrierUses(gpu::LocalAllocOp alloc,
     const auto *footprint = regions.getFootprint(value);
     if (!footprint ||
         !llvm::all_of(footprint->regionInfo.views, [&](const auto &view) {
-          return view.view.allocation == alloc.getOperation();
+          return view.allocation == alloc.getOperation();
         }))
       return failure();
     for (OpOperand &use : value.getUses()) {
