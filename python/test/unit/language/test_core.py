@@ -2635,6 +2635,71 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_x, rounding", [("float32", None), ("float32", "rtne"), ("float32", "rtz"),
+                                               ("float16", None)])
+def test_cast_bf16_rounding(dtype_x, rounding, device):
+    if not is_interpreter():
+        check_type_supported("bfloat16", device)
+
+    @triton.jit
+    def kernel(X, Z, SIZE: tl.constexpr, ROUNDING: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        tl.store(Z + offs, tl.load(X + offs).to(tl.bfloat16, fp_downcast_rounding=ROUNDING))
+
+    torch.manual_seed(0)
+    dtype = getattr(torch, dtype_x)
+    x = torch.randn(1024, dtype=dtype, device=device)
+    # Ties, a carry out of the mantissa and an overflow tell round-to-nearest-even
+    # apart from truncation and from rounding ties away from zero.
+    x[:8] = torch.tensor([
+        1 + 2**-8, 1 + 2**-7 + 2**-8, 1 + 2**-8 + 2**-10, 2 - 2**-9,
+        torch.finfo(dtype).max,
+        float("nan"), -0.0,
+        torch.finfo(dtype).tiny / 4
+    ], dtype=dtype, device=device)
+    if dtype_x == "float32" and rounding != "rtz":
+        # NaN payloads can disappear on truncation or overflow on rounding.
+        x[8:10] = torch.tensor([0x7F800001, 0x7FFFFFFF], dtype=torch.int32, device=device).view(torch.float32)
+    z = torch.empty_like(x, dtype=torch.bfloat16)
+    kernel[(1, )](x, z, SIZE=x.numel(), ROUNDING=rounding)
+    expected = x.to(torch.bfloat16)
+    if rounding == "rtz":
+        expected = (x.view(torch.int32) >> 16).to(torch.int16).view(torch.bfloat16)
+    torch.testing.assert_close(z, expected, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_x", ["float32", "float16"])
+@pytest.mark.parametrize("dtype_z", ["float8_e5m2", "float8_e4m3fn"])
+def test_cast_fp8_rounding(dtype_x, dtype_z, device):
+    if not is_interpreter():
+        check_type_supported(dtype_z, device)
+        if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
+            pytest.skip("FP8 RTNE boundary tests require compute capability >= 90")
+        if is_hip() and dtype_z == "float8_e4m3fn" and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx1250()):
+            pytest.skip("float8e4nv requires CDNA3 or newer")
+
+    @triton.jit
+    def kernel(X, Z, SIZE: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        tl.store(Z + offs, tl.load(X + offs).to(Z.dtype.element_ty))
+
+    # Cover both tie parities, exponent carry, and subnormal rounding into a normal value.
+    if dtype_z == "float8_e5m2":
+        values = [9.0, 11.0, 10.0, 1.9990234375, 2**-17, 3 * 2**-17, 7 * 2**-17, -2**-17]
+        expected = [8.0, 12.0, 10.0, 2.0, 0.0, 2**-15, 2**-14, -0.0]
+    else:
+        values = [1.0625, 1.1875, 1.125, 1.97, 2**-10, 3 * 2**-10, 15 * 2**-10, -2**-10]
+        expected = [1.0, 1.25, 1.125, 2.0, 0.0, 2**-8, 2**-6, -0.0]
+    x = torch.tensor(values, dtype=getattr(torch, dtype_x), device=device)
+    z = torch.empty(x.shape, dtype=getattr(torch, dtype_z), device=device)
+    kernel[(1, )](x, z, SIZE=x.numel())
+    expected = torch.tensor(expected, dtype=torch.float32, device=device)
+    torch.testing.assert_close(z.float(), expected, rtol=0, atol=0)
+    assert torch.equal(torch.signbit(z.float()), torch.signbit(expected))
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str, num_warps",
                          [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
 @pytest.mark.parametrize("can_reorder", [True, False])
@@ -5239,6 +5304,22 @@ def test_full(dtype_str, shape, device):
     out_dynamic = torch.zeros((128), dtype=dtype, device=device)
     kernel_dynamic_patched[(1, )](out_dynamic, 2, getattr(triton.language, dtype_str))
     assert torch.all(out_dynamic == 2)
+
+
+@pytest.mark.parametrize("value", [1e-8, 3e-7, -2.5e-7, 1.5e-6, 1e-40, 0.1, 3.14159265])
+def test_full_bf16_small_constant(value, device):
+    check_type_supported(torch.bfloat16, device)
+
+    @triton.jit
+    def kernel(X, Z, VALUE: tl.constexpr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(Z + offs, tl.full([BLOCK], VALUE, tl.bfloat16))
+        tl.store(Z + BLOCK + offs, tl.load(X + offs) * VALUE)
+
+    x = torch.ones(16, dtype=torch.bfloat16, device=device)
+    z = torch.empty(32, dtype=torch.bfloat16, device=device)
+    kernel[(1, )](x, z, VALUE=value, BLOCK=16)
+    torch.testing.assert_close(z, torch.full((32, ), value, dtype=torch.bfloat16, device=device), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("literal, dtype_str", [(1e+50, "f64"), (1e+10, "f32"), (1.0, "f32"), ('float("inf")', "f32"),

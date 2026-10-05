@@ -1,6 +1,6 @@
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar="compute-capability=103" --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="compute-capability=103" | FileCheck %s --check-prefix=EARLY
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar='compute-capability=100' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=100 -cse | FileCheck %s --check-prefixes=CHECK,SM100
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar='compute-capability=103' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=103 -cse | FileCheck %s --check-prefixes=CHECK,SM103
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --triton-nvidia-gpu-membar="compute-capability=103" --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="compute-capability=103" | FileCheck %s --check-prefix=EARLY
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --triton-nvidia-gpu-membar='compute-capability=100' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=100 -cse | FileCheck %s --check-prefixes=CHECK,SM100
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --triton-nvidia-gpu-membar='compute-capability=103' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=103 -cse | FileCheck %s --check-prefixes=CHECK,SM103
 
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 32]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
@@ -14,7 +14,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK: %[[WID:.+]] = ttg.warp_id
   // CHECK: %[[P0:.+]] = llvm.icmp "eq" %[[WID]], %[[C0]] : i32
   // CHECK: %[[P1:.+]] = llvm.and %{{.*}}, %[[P0]]  : i1
-  // CHECK: nvvm.barrier
+  // CHECK-NOT: nvvm.barrier
   // CHECK-NEXT: llvm.cond_br %[[P1]]
   // CHECK: %[[E:.+]] = nvvm.elect.sync -> i1
   // CHECK: %[[BASE:.+]] = llvm.and %{{.*}}, %[[MASK]] : i32
@@ -861,7 +861,7 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 // CHECK-LABEL: @tc_gen5_commit
 // CHECK-DAG: [[IS_WARP_0:%.*]] = llvm.mlir.constant(true)
 tt.func @tc_gen5_commit(%arg0: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %pred: i1) {
-  // CHECK: nvvm.barrier
+  // CHECK-NOT: nvvm.barrier
   // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
   // CHECK: [[WARP_PRED:%.*]] = llvm.and [[IS_WARP_0]], [[ELECT]]
   // CHECK: [[PRED:%.*]] = llvm.and %arg1, [[WARP_PRED]]

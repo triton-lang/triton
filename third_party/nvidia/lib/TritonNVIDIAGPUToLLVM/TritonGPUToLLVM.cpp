@@ -21,6 +21,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/IR/Value.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
@@ -78,6 +79,28 @@ void createSharedMemoryGlobal(ModuleOp mod, LLVMTypeConverter &typeConverter) {
       builder, mod.getLoc(), arrayTy, /*isConstant=*/false,
       LLVM::Linkage::External, "global_smem", /*value=*/Attribute(),
       /*alignment=*/16, static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
+}
+
+void propagatePointerAlignment(ModuleOp mod) {
+  Builder builder(mod.getContext());
+  mod.walk([&](LLVM::LLVMFuncOp funcOp) {
+    for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
+      // Only original Triton pointers carry this attribute, not descriptors.
+      if (!funcOp.getArgAttr(i, "tt.pointee_type"))
+        continue;
+      auto attr = funcOp.getArgAttrOfType<IntegerAttr>(i, "tt.divisibility");
+      if (!attr)
+        continue;
+      auto alignment = attr.getValue().getZExtValue();
+      // AxisInfo gives poison pointer arguments a maximal divisor.
+      if (alignment == 1 || alignment > llvm::Value::MaximumAlignment)
+        continue;
+      auto alignName = LLVM::LLVMDialect::getAlignAttrName();
+      auto existing = funcOp.getArgAttrOfType<IntegerAttr>(i, alignName);
+      if (!existing || existing.getValue().ult(alignment))
+        funcOp.setArgAttr(i, alignName, builder.getI64IntegerAttr(alignment));
+    }
+  });
 }
 
 struct ConvertTritonGPUToLLVM
@@ -222,6 +245,8 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
 LogicalResult ConvertTritonGPUToLLVM::lowerTritonGPUOps(
     ModuleOp mod, LLVMTypeConverter &typeConverter, TargetInfo &targetInfo) {
   ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+  // Infer all call sites before turning divisibility into an LLVM contract.
+  propagatePointerAlignment(mod);
   RewritePatternSet patterns(mod.getContext());
   populateConversionPatterns(typeConverter, patterns, axisInfoAnalysis,
                              targetInfo);
