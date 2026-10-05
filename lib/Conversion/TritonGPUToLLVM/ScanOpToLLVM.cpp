@@ -66,17 +66,9 @@ private:
   void scanLinearLayout(triton::ScanOp op, const ScanLoweringHelper &helper,
                         ScanValues &values, Value laneId, Value warpId,
                         ConversionPatternRewriter &rewriter) const {
-    // Keep native thread prefixes in place and communicate only segment totals.
+    // Keep native ownership and communicate only segment totals.
     permuteRegisters(values, helper.getRegisterOrder());
     if (!scanWarpChunks(op, helper, values, laneId, rewriter)) {
-      auto order = getNativeRegisterOrder(
-          helper, values.size() / helper.getThreadLocalSegmentSize());
-      scanWithinThreads(op, values, helper.getThreadLocalSegmentSize(),
-                        rewriter, order);
-      ScanValues intraWarpTotals;
-      SmallVector<ScanCarry> interWarpCarries;
-      if (helper.getIntraWarpLayout())
-        intraWarpTotals = scanWithinWarps(op, helper, values, laneId, rewriter);
       // Consume carries as soon as their raw totals have been accumulated,
       // as in main. A layout conversion defers consumption until all totals
       // are available; unchanged ownership can finish each native chunk here.
@@ -88,9 +80,18 @@ private:
            (*helper.getIntraWarpLayout() == *helper.getIntraWarpScanLayout() &&
             getScanLaneStride(*helper.getIntraWarpLayout(), op.getAxis(),
                               lanes)));
+      auto order = getNativeRegisterOrder(
+          helper, values.size() / helper.getThreadLocalSegmentSize());
+      bool deferFirst = consumeImmediately && op.getReverse();
+      scanWithinThreads(op, values, helper.getThreadLocalSegmentSize(),
+                        rewriter, order, deferFirst);
+      ScanValues intraWarpTotals;
+      SmallVector<ScanCarry> interWarpCarries;
+      if (helper.getIntraWarpLayout())
+        intraWarpTotals = scanWithinWarps(op, helper, values, laneId, rewriter);
       auto consume = [&](unsigned reg, const ScanCarry &carry) {
         applyWarpCarry(op, helper, values, intraWarpTotals, reg, carry, laneId,
-                       rewriter);
+                       rewriter, deferFirst);
       };
       llvm::function_ref<void(unsigned, const ScanCarry &)> consumer;
       if (consumeImmediately)
@@ -216,19 +217,26 @@ private:
     values = transposeValues(operands);
   }
 
-  // Scan contiguous register groups in traversal order.
+  // Scan contiguous register groups in traversal order. When deferring the
+  // first value, save (x0, x1, x1*x2, total) instead of full local prefixes:
+  // x0 absorbs the carry once, and subsequent combines need no boundary guard.
   void scanWithinThreads(triton::ScanOp op, ScanValues &values,
                          unsigned numRegs, ConversionPatternRewriter &rewriter,
-                         ArrayRef<unsigned> order = {}) const {
+                         ArrayRef<unsigned> order = {},
+                         bool deferFirst = false) const {
     auto loc = op.getLoc();
-    for (unsigned group = 0; group < values.size() / numRegs; ++group)
-      for (unsigned i = 1; i < numRegs; ++i) {
-        unsigned base = (order.empty() ? group : order[group]) * numRegs;
-        unsigned r = base + getScanIndex(op, i, numRegs);
-        unsigned prev = base + getScanIndex(op, i - 1, numRegs);
-        values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
-                                   values[prev], values[r]);
-      }
+    for (unsigned group = 0; group < values.size() / numRegs; ++group) {
+      unsigned base = (order.empty() ? group : order[group]) * numRegs;
+      auto at = [&](unsigned i) -> SmallVector<Value> & {
+        return values[base + getScanIndex(op, i, numRegs)];
+      };
+      for (unsigned i = deferFirst ? 2 : 1; i < numRegs; ++i)
+        at(i) =
+            applyCombineOp(loc, rewriter, op.getCombineOp(), at(i - 1), at(i));
+      if (deferFirst && numRegs > 1)
+        at(numRegs - 1) = applyCombineOp(loc, rewriter, op.getCombineOp(),
+                                         at(0), at(numRegs - 1));
+    }
   }
 
   // A regular group of lane bases admits main's shuffle-up instruction.
@@ -283,9 +291,7 @@ private:
     SmallVector<Round> rounds;
     for (unsigned offset = 1; offset < numLanes; offset *= 2) {
       Value source;
-      if (stride && op.getReverse()) {
-        source = b.add(laneId, b.i32_val(offset * stride));
-      } else if (!stride) {
+      if (!stride) {
         auto previous = coords;
         previous[op.getAxis()].second = shiftWithinSegment(
             b, index, op.getReverse() ? int(offset) : -int(offset), numLanes,
@@ -295,19 +301,37 @@ private:
       }
       rounds.push_back({offset, source, {}});
     }
-    for (unsigned reg : order) {
-      auto &acc = values[reg];
+    // Expose independent indexed shuffles in bounded batches. Keep the native
+    // shuffle-up emission order for forward scans.
+    unsigned batchSize = op.getReverse() ? 8 : 1;
+    for (unsigned base = 0; base < order.size(); base += batchSize) {
+      auto batch =
+          order.slice(base, std::min<unsigned>(batchSize, order.size() - base));
       for (auto &[offset, source, pred] : rounds) {
-        auto incoming = acc;
-        for (auto &value : incoming)
-          value = source ? targetInfo.shuffleIdx(rewriter, loc, value, source)
-                         : targetInfo.shuffleUp(rewriter, loc, value,
-                                                offset * stride);
-        if (!pred)
-          pred = op.getReverse()
-                     ? b.icmp_ult(laneIndex, b.i32_val(numLanes - offset))
-                     : b.icmp_uge(laneIndex, b.i32_val(offset));
-        acc = combineWithPrefix(op, incoming, acc, rewriter, pred);
+        // In the last reverse round, every participating lane has this bit
+        // clear. Its higher neighbor differs by exactly that physical lane bit.
+        bool butterfly = op.getReverse() && stride && offset * 2 == numLanes;
+        if (!source && stride && op.getReverse() && !butterfly)
+          source = b.add(laneId, b.i32_val(offset * stride));
+        for (unsigned reg : batch) {
+          auto &acc = values[reg];
+          auto incoming = acc;
+          for (auto &value : incoming) {
+            if (butterfly)
+              value =
+                  targetInfo.shuffleXor(rewriter, loc, value, offset * stride);
+            else if (source)
+              value = targetInfo.shuffleIdx(rewriter, loc, value, source);
+            else
+              value =
+                  targetInfo.shuffleUp(rewriter, loc, value, offset * stride);
+          }
+          if (!pred)
+            pred = op.getReverse()
+                       ? b.icmp_ult(laneIndex, b.i32_val(numLanes - offset))
+                       : b.icmp_uge(laneIndex, b.i32_val(offset));
+          acc = combineWithPrefix(op, incoming, acc, rewriter, pred);
+        }
       }
     }
   }
@@ -579,7 +603,8 @@ private:
   void applyWarpCarry(triton::ScanOp op, const ScanLoweringHelper &helper,
                       ScanValues &values, const ScanValues &totals,
                       unsigned reg, const ScanCarry &carry, Value laneId,
-                      ConversionPatternRewriter &rewriter) const {
+                      ConversionPatternRewriter &rewriter,
+                      bool deferFirst = false) const {
     unsigned count = helper.getThreadLocalSegmentSize();
     unsigned begin = reg * count;
     unsigned last = begin + getScanIndex(op, count - 1, count);
@@ -587,6 +612,8 @@ private:
                                    totals.empty() ? values[last] : totals[reg],
                                    rewriter, carry.pred);
     values[last] = total;
+    if (count == 1)
+      return;
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto kLane = StringAttr::get(op.getContext(), "lane");
@@ -615,6 +642,16 @@ private:
       value = b.select(hasLocalCarry, value, warpCarry);
     }
     Value pred = b.or_(hasLocalCarry, carry.pred);
+    if (deferFirst) {
+      unsigned first = begin + getScanIndex(op, 0, count);
+      auto prefix = combineWithPrefix(op, total, values[first], rewriter, pred);
+      values[first] = prefix;
+      for (unsigned i = 1; i + 1 < count; ++i) {
+        unsigned r = begin + getScanIndex(op, i, count);
+        values[r] = combineWithPrefix(op, prefix, values[r], rewriter, {});
+      }
+      return;
+    }
     for (unsigned i = 1; i < count; ++i) {
       unsigned r = begin + getScanIndex(op, count - 1 - i, count);
       values[r] = combineWithPrefix(op, total, values[r], rewriter, pred);

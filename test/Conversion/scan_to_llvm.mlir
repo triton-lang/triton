@@ -102,9 +102,10 @@ tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<
 
 // CHECK-LABEL: @test_1d_reversed
 tt.func private @test_1d_reversed(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
-  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
-  // CHECK-COUNT-3: @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
+  // Three scan rounds, including an immediate neighbor in the last round.
+  // CHECK-COUNT-2: @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: @llvm.nvvm.shfl.sync.bfly.i32
+  // CHECK-NOT: @llvm.nvvm.shfl.sync
   // CHECK-NOT: @llvm.nvvm.barrier
   // CHECK: ret
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = true}> ({
@@ -429,8 +430,7 @@ tt.func private @test_scan_native_prefix_forward(%a: tensor<32xi8, #native_prefi
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
 // TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.add
-// TRANSPOSE: nvvm.shfl.sync idx
-// TRANSPOSE-NOT: nvvm.shfl.sync bfly
+// TRANSPOSE: nvvm.shfl.sync
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
 // AMD-TRANSPOSE: llvm.add
@@ -450,8 +450,10 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
 
 // Scan four native chunks and broadcast each terminal prefix to the next.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
-// TRANSPOSE-COUNT-12: nvvm.shfl.sync up
+// TRANSPOSE-COUNT-8: nvvm.shfl.sync up
 // TRANSPOSE-NOT: nvvm.shfl.sync up
+// TRANSPOSE-COUNT-3: nvvm.shfl.sync idx
+// TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
 // AMD-TRANSPOSE: llvm.add
@@ -465,8 +467,8 @@ tt.func private @test_scan_exclusive_carry_forward(%arg: tensor<16xi32, #transpo
   tt.return %result : tensor<16xi32, #transpose>
 }
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
-// TRANSPOSE-NOT: nvvm.shfl.sync bfly
-// TRANSPOSE-COUNT-15: nvvm.shfl.sync idx
+// Eight scan rounds and three chunk broadcasts; no unused exclusive carries.
+// TRANSPOSE-COUNT-11: nvvm.shfl.sync
 // TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
@@ -606,8 +608,10 @@ tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_tot
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // Sixteen native chunks each use five shuffle-up rounds, with no transpose.
 // SHIP-LABEL: llvm.func {{.*}}@test_scan_register_lane_exchanges(
-// SHIP-COUNT-96: nvvm.shfl.sync up
-// SHIP-NOT: nvvm.shfl.sync bfly
+// SHIP-COUNT-80: nvvm.shfl.sync up
+// SHIP-NOT: nvvm.shfl.sync up
+// SHIP-COUNT-15: nvvm.shfl.sync idx
+// SHIP-NOT: nvvm.shfl.sync
 // SHIP: llvm.return
 tt.func private @test_scan_register_lane_exchanges(%arg: tensor<512xf32, #ship>) -> tensor<512xf32, #ship> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({

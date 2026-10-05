@@ -341,6 +341,8 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
     (ttgl.DistributedLinearLayout([[8, 0], [0, 1], [1, 0], [32, 0], [0, 2]],
                                   [[0, 4], [4, 0], [0, 8], [2, 0], [0, 16]] + [[0, 0]] *
                                   (THREADS_PER_WARP.bit_length() - 6), [[16, 0], [64, 0]], [], [128, 32]), 128, 32),
+    # Carry-seeded native prefixes must skip the first segment's empty carry.
+    (ttgl.BlockedLayout([8, 1], [THREADS_PER_WARP, 1], [4, 1], [0, 1]), 2048, 2),
     # Chunk boundaries must preserve side-effectful, noncommutative combines.
     (ttgl.BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0]), 256, 64),
     (ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 4096, 8),
