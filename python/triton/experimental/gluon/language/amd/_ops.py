@@ -161,8 +161,13 @@ def _wmma(version, a, b, acc, semantic):
     return ttgl.tensor(handle, acc.type)
 
 
-def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, semantic):
-    """ Shared implementation for AMD WMMA scaled and MFMA scaled operation. """
+def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, semantic, allow_absent_scales=False):
+    """ Shared implementation for AMD WMMA scaled and MFMA scaled operation.
+
+    If ``allow_absent_scales`` is set and both scales are ``None``, no default scales are materialized and the
+    resulting ``tt.dot_scaled`` carries no scale operands. LLVM lowering then emits ``rocdl.mfma.scale`` with an
+    immediate 0 for both scale operands, and the AMDGPU backend folds that to ``v_mfma_f32_*_f8f6f4``.
+    """
 
     def _get_scale_shape(op_idx, operand, format, scale_factor):
         operand_shape = [s for s in operand.type.shape]
@@ -185,8 +190,15 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
 
         if a_format == b_format == "e2m1":
             # Fp4 x Fp4 requries to use the same scale dtype for both operands.
-            other_scale = b_scale if op_idx == 0 else a_scale
-            return other_scale.dtype, default_value_by_dtype[other_scale.dtype]
+            other_scale = _unwrap_if_constexpr(b_scale if op_idx == 0 else a_scale)
+            # The other scale may still be a Python scalar here, which is materialized with a default dtype.
+            if isinstance(other_scale, int):
+                other_dtype = ttgl.uint8
+            elif isinstance(other_scale, float):
+                other_dtype = ttgl.float8e4nv
+            else:
+                other_dtype = other_scale.dtype
+            return other_dtype, default_value_by_dtype[other_dtype]
 
         return ttgl.uint8, 0x7F
 
@@ -215,8 +227,11 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
 
     scale_factor = semantic.deduce_scale_factor(a, a_scale, a_format, True, b, b_scale, b_format, True)
 
-    a_scale = _create_and_broadcast_default_scale(0, a_scale, a_format, scale_factor)
-    b_scale = _create_and_broadcast_default_scale(1, b_scale, b_format, scale_factor)
+    # Materialize the LHS scale before the RHS scale. When the RHS scale is missing and both formats are
+    # e2m1, the default dtype is taken from ``a_scale``, which the LHS call has already turned into a tensor.
+    if not (allow_absent_scales and _unwrap_if_constexpr(a_scale) is None and _unwrap_if_constexpr(b_scale) is None):
+        a_scale = _create_and_broadcast_default_scale(0, a_scale, a_format, scale_factor)
+        b_scale = _create_and_broadcast_default_scale(1, b_scale, b_format, scale_factor)
     output = semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, fast_math=False, lhs_k_pack=True,
                                  rhs_k_pack=True, out_dtype=ttgl.float32)
     return ttgl.tensor(output.handle, acc.type)
