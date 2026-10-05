@@ -22,7 +22,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
   tt.func public @approx_reciprocal_tensor_f32(%ptr: tensor<256x!tt.ptr<f32>, #blocked>, %arg: tensor<256xf32, #blocked>) {
     // CHECK-LABEL: approx_reciprocal_tensor_f32(
-    // CHECK-COUNT-8: div.approx.f32
+    // CHECK-COUNT-8: rcp.approx.f32
     %one = arith.constant dense<1.0> : tensor<256xf32, #blocked>
     %result = tt.approx_divf %one, %arg : tensor<256xf32, #blocked>
     tt.store %ptr, %result : tensor<256x!tt.ptr<f32>, #blocked>
@@ -47,7 +47,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
   tt.func public @approx_reciprocal_f32(%ptr: !tt.ptr<f32>, %arg: f32) {
     // CHECK-LABEL: approx_reciprocal_f32(
-    // CHECK: div.approx.f32
+    // CHECK: rcp.approx.f32
     %one = arith.constant 1.0 : f32
     %result = tt.approx_divf %one, %arg : f32
     tt.store %ptr, %result : !tt.ptr<f32>
@@ -68,6 +68,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     // CHECK: rcp.rn.f32
     %one = arith.constant 1.0 : f32
     %result = tt.precise_divf %one, %arg : f32
+    tt.store %ptr, %result : !tt.ptr<f32>
+    tt.return
+  }
+
+  tt.func public @precise_sqrt_f32(%ptr: !tt.ptr<f32>, %arg: f32) {
+    // CHECK-LABEL: precise_sqrt_f32(
+    // CHECK: sqrt.rn.f32
+    %result = tt.precise_sqrt %arg : f32
     tt.store %ptr, %result : !tt.ptr<f32>
     tt.return
   }

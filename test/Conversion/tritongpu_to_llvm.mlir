@@ -3601,9 +3601,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   tt.func private @precise_math(%arg0 : tensor<256xf32, #blocked>, %arg1 : tensor<256xf32, #blocked>) -> (tensor<256xf32, #blocked>, tensor<256xf32, #blocked>) {
     // CHECK: llvm.fdiv {{.*}} : f32
     %0 = tt.precise_divf %arg0, %arg1 : tensor<256xf32, #blocked>
-    // CHECK: llvm.call_intrinsic "llvm.nvvm.sqrt.rn.f"
+    // CHECK: llvm.intr.sqrt
     %1 = tt.precise_sqrt %arg0 : tensor<256xf32, #blocked>
     tt.return %0, %1 : tensor<256xf32, #blocked>, tensor<256xf32, #blocked>
+  }
+
+  // CHECK-LABEL: approx_div
+  tt.func private @approx_div(%arg0 : tensor<256xf32, #blocked>, %arg1 : tensor<256xf32, #blocked>) -> tensor<256xf32, #blocked> {
+    // CHECK: llvm.fdiv %{{.*}}, %{{.*}} {fastmathFlags = #llvm.fastmath<afn>} : f32
+    %0 = tt.approx_divf %arg0, %arg1 : tensor<256xf32, #blocked>
+    tt.return %0 : tensor<256xf32, #blocked>
   }
 }
 

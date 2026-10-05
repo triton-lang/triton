@@ -928,25 +928,25 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
-  patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseSqrtOp>>(
-      typeConverter, axisInfoAnalysis, "llvm.nvvm.sqrt.rn.f", benefit);
-  patterns.add<ElementwiseToIntrinsicOpConversion<triton::ApproxDivFOp>>(
-      typeConverter, axisInfoAnalysis, "llvm.nvvm.div.approx.f", benefit);
-
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
 
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis,
                                     benefit.getBenefit() + 1);
 
-#define POPULATE_OP(SRC_OP, DST_OP)                                            \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+#define POPULATE_OP(SRC_OP, DST_OP, ...)                                       \
+  patterns.add<                                                                \
+      ElementwiseOpConversion<SRC_OP, DST_OP __VA_OPT__(, ) __VA_ARGS__>>(     \
       typeConverter, axisInfoAnalysis, benefit)
 
   POPULATE_OP(arith::SubFOp, LLVM::FSubOp);
   POPULATE_OP(arith::AddFOp, LLVM::FAddOp);
   POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
   POPULATE_OP(triton::PreciseDivFOp, LLVM::FDivOp);
+  POPULATE_OP(triton::PreciseSqrtOp, LLVM::SqrtOp);
+  POPULATE_OP(triton::ApproxDivFOp, LLVM::FDivOp, [](LLVM::FDivOp op) {
+    op.setFastmathFlags(LLVM::FastmathFlags::afn);
+  });
 
   POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);
