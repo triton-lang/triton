@@ -9,6 +9,7 @@
 
 #include <deque>
 #include <set>
+#include <type_traits>
 
 namespace mlir {
 
@@ -289,13 +290,67 @@ TEST(Analysis, BufferRegionViewPreservesSubviewProvenance) {
   EXPECT_EQ(physicalRegions.size(), 1);
 }
 
+TEST(Analysis, RegionInfoAssignmentPreservesImmutableViews) {
+  using triton::BufferRegionView;
+  using triton::RegionInfo;
+  RegionInfo source({BufferRegionView{{0, 8}}});
+  RegionInfo target({BufferRegionView{{16, 8}}});
+  target = source;
+  EXPECT_EQ(target, source);
+  const RegionInfo &self = target;
+  target = self;
+  EXPECT_EQ(target, source);
+  target = RegionInfo::getPessimisticValueState();
+  EXPECT_TRUE(target.isUnknown());
+  EXPECT_TRUE(target.views.empty());
+  RegionInfo moved(source);
+  target = std::move(moved);
+  EXPECT_EQ(target, source);
+}
+
+TEST(Analysis, RegionInfoPreservesDistinctFootprints) {
+  using triton::AddressSet;
+  using triton::BufferRegionView;
+  using triton::RegionInfo;
+  struct ConstantHash {
+    size_t operator()(const triton::BufferRegionView &) const { return 0; }
+  };
+  std::unordered_set<triton::BufferRegionView, ConstantHash> collided;
+  std::set<BufferRegionView> expected;
+  RegionInfo::ViewList forward, reverse;
+  SmallVector<BufferRegionView> values;
+  for (unsigned mask = 0; mask < 256; ++mask) {
+    AddressSet addresses;
+    for (unsigned bit = 0; bit < 8; ++bit)
+      if (mask & (1u << bit))
+        addresses.set(bit);
+    BufferRegionView view{{0, 8, {{0, addresses}}}};
+    values.push_back(view);
+    expected.insert(view);
+    forward.insert(view);
+    collided.insert(view);
+    collided.insert(view);
+  }
+  for (const auto &view : llvm::reverse(values))
+    reverse.insert(view);
+  EXPECT_EQ(forward.size(), expected.size());
+  EXPECT_EQ(collided.size(), expected.size());
+  for (const auto &view : expected) {
+    EXPECT_EQ(forward.count(view), 1);
+    EXPECT_EQ(collided.count(view), 1);
+  }
+  RegionInfo lhs(forward), rhs(reverse);
+  EXPECT_EQ(lhs, rhs);
+  EXPECT_EQ(RegionInfo::join(lhs, rhs), lhs);
+  EXPECT_EQ(RegionInfo::join(rhs, lhs), lhs);
+}
+
 TEST(Analysis, BufferRegionFootprintUnknownIsNotEmpty) {
   MLIRContext context;
   context.getOrLoadDialect<triton::gpu::TritonGPUDialect>();
   Attribute space = triton::gpu::SharedMemorySpaceAttr::get(&context);
   triton::BufferRegionView view{
-      {0, 8, {{0, triton::AddressSet::fromRange(0, 8)}}}};
-  view.allocationFrame = 1;
+      {0, 8, {{0, triton::AddressSet::fromRange(0, 8)}}}, 0, 0, {}, 0, 0, 1};
   triton::BufferRegionFootprint known{space, triton::RegionInfo({view})};
   triton::BufferRegionFootprint uninitialized{space, {}};
   triton::BufferRegionFootprint unknown{
@@ -310,8 +365,8 @@ TEST(Analysis, BufferRegionFootprintUnknownIsNotEmpty) {
     EXPECT_TRUE(triton::mayOverlap(&known, footprint));
   }
 
-  view.region = {};
-  triton::BufferRegionFootprint empty{space, triton::RegionInfo({view})};
+  triton::BufferRegionView emptyView{{}, 0, 0, {}, 0, 0, 1};
+  triton::BufferRegionFootprint empty{space, triton::RegionInfo({emptyView})};
   EXPECT_FALSE(triton::mayOverlap(&empty, &known));
   EXPECT_FALSE(triton::mayOverlap(&known, &empty));
   EXPECT_TRUE(triton::mayOverlap(&empty, &unknown));
@@ -505,6 +560,54 @@ TEST(Analysis, BufferStatePlanKeepsLargeSparsePartitionsExact) {
   }
 
   expectFullCoveragePartition(regions);
+}
+
+TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
+  using triton::AddressSet;
+  using triton::BufferRegionView;
+  using Hash = BufferRegionView::Hash;
+  static_assert(std::is_const_v<decltype(BufferRegionView::region)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::partitionBases)>);
+  static_assert(std::is_const_v<decltype(BufferRegionView::allocation)>);
+  static_assert(!std::is_copy_assignable_v<BufferRegionView>);
+  triton::BufferRegion region{0, 72, {{0, AddressSet::fromRange(0, 8)}}};
+  region.ctaAddresses.front().second.insert(AddressSet::fromRange(64, 8));
+  region.ctaAddresses.front().second.set(10);
+  BufferRegionView original{region, 5, 7, {5, 100}, 1, 2, 9};
+  auto unhashedCopy = original;
+  const size_t originalHash = Hash{}(original);
+  EXPECT_EQ(unhashedCopy, original);
+  EXPECT_EQ(Hash{}(unhashedCopy), originalHash);
+  region.ctaAddresses.front().second.subtract(AddressSet::fromRange(10, 1));
+  region.ctaAddresses.front().second.set(11);
+  BufferRegionView changed{region, 5, 7, {5, 100}, 1, 2, 9};
+  EXPECT_NE(Hash{}(changed), originalHash);
+  EXPECT_FALSE(original == changed);
+  EXPECT_EQ(Hash{}(original), originalHash);
+  auto copy = original;
+  EXPECT_EQ(copy, original);
+  BufferRegionView moved(std::move(copy));
+  EXPECT_EQ(moved, original);
+  EXPECT_EQ(Hash{}(moved), originalHash);
+  BufferRegionView translated(original.translated(16, 3));
+  AddressSet translatedAddresses = AddressSet::fromRange(16, 8);
+  translatedAddresses.insert(AddressSet::fromRange(80, 8));
+  translatedAddresses.set(26);
+  BufferRegionView expected(
+      BufferRegionView{{16, 72, {{0, translatedAddresses}}},
+                       21,
+                       7,
+                       {21, 116},
+                       1,
+                       2,
+                       /*allocationFrame=*/3});
+  EXPECT_EQ(translated, expected);
+  EXPECT_EQ(Hash{}(translated), Hash{}(expected));
+  EXPECT_FALSE(translated == original);
+  triton::RegionInfo::ViewList views;
+  views.insert(std::move(moved));
+  EXPECT_EQ(*views.begin(), original);
+  EXPECT_EQ(Hash{}(*views.begin()), originalHash);
 }
 
 } // namespace mlir
