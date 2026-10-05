@@ -3202,6 +3202,12 @@ std::optional<KnownExternTransform> getKnownExtern(StringRef symbol) {
       .Case("__nv_fsqrt_rn",
             makeTaggedUnaryExternTransform(UnaryOpId::PreciseSqrt))
       .Case("__nv_fdiv_rn", makeBinaryExternTransform(fpsanFDiv))
+      .Case(
+          "__nv_fmul_rn",
+          makeBinaryExternTransform([](PatternRewriter &rewriter, Location loc,
+                                       Value lhs, Value rhs) -> Value {
+            return arith::MulFOp::create(rewriter, loc, lhs, rhs);
+          }))
       .Case("__nv_fmaf", makeTernaryExternTransform(fpsanFma))
       .Default(std::nullopt);
 }

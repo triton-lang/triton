@@ -804,6 +804,20 @@ tt.func public @extern_binary_known(%a: tensor<4xf32>, %b: tensor<4xf32>) -> ten
 
 // -----
 
+// CHECK-LABEL: @extern_mul_rn
+// CHECK-SAME: %[[LHS:.*]]: tensor<4xf32>, %[[RHS:.*]]: tensor<4xf32>
+tt.func public @extern_mul_rn(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed %[[LHS]]
+  // CHECK-NEXT: %[[B:.*]] = tti.experimental_fpsan_embed %[[RHS]]
+  // CHECK-NEXT: %[[PRODUCT:.*]] = arith.muli %[[A]], %[[B]]
+  // CHECK-NEXT: %[[RESULT:.*]] = tti.experimental_fpsan_unembed %[[PRODUCT]]
+  // CHECK-NEXT: tt.return %[[RESULT]]
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_fmul_rn"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
 // CHECK-LABEL: @extern_ternary_known
 tt.func public @extern_ternary_known(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed
