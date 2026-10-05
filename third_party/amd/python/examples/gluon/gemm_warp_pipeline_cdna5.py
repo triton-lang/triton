@@ -1,4 +1,4 @@
-"""Clustered warp-pipeline GEMMs for AMD CDNA5.
+r"""Clustered warp-pipeline GEMMs for AMD CDNA5.
 
 Each kernel uses eight warps per CTA, FP32 accumulation and BF16 output.
 BF16, MXFP4 and FP8 x MXFP4 use a 4x4 CTA cluster (1024x1024 output tile).
@@ -54,7 +54,10 @@ to block-32 scales. It requires --dtype mxfp8. --input-mode is an alias for
 --input.
 The default inputs match the performance experiments: trig for BF16/MXFP8/
 MXFP4 and seed-42 random for FP8 x MXFP4. Timing excludes input generation,
-compilation and correctness checking. No workspace-specific imports are needed.
+compilation and correctness checking. MXFP8/MXFP4 trig inputs use the fixed
+hipBLASLt seed 1713573849; BF16 trig inputs are deterministic without an RNG.
+--seed controls random inputs and the random scales for FP8 x MXFP4 trig
+inputs. No workspace-specific imports are needed.
 """
 
 import argparse
@@ -78,6 +81,7 @@ except ImportError:
 
 BF16_BLOCK_K = 128
 NUM_WARPS = 8
+HIPBLASLT_TRIG_SEED = 1713573849
 
 
 @gluon.jit
@@ -117,9 +121,8 @@ def _tdm_store_full_tile(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc, S
 
 
 @gluon.jit
-def _mxfp8_tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc0, acc1,
-                              OUTPUT_CGA_LAYOUT: gl.constexpr, CTA_M: gl.constexpr, CTA_N: gl.constexpr,
-                              TWO_BUFFERS: gl.constexpr = False):
+def _tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc0, acc1, OUTPUT_CGA_LAYOUT: gl.constexpr,
+                        CTA_M: gl.constexpr, CTA_N: gl.constexpr, TWO_BUFFERS: gl.constexpr = False):
     cta_m: gl.constexpr = 256
     cta_n: gl.constexpr = 256
     half_n: gl.constexpr = 128
@@ -172,7 +175,7 @@ def _bf16_cluster_consume_and_refill(a_buf, b_buf, slot, refill_slot, a_desc, b_
 
 
 @gluon.jit
-def _bf16_8stage_split_b(b, DOT_B: gl.constexpr, BLOCK_N: gl.constexpr, CTA_N: gl.constexpr):
+def _split_b_n_halves(b, DOT_B: gl.constexpr, BLOCK_N: gl.constexpr, CTA_N: gl.constexpr):
     cta_n: gl.constexpr = 256
     half_n: gl.constexpr = 128
     packed_n: gl.constexpr = BLOCK_N // 2
@@ -475,8 +478,8 @@ def mxfp8_gemm_warp_pipeline(a_ptr, b_ptr, c_ptr, a_scale_ptr, b_scale_ptr, M, N
     b_buf._keep_alive()
     as_buf._keep_alive()
     bs_buf._keep_alive()
-    _mxfp8_tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc0, acc1, OUTPUT_CGA_LAYOUT, CTA_M,
-                              CTA_N, TWO_BUFFER_OUTPUT)
+    _tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc0, acc1, OUTPUT_CGA_LAYOUT, CTA_M, CTA_N,
+                        TWO_BUFFER_OUTPUT)
 
 
 @gluon.jit
@@ -553,8 +556,8 @@ def mxfp8_gemm_warp_pipeline_flat(a_ptr, b_ptr, c_ptr, a_scale_ptr, b_scale_ptr,
     b_buf._keep_alive()
     as_buf._keep_alive()
     bs_buf._keep_alive()
-    _mxfp8_tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc0, acc1, OUTPUT_CGA_LAYOUT, CTA_M,
-                              CTA_N, TWO_BUFFER_OUTPUT)
+    _tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc0, acc1, OUTPUT_CGA_LAYOUT, CTA_M, CTA_N,
+                        TWO_BUFFER_OUTPUT)
 
 
 @gluon.jit
@@ -606,10 +609,10 @@ def _mxfp8_tiled_bk512_five(a_buf, b_buf, as_buf, bs_buf, slot, a_desc, b_desc, 
         bs1 = _mxfp8_tiled_load_scale(bs_buf, slot, 4, scale_b_layout)
         b0 = b_buf.index(slot).slice(0, 128, 1).permute([1, 0]).load(layout=dot_b)
         b1 = b_buf.index(slot).slice(128, 128, 1).permute([1, 0]).load(layout=dot_b)
-    with gl.amd.warp_pipeline_stage('tiled_stage2_compute_k0'):
+    with gl.amd.warp_pipeline_stage('tiled_stage1_compute_k0'):
         acc = gl.amd.cdna5.wmma_scaled(a0, as0, 'e4m3', b0, bs0, 'e4m3', acc)
         acc = gl.amd.cdna5.wmma_scaled(a1, as1, 'e4m3', b1, bs1, 'e4m3', acc)
-    with gl.amd.warp_pipeline_stage('tiled_stage4_load_k2'):
+    with gl.amd.warp_pipeline_stage('tiled_stage2_load_k2'):
         a2 = a_buf.index(slot).slice(256, 128, 1).load(layout=dot_a)
         as2 = _mxfp8_tiled_load_scale(as_buf, slot, 8, scale_a_layout)
         b2 = b_buf.index(slot).slice(256, 128, 1).permute([1, 0]).load(layout=dot_b)
@@ -619,10 +622,10 @@ def _mxfp8_tiled_bk512_five(a_buf, b_buf, as_buf, bs_buf, slot, a_desc, b_desc, 
         b3 = b_buf.index(slot).slice(384, 128, 1).permute([1, 0]).load(layout=dot_b)
         bs3 = _mxfp8_tiled_load_scale(bs_buf, slot, 12, scale_b_layout)
         gl.amd.cdna5.cluster.arrive()
-    with gl.amd.warp_pipeline_stage('tiled_stage6_compute_k2'):
+    with gl.amd.warp_pipeline_stage('tiled_stage3_compute_k2'):
         acc = gl.amd.cdna5.wmma_scaled(a2, as2, 'e4m3', b2, bs2, 'e4m3', acc)
         acc = gl.amd.cdna5.wmma_scaled(a3, as3, 'e4m3', b3, bs3, 'e4m3', acc)
-    with gl.amd.warp_pipeline_stage('tiled_stage8_wait_refill'):
+    with gl.amd.warp_pipeline_stage('tiled_stage4_wait_refill'):
         gl.amd.cdna5.cluster.wait()
         a_desc, b_desc, as_desc, bs_desc = _mxfp8_tiled_issue_refill(a_desc, b_desc, as_desc, bs_desc, a_buf, b_buf,
                                                                      as_buf, bs_buf, slot, 512, 16)
@@ -765,7 +768,7 @@ def _fp8_mxfp4_five_consume_and_refill(a_buf, b_buf, bs_buf, data_slot, scale_sl
         bs0_full = _fp8_mxfp4_load_scale(bs_buf, scale_slot, 0, SCALE_B_LOAD, BLOCK_N)
         bs0, bs1 = _fp8_mxfp4_split_scale(bs0_full, SCALE_B_LAYOUT, BLOCK_N, CTA_N)
         b0_full = b_buf.index(data_slot).slice(0, BLOCK_N, 0).slice(0, 64, 1).permute([1, 0]).load(layout=DOT_B_LOAD)
-        b0, b1 = _bf16_8stage_split_b(b0_full, DOT_B, BLOCK_N, CTA_N)
+        b0, b1 = _split_b_n_halves(b0_full, DOT_B, BLOCK_N, CTA_N)
     with gl.amd.warp_pipeline_stage('fp8mxfp4_five1_compute_low'):
         acc0 = gl.amd.cdna5.wmma_scaled(a0, None, 'e4m3', b0, bs0, 'e2m1', acc0)
         acc1 = gl.amd.cdna5.wmma_scaled(a0, None, 'e4m3', b1, bs1, 'e2m1', acc1)
@@ -774,7 +777,7 @@ def _fp8_mxfp4_five_consume_and_refill(a_buf, b_buf, bs_buf, data_slot, scale_sl
         bs1_full = _fp8_mxfp4_load_scale(bs_buf, scale_slot, 4, SCALE_B_LOAD, BLOCK_N)
         bs2, bs3 = _fp8_mxfp4_split_scale(bs1_full, SCALE_B_LAYOUT, BLOCK_N, CTA_N)
         b1_full = b_buf.index(data_slot).slice(0, BLOCK_N, 0).slice(64, 64, 1).permute([1, 0]).load(layout=DOT_B_LOAD)
-        b2, b3 = _bf16_8stage_split_b(b1_full, DOT_B, BLOCK_N, CTA_N)
+        b2, b3 = _split_b_n_halves(b1_full, DOT_B, BLOCK_N, CTA_N)
         gl.amd.cdna5.cluster.arrive()
         next_a = tdm.update_tensor_descriptor(a_desc, add_offsets=[0, 256])
         next_b = tdm.update_tensor_descriptor(b_desc, add_offsets=[0, 128])
@@ -872,7 +875,7 @@ def fp8_mxfp4_gemm_warp_pipeline(a_ptr, b_ptr, c_ptr, b_scale_ptr, M, N, K, stri
             b0_full = b_buf.index(tile_idx % 3).slice(0, BLOCK_N, 0).slice(0, 64,
                                                                            1).permute([1, 0]).load(layout=dot_b_load)
             bs0_full = _fp8_mxfp4_load_scale(bs_buf, tile_idx % 3, 0, scale_b_load, BLOCK_N)
-            b0, b1 = _bf16_8stage_split_b(b0_full, dot_b, BLOCK_N, CTA_N)
+            b0, b1 = _split_b_n_halves(b0_full, dot_b, BLOCK_N, CTA_N)
             bs0, bs1 = _fp8_mxfp4_split_scale(bs0_full, scale_b_layout, BLOCK_N, CTA_N)
         with gl.amd.warp_pipeline_stage('fp8mxfp4_tail_compute_k0'):
             acc0 = gl.amd.cdna5.wmma_scaled(a0, None, 'e4m3', b0, bs0, 'e2m1', acc0)
@@ -882,7 +885,7 @@ def fp8_mxfp4_gemm_warp_pipeline(a_ptr, b_ptr, c_ptr, b_scale_ptr, M, N, K, stri
             b1_full = b_buf.index(tile_idx % 3).slice(0, BLOCK_N, 0).slice(64, 64,
                                                                            1).permute([1, 0]).load(layout=dot_b_load)
             bs1_full = _fp8_mxfp4_load_scale(bs_buf, tile_idx % 3, 4, scale_b_load, BLOCK_N)
-            b2, b3 = _bf16_8stage_split_b(b1_full, dot_b, BLOCK_N, CTA_N)
+            b2, b3 = _split_b_n_halves(b1_full, dot_b, BLOCK_N, CTA_N)
             bs2, bs3 = _fp8_mxfp4_split_scale(bs1_full, scale_b_layout, BLOCK_N, CTA_N)
         with gl.amd.warp_pipeline_stage('fp8mxfp4_tail_compute_k1'):
             acc0 = gl.amd.cdna5.wmma_scaled(a1, None, 'e4m3', b2, bs2, 'e2m1', acc0)
@@ -891,8 +894,7 @@ def fp8_mxfp4_gemm_warp_pipeline(a_ptr, b_ptr, c_ptr, b_scale_ptr, M, N, K, stri
     a_buf._keep_alive()
     b_buf._keep_alive()
     bs_buf._keep_alive()
-    _mxfp8_tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc0, acc1, OUTPUT_CGA_LAYOUT, CTA_M,
-                              CTA_N)
+    _tdm_store_split_n2(c_ptr, pid_m, pid_n, stride_cm, stride_cn, M, N, acc0, acc1, OUTPUT_CGA_LAYOUT, CTA_M, CTA_N)
 
 
 @gluon.jit
@@ -1075,7 +1077,7 @@ def _make_hipblaslt_mxfp8_trig_matrix(rows, k):
         raise ValueError('MXFP8 trig generation requires K divisible by 32')
     block_size = 32
     num_threads = 32
-    seed = 1713573849
+    seed = HIPBLASLT_TRIG_SEED
     blocks = rows * k // block_size
     if blocks % num_threads:
         raise ValueError('MXFP8 trig generation requires scale blocks divisible by 32')
@@ -1513,7 +1515,7 @@ def _make_hipblaslt_mxfp4_trig_matrix(rows, k):
         raise ValueError('MXFP4 trig generation requires K divisible by 32')
     block_size = 32
     num_threads = 32
-    seed = 1713573849
+    seed = HIPBLASLT_TRIG_SEED
     blocks = rows * k // block_size
     if blocks % num_threads:
         raise ValueError('MXFP4 trig generation requires scale blocks divisible by 32')
@@ -1586,7 +1588,8 @@ def main():
                         help='MXFP8 output LDS buffers: default 1; 2 overlaps BK256 N-half stores')
     parser.add_argument('--flat-pipeline', action='store_true',
                         help='fully expand the MXFP8 K traversal, including tails; specializes the kernel for K')
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--seed', type=int, default=42,
+                        help='random input seed (default 42); ignored by BF16/MXFP8/MXFP4 trig inputs')
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--benchmark', action='store_true')
     parser.add_argument('--warmup', type=int, default=20)
@@ -1646,7 +1649,15 @@ def main():
     mode = args.input_mode
     for dtype in dtypes:
         args.input_mode = ('random' if dtype == 'fp8_mxfp4' else 'trig') if mode == 'auto' else mode
-        print(f'\n{dtype}: M={args.M} N={args.N} K={args.K}, {args.input_mode}, seed={args.seed}', flush=True)
+        if args.input_mode == 'trig' and dtype in ('mxfp8', 'mxfp4'):
+            seed_info = f'seed={HIPBLASLT_TRIG_SEED} (fixed hipBLASLt)'
+        elif args.input_mode == 'trig' and dtype == 'bf16':
+            seed_info = 'seed=none (deterministic trig)'
+        elif args.input_mode == 'trig':
+            seed_info = f'scale seed={args.seed} (deterministic trig values)'
+        else:
+            seed_info = f'seed={args.seed}'
+        print(f'\n{dtype}: M={args.M} N={args.N} K={args.K}, {args.input_mode}, {seed_info}', flush=True)
         launch, check, inputs = CASE_BUILDERS[dtype](args)
         if args.check:
             check()
