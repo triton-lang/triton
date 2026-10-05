@@ -658,15 +658,11 @@ def ScaledDowncastFp4Op : TT_AMDGPU_Op<"scaled_downcast_fp4", [
     Divide FP16, BF16, or FP32 values by a scale and convert them to packed
     e2m1 values. An i8 scale is interpreted as a raw E8M0 payload; an f32 scale
     is passed directly to the hardware conversion, which uses only the exponent
-    field and ignores mantissa bits (so effective scales are positive, normal
-    powers of two). The result packs two consecutive fp4 values per i8 along
-    `axis`: the element at even position provides the low nibble and the
-    following element the high nibble, so the result extent along `axis` is
-    half the input extent (the inverse of `scaled_upcast_fp4`).
-
-    `scale_format` makes this representation explicit in the IR: `e8m0`
-    denotes a raw i8 payload and `e8m0_f32` denotes E8M0 exponent bits already
-    placed in an f32 hardware operand. It must match the scale element type.
+    field and ignores sign and mantissa bits (so effective scales are the E8M0
+    values 2^-127 to 2^127). The result packs two consecutive fp4 values per
+    i8 along `axis`: the element at even position provides the low nibble and
+    the following element the high nibble, so the result extent along `axis`
+    is half the input extent (the inverse of `scaled_upcast_fp4`).
 
     The `axis` attribute identifies the dimension along which the fp4 elements
     are packed and along which scales are shared. The scale must be compact
@@ -682,26 +678,21 @@ def ScaledDowncastFp4Op : TT_AMDGPU_Op<"scaled_downcast_fp4", [
   let arguments = (ins
     RankedTensorOf<[F16, BF16, F32]>:$input,
     RankedTensorOf<[I8, F32]>:$scale,
-    AMDGPU_ScaledDowncastScaleFormatAttr:$scale_format,
     I32Attr:$axis);
   let results = (outs RankedTensorOf<[I8]>:$output);
 
   let builders = [
       OpBuilder<(ins "Value":$input, "Value":$scale, "int32_t":$axis), [{
         auto inputTy = cast<RankedTensorType>(input.getType());
-        auto scaleTy = cast<RankedTensorType>(scale.getType());
         auto resultTy = mlir::triton::gpu::inferFpToFp4ResultType(
             inputTy, axis, $_state.location);
         assert(succeeded(resultTy));
-        auto scaleFormat = scaleTy.getElementType().isF32()
-                               ? ScaledDowncastScaleFormat::E8M0_F32
-                               : ScaledDowncastScaleFormat::E8M0;
-        build($_builder, $_state, *resultTy, input, scale, scaleFormat, axis);
+        build($_builder, $_state, *resultTy, input, scale, axis);
       }]>
   ];
 
   let assemblyFormat = [{
-    $input `scale` $scale `scale_format` `=` $scale_format attr-dict
+    $input `scale` $scale attr-dict
         `:` type($input) `,` type($scale) `->` type($output)
   }];
 
@@ -727,14 +718,10 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
     Divide FP16, BF16, or FP32 values by a scale and convert them to fp8 (e4m3)
     or bf8 (e5m2) values. An i8 scale is interpreted as a raw E8M0 payload; an
     f32 scale is passed directly to the hardware conversion, which uses only
-    the exponent field and ignores mantissa bits (so effective scales are
-    positive, normal powers of two). This is the elementwise inverse of
+    the exponent field and ignores sign and mantissa bits (so effective scales
+    are the E8M0 values 2^-127 to 2^127). This is the elementwise inverse of
     `scaled_upcast_fp8`: input and result share the same shape and encoding,
     and each fp8 result occupies its own byte (no packing).
-
-    `scale_format` makes this representation explicit in the IR: `e8m0`
-    denotes a raw i8 payload and `e8m0_f32` denotes E8M0 exponent bits already
-    placed in an f32 hardware operand. It must match the scale element type.
 
     The `axis` attribute identifies the dimension along which scales are
     shared. The scale must be compact along `axis`: one scale covers multiple
@@ -750,7 +737,6 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
   let arguments = (ins
     RankedTensorOf<[F16, BF16, F32]>:$input,
     RankedTensorOf<[I8, F32]>:$scale,
-    AMDGPU_ScaledDowncastScaleFormatAttr:$scale_format,
     I32Attr:$axis);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$output);
 
@@ -758,17 +744,13 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
       OpBuilder<(ins "Value":$input, "Value":$scale, "Type":$elemType,
                      "int32_t":$axis), [{
         auto inputTy = cast<RankedTensorType>(input.getType());
-        auto scaleTy = cast<RankedTensorType>(scale.getType());
         auto resultTy = inputTy.clone(elemType);
-        auto scaleFormat = scaleTy.getElementType().isF32()
-                               ? ScaledDowncastScaleFormat::E8M0_F32
-                               : ScaledDowncastScaleFormat::E8M0;
-        build($_builder, $_state, resultTy, input, scale, scaleFormat, axis);
+        build($_builder, $_state, resultTy, input, scale, axis);
       }]>
   ];
 
   let assemblyFormat = [{
-    $input `scale` $scale `scale_format` `=` $scale_format attr-dict
+    $input `scale` $scale attr-dict
         `:` type($input) `,` type($scale) `->` type($output)
   }];
 

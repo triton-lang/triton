@@ -258,18 +258,20 @@ def _normalize_axis(axis, rank, axis_required_message):
     return axis
 
 
-def _is_normal_fp32_power_of_two(value):
+def _is_e8m0_power_of_two(value):
     mantissa, exponent = math.frexp(value)
-    # Positive powers of two have mantissa 0.5; 2**-126..2**127 are normal in fp32.
-    return mantissa == 0.5 and -125 <= exponent <= 128
+    # Positive powers of two have mantissa 0.5.
+    # E8M0 spans 2**-127..2**127. 2**-127 is an fp32 subnormal, but its zero
+    # exponent field is still read as 2**-127.
+    return mantissa == 0.5 and -126 <= exponent <= 128
 
 
 def _prepare_scaled_downcast_scale(scale, semantic):
     scale = _unwrap_if_constexpr(scale)
     if isinstance(scale, float):
         _check(
-            _is_normal_fp32_power_of_two(scale), lambda: "fp32 scaled_downcast scales must be positive, normal powers "
-            f"of two (2**-126 to 2**127), but got {scale}")
+            _is_e8m0_power_of_two(scale), lambda: "fp32 scaled_downcast scales must be positive powers of two "
+            f"representable in E8M0 (2**-127 to 2**127), but got {scale}")
         return semantic.make_scalar(scale, ttgl.float32)
     _check(isinstance(scale, ttgl.tensor),
            lambda: f"Expected scale to be a tensor, an fp32 scalar, or a float constant but got {scale!r}")
@@ -354,11 +356,9 @@ def _scaled_downcast(input, scale, elem_type, axis, semantic):
 @builtin
 def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
     """
-    Scale and convert FP16, BF16, or FP32 values to a low-precision format,
-    dividing ``input`` by ``scale``.
+    Scale and convert FP16, BF16, or FP32 values to a low-precision format.
 
     ``scale`` is one of:
-
     * a tensor of raw E8M0 payloads (``int8`` or ``uint8``), as used by the
       MX formats;
     * a tensor of ``fp32`` scales; or
@@ -369,12 +369,14 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
     .. warning::
         ``fp32`` scales are passed to the hardware conversion unchanged, and
         the hardware reads only their exponent bits. Every ``fp32`` scale
-        **must** therefore be a positive, normal power of two (``2**-126`` to
-        ``2**127``). Any other value is not rejected and silently produces
-        wrong results. Constant ``float`` scales are checked at compile time,
-        but runtime values (``fp32`` scalars and tensors) cannot be, so the
-        caller is responsible for ensuring them, e.g. by rounding the scale
-        to a power of two before calling this function.
+        must therefore be a positive power of two representable in E8M0.
+        Constant ``float`` scales are checked at compile time, but runtime
+        values (``fp32`` scalars and tensors) cannot be, so the caller is
+        responsible for ensuring them, e.g. by rounding the scale to a power of
+        two before calling this function. In particular, do not convert E8M0
+        payloads with ``.to(ttgl.float32)``: that converts their integer value
+        (127, meaning a scale of 1, becomes ``127.0``, a scale of 64). Pass the
+        ``int8``/``uint8`` tensor directly instead.
 
     ``format`` selects the target type and packing behavior:
 

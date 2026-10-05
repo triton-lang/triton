@@ -4322,8 +4322,6 @@ def test_amd_scaled_downcast_fp4_float_dtypes(target, dtype, ir_dtype, scale_dty
     assert "amdg.scaled_downcast_fp4" in module_text
     assert f"tensor<16x64x{ir_dtype}" in module_text
     assert f"tensor<16x8x{scale_ir_dtype}" in module_text
-    scale_format = "e8m0_f32" if scale_dtype == ttgl.float32 else "e8m0"
-    assert f"scale_format = {scale_format}" in module_text
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
@@ -4348,8 +4346,6 @@ def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype, scale_dtype,
     assert "amdg.scaled_downcast_fp8" in module_text
     assert f"-> tensor<16x64x{ir_dtype}" in module_text
     assert f"tensor<16x8x{scale_ir_dtype}" in module_text
-    scale_format = "e8m0_f32" if scale_dtype == ttgl.float32 else "e8m0"
-    assert f"scale_format = {scale_format}" in module_text
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
@@ -4380,7 +4376,7 @@ def test_amd_scaled_downcast_scalar_fp32_scale(target, format, op_name, constant
     module_text = module.str_nodebug()
     # The scalar is splatted into a single scale block spanning the whole axis, in the input's layout.
     assert re.search(
-        rf"amdg\.scaled_downcast_{op_name} .* scale_format = e8m0_f32 .* : tensor<64x64xbf16, (#\w+)>, "
+        rf"amdg\.scaled_downcast_{op_name} .* : tensor<64x64xbf16, (#\w+)>, "
         rf"tensor<{scale_shape}xf32, \1> -> ", module_text)
     if constant_scale:
         assert f"arith.constant dense<2.500000e-01> : tensor<{scale_shape}xf32" in module_text
@@ -4388,12 +4384,25 @@ def test_amd_scaled_downcast_scalar_fp32_scale(target, format, op_name, constant
         assert f"tt.splat %arg0 : f32 -> tensor<{scale_shape}xf32" in module_text
 
 
+@pytest.mark.parametrize("scale", [2.0**-127, 2.0**127])
+def test_amd_scaled_downcast_scalar_scale_e8m0_bounds(scale):
+
+    @gluon.jit
+    def kernel(SCALE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
+        input = ttgl.full([16, 64], 1.0, ttgl.bfloat16, layout)
+        ttgl.amd.cdna4.scaled_downcast(input, SCALE, "e4m3", axis=1)
+
+    module = run_parser(kernel, *make_args(scale, num_warps=1), target=HIP_TARGET_CDNA4)
+    assert "amdg.scaled_downcast_fp8" in module.str_nodebug()
+
+
 @pytest.mark.parametrize("scale, message", [
-    (3.0, "must be positive, normal powers of two"),
-    (-2.0, "must be positive, normal powers of two"),
-    (0.0, "must be positive, normal powers of two"),
-    (2.0**-127, "must be positive, normal powers of two"),
-    (2.0**128, "must be positive, normal powers of two"),
+    (3.0, "must be positive powers of two"),
+    (-2.0, "must be positive powers of two"),
+    (0.0, "must be positive powers of two"),
+    (2.0**-128, "must be positive powers of two"),
+    (2.0**128, "must be positive powers of two"),
     (2, "Expected scale to be a tensor, an fp32 scalar, or a float constant"),
     ("fp16", "Expected scalar scale to be fp32"),
 ])

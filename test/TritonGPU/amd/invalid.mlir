@@ -882,17 +882,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
-
-// -----
-
-#input = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-#scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @scaled_downcast_scale_format_mismatch(
-      %input: tensor<16x64xf32, #input>,
-      %scale: tensor<16x8xf32, #scale>) {
-    // expected-error @below {{scale_format does not match the scale element type; expected e8m0_f32}}
-    %0 = amdg.scaled_downcast_fp8 %input scale %scale scale_format = e8m0 {axis = 1 : i32} : tensor<16x64xf32, #input>, tensor<16x8xf32, #scale> -> tensor<16x64xf8E4M3FN, #input>
-    tt.return
-  }
-}
