@@ -1666,6 +1666,52 @@ def test_cast_ext_payload_semantics(device, fresh_knobs):
 
 
 @gluon.jit
+def _cast_kernel(input_ptr, output_ptr, BLOCK: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+    offsets = gl.arange(0, BLOCK, layout=layout)
+    value = gl.load(input_ptr + offsets)
+    gl.store(output_ptr + offsets, value.to(output_ptr.dtype.element_ty))
+
+
+@pytest.mark.parametrize("int_dtype, float_dtype", [
+    ("int32", "f32"),
+    ("uint32", "f32"),
+    ("int32", "f16"),
+    ("uint64", "bf16"),
+    ("int16", "f64"),
+    ("uint8", "f32"),
+])
+def test_int_float_cast_payload_semantics(device, int_dtype, float_dtype, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    BLOCK = 256
+    rng = np.random.RandomState(29)
+
+    # Integer-to-float resizes the integer payload and unembeds it.
+    limits = np.iinfo(int_dtype)
+    integers = rng.randint(limits.min, limits.max, size=BLOCK, dtype=int_dtype)
+    integers[:5] = [0, 1, 2, limits.min, limits.max]
+    int_input = torch.from_numpy(integers).to(device)
+    expected_bits = _unmix_payload_to_float_bits(integers, float_dtype)
+    float_output_bits, float_output = _as_float_bits_tensor(np.empty_like(expected_bits), float_dtype)
+
+    _cast_kernel[(1, )](int_input, float_output, BLOCK=BLOCK, THREADS_PER_WARP=THREADS_PER_WARP)
+    _assert_payload_equal(float_output_bits, expected_bits)
+
+    # Float-to-integer embeds the input, then resizes the signed payload.
+    float_bits = _random_float_bits(rng, (BLOCK, ), float_dtype)
+    _, float_input = _as_float_bits_tensor(float_bits, float_dtype)
+    int_output = torch.empty_like(int_input)
+
+    _cast_kernel[(1, )](float_input, int_output, BLOCK=BLOCK, THREADS_PER_WARP=THREADS_PER_WARP)
+    # Interpret the payload as signed before widening, even for unsigned outputs.
+    payload = _mix_float_bits(float_bits, float_dtype).astype(float_bits.dtype)
+    expected_integers = payload.astype(int_dtype)
+    np.testing.assert_array_equal(int_output.cpu().numpy(), expected_integers)
+
+
+@gluon.jit
 def _downcast_placement_kernel(x_ptr, y_ptr, after_ptr, before_ptr, n_elements, BLOCK: gl.constexpr,
                                THREADS_PER_WARP: gl.constexpr):
     pid = gl.program_id(0)

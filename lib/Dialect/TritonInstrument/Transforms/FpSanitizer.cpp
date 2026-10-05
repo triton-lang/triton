@@ -3,6 +3,7 @@
 #include "mlir/IR/Types.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "mlir/Transforms/WalkPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -2107,6 +2108,43 @@ struct FpToFpPattern : public OpRewritePattern<tt::FpToFpOp> {
   }
 };
 
+template <typename OpTy>
+struct IntToFloatPattern : public OpRewritePattern<OpTy> {
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Type intTy = getIntTypeLike(op.getType());
+    Value payload = op.getIn();
+    if (isa<arith::UIToFPOp>(op) &&
+        getIntBitwidth(payload.getType()) < getIntBitwidth(intTy))
+      payload = arith::ExtUIOp::create(rewriter, loc, intTy, payload);
+    else
+      payload = castSignedIntValueToType(rewriter, loc, payload, intTy);
+    rewriter.replaceOp(op,
+                       unembedToFloat(rewriter, loc, payload, op.getType()));
+    return success();
+  }
+};
+
+template <typename OpTy>
+struct FloatToIntPattern : public OpRewritePattern<OpTy> {
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto payload = embedToInt(rewriter, loc, op.getIn());
+    // Float payloads widen with signed extension, including unsigned results,
+    // so an intermediate extf does not change the integer result.
+    auto result =
+        castSignedIntValueToType(rewriter, loc, payload, op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 struct Fp4ToFpPattern : public OpRewritePattern<ttg::Fp4ToFpOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(ttg::Fp4ToFpOp op,
@@ -3377,6 +3415,14 @@ public:
                             BoolAttr::get(&getContext(), twoCTAs));
     getOperation()->setAttr(kHomomorphicCastsAttr,
                             BoolAttr::get(&getContext(), homomorphicCasts));
+
+    // Rewrite casts before the greedy driver can fold them numerically.
+    RewritePatternSet castPatterns(&getContext());
+    castPatterns.add<
+        IntToFloatPattern<arith::SIToFPOp>, IntToFloatPattern<arith::UIToFPOp>,
+        FloatToIntPattern<arith::FPToSIOp>, FloatToIntPattern<arith::FPToUIOp>>(
+        &getContext());
+    walkAndApplyPatterns(getOperation(), std::move(castPatterns));
 
     // MMA emulation can redistribute accumulator elements across all CTAs.
     bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
