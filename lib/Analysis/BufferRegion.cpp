@@ -642,10 +642,9 @@ const BufferRegionFootprint *BufferRegionAnalysis::translateToCallsite(
   if (!footprint)
     return nullptr;
   uint32_t calleeFrame = getOperationId(callee);
-  if (llvm::none_of(footprint->regionInfo.views,
-                    [&](const BufferRegionViewWithHash &view) {
-                      return view.view.allocationFrame == calleeFrame;
-                    }))
+  if (llvm::none_of(footprint->regionInfo.views, [&](const auto &view) {
+        return view.view.allocationFrame == calleeFrame;
+      }))
     return footprint;
   auto [it, inserted] =
       callsiteFootprints.try_emplace({footprint, call.getOperation()});
