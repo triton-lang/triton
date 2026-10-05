@@ -131,8 +131,7 @@ getScanScratchConfig(const triton::LinearLayout &src,
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
-  ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis,
-                     bool preserveLaneOrder = false);
+  ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis);
   bool isSupported();
   const triton::LinearLayout &getPermutedLayout() const {
     return permutedLayout;
@@ -156,8 +155,7 @@ public:
   const std::optional<triton::LinearLayout> &getInterWarpLayout() const {
     return interWarpLayout;
   }
-  // Contiguous partitions of long total sequences; short sequences are
-  // replicated within each participating warp.
+  // The full segment sequence replicated within each participating warp.
   const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
     return interWarpScanLayout;
   }
@@ -166,7 +164,7 @@ public:
 private:
   triton::LinearLayout buildPermutedLayout();
   triton::LinearLayout buildIntraWarpLayout() const;
-  triton::LinearLayout buildIntraWarpScanLayout(bool preserveLaneOrder) const;
+  triton::LinearLayout buildIntraWarpScanLayout() const;
   triton::LinearLayout buildInterWarpLayout() const;
   triton::LinearLayout buildInterWarpScanLayout() const;
 
