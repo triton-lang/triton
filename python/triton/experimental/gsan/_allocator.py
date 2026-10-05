@@ -43,32 +43,38 @@ def _load_gsan_module() -> ModuleType:
 
 @functools.lru_cache()
 def _load_gsan_module_hip() -> ModuleType:
-    """Compile and load GSanAllocatorHIP.cc against ROCm headers."""
-    import os
-
-    # Find ROCm installation — honour ROCM_PATH env var, then common defaults.
-    rocm_root = (os.environ.get("ROCM_PATH") or os.environ.get("ROCM_HOME") or "/opt/rocm")
-    rocm_include = os.path.join(rocm_root, "include")
-    rocm_lib = os.path.join(rocm_root, "lib")
-
-    # Triton's AMD driver exposes its own include directory for HIP utils.
-    from triton.backends.amd.driver import include_dirs as amd_include_dirs
+    """Compile and load GSanAllocatorHIP.cc against the HIP headers Triton bundles."""
+    from triton.backends.amd.driver import _get_path_to_hip_runtime_dylib, include_dirs as amd_include_dirs
 
     include_dirs = list(amd_include_dirs) + [
-        rocm_include,
         str(_THIS_DIR / "src" / "hip_shim"),  # dummy cuda.h to satisfy #include <cuda.h>
         str(_THIS_DIR / "src"),  # for GSan.h and friends
     ]
 
+    # The build cache only hashes GSanAllocatorHIP.cc, which #includes the CUDA
+    # sources; fold their contents into the flags so edits there force a rebuild.
+    import hashlib
+    deps_hash = hashlib.sha256()
+    for path in sorted((_THIS_DIR / "src").rglob("*")):
+        if path.suffix in (".cc", ".h"):
+            deps_hash.update(path.read_bytes())
+
     # The embedded GSanAllocator.cc defines PyInit_gsan_allocator, so use that
-    # as the module name so Python finds the right init symbol.
+    # as the module name so Python finds the right init symbol. The HIP runtime
+    # is dlopen'ed from the same library the AMD driver uses.
     return compile_module_from_file(
         src_path=str(_GSAN_HIP_SOURCE_PATH),
         name="gsan_allocator",
-        library_dirs=[rocm_lib],
         include_dirs=include_dirs,
-        libraries=["amdhip64"],
-        ccflags=["-std=c++17", "-D__HIP_PLATFORM_AMD__"],
+        libraries=["dl"],
+        ccflags=[
+            "-std=c++17",
+            "-D__HIP_PLATFORM_AMD__",
+            "-DGSAN_HIP",
+            "-DGSAN_HIP_LARGE_STRIDE",
+            f'-DGSAN_LIBHIP_PATH="{_get_path_to_hip_runtime_dylib()}"',
+            f"-DGSAN_SOURCES_HASH={deps_hash.hexdigest()[:16]}",
+        ],
     )
 
 
@@ -161,6 +167,11 @@ def has_live_allocations() -> bool:
     initialize GSan runtime state or freeze its configuration.
     """
     return _load_gsan_module().has_live_allocations()
+
+
+def get_per_device_state_stride() -> int:
+    """Return the byte distance between consecutive devices' runtime state."""
+    return _load_gsan_module().PER_DEVICE_STATE_STRIDE_BYTES
 
 
 def supports_fabric_handles(device: int) -> bool:

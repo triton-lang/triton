@@ -194,9 +194,12 @@ static_assert(sizeof(MBarrierTable) == 16);
 // Place the thread state for each device at a fixed stride for ease of
 // address calculation.
 // AMD GPUs (e.g. gfx950, 256 CUs × 8 GPUs = 2048 threads) need ~1025 MiB per
-// device, exceeding the original 1 GiB stride.  Increase to 2 GiB when
-// building the HIP port.  kGlobalsReserveSize (= stride × 32 GPUs) becomes
-// 64 GiB of virtual address space reservation, which has no physical cost.
+// device, exceeding the original 1 GiB stride.  The HIP allocator build
+// (_allocator.py) passes -DGSAN_HIP_LARGE_STRIDE to use 2 GiB instead.
+// kGlobalsReserveSize (= stride × 32 GPUs) becomes 64 GiB of virtual address
+// space reservation, which has no physical cost.  libtriton is shared by both
+// backends, so Python reads the stride from the allocator module rather than
+// from gsan_testing.
 #ifdef GSAN_HIP_LARGE_STRIDE
 static constexpr uintptr_t kPerDeviceStateStride = 2ull << 30; // 2 GiB
 #else

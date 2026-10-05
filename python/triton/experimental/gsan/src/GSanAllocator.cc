@@ -39,9 +39,18 @@ union GSanShareableHandle {
   CUmemFabricHandle fabricHandle;
 };
 
+#ifdef GSAN_HIP
+constexpr const char *kFabricUnsupportedMsg =
+    "fabric handles are not supported on HIP";
+#endif
+
 bool isSupportedShareableHandleType(CUmemAllocationHandleType handleType) {
+#ifdef GSAN_HIP
+  return handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+#else
   return handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR ||
          handleType == CU_MEM_HANDLE_TYPE_FABRIC;
+#endif
 }
 
 void *getShareableHandleImportArg(const GSanShareableHandle *handle,
@@ -478,6 +487,13 @@ CUresult refreshConfigForDevice(int device) {
     config.shareableHandleType = getRequestedShareableHandleType();
     config.shareableHandleTypeConfigured = true;
   }
+#ifdef GSAN_HIP
+  if (config.shareableHandleType == CU_MEM_HANDLE_TYPE_FABRIC) {
+    fprintf(stderr, "GSan: %s (PYTORCH_CUDA_ALLOC_CONF requests them)\n",
+            kFabricUnsupportedMsg);
+    return CUDA_ERROR_NOT_SUPPORTED;
+  }
+#endif
   return CUDA_SUCCESS;
 }
 
@@ -1112,6 +1128,12 @@ bool parseShareableHandleTypeArg(PyObject *obj, const char *name,
                  handleType);
     return false;
   }
+#ifdef GSAN_HIP
+  if (handleType == CU_MEM_HANDLE_TYPE_FABRIC) {
+    PyErr_SetString(PyExc_ValueError, kFabricUnsupportedMsg);
+    return false;
+  }
+#endif
   *out = static_cast<CUmemAllocationHandleType>(handleType);
   return true;
 }
@@ -1423,6 +1445,9 @@ PyObject *pySupportsFabricHandles([[maybe_unused]] PyObject *self,
   int device = 0;
   if (!parseIntArg(args[0], "device", &device))
     return nullptr;
+#ifdef GSAN_HIP
+  Py_RETURN_FALSE;
+#else
 
   CUdevice cuDevice = 0;
   CUresult err = cuDeviceGet(&cuDevice, device);
@@ -1441,6 +1466,7 @@ PyObject *pySupportsFabricHandles([[maybe_unused]] PyObject *self,
     return nullptr;
   }
   return PyBool_FromLong(supported);
+#endif
 }
 
 PyObject *pyReset([[maybe_unused]] PyObject *self, PyObject *const *args,
@@ -1911,5 +1937,16 @@ PyModuleDef kGSanAllocatorModuleDef = {
 } // namespace
 
 PyMODINIT_FUNC PyInit_gsan_allocator(void) {
-  return PyModule_Create(&kGSanAllocatorModuleDef);
+  PyObject *module = PyModule_Create(&kGSanAllocatorModuleDef);
+  if (module == nullptr)
+    return nullptr;
+  // The stride is chosen per build (see GSan.h), so Python must read it from
+  // the module that lays out the per-device state.
+  if (PyModule_AddObject(module, "PER_DEVICE_STATE_STRIDE_BYTES",
+                         PyLong_FromUnsignedLongLong(
+                             gsan::kPerDeviceStateStride)) != 0) {
+    Py_DECREF(module);
+    return nullptr;
+  }
+  return module;
 }
