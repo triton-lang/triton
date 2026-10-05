@@ -52,12 +52,14 @@ compilation time and code size.
 with random scales rounded up to E8M0: K128 for A and N128xK128 for B, expanded
 to block-32 scales. It requires --dtype mxfp8. --input-mode is an alias for
 --input.
-The default inputs match the performance experiments: trig for BF16/MXFP8/
-MXFP4 and seed-42 random for FP8 x MXFP4. Timing excludes input generation,
-compilation and correctness checking. MXFP8/MXFP4 trig inputs use the fixed
-hipBLASLt seed 1713573849; BF16 trig inputs are deterministic without an RNG.
---seed controls random inputs and the random scales for FP8 x MXFP4 trig
-inputs. No workspace-specific imports are needed.
+The default --input auto selects trig for BF16/MXFP8/MXFP4 and random for
+FP8 x MXFP4. With --dtype all, this selection is made separately for each dtype.
+--seed (default 42) controls random and positive_mxfp8 inputs, as well as the
+random scales for FP8 x MXFP4 trig inputs. MXFP8/MXFP4 trig inputs always use
+the fixed hipBLASLt seed 1713573849; BF16 trig inputs are deterministic without
+an RNG. These three trig modes ignore --seed.
+Timing excludes input generation, compilation and correctness checking.
+No workspace-specific imports are needed.
 """
 
 import argparse
