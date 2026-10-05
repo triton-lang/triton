@@ -2,7 +2,8 @@
 
 Each kernel uses eight warps per CTA, FP32 accumulation and BF16 output.
 BF16, MXFP4 and FP8 x MXFP4 use a 4x4 CTA cluster (1024x1024 output tile).
-MXFP8 supports 2x2/4x4 clusters and 64/128/256-square CTA tiles. TDM multicasts operands into LDS.
+MXFP8 supports 2x2/4x4 clusters and 64/128/256-square CTA tiles. TDM multicasts
+operands into LDS.
 
 * BF16: BK128, two data slots and an unroll-2 load/compute/refill schedule.
 * MXFP8: BK256 with CTA256 (two data/three scale slots), or BK512 with
@@ -11,20 +12,23 @@ MXFP8 supports 2x2/4x4 clusters and 64/128/256-square CTA tiles. TDM multicasts 
 * FP8 x MXFP4: BK256, three slots each for A, B and B scales, six-tile unroll.
 
 The three scaled kernels use five stages with phase gap one:
-load low -> compute low -> load high/arrive/advance -> compute high -> wait/refill.
+load low -> compute low -> load high/arrive/advance -> compute high
+-> wait/refill.
 Leading refill overlaps trailing compute after its LDS reads have completed.
 TDM readiness waits and warp-pipeline boundaries protect buffer lifetimes;
 cluster arrive/wait are scheduling hints. B reuse is not enabled here.
 
 Run from this directory on CDNA5, for example::
 
-    python gemm_warp_pipeline_cdna5.py --dtype all --check --mxfp8-tile 256x256x256 --mxfp8-cluster 4x4
+    python gemm_warp_pipeline_cdna5.py --dtype all --check \
+        --mxfp8-tile 256x256x256 --mxfp8-cluster 4x4
     python gemm_warp_pipeline_cdna5.py --dtype mxfp8 --check --benchmark \
         --mxfp8-tile 128x128x512 --mxfp8-cluster 4x4
 
 Rotating buffers are opt-in and imply --benchmark::
 
-    python gemm_warp_pipeline_cdna5.py --dtype mxfp8 --rotate-inputs --repeats 100 \
+    python gemm_warp_pipeline_cdna5.py --dtype mxfp8 \
+        --rotate-inputs --repeats 100 \
         --mxfp8-tile 256x256x256 --mxfp8-cluster 4x4
 
 Rotation clones A, B, scales and output with identical input values at distinct
@@ -36,15 +40,18 @@ Without rotation, timing defaults remain 4 samples x 20 replays x 50 launches.
 MXFP8 requires explicit --mxfp8-tile and --mxfp8-cluster selections, including
 when --dtype all is used. Unsupported configurations are rejected.
 M/N must be divisible by CTA size times cluster width.
-The other dtypes require M/N multiples of 1024. K constraints are checked before launch.
+The other dtypes require M/N multiples of 1024. K constraints are checked
+before launch.
 MXFP8 --mxfp8-output-buffers 2 overlaps the BK256 N-half output stores using
 two LDS buffers; the default is 1. BK512 supports only 1.
 --flat-pipeline selects separate BK256/BK512 bodies with compile-time K and
 fully expanded stages, including tails. It is opt-in and requires
---dtype mxfp8; all supported MXFP8 tiles are accepted; large K increases compilation time and code size.
+--dtype mxfp8; all supported MXFP8 tiles are accepted; large K increases
+compilation time and code size.
 --input positive_mxfp8 generates positive FP8 values from uniform [0, 0.1),
 with random scales rounded up to E8M0: K128 for A and N128xK128 for B, expanded
-to block-32 scales. It requires --dtype mxfp8. --input-mode is an alias for --input.
+to block-32 scales. It requires --dtype mxfp8. --input-mode is an alias for
+--input.
 The default inputs match the performance experiments: trig for BF16/MXFP8/
 MXFP4 and seed-42 random for FP8 x MXFP4. Timing excludes input generation,
 compilation and correctness checking. No workspace-specific imports are needed.
@@ -67,10 +74,8 @@ try:
 except ImportError:
     from mxfp_gemm_cdna5 import init_data, torch_gemm_mxfp
 
-# Use VGPR accumulators for scaled WMMA, as in the retained configurations.
 BF16_BLOCK_K = 128
 NUM_WARPS = 8
-AGPR_ATTRS = (("amdgpu-agpr-alloc", "0,0"), )
 
 
 @gluon.jit
@@ -1265,12 +1270,14 @@ def make_fp8_mxfp4_case(args):
     group_size = 8 if args.K <= 8192 else 4
 
     def launch(a_d=a_d, b_d=b_d, c_d=c_d, bs_d=bs_d):
-        return fp8_mxfp4_gemm_warp_pipeline[grid](
-            a_d, b_d, c_d, bs_d, args.M, args.N, args.K, a_d.stride(0), a_d.stride(1), b_d.stride(1), b_d.stride(0),
-            c_d.stride(0), c_d.stride(1), bs_d.stride(0), GRID_MN=grid[0], SHARED_LAYOUT_A=shared_a,
-            SHARED_LAYOUT_B=shared_b, SHARED_SCALE_B=shared_bs, WMMA_LAYOUT=wmma, LOAD_WMMA_LAYOUT=load_wmma,
-            OUTPUT_CGA_LAYOUT=output_cga, BLOCK_M=block_m, BLOCK_N=block_n, CTA_M=4, CTA_N=4, REUSE_A=True,
-            GROUP_SIZE=group_size, num_warps=8, waves_per_eu=2, num_ctas=16, llvm_fn_attrs=AGPR_ATTRS)
+        return fp8_mxfp4_gemm_warp_pipeline[grid](a_d, b_d, c_d, bs_d, args.M, args.N, args.K, a_d.stride(0),
+                                                  a_d.stride(1), b_d.stride(1), b_d.stride(0), c_d.stride(0),
+                                                  c_d.stride(1), bs_d.stride(0), GRID_MN=grid[0],
+                                                  SHARED_LAYOUT_A=shared_a, SHARED_LAYOUT_B=shared_b,
+                                                  SHARED_SCALE_B=shared_bs, WMMA_LAYOUT=wmma,
+                                                  LOAD_WMMA_LAYOUT=load_wmma, OUTPUT_CGA_LAYOUT=output_cga,
+                                                  BLOCK_M=block_m, BLOCK_N=block_n, CTA_M=4, CTA_N=4, REUSE_A=True,
+                                                  GROUP_SIZE=group_size, num_warps=8, waves_per_eu=2, num_ctas=16)
 
     def check():
         c_d.zero_()
@@ -1413,14 +1420,14 @@ def make_mxfp8_case(args):
                                       bs_d.stride(0), GRID_MN=grid[0], SHARED_A=shared_a, SHARED_B=shared_b,
                                       SHARED_AS=shared_as, SHARED_BS=shared_bs, WMMA=wmma, BLOCK_M=block_m,
                                       BLOCK_N=block_n, CLUSTER=cluster, num_warps=8, num_ctas=cluster * cluster,
-                                      waves_per_eu=2, llvm_fn_attrs=AGPR_ATTRS)
+                                      waves_per_eu=2)
         return bk256_kernel[grid](a_d, b_d, c_d, as_d, bs_d, args.M, args.N, args.K, a_d.stride(0), a_d.stride(1),
                                   b_d.stride(1), b_d.stride(0), c_d.stride(0), c_d.stride(1), as_d.stride(0),
                                   bs_d.stride(0), GRID_MN=grid[0], SHARED_LAYOUT_A=shared_a, SHARED_LAYOUT_B2=b2_shared,
                                   SHARED_SCALE_A=shared_as, SHARED_SCALE_B=shared_bs, WMMA_LAYOUT=wmma,
                                   LOAD_WMMA_LAYOUT=load_wmma, B2_LOAD_LAYOUT=b2_load, OUTPUT_CGA_LAYOUT=output_cga,
                                   BLOCK_M=block_m, BLOCK_N=block_n, CTA_M=cluster, CTA_N=cluster, num_warps=8,
-                                  waves_per_eu=2, num_ctas=cluster * cluster, llvm_fn_attrs=AGPR_ATTRS,
+                                  waves_per_eu=2, num_ctas=cluster * cluster,
                                   TWO_BUFFER_OUTPUT=args.mxfp8_output_buffers == 2)
 
     def check():
@@ -1497,7 +1504,7 @@ def make_mxfp4_case(args):
     def launch(a_d=a_d, b_d=b_d, c_d=c_d, as_d=as_d, bs_d=bs_d):
         common_kwargs = dict(GRID_MN=grid[0], SHARED_LAYOUT_A=shared_a, SHARED_LAYOUT_B=shared_b,
                              SHARED_SCALE_A=shared_as, SHARED_SCALE_B=shared_bs, WMMA_LAYOUT=wmma, num_warps=8,
-                             waves_per_eu=2, num_ctas=16, llvm_fn_attrs=AGPR_ATTRS)
+                             waves_per_eu=2, num_ctas=16)
         return mxfp4_gemm_warp_pipeline[grid](a_d, b_d, c_d, as_d, bs_d, args.M, args.N, args.K, a_d.stride(0),
                                               a_d.stride(1), b_d.stride(1), b_d.stride(0), c_d.stride(0), c_d.stride(1),
                                               bs_d.stride(0), **common_kwargs)
