@@ -673,3 +673,31 @@ def test_aot_target_parsing_with_explicit_target():
         # to exercise the --target string parsing path in compile.py
         target = triton.runtime.driver.active.get_current_target()
         compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK, target=target)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+def test_aot_h200_target(tmp_path, monkeypatch):
+    from triton.tools.compile import CompileArgs, compile_kernel
+
+    kernel_path = write_triton_kernels(str(tmp_path), kernel_src, kernel_utils_src)
+    compile = triton.compile
+    targets = []
+
+    def compile_with_target(src, target, options):
+        targets.append(target)
+        compiled = compile(src, target=target, options=options)
+        assert compiled.metadata.target == GPUTarget("cuda", 90, 32)
+        assert ".target sm_90" in compiled.asm["ptx"]
+        return compiled
+
+    monkeypatch.setattr(triton, "compile", compile_with_target)
+    compile_kernel(
+        CompileArgs(
+            path=kernel_path,
+            kernel_name="kernel",
+            target="cuda-90-h200",
+            signature="*fp32, *fp16, *fp16, i32, i32, i32, i32, i32, i32, i32, i32, i32, 16, 16, 16",
+            grid="M/16, N/16, 1",
+            out_path=tmp_path / "matmul",
+        ))
+    assert targets == [GPUTarget("cuda", 90, 32)]

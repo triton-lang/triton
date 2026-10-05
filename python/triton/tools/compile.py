@@ -64,7 +64,8 @@ def main():
     parser.add_argument(
         "--target", "-t", type=str, default=None,
         help="The target to compile towards, in format of '<backend>:<arch>:<warp-size>'; "
-        "e.g., 'cuda:80:32', 'hip:gfx942:64'. Default to None, which means using current machine's GPU target")
+        "e.g., 'cuda:80:32', 'hip:gfx942:64', or 'cuda-90-h200' (equivalent to 'cuda:90:32'). "
+        "Default to None, which means using current machine's GPU target")
     parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
     parser.add_argument("--num-stages", "-ns", type=int, default=3,
                         help="Number of stages (meta-parameter of the kernel)")
@@ -134,8 +135,11 @@ def compile_kernel(args: CompileArgs):
     attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
     kernel.create_binder()
     src = kernel.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
-    target = triton.backends.compiler.GPUTarget(*args.target.split(":")) \
-        if args.target else triton.runtime.driver.active.get_current_target()
+    if args.target == "cuda-90-h200":
+        target = triton.backends.compiler.GPUTarget("cuda", 90, 32)
+    else:
+        target = triton.backends.compiler.GPUTarget(*args.target.split(":")) \
+            if args.target else triton.runtime.driver.active.get_current_target()
     backend = triton.compiler.make_backend(target)
     kwargs = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     options = backend.parse_options(kwargs)

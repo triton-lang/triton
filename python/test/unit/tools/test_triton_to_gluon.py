@@ -36,9 +36,10 @@ def _convert_host_descriptor(desc):
     return convert_host_descriptor(desc)
 
 
-def convert_kernel(kernel, kernel_name, tmp_path):
-    t = current_target()
-    target = TranslatorTarget(f"sm{t.arch}" if t.backend == "cuda" else t.arch)
+def convert_kernel(kernel, kernel_name, tmp_path, target=None):
+    if target is None:
+        t = current_target()
+        target = TranslatorTarget(f"sm{t.arch}" if t.backend == "cuda" else t.arch)
 
     converted = convert_triton_to_gluon([kernel], target=target)
 
@@ -64,8 +65,15 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr):
     tl.store(out_ptr + offsets, x + y)
 
 
-def test_simple_kernel(tmp_path):
-    kernel = convert_kernel(add_kernel, "add_kernel", tmp_path)
+@pytest.mark.parametrize("target", [None, "cuda-90-h200"])
+def test_simple_kernel(tmp_path, target):
+    if target == "cuda-90-h200":
+        if not is_cuda() or not is_hopper_or_newer():
+            pytest.skip("Requires Hopper or newer")
+        target = TranslatorTarget(target)
+        assert target is TranslatorTarget.SM90
+        assert target.helpers_module.endswith(".hopper_helpers")
+    kernel = convert_kernel(add_kernel, "add_kernel", tmp_path, target=target)
 
     n = 1024
     BLOCK = 128

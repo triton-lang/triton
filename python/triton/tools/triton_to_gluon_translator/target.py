@@ -25,6 +25,8 @@ class TranslatorTarget(str, Enum):
 
     @classmethod
     def _missing_(cls, value: object) -> "TranslatorTarget | None":
+        if value == "cuda-90-h200":
+            return cls.SM90
         if value not in cls._value2member_map_:
             return None
         if isinstance(value, str):
