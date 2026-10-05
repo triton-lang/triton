@@ -2917,7 +2917,12 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         out_ref = torch.matmul(a_ref, b_ref)
         torch.testing.assert_close(out, out_ref)
 
-    assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
+    if has_scale:
+        assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
+    else:
+        # Without scales, the non-scaled F8F6F4 instruction must be selected.
+        assert 'v_mfma_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
+        assert 'v_mfma_scale' not in compiled.asm['amdgcn']
     _check_cd_regclass_pins(compiled.asm['llir'], cd_regclass)
 
 
