@@ -139,7 +139,9 @@ runtime events, and metric insertion.
 A backend shipped separately from Triton, for example in its own package, can
 register when its library is loaded instead. It passes the same
 `BackendRegistration` to `proton::registerBackend` before profiling starts, with
-`proton::DeviceType::EXTERNAL` as the device type:
+`proton::DeviceType::EXTERNAL` as the device type. For now there is a single
+`DeviceType::EXTERNAL`, so a process can have only one device type registered
+this way.
 
 ```c++
 __attribute__((constructor)) static void registerMyBackend() {
