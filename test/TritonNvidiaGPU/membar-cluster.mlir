@@ -2,6 +2,33 @@
 
 // -----
 
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Each CTA waits for its own copy before overwriting the destination.
+  // CHECK-LABEL: @tma_payload_generic_store
+  // CHECK: ttng.wait_barrier
+  // CHECK-NEXT: ttg.local_store
+  tt.func @tma_payload_generic_store(%desc: !tt.tensordesc<16x64xf16, #shared>, %value: tensor<16x64xf16, #blocked>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, 2048, %true : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<2xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttg.local_store %value, %mem : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %result = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+}
+
+// -----
+
 #blockedSplitM = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #blockedSplitN = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
@@ -1392,15 +1419,14 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK: cf.cond_br
   // CHECK: ttng.barrier_expect
   // CHECK-NOT: ttng.cluster_barrier
-  // CHECK: ttg.barrier local
-  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
-  // CHECK-NOT: ttng.cluster_barrier
-  // CHECK: ttg.barrier local
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttng.async_tma_copy_global_to_local
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK-NOT: ttng.cluster_barrier
   // CHECK: ttng.wait_barrier
   // CHECK-NOT: ttng.cluster_barrier
-  // CHECK: ttng.tc_gen5_mma
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttng.tc_gen5_mma
   // CHECK: ttng.wait_barrier
   tt.func @example_matmul(%a_desc: !tt.tensordesc<256x16xf16, #sharedA>, %b_desc: !tt.tensordesc<16x64xf16, #sharedB>) {
     %c0 = arith.constant 0 : i32
