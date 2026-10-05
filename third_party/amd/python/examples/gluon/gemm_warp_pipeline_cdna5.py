@@ -70,9 +70,11 @@ from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
 try:
-    from .mxfp_gemm_cdna5 import init_data, torch_gemm_mxfp
+    from .f16_gemm_common_cdna5 import chiplet_transform
+    from .mxfp_gemm_cdna5 import init_data, pack_scale, torch_gemm_mxfp
 except ImportError:
-    from mxfp_gemm_cdna5 import init_data, torch_gemm_mxfp
+    from f16_gemm_common_cdna5 import chiplet_transform
+    from mxfp_gemm_cdna5 import init_data, pack_scale, torch_gemm_mxfp
 
 BF16_BLOCK_K = 128
 NUM_WARPS = 8
@@ -85,15 +87,7 @@ def _get_xcd_swizzled_pids(M, N, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, G
     num_pid_m = gl.cdiv(M, BLOCK_M)
     num_pid_n = gl.cdiv(N, BLOCK_N)
     if NUM_XCDS != 1:
-        pids_per_xcd = (GRID_MN + NUM_XCDS - 1) // NUM_XCDS
-        tall_xcds = GRID_MN % NUM_XCDS
-        tall_xcds = NUM_XCDS if tall_xcds == 0 else tall_xcds
-        xcd = pid % NUM_XCDS
-        local_pid = pid // NUM_XCDS
-        if xcd < tall_xcds:
-            pid = xcd * pids_per_xcd + local_pid
-        else:
-            pid = tall_xcds * pids_per_xcd + (xcd - tall_xcds) * (pids_per_xcd - 1) + local_pid
+        pid = chiplet_transform(pid, GRID_MN, NUM_XCDS)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
@@ -1129,19 +1123,6 @@ def _make_hipblaslt_mxfp8_trig_matrix(rows, k):
     return (data, scales)
 
 
-def _pack_scale(scale, scale_kwidth):
-    """Preshuffle [non-K, K-block] E8M0 scales for scaled-WMMA LDS loads.
-
-    The factor-128 permutation groups the four scale lanes consumed by each
-    WMMA scale fragment. The returned 2D tensor is the global-memory format
-    expected by the scale TDM descriptors in this module.
-    """
-    non_k, k_scale = scale.shape
-    scale = scale.view(non_k // 128, 4, 32, k_scale // scale_kwidth, scale_kwidth)
-    scale = scale.permute(0, 3, 2, 1, 4).contiguous()
-    return scale.view(non_k // 128, k_scale * 128)
-
-
 def make_bf16_case(args):
     if args.M % 1024 or args.N % 1024 or args.K % 128:
         raise ValueError('BF16 requires M/N divisible by 1024 and K by 128')
@@ -1239,7 +1220,7 @@ def make_fp8_mxfp4_case(args):
         reference = torch_gemm_mxfp(a, b, a_scale_obj, b_scale_obj, 32, args.M, args.N, args.K).to(torch.bfloat16)
     a_d = a.contiguous().cuda()
     b_d = b.to_packed_tensor(dim=0).data.T.contiguous().cuda()
-    bs_d = _pack_scale(b_scale_obj.data, 4).cuda()
+    bs_d = pack_scale(b_scale_obj.data).cuda()
     c_d = torch.empty((args.M, args.N), dtype=torch.bfloat16, device='cuda')
     block_m = block_n = 1024
     packed_n = 512
@@ -1359,8 +1340,8 @@ def make_mxfp8_case(args):
         reference = torch_gemm_mxfp(a, b, a_scale_obj, b_scale_obj, 32, args.M, args.N, args.K).to(torch.bfloat16)
     a_d = a.contiguous().cuda()
     b_d = b.T.contiguous().cuda()
-    as_d = (_pack_scale(a_scale_obj.data, 4) if block_k == 256 else a_scale_obj.data.contiguous()).cuda()
-    bs_d = (_pack_scale(b_scale_obj.data, 4) if block_k == 256 else b_scale_obj.data.contiguous()).cuda()
+    as_d = (pack_scale(a_scale_obj.data) if block_k == 256 else a_scale_obj.data.contiguous()).cuda()
+    bs_d = (pack_scale(b_scale_obj.data) if block_k == 256 else b_scale_obj.data.contiguous()).cuda()
     c_d = torch.empty((args.M, args.N), dtype=torch.bfloat16, device='cuda')
     # First derive the per-CTA WMMA ownership, then attach the cluster CGA bases.
     cga = make_cga_layout([cluster, cluster], [cluster, cluster], [0, 1])
@@ -1475,8 +1456,8 @@ def make_mxfp4_case(args):
     reference = None
     if args.check:
         reference = torch_gemm_mxfp(a, b, a_scale_obj, b_scale_obj, 32, args.M, args.N, args.K).to(torch.bfloat16)
-    as_d = _pack_scale(a_scale_obj.data, 4).cuda()
-    bs_d = _pack_scale(b_scale_obj.data, 4).cuda()
+    as_d = pack_scale(a_scale_obj.data).cuda()
+    bs_d = pack_scale(b_scale_obj.data).cuda()
     a_d = a.to_packed_tensor(dim=1).data.contiguous().cuda()
     b_d = b.to_packed_tensor(dim=0).data.T.contiguous().cuda()
     c_d = torch.empty((args.M, args.N), dtype=torch.bfloat16, device='cuda')
