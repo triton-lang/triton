@@ -90,6 +90,15 @@ jobs:
         - {runner: 'MacOS ARM64', runs_on: 'macos-15', target-os: 'macos', arch: 'arm64'}
         - {runner: 'Windows 2022', runs_on: 'windows-2022', target-os: 'windows', arch: 'x64', msvc_arch: 'amd64'}
         - {runner: 'Windows 11 ARM64', runs_on: 'windows-11-arm', target-os: 'windows', arch: 'arm64', msvc_arch: 'arm64'}
+        exclude:
+        # cmake/amd-llvm-info.json has no windows-arm64 entry, so this artifact
+        # is published and then never downloaded. It is not free either: Windows
+        # does not use sccache here, so the job rebuilds LLVM from source every
+        # time, and MSVC has been running out of heap doing it. With fail-fast
+        # that takes down the platforms that are consumed. The llvm package
+        # still builds on this runner, since bootstrap_llvm does list it.
+        - package: amd-codegen
+          config: {runner: 'Windows 11 ARM64', runs_on: 'windows-11-arm', target-os: 'windows', arch: 'arm64', msvc_arch: 'arm64'}
 
     steps:
 
