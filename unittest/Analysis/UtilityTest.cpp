@@ -138,8 +138,8 @@ TEST(Analysis, BufferRegionViewPreservesSubviewProvenance) {
   EXPECT_EQ(joined.views.size(), 2);
 
   std::set<triton::BufferRegion> physicalRegions;
-  for (const triton::BufferRegionView &view : joined.views)
-    physicalRegions.insert(view.region);
+  for (const auto &entry : joined.views)
+    physicalRegions.insert(entry.view.region);
   EXPECT_EQ(physicalRegions.size(), 1);
 }
 
@@ -148,7 +148,7 @@ TEST(Analysis, RegionInfoPreservesDistinctFootprints) {
   using triton::BufferRegionView;
   using triton::RegionInfo;
   struct ConstantHash {
-    size_t operator()(const BufferRegionView &) const { return 0; }
+    size_t operator()(const triton::BufferRegionViewWithHash &) const { return 0; }
   };
   std::unordered_set<triton::BufferRegionViewWithHash, ConstantHash> collided;
   std::set<BufferRegionView> expected;
@@ -402,11 +402,11 @@ TEST(Analysis, BufferRegionViewHashTracksTheImmutableValue) {
   using triton::AddressSet;
   using triton::BufferRegionView;
   using triton::BufferRegionViewWithHash;
-  using Hash = BufferRegionViewWithHash::Hash;
+  using Hash = std::hash<BufferRegionViewWithHash>;
   static_assert(std::is_const_v<decltype(BufferRegionViewWithHash::view)>);
   static_assert(std::is_const_v<decltype(BufferRegionViewWithHash::hash)>);
   static_assert(!std::is_convertible_v<BufferRegionViewWithHash &,
-                                       BufferRegionView &>);
+                                       const BufferRegionView &>);
   BufferRegionView source{
       {0, 72, {{0, AddressSet::fromRange(0, 8)}}}, 5, 7, {5, 100}, 1, 2, 9};
   source.region.ctaAddresses.front().second.insert(AddressSet::fromRange(64, 8));
