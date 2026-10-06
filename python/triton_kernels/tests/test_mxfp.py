@@ -12,18 +12,46 @@ from triton_kernels.numerics_details.mxfp import (
     downcast_to_mxfp,
     downcast_to_mxfp_torch,
     get_max_quant_val,
+    nvfp4_to_mxfp8,
     upcast_from_mxfp,
     upcast_from_mxfp_torch,
 )
 from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_ue8m0_scale
 from triton_kernels.target_info import cuda_capability_geq, is_cuda
-from triton_kernels.tensor import convert_layout, wrap_torch_tensor
-from triton_kernels.tensor_details.layout import StridedLayout
+from triton_kernels.tensor import FP4, convert_layout, wrap_torch_tensor
+from triton_kernels.tensor_details.layout import StridedLayout, BlackwellActMXScaleLayout
 from triton_kernels.testing import assert_close, assert_equal
 
 
 def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
+
+
+@pytest.mark.parametrize("shape", [(0, 128), (17, 160), (2, 73, 256)])
+@pytest.mark.parametrize("swizzled", [False, True])
+def test_nvfp4_to_mxfp8_scale_layout(shape, swizzled, device):
+    if not is_cuda() or not cuda_capability_geq(10, 0):
+        pytest.skip("requires Blackwell")
+    torch.manual_seed(42)
+    values = torch.randint(0, 256, shape[:-1] + (shape[-1] // 2,), device=device, dtype=torch.uint8)
+    scale_shape = shape[:-1] + (shape[-1] // 16,)
+    scale_values = torch.tensor([0, 2**-9, 0.5, 1.125, 448], device=device)
+    scales = scale_values[torch.arange(values.numel() // 8, device=device) % 5].reshape(scale_shape).to(torch.float8_e4m3fn)
+    x = wrap_torch_tensor(values, FP4)
+    scale = wrap_torch_tensor(scales)
+    if swizzled:
+        scale = convert_layout(scale, BlackwellActMXScaleLayout(None))
+    actual, actual_scale = nvfp4_to_mxfp8(x, scale)
+    assert tuple(actual.shape) == shape
+    assert actual_scale.storage.layout == scale.storage.layout
+    if not values.numel():
+        assert actual.numel() == actual_scale.numel() == 0
+        return
+    decoded = upcast_from_mxfp_torch(values, scales, torch.float32, axis=-1)
+    expected, expected_scale = downcast_to_mxfp_torch(decoded, torch.float8_e4m3fn, axis=-1)
+    torch.testing.assert_close(actual.storage.data.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
+    actual_scale = convert_layout(actual_scale, StridedLayout()).storage.data
+    torch.testing.assert_close(actual_scale, expected_scale, rtol=0, atol=0)
 
 
 @triton.jit

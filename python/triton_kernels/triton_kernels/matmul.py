@@ -1,6 +1,6 @@
 # isort: off
 # fmt: off
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import itertools
 import torch
 import triton
@@ -16,11 +16,11 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 # details
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
-from .numerics_details.mxfp import MXFP_BLOCK_SIZE
+from .numerics_details.mxfp import MXFP_BLOCK_SIZE, nvfp4_to_mxfp8
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.tiled import TiledLayout
-from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, SWIZZLE_SIZE_OUTER
+from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout, SWIZZLE_SIZE_OUTER
 from .tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .matmul_details.opt_flags import (
     InapplicableConstraint,
@@ -271,6 +271,10 @@ def matmul(a, b, bias,
     RaggedTensorMetadata instance as a_ragged_metadata. This ensures matching row
     segmentation and padding without comparing metadata tensors on the device.
 
+    On Blackwell, NVFP4 activations with Blackwell-swizzled MXFP4 weights are
+    requantized to MXFP8 before multiplication. This can add rounding error.
+    That path defaults to BF16 output unless out_dtype or c is supplied.
+
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
     When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
@@ -365,6 +369,21 @@ def matmul(a, b, bias,
     assert b_scale is None or b_microblock_size is not None, (
         "precision_config.b_microblock_size is required when precision_config.b_mx_scale is set"
     )
+    if (a.dtype == FP4 and b.dtype == FP4 and a_microblock_size == 16 and b_microblock_size == 32
+            and isinstance(b_scale_layout, BlackwellMXScaleLayout) and is_cuda()
+            and target_info.cuda_capability_geq(10, 0)):
+        # Gather during conversion so the MXFP8 matmul reads contiguous rows.
+        a, a_scale = nvfp4_to_mxfp8(a, a_scale, gather_indx)
+        if gather_indx is not None:
+            if a_tensor_scale is not None and a_tensor_scale.numel() != 1:
+                a_tensor_scale = a_tensor_scale[gather_indx]
+            gather_indx = None
+        a_microblock_size = 32
+        precision_config = replace(
+            precision_config, a_mx_scale=a_scale, a_microblock_size=32,
+            a_mx_tensor_scale=a_tensor_scale,
+            out_dtype=precision_config.out_dtype or (c.dtype if c is not None else torch.bfloat16),
+        )
     if a_microblock_size is not None and b_microblock_size is not None:
         assert a_microblock_size == b_microblock_size, (
             f"Microscaled operands must share a block size. Got {a_microblock_size} and {b_microblock_size}"
