@@ -127,7 +127,8 @@ public:
   // Return the number of blocks along non axis dim.
   unsigned getNonAxisNumBlocks();
   // Return the size of the scratch space needed for scan lowering.
-  unsigned getScratchSizeInBytes();
+  unsigned getScratchSizeInBytes(
+      ReduceOpHelper::GetNumScratchElemsFn numScratchElemsGetter = nullptr);
   // Return the number of elements of the scratch space needed for scan
   // lowering.
   unsigned getScratchSizeInElems();
@@ -143,6 +144,7 @@ public:
   unsigned getAxis() { return scanOp.getAxis(); }
   bool getReverse() { return scanOp.getReverse(); }
   triton::gpu::LinearEncodingAttr getEncoding() { return srcEncoding; }
+  const triton::LinearLayout &getOriginalLayout() { return originalLayout; }
   llvm::ArrayRef<int64_t> getShape() { return srcShape; }
   unsigned getNumOperands() { return scanOp.getNumOperands(); }
   SmallVector<Type> getElementTypes() { return srcElementTypes; }
@@ -150,7 +152,11 @@ public:
   Region &getCombineOp();
 
 private:
+  // Construct the regular scan ordering while preserving CTA ownership.
+  triton::LinearLayout buildScanLayout();
+
   triton::ScanOp scanOp;
+  triton::LinearLayout originalLayout;
   triton::gpu::LinearEncodingAttr srcEncoding;
   Attribute legacyEncoding;
   llvm::ArrayRef<int64_t> srcShape;
@@ -263,6 +269,8 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 // The conversion involves data exchange across threads within a warp, or is
 // explicitly forced to use warp shuffles.
 bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
+bool cvtNeedsSharedMemory(const triton::LinearLayout &src,
+                          const triton::LinearLayout &dst);
 
 // The conversion requires data exchange through shared memory.
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);

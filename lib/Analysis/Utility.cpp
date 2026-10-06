@@ -301,29 +301,23 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
   return reduced;
 }
 
-ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
+ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
+    : scanOp(op), originalLayout(toLinearLayout(op.getInputTypes().front())) {
   auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
   srcShape = firstTy.getShape();
   legacyEncoding = firstTy.getEncoding();
   // Remove broadcasting in the registers
   // We also remove it in the lowering and re-add it when we pack the results
-  auto origLayout = triton::gpu::toLinearLayout(firstTy);
+  if (!isSupported())
+    return;
+  // Main's scan groups require the same element/thread/warp order. Layouts
+  // with a different order are converted before the scan and restored after it.
+  auto origLayout = buildScanLayout();
   auto removeBroadcastRegs = actionRemoveBroadcastedRegs(origLayout);
   origLayout = removeBroadcastRegs.apply(origLayout);
   srcEncoding = triton::gpu::LinearEncodingAttr::get(op.getContext(),
                                                      std::move(origLayout));
   srcElementTypes = op.getElementTypes();
-  // The codegen does not support different element/thread/warp order so
-  // we choose one a priori. We choose that of the blocked encoding.
-  // When we generalise this code to other layouts we'll probably need to
-  // get rid of all this logic and the *Stride auxiliary methods
-  // and replace them by transposes and reshapes on the LinearLayout
-  if (auto blockedEncoding =
-          dyn_cast<triton::gpu::BlockedEncodingAttr>(legacyEncoding)) {
-    order = llvm::to_vector(blockedEncoding.getOrder());
-  } else {
-    order = srcEncoding.getOrder();
-  }
 
   for (const auto &t : op.getInputTypes()) {
     if (t.getShape() != srcShape) {
@@ -333,6 +327,37 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
       op.emitError() << "encoding mismatch";
     }
   }
+}
+
+LinearLayout ScanLoweringHelper::buildScanLayout() {
+  if (auto blocked = dyn_cast<BlockedEncodingAttr>(legacyEncoding)) {
+    order = llvm::to_vector(blocked.getOrder());
+    return originalLayout;
+  }
+  auto *ctx = scanOp.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto layout = originalLayout.removeZeroBasesAlongDim(kReg);
+  auto encoding = GenericLinearEncodingAttr::get(ctx, layout);
+  order = llvm::to_vector(encoding.getOrder());
+  // Preserve the physical thread count, including replicated lanes and warps.
+  // A swizzled warp basis can move in several dimensions; the conversion will
+  // redistribute it into the regular ordering used by the scan.
+  auto counts = [&](StringRef name) {
+    SmallVector<unsigned> result(srcShape.size(), 1);
+    for (const auto &basis :
+         layout.getBases().lookup(StringAttr::get(ctx, name))) {
+      auto it = llvm::find_if(basis, [](int32_t x) { return x != 0; });
+      unsigned dim = it == basis.end() ? order.front() : it - basis.begin();
+      result[dim] *= 2;
+    }
+    return result;
+  };
+  auto ctaLayout =
+      identityStandardND(kReg, encoding.getContigPerThread(), order) *
+      identityStandardND(StringAttr::get(ctx, "lane"), counts("lane"), order) *
+      identityStandardND(StringAttr::get(ctx, "warp"), counts("warp"), order);
+  return combineCtaCgaWithShape(std::move(ctaLayout), encoding.getCGALayout(),
+                                srcShape);
 }
 
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
@@ -396,12 +421,11 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
 }
 
 bool ScanLoweringHelper::isSupported() {
-  // TODO: Support the following cases:
-  // 1. Scan on non-blocking encodings
-  if (!isa<BlockedEncodingAttr>(legacyEncoding))
-    return false;
   // Partial results are only combined within each CTA.
-  return getCTASplitNum(srcEncoding)[getAxis()] == 1;
+  auto axis =
+      StringAttr::get(scanOp.getContext(), "dim" + std::to_string(getAxis()));
+  auto block = StringAttr::get(scanOp.getContext(), "block");
+  return originalLayout.sublayoutIsZero({block}, {axis});
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInElems() {
@@ -413,19 +437,38 @@ unsigned ScanLoweringHelper::getScratchSizeInElems() {
   return numElements;
 }
 
-unsigned ScanLoweringHelper::getScratchSizeInBytes() {
+unsigned ScanLoweringHelper::getScratchSizeInBytes(
+    ReduceOpHelper::GetNumScratchElemsFn numScratchElemsGetter) {
   // Lowering will fail later if the layout is not supported.
   if (!isSupported())
     return 0;
 
   unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
-  if (axisNumWarps == 1)
-    return 0;
   unsigned elementSizeInBytes = 0;
   for (const auto &ty : srcElementTypes) {
     elementSizeInBytes += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
   }
-  return elementSizeInBytes * getScratchSizeInElems();
+  unsigned bytes =
+      axisNumWarps == 1 ? 0 : elementSizeInBytes * getScratchSizeInElems();
+  auto &scanLayout = srcEncoding.getLinearLayout();
+  // Conversions and the scan reuse one allocation. Each operand conversion
+  // finishes with a barrier before another operation can overwrite scratch.
+  if (originalLayout.removeZeroBasesAlongDim(
+          StringAttr::get(scanOp.getContext(), "register")) == scanLayout)
+    return bytes;
+  for (auto [src, dst] : {std::pair{originalLayout, scanLayout},
+                          std::pair{scanLayout, originalLayout}}) {
+    if (!cvtNeedsSharedMemory(src, dst))
+      continue;
+    for (Type type : srcElementTypes) {
+      unsigned bitwidth = std::max(8, getIntOrFloatOrPtrBitWidth(type));
+      unsigned elems = numScratchElemsGetter
+                           ? numScratchElemsGetter(src, dst, bitwidth)
+                           : getNumScratchElemsSwizzledCvt(src, dst, bitwidth);
+      bytes = std::max(bytes, elems * (bitwidth / 8));
+    }
+  }
+  return bytes;
 }
 
 static void computeTranspositionSelectors(
@@ -1128,16 +1171,13 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   return outDims.empty() || ArrayRef(outDims) == ArrayRef({kRegister});
 }
 
-bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
-  bool forceWarpShuffle = op.getForceWarpShuffle();
-  auto srcTy = op.getSrc().getType();
-  auto dstTy = op.getType();
-  if (!forceWarpShuffle && cvtReordersRegisters(srcTy, dstTy))
-    return false;
-  MLIRContext *ctx = srcTy.getContext();
+static bool cvtNeedsWarpShuffle(const LinearLayout &src,
+                                const LinearLayout &dst,
+                                bool forceWarpShuffle) {
+  MLIRContext *ctx = src.getInDimNames().begin()->getContext();
   auto kRegister = StringAttr::get(ctx, "register");
-  auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
-  auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+  auto srcLayout = src.removeZeroBasesAlongDim(kRegister);
+  auto dstLayout = dst.removeZeroBasesAlongDim(kRegister);
   bool canShuffle = isPermutationMatrixLayout(srcLayout) &&
                     isPermutationMatrixLayout(dstLayout);
   if (canShuffle) {
@@ -1155,6 +1195,27 @@ bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
          (canShuffle &&
           getWarpLayoutConvertDecomposition(srcLayout, dstLayout, 32)
                   .mixedTranspositions.size() < 2);
+}
+
+bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
+  bool forceWarpShuffle = op.getForceWarpShuffle();
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
+  if (!forceWarpShuffle && cvtReordersRegisters(srcTy, dstTy))
+    return false;
+  return cvtNeedsWarpShuffle(toLinearLayout(srcTy), toLinearLayout(dstTy),
+                             forceWarpShuffle);
+}
+
+bool cvtNeedsSharedMemory(const LinearLayout &src, const LinearLayout &dst) {
+  auto *ctx = src.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto conversion = minimalCvtLayout(src.removeZeroBasesAlongDim(kReg),
+                                     dst.removeZeroBasesAlongDim(kReg));
+  auto dims = llvm::to_vector(conversion.getOutDimNames());
+  if (dims.empty() || ArrayRef(dims) == ArrayRef({kReg}))
+    return false;
+  return !cvtNeedsWarpShuffle(src, dst, /*forceWarpShuffle=*/false);
 }
 
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op) {

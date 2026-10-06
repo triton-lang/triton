@@ -33,7 +33,7 @@ unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
 unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
                                             TargetInfoBase &targetInfo) {
 
-  if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+  if (isa<ReduceOp, ScanOp>(op)) {
     ReduceOpHelper::GetNumScratchElemsFn AMDGetNumScratchElemsFn =
         [&targetInfo](const triton::LinearLayout &src,
                       const triton::LinearLayout &dst, unsigned bitwidth) {
@@ -44,8 +44,11 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
           return getNumScratchElemsSwizzledCvt(src, dst, bitwidth, numBanks,
                                                srcTile, dstTile);
         };
-    return ReduceOpHelper(reduceOp).getScratchSizeInBytes(
-        AMDGetNumScratchElemsFn);
+    if (auto reduceOp = dyn_cast<ReduceOp>(op))
+      return ReduceOpHelper(reduceOp).getScratchSizeInBytes(
+          AMDGetNumScratchElemsFn);
+    return ScanLoweringHelper(cast<ScanOp>(op))
+        .getScratchSizeInBytes(AMDGetNumScratchElemsFn);
   }
 
   if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {

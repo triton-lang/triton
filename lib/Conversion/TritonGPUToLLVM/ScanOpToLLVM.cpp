@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
 
@@ -306,7 +307,9 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {
       auto laneValue = srcValues[srcIndex - i * elementStride];
-      laneValue = accumulate(helper, rewriter, lastElement, laneValue);
+      Value pred =
+          axisBlockId == 0 ? b.xor_(maskFirstThread, b.true_val()) : Value{};
+      laneValue = accumulate(helper, rewriter, lastElement, laneValue, pred);
       if (axisBlockId == 0) {
         for (unsigned j = 0; j < helper.getNumOperands(); ++j) {
           // For the first warp and first chunk we don't have anything to
@@ -347,6 +350,10 @@ public:
 
 private:
   const TargetInfoBase &targetInfo;
+  void convertScanValues(triton::ScanOp op,
+                         SmallVector<SmallVector<Value>> &values,
+                         Attribute srcEncoding, Attribute dstEncoding,
+                         ConversionPatternRewriter &rewriter) const;
   std::tuple<SmallVector<Value>, Value>
   getMultiDimLaneId(ConversionPatternRewriter &rewriter,
                     ScanLoweringHelper &helper, Value laneId) const;
@@ -361,6 +368,58 @@ private:
                              ConversionPatternRewriter &rewriter,
                              const TargetInfoBase &targetInfo) const;
 };
+
+void ScanOpConversion::convertScanValues(
+    triton::ScanOp op, SmallVector<SmallVector<Value>> &values,
+    Attribute srcEncoding, Attribute dstEncoding,
+    ConversionPatternRewriter &rewriter) const {
+  auto shape = op.getInputTypes().front().getShape();
+  auto srcLayout = triton::gpu::toLinearLayout(shape, srcEncoding);
+  auto dstLayout = triton::gpu::toLinearLayout(shape, dstEncoding);
+  auto kReg = rewriter.getStringAttr("register");
+  if (srcLayout.removeZeroBasesAlongDim(kReg) ==
+      dstLayout.removeZeroBasesAlongDim(kReg))
+    return;
+  bool shared = cvtNeedsSharedMemory(srcLayout, dstLayout);
+  SmallVector<SmallVector<Value>> converted;
+  for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+    auto srcTy =
+        RankedTensorType::get(shape, op.getElementTypes()[i], srcEncoding);
+    auto dstTy =
+        RankedTensorType::get(shape, op.getElementTypes()[i], dstEncoding);
+    SmallVector<Value> operand;
+    for (auto &row : values)
+      operand.push_back(row[i]);
+    Value packed = packUniqueTensorElements(op.getLoc(), getTypeConverter(),
+                                            operand, rewriter, srcTy);
+    auto input =
+        UnrealizedConversionCastOp::create(rewriter, op.getLoc(), srcTy, packed)
+            .getResult(0);
+    auto cvt = triton::gpu::ConvertLayoutOp::create(rewriter, op.getLoc(),
+                                                    dstTy, input);
+    if (shared) {
+      auto offset = op->getAttr("allocation.offset");
+      assert(offset && "expected scan conversion scratch allocation");
+      cvt->setAttr("allocation.offset", offset);
+      triton::nvidia_gpu::copyClusterBarrierMbarOffset(op, cvt);
+    }
+    auto output = UnrealizedConversionCastOp::create(
+                      rewriter, op.getLoc(),
+                      getTypeConverter()->convertType(dstTy), cvt.getResult())
+                      .getResult(0);
+    auto unpacked = unpackUniqueTensorElements(op.getLoc(), output, rewriter);
+    converted.resize(unpacked.size());
+    for (auto [r, value] : llvm::enumerate(unpacked))
+      converted[r].push_back(value);
+    // A conversion's last loads must finish before the next operand or the
+    // scan reuses this allocation. Register/shuffle conversions need no
+    // barrier.
+    if (shared)
+      TritonLLVMOpBuilder(op.getLoc(), rewriter)
+          .barrier(triton::gpu::AddrSpace::Local);
+  }
+  values = std::move(converted);
+}
 
 std::tuple<SmallVector<Value>, Value>
 ScanOpConversion::getMultiDimLaneId(ConversionPatternRewriter &rewriter,
@@ -481,6 +540,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   unsigned nElems = triton::gpu::getUniqueElemsPerThread(
       cast<RankedTensorType>(op.getOperands()[0].getType()));
   auto srcValues = unpackInputs(loc, op, adaptor, rewriter, nElems);
+  auto originalEncoding = op.getInputTypes().front().getEncoding();
+  convertScanValues(op, srcValues, originalEncoding, helper.getEncoding(),
+                    rewriter);
 
   // For the reverse option we apply flip(scan(flip()) in
   // order to avoid having a separate code path in the reverse direction.
@@ -554,6 +616,14 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     srcValues =
         flipSrcValues(loc, op, rewriter, targetInfo, srcValues, iWarpSize);
   }
+
+  // All readers of scan scratch finish before the result conversion reuses it.
+  if (axisNumWarps > 1 &&
+      cvtNeedsSharedMemory(helper.getEncoding().getLinearLayout(),
+                           helper.getOriginalLayout()))
+    b.barrier(triton::gpu::AddrSpace::Local);
+  convertScanValues(op, srcValues, helper.getEncoding(), originalEncoding,
+                    rewriter);
 
   auto valuesTransposed = transpose(srcValues);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {

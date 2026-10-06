@@ -311,3 +311,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %0 : tensor<256xi8, #dst>
   }
 }
+
+// -----
+
+#scan_linear = #ttg.linear<{register = [[1, 0], [2, 0], [0, 1], [0, 2]], lane = [[4, 0], [8, 0], [0, 4], [0, 8], [0, 16], [0, 0]], warp = [[16, 0], [32, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @scan_interleaved_linear
+  // CHECK: rocdl.s.barrier
+  // CHECK: llvm.fadd
+  // CHECK: llvm.store
+  tt.func @scan_interleaved_linear(%input: tensor<64x32xf32, #scan_linear>, %output: tensor<64x32x!tt.ptr<f32>, #scan_linear>) {
+    %0 = "tt.scan"(%input) <{axis = 0 : i32, reverse = false}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.scan.return %sum : f32
+    }) : (tensor<64x32xf32, #scan_linear>) -> tensor<64x32xf32, #scan_linear>
+    tt.store %output, %0 : tensor<64x32x!tt.ptr<f32>, #scan_linear>
+    tt.return
+  }
+}
