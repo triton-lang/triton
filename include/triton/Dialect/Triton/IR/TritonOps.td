@@ -554,7 +554,8 @@ def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
 }
 
 def TT_ReshapeOp : TT_Op<"reshape", [Pure,
-                                     SameOperandsAndResultElementType]> {
+                                     SameOperandsAndResultElementType,
+                                     EfficientLayoutOpInterface]> {
     let summary = "reinterpret a tensor to a different shape. It may change elements order if the attribute is set.";
     let description = [{
         reinterpret a tensor to a different shape.
@@ -854,6 +855,11 @@ def TT_ReduceOp: TT_Op<"reduce",
       // Returns the CombineOp iff this ReduceOp's region contains only
       // one CombineOp other than the return, or nullptr if not applicable.
       ::mlir::Operation *getSingleCombiner();
+
+      // Proves that exchanging the two input tuples preserves every result,
+      // comparing pure expression DAGs modulo commutative operand order.
+      // Returns false when the proof fails or the region is unsupported.
+      bool isCommutative();
     }];
 }
 
@@ -1024,7 +1030,8 @@ def TT_HistogramOp : TT_Op<"histogram", [Pure,
 // Gather Op
 //
 def TT_GatherOp : TT_Op<"gather", [Pure,
-    DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+    DeclareOpInterfaceMethods<InferTypeOpInterface>,
+    EfficientLayoutOpInterface]> {
   let summary = "local gather operation";
   let description = [{
     Gather elements from the input tensor using the indices tensor along a

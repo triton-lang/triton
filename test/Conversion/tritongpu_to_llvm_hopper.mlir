@@ -199,14 +199,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: test_fp8_to_f16_conversion
-  tt.func @test_fp8_to_f16_conversion(
+  tt.func private @test_fp8_to_f16_conversion(
     %in0: tensor<128xf8E5M2, #blocked>, %in1: tensor<128xf8E4M3FN, #blocked>,
-    %in2: tensor<128xf16, #blocked>, %in3: tensor<128xf32, #blocked>) {
+    %in2: tensor<128xf16, #blocked>, %in3: tensor<128xf32, #blocked>) -> (
+        tensor<128xf16, #blocked>,
+        tensor<128xf16, #blocked>,
+        tensor<128xbf16, #blocked>,
+        tensor<128xf8E5M2, #blocked>,
+        tensor<128xf8E4M3FN, #blocked>,
+        tensor<128xf8E5M2, #blocked>,
+        tensor<128xf8E4M3FN, #blocked>) {
     // CHECK-COUNT-2: cvt.rn.f16x2.e5m2x2 {{.*}} "=r,h" %{{.*}} : (i16) -> vector<2xf16>
     %out0 = tt.fp_to_fp %in0 : tensor<128xf8E5M2, #blocked> -> tensor<128xf16, #blocked>
     // CHECK-COUNT-2: cvt.rn.f16x2.e4m3x2 {{.*}} "=r,h" %{{.*}} : (i16) -> vector<2xf16>
     %out1 = tt.fp_to_fp %in1 : tensor<128xf8E4M3FN, #blocked> -> tensor<128xf16, #blocked>
-    // CHECK-COUNT-2: mul.rn.bf16x2
+    // CHECK-COUNT-2: cvt.rn.f16x2.e5m2x2 a, $1;
+    // CHECK-SAME: cvt.bf16.f16 b0, a0;
+    // CHECK-SAME: cvt.bf16.f16 b1, a1;
+    // CHECK-SAME: "=r,h"
     %out2 = tt.fp_to_fp %in0 : tensor<128xf8E5M2, #blocked> -> tensor<128xbf16, #blocked>
 
     // CHECK-COUNT-2: cvt.rn.satfinite.e5m2x2.f16x2 {{.*}} "=h,r" %{{.*}} : (i32) -> vector<2xi8>
@@ -218,7 +228,14 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %out5 = tt.fp_to_fp %in3, rounding = rtne : tensor<128xf32, #blocked> -> tensor<128xf8E5M2, #blocked>
     // CHECK-COUNT-2: cvt.rn.satfinite.e4m3x2.f32 {{.*}} "=h,r,r" %{{.*}}, %{{.*}} : (i32, i32) -> vector<2xi8>
     %out6 = tt.fp_to_fp %in3, rounding = rtne : tensor<128xf32, #blocked> -> tensor<128xf8E4M3FN, #blocked>
-    tt.return
+    tt.return %out0, %out1, %out2, %out3, %out4, %out5, %out6 :
+        tensor<128xf16, #blocked>,
+        tensor<128xf16, #blocked>,
+        tensor<128xbf16, #blocked>,
+        tensor<128xf8E5M2, #blocked>,
+        tensor<128xf8E4M3FN, #blocked>,
+        tensor<128xf8E5M2, #blocked>,
+        tensor<128xf8E4M3FN, #blocked>
   }
 }
 
@@ -314,7 +331,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 16]}>
 // CHECK-LABEL: convert_mma_to_blocked
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @convert_mma_to_blocked(%a: tensor<128x256xf16, #mma>) {
+  tt.func private @convert_mma_to_blocked(%a: tensor<128x256xf16, #mma>) -> tensor<128x256xf16, #blocked> {
     // CHECK-COUNT-8: llvm.store
     //          CHECK: nvvm.barrier
     // CHECK-COUNT-8: nvvm.ldmatrix
@@ -323,7 +340,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     //          CHECK: nvvm.barrier
     // CHECK-COUNT-8: nvvm.ldmatrix
     %c = ttg.convert_layout %a : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
-    tt.return
+    tt.return %c : tensor<128x256xf16, #blocked>
   }
 }
 
@@ -332,7 +349,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @convert_mma_to_blocked(%a: tensor<128x64xbf16, #linear>) {
+  // CHECK-LABEL: convert_linear_to_blocked
+  tt.func private @convert_linear_to_blocked(%a: tensor<128x64xbf16, #linear>) -> tensor<128x64xbf16, #blocked> {
     // CHECK: llvm.store {{.*}} : vector<4xi32>
     // CHECK: nvvm.barrier
     // CHECK: llvm.load {{.*}} -> vector<4xi32>
@@ -351,7 +369,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     // CHECK-NOT: llvm.store
     // CHECK-NOT: llvm.load
     %b = ttg.convert_layout %a: tensor<128x64xbf16, #linear> -> tensor<128x64xbf16, #blocked>
-    tt.return
+    tt.return %b : tensor<128x64xbf16, #blocked>
   }
 }
 
@@ -592,12 +610,12 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @fp8_const(%arg0: tensor<1024xi1, #blocked>, %arg1: tensor<1024xf8E4M3FNUZ, #blocked>) {
+  tt.func private @fp8_const(%arg0: tensor<1024xi1, #blocked>, %arg1: tensor<1024xf8E4M3FNUZ, #blocked>) -> tensor<1024xf8E4M3FNUZ, #blocked> {
     // CHECK-LABEL: @fp8_const
-    // CHECK: llvm.mlir.constant(0.000000e+00 : f8E4M3FNUZ) : i8
+    // CHECK-DAG: llvm.mlir.constant(0.000000e+00 : f8E4M3FNUZ) : i8
     %cst = arith.constant dense<0.000000e+00> : tensor<1024xf8E4M3FNUZ, #blocked>
     %a = arith.select %arg0, %arg1, %cst : tensor<1024xi1, #blocked>, tensor<1024xf8E4M3FNUZ, #blocked>
-    tt.return
+    tt.return %a : tensor<1024xf8E4M3FNUZ, #blocked>
   }
 }
 
@@ -645,9 +663,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: test_fp8_to_fp16_dot_operand
   // CHECK-COUNT-16: cvt.rn.f16x2.e5m2x2
-  tt.func @test_fp8_to_fp16_dot_operand(%arg: tensor<128x32xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>) {
+  tt.func private @test_fp8_to_fp16_dot_operand(%arg: tensor<128x32xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>) -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> {
     %r = tt.fp_to_fp %arg : tensor<128x32xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-    tt.return
+    tt.return %r : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
   }
 }
 
@@ -699,31 +717,6 @@ tt.func @warpgroup_dot_wait_2_inputs(%arg0: tensor<128xf32, #blocked>, %arg1: te
   // CHECK-NOT: nvvm.barrier
   // CHECK: llvm.return
   ttng.warp_group_dot_wait %arg0, %arg1 {pendings = 0 : i32} : tensor<128xf32, #blocked>, tensor<128xf32, #blocked>
-  tt.return
-}
-
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
-
-module attributes {"ttg.target" = "cuda:90", "ttg.num-warps" = 8 : i32} {
-
-// CHECK-LABEL: @warpgroup_dot_wait_synchronizes_warpgroups
-tt.func @warpgroup_dot_wait_synchronizes_warpgroups(%arg0: tensor<256xf32, #blocked>) {
-  // CHECK: nvg.wgmma_wait_group
-  // CHECK-NEXT: nvvm.barrier
-  ttng.warp_group_dot_wait %arg0 {pendings = 0 : i32} : tensor<256xf32, #blocked>
-  tt.return
-}
-
-// CHECK-LABEL: @warpgroup_dot_wait_local_does_not_synchronize_warpgroups
-tt.func @warpgroup_dot_wait_local_does_not_synchronize_warpgroups(%arg0: tensor<256xf32, #blocked>) {
-  // CHECK: nvg.wgmma_wait_group
-  // CHECK-NOT: nvvm.barrier
-  // CHECK: llvm.return
-  ttng.warp_group_dot_wait %arg0 {pendings = 0 : i32, warpGroupLocal} : tensor<256xf32, #blocked>
   tt.return
 }
 

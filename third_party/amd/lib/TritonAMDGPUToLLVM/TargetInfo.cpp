@@ -481,7 +481,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   if (reduceLaneIdMask != (getWarpSize() - 1))
     return false;
   // DPP warp reduce requires gfx90a+ (CDNA2+) or gfx11+ (RDNA3+).
-  // Pre-CDNA2 GFX9 (gfx906/gfx908) and GFX10 (RDNA1/2) are excluded.
+  // Pre-CDNA2 GFX9 (gfx906/gfx908) is excluded.
   auto v = getIsaVersion();
   if (!((v.Major == 9 && (v.Minor > 0 || v.Stepping >= 0xa)) || v.Major >= 11))
     return false;
@@ -805,6 +805,10 @@ bool TargetInfo::supportsMultiCTALaunch() const {
   return targetFeatures.supportsMultiCTALaunch();
 }
 
+bool TargetInfo::supportsMulticast() const {
+  return targetFeatures.supportsMulticast();
+}
+
 unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
   return targetFeatures.getMaxMulticastMaskPopcount();
 }
@@ -851,6 +855,14 @@ bool TargetInfo::supportsCvtPkScalePk8() const {
   return targetFeatures.supportsCvtPkScalePk8();
 }
 
+bool TargetInfo::supportsCvtPkScalePk8Upcast() const {
+  return targetFeatures.supportsCvtPkScalePk8Upcast();
+}
+
+bool TargetInfo::supportsCvtPkScalePk8Block16() const {
+  return targetFeatures.supportsCvtPkScalePk8Block16();
+}
+
 bool TargetInfo::supportsHwScaledUpcast() const {
   return targetFeatures.supportsHwScaledUpcast();
 }
@@ -863,11 +875,14 @@ bool TargetInfo::supportDppBroadcast() const {
   return targetFeatures.supportDppBroadcast();
 }
 
+bool TargetInfo::isGFX1250Strict() const {
+  return targetFeatures.isGFX1250Strict();
+}
+
 std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
 TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA3:
-  case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
     if (vecBitwidth == 128)

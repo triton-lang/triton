@@ -29,6 +29,7 @@ namespace mlir {
 
 namespace {
 using triton::amdgpu::ISAFamily;
+using triton::amdgpu::kWmmaRestrictedInstsFeature;
 using triton::amdgpu::TargetFeatures;
 
 constexpr char AttrDecomposedDotScaledSource[] =
@@ -338,8 +339,9 @@ selectMatrixCoreOperandTypes(tt::DotOp dot,
   return optTypes;
 }
 
-OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
-                                            tt::DotOp dot, int version) {
+OperandTypesVector
+getOperandTypesForWmmaOp(PatternRewriter &rewriter, tt::DotOp dot, int version,
+                         ArrayRef<StringRef> unsupportedFeatures) {
   Type f16 = rewriter.getF16Type();
   Type f32 = rewriter.getF32Type();
   Type bf16 = rewriter.getBF16Type();
@@ -375,6 +377,13 @@ OperandTypesVector getOperandTypesForWmmaOp(PatternRewriter &rewriter,
         // clang-format on
     });
   }
+  unsigned inputKDim = dot.getA().getType().getShape().back();
+  llvm::erase_if(applicableTypes, [&](const OperandTypesVector &types) {
+    auto intrinsic =
+        WmmaIntrinsic::selectFor(version, 16, 16, inputKDim, types[0], types[1],
+                                 types[2], unsupportedFeatures);
+    return failed(intrinsic);
+  });
   return selectMatrixCoreOperandTypes(dot, applicableTypes);
 }
 
@@ -838,6 +847,21 @@ public:
     return *resultType;
   }
 
+  // Scaled upcasts convert `groupSize` elements along K at a time, so those
+  // elements have to be consecutive in registers within a thread.
+  Attribute getPackedScaledUpcastEncoding(RankedTensorType type, int32_t kDim,
+                                          unsigned groupSize) const {
+    auto blocked = cast<ttg::BlockedEncodingAttr>(type.getEncoding());
+    SmallVector<unsigned> sizePerThread(blocked.getSizePerThread());
+    sizePerThread[kDim] = std::max(sizePerThread[kDim], groupSize);
+    SmallVector<unsigned> order(blocked.getOrder());
+    llvm::erase(order, kDim);
+    order.insert(order.begin(), kDim);
+    return ttg::BlockedEncodingAttr::get(
+        type.getContext(), sizePerThread, blocked.getThreadsPerWarp(),
+        blocked.getWarpsPerCTA(), order, ttg::getCGALayout(blocked));
+  }
+
   TensorValue scaleArg(PatternRewriter &rewriter, triton::DotScaledOp dotOp,
                        int opIdx, FloatType computeType) const override {
     TensorValue v = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
@@ -862,12 +886,20 @@ public:
     auto loc = dotOp.getLoc();
     bool isFp4 = (elemType == ScaleDotElemType::E2M1);
 
-    RankedTensorType resultType =
-        getScaledUpcastResultType(vType, computeType, kDim, isFp4, loc);
+    unsigned groupSize =
+        isFp4 ? 8 : (targetFeatures.supportsCvtPkScalePk8() ? 8 : 4);
 
-    // Mark scale to simplify pattern matching during deducing TilesPerWarp
-    scale.getDefiningOp()->setAttr(AttrDecomposedDotScaledSource,
-                                   BoolAttr::get(rewriter.getContext(), true));
+    Attribute inputEncoding = getPackedScaledUpcastEncoding(
+        vType, kDim, isFp4 ? groupSize / 2 : groupSize);
+    RankedTensorType resultType = getScaledUpcastResultType(
+        vType.cloneWithEncoding(inputEncoding), computeType, kDim, isFp4, loc);
+    v = cast<TensorValue>(convertAndCastTensor(rewriter, v, inputEncoding,
+                                               vType.getElementType()));
+
+    if (Operation *scaleOp = scale.getDefiningOp()) {
+      scaleOp->setAttr(AttrDecomposedDotScaledSource,
+                       BoolAttr::get(rewriter.getContext(), true));
+    }
 
     Value reshapeScale;
     if (targetFeatures.supportsCvtPkScalePk8()) {
@@ -1129,11 +1161,14 @@ public:
 class ScaledBlockedToScaledWMMAF8F6F4 final
     : public OpRewritePattern<triton::DotScaledOp> {
   int wmmaVersion;
+  SmallVector<StringRef> unsupportedFeatures;
 
 public:
   ScaledBlockedToScaledWMMAF8F6F4(MLIRContext *context, int wmmaVersion,
+                                  ArrayRef<StringRef> unsupportedFeatures,
                                   PatternBenefit benefit = 1)
-      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion) {}
+      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion),
+        unsupportedFeatures(unsupportedFeatures) {}
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -1142,6 +1177,11 @@ public:
     if (wmmaVersion != 3) {
       return rewriter.notifyMatchFailure(
           dotOp, "F8F6F4 scaled dot is only natively supported on gfx1250");
+    }
+    if (llvm::is_contained(unsupportedFeatures, kWmmaRestrictedInstsFeature)) {
+      return rewriter.notifyMatchFailure(
+          dotOp, "scaled wmma instructions are not supported on this "
+                 "architecture");
     }
 
     RankedTensorType oldRetType = dotOp.getType();
@@ -1397,18 +1437,19 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
-FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
-                                               RankedTensorType cType,
-                                               Type aElemType, Type bElemType,
-                                               Type cElemType, int inputKSize) {
+FailureOr<WmmaIntrinsic>
+chooseWmmaInstruction(Location loc, int wmmaVersion, RankedTensorType cType,
+                      Type aElemType, Type bElemType, Type cElemType,
+                      int inputKSize, ArrayRef<StringRef> unsupportedFeatures) {
   // number of matrix elements along k dim per one WMMA instruction
   unsigned kDim = 0;
 
   unsigned mDim = 16;
   unsigned nDim = 16;
 
-  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::selectFor(
-      wmmaVersion, mDim, nDim, inputKSize, aElemType, bElemType, cElemType);
+  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic =
+      WmmaIntrinsic::selectFor(wmmaVersion, mDim, nDim, inputKSize, aElemType,
+                               bElemType, cElemType, unsupportedFeatures);
   if (failed(maybeWmmaIntrinsic))
     return emitError(loc, "no matching matrix core intrinsic ")
            << "for wmma version " << wmmaVersion << " with instruction shape ["
@@ -1423,22 +1464,27 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
   return maybeWmmaIntrinsic;
 }
 
-FailureOr<WmmaIntrinsic> chooseWmmaInstruction(tt::DotOp dot,
-                                               OperandTypesVector operandTypes,
-                                               int wmmaVersion) {
+FailureOr<WmmaIntrinsic>
+chooseWmmaInstruction(tt::DotOp dot, OperandTypesVector operandTypes,
+                      int wmmaVersion,
+                      ArrayRef<StringRef> unsupportedFeatures) {
 
   return chooseWmmaInstruction(
       dot.getLoc(), wmmaVersion, dot.getC().getType(), operandTypes[0],
-      operandTypes[1], operandTypes[2], dot.getA().getType().getShape().back());
+      operandTypes[1], operandTypes[2], dot.getA().getType().getShape().back(),
+      unsupportedFeatures);
 }
 
 class BlockedToWMMA : public OpRewritePattern<tt::DotOp> {
   int wmmaVersion;
+  SmallVector<StringRef> unsupportedFeatures;
 
 public:
   BlockedToWMMA(MLIRContext *context, int wmmaVersion, int nonKDim,
+                ArrayRef<StringRef> unsupportedFeatures,
                 PatternBenefit benefit = 1)
-      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion) {}
+      : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion),
+        unsupportedFeatures(unsupportedFeatures) {}
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -1460,7 +1506,8 @@ public:
     auto bShape = oldBType.getShape();
 
     // get operand types
-    auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp, wmmaVersion);
+    auto operandTypes = getOperandTypesForWmmaOp(rewriter, dotOp, wmmaVersion,
+                                                 unsupportedFeatures);
     if (operandTypes.empty())
       return rewriter.notifyMatchFailure(
           dotOp, "failed to get operands types for wmma op");
@@ -1471,8 +1518,8 @@ public:
                                          "Skipping WMMA for dot op with K=1");
     }
     // check shape
-    FailureOr<WmmaIntrinsic> wmmaInstr =
-        chooseWmmaInstruction(dotOp, operandTypes, wmmaVersion);
+    FailureOr<WmmaIntrinsic> wmmaInstr = chooseWmmaInstruction(
+        dotOp, operandTypes, wmmaVersion, unsupportedFeatures);
     if (failed(wmmaInstr)) {
       return rewriter.notifyMatchFailure(
           dotOp, "Unable to choose WMMA intrinsic for dot operation.");
@@ -1531,7 +1578,7 @@ public:
     // kWidth is always equals to kBase for WMMA v1/2
     auto kWidth = kBase;
     if (wmmaVersion == 3) {
-      const bool isF32 = oldAType.getElementType().isF32();
+      const bool isF32 = operandTypes[0].isF32();
       // kBase always consits of several groups of 8 elments except F32 case
       kWidth = isF32 ? 2 : 8;
     }
@@ -1755,13 +1802,16 @@ struct TritonAMDGPUAccelerateMatmulPass
     TargetFeatures targetFeatures{llvm::StringRef(gfxArch)};
     auto isaFamily = targetFeatures.getISAFamily();
     unsigned wmmaVersion = getWmmaVersion(isaFamily);
+    ArrayRef<StringRef> unsupportedWmmaFeatures =
+        targetFeatures.getUnsupportedWmmaFeatures();
     switch (isaFamily) {
     case ISAFamily::GFX1250:
-      mfmaPatterns.add<ScaledBlockedToScaledWMMAF8F6F4>(context, wmmaVersion,
-                                                        /*benefit=*/4);
+      mfmaPatterns.add<ScaledBlockedToScaledWMMAF8F6F4>(
+          context, wmmaVersion, unsupportedWmmaFeatures, /*benefit=*/4);
       mfmaPatterns.add<::DecomposeAMDScaledBlocked>(context, targetFeatures,
                                                     /*benefit=*/3);
-      mfmaPatterns.add<BlockedToWMMA>(context, wmmaVersion, 16, /*benefit=*/2);
+      mfmaPatterns.add<BlockedToWMMA>(context, wmmaVersion, 16,
+                                      unsupportedWmmaFeatures, /*benefit=*/2);
       break;
     case ISAFamily::CDNA4:
       mfmaPatterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
@@ -1782,9 +1832,9 @@ struct TritonAMDGPUAccelerateMatmulPass
     case ISAFamily::RDNA4:
       mfmaPatterns.add<::DecomposeAMDScaledBlocked>(context, targetFeatures,
                                                     /*benefit=*/3);
-      mfmaPatterns.add<::BlockedToWMMA>(context, wmmaVersion,
-                                        matrixInstructionSize,
-                                        /*benefit=*/2);
+      mfmaPatterns.add<::BlockedToWMMA>(
+          context, wmmaVersion, matrixInstructionSize, unsupportedWmmaFeatures,
+          /*benefit=*/2);
       break;
     default:
       break;

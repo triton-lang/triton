@@ -6,6 +6,7 @@
 #include <optional>
 #include <set>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
@@ -59,6 +60,8 @@ public:
     return addresses == other.addresses;
   }
   bool operator<(const AddressSet &other) const {
+    if (*this == other)
+      return false;
     auto lhs = begin();
     auto rhs = other.begin();
     while (lhs != end() && rhs != other.end()) {
@@ -119,16 +122,28 @@ struct BufferRegion {
 
 /// A physical region and the provenance required to compose descriptor views.
 struct BufferRegionView {
-  BufferRegion region;
-  uint32_t storageBase = 0;
-  uint32_t affineOffset = 0;
-  llvm::SmallVector<uint32_t, 2> partitionBases;
-  uint32_t affinePartitionOffset = 0;
-  uint32_t affineCTAOffset = 0;
+  const BufferRegion region;
+  const uint32_t storageBase;
+  const uint32_t affineOffset;
+  const llvm::SmallVector<uint32_t, 2> partitionBases;
+  const uint32_t affinePartitionOffset;
+  const uint32_t affineCTAOffset;
   /// Deterministically interned identity of the owning allocation frame.
-  uint32_t allocationFrame = 0;
+  const uint32_t allocationFrame;
   /// Descriptor allocation supplying these views; null for implicit scratch.
-  Operation *allocation = nullptr;
+  Operation *const allocation;
+
+  BufferRegionView(BufferRegion region = {}, uint32_t storageBase = 0,
+                   uint32_t affineOffset = 0,
+                   llvm::SmallVector<uint32_t, 2> partitionBases = {},
+                   uint32_t affinePartitionOffset = 0,
+                   uint32_t affineCTAOffset = 0, uint32_t allocationFrame = 0,
+                   Operation *allocation = nullptr)
+      : region(std::move(region)), storageBase(storageBase),
+        affineOffset(affineOffset), partitionBases(std::move(partitionBases)),
+        affinePartitionOffset(affinePartitionOffset),
+        affineCTAOffset(affineCTAOffset), allocationFrame(allocationFrame),
+        allocation(allocation) {}
 
   bool contains(const BufferRegionView &other) const {
     return allocationFrame == other.allocationFrame &&
@@ -147,12 +162,25 @@ private:
 
 public:
   bool operator==(const BufferRegionView &other) const {
+    if (cachedHash && other.cachedHash && cachedHash != other.cachedHash)
+      return false;
     return key() == other.key();
   }
 
   bool operator<(const BufferRegionView &other) const {
     return key() < other.key();
   }
+
+  struct Hash {
+    size_t operator()(const BufferRegionView &view) const noexcept {
+      return view.hash();
+    }
+  };
+
+private:
+  size_t hash() const;
+  // Equality fields are immutable; only the derived cache changes.
+  mutable std::optional<size_t> cachedHash;
 };
 
 //===----------------------------------------------------------------------===//
@@ -178,13 +206,22 @@ BufferStatePlan createBufferStatePlan(llvm::ArrayRef<BufferRegion> regions,
 //
 struct RegionInfo {
   enum class Kind { Uninitialized, Exact, Unknown };
-  using ViewList = std::set<BufferRegionView>;
+  using ViewList = std::unordered_set<BufferRegionView, BufferRegionView::Hash>;
 
   Kind kind = Kind::Uninitialized;
   ViewList views;
 
   RegionInfo() = default;
   RegionInfo(ViewList views) : kind(Kind::Exact), views(std::move(views)) {}
+  RegionInfo(const RegionInfo &) = default;
+  RegionInfo(RegionInfo &&) = default;
+
+  // Replace the container: immutable keys cannot be assigned by libc++.
+  RegionInfo &operator=(RegionInfo other) {
+    kind = other.kind;
+    views.swap(other.views);
+    return *this;
+  }
 
   bool isUnknown() const { return kind == Kind::Unknown; }
 
@@ -209,8 +246,14 @@ struct RegionInfo {
       os << "unknown";
       return;
     }
-    llvm::interleaveComma(views, os, [&](const BufferRegionView &view) {
-      view.region.print(os);
+    // Keep diagnostics stable even though the lattice container is unordered.
+    llvm::SmallVector<const BufferRegionView *> orderedViews;
+    for (const BufferRegionView &view : views)
+      orderedViews.push_back(&view);
+    llvm::sort(orderedViews,
+               [](const auto *lhs, const auto *rhs) { return *lhs < *rhs; });
+    llvm::interleaveComma(orderedViews, os, [&](const BufferRegionView *view) {
+      view->region.print(os);
     });
   }
 

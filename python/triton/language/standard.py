@@ -282,6 +282,45 @@ def argmin(input, axis, tie_break_left=True, keep_dims=False):
     return ret
 
 
+# logical reductions
+
+
+@core._tensor_member_fn
+@jit
+def all(input, axis=None, keep_dims=False):
+    """
+    Returns whether all elements in :code:`input` are nonzero along the provided :code:`axis`.
+
+    The result has dtype :code:`int1`. NaN and infinity are treated as nonzero.
+
+    :param input: the input values
+    :type input: Tensor
+    :param axis: the dimension to reduce. If None, reduce all dimensions
+    :type axis: int | None
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
+    """
+    return core.reduce(input.to(core.int1), axis, _elementwise_min, keep_dims=keep_dims)
+
+
+@core._tensor_member_fn
+@jit
+def any(input, axis=None, keep_dims=False):
+    """
+    Returns whether any element in :code:`input` is nonzero along the provided :code:`axis`.
+
+    The result has dtype :code:`int1`. NaN and infinity are treated as nonzero.
+
+    :param input: the input values
+    :type input: Tensor
+    :param axis: the dimension to reduce. If None, reduce all dimensions
+    :type axis: int | None
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
+    """
+    return core.reduce(input.to(core.int1), axis, _elementwise_max, keep_dims=keep_dims)
+
+
 @jit
 def _sum_combine(a, b):
     return a + b
@@ -551,13 +590,14 @@ def flip(x, dim=None):
     core.static_assert(0 <= _dim and _dim < len(x.shape), "flip: dim must be None or in [-rank, rank)")
     core.static_assert(_is_power_of_two(x.shape[_dim]))
     steps: core.constexpr = _log2(x.shape[_dim])
-
-    # reshape the swap dimension to (2, 2, ..., 2)
-    idtype = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
-    y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + [2] * steps + x.shape[_dim + 1:])
-    for i in core.static_range(steps):
-        y = y ^ xor_sum(y, _dim + i, True)
-    x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
+    # Flipping a dimension of size 1 is a no-op.
+    if steps > 0:
+        # reshape the swap dimension to (2, 2, ..., 2)
+        idtype = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+        y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + [2] * steps + x.shape[_dim + 1:])
+        for i in core.static_range(steps):
+            y = y ^ xor_sum(y, _dim + i, True)
+        x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 
 

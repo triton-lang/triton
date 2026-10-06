@@ -24,6 +24,7 @@
 #include "mlir/Support/LLVM.h"
 
 #include "../PatternTritonGPUOpToLLVM.h"
+#include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/WmmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -33,23 +34,6 @@
 #include "llvm/ADT/TypeSwitch.h"
 namespace mlir::triton::AMD {
 namespace {
-
-static std::optional<mlir::triton::LinearLayout>
-wmmaRepLayoutForTensor(const mlir::triton::LinearLayout &wholeTileLL,
-                       const mlir::triton::LinearLayout &tileLL) {
-  llvm::SmallDenseMap<StringAttr, int64_t> shape;
-  for (auto outDim : wholeTileLL.getOutDimNames())
-    shape[outDim] = wholeTileLL.getOutDimSize(outDim);
-
-  // Clamp the tileLL to the tensor's output dims so that divideLeft succeeds
-  // when the tensor is smaller than the WMMA instruction shape.
-  auto clampedTileLL = ensureLayoutNotLargerThan(tileLL, shape);
-
-  auto quot = divideLeft(wholeTileLL, clampedTileLL);
-  if (quot.has_value())
-    return zerosLike(clampedTileLL) * *quot;
-  return {};
-}
 
 #define S(v) StringAttr::get(ctx, (v))
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
@@ -397,6 +381,7 @@ std::optional<int> findNextM(LinearLayout repLayout, int &reg, int elemsPerVec,
 
 // Conduct the Dot conversion.
 LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
+                         const TargetInfo &targetInfo,
                          ConversionPatternRewriter &rewriter,
                          const LLVMTypeConverter *typeConverter) {
   auto wmmaLayout = cast<AMDWmmaEncodingAttr>(
@@ -434,6 +419,14 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
            << "are supported on the current AMD GPU architecture.";
   }
 
+  amdgpu::TargetFeatures targetFeatures(targetInfo.getArch());
+  if (llvm::is_contained(targetFeatures.getUnsupportedWmmaFeatures(),
+                         maybeWmmaIntrinsic->requiredFeature)) {
+    return op.emitError("wmma intrinsic ")
+           << maybeWmmaIntrinsic->name << " is not supported on "
+           << targetFeatures.getArch();
+  }
+
   unsigned kInstrSize = maybeWmmaIntrinsic->kDim;
 
   intrinsicName = maybeWmmaIntrinsic->name;
@@ -442,12 +435,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto rank = resShape.size();
   auto K = aTensorTy.getShape()[rank - 1];
 
-  auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile);
-  if (!repLayout.has_value()) {
-    return op.emitError("failed to divide wmma layout by tile layout");
-  }
   const unsigned numRepK = std::max(static_cast<unsigned>(K / kInstrSize), 1u);
 
   Value loadedA = adaptor.getA();
@@ -479,14 +467,18 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
   StringAttr kBlock = S("block");
+  assert(wmmaLayout.getTileLayout(rank).getInDimSize(kRegister) ==
+             dElemsToStorePerThread &&
+         "WMMA loop stride must skip the instruction tile register bits");
 
   llvm::DenseSet<uint64_t> mnProcessed;
   int tiedGroup = 1;
 
-  for (int reg = 0; reg < repLayout->getInDimSize(kRegister);
+  // Instruction-sized strides skip the intra-tile register bits.
+  for (int reg = 0; reg < wmmaLL.getInDimSize(kRegister);
        reg += dElemsToStorePerThread) {
-    auto repIndices = repLayout->apply(
-        {{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    auto repIndices =
+        wmmaLL.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     int batchIdx = (rank == 3 ? repIndices[0].second : 0);
     int m = repIndices[rank == 3 ? 1 : 0].second;
     int n = repIndices[rank == 3 ? 2 : 1].second;
@@ -497,7 +489,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
       if (mnProcessed.contains(packMN((uint32_t)m, (uint32_t)n))) {
         continue;
       }
-      nextM = findNextM(*repLayout, nextMReg, dElemsToStorePerThread, m, rank);
+      nextM = findNextM(wmmaLL, nextMReg, dElemsToStorePerThread, m, rank);
       if (nextM.has_value()) {
         tiedGroup = 2;
         mnProcessed.insert(packMN((uint32_t)m, (uint32_t)n));
@@ -592,6 +584,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 //  types
 LogicalResult convertScaledDot(triton::DotScaledOp op,
                                triton::DotScaledOp::Adaptor adaptor,
+                               const TargetInfo &targetInfo,
                                ConversionPatternRewriter &rewriter,
                                const LLVMTypeConverter *typeConverter) {
   auto ctx = op.getContext();
@@ -656,6 +649,14 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
               "types are supported on the current AMD GPU architecture.";
   }
 
+  amdgpu::TargetFeatures targetFeatures(targetInfo.getArch());
+  if (llvm::is_contained(targetFeatures.getUnsupportedWmmaFeatures(),
+                         maybeWmmaScaleIntrinsic->requiredFeature)) {
+    return op.emitError("wmma scale intrinsic ")
+           << maybeWmmaScaleIntrinsic->name << " is not supported on "
+           << targetFeatures.getArch();
+  }
+
   auto kBaseA = maybeWmmaScaleIntrinsic->kBaseA;
   auto kBaseB = maybeWmmaScaleIntrinsic->kBaseB;
 
@@ -667,12 +668,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto K = aTensorTy.getShape()[rank - 1];
   auto resShape = dTensorTy.getShape();
 
-  auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile);
-  if (!repLayout.has_value()) {
-    return op.emitError("failed to divide wmma layout by tile layout");
-  }
 
   Value loadedA = adaptor.getA();
   Value loadedAScale = adaptor.getAScale();
@@ -702,12 +698,16 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto elemsPerVec = mnkDim[0] * mnkDim[1] / warpSize;
   auto dElemsToStorePerThread = mnkDim[0] * mnkDim[1] / warpSize;
   auto vecTy = vec_ty(dstElemTy, elemsPerVec);
+  assert(wmmaLayout.getTileLayout(rank).getInDimSize(kRegister) ==
+             elemsPerVec &&
+         "scaled WMMA loop stride must skip the instruction tile register "
+         "bits");
 
-  for (int reg = 0; reg < repLayout->getInDimSize(kRegister);
-       reg += elemsPerVec) {
+  // Instruction-sized strides skip the intra-tile register bits.
+  for (int reg = 0; reg < wmmaLL.getInDimSize(kRegister); reg += elemsPerVec) {
 
-    auto repIndices = repLayout->apply(
-        {{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    auto repIndices =
+        wmmaLL.apply({{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     int batchIdx = (rank == 3 ? repIndices[0].second : 0);
     int m = repIndices[rank == 3 ? 1 : 0].second;
     int n = repIndices[rank == 3 ? 2 : 1].second;
@@ -782,6 +782,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 } // namespace
 
 LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                          const TargetInfo &targetInfo,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   auto rankedTType = [](Value tensor) {
@@ -801,11 +802,12 @@ LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's $c operand should pass the same number of values as $d");
 
-  return convertDot(op, adaptor, rewriter, typeConverter);
+  return convertDot(op, adaptor, targetInfo, rewriter, typeConverter);
 }
 
 LogicalResult convertScaledWMMA(triton::DotScaledOp op,
                                 triton::DotScaledOp::Adaptor adaptor,
+                                const TargetInfo &targetInfo,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter) {
   assert(isa<mlir::triton::gpu::LinearEncodingTrait>(
@@ -823,6 +825,6 @@ LogicalResult convertScaledWMMA(triton::DotScaledOp op,
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
          "DotOp's C operand should pass the same number of values as D.");
 
-  return convertScaledDot(op, adaptor, rewriter, typeConverter);
+  return convertScaledDot(op, adaptor, targetInfo, rewriter, typeConverter);
 }
 } // namespace mlir::triton::AMD

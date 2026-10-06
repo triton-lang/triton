@@ -628,134 +628,146 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, ProgramIDDim axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
-bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
-                            SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned reduceLaneIdMask,
-                            unsigned broadcastLaneIdMask) const {
-
-  constexpr unsigned kWarpSize = 32;
-  unsigned fullMask = kWarpSize - 1;
-  bool partialWarp = reduceLaneIdMask != fullMask;
+// Return an empty value when the reduction should use shuffles instead.
+static Value warpReduce32(RewriterBase &rewriter, Location loc, Value value,
+                          NVVM::ReductionKind kind, bool useNanQualifier,
+                          unsigned reduceLaneIdMask,
+                          unsigned broadcastLaneIdMask, int computeCapability) {
+  assert(value.getType().getIntOrFloatBitWidth() == 32);
+  constexpr unsigned fullMask = 31;
   unsigned groupMask = fullMask & ~(reduceLaneIdMask | broadcastLaneIdMask);
   bool partitioned = groupMask != 0;
   // Use at most two converged full-warp reductions. Broadcast lanes
   // share a result, so only lane bits identifying distinct groups count.
   if (llvm::popcount(groupMask) > 1)
-    return false;
+    return {};
+  if (reduceLaneIdMask != fullMask) {
+    // Min/max use the faster CREDUX instructions on SM100+. The minimum
+    // group size also depends on whether we need one redux or two.
+    bool isMinMax =
+        kind == NVVM::ReductionKind::MIN || kind == NVVM::ReductionKind::MAX ||
+        kind == NVVM::ReductionKind::UMIN ||
+        kind == NVVM::ReductionKind::UMAX ||
+        kind == NVVM::ReductionKind::FMIN || kind == NVVM::ReductionKind::FMAX;
+    bool useFastMinMax = isMinMax && computeCapability >= 100;
+    // Heuristic thresholds based on latency/throughput benchmarks:
+    // https://github.com/triton-lang/triton/pull/11823
+    unsigned minLanes =
+        useFastMinMax ? (partitioned ? 8 : 2) : (partitioned ? 16 : 4);
+    unsigned numLanes = 1u << llvm::popcount(reduceLaneIdMask);
+    if (numLanes < minLanes)
+      return {};
+  }
+
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value mask = b.i32_val(0xFFFFFFFF);
+  bool maskBroadcast =
+      broadcastLaneIdMask &&
+      (kind == NVVM::ReductionKind::ADD || kind == NVVM::ReductionKind::XOR);
+  Value identity, firstGroup;
+  if (partitioned || maskBroadcast) {
+    identity = createReduxIdentity(b, kind, useNanQualifier);
+    Value laneId = getLaneId(rewriter, loc);
+    if (partitioned) {
+      Value group = b.and_(laneId, b.i32_val(groupMask));
+      firstGroup = b.icmp_eq(group, b.i32_val(0));
+    }
+    // Min/max, AND, and OR are idempotent. Add and XOR must count each
+    // broadcast value just once, even though all lanes execute the redux.
+    if (maskBroadcast) {
+      Value duplicate = b.and_(laneId, b.i32_val(broadcastLaneIdMask));
+      Value uniqueLane = b.icmp_eq(duplicate, b.i32_val(0));
+      value = b.select(uniqueLane, value, identity);
+    }
+  }
+  auto redux = [&](Value input) -> Value {
+    return NVVM::ReduxOp::create(rewriter, loc, input.getType(), input, kind,
+                                 mask, /*abs=*/false, /*nan=*/useNanQualifier);
+  };
+  if (partitioned) {
+    Value first = redux(b.select(firstGroup, value, identity));
+    Value second = redux(b.select(firstGroup, identity, value));
+    return b.select(firstGroup, first, second);
+  }
+  return redux(value);
+}
+
+bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
+                            SmallVector<Value> &acc, triton::ReduceOp op,
+                            unsigned reduceLaneIdMask,
+                            unsigned broadcastLaneIdMask) const {
   bool useNanQualifier = false;
-  if (auto kind = matchReduxKind(op, targetFeatures.getComputeCapability(),
-                                 useNanQualifier)) {
-    assert(acc.size() == 1);
-    if (partialWarp) {
-      if (acc[0].getType().getIntOrFloatBitWidth() > 32)
+  auto kind = matchReduxKind(op, getComputeCapability(), useNanQualifier);
+  if (!kind)
+    return false;
+  assert(acc.size() == 1);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto reduce32 = [&](Value value, NVVM::ReductionKind kind) {
+    return warpReduce32(rewriter, loc, value, kind, useNanQualifier,
+                        reduceLaneIdMask, broadcastLaneIdMask,
+                        getComputeCapability());
+  };
+  Value value = acc[0];
+  if (value.getType().isInteger(64)) {
+    // The i64 tree uses two shuffles per stage for all groups, while REDUX
+    // needs one instruction per piece and group. Require at least two
+    // shuffles per REDUX to cover splitting, masking, and merging.
+    unsigned groupMask = 31 & ~(reduceLaneIdMask | broadcastLaneIdMask);
+    unsigned stages = llvm::popcount(reduceLaneIdMask);
+    unsigned groups = 1u << llvm::popcount(groupMask);
+    unsigned pieces = *kind == NVVM::ReductionKind::ADD ? 3 : 2;
+    if (stages < pieces * groups)
+      return false;
+
+    Value high = b.trunc(i32_ty, b.lshr(value, b.i64_val(32)));
+    Value highResult = reduce32(high, *kind);
+    if (!highResult)
+      return false;
+    Value low = b.trunc(i32_ty, value);
+    if (*kind == NVVM::ReductionKind::ADD) {
+      // Each 16-bit sum fits in 21 bits; i64 adds propagate their carries.
+      Value lowResult = reduce32(b.and_(low, b.i32_val(0xFFFF)), *kind);
+      Value middleResult = reduce32(b.lshr(low, b.i32_val(16)), *kind);
+      if (!lowResult || !middleResult)
         return false;
-      // Min/max use the faster CREDUX instructions on SM100+. The minimum
-      // group size also depends on whether we need one redux or two.
-      bool isMinMax = *kind == NVVM::ReductionKind::MIN ||
-                      *kind == NVVM::ReductionKind::MAX ||
-                      *kind == NVVM::ReductionKind::UMIN ||
-                      *kind == NVVM::ReductionKind::UMAX ||
-                      *kind == NVVM::ReductionKind::FMIN ||
-                      *kind == NVVM::ReductionKind::FMAX;
-      bool useFastMinMax = isMinMax && getComputeCapability() >= 100;
-      // Heuristic thresholds based on latency/throughput benchmarks:
-      // https://github.com/triton-lang/triton/pull/11823
-      unsigned minLanes =
-          useFastMinMax ? (partitioned ? 8 : 2) : (partitioned ? 16 : 4);
-      unsigned numLanes = 1u << llvm::popcount(reduceLaneIdMask);
-      if (numLanes < minLanes)
-        return false;
-    }
-    Value mask = b.i32_val(0xFFFFFFFF);
-    bool maskBroadcast =
-        broadcastLaneIdMask && (*kind == NVVM::ReductionKind::ADD ||
-                                *kind == NVVM::ReductionKind::XOR);
-    Value identity, firstGroup, uniqueLane;
-    if (partitioned || maskBroadcast) {
-      identity = createReduxIdentity(b, *kind, useNanQualifier);
-      Value laneId = getLaneId(rewriter, loc);
-      if (partitioned) {
-        Value group = b.and_(laneId, b.i32_val(groupMask));
-        firstGroup = b.icmp_eq(group, b.i32_val(0));
-      }
-      // Min/max, AND, and OR are idempotent. Add and XOR must count each
-      // broadcast value just once, even though all lanes execute the redux.
-      if (maskBroadcast) {
-        Value duplicate = b.and_(laneId, b.i32_val(broadcastLaneIdMask));
-        uniqueLane = b.icmp_eq(duplicate, b.i32_val(0));
-      }
-    }
-    if (acc[0].getType().isInteger(64)) {
-      Value high = b.trunc(i32_ty, b.lshr(acc[0], b.i64_val(32)));
-      Value highResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty, high,
-                                               *kind, mask, false, false);
-      Value low = b.trunc(i32_ty, acc[0]);
-      if (*kind == NVVM::ReductionKind::ADD) {
-        // Each 16-bit sum fits in 21 bits; i64 adds propagate their carries.
-        Value lowResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty,
-                                                b.and_(low, b.i32_val(0xFFFF)),
-                                                *kind, mask, false, false);
-        Value middleResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty,
-                                                   b.lshr(low, b.i32_val(16)),
-                                                   *kind, mask, false, false);
-        acc[0] =
-            b.add(b.add(b.zext(i64_ty, lowResult),
-                        b.shl(b.zext(i64_ty, middleResult), b.i64_val(16))),
-                  b.shl(b.zext(i64_ty, highResult), b.i64_val(32)));
-        return true;
-      }
-      auto lowKind = *kind;
-      if (*kind == NVVM::ReductionKind::MIN ||
-          *kind == NVVM::ReductionKind::UMIN ||
-          *kind == NVVM::ReductionKind::MAX ||
-          *kind == NVVM::ReductionKind::UMAX) {
-        bool isMin = *kind == NVVM::ReductionKind::MIN ||
-                     *kind == NVVM::ReductionKind::UMIN;
-        lowKind = isMin ? NVVM::ReductionKind::UMIN : NVVM::ReductionKind::UMAX;
-        // Only matching high words can win; compare their low words unsigned.
-        low = b.select(b.icmp_eq(high, highResult), low,
-                       b.i32_val(isMin ? 0xFFFFFFFF : 0));
-      }
-      Value lowResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty, low,
-                                              lowKind, mask, false, false);
-      acc[0] = b.or_(b.shl(b.zext(i64_ty, highResult), b.i64_val(32)),
-                     b.zext(i64_ty, lowResult));
+      acc[0] = b.add(b.add(b.zext(i64_ty, lowResult),
+                           b.shl(b.zext(i64_ty, middleResult), b.i64_val(16))),
+                     b.shl(b.zext(i64_ty, highResult), b.i64_val(32)));
       return true;
     }
-    for (unsigned i = 0; i < acc.size(); ++i) {
-      unsigned bitwidth = acc[i].getType().getIntOrFloatBitWidth();
-      if (acc[i].getType().isInteger()) {
-        if (bitwidth < 32) {
-          if (*kind == NVVM::ReductionKind::MIN ||
-              *kind == NVVM::ReductionKind::MAX)
-            acc[i] = b.sext(i32_ty, acc[i]);
-          else
-            acc[i] = b.zext(i32_ty, acc[i]);
-        }
-      }
-      auto redux = [&](Value value) -> Value {
-        return NVVM::ReduxOp::create(rewriter, loc, value.getType(), value,
-                                     *kind, mask, /*abs=*/false,
-                                     /*nan=*/useNanQualifier);
-      };
-      if (maskBroadcast)
-        acc[i] = b.select(uniqueLane, acc[i], identity);
-      if (partitioned) {
-        Value first = redux(b.select(firstGroup, acc[i], identity));
-        Value second = redux(b.select(firstGroup, identity, acc[i]));
-        acc[i] = b.select(firstGroup, first, second);
-      } else {
-        acc[i] = redux(acc[i]);
-      }
-      if (acc[i].getType().isInteger()) {
-        if (bitwidth < 32)
-          acc[i] = b.trunc(int_ty(bitwidth), acc[i]);
-      }
+    auto lowKind = *kind;
+    if (*kind == NVVM::ReductionKind::MIN ||
+        *kind == NVVM::ReductionKind::UMIN ||
+        *kind == NVVM::ReductionKind::MAX ||
+        *kind == NVVM::ReductionKind::UMAX) {
+      bool isMin = *kind == NVVM::ReductionKind::MIN ||
+                   *kind == NVVM::ReductionKind::UMIN;
+      lowKind = isMin ? NVVM::ReductionKind::UMIN : NVVM::ReductionKind::UMAX;
+      // Only matching high words can win; compare their low words unsigned.
+      low = b.select(b.icmp_eq(high, highResult), low,
+                     b.i32_val(isMin ? 0xFFFFFFFF : 0));
     }
+    Value lowResult = reduce32(low, lowKind);
+    if (!lowResult)
+      return false;
+    acc[0] = b.or_(b.shl(b.zext(i64_ty, highResult), b.i64_val(32)),
+                   b.zext(i64_ty, lowResult));
     return true;
   }
-  return false;
+
+  Type type = value.getType();
+  unsigned bitwidth = type.getIntOrFloatBitWidth();
+  if (type.isInteger() && bitwidth < 32) {
+    if (*kind == NVVM::ReductionKind::MIN || *kind == NVVM::ReductionKind::MAX)
+      value = b.sext(i32_ty, value);
+    else
+      value = b.zext(i32_ty, value);
+  }
+  Value result = reduce32(value, *kind);
+  if (!result)
+    return false;
+  acc[0] = type.isInteger() && bitwidth < 32 ? b.trunc(type, result) : result;
+  return true;
 }
 
 unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {

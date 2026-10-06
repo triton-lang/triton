@@ -19,6 +19,7 @@ from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
+from .tensor_details.layout_details.tiled import TiledLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, SWIZZLE_SIZE_OUTER
 from .tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .matmul_details.opt_flags import (
@@ -451,6 +452,9 @@ def matmul(a, b, bias,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
+    if any(isinstance(t.storage.layout, TiledLayout) for t in (a, b)):
+        if not opt_flags.is_persistent or not can_use_tma or ragged_dimension != "K":
+            raise InapplicableConstraint("Tiled operands require a persistent ragged-K TMA matmul")
     if opt_flags.clc and ragged_dimension == "M":
         raise InapplicableConstraint("CLC requires a host-known grid and does not support ragged-M matmul")
     if opt_flags.clc and opt_flags.idle_sms:

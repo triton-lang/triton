@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250-strict | FileCheck %s --check-prefix=STRICT
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 8, order = [1, 0]}>
@@ -61,6 +62,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32} {
   // CHECK-LABEL: async_load_multicast_to_all_ctas
+  // STRICT-LABEL: async_load_multicast_to_all_ctas
+  // STRICT-NOT: rocdl.cluster.load.async.to.lds
+  // STRICT: rocdl.global.load.async.to.lds
+  // STRICT-NOT: rocdl.cluster.load.async.to.lds
   tt.func public @async_load_multicast_to_all_ctas(%arg0: tensor<32x32x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>},
                                 %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) {
     // CHECK: %[[GROUP_MASK:.*]] = llvm.mlir.constant(15 : i32) : i32

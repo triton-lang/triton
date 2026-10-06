@@ -161,9 +161,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
              << "bitwidth * colStride must be less than or equal to 32. Got "
              << bitwidth << " and " << enc.getColStride();
     }
-    // Takes subslices into account and figures out whether we can construct
-    // the linear layout at all
-    allocShape = dropPipeliningDim(allocShape, enc);
     auto ctaSplit = enc.getCGALayout().getCTASplitNum();
     auto blockN = std::min<int32_t>(enc.getBlockN(), shape.back());
     if (shape[shape.size() - 2] < enc.getBlockM() * ctaSplit[0] ||
@@ -171,16 +168,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
       return emitError() << "the tensor shape must be at least "
                          << enc.getBlockM() * ctaSplit[0] << "x"
                          << blockN * ctaSplit[1] << ". Got " << shape;
-    }
-    // Checks the layout of the allocation
-    auto ll = toLinearLayout(allocShape, enc);
-    // Sanity check that the layout is of the right shape
-    auto dims = standardOutDimNames(ctx, 2);
-    if (ll.getOutDimSize(dims[0]) != allocShape[0] ||
-        ll.getOutDimSize(dims[1]) != allocShape[1]) {
-      return emitError() << "allocation shape must be equal to "
-                         << ll.getOutDimSize(dims[0]) << "x"
-                         << ll.getOutDimSize(dims[1]);
     }
   } else if (isa<SharedEncodingTrait>(encoding)) {
     if (memorySpace != SharedMemorySpaceAttr::get(ctx)) {
@@ -205,11 +192,57 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (bitwidth != 8) {
       return emitError() << "bitwidth must be 8";
     }
+    // TMEM stores require 16 independently addressable rows per CTA.
+    auto shapePerCTA = getShapePerCTA(enc, allocShape);
+    if (shapePerCTA[0] < 16)
+      return emitError() << "tensor-memory scale allocations require at least "
+                            "16 rows per CTA; got "
+                         << shapePerCTA[0];
   }
 
-  // PaddedSharedEncodingAttr is also a SharedEncodingTrait but we have some
-  // additional rules to verify.
-  if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
+  // These encodings are also SharedEncodingTraits but have additional rules.
+  if (auto enc = dyn_cast<PartitionedSharedEncodingAttr>(encoding)) {
+    auto inner = enc.getPartitionLayout();
+    if (isa<PartitionedSharedEncodingAttr>(inner)) {
+      return emitError()
+             << "nested PartitionedSharedEncodingAttr is not supported";
+    }
+    if (isa<NVMMASharedEncodingAttr>(inner)) {
+      return emitError() << "NVMMASharedEncodingAttr is not supported as a "
+                            "partitionLayout";
+    }
+
+    auto blockShape = getShapePerCTA(enc, layoutAllocShape);
+    unsigned partitionDim = enc.getPartitionDim();
+    unsigned numLogicalPieces = enc.getNumLogicalPieces();
+    if (blockShape[partitionDim] % numLogicalPieces != 0) {
+      return emitError()
+             << "per-CTA allocation extent along partitionDim must be "
+                "divisible by numPartitions * numGroups; got "
+             << blockShape[partitionDim] << " and " << numLogicalPieces;
+    }
+
+    SmallVector<int64_t> pieceShape(blockShape);
+    pieceShape[partitionDim] /= numLogicalPieces;
+    auto verifyFixedShape = [&](const LinearLayout &layout) -> LogicalResult {
+      auto shape = llvm::to_vector_of<int64_t>(layout.getOutDimSizes());
+      auto actual = getShapePerCTA(enc, shape);
+      if (actual != pieceShape) {
+        return emitError() << "partitionLayout does not match the per-CTA "
+                              "logical piece shape; expected "
+                           << pieceShape << ", got " << actual;
+      }
+      return success();
+    };
+
+    if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(inner)) {
+      if (failed(verifyFixedShape(padded.getLinearComponent())))
+        return failure();
+    } else if (auto linear = dyn_cast<SharedLinearEncodingAttr>(inner)) {
+      if (failed(verifyFixedShape(linear.getLinearLayout())))
+        return failure();
+    }
+  } else if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
     auto rank = enc.getRank();
     // Ensure linear component's outDims match the alloc size ignoring
     // pipelining dimension
