@@ -15,22 +15,22 @@ from triton.language.extra import libdevice
 # -----------------------
 
 
-@pytest.mark.parametrize("use_rn", [False, True])
-def test_cuda_round_f32_to_tf32(use_rn):
-    capability = (9, 0) if use_rn else (8, 0)
+@pytest.mark.parametrize("rounding", ["rna", "rn"])
+def test_cuda_round_f32_to_tf32(rounding):
+    capability = (9, 0) if rounding == "rn" else (8, 0)
     if not is_cuda() or torch.cuda.get_device_capability() < capability:
         pytest.skip(f"requires CUDA compute capability {capability}")
 
     @triton.jit
-    def kernel(X, Out, USE_RN: tl.constexpr):
+    def kernel(X, Out, ROUNDING: tl.constexpr):
         offsets = tl.arange(0, 4)
         x = tl.load(X + offsets)
-        tl.store(Out + offsets, tl.extra.cuda.round_f32_to_tf32(x, USE_RN))
+        tl.store(Out + offsets, tl.extra.cuda.round_f32_to_tf32(x, ROUNDING))
 
     x = torch.tensor([1 + 2**-11, 1 + 3 * 2**-11, -1 - 2**-11, -1 - 3 * 2**-11], device="cuda")
     out = torch.empty_like(x)
-    kernel[(1,)](x, out, use_rn)
-    rounded = 1. if use_rn else 1 + 2**-10
+    kernel[(1,)](x, out, rounding)
+    rounded = 1. if rounding == "rn" else 1 + 2**-10
     expected = torch.tensor([rounded, 1 + 2**-9, -rounded, -1 - 2**-9], device="cuda")
     assert torch.equal(out.view(torch.int32), expected.view(torch.int32))
 

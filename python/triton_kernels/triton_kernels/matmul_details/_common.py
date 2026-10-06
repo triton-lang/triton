@@ -15,7 +15,8 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import (
 @triton.jit
 def round_f32_to_tf32(x):
     # Use round-to-nearest-even on Hopper+ to match TMA.
-    return tl.extra.cuda.round_f32_to_tf32(x, cuda_capability_geq(9, 0))
+    rounding: tl.constexpr = "rn" if cuda_capability_geq(9, 0) else "rna"
+    return tl.extra.cuda.round_f32_to_tf32(x, rounding)
 
 
 @triton.constexpr_function

@@ -24,9 +24,11 @@ def num_warps(_semantic=None):
 
 
 @core.extern
-def round_f32_to_tf32(x, use_rn, _semantic=None):
-    """Round float32 to TF32, with ties to even if use_rn, otherwise away from zero."""
-    intrinsic = "llvm.nvvm.f2tf32.rn" if use_rn else "llvm.nvvm.f2tf32.rna"
+def round_f32_to_tf32(x, rounding: core.constexpr, _semantic=None):
+    """Round float32 to TF32, with ties to even (rn) or away from zero (rna)."""
+    rounding = core._unwrap_if_constexpr(rounding)
+    assert rounding in ("rn", "rna"), 'rounding must be "rn" or "rna"'
+    intrinsic = f"llvm.nvvm.f2tf32.{rounding}"
     return core.extern_elementwise("", "", [x], {
         (core.float32, ): (intrinsic, core.float32),
     }, is_pure=True, _semantic=_semantic)
