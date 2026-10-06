@@ -65,7 +65,7 @@ def sm86_min_nan_xorsign_abs_f32(a, b):
     tl.static_assert(a.dtype == tl.float32, "min.NaN.xorsign.abs.f32 requires float32 inputs")
     tl.static_assert(b.dtype == tl.float32, "min.NaN.xorsign.abs.f32 requires float32 inputs")
 
-    return tl.extra.cuda.min_nan_xorsign_abs_f32(a, b)
+    return tl.extra.cuda.min_xorsign_abs_f32(a, b, propagate_nan=tl.PropagateNan.ALL)
 
 
 @triton.jit
@@ -81,7 +81,7 @@ def sm86_max_nan_xorsign_abs_f32(a, b):
     tl.static_assert(a.dtype == tl.float32, "max.NaN.xorsign.abs.f32 requires float32 inputs")
     tl.static_assert(b.dtype == tl.float32, "max.NaN.xorsign.abs.f32 requires float32 inputs")
 
-    return tl.extra.cuda.max_nan_xorsign_abs_f32(a, b)
+    return tl.extra.cuda.max_xorsign_abs_f32(a, b, propagate_nan=tl.PropagateNan.ALL)
 
 
 @triton.jit

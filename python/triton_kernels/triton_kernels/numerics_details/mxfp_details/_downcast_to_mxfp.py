@@ -91,7 +91,7 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
         lo_f32 = lo_f.to(tl.float32)
         hi_f32 = hi_f.to(tl.float32)
 
-        out_tensor = tl.extra.cuda.f32_to_e2m1x2(hi_f32, lo_f32).to(tl.uint8)
+        out_tensor = tl.extra.cuda.f32_to_e2m1x2_satfinite(hi_f32, lo_f32).to(tl.uint8)
     else:
         quant_tensor = quant_tensor.to(tl.uint32, bitcast=True)
         signs = quant_tensor & 0x80000000

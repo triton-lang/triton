@@ -57,9 +57,9 @@ tt.func public @attention_forward(
     // CHECK: [[SOFTMAX:%.*]] = math.exp2 {{.*}} {ttg.partition = array<i32: 0>} : tensor<256x64xf32
     %softmax = math.exp2 %QK_adj : tensor<256x64xf32, #blocked>
     // Subtraction stays cheap, so both consumers get their own alpha computation.
-    // CHECK-NEXT: [[DIFF0:%.*]] = tt.extern_elementwise {{.*}}symbol = "__nv_fsub_rn", ttg.partition = array<i32: 0>
-    // CHECK-NEXT: [[DIFF1:%.*]] = tt.extern_elementwise {{.*}}symbol = "__nv_fsub_rn", ttg.partition = array<i32: 1>
-    %diff = tt.extern_elementwise %m_i, %row_max {libname = "libdevice", libpath = "", pure = true, symbol = "__nv_fsub_rn"} : (tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    // CHECK-NEXT: [[DIFF0:%.*]] = arith.subf {{.*}} {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: [[DIFF1:%.*]] = arith.subf {{.*}} {ttg.partition = array<i32: 1>}
+    %diff = arith.subf %m_i, %row_max : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
     // CHECK-NEXT: {{%.*}} = math.exp2 [[DIFF0]] {ttg.partition = array<i32: 0>}
     // CHECK-NEXT: {{%.*}} = math.exp2 [[DIFF1]] {ttg.partition = array<i32: 1>}
     %alpha = math.exp2 %diff : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>

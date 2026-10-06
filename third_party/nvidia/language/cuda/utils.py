@@ -36,23 +36,37 @@ def round_f32_to_tf32(x, rounding: core.constexpr, _semantic=None):
 
 
 @core.extern
-def min_nan_xorsign_abs_f32(a, b, _semantic=None):
-    """Minimum magnitude with NaN propagation and XORed signs."""
+def min_xorsign_abs_f32(a, b, propagate_nan: core.constexpr = core.PropagateNan.NONE, _semantic=None):
+    """Minimum magnitude with XORed signs and optional NaN propagation."""
+    propagate_nan = core._unwrap_if_constexpr(propagate_nan)
+    if propagate_nan == core.PropagateNan.ALL:
+        symbol = "llvm.nvvm.fmin.nan.xorsign.abs.f"
+    elif propagate_nan == core.PropagateNan.NONE:
+        symbol = "llvm.nvvm.fmin.xorsign.abs.f"
+    else:
+        raise ValueError(f"Unexpected propagate_nan {propagate_nan}")
     return core.extern_elementwise("", "", [a, b], {
-        (core.float32, core.float32): ("llvm.nvvm.fmin.nan.xorsign.abs.f", core.float32),
+        (core.float32, core.float32): (symbol, core.float32),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
-def max_nan_xorsign_abs_f32(a, b, _semantic=None):
-    """Maximum magnitude with NaN propagation and XORed signs."""
+def max_xorsign_abs_f32(a, b, propagate_nan: core.constexpr = core.PropagateNan.NONE, _semantic=None):
+    """Maximum magnitude with XORed signs and optional NaN propagation."""
+    propagate_nan = core._unwrap_if_constexpr(propagate_nan)
+    if propagate_nan == core.PropagateNan.ALL:
+        symbol = "llvm.nvvm.fmax.nan.xorsign.abs.f"
+    elif propagate_nan == core.PropagateNan.NONE:
+        symbol = "llvm.nvvm.fmax.xorsign.abs.f"
+    else:
+        raise ValueError(f"Unexpected propagate_nan {propagate_nan}")
     return core.extern_elementwise("", "", [a, b], {
-        (core.float32, core.float32): ("llvm.nvvm.fmax.nan.xorsign.abs.f", core.float32),
+        (core.float32, core.float32): (symbol, core.float32),
     }, is_pure=True, _semantic=_semantic)
 
 
 @core.extern
-def f32_to_e2m1x2(hi, lo, _semantic=None):
+def f32_to_e2m1x2_satfinite(hi, lo, _semantic=None):
     """Round two float32 values to finite E2M1, with hi in the high nibble."""
     return core.extern_elementwise("", "", [hi, lo], {
         (core.float32, core.float32): ("llvm.nvvm.ff.to.e2m1x2.rn.satfinite", core.uint16),
