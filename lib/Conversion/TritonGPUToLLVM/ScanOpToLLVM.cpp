@@ -256,21 +256,17 @@ private:
 
   // Compute an inclusive prefix within each thread-local group. Input: original
   // register values. Output: prefixes in the same registers, with the total in
-  // the final register. Thread-local groups are interleaved in native register
-  // emission order; each is accumulated in logical axis order.
+  // the final register. Accumulate each thread-local group in logical axis
+  // order.
   void scanWithinThreads(triton::ScanOp op, const ScanLoweringHelper &helper,
                          ScanValues &values,
                          ConversionPatternRewriter &rewriter) const {
-    auto groups = helper.getThreadLocalGroups();
-    auto groupForReg = helper.getRegisterGroups();
-    SmallVector<unsigned> nextReg(groups.size(), 0);
-    ScanValues accumulators(groups.size());
-    for (unsigned nativeReg = 0; nativeReg < values.size(); ++nativeReg) {
-      unsigned g = groupForReg[nativeReg];
-      unsigned reg = groups[g][nextReg[g]++];
-      accumulators[g] =
-          combineWithPrefix(op, accumulators[g], values[reg], rewriter);
-      values[reg] = accumulators[g];
+    for (const auto &group : helper.getThreadLocalGroups()) {
+      SmallVector<Value> acc;
+      for (unsigned reg : group) {
+        acc = combineWithPrefix(op, acc, values[reg], rewriter);
+        values[reg] = acc;
+      }
     }
   }
 
