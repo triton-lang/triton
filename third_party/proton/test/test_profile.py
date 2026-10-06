@@ -412,6 +412,33 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
 
 
 @_skip_cudagraph_test
+def test_trace_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, device: str):
+
+    @triton.jit
+    def foo(x):
+        tl.store(x, tl.load(x) + 1)
+
+    x = torch.zeros((1, ), device=device)
+    foo[(1, )](x)
+    # Build/capture graph before profiler starts.
+    g = torch.cuda.CUDAGraph()
+    with cuda_graph_without_gc(g):
+        foo[(1, )](x)
+
+    temp_file = tmp_path / "test_trace_cudagraph_not_captured_by_profiler.chrome_trace"
+    proton.start(str(temp_file.with_suffix("")), data="trace")
+    with proton.scope("replay"):
+        g.replay()
+    proton.finalize()
+
+    with temp_file.open() as f:
+        trace_events = json.load(f)["traceEvents"]
+    replay = next(event for event in trace_events if event.get("cat") == "scope" and event["name"] == "replay")
+    flow_start = next(event for event in trace_events if event.get("cat") == "flow" and event["ph"] == "s")
+    assert (flow_start["tid"], flow_start["ts"]) == (replay["tid"], replay["ts"])
+
+
+@_skip_cudagraph_test
 def test_cudagraph_deactivate(tmp_path, device: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
