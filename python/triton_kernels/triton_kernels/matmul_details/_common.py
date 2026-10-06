@@ -428,9 +428,9 @@ def matmul_launch_metadata(grid, kernel, args):
         x_bytes_per_token = triton.cdiv(K, 2)
         w_bytes_per_active_slice = N * triton.cdiv(K, 2)
         if args["XMxScale"] is not None:
-            x_bytes_per_token += triton.cdiv(K, args["MX_BLOCK_SIZE"])
+            x_bytes_per_token += triton.cdiv(K, args["DOT_SCALE_BLOCK_SIZE"])
         if args["WMxScale"] is not None:
-            w_bytes_per_active_slice += N * triton.cdiv(K, args["MX_BLOCK_SIZE"])
+            w_bytes_per_active_slice += N * triton.cdiv(K, args["DOT_SCALE_BLOCK_SIZE"])
         if args["XTensorScale"] is not None:
             x_bytes_per_token += args["XTensorScale"].element_size()
         if args["WTensorScale"] is not None:

@@ -119,8 +119,8 @@ def _p_matmul(
              SWIZZLE_MX_VALUE: tl.constexpr,
              # One of ["BLACKWELL", None]
              SWIZZLE_MX_SCALE: tl.constexpr,
-             MX_BLOCK_SIZE: tl.constexpr,
-             X_MX_BLOCK_SIZE: tl.constexpr,
+             DOT_SCALE_BLOCK_SIZE: tl.constexpr,
+             X_INPUT_SCALE_BLOCK_SIZE: tl.constexpr,
              EPILOGUE_SUBTILE: tl.constexpr,
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
              W_CACHE_MODIFIER: tl.constexpr,
@@ -155,13 +155,13 @@ def _p_matmul(
     is_x_microscaled: tl.constexpr = XMxScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
-    REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
-    X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
-    MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
+    REQUANTIZE_X: tl.constexpr = X_INPUT_SCALE_BLOCK_SIZE != DOT_SCALE_BLOCK_SIZE
+    X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_INPUT_SCALE_BLOCK_SIZE
+    MX_PACK_DIVISOR: tl.constexpr = DOT_SCALE_BLOCK_SIZE
     if is_x_microscaled or is_w_microscaled:
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
     if is_w_microscaled:
-        tl.static_assert(MX_BLOCK_SIZE == NVFP_BLOCK_SIZE or MX_BLOCK_SIZE == MXFP_BLOCK_SIZE,
+        tl.static_assert(DOT_SCALE_BLOCK_SIZE == NVFP_BLOCK_SIZE or DOT_SCALE_BLOCK_SIZE == MXFP_BLOCK_SIZE,
                          "Unsupported microscale factor")
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8 or fp8")
@@ -337,7 +337,7 @@ def _p_matmul(
             XMxScalePtrs = XMxScale + off_x_z.to(index_type) * stride_x_mx_z
             if GatherIndx is None:
                 XMxScalePtrs += slice_off_m * stride_x_mx_m
-            offs_k_scale = off_k_x0 // X_MX_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
+            offs_k_scale = off_k_x0 // X_INPUT_SCALE_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
             XMxScalePtrs += (offs_x_m if USE_GATHER_TMA else offs_m).to(index_type)[:, None] * stride_x_mx_m
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
         XTensorScalePtrs = None
@@ -412,11 +412,11 @@ def _p_matmul(
             x_format: tl.constexpr = "e4m3" if REQUANTIZE_X else get_scaled_dot_format_string(x.dtype)
             if is_x_microscaled:
                 if XMxScalePtrs is not None: # not using TMA for x scale load
-                    off_k_mx = off_k_x // X_MX_BLOCK_SIZE
+                    off_k_mx = off_k_x // X_INPUT_SCALE_BLOCK_SIZE
                     if EVEN_K and SPLIT_K == 1:
                         mask_k_scale = tl.full([X_SCALE_BLOCK_K], True, dtype=tl.int1)
                     else:
-                        mask_k_scale = off_k_mx + tl.arange(0, X_SCALE_BLOCK_K) < tl.cdiv(K, X_MX_BLOCK_SIZE)
+                        mask_k_scale = off_k_mx + tl.arange(0, X_SCALE_BLOCK_K) < tl.cdiv(K, X_INPUT_SCALE_BLOCK_SIZE)
                     mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
                     x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
                 else: # use TMA for x scale load
@@ -428,7 +428,7 @@ def _p_matmul(
                         off_m_scale = slice_block_off_m + off_m // 128
                     else:
                         off_m_scale = off_x_z * ((M + 127) // 128) + off_m // 128
-                    x_scales = XMxScale.load([0, off_m_scale, off_k_x // X_MX_BLOCK_SIZE // 4, 0, 0])
+                    x_scales = XMxScale.load([0, off_m_scale, off_k_x // X_INPUT_SCALE_BLOCK_SIZE // 4, 0, 0])
                     x_scales = unswizzle_act_mx_scale_bw(x_scales)
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
@@ -639,7 +639,7 @@ def _p_matmul(
         tl.static_assert(len(accs) == SUBTILE_FACTOR)
 
         if is_out_microscaled:
-            MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
+            MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // DOT_SCALE_BLOCK_SIZE
 
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]
@@ -712,8 +712,8 @@ def _p_matmul(
                 )
                 out, out_scale = EPILOGUE_FN(out, out_mask, *epilogue_fn_args)
                 tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
-                offs_y_n_scale = off_n1 // ACTIVATION_REDUCTION_N // MX_BLOCK_SIZE + a_i * MX_SCALE_BLOCK_N + tl.arange(0, MX_SCALE_BLOCK_N)
-                n_mx_blocks = tl.cdiv(yN, MX_BLOCK_SIZE)
+                offs_y_n_scale = off_n1 // ACTIVATION_REDUCTION_N // DOT_SCALE_BLOCK_SIZE + a_i * MX_SCALE_BLOCK_N + tl.arange(0, MX_SCALE_BLOCK_N)
+                n_mx_blocks = tl.cdiv(yN, DOT_SCALE_BLOCK_SIZE)
                 YActualScalePtrs = output_mx_scale_store_ptr(
                     YActualScale,
                     offs_m,
