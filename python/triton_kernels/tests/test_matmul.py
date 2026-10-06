@@ -670,10 +670,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
 
 @pytest.mark.parametrize("swizzled", [False, True])
+@pytest.mark.parametrize("weights_swizzled", [False, True])
 @pytest.mark.parametrize("mode", ["plain", "batched", "ragged", "gather"])
 @pytest.mark.parametrize("tensor_scale", ["none", "row", "column", "both", "wide_row"])
 @pytest.mark.parametrize("out_dtype", [None, torch.float32])
-def test_nvfp4_acts_mxfp4_swizzled_weights(swizzled, mode, tensor_scale, out_dtype, device, opt_flags_scope):
+def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, tensor_scale, out_dtype, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell")
     torch.manual_seed(42)
@@ -712,8 +713,11 @@ def test_nvfp4_acts_mxfp4_swizzled_weights(swizzled, mode, tensor_scale, out_dty
         if gather is not None:
             a_scale = wrap_torch_tensor(a_scale.storage.data[gather.long()])
         a_scale = convert_layout(a_scale, layout.BlackwellActMXScaleLayout(metadata))
-    b = convert_layout(b, layout.BlackwellMXValueLayout())
-    b_scale = convert_layout(b_scale, layout.BlackwellMXScaleLayout())
+    if weights_swizzled:
+        b = convert_layout(b, layout.BlackwellMXValueLayout())
+        b_scale = convert_layout(b_scale, layout.BlackwellMXScaleLayout())
+    else:
+        b_scale = wrap_torch_tensor(b_scale.storage.data.contiguous())
     config = PrecisionConfig(a_mx_scale=a_scale, a_microblock_size=16, a_mx_tensor_scale=outer_scale,
                              b_mx_scale=b_scale, b_microblock_size=32,
                              b_mx_tensor_scale=weight_outer_scale, out_dtype=out_dtype)

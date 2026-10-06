@@ -20,7 +20,7 @@ from .numerics_details.mxfp import MXFP_BLOCK_SIZE, nvfp4_to_mxfp8
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.tiled import TiledLayout
-from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout, SWIZZLE_SIZE_OUTER
+from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, SWIZZLE_SIZE_OUTER
 from .tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .matmul_details.opt_flags import (
     InapplicableConstraint,
@@ -271,7 +271,7 @@ def matmul(a, b, bias,
     RaggedTensorMetadata instance as a_ragged_metadata. This ensures matching row
     segmentation and padding without comparing metadata tensors on the device.
 
-    On Blackwell, NVFP4 activations with Blackwell-swizzled MXFP4 weights are
+    On Blackwell, NVFP4 activations with MXFP4 weights are
     requantized to MXFP8 before multiplication. This can add rounding error.
     That path defaults to BF16 output unless out_dtype or c is supplied.
 
@@ -370,7 +370,7 @@ def matmul(a, b, bias,
         "precision_config.b_microblock_size is required when precision_config.b_mx_scale is set"
     )
     if (a.dtype == FP4 and b.dtype == FP4 and a_microblock_size == 16 and b_microblock_size == 32
-            and isinstance(b_scale_layout, BlackwellMXScaleLayout) and is_cuda()
+            and is_cuda()
             and target_info.cuda_capability_geq(10, 0)):
         # Gather during conversion so the MXFP8 matmul reads contiguous rows.
         a, a_scale = nvfp4_to_mxfp8(a, a_scale, gather_indx)
