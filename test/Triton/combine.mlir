@@ -1,7 +1,458 @@
 // RUN: triton-opt %s -canonicalize -triton-combine | FileCheck %s
+// RUN: triton-opt %s -triton-combine | FileCheck %s --check-prefix=RAW
 
-// We don't combine if the dot result is used by more than one op.
+#join_blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#join_slice = #ttg.slice<{dim = 1, parent = #join_blocked}>
+
+// CHECK-LABEL: @test_join_encoded_addresses
+module @join_encoded attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
+tt.func @test_join_encoded_addresses(%base: !tt.ptr<f16>) -> tensor<16x2x!tt.ptr<f16>, #join_blocked> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32, #join_slice>
+  %two = arith.constant dense<2> : tensor<16xi32, #join_slice>
+  %off = arith.muli %r, %two : tensor<16xi32, #join_slice>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>, #join_slice>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>, #join_slice>, tensor<16xi32, #join_slice>
+  %one = arith.constant dense<1> : tensor<16xi32, #join_slice>
+  %q = tt.addptr %p, %one : tensor<16x!tt.ptr<f16>, #join_slice>, tensor<16xi32, #join_slice>
+  // CHECK: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>, #join_slice> -> tensor<16x2x!tt.ptr<f16>, #join_blocked>
+  tt.return %v : tensor<16x2x!tt.ptr<f16>, #join_blocked>
+}
+}
+
+// CHECK-LABEL: @test_join_adjacent_pointers
+tt.func @test_join_adjacent_pointers(%base: !tt.ptr<f16>, %m: tensor<16xi1>) -> tensor<16xf16> {
+  %one = arith.constant dense<1> : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %off = arith.muli %r, %two : tensor<16xi32>
+  %bases = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %bases, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %q = tt.addptr %p, %one : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %ptrs = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  %mask = tt.join %m, %m : tensor<16xi1> -> tensor<16x2xi1>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK: tt.addptr
+  // CHECK-NOT: tt.join
+  // CHECK: tt.load {{.*}}tensor<32x!tt.ptr<f16>>
+  %v = tt.load %ptrs, %mask : tensor<16x2x!tt.ptr<f16>>
+  %a, %b = tt.split %v : tensor<16x2xf16> -> tensor<16xf16>
+  %sum = arith.addf %a, %b : tensor<16xf16>
+  tt.return %sum : tensor<16xf16>
+}
+
+// CHECK-LABEL: @test_join_canonical_offsets
+tt.func @test_join_canonical_offsets(%base: !tt.ptr<f16>) -> tensor<16x2x!tt.ptr<f16>> {
+  %one = arith.constant dense<1> : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %off = arith.muli %r, %two : tensor<16xi32>
+  %odd = arith.addi %off, %one : tensor<16xi32>
+  %bases = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %bases, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %q = tt.addptr %bases, %odd : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %ptrs = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK-NOT: tt.join
+  // CHECK: tt.return
+  tt.return %ptrs : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_duplicate_addresses
+// RAW-LABEL: @test_join_duplicate_addresses
+tt.func @test_join_duplicate_addresses(%base: !tt.ptr<f16>) -> tensor<16x2x!tt.ptr<f16>> {
+  %one = arith.constant dense<1> : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %r0 = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %r1 = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %off0 = arith.muli %r0, %two : tensor<16xi32>
+  %off1 = arith.muli %r1, %two : tensor<16xi32>
+  %b0 = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %b1 = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b0, %off0 : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %p1 = tt.addptr %b1, %off1 : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %q = tt.addptr %p1, %one : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %ptrs = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK-NOT: tt.join
+  // CHECK: tt.return
+  // RAW: tt.make_range {{.*}}end = 32
+  // RAW-NOT: tt.join
+  // RAW: tt.return
+  tt.return %ptrs : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_nonadjacent_pointers
+tt.func @test_join_nonadjacent_pointers(%p: tensor<16x!tt.ptr<f16>>) -> tensor<16x2x!tt.ptr<f16>> {
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %q = tt.addptr %p, %two : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  // CHECK: tt.join
+  %ptrs = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  tt.return %ptrs : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_unrelated_pointers
+tt.func @test_join_unrelated_pointers(%p: tensor<16x!tt.ptr<f16>>, %q: tensor<16x!tt.ptr<f16>>) -> tensor<16x2x!tt.ptr<f16>> {
+  // CHECK: tt.join
+  %ptrs = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  tt.return %ptrs : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_contiguous_pair_volatile_load
+tt.func @test_contiguous_pair_volatile_load(%base: !tt.ptr<f16>) -> tensor<16xf16> {
+  %r = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+  %off = tt.reshape %r : tensor<32xi32> -> tensor<16x2xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x2x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x2x!tt.ptr<f16>>, tensor<16x2xi32>
+  // CHECK: tt.load {{.*}}isVolatile = true{{.*}}tensor<16x2x!tt.ptr<f16>>
+  %v = tt.load %p {isVolatile = true} : tensor<16x2x!tt.ptr<f16>>
+  %a, %b0 = tt.split %v : tensor<16x2xf16> -> tensor<16xf16>
+  %sum = arith.addf %a, %b0 : tensor<16xf16>
+  tt.return %sum : tensor<16xf16>
+}
+
+// CHECK-LABEL: @test_contiguous_pair_matrix_consumer
+tt.func @test_contiguous_pair_matrix_consumer(%base: !tt.ptr<f16>) -> tensor<16x2xf16> {
+  %r = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+  %off = tt.reshape %r : tensor<32xi32> -> tensor<16x2xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x2x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x2x!tt.ptr<f16>>, tensor<16x2xi32>
+  // CHECK: tt.load {{.*}}tensor<16x2x!tt.ptr<f16>>
+  %v = tt.load %p : tensor<16x2x!tt.ptr<f16>>
+  tt.return %v : tensor<16x2xf16>
+}
+
+// CHECK-LABEL: @test_join_nonzero_range
+tt.func @test_join_nonzero_range(%base: !tt.ptr<f16>) -> tensor<16x2x!tt.ptr<f16>> {
+  %one = arith.constant dense<1> : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %r = tt.make_range {start = 16 : i32, end = 32 : i32} : tensor<16xi32>
+  %off = arith.muli %r, %two : tensor<16xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %q = tt.addptr %p, %one : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK-NOT: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+
+// CHECK-LABEL: @test_join_pitched_rows
+tt.func @test_join_pitched_rows(%base: !tt.ptr<f16>) -> tensor<4x16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32>
+  %c = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %pitch = arith.constant dense<40> : tensor<4xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %row = arith.muli %r, %pitch : tensor<4xi32>
+  %col = arith.muli %c, %two : tensor<16xi32>
+  %rr = tt.expand_dims %row {axis = 1 : i32} : tensor<4xi32> -> tensor<4x1xi32>
+  %cc = tt.expand_dims %col {axis = 0 : i32} : tensor<16xi32> -> tensor<1x16xi32>
+  %rows = tt.broadcast %rr : tensor<4x1xi32> -> tensor<4x16xi32>
+  %cols = tt.broadcast %cc : tensor<1x16xi32> -> tensor<4x16xi32>
+  %off = arith.addi %rows, %cols : tensor<4x16xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<4x16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<4x16x!tt.ptr<f16>>, tensor<4x16xi32>
+  %one = arith.constant dense<1> : tensor<4x16xi32>
+  %q = tt.addptr %p, %one : tensor<4x16x!tt.ptr<f16>>, tensor<4x16xi32>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK: tt.reshape {{.*}}tensor<4x32xi32> -> tensor<4x16x2xi32>
+  // CHECK-NOT: tt.join
+  %ptr = tt.join %p, %q : tensor<4x16x!tt.ptr<f16>> -> tensor<4x16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %ptr : tensor<4x16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_large_i64_offset
+tt.func @test_join_large_i64_offset(%base: !tt.ptr<f16>) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %wide = arith.extsi %r : tensor<16xi32> to tensor<16xi64>
+  %two = arith.constant dense<2> : tensor<16xi64>
+  %shift = arith.constant dense<4294967296> : tensor<16xi64>
+  %scaled = arith.muli %wide, %two : tensor<16xi64>
+  %off = arith.addi %scaled, %shift : tensor<16xi64>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi64>
+  %one = arith.constant dense<1> : tensor<16xi64>
+  %q = tt.addptr %p, %one : tensor<16x!tt.ptr<f16>>, tensor<16xi64>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK: arith.extsi {{.*}}tensor<32xi32> to tensor<32xi64>
+  // CHECK-NOT: tt.join
+  %ptr = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %ptr : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_pair_load_attributes
+tt.func @test_pair_load_attributes(%base: !tt.ptr<i16>, %mask: tensor<16x2xi1>, %other: tensor<16x2xi16>) -> (tensor<16xi32>) {
+  %r = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+  %off = tt.reshape %r : tensor<32xi32> -> tensor<16x2xi32>
+  %b = tt.splat %base : !tt.ptr<i16> -> tensor<16x2x!tt.ptr<i16>>
+  %p = tt.addptr %b, %off : tensor<16x2x!tt.ptr<i16>>, tensor<16x2xi32>
+  // CHECK: %[[MASK:.*]] = tt.reshape %arg1 : tensor<16x2xi1> -> tensor<32xi1>
+  // CHECK: %[[OTHER:.*]] = tt.reshape %arg2 : tensor<16x2xi16> -> tensor<32xi16>
+
+  // CHECK: tt.load {{.*}}%[[MASK]], %[[OTHER]] {{.*}}cache_modifier = cg, eviction_policy = evict_last{{.*}}tensor<32x!tt.ptr<i16>>
+  %v = tt.load %p, %mask, %other {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_last>} : tensor<16x2x!tt.ptr<i16>>
+  %wide = arith.extsi %v : tensor<16x2xi16> to tensor<16x2xi32>
+  %a, %bb = tt.split %wide : tensor<16x2xi32> -> tensor<16xi32>
+  %sum = arith.addi %a, %bb : tensor<16xi32>
+  tt.return %sum : tensor<16xi32>
+}
+
+// CHECK-LABEL: @test_pair_load_hint
+tt.func @test_pair_load_hint(%base: !tt.ptr<i16>, %mask: tensor<16x2xi1>, %other: tensor<16x2xi16>) -> (tensor<16xi32>) {
+  %r = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+  %off = tt.reshape %r : tensor<32xi32> -> tensor<16x2xi32>
+  %b = tt.splat %base : !tt.ptr<i16> -> tensor<16x2x!tt.ptr<i16>>
+  %p = tt.addptr %b, %off : tensor<16x2x!tt.ptr<i16>>, tensor<16x2xi32>
+
+  // CHECK: tt.load {{.*}}tensor<16x2x!tt.ptr<i16>>
+  %v = tt.load %p, %mask, %other {tt.contiguity = dense<[16, 2]> : tensor<2xi32>} : tensor<16x2x!tt.ptr<i16>>
+  %wide = arith.extsi %v : tensor<16x2xi16> to tensor<16x2xi32>
+  %a, %bb = tt.split %wide : tensor<16x2xi32> -> tensor<16xi32>
+  %sum = arith.addi %a, %bb : tensor<16xi32>
+  tt.return %sum : tensor<16xi32>
+}
+
+// CHECK-LABEL: @test_pair_load_multiuse
+tt.func @test_pair_load_multiuse(%base: !tt.ptr<i16>, %mask: tensor<16x2xi1>, %other: tensor<16x2xi16>) -> (tensor<16x2xi16>, tensor<16xi32>) {
+  %r = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+  %off = tt.reshape %r : tensor<32xi32> -> tensor<16x2xi32>
+  %b = tt.splat %base : !tt.ptr<i16> -> tensor<16x2x!tt.ptr<i16>>
+  %p = tt.addptr %b, %off : tensor<16x2x!tt.ptr<i16>>, tensor<16x2xi32>
+
+  // CHECK: tt.load {{.*}}tensor<16x2x!tt.ptr<i16>>
+  %v = tt.load %p, %mask, %other  : tensor<16x2x!tt.ptr<i16>>
+  %wide = arith.extsi %v : tensor<16x2xi16> to tensor<16x2xi32>
+  %a, %bb = tt.split %wide : tensor<16x2xi32> -> tensor<16xi32>
+  %sum = arith.addi %a, %bb : tensor<16xi32>
+  tt.return %v, %sum : tensor<16x2xi16>, tensor<16xi32>
+}
+
+
+// CHECK-LABEL: @test_join_affine_shift
+tt.func @test_join_affine_shift(%base: !tt.ptr<f16>, %shift: i32) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %one = arith.constant dense<1> : tensor<16xi32>
+  %off = arith.shli %r, %one : tensor<16xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %delta = arith.constant dense<1> : tensor<16xi32>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK-NOT: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_affine_commuted
+tt.func @test_join_affine_commuted(%base: !tt.ptr<f16>, %shift: i32) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %off = arith.muli %two, %r : tensor<16xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %delta = arith.constant dense<1> : tensor<16xi32>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK-NOT: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_affine_repeated_add
+tt.func @test_join_affine_repeated_add(%base: !tt.ptr<f16>, %shift: i32) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %off = arith.addi %r, %r : tensor<16xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %delta = arith.constant dense<1> : tensor<16xi32>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK-NOT: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_affine_i64
+tt.func @test_join_affine_i64(%base: !tt.ptr<f16>, %shift: i32) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %wide = arith.extsi %r : tensor<16xi32> to tensor<16xi64>
+  %two = arith.constant dense<2> : tensor<16xi64>
+  %off = arith.muli %wide, %two : tensor<16xi64>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi64>
+  %delta = arith.constant dense<1> : tensor<16xi64>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi64>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK-NOT: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_affine_u64
+tt.func @test_join_affine_u64(%base: !tt.ptr<f16>, %shift: i32) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %wide = arith.extui %r : tensor<16xi32> to tensor<16xi64>
+  %two = arith.constant dense<2> : tensor<16xi64>
+  %off = arith.muli %wide, %two : tensor<16xi64>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi64>
+  %delta = arith.constant dense<1> : tensor<16xi64>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi64>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK-NOT: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_affine_negative
+tt.func @test_join_affine_negative(%base: !tt.ptr<f16>, %shift: i32) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %bias = arith.constant dense<32> : tensor<16xi32>
+  %mul = arith.muli %r, %two : tensor<16xi32>
+  %off = arith.subi %mul, %bias : tensor<16xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %delta = arith.constant dense<1> : tensor<16xi32>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  // CHECK: tt.make_range {{.*}}end = 32
+  // CHECK-NOT: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_affine_i32_overflow
+tt.func @test_join_affine_i32_overflow(%base: !tt.ptr<f16>, %shift: i32) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %bias = arith.constant dense<2147483644> : tensor<16xi32>
+  %mul = arith.muli %r, %two : tensor<16xi32>
+  %off = arith.addi %mul, %bias : tensor<16xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %delta = arith.constant dense<1> : tensor<16xi32>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  // CHECK: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_affine_i64_overflow
+tt.func @test_join_affine_i64_overflow(%base: !tt.ptr<f16>, %shift: i32) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %wide = arith.extsi %r : tensor<16xi32> to tensor<16xi64>
+  %two = arith.constant dense<2> : tensor<16xi64>
+  %bias = arith.constant dense<9223372036854775804> : tensor<16xi64>
+  %mul = arith.muli %wide, %two : tensor<16xi64>
+  %off = arith.addi %mul, %bias : tensor<16xi64>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi64>
+  %delta = arith.constant dense<1> : tensor<16xi64>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi64>
+  // CHECK: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_affine_unsigned_negative
+tt.func @test_join_affine_unsigned_negative(%base: !tt.ptr<f16>, %shift: i32) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %bias = arith.constant dense<16> : tensor<16xi32>
+  %mul = arith.muli %r, %two : tensor<16xi32>
+  %neg = arith.subi %mul, %bias : tensor<16xi32>
+  %off = arith.extui %neg : tensor<16xi32> to tensor<16xi64>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi64>
+  %delta = arith.constant dense<1> : tensor<16xi64>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi64>
+  // CHECK: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_affine_dynamic_offset
+tt.func @test_join_affine_dynamic_offset(%base: !tt.ptr<f16>, %shift: i32) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %bias = tt.splat %shift : i32 -> tensor<16xi32>
+  %mul = arith.muli %r, %two : tensor<16xi32>
+  %off = arith.addi %mul, %bias : tensor<16xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %delta = arith.constant dense<1> : tensor<16xi32>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  // CHECK: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  // CHECK: tt.return
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+
+// CHECK-LABEL: @test_join_affine_delta_minus1
+tt.func @test_join_affine_delta_minus1(%base: !tt.ptr<f16>) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %off = arith.muli %r, %two : tensor<16xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %delta = arith.constant dense<-1> : tensor<16xi32>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  // CHECK: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_affine_delta_2
+tt.func @test_join_affine_delta_2(%base: !tt.ptr<f16>) -> tensor<16x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>
+  %two = arith.constant dense<2> : tensor<16xi32>
+  %off = arith.muli %r, %two : tensor<16xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<16x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  %delta = arith.constant dense<2> : tensor<16xi32>
+  %q = tt.addptr %p, %delta : tensor<16x!tt.ptr<f16>>, tensor<16xi32>
+  // CHECK: tt.join
+  %v = tt.join %p, %q : tensor<16x!tt.ptr<f16>> -> tensor<16x2x!tt.ptr<f16>>
+  tt.return %v : tensor<16x2x!tt.ptr<f16>>
+}
+
+// CHECK-LABEL: @test_join_reshape_across_pitch
+tt.func @test_join_reshape_across_pitch(%base: !tt.ptr<f16>) -> tensor<4x2x!tt.ptr<f16>> {
+  %r = tt.make_range {start = 0 : i32, end = 2 : i32} : tensor<2xi32>
+  %two = arith.constant dense<2> : tensor<2xi32>
+  %ten = arith.constant dense<10> : tensor<2xi32>
+  %row = arith.muli %r, %ten : tensor<2xi32>
+  %col = arith.muli %r, %two : tensor<2xi32>
+  %rr = tt.expand_dims %row {axis = 1 : i32} : tensor<2xi32> -> tensor<2x1xi32>
+  %cc = tt.expand_dims %col {axis = 0 : i32} : tensor<2xi32> -> tensor<1x2xi32>
+  %rows = tt.broadcast %rr : tensor<2x1xi32> -> tensor<2x2xi32>
+  %cols = tt.broadcast %cc : tensor<1x2xi32> -> tensor<2x2xi32>
+  %grid = arith.addi %rows, %cols : tensor<2x2xi32>
+  %off = tt.reshape %grid : tensor<2x2xi32> -> tensor<4xi32>
+  %b = tt.splat %base : !tt.ptr<f16> -> tensor<4x!tt.ptr<f16>>
+  %p = tt.addptr %b, %off : tensor<4x!tt.ptr<f16>>, tensor<4xi32>
+  %one = arith.constant dense<1> : tensor<4xi32>
+  %q = tt.addptr %p, %one : tensor<4x!tt.ptr<f16>>, tensor<4xi32>
+  // CHECK: tt.join
+  %v = tt.join %p, %q : tensor<4x!tt.ptr<f16>> -> tensor<4x2x!tt.ptr<f16>>
+  tt.return %v : tensor<4x2x!tt.ptr<f16>>
+}
+
 // CHECK-LABEL: @test_combine_dot_add_invalid_pattern
+// We don't combine if the dot result is used by more than one op.
 tt.func @test_combine_dot_add_invalid_pattern() -> (tensor<128x128xf32>, tensor<128x128xf32>) {
     // CHECK-DAG: %[[d:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
     // CHECK-DAG: %[[e:.*]] = arith.constant dense<4.000000e+00> : tensor<128x128xf32>

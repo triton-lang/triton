@@ -2940,6 +2940,246 @@ def test_join_scalars(device):
     np.testing.assert_equal([42, 100], to_numpy(z))
 
 
+@pytest.mark.parametrize("n", [3, 32, 33, 513])
+@pytest.mark.parametrize("offset", [0, 1])
+@pytest.mark.parametrize("delta", [1, 2, -1])
+@pytest.mark.parametrize("same_mask", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.int16, torch.int32])
+def test_join_pointer_pair_boundaries(device, n, offset, delta, same_mask, dtype):
+
+    @triton.jit
+    def kernel(X, O, N: tl.constexpr, OFFSET: tl.constexpr, DELTA: tl.constexpr, SAME_MASK: tl.constexpr,
+               B: tl.constexpr):
+        i = tl.arange(0, B)
+        j = 2 * i
+        base = X + OFFSET
+        p = base + j
+        q = p + DELTA
+        m0 = j < N
+        m1 = (j + DELTA >= 0) & (j + DELTA < N)
+        if SAME_MASK:
+            m0 = m0 & m1
+            m1 = m0
+        pair = tl.load(tl.join(p, q), tl.join(m0, m1), other=0)
+        a, b = tl.split(pair.to(tl.float32))
+        tl.store(O + 2 * i, a)
+        tl.store(O + 2 * i + 1, b)
+
+    block = triton.next_power_of_2(triton.cdiv(n, 2))
+    x = torch.arange(n + offset, device=device).to(dtype)
+    if dtype.is_floating_point:
+        # Exact bit transport, including special values, must survive grouping.
+        x[:3] = torch.tensor([float("nan"), float("inf"), -0.0], device=device, dtype=dtype)
+    out = torch.empty(2 * block, device=device, dtype=torch.float32)
+    compiled = kernel[(1, )](x, out, n, offset, delta, same_mask, block)
+    j = 2 * torch.arange(block, device=device)
+    m0, m1 = j < n, (j + delta >= 0) & (j + delta < n)
+    if same_mask:
+        m0 = m0 & m1
+        m1 = m0
+    ref = torch.zeros_like(out).reshape(-1, 2)
+    ref[m0, 0] = x[offset + j[m0]].float()
+    ref[m1, 1] = x[offset + j[m1] + delta].float()
+    torch.testing.assert_close(out.reshape(-1, 2), ref, rtol=0, atol=0, equal_nan=True)
+    if is_cuda() and dtype == torch.float16 and n == 513 and offset == 0 and delta == 1 and same_mask:
+        assert any(op in compiled.asm["ptx"]
+                   for op in ["ld.global.b32", "ld.global.b64", "ld.global.v2.b32", "ld.global.v4.b32"])
+        assert "ld.global.b16" not in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize(
+    "form", ["shift", "commuted", "add", "sub", "i64", "u64", "trunc", "large_i64", "negative_u64", "transpose"])
+@pytest.mark.parametrize("rows", [1, 4])
+@pytest.mark.parametrize("pitch", [64, 80])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.int16])
+@pytest.mark.parametrize("same_mask", [False, True])
+def test_join_pointer_affine_forms(device, form, rows, pitch, dtype, same_mask):
+
+    @triton.jit
+    def kernel(X, O, FORM: tl.constexpr, R: tl.constexpr, PITCH: tl.constexpr, SAME_MASK: tl.constexpr):
+        # Nonzero arange, a dynamic scalar block base, and pitched 2-D rows.
+        base = X + tl.program_id(0) * R * PITCH
+        c = tl.arange(16, 48)
+        if FORM == "shift":
+            j = (c << 1) - 32
+        elif FORM == "commuted":
+            j = 2 * c - 32
+        elif FORM == "add":
+            j = c + c - 32
+        elif FORM == "sub":
+            j = 64 - (96 - c * 2)
+        elif FORM == "i64":
+            j = c.to(tl.int64) * 2 - 32
+        elif FORM == "u64":
+            j = c.to(tl.uint64) * 2 - 32
+        elif FORM == "trunc":
+            j = (c.to(tl.int64) * 2 - 32).to(tl.int32)
+        elif FORM == "transpose":
+            j = c * 2 - 32
+        elif FORM == "negative_u64":
+            j = (c * 2 - 128).to(tl.uint32).to(tl.uint64)
+            base = base - 4294967296 + 96
+        else:
+            # Exercise i64 addresses without allocating a huge buffer.
+            base = base - 4294967296
+            j = c.to(tl.int64) * 2 - 32 + 4294967296
+        r = tl.arange(0, R)
+        if FORM == "large_i64":
+            column = j - 4294967296
+        elif FORM == "negative_u64":
+            column = j - 4294967200
+        else:
+            column = j
+        p = base + r[:, None] * PITCH + j[None, :]
+        q = base + r[:, None] * PITCH + (j[None, :] + 1)
+        if FORM == "transpose":
+            p = (base + r[None, :] * PITCH + j[:, None]).trans()
+            q = p + 1
+        m0 = (r[:, None] < R) & (column[None, :] < 53)
+        m1 = (r[:, None] < R) & (column[None, :] + 1 < 53)
+        if SAME_MASK:
+            m0 = m0 & m1
+            m1 = m0
+        # Preserve different per-element 'other' values as well as the masks.
+        other = tl.join(tl.full((R, 32), -3, tl.int32), tl.full((R, 32), 7, tl.int32))
+        a, b = tl.split(tl.load(tl.join(p, q), tl.join(m0, m1), other=other).to(tl.float32))
+        out = O + tl.program_id(0) * R * 64 + r[:, None] * 64 + 2 * tl.arange(0, 32)[None, :]
+        tl.store(out, a)
+        tl.store(out + 1, b)
+
+    x = (torch.arange(2 * rows * pitch, device=device) % 101).to(dtype)
+    out = torch.empty((2, rows, 64), device=device, dtype=torch.float32)
+    compiled = kernel[(2, )](x, out, form, rows, pitch, same_mask)
+    ref = x.reshape(2, rows, pitch)[:, :, :64].float().clone()
+    ref[:, :, 53::2] = 7
+    ref[:, :, 54::2] = -3
+    if same_mask:
+        ref[:, :, 52] = -3
+    torch.testing.assert_close(out, ref, rtol=0, atol=0)
+    # Verify the source form actually reached this optimization, not merely
+    # that an unoptimized kernel happened to return correct values.
+    assert not any("tt.join" in line and "!tt.ptr" in line for line in compiled.asm["ttir"].splitlines())
+    assert not any("tt.load" in line and "x32x2x!tt.ptr" in line for line in compiled.asm["ttir"].splitlines())
+
+
+@pytest.mark.parametrize("kind", ["i32_wrap", "u32_high_bit", "trunc_wrap", "negative_ext", "i64_wrap"])
+@pytest.mark.parametrize("offset_first", [False, True])
+def test_join_pointer_integer_semantics(device, kind, offset_first):
+
+    @triton.jit
+    def kernel(X, O, KIND: tl.constexpr, OFFSET_FIRST: tl.constexpr):
+        i = tl.arange(0, 32)
+        if KIND == "i32_wrap":
+            off = i * 2 + 2147483645
+        elif KIND == "u32_high_bit":
+            off = (i * 2 + 2147483645).to(tl.uint32).to(tl.uint64)
+        elif KIND == "trunc_wrap":
+            off = (i.to(tl.int64) * 2 + 2147483645).to(tl.int32)
+        elif KIND == "negative_ext":
+            off = (i * 2 - 32).to(tl.uint32).to(tl.uint64)
+        else:
+            off = i.to(tl.int64) * 2 + 9223372036854775805
+        p = X + off
+        if OFFSET_FIRST:
+            q = X + (off + 1)
+        else:
+            q = p + 1
+        # Compare addresses without dereferencing intentionally wrapped ones.
+        addresses = tl.join(p, q).to(tl.uint64) - X.to(tl.uint64)
+        tl.store(O + tl.arange(0, 64), addresses.reshape(64))
+
+    x = torch.empty(1, device=device, dtype=torch.int8)
+    out = torch.empty(64, device=device, dtype=torch.uint64)
+    kernel[(1, )](x, out, kind, offset_first)
+
+    def signed(value, bits):
+        return (value + 2**(bits - 1)) % 2**bits - 2**(bits - 1)
+
+    ref = []
+    for i in range(32):
+        if kind in ("i32_wrap", "trunc_wrap"):
+            off = signed(2 * i + 2147483645, 32)
+        elif kind == "u32_high_bit":
+            off = (2 * i + 2147483645) % 2**32
+        elif kind == "negative_ext":
+            off = (2 * i - 32) % 2**32
+        else:
+            off = signed(2 * i + 9223372036854775805, 64)
+        second = off + 1
+        if offset_first and kind in ("i32_wrap", "trunc_wrap"):
+            second = signed(second, 32)
+        ref.extend([off % 2**64, second % 2**64])
+    assert out.cpu().tolist() == ref
+
+
+@pytest.mark.parametrize("cast", ["signed", "unsigned", "float_chain"])
+def test_join_pointer_conversion_split(device, cast):
+
+    @triton.jit
+    def kernel(X, O, CAST: tl.constexpr):
+        i = tl.arange(0, 128)
+        p = X + (i << 1)
+        pair = tl.load(tl.join(p, p + 1))
+        if CAST == "signed":
+            pair = pair.to(tl.int32)
+        elif CAST == "unsigned":
+            pair = pair.to(tl.uint16).to(tl.uint32)
+        else:
+            pair = pair.to(tl.float32).to(tl.float16).to(tl.float32)
+        a, b = tl.split(pair)
+        tl.store(O + i, a + b)
+
+    dtype = torch.float16 if cast == "float_chain" else torch.int16
+    x = (torch.arange(256, device=device) - 128).to(dtype)
+    out = torch.empty(128, device=device, dtype=torch.float32 if cast == "float_chain" else torch.int32)
+    compiled = kernel[(1, )](x, out, cast, num_warps=4)
+    ref = x.float() if cast == "float_chain" else x.int()
+    if cast == "unsigned":
+        ref = ref & 65535
+    torch.testing.assert_close(out, ref.reshape(128, 2).sum(1).to(out.dtype), rtol=0, atol=0)
+    if is_cuda():
+        assert "ld.global.b16" not in compiled.asm["ptx"]
+        assert compiled.metadata.shared == 0
+
+
+def test_join_pointer_nested_pack(device):
+
+    @triton.jit
+    def kernel(X, O):
+        i = tl.arange(0, 128)
+        p = X + i * 4
+        # Logical order [4*i, 4*i+1, 4*i+2, 4*i+3]. The inner
+        # joins alone are not contiguous; the complete packing is.
+        ptr = tl.join(tl.join(p, p + 2), tl.join(p + 1, p + 3))
+        data = tl.load(ptr).to(tl.float32)
+        tl.store(O + tl.arange(0, 512), data.reshape(512))
+
+    x = torch.randn(512, device=device, dtype=torch.float16)
+    out = torch.empty(512, device=device, dtype=torch.float32)
+    compiled = kernel[(1, )](x, out)
+    torch.testing.assert_close(out, x.float(), rtol=0, atol=0)
+    assert not any("tt.join" in line and "!tt.ptr" in line for line in compiled.asm["ttir"].splitlines())
+
+
+def test_join_pointer_pair_sum_codegen(device):
+
+    @triton.jit
+    def kernel(X, O, N: tl.constexpr):
+        i = tl.arange(0, 256)
+        p = X + 2 * i
+        m = 2 * i + 1 < N
+        a, b = tl.split(tl.load(tl.join(p, p + 1), tl.join(m, m), 0).to(tl.float32))
+        tl.store(O + i, a + b, i < N // 2)
+
+    x = torch.randn(513, device=device, dtype=torch.float16)
+    out = torch.empty(256, device=device, dtype=torch.float32)
+    compiled = kernel[(1, )](x, out, 513, num_warps=4)
+    torch.testing.assert_close(out, x[:512].float().reshape(-1, 2).sum(1), rtol=0, atol=0)
+    if is_cuda():
+        assert "ld.global.b16" not in compiled.asm["ptx"]
+        assert compiled.metadata.shared == 0
+
+
 @pytest.mark.interpreter
 def test_join_with_mma(device):
 
