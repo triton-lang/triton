@@ -839,6 +839,59 @@ def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, devic
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("block_m", [16, 128])
+@pytest.mark.parametrize("scale_source", ["global", "row"])
+@pytest.mark.parametrize("has_beta, expected", [(False, 0.00787353515625), (True, 0.0079345703125)])
+def test_persistent_matmul_scale_bias_rounding(block_m, scale_source, has_beta, expected, device, opt_flags_scope):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+
+    a = torch.zeros((128, 128), device=device)
+    b = torch.zeros((256, 128), device=device)
+    a[:, :3] = 1
+    b[:, :3] = 1
+    # The accumulator is 3. Separate scaling reaches a BF16 tie; FMA stays below it.
+    scale = torch.tensor([0.1], device=device)
+    bias = torch.full((256, ), -0.29209595918655396, device=device)
+    betas = torch.ones(128, device=device) if has_beta else None
+    config = PrecisionConfig(out_dtype=torch.bfloat16)
+    if scale_source == "global":
+        config.flex_ctx = FlexCtx(lhs_data=InFlexData(scale=scale))
+    else:
+        config.a_mx_tensor_scale = scale.expand(128).contiguous()
+    opt_flags.update_opt_flags_constraints(
+        dict(
+            block_m=block_m,
+            block_n=256,
+            block_k=128,
+            num_stages=2,
+            is_persistent=True,
+            split_k=1,
+            epilogue_subtile=2,
+        ))
+    actual = matmul(a.to(torch.float8_e4m3fn), b.to(torch.float8_e4m3fn).T, bias, precision_config=config, betas=betas)
+
+    torch.testing.assert_close(actual, torch.full_like(actual, expected), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_persistent_matmul_residual_scale_rounding(dtype, device, opt_flags_scope):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+
+    a = torch.ones((128, 128), device=device).to(torch.float8_e4m3fn)
+    b = torch.full((256, 128), 3 / 128, device=device).to(torch.float8_e4m3fn).T
+    residual = torch.full((128, 256), -30, dtype=dtype, device=device)
+    scale = torch.tensor([0.1], dtype=dtype, device=device)
+    config = PrecisionConfig(out_dtype=dtype, flex_ctx=FlexCtx(acc_data=InFlexData(scale=scale)))
+    opt_flags.update_opt_flags_constraints(
+        dict(is_persistent=True, block_m=64, block_n=128, block_k=128, split_k=1, epilogue_subtile=2))
+    actual = matmul(a, b, None, precision_config=config, c=residual, c_acc_in=residual)
+
+    # Rounding -30 * 0.1 in the residual dtype gives -3 before adding 3.
+    torch.testing.assert_close(actual, torch.zeros_like(actual), rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("is_persistent", [False, True])
 @pytest.mark.parametrize("n", [960, 1024, 1536, 1568, 1600, 1632, 1664])
 def test_mxfp8_act_scale_store_zeroes_partial_group(n, is_persistent, device):
