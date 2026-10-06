@@ -23,11 +23,18 @@ from triton_kernels.testing import assert_close
 
 
 @pytest.mark.parametrize("block_m, num_warps, occupancy, full_grid, scaled_input", [
-    (16, 4, 4, True, False), (64, 4, 4, True, False), (128, 4, 2, True, False),
-    (16, 8, 2, True, False), (64, 8, 2, True, False), (128, 8, 1, True, False), (64, 8, 1, False, False),
-    (16, 4, 1, True, True), (64, 8, 1, True, True),
+    (16, 4, 4, True, False),
+    (64, 4, 4, True, False),
+    (128, 4, 2, True, False),
+    (16, 8, 2, True, False),
+    (64, 8, 2, True, False),
+    (128, 8, 1, True, False),
+    (64, 8, 1, False, False),
+    (16, 4, 1, True, True),
+    (64, 8, 1, True, True),
 ])
-def test_hopper_mxfp4_compiled_occupancy_budget(block_m, num_warps, occupancy, full_grid, scaled_input, device, monkeypatch):
+def test_hopper_mxfp4_compiled_occupancy_budget(block_m, num_warps, occupancy, full_grid, scaled_input, device,
+                                                monkeypatch):
     if device != "cuda" or not is_cuda() or torch.cuda.get_device_capability()[0] != 9:
         pytest.skip("requires Hopper")
 
@@ -44,7 +51,8 @@ def test_hopper_mxfp4_compiled_occupancy_budget(block_m, num_warps, occupancy, f
     if scaled_input:
         a, a_scale = downcast_to_mxfp(a, torch.float8_e4m3fn, axis=-1)
         a, a_scale = wrap_torch_tensor(a), wrap_torch_tensor(a_scale)
-    config = PrecisionConfig(out_dtype=torch.bfloat16, a_mx_scale=a_scale, a_microblock_size=32, b_mx_scale=b_scale, b_microblock_size=32)
+    config = PrecisionConfig(out_dtype=torch.bfloat16, a_mx_scale=a_scale, a_microblock_size=32, b_mx_scale=b_scale,
+                             b_microblock_size=32)
 
     # Inspect the compiled kernel, including cache hits, rather than merely
     # asserting that the heuristic returns a particular launch option.
