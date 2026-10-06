@@ -359,6 +359,7 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
     Scale and convert FP16, BF16, or FP32 values to a low-precision format.
 
     ``scale`` is one of:
+
     * a tensor of raw E8M0 payloads (``int8`` or ``uint8``), as used by the
       MX formats;
     * a tensor of ``fp32`` scales; or
@@ -387,11 +388,13 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
       high nibble), so the result extent along ``axis`` is halved (the inverse
       of ``scaled_upcast``).
 
-    ``axis`` (default: last dim) selects the dimension along which tensor
-    scales are shared and along which fp4 values are packed. A tensor ``scale``
-    must be compact along ``axis`` with one value per block of consecutive
-    input elements along ``axis``, and each block must span a multiple of 8
-    consecutive input elements.
+    ``axis`` (default: last dim) selects the dimension along which scales are
+    shared and along which fp4 values are packed. A tensor ``scale`` must be
+    compact along ``axis`` with one value per block of consecutive input
+    elements along ``axis``, and each block must span a multiple of 8
+    consecutive input elements. A scalar ``scale`` is applied as a single block
+    spanning ``axis``, so, as with tensor scales, ``axis`` must be the dimension
+    along which each thread holds consecutive values of ``input``.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _downcast_format_to_elem_type(format)
