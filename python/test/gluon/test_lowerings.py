@@ -96,7 +96,7 @@ def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl
     ttgl.store(z_ptr + x_offs_m * N + x_offs_n, y)
 
 
-@pytest.mark.parametrize("M, N", [(32, 16), (32, 32), (32, 64), (64, 32)])
+@pytest.mark.parametrize("M, N", [(32, 16), (32, 32), (32, 64), (64, 32), (64, 256)])
 @pytest.mark.parametrize(
     "src_layout",
     _filter_layouts([

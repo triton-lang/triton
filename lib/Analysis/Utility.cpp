@@ -890,14 +890,13 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape,
 }
 
 unsigned ScanLoweringHelper::getAxisElementStride() {
-  auto order = getEncoding().getOrder();
-  unsigned stride = 1;
-  for (unsigned dim : order) {
-    if (dim == getAxis())
-      return stride;
-    stride *= getEncoding().getContigPerThread()[dim];
-  }
-  llvm_unreachable("Axis not found in order");
+  auto encoding = getEncoding();
+  const auto &layout = encoding.getLinearLayout();
+  auto kReg = StringAttr::get(encoding.getContext(), "register");
+  auto outDims = llvm::to_vector(layout.getOutDimNames());
+  uint64_t bases = getInputBasisMask(layout, kReg, {outDims[getAxis()]});
+  // With one element per thread along the axis, the stride is unused.
+  return bases ? uint64_t{1} << llvm::countr_zero(bases) : 1;
 }
 
 unsigned ScanLoweringHelper::getAxisThreadStride() {
@@ -910,20 +909,27 @@ unsigned ScanLoweringHelper::getAxisThreadStride() {
 }
 
 unsigned ScanLoweringHelper::getAxisBlockStride() {
-  auto order = getOrder();
-  auto shapePerCTA = getShapePerCTA(getEncoding(), getShape());
-  unsigned stride = 1;
-  auto contigPerThread = getEncoding().getContigPerThread();
-  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
-  auto warpsPerCTA = getEncoding().getWarpsPerCTA();
-  for (unsigned dim : order) {
-    if (dim == getAxis())
-      return stride;
-    stride *= ceil<unsigned int>(shapePerCTA[dim], contigPerThread[dim] *
-                                                       threadsPerWarp[dim] *
-                                                       warpsPerCTA[dim]);
-  }
-  llvm_unreachable("Axis not found in order");
+  auto encoding = getEncoding();
+  const auto &layout = encoding.getLinearLayout();
+  auto kReg = StringAttr::get(encoding.getContext(), "register");
+  auto tileShape = encoding.getContigPerThread();
+  auto threadsPerWarp = encoding.getThreadsPerWarp();
+  auto warpsPerCTA = encoding.getWarpsPerCTA();
+  for (unsigned dim = 0; dim < tileShape.size(); ++dim)
+    tileShape[dim] *= threadsPerWarp[dim] * warpsPerCTA[dim];
+
+  // Registers within the first CTA tile do not contribute to blockId.
+  // Dividing their coordinates by the tile shape leaves the repetition bits.
+  auto regBases = layout.getBases().lookup(kReg);
+  for (auto &basis : regBases)
+    for (auto [dim, value] : llvm::enumerate(basis))
+      value /= tileShape[dim];
+  auto outDims = llvm::to_vector(layout.getOutDimNames());
+  auto repetitions = LinearLayout({{kReg, std::move(regBases)}}, outDims)
+                         .removeZeroBasesAlongDim(kReg);
+  uint64_t bases = getInputBasisMask(repetitions, kReg, {outDims[getAxis()]});
+  // With one tile along the axis, the stride is unused.
+  return bases ? uint64_t{1} << llvm::countr_zero(bases) : 1;
 }
 
 GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)
