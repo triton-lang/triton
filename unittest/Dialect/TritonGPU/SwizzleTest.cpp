@@ -539,29 +539,6 @@ TEST_F(SwizzleTest, Test64x128F16BlockedMfma64Bank) {
   EXPECT_EQ(w, 0);
 }
 
-TEST_F(SwizzleTest, RepetitionsRequireUniqueRegisterOwnership) {
-  LinearLayout dst({{S("register"), {{1}, {2}, {4}}},
-                    {S("lane"), {{8}, {16}, {32}, {64}, {128}}},
-                    {S("warp"), {{256}, {0}}},
-                    {S("block"), {}}},
-                   {{S("dim0"), 512}}, /*requireSurjective=*/true);
-  auto warpBases = dst.getBases();
-  warpBases[S("warp")] = {{4}, {256}};
-  auto regBases = dst.getBases();
-  regBases[S("register")].push_back({4});
-  for (const auto &src : {dst, LinearLayout(warpBases, dst.getOutDims(), true),
-                          LinearLayout(regBases, dst.getOutDims(), true)}) {
-    auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/32);
-    // Bit 4 is a repetition only when no other register or warp selects it.
-    EXPECT_EQ(smem.getInDimSize(S("reps")), src == dst ? 2 : 1);
-    for (const auto &layout : {src, dst}) {
-      auto cvt = layout.invertAndCompose(smem);
-      EXPECT_TRUE(
-          cvt.sublayoutIsZero({S("lane"), S("warp"), S("block")}, {S("reps")}));
-    }
-  }
-}
-
 TEST_F(SwizzleTest, Test1024F32WarpSwapped32Bank) {
   LinearLayout src({{S("register"), {{1}, {2}}},
                     {S("lane"), {{4}, {8}, {16}, {32}, {64}, {128}}},

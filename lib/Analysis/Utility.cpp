@@ -470,8 +470,8 @@ LinearLayout ScanLoweringHelper::getChunkLookup() const {
   LinearLayout query(queryBases, totalsLayout->getOutDims(), false);
   auto ownerLayout =
       interWarp ? *scratchLayout : totalsLayout->sublayout({kReg, kLane}, dims);
-  // Invert only coordinates reachable by this CTA (or warp), rather than
-  // demanding a full-tensor inverse for broadcasts or CTA-local views.
+  // Restrict the inverse to coordinates reachable by this CTA (or warp).
+  // This supports broadcasts and CTA-local views.
   return query.invertAndCompose(ownerLayout);
 }
 

@@ -337,8 +337,8 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
       constantIns.push_back({inDimName, constant.getSExtValue()});
     } else {
       constantIns.push_back({inDimName, 0});
-      // Ignore inputs that cannot affect any output, rather than packing
-      // their values into the matrix-vector product and masking them later.
+      // Include inputs with nonzero output contributions in the matrix-vector
+      // product.
       if (!layout.sublayoutIsZero({inDimName}, outDimNames))
         nonConstantIns.push_back({inDimName, idx});
     }

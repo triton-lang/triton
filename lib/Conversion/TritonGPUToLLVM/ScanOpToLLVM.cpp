@@ -159,7 +159,7 @@ private:
 
     // As in main, reverse the register/lane traversal around a forward scan.
     // The layout gives the remaining axis offset, including interleaved or
-    // swizzled warp bits; no layout or physical warp ownership is changed.
+    // swizzled warp bits. Layout and physical warp ownership are preserved.
     indices.axisOffset = helper.getAxisOffset();
     // Physical lane -> position within a chunk, in thread-local range units.
     unsigned threadSize = helper.getThreadLocalSize();
@@ -253,12 +253,15 @@ private:
     return shuffleValues(op, values, lane, rewriter);
   }
 
+  // Compute an inclusive prefix for each group, independently in each thread.
+  // Input: original register values. Output: group-local prefixes in the same
+  // registers; the final register of each group contains its total.
+  // Groups are interleaved in native register emission order, while each group
+  // is accumulated in logical axis order using thread-local registers.
   void scanWithinThreads(triton::ScanOp op, const ScanLoweringHelper &helper,
                          ScanValues &values,
                          ConversionPatternRewriter &rewriter) const {
     auto groups = helper.getThreadGroups();
-    // Scan contiguous elements within a thread. Follow native register emission
-    // order, but take each chunk's elements in logical axis order.
     auto groupForReg = helper.getRegisterGroups();
     SmallVector<unsigned> nextReg(groups.size(), 0);
     ScanValues accumulators(groups.size());
@@ -271,6 +274,14 @@ private:
     }
   }
 
+  // Scan group totals across the lanes belonging to each chunk. Shuffle rounds
+  // at logical distances 1, 2, 4, ... compute inclusive prefixes of group
+  // totals; predicates exclude predecessors outside the chunk. The returned
+  // totals[g] contains the prefix through this lane's group, with the complete
+  // chunk total in its terminal lane. The register values retain group-local
+  // prefixes until carries are applied. If no inter-warp scan is needed,
+  // applyWarpCarries also scans preceding chunks and completes the register
+  // prefixes here.
   ScanValues scanWithinWarps(triton::ScanOp op,
                              const ScanLoweringHelper &helper,
                              ScanIndices &indices, ScanValues &values,
@@ -506,8 +517,8 @@ private:
       for (unsigned g = 0; g < groups.size(); ++g)
         applyChunkCarry(op, helper, indices, values, totals, g, {}, rewriter);
     } else if (oneChunkPerLaneGroup) {
-      // Main's one-warp carry chain: broadcast the completed chunk prefix,
-      // instead of separately recomputing the same prefix from raw totals.
+      // Main's one-warp carry chain: broadcast the completed chunk prefix
+      // and reuse it as the carry for the next chunk.
       unsigned axisRegs = helper.getAxisMask(kReg, layout.getOutDimSize(axis));
       llvm::MapVector<unsigned, SmallVector<unsigned>> rows;
       for (unsigned g = 0; g < groups.size(); ++g)
@@ -543,6 +554,13 @@ private:
     }
   }
 
+  // Complete the scan from group-local register prefixes and the inclusive
+  // group-total prefixes returned by scanWithinWarps. Terminal lanes publish
+  // chunk totals to shared memory, excluding redundant owners. After one CTA
+  // barrier, scanChunkTotals reads totals in logical chunk order and computes
+  // each chunk's exclusive carry. applyChunkCarry combines this carry with the
+  // preceding groups' prefix and updates the registers in each group. Boundary
+  // predicates apply carries only to groups with preceding elements.
   void scanAcrossWarps(triton::ScanOp op, const ScanLoweringHelper &helper,
                        ScanIndices &indices, ScanValues &values,
                        const ScanValues &totals,
