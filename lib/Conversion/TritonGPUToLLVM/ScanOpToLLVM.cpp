@@ -500,20 +500,13 @@ private:
     auto kLane = rewriter.getStringAttr("lane");
     auto axis = rewriter.getStringAttr("dim" + std::to_string(op.getAxis()));
     const auto &layout = helper.getLayout();
-    auto dims = llvm::to_vector(layout.getOutDimNames());
     auto groups = helper.getThreadLocalGroups();
     unsigned chunkSize = helper.getChunkSize();
     unsigned numLanes = helper.getChunkSize() / helper.getGroupSize();
     unsigned numChunks = layout.getOutDimSize(axis) / chunkSize;
     unsigned laneMask = helper.getAxisMask(kLane, chunkSize);
-    auto localLayout = layout.sublayout({kReg, kLane}, dims)
-                           .removeZeroBasesAlongDim(kReg)
-                           .removeZeroBasesAlongDim(kLane);
-    auto free = localLayout.getFreeVariableMasks();
     bool oneChunkPerLaneGroup =
-        helper.getAxisMask(kLane, layout.getOutDimSize(axis)) == laneMask &&
-        triton::gpu::hasPowerOfTwoBases(localLayout) && !free[kReg] &&
-        !free[kLane];
+        helper.getAxisMask(kLane, layout.getOutDimSize(axis)) == laneMask;
     if (numChunks == 1) {
       for (unsigned g = 0; g < groups.size(); ++g)
         applyChunkCarry(op, helper, indices, values, totals, g, {}, rewriter);

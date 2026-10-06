@@ -328,16 +328,6 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
           chunkSize = std::min(chunkSize, bit);
       }
 
-  auto local =
-      layout.sublayout({kReg, kLane}, llvm::to_vector(layout.getOutDimNames()))
-          .removeZeroBasesAlongDim(kReg)
-          .removeZeroBasesAlongDim(kLane);
-  auto free = local.getFreeVariableMasks();
-  // Swizzled or overlapping register/lane bases use single-value warp-local
-  // chunks. The same coordinate lookup supplies their ordered carries.
-  if (!hasPowerOfTwoBases(local) || free[kReg] || free[kLane])
-    groupSize = chunkSize = 1;
-
   unsigned regMask = getAxisMask(kReg, groupSize);
   llvm::DenseMap<unsigned, unsigned> groups;
   for (unsigned reg = 0; reg < layout.getInDimSize(kReg); ++reg) {

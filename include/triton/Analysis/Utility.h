@@ -131,9 +131,9 @@ private:
 // [x4..x7]. Here groupSize=2 and chunkSize=4. The warp-local chunk index of xi
 // is i / 4.
 //
-// Swizzled or overlapping register/lane bases use one-element thread-local
-// groups and warp-local chunks. Scans across CTAs are unsupported. Layouts
-// describe increasing axis coordinates; the lowering reflects reverse scans.
+// Register/lane bases are non-swizzled and independent after removing
+// broadcast bases. Scans across CTAs are unsupported. Layouts describe
+// increasing axis coordinates; the lowering reflects reverse scans.
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
