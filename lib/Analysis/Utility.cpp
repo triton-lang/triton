@@ -388,7 +388,7 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
   scratchLayout = scratchAddressLayout->pseudoinvert().compose(*totalsLayout);
 }
 
-unsigned ScanLoweringHelper::getAxisOffset() const {
+unsigned ScanLoweringHelper::getRemainingReverseMask() const {
   auto op = scanOp;
   if (!op.getReverse())
     return 0;
@@ -423,12 +423,12 @@ ScanLoweringHelper::getChunkBounds(unsigned reg) const {
   auto *ctx = op.getContext();
   auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
   unsigned first = totalsLayout->getOutDimSize(axis) - 1, last = 0;
-  unsigned offset = getAxisOffset() / chunkSize;
+  unsigned reverseMask = getRemainingReverseMask() / chunkSize;
   for (unsigned lane = 0;
        lane < layout.getInDimSize(StringAttr::get(ctx, "lane")); ++lane)
     for (unsigned warp = 0;
          warp < layout.getInDimSize(StringAttr::get(ctx, "warp")); ++warp) {
-      unsigned index = getChunkIndex(reg, lane, warp) ^ offset;
+      unsigned index = getChunkIndex(reg, lane, warp) ^ reverseMask;
       first = std::min(first, index);
       last = std::max(last, index);
     }

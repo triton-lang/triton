@@ -145,7 +145,7 @@ public:
   unsigned getChunkSize() const { return chunkSize; }
   unsigned getAxisMask(mlir::StringAttr dim, unsigned size) const;
   // Remaining axis XOR mask for reverse scans after reversing registers/lanes.
-  unsigned getAxisOffset() const;
+  unsigned getRemainingReverseMask() const;
   // Logical axis coordinate in warp-local chunk units, before reverse-scan
   // reflection.
   unsigned getChunkIndex(unsigned reg, unsigned lane = 0,

@@ -64,7 +64,7 @@ private:
   struct ScanIndices {
     Value laneId, warpId, laneIndex, notFirstLane, baseChunkIndex;
     LinearLayout laneInverse;
-    unsigned stride = 0, axisOffset = 0, chunkSpan = 1;
+    unsigned stride = 0, remainingReverseMask = 0, chunkSpan = 1;
   };
 
   static SmallVector<std::pair<StringAttr, Value>>
@@ -144,9 +144,9 @@ private:
                             b.i32_val(layout.getInDimSize(kWarp) - 1));
 
     // As in main, reverse the register/lane traversal around a forward scan.
-    // The layout gives the remaining axis offset, including interleaved or
+    // The layout gives the remaining reverse mask, including interleaved or
     // swizzled warp bits. Layout and physical warp ownership are preserved.
-    indices.axisOffset = helper.getAxisOffset();
+    indices.remainingReverseMask = helper.getRemainingReverseMask();
     // Physical lane -> position within a warp-local chunk, in thread-local
     // group units.
     unsigned groupSize = helper.getGroupSize();
@@ -193,7 +193,8 @@ private:
                                                  indices.warpId,
                                                  rewriter))[op.getAxis()]
             .second;
-    unsigned reflection = (indices.axisOffset / chunkSize) % indices.chunkSpan;
+    unsigned reflection =
+        (indices.remainingReverseMask / chunkSize) % indices.chunkSpan;
     if (reflection == indices.chunkSpan - 1)
       indices.baseChunkIndex =
           b.sub(b.i32_val(reflection), indices.baseChunkIndex);
@@ -290,7 +291,7 @@ private:
     unsigned reg = helper.getThreadLocalGroups()[g].back();
     unsigned regIndex = helper.getChunkIndex(reg);
     unsigned traversalIndex =
-        regIndex ^ (indices.axisOffset / helper.getChunkSize());
+        regIndex ^ (indices.remainingReverseMask / helper.getChunkSize());
     // Aligned intervals selected by registers have a compile-time ordering.
     if (traversalIndex / indices.chunkSpan != index / indices.chunkSpan)
       return b.i1_val(traversalIndex / indices.chunkSpan >
@@ -439,7 +440,7 @@ private:
       auto &row = rows[chunks[g].row];
       while (row.next <= chunks[g].last) {
         unsigned index = row.next++;
-        unsigned logical = index ^ (indices.axisOffset / chunkSize);
+        unsigned logical = index ^ (indices.remainingReverseMask / chunkSize);
         auto total = loadTotal(g, logical);
         row.acc = combineWithPrefix(op, row.acc, total, rewriter);
         for (unsigned consumer : row.groups) {
