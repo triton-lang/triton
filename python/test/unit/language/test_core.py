@@ -2985,8 +2985,11 @@ def test_coalesce_adjacent_loads(device, width, rows, n, offset, reverse, dtype)
         ref[row, :valid] = x[offset + row * pitch:offset + row * pitch + valid * width].float().reshape(valid, width)
     torch.testing.assert_close(out, ref, rtol=0, atol=0, equal_nan=True)
     if n == 513:
-        assert compiled.asm["ttir"].count("tt.load ") == (width if offset else 1)
-        assert not any("tt.join" in line and "!tt.ptr" in line for line in compiled.asm["ttir"].splitlines())
+        # Grouping happens at the TTIR-to-TTGIR boundary. AMD may subsequently
+        # turn the resulting loads into buffer operations.
+        loads = re.findall(r"\b(?:tt\.load|amdg\.buffer_load)\b", compiled.asm["ttgir"])
+        assert len(loads) == (width if offset else 1)
+        assert not any("tt.join" in line and "!tt.ptr" in line for line in compiled.asm["ttgir"].splitlines())
 
 
 @pytest.mark.parametrize("case", [
@@ -3060,7 +3063,8 @@ def test_coalesce_adjacent_loads_dependencies(device, case):
     extra = z if case in ("volatile", "read_between") else a if case == "effectful_asm" else 0
     torch.testing.assert_close(out, a + b + extra, rtol=0, atol=0)
     expected = 1 if case in ("later_other", "duplicate_mask") else 3 if case == "volatile" else 2
-    assert compiled.asm["ttir"].count("tt.load ") == expected
+    loads = re.findall(r"\b(?:tt\.load|amdg\.buffer_load)\b", compiled.asm["ttgir"])
+    assert len(loads) == expected
 
 
 @pytest.mark.parametrize("block", [128, 256, 512])
@@ -3091,7 +3095,8 @@ def test_coalesce_adjacent_loads_profitability(device, block, num_warps, offset,
         ref += v[2:2 * block + 2:2] + v[3:2 * block + 2:2]
     torch.testing.assert_close(out, ref, rtol=0, atol=0)
     merged = not offset and not overlap and block >= num_warps * THREADS_PER_WARP
-    assert compiled.asm["ttir"].count("tt.load ") == (1 if merged else 4 if overlap else 2)
+    loads = re.findall(r"\b(?:tt\.load|amdg\.buffer_load)\b", compiled.asm["ttgir"])
+    assert len(loads) == (1 if merged else 4 if overlap else 2)
 
 
 @pytest.mark.parametrize("n", [3, 32, 33, 513])

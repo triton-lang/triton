@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
+#include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -694,6 +695,10 @@ public:
 
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+    // Keep the cross-load transformation separate from individual conversion
+    // patterns. Here the launch configuration is known and layouts are not
+    // assigned yet.
+    triton::coalesceAdjacentLoads(mod, numWarps * threadsPerWarp);
     // type converter
     TritonGPUTypeConverter typeConverter(context, numWarps, threadsPerWarp,
                                          numCTAs, enableSourceRemat);

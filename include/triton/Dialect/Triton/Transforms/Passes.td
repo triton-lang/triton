@@ -6,7 +6,7 @@ include "mlir/Pass/PassBase.td"
 def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp"> {
   let summary = "combine ops";
   let description = [{
-    This pass includes the following combinations:
+    This pass aims to optimize the five following patterns:
     - `dot(a, b, 0) + c => dot(a, b, c)`
 
     - `addptr(addptr(ptr, idx0), idx1) => addptr(ptr, AddI(idx0, idx1))`
@@ -17,17 +17,9 @@ def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp">
     - `broadcast(constant) => reshaped_constant`
     - `torch.sum(x[:,:,None].expand(-1,-1,n) * y[None,:,:].expand(m,-1,-1),1)
        => dot(x,y,splat(0))`
-
-    - Recover contiguous pointer joins and flatten loads feeding pair splits.
-    - With num-threads set, group aligned, non-overlapping interleaved loads
-      before layout assignment, subject to memory-order and operand checks.
   }];
 
   let dependentDialects = ["mlir::arith::ArithDialect"];
-  let options = [
-    Option<"numThreads", "num-threads", "int", /*default*/"0",
-           "Threads per CTA for independent-load profitability checks; zero disables load grouping">
-  ];
 }
 
 def TritonReorderBroadcast : Pass</*cli-arg*/"triton-reorder-broadcast", /*Op*/"mlir::ModuleOp"> {

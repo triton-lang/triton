@@ -11,6 +11,7 @@ add_triton_library(TritonToTritonGPU
     MLIRPass
     MLIRTransforms
     TritonIR
+    TritonTransforms
     ProtonIR
     TritonGPUIR
 )

@@ -4,7 +4,13 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+class ModuleOp;
 namespace triton {
+
+// Group independent interleaved loads before layout assignment. The thread
+// count is used only for profitability; address and memory-order checks are
+// internal to this transformation.
+void coalesceAdjacentLoads(ModuleOp module, int numThreads);
 
 // Generate the pass class declarations.
 #define GEN_PASS_DECL

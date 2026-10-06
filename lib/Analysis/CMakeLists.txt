@@ -1,5 +1,4 @@
 add_triton_library(TritonAnalysis
-  AffineAddress.cpp
   AxisInfo.cpp
   Allocation.cpp
   BufferRegion.cpp
