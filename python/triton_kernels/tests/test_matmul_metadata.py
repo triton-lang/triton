@@ -103,7 +103,7 @@ def _metadata_args(
         "OutAcc": out_acc,
         "batch_size": batch_size,
         "EPILOGUE_SUBTILE": None,
-        "DOT_SCALE_BLOCK_SIZE": mx_block_size,
+        "MX_BLOCK_SIZE": mx_block_size,
         "XMxScale": x_mx_scale,
         "WMxScale": w_mx_scale,
         "XTensorScale": x_tensor_scale,

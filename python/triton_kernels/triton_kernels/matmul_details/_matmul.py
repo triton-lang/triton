@@ -88,8 +88,8 @@ def _matmul(
              SWIZZLE_MX_VALUE: tl.constexpr,
              # One of ["HOPPER", "BLACKWELL", None]
              SWIZZLE_MX_SCALE: tl.constexpr,
-             DOT_SCALE_BLOCK_SIZE: tl.constexpr,
-             X_INPUT_SCALE_BLOCK_SIZE: tl.constexpr,
+             MX_BLOCK_SIZE: tl.constexpr,
+             X_MX_BLOCK_SIZE: tl.constexpr,
              EPILOGUE_SUBTILE: tl.constexpr,
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
              W_CACHE_MODIFIER: tl.constexpr,
@@ -139,14 +139,14 @@ def _matmul(
     has_x_tensor_scale: tl.constexpr = XTensorScale is not None
     has_w_tensor_scale: tl.constexpr = WTensorScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
-    REQUANTIZE_X: tl.constexpr = X_INPUT_SCALE_BLOCK_SIZE != DOT_SCALE_BLOCK_SIZE
-    X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_INPUT_SCALE_BLOCK_SIZE
-    MX_PACK_DIVISOR: tl.constexpr = DOT_SCALE_BLOCK_SIZE
+    REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
+    X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
+    MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
     if is_x_microscaled or is_w_microscaled:
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
 
     if is_w_microscaled:
-        tl.static_assert(DOT_SCALE_BLOCK_SIZE == NVFP_BLOCK_SIZE or DOT_SCALE_BLOCK_SIZE == MXFP_BLOCK_SIZE,
+        tl.static_assert(MX_BLOCK_SIZE == NVFP_BLOCK_SIZE or MX_BLOCK_SIZE == MXFP_BLOCK_SIZE,
                          "Unsupported microscale factor")
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8 or fp8")
@@ -360,7 +360,7 @@ def _matmul(
         XMxScale += start_z.to(index_type) * stride_x_mx_z
         if GatherIndx is None:
             XMxScale += start_m * stride_x_mx_m
-        offs_x_k_scale = off_k_x // X_INPUT_SCALE_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
+        offs_x_k_scale = off_k_x // X_MX_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
         XMxScalePtrs = XMxScale + offs_x_m.to(index_type)[:, None] * stride_x_mx_m + offs_x_k_scale.to(index_type)[None, :] * stride_x_mx_k
     else:
         XMxScalePtrs = None
@@ -415,7 +415,7 @@ def _matmul(
                 # packed per Byte along K)
                 mask_k_scale = offs_k_scale * (MX_PACK_DIVISOR // W_K_DIVISOR) < w_k_limit
             if is_x_microscaled:
-                mask_x_k_scale = offs_x_k_scale * X_INPUT_SCALE_BLOCK_SIZE < x_k_limit
+                mask_x_k_scale = offs_x_k_scale * X_MX_BLOCK_SIZE < x_k_limit
 
         x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
@@ -595,8 +595,8 @@ def _matmul(
         out += tl.load(AccPtrs, mask=mask, other=0.0) * load_scale(ScalePtr)
 
     if is_out_microscaled:
-        MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // DOT_SCALE_BLOCK_SIZE
-        N_MX_BLOCK = tl.cdiv(N, DOT_SCALE_BLOCK_SIZE)
+        MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
+        N_MX_BLOCK = tl.cdiv(N, MX_BLOCK_SIZE)
         tl.static_assert(EPILOGUE_FN is not None)
         if PER_BATCH_OUT_SCALE:
             YExpectedScale = YExpectedScale + start_z_out
