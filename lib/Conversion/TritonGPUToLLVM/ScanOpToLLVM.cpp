@@ -136,9 +136,10 @@ private:
                          ConversionPatternRewriter &rewriter) const {
     if (src == dst)
       return;
-    auto operands = convertLayoutValues(
-        op.getLoc(), rewriter, op, src, dst, transposeValues(values),
-        getTypeConverter(), targetInfo, /*forceWarpShuffle=*/true);
+    auto operands = transposeValues(values);
+    for (auto &operand : operands)
+      operand = convertLayoutWithinWarp(op.getLoc(), rewriter, src, dst,
+                                        operand, targetInfo);
     values = transposeValues(operands);
   }
 
