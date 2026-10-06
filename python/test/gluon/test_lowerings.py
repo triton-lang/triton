@@ -193,7 +193,7 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, reverse, device
 
 @gluon.jit
 def _scan_affine_combine(a1, b1, a2, b2):
-    return a1 * a2, b1 * a2 + b2
+    return (a1 * a2).to(a1.dtype), b1 * a2 + b2
 
 
 @pytest.mark.parametrize("layout", [
@@ -240,7 +240,7 @@ def _scan_affine_combine(a1, b1, a2, b2):
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("M", [32, 64])
-def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=1):
+def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=1, a_dtype=torch.int32):
 
     @gluon.jit
     def kernel(A, B, OutA, OutB, M: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
@@ -254,7 +254,7 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=
         ttgl.store(OutB + m * 32 + n, b)
 
     torch.manual_seed(0)
-    a = torch.randint(0, 2, (M, 32), dtype=torch.int32) * 2 - 1
+    a = torch.randint(0, 2, (M, 32), dtype=a_dtype) * 2 - 1
     b = torch.randint(-100, 100, (M, 32), dtype=torch.int64)
     expected_a, expected_b = a.clone(), b.clone()
     order = list(range(a.shape[axis]))
@@ -268,6 +268,17 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=
     kernel[(1, )](a, b, out_a, out_b, M, layout, axis, reverse, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
     torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int16, torch.int64])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_warp_conversion_mixed_width(dtype, reverse, device):
+    # Interleaved register/lane bits require conversion of the thread totals.
+    # The tuple exercises narrow packing and 64-bit shuffles with a broadcast warp.
+    layout = ttgl.DistributedLinearLayout([[8, 0], [16, 0], [0, 4], [0, 8], [0, 16]],
+                                          [[1, 0], [0, 1], [2, 0], [0, 2], [4, 0]] + [[0, 0]] *
+                                          (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32])
+    test_scan_layouts_noncommutative(layout, axis=0, reverse=reverse, M=64, device=device, a_dtype=dtype)
 
 
 @pytest.mark.parametrize("layout, M", [
