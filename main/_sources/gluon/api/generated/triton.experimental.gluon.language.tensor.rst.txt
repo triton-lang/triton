@@ -16,6 +16,8 @@
       ~tensor.__init__
       ~tensor.abs
       ~tensor.advance
+      ~tensor.all
+      ~tensor.any
       ~tensor.argmax
       ~tensor.argmin
       ~tensor.associative_scan

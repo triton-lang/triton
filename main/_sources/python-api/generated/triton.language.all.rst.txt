@@ -1,0 +1,6 @@
+﻿triton.language.all
+===================
+
+.. currentmodule:: triton.language
+
+.. autofunction:: all
