@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import functools
 import gc
+import hashlib
+import os
 from enum import IntEnum
 from pathlib import Path
 from types import ModuleType
@@ -12,6 +14,7 @@ from triton.runtime.build import compile_module_from_file
 
 _THIS_DIR = Path(__file__).resolve().parent
 _GSAN_SOURCE_PATH = _THIS_DIR / "src" / "GSanAllocator.cc"
+_GSAN_HEADER_PATHS = (_THIS_DIR / "src" / "GSan.h", _THIS_DIR / "src" / "GSanDriver.h")
 
 
 class ShareableHandleType(IntEnum):
@@ -19,19 +22,44 @@ class ShareableHandleType(IntEnum):
     FABRIC = 0x8
 
 
+def _header_digest() -> str:
+    # The module cache is keyed on the main source only, so fold in the headers
+    # to rebuild when just they change.
+    digest = hashlib.sha256()
+    for path in _GSAN_HEADER_PATHS:
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
 @functools.lru_cache()
 def _load_gsan_module() -> ModuleType:
-    if runtime_driver.active.get_current_target().backend != "cuda":
-        raise RuntimeError("GSan allocator requires the CUDA backend.")
+    backend = runtime_driver.active.get_current_target().backend
+    ccflags = [f"-DGSAN_HEADER_DIGEST={_header_digest()}"]
+    if backend == "cuda":
+        from triton.backends.nvidia import driver as nvidia_driver
 
-    from triton.backends.nvidia.driver import library_dirs, include_dirs
+        library_dirs = nvidia_driver.library_dirs()
+        include_dirs = nvidia_driver.include_dirs
+        libraries = ["libcuda.so.1"]
+    elif backend == "hip":
+        from triton.backends.amd import driver as amd_driver
+
+        # Link the HIP runtime PyTorch uses so allocations are visible to it.
+        libhip = amd_driver._get_path_to_hip_runtime_dylib()
+        include_dirs = amd_driver.include_dirs
+        library_dirs = [os.path.dirname(libhip)]
+        libraries = [os.path.basename(libhip)]
+        ccflags += ["-DGSAN_BACKEND_HIP", f"-Wl,-rpath,{library_dirs[0]}"]
+    else:
+        raise RuntimeError("GSan allocator requires the CUDA or HIP backend.")
 
     return compile_module_from_file(
         src_path=str(_GSAN_SOURCE_PATH),
         name="gsan_allocator",
-        library_dirs=library_dirs(),
+        library_dirs=library_dirs,
         include_dirs=include_dirs,
-        libraries=["libcuda.so.1"],
+        libraries=libraries,
+        ccflags=ccflags,
     )
 
 
@@ -103,11 +131,14 @@ def configure(
         clock_buffer_size (int, optional): When doing an atomic release operation, GSan uses a
             circular buffer to record what memory accesses have been released. If the writing CTA
             has done more release writes than there are circular buffer entries, then the atomic
-            flag cannot be read and you will need to increase the buffer size. If omitted, GSan
-            first checks ``TRITON_GSAN_CLOCK_BUFFER_SIZE`` and otherwise defaults to 1024.
+            flag cannot be read and you will need to increase the buffer size. Must be in
+            ``[1, 65535]``, and small enough for the per-device runtime state to fit in 1 GiB. If
+            omitted, GSan first checks ``TRITON_GSAN_CLOCK_BUFFER_SIZE`` and otherwise defaults to
+            1024, or the largest size that fits when the topology has too many SMs for 1024.
         handle_type (ShareableHandleType, optional): Type of shareable handle requested for GSan
             allocations. If omitted, GSan uses fabric handles when ``PYTORCH_CUDA_ALLOC_CONF``
-            contains ``fabric_handles:True`` and otherwise uses POSIX file descriptors.
+            contains ``fabric_handles:True`` and otherwise uses POSIX file descriptors. Fabric
+            handles are CUDA-only.
     """
     _load_gsan_module().configure(device_ranks, num_devices, rng_seed, clock_buffer_size, handle_type)
 
