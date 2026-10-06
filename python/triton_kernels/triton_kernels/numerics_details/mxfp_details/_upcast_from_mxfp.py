@@ -127,12 +127,38 @@ def upcast_nvfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
 
 
 @triton.jit
+def _mxfp4_maximum_code(values):
+    # Pack explicit groups before the SIMD reduction; inline-asm pack ordering
+    # alone does not guarantee that elements belong to the same scale block.
+    even, odd = tl.split(values.reshape(values.shape[0], values.shape[1], 2, 2, 2))
+    byte0, byte2 = tl.split(even)
+    byte1, byte3 = tl.split(odd)
+    packed = (byte0.to(tl.uint32) | (byte1.to(tl.uint32) << 8)
+              | (byte2.to(tl.uint32) << 16) | (byte3.to(tl.uint32) << 24))
+    # Each halfword holds one magnitude code. Native packed maxima avoid
+    # expanding all sixteen FP4 magnitudes into separate scalar reductions.
+    word_maximum = tl.inline_asm_elementwise(
+        """{
+        .reg .b32 a, b;
+        and.b32 a, $1, 0x00070007;
+        shr.u32 b, $1, 4;  and.b32 b, b, 0x00070007; max.u16x2 a, a, b;
+        shr.u32 b, $1, 8;  and.b32 b, b, 0x00070007; max.u16x2 a, a, b;
+        shr.u32 b, $1, 12; and.b32 b, b, 0x00070007; max.u16x2 a, a, b;
+        shr.u32 b, a, 16;
+        and.b32 a, a, 7;
+        max.u32 $0, a, b;
+        }""",
+        constraints="=r,r", args=[packed], dtype=tl.uint32, is_pure=True, pack=1,
+    )
+    # Keep the reduction visible to prevent duplicating it into both scale layouts.
+    return tl.max(word_maximum, 2)
+
+
+@triton.jit
 def nvfp4_to_mxfp8_tile(values, scales):
     # FP4 magnitude codes are ordered. Reduce before decoding so scale selection
     # does not duplicate the full activation decode in a second register layout.
-    magnitude = tl.maximum(values & 0x7, (values >> 4) & 0x7)
-    magnitude = magnitude.reshape(values.shape[0], scales.shape[1], 8)
-    maximum_code = tl.max(magnitude, 2).to(tl.uint32)
+    maximum_code = _mxfp4_maximum_code(values.reshape(values.shape[0], scales.shape[1], 8))
     maximum_bits = (maximum_code << 22) + 0x3F000000
     maximum = tl.where(maximum_code < 2, maximum_code.to(tl.float32) * 0.5,
                        maximum_bits.to(tl.float32, bitcast=True))
