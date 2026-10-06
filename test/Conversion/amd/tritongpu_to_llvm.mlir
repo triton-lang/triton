@@ -1197,3 +1197,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %hist : tensor<2xi32, #histResult>
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @assert_uniform_failure_path_no_barrier
+  // COMMON: llvm.call @__triton_assert_fail
+  // COMMON-NEXT: llvm.inline_asm has_side_effects {{.*}}s_trap 2
+  // COMMON-NEXT: llvm.br
+  tt.func @assert_uniform_failure_path_no_barrier(%condition: i1) {
+    tti.experimental_assert_uniform %condition, "uniform assertion"
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @assert_tensor_failure_path_no_barrier
+  // COMMON: llvm.call @__triton_assert_fail
+  // COMMON-NEXT: llvm.inline_asm has_side_effects {{.*}}s_trap 2
+  // COMMON-NEXT: llvm.br
+  // COMMON: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func @assert_tensor_failure_path_no_barrier(%condition: tensor<256xi1, #blocked>) {
+    tt.assert %condition, "tensor assertion" : tensor<256xi1, #blocked>
+    tt.return
+  }
+}

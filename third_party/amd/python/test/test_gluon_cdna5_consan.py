@@ -8,23 +8,59 @@ from triton._internal_testing import is_hip_gfx1250
 
 
 def _run_consan_subprocess(test_name, *args, timeout=120):
-    """Run a ConSan test kernel in a subprocess and return captured stderr.
+    """Run a ConSan test in a subprocess, validate its outcome, and return stderr.
 
     The subprocess pipe captures all stderr output including messages
     flushed during process exit.
     """
     helper_script = os.path.join(os.path.dirname(__file__), "cdna5_consan_helper.py")
-    proc = subprocess.Popen(
-        [sys.executable, helper_script, test_name] + [str(a) for a in args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    command = [sys.executable, helper_script, test_name] + [str(a) for a in args]
+    return _run_consan_command(command, timeout=timeout)
+
+
+def _run_consan_command(command, *, timeout):
+    proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        _, stderr = proc.communicate(timeout=timeout)
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
-        _, stderr = proc.communicate()
-    return stderr.decode(errors="replace")
+        stdout, stderr = proc.communicate()
+        pytest.fail(f"ConSan helper {command} timed out after {timeout}s.\n"
+                    f"stdout:\n{stdout.decode(errors='replace')}\n"
+                    f"stderr:\n{stderr.decode(errors='replace')}")
+    stdout = stdout.decode(errors="replace")
+    stderr = stderr.decode(errors="replace")
+    # A device assertion may stop execution before normal completion;
+    # the calling test checks the expected diagnostic.
+    # If no assertion was reported, require a successful exit and the
+    # completion marker printed after device synchronization.
+    if "device assertion failed" not in stderr:
+        assert proc.returncode == 0, (f"ConSan helper {command} exited with {proc.returncode}.\n"
+                                      f"stdout:\n{stdout}\nstderr:\n{stderr}")
+        assert "ConSan helper completed" in stdout.splitlines(), (f"ConSan helper {command} did not complete.\n"
+                                                                  f"stdout:\n{stdout}\nstderr:\n{stderr}")
+    return stderr
+
+
+@pytest.mark.parametrize(
+    ("script", "timeout", "error"),
+    [
+        ('print("ConSan helper completed")', 10, None),
+        ('raise RuntimeError("compilation failed")', 10, "exited with 1"),
+        ('import os; os._exit(0)', 10, "did not complete"),
+        ('import time; time.sleep(60)', 0.5, "timed out"),
+        ('import sys; print("device assertion failed: expected", file=sys.stderr); sys.exit(1)', 10, None),
+        ('import sys; print("device assertion failed: expected", file=sys.stderr)', 10, None),
+    ],
+)
+def test_consan_subprocess_completion(script, timeout, error):
+    # Exercise real subprocess exits and timeout cleanup without a GPU kernel.
+    command = [sys.executable, "-c", script]
+    if error is None:
+        _run_consan_command(command, timeout=timeout)
+    else:
+        with pytest.raises((AssertionError, pytest.fail.Exception), match=error):
+            _run_consan_command(command, timeout=timeout)
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
@@ -68,8 +104,9 @@ def test_ws_store_wait_load(FAILURE):
     stderr_str = _run_consan_subprocess("ws_store_wait_load_failure", FAILURE)
 
     if FAILURE:
-        assert "Buffer being accessed has outstanding writes" in stderr_str, \
-            f"Expected 'Buffer being accessed has outstanding writes' in stderr, got:\n{stderr_str}"
+        # Without the wait, either partition can access the buffer first.
+        assert "Buffer being accessed has outstanding" in stderr_str, \
+            f"Expected an unsynchronized access diagnostic, got:\n{stderr_str}"
     else:
         assert "device assertion failed" not in stderr_str, \
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
@@ -86,8 +123,9 @@ def test_ws_load_wait_store(FAILURE):
     stderr_str = _run_consan_subprocess("ws_load_wait_store_failure", FAILURE)
 
     if FAILURE:
-        assert "Buffer being accessed has outstanding reads" in stderr_str, \
-            f"Expected 'Buffer being accessed has outstanding reads' in stderr, got:\n{stderr_str}"
+        # Without the wait, either partition can access the buffer first.
+        assert "Buffer being accessed has outstanding" in stderr_str, \
+            f"Expected an unsynchronized access diagnostic, got:\n{stderr_str}"
     else:
         assert "device assertion failed" not in stderr_str, \
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
