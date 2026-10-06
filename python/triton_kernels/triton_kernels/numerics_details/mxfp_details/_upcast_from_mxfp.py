@@ -127,29 +127,11 @@ def upcast_nvfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
 
 
 @triton.jit
-def _nvfp4_to_mxfp8(X, Scale, Y, YScale, Gather,
-                    M, K, stride_x_b, stride_x_m, stride_s_b, stride_s_m, stride_s_k,
-                    SCALE_IS_GATHERED: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr):
-    batch = tl.program_id(2)
-    rows = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
-    x_rows = rows
-    if Gather is not None:
-        x_rows = tl.load(Gather + rows, rows < M, other=0)
-    packed_k = tl.program_id(1) * (BLOCK_K // 2) + tl.arange(0, BLOCK_K // 2)
-    values = tl.load(X + batch * stride_x_b + x_rows[:, None] * stride_x_m + packed_k[None, :],
-                     (rows[:, None] < M) & (packed_k[None, :] < K // 2), other=0)
-    scale_k = tl.program_id(1) * (BLOCK_K // 16) + tl.arange(0, BLOCK_K // 16)
-    scale_rows = rows if SCALE_IS_GATHERED else x_rows
-    scales = tl.load(Scale + batch * stride_s_b + scale_rows[:, None] * stride_s_m + scale_k[None, :] * stride_s_k,
-                     (rows[:, None] < M) & (scale_k[None, :] < K // 16), other=0.0)
+def nvfp4_to_mxfp8_tile(values, scales):
+    # Keep outer tensor/row scales separate; the matmul epilogue applies them.
     decoded = upcast_nvfp4_tile(values, scales, tl.float32)
-    cols = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K)
-    mask = (rows[:, None] < M) & (cols[None, :] < K)
-    quantized, output_scales = _compute_quant_and_scale(decoded, mask, tl.float8e4nv, tl.uint8, 32)
-    tl.store(Y + (batch * M + rows[:, None]) * K + cols[None, :], quantized, mask)
-    out_scale_k = tl.program_id(1) * (BLOCK_K // 32) + tl.arange(0, BLOCK_K // 32)
-    tl.store(YScale + (batch * M + rows[:, None]) * (K // 32) + out_scale_k[None, :], output_scales,
-             (rows[:, None] < M) & (out_scale_k[None, :] < K // 32))
+    return _compute_quant_and_scale(decoded, tl.full(decoded.shape, True, tl.int1),
+                                    tl.float8e4nv, tl.uint8, 32)
 
 
 # fmt: off

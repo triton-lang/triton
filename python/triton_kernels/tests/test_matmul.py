@@ -671,18 +671,19 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
 @pytest.mark.parametrize("swizzled", [False, True])
 @pytest.mark.parametrize("weights_swizzled", [False, True])
-@pytest.mark.parametrize("mode", ["plain", "batched", "ragged", "gather"])
+@pytest.mark.parametrize("mode", ["plain", "batched", "ragged", "gather", "ragged_gather"])
+@pytest.mark.parametrize("k", [256, 1024])
 @pytest.mark.parametrize("tensor_scale", ["none", "row", "column", "both", "wide_row"])
 @pytest.mark.parametrize("out_dtype", [None, torch.float32])
-def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, tensor_scale, out_dtype, device, opt_flags_scope):
+def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_scale, out_dtype, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell")
     torch.manual_seed(42)
-    m, n, k = 73, 256, 256
+    m, n = 73, 256
     source_m = 97 if mode == "gather" else m
-    slices = 3 if mode == "ragged" else 2 if mode == "batched" else 1
+    slices = 3 if mode in ("ragged", "ragged_gather") else 2 if mode == "batched" else 1
     a, a_scale, metadata = make_random_tensor(
-        (source_m, k), slices, 0 if mode == "ragged" else None, False, device,
+        (source_m, k), slices, 0 if mode in ("ragged", "ragged_gather") else None, False, device,
         DType("nvfp4_e2m1"), -1, False, mode != "batched")
     b, b_scale, _ = make_random_tensor(
         (k, n), slices, None, False, device, DType("mxfloat4_e2m1"), -2, False,
@@ -708,7 +709,7 @@ def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, tensor_scale
         weight_outer_scale = torch.linspace(0.5, 1.5, decoded_b.numel() // k, device=device).reshape(
             decoded_b.shape[:-2] + (n,))
         decoded_b *= weight_outer_scale[..., None, :]
-    gather = torch.randint(source_m, (m,), device=device, dtype=torch.int32) if mode == "gather" else None
+    gather = torch.randint(source_m, (m,), device=device, dtype=torch.int32) if mode in ("gather", "ragged_gather") else None
     if swizzled:
         if gather is not None:
             a_scale = wrap_torch_tensor(a_scale.storage.data[gather.long()])
@@ -734,6 +735,13 @@ def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, tensor_scale
         expected = expected.float() / result_scale[..., None]
         actual = actual.float() / result_scale[..., None]
     assert_close(expected, actual)
+
+
+@pytest.mark.parametrize("k", [160, 1024])
+@pytest.mark.parametrize("mode", ["plain", "ragged_gather"])
+def test_nvfp4_acts_mxfp4_weights_nonpersistent(k, mode, device, opt_flags_scope):
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": False, "split_k": 1}):
+        test_nvfp4_acts_mxfp4_weights(False, False, mode, k, "wide_row", torch.float32, device, opt_flags_scope)
 
 
 @pytest.mark.parametrize("shape, fp8_lhs, constraints", [

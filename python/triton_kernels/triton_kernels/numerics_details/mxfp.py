@@ -5,12 +5,12 @@ import math
 import triton
 import torch
 import torch.nn.functional as F
-from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp, _nvfp4_to_mxfp8
+from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, _quantize_mxfp8_fn, _quantize_mxfp4_fn, _quantize_nvfp4_fn
 from triton.tools.mxfp import fp8e8m0_to_float32
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton_kernels.tensor import Tensor, wrap_torch_tensor, empty, convert_layout
-from triton_kernels.tensor_details.layout import StridedLayout, BlackwellActMXScaleLayout
+from triton_kernels.tensor import Tensor, wrap_torch_tensor, empty
+from triton_kernels.tensor_details.layout import StridedLayout
 from triton_kernels.tensor_details.dtype import FP4, FP8_E4M3FN, FP8_E5M2, UINT8
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
@@ -24,44 +24,6 @@ class DequantScaleRoundingMode(Enum):
     ROUND_DOWN = 1
     # Round directly represented E4M3 block scales to nearest, ties to even.
     ROUND_NEAREST = 2
-
-def nvfp4_to_mxfp8(x: Tensor, scale: Tensor, gather_indx: torch.Tensor | None = None):
-    """Requantize NVFP4 activations through FP32 to MXFP8, preserving the scale layout.
-
-    Outer tensor/row scales are not applied here. With gather_indx, swizzled
-    scales already describe gathered rows; strided scales use source row order.
-    """
-    assert x.dtype == FP4 and x.ndim in (2, 3)
-    assert isinstance(x.storage.layout, StridedLayout) and x.stride(-1) == 1
-    assert scale.dtype == FP8_E4M3FN
-    assert isinstance(scale.storage.layout, (StridedLayout, BlackwellActMXScaleLayout))
-    k = x.shape[-1]
-    assert k % 32 == 0, "NVFP4 to MXFP8 requires K divisible by 32"
-    if gather_indx is not None:
-        assert x.ndim == 2
-        shape = (gather_indx.numel(), k)
-    else:
-        shape = tuple(x.shape)
-    scale_layout = scale.storage.layout
-    scale_is_gathered = isinstance(scale_layout, BlackwellActMXScaleLayout)
-    scale_shape = shape if scale_is_gathered else tuple(x.shape)
-    assert tuple(scale.shape) == scale_shape[:-1] + (k // 16,)
-    scale = convert_layout(scale, StridedLayout())
-    values = x.storage.data
-    scales = scale.storage.data
-    output = torch.empty(shape, dtype=torch.float8_e4m3fn, device=x.device)
-    output_scales = torch.empty(shape[:-1] + (k // 32,), dtype=torch.uint8, device=x.device)
-    m = shape[-2]
-    batch = 1 if len(shape) == 2 else shape[0]
-    if output.numel():
-        _nvfp4_to_mxfp8[(triton.cdiv(m, 16), triton.cdiv(k, 128), batch)](
-            values, scales, output, output_scales, gather_indx, m, k,
-            values.stride(0) if x.ndim == 3 else 0, values.stride(-2),
-            scales.stride(0) if x.ndim == 3 else 0, scales.stride(-2), scales.stride(-1),
-            SCALE_IS_GATHERED=scale_is_gathered, BLOCK_M=16, BLOCK_K=128, num_warps=4,
-        )
-    return wrap_torch_tensor(output), convert_layout(wrap_torch_tensor(output_scales), scale_layout)
-
 
 def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
                      scale_dtype: torch.dtype = torch.uint8,

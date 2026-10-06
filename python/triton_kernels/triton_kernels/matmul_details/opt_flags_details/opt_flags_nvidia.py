@@ -179,6 +179,11 @@ def compute_num_stages(
         # smem_capacity accordingly.
         act_size = 2
 
+    if (has_native_mxfp and lhs_dtype == FP8_E4M3FN and rhs_dtype == FP4
+            and precision_config.a_microblock_size == 16 and precision_config.b_microblock_size == 32):
+        # Fused requantization keeps the packed NVFP4 input alongside MXFP8.
+        act_size += 0.5
+
     stage_size = block_m * block_k * act_size + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
@@ -197,7 +202,7 @@ def compute_num_stages(
             stage_size += block_k * block_n * weight_size
 
     if precision_config.a_mx_scale is not None:
-        scale_block_size = mx_block_size or int(MXFP_BLOCK_SIZE)
+        scale_block_size = precision_config.a_microblock_size or mx_block_size or int(MXFP_BLOCK_SIZE)
         stage_size += block_m * (block_k // scale_block_size)
 
     if precision_config.b_mx_scale is not None:
