@@ -690,6 +690,16 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
           LowerLdStCallback lowerInst);
 
+// Convert unique distributed values within each warp using register
+// permutations and shuffles. Both layouts must have their zero register bases
+// removed.
+SmallVector<Value> convertLayoutWithinWarp(Location loc,
+                                           ConversionPatternRewriter &rewriter,
+                                           const LinearLayout &srcLayout,
+                                           const LinearLayout &dstLayout,
+                                           ArrayRef<Value> inVals,
+                                           const TargetInfoBase &targetInfo);
+
 // Convert distributed values through shared memory. When storePred is present,
 // only selected threads need valid input values. They must cover every source
 // element; loads and synchronization still execute in all participating
