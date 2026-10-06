@@ -345,6 +345,7 @@ struct FpToFpOpConversion
     auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
     auto F16TyID = TypeID::get<Float16Type>();
+    auto BF16TyID = TypeID::get<BFloat16Type>();
     auto F32TyID = TypeID::get<Float32Type>();
 
     auto undefRounding = static_cast<RoundingMode>(-1);
