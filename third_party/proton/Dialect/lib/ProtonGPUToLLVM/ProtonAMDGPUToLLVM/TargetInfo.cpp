@@ -33,10 +33,9 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
 Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
                              Location loc) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  llvm::AMDGPU::GPUKind GPUKind = getTritonTargetInfo().getGPUKind();
-
   Value globalTimeVal;
-  if (GPUKind == llvm::AMDGPU::GK_GFX1250) {
+  if (getTritonTargetInfo().getISAFamily() ==
+      triton::amdgpu::ISAFamily::GFX1250) {
     Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
     globalTimeVal =
         LLVM::createLLVMIntrinsicCallOp(
@@ -148,7 +147,8 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
   // Granularity is per-WGP, not per-CU: the CU-within-WGP bit
   // (HW_ID1.SIMD_ID[0]) is intentionally omitted; add it if sub-WGP resolution
   // is ever needed.
-  if (GPUKind == llvm::AMDGPU::GK_GFX1250) {
+  if (getTritonTargetInfo().getISAFamily() ==
+      triton::amdgpu::ISAFamily::GFX1250) {
     Value msg = b.i32_val(/*MSG_RTN_GET_SE_AID_ID=*/135);
     Value seAid =
         LLVM::createLLVMIntrinsicCallOp(
