@@ -108,26 +108,6 @@ LinearLayout buildReps(MLIRContext *ctx, const LinearLayout &src,
   auto kReps = StringAttr::get(ctx, "reps");
   auto kBlock = StringAttr::get(ctx, "block");
   auto kReg = StringAttr::get(ctx, "register");
-  // Repetitions must be selected by exactly one register bit in each layout.
-  // For example, register=[1,2,4], warp=[4,256] cannot repeat over bit 4:
-  // the warp also changes which repetition a value belongs to.
-  uint32_t nonRepMask = 0;
-  for (const auto &layout : {src, dst}) {
-    auto cvt = layout.invertAndCompose(smem);
-    auto dims = llvm::to_vector(cvt.getOutDimNames());
-    unsigned index = llvm::find(dims, kSegment) - dims.begin();
-    uint32_t seenRegs = 0;
-    for (const auto &[dim, bases] : cvt.getBases())
-      for (const auto &basis : bases) {
-        uint32_t bits = basis[index];
-        if (dim == kReg) {
-          nonRepMask |= seenRegs & bits;
-          seenRegs |= bits;
-        } else {
-          nonRepMask |= bits;
-        }
-      }
-  }
   // A basis is a rep if:
   // 1) It is in registers in both src and dst
   // 2) It is in the segment of smem (i.e., is not part of just one
@@ -137,12 +117,11 @@ LinearLayout buildReps(MLIRContext *ctx, const LinearLayout &src,
   SetVector<int32_t> smemSegment(llvm::from_range_t{}, flatten(smem, kSegment));
   SetVector<int32_t> segment;
   SetVector<int32_t> reps;
-  for (auto [bit, s] : llvm::enumerate(smemSegment)) {
+  for (auto s : smemSegment) {
     // Do not move the first leaveReps bases from reps to segment
     // as we need them to vectorise the instructions (think .x2 and .x4 in
     // ldmatrix)
-    if (srcRegs.contains(s) && dstRegs.contains(s) &&
-        !(nonRepMask & (uint32_t{1} << bit))) {
+    if (srcRegs.contains(s) && dstRegs.contains(s)) {
       if (leaveReps > 0) {
         leaveReps--;
         segment.insert(s);

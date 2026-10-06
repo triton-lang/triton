@@ -147,8 +147,8 @@ private:
     auto kBlock = rewriter.getStringAttr("block");
     auto axis = rewriter.getStringAttr("dim" + std::to_string(op.getAxis()));
     const auto &layout = helper.getLayout();
-    auto groups = helper.getThreadGroups();
-    unsigned chunkSize = helper.getWarpChunkSize();
+    auto groups = helper.getThreadLocalGroups();
+    unsigned chunkSize = helper.getChunkSize();
     unsigned warpSize = layout.getInDimSize(kLane);
     bool interWarp = helper.hasInterWarpScan();
     ScanIndices indices;
@@ -161,12 +161,13 @@ private:
     // The layout gives the remaining axis offset, including interleaved or
     // swizzled warp bits. Layout and physical warp ownership are preserved.
     indices.axisOffset = helper.getAxisOffset();
-    // Physical lane -> position within a chunk, in thread-local range units.
-    unsigned threadSize = helper.getThreadLocalSize();
-    unsigned numLanes = chunkSize / threadSize;
+    // Physical lane -> position within a warp-local chunk, in thread-local
+    // group units.
+    unsigned groupSize = helper.getGroupSize();
+    unsigned numLanes = chunkSize / groupSize;
     auto laneBases = layout.sublayout({kLane}, {axis}).getBases();
     for (auto &basis : laneBases[kLane])
-      basis[0] = (basis[0] % chunkSize) / threadSize;
+      basis[0] = (basis[0] % chunkSize) / groupSize;
     LinearLayout laneLayout(laneBases, {{axis, numLanes}}, true);
     indices.laneIndex =
         applyLinearLayout(loc, rewriter, laneLayout, {{kLane, indices.laneId}})
@@ -233,8 +234,8 @@ private:
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto kLane = rewriter.getStringAttr("lane");
     auto axis = rewriter.getStringAttr("dim" + std::to_string(op.getAxis()));
-    unsigned chunkSize = helper.getWarpChunkSize();
-    unsigned numLanes = helper.getWarpChunkSize() / helper.getThreadLocalSize();
+    unsigned chunkSize = helper.getChunkSize();
+    unsigned numLanes = helper.getChunkSize() / helper.getGroupSize();
     unsigned laneMask = helper.getAxisMask(kLane, chunkSize);
     if (indices.stride) {
       SmallVector<Value> result;
@@ -253,15 +254,14 @@ private:
     return shuffleValues(op, values, lane, rewriter);
   }
 
-  // Compute an inclusive prefix for each group, independently in each thread.
-  // Input: original register values. Output: group-local prefixes in the same
-  // registers; the final register of each group contains its total.
-  // Groups are interleaved in native register emission order, while each group
-  // is accumulated in logical axis order using thread-local registers.
+  // Compute an inclusive prefix within each thread-local group. Input: original
+  // register values. Output: prefixes in the same registers, with the total in
+  // the final register. Thread-local groups are interleaved in native register
+  // emission order; each is accumulated in logical axis order.
   void scanWithinThreads(triton::ScanOp op, const ScanLoweringHelper &helper,
                          ScanValues &values,
                          ConversionPatternRewriter &rewriter) const {
-    auto groups = helper.getThreadGroups();
+    auto groups = helper.getThreadLocalGroups();
     auto groupForReg = helper.getRegisterGroups();
     SmallVector<unsigned> nextReg(groups.size(), 0);
     ScanValues accumulators(groups.size());
@@ -274,22 +274,23 @@ private:
     }
   }
 
-  // Scan group totals across the lanes belonging to each chunk. Shuffle rounds
-  // at logical distances 1, 2, 4, ... compute inclusive prefixes of group
-  // totals; predicates exclude predecessors outside the chunk. The returned
-  // totals[g] contains the prefix through this lane's group, with the complete
-  // chunk total in its terminal lane. The register values retain group-local
-  // prefixes until carries are applied. If no inter-warp scan is needed,
-  // applyWarpCarries also scans preceding chunks and completes the register
-  // prefixes here.
+  // Scan thread-local group totals within each warp-local chunk. Shuffle rounds
+  // at logical distances 1, 2, 4, ... compute inclusive prefixes of these
+  // totals. Predicates restrict predecessors to the same warp-local chunk.
+  // totals[g] contains the prefix through this lane's thread-local group; the
+  // terminal lane holds the complete warp-local chunk total. Register values
+  // retain their thread-local group prefixes until carries are applied. For
+  // scans contained in one warp, applyWarpCarries completes the register
+  // prefixes by incorporating preceding warp-local chunks and thread-local
+  // groups.
   ScanValues scanWithinWarps(triton::ScanOp op,
                              const ScanLoweringHelper &helper,
                              ScanIndices &indices, ScanValues &values,
                              ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto groups = helper.getThreadGroups();
-    unsigned numLanes = helper.getWarpChunkSize() / helper.getThreadLocalSize();
+    auto groups = helper.getThreadLocalGroups();
+    unsigned numLanes = helper.getChunkSize() / helper.getGroupSize();
     bool interWarp = helper.hasInterWarpScan();
     ScanValues totals(groups.size());
     for (unsigned g = 0; g < groups.size(); ++g) {
@@ -313,15 +314,15 @@ private:
                      ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto groups = helper.getThreadGroups();
-    unsigned chunkSize = helper.getWarpChunkSize();
+    auto groups = helper.getThreadLocalGroups();
+    unsigned chunkSize = helper.getChunkSize();
     unsigned reg = helper.getChunkIndex(groups[g].back());
     unsigned fixed =
         (reg ^ (indices.axisOffset / chunkSize)) & ~indices.varyingBits;
     if (fixed != (index & ~indices.varyingBits))
       return b.i1_val(fixed > (index & ~indices.varyingBits));
     // Compare only bits that can vary between threads. This shares main's
-    // warp-prefix predicate across repeated register chunks.
+    // warp-prefix predicate across warp-local chunks selected by register bits.
     if (!indices.chunkIndices[g])
       indices.chunkIndices[g] =
           b.xor_(indices.threadChunk, b.i32_val(reg & indices.varyingBits));
@@ -336,8 +337,8 @@ private:
                   ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto groups = helper.getThreadGroups();
-    unsigned numLanes = helper.getWarpChunkSize() / helper.getThreadLocalSize();
+    auto groups = helper.getThreadLocalGroups();
+    unsigned numLanes = helper.getChunkSize() / helper.getGroupSize();
     bool interWarp = helper.hasInterWarpScan();
     Value hasCarry;
     if (!carry.empty())
@@ -379,11 +380,11 @@ private:
     auto kLane = rewriter.getStringAttr("lane");
     auto axis = rewriter.getStringAttr("dim" + std::to_string(op.getAxis()));
     const auto &layout = helper.getLayout();
-    auto groups = helper.getThreadGroups();
-    unsigned threadSize = helper.getThreadLocalSize();
-    unsigned chunkSize = helper.getWarpChunkSize();
+    auto groups = helper.getThreadLocalGroups();
+    unsigned groupSize = helper.getGroupSize();
+    unsigned chunkSize = helper.getChunkSize();
     unsigned laneMask = helper.getAxisMask(kLane, chunkSize);
-    unsigned regMask = helper.getAxisMask(kReg, threadSize);
+    unsigned regMask = helper.getAxisMask(kReg, groupSize);
     unsigned warpSize = layout.getInDimSize(kLane);
     auto coords = getHardwareCoordinates(op, sourceReg, indices.laneId,
                                          Value(b.i32_val(0)), rewriter);
@@ -429,15 +430,15 @@ private:
     auto kReg = rewriter.getStringAttr("register");
     auto axis = rewriter.getStringAttr("dim" + std::to_string(op.getAxis()));
     const auto &layout = helper.getLayout();
-    auto groups = helper.getThreadGroups();
-    unsigned threadSize = helper.getThreadLocalSize();
-    unsigned chunkSize = helper.getWarpChunkSize();
-    unsigned regMask = helper.getAxisMask(kReg, threadSize);
-    // Read chunk totals in logical order and retain the exclusive prefix for
-    // each consumer. Main's repeated CTA tiles are disjoint ranges of this
-    // sequence; interleaved register/lane/warp chunks can have overlapping
-    // ranges. Visit each total once per independent scan and finish a chunk
-    // as soon as all its possible predecessors have been read.
+    auto groups = helper.getThreadLocalGroups();
+    unsigned groupSize = helper.getGroupSize();
+    unsigned chunkSize = helper.getChunkSize();
+    unsigned regMask = helper.getAxisMask(kReg, groupSize);
+    // Read warp-local chunk totals in logical order and retain the exclusive
+    // prefix for each consumer. Main's repeated CTA tiles occupy disjoint
+    // ranges of this sequence. Interleaved register/lane/warp ownership can
+    // produce overlapping ranges. Visit each total once per independent scan
+    // and finish each warp-local chunk after reading its possible predecessors.
     unsigned axisRegs = helper.getAxisMask(kReg, layout.getOutDimSize(axis));
     struct Chunk {
       unsigned first, last, row;
@@ -500,9 +501,9 @@ private:
     auto axis = rewriter.getStringAttr("dim" + std::to_string(op.getAxis()));
     const auto &layout = helper.getLayout();
     auto dims = llvm::to_vector(layout.getOutDimNames());
-    auto groups = helper.getThreadGroups();
-    unsigned chunkSize = helper.getWarpChunkSize();
-    unsigned numLanes = helper.getWarpChunkSize() / helper.getThreadLocalSize();
+    auto groups = helper.getThreadLocalGroups();
+    unsigned chunkSize = helper.getChunkSize();
+    unsigned numLanes = helper.getChunkSize() / helper.getGroupSize();
     unsigned numChunks = layout.getOutDimSize(axis) / chunkSize;
     unsigned laneMask = helper.getAxisMask(kLane, chunkSize);
     auto localLayout = layout.sublayout({kReg, kLane}, dims)
@@ -517,8 +518,8 @@ private:
       for (unsigned g = 0; g < groups.size(); ++g)
         applyChunkCarry(op, helper, indices, values, totals, g, {}, rewriter);
     } else if (oneChunkPerLaneGroup) {
-      // Main's one-warp carry chain: broadcast the completed chunk prefix
-      // and reuse it as the carry for the next chunk.
+      // Main's one-warp carry chain: broadcast the completed warp-local chunk
+      // prefix and reuse it as the carry for the next warp-local chunk.
       unsigned axisRegs = helper.getAxisMask(kReg, layout.getOutDimSize(axis));
       llvm::MapVector<unsigned, SmallVector<unsigned>> rows;
       for (unsigned g = 0; g < groups.size(); ++g)
@@ -554,13 +555,13 @@ private:
     }
   }
 
-  // Complete the scan from group-local register prefixes and the inclusive
-  // group-total prefixes returned by scanWithinWarps. Terminal lanes publish
-  // chunk totals to shared memory, excluding redundant owners. After one CTA
-  // barrier, scanChunkTotals reads totals in logical chunk order and computes
-  // each chunk's exclusive carry. applyChunkCarry combines this carry with the
-  // preceding groups' prefix and updates the registers in each group. Boundary
-  // predicates apply carries only to groups with preceding elements.
+  // Complete the scan using thread-local group prefixes and the scanned totals
+  // from scanWithinWarps. Terminal lanes publish warp-local chunk totals to
+  // shared memory, excluding redundant owners. After one CTA barrier,
+  // scanChunkTotals reads totals in logical order and computes each warp-local
+  // chunk's exclusive carry. applyChunkCarry combines this carry with preceding
+  // thread-local groups' prefixes and updates their register values. Boundary
+  // predicates apply carries only to thread-local groups with predecessors.
   void scanAcrossWarps(triton::ScanOp op, const ScanLoweringHelper &helper,
                        ScanIndices &indices, ScanValues &values,
                        const ScanValues &totals,
@@ -571,8 +572,8 @@ private:
     auto kWarp = rewriter.getStringAttr("warp");
     auto axis = rewriter.getStringAttr("dim" + std::to_string(op.getAxis()));
     const auto &layout = helper.getLayout();
-    auto groups = helper.getThreadGroups();
-    unsigned chunkSize = helper.getWarpChunkSize();
+    auto groups = helper.getThreadLocalGroups();
+    unsigned chunkSize = helper.getChunkSize();
     unsigned laneMask = helper.getAxisMask(kLane, chunkSize);
     SmallVector<Value> smemBases;
     SmallVector<Type> smemTypes;
@@ -580,8 +581,8 @@ private:
         getSmemBases(op, helper.getScratchSizeInElems(), rewriter, targetInfo);
     for (unsigned i = 0; i < op.getNumOperands(); ++i)
       smemTypes.push_back(getElementType(op, i));
-    // Store one total per contiguous chunk. All independent scans and all
-    // register chunks publish before the single CTA barrier, as in main.
+    // Publish totals for all warp-local chunks and independent scans before
+    // the single CTA barrier, as in main.
     unsigned laneZeros = 0, warpZeros = 0;
     for (auto [dim, mask] :
          {std::pair{kLane, &laneZeros}, std::pair{kWarp, &warpZeros}})

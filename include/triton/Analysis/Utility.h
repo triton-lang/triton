@@ -106,31 +106,34 @@ private:
 };
 
 // Layout analysis for scan lowering. The algorithm consists of three stages:
-// 1. Compute inclusive prefixes within each thread's groups.
-// 2. Scan group totals across lanes within each chunk using warp shuffles.
-// 3. Scan chunk totals in logical order and apply the resulting carries to the
-//    group prefixes. Use shared memory when the scan spans multiple warps;
-//    otherwise, complete this stage within the warp.
+// 1. Compute inclusive prefixes within each thread-local group.
+// 2. Use shuffles to scan thread-local group totals in each warp-local chunk.
+// 3. Scan warp-local chunk totals in logical order and apply the carries to
+//    thread-local group prefixes. Communication uses shared memory across warps
+//    and shuffles within a warp.
 //
 // Definitions (for fixed coordinates outside the scan axis):
 // - thread: A physical lane within a warp, owning a set of register values.
-// - group: An ordered set of registers in one thread representing a contiguous
-//   axis interval of threadLocalSize elements.
-// - chunk: A contiguous axis interval of warpChunkSize elements formed by
-//   groups in one warp. Its internal axis bits consist of the group's register
-//   bits followed by lane bits; the next register or warp bit starts a new
-//   chunk. A warp may own multiple chunks, even for contiguous warp ownership.
-// - total: The final inclusive prefix of a group or chunk.
-// - carry: The combined total of preceding groups or chunks in scan order.
+// - thread-local group: Registers in one thread representing a contiguous axis
+//   interval. groupSize is the number of elements in this interval.
+// - warp-local chunk: A contiguous axis interval formed by thread-local groups
+//   in one warp. chunkSize is the number of elements in this interval. Its
+//   internal axis bits consist of register bits followed by lane bits; the next
+//   register or warp bit starts a new interval. Each warp may own several.
+// - total: The final inclusive prefix of a thread-local group or warp-local
+//   chunk.
+// - carry: The combined total of preceding thread-local groups or warp-local
+//   chunks in scan order.
 //
 // Example: register=[1,4], lane=[2,8], warp=[16]. In warp 0, lane 0 owns
-// [x0,x1,x4,x5] and lane 1 owns [x2,x3,x6,x7]. The register groups are
-// [r0,r1] and [r2,r3]; the first two chunks are [x0..x3] and [x4..x7].
-// Thus threadLocalSize=2, warpChunkSize=4, and xi has chunk index i / 4.
+// [x0,x1,x4,x5] and lane 1 owns [x2,x3,x6,x7]. The thread-local groups are
+// [r0,r1] and [r2,r3]. The first two warp-local chunks are [x0..x3] and
+// [x4..x7]. Here groupSize=2 and chunkSize=4. The warp-local chunk index of xi
+// is i / 4.
 //
-// Swizzled or overlapping register/lane bases use one-element groups and
-// chunks. Scans across CTAs are unsupported. Layouts describe increasing axis
-// coordinates; reverse traversal is handled by the lowering's reflections.
+// Swizzled or overlapping register/lane bases use one-element thread-local
+// groups and warp-local chunks. Scans across CTAs are unsupported. Layouts
+// describe increasing axis coordinates; the lowering reflects reverse scans.
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
@@ -138,38 +141,43 @@ public:
   bool hasInterWarpScan() const;
   unsigned getScratchSizeInElems() const;
   unsigned getScratchSizeInBytes() const;
-  unsigned getThreadLocalSize() const { return threadLocalSize; }
-  unsigned getWarpChunkSize() const { return warpChunkSize; }
+  unsigned getGroupSize() const { return groupSize; }
+  unsigned getChunkSize() const { return chunkSize; }
   unsigned getAxisMask(mlir::StringAttr dim, unsigned size) const;
   // Remaining axis XOR mask for reverse scans after reversing registers/lanes.
   unsigned getAxisOffset() const;
-  // Logical axis coordinate in chunk units, before reverse-scan reflection.
+  // Logical axis coordinate in warp-local chunk units, before reverse-scan
+  // reflection.
   unsigned getChunkIndex(unsigned reg, unsigned lane = 0,
                          unsigned warp = 0) const;
-  // Inclusive chunk-index bounds over all lanes/warps for this register,
-  // accounting for the remaining reverse-scan reflection.
+  // Inclusive warp-local chunk-index bounds over all lanes/warps for this
+  // register, accounting for the remaining reverse-scan reflection.
   std::pair<unsigned, unsigned> getChunkBounds(unsigned reg) const;
-  // Map a requested chunk index and the current scan's off-axis coordinates to
-  // its shared-memory offset (inter-warp) or register/lane owner (intra-warp).
+  // Map a requested warp-local chunk index and the current scan's off-axis
+  // coordinates to its shared-memory offset (inter-warp) or register/lane owner
+  // (intra-warp).
   triton::LinearLayout getChunkLookup() const;
-  // Register index -> index into getThreadGroups().
+  // Register index -> index into getThreadLocalGroups().
   llvm::ArrayRef<unsigned> getRegisterGroups() const { return registerGroups; }
   // layout: (register, lane, warp, block) -> tensor element coordinates.
   // Register indices exclude redundant register bases; ownership is preserved.
   const triton::LinearLayout &getLayout() const { return layout; }
   // totalsLayout: (register, lane, warp, block) -> tensor coordinates with
-  // axis coordinate floor(element / warpChunkSize). All elements of a chunk
-  // map to its chunk index; coordinates outside the axis remain unchanged.
+  // axis coordinate floor(element / chunkSize). All elements of a warp-local
+  // chunk map to its warp-local chunk index; coordinates outside the axis
+  // remain unchanged.
   const triton::LinearLayout &getTotalsLayout() const { return *totalsLayout; }
   // scratchAddressLayout: (register, lane, warp, block) -> scratch element
-  // offset. Internal group-register and chunk-lane bits map to zero; terminal
-  // lanes publish chunk totals, with redundant owners excluded by predicates.
+  // offset. Register bits within a thread-local group and lane bits within a
+  // warp-local chunk map to zero. Terminal lanes publish totals, with redundant
+  // owners excluded by predicates.
   const triton::LinearLayout &getScratchAddressLayout() const {
     return *scratchAddressLayout;
   }
-  // Group index -> register indices in increasing logical axis order.
-  llvm::ArrayRef<SmallVector<unsigned>> getThreadGroups() const {
-    return threadGroups;
+  // Thread-local group index -> register indices in increasing logical axis
+  // order.
+  llvm::ArrayRef<SmallVector<unsigned>> getThreadLocalGroups() const {
+    return threadLocalGroups;
   }
 
 private:
@@ -177,13 +185,14 @@ private:
   triton::LinearLayout layout;
   std::optional<triton::LinearLayout> totalsLayout;
   std::optional<triton::LinearLayout> scratchAddressLayout;
-  // scratchLayout: scratch element offset -> chunk index and coordinates
-  // outside the scan axis, using the same output space as totalsLayout.
+  // scratchLayout: scratch element offset -> warp-local chunk index and
+  // coordinates outside the scan axis, using the same output space as
+  // totalsLayout.
   std::optional<triton::LinearLayout> scratchLayout;
-  SmallVector<SmallVector<unsigned>> threadGroups;
+  SmallVector<SmallVector<unsigned>> threadLocalGroups;
   SmallVector<unsigned> registerGroups;
-  unsigned threadLocalSize;
-  unsigned warpChunkSize;
+  unsigned groupSize;
+  unsigned chunkSize;
 };
 
 // Helper class for lowering `tt.gather` operations. This class shares lowering

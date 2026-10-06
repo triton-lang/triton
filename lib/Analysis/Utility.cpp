@@ -314,18 +314,18 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
   auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
   // Scan contiguous register prefixes first, then the contiguous lane range
   // before the next register or warp bit. CTA-spanning scans are unsupported.
-  threadLocalSize = layout.getOutDimSize(axisDim);
+  groupSize = layout.getOutDimSize(axisDim);
   for (auto dim : {kLane, kWarp})
     for (const auto &basis : layout.getBases().lookup(dim))
       if (unsigned value = basis[axis])
-        threadLocalSize = std::min(threadLocalSize, value & -value);
-  warpChunkSize = layout.getOutDimSize(axisDim);
+        groupSize = std::min(groupSize, value & -value);
+  chunkSize = layout.getOutDimSize(axisDim);
   for (auto dim : {kReg, kWarp})
     for (const auto &basis : layout.getBases().lookup(dim))
       if (unsigned value = basis[axis]) {
         unsigned bit = value & -value;
-        if (dim == kWarp || bit >= threadLocalSize)
-          warpChunkSize = std::min(warpChunkSize, bit);
+        if (dim == kWarp || bit >= groupSize)
+          chunkSize = std::min(chunkSize, bit);
       }
 
   auto local =
@@ -333,41 +333,43 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
           .removeZeroBasesAlongDim(kReg)
           .removeZeroBasesAlongDim(kLane);
   auto free = local.getFreeVariableMasks();
-  // Swizzled or overlapping register/lane bases use single-value chunks.
-  // The same coordinate lookup supplies their ordered carries.
+  // Swizzled or overlapping register/lane bases use single-value warp-local
+  // chunks. The same coordinate lookup supplies their ordered carries.
   if (!hasPowerOfTwoBases(local) || free[kReg] || free[kLane])
-    threadLocalSize = warpChunkSize = 1;
+    groupSize = chunkSize = 1;
 
-  unsigned regMask = getAxisMask(kReg, threadLocalSize);
+  unsigned regMask = getAxisMask(kReg, groupSize);
   llvm::DenseMap<unsigned, unsigned> groups;
   for (unsigned reg = 0; reg < layout.getInDimSize(kReg); ++reg) {
     unsigned key = reg & ~regMask;
-    auto [it, inserted] = groups.try_emplace(key, threadGroups.size());
+    auto [it, inserted] = groups.try_emplace(key, threadLocalGroups.size());
     if (inserted)
-      threadGroups.emplace_back();
-    threadGroups[it->second].push_back(reg);
+      threadLocalGroups.emplace_back();
+    threadLocalGroups[it->second].push_back(reg);
     registerGroups.push_back(it->second);
   }
   auto regAxis = layout.sublayout({kReg}, {axisDim});
-  for (auto &group : threadGroups)
+  for (auto &group : threadLocalGroups)
     llvm::sort(group, [&](unsigned a, unsigned b) {
       return regAxis.apply({{kReg, a}}).front().second <
              regAxis.apply({{kReg, b}}).front().second;
     });
 
-  // Drop each chunk's internal coordinates. For register=[1,4], lane=[2,8],
-  // warp=[16], a chunk covers [0..3]; its totals have reg=[0,1], lane=[0,2],
-  // warp=[4] in chunk units. Values keep their original physical owners.
+  // Drop each warp-local chunk's internal coordinates. For register=[1,4],
+  // lane=[2,8], warp=[16], a warp-local chunk covers [0..3]; its totals have
+  // reg=[0,1], lane=[0,2], warp=[4] in warp-local chunk units. Values keep
+  // their original physical owners.
   auto bases = layout.getBases();
   auto outDims = layout.getOutDims();
-  outDims[axis].second /= warpChunkSize;
+  outDims[axis].second /= chunkSize;
   for (auto &[dim, columns] : bases)
     for (auto &basis : columns)
-      basis[axis] /= warpChunkSize;
+      basis[axis] /= chunkSize;
   totalsLayout.emplace(bases, outDims, /*requireSurjective=*/true);
 
-  // Put independent lanes/warps before axis warps, then register chunks, as
-  // main's shared buffer does. Only terminal lanes publish a chunk total.
+  // Order scratch slots by independent lanes/warps, axis warps, then register
+  // bits selecting warp-local chunks, as in main. Terminal lanes publish
+  // totals.
   LinearLayout::BasesT addresses;
   for (const auto &[dim, columns] : layout.getBases())
     addresses[dim].resize(columns.size(), {0});
@@ -378,7 +380,7 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
         continue;
       if (dim == kReg && (regMask & (1u << i)))
         continue;
-      if (dim == kLane && (getAxisMask(kLane, warpChunkSize) & (1u << i)))
+      if (dim == kLane && (getAxisMask(kLane, chunkSize) & (1u << i)))
         continue;
       if (dim == kWarp && bool(basis[axis]) != axisWarps)
         continue;
@@ -431,7 +433,7 @@ ScanLoweringHelper::getChunkBounds(unsigned reg) const {
   auto *ctx = op.getContext();
   auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
   unsigned first = totalsLayout->getOutDimSize(axis) - 1, last = 0;
-  unsigned offset = getAxisOffset() / warpChunkSize;
+  unsigned offset = getAxisOffset() / chunkSize;
   for (unsigned lane = 0;
        lane < layout.getInDimSize(StringAttr::get(ctx, "lane")); ++lane)
     for (unsigned warp = 0;
@@ -453,7 +455,7 @@ LinearLayout ScanLoweringHelper::getChunkLookup() const {
   auto axis =
       StringAttr::get(op.getContext(), "dim" + std::to_string(op.getAxis()));
   auto dims = llvm::to_vector(layout.getOutDimNames());
-  unsigned numChunks = layout.getOutDimSize(axis) / warpChunkSize;
+  unsigned numChunks = layout.getOutDimSize(axis) / chunkSize;
   bool interWarp = hasInterWarpScan();
   auto queryBases = totalsLayout->getBases();
   for (auto &[dim, columns] : queryBases)

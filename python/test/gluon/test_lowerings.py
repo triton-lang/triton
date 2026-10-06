@@ -193,9 +193,11 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=
         n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, memory_layout))[None, :]
         a = ttgl.load(A + m * N + n)
         b = ttgl.load(B + m * N + n)
-        a, b = ttgl.convert_layout(a, layout), ttgl.convert_layout(b, layout)
+        if memory_layout != layout:
+            a, b = ttgl.convert_layout(a, layout), ttgl.convert_layout(b, layout)
         a, b = ttgl.associative_scan((a, b), axis, _scan_affine_combine, reverse=reverse)
-        a, b = ttgl.convert_layout(a, memory_layout), ttgl.convert_layout(b, memory_layout)
+        if memory_layout != layout:
+            a, b = ttgl.convert_layout(a, memory_layout), ttgl.convert_layout(b, memory_layout)
         ttgl.store(OutA + m * N + n, a)
         ttgl.store(OutB + m * N + n, b)
 
