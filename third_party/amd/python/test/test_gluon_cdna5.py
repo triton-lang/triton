@@ -79,13 +79,16 @@ def get_test_gemm_block_mnk():
 def get_test_gemm_variants():
     return  [
         # float32 * float32 -> float32
-        ("float32", "float32", 4),
+        ("float32", "float32", 4, "float32"),
         # bfloat16/float16 * bfloat16/float16 -> float32
-        *[(a, a, 32) for a in ["bfloat16", "float16"]],
+        *[(a, a, 32, "float32") for a in ["bfloat16", "float16"]],
+        # float16 * float16 -> float16
+        ("float16", "float16", 32, "float16"),
         # float8e4m3/float8e5m2 * float8e4m3/float8e5m2 -> float32/float16
-        *[(a, b, k) for a in ["float8_e4m3fn", "float8_e5m2"] \
-                       for b in ["float8_e4m3fn", "float8_e5m2"] \
-                       for k in [64, 128]],
+        *[(a, b, k, c) for a in ["float8_e4m3fn", "float8_e5m2"] \
+                          for b in ["float8_e4m3fn", "float8_e5m2"] \
+                          for k in [64, 128] \
+                          for c in ["float32", "float16"]],
     ]
 
 
@@ -96,9 +99,9 @@ def get_test_gemm_shapes():
     ]
 
 
-@pytest.mark.parametrize("a_dtype,b_dtype,k_dim", get_test_gemm_variants())
+@pytest.mark.parametrize("a_dtype,b_dtype,k_dim,c_dtype", get_test_gemm_variants())
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", get_test_gemm_block_mnk())
-def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
+def test_compile_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_K):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
     if get_current_target().arch == "gfx1250-strict" and not (a_dtype == "float32" and k_dim == 4):
@@ -106,9 +109,10 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
 
     a_dtype = str_to_triton_dtype(a_dtype).name
     b_dtype = str_to_triton_dtype(b_dtype).name
+    c_dtype = str_to_triton_dtype(c_dtype).name
 
     signature = {
-        "a_ptr": f"*{a_dtype}", "b_ptr": f"*{b_dtype}", "c_ptr": "*fp32",  #
+        "a_ptr": f"*{a_dtype}", "b_ptr": f"*{b_dtype}", "c_ptr": f"*{c_dtype}",  #
         "M": "i32", "N": "i32", "K": "i32",  #
         "stride_am": "i32", "stride_ak": "i32",  #
         "stride_bk": "i32", "stride_bn": "i32",  #
@@ -127,7 +131,7 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
     amdgcn = k.asm["amdgcn"]
 
     wmma_pattern = "v_wmma_"
-    wmma_pattern += "f32_"
+    wmma_pattern += "f16_" if c_dtype == "fp16" else "f32_"
     wmma_pattern += "16x16x" + str(k_dim) + "_"
     if a_dtype == "fp32":
         wmma_pattern += "f32"
@@ -466,10 +470,10 @@ def test_runtime_scaled_downcast_fp8(fp8_dtype, dtype, ttgl_dtype, in_suffix):
     torch.testing.assert_close(y.view(torch.uint8).cpu(), v, atol=0, rtol=0)
 
 
-@pytest.mark.parametrize("a_dtype,b_dtype,k_dim", get_test_gemm_variants())
+@pytest.mark.parametrize("a_dtype,b_dtype,k_dim,c_dtype", get_test_gemm_variants())
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", get_test_gemm_block_mnk())
 @pytest.mark.parametrize("M,N,K", get_test_gemm_shapes())
-def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
+def test_runtime_gemm(a_dtype, b_dtype, k_dim, c_dtype, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
     if get_current_target().arch == "gfx1250-strict" and not (a_dtype == "float32" and k_dim == 4):
@@ -486,10 +490,11 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
 
     a_dtype = getattr(torch, a_dtype)
     b_dtype = getattr(torch, b_dtype)
+    c_dtype = getattr(torch, c_dtype)
 
     a = create_operand((M, K), a_dtype)
     b = create_operand((K, N), b_dtype)
-    c = torch.zeros((M, N), dtype=torch.float32)
+    c = torch.zeros((M, N), dtype=c_dtype)
     stride_am, stride_ak = a.stride(0), a.stride(1)
     stride_bk, stride_bn = b.stride(0), b.stride(1)
     stride_cm, stride_cn = c.stride(0), c.stride(1)
@@ -509,7 +514,10 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
 
     c_triton = c_device.cpu()
     c_torch = a.to(torch.float32) @ b.to(torch.float32)
-    torch.testing.assert_close(c_triton, c_torch, rtol=1e-4, atol=1e-4)
+    if c_dtype == torch.float16:
+        torch.testing.assert_close(c_triton.to(torch.float32), c_torch, rtol=1e-2, atol=1e-1)
+    else:
+        torch.testing.assert_close(c_triton, c_torch, rtol=1e-4, atol=1e-4)
 
 
 @gluon.jit

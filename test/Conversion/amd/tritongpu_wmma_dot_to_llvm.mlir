@@ -565,6 +565,73 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#mma3 = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // GFX1250-NATIVE-LABEL: wmma3_dot_f16_acc_f16
+  tt.func @wmma3_dot_f16_acc_f16(%arg0: tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma3, kWidth = 8}>>, %arg1: tensor<32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma3, kWidth = 8}>>, %arg2: tensor<16x16xf16, #mma3>, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // GFX1250-NATIVE-COUNT-8: llvm.insertelement {{.*}} : vector<8xf16>
+    // GFX1250-NATIVE: wmma.f16.16x16x32.f16{{.*}} : (vector<16xf16>, vector<16xf16>, i16, vector<8xf16>, i1, i1) -> vector<8xf16>
+    // expected-error @+2 {{wmma intrinsic llvm.amdgcn.wmma.f16.16x16x32.f16 is not supported on gfx1250-strict}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma3, kWidth = 8}>> * tensor<32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma3, kWidth = 8}>> -> tensor<16x16xf16, #mma3>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>, #mma3>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f16>, #mma3>
+    tt.return
+  }
+}
+
+// -----
+
+#mma3 = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // GFX1250-NATIVE-LABEL: wmma3_dot_bf16_acc_bf16
+  tt.func @wmma3_dot_bf16_acc_bf16(%arg0: tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma3, kWidth = 8}>>, %arg1: tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma3, kWidth = 8}>>, %arg2: tensor<16x16xbf16, #mma3>, %arg3: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // GFX1250-NATIVE-COUNT-8: llvm.insertelement {{.*}} : vector<8xbf16>
+    // GFX1250-NATIVE: wmma.bf16.16x16x32.bf16{{.*}} : (vector<16xbf16>, vector<16xbf16>, i16, vector<8xbf16>, i1, i1) -> vector<8xbf16>
+    // expected-error @+2 {{wmma intrinsic llvm.amdgcn.wmma.bf16.16x16x32.bf16 is not supported on gfx1250-strict}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma3, kWidth = 8}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma3, kWidth = 8}>> -> tensor<16x16xbf16, #mma3>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<bf16> -> tensor<16x16x!tt.ptr<bf16>, #mma3>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<bf16>, #mma3>
+    tt.return
+  }
+}
+
+// -----
+
+#mma3_f8 = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 64]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // GFX1250-NATIVE-LABEL: wmma3_dot_fp8_bf8_acc_f16
+  tt.func @wmma3_dot_fp8_bf8_acc_f16(%arg0: tensor<16x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8, kWidth = 8}>>, %arg1: tensor<64x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8, kWidth = 8}>>, %arg2: tensor<16x16xf16, #mma3_f8>, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // GFX1250-NATIVE-COUNT-8: llvm.insertelement {{.*}} : vector<8xf16>
+    // GFX1250-NATIVE: wmma.f16.16x16x64.fp8.bf8{{.*}} : (vector<8xi32>, vector<8xi32>, i16, vector<8xf16>, i1, i1) -> vector<8xf16>
+    // expected-error @+2 {{wmma intrinsic llvm.amdgcn.wmma.f16.16x16x64.fp8.bf8 is not supported on gfx1250-strict}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8, kWidth = 8}>> * tensor<64x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8, kWidth = 8}>> -> tensor<16x16xf16, #mma3_f8>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>, #mma3_f8>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f16>, #mma3_f8>
+    tt.return
+  }
+}
+
+// -----
+
+#mma3_f8_k128 = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 128]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // GFX1250-NATIVE-LABEL: wmma3_dot_fp8_k128_acc_f16
+  tt.func @wmma3_dot_fp8_k128_acc_f16(%arg0: tensor<16x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8_k128, kWidth = 16}>>, %arg1: tensor<128x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8_k128, kWidth = 16}>>, %arg2: tensor<16x16xf16, #mma3_f8_k128>, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // GFX1250-NATIVE: wmma.f16.16x16x128.fp8.fp8{{.*}} : (vector<16xi32>, vector<16xi32>, i16, vector<8xf16>, i1, i1) -> vector<8xf16>
+    // expected-error @+2 {{wmma intrinsic llvm.amdgcn.wmma.f16.16x16x128.fp8.fp8 is not supported on gfx1250-strict}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8_k128, kWidth = 16}>> * tensor<128x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8_k128, kWidth = 16}>> -> tensor<16x16xf16, #mma3_f8_k128>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>, #mma3_f8_k128>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f16>, #mma3_f8_k128>
+    tt.return
+  }
+}
+
+// -----
+
 #mma_acc = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, CGALayout = [[1, 0], [0, 1]], instrShape = [16, 16, 32]}>
 #mma_a = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, CGALayout = [[1, 0], [0, 0]], instrShape = [16, 16, 32]}>
 #mma_b = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, CGALayout = [[0, 0], [0, 1]], instrShape = [16, 16, 32]}>
