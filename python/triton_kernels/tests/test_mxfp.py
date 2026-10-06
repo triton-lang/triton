@@ -64,6 +64,32 @@ def test_nvfp4_to_mxfp8_tile(block_k, k, device):
     torch.testing.assert_close(actual_scale, expected_scale, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("maximum0", range(8))
+def test_nvfp4_to_mxfp8_tile_scale_pairs(maximum0, device):
+    if not is_cuda() or not cuda_capability_geq(10, 0):
+        pytest.skip("requires Blackwell")
+    # Every finite nonnegative E4M3 scale pair, with independent FP4 maxima
+    # in the two NVFP4 blocks that share one MXFP8 scale.
+    cases = torch.arange(127 * 127 * 8, device=device)
+    scale_bits = torch.stack((cases // (127 * 8), cases // 8 % 127), dim=1).to(torch.uint8)
+    scales = scale_bits.view(torch.float8_e4m3fn)
+    maxima = torch.stack((torch.full_like(cases, maximum0), cases % 8), dim=1)
+    positions = torch.arange(8, device=device)
+    lo = torch.minimum(positions, maxima[:, :, None])
+    hi = torch.minimum(7 - positions, maxima[:, :, None])
+    # Exercise both signs, including negative zero, in both packed halves.
+    values = (lo | (hi << 4) | ((positions % 2) * 0x88)).to(torch.uint8).reshape(-1, 16)
+    m, k = values.shape[0], 32
+    actual = torch.empty((m, k), dtype=torch.float8_e4m3fn, device=device)
+    actual_scale = torch.empty((m, 1), dtype=torch.uint8, device=device)
+    _nvfp4_to_mxfp8_tile_kernel[(triton.cdiv(m, 16), 1)](
+        values, scales, actual, actual_scale, m, k, k)
+    decoded = upcast_from_mxfp_torch(values, scales, torch.float32, axis=-1)
+    expected, expected_scale = downcast_to_mxfp_torch(decoded, torch.float8_e4m3fn, axis=-1)
+    torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
+    torch.testing.assert_close(actual_scale, expected_scale, rtol=0, atol=0)
+
+
 @triton.jit
 def _upcast_ue8m0_scale_kernel(out, scale, BLOCK_SIZE: tl.constexpr):
     offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
