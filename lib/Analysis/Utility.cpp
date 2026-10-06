@@ -443,35 +443,6 @@ ScanLoweringHelper::getChunkBounds(unsigned reg) const {
   return {first, last};
 }
 
-LinearLayout ScanLoweringHelper::getLaneLayout() const {
-  auto op = scanOp;
-  auto kLane = StringAttr::get(op.getContext(), "lane");
-  auto axis =
-      StringAttr::get(op.getContext(), "dim" + std::to_string(op.getAxis()));
-  auto bases = layout.sublayout({kLane}, {axis}).getBases();
-  for (auto &basis : bases[kLane])
-    basis[0] = (basis[0] % warpChunkSize) / threadLocalSize;
-  return LinearLayout(bases, {{axis, warpChunkSize / threadLocalSize}}, true);
-}
-
-unsigned ScanLoweringHelper::getLaneStride() const {
-  auto op = scanOp;
-  unsigned numLanes = warpChunkSize / threadLocalSize;
-  if (numLanes == 1)
-    return 1;
-  auto laneLayout = getLaneLayout();
-  const auto &columns =
-      laneLayout.getBases().lookup(StringAttr::get(op.getContext(), "lane"));
-  for (unsigned bit = 0; bit < columns.size(); ++bit)
-    if (columns[bit][0] == 1) {
-      for (unsigned i = 0; (1u << i) < numLanes; ++i)
-        if (bit + i >= columns.size() || columns[bit + i][0] != (1u << i))
-          return 0;
-      return 1u << bit;
-    }
-  return 0;
-}
-
 LinearLayout ScanLoweringHelper::getChunkLookup() const {
   auto op = scanOp;
 

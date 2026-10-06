@@ -161,13 +161,35 @@ private:
     // The layout gives the remaining axis offset, including interleaved or
     // swizzled warp bits; no layout or physical warp ownership is changed.
     indices.axisOffset = helper.getAxisOffset();
-    auto laneLayout = helper.getLaneLayout();
+    // Physical lane -> position within a chunk, in thread-local range units.
+    unsigned threadSize = helper.getThreadLocalSize();
+    unsigned numLanes = chunkSize / threadSize;
+    auto laneBases = layout.sublayout({kLane}, {axis}).getBases();
+    for (auto &basis : laneBases[kLane])
+      basis[0] = (basis[0] % chunkSize) / threadSize;
+    LinearLayout laneLayout(laneBases, {{axis, numLanes}}, true);
     indices.laneIndex =
         applyLinearLayout(loc, rewriter, laneLayout, {{kLane, indices.laneId}})
             .front()
             .second;
     indices.laneInverse = laneLayout.pseudoinvert();
-    indices.stride = helper.getLaneStride();
+    // Use shuffle-up when logical neighbors have a fixed physical stride.
+    // Otherwise leave stride zero and use the inverse layout for lane lookup.
+    if (numLanes == 1)
+      indices.stride = 1;
+    else {
+      const auto &columns = laneBases[kLane];
+      for (unsigned bit = 0; bit < columns.size(); ++bit)
+        if (columns[bit][0] == 1) {
+          indices.stride = 1u << bit;
+          for (unsigned i = 0; (1u << i) < numLanes; ++i)
+            if (bit + i >= columns.size() || columns[bit + i][0] != (1u << i)) {
+              indices.stride = 0;
+              break;
+            }
+          break;
+        }
+    }
 
     unsigned warpReflection =
         op.getReverse() ? helper.getAxisMask(kWarp, layout.getOutDimSize(axis))
