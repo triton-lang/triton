@@ -2742,6 +2742,10 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
     "layout",
     _filter_layouts([
         *_swizzled_warp_layouts_2d(),
+        # Reverse traversal reaches warp-local chunk indices {1, 2} at register zero;
+        # their aligned interval has size 4. Register/lane bases are independent.
+        ttgl.DistributedLinearLayout([[2, 0]], [[0, 0]] * (THREADS_PER_WARP.bit_length() - 1), [[3, 0], [0, 0]], [],
+                                     [4, 1]),
         *[
             ttgl.DistributedLinearLayout([[*b, 0]
                                           for b in x.reg_bases], [[*b, 0]

@@ -62,10 +62,9 @@ struct ScanOpConversion
 private:
   // Generated coordinates reused by the scan stages.
   struct ScanIndices {
-    Value laneId, warpId, laneIndex, scratchWarpId, notFirstLane, threadChunk;
+    Value laneId, warpId, laneIndex, notFirstLane, baseChunkIndex;
     LinearLayout laneInverse;
-    unsigned stride = 0, axisOffset = 0, scratchReflection = 0, varyingBits = 0;
-    SmallVector<Value> chunkIndices;
+    unsigned stride = 0, axisOffset = 0, chunkSpan = 1;
   };
 
   static SmallVector<std::pair<StringAttr, Value>>
@@ -86,15 +85,6 @@ private:
             {rewriter.getStringAttr("lane"), lane},
             {rewriter.getStringAttr("warp"), warp},
             {rewriter.getStringAttr("block"), 0}};
-  }
-
-  static Value reflectIndex(TritonLLVMOpBuilder &b, Value index, unsigned mask,
-                            unsigned size) {
-    // A complete field reversal is subtraction, as in main. A partial
-    // reversal preserves the other layout bits with XOR.
-    if (mask == size - 1)
-      return b.sub(b.i32_val(mask), index);
-    return b.xor_(index, b.i32_val(mask));
   }
 
   SmallVector<Value> combineWithPrefix(triton::ScanOp op, ValueRange prefix,
@@ -141,16 +131,12 @@ private:
                              ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto kReg = rewriter.getStringAttr("register");
     auto kLane = rewriter.getStringAttr("lane");
     auto kWarp = rewriter.getStringAttr("warp");
-    auto kBlock = rewriter.getStringAttr("block");
     auto axis = rewriter.getStringAttr("dim" + std::to_string(op.getAxis()));
     const auto &layout = helper.getLayout();
-    auto groups = helper.getThreadLocalGroups();
     unsigned chunkSize = helper.getChunkSize();
     unsigned warpSize = layout.getInDimSize(kLane);
-    bool interWarp = helper.hasInterWarpScan();
     ScanIndices indices;
     Value threadId = getThreadId(rewriter, loc);
     indices.laneId = b.urem(threadId, b.i32_val(warpSize));
@@ -165,10 +151,12 @@ private:
     // group units.
     unsigned groupSize = helper.getGroupSize();
     unsigned numLanes = chunkSize / groupSize;
-    auto laneBases = layout.sublayout({kLane}, {axis}).getBases();
-    for (auto &basis : laneBases[kLane])
-      basis[0] = (basis[0] % chunkSize) / groupSize;
-    LinearLayout laneLayout(laneBases, {{axis, numLanes}}, true);
+    auto laneLayout =
+        layout.sublayout({kLane}, {axis})
+            .resizeOutDim(axis, chunkSize)
+            .reshapeOuts({{rewriter.getStringAttr("element"), groupSize},
+                          {axis, numLanes}})
+            .sublayout({kLane}, {axis});
     indices.laneIndex =
         applyLinearLayout(loc, rewriter, laneLayout, {{kLane, indices.laneId}})
             .front()
@@ -179,7 +167,7 @@ private:
     if (numLanes == 1)
       indices.stride = 1;
     else {
-      const auto &columns = laneBases[kLane];
+      const auto &columns = laneLayout.getBases().lookup(kLane);
       for (unsigned bit = 0; bit < columns.size(); ++bit)
         if (columns[bit][0] == 1) {
           indices.stride = 1u << bit;
@@ -192,37 +180,26 @@ private:
         }
     }
 
-    unsigned warpReflection =
-        op.getReverse() ? helper.getAxisMask(kWarp, layout.getOutDimSize(axis))
-                        : 0;
-    // Reflect axis-warp slots once for reverse traversal. Regular layouts
-    // then read neighboring totals at increasing shared-memory addresses.
-    indices.scratchWarpId = reflectIndex(b, indices.warpId, warpReflection,
-                                         layout.getInDimSize(kWarp));
-    if (interWarp && op.getReverse())
-      indices.scratchReflection =
-          helper.getScratchAddressLayout()
-              .apply(
-                  {{kReg, 0}, {kLane, 0}, {kWarp, warpReflection}, {kBlock, 0}})
-              .front()
-              .second;
     indices.notFirstLane = b.icmp_ne(indices.laneIndex, b.i32_val(0));
-    auto baseCoords =
+    // Size of the aligned interval containing the warp-local chunks reachable
+    // by varying lane and warp at a fixed register.
+    auto [first, last] = helper.getChunkBounds(0);
+    while (first / indices.chunkSpan != last / indices.chunkSpan)
+      indices.chunkSpan *= 2;
+    // Warp-local chunk coordinate for register zero, in scan traversal order.
+    indices.baseChunkIndex =
         applyLinearLayout(loc, rewriter, helper.getTotalsLayout(),
                           getHardwareCoordinates(op, 0, indices.laneId,
-                                                 indices.warpId, rewriter));
-    indices.threadChunk = baseCoords[op.getAxis()].second;
-    unsigned varyingMask = 0;
-    for (auto dim : {kLane, kWarp})
-      for (const auto &basis : helper.getTotalsLayout().getBases().lookup(dim))
-        varyingMask |= basis[op.getAxis()];
-    unsigned varyingSize = llvm::PowerOf2Ceil(varyingMask + 1);
-    indices.varyingBits = varyingSize - 1;
-    indices.threadChunk = reflectIndex(
-        b, indices.threadChunk,
-        (indices.axisOffset / chunkSize) & indices.varyingBits, varyingSize);
-
-    indices.chunkIndices.resize(groups.size());
+                                                 indices.warpId,
+                                                 rewriter))[op.getAxis()]
+            .second;
+    unsigned reflection = (indices.axisOffset / chunkSize) % indices.chunkSpan;
+    if (reflection == indices.chunkSpan - 1)
+      indices.baseChunkIndex =
+          b.sub(b.i32_val(reflection), indices.baseChunkIndex);
+    else
+      indices.baseChunkIndex =
+          b.xor_(indices.baseChunkIndex, b.i32_val(reflection));
     return indices;
   }
 
@@ -310,20 +287,19 @@ private:
                      ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto groups = helper.getThreadLocalGroups();
-    unsigned chunkSize = helper.getChunkSize();
-    unsigned reg = helper.getChunkIndex(groups[g].back());
-    unsigned fixed =
-        (reg ^ (indices.axisOffset / chunkSize)) & ~indices.varyingBits;
-    if (fixed != (index & ~indices.varyingBits))
-      return b.i1_val(fixed > (index & ~indices.varyingBits));
-    // Compare only bits that can vary between threads. This shares main's
-    // warp-prefix predicate across warp-local chunks selected by register bits.
-    if (!indices.chunkIndices[g])
-      indices.chunkIndices[g] =
-          b.xor_(indices.threadChunk, b.i32_val(reg & indices.varyingBits));
-    return b.icmp_ugt(indices.chunkIndices[g],
-                      b.i32_val(index & indices.varyingBits));
+    unsigned reg = helper.getThreadLocalGroups()[g].back();
+    unsigned regIndex = helper.getChunkIndex(reg);
+    unsigned traversalIndex =
+        regIndex ^ (indices.axisOffset / helper.getChunkSize());
+    // Aligned intervals selected by registers have a compile-time ordering.
+    if (traversalIndex / indices.chunkSpan != index / indices.chunkSpan)
+      return b.i1_val(traversalIndex / indices.chunkSpan >
+                      index / indices.chunkSpan);
+    // Within one interval, combine the layout's thread and register
+    // coordinates.
+    Value chunkIndex =
+        b.xor_(indices.baseChunkIndex, b.i32_val(regIndex % indices.chunkSpan));
+    return b.icmp_ugt(chunkIndex, b.i32_val(index % indices.chunkSpan));
   }
 
   SmallVector<Value>
@@ -564,6 +540,22 @@ private:
     auto groups = helper.getThreadLocalGroups();
     unsigned chunkSize = helper.getChunkSize();
     unsigned laneMask = helper.getAxisMask(kLane, chunkSize);
+    // Reflect shared-memory warp slots for reverse traversal. Applying the
+    // same reflection to loads preserves the layout lookup's ownership.
+    Value scratchWarp = indices.warpId;
+    unsigned scratchReflection = 0;
+    if (op.getReverse()) {
+      unsigned mask = helper.getAxisMask(kWarp, layout.getOutDimSize(axis));
+      if (mask == unsigned(layout.getInDimSize(kWarp) - 1))
+        scratchWarp = b.sub(b.i32_val(mask), indices.warpId);
+      else
+        scratchWarp = b.xor_(indices.warpId, b.i32_val(mask));
+      scratchReflection =
+          helper.getScratchAddressLayout()
+              .apply(getHardwareCoordinates(0, 0, mask, rewriter))
+              .front()
+              .second;
+    }
     SmallVector<Value> smemBases;
     SmallVector<Type> smemTypes;
     smemBases =
@@ -587,10 +579,10 @@ private:
                                  b.i32_val(0)));
     for (unsigned g = 0; g < groups.size(); ++g) {
       Value offset =
-          applyLinearLayout(
-              loc, rewriter, helper.getScratchAddressLayout(),
-              getHardwareCoordinates(op, groups[g].back(), indices.laneId,
-                                     indices.scratchWarpId, rewriter))
+          applyLinearLayout(loc, rewriter, helper.getScratchAddressLayout(),
+                            getHardwareCoordinates(op, groups[g].back(),
+                                                   indices.laneId, scratchWarp,
+                                                   rewriter))
               .front()
               .second;
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -610,7 +602,7 @@ private:
           SmallVector<Value> total;
           Value offset =
               applyLinearLayout(loc, rewriter, lookup, coords).front().second;
-          offset = b.xor_(offset, b.i32_val(indices.scratchReflection));
+          offset = b.xor_(offset, b.i32_val(scratchReflection));
           for (unsigned i = 0; i < op.getNumOperands(); ++i) {
             Value ptr = b.gep(smemBases[i].getType(), smemTypes[i],
                               smemBases[i], offset);
