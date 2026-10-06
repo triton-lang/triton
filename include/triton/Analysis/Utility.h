@@ -115,6 +115,14 @@ public:
   unsigned getThreadLocalSize() const { return threadLocalSize; }
   unsigned getWarpChunkSize() const { return warpChunkSize; }
   unsigned getAxisMask(mlir::StringAttr dim, unsigned size) const;
+  unsigned getAxisOffset() const;
+  unsigned getChunkIndex(unsigned reg, unsigned lane = 0,
+                         unsigned warp = 0) const;
+  std::pair<unsigned, unsigned> getChunkBounds(unsigned reg) const;
+  triton::LinearLayout getLaneLayout() const;
+  unsigned getLaneStride() const;
+  triton::LinearLayout getChunkLookup() const;
+  llvm::ArrayRef<unsigned> getRegisterGroups() const { return registerGroups; }
   const triton::LinearLayout &getLayout() const { return layout; }
   const triton::LinearLayout &getTotalsLayout() const { return *totalsLayout; }
   const triton::LinearLayout &getScratchAddressLayout() const {
@@ -134,6 +142,7 @@ private:
   std::optional<triton::LinearLayout> scratchAddressLayout;
   std::optional<triton::LinearLayout> scratchLayout;
   SmallVector<SmallVector<unsigned>> threadGroups;
+  SmallVector<unsigned> registerGroups;
   unsigned threadLocalSize;
   unsigned warpChunkSize;
 };

@@ -346,6 +346,7 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
     if (inserted)
       threadGroups.emplace_back();
     threadGroups[it->second].push_back(reg);
+    registerGroups.push_back(it->second);
   }
   auto regAxis = layout.sublayout({kReg}, {axisDim});
   for (auto &group : threadGroups)
@@ -393,6 +394,114 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
       SmallVector<std::pair<StringAttr, int32_t>>{{kOffset, 1u << bit}},
       /*requireSurjective=*/true);
   scratchLayout = scratchAddressLayout->pseudoinvert().compose(*totalsLayout);
+}
+
+unsigned ScanLoweringHelper::getAxisOffset() const {
+  auto op = scanOp;
+  if (!op.getReverse())
+    return 0;
+  auto *ctx = op.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
+  return (layout.getOutDimSize(axis) - 1) ^
+         layout
+             .apply({{kReg, layout.getInDimSize(kReg) - 1},
+                     {kLane, layout.getInDimSize(kLane) - 1},
+                     {StringAttr::get(ctx, "warp"), 0},
+                     {StringAttr::get(ctx, "block"), 0}})[op.getAxis()]
+             .second;
+}
+
+unsigned ScanLoweringHelper::getChunkIndex(unsigned reg, unsigned lane,
+                                           unsigned warp) const {
+  auto op = scanOp;
+  auto *ctx = op.getContext();
+  return totalsLayout
+      ->apply({{StringAttr::get(ctx, "register"), reg},
+               {StringAttr::get(ctx, "lane"), lane},
+               {StringAttr::get(ctx, "warp"), warp},
+               {StringAttr::get(ctx, "block"), 0}})[op.getAxis()]
+      .second;
+}
+
+std::pair<unsigned, unsigned>
+ScanLoweringHelper::getChunkBounds(unsigned reg) const {
+  auto op = scanOp;
+  auto *ctx = op.getContext();
+  auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
+  unsigned first = totalsLayout->getOutDimSize(axis) - 1, last = 0;
+  unsigned offset = getAxisOffset() / warpChunkSize;
+  for (unsigned lane = 0;
+       lane < layout.getInDimSize(StringAttr::get(ctx, "lane")); ++lane)
+    for (unsigned warp = 0;
+         warp < layout.getInDimSize(StringAttr::get(ctx, "warp")); ++warp) {
+      unsigned index = getChunkIndex(reg, lane, warp) ^ offset;
+      first = std::min(first, index);
+      last = std::max(last, index);
+    }
+  return {first, last};
+}
+
+LinearLayout ScanLoweringHelper::getLaneLayout() const {
+  auto op = scanOp;
+  auto kLane = StringAttr::get(op.getContext(), "lane");
+  auto axis =
+      StringAttr::get(op.getContext(), "dim" + std::to_string(op.getAxis()));
+  auto bases = layout.sublayout({kLane}, {axis}).getBases();
+  for (auto &basis : bases[kLane])
+    basis[0] = (basis[0] % warpChunkSize) / threadLocalSize;
+  return LinearLayout(bases, {{axis, warpChunkSize / threadLocalSize}}, true);
+}
+
+unsigned ScanLoweringHelper::getLaneStride() const {
+  auto op = scanOp;
+  unsigned numLanes = warpChunkSize / threadLocalSize;
+  if (numLanes == 1)
+    return 1;
+  auto laneLayout = getLaneLayout();
+  const auto &columns =
+      laneLayout.getBases().lookup(StringAttr::get(op.getContext(), "lane"));
+  for (unsigned bit = 0; bit < columns.size(); ++bit)
+    if (columns[bit][0] == 1) {
+      for (unsigned i = 0; (1u << i) < numLanes; ++i)
+        if (bit + i >= columns.size() || columns[bit + i][0] != (1u << i))
+          return 0;
+      return 1u << bit;
+    }
+  return 0;
+}
+
+LinearLayout ScanLoweringHelper::getChunkLookup() const {
+  auto op = scanOp;
+
+  auto kReg = StringAttr::get(op.getContext(), "register");
+  auto kLane = StringAttr::get(op.getContext(), "lane");
+  auto kWarp = StringAttr::get(op.getContext(), "warp");
+  auto kBlock = StringAttr::get(op.getContext(), "block");
+  auto axis =
+      StringAttr::get(op.getContext(), "dim" + std::to_string(op.getAxis()));
+  auto dims = llvm::to_vector(layout.getOutDimNames());
+  unsigned numChunks = layout.getOutDimSize(axis) / warpChunkSize;
+  bool interWarp = hasInterWarpScan();
+  auto queryBases = totalsLayout->getBases();
+  for (auto &[dim, columns] : queryBases)
+    for (auto &basis : columns) {
+      if (dim == kBlock || (!interWarp && dim == kWarp))
+        std::fill(basis.begin(), basis.end(), 0);
+      basis[op.getAxis()] = 0;
+    }
+  for (unsigned bit = 1; bit < numChunks; bit *= 2) {
+    std::vector<int32_t> basis(dims.size(), 0);
+    basis[op.getAxis()] = bit;
+    queryBases[axis].push_back(std::move(basis));
+  }
+  LinearLayout query(queryBases, totalsLayout->getOutDims(), false);
+  auto ownerLayout =
+      interWarp ? *scratchLayout : totalsLayout->sublayout({kReg, kLane}, dims);
+  // Invert only coordinates reachable by this CTA (or warp), rather than
+  // demanding a full-tensor inverse for broadcasts or CTA-local views.
+  return query.invertAndCompose(ownerLayout);
 }
 
 unsigned ScanLoweringHelper::getAxisMask(StringAttr dim, unsigned size) const {
