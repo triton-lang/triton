@@ -2940,6 +2940,160 @@ def test_join_scalars(device):
     np.testing.assert_equal([42, 100], to_numpy(z))
 
 
+@pytest.mark.parametrize("width", [2, 4])
+@pytest.mark.parametrize("rows", [1, 4])
+@pytest.mark.parametrize("n", [3, 33, 513])
+@pytest.mark.parametrize("offset", [0, 1])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.int8, torch.int16, torch.int32])
+def test_coalesce_adjacent_loads(device, width, rows, n, offset, reverse, dtype):
+
+    @triton.jit
+    def kernel(X, O, N: tl.constexpr, R: tl.constexpr, PITCH: tl.constexpr, OFFSET: tl.constexpr, W: tl.constexpr,
+               REVERSE: tl.constexpr, B: tl.constexpr):
+        i = tl.arange(0, B)
+        row = tl.arange(0, R)
+        p = X + OFFSET + row[:, None] * PITCH + W * i[None, :]
+        m = tl.broadcast_to(W * i[None, :] + W - 1 < N, (R, B))
+        if REVERSE:
+            b = tl.load(p + 1, m, 7).to(tl.float32)
+            a = tl.load(p, m, -3).to(tl.float32)
+        else:
+            a = tl.load(p, m, -3).to(tl.float32)
+            b = tl.load(p + 1, m, 7).to(tl.float32)
+        if W == 4:
+            c = tl.load(p + 2, m, 9).to(tl.float32)
+            d = tl.load(p + 3, m, -5).to(tl.float32)
+        out = O + row[:, None] * W * B + W * i[None, :]
+        tl.store(out, a)
+        tl.store(out + 1, b)
+        if W == 4:
+            tl.store(out + 2, c)
+            tl.store(out + 3, d)
+
+    block = triton.next_power_of_2(triton.cdiv(n, width))
+    pitch = n + 7
+    # No tail padding after the final row: memcheck can detect mask widening.
+    x = (torch.arange((rows - 1) * pitch + offset + n, device=device) % 97).to(dtype)
+    if dtype.is_floating_point:
+        x[offset:offset + 3] = torch.tensor([float("nan"), float("inf"), -0.0], device=device, dtype=dtype)
+    out = torch.empty((rows, block, width), device=device, dtype=torch.float32)
+    compiled = kernel[(1, )](x, out, n, rows, pitch, offset, width, reverse, block)
+    ref = torch.tensor([-3, 7, 9, -5][:width], device=device).float().expand(rows, block, width).clone()
+    valid = n // width
+    for row in range(rows):
+        ref[row, :valid] = x[offset + row * pitch:offset + row * pitch + valid * width].float().reshape(valid, width)
+    torch.testing.assert_close(out, ref, rtol=0, atol=0, equal_nan=True)
+    if n == 513:
+        assert compiled.asm["ttir"].count("tt.load ") == (width if offset else 1)
+        assert not any("tt.join" in line and "!tt.ptr" in line for line in compiled.asm["ttir"].splitlines())
+
+
+@pytest.mark.parametrize("case", [
+    "store", "atomic", "barrier", "volatile", "effectful_asm", "different_mask", "cache_mismatch", "dependent_other",
+    "later_other", "read_between", "duplicate_mask", "mixed_mask", "mixed_mask_reverse"
+])
+def test_coalesce_adjacent_loads_dependencies(device, case):
+
+    @triton.jit
+    def kernel(X, Y, Z, CASE: tl.constexpr):
+        i = tl.arange(0, 256)
+        p = X + 2 * i
+        m = i < 32
+        if CASE == "mixed_mask_reverse":
+            a = tl.load(p)
+        else:
+            a = tl.load(p, m, 0)
+        extra = tl.full((256, ), 0, tl.int32)
+        if CASE == "store":
+            tl.store(p + 1, a + 3, m)
+        elif CASE == "atomic":
+            tl.atomic_add(p + 1, 1, m, sem="relaxed")
+        elif CASE == "barrier":
+            tl.debug_barrier()
+        elif CASE == "volatile":
+            extra = tl.load(Z + i, volatile=True)
+        elif CASE == "effectful_asm":
+            extra = tl.inline_asm_elementwise("mov.b32 $0, $1;", constraints="=r,r", args=[a], dtype=tl.int32,
+                                              is_pure=False, pack=1)
+        elif CASE == "read_between":
+            extra = tl.load(Z + i)
+        if CASE == "different_mask":
+            b = tl.load(p + 1, i < 31, 0)
+        elif CASE == "cache_mismatch":
+            b = tl.load(p + 1, m, 0, cache_modifier=".cg")
+        elif CASE == "dependent_other":
+            b = tl.load(p + 1, m, a + 1)
+        elif CASE == "later_other":
+            b = tl.load(p + 1, m, i + 99)
+        elif CASE == "duplicate_mask":
+            b = tl.load(p + 1, i < 32, 0)
+        elif CASE == "mixed_mask":
+            b = tl.load(p + 1)
+        else:
+            b = tl.load(p + 1, m, 0)
+        tl.store(Y + i, a + b + extra)
+
+    if not is_cuda() and case == "effectful_asm":
+        pytest.skip("PTX side-effect boundary test")
+    x = torch.arange(512, device=device, dtype=torch.int32)
+    z = torch.full((256, ), 5, device=device, dtype=torch.int32)
+    out = torch.empty(256, device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](x, out, z, case)
+    i = torch.arange(256, device=device, dtype=torch.int32)
+    a = torch.where(i < 32, 2 * i, 0)
+    b = torch.where(i < 32, 2 * i + 1, 0)
+    if case == "store":
+        b = torch.where(i < 32, a + 3, 0)
+    elif case == "atomic":
+        b = torch.where(i < 32, b + 1, 0)
+    elif case == "different_mask":
+        b[31] = 0
+    elif case == "dependent_other":
+        b[32:] = 1
+    elif case == "later_other":
+        b[32:] = i[32:] + 99
+    elif case == "mixed_mask":
+        b = 2 * i + 1
+    elif case == "mixed_mask_reverse":
+        a = 2 * i
+    extra = z if case in ("volatile", "read_between") else a if case == "effectful_asm" else 0
+    torch.testing.assert_close(out, a + b + extra, rtol=0, atol=0)
+    expected = 1 if case in ("later_other", "duplicate_mask") else 3 if case == "volatile" else 2
+    assert compiled.asm["ttir"].count("tt.load ") == expected
+
+
+@pytest.mark.parametrize("block", [128, 256, 512])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("offset", [0, 1])
+@pytest.mark.parametrize("overlap", [False, True])
+def test_coalesce_adjacent_loads_profitability(device, block, num_warps, offset, overlap):
+
+    @triton.jit
+    def kernel(X, O, B: tl.constexpr, OFFSET: tl.constexpr, OVERLAP: tl.constexpr):
+        i = tl.arange(0, B)
+        p = X + OFFSET + 2 * i
+        a = tl.load(p).to(tl.float32)
+        b = tl.load(p + 1).to(tl.float32)
+        y = a + b
+        if OVERLAP:
+            c = tl.load(p + 2).to(tl.float32)
+            d = tl.load(p + 3).to(tl.float32)
+            y += c + d
+        tl.store(O + i, y)
+
+    x = (torch.arange(2 * block + offset + 2, device=device) % 97).to(torch.float16)
+    out = torch.empty(block, device=device, dtype=torch.float32)
+    compiled = kernel[(1, )](x, out, block, offset, overlap, num_warps=num_warps)
+    v = x[offset:].float()
+    ref = v[:2 * block:2] + v[1:2 * block:2]
+    if overlap:
+        ref += v[2:2 * block + 2:2] + v[3:2 * block + 2:2]
+    torch.testing.assert_close(out, ref, rtol=0, atol=0)
+    merged = not offset and not overlap and block >= num_warps * THREADS_PER_WARP
+    assert compiled.asm["ttir"].count("tt.load ") == (1 if merged else 4 if overlap else 2)
+
+
 @pytest.mark.parametrize("n", [3, 32, 33, 513])
 @pytest.mark.parametrize("offset", [0, 1])
 @pytest.mark.parametrize("delta", [1, 2, -1])

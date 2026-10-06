@@ -44,7 +44,12 @@ void init_triton_passes_common(py::module_ &m) {
 
 void init_triton_passes_ttir(py::module_ &m) {
   using namespace mlir::triton;
-  ADD_PASS_WRAPPER_0("add_combine", createTritonCombineOps);
+  m.def(
+      "add_combine",
+      [](mlir::PassManager &pm, int numThreads) {
+        pm.addPass(createTritonCombineOps({numThreads}));
+      },
+      py::arg("pm"), py::arg("num_threads") = 0);
   ADD_PASS_WRAPPER_0("add_reorder_broadcast", createTritonReorderBroadcast);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
                      createTritonRewriteTensorDescriptorToPointer);

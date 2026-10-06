@@ -18,6 +18,7 @@ add_triton_library(TritonTransforms
   TritonCombineIncGen
 
   LINK_LIBS PUBLIC
+  TritonAnalysis
   MLIRPass
   MLIRTransformUtils
   MLIRTransforms
