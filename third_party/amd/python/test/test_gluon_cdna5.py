@@ -3957,6 +3957,43 @@ def test_compile_cluster_barrier_wait():
     assert "s_barrier_wait -3" in amdgcn
 
 
+@gluon.jit(noinline=True)
+def ws_noinline_barrier_helper(smem, layout: ttgl.constexpr):
+    smem.store(ttgl.arange(0, 128, layout))
+    smem.store(smem.load(layout) + 1)
+
+
+@gluon.jit
+def ws_noinline_barrier_worker(smem):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    ws_noinline_barrier_helper(smem, layout)
+
+
+@gluon.jit
+def ws_noinline_barrier_default():
+    pass
+
+
+@gluon.jit
+def ws_noinline_barrier_kernel():
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+    # Two worker partitions use different barriers while calling the same helper. This keeps its barrier handle variable instead of allowing it to fold into a constant
+    ttgl.warp_specialize([
+        (ws_noinline_barrier_default, ()),
+        (ws_noinline_barrier_worker, (smem.index(0), )),
+        (ws_noinline_barrier_worker, (smem.index(1), )),
+    ], [4, 4])
+
+
+def test_compile_warp_specialize_noinline_barrier():
+    k = triton.compile(src=gluon._runtime.GluonASTSource(ws_noinline_barrier_kernel, {}, {}),
+                       target=GPUTarget("hip", 'gfx1250', 32))
+    assert re.search(r"call .*@\S+_ws\(.*ptr addrspace\(3\) @nbar", k.asm["llir"])
+    amdgcn = k.asm["amdgcn"]
+    assert "s_barrier_join m0" in amdgcn
+    assert "s_barrier_signal m0" in amdgcn
+
+
 @gluon.jit
 def cluster_barrier_arrive_and_wait_kernel():
     ttgl.amd.cdna5.cluster.arrive()
