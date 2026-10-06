@@ -148,7 +148,11 @@ def _mxfp4_maximum_code(values):
         and.b32 a, a, 7;
         max.u32 $0, a, b;
         }""",
-        constraints="=r,r", args=[packed], dtype=tl.uint32, is_pure=True, pack=1,
+        constraints="=r,r",
+        args=[packed],
+        dtype=tl.uint32,
+        is_pure=True,
+        pack=1,
     )
     # Keep the reduction visible to prevent duplicating it into both scale layouts.
     return tl.max(word_maximum, 2)
@@ -160,8 +164,7 @@ def nvfp4_to_mxfp8_tile(values, scales):
     # does not duplicate the full activation decode in a second register layout.
     maximum_code = _mxfp4_maximum_code(values.reshape(values.shape[0], scales.shape[1], 8))
     maximum_bits = (maximum_code << 22) + 0x3F000000
-    maximum = tl.where(maximum_code < 2, maximum_code.to(tl.float32) * 0.5,
-                       maximum_bits.to(tl.float32, bitcast=True))
+    maximum = tl.where(maximum_code < 2, maximum_code.to(tl.float32) * 0.5, maximum_bits.to(tl.float32, bitcast=True))
     maximum *= tl.abs(scales.to(tl.float32))
     maximum = tl.max(maximum.reshape(values.shape[0], scales.shape[1] // 2, 2), 2)
     dequant_scale = maximum / 448.0

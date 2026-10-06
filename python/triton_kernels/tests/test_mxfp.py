@@ -30,18 +30,15 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
 def _nvfp4_to_mxfp8_tile_kernel(X, S, Y, YS, M: tl.constexpr, K: tl.constexpr, BLOCK_K: tl.constexpr):
     rows = tl.program_id(0) * 16 + tl.arange(0, 16)
     cols = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K // 2) * 2
-    x = tl.load(X + rows[:, None] * (K // 2) + cols[None, :] // 2,
-                (rows[:, None] < M) & (cols[None, :] < K), other=0)
+    x = tl.load(X + rows[:, None] * (K // 2) + cols[None, :] // 2, (rows[:, None] < M) & (cols[None, :] < K), other=0)
     sc = tl.program_id(1) * (BLOCK_K // 16) + tl.arange(0, BLOCK_K // 16)
-    scales = tl.load(S + rows[:, None] * (K // 16) + sc[None, :],
-                     (rows[:, None] < M) & (sc[None, :] < K // 16), other=0.0)
+    scales = tl.load(S + rows[:, None] * (K // 16) + sc[None, :], (rows[:, None] < M) & (sc[None, :] < K // 16),
+                     other=0.0)
     y, ys = nvfp4_to_mxfp8_tile(x, scales)
     out_cols = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K)
-    tl.store(Y + rows[:, None] * K + out_cols[None, :], y,
-             (rows[:, None] < M) & (out_cols[None, :] < K))
+    tl.store(Y + rows[:, None] * K + out_cols[None, :], y, (rows[:, None] < M) & (out_cols[None, :] < K))
     out_sc = tl.program_id(1) * (BLOCK_K // 32) + tl.arange(0, BLOCK_K // 32)
-    tl.store(YS + rows[:, None] * (K // 32) + out_sc[None, :], ys,
-             (rows[:, None] < M) & (out_sc[None, :] < K // 32))
+    tl.store(YS + rows[:, None] * (K // 32) + out_sc[None, :], ys, (rows[:, None] < M) & (out_sc[None, :] < K // 32))
 
 
 @pytest.mark.parametrize("block_k", [32, 128, 256])
@@ -56,8 +53,8 @@ def test_nvfp4_to_mxfp8_tile(block_k, k, device):
     scales = scale_values[torch.arange(m * k // 16, device=device) % 5].reshape(m, k // 16).to(torch.float8_e4m3fn)
     actual = torch.empty((m, k), dtype=torch.float8_e4m3fn, device=device)
     actual_scale = torch.empty((m, k // 32), dtype=torch.uint8, device=device)
-    _nvfp4_to_mxfp8_tile_kernel[(triton.cdiv(m, 16), triton.cdiv(k, block_k))](
-        values, scales, actual, actual_scale, m, k, block_k)
+    _nvfp4_to_mxfp8_tile_kernel[(triton.cdiv(m, 16), triton.cdiv(k, block_k))](values, scales, actual, actual_scale, m,
+                                                                               k, block_k)
     decoded = upcast_from_mxfp_torch(values, scales, torch.float32, axis=-1)
     expected, expected_scale = downcast_to_mxfp_torch(decoded, torch.float8_e4m3fn, axis=-1)
     torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
@@ -82,8 +79,7 @@ def test_nvfp4_to_mxfp8_tile_scale_pairs(maximum0, device):
     m, k = values.shape[0], 32
     actual = torch.empty((m, k), dtype=torch.float8_e4m3fn, device=device)
     actual_scale = torch.empty((m, 1), dtype=torch.uint8, device=device)
-    _nvfp4_to_mxfp8_tile_kernel[(triton.cdiv(m, 16), 1)](
-        values, scales, actual, actual_scale, m, k, k)
+    _nvfp4_to_mxfp8_tile_kernel[(triton.cdiv(m, 16), 1)](values, scales, actual, actual_scale, m, k, k)
     decoded = upcast_from_mxfp_torch(values, scales, torch.float32, axis=-1)
     expected, expected_scale = downcast_to_mxfp_torch(decoded, torch.float8_e4m3fn, axis=-1)
     torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
