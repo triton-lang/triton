@@ -181,16 +181,21 @@ def _scan_affine_combine(a1, b1, a2, b2):
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("M", [32, 256])
-def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=1, num_warps=4, N=32):
+def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=1, num_warps=4, N=32,
+                                     memory_layout=None):
+
+    memory_layout = layout if memory_layout is None else memory_layout
 
     @gluon.jit
     def kernel(A, B, OutA, OutB, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
-               reverse: ttgl.constexpr):
-        m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
-        n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
+               reverse: ttgl.constexpr, memory_layout: ttgl.constexpr):
+        m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, memory_layout))[:, None]
+        n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, memory_layout))[None, :]
         a = ttgl.load(A + m * N + n)
         b = ttgl.load(B + m * N + n)
+        a, b = ttgl.convert_layout(a, layout), ttgl.convert_layout(b, layout)
         a, b = ttgl.associative_scan((a, b), axis, _scan_affine_combine, reverse=reverse)
+        a, b = ttgl.convert_layout(a, memory_layout), ttgl.convert_layout(b, memory_layout)
         ttgl.store(OutA + m * N + n, a)
         ttgl.store(OutB + m * N + n, b)
 
@@ -206,7 +211,8 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=
         expected_b.select(axis, cur).copy_(expected_b.select(axis, prev) * a.select(axis, cur) + b.select(axis, cur))
     a, b = a.to(device), b.to(device)
     out_a, out_b = torch.empty_like(a), torch.empty_like(b)
-    kernel[(1, )](a, b, out_a, out_b, M, N, layout, axis, reverse, num_warps=num_warps, num_ctas=num_ctas)
+    kernel[(1, )](a, b, out_a, out_b, M, N, layout, axis, reverse, memory_layout, num_warps=num_warps,
+                  num_ctas=num_ctas)
     torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
     torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
 
@@ -2742,6 +2748,12 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
     "layout",
     _filter_layouts([
         *_swizzled_warp_layouts_2d(),
+        ttgl.DistributedLinearLayout([[3, 0], [1, 0]], [[4, 0], [8, 0], [16, 0], [0, 0], [0, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 1]),
+        ttgl.DistributedLinearLayout([[4, 0]], [[1, 0], [3, 0], [8, 0], [0, 0], [0, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[16, 0], [0, 0]], [], [32, 1]),
+        ttgl.DistributedLinearLayout([[1, 0], [2, 0], [2, 0]], [[4, 0], [8, 0], [0, 0], [0, 0], [0, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[16, 0], [0, 0]], [], [32, 1]),
         *[
             ttgl.DistributedLinearLayout([[*b, 0]
                                           for b in x.reg_bases], [[*b, 0]
@@ -2754,8 +2766,14 @@ def test_partitioned_shared_layout(M, K, num_partitions, num_groups, partition_d
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("reverse", [False, True])
 def test_scan_generic_linear(layout, axis, reverse, device):
+    # Produce aliased register values through an explicit layout conversion;
+    # the scan still operates directly on their original generic layout.
+    reg_bases = [tuple(basis) for basis in layout.reg_bases if any(basis)]
+    memory_layout = None
+    if len(set(reg_bases)) < len(reg_bases):
+        memory_layout = ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2**len(layout.warp_bases), 1], [0, 1])
     test_scan_layouts_noncommutative(layout, axis, reverse, M=layout.shape[0], N=layout.shape[1],
-                                     num_warps=2**len(layout.warp_bases), device=device)
+                                     num_warps=2**len(layout.warp_bases), device=device, memory_layout=memory_layout)
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")

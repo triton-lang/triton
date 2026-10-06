@@ -108,60 +108,34 @@ private:
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
-  // Return true if the lowering of the scan op is supported.
-  bool isSupported();
-  // Return the number of elements per thread along axis dim.
-  unsigned getAxisNumElementsPerThread();
-  // Return the number of elements per thread along non-axis dims.
-  unsigned getNonAxisNumElementsPerThread();
-  // Return the number of threads per warp along non-axis dims.
-  unsigned getNonAxisNumThreadsPerWarp();
-  // Return the flat numbers of threads computing independent scan results.
-  unsigned getNonAxisNumThreadsPerCTA();
-  // Return the number of warps per CTA along axis dim with unique data.
-  unsigned getAxisNumWarpsWithUniqueData();
-  // Return the number of threads per warp along axis dim with unique data.
-  unsigned getAxisNumThreadsPerWarpWithUniqueData();
-  // Return the number of blocks along axis dim.
-  unsigned getAxisNumBlocks();
-  // Return the number of blocks along non axis dim.
-  unsigned getNonAxisNumBlocks();
-  // Return the size of the scratch space needed for scan lowering.
-  unsigned getScratchSizeInBytes(
-      ReduceOpHelper::GetNumScratchElemsFn numScratchElemsGetter = nullptr);
-  // Return the number of elements of the scratch space needed for scan
-  // lowering.
-  unsigned getScratchSizeInElems();
-
-  // Stride between contiguous element along axis dim.
-  unsigned getAxisElementStride();
-  // Stride between contiguous threads along axis dim.
-  unsigned getAxisThreadStride();
-  // Stride between contiguous blocks along axis dim.
-  unsigned getAxisBlockStride();
-
-  Location getLoc() { return scanOp.getLoc(); }
-  unsigned getAxis() { return scanOp.getAxis(); }
-  bool getReverse() { return scanOp.getReverse(); }
-  triton::gpu::LinearEncodingAttr getEncoding() { return srcEncoding; }
-  const triton::LinearLayout &getOriginalLayout() { return originalLayout; }
-  llvm::ArrayRef<int64_t> getShape() { return srcShape; }
-  unsigned getNumOperands() { return scanOp.getNumOperands(); }
-  SmallVector<Type> getElementTypes() { return srcElementTypes; }
-  SmallVector<unsigned> getOrder() { return order; }
-  Region &getCombineOp();
+  bool isSupported() const;
+  bool hasInterWarpScan() const;
+  unsigned getScratchSizeInElems() const;
+  unsigned getScratchSizeInBytes() const;
+  unsigned getThreadLocalSize() const { return threadLocalSize; }
+  unsigned getWarpChunkSize() const { return warpChunkSize; }
+  unsigned getAxisMask(mlir::StringAttr dim, unsigned size) const;
+  const triton::LinearLayout &getLayout() const { return layout; }
+  const triton::LinearLayout &getTotalsLayout() const { return *totalsLayout; }
+  const triton::LinearLayout &getScratchAddressLayout() const {
+    return *scratchAddressLayout;
+  }
+  const triton::LinearLayout &getScratchLayout() const {
+    return *scratchLayout;
+  }
+  llvm::ArrayRef<SmallVector<unsigned>> getThreadGroups() const {
+    return threadGroups;
+  }
 
 private:
-  // Construct the regular scan ordering while preserving CTA ownership.
-  triton::LinearLayout buildScanLayout();
-
   triton::ScanOp scanOp;
-  triton::LinearLayout originalLayout;
-  triton::gpu::LinearEncodingAttr srcEncoding;
-  Attribute legacyEncoding;
-  llvm::ArrayRef<int64_t> srcShape;
-  SmallVector<Type> srcElementTypes;
-  SmallVector<unsigned> order;
+  triton::LinearLayout layout;
+  std::optional<triton::LinearLayout> totalsLayout;
+  std::optional<triton::LinearLayout> scratchAddressLayout;
+  std::optional<triton::LinearLayout> scratchLayout;
+  SmallVector<SmallVector<unsigned>> threadGroups;
+  unsigned threadLocalSize;
+  unsigned warpChunkSize;
 };
 
 // Helper class for lowering `tt.gather` operations. This class shares lowering
@@ -269,8 +243,6 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 // The conversion involves data exchange across threads within a warp, or is
 // explicitly forced to use warp shuffles.
 bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
-bool cvtNeedsSharedMemory(const triton::LinearLayout &src,
-                          const triton::LinearLayout &dst);
 
 // The conversion requires data exchange through shared memory.
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);

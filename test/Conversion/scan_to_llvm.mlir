@@ -53,7 +53,7 @@ tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<
 tt.func private @test_1d_reversed(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32, #layout> {
   // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
   // CHECK: [[FLIPPED:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 %{{.*}}, i32 15, i32 31)
-  // CHECK-NEXT: [[FIRST_SCAN:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.up.i32(i32 -1, i32 [[FLIPPED]], i32 1, i32 0)
+  // CHECK: [[FIRST_SCAN:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.up.i32(i32 -1, i32 [[FLIPPED]], i32 1, i32 0)
   // CHECK-NOT: @llvm.nvvm.shfl.sync.bfly.i32
   // CHECK: [[UNFLIPPED:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 %{{.*}}, i32 15, i32 31)
   // CHECK-NEXT: ret i32 [[UNFLIPPED]]
@@ -67,7 +67,8 @@ tt.func private @test_1d_reversed(%arg0: tensor<8xi32, #layout>) -> tensor<8xi32
 
 // CHECK-LABEL: @test_interleaved_linear
 // CHECK: @llvm.nvvm.barrier
-// CHECK: @llvm.nvvm.shfl.sync
+// CHECK-NOT: @llvm.nvvm.shfl.sync
+// CHECK: load i32
 // CHECK: ret
 tt.func private @test_interleaved_linear(%arg0: tensor<32xi32, #interleaved>) -> tensor<32xi32, #interleaved> {
   %0 = "tt.scan"(%arg0) <{axis = 0 : i32, reverse = false}> ({

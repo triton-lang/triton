@@ -330,13 +330,17 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   // Manually constant-fold the layout where possible.
   SmallVector<std::pair<StringAttr, int32_t>> constantIns;
   SmallVector<std::pair<StringAttr, Value>> nonConstantIns;
+  auto outDimNames = llvm::to_vector(layout.getOutDimNames());
   for (auto [inDimName, idx] : indices) {
     APInt constant;
     if (matchPattern(idx, m_ConstantInt(&constant))) {
       constantIns.push_back({inDimName, constant.getSExtValue()});
     } else {
       constantIns.push_back({inDimName, 0});
-      nonConstantIns.push_back({inDimName, idx});
+      // Ignore inputs that cannot affect any output, rather than packing
+      // their values into the matrix-vector product and masking them later.
+      if (!layout.sublayoutIsZero({inDimName}, outDimNames))
+        nonConstantIns.push_back({inDimName, idx});
     }
   }
 

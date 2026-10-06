@@ -1328,7 +1328,11 @@ LinearEncodingTrait::orderPerDim(const LinearLayout &ll, StringAttr dimName,
                                  ArrayRef<unsigned> defaultOrder) {
   auto dimLayout =
       ll.sublayout({dimName}, llvm::to_vector(ll.getOutDimNames()));
-  if (!hasPowerOfTwoBases(dimLayout))
+  // Dimension order depends on which output a basis moves, not whether its
+  // value selects one bit or several bits within that output dimension.
+  if (llvm::any_of(dimLayout.getBases().lookup(dimName), [](const auto &basis) {
+        return llvm::count_if(basis, [](int32_t x) { return x != 0; }) > 1;
+      }))
     llvm_unreachable(
         "orderPerDim cannot determine dimension order for swizzled bases.");
   return orderPerDimImpl(ll, dimName, defaultOrder);
