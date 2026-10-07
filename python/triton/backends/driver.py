@@ -2,7 +2,7 @@ from abc import ABCMeta, abstractmethod
 import re
 from typing import Callable, List, Protocol, Sequence
 
-from triton._utils import find_paths_if
+from triton._utils import find_paths_if, get_iterable_path
 from triton._C.libtriton import make_tensordesc_args
 
 
@@ -102,6 +102,27 @@ def expand_signature(signature, tensordesc_meta, descriptor_type):
     result = []
     for s in signature:
         visit(s, result)
+    return result
+
+
+def get_kernel_argument_layout(signature, tensordesc_meta=None, descriptor_type="tensordesc"):
+    """Return ``(source_path, parameter_type)`` pairs in launch order.
+
+    ``signature`` is a sequence of type strings and nested tuples, such as
+    ``compiled.src.signature.values()``. Paths index the original signature;
+    constexpr leaves are omitted. Each expanded tensor-descriptor field uses
+    the descriptor's source path, in the order used by the launcher.
+
+    Pass the compiled ``tensordesc_meta`` and the backend's descriptor type
+    (``"nvTmaDesc"`` for CUDA, ``"tensordesc"`` for HIP). This function needs
+    no active device or driver. Launcher-added scratch arguments are excluded.
+    """
+    signature = tuple(signature)
+    result = []
+    for path in find_paths_if(signature, lambda _, ty: ty != "constexpr"):
+        ty = get_iterable_path(signature, path)
+        types = _expand_descriptor(ty, bool(tensordesc_meta), descriptor_type) if _is_descriptor(ty) else (ty, )
+        result.extend((path, ty) for ty in types)
     return result
 
 

@@ -22,7 +22,7 @@ from triton._compile_warmup import (
 from triton._compile_warmup_pool import ProcessPoolWarmupDispatcher, SharedWarmupCoordinator, _jit_dumps
 from triton._internal_testing import is_compile_warmup, random_float, random_int
 from triton import _test_runner
-from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import GPUDriver, expand_signature, get_kernel_argument_layout, wrap_handle_tensordesc_impl
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
@@ -507,6 +507,27 @@ def test_kernel_in_thread(device):
     with ThreadPoolExecutor(1) as pool:
         future = pool.submit(call_triton)
         future.result()
+
+
+def test_kernel_argument_layout_nested():
+    signature = ("constexpr", ("i64", ("*fp32", "constexpr", "i32"), ()), "u64")
+    assert get_kernel_argument_layout(signature) == [
+        ((1, 0), "i64"),
+        ((1, 1, 0), "*fp32"),
+        ((1, 1, 2), "i32"),
+        ((2, ), "u64"),
+    ]
+
+
+@pytest.mark.parametrize("metadata,descriptor_type,expected", [
+    (None, "nvTmaDesc", ["*fp16", *["i64"] * 4, "i1", "i1", "i32", "i32", "i64", "i64"]),
+    ([{}], "nvTmaDesc", ["nvTmaDesc", "i32", "i32", "i64", "i64"]),
+    ([{}], "tensordesc", ["tensordesc", "i32", "i32", "i64", "i64"]),
+])
+def test_kernel_argument_layout_tensordesc(metadata, descriptor_type, expected):
+    signature = (("constexpr", "tensordesc<fp16[16,32]>", "i64"), "i32")
+    expected_layout = [((0, 1), ty) for ty in expected] + [((0, 2), "i64"), ((1, ), "i32")]
+    assert get_kernel_argument_layout(signature, metadata, descriptor_type) == expected_layout
 
 
 def test_expand_signature_with_aggregate_tensordesc():
