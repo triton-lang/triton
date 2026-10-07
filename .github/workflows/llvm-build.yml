@@ -89,7 +89,8 @@ jobs:
         - {runner: 'MacOS X64', runs_on: 'macos-15-intel', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-15', target-os: 'macos', arch: 'arm64'}
         - {runner: 'Windows 2022', runs_on: 'windows-2022', target-os: 'windows', arch: 'x64', msvc_arch: 'amd64'}
-        - {runner: 'Windows 11 ARM64', runs_on: 'windows-11-arm', target-os: 'windows', arch: 'arm64', msvc_arch: 'arm64'}
+        # MSVC 14.5x from VS 2026 runs out of heap on AMDGPU tables and ICEs on mlir-tblgen for ARM64; pin to 14.44.
+        - {runner: 'Windows 11 ARM64', runs_on: 'windows-11-arm', target-os: 'windows', arch: 'arm64', msvc_arch: 'arm64', msvc_toolset: '14.44'}
 
     steps:
 
@@ -180,6 +181,7 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1.13.0
       with:
         arch: ${{ matrix.config.msvc_arch }}
+        toolset: ${{ matrix.config.msvc_toolset }}
 
     - name: Install Prerequisites
       shell: bash

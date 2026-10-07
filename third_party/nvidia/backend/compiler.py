@@ -82,6 +82,8 @@ def get_ptx_version_from_options(options, arch: int):
     if ptx_version is None:
         cuda_version = get_ptxas(arch).version
         ptx_version = ptx_get_version(cuda_version)
+    if arch == 107 and ptx_version < 94:
+        raise ValueError("SM107 requires PTX 9.4 or later")
     return ptx_version
 
 
@@ -94,12 +96,12 @@ def get_llvm_flags():
 def get_features(options, arch: int):
     ptx_version = get_ptx_version_from_options(options, arch)
 
-    # PTX 8.6 is the max version supported by llvm 979132a0.
+    # PTX 9.4 is the max version supported by LLVM b010a18d.
     #
     # To check if a newer PTX version is supported, increase this value
     # and run a test.  If it's not supported, LLVM will print a warning
     # like "+ptx8.4 is not a recognized feature for this target".
-    llvm_ptx_version = min(90, ptx_version)
+    llvm_ptx_version = min(94, ptx_version)
     features = f'+ptx{llvm_ptx_version}'
     return features
 
@@ -490,13 +492,8 @@ class CUDABackend(BaseBackend):
                 "Address Sanitizer Error: Address sanitizer is currently only supported on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
 
-        if capability == 107:
-            cap_llvm = 100
-        else:
-            cap_llvm = capability
-
-        proc = sm_arch_from_capability(cap_llvm)
-        features = get_features(options, cap_llvm)
+        proc = sm_arch_from_capability(capability)
+        features = get_features(options, capability)
         triple = 'nvptx64-nvidia-cuda'
         flags = get_llvm_flags()
         llvm.attach_datalayout(llvm_mod, triple, proc, features, flags)
@@ -543,13 +540,8 @@ class CUDABackend(BaseBackend):
 
         triple = 'nvptx64-nvidia-cuda'
 
-        if capability == 107:
-            cap_llvm = 100
-        else:
-            cap_llvm = capability
-
-        proc = sm_arch_from_capability(cap_llvm)
-        features = get_features(opt, cap_llvm)
+        proc = sm_arch_from_capability(capability)
+        features = get_features(opt, capability)
         flags = get_llvm_flags()
         canonicalize_gep = is_enabled(opt, "fpsan")
         ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep,

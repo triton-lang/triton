@@ -669,6 +669,81 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+@pytest.mark.parametrize("swizzled", [False, True])
+@pytest.mark.parametrize("weights_swizzled", [False, True])
+@pytest.mark.parametrize("mode", ["plain", "batched", "ragged", "gather", "ragged_gather"])
+@pytest.mark.parametrize("k", [256, 1024])
+@pytest.mark.parametrize("tensor_scale", ["none", "row", "column", "both", "wide_row"])
+@pytest.mark.parametrize("out_dtype", [None, torch.float32])
+def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_scale, out_dtype, device, opt_flags_scope):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell")
+    torch.manual_seed(42)
+    m, n = 73, 256
+    source_m = 97 if mode == "gather" else m
+    slices = 3 if mode in ("ragged", "ragged_gather") else 2 if mode == "batched" else 1
+    a, a_scale, metadata = make_random_tensor(
+        (source_m, k), slices, 0 if mode in ("ragged", "ragged_gather") else None, False, device,
+        DType("nvfp4_e2m1"), -1, False, mode != "batched")
+    b, b_scale, _ = make_random_tensor(
+        (k, n), slices, None, False, device, DType("mxfloat4_e2m1"), -2, False,
+        mode in ("plain", "gather"))
+    decoded_a = upcast_from_mxfp_torch(a.storage.data, a_scale.storage.data, torch.float32, -1)
+    decoded_b = upcast_from_mxfp_torch(b.storage.data, b_scale.storage.data, torch.float32, -2)
+    converted, converted_scale = downcast_to_mxfp_torch(decoded_a, torch.float8_e4m3fn, -1)
+    reference_a = upcast_from_mxfp_torch(converted, converted_scale, torch.float32, -1)
+    outer_scale = None
+    if tensor_scale == "wide_row":
+        exponents = torch.tensor([-80, -32, 0, 32, 80], device=device, dtype=torch.int32)
+        exponents = exponents[torch.arange(reference_a.numel() // k, device=device) % exponents.numel()]
+        outer_scale = torch.ldexp(torch.ones_like(exponents, dtype=torch.float32), exponents).reshape(
+            reference_a.shape[:-1])
+        reference_a *= outer_scale[..., None]
+        assert torch.isfinite(reference_a).all()
+        assert reference_a.abs().max() > torch.finfo(torch.float16).max
+    elif tensor_scale in ("row", "both"):
+        outer_scale = torch.linspace(0.5, 1.5, reference_a.numel() // k, device=device).reshape(reference_a.shape[:-1])
+        reference_a *= outer_scale[..., None]
+    weight_outer_scale = None
+    if tensor_scale in ("column", "both"):
+        weight_outer_scale = torch.linspace(0.5, 1.5, decoded_b.numel() // k, device=device).reshape(
+            decoded_b.shape[:-2] + (n,))
+        decoded_b *= weight_outer_scale[..., None, :]
+    gather = torch.randint(source_m, (m,), device=device, dtype=torch.int32) if mode in ("gather", "ragged_gather") else None
+    if swizzled:
+        if gather is not None:
+            a_scale = wrap_torch_tensor(a_scale.storage.data[gather.long()])
+        a_scale = convert_layout(a_scale, layout.BlackwellActMXScaleLayout(metadata))
+    if weights_swizzled:
+        b = convert_layout(b, layout.BlackwellMXValueLayout())
+        b_scale = convert_layout(b_scale, layout.BlackwellMXScaleLayout())
+    else:
+        b_scale = wrap_torch_tensor(b_scale.storage.data.contiguous())
+    config = PrecisionConfig(a_mx_scale=a_scale, a_microblock_size=16, a_mx_tensor_scale=outer_scale,
+                             b_mx_scale=b_scale, b_microblock_size=32,
+                             b_mx_tensor_scale=weight_outer_scale, out_dtype=out_dtype)
+    actual = matmul(a, b, None, a_ragged_metadata=metadata, gather_indx=gather, precision_config=config)
+    expected = matmul_torch(reference_a, decoded_b, None, a_ragged_metadata=metadata,
+                            gather_indx=gather, precision_config=PrecisionConfig()).to(actual.dtype)
+    assert actual.dtype == (out_dtype or torch.bfloat16)
+    assert config.a_mx_scale is a_scale and config.a_microblock_size == 16
+    assert config.a_mx_tensor_scale is outer_scale
+    if tensor_scale == "wide_row":
+        assert torch.isfinite(expected).all() and torch.isfinite(actual).all()
+        # Compare every row at its own scale so large rows cannot hide underflow.
+        result_scale = outer_scale if gather is None else outer_scale[gather.long()]
+        expected = expected.float() / result_scale[..., None]
+        actual = actual.float() / result_scale[..., None]
+    assert_close(expected, actual)
+
+
+@pytest.mark.parametrize("k", [160, 1024])
+@pytest.mark.parametrize("mode", ["plain", "ragged_gather"])
+def test_nvfp4_acts_mxfp4_weights_nonpersistent(k, mode, device, opt_flags_scope):
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": False, "split_k": 1}):
+        test_nvfp4_acts_mxfp4_weights(False, False, mode, k, "wide_row", torch.float32, device, opt_flags_scope)
+
+
 @pytest.mark.parametrize("shape, fp8_lhs, constraints", [
     ((273, 544, 576), True, dict(block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True)),
     ((273, 544, 576), False, dict(block_m=128, block_n=256, block_k=128, split_k=1, is_persistent=True, swap_xw=False)),
