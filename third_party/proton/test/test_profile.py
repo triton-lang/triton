@@ -393,12 +393,21 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     if data == "trace":
         with temp_file.open() as f:
             trace_events = json.load(f)["traceEvents"]
+        flow_starts = [e for e in trace_events if e.get("cat") == "flow" and e["ph"] == "s"]
+        flow_finishes = [e for e in trace_events if e.get("cat") == "flow" and e["ph"] == "f"]
         for replay in ("replay0", "replay1"):
             kernels = [e for e in trace_events if e.get("cat") == "kernel" and e["args"]["call_stack"][1] == replay]
             assert len(kernels) >= 3
             assert any(e["dur"] > 0 for e in kernels)
-        # The graph launch has no CPU time range, so its kernels have no launch arrow.
-        assert not any(e.get("cat") == "flow" for e in trace_events)
+            # Each kernel's launch arrow starts at the CPU scope around replay.
+            scope = next(e for e in trace_events
+                         if e.get("cat") == "scope" and e["args"]["call_stack"] == ["ROOT", replay])
+            starts = [e for e in flow_starts if e["tid"] == scope["tid"] and e["ts"] == scope["ts"]]
+            assert len(starts) == len(kernels)
+            launch_ids = {e["id"] for e in starts}
+            assert len(launch_ids) == 1
+            finishes = [e for e in flow_finishes if e["id"] in launch_ids]
+            assert sorted((e["tid"], e["ts"]) for e in finishes) == sorted((e["tid"], e["ts"]) for e in kernels)
         return
 
     with temp_file.open() as f:
