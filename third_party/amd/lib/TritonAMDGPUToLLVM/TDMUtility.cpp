@@ -1,4 +1,5 @@
 #include "TDMUtility.h"
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -500,6 +501,13 @@ decodeTDMDescriptorFull(RewriterBase &rewriter, Location loc,
   return {srcPtr, tensorShape, tensorStride};
 }
 
+uint32_t encodeTDMPadding(int64_t intervalInDwords, int64_t amountInDwords) {
+  assert(triton::amdgpu::isValidTDMPadding(intervalInDwords, amountInDwords) &&
+         "padding exceeds the TDM descriptor fields");
+  return (1u << 20) | ((llvm::Log2_64(intervalInDwords) - 1) << 22) |
+         (static_cast<uint32_t>(amountInDwords - 1) << 25);
+}
+
 SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                        const LLVMTypeConverter *typeConverter,
                                        Type elementType, size_t numDims,
@@ -606,16 +614,10 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
          "padInterval must be a multiple of dwordSize(32bit)");
   auto padIntervalInDwords = padIntervalBits / dwordSize;
   auto padAmountInDwords = padAmount * elementBitWidth / dwordSize;
-  Value g1_0 = b.i32_val(dataSize << 16);
-  if (padIntervalInDwords > 0 && padAmountInDwords > 0) {
-    assert(llvm::isPowerOf2_32(padIntervalInDwords));
-    int32_t log2PadIntervalDwords = log2(padIntervalInDwords);
-    assert(log2PadIntervalDwords <= 8 && "padInterval too large");
-    g1_0 = b.or_(g1_0, b.i32_val(1 << 20));
-    g1_0 = b.or_(g1_0, b.i32_val((log2PadIntervalDwords - 1) << 22));
-    g1_0 = b.or_(g1_0, b.i32_val((padAmountInDwords - 1) << 25));
-  }
-  group1 = vecSet(b, group1, 0, g1_0);
+  uint32_t g1_0 = dataSize << 16;
+  if (padIntervalInDwords > 0 && padAmountInDwords > 0)
+    g1_0 |= encodeTDMPadding(padIntervalInDwords, padAmountInDwords);
+  group1 = vecSet(b, group1, 0, b.i32_val(g1_0));
   // Encode 32-bit tensor shapes
   group1 = vecSet(b, group1, 1, b.shl(tensorShape[numDims - 1], v16));
   Value g1_2 = b.lshr(tensorShape[numDims - 1], v16);
@@ -783,7 +785,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        Value barrierPtr,
                        const triton::LinearLayout &sharedLayout, Value ctaId,
                        bool isStore, ArrayRef<unsigned> warpsPerCTA,
-                       std::optional<uint32_t> warpUsedHint, bool isPureForm) {
+                       std::optional<uint32_t> warpUsedHint, bool isPureForm,
+                       std::optional<int64_t> rowPitch) {
   size_t numDims = offset.size();
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors.");
   assert(!dstPtrs.empty() && "dstPtrs cannot be empty");
@@ -880,6 +883,23 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
     }
     // Use vector extract to select the correct base pointer
     dstPtr = b.extract_element(basesVec, partitionIdx);
+  }
+
+  // TDM writes each tile row right after the previous one, so rows of a
+  // subview that are further apart in the allocation need LDS padding between
+  // them (see getTDMRowPitch).
+  std::optional<uint32_t> rowPitchPadding;
+  if (rowPitch && llvm::any_of(ArrayRef(tileShape).drop_back(),
+                               [](int64_t dim) { return dim > 1; })) {
+    assert(!isStore && !isPartitioned && !(padInterval > 0 && padAmount > 0) &&
+           "TDM verifiers only admit row pitches for loads into unpadded, "
+           "unpartitioned layouts");
+    int64_t width = shapePerCTA[numDims - 1];
+    assert(tileShape[numDims - 1] == width &&
+           "TDM splits rows across warps only if each warp gets one row");
+    unsigned bitWidth = elementType.getIntOrFloatBitWidth();
+    rowPitchPadding = encodeTDMPadding(width * bitWidth / 32,
+                                       (*rowPitch - width) * bitWidth / 32);
   }
 
   // Apply padding if needed
@@ -985,6 +1005,9 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
     // inherits the descriptor's barrier state.
     g1_0 = b.and_(g1_0, b.i32_val(0xFFFBFFFF));
   }
+  if (rowPitchPadding)
+    g1_0 = b.or_(b.and_(g1_0, b.i32_val(~tdmPaddingFields)),
+                 b.i32_val(*rowPitchPadding));
   group1 = vecSet(b, group1, 0, g1_0);
   group1 = vecSet(b, group1, 1, g1_1);
 
@@ -1259,16 +1282,15 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                       Value multicastMask, Value barrier,
                       const triton::LinearLayout &instrSharedLayout,
                       Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
-                      int32_t auxBits,
-                      std::optional<uint32_t> warpUsedHint = std::nullopt,
-                      bool isPureForm = false) {
+                      int32_t auxBits, std::optional<uint32_t> warpUsedHint,
+                      bool isPureForm, std::optional<int64_t> rowPitch) {
   SmallVector<Value, 4> groups(desc.begin(),
                                desc.begin() + (numDims > 2 ? 4 : 2));
   fillTDMDescriptor(rewriter, loc, typeConverter, elementType,
                     effectiveBlockShape, numWarps, padInterval, padAmount,
                     groups, globalOffset, instrDstPtrs, pred, multicastMask,
                     barrier, instrSharedLayout, ctaId, !isLoad, warpsPerCTA,
-                    warpUsedHint, isPureForm);
+                    warpUsedHint, isPureForm, rowPitch);
 
   emitTDMRawIntrinsic(rewriter, loc, groups, isLoad, auxBits);
 }
@@ -1292,7 +1314,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
                       Attribute encoding, Value ctaId, int32_t auxBits,
-                      std::optional<uint32_t> warpUsedHint, bool isPureForm) {
+                      std::optional<uint32_t> warpUsedHint, bool isPureForm,
+                      std::optional<int64_t> rowPitch) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   size_t numDims = blockShape.size();
   assert(numDims <= 5);
@@ -1316,9 +1339,10 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                      to_vector(blockShape), numWarps, padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
                      barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA,
-                     auxBits, warpUsedHint, isPureForm);
+                     auxBits, warpUsedHint, isPureForm, rowPitch);
     return;
   }
+  assert(!rowPitch && "TDM verifiers reject subviews of partitioned layouts");
 
   // --- Multi-instruction path ---
   //
@@ -1379,7 +1403,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                      effectiveBlockShape, numWarps, padInterval, padAmount,
                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
                      sliceLayout, ctaId, isLoad, warpsPerCTA, auxBits,
-                     warpUsedHint, isPureForm);
+                     warpUsedHint, isPureForm, /*rowPitch=*/std::nullopt);
   }
 }
 
@@ -1695,8 +1719,8 @@ fillFusedTDMDescriptorMember(RewriterBase &rewriter, Location loc,
   fillTDMDescriptor(rewriter, loc, typeConverter, m.elementType, m.shapePerCTA,
                     numWarps, m.padInterval, m.padAmount, filled, offsets,
                     m.dstPtrs, m.pred, m.multicastMask, /*barrierPtr=*/Value(),
-                    m.sharedLayout, ctaId, /*isStore=*/false, warpsPerCTA,
-                    hint);
+                    m.sharedLayout, ctaId, /*isStore=*/false, warpsPerCTA, hint,
+                    /*isPureForm=*/false, m.rowPitch);
   return filled;
 }
 

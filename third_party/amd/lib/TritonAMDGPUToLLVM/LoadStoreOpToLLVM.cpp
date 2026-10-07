@@ -44,6 +44,58 @@ Value emitCtaMulticastMaskIfSupported(RewriterBase &rewriter, Location loc,
       rewriter, loc, ctaId, layout, targetInfo.getMaxMulticastMaskPopcount());
 }
 
+// Returns the shared memory base of a TDM access, i.e. the allocation base
+// advanced by the subview's offset. TDM lowerings pad the offsets they add to
+// this base, so the subview's offset is padded separately, which is exact
+// because the memdesc_subslice verifier keeps it bitwise disjoint from them.
+Value getTDMSharedMemoryBase(Location loc, RewriterBase &rewriter,
+                             const LLVM::SharedMemoryObject &smemObj,
+                             MemDescType memDescTy) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value offset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+  offset =
+      applyPadding(loc, rewriter, offset,
+                   getPaddedSharedShifts(memDescTy.getEncoding(),
+                                         memDescTy.getElementTypeBitWidth(),
+                                         /*offsetInBytes=*/false));
+  Value base = smemObj.getBase();
+  return b.gep(base.getType(), smemObj.getBaseElemType(), base, offset);
+}
+
+// Partitioned layouts take one base per partition; the TDM verifiers reject
+// subviews of them.
+SmallVector<Value>
+getTDMSharedMemoryBases(Location loc, RewriterBase &rewriter,
+                        const LLVM::SharedMemoryObject &smemObj,
+                        MemDescType memDescTy) {
+  if (isa<PartitionedSharedEncodingAttr>(memDescTy.getEncoding()))
+    return llvm::to_vector(smemObj.getBases());
+  return {getTDMSharedMemoryBase(loc, rewriter, smemObj, memDescTy)};
+}
+
+// TDM addresses shared memory through the layout of the whole allocation, with
+// one dimension per descriptor dimension. Rank-reducing accesses drop leading
+// unit dimensions of the descriptor from the allocation.
+triton::LinearLayout getTDMSharedLayout(MemDescType memDescTy, int rank) {
+  triton::LinearLayout layout = toLinearLayoutIgnoringPadding(memDescTy);
+  assert(layout.getNumOutDims() <= rank &&
+         "TDM verifiers reject allocations of higher rank than the descriptor");
+  SmallVector<int64_t> shape(rank - layout.getNumOutDims(), 1);
+  llvm::append_range(shape, layout.getOutDimSizes());
+  return triton::reshapeLayout(memDescTy.getContext(), layout, shape);
+}
+
+// Returns the pitch of the rows of a TDM load destination if they are spread
+// out in its allocation.
+std::optional<int64_t> getTDMLoadRowPitch(MemDescType memDescTy) {
+  FailureOr<int64_t> pitch = triton::amdgpu::getTDMRowPitch(memDescTy);
+  assert(succeeded(pitch) &&
+         "TDM verifiers reject subviews that TDM cannot address");
+  if (*pitch == getShapePerCTA(memDescTy).back())
+    return std::nullopt;
+  return *pitch;
+}
+
 std::optional<const char *> getAMDGPUMemScopeStr(MemSyncScope scope) {
   switch (scope) {
   case MemSyncScope::GPU:
@@ -1307,14 +1359,12 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     auto tensorDescTy = op.getDesc().getType();
+    auto smemTy = op.getResult().getType();
     auto encoding = tensorDescTy.getSharedLayout();
     Type elementType =
         getTypeConverter()->convertType(tensorDescTy.getElementType());
-    // Use descBlockTy to query shared layout because TDM lowering logic expects
-    // the descriptor's dimensionality. For rank-reducing loads, destination
-    // shared memory may have fewer dimensions than the descriptor block type.
     triton::LinearLayout sharedLayout =
-        toLinearLayoutIgnoringPadding(tensorDescTy.getShape(), encoding);
+        getTDMSharedLayout(smemTy, tensorDescTy.getShape().size());
     // Extract padding information if present
     unsigned padInterval = 0;
     unsigned padAmount = 0;
@@ -1341,7 +1391,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), elementType, rewriter);
     // Get all base pointers (multiple for partitioned encoding)
-    SmallVector<Value> dstPtrs = llvm::to_vector(dstMemObj.getBases());
+    SmallVector<Value> dstPtrs =
+        getTDMSharedMemoryBases(loc, rewriter, dstMemObj, smemTy);
     // Positioning lives in the descriptor; the copy only does per-warp
     // distribution, so the user offset is zero.
     SmallVector<Value> offset(blockShape.size(), b.i32_val(0));
@@ -1376,7 +1427,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         rewriter, loc, getTypeConverter(), desc, shapePerCTA, numWarps,
         padInterval, padAmount, offset, dstPtrs, pred, multicastMask,
         elementType, barrierPtr, /*isLoad=*/true, sharedLayout, encoding, ctaId,
-        auxBits, warpUsedHint, /*isPureForm=*/true);
+        auxBits, warpUsedHint, /*isPureForm=*/true, getTDMLoadRowPitch(smemTy));
 
     rewriter.eraseOp(op);
     return success();
@@ -1408,11 +1459,12 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
 
     for (size_t i = 0; i < numMembers; ++i) {
       auto descTy = cast<triton::TensorDescType>(op.getDescs()[i].getType());
+      auto dstTy = cast<MemDescType>(op.getDests()[i].getType());
       auto enc = descTy.getSharedLayout();
       mlir::LLVM::AMD::TDMFusedLoadMemberInfo &m = members[i];
 
       m.elementType = getTypeConverter()->convertType(descTy.getElementType());
-      m.sharedLayout = toLinearLayoutIgnoringPadding(descTy.getShape(), enc);
+      m.sharedLayout = getTDMSharedLayout(dstTy, descTy.getShape().size());
       if (auto padEnc = getPaddedEncoding(enc)) {
         assert(padEnc.getIntervals().size() == 1 &&
                padEnc.getPaddings().size() == 1);
@@ -1431,8 +1483,9 @@ struct AsyncTDMFusedCopyGlobalToLocalOpConversion
 
       auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
           loc, adaptor.getDests()[i], m.elementType, rewriter);
-      m.dstPtrs = llvm::to_vector(dstMemObj.getBases());
+      m.dstPtrs = getTDMSharedMemoryBases(loc, rewriter, dstMemObj, dstTy);
       m.pred = Value();
+      m.rowPitch = getTDMLoadRowPitch(dstTy);
       memberHints.push_back(static_cast<uint32_t>(op.getWarpUsedHints()[i]));
     }
 
@@ -1478,10 +1531,11 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     assert((blockShape.size() <= 2 && desc.size() == 2) ||
            (blockShape.size() > 2 && desc.size() == 4));
 
-    auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
+    auto srcMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(), elementType, rewriter);
     // Get all base pointers (multiple for partitioned encoding)
-    SmallVector<Value> srcPtrs = llvm::to_vector(dstMemObj.getBases());
+    SmallVector<Value> srcPtrs =
+        getTDMSharedMemoryBases(loc, rewriter, srcMemObj, smemTy);
     // Positioning lives in the descriptor; the copy only does per-warp
     // distribution, so the user offset is zero.
     SmallVector<Value> offset(blockShape.size(), b.i32_val(0));
@@ -1507,11 +1561,12 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
       padAmount = paddedEnc.getPaddings()[0];
     }
 
-    triton::LinearLayout sharedLayout = toLinearLayoutIgnoringPadding(smemTy);
+    triton::LinearLayout sharedLayout =
+        getTDMSharedLayout(smemTy, blockShape.size());
 
     auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
 
-    auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
+    auto shapePerCTA = triton::gpu::getShapePerCTA(encoding, blockShape);
 
     auto cacheMod = op.getCache();
     auto auxBits = mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
@@ -1567,7 +1622,7 @@ struct AsyncTDMScatterOpConversion
 
     auto srcMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(), elementType, rewriter);
-    Value srcPtr = srcMemObj.getBase();
+    Value srcPtr = getTDMSharedMemoryBase(loc, rewriter, srcMemObj, smemTy);
 
     Value barrierPtr = nullptr;
     if (op.getBarrier()) {
@@ -1659,7 +1714,7 @@ struct AsyncTDMGatherOpConversion
 
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getDst(), elementType, rewriter);
-    Value dstPtr = dstMemObj.getBase();
+    Value dstPtr = getTDMSharedMemoryBase(loc, rewriter, dstMemObj, smemTy);
 
     Value barrierPtr = nullptr;
     if (op.getBarrier()) {
