@@ -1,3 +1,5 @@
+#include "LLVMABIGuard.h"
+
 #include "triton/Tools/LLVMOptions.h"
 
 #include "llvm/ADT/STLExtras.h"
