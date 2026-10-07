@@ -1,5 +1,4 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"

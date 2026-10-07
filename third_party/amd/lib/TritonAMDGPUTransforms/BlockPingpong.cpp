@@ -142,7 +142,7 @@ private:
   template <typename T>
   size_t countIfMemoryOps(scf::IfOp ifOp, bool assumeNotTaken);
   template <typename T>
-  size_t estimateNonDotMemoryImpact(T *start, T *end, bool assumeNotTaken);
+  size_t estimateNonDotMemoryImpact(ArrayRef<T> ops, bool assumeNotTaken);
   void determineDotMemoryOps(tt::DotOp dotOp,
                              DenseSet<tt::LoadOp> &dotGlobalLoads,
                              DenseSet<ttg::LocalLoadOp> &dotLocalLoads,
@@ -349,12 +349,12 @@ size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, bool assumeNotTaken) {
 // rounded to an integer. This is used to determine any possible
 // influence on cluster setup.
 template <typename T>
-size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end,
+size_t Pingponger::estimateNonDotMemoryImpact(ArrayRef<T> ops,
                                               bool assumeNotTaken) {
   DenseSet<Operation *> visitedParents;
   size_t count = 0;
-  for (auto it = start; it != end; it++) {
-    auto parent = (*it)->getParentOp();
+  for (T op : ops) {
+    auto parent = op->getParentOp();
     if (parent == nullptr)
       continue;
     if (parent == forOp)
@@ -1160,27 +1160,27 @@ void Pingponger::getDotPingponged() {
   // Prune Memory operations that may be moved to only those involved in dot
   // computation. To understand the "cluster assumptions" we also estimate
   // the impact of any additional loads/stores.
-  auto gLoadIt = std::stable_partition(
-      gLoadOps.begin(), gLoadOps.end(),
-      [&dotGlobalLoads](tt::LoadOp op) { return dotGlobalLoads.contains(op); });
-  auto lLoadIt = std::stable_partition(lLoadOps.begin(), lLoadOps.end(),
-                                       [&dotLocalLoads](ttg::LocalLoadOp op) {
-                                         return dotLocalLoads.contains(op);
-                                       });
-  auto lStoreIt =
-      std::stable_partition(lStoreOps.begin(), lStoreOps.end(),
-                            [&dotLocalStores](ttg::LocalStoreOp op) {
-                              return dotLocalStores.contains(op);
-                            });
-  if (estimateNonDotMemoryImpact<tt::LoadOp>(gLoadIt, gLoadOps.end(),
-                                             assumeNotTaken) != 0) {
+  auto nonDotGLoads =
+      std::ranges::stable_partition(gLoadOps, [&dotGlobalLoads](tt::LoadOp op) {
+        return dotGlobalLoads.contains(op);
+      });
+  auto nonDotLLoads = std::ranges::stable_partition(
+      lLoadOps, [&dotLocalLoads](ttg::LocalLoadOp op) {
+        return dotLocalLoads.contains(op);
+      });
+  auto nonDotLStores = std::ranges::stable_partition(
+      lStoreOps, [&dotLocalStores](ttg::LocalStoreOp op) {
+        return dotLocalStores.contains(op);
+      });
+  if (estimateNonDotMemoryImpact<tt::LoadOp>(nonDotGLoads, assumeNotTaken) !=
+      0) {
     std::stringstream message;
     message << "Unable to match ping pong scheduling pattern. Details: "
             << "Non-dot global loads found in non-persistent GEMM";
     LDBG(message.str());
     return;
   }
-  if (estimateNonDotMemoryImpact<ttg::LocalLoadOp>(lLoadIt, lLoadOps.end(),
+  if (estimateNonDotMemoryImpact<ttg::LocalLoadOp>(nonDotLLoads,
                                                    assumeNotTaken) != 0) {
     std::stringstream message;
     message << "Unable to match ping pong scheduling pattern. Details: "
@@ -1188,7 +1188,7 @@ void Pingponger::getDotPingponged() {
     LDBG(message.str());
     return;
   }
-  if (estimateNonDotMemoryImpact<ttg::LocalStoreOp>(lStoreIt, lStoreOps.end(),
+  if (estimateNonDotMemoryImpact<ttg::LocalStoreOp>(nonDotLStores,
                                                     assumeNotTaken) != 0) {
     std::stringstream message;
     message << "Unable to match ping pong scheduling pattern. Details: "
@@ -1198,9 +1198,9 @@ void Pingponger::getDotPingponged() {
   }
 
   // Remove non-dot memory operations.
-  gLoadOps.erase(gLoadIt, gLoadOps.end());
-  lLoadOps.erase(lLoadIt, lLoadOps.end());
-  lStoreOps.erase(lStoreIt, lStoreOps.end());
+  gLoadOps.erase(nonDotGLoads.begin(), nonDotGLoads.end());
+  lLoadOps.erase(nonDotLLoads.begin(), nonDotLLoads.end());
+  lStoreOps.erase(nonDotLStores.begin(), nonDotLStores.end());
   // All PingPong Scheduler assumes there are 2 movable global loads and 2
   // movable local loads.
   if (gLoadOps.size() != 2 || lLoadOps.size() != 2) {

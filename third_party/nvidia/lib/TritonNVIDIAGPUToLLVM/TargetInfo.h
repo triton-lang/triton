@@ -65,6 +65,9 @@ public:
   bool supportBitwidth32Elementwise() const override {
     return targetFeatures.supportBitwidth32Elementwise();
   }
+  bool supportsTcgen05() const override {
+    return targetFeatures.supportsTcgen05();
+  }
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;

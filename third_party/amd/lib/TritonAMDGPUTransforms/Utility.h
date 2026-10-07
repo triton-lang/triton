@@ -71,8 +71,7 @@ Value createUpdateTDMDescriptorOp(OpBuilder &builder, Location loc, Value desc,
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // and |vecSize| with which dot operand |inputValue| is fed into if possible.
 template <class T>
-T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize,
-                 T *dummy = nullptr) {
+T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize) {
   if (!llvm::hasSingleElement(inputValue.getUses()))
     return nullptr;
 

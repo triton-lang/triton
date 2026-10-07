@@ -21,7 +21,7 @@ TTIR_PATH = str(Path(__file__).parent / "attn_fwd.ttir")
 
 @lru_cache(maxsize=None)
 def compile_for_target(target):
-    return triton.compile(TTIR_PATH, target=target)
+    return triton.compile(TTIR_PATH, target=target, options={"enable_fp_fusion": True})
 
 
 def get_func_body_llir(llir):

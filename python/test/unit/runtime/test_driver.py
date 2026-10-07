@@ -219,7 +219,7 @@ def test_gsan_runner_isolates_distributed_tests_when_multiple_gpus_are_visible(m
     assert _test_runner._gsan(SimpleNamespace(num_gpus=num_gpus, num_procs=24)) == 0
     assert len(commands) == num_gpus
     assert commands[0][0][commands[0][0].index("-n") + 1] == str(8 * num_gpus)
-    assert all(kwargs["timeout"] == 180 for _, kwargs in commands)
+    assert all(kwargs["timeout"] == 300 for _, kwargs in commands)
     assert all(kwargs["environment"]["TRITON_TEST_PROCESS_TIMEOUT"] == "90" for _, kwargs in commands)
     if num_gpus == 1:
         assert "not xdist_group" not in commands[0][0]

@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace ttg = mlir::triton::gpu;
@@ -133,7 +134,9 @@ MemDescFootprint getMemDescAddresses(
           addresses.translated(storageBase);
     return footprint;
   }
-  triton::LinearLayout layout = ttg::toLinearLayoutIgnoringPadding(ty);
+  triton::LinearLayout layout = ttg::toLinearLayoutIgnoringPadding(
+      ttg::dropPipeliningDim(ty.getAllocShape(), ty.getEncoding()),
+      ty.getEncoding());
   triton::LinearLayout inverse = layout.pseudoinvert();
   MLIRContext *ctx = ty.getContext();
   SmallVector<StringAttr> dims = triton::standardOutDimNames(ctx, ty.getRank());
@@ -193,30 +196,20 @@ MemDescFootprint getMemDescAddresses(
                        basis(partitionName), block});
     }
   }
-  // The pseudoinverse selects one representative of replicated storage. Zero
-  // block bases in the allocation layout denote a local copy in every replica
-  // CTA. A nonzero block basis excluded by a subview is not a replica.
-  uint32_t broadcastBits = layout.getFreeVariableMasks().lookup(blockName);
-  for (unsigned bit = 0; bit < layout.getInDimSizeLog2(blockName); ++bit) {
-    if (!(broadcastBits & (uint32_t{1} << bit)))
-      continue;
-    PhysicalBasis replica;
-    replica.block = uint32_t{1} << bit;
-    bases.push_back(replica);
-    numPoints *= 2;
-  }
-  if (isTmem) {
-    // Zero row bases at 32 and 64 broadcast across warp-addressable storage;
-    // loads/stores still access every replica. The pseudoinverse chooses only
-    // one. Other zero row/column bases denote undefined storage, not replicas.
-    uint64_t rowBasisMask = triton::getInputBasisMask(layout, rowName, dims);
-    for (unsigned bit : {5, 6}) {
-      if (!(rowBasisMask & (uint64_t{1} << bit))) {
-        PhysicalBasis replica;
-        replica.row = uint32_t{1} << bit;
-        bases.push_back(replica);
-        numPoints *= 2;
-      }
+  // Include storage reserved by zero allocation bases, but not bases excluded
+  // by the subview. The pseudoinverse above selects only one representative.
+  for (StringAttr dim : layout.getInDimNames()) {
+    uint32_t zeroBits = (layout.getInDimSize(dim) - 1) &
+                        ~triton::getInputBasisMask(layout, dim, dims);
+    // A zero row-16 basis leaves half of each warp's rows unallocated.
+    if (dim == rowName)
+      zeroBits &= ~uint32_t{16};
+    for (; zeroBits; zeroBits &= zeroBits - 1) {
+      uint32_t bit = uint32_t{1} << llvm::countr_zero(zeroBits);
+      bases.push_back({dim == offsetName ? bit : 0, dim == rowName ? bit : 0,
+                       dim == colName ? bit : 0, 0,
+                       dim == blockName ? bit : 0});
+      numPoints *= 2;
     }
   }
 
@@ -354,18 +347,40 @@ AddressSet AddressSet::translated(uint32_t delta) const {
   return result;
 }
 
+// Hash every equality field, including the exact address sets.
+size_t BufferRegionView::hash() const {
+  if (cachedHash)
+    return *cachedHash;
+  auto hash = llvm::hash_combine(
+      allocationFrame, region.baseOffset, region.length, storageBase,
+      affineOffset, affinePartitionOffset, affineCTAOffset, allocation,
+      llvm::hash_combine_range(partitionBases.begin(), partitionBases.end()));
+  for (const auto &[cta, addresses] : region.ctaAddresses)
+    hash = llvm::hash_combine(
+        hash, cta,
+        llvm::hash_combine_range(addresses.begin(), addresses.end()));
+  cachedHash = hash;
+  return *cachedHash;
+}
+
 BufferRegionView
 BufferRegionView::translated(uint32_t offset,
                              uint32_t newAllocationFrame) const {
-  BufferRegionView result = *this;
-  result.region.baseOffset += offset;
-  for (auto &[cta, addresses] : result.region.ctaAddresses)
+  BufferRegion translatedRegion = region;
+  translatedRegion.baseOffset += offset;
+  for (auto &[cta, addresses] : translatedRegion.ctaAddresses)
     addresses = addresses.translated(offset);
-  result.storageBase += offset;
-  for (uint32_t &base : result.partitionBases)
+  auto translatedBases = partitionBases;
+  for (uint32_t &base : translatedBases)
     base += offset;
-  result.allocationFrame = newAllocationFrame;
-  return result;
+  return {std::move(translatedRegion),
+          storageBase + offset,
+          affineOffset,
+          std::move(translatedBases),
+          affinePartitionOffset,
+          affineCTAOffset,
+          newAllocationFrame,
+          allocation};
 }
 
 BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
@@ -477,19 +492,22 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
 BufferRegionView
 BufferRegionAnalysis::getAllocView(Value allocation, uint32_t storageBase,
                                    ArrayRef<uint32_t> partitionBases) {
-  BufferRegionView view;
-  view.storageBase = storageBase;
-  view.partitionBases = llvm::to_vector<2>(partitionBases);
   Operation *op = allocation.getDefiningOp();
-  view.allocation = op;
   // TMEM allocation assigns module-wide addresses; only shared allocations
   // need a per-function frame and translation by a call's shared-memory offset.
   auto memory = cast<ttg::MemDescType>(allocation.getType());
-  view.allocationFrame =
+  uint32_t allocationFrame =
       isa<ttng::TensorMemorySpaceAttr>(memory.getMemorySpace())
           ? getOperationId(op->getParentOfType<ModuleOp>())
           : getOperationId(op->getParentOfType<FunctionOpInterface>());
-  return getSubView(allocation.getType(), view);
+  return getSubView(allocation.getType(), {{},
+                                           storageBase,
+                                           0,
+                                           llvm::to_vector<2>(partitionBases),
+                                           0,
+                                           0,
+                                           allocationFrame,
+                                           op});
 }
 
 BufferRegionView
@@ -515,14 +533,14 @@ BufferRegionAnalysis::getSubView(Type type, const BufferRegionView &view,
                         (isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace())
                              ? affineOffset
                              : applySharedPadding(affineOffset, ty));
-  BufferRegionView result = view;
-  result.region = {baseOffset, getMemDescSize(ty), std::move(footprint)};
-  result.storageBase = storageBase;
-  result.affineOffset = affineOffset;
-  result.partitionBases = std::move(partitionBases);
-  result.affinePartitionOffset = affinePartitionOffset;
-  result.affineCTAOffset = affineCTAOffset;
-  return result;
+  return {{baseOffset, getMemDescSize(ty), std::move(footprint)},
+          storageBase,
+          affineOffset,
+          std::move(partitionBases),
+          affinePartitionOffset,
+          affineCTAOffset,
+          view.allocationFrame,
+          view.allocation};
 }
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
@@ -611,18 +629,18 @@ BufferRegionAnalysis::getScratchFootprint(Operation *op) {
     base = offset.getInt();
     length = size.getInt();
   }
-  BufferRegionView view{{base, length}, /*storageBase=*/base};
-  view.allocationFrame =
+  BufferRegion region{base, length};
+  uint32_t allocationFrame =
       getOperationId(op->getParentOfType<FunctionOpInterface>());
   AddressSet addresses = AddressSet::fromRange(base, length);
   unsigned numCTAs = ttg::lookupNumCTAs(op);
   uint32_t broadcastMask = getAtomicScratchBroadcastMask(op).value_or(0);
   for (unsigned cta = 0; cta < numCTAs; ++cta)
     if (!(cta & broadcastMask))
-      view.region.ctaAddresses.emplace_back(cta, addresses);
-  it->second = std::make_unique<BufferRegionFootprint>(
-      BufferRegionFootprint{ttg::SharedMemorySpaceAttr::get(op->getContext()),
-                            RegionInfo({std::move(view)})});
+      region.ctaAddresses.emplace_back(cta, addresses);
+  it->second = std::make_unique<BufferRegionFootprint>(BufferRegionFootprint{
+      ttg::SharedMemorySpaceAttr::get(op->getContext()),
+      RegionInfo({{std::move(region), base, 0, {}, 0, 0, allocationFrame}})});
   return it->second.get();
 }
 

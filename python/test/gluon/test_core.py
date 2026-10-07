@@ -2,10 +2,12 @@ import torch
 import math
 import pytest
 import re
+from collections import Counter
 from itertools import product
 
 import triton
 import triton.language as tl
+from triton import CompilationError
 
 from triton._internal_testing import (
     is_compile_warmup,
@@ -23,7 +25,9 @@ from triton._internal_testing import (
     is_hip_cdna4,
     is_hopper_or_newer,
     is_hopper,
+    skip_if_unsupported_cluster_size,
 )
+from triton.backends.compiler import GPUTarget
 from triton.compiler import max_shared_mem
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 from triton.experimental import gluon
@@ -51,6 +55,51 @@ from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._C.libtriton.gluon_ir import make_cga_layout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
+
+
+@pytest.mark.parametrize("elementwise", [False, True])
+def test_inline_asm_shared_amd_compilation(elementwise):
+
+    @gluon.jit
+    def kernel(Out, ELEMENTWISE: ttgl.constexpr):
+        x = ttgl.arange(0, 256, layout=ttgl.BlockedLayout([1], [64], [4], [0]))
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), x)
+        asm: ttgl.constexpr = "v_add_u32 $0, $1, $2\nds_read_b32 $0, $0\ns_waitcnt lgkmcnt(0)"
+        if ELEMENTWISE:
+            y = ttgl.inline_asm_elementwise(asm, "=&v,v,v", [smem, x * 4], ttgl.int32, False, 1)
+        else:
+            ttgl.barrier()
+            y = ttgl.inline_asm(asm, "=&v,v,v", [smem, x * 4], x.type)
+        ttgl.store(Out + x, y)
+
+    source = gluon.GluonASTSource(kernel, {"Out": "*i32", "ELEMENTWISE": "constexpr"}, {"ELEMENTWISE": elementwise})
+    compiled = triton.compile(source, target=GPUTarget("hip", "gfx942", 64))
+    assert "ds_read_b32" in compiled.asm["amdgcn"]
+
+
+@pytest.mark.parametrize("target, binary", [(GPUTarget("cuda", 80, 32), "cubin"),
+                                            (GPUTarget("hip", "gfx942", 64), "hsaco")])
+def test_gluon_ast_source_without_driver(target, binary, monkeypatch, fresh_triton_cache):
+
+    def fail_driver_access(self):
+        raise AssertionError("Offline compilation must not access the GPU driver")
+
+    monkeypatch.setattr(type(triton.runtime.driver), "active", property(fail_driver_access))
+
+    @gluon.jit
+    def kernel(X, Y, BLOCK: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=LAYOUT)
+        ttgl.store(Y + offsets, ttgl.load(X + offsets))
+
+    source = gluon.GluonASTSource(
+        kernel,
+        signature={"X": "*fp32", "Y": "*fp32", "BLOCK": "constexpr", "LAYOUT": "constexpr"},
+        constexprs={"BLOCK": 128, "LAYOUT": ttgl.BlockedLayout([1], [target.warp_size], [4], [0])},
+        attrs={(0, ): [["tt.divisibility", 16]], (1, ): [["tt.divisibility", 16]]},
+    )
+    compiled = triton.compile(source, target=target)
+    assert "tt.divisibility = 16" in compiled.asm[source.ext]
+    assert compiled.asm[binary]
 
 
 @gluon.constexpr_function
@@ -590,12 +639,12 @@ def test_proxy_fence_noinline_tma_store():
 
 
 @gluon.jit
-def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr):
+def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr, POLICY: ttgl.constexpr = None):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
     mbarrier.expect(bar, in_desc.block_type.nbytes)
-    tma.async_load_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem, multicast=MULTICAST)
+    tma.async_load_im2col(in_desc, [0, 0, 0, 0], [0, 0], bar, smem, multicast=MULTICAST, cache_policy=POLICY)
     mbarrier.wait(bar, phase=0)
     mbarrier.invalidate(bar)
     tma.async_store(out_desc, [0, 0], smem)
@@ -607,7 +656,9 @@ def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr):
 @pytest.mark.parametrize("channels_per_pixel", [32])
 @pytest.mark.parametrize("swizzle_byte_width", [32])
 @pytest.mark.parametrize("multicast", [False, True], ids=["unicast", "multicast"])
-def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width, multicast):
+@pytest.mark.parametrize(
+    "policy", [None, hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"))])
+def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width, multicast, policy):
     smem_bytes = pixels_per_column * channels_per_pixel * 4 + 8192  # block + mbarrier overhead
     if smem_bytes > 200000:
         pytest.skip(f"Skipping: shared memory {smem_bytes} exceeds limit")
@@ -638,7 +689,9 @@ def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width, m
         pixel_box_upper_corner=[0, 0],
     )
     out_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, block_shape, layout)
-    compiled = tma_im2col_kernel[(1, )](in_desc, out_desc, multicast, num_warps=1, num_ctas=2 if multicast else 1)
+    compiled = tma_im2col_kernel[(1, )](in_desc, out_desc, multicast, policy, num_warps=1,
+                                        num_ctas=2 if multicast else 1)
+    assert (".L2::cache_hint" in compiled.asm["ptx"]) == (policy is not None)
     assert (".im2col.mbarrier::complete_tx::bytes.multicast::cluster" in compiled.asm["ptx"]) == multicast
     torch.testing.assert_close(out, inp.reshape(pixels_per_column, channels_per_pixel), atol=0, rtol=0)
 
@@ -691,14 +744,14 @@ def test_gluon_tma_round_f32_to_tf32():
 
 
 @gluon.jit
-def tma_multicast_copy_kernel(in_desc, out_desc):
+def tma_multicast_copy_kernel(in_desc, out_desc, POLICY: ttgl.constexpr = None):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
 
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
 
     mbarrier.expect(bar, in_desc.nbytes_per_cta)
-    tma.async_load(in_desc, [0, 0], bar, smem, multicast=True)
+    tma.async_load(in_desc, [0, 0], bar, smem, multicast=True, cache_policy=POLICY)
     mbarrier.wait(bar, phase=0, deps=[smem])
 
     tma.async_store(out_desc, [0, 0], smem)
@@ -710,7 +763,10 @@ def tma_multicast_copy_kernel(in_desc, out_desc):
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [1, 4], [4, 4]])
-def test_tma_multicast_copy(ctas_per_cga):
+@pytest.mark.parametrize(
+    "policy", [None, hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"))])
+def test_tma_multicast_copy(ctas_per_cga, policy):
+    skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     cga_split_num = [min(ctas_per_cga[0], 2), min(ctas_per_cga[1], 2)]
     cga_layout = make_cga_layout(ctas_per_cga, cga_split_num, [1, 0])
 
@@ -733,9 +789,11 @@ def test_tma_multicast_copy(ctas_per_cga):
     compiled = tma_multicast_copy_kernel[(1, )](
         in_desc,
         out_desc,
+        policy,
         num_warps=4,
         num_ctas=num_ctas,
     )
+    assert (".L2::cache_hint" in compiled.asm["ptx"]) == (policy is not None)
     expect_multicast = any(ctas_per_cga[i] > cga_split_num[i] for i in range(len(ctas_per_cga)))
     assert (".multicast::cluster" in compiled.asm["ptx"]) == expect_multicast
     torch.testing.assert_close(out, inp, atol=0, rtol=0)
@@ -743,7 +801,7 @@ def test_tma_multicast_copy(ctas_per_cga):
 
 @gluon.jit
 def tma_gather_scatter_kernel(in_desc, gather_out_desc, scatter_out_desc, gather_idx_ptr, scatter_idx_ptr,
-                              BLOCK_M: ttgl.constexpr, x_offsets_layout: ttgl.constexpr):
+                              BLOCK_M: ttgl.constexpr, x_offsets_layout: ttgl.constexpr, POLICY: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, [BLOCK_M, gather_out_desc.block_shape[1]], gather_out_desc.layout)
 
     bar = mbarrier.allocate_mbarrier()
@@ -751,14 +809,14 @@ def tma_gather_scatter_kernel(in_desc, gather_out_desc, scatter_out_desc, gather
 
     gather_offsets = ttgl.load(gather_idx_ptr + ttgl.arange(0, BLOCK_M, layout=x_offsets_layout))
     mbarrier.expect(bar, smem.nbytes_per_cta)
-    blackwell_tma.async_gather(in_desc, gather_offsets, 0, bar, smem, multicast=True)
+    blackwell_tma.async_gather(in_desc, gather_offsets, 0, bar, smem, multicast=True, cache_policy=POLICY)
     mbarrier.wait(bar, phase=0, deps=[smem])
 
     mbarrier.invalidate(bar)
 
     scatter_offsets = ttgl.load(scatter_idx_ptr + ttgl.arange(0, BLOCK_M, layout=x_offsets_layout))
-    tma.async_store(gather_out_desc, [0, 0], smem)
-    blackwell_tma.async_scatter(scatter_out_desc, scatter_offsets, 0, smem)
+    tma.async_store(gather_out_desc, [0, 0], smem, cache_policy=POLICY)
+    blackwell_tma.async_scatter(scatter_out_desc, scatter_offsets, 0, smem, cache_policy=POLICY)
     tma.store_wait(0)
 
     smem._keep_alive()
@@ -775,7 +833,9 @@ def get_split_dim(cga_layout, dim):
     [[1, 0], [0, 0]],
     [[1, 0], [2, 0]],
 ])
-def test_tma_gather_scatter_multi_cta(cga_layout):
+@pytest.mark.parametrize(
+    "policy", [None, hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"))])
+def test_tma_gather_scatter_multi_cta(cga_layout, policy):
     cga_split_num = [get_split_dim(cga_layout, dim) for dim in range(2)]
 
     BLOCK_M = 32 * cga_split_num[0]
@@ -809,10 +869,14 @@ def test_tma_gather_scatter_multi_cta(cga_layout):
         scatter_idx,
         BLOCK_M,
         x_offsets_layout,
+        policy,
         num_warps=4,
         num_ctas=num_ctas,
     )
 
+    assert all((".L2::cache_hint" in line) == (policy is not None)
+               for line in compiled.asm["ptx"].splitlines()
+               if "cp.async.bulk.tensor" in line)
     expected_gather = inp[gather_idx.to(torch.int64)]
     expected_scatter = torch.zeros_like(inp)
     expected_scatter[scatter_idx.to(torch.int64)] = expected_gather
@@ -966,6 +1030,7 @@ def make_2cta_cga_layout(ctas_per_cga, cta_split, cta_order, two_cta_dim):
 @pytest.mark.parametrize("ctas_per_cga", [[2, 1], [2, 4], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [True, False] if is_blackwell() else [False])
 def test_tcgen05_mma_multicast_commit(ctas_per_cga, two_ctas):
+    skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
 
     if two_ctas:
         ctas_per_cga_b = [ctas_per_cga[0] // 2, 2 * ctas_per_cga[1]]
@@ -1162,9 +1227,12 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
     )
     mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mbar, count=1)
-    async_copy.mbarrier_arrive(mbar)
     mbarrier.arrive(mbar)
     mbarrier.wait(mbar, 0)
+    async_copy.mbarrier_arrive(mbar)
+    mbarrier.wait(mbar, 0)
+    mbarrier.arrive(mbar)
+    mbarrier.wait(mbar, 1)
 
     val = smem.load(block_layout)
     ttgl.store(out + xindex * YBLOCK + yindex, val)
@@ -1180,7 +1248,8 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
         l2=ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"),
         l2_prefetch_size=128,
     ),
-], ids=["default", "evict_first", "evict_last", "fractional"])
+    ttgl.nvidia.ampere.CachePolicy(l2=ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 1.0), ),
+], ids=["default", "evict_first", "evict_last", "fractional", "fractional_one"])
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere")
 def test_async_copy_mbarrier(copy_vec, cache_policy):
     tensor_opts = dict(dtype=torch.float, device="cuda")
@@ -1242,6 +1311,400 @@ def test_warp_specialize_noinline_ids():
     kernel[(1, )](index_out, scan_out, num_warps=4)
     torch.testing.assert_close(index_out, 2 * expected, rtol=0, atol=0)
     torch.testing.assert_close(scan_out, expected + 1, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_mbarrier_tma_progress(device):
+
+    @gluon.jit
+    def consumer(desc, payload, ready, copied):
+        mbarrier.wait(ready, 0)
+        tma.async_load(desc, [0, 0], copied, payload)
+        mbarrier.wait(copied, 0, deps=[payload])
+
+    @gluon.jit
+    def producer(ready, copied):
+        mbarrier.arrive(ready)
+        mbarrier.wait(copied, 0)
+        mbarrier.arrive(ready)
+        mbarrier.wait(ready, 1)
+
+    @gluon.jit
+    def kernel(desc):
+        ready = mbarrier.allocate_mbarrier()
+        copied = mbarrier.allocate_mbarrier()
+        payload = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+        mbarrier.init(ready, count=1)
+        mbarrier.init(copied, count=1)
+        mbarrier.expect(copied, desc.nbytes_per_cta)
+        ttgl.warp_specialize([
+            (consumer, (desc, payload, ready, copied)),
+            (producer, (ready, copied)),
+        ], [1])
+        mbarrier.invalidate(ready)
+        mbarrier.invalidate(copied)
+
+    inp = torch.zeros((16, 64), dtype=torch.float16, device=device)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    desc = TensorDescriptor.from_tensor(inp, [16, 64], shared_layout)
+    compiled = kernel.warmup(desc, grid=(1, ), num_warps=4)
+    ptx = compiled.asm["ptx"]
+    copy = ptx.index("cp.async.bulk.tensor.")
+    wait = ptx.rfind("mbarrier.try_wait.", 0, copy)
+    assert wait >= 0
+    # All consumer warps must finish waiting before the copy lets ready advance.
+    # Check before launch so a regression fails without hanging the GPU.
+    assert re.search(r"\bbar(?:rier)?\.sync\b", ptx[wait:copy])
+    kernel[(1, )](desc, num_warps=4)
+    torch.cuda.synchronize(device)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("expect_before_copy", [True, False])
+@pytest.mark.parametrize("synchronize_expect", [True, False])
+def test_mbarrier_multiple_tma_expectations(device, expect_before_copy, synchronize_expect):
+
+    @gluon.jit
+    def kernel(desc, out, iterations, EXPECT_BEFORE_COPY: ttgl.constexpr, SYNCHRONIZE_EXPECT: ttgl.constexpr):
+        a = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+        b = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=2)
+        for i in range(iterations):
+            if EXPECT_BEFORE_COPY:
+                if SYNCHRONIZE_EXPECT:
+                    ttgl.barrier()
+                mbarrier.expect(bar, desc.nbytes_per_cta)
+            tma.async_load(desc, [32 * i, 0], bar, a)
+            if not EXPECT_BEFORE_COPY:
+                if SYNCHRONIZE_EXPECT:
+                    ttgl.barrier()
+                mbarrier.expect(bar, desc.nbytes_per_cta)
+            if EXPECT_BEFORE_COPY:
+                if SYNCHRONIZE_EXPECT:
+                    ttgl.barrier()
+                mbarrier.expect(bar, desc.nbytes_per_cta)
+            tma.async_load(desc, [32 * i + 16, 0], bar, b)
+            if not EXPECT_BEFORE_COPY:
+                if SYNCHRONIZE_EXPECT:
+                    ttgl.barrier()
+                mbarrier.expect(bar, desc.nbytes_per_cta)
+            mbarrier.wait(bar, i & 1, deps=[a, b])
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        rows = ttgl.arange(0, 16, ttgl.SliceLayout(1, layout))[:, None]
+        cols = ttgl.arange(0, 64, ttgl.SliceLayout(0, layout))[None, :]
+        ttgl.store(out + rows * 64 + cols, a.load(layout))
+        ttgl.store(out + (rows + 16) * 64 + cols, b.load(layout))
+        mbarrier.invalidate(bar)
+
+    iterations = 64
+    inp = torch.arange(iterations * 32 * 64, dtype=torch.float32, device=device).reshape(-1, 64)
+    out = torch.empty((32, 64), dtype=inp.dtype, device=device)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+    desc = TensorDescriptor.from_tensor(inp, [16, 64], shared_layout)
+    compiled = kernel.warmup(desc, out, iterations, expect_before_copy, synchronize_expect, grid=(1, ), num_warps=4)
+    ptx = compiled.asm["ptx"]
+    # Check the physical counts before launch so a mismatch fails without hanging.
+    initial_count = "2" if synchronize_expect else "8"
+    assert re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx) == [initial_count]
+    expectations = list(re.finditer(r"mbarrier\.arrive\.expect_tx\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx))
+    byte_counts = [expect.group(1) for expect in expectations]
+    # Membar already synchronizes the first expectation when it precedes copies.
+    assert byte_counts == [
+        "4096" if synchronize_expect or expect_before_copy else "1024",
+        "4096" if synchronize_expect else "1024",
+    ]
+    arrival_counts = re.findall(r"mbarrier\.arrive\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx)
+    assert arrival_counts == ([] if synchronize_expect else ["3"] * byte_counts.count("4096"))
+    # Folding must not add a CTA barrier before the next copy or wait.
+    for expect in expectations:
+        if expect.group(1) == "4096":
+            following = ptx[expect.end():]
+            next_op = re.search(r"cp\.async\.bulk\.tensor\.|mbarrier\.try_wait\.", following)
+            assert next_op is not None
+            assert not re.search(r"\bbar(?:rier)?\.sync\b", following[:next_op.start()])
+    kernel[(1, )](desc, out, iterations, expect_before_copy, synchronize_expect, num_warps=4)
+    torch.testing.assert_close(out, inp[-32:])
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_mbarrier_private_phase_progress(device):
+
+    @gluon.jit
+    def kernel(desc):
+        ready = mbarrier.allocate_mbarrier()
+        payload = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+        mbarrier.init(ready, count=1)
+        mbarrier.expect(ready, desc.nbytes_per_cta)
+        ttgl.barrier()
+        mbarrier.wait(ready, 1)
+        tma.async_load(desc, [0, 0], ready, payload)
+        mbarrier.wait(ready, 0, deps=[payload])
+        mbarrier.invalidate(ready)
+
+    inp = torch.zeros((16, 64), dtype=torch.float16, device=device)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    desc = TensorDescriptor.from_tensor(inp, [16, 64], shared_layout)
+    compiled = kernel.warmup(desc, grid=(1, ), num_warps=4)
+    ptx = compiled.asm["ptx"]
+    copy = ptx.index("cp.async.bulk.tensor.")
+    last_wait = ptx.rfind("mbarrier.try_wait.", 0, copy)
+    assert last_wait >= 0
+    # Completing a phase must not strand a warp waiting on the previous parity.
+    # Check before launch so a regression fails without hanging the GPU.
+    assert re.search(r"\bbar(?:rier)?\.sync\b", ptx[last_wait:copy])
+    kernel[(1, )](desc, num_warps=4)
+    torch.cuda.synchronize(device)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_mbarrier_private_indexed_counter(num_ctas, device):
+
+    @gluon.jit
+    def kernel(out, slot):
+        barriers = mbarrier.allocate_mbarrier(batch=4)
+        ready = barriers.index(slot)
+        mbarrier.init(ready, count=1)
+        mbarrier.arrive(ready)
+        mbarrier.wait(ready, 0)
+        ttgl.store(out, 1)
+        mbarrier.invalidate(ready)
+
+    out = torch.zeros((), dtype=torch.int32, device=device)
+    compiled = kernel.warmup(out, 3, grid=(1, ), num_warps=4, num_ctas=num_ctas)
+    ptx = compiled.asm["ptx"]
+    store = re.search(r"\bst\.global\b", ptx)
+    assert store is not None
+    wait = ptx.rfind("mbarrier.try_wait.", 0, store.start())
+    assert wait >= 0
+    # The output write cannot let a peer advance these private counters.
+    assert not re.search(r"\bbar(?:rier)?\.sync\b", ptx[wait:store.start()])
+    kernel[(1, )](out, 3, num_warps=4, num_ctas=num_ctas)
+    assert out.item() == 1
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_mbarrier_atomic_progress(device):
+
+    @gluon.jit
+    def consumer(ready, flag, pred):
+        mbarrier.wait(ready, 0)
+        # A skipped later wait must preserve the first wait's progress requirement.
+        mbarrier.wait(ready, 1, pred=pred)
+        ttgl.atomic_xchg(flag, 1, sem="relaxed", scope="cta")
+
+    @gluon.jit
+    def producer(ready, flag):
+        mbarrier.arrive(ready)
+        ttgl.atomic_poll(flag, 1, sem="relaxed", scope="cta")
+        mbarrier.arrive(ready)
+        mbarrier.wait(ready, 1)
+
+    @gluon.jit
+    def kernel(flag, pred):
+        ready = mbarrier.allocate_mbarrier()
+        mbarrier.init(ready, count=1)
+        ttgl.warp_specialize([
+            (consumer, (ready, flag, pred)),
+            (producer, (ready, flag)),
+        ], [1])
+        mbarrier.invalidate(ready)
+
+    flag = torch.zeros((), dtype=torch.int32, device=device)
+    compiled = kernel.warmup(flag, False, grid=(1, ), num_warps=4)
+    ptx = compiled.asm["ptx"]
+    notify = re.search(r"\batom\.[^;\n]*\.exch\.", ptx)
+    assert notify is not None
+    last_wait = ptx.rfind("mbarrier.try_wait.", 0, notify.start())
+    assert last_wait >= 0
+    # Check before launch: advancing ready early can strand a phase-0 waiter.
+    assert re.search(r"\bbar(?:rier)?\.sync\b", ptx[last_wait:notify.start()])
+    kernel[(1, )](flag, False, num_warps=4)
+    assert flag.item() == 1
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("producer_warps", [1, 8])
+@pytest.mark.parametrize("num_ctas", [1, 4])
+def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
+
+    @gluon.jit
+    def producer(inp, buffers, ready, empty, iterations, BLOCK: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0],
+                                                    cga_layout=buffers.type.layout.cga_layout)
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        inp += ttgl.program_id(0) * iterations * BLOCK
+        # Bootstrap and steady-state arrivals come from different partitions.
+        for bootstrap_slot in ttgl.static_range(2):
+            mbarrier.arrive(empty.index(bootstrap_slot))
+        for i in range(iterations):
+            slot = i % 2
+            phase = i // 2 & 1
+            mbarrier.wait(empty.index(slot), phase)
+            buffers.index(slot).store(ttgl.load(inp + i * BLOCK + offsets))
+            mbarrier.arrive(ready.index(slot))
+
+    @gluon.jit
+    def consumer(out, buffers, ready, empty, iterations, BLOCK: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0],
+                                                    cga_layout=buffers.type.layout.cga_layout)
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        out += ttgl.program_id(0) * iterations * BLOCK
+        for i in range(iterations):
+            slot = i % 2
+            phase = i // 2 & 1
+            mbarrier.wait(ready.index(slot), phase)
+            values = buffers.index(slot).load(layout)
+            ttgl.store(out + i * BLOCK + offsets, values + 1)
+            mbarrier.arrive(empty.index(slot))
+
+    @gluon.jit
+    def kernel(inp, out, iterations, BLOCK: ttgl.constexpr, PRODUCER_WARPS: ttgl.constexpr):
+        cga_layout: ttgl.constexpr = ((1, ), (2, ))[:ttgl.num_ctas().bit_length() - 1]
+        buffers = ttgl.allocate_shared_memory(ttgl.int32, [2, BLOCK],
+                                              ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout))
+        ready = mbarrier.allocate_mbarrier(batch=2)
+        empty = mbarrier.allocate_mbarrier(batch=2)
+        for slot in ttgl.static_range(2):
+            mbarrier.init(ready.index(slot), count=1)
+            mbarrier.init(empty.index(slot), count=1)
+        ttgl.warp_specialize([
+            (consumer, (out, buffers, ready, empty, iterations, BLOCK)),
+            (producer, (inp, buffers, ready, empty, iterations, BLOCK)),
+        ], [PRODUCER_WARPS])
+        for slot in ttgl.static_range(2):
+            mbarrier.wait(empty.index(slot), iterations // 2 & 1)
+            mbarrier.invalidate(empty.index(slot))
+            mbarrier.invalidate(ready.index(slot))
+
+    block = 256
+    iterations = 64
+    inp = torch.arange(8 * iterations * block, device="cuda", dtype=torch.int32)
+    out = torch.empty_like(inp)
+    compiled = kernel.warmup(inp, out, iterations, block, producer_warps, grid=(8, ), num_warps=4, num_ctas=num_ctas)
+
+    # Each physical phase must collect every warp, including bootstrap arrivals.
+    scale = max(4, producer_warps)
+    ptx = compiled.asm["ptx"]
+    init_counts = re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
+    expected_inits = [scale, scale, producer_warps, producer_warps]
+    # Warp-specialization cluster barriers can introduce additional mbarriers.
+    assert Counter(expected_inits) <= Counter(map(int, init_counts))
+    arrive_counts = re.findall(r"mbarrier\.arrive\.shared::(?:cta|cluster)\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;", ptx)
+    # The launch rendezvous covers the first bootstrap arrival's full count.
+    # A CTA barrier before the consumer's arrival can also fold its full count.
+    expected_arrivals = [scale, scale // producer_warps, 1]
+    actual_arrivals = Counter(int(count or 1) for count in arrive_counts)
+    assert any(Counter(expected_arrivals + [count]) <= actual_arrivals for count in (scale // 4, scale))
+    assert "bar.warp.sync" in ptx
+    kernel[(8, )](inp, out, iterations, block, producer_warps, num_warps=4, num_ctas=num_ctas)
+    torch.testing.assert_close(out, inp + 1)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_mbarrier_wait_before_distributed_arrival():
+
+    @gluon.jit
+    def kernel(inp, out, iterations, BLOCK: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        pid = ttgl.program_id(0)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.arrive(bar)
+        total = ttgl.full([BLOCK], 0, ttgl.int32, layout)
+        for i in range(iterations):
+            # Retire earlier arrivals before testing the wait-to-arrive edge.
+            ttgl.barrier()
+            mbarrier.wait(bar, phase=i & 1)
+            total += ttgl.load(inp + (pid * iterations + i) * BLOCK + offsets)
+            mbarrier.arrive(bar)
+        mbarrier.wait(bar, phase=iterations & 1)
+        mbarrier.invalidate(bar)
+        ttgl.store(out + pid * BLOCK + offsets, total)
+
+    blocks, iterations, block = 16, 128, 128
+    inp = torch.arange(blocks * iterations * block, device="cuda", dtype=torch.int32)
+    out = torch.empty((blocks, block), device="cuda", dtype=torch.int32)
+    compiled = kernel.warmup(inp, out, iterations, block, grid=(blocks, ), num_warps=4)
+    arrive_counts = re.findall(r"mbarrier\.arrive\.shared::cta\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;",
+                               compiled.asm["ptx"])
+    # The bootstrap arrives for the CTA; each loop arrival counts one warp.
+    assert {int(count or 1) for count in arrive_counts} == {4, 1}
+    kernel[(blocks, )](inp, out, iterations, block, num_warps=4)
+    torch.testing.assert_close(out, inp.reshape(blocks, iterations, block).sum(dim=1, dtype=torch.int32))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("worker_warps", [2, 8])
+def test_mbarrier_automatic_warp_arrivals_noinline(worker_warps):
+
+    @gluon.jit(noinline=True)
+    def arrive_and_wait():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=4)
+        mbarrier.arrive(bar, count=4)
+        mbarrier.wait(bar, phase=0)
+        mbarrier.invalidate(bar)
+
+    @gluon.jit
+    def worker():
+        arrive_and_wait()
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(W: ttgl.constexpr):
+        ttgl.warp_specialize([(idle, ()), (worker, ())], [W])
+
+    # Synchronization lets the helper's relative thread zero arrive for all warps.
+    compiled = kernel.warmup(worker_warps, grid=(1, ), num_warps=4)
+    arrive_counts = re.findall(r"mbarrier\.arrive\.shared::cta\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;",
+                               compiled.asm["ptx"])
+    assert arrive_counts == ["4"]
+    kernel[(1, )](worker_warps, num_warps=4)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_ctas,from_cta,two_ctas", [(2, 0, False), (8, 5, False), (4, None, True)])
+def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas):
+
+    @gluon.jit
+    def kernel(out, FROM_CTA: ttgl.constexpr, TWO_CTAS: ttgl.constexpr):
+        bar = mbarrier.allocate_mbarrier(two_ctas=TWO_CTAS)
+        mbarrier.init(bar, count=1)
+        if TWO_CTAS:
+            ack = mbarrier.allocate_mbarrier()
+            mbarrier.init(ack, count=1)
+        for i in range(16 if TWO_CTAS else 1):
+            mbarrier.arrive(bar, from_cta=FROM_CTA)
+            mbarrier.wait(bar, phase=i & 1)
+            if TWO_CTAS:
+                # Each pair's leader releases both CTAs after observing the phase.
+                mbarrier.arrive(ack, from_cta=ttgl.num_ctas() - 2)
+                mbarrier.wait(ack, phase=i & 1)
+        if TWO_CTAS:
+            mbarrier.invalidate(ack)
+        mbarrier.invalidate(bar)
+        ttgl.store(out, 1)
+
+    out = torch.zeros((1, ), device="cuda", dtype=torch.int32)
+    compiled = kernel.warmup(out, from_cta, two_ctas, grid=(1, ), num_warps=4, num_ctas=num_ctas)
+    ptx = compiled.asm["ptx"]
+    init_counts = re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
+    assert sorted(map(int, init_counts)) == ([2, 4] if two_ctas else [1])
+    arrive_counts = re.findall(
+        r"mbarrier\.arrive\.shared::cluster(?:\.multicast::cluster::32b)?\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?(?:,\s*%r\d+)?;",
+        ptx)
+    # Each scalar arrival or per-warp share contributes one.
+    assert {int(count or 1) for count in arrive_counts} == {1}
+    assert ("bar.warp.sync" in ptx) == two_ctas
+    kernel[(1, )](out, from_cta, two_ctas, num_warps=4, num_ctas=num_ctas)
+    assert out.item() == 1
 
 
 # Equivalence-class multicast: multicast_cta selects which CTA-ID bits to multicast
@@ -1396,6 +1859,41 @@ def test_device_tma_store():
 
     tma_device_store_kernel[(1, )](out, XBLOCK, smem_layout)
     torch.testing.assert_close(out, torch.zeros_like(out))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_device_tma_stride_alignment():
+
+    @gluon.jit
+    def kernel(input_ptr, XBLOCK: ttgl.constexpr, stride_m: ttgl.constexpr, smem_layout: ttgl.constexpr):
+        tma.make_tensor_descriptor(
+            input_ptr,
+            shape=[XBLOCK, XBLOCK],
+            strides=[stride_m, 1],
+            block_shape=[XBLOCK, XBLOCK],
+            layout=smem_layout,
+        )
+
+    XBLOCK = 16
+    inp = torch.zeros((XBLOCK, XBLOCK), device="cuda", dtype=torch.float16)
+    smem_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=16,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    def alloc_fn(size: int, alignment: int, stream: int):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    # float16 is 2 bytes, so a stride of 15 => 30 bytes, which is not 16-byte aligned.
+    with pytest.raises(CompilationError, match="16-byte aligned"):
+        kernel[(1, )](inp, XBLOCK, 15, smem_layout)
+    # A stride of 16 => 32 bytes is aligned.
+    kernel[(1, )](inp, XBLOCK, XBLOCK, smem_layout)
 
 
 @gluon.jit
@@ -1761,6 +2259,7 @@ def test_tma_mma_shared_inputs_expect_order(num_warps, use_gather_scatter, expec
 
 def _run_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, use_gather_scatter, expect_before_copy,
                                exact=False):
+    skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     bitwidth = 16
     acc_dtype = torch.float32
 
@@ -1915,6 +2414,7 @@ def _run_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
 @pytest.mark.enable_warmup(min_capability=9, priority=1)
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, instr_m,
                            shape_m, shape_n, shape_k, ctas_per_cga, two_ctas):
+    skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
     # This is fixed in PTXAS 13.0.88. Remove once we upgrade
     if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
@@ -2701,11 +3201,57 @@ def test_tmem_subslice_unpacked_one_column():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("pred", [False, True])
-def test_tmem_wait_predicated_store(pred):
+@pytest.mark.parametrize("store_repeats", [1, 4])
+def test_tmem_same_warp_raw_then_cross_warp(device, store_repeats):
 
     @gluon.jit
-    def kernel(inp, out, pred_ptr):
+    def kernel(a_ptr, b_ptr, flag_ptr, same_ptr, cross_ptr, repeats):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 2], [0, 1])
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 2, layout=ttgl.SliceLayout(0, layout))
+        offsets = ttgl.program_id(0) * 256 + rows[:, None] * 2 + cols[None, :]
+        av = ttgl.load(a_ptr + offsets)
+        bv = ttgl.load(b_ptr + offsets)
+
+        parent = allocate_tensor_memory(ttgl.float32, [128, 4], TensorMemoryLayout([128, 128], col_stride=1))
+        a = parent.slice(0, 2)
+        b = parent.slice(1, 2)
+        b.store(bv)
+        for i in range(repeats):
+            a.store(av + i)
+
+        # The ready flag gives a local-only CTA barrier; TMEM completion
+        # and cross-warp publication are still required before the loads.
+        ttgl.atomic_poll(flag_ptr, 1, sem="acquire", scope="gpu")
+        same = a.load(layout)
+        cross = b.load(layout)
+        ttgl.store(same_ptr + offsets, same)
+        ttgl.store(cross_ptr + offsets, cross)
+
+    ctas = 256
+    a = torch.arange(ctas * 256, dtype=torch.float32, device=device).reshape(ctas, 128, 2)
+    b = a + 1048576
+    flag = torch.ones((), dtype=torch.int32, device=device)
+    same = torch.empty_like(a)
+    cross = torch.empty_like(a)
+    expected_same = a + store_repeats - 1
+    expected_cross = torch.stack((expected_same[:, :, 1], b[:, :, 1]), dim=2)
+
+    for _ in range(8):
+        same.fill_(float("nan"))
+        cross.fill_(float("nan"))
+        kernel[(ctas, )](a, b, flag, same, cross, store_repeats, num_warps=8, num_ctas=1)
+        torch.testing.assert_close(same, expected_same, rtol=0, atol=0)
+        torch.testing.assert_close(cross, expected_cross, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("pred", [False, True])
+@pytest.mark.parametrize("iterations", [1, 3])
+def test_tmem_wait_predicated_store(pred, iterations):
+
+    @gluon.jit
+    def kernel(inp, out, pred_ptr, iterations):
         parent = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], col_stride=1))
         layout: ttgl.constexpr = parent.get_reg_layout()
         rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
@@ -2717,24 +3263,26 @@ def test_tmem_wait_predicated_store(pred):
         a = parent.slice(0, 16)
         b = parent.slice(16, 16)
         c = parent.slice(32, 16)
-        values = a.load()
-        # Register users and disjoint stores need no load wait.
-        b.store(values + 1)
-        c.store(values + 2, pred=pred_value)
-        # Overwriting the loaded source and reading all stores require completion.
-        a.store(ttgl.full([128, 16], -7, ttgl.float32, layout=a.get_reg_layout()))
+        for _ in range(iterations):
+            values = a.load()
+            # Register users and disjoint stores need no load wait.
+            b.store(values + 1)
+            c.store(values + 2, pred=pred_value)
+            # Complete the load before overwriting its source.
+            a.store(ttgl.full([128, 16], -7, ttgl.float32, layout=a.get_reg_layout()))
         ttgl.store(out + offsets, parent.load())
 
     inp = torch.arange(128 * 64, dtype=torch.float32, device="cuda").reshape(128, 64)
     out = torch.empty_like(inp)
     pred_tensor = torch.tensor(pred, dtype=torch.bool, device="cuda")
-    kernel[(1, )](inp, out, pred_tensor, num_warps=4)
+    kernel[(1, )](inp, out, pred_tensor, iterations, num_warps=4)
 
     expected = inp.clone()
     expected[:, :16] = -7
-    expected[:, 16:32] = inp[:, :16] + 1
+    last_load = inp[:, :16] if iterations == 1 else -7
+    expected[:, 16:32] = last_load + 1
     if pred:
-        expected[:, 32:48] = inp[:, :16] + 2
+        expected[:, 32:48] = last_load + 2
     torch.testing.assert_close(out, expected, atol=0, rtol=0)
 
 
@@ -2817,6 +3365,120 @@ def test_tmem_subslice_block_m_64():
     out_ref[:, 36:38] = 4.0
 
     torch.testing.assert_close(out_ref, out_tri, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("K,N,mn_major,storage_n,block_n", [(128, 1, False, 8, 8), (128, 1, False, 4, 8),
+                                                            (128, 1, False, 2, 8), (128, 1, False, 2, 16),
+                                                            (256, 4, False, 8, 8), (256, 1, True, 16, 16)])
+@pytest.mark.parametrize("scaled", [False, True])
+@pytest.mark.parametrize("two_ctas", [False, True])
+def test_tcgen05_mma_zero_n_bases(K, N, mn_major, storage_n, block_n, scaled, two_ctas):
+    M = 256 if two_ctas else 128
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, out_ptr, a_scale_ptr, b_scale_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
+               SCALED: ttgl.constexpr, TWO_CTAS: ttgl.constexpr, B_LAYOUT: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+        cga_a: ttgl.constexpr = ((1, 0), ) if TWO_CTAS else ()
+        cga_b: ttgl.constexpr = ((0, 0), ) if TWO_CTAS else ()
+        a = allocate_tensor_memory(ttgl.float8e4nv, [M, K],
+                                   TensorMemoryLayout((128, K), 1, cga_layout=cga_a, two_ctas=TWO_CTAS))
+        a_offsets = ttgl.arange(0, M)[:, None] * K + ttgl.arange(0, K)[None, :]
+        a_offsets = ttgl.set_auto_layout(a_offsets, a.get_reg_layout())
+        a.store(ttgl.load(a_ptr + a_offsets))
+
+        b_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [0, 1], cga_layout=cga_b)
+        b_offsets = ttgl.arange(0, K)[:, None] * N + ttgl.arange(0, N)[None, :]
+        b_values = ttgl.load(ttgl.set_auto_layout(b_ptr + b_offsets, b_layout))
+        b = ttgl.allocate_shared_memory(ttgl.float8e4nv, [K, N], B_LAYOUT, b_values)
+
+        acc = allocate_tensor_memory(ttgl.float32, [M, N],
+                                     TensorMemoryLayout((128, BLOCK_N), 1, cga_layout=cga_a, two_ctas=TWO_CTAS))
+
+        if SCALED:
+            a_scale = allocate_tensor_memory(ttgl.uint8, [M, K // 32], TensorMemoryScalesLayout(cga_layout=cga_a))
+            b_scale = allocate_tensor_memory(ttgl.uint8, [64, K // 32], TensorMemoryScalesLayout(cga_layout=cga_b))
+            a_scale_offsets = ttgl.arange(0, M)[:, None] * (K // 32) + ttgl.arange(0, K // 32)[None, :]
+            b_scale_offsets = (ttgl.arange(0, 64)[:, None] % N) * (K // 32) + ttgl.arange(0, K // 32)[None, :]
+            a_scale_offsets = ttgl.set_auto_layout(a_scale_offsets, a_scale.get_reg_layout())
+            b_scale_offsets = ttgl.set_auto_layout(b_scale_offsets, b_scale.get_reg_layout())
+            a_scale.store(ttgl.load(a_scale_ptr + a_scale_offsets))
+            b_scale.store(ttgl.load(b_scale_ptr + b_scale_offsets))
+
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        fence_async_shared(cluster=TWO_CTAS)
+        if TWO_CTAS:
+            ttgl.barrier(cluster=True)
+        if SCALED:
+            tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, "e4m3", "e4m3", use_acc=False)
+        else:
+            tcgen05_mma(a, b, acc, use_acc=False)
+        tcgen05_commit(bar)
+        mbarrier.wait(bar, phase=0, deps=[b])
+        mbarrier.invalidate(bar)
+        out_offsets = ttgl.arange(0, M)[:, None] * N + ttgl.arange(0, N)[None, :]
+        ttgl.store(out_ptr + out_offsets, acc.load())
+
+    # Reserve padding and replicate B across the CTA pair.
+    b_bases = [
+        [1, 0],
+        [2, 0],
+        [4, 0],
+        [8, 0],
+        [0, 1],
+        [0, 2],
+        [0, 4],
+        [16, 0],
+        [32, 0],
+        [64, 0],
+        [128, 0],
+    ]
+    if mn_major:
+        b_bases = [[0, n] for n in (1, 2, 4, 8)] + [[k, 0] for k in (1, 2, 4, 8, 16, 32, 64, 128)]
+    elif storage_n < 8:
+        # Keep trailing padding for the overlapping MMA cores.
+        b_bases = [[k, 0] for k, n in b_bases if k]
+        if storage_n == 4:
+            b_bases.insert(4, [0, 0])
+        b_bases.append([0, 0])
+    b_layout = ttgl.SharedLinearLayout([[k, n if n < N else 0] for k, n in b_bases if k < K],
+                                       block_bases=[[0, 0]] if two_ctas else [])
+    block_n *= 2 if two_ctas else 1
+    torch.manual_seed(0)
+    # Products and sums of these dyadic inputs are exactly representable in FP32.
+    a = (torch.randint(-8, 9, (M, K), device="cuda").float() / 4).to(torch.float8_e4m3fn)
+    b = (torch.randint(-8, 9, (K, N), device="cuda").float() / 4).to(torch.float8_e4m3fn)
+    out = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    a_scale = torch.randint(126, 129, (M, K // 32), device="cuda", dtype=torch.uint8)
+    b_scale = torch.randint(126, 129, (N, K // 32), device="cuda", dtype=torch.uint8)
+    a_ref, b_ref = a.float(), b.float()
+    if scaled:
+        a_ref *= fp8e8m0_to_float32(a_scale).repeat_interleave(32, dim=1)
+        b_ref *= fp8e8m0_to_float32(b_scale).repeat_interleave(32, dim=1).T
+    expected = a_ref @ b_ref
+    kernel[(1, )](a, b, out, a_scale, b_scale, M, N, K, scaled, two_ctas, b_layout, block_n, num_warps=4,
+                  num_ctas=2 if two_ctas else 1)
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("block_m", [64, 128])
+def test_tcgen05_mma_projected_tmem_layout(block_m):
+    M, N, K = 2 * block_m, 16, 128
+    cga_a, cga_b = ((1, 0), ), ((0, 0), )
+    a_layout = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0], cga_layout=cga_a)
+    b_layout = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0], cga_layout=cga_b)
+    a_shared = ttgl.NVMMASharedLayout(128, 8, cga_layout=cga_a)
+    b_shared = ttgl.NVMMASharedLayout(32, 8, transposed=True, cga_layout=cga_b)
+    acc_layout = TensorMemoryLayout((block_m, 32), 1, cga_layout=cga_a, two_ctas=True)
+    torch.manual_seed(0)
+    a = (torch.randint(-8, 9, (M, K), device="cuda").float() / 4).to(torch.float8_e4m3fn)
+    b = (torch.randint(-8, 9, (K, N), device="cuda").float() / 4).to(torch.float8_e4m3fn)
+    out = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    mma_kernel[(1, )](a, b, out, M, N, K, a_layout, b_layout, cga_a, acc_layout, a_shared, b_shared, ttgl.float32,
+                      False, True, num_warps=4, num_ctas=2)
+    torch.testing.assert_close(out, a.float() @ b.float(), atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
@@ -3272,6 +3934,79 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
     assert (output == ref_output).all()
 
 
+@pytest.mark.parametrize("n", [4, 128])
+@pytest.mark.parametrize("order", [[0, 1], [1, 0]])
+@pytest.mark.parametrize("warps_per_cta", [[4, 1], [1, 4]])
+@pytest.mark.parametrize("tuple_reduce", [False, True])
+def test_reduce_noncommutative(n, order, warps_per_cta, tuple_reduce):
+
+    @gluon.jit
+    def take_first(a, b):
+        return a
+
+    @gluon.jit
+    def take_endpoints(a_first, a_last, b_first, b_last):
+        return a_first, b_last
+
+    @gluon.jit
+    def kernel(X, First, Last, N: ttgl.constexpr, Layout: ttgl.constexpr, Tuple: ttgl.constexpr):
+        rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, Layout))
+        cols = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, Layout))
+        offsets = rows[:, None] * N + cols[None, :]
+        x = ttgl.load(X + offsets)
+        if Tuple:
+            first, last = ttgl.reduce((x, x.to(ttgl.int64)), 1, take_endpoints)
+            ttgl.store(Last + offsets, last[:, None])
+        else:
+            first = ttgl.reduce(x, 1, take_first)
+        # Read every replica of the result, including lanes that supplied RHS.
+        ttgl.store(First + offsets, first[:, None])
+
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], warps_per_cta, order)
+    x = torch.arange(16 * n, device="cuda", dtype=torch.int32).reshape(16, n)
+    first = torch.empty_like(x)
+    last = torch.empty_like(x, dtype=torch.int64)
+    kernel[(1, )](x, first, last, n, layout, tuple_reduce)
+    torch.testing.assert_close(first, x[:, :1].expand_as(x), atol=0, rtol=0)
+    if tuple_reduce:
+        torch.testing.assert_close(last, x[:, -1:].to(torch.int64).expand_as(last), atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("n", [4, 128])
+@pytest.mark.parametrize("order", [[0, 1], [1, 0]])
+@pytest.mark.parametrize("warps_per_cta", [[4, 1], [1, 4]])
+def test_reduce_commutative_complex_product(n, order, warps_per_cta):
+
+    @gluon.jit
+    def combine(ar, ai, br, bi):
+        return ar * br - ai * bi, ar * bi + ai * br
+
+    @gluon.jit
+    def kernel(Real, Imag, OutReal, OutImag, N: ttgl.constexpr, Layout: ttgl.constexpr):
+        rows = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, Layout))
+        cols = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, Layout))
+        offsets = rows[:, None] * N + cols[None, :]
+        real = ttgl.load(Real + offsets)
+        imag = ttgl.load(Imag + offsets)
+        real, imag = ttgl.reduce((real, imag), 1, combine)
+        ttgl.store(OutReal + offsets, real[:, None])
+        ttgl.store(OutImag + offsets, imag[:, None])
+
+    torch.manual_seed(123)
+    real = 1 + 0.01 * torch.randn((16, n), device="cuda")
+    imag = 0.01 * torch.randn((16, n), device="cuda")
+    out_real = torch.empty_like(real)
+    out_imag = torch.empty_like(imag)
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], warps_per_cta, order)
+    kernel[(1, )](real, imag, out_real, out_imag, n, layout, enable_fp_fusion=False)
+    expected = torch.complex(real.double(), imag.double()).prod(1, keepdim=True)
+    torch.testing.assert_close(out_real, expected.real.float().expand_as(real), atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(out_imag, expected.imag.float().expand_as(imag), atol=1e-6, rtol=1e-5)
+    # A commutative reduction must still agree exactly across all replicas.
+    torch.testing.assert_close(out_real, out_real[:, :1].expand_as(real), atol=0, rtol=0)
+    torch.testing.assert_close(out_imag, out_imag[:, :1].expand_as(imag), atol=0, rtol=0)
+
+
 @gluon.jit
 def _combine_add2(a, b, c, d):
     parent: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [1, 32], [1, ttgl.num_warps()], [1, 0],
@@ -3688,6 +4423,35 @@ def test_tcgen05_mma_scaled_minimal():
     assert "ttng.tc_gen5_mma_scaled" in ttgir
 
 
+@pytest.mark.parametrize("transposed", [False, True])
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_mma_scaled_shared_linear_fp4(transposed):
+
+    @gluon.jit
+    def kernel(out, TRANSPOSED: ttgl.constexpr):
+        shape: ttgl.constexpr = [64, 128] if TRANSPOSED else [128, 64]
+        layout: ttgl.constexpr = ttgl.to_linear_layout(
+            ttgl.NVMMASharedLayout(128, 8, transposed=TRANSPOSED, fp4_padded=True), shape)
+        regs: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        operand = ttgl.allocate_shared_memory(ttgl.uint8, shape, layout, ttgl.full(shape, 0x11, ttgl.uint8, regs))
+        acc = allocate_tensor_memory(ttgl.float32, [128, 128], TensorMemoryLayout([128, 128], col_stride=1))
+        scale = allocate_tensor_memory(ttgl.uint8, [128, 4], TensorMemoryScalesLayout())
+        scale.store(ttgl.full([128, 4], 127, ttgl.uint8, scale.get_reg_layout()))
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        fence_async_shared()
+        tcgen05_mma_scaled(operand, operand, acc, scale, scale, "e2m1", "e2m1", use_acc=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[operand])
+        mbarrier.invalidate(bar)
+        offsets = ttgl.arange(0, 128)[:, None] * 128 + ttgl.arange(0, 128)[None, :]
+        ttgl.store(out + offsets, acc.load())
+
+    out = torch.empty((128, 128), device="cuda")
+    kernel[(1, )](out, transposed, num_warps=4)
+    # Each packed nibble is 0.5, so every output is 128 * 0.5 * 0.5.
+    torch.testing.assert_close(out, torch.full_like(out, 32), rtol=0, atol=0)
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_scaled_noncontiguous_accumulator():
 
@@ -3970,6 +4734,62 @@ def test_convert_auto_layout_to_coalesced_layout():
         XBLOCK, YBLOCK, num_warps=4)
 
     torch.testing.assert_close(output, ref)
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.parametrize("operation", ["ld", "st"])
+@pytest.mark.parametrize("dtype, transpose, reg_bases, lane_bases", [
+    pytest.param(torch.int8, True, [128, 32, 64, 8, 512, 1024], [16, 256, 1, 2, 4], id="b8-transpose-nonadditive"),
+    pytest.param(torch.int8, True, [32, 64, 8, 128, 512], [16, 256, 1, 2, 4], id="b8-transpose-load-packed"),
+    pytest.param(torch.int8, True, [32, 8, 64, 128, 512], [16, 256, 1, 2, 4], id="b8-transpose-store-packed"),
+    pytest.param(torch.float16, True, [8], [16, 32, 1, 2, 4], id="b16-transpose-x1"),
+    pytest.param(torch.float16, True, [64, 32, 128, 256], [8, 16, 1, 2, 4], id="b16-transpose-bank-conflict"),
+    pytest.param(torch.int8, False, [128, 1, 2, 256, 512], [4, 8, 16, 32, 64], id="b8-packed"),
+    pytest.param(torch.float16, False, [64, 1, 128, 256], [2, 4, 8, 16, 32], id="b16"),
+    pytest.param(torch.float32, False, [32, 64, 128], [1, 2, 4, 8, 16], id="b32"),
+])
+def test_ldstmatrix_register_order(operation, dtype, transpose, reg_bases, lane_bases):
+    is_b8 = dtype == torch.int8 and transpose
+    if operation == "st" and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("stmatrix requires SM90 or newer")
+    if is_b8 and torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("ldmatrix/stmatrix.b8 requires SM100 or newer")
+
+    @gluon.jit
+    def kernel(inp, out, N: ttgl.constexpr, store_layout: ttgl.constexpr, load_layout: ttgl.constexpr,
+               shared_layout: ttgl.constexpr):
+        offsets = ttgl.arange(0, N, layout=store_layout)
+        values = ttgl.load(inp + offsets)
+        smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [N], shared_layout)
+        smem.store(values)
+        values = smem.load(load_layout)
+        offsets = ttgl.arange(0, N, layout=load_layout)
+        ttgl.store(out + offsets, values)
+
+    size = 32 << len(reg_bases)
+    shared_bases = [[1 << i] for i in range(size.bit_length() - 1)]
+    if size > 512:
+        # Exercise composition with the additive-stride register permutation.
+        shared_bases[9][0] ^= 16
+    shared_layout = ttgl.SharedLinearLayout(shared_bases)
+    layout = ttgl.DistributedLinearLayout(reg_bases=[[b] for b in reg_bases], lane_bases=[[b] for b in lane_bases],
+                                          warp_bases=[], block_bases=[], shape=[size])
+    blocked = ttgl.BlockedLayout([1], [32], [1], [0])
+    store_layout, load_layout = (layout, blocked) if operation == "st" else (blocked, layout)
+    inp = torch.randint(0, 127, (size, ), dtype=torch.int32, device="cuda").to(dtype)
+    out = torch.empty_like(inp)
+    compiled = kernel[(1, )](inp, out, size, store_layout, load_layout, shared_layout, num_warps=1)
+    torch.testing.assert_close(out, inp, atol=0, rtol=0)
+
+    shape, bitwidth = "m8n8", 16
+    if is_b8:
+        shape, bitwidth = ("m16n16", 8) if operation == "ld" else ("m16n8", 8)
+    bytes_per_matrix = 256 if is_b8 and operation == "ld" else 128
+    total_bytes = size * inp.element_size()
+    count = min(total_bytes, 512) // bytes_per_matrix
+    trans = r"\.trans" if transpose else ""
+    opcode = rf"{operation}matrix\.sync\.aligned\.(?:{shape}\.x{count}|x{count}\.{shape}){trans}\.shared\.b{bitwidth}"
+    assert len(re.findall(opcode, compiled.asm["ptx"])) == total_bytes // (bytes_per_matrix * count)
 
 
 @gluon.jit
@@ -4270,6 +5090,7 @@ def shared_gather_cga_kernel(
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("num_ctas,broadcast_mask", _shared_gather_cga_cases())
 def test_shared_gather_cga(num_ctas, broadcast_mask):
+    skip_if_unsupported_cluster_size(num_ctas)
     cta_tile = 32
     out = torch.empty(cta_tile * num_ctas, dtype=torch.int32, device="cuda")
     value_layout, seed_layout, shared_layout, num_shard_bits = _shared_gather_layouts(num_ctas, broadcast_mask)
@@ -6296,6 +7117,7 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
 @pytest.mark.parametrize("multicast", [True, False])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE, ctas_per_cga, multicast):
+    skip_if_unsupported_cluster_size(math.prod(ctas_per_cga))
     BLOCK_M = 128 * ctas_per_cga[0]
     BLOCK_N = 128 * ctas_per_cga[1]
     torch.manual_seed(0)
@@ -6466,3 +7288,128 @@ def test_tmem288k_simple(Ncol1: int, Ncol2: int):
     num_warps = 4
     tmem288k_simple_kernel[(1, )](input, output, M, Ncol1, Ncol2, num_warps=num_warps)
     torch.testing.assert_close(input.cpu(), output.cpu(), atol=0, rtol=0)
+
+
+@gluon.jit
+def tma_cache_policy_copy_kernel(in_desc, out_desc, Flag, POLICY: ttgl.constexpr, LAYOUT: ttgl.constexpr,
+                                 KIND: ttgl.constexpr):
+    if KIND == "gather" or KIND == "scatter":
+        shape: ttgl.constexpr = [32, in_desc.block_shape[1]]
+        offsets_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([4, 1], [1, 32], [4, 1], [0, 1]))
+        offsets = 31 - ttgl.arange(0, 32, layout=offsets_layout)
+    else:
+        shape: ttgl.constexpr = in_desc.block_shape
+    initial = ttgl.full(shape, -1, in_desc.dtype, LAYOUT)
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, shape, in_desc.layout, initial)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    pred = ttgl.load(Flag) != 0
+    mbarrier.expect(bar, smem.nbytes_per_cta, pred=pred)
+    if KIND == "gather":
+        blackwell_tma.async_gather(in_desc, offsets, 0, bar, smem, pred=pred, cache_policy=POLICY)
+    elif KIND == "scatter":
+        blackwell_tma.async_gather(in_desc, offsets, 0, bar, smem, pred=pred)
+    elif KIND == "store":
+        tma.async_load(in_desc, [0] * len(shape), bar, smem, pred=pred)
+    else:
+        tma.async_load(in_desc, [0] * len(shape), bar, smem, pred=pred, cache_policy=POLICY)
+    mbarrier.wait(bar, phase=0, pred=pred, deps=[smem])
+    mbarrier.invalidate(bar)
+    if KIND == "store":
+        tma.async_store(out_desc, [0] * len(shape), smem, cache_policy=POLICY)
+    elif KIND == "scatter":
+        blackwell_tma.async_scatter(out_desc, offsets, 0, smem, cache_policy=POLICY)
+    else:
+        tma.async_store(out_desc, [0] * len(shape), smem)
+    tma.store_wait(0)
+    smem._keep_alive()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("kind,rank", [("load", 1), ("load", 2), ("load", 5), ("store", 1), ("store", 2), ("store", 5),
+                                       ("gather", 2), ("scatter", 2)])
+@pytest.mark.parametrize("pred", [False, True])
+@pytest.mark.parametrize("policy", [
+    None,
+    ttgl.CachePolicy(),
+    ttgl.CachePolicy(eviction_policy="evict_first"),
+    ttgl.CachePolicy(eviction_policy="evict_last"),
+    hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_first", 1.0)),
+    hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 1.0)),
+    hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_normal", 1.0)),
+    hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first")),
+    hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_unchanged", 0.25, "evict_first")),
+])
+def test_tma_cache_policy_copy(kind, rank, pred, policy):
+    if kind in ("gather", "scatter") and not is_blackwell():
+        pytest.skip("gather/scatter require Blackwell")
+    shape = [32, 256] if kind in ("gather", "scatter") else [2] * (rank - 1) + [256]
+    inp = torch.randn(shape, dtype=torch.float16, device="cuda")
+    out = torch.empty_like(inp)
+    flag = torch.tensor([pred], dtype=torch.int32, device="cuda")
+    shared = ttgl.NVMMASharedLayout(0, 16, rank=rank)
+    layout = ttgl.BlockedLayout([1] * rank, [1] * (rank - 1) + [32], [1] * (rank - 1) + [4],
+                                list(reversed(range(rank))))
+    in_shape = [1, shape[1]] if kind in ("gather", "scatter") else shape
+    out_shape = [1, shape[1]] if kind == "scatter" else shape
+    in_desc = TensorDescriptor.from_tensor(inp, in_shape, shared)
+    out_desc = TensorDescriptor.from_tensor(out, out_shape, shared)
+    compiled = tma_cache_policy_copy_kernel[(1, )](in_desc, out_desc, flag, policy, layout, kind)
+    expected = inp.flip(0) if kind == "gather" else inp
+    torch.testing.assert_close(out, expected if pred else torch.full_like(inp, -1), atol=0, rtol=0)
+    detailed = isinstance(policy, hopper.CachePolicy)
+    primary = policy.l2.primary if detailed else policy.eviction_policy if policy is not None else None
+    assert (".L2::cache_hint" in compiled.asm["ptx"]) == (detailed or primary in ("evict_first", "evict_last"))
+    if detailed or primary in ("evict_first", "evict_last"):
+        expected = f"createpolicy.fractional.L2::{primary}"
+        if detailed and policy.l2.secondary == "evict_first":
+            expected += ".L2::evict_first"
+        assert expected + ".b64" in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize("target", [GPUTarget("cuda", 90, 32), GPUTarget("cuda", 100, 32)])
+@pytest.mark.parametrize("rank,kind,multicast", [(1, "load", False), (2, "load", False), (5, "load", False),
+                                                 (2, "load", True), (4, "im2col", False), (4, "im2col", True),
+                                                 (2, "gather", False), (2, "gather", True), (1, "store", False),
+                                                 (2, "store", False), (5, "store", False), (2, "scatter", False)])
+@pytest.mark.parametrize("policy,expected", [
+    (None, None),
+    (ttgl.CachePolicy(eviction_policy="evict_first"), "createpolicy.fractional.L2::evict_first.b64"),
+    (ttgl.CachePolicy(eviction_policy="evict_last"), "createpolicy.fractional.L2::evict_last.b64"),
+    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_normal", 1.0)),
+     "createpolicy.fractional.L2::evict_normal.b64"),
+    (hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy("evict_last", 0.5, "evict_first")),
+     "createpolicy.fractional.L2::evict_last.L2::evict_first.b64"),
+])
+def test_tma_cache_policy_ptx(target, rank, kind, multicast, policy, expected, tmp_path):
+    from triton._filecheck import run_parser
+    from test_frontend import make_args, make_tma_cache_policy_desc, tma_cache_policy_kernel
+
+    # Parse a runtime predicate, then compile the saved Gluon IR all the way
+    # through the pinned ptxas for both architectures without needing that GPU.
+    if kind in ("gather", "scatter") and target.arch == 90:
+        pytest.skip("gather/scatter require Blackwell")
+    desc = make_tma_cache_policy_desc(rank, kind, multicast)
+    mod = run_parser(tma_cache_policy_kernel,
+                     *make_args(desc, False, policy, kind, multicast, num_ctas=2 if multicast else 1), target=target)
+    source = tmp_path / "tma_cache_policy.glir"
+    source.write_text(mod.str_nodebug())
+    compiled = triton.compile(str(source), target=target)
+    ptx = compiled.asm["ptx"]
+    assert compiled.asm["cubin"]
+    opcode = {"gather": ".tile::gather4", "scatter": ".tile::scatter4", "store":
+              ".global.shared::cta"}.get(kind, "cp.async.bulk.tensor")
+    loads = [line for line in ptx.splitlines() if "cp.async.bulk.tensor" in line and opcode in line]
+    assert loads
+    assert all((".L2::cache_hint" in line) == (expected is not None) for line in loads)
+    if expected is None:
+        assert "createpolicy" not in ptx
+    else:
+        assert expected in ptx
+        # The opaque policy is a 64-bit register and comes after im2col offsets
+        # and the multicast mask, on every emitted message.
+        assert all(re.search(r", %rd[0-9]+;", line) for line in loads)
+        if multicast:
+            assert all(re.search(r", %rs[0-9]+, %rd[0-9]+;", line) for line in loads)
+        if kind == "im2col":
+            assert all(re.search(r"\}, (?:%rs[0-9]+, )?%rd[0-9]+;", line) for line in loads)

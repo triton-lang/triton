@@ -1,3 +1,4 @@
+#include "TargetInfo.h"
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -24,18 +25,23 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
                                 ConversionPatternRewriter &rewriter);
 
 LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                          const TargetInfo &targetInfo,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
 
 LogicalResult convertScaledWMMA(triton::DotScaledOp op,
                                 triton::DotScaledOp::Adaptor adaptor,
+                                const TargetInfo &targetInfo,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter);
 } // namespace mlir::triton::AMD
 
 namespace {
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  DotOpConversion(LLVMTypeConverter &typeConverter,
+                  const AMD::TargetInfo &targetInfo, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
@@ -48,7 +54,8 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     // (e.g. swizzled-warp) encodings, so handle it up front and then enforce
     // the permutation-matrix invariant for all other paths.
     if (isa<AMDWmmaEncodingAttr>(dEncoding))
-      return AMD::convertWMMA(op, adaptor, getTypeConverter(), rewriter);
+      return AMD::convertWMMA(op, adaptor, targetInfo, getTypeConverter(),
+                              rewriter);
 
     if (!isPermutationMatrixLayout(toLinearLayout(dType.getShape(), dEncoding)))
       return rewriter.notifyMatchFailure(op,
@@ -66,11 +73,18 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
+
+private:
+  const AMD::TargetInfo &targetInfo;
 };
 
 struct ScaledDotOpConversion
     : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  ScaledDotOpConversion(LLVMTypeConverter &typeConverter,
+                        const AMD::TargetInfo &targetInfo,
+                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(triton::DotScaledOp op, OpAdaptor adaptor,
@@ -79,7 +93,8 @@ struct ScaledDotOpConversion
     auto dEncoding = dType.getEncoding();
 
     if (isa<AMDWmmaEncodingAttr>(dEncoding))
-      return AMD::convertScaledWMMA(op, adaptor, getTypeConverter(), rewriter);
+      return AMD::convertScaledWMMA(op, adaptor, targetInfo, getTypeConverter(),
+                                    rewriter);
 
     if (!isPermutationMatrixLayout(toLinearLayout(dType.getShape(), dEncoding)))
       return rewriter.notifyMatchFailure(
@@ -92,6 +107,9 @@ struct ScaledDotOpConversion
     llvm::report_fatal_error(
         "Unsupported DotScaleOp found when converting TritonGPU to LLVM.");
   }
+
+private:
+  const AMD::TargetInfo &targetInfo;
 };
 } // namespace
 
@@ -99,8 +117,9 @@ namespace mlir::triton::AMD {
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                 const TargetInfo &targetInfo,
                                  PatternBenefit benefit) {
-  patterns.add<DotOpConversion>(typeConverter, benefit);
-  patterns.add<ScaledDotOpConversion>(typeConverter, benefit);
+  patterns.add<DotOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<ScaledDotOpConversion>(typeConverter, targetInfo, benefit);
 }
 } // namespace mlir::triton::AMD

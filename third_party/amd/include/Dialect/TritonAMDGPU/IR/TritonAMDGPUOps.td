@@ -555,7 +555,7 @@ def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", []> {
 // ScaledUpcastFp4Op
 //===----------------------------------------------------------------------===//
 
-def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterfaceMethods<CastFpOpInterface>]> {
+def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, EfficientLayoutOpInterface, DeclareOpInterfaceMethods<CastFpOpInterface>]> {
   let summary = "Upcast fp4 and then multiply scale";
 
   let description = [{
@@ -568,6 +568,10 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterf
 
     The `axis` attribute specifies the axis along which the fp4 elements are
     packed.
+
+    The result encoding is always a layout constraint: the conversion consumes
+    register-consecutive groups along `axis`, so layout conversion will not
+    rewrite this op.
   }];
 
   let arguments = (ins
@@ -592,6 +596,8 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterf
   }];
 
   let extraClassDeclaration = [{
+    bool getEfficientLayout() { return true; }
+
     static std::optional<mlir::triton::LinearLayout>
     computeScaleLayout(const mlir::triton::LinearLayout &outputLayout,
                        int64_t axis, int64_t elementsPerScale);
@@ -609,6 +615,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
     Elementwise,
     SameOperandsAndResultShape,
     SameOperandsAndResultEncoding,
+    EfficientLayoutOpInterface,
     DeclareOpInterfaceMethods<CastFpOpInterface>]> {
   let summary = "Upcast Fp8 and then multiply scale";
 
@@ -616,6 +623,9 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
     Upcast fp8 (e4m3/e5m2) values and multiply with the given E8M0 scale
     encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
     on the AMD CDNA4 architecture.
+
+    The result encoding is always a layout constraint: the conversion consumes
+    register-consecutive groups, so layout conversion will not rewrite this op.
   }];
 
   let arguments = (ins
@@ -623,10 +633,16 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
     RankedTensorOf<[AnyTypeOf<[BF16, I8]>]>:$scale);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16]>]>:$output);
 
+  let extraClassDeclaration = [{
+    bool getEfficientLayout() { return true; }
+  }];
+
   let assemblyFormat = [{
     $input `scale` $scale attr-dict
         `:` type($input) `,` type($scale) `->` type($output)
   }];
+
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1259,32 +1275,6 @@ def AsyncWaitOp : TT_AMDGPU_Op<"async_wait", [MemWaitOpTrait]> {
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num_inst);
   let results = (outs TTG_AsyncToken:$retToken);
   let assemblyFormat = "($asyncToken^)? attr-dict";
-}
-
-//===----------------------------------------------------------------------===//
-// MemoryCounterWait
-//===----------------------------------------------------------------------===//
-
-def MemoryCounterWaitOp : TT_AMDGPU_Op<"memory_counter_wait"> {
-  let summary = "Wait for specified hardware counters";
-  let description = [{
-    Wait for the specified counters to be less-than or equal-to the provided
-    values before continuing.
-
-    Counters can lower to different instructions on different architectires,
-    including clamping to the some HW supported max value or combining multiple
-    counters into one.
-  }];
-
-  let arguments = (ins
-    OptionalAttr<I32Attr>:$load,
-    OptionalAttr<I32Attr>:$store,
-    OptionalAttr<I32Attr>:$ds
-  );
-
-  let assemblyFormat = [{
-    oilist( `load` `(` $load `)` | `store` `(` $store `)` | `ds` `(` $ds `)` ) attr-dict
-  }];
 }
 
 //===----------------------------------------------------------------------===//

@@ -142,6 +142,7 @@ public:
   virtual bool supportLdStMatrixB8() const { return false; }
   virtual bool supportBitwidth16Elementwise() const { return false; }
   virtual bool supportBitwidth32Elementwise() const { return false; }
+  virtual bool supportsTcgen05() const { return false; }
 
   // Returns the preferred arity of the in-thread reduction tree for the given
   // combiner operation. The default is 2 (binary tree). Targets that have
@@ -155,11 +156,6 @@ public:
   // Returns the shared memory partition size in bytes. A value of 0 means
   // shared memory is not partitioned.
   virtual size_t getSharedMemoryPartitionSize() const { return 0; }
-
-  // Annotate target specific information to local load operations during
-  // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
-  virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                                     Operation *llLoadOp) const {}
 
   // Returns bases of lanes {LoadBases, StoreBases} that are active in a
   // single hardware cycle for shared memory loads and stores.

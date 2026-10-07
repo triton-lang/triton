@@ -1,6 +1,5 @@
 #include "TargetInfo.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -125,10 +124,6 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
   return value;
 }
 } // namespace
-
-llvm::AMDGPU::IsaVersion TargetInfo::getIsaVersion() const {
-  return llvm::AMDGPU::getIsaVersion(getArch());
-}
 
 llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(getArch());
@@ -378,7 +373,8 @@ static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
   Value toVal = val;
 
   if (originalBits < fromBits) {
-    toVal = b.trunc(int_ty(originalBits), toVal);
+    toVal =
+        b.trunc(int_ty(originalBits), toVal, LLVM::IntegerOverflowFlags::nsw);
   }
 
   if (!valType.isIntOrIndex()) {
@@ -479,11 +475,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return true;
 
   if (reduceLaneIdMask != (getWarpSize() - 1))
-    return false;
-  // DPP warp reduce requires gfx90a+ (CDNA2+) or gfx11+ (RDNA3+).
-  // Pre-CDNA2 GFX9 (gfx906/gfx908) and GFX10 (RDNA1/2) are excluded.
-  auto v = getIsaVersion();
-  if (!((v.Major == 9 && (v.Minor > 0 || v.Stepping >= 0xa)) || v.Major >= 11))
     return false;
 
   Operation *reduxOp = op.getSingleCombiner();
@@ -805,6 +796,10 @@ bool TargetInfo::supportsMultiCTALaunch() const {
   return targetFeatures.supportsMultiCTALaunch();
 }
 
+bool TargetInfo::supportsMulticast() const {
+  return targetFeatures.supportsMulticast();
+}
+
 unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
   return targetFeatures.getMaxMulticastMaskPopcount();
 }
@@ -851,6 +846,14 @@ bool TargetInfo::supportsCvtPkScalePk8() const {
   return targetFeatures.supportsCvtPkScalePk8();
 }
 
+bool TargetInfo::supportsCvtPkScalePk8Upcast() const {
+  return targetFeatures.supportsCvtPkScalePk8Upcast();
+}
+
+bool TargetInfo::supportsCvtPkScalePk8Block16() const {
+  return targetFeatures.supportsCvtPkScalePk8Block16();
+}
+
 bool TargetInfo::supportsHwScaledUpcast() const {
   return targetFeatures.supportsHwScaledUpcast();
 }
@@ -859,21 +862,18 @@ bool TargetInfo::supportsHwScaledDowncast() const {
   return targetFeatures.supportsHwScaledDowncast();
 }
 
-void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                                       Operation *llLoadOp) const {
-  if (requiresAliasInfoForAsyncOps())
-    AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
-}
-
 bool TargetInfo::supportDppBroadcast() const {
   return targetFeatures.supportDppBroadcast();
+}
+
+bool TargetInfo::isGFX1250Strict() const {
+  return targetFeatures.isGFX1250Strict();
 }
 
 std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
 TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA3:
-  case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
     if (vecBitwidth == 128)

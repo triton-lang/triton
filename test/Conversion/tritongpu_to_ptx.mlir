@@ -8,7 +8,70 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
 #blocked_reduce = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 2], order = [1, 0]}>
+#narrow_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+#narrow_dst = #ttg.linear<{register = [], lane = [[2], [1], [4], [8], [16]], warp = [[32]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reciprocal_f32(%ptr: !tt.ptr<f32>, %arg: f32) {
+    // CHECK-LABEL: reciprocal_f32(
+    // CHECK: div.full.f32
+    %one = arith.constant 1.0 : f32
+    %result = arith.divf %one, %arg : f32
+    tt.store %ptr, %result : !tt.ptr<f32>
+    tt.return
+  }
+
+  tt.func public @approx_reciprocal_tensor_f32(%ptr: tensor<256x!tt.ptr<f32>, #blocked>, %arg: tensor<256xf32, #blocked>) {
+    // CHECK-LABEL: approx_reciprocal_tensor_f32(
+    // CHECK-COUNT-8: div.approx.f32
+    %one = arith.constant dense<1.0> : tensor<256xf32, #blocked>
+    %result = tt.approx_divf %one, %arg : tensor<256xf32, #blocked>
+    tt.store %ptr, %result : tensor<256x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+
+  tt.func public @divide_f32(%ptr: !tt.ptr<f32>, %lhs: f32, %rhs: f32) {
+    // CHECK-LABEL: divide_f32(
+    // CHECK: div.full.f32
+    %result = arith.divf %lhs, %rhs : f32
+    tt.store %ptr, %result : !tt.ptr<f32>
+    tt.return
+  }
+
+  tt.func public @approx_divide_f32(%ptr: !tt.ptr<f32>, %lhs: f32, %rhs: f32) {
+    // CHECK-LABEL: approx_divide_f32(
+    // CHECK: div.approx.f32
+    %result = tt.approx_divf %lhs, %rhs : f32
+    tt.store %ptr, %result : !tt.ptr<f32>
+    tt.return
+  }
+
+  tt.func public @approx_reciprocal_f32(%ptr: !tt.ptr<f32>, %arg: f32) {
+    // CHECK-LABEL: approx_reciprocal_f32(
+    // CHECK: div.approx.f32
+    %one = arith.constant 1.0 : f32
+    %result = tt.approx_divf %one, %arg : f32
+    tt.store %ptr, %result : !tt.ptr<f32>
+    tt.return
+  }
+
+  tt.func public @reciprocal_f64(%ptr: !tt.ptr<f64>, %arg: f64) {
+    // CHECK-LABEL: reciprocal_f64(
+    // CHECK: div.rn.f64
+    %one = arith.constant 1.0 : f64
+    %result = arith.divf %one, %arg : f64
+    tt.store %ptr, %result : !tt.ptr<f64>
+    tt.return
+  }
+
+  tt.func public @precise_reciprocal_f32(%ptr: !tt.ptr<f32>, %arg: f32) {
+    // CHECK-LABEL: precise_reciprocal_f32(
+    // CHECK: div.rn.f32
+    %one = arith.constant 1.0 : f32
+    %result = tt.precise_divf %one, %arg : f32
+    tt.store %ptr, %result : !tt.ptr<f32>
+    tt.return
+  }
+
   tt.func public @add_bf16(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg0: tensor<256xbf16, #blocked>, %arg1: tensor<256xbf16, #blocked>) {
     // CHECK-LABEL: add_bf16
     // SM80-COUNT-8: fma.rn.bf16
@@ -191,6 +254,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     }) {allocation.offset = 0 : i32} : (tensor<1x256xf32, #blocked_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
     %ptr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
     tt.store %ptr, %r : tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
+    tt.return
+  }
+
+  // CHECK-LABEL: .visible .entry shuffle_i1_no_mask(
+  tt.func public @shuffle_i1_no_mask(%arg: tensor<64xi1, #narrow_src>, %out: tensor<64x!tt.ptr<i32>, #narrow_dst>) {
+    // CHECK: shfl.sync.idx.b32 [[VALUE:%r[0-9]+]],
+    // CHECK-NOT: and.b32
+    // CHECK: st.global.b32 {{.*}}, { [[VALUE]] };
+    %0 = ttg.convert_layout %arg : tensor<64xi1, #narrow_src> -> tensor<64xi1, #narrow_dst>
+    %1 = arith.extui %0 : tensor<64xi1, #narrow_dst> to tensor<64xi32, #narrow_dst>
+    tt.store %out, %1 : tensor<64x!tt.ptr<i32>, #narrow_dst>
+    tt.return
+  }
+  // CHECK-LABEL: .visible .entry shuffle_i16_no_mask(
+  tt.func public @shuffle_i16_no_mask(%arg: tensor<64xi16, #narrow_src>, %out: tensor<64x!tt.ptr<i32>, #narrow_dst>) {
+    // CHECK: shfl.sync.idx.b32 [[VALUE:%r[0-9]+]],
+    // CHECK-NOT: and.b32
+    // CHECK: st.global.b32 {{.*}}, { [[VALUE]] };
+    %0 = ttg.convert_layout %arg : tensor<64xi16, #narrow_src> -> tensor<64xi16, #narrow_dst>
+    %1 = arith.extui %0 : tensor<64xi16, #narrow_dst> to tensor<64xi32, #narrow_dst>
+    tt.store %out, %1 : tensor<64x!tt.ptr<i32>, #narrow_dst>
     tt.return
   }
 }

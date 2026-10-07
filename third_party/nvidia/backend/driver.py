@@ -5,6 +5,7 @@ import triton
 import ctypes
 import sys
 from triton import knobs
+from triton._C.libtriton.gsan_testing import PER_DEVICE_STATE_STRIDE_BYTES as GSAN_PER_DEVICE_STATE_STRIDE
 from triton._instrumentation import is_enabled
 from triton.runtime.build import compile_module_from_file
 from triton.runtime import _allocation
@@ -20,7 +21,6 @@ PyKernelArg = None
 ARG_CONSTEXPR = None
 ARG_KERNEL = None
 ARG_TUPLE = None
-GSAN_PER_DEVICE_STATE_STRIDE = 1 << 30
 
 
 @functools.lru_cache()
@@ -280,10 +280,20 @@ class CudaLauncher(object):
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
 
         self.gsan_enabled = is_enabled(metadata, "gsan")
+        self.shared = metadata.shared
+        max_occupancy = getattr(metadata, "max_occupancy", None)
+        if max_occupancy is not None:
+            # Resolve device-dependent reservations here, keeping compilation
+            # independent of the current device and driver.
+            active_driver = triton.runtime.driver.active
+            device = active_driver.get_current_device()
+            properties = active_driver.utils.get_device_properties(device)
+            min_shared = properties["max_shared_mem_per_multiprocessor"] // (max_occupancy + 1) + 1
+            self.shared = max(self.shared, min_shared)
         if self.gsan_enabled:
             signature["_gsan_globals_ptr"] = "*i8"
-            signature["_gsan_stream_clock_ptr"] = "*i32"
-            signature["_gsan_kernel_id"] = "i64"
+            signature["_gsan_launch_table_ptr"] = "*i8"
+            signature["_gsan_launch_index"] = "i64"
 
         launcher = triton.runtime.driver.active.utils.launch
         expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
@@ -334,9 +344,11 @@ class CudaLauncher(object):
             device = triton.runtime.driver.active.get_current_device()
             device_rank = gsan_allocator.get_device_rank(device)
             gsan_state_ptr = gsan_allocator.get_global_state_pointer() + device_rank * GSAN_PER_DEVICE_STATE_STRIDE
-            stream_clock, kernel_id = gsan_stream_sync.get_launch_stream_clock(device, stream)
-            kernel_args = (*args, gsan_state_ptr, stream_clock, kernel_id)
+            launch_table, launch_index = gsan_stream_sync.get_launch_state(device, stream, self.launch_pdl)
+            kernel_args = (*args, gsan_state_ptr, launch_table, launch_index)
 
+        num_warps, num_ctas, _ = kernel_metadata
+        kernel_metadata = (num_warps, num_ctas, self.shared)
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
                     profile_scratch, self.arg_annotations, self.kernel_signature, kernel_args)
