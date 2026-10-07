@@ -22,6 +22,70 @@ from triton_kernels.tensor_details.ragged_tensor import make_ragged_tensor_metad
 from triton_kernels.testing import assert_close
 
 
+@pytest.mark.parametrize("block_m, num_warps, occupancy, full_grid, scaled_input", [
+    (16, 4, 4, True, False),
+    (64, 4, 4, True, False),
+    (128, 4, 2, True, False),
+    (16, 8, 2, True, False),
+    (64, 8, 2, True, False),
+    (128, 8, 1, True, False),
+    (64, 8, 1, False, False),
+    (16, 4, 1, True, True),
+    (64, 8, 1, True, True),
+])
+def test_hopper_mxfp4_compiled_occupancy_budget(block_m, num_warps, occupancy, full_grid, scaled_input, device,
+                                                monkeypatch):
+    if device != "cuda" or not is_cuda() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+
+    torch.manual_seed(0)
+    m = block_m * torch.cuda.get_device_properties(device).multi_processor_count if full_grid else 129
+    n, k = 512, 1504
+    a = torch.randn((m, k), device=device, dtype=torch.bfloat16)
+    weight = torch.randn((n, k), device=device, dtype=torch.bfloat16).T
+    values, scales = downcast_to_mxfp(weight, torch.uint8, axis=-2)
+    b = convert_layout(wrap_torch_tensor(values, dtype=FP4), layout.make_default_matmul_mxfp4_w_layout(-2))
+    b_scale = convert_layout(wrap_torch_tensor(scales, dtype=UINT8),
+                             layout.make_default_matmul_mxfp4_w_scale_layout(-2, num_warps=num_warps))
+    a_scale = None
+    if scaled_input:
+        a, a_scale = downcast_to_mxfp(a, torch.float8_e4m3fn, axis=-1)
+        a, a_scale = wrap_torch_tensor(a), wrap_torch_tensor(a_scale)
+    config = PrecisionConfig(out_dtype=torch.bfloat16, a_mx_scale=a_scale, a_microblock_size=32, b_mx_scale=b_scale,
+                             b_microblock_size=32)
+
+    # Inspect the compiled kernel, including cache hits, rather than merely
+    # asserting that the heuristic returns a particular launch option.
+    compiled = []
+    original_run = triton.runtime.JITFunction.run
+
+    def capture_kernel(self, *args, **kwargs):
+        kernel = original_run(self, *args, **kwargs)
+        if kernel is not None and kernel.name.startswith("_matmul"):
+            compiled.append(kernel)
+        return kernel
+
+    monkeypatch.setattr(triton.runtime.JITFunction, "run", capture_kernel)
+    with scoped_opt_flags_constraints(dict(block_m=block_m, is_persistent=False, split_k=1)):
+        actual = matmul(a, b, None, precision_config=config)
+    expected = matmul_torch(a, b, None, precision_config=config)
+    assert_close(actual, expected, maxtol=3e-2)
+    assert compiled
+    for kernel in compiled:
+        threads = 32 * kernel.metadata.num_warps
+        expected_cap = 65536 // (threads * occupancy) if occupancy == 16 // num_warps else None
+        assert kernel.metadata.maxnreg == expected_cap
+        assert kernel.n_regs * threads * occupancy <= 65536
+        shared_limit = torch.cuda.get_device_properties(device).shared_memory_per_multiprocessor
+        if scaled_input:
+            # The widened RHS tile prevents the 16-warp goal even with enough registers.
+            assert kernel.metadata.shared * (16 // num_warps) > shared_limit
+        else:
+            # A small grid relaxes registers without expanding the pipeline.
+            pipeline_occupancy = occupancy if full_grid else 2
+            assert kernel.metadata.shared * pipeline_occupancy <= shared_limit
+
+
 def _make_blackwell_scale_tensor():
     scale_storage = Storage(torch.empty((1, 128), dtype=torch.uint8), BlackwellMXScaleLayout())
     return Tensor(scale_storage, dtype=UINT8)
