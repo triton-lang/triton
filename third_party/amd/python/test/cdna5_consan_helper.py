@@ -353,7 +353,8 @@ def ws_two_loads_two_bars_loop():
         acc = ttgl.zeros([XBLOCK_C], ttgl.float16, layout)
         phase = 0
         for _ in range(10):
-            ttgl.amd.cdna5.mbarrier.wait(bar.index(2), phase=phase)
+            if MISSING_BAR != "2":
+                ttgl.amd.cdna5.mbarrier.wait(bar.index(2), phase=phase)
             phase = (phase + 1) % 2
             val = smem.index(0).load(layout)
             ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
@@ -365,7 +366,8 @@ def ws_two_loads_two_bars_loop():
         acc = ttgl.zeros([XBLOCK_C], ttgl.float16, layout)
         phase = 0
         for _ in range(10):
-            ttgl.amd.cdna5.mbarrier.wait(bar.index(3), phase=phase)
+            if MISSING_BAR != "3":
+                ttgl.amd.cdna5.mbarrier.wait(bar.index(3), phase=phase)
             phase = (phase + 1) % 2
             val = smem.index(0).load(layout)
             ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=1)
