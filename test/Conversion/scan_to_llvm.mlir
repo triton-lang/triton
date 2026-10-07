@@ -449,11 +449,11 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
 
 
 // After conversion, each of four logical lanes owns four consecutive values.
-// Two scan rounds compute both the inclusive total and the exclusive carry:
-// there must be no third indexed shuffle to fetch the preceding lane's prefix.
+// Two scan rounds compute the inclusive total. A third indexed shuffle
+// fetches the preceding logical lane's total as the exclusive carry.
 // The register/lane conversions use butterfly shuffles.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
-// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
+// TRANSPOSE-COUNT-3: nvvm.shfl.sync idx
 // TRANSPOSE-NOT: nvvm.shfl.sync idx
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
@@ -468,7 +468,7 @@ tt.func private @test_scan_exclusive_carry_forward(%arg: tensor<16xi32, #transpo
   tt.return %result : tensor<16xi32, #transpose>
 }
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
-// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
+// TRANSPOSE-COUNT-3: nvvm.shfl.sync idx
 // TRANSPOSE-NOT: nvvm.shfl.sync idx
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
@@ -520,7 +520,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals(
 // TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
-// TERMINAL-COUNT-2: nvvm.shfl.sync idx
+// TERMINAL-COUNT-3: nvvm.shfl.sync idx
 // TERMINAL-NOT: nvvm.shfl.sync idx
 // TERMINAL: %[[LANE_IN_SEGMENT:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
 // TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[MASK]] : i32
@@ -556,7 +556,7 @@ tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) ->
 // TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
 // TERMINAL-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
-// TERMINAL-COUNT-2: nvvm.shfl.sync idx
+// TERMINAL-COUNT-3: nvvm.shfl.sync idx
 // TERMINAL-NOT: nvvm.shfl.sync idx
 // TERMINAL: %[[LANE_IN_SEGMENT:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
 // TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[ZERO]] : i32

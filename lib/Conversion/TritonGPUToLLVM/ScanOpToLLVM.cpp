@@ -136,10 +136,9 @@ private:
                          ConversionPatternRewriter &rewriter) const {
     if (src == dst)
       return;
-    auto operands = transposeValues(values);
-    for (auto &operand : operands)
-      operand = convertLayoutWithinWarp(op.getLoc(), rewriter, src, dst,
-                                        operand, targetInfo);
+    auto operands = convertLayoutValues(
+        op.getLoc(), rewriter, op, src, dst, transposeValues(values),
+        getTypeConverter(), targetInfo, /*forceWarpShuffle=*/true);
     values = transposeValues(operands);
   }
 
@@ -158,7 +157,7 @@ private:
       }
   }
 
-  // Scan lane totals, reusing each round's shuffle for the exclusive carries.
+  // Scan lane totals, then shift the inclusive results for exclusive carries.
   void scanLaneTotals(triton::ScanOp op, ScanValues &values,
                       const LinearLayout &layout, unsigned numRegs,
                       unsigned segmentSize, Value laneId,
@@ -202,24 +201,16 @@ private:
     for (unsigned base = 0; base < values.size(); base += numRegs) {
       unsigned last = base + (reverse ? 0 : numRegs - 1);
       auto acc = values[last];
-      SmallVector<Value> prefix;
       for (auto [lane, pred] : rounds) {
         auto incoming = shuffleValues(loc, acc, lane, rewriter);
-        if (numRegs > 1) {
-          // Initialize the exclusive carry from the first shuffle, then prepend
-          // earlier groups. The boundary lane never consumes its carry.
-          if (prefix.empty())
-            prefix = incoming;
-          else
-            prefix = combineWithPrefix(op, incoming, prefix, rewriter, pred);
-        }
         acc = combineWithPrefix(op, incoming, acc, rewriter, pred);
       }
       values[last] = acc;
       if (numRegs == 1)
         continue;
-      // Skip the boundary lane without assuming an identity value.
-      Value pred = rounds.front().second;
+      // Shift by one logical lane and preserve the scan boundary.
+      auto [lane, pred] = rounds.front();
+      auto prefix = shuffleValues(loc, acc, lane, rewriter);
       for (unsigned r = base; r < base + numRegs; ++r)
         if (r != last)
           values[r] = combineWithPrefix(op, prefix, values[r], rewriter, pred);
