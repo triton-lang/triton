@@ -9,6 +9,7 @@ from triton._C.libtriton import amd
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import (
     GPUDriver,
+    TensorDescABI,
     decompose_descriptor,
     expand_signature,
     get_kernel_argument_layout,
@@ -276,11 +277,12 @@ class HIPLauncher(object):
     def __init__(self, src, metadata):
         signature = dict(src.signature)
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
+        tensordesc_abi = TensorDescABI.HIP_TDM if tensordesc_meta else TensorDescABI.DECOMPOSED
         utils = triton.runtime.driver.active.utils
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "tensordesc")
+        expanded_signature = expand_signature(signature.values(), tensordesc_abi)
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = utils.build_signature_metadata(
-            [ty for _, ty in get_kernel_argument_layout(signature.values(), tensordesc_meta)])
+            [ty for _, ty in get_kernel_argument_layout(signature.values(), tensordesc_abi)])
         self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta)
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.warp_size = metadata.warp_size

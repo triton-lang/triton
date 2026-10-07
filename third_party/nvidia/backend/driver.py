@@ -12,6 +12,7 @@ from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import (
     GPUDriver,
+    TensorDescABI,
     decompose_descriptor,
     expand_signature,
     get_kernel_argument_layout,
@@ -259,6 +260,7 @@ class CudaLauncher(object):
     def __init__(self, src, metadata):
         signature = dict(src.signature)
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
+        tensordesc_abi = TensorDescABI.CUDA_TMA if tensordesc_meta else TensorDescABI.DECOMPOSED
 
         self.gsan_enabled = is_enabled(metadata, "gsan")
         self.shared = metadata.shared
@@ -277,10 +279,10 @@ class CudaLauncher(object):
             signature["_gsan_launch_index"] = "i64"
 
         utils = triton.runtime.driver.active.utils
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
+        expanded_signature = expand_signature(signature.values(), tensordesc_abi)
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = utils.build_signature_metadata(
-            [ty for _, ty in get_kernel_argument_layout(signature.values(), tensordesc_meta, "nvTmaDesc")])
+            [ty for _, ty in get_kernel_argument_layout(signature.values(), tensordesc_abi)])
         self.num_ctas = getattr(metadata, "num_ctas", 1)
         self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta)
         self.global_scratch_size = metadata.global_scratch_size

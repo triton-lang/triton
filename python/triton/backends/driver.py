@@ -1,4 +1,5 @@
 from abc import ABCMeta, abstractmethod
+from enum import Enum
 import re
 from typing import Callable, List, Protocol, Sequence
 
@@ -60,20 +61,27 @@ def _parse_descriptor(descriptor):
     return (dtype, ndim)
 
 
-def _expand_descriptor(descriptor, has_tensordesc_meta, descriptor_type):
+class TensorDescABI(Enum):
+    """How a tensor descriptor is passed to a compiled kernel."""
+    DECOMPOSED = None
+    CUDA_TMA = "nvTmaDesc"
+    HIP_TDM = "tensordesc"
+
+
+def _expand_descriptor(descriptor, tensordesc_abi):
     dtype, ndim = _parse_descriptor(descriptor)
     expanded = []
 
-    # If there is no descriptor metadata, the descriptor was decomposed to:
-    # base pointer, shape, strides, padding, round_f32_to_tf32.
-    if not has_tensordesc_meta:
+    # Decomposed descriptors contain the base pointer, shape, strides,
+    # padding and round_f32_to_tf32.
+    if tensordesc_abi is TensorDescABI.DECOMPOSED:
         expanded.append("*" + dtype)
         for _ in range(2 * ndim):
             expanded.append("i64")
         expanded.append("i1")
         expanded.append("i1")
     else:
-        expanded.append(descriptor_type)
+        expanded.append(tensordesc_abi.value)
 
     for _ in range(ndim):
         expanded.append("i32")
@@ -82,14 +90,12 @@ def _expand_descriptor(descriptor, has_tensordesc_meta, descriptor_type):
     return expanded
 
 
-def expand_signature(signature, tensordesc_meta, descriptor_type):
-    has_tensordesc_meta = bool(tensordesc_meta)
-
+def expand_signature(signature, tensordesc_abi: TensorDescABI):
     result = []
 
     def visit(signature, result):
         if _is_descriptor(signature):
-            result.extend(_expand_descriptor(signature, has_tensordesc_meta, descriptor_type))
+            result.extend(_expand_descriptor(signature, tensordesc_abi))
             return
         elif isinstance(signature, tuple):
             inner = []
@@ -105,7 +111,7 @@ def expand_signature(signature, tensordesc_meta, descriptor_type):
     return result
 
 
-def get_kernel_argument_layout(signature, tensordesc_meta=None, descriptor_type="tensordesc"):
+def get_kernel_argument_layout(signature, tensordesc_abi: TensorDescABI = TensorDescABI.DECOMPOSED):
     """Return ``(source_path, parameter_type)`` pairs in launch order.
 
     ``signature`` is a sequence of type strings and nested tuples, such as
@@ -113,15 +119,16 @@ def get_kernel_argument_layout(signature, tensordesc_meta=None, descriptor_type=
     constexpr leaves are omitted. Each expanded tensor-descriptor field uses
     the descriptor's source path, in the order used by the launcher.
 
-    Pass the compiled ``tensordesc_meta`` and the backend's descriptor type
-    (``"nvTmaDesc"`` for CUDA, ``"tensordesc"`` for HIP). This function needs
-    no active device or driver. Launcher-added scratch arguments are excluded.
+    ``tensordesc_abi`` selects decomposed descriptors, CUDA TMA descriptors,
+    or HIP TDM descriptors. The default is ``TensorDescABI.DECOMPOSED``.
+    This function needs no active device or driver. Launcher-added scratch
+    arguments are excluded.
     """
     signature = tuple(signature)
     result = []
     for path in find_paths_if(signature, lambda _, ty: ty != "constexpr"):
         ty = get_iterable_path(signature, path)
-        types = _expand_descriptor(ty, bool(tensordesc_meta), descriptor_type) if _is_descriptor(ty) else (ty, )
+        types = _expand_descriptor(ty, tensordesc_abi) if _is_descriptor(ty) else (ty, )
         result.extend((path, ty) for ty in types)
     return result
 
