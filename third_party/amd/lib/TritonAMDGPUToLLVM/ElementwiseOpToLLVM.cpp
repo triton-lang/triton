@@ -19,6 +19,7 @@ using mlir::getElementTypeOrSelf;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::ElementwiseOpConversion;
 using mlir::triton::gpu::ElementwiseOpConversionBase;
+using mlir::triton::gpu::ElementwiseToIntrinsicOpConversion;
 using mlir::triton::gpu::getFunctionType;
 using mlir::triton::gpu::MultipleOperandsRange;
 using triton::amdgpu::ISAFamily;
@@ -55,9 +56,12 @@ struct PackedArithOpConversion
     if (operands.size() < 2 || !(elemTy.isF32() || elemTy.isBF16()))
       return {};
 
-    Value va = packLLVector(loc, {operands[0][0], operands[1][0]}, rewriter);
-    Value vb = packLLVector(loc, {operands[0][1], operands[1][1]}, rewriter);
-    Value vr = LLVMOp::create(rewriter, loc, va.getType(), va, vb);
+    SmallVector<Value> packedOperands;
+    for (unsigned i = 0, e = operands[0].size(); i < e; ++i)
+      packedOperands.push_back(
+          packLLVector(loc, {operands[0][i], operands[1][i]}, rewriter));
+    Value vr = LLVMOp::create(rewriter, loc, packedOperands[0].getType(),
+                              packedOperands);
     return unpackLLVector(loc, vr, rewriter);
   }
 };
@@ -475,8 +479,8 @@ void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo) {
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
-    const TargetInfo &targetInfo, PatternBenefit benefit) {
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfo &targetInfo,
+    PatternBenefit benefit) {
 
   // fmin (return NaN if either op is NaN)
   patterns.add<ElementwiseOpConversion<arith::MinimumFOp, LLVM::MinimumOp>>(
@@ -486,6 +490,8 @@ void populateElementwiseOpToLLVMPatterns(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<triton::PreciseDivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseToIntrinsicOpConversion<triton::ApproxDivFOp>>(
+      typeConverter, axisInfoAnalysis, "llvm.amdgcn.fdiv.fast", benefit);
   patterns.add<ElementwiseOpConversion<triton::PreciseSqrtOp, LLVM::SqrtOp>>(
       typeConverter, axisInfoAnalysis, benefit);
 
@@ -496,6 +502,8 @@ void populateElementwiseOpToLLVMPatterns(
     patterns.add<PackedArithOpConversion<arith::AddFOp, LLVM::FAddOp>>(
         typeConverter, axisInfoAnalysis, gfx1250Benefit);
     patterns.add<PackedArithOpConversion<arith::MulFOp, LLVM::FMulOp>>(
+        typeConverter, axisInfoAnalysis, gfx1250Benefit);
+    patterns.add<PackedArithOpConversion<math::FmaOp, LLVM::FMAOp>>(
         typeConverter, axisInfoAnalysis, gfx1250Benefit);
   }
 

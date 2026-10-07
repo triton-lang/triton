@@ -5,14 +5,17 @@ from triton import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
 from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
-from .._ops import _scaled_upcast
+from .._layouts import AMDMFMALayout
+from .._ops import _scaled_upcast, get_scaled_upcast_fp4_scale_layout
+from ..._semantic import _check
 
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
     "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or",
-    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast"
+    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast",
+    "get_scaled_upcast_fp4_scale_layout"
 ]
 
 _atomic_op_str_to_op = {
@@ -162,8 +165,28 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
 
 
+# Attribute that carries `cd_regclass` on the dot op; read by the MFMA lowering.
+_CD_REGCLASS_ATTR = "amdg.cd_regclass"
+
+
+def _check_cd_regclass(cd_regclass, acc):
+    """Validate `cd_regclass` ("a" = AGPRs, "v" = VGPRs, None) for an MFMA on `acc`, and return it unwrapped."""
+    cd_regclass = _unwrap_if_constexpr(cd_regclass)
+    if cd_regclass is not None:
+        _check(cd_regclass in ("a", "v"), lambda: f"cd_regclass must be None, 'a' or 'v', got {cd_regclass!r}")
+        _check(isinstance(acc.type.layout, AMDMFMALayout),
+               lambda: f"cd_regclass requires an accumulator with AMDMFMALayout, got {acc.type.layout}")
+    return cd_regclass
+
+
+def _set_cd_regclass(handle, cd_regclass, semantic):
+    """Record a checked `cd_regclass` on the dot op that defines `handle`."""
+    if cd_regclass is not None:
+        handle.set_attr(_CD_REGCLASS_ATTR, semantic.builder.get_string_attr(cd_regclass))
+
+
 @builtin
-def mfma(a, b, acc, _semantic: GluonSemantic = None):
+def mfma(a, b, acc, cd_regclass=None, _semantic: GluonSemantic = None):
     """
     Computes matrix multiplication ``a * b + acc`` using AMD native matrix core units.
 
@@ -171,13 +194,19 @@ def mfma(a, b, acc, _semantic: GluonSemantic = None):
         a (tensor): The first operand of mfma.
         b (tensor): The second operand of mfma.
         acc (tensor): The accumulator tensor.
+        cd_regclass (str, optional): Experimental. Register class for the accumulator input (C)
+            and result (D) of the MFMA instructions: ``"a"`` for AGPRs or ``"v"`` for VGPRs.
+            Requires an ``AMDMFMALayout`` accumulator. ``None`` (default) leaves the choice to
+            the compiler.
     """
     assert acc is not None, "acc is required"
     ret_type = acc.type
     acc = ttgl._unwrap_if_constexpr(acc)
 
+    cd_regclass = _check_cd_regclass(cd_regclass, acc)
     handle = _semantic.dot(a, b, acc, input_precision=knobs.language.fp32_default, max_num_imprecise_acc=None,
                            out_dtype=acc.dtype).handle
+    _set_cd_regclass(handle, cd_regclass, _semantic)
     return ttgl.tensor(handle, ret_type)
 
 

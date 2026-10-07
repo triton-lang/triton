@@ -3,6 +3,9 @@ import triton.language as tl
 
 import torch
 import math
+import subprocess
+import sys
+import textwrap
 import pytest
 
 _BLOCK_SIZE = 16
@@ -22,6 +25,33 @@ def test_llvm_ir_to_bitcode_reports_invalid_ir():
 
     with pytest.raises(RuntimeError, match="failed to parse LLVM IR.*expected top-level entity"):
         llvm.to_bitcode("invalid LLVM IR")
+
+
+def test_binding_classes_released_at_shutdown():
+    script = textwrap.dedent("""
+        import os
+        from triton._C.libtriton import gluon_ir, ir
+        from triton.experimental.gluon.language import BlockedLayout
+
+        class ShutdownSentinel:
+            def __init__(self, message):
+                self.message = message
+
+            def __del__(self, write=os.write):
+                write(1, self.message)
+
+        ir.builder._shutdown_sentinel = ShutdownSentinel(b"builder released\\n")
+        context = ir.context()
+        ir.load_dialects(context)
+        builder = gluon_ir.GluonOpBuilder(context)
+        layout = BlockedLayout([1], [32], [4], [0])._to_ir(builder)
+        result = builder.to_linear_layout(layout, [128])
+        type(result)._shutdown_sentinel = ShutdownSentinel(b"layout released\\n")
+        del result, layout, builder, context
+    """)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+    assert set(result.stdout.splitlines()) == {"builder released", "layout released"}, result.stderr
+    assert "nanobind: leaked" not in result.stderr
 
 
 @triton.jit

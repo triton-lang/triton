@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -100,9 +101,13 @@ public:
     if (splatCond != condSelect)
       return failure();
 
-    rewriter.replaceOpWithNewOp<LoadOp>(
-        op, loadOp.getPtr(), loadOp.getMask(), /*other=*/falseValue,
-        loadOp.getCachePolicyAttr(), loadOp.getIsVolatile());
+    if (!loadOp.getResult().hasOneUse() ||
+        !DominanceInfo().properlyDominates(falseValue, loadOp))
+      return failure();
+
+    rewriter.modifyOpInPlace(
+        loadOp, [&] { loadOp.getOtherMutable().assign(falseValue); });
+    rewriter.replaceOp(op, loadOp.getResult());
     return success();
   }
 };
@@ -185,29 +190,6 @@ public:
                                                   rewriter.getF32FloatAttr(0)));
     rewriter.replaceOpWithNewOp<DotOp>(op, lhs, rhs, newAcc,
                                        InputPrecision::IEEE, 0);
-    return success();
-  }
-};
-
-// When reducing a 1D tensor the order of elements of the tensor doesn't matter.
-// Therefore we can relax the reshape to allow it to re-order elements.
-class CombineReshapeReducePatterns : public mlir::OpRewritePattern<ReshapeOp> {
-public:
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::ReshapeOp reshapeOp,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (reshapeOp.getAllowReorder())
-      return failure();
-    if (reshapeOp.getType().getRank() != 1)
-      return failure();
-    for (Operation *user : reshapeOp->getUsers()) {
-      if (!isa<triton::ReduceOp, triton::HistogramOp>(user))
-        return failure();
-    }
-    rewriter.modifyOpInPlace(reshapeOp,
-                             [&]() { reshapeOp.setAllowReorder(true); });
     return success();
   }
 };
@@ -303,7 +285,6 @@ public:
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
-    patterns.add<CombineReshapeReducePatterns>(context);
     patterns.add<RankedReduceDescriptorLoads>(context);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())

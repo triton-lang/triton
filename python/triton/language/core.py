@@ -380,7 +380,7 @@ def _unwrap_if_constexpr(o):
 def _normalize_tuple(t):
     normalized_tuple = _unwrap_if_constexpr(t)
     if isinstance(normalized_tuple, (list, builtins.tuple)):
-        normalized_tuple = tuple(normalized_tuple)
+        normalized_tuple = tuple(_normalize_tuple(x) for x in normalized_tuple)
     return normalized_tuple
 
 
@@ -1039,66 +1039,66 @@ class tensor(base_value):
     # >
     @builtin
     def __gt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_than(self, other)
 
     @builtin
     def __rgt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_than(other, self)
 
     # >=
     @builtin
     def __ge__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_equal(self, other)
 
     @builtin
     def __rge__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_equal(other, self)
 
     # <
     @builtin
     def __lt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_than(self, other)
 
     @builtin
     def __rlt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_than(other, self)
 
     # <=
     @builtin
     def __le__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_equal(self, other)
 
     @builtin
     def __rle__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_equal(other, self)
 
     # ==
     @builtin
     def __eq__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.equal(self, other)
 
     @builtin
     def __req__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.equal(other, self)
 
     @builtin
     def __ne__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.not_equal(self, other)
 
     @builtin
     def __rne__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.not_equal(other, self)
 
     @builtin
@@ -1124,12 +1124,16 @@ class tensor(base_value):
         if isinstance(slices, tuple):
             slices = slices.values
         ret = self
+        src_rank = len(self.shape)
+        indexed_dims = 0
         for dim, sl in enumerate(slices):
             if _unwrap_if_constexpr(sl) is None:
                 ret = _semantic.expand_dims(ret, dim)
             elif isinstance(sl, (builtins.slice, slice)) and all(
                     _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
-                pass  # an unsqueeze
+                indexed_dims += 1
+                if indexed_dims > src_rank:
+                    raise ValueError(f"too many indices for tensor of rank {src_rank}")
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
         return ret
@@ -1272,6 +1276,12 @@ class tensor(base_value):
         ...
 
     def ravel(self) -> tensor:
+        ...
+
+    def all(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
+    def any(self, axis=None, keep_dims=False) -> tensor:
         ...
 
     def max(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
@@ -1779,6 +1789,9 @@ def _aggregate(cls):
     aggregate_value.__module__ = cls.__module__
     aggregate_value.__qualname__ = cls.__qualname__
     aggregate_value.__doc__ = cls.__doc__
+    # Preserve the original class location for inspect.getsource on Python 3.13+.
+    if "__firstlineno__" in cls.__dict__:
+        aggregate_value.__firstlineno__ = cls.__firstlineno__
     aggregate_value.__aggregate_fields__ = builtins.tuple(all_annotations.keys())
     aggregate_value.__aggregate_defaults__ = dict(all_defaults)
 
@@ -2836,9 +2849,7 @@ def expect_zero(x, mask, _semantic=None):
     if is_enabled(_semantic.builder.options, "fpsan"):
         return _semantic.where(mask, 0, x)
     if _semantic.builder.options.debug:
-        x_tensor = _semantic.to_tensor(x)
-        zero = _semantic.to_tensor(0)
-        cond = _semantic.or_(_semantic.equal(x_tensor, zero), _semantic.not_(mask))
+        cond = _semantic.or_(_semantic.equal(x, 0), _semantic.not_(mask))
         _semantic.device_assert(cond, "expect_zero expected x == 0 where mask is true", None)
     return x
 
@@ -2952,9 +2963,9 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _semantic=N
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    min = _semantic.to_tensor(min)
-    max = _semantic.to_tensor(max)
+    x = _unwrap_if_constexpr(x)
+    min = _unwrap_if_constexpr(min)
+    max = _unwrap_if_constexpr(max)
 
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
 

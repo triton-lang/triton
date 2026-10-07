@@ -9,6 +9,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -120,9 +121,13 @@ unsigned getElementBitWidth(RankedTensorType type) {
 }
 
 static std::optional<unsigned>
-getAtomicWriteElementsPerThreadCap(Operation *op) {
-  if (isa<triton::AtomicLoadOp, triton::AtomicStoreOp>(op))
-    return 1;
+getAtomicElementsPerThreadCap(Operation *op, unsigned bitWidth) {
+  auto moduleOp = op->getParentOfType<ModuleOp>();
+  if (isa<triton::AtomicLoadOp, triton::AtomicStoreOp>(op)) {
+    auto targetInfo = TargetInfoBase::fromModuleOp(moduleOp);
+    return targetInfo ? targetInfo->getMaxAtomicLoadStoreVectorSize(bitWidth)
+                      : 1;
+  }
   if (isa<triton::AtomicCASOp>(op))
     return 1;
 
@@ -134,8 +139,6 @@ getAtomicWriteElementsPerThreadCap(Operation *op) {
   if (elemTy.isInteger() || elemTy.isF64())
     return 1;
 
-  auto moduleOp = op->getParentOfType<ModuleOp>();
-
   if (moduleOp && getAMDArch(moduleOp)) {
     unsigned elemBitwidth = elemTy.getIntOrFloatBitWidth();
     return std::max(1u, 32u / elemBitwidth);
@@ -144,10 +147,8 @@ getAtomicWriteElementsPerThreadCap(Operation *op) {
   if (atomicRmw.getAtomicRmwOp() != RMWOp::FADD)
     return std::nullopt;
 
-  auto targetAttr =
-      moduleOp ? moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName)
-               : nullptr;
-  if (!targetAttr || !targetAttr.getValue().starts_with("cuda:"))
+  auto targetInfo = TargetInfoBase::fromModuleOp(moduleOp);
+  if (!targetInfo || !targetInfo->isCuda())
     return std::nullopt;
 
   int computeCapability = getNVIDIAComputeCapability(moduleOp);
@@ -165,15 +166,12 @@ static unsigned getMaxElementsPerThread(Operation *op) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   unsigned elemNumBits = getElementBitWidth(ty);
-  unsigned maxElementsPerThread = 128 / elemNumBits;
   // Some atomic lowerings are narrower than a plain store. TTGIR currently
   // exposes the target architecture but not the PTX version, so we only cap
   // cases that are unambiguous from the available target metadata and the
   // current backend lowering.
-  if (auto atomicCap = getAtomicWriteElementsPerThreadCap(op)) {
-    maxElementsPerThread = std::min(maxElementsPerThread, *atomicCap);
-  }
-  return maxElementsPerThread;
+  return getAtomicElementsPerThreadCap(op, elemNumBits)
+      .value_or(128 / elemNumBits);
 }
 
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
@@ -320,7 +318,7 @@ std::string GraphDumper::emitEdge(const std::string &srcId,
 
 std::string GraphDumper::emitValueNode(Value value) const {
   NodeInfo info = onValue(value);
-  if (info.find("label") == info.end()) {
+  if (!info.contains("label")) {
     std::string shapeStr = getShapeStr(value.getType());
     if (auto arg = mlir::dyn_cast<BlockArgument>(value))
       info["label"] =
@@ -333,7 +331,7 @@ std::string GraphDumper::emitValueNode(Value value) const {
 
 std::string GraphDumper::emitOperationNode(Operation *op) const {
   NodeInfo info = onOperation(op);
-  if (info.find("label") == info.end())
+  if (!info.contains("label"))
     info["label"] = op->getName().getStringRef().str();
   return emitNode(getUniqueId(op), info);
 }
@@ -661,6 +659,17 @@ bool isExpensiveLoadOrStore(Operation *op) {
 
 std::optional<SmallVector<OpOperand *>>
 canUseResultEncoding(Operation *op, Attribute targetEncoding) {
+  if (auto broadcast = dyn_cast<triton::BroadcastOp>(op)) {
+    auto dstType = broadcast.getType().cloneWithEncoding(targetEncoding);
+    auto srcType = broadcast.getSrc().getType();
+    if (failed(srcType.getEncoding()
+                   .getDialect()
+                   .getRegisteredInterface<DialectInferLayoutInterface>()
+                   ->verifyBroadcastOpEncoding(srcType, dstType)))
+      return std::nullopt;
+    return SmallVector<OpOperand *>{&broadcast.getSrcMutable()};
+  }
+
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -692,10 +701,8 @@ bool canBeRematerialized(Operation *op) {
     return !isExpensiveLoadOrStore(op);
   if (isa<AtomicOpInterface, DotOpInterface>(op))
     return false;
-  if (auto gather = dyn_cast<GatherOp>(op))
-    return !gather.getEfficientLayout();
-  if (auto reshape = dyn_cast<ReshapeOp>(op))
-    return !reshape.getEfficientLayout();
+  if (ttg::hasEfficientLayout(op))
+    return false;
 
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;

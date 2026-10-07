@@ -26,6 +26,13 @@ struct TMemLdStEncodingInfo {
   bool padding = false;
 };
 
+// Map registers, lanes, and all warps to physical TMEM rows and element
+// columns. Preserve warp-addressable replicas when the memory layout broadcasts
+// rows.
+FailureOr<LinearLayout>
+computeTMemLdStLayout(RankedTensorType regTy, gpu::MemDescType memTy,
+                      std::function<InFlightDiagnostic()> emitError = {});
+
 FailureOr<TMemLdStEncodingInfo>
 computeTMemLdStEncodingInfo(RankedTensorType regTy, gpu::MemDescType memTy,
                             int maxnreg,

@@ -219,7 +219,7 @@ def test_gsan_runner_isolates_distributed_tests_when_multiple_gpus_are_visible(m
     assert _test_runner._gsan(SimpleNamespace(num_gpus=num_gpus, num_procs=24)) == 0
     assert len(commands) == num_gpus
     assert commands[0][0][commands[0][0].index("-n") + 1] == str(8 * num_gpus)
-    assert all(kwargs["timeout"] == 180 for _, kwargs in commands)
+    assert all(kwargs["timeout"] == 300 for _, kwargs in commands)
     assert all(kwargs["environment"]["TRITON_TEST_PROCESS_TIMEOUT"] == "90" for _, kwargs in commands)
     if num_gpus == 1:
         assert "not xdist_group" not in commands[0][0]
@@ -425,13 +425,25 @@ def test_compilation_trace_grades_attempted_warmup_tests(tmp_path):
 
 def test_is_lazy():
     from importlib import reload
-    reload(sys.modules["triton.runtime.driver"])
-    reload(sys.modules["triton.runtime"])
-    assert triton.runtime.driver._active is None
-    assert triton.runtime.driver._default is None
-    assert isinstance(triton.runtime.driver.active, getattr(triton.backends.driver, "DriverBase"))
-    assert isinstance(triton.runtime.driver.default, getattr(triton.backends.driver, "DriverBase"))
-    utils = triton.runtime.driver.active.utils  # noqa: F841
+    driver_module = sys.modules["triton.runtime.driver"]
+    original = driver_module.driver
+    try:
+        reload(driver_module)
+        reload(sys.modules["triton.runtime"])
+        assert triton.runtime.driver._active is None
+        assert triton.runtime.driver._default is None
+        assert isinstance(triton.runtime.driver.active, getattr(triton.backends.driver, "DriverBase"))
+        assert isinstance(triton.runtime.driver.default, getattr(triton.backends.driver, "DriverBase"))
+        utils = triton.runtime.driver.active.utils  # noqa: F841
+    finally:
+        # The reloads build a second DriverConfig. Modules that imported the
+        # singleton by value keep the first one, so leaving the second in place
+        # splits the process: patching one config is then invisible to code
+        # reading the other.
+        driver_module.driver = original
+        triton.runtime.driver = original
+
+    assert triton.runtime.driver is triton.compiler.compiler.driver
 
 
 def test_profile_scratch_stream_zero_uses_default_stream(monkeypatch):

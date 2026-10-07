@@ -4,12 +4,22 @@
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/ArrayRef.h"
+#include <functional>
+#include <memory>
 
 namespace mlir::triton {
 enum class ProgramIDDim : uint32_t;
 
 class TargetInfoBase {
 public:
+  using Factory = std::function<std::unique_ptr<TargetInfoBase>(ModuleOp)>;
+
+  // Register during backend initialization, before running compiler passes.
+  static void registerFactory(StringRef target, Factory factory);
+
+  // Returns null when the module has no registered target.
+  static std::unique_ptr<TargetInfoBase> fromModuleOp(ModuleOp moduleOp);
+
   virtual bool supportMaximumMinimum() const = 0;
 
   virtual Value getClusterCTAId(RewriterBase &rewriter, Location loc) const = 0;
@@ -22,6 +32,22 @@ public:
 
   // Return the LLVM synchronization scope for an atomic operation.
   virtual StringRef getAtomicSyncScope(MemSyncScope scope) const = 0;
+
+  virtual unsigned getMaxAtomicLoadStoreVectorSize(unsigned bitWidth) const {
+    return 1;
+  }
+
+  // Emit a relaxed atomic load of a scalar or vector, aligned to its full size.
+  // A null predicate enables all threads; a false predicate suppresses the
+  // memory access and leaves the result unspecified.
+  virtual Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                            Type valueTy, Value pred,
+                            MemSyncScope scope) const = 0;
+
+  // Emit a relaxed atomic store with the same alignment and predication rules.
+  virtual void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                            Value value, Value pred,
+                            MemSyncScope scope) const = 0;
 
   // Emit a block/CTA level barrier that guarantees visibility for the
   // target address space
@@ -73,9 +99,12 @@ public:
   virtual Value programId(RewriterBase &rewriter, Location loc,
                           ModuleOp moduleOp, ProgramIDDim axis) const = 0;
 
+  // reduceLaneIdMask identifies lane-ID bits reduced by this step.
+  // broadcastLaneIdMask identifies zero lane bases in this step's layout.
   virtual bool warpReduce(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
-                          unsigned reduceLaneIdMask) const = 0;
+                          unsigned reduceLaneIdMask,
+                          unsigned broadcastLaneIdMask) const = 0;
 
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of
@@ -113,6 +142,7 @@ public:
   virtual bool supportLdStMatrixB8() const { return false; }
   virtual bool supportBitwidth16Elementwise() const { return false; }
   virtual bool supportBitwidth32Elementwise() const { return false; }
+  virtual bool supportsTcgen05() const { return false; }
 
   // Returns the preferred arity of the in-thread reduction tree for the given
   // combiner operation. The default is 2 (binary tree). Targets that have
@@ -126,11 +156,6 @@ public:
   // Returns the shared memory partition size in bytes. A value of 0 means
   // shared memory is not partitioned.
   virtual size_t getSharedMemoryPartitionSize() const { return 0; }
-
-  // Annotate target specific information to local load operations during
-  // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
-  virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                                     Operation *llLoadOp) const {}
 
   // Returns bases of lanes {LoadBases, StoreBases} that are active in a
   // single hardware cycle for shared memory loads and stores.

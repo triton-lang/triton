@@ -39,7 +39,10 @@ def min_dot_size(target: GPUTarget):
 
 
 def get_ptxas(arch: int) -> knobs.NvidiaTool:
-    return knobs.nvidia.ptxas_blackwell if arch >= 100 else knobs.nvidia.ptxas
+    if arch < 90:
+        return knobs.nvidia.ptxas
+    # The ptxas-blackwell name is misleading; keep it until legacy ptxas is removed.
+    return knobs.nvidia.ptxas_blackwell
 
 
 @functools.lru_cache()
@@ -79,6 +82,8 @@ def get_ptx_version_from_options(options, arch: int):
     if ptx_version is None:
         cuda_version = get_ptxas(arch).version
         ptx_version = ptx_get_version(cuda_version)
+    if arch == 107 and ptx_version < 94:
+        raise ValueError("SM107 requires PTX 9.4 or later")
     return ptx_version
 
 
@@ -91,12 +96,12 @@ def get_llvm_flags():
 def get_features(options, arch: int):
     ptx_version = get_ptx_version_from_options(options, arch)
 
-    # PTX 8.6 is the max version supported by llvm 979132a0.
+    # PTX 9.4 is the max version supported by LLVM b010a18d.
     #
     # To check if a newer PTX version is supported, increase this value
     # and run a test.  If it's not supported, LLVM will print a warning
     # like "+ptx8.4 is not a recognized feature for this target".
-    llvm_ptx_version = min(90, ptx_version)
+    llvm_ptx_version = min(94, ptx_version)
     features = f'+ptx{llvm_ptx_version}'
     return features
 
@@ -122,10 +127,13 @@ class CUDAOptions:
     # maxnreg corresponds to the ptx parameter .maxnreg, which controls the
     # maximum number of 32-bit registers used by one thread.
     maxnreg: Optional[int] = None
+    # Limit resident CTAs per SM by reserving shared memory at launch time.
+    # Other resource limits can reduce occupancy further. None adds no limit.
+    max_occupancy: Optional[int] = None
     ptx_version: int = None
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
-    enable_fp_fusion: bool = True
+    enable_fp_fusion: bool = False
     sched4reg: bool = False
     enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False
@@ -143,9 +151,10 @@ class CUDAOptions:
     arch: str = None
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
-    min_shared_mem: Optional[int] = None
 
     def __post_init__(self):
+        if self.max_occupancy is not None and (type(self.max_occupancy) is not int or self.max_occupancy <= 0):
+            raise ValueError("max_occupancy must be a positive integer or None")
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
@@ -221,6 +230,9 @@ class CUDABackend(BaseBackend):
         if args.get("instrumentation_mode", ""):
             # Instrumentation can require more registers than the user-specified limit.
             args["maxnreg"] = None
+        if is_enabled(args, "gsan"):
+            # GSan identifies CTAs by SM and requires at most one CTA per SM.
+            args["max_occupancy"] = 1
         capability = int(self._parse_arch(args["arch"]))
 
         if args.get("clc", False) and capability < 100:
@@ -241,14 +253,7 @@ class CUDABackend(BaseBackend):
             if capability >= 90:
                 args["deprecated_fp8_dot_operand_dtypes"] = ("fp8e4b15", )
 
-        if "enable_fp_fusion" not in args:
-            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
-
-        if is_enabled(args, "gsan"):
-            from triton.runtime.driver import driver
-            device = driver.active.get_current_device()
-            device_max = driver.active.utils.get_device_properties(device)["max_shared_mem"]
-            args["min_shared_mem"] = max(args.get("min_shared_mem", 0), device_max)
+        args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
 
         args["max_num_imprecise_acc_default"] = 2**30 if capability == 90 else 0
 
@@ -332,10 +337,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
         elif capability // 10 >= 10:
-            # FPSan emulates floating-point MMA with integer arithmetic. Flattened
-            # persistent loops and warp specialization can cause excessive spills.
-            if not is_enabled(opt, "fpsan"):
-                passes.ttgpuir.add_fuse_nested_loops(pm)
+            passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttir.add_triton_licm(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
@@ -343,8 +345,7 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-            if not is_enabled(opt, "fpsan"):
-                passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
+            passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_optimize_partition_warps(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
@@ -425,7 +426,6 @@ class CUDABackend(BaseBackend):
 
         if is_enabled(options, "gsan"):
             # GSan introduces layout conversions, so it must run before shared-memory allocation.
-            mod.set_attr("tti.gsan_launch_pdl", ir.builder(mod.context).get_int32_attr(int(options.launch_pdl)))
             passes.ttgpuir.add_global_sanitizer(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
@@ -439,9 +439,9 @@ class CUDABackend(BaseBackend):
         # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
-        nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
         nvidia.passes.ttgpuir.add_membar(pm, capability, ptx_version)
-        nvidia.passes.ttnvgpuir.add_tmem_wait_insertion(pm)
+        nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
+        nvidia.passes.ttnvgpuir.add_optimize_mbarrier_arrivals(pm)
         if is_enabled(options, "consan"):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
@@ -450,8 +450,6 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_initialize_ws_cluster_barriers(pm, capability, ptx_version)
-        if options.min_shared_mem is not None:
-            nvidia.passes.ttgpuir.add_set_minimum_shared_memory(pm, options.min_shared_mem)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
         # Lower Proton segment values before warp specialization captures partition operands.
@@ -494,13 +492,8 @@ class CUDABackend(BaseBackend):
                 "Address Sanitizer Error: Address sanitizer is currently only supported on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
 
-        if capability == 107:
-            cap_llvm = 100
-        else:
-            cap_llvm = capability
-
-        proc = sm_arch_from_capability(cap_llvm)
-        features = get_features(options, cap_llvm)
+        proc = sm_arch_from_capability(capability)
+        features = get_features(options, capability)
         triple = 'nvptx64-nvidia-cuda'
         flags = get_llvm_flags()
         llvm.attach_datalayout(llvm_mod, triple, proc, features, flags)
@@ -547,13 +540,8 @@ class CUDABackend(BaseBackend):
 
         triple = 'nvptx64-nvidia-cuda'
 
-        if capability == 107:
-            cap_llvm = 100
-        else:
-            cap_llvm = capability
-
-        proc = sm_arch_from_capability(cap_llvm)
-        features = get_features(opt, cap_llvm)
+        proc = sm_arch_from_capability(capability)
+        features = get_features(opt, capability)
         flags = get_llvm_flags()
         canonicalize_gep = is_enabled(opt, "fpsan")
         ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep,

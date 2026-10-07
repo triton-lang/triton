@@ -1975,6 +1975,7 @@ _TCGEN05_MMA_SCALED_CASES = [
                      id=f"{type_a}-{type_b}-mxfp-minimum") for type_a, type_b in _TCGEN05_SCALED_DTYPES
     ],
     pytest.param("e2m1", "e2m1", 128, 128, 64, 16, "e4m3", id="e2m1-e2m1-nvfp4-minimum"),
+    pytest.param("e2m1", "e2m1", 128, 128, 256, 16, "e4m3", id="e2m1-e2m1-nvfp4-wide-scales"),
 ]
 
 
@@ -2618,7 +2619,7 @@ def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
         smem_layout_a: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float32,
                                                                            cga_layout=((1, 0), ))
         smem_layout_b: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float32,
-                                                                           cga_layout=((0, 1), ))
+                                                                           transposed=True, cga_layout=((0, 1), ))
         smem_a = gl.allocate_shared_memory(gl.float32, [BLOCK_M, BLOCK_K], smem_layout_a, a_tile)
         smem_b = gl.allocate_shared_memory(gl.float32, [BLOCK_K, BLOCK_N], smem_layout_b, b_tile)
 
@@ -3113,7 +3114,7 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, scale_shape, two_
         if TWO_CTAS:
             mma_a_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([256, 64], gl.float32,
                                                                               cga_layout=((1, 0), ))
-            mma_b_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([64, 128], gl.float32,
+            mma_b_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([64, 128], gl.float32, transposed=True,
                                                                               cga_layout=((0, 1), ))
             mma_a = gl.allocate_shared_memory(gl.float32, [256, 64], mma_a_layout)
             mma_b = gl.allocate_shared_memory(gl.float32, [64, 128], mma_b_layout)
@@ -3443,3 +3444,44 @@ def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, f
     kernel[(1, )](aw, bw, cw, outw, BLOCK_M=m, BLOCK_N=n, BLOCK_K=k, INSTR_SHAPE_K=instr_k, K_WIDTH=k_width)
 
     _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not _hip_device_supports_fpsan(), reason="Requires AMD target")
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("scale_factor", [32, 64])
+def test_scaled_upcast_fp4_compact_scales(device, dtype, scale_factor, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    amd = gl.amd.cdna5 if is_hip_gfx1250() else gl.amd.cdna4 if is_hip_cdna4() else gl.amd.cdna3
+
+    @gluon.jit
+    def kernel(src_ptr, scale_ptr, out_ptr, SCALE_FACTOR: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([32], [THREADS_PER_WARP], [1], [0])
+        src = gl.load(src_ptr + gl.arange(0, 256, layout=layout))
+        scale_layout: gl.constexpr = amd.get_scaled_upcast_fp4_scale_layout(src, SCALE_FACTOR, out_ptr.dtype.element_ty,
+                                                                            axis=0)
+        scale = gl.load(scale_ptr + gl.arange(0, 512 // SCALE_FACTOR, layout=scale_layout))
+        out = amd.scaled_upcast(src, scale, out_ptr.dtype.element_ty, axis=0)
+        gl.store(out_ptr + gl.arange(0, 512, layout=out.type.layout), out)
+
+    src = torch.arange(256, device=device).to(torch.uint8)
+    scale = (torch.arange(512 // scale_factor, device=device) * 17).to(torch.uint8)
+    out = torch.empty(512, dtype=dtype, device=device)
+    kernel[(1, )](src, scale, out, scale_factor, THREADS_PER_WARP, num_warps=1)
+
+    # Split each byte into two 4-bit values, low bits first.
+    # FPSan uses these values as integers.
+    src_bits = src.cpu().numpy()
+    unpacked = np.stack((src_bits & 0xF, src_bits >> 4), axis=1).reshape(-1)
+
+    # Convert each scale to the integer value used by FPSan.
+    compute_type = "bf16" if dtype == torch.bfloat16 else "fp16"
+    scale_payload = np.array([_dot_scaled_scale_payload(np.uint64(s), compute_type) for s in scale.cpu().numpy()],
+                             dtype=np.uint64)
+
+    # Repeat each scale for its group, multiply, and keep the low 16 bits.
+    payload = (unpacked * np.repeat(scale_payload, scale_factor)) & 0xFFFF
+
+    # Encode the integer results as FP16/BF16 bits and compare the bits.
+    expected = _unmix_payload_to_float_bits(payload, "bf16" if dtype == torch.bfloat16 else "f16")
+    _assert_payload_equal(out.view(torch.int16), expected)

@@ -365,11 +365,6 @@ std::optional<bool> evaluateCmpI(const DataFlowSolver &solver,
   return std::nullopt;
 }
 
-LogicalResult TritonIntegerRangeAnalysis::initialize(Operation *top) {
-  signedIntValues.clear();
-  return Base::initialize(top);
-}
-
 std::optional<ConstantIntRanges>
 TritonIntegerRangeAnalysis::maybeGetAssumedRange(Value anchor,
                                                  Block *useBlock) const {
@@ -641,7 +636,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
 void TritonIntegerRangeAnalysis::initializeFuncOp(tt::FuncOp op) {
   Block *entryBlock = getFuncEntryBlock(op);
   for (BlockArgument argument : op.getArguments()) {
-    if (!this->assumptions.count(argument))
+    if (!this->assumptions.contains(argument))
       continue;
 
     dataflow::IntegerValueRangeLattice *argLattice =

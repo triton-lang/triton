@@ -1,6 +1,7 @@
 #include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -17,6 +18,8 @@ struct GfxArch {
 std::optional<GfxArch> parseGfxArch(StringRef arch) {
   if (!arch.consume_front("gfx"))
     return std::nullopt;
+
+  bool strict = arch.consume_back("-strict");
 
   if (arch.size() < 3)
     return std::nullopt;
@@ -35,14 +38,21 @@ std::optional<GfxArch> parseGfxArch(StringRef arch) {
   if (arch.getAsInteger(10, major))
     return std::nullopt;
 
+  if (strict && !(major == 12 && minor == 5))
+    return std::nullopt;
+
   return GfxArch{major, minor, patch};
 }
+
+ISAFamily computeISAFamily(StringRef arch);
 } // namespace
 
 TargetFeatures::TargetFeatures(std::optional<StringRef> arch)
     : TargetFeatures(arch.value_or("")) {}
 
-TargetFeatures::TargetFeatures(StringRef arch) : arch(arch.str()) {}
+TargetFeatures::TargetFeatures(StringRef arch)
+    : arch(arch.str()), baseArch(arch.split("-strict").first),
+      isaFamily(computeISAFamily(arch)) {}
 
 TargetFeatures TargetFeatures::fromModuleOp(ModuleOp moduleOp) {
   auto targetAttr =
@@ -59,7 +69,12 @@ TargetFeatures TargetFeatures::fromModuleOp(ModuleOp moduleOp) {
 
 StringRef TargetFeatures::getArch() const { return arch; }
 
-ISAFamily TargetFeatures::getISAFamily() const {
+StringRef TargetFeatures::getBaseArch() const { return baseArch; }
+
+ISAFamily TargetFeatures::getISAFamily() const { return isaFamily; }
+
+namespace {
+ISAFamily computeISAFamily(StringRef arch) {
   std::optional<GfxArch> gfxArch = parseGfxArch(arch);
   if (!gfxArch)
     return ISAFamily::Unknown;
@@ -79,10 +94,6 @@ ISAFamily TargetFeatures::getISAFamily() const {
       return ISAFamily::CDNA3;
     if (minor == 0 && patch == 10)
       return ISAFamily::CDNA2;
-    if (minor == 0 && patch == 8)
-      return ISAFamily::CDNA1;
-    if (minor == 0 && patch == 6)
-      return ISAFamily::GCN5_1;
   }
 
   // RDNA ISA cases.
@@ -92,13 +103,10 @@ ISAFamily TargetFeatures::getISAFamily() const {
     return ISAFamily::RDNA4m;
   if (major == 11)
     return ISAFamily::RDNA3;
-  if (major == 10 && minor == 3)
-    return ISAFamily::RDNA2;
-  if (major == 10 && minor == 1)
-    return ISAFamily::RDNA1;
 
   return ISAFamily::Unknown;
 }
+} // namespace
 
 bool TargetFeatures::isCDNA() const {
   return mlir::triton::amdgpu::isCDNA(getISAFamily());
@@ -120,10 +128,12 @@ bool TargetFeatures::isGFX1250() const {
   return getISAFamily() == ISAFamily::GFX1250;
 }
 
+bool TargetFeatures::isGFX1250Strict() const {
+  return isGFX1250() && arch != baseArch;
+}
+
 int TargetFeatures::getWarpSize() const {
   switch (getISAFamily()) {
-  case ISAFamily::GCN5_1:
-  case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
   case ISAFamily::CDNA4:
@@ -239,12 +249,16 @@ bool TargetFeatures::supportsTDM() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsMultiCTALaunch() const { return isGFX1250(); }
 
+bool TargetFeatures::supportsMulticast() const {
+  return isGFX1250() && !isGFX1250Strict();
+}
+
 unsigned TargetFeatures::getMaxMulticastMaskPopcount() const {
-  return isGFX1250() ? 5 : 1;
+  return supportsMulticast() ? 5 : 1;
 }
 
 bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
-  if (getISAFamily() == ISAFamily::GFX1250) {
+  if (supportsMulticast()) {
     return llvm::is_contained({32, 64, 128}, bitWidth);
   }
   return false;
@@ -273,15 +287,13 @@ bool TargetFeatures::supportsBufferAtomicFadd(Type elementType) const {
 bool TargetFeatures::supportsBufferAtomicFMinMax(Type elementType) const {
   auto isaFamily = getISAFamily();
   if (elementType.isF32()) {
-    return llvm::is_contained({ISAFamily::RDNA1, ISAFamily::RDNA2,
-                               ISAFamily::RDNA3, ISAFamily::RDNA4m,
+    return llvm::is_contained({ISAFamily::RDNA3, ISAFamily::RDNA4m,
                                ISAFamily::RDNA4, ISAFamily::GFX1250},
                               isaFamily);
   }
   if (elementType.isF64()) {
     return llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
-                               ISAFamily::CDNA4, ISAFamily::RDNA1,
-                               ISAFamily::RDNA2, ISAFamily::GFX1250},
+                               ISAFamily::CDNA4, ISAFamily::GFX1250},
                               isaFamily);
   }
   return false;
@@ -306,8 +318,6 @@ bool TargetFeatures::supportMaximumMinimum() const {
 
 bool TargetFeatures::supportDppBroadcast() const {
   switch (getISAFamily()) {
-  case ISAFamily::GCN5_1:
-  case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
   case ISAFamily::CDNA4:
@@ -326,14 +336,31 @@ bool TargetFeatures::supportsPermlaneSwap() const {
 
 bool TargetFeatures::supportsCvtPkScalePk8() const { return isGFX1250(); }
 
+bool TargetFeatures::supportsCvtPkScalePk8Upcast() const {
+  // TODO: gfx1250-strict implements the v_cvt_scale_pk8_* upcasts in Block32
+  // mode, but LLVM gates them behind block16-cvt-scale-insts, which it does
+  // not enable for gfx1250-strict. Drop the strict check once LLVM ticket is
+  // merged. May require LLVM bump
+  return supportsCvtPkScalePk8() && !isGFX1250Strict();
+}
+
+bool TargetFeatures::supportsCvtPkScalePk8Block16() const {
+  return supportsCvtPkScalePk8() && !isGFX1250Strict();
+}
+
+ArrayRef<StringRef> TargetFeatures::getUnsupportedWmmaFeatures() const {
+  static const StringRef kGFX1250Strict[] = {kWmmaRestrictedInstsFeature};
+  if (isGFX1250Strict())
+    return kGFX1250Strict;
+  return {};
+}
+
 bool TargetFeatures::supportsHwScaledUpcast() const {
-  return getISAFamily() == ISAFamily::CDNA4 ||
-         getISAFamily() == ISAFamily::GFX1250;
+  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8Upcast();
 }
 
 bool TargetFeatures::supportsHwScaledDowncast() const {
-  return getISAFamily() == ISAFamily::CDNA4 ||
-         getISAFamily() == ISAFamily::GFX1250;
+  return getISAFamily() == ISAFamily::CDNA4 || supportsCvtPkScalePk8();
 }
 
 bool TargetFeatures::supportBitwidth16Elementwise() const { return true; }
@@ -352,7 +379,6 @@ bool TargetFeatures::supportBitwidth32Elementwise() const {
 
 bool isCDNA(ISAFamily isaFamily) {
   switch (isaFamily) {
-  case ISAFamily::CDNA1:
   case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
   case ISAFamily::CDNA4:
@@ -365,8 +391,6 @@ bool isCDNA(ISAFamily isaFamily) {
 
 bool isRDNA(ISAFamily isaFamily) {
   switch (isaFamily) {
-  case ISAFamily::RDNA1:
-  case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:

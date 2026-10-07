@@ -299,6 +299,9 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
               rewriter, loc, srcValues[srcIndex][i], laneIdLast);
       }
     } else if (numScanBlocks > 1) {
+      // The rest of the chunk needs the total of the previous blocks, not the
+      // value that already includes this chunk.
+      lastElement = accumulator;
       accumulator = srcValues[srcIndex];
     }
     for (unsigned i = 1; i < scanElementsPerThreads; ++i) {

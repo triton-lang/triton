@@ -35,7 +35,7 @@ def smid(_semantic=None):
     (register 4) as a packed value.  On multi-XCC parts (gfx942/gfx950) the
     XCC_ID is NOT included; values are unique only within a single XCC.
 
-    RDNA (gfx10xx/gfx11xx/gfx12xx): reads WGP_ID from HW_REG_HW_ID1
+    RDNA (gfx11xx/gfx12xx): reads WGP_ID from HW_REG_HW_ID1
     (register 23).  Values are unique only within a shader array.
     """
     target_arch = _semantic.builder.options.arch
@@ -45,7 +45,7 @@ def smid(_semantic=None):
         #   [12]    SH_ID  (1 bit)
         #   [15:13] SE_ID  (2-3 bits depending on chip)
         asm_str = "s_getreg_b32 $0, hwreg(4, 8, 8)"
-    elif 'gfx10' in target_arch or 'gfx11' in target_arch or 'gfx12' in target_arch:
+    elif 'gfx11' in target_arch or 'gfx12' in target_arch:
         # HW_REG_HW_ID1 (reg 23), bits [13:10]: WGP_ID (4 bits)
         asm_str = "s_getreg_b32 $0, hwreg(23, 10, 4)"
     else:

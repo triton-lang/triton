@@ -21,10 +21,6 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using ::mlir::LLVM::AMD::getVectorSize;
-
-namespace ttg = mlir::triton::gpu;
-namespace tt = mlir::triton;
 namespace amdttg = mlir::triton::amdgpu;
 
 namespace mlir {
