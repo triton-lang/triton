@@ -150,6 +150,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/amd-llvm-info.json"
       "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amd/backend/codegen/CMakeLists.txt"
       "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amd/backend/codegen/amdgpu_codegen.cc"
+      "${CMAKE_CURRENT_SOURCE_DIR}/include/triton/Tools/LLVMDiagnosticCapture.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/include/triton/Tools/LLVMOptions.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/lib/Tools/LLVMOptions.cpp"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/nvidia-toolchain-version.json"

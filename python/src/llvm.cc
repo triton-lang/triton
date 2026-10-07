@@ -2,6 +2,7 @@
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "third_party/amd/lib/Target/MIRDAG/DAGBuilder.h"
+#include "triton/Tools/LLVMDiagnosticCapture.h"
 #include "triton/Tools/LLVMOptions.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "triton/Version.h"
@@ -131,6 +132,7 @@ struct ExpandMaskedDivRemPass : RequiredPassInfoMixin<ExpandMaskedDivRemPass> {
   }
 };
 
+using mlir::triton::tools::LLVMDiagnosticCapture;
 using mlir::triton::tools::ScopedLLVMOptions;
 
 // The LLVM command line overrides one pipeline run needs. They take effect
@@ -367,7 +369,11 @@ std::string translateLLVMIRToASM(
     auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
                              : llvm::CodeGenFileType::AssemblyFile;
     machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
+    LLVMDiagnosticCapture diagnostics(module.getContext());
     pass.run(module);
+    if (diagnostics.hasErrors())
+      throw std::runtime_error(diagnostics.getMessage());
+    llvm::errs() << diagnostics.getMessage();
 
     if (enabledTiming) {
       reportAndResetTimings(&reportStream);

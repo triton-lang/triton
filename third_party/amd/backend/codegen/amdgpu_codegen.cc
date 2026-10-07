@@ -1,3 +1,4 @@
+#include "triton/Tools/LLVMDiagnosticCapture.h"
 #include "triton/Tools/LLVMOptions.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -66,6 +67,7 @@
 
 namespace {
 
+using mlir::triton::tools::LLVMDiagnosticCapture;
 using mlir::triton::tools::ScopedLLVMOptions;
 
 constexpr uint32_t codegenABIVersion = 1;
@@ -387,7 +389,11 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
     if (machine->addPassesToEmitFile(codegen, bufferedOutput, nullptr,
                                      llvm::CodeGenFileType::AssemblyFile))
       return fail("AMD target cannot emit AMDGCN assembly", error);
+    LLVMDiagnosticCapture diagnostics(context);
     codegen.run(*module);
+    if (diagnostics.hasErrors())
+      return fail(diagnostics.getMessage(), error);
+    llvm::errs() << diagnostics.getMessage();
   }
 
   if (options->enableTiming) {

@@ -479,3 +479,47 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
+
+
+def test_llvm_codegen_errors_are_catchable() -> None:
+
+    @triton.jit
+    def kernel(x_ptr, out_ptr, n: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        values = tl.load(x_ptr + offsets, mask=offsets < n, other=0.0)
+        packed = tl.inline_asm_elementwise(
+            asm="""
+            {
+                .reg .b16 result;
+                mov.u16 result, 0;
+                mov.u16 $0, result;
+            }
+            """,
+            constraints="=h,f",
+            args=[values],
+            dtype=tl.uint16,
+            is_pure=True,
+            pack=1,
+        )
+        tl.store(out_ptr + offsets, packed.to(tl.uint8), mask=offsets < n)
+
+    src = ASTSource(
+        fn=kernel,
+        signature={"x_ptr": "*fp32", "out_ptr": "*u8", "n": "constexpr", "BLOCK": "constexpr"},
+        constexprs={"n": 128, "BLOCK": 128},
+    )
+
+    with pytest.raises(RuntimeError, match="could not allocate output register for constraint 'h'"):
+        triton.compile(src, target=GPUTarget("hip", "gfx1200", 32))
+
+
+@pytest.mark.parametrize("target", [GPUTarget("cuda", 90, 32), GPUTarget("hip", "gfx1200", 32)], ids=["cuda", "hip"])
+def test_llvm_codegen_remarks_are_not_reported(target, fresh_triton_cache, capfd) -> None:
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    src = ASTSource(fn=kernel, signature={"out": "*i32"})
+    triton.compile(src, target=target)
+    assert "instructions in function" not in capfd.readouterr().err
