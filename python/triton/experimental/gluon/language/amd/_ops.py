@@ -272,7 +272,7 @@ def _prepare_scaled_downcast_scale(scale, semantic):
         _check(
             _is_e8m0_power_of_two(scale), lambda: "fp32 scaled_downcast scales must be positive powers of two "
             f"representable in E8M0 (2**-127 to 2**127), but got {scale}")
-        return semantic.make_scalar(scale, ttgl.float32)
+        scale = semantic.make_scalar(scale, ttgl.float32)
     _check(isinstance(scale, ttgl.tensor),
            lambda: f"Expected scale to be a tensor, an fp32 scalar, or a float constant but got {scale!r}")
     if isinstance(scale.type, ttgl.distributed_type):
@@ -280,7 +280,11 @@ def _prepare_scaled_downcast_scale(scale, semantic):
                lambda: f"Expected raw E8M0 scale in int8/uint8 or fp32 scale but got {scale.dtype}")
     else:
         _check(scale.dtype == ttgl.float32, lambda: f"Expected scalar scale to be fp32 but got {scale.dtype}")
-    return scale
+    if scale.dtype != ttgl.float32:
+        return scale
+    # E8M0 is the biased fp32 exponent field; drop the mantissa and sign bits.
+    exponent = semantic.lshr(semantic.bitcast(scale, ttgl.uint32), 23)
+    return semantic.cast(exponent, ttgl.uint8)
 
 
 def _validate_scaled_downcast_input(input):
@@ -313,7 +317,7 @@ def _broadcast_scalar_scale(input, scale, axis, semantic):
     # extent 1 along `axis`, the input's layout is already the compact scale layout.
     shape = list(input.type.shape)
     shape[axis] = 1
-    return semantic.full(shape, scale, ttgl.float32, input.type.layout)
+    return semantic.full(shape, scale, scale.dtype, input.type.layout)
 
 
 def _scaled_downcast(input, scale, elem_type, axis, semantic):
@@ -368,8 +372,8 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
       ``float`` constant.
 
     .. warning::
-        ``fp32`` scales are passed to the hardware conversion unchanged, and
-        the hardware reads only their exponent bits. Every ``fp32`` scale
+        Only the exponent bits of an ``fp32`` scale are used: it is converted
+        to the E8M0 payload holding its exponent field. Every ``fp32`` scale
         must therefore be a positive power of two representable in E8M0.
         Constant ``float`` scales are checked at compile time, but runtime
         values (``fp32`` scalars and tensors) cannot be, so the caller is
