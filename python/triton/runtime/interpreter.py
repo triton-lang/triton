@@ -576,8 +576,7 @@ class InterpreterBuilder:
                                   rounding_mode).view(_get_np_dtype(dst_type))
             return TensorHandle(data, dst_type.scalar)
         if src_element_type == tl.bfloat16 and not dst_element_type.is_floating():
-            fp32 = _convert_float(src.data, tl.bfloat16, tl.float32,
-                                  rounding_mode).view(np.float32)
+            fp32 = _convert_float(src.data, tl.bfloat16, tl.float32, rounding_mode).view(np.float32)
             return TensorHandle(fp32.astype(_get_np_dtype(dst_type)), dst_type.scalar)
         if dst_element_type == tl.bfloat16 and not src_element_type.is_floating():
             # fp64 holds every 32-bit integer exactly, so the value is

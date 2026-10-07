@@ -2713,7 +2713,7 @@ def test_cast_bf16_value_preserving(dtype_x, device):
         tl.store(Z + offs, tl.load(X + offs).to(TO))
 
     if dtype_x == "uint32":
-        values = [0, 1, 2, 1000, 2**20, 4000000000]
+        values = [0, 1, 2, 1000, 2**20, 4000000000, 7, 255]
     elif dtype_x.startswith("int"):
         values = [0, 1, -1, 2, 1000, -1000, 2**20, -(2**20)]
     else:
