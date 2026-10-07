@@ -3,8 +3,8 @@
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1200 | FileCheck --check-prefixes=COMMON,NOHW %s
 
 // OCP fp8 (f8E4M3FN / f8E5M2) casts: hardware cvt vs. software fallback.
-// HWCVT (gfx1170) uses the unscaled cvt ops for downcasts and for a single-value
-// upcast to f32; other upcasts stay in software. NOHW targets use software only.
+// HWCVT (gfx1170) uses the unscaled cvt ops for downcasts and for upcasts to
+// f32; upcasts to f16/bf16 stay in software. NOHW targets use software only.
 
 // COMMON-LABEL: f16_to_f32
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -104,31 +104,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// OCP fp8/bf8 -> f32/f16/bf16 with several values per thread. The packed
-// upcast does not assemble on any of these targets (LCOMPILER-2609), so every
-// target keeps the software path.
-
-// COMMON-LABEL: packed_upcast_stays_software
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @packed_upcast_stays_software(%arg0: tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
-                                        %arg1: tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>) {
-    // COMMON-NOT: rocdl.cvt.pk.f32.fp8
-    // COMMON-NOT: rocdl.cvt.pk.f32.bf8
-    // COMMON-NOT: rocdl.cvt.f32.fp8
-    // COMMON-NOT: rocdl.cvt.f32.bf8
-    %0 = tt.fp_to_fp %arg0 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
-    %1 = tt.fp_to_fp %arg1 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
-    %2 = tt.fp_to_fp %arg0 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
-    %3 = tt.fp_to_fp %arg1 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
-    %4 = tt.fp_to_fp %arg0 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
-    %5 = tt.fp_to_fp %arg1 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
-    tt.return
-  }
-}
-
-// -----
-
 // The unscaled hardware downcast is round-to-nearest-even only, so RTZ requests
 // must stay on the software path even on HWCVT targets. Guards against a future
 // change wiring RTZ to the RTNE instruction.
@@ -149,21 +124,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// A layout that leaves a single fp8 value per thread upcasts to f32 with the
-// single-value hardware converter.
+// OCP fp8/bf8 -> f32. The packed upcast does not assemble on gfx12
+// (LCOMPILER-2609), so each group of 4 values is packed into one dword and
+// converted one byte at a time.
 
-// COMMON-LABEL: single_element_upcast_is_scalar
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// COMMON-LABEL: upcast_ocp_to_f32
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @single_element_upcast_is_scalar(%arg0: tensor<128xf8E4M3FN, #blocked>,
-                                           %arg1: tensor<128xf8E5M2, #blocked>) {
-    // HWCVT-COUNT-1: rocdl.cvt.f32.fp8
+  tt.func @upcast_ocp_to_f32(%arg0: tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+                             %arg1: tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>) {
+    // HWCVT: rocdl.cvt.f32.fp8 %[[W0:.*]][0] : f32
+    // HWCVT: rocdl.cvt.f32.fp8 %[[W0]][1] : f32
+    // HWCVT: rocdl.cvt.f32.fp8 %[[W0]][2] : f32
+    // HWCVT: rocdl.cvt.f32.fp8 %[[W0]][3] : f32
     // HWCVT-NOT: rocdl.cvt.pk.f32.fp8
     // NOHW-NOT: rocdl.cvt.f32.fp8
-    %0 = tt.fp_to_fp %arg0 : tensor<128xf8E4M3FN, #blocked> -> tensor<128xf32, #blocked>
+    %0 = tt.fp_to_fp %arg0 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
 
-    // HWCVT-COUNT-1: rocdl.cvt.f32.bf8
+    // HWCVT: rocdl.cvt.f32.bf8 %[[W1:.*]][0] : f32
+    // HWCVT: rocdl.cvt.f32.bf8 %[[W1]][1] : f32
+    // HWCVT: rocdl.cvt.f32.bf8 %[[W1]][2] : f32
+    // HWCVT: rocdl.cvt.f32.bf8 %[[W1]][3] : f32
     // HWCVT-NOT: rocdl.cvt.pk.f32.bf8
+    // NOHW-NOT: rocdl.cvt.f32.bf8
+    %1 = tt.fp_to_fp %arg1 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    tt.return
+  }
+}
+
+// -----
+
+// A single fp8 value per thread still goes through the byte-wise converter;
+// the padding lanes are dead and get cleaned up later.
+
+// COMMON-LABEL: single_element_upcast_to_f32
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @single_element_upcast_to_f32(%arg0: tensor<128xf8E4M3FN, #blocked>,
+                                        %arg1: tensor<128xf8E5M2, #blocked>) {
+    // HWCVT: rocdl.cvt.f32.fp8 %{{.*}}[0] : f32
+    // NOHW-NOT: rocdl.cvt.f32.fp8
+    %0 = tt.fp_to_fp %arg0 : tensor<128xf8E4M3FN, #blocked> -> tensor<128xf32, #blocked>
+    // HWCVT: rocdl.cvt.f32.bf8 %{{.*}}[0] : f32
     // NOHW-NOT: rocdl.cvt.f32.bf8
     %1 = tt.fp_to_fp %arg1 : tensor<128xf8E5M2, #blocked> -> tensor<128xf32, #blocked>
     tt.return
@@ -172,40 +174,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// Two values per thread already need the packed upcast, so they stay on the
-// software path; this pins the boundary of the single-value case.
+// OCP fp8/bf8 -> f16/bf16 keeps the software path on every target.
 
-// COMMON-LABEL: two_element_upcast_stays_software
-#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// COMMON-LABEL: upcast_ocp_to_16bit_stays_software
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @two_element_upcast_stays_software(%arg0: tensor<256xf8E4M3FN, #blocked>,
-                                             %arg1: tensor<256xf8E5M2, #blocked>) {
+  tt.func @upcast_ocp_to_16bit_stays_software(%arg0: tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+                                              %arg1: tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>) {
     // COMMON-NOT: rocdl.cvt.pk.f32.fp8
     // COMMON-NOT: rocdl.cvt.pk.f32.bf8
     // COMMON-NOT: rocdl.cvt.f32.fp8
     // COMMON-NOT: rocdl.cvt.f32.bf8
-    %0 = tt.fp_to_fp %arg0 : tensor<256xf8E4M3FN, #blocked> -> tensor<256xf32, #blocked>
-    %1 = tt.fp_to_fp %arg1 : tensor<256xf8E5M2, #blocked> -> tensor<256xf32, #blocked>
-    tt.return
-  }
-}
-
-// -----
-
-// The single-value converter is used only for an f32 destination. A single
-// fp8 value headed for f16/bf16 stays on the software path.
-
-// COMMON-LABEL: single_element_upcast_to_16bit_stays_software
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @single_element_upcast_to_16bit_stays_software(%arg0: tensor<128xf8E4M3FN, #blocked>,
-                                                         %arg1: tensor<128xf8E5M2, #blocked>) {
-    // COMMON-NOT: rocdl.cvt.pk.f32.fp8
-    // COMMON-NOT: rocdl.cvt.pk.f32.bf8
-    // COMMON-NOT: rocdl.cvt.f32.fp8
-    // COMMON-NOT: rocdl.cvt.f32.bf8
-    %0 = tt.fp_to_fp %arg0 : tensor<128xf8E4M3FN, #blocked> -> tensor<128xf16, #blocked>
-    %1 = tt.fp_to_fp %arg1 : tensor<128xf8E5M2, #blocked> -> tensor<128xbf16, #blocked>
+    %0 = tt.fp_to_fp %arg0 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %1 = tt.fp_to_fp %arg1 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %2 = tt.fp_to_fp %arg0 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %3 = tt.fp_to_fp %arg1 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
     tt.return
   }
 }

@@ -178,6 +178,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %1 : tensor<64xbf16, #blocked>
   }
 
+  // GFX1250-LABEL: @ocp_fp8_to_f32
+  tt.func @ocp_fp8_to_f32(%arg0: tensor<64xf8E4M3FN, #blocked>, %arg1: tensor<64xf8E5M2, #blocked>) {
+    // GFX1250: rocdl.cvt.scale.pk8.f32.fp8
+    %0 = tt.fp_to_fp %arg0 : tensor<64xf8E4M3FN, #blocked> -> tensor<64xf32, #blocked>
+    // GFX1250: rocdl.cvt.scale.pk8.f32.bf8
+    %1 = tt.fp_to_fp %arg1 : tensor<64xf8E5M2, #blocked> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+
   // GFX1250-LABEL: @bf16_addf
   tt.func @bf16_addf(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xbf16, #blocked>) -> tensor<64xbf16, #blocked> {
     // GFX1250-NOT: llvm.fadd {{.*}} : f32
