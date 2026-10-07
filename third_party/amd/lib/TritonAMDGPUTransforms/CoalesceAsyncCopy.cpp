@@ -136,17 +136,38 @@ struct CoalesceAsyncCopyWrites
       // disagree this spreads consecutive lanes along a dimension that is
       // strided in LDS, resulting in uncoalesced writes. Instead we distribute
       // the lanes/warps following the shared order so consecutive lanes map to
-      // consecutive LDS offsets, and keep the original blocked order for the
-      // final blocked encoding.
+      // consecutive LDS offsets.
       auto distEncSharedOrder = BlockedEncodingAttr::get(
           copyOp.getContext(), srcTy.getShape(), contigPerThread,
           swizzledEnc.getOrder(), numWarps, threadsPerWarp,
           blockedEnc.getCGALayout());
+      // Re-stamping the original blocked order re-linearizes lanes (and
+      // registers) along it. As long as every warp stays inside the fastest
+      // shared dimension the linearization is identical to the shared order
+      // one, but once a warp spans more than that dimension consecutive lanes
+      // walk a dimension that is strided in LDS and the direct-to-LDS lowering
+      // rejects the rewritten copy. Detect that case and keep the shared
+      // order distribution instead, which is coalesced by construction.
       newDistEnc = BlockedEncodingAttr::get(
           copyOp.getContext(), distEncSharedOrder.getSizePerThread(),
           distEncSharedOrder.getThreadsPerWarp(),
           distEncSharedOrder.getWarpsPerCTA(), blockedEnc.getOrder(),
           blockedEnc.getCGALayout());
+      auto newSrcTy = srcTy.cloneWithEncoding(newDistEnc);
+      unsigned candidateVec = loadContig;
+      if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, newSrcTy,
+                                         dstTy.getEncoding(),
+                                         dstTy.getAllocShape(), candidateVec)) {
+        newDistEnc = distEncSharedOrder;
+        newSrcTy = srcTy.cloneWithEncoding(newDistEnc);
+        candidateVec = loadContig;
+        if (!LLVM::AMD::canLoadDirectToLDS(targetInfo, newSrcTy,
+                                           dstTy.getEncoding(),
+                                           dstTy.getAllocShape(), candidateVec))
+          return rewriter.notifyMatchFailure(
+              copyOp,
+              "could not find a lane distribution with coalesced LDS writes");
+      }
     } else if (paddedEnc) {
       // For padded layouts the linear_component maps from LDS offsets to n-D
       // tensor indices. This mapping might reorder elements resulting in
