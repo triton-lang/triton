@@ -254,8 +254,12 @@ def _p_matmul(
     OUT_BLOCK_N: tl.constexpr = EPILOGUE_BLOCK_N // ACTIVATION_REDUCTION_N
     # Fuse alpha with the residual when activation and gamma are absent.
     FUSE_ALPHA: tl.constexpr = OutAcc is not None and Gammas is None and ACTIVATION_FN is None and out_alpha is not None
-    # Keep row/fiber scaling fused with bias when global scales are absent.
-    FUSE_TENSOR_SCALE: tl.constexpr = (XTensorScale is not None or WTensorScale is not None) and XScale is None and WScale is None and B is not None and Betas is None
+    # Preserve rounding for dense sub-tiles and unswapped row scales.
+    FUSE_TENSOR_SCALE: tl.constexpr = (
+        (XTensorScale is not None or WTensorScale is not None)
+        and XScale is None and WScale is None and B is not None and Betas is None
+        and (is_out_microscaled or (SUBTILE_FACTOR == 1 and (SWAP_XW or WTensorScale is not None)))
+    )
     yN = N // ACTIVATION_REDUCTION_N
 
     num_blocks = batch_size * useful_grid_m * grid_n * SPLIT_K
