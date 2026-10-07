@@ -54,6 +54,43 @@ def test_binding_classes_released_at_shutdown():
     assert "nanobind: leaked" not in result.stderr
 
 
+@pytest.mark.parametrize("setup", [
+    "import torch",
+    "from triton.runtime.jit import mangle_type\nmangle_type(1)",
+], ids=["torch", "specialization"])
+def test_gluon_binding_class_released_at_shutdown(tmp_path, setup):
+    # PyTorch and native argument specialization can retain JIT dependencies
+    # through shutdown. Capture a Gluon builtin to exercise its builder references.
+    script = textwrap.dedent("""
+        import os
+        from triton._C.libtriton import gluon_ir
+        from triton.experimental import gluon
+        from triton.experimental.gluon import language as gl
+        from triton.experimental.gluon.language.nvidia.blackwell import (
+            allocate_tensor_memory, TensorMemoryLayout,
+        )
+
+        class ShutdownSentinel:
+            def __del__(self, write=os.write):
+                write(1, b"builder released\\n")
+
+        gluon_ir.GluonOpBuilder._shutdown_sentinel = ShutdownSentinel()
+
+        def make_allocator(allocate):
+            @gluon.jit
+            def allocator():
+                return allocate(gl.float32, [128, 128], TensorMemoryLayout([128, 128], col_stride=1))
+            return allocator
+
+        allocator = make_allocator(allocate_tensor_memory)
+    """)
+    script_path = tmp_path / "gluon_binding_shutdown.py"
+    script_path.write_text(setup + "\n" + script)
+    result = subprocess.run([sys.executable, str(script_path)], capture_output=True, text=True, check=True, timeout=60)
+    assert result.stdout.splitlines() == ["builder released"], result.stderr
+    assert "nanobind: leaked" not in result.stderr
+
+
 @triton.jit
 def add_helper(x, y):
     return x + y
