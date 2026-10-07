@@ -69,6 +69,9 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // `warpUsedHint`: see TritonAMDGPUOps.td for the axis-aligned hint rule.
 // `isPureForm`: inherit `pred` from the descriptor (group0[0]) instead of the
 // `pred` arg, and leave the barrier-enable bit untouched.
+// `sharedLayout`: layout of the whole allocation, with one dimension per
+// descriptor dimension. Each warp starts at its tile origin in it; the
+// verifiers require each transfer region to be contiguous before padding.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> blockShape, int numWarps,
