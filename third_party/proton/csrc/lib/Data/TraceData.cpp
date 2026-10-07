@@ -363,14 +363,12 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         auto endTimeNs = applyTimestampOffset(
             std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime)),
             timestampOffsetNs);
-        // The launch is the nearest ancestor with a CPU time range: the kernels
-        // of a graph created before profiling started are recorded under the
-        // graph launch.
         auto launchEventId = events.at(eventId).parentEventId;
-        for (auto it = events.find(launchEventId);
-             it != events.end() && !it->second.hasCpuTimeRange();
-             it = events.find(launchEventId))
-          launchEventId = it->second.parentEventId;
+        // A graph created before profiling started has no launch event: its
+        // kernels are recorded under the graph launch op, without CPU times.
+        if (auto it = events.find(launchEventId);
+            it != events.end() && !it->second.hasCpuTimeRange())
+          launchEventId = Trace::Event::DummyId;
         kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
                                             contexts, startTimeNs, endTimeNs,
                                             launchEventId, isGraphLinked);
