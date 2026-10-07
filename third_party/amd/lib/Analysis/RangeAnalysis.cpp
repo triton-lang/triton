@@ -365,11 +365,6 @@ std::optional<bool> evaluateCmpI(const DataFlowSolver &solver,
   return std::nullopt;
 }
 
-LogicalResult TritonIntegerRangeAnalysis::initialize(Operation *top) {
-  signedIntValues.clear();
-  return Base::initialize(top);
-}
-
 std::optional<ConstantIntRanges>
 TritonIntegerRangeAnalysis::maybeGetAssumedRange(Value anchor,
                                                  Block *useBlock) const {

@@ -33,9 +33,6 @@ using mlir::triton::gpu::ElementwiseOpConversionBase;
 using mlir::triton::gpu::MultipleOperandsRange;
 using triton::amdgpu::ISAFamily;
 
-using ConverterT = std::function<SmallVector<Value>(
-    Location, ConversionPatternRewriter &, const SmallVector<Value> &)>;
-
 namespace {
 bool isCDNA4OrHigher(ISAFamily family) {
   return family == ISAFamily::CDNA4 || family == ISAFamily::GFX1250;
@@ -2570,9 +2567,8 @@ private:
 
 namespace mlir::triton::AMD {
 void populateFpCastOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                    RewritePatternSet &patterns, bool ftz,
+                                    RewritePatternSet &patterns,
                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                    ModuleAllocation &allocation,
                                     const TargetInfo &targetInfo,
                                     PatternBenefit benefit) {
 
