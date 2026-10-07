@@ -8,7 +8,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Tools/GenericSwizzling.h"
-#include "triton/Tools/LayoutUtils.h"
 
 //
 #include "mlir/IR/TypeUtilities.h"
@@ -25,7 +24,6 @@ using namespace mlir::triton;
 
 namespace mlir::triton {
 class ReduceOp;
-class ScanOp;
 
 inline SmallVector<Value>
 inlineCombineBlock(ConversionPatternRewriter &rewriter, Block &combineBlock,
@@ -108,87 +106,6 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   rewriter.replaceOpWithNewOp<LLVM::BrOp>(returnOp, results, thenBlock);
   rewriter.setInsertionPointToStart(thenBlock);
   return SmallVector<Value>(thenBlock->getArguments());
-}
-
-inline SmallVector<SmallVector<Value>>
-convertScanTotals(Location loc, ConversionPatternRewriter &rewriter,
-                  triton::ScanOp op, const LinearLayout &src,
-                  const LinearLayout &dst,
-                  const SmallVector<SmallVector<Value>> &values,
-                  const LLVMTypeConverter *typeConverter,
-                  const TargetInfoBase &targetInfo, Value storePred = {}) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto *ctx = rewriter.getContext();
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto kOffset = StringAttr::get(ctx, "offset");
-  auto scratch = getScanScratchConfig(src, dst, op.getElementTypes());
-  auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  if (!storePred) {
-    storePred = b.true_val();
-    auto free = src.getFreeVariableMasks();
-    for (auto [dim, id] : SmallVector<std::pair<StringAttr, Value>>{
-             {StringAttr::get(ctx, "lane"), laneId},
-             {StringAttr::get(ctx, "warp"), warpId}})
-      if (free[dim])
-        storePred =
-            b.and_(storePred,
-                   b.icmp_eq(b.and_(id, b.i32_val(free[dim])), b.i32_val(0)));
-  }
-  struct SharedOperand {
-    LinearLayout layout;
-    Value base;
-    Type type;
-  };
-  SmallVector<SharedOperand> operands;
-  // Keep every operand in its own part of the allocation, then synchronize
-  // once. Fold the swizzle's repetition dimension into the shared offset.
-  for (auto [i, input] : llvm::enumerate(values)) {
-    Type type = typeConverter->convertType(op.getElementTypes()[i]);
-    Type storageType = type;
-    auto stored = input;
-    if (isa<LLVM::LLVMPointerType>(type)) {
-      storageType = rewriter.getI64Type();
-      for (auto &v : stored)
-        v = b.ptrtoint(storageType, v);
-    } else if (type.getIntOrFloatBitWidth() < 8) {
-      storageType = rewriter.getI8Type();
-      for (auto &v : stored)
-        v = b.zext(storageType, v);
-    }
-    unsigned width = storageType.getIntOrFloatBitWidth();
-    auto [dstTile, srcTile] =
-        targetInfo.getSharedLdStTiles(gpu::getVecBitwidthLdSt(src, dst, width));
-    auto shared = gpu::optimalSwizzlingLdSt(
-        src, dst, width, targetInfo.getSharedMemoryBanks(), srcTile, dstTile);
-    auto order = llvm::to_vector(shared.getInDimNames());
-    order.erase(llvm::find(order, kBlock));
-    order.push_back(kBlock);
-    unsigned blocks = shared.getInDimSize(kBlock);
-    shared = shared.transposeIns(order).reshapeIns(
-        {{kOffset, shared.getTotalInDimSize() / blocks}, {kBlock, blocks}});
-    Value operandBase = b.gep(base.getType(), rewriter.getI8Type(), base,
-                              b.i32_val(scratch.offsets[i]));
-    lowerLdSt(loc, ctx, src.invertAndCompose(shared), stored, storageType,
-              operandBase, {}, b.i32_val(0), 0, {}, 0, laneId, warpId, rewriter,
-              targetInfo, {}, makeSharedStoreEmitter(targetInfo, storePred));
-    operands.push_back({std::move(shared), operandBase, storageType});
-  }
-  targetInfo.barrier(loc, rewriter, gpu::AddrSpace::Local);
-  SmallVector<SmallVector<Value>> result;
-  for (auto [i, operand] : llvm::enumerate(operands)) {
-    auto loaded = lowerLdSt(
-        loc, ctx, invertAndComposeLocal(operand.layout, dst, {kBlock}), {},
-        operand.type, operand.base, {}, b.i32_val(0), 0, {}, 0, laneId, warpId,
-        rewriter, targetInfo, {}, makeSharedLoadEmitter(targetInfo));
-    Type type = typeConverter->convertType(op.getElementTypes()[i]);
-    if (type != operand.type)
-      for (auto &v : loaded)
-        v = isa<LLVM::LLVMPointerType>(type) ? Value(b.inttoptr(type, v))
-                                             : Value(b.trunc(type, v));
-    result.push_back(std::move(loaded));
-  }
-  return result;
 }
 
 template <typename SourceOp>
