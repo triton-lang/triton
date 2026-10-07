@@ -186,6 +186,13 @@ def _get_np_dtype(tt_dtype):
     return np_types[tt_dtype]
 
 
+def _stores_raw_bits(tt_dtype):
+    # Floats numpy cannot represent are kept as raw unsigned integer bits
+    # (bf16 as uint16, the fp8 family as uint8; see _get_np_dtype), so a
+    # cast involving them must convert the value, not the bit pattern.
+    return tt_dtype.is_floating() and np.issubdtype(_get_np_dtype(tt_dtype), np.integer)
+
+
 def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     input_uint_dtype = getattr(np, f"uint{input_dtype.primitive_bitwidth}")
     output_unint_dtype = getattr(np, f"uint{output_dtype.primitive_bitwidth}")
@@ -563,26 +570,35 @@ class InterpreterBuilder:
     def cast_impl(self, src, dst_type, rounding_mode=None):
         src_element_type = src.dtype.scalar
         dst_element_type = dst_type.scalar
-        # bf16 tensors are stored as raw uint16 bits, so a cast with a bf16
-        # side must decode/encode through _convert_float: a plain numpy
-        # astype would reinterpret the bit pattern instead of converting
-        # the value (int 1 became bf16 denormal 9.2e-41, not bf16 1.0).
-        if src_element_type == tl.bfloat16 and dst_element_type.is_floating():
+        # A cast with a raw-bit float side must decode/encode through
+        # _convert_float: a plain numpy astype would reinterpret the bit
+        # pattern instead of converting the value (int 1 became bf16
+        # denormal 9.2e-41, not bf16 1.0). fp8 never actually reaches this
+        # path (semantic routes fp8<->float through create_fp_to_fp and
+        # rejects int<->fp8), but keying the gate off the storage keeps
+        # any raw-bit float covered, not just bf16.
+        src_raw = _stores_raw_bits(src_element_type)
+        dst_raw = _stores_raw_bits(dst_element_type)
+        if src_raw and dst_raw:
             data = _convert_float(src.data, src_element_type, dst_element_type,
                                   rounding_mode).view(_get_np_dtype(dst_type))
             return TensorHandle(data, dst_type.scalar)
-        if dst_element_type == tl.bfloat16 and src_element_type.is_floating():
-            data = _convert_float(src.data, src_element_type, dst_element_type,
-                                  rounding_mode).view(_get_np_dtype(dst_type))
-            return TensorHandle(data, dst_type.scalar)
-        if src_element_type == tl.bfloat16 and not dst_element_type.is_floating():
-            fp32 = _convert_float(src.data, tl.bfloat16, tl.float32, rounding_mode).view(np.float32)
+        if src_raw:
+            if dst_element_type.is_floating():
+                data = _convert_float(src.data, src_element_type, dst_element_type,
+                                      rounding_mode).view(_get_np_dtype(dst_type))
+                return TensorHandle(data, dst_type.scalar)
+            fp32 = _convert_float(src.data, src_element_type, tl.float32, rounding_mode).view(np.float32)
             return TensorHandle(fp32.astype(_get_np_dtype(dst_type)), dst_type.scalar)
-        if dst_element_type == tl.bfloat16 and not src_element_type.is_floating():
-            # fp64 holds every 32-bit integer exactly, so the value is
-            # rounded only once, on the RTNE encode to bf16.
-            fp64 = src.data.astype(np.float64)
-            data = _convert_float(fp64, tl.float64, tl.bfloat16, _ir.ROUNDING_MODE.RTNE)
+        if dst_raw:
+            if src_element_type.is_floating():
+                data = _convert_float(src.data, src_element_type, dst_element_type,
+                                      rounding_mode).view(_get_np_dtype(dst_type))
+            else:
+                # fp64 holds every 32-bit integer exactly, so the value is
+                # rounded only once, on the RTNE encode to the raw-bit float.
+                fp64 = src.data.astype(np.float64)
+                data = _convert_float(fp64, tl.float64, dst_element_type, _ir.ROUNDING_MODE.RTNE)
             return TensorHandle(data.view(_get_np_dtype(dst_type)), dst_type.scalar)
         return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
 

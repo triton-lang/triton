@@ -2735,6 +2735,28 @@ def test_cast_bf16_value_preserving(dtype_x, device):
 
 
 @pytest.mark.interpreter
+def test_cast_fp8_value_preserving(device):
+    # fp8 is stored as raw uint8 bits too, but the semantic layer keeps
+    # fp8<->float on create_fp_to_fp and rejects int<->fp8, so value
+    # conversion already holds on this path. Guard it: every value below is
+    # exactly representable in e4m3, so no rounding is involved anywhere.
+    @triton.jit
+    def kernel(X, Z, SIZE: tl.constexpr, TO: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        tl.store(Z + offs, tl.load(X + offs).to(TO))
+
+    x = torch.tensor([0.0, 1.0, -1.0, 80.0, -7.5, 0.125, 2.0, -0.25], dtype=torch.float32, device=device)
+    z = torch.empty(x.shape, dtype=torch.float8_e4m3fn, device=device)
+    kernel[(1, )](x, z, SIZE=x.numel(), TO=tl.float8e4nv)
+    expected = x.to(torch.float8_e4m3fn)
+    torch.testing.assert_close(z.float(), expected.float(), rtol=0, atol=0)
+
+    y = torch.empty(x.shape, dtype=torch.float32, device=device)
+    kernel[(1, )](z, y, SIZE=z.numel(), TO=tl.float32)
+    torch.testing.assert_close(y, expected.float(), rtol=0, atol=0)
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str, num_warps",
                          [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
 @pytest.mark.parametrize("can_reorder", [True, False])
