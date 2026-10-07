@@ -14,6 +14,9 @@ from pathlib import Path
 import pytest
 import triton
 from triton.backends.compiler import GPUTarget
+from triton.experimental import gluon
+from triton.experimental.gluon._runtime import GluonASTSource
+from triton.experimental.gluon import language as gl
 
 GFX1250_TARGET = GPUTarget("hip", "gfx1250", 32)
 TTIR_PATH = str(Path(__file__).parent / "attn_fwd.ttir")
@@ -79,3 +82,31 @@ def test_gfx1250_v_pk_fma_f32_in_asm(gfx1250_kernel):
                                           f"{counts['v_pk_fma_f32']}")
     assert counts["v_fma_f32"] < 20, (f"Expected scalar v_fma_f32 instructions to stay low, got "
                                       f"{counts['v_fma_f32']}")
+
+
+@gluon.jit
+def gluon_fma_kernel(x_ptr, y_ptr, z_ptr, out_ptr, BLOCK: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([8], [32], [4], [0])
+    offs = gl.arange(0, BLOCK, layout)
+    x = gl.load(x_ptr + offs)
+    y = gl.load(y_ptr + offs)
+    z = gl.load(z_ptr + offs)
+    gl.store(out_ptr + offs, gl.fma(x, y, z))
+
+
+@pytest.mark.parametrize("dtype, packed_inst", [("fp32", "v_pk_fma_f32"), ("bf16", "v_pk_fma_bf16")])
+def test_gfx1250_gl_fma_packed(dtype, packed_inst):
+    """gl.fma on gfx1250 should lower to packed FMA instructions."""
+    ptr_ty = f"*{dtype}"
+    src = GluonASTSource(
+        gluon_fma_kernel,
+        {"x_ptr": ptr_ty, "y_ptr": ptr_ty, "z_ptr": ptr_ty, "out_ptr": ptr_ty, "BLOCK": "constexpr"},
+        {"BLOCK": 1024},
+    )
+    kernel = triton.compile(src, target=GFX1250_TARGET)
+    func_body = get_func_body_asm(kernel.asm["amdgcn"], "gluon_fma_kernel")
+
+    # 8 elements per thread -> 4 packed FMAs.
+    assert func_body.count(packed_inst) == 4, func_body
+    assert "v_fma_f32" not in func_body
+    assert "v_dual_fma" not in func_body
