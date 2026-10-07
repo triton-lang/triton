@@ -23,7 +23,6 @@
 using namespace mlir;
 using namespace mlir::triton::gpu;
 
-using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;

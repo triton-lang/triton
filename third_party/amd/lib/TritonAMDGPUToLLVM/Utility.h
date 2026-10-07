@@ -108,12 +108,6 @@ unsigned getVectorSize(Value ptr, Value offset,
 
 Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 
-// Returns true if we can perform coalesced write from the source encoding to
-// the destination encoding.
-bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
-                                      const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp);
-
 // The vector sizes the pointers/offsets and the mask each allow. Zero means
 // unknown, in which case no attribution is made.
 struct DirectToLdsVecInfo {
