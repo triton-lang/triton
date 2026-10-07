@@ -2700,6 +2700,41 @@ def test_cast_fp8_rounding(dtype_x, dtype_z, device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_x", ["int32", "uint32", "int64", "float16", "float64"])
+def test_cast_bf16_value_preserving(dtype_x, device):
+    # The interpreter stores bf16 as raw uint16 bits; casts with a bf16 side
+    # must convert the value, not reinterpret the bit pattern.
+    if not is_interpreter():
+        check_type_supported("bfloat16", device)
+
+    @triton.jit
+    def kernel(X, Z, SIZE: tl.constexpr, TO: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        tl.store(Z + offs, tl.load(X + offs).to(TO))
+
+    if dtype_x == "uint32":
+        values = [0, 1, 2, 1000, 2**20, 4000000000]
+    elif dtype_x.startswith("int"):
+        values = [0, 1, -1, 2, 1000, -1000, 2**20, -(2**20)]
+    else:
+        values = [0.0, 1.0, -1.0, 0.5, -0.5, 100.0, -0.1, 3.14159]
+    dtype = getattr(torch, dtype_x)
+    x = torch.tensor(values, dtype=dtype, device=device)
+
+    z = torch.empty(x.shape, dtype=torch.bfloat16, device=device)
+    kernel[(1, )](x, z, SIZE=x.numel(), TO=tl.bfloat16)
+    expected_bf16 = x.to(torch.bfloat16)
+    torch.testing.assert_close(z, expected_bf16, rtol=0, atol=0)
+
+    y = torch.empty(x.shape, dtype=dtype, device=device)
+    kernel[(1, )](z, y, SIZE=z.numel(), TO=str_to_triton_dtype(dtype_x))
+    if dtype.is_floating_point:
+        torch.testing.assert_close(y, expected_bf16.to(dtype), rtol=0, atol=0)
+    else:
+        assert torch.equal(y, expected_bf16.to(dtype))
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str, num_warps",
                          [(dtype_str, num_warps) for dtype_str in int_dtypes + float_dtypes for num_warps in [4, 8]])
 @pytest.mark.parametrize("can_reorder", [True, False])

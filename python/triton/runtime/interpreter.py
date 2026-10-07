@@ -563,13 +563,29 @@ class InterpreterBuilder:
     def cast_impl(self, src, dst_type, rounding_mode=None):
         src_element_type = src.dtype.scalar
         dst_element_type = dst_type.scalar
-        if (src_element_type == tl.bfloat16 and dst_element_type == tl.float32) or \
-           (src_element_type == tl.float32 and dst_element_type == tl.bfloat16):
+        # bf16 tensors are stored as raw uint16 bits, so a cast with a bf16
+        # side must decode/encode through _convert_float: a plain numpy
+        # astype would reinterpret the bit pattern instead of converting
+        # the value (int 1 became bf16 denormal 9.2e-41, not bf16 1.0).
+        if src_element_type == tl.bfloat16 and dst_element_type.is_floating():
             data = _convert_float(src.data, src_element_type, dst_element_type,
                                   rounding_mode).view(_get_np_dtype(dst_type))
             return TensorHandle(data, dst_type.scalar)
-        else:
-            return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
+        if dst_element_type == tl.bfloat16 and src_element_type.is_floating():
+            data = _convert_float(src.data, src_element_type, dst_element_type,
+                                  rounding_mode).view(_get_np_dtype(dst_type))
+            return TensorHandle(data, dst_type.scalar)
+        if src_element_type == tl.bfloat16 and not dst_element_type.is_floating():
+            fp32 = _convert_float(src.data, tl.bfloat16, tl.float32,
+                                  rounding_mode).view(np.float32)
+            return TensorHandle(fp32.astype(_get_np_dtype(dst_type)), dst_type.scalar)
+        if dst_element_type == tl.bfloat16 and not src_element_type.is_floating():
+            # fp64 holds every 32-bit integer exactly, so the value is
+            # rounded only once, on the RTNE encode to bf16.
+            fp64 = src.data.astype(np.float64)
+            data = _convert_float(fp64, tl.float64, tl.bfloat16, _ir.ROUNDING_MODE.RTNE)
+            return TensorHandle(data.view(_get_np_dtype(dst_type)), dst_type.scalar)
+        return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
 
     create_si_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_ui_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
