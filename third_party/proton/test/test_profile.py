@@ -356,7 +356,8 @@ def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, 
 
 
 @_skip_cudagraph_test
-def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
+@pytest.mark.parametrize("data", ["tree", "trace"])
+def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str, data: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -376,8 +377,9 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     with cuda_graph_without_gc(g):
         fn()
 
-    temp_file = tmp_path / "test_cudagraph_not_captured_by_profiler.hatchet"
-    proton.start(str(temp_file.with_suffix("")), context="shadow")
+    suffix = "chrome_trace" if data == "trace" else "hatchet"
+    temp_file = tmp_path / f"test_cudagraph_not_captured_by_profiler.{suffix}"
+    proton.start(str(temp_file.with_suffix("")), context="shadow", data=data)
     with proton.scope("replay0"):
         g.replay()
     with proton.scope("replay1"):
@@ -387,6 +389,17 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     captured = capfd.readouterr()
     assert captured.err.count("Cannot find graph for graphExecId:") == 1
     assert "start profiling before the graph is created" in captured.err
+
+    if data == "trace":
+        with temp_file.open() as f:
+            trace_events = json.load(f)["traceEvents"]
+        for replay in ("replay0", "replay1"):
+            kernels = [e for e in trace_events if e.get("cat") == "kernel" and e["args"]["call_stack"][1] == replay]
+            assert len(kernels) >= 3
+            assert any(e["dur"] > 0 for e in kernels)
+        # The graph launch has no CPU time range, so its kernels have no launch arrow.
+        assert not any(e.get("cat") == "flow" for e in trace_events)
+        return
 
     with temp_file.open() as f:
         data = json.load(f)
