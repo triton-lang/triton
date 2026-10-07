@@ -461,6 +461,70 @@ class MXFPGEMMProgramBase:
         return a, b, scale_a, scale_b
 
 
+@gluon.constexpr_function
+def get_cta_split(cga_layout, dim):
+    return max(1, 2 * max(basis[dim] for basis in cga_layout)) if cga_layout else 1
+
+
+@gluon.jit
+def load_cta_local_slice(buf, nonk_start: gl.constexpr, nonk_len: gl.constexpr, k_start: gl.constexpr,
+                         k_len: gl.constexpr, transposed: gl.constexpr, cga: gl.constexpr, op: gl.constexpr,
+                         target: gl.constexpr, scale: gl.constexpr = False):
+    """Slice each CTA's local rows while preserving the cluster distribution.
+
+    Normalize the descriptor to [rows, K], then expose the CTA coordinate
+    separately so slicing rows cannot select data owned by another CTA.
+    """
+    splits: gl.constexpr = get_cta_split(cga, op)
+    if transposed:
+        buf = buf.permute([1, 0])
+    if splits == 1:
+        # Preserve partitioned descriptors when no CTA-local reshape is needed.
+        sub = buf.slice(nonk_start, nonk_len, 0).slice(k_start, k_len, 1)
+        if op == 1 and not scale:
+            sub = sub.permute([1, 0])
+        return sub.load(target)
+    else:
+        nonk: gl.constexpr = buf.shape[0]
+        kval: gl.constexpr = buf.shape[1]
+        # Preserve CTA ownership as its own dimension, so both local halves exist
+        # on every CTA. The flattened result has the compact cluster shape.
+        sub = buf.reshape([splits, nonk // splits, kval]) \
+            .slice(nonk_start // splits, nonk_len // splits, 1).slice(k_start, k_len, 2)
+        # Reshape the target register layout to load directly into it. The template
+        # supplies only its layout; its values are unused.
+        if op == 1 and not scale:
+            template = gl.full([k_len, nonk_len], 0, buf.dtype, target).permute([1, 0])
+        else:
+            template = gl.full([nonk_len, k_len], 0, buf.dtype, target)
+        template = template.reshape([splits, nonk_len // splits, k_len])
+        load_layout: gl.constexpr = template.type.layout
+        # Reshape registers after loading: reshaping a sliced shared descriptor is
+        # currently unsupported.
+        result = sub.load(load_layout).reshape([nonk_len, k_len])
+        if op == 1 and not scale:
+            result = result.permute([1, 0])
+        return gl.convert_layout(result, target, assert_trivial=True)
+
+
+@gluon.jit
+def concat_cta_local(a, b, dim: gl.constexpr, cga: gl.constexpr):
+    """Join local halves inside each CTA before restoring the cluster shape."""
+    splits: gl.constexpr = get_cta_split(cga, dim)
+    if dim == 0:
+        size: gl.constexpr = a.shape[0]
+        width: gl.constexpr = a.shape[1]
+        a = a.reshape([splits, size // splits, width])
+        b = b.reshape([splits, size // splits, width])
+        return gl.join(a, b).permute(0, 3, 1, 2).reshape([2 * size, width])
+    else:
+        height: gl.constexpr = a.shape[0]
+        size: gl.constexpr = a.shape[1]
+        a = a.reshape([height, splits, size // splits])
+        b = b.reshape([height, splits, size // splits])
+        return gl.join(a, b).permute(0, 1, 3, 2).reshape([height, 2 * size])
+
+
 @gluon.jit
 def apply_activation_and_store(cfg, accumulator, c_desc, off_m, off_n):
     if cfg.ACTIVATION == "swiglu":
@@ -983,15 +1047,9 @@ class MXFPGEMMSliceNKProgram:
         BLOCK_K_SCALE: gl.constexpr = cfg.BLOCK_K // cfg.SCALE_BLOCK
         subtile_start_k: gl.constexpr = subtile_start_idx_k * SUBTILE_LEN_K
         subtile_start_n: gl.constexpr = subtile_start_idx_n * SUBTILE_LEN_N
-        if cfg.TRANSPOSE_B:
-            b = b_buffer.index(wmma_idx % cfg.NUM_BUFFERS).slice(subtile_start_n, SUBTILE_LEN_N, 0) \
-            .slice(subtile_start_k // cfg.DIV_FACTOR_B, SUBTILE_LEN_K // cfg.DIV_FACTOR_B, 1) \
-            .permute([1, 0]).load(layout=cfg.dot_layout_b)
-        else:
-            b = b_buffer.index(wmma_idx % cfg.NUM_BUFFERS).slice(subtile_start_k // cfg.DIV_FACTOR_B,
-                                                                 SUBTILE_LEN_K // cfg.DIV_FACTOR_B, 0) \
-            .slice(subtile_start_n, SUBTILE_LEN_N, 1) \
-            .load(layout=cfg.dot_layout_b)
+        b = load_cta_local_slice(b_buffer.index(wmma_idx % cfg.NUM_BUFFERS), subtile_start_n, SUBTILE_LEN_N,
+                                 subtile_start_k // cfg.DIV_FACTOR_B, SUBTILE_LEN_K // cfg.DIV_FACTOR_B,
+                                 not cfg.TRANSPOSE_B, cfg.CGA_LAYOUT, 1, cfg.dot_layout_b)
         b_scale_buffer_slice = b_scale_buffer.index(wmma_idx % cfg.NUM_BUFFERS)
         if cfg.SCALE_PRESHUFFLE:
             b_scale_buffer_slice = b_scale_buffer_slice.reshape((
@@ -1000,9 +1058,9 @@ class MXFPGEMMSliceNKProgram:
                 cfg.PRESHUFFLE_FACTOR // 4,  #
                 4,  #
                 cfg.SCALE_KWIDTH)).permute((0, 3, 2, 1, 4)).reshape((cfg.BLOCK_N, BLOCK_K_SCALE))
-        b_scale_buffer_slice = b_scale_buffer_slice.slice(subtile_start_n, SUBTILE_LEN_N, 0) \
-            .slice(subtile_start_k // cfg.SCALE_BLOCK, SUBTILE_LEN_K // cfg.SCALE_BLOCK, 1)
-        scale_b = b_scale_buffer_slice.load(layout=cfg.layout_b_scale)
+        scale_b = load_cta_local_slice(b_scale_buffer_slice, subtile_start_n, SUBTILE_LEN_N,
+                                       subtile_start_k // cfg.SCALE_BLOCK, SUBTILE_LEN_K // cfg.SCALE_BLOCK, False,
+                                       cfg.CGA_LAYOUT, 1, cfg.layout_b_scale, scale=True)
         return b, scale_b
 
     @gluon.jit
@@ -1135,8 +1193,7 @@ class MXFPGEMMSliceNKProgram:
             a0, scale_a0 = self.issue_local_load_a(wmma_idx, 0, self.a_buffer, self.a_scale_buffer)
             b00, scale_b00 = self.issue_local_load_b(wmma_idx, 0, 0, self.b_buffer, self.b_scale_buffer)
 
-        accumulator = gl.join(c0, c1)
-        accumulator = accumulator.permute(0, 2, 1).reshape((cfg.BLOCK_M, cfg.BLOCK_N))
+        accumulator = concat_cta_local(c0, c1, 1, cfg.CGA_LAYOUT)
         accumulator = gl.convert_layout(accumulator, cfg.acc_layout, assert_trivial=True)
 
         apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
@@ -1215,9 +1272,9 @@ class MXFPGEMMSliceMNKProgram:
         BLOCK_K_SCALE: gl.constexpr = cfg.BLOCK_K // cfg.SCALE_BLOCK
         subtile_start_m: gl.constexpr = subtile_start_idx_m * SUBTILE_LEN_M
         subtile_start_k: gl.constexpr = subtile_start_idx_k * SUBTILE_LEN_K
-        a = a_buffer.index(wmma_idx % cfg.NUM_BUFFERS).slice(subtile_start_m, SUBTILE_LEN_M, 0) \
-            .slice(subtile_start_k // cfg.DIV_FACTOR_A, SUBTILE_LEN_K // cfg.DIV_FACTOR_A, 1) \
-            .load(layout=cfg.dot_layout_a)
+        a = load_cta_local_slice(a_buffer.index(wmma_idx % cfg.NUM_BUFFERS), subtile_start_m, SUBTILE_LEN_M,
+                                 subtile_start_k // cfg.DIV_FACTOR_A, SUBTILE_LEN_K // cfg.DIV_FACTOR_A, False,
+                                 cfg.CGA_LAYOUT, 0, cfg.dot_layout_a)
         if cfg.WITH_A_SCALE:
             a_scale_buffer_slice = a_scale_buffer.index(wmma_idx % cfg.NUM_BUFFERS)
             if cfg.SCALE_PRESHUFFLE:
@@ -1227,9 +1284,9 @@ class MXFPGEMMSliceMNKProgram:
                     cfg.PRESHUFFLE_FACTOR // 4,  #
                     4,  #
                     cfg.SCALE_KWIDTH)).permute((0, 3, 2, 1, 4)).reshape((cfg.BLOCK_M, BLOCK_K_SCALE))
-            a_scale_buffer_slice = a_scale_buffer_slice.slice(subtile_start_m, SUBTILE_LEN_M, 0) \
-                .slice(subtile_start_k // cfg.SCALE_BLOCK, SUBTILE_LEN_K // cfg.SCALE_BLOCK, 1)
-            scale_a = a_scale_buffer_slice.load(layout=cfg.layout_a_scale)
+            scale_a = load_cta_local_slice(a_scale_buffer_slice, subtile_start_m, SUBTILE_LEN_M,
+                                           subtile_start_k // cfg.SCALE_BLOCK, SUBTILE_LEN_K // cfg.SCALE_BLOCK, False,
+                                           cfg.CGA_LAYOUT, 0, cfg.layout_a_scale, scale=True)
         else:
             scale_a = 0
             scale_a = scale_a.to(gl.uint8)
@@ -1246,15 +1303,9 @@ class MXFPGEMMSliceMNKProgram:
         BLOCK_K_SCALE: gl.constexpr = cfg.BLOCK_K // cfg.SCALE_BLOCK
         subtile_start_k: gl.constexpr = subtile_start_idx_k * SUBTILE_LEN_K
         subtile_start_n: gl.constexpr = subtile_start_idx_n * SUBTILE_LEN_N
-        if cfg.TRANSPOSE_B:
-            b = b_buffer.index(wmma_idx % cfg.NUM_BUFFERS).slice(subtile_start_n, SUBTILE_LEN_N, 0) \
-            .slice(subtile_start_k // cfg.DIV_FACTOR_B, SUBTILE_LEN_K // cfg.DIV_FACTOR_B, 1) \
-            .permute([1, 0]).load(layout=cfg.dot_layout_b)
-        else:
-            b = b_buffer.index(wmma_idx % cfg.NUM_BUFFERS).slice(subtile_start_k // cfg.DIV_FACTOR_B,
-                                                                 SUBTILE_LEN_K // cfg.DIV_FACTOR_B, 0) \
-            .slice(subtile_start_n, SUBTILE_LEN_N, 1) \
-            .load(layout=cfg.dot_layout_b)
+        b = load_cta_local_slice(b_buffer.index(wmma_idx % cfg.NUM_BUFFERS), subtile_start_n, SUBTILE_LEN_N,
+                                 subtile_start_k // cfg.DIV_FACTOR_B, SUBTILE_LEN_K // cfg.DIV_FACTOR_B,
+                                 not cfg.TRANSPOSE_B, cfg.CGA_LAYOUT, 1, cfg.dot_layout_b)
         b_scale_buffer_slice = b_scale_buffer.index(wmma_idx % cfg.NUM_BUFFERS)
         if cfg.SCALE_PRESHUFFLE:
             b_scale_buffer_slice = b_scale_buffer_slice.reshape((
@@ -1263,9 +1314,9 @@ class MXFPGEMMSliceMNKProgram:
                 cfg.PRESHUFFLE_FACTOR // 4,  #
                 4,  #
                 cfg.SCALE_KWIDTH)).permute((0, 3, 2, 1, 4)).reshape((cfg.BLOCK_N, BLOCK_K_SCALE))
-        b_scale_buffer_slice = b_scale_buffer_slice.slice(subtile_start_n, SUBTILE_LEN_N, 0) \
-            .slice(subtile_start_k // cfg.SCALE_BLOCK, SUBTILE_LEN_K // cfg.SCALE_BLOCK, 1)
-        scale_b = b_scale_buffer_slice.load(layout=cfg.layout_b_scale)
+        scale_b = load_cta_local_slice(b_scale_buffer_slice, subtile_start_n, SUBTILE_LEN_N,
+                                       subtile_start_k // cfg.SCALE_BLOCK, SUBTILE_LEN_K // cfg.SCALE_BLOCK, False,
+                                       cfg.CGA_LAYOUT, 1, cfg.layout_b_scale, scale=True)
         return b, scale_b
 
     @gluon.jit
@@ -1461,9 +1512,9 @@ class MXFPGEMMSliceMNKProgram:
             a00, scale_a00 = self.issue_local_load_a(wmma_idx, 0, 0, self.a_buffer, self.a_scale_buffer)
             b00, scale_b00 = self.issue_local_load_b(wmma_idx, 0, 0, self.b_buffer, self.b_scale_buffer)
 
-        acc_top = gl.join(c00, c01).permute(0, 2, 1).reshape((SUBTILE_M, cfg.BLOCK_N))
-        acc_bot = gl.join(c10, c11).permute(0, 2, 1).reshape((SUBTILE_M, cfg.BLOCK_N))
-        accumulator = gl.join(acc_top, acc_bot).permute(2, 0, 1).reshape((cfg.BLOCK_M, cfg.BLOCK_N))
+        acc_top = concat_cta_local(c00, c01, 1, cfg.CGA_LAYOUT)
+        acc_bot = concat_cta_local(c10, c11, 1, cfg.CGA_LAYOUT)
+        accumulator = concat_cta_local(acc_top, acc_bot, 0, cfg.CGA_LAYOUT)
         accumulator = gl.convert_layout(accumulator, cfg.acc_layout)
 
         apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
@@ -2493,8 +2544,8 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
         }, id='baseline-mn-unshuffled-masked'),
     pytest.param('sliceK', 4, ((1, 0), (0, 1)), 'float4', 'float4', False, False,
                  {'shape': (128, 128, 768), 'partial_tdm': True}, id='sliceK-mn-fp4-masked'),
-    pytest.param('sliceNK', 4, ((1, 0), ), 'float8_e4m3', 'float4', True, False, {'with_a_scale': False},
-                 id='sliceNK-m-async-scales-no-a-scale'),
+    pytest.param('sliceNK', 4, ((0, 1), ), 'float8_e4m3', 'float4', True, False, {'with_a_scale': False},
+                 id='sliceNK-n-async-scales-no-a-scale'),
     pytest.param('baseline', 4, ((0, 1), ), 'float4', 'float8_e4m3', False, False,
                  {'shape': (384, 192, 640), 'block_n': 128, 'activation': 'swiglu'}, id='baseline-n-swiglu-masked'),
     pytest.param('baseline', 4,
@@ -2504,6 +2555,16 @@ def test_runtime_mxgemm_tdm_pipelined(DTYPE_A, DTYPE_B, M, N, K, BLOCK_M, BLOCK_
     pytest.param('baseline', 4, ((1, 0), ), 'float8_e4m3', 'float8_e5m2', False, False,
                  {'scale_preshuffle': False, 'partial_tdm': True, 'l2_prefetch_distance': 1},
                  id='baseline-m-unshuffled-a-b-scales-prefetch'),
+    pytest.param('sliceNK', 4, ((1, 0), (0, 1)), 'float4', 'float8_e4m3', True, False, {'l2_prefetch_distance': 1},
+                 id='sliceNK-mn-async-scales-prefetch'),
+    pytest.param('sliceMNK', 4,
+                 ((1, 0), ), 'float4', 'float8_e4m3', False, False, {'partial_tdm': True}, id='sliceMNK-m-partial-tdm'),
+    pytest.param('sliceMNK', 8, ((0, 1), ), 'float8_e4m3', 'float8_e5m2', False, False, {'l2_prefetch_distance': 2},
+                 id='sliceMNK-n-eight-warps-prefetch'),
+    pytest.param('sliceMNK', 4,
+                 ((1, 0), (0, 1),
+                  (0, 2)), 'float4', 'float4', False, False, {'shape':
+                                                              (512, 1024, 768), 'block_n': 512}, id='sliceMNK-2x4-fp4'),
 ])
 def test_runtime_mxgemm_tdm_multi_cta(SCHEDULE, NUM_WARPS, CGA_LAYOUT, DTYPE_A, DTYPE_B, ASYNC_COPY_SCALE, PINGPONG,
                                       OPTIONS):
