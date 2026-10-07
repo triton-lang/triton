@@ -884,6 +884,10 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   b.call(funcOp, operands);
 }
 
+void TargetInfo::assertTrap(RewriterBase &rewriter, Location loc) const {
+  llvm_unreachable("__assertfail aborts the kernel; no separate trap needed");
+}
+
 int TargetInfo::getSharedAddressSpace() const { return 3; }
 
 int TargetInfo::getAddressSpace(Attribute addressSpace) const {
