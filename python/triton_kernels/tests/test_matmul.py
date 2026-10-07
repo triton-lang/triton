@@ -840,9 +840,17 @@ def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, devic
 
 
 @pytest.mark.parametrize("block_m", [16, 128])
-@pytest.mark.parametrize("scale_source", ["global", "row"])
-@pytest.mark.parametrize("has_beta, expected", [(False, 0.00787353515625), (True, 0.0079345703125)])
-def test_persistent_matmul_scale_bias_rounding(block_m, scale_source, has_beta, expected, device, opt_flags_scope):
+@pytest.mark.parametrize("scale_source, epilogue_subtile, has_beta, expected", [
+    ("global", 2, False, 0.00787353515625),
+    ("global", 2, True, 0.0079345703125),
+    ("row", 2, False, 0.0079345703125),
+    ("row", 2, True, 0.0079345703125),
+    ("column", 1, False, 0.00787353515625),
+    ("column", 2, False, 0.0079345703125),
+    ("row_and_column", 1, False, 0.00787353515625),
+    ("row_and_column", 2, False, 0.0079345703125),
+])
+def test_persistent_matmul_scale_bias_rounding(block_m, scale_source, epilogue_subtile, has_beta, expected, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
 
@@ -857,8 +865,11 @@ def test_persistent_matmul_scale_bias_rounding(block_m, scale_source, has_beta, 
     config = PrecisionConfig(out_dtype=torch.bfloat16)
     if scale_source == "global":
         config.flex_ctx = FlexCtx(lhs_data=InFlexData(scale=scale))
-    else:
+    if scale_source in ("row", "row_and_column"):
         config.a_mx_tensor_scale = scale.expand(128).contiguous()
+    if scale_source in ("column", "row_and_column"):
+        column_scale = torch.ones_like(scale) if scale_source == "row_and_column" else scale
+        config.b_mx_tensor_scale = column_scale.expand(256).contiguous()
     opt_flags.update_opt_flags_constraints(
         dict(
             block_m=block_m,
@@ -867,7 +878,7 @@ def test_persistent_matmul_scale_bias_rounding(block_m, scale_source, has_beta, 
             num_stages=2,
             is_persistent=True,
             split_k=1,
-            epilogue_subtile=2,
+            epilogue_subtile=epilogue_subtile,
         ))
     actual = matmul(a.to(torch.float8_e4m3fn), b.to(torch.float8_e4m3fn).T, bias, precision_config=config, betas=betas)
 
