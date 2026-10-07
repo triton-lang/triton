@@ -96,7 +96,7 @@ def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fres
     monkeypatch.setattr(launcher, "launch", launch)
     compiled[(16, 1, 1)](out)
     graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
+    with triton.testing.cuda_graph_without_gc(graph):
         compiled[(16, 1, 1)](out)
     graph.replay()
     graph.replay()
