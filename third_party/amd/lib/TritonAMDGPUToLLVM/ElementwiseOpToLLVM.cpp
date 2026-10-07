@@ -56,9 +56,12 @@ struct PackedArithOpConversion
     if (operands.size() < 2 || !(elemTy.isF32() || elemTy.isBF16()))
       return {};
 
-    Value va = packLLVector(loc, {operands[0][0], operands[1][0]}, rewriter);
-    Value vb = packLLVector(loc, {operands[0][1], operands[1][1]}, rewriter);
-    Value vr = LLVMOp::create(rewriter, loc, va.getType(), va, vb);
+    SmallVector<Value> packedOperands;
+    for (unsigned i = 0, e = operands[0].size(); i < e; ++i)
+      packedOperands.push_back(
+          packLLVector(loc, {operands[0][i], operands[1][i]}, rewriter));
+    Value vr = LLVMOp::create(rewriter, loc, packedOperands[0].getType(),
+                              packedOperands);
     return unpackLLVector(loc, vr, rewriter);
   }
 };
@@ -499,6 +502,8 @@ void populateElementwiseOpToLLVMPatterns(
     patterns.add<PackedArithOpConversion<arith::AddFOp, LLVM::FAddOp>>(
         typeConverter, axisInfoAnalysis, gfx1250Benefit);
     patterns.add<PackedArithOpConversion<arith::MulFOp, LLVM::FMulOp>>(
+        typeConverter, axisInfoAnalysis, gfx1250Benefit);
+    patterns.add<PackedArithOpConversion<math::FmaOp, LLVM::FMAOp>>(
         typeConverter, axisInfoAnalysis, gfx1250Benefit);
   }
 

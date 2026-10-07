@@ -193,6 +193,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %0 = arith.subf %arg0, %arg1 : tensor<64xbf16, #blocked>
     tt.return %0 : tensor<64xbf16, #blocked>
   }
+
+  // GFX1250-LABEL: @f32_fma
+  tt.func @f32_fma(%arg0: tensor<64xf32, #blocked>, %arg1: tensor<64xf32, #blocked>, %arg2: tensor<64xf32, #blocked>) -> tensor<64xf32, #blocked> {
+    // GFX1250-NOT: llvm.intr.fma({{.*}}) : (f32, f32, f32) -> f32
+    // GFX1250: llvm.intr.fma({{.*}}) : (vector<2xf32>, vector<2xf32>, vector<2xf32>) -> vector<2xf32>
+    %0 = math.fma %arg0, %arg1, %arg2 : tensor<64xf32, #blocked>
+    tt.return %0 : tensor<64xf32, #blocked>
+  }
+
+  // GFX1250-LABEL: @bf16_fma
+  tt.func @bf16_fma(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xbf16, #blocked>, %arg2: tensor<64xbf16, #blocked>) -> tensor<64xbf16, #blocked> {
+    // GFX1250-NOT: llvm.intr.fma({{.*}}) : (bf16, bf16, bf16) -> bf16
+    // GFX1250: llvm.intr.fma({{.*}}) : (vector<2xbf16>, vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
+    %0 = math.fma %arg0, %arg1, %arg2 : tensor<64xbf16, #blocked>
+    tt.return %0 : tensor<64xbf16, #blocked>
+  }
 }
 
 // -----
