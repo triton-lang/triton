@@ -16,24 +16,6 @@ PyObject *asPyObject(PyCodeObject *code) {
   return reinterpret_cast<PyObject *>(code);
 }
 
-// bpo-42262 added Py_NewRef() to Python 3.10.0a3
-#if PY_VERSION_HEX < 0x030A00A3 && !defined(Py_NewRef)
-PyObject *_Py_NewRef(PyObject *obj) {
-  Py_INCREF(obj);
-  return obj;
-}
-#define Py_NewRef(obj) _Py_NewRef((PyObject *)(obj))
-#endif
-
-// bpo-42262 added Py_XNewRef() to Python 3.10.0a3
-#if PY_VERSION_HEX < 0x030A00A3 && !defined(Py_XNewRef)
-PyObject *_Py_XNewRef(PyObject *obj) {
-  Py_XINCREF(obj);
-  return obj;
-}
-#define Py_XNewRef(obj) _Py_XNewRef((PyObject *)(obj))
-#endif
-
 PyCodeObject *getFrameCodeObject(PyFrameObject *frame) {
   assert(frame != nullptr);
   return PyFrame_GetCode(frame);
