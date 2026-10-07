@@ -91,40 +91,15 @@ def get_amd_codegen_target_triple(arch: str) -> str:
     return amd.get_target_triple(arch)
 
 
-_NAMED_BARRIER_INTRINSICS = (
-    "llvm.amdgcn.s.barrier.init",
-    "llvm.amdgcn.s.barrier.signal.var",
-    "llvm.amdgcn.s.barrier.join",
-    "llvm.amdgcn.s.wakeup.barrier",
-    "llvm.amdgcn.s.get.named.barrier.state",
-)
-
-
-def _upgrade_legacy_named_barrier_address_spaces(src: str) -> str:
-    upgraded = src.replace('addrspace(3) global target("amdgcn.named.barrier"',
-                           'addrspace(15) global target("amdgcn.named.barrier"')
-    for intrinsic in _NAMED_BARRIER_INTRINSICS:
-        upgraded = upgraded.replace(f"@{intrinsic}(ptr addrspace(3)", f"@{intrinsic}(ptr addrspace(15)")
-    return upgraded
-
-
 def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
                    disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
                    enable_timing: bool) -> str:
     library = _load_amd_codegen(get_amd_codegen_path())
-    upgraded_src = _upgrade_legacy_named_barrier_address_spaces(src)
-    if upgraded_src == src:
-        # Serialize with Triton's LLVM: newer backends support older bitcode,
-        # whereas textual IR has no backwards-compatibility guarantee.
-        # Express fusion permission in the IR because newer LLVM versions no
-        # longer honor TargetOptions::AllowFPOpFusion during code generation.
-        llvm_ir = llvm.to_bitcode(src, enable_fp_fusion)
-    else:
-        # LLVM commit 5bf967cb132b changed named-barrier intrinsic operands from
-        # address space 3 to 15. The bitcode reader rejects the legacy signature
-        # before the standalone code generator can upgrade the module, so send
-        # the narrowly upgraded module as text.
-        llvm_ir = upgraded_src.encode("utf-8")
+    # Serialize with Triton's LLVM: newer backends support older bitcode,
+    # whereas textual IR has no backwards-compatibility guarantee.
+    # Express fusion permission in the IR because newer LLVM versions no
+    # longer honor TargetOptions::AllowFPOpFusion during code generation.
+    llvm_ir = llvm.to_bitcode(src, enable_fp_fusion)
     options = _AMDGPUCodegenOptions(
         1,
         triple.encode("utf-8"),
