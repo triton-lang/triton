@@ -1586,8 +1586,8 @@ public:
 
   // Fp16 -> Fp8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
   SmallVector<Value> Fp16ToFp8E4M3HW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
+                                     ConversionPatternRewriter &rewriter,
+                                     const SmallVector<Value> &v) {
     assert(v.size() == 4);
     SmallVector<Value> f32Vec(4);
     for (size_t i = 0; i < 4; i++)
@@ -1654,8 +1654,8 @@ public:
 
   // Fp16 -> Bf8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
   SmallVector<Value> Fp16ToFp8E5M2HW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
+                                     ConversionPatternRewriter &rewriter,
+                                     const SmallVector<Value> &v) {
     SmallVector<Value> f32Vec(4);
     for (size_t i = 0; i < 4; i++)
       f32Vec[i] = Fp16ToFp32OneValue(loc, rewriter, v[i]);
@@ -1815,8 +1815,8 @@ public:
 
   // Bf16 -> Fp8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
   SmallVector<Value> Bf16ToFp8E4M3HW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
+                                     ConversionPatternRewriter &rewriter,
+                                     const SmallVector<Value> &v) {
     assert(v.size() == 4);
     SmallVector<Value> fp32Vec(4);
     for (size_t i = 0; i < 4; i++)
@@ -1964,8 +1964,8 @@ public:
 
   // Bf16 -> Bf8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
   SmallVector<Value> Bf16ToFp8E5M2HW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
+                                     ConversionPatternRewriter &rewriter,
+                                     const SmallVector<Value> &v) {
     assert(v.size() == 4);
     SmallVector<Value> f32Vec(4);
     for (size_t i = 0; i < 4; i++)
@@ -2168,8 +2168,8 @@ public:
 
   // Fp32 -> Fp8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
   SmallVector<Value> Fp32ToFp8E4M3HW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
+                                     ConversionPatternRewriter &rewriter,
+                                     const SmallVector<Value> &v) {
     assert(v.size() == 4);
     return Pk4Fp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, v);
   }
@@ -2256,8 +2256,8 @@ public:
 
   // Fp32 -> Bf8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
   SmallVector<Value> Fp32ToFp8E5M2HW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
+                                     ConversionPatternRewriter &rewriter,
+                                     const SmallVector<Value> &v) {
     assert(v.size() == 4);
     return Pk4Fp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, v);
   }
