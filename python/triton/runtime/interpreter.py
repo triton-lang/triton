@@ -563,13 +563,31 @@ class InterpreterBuilder:
     def cast_impl(self, src, dst_type, rounding_mode=None):
         src_element_type = src.dtype.scalar
         dst_element_type = dst_type.scalar
-        if (src_element_type == tl.bfloat16 and dst_element_type == tl.float32) or \
-           (src_element_type == tl.float32 and dst_element_type == tl.bfloat16):
-            data = _convert_float(src.data, src_element_type, dst_element_type,
-                                  rounding_mode).view(_get_np_dtype(dst_type))
-            return TensorHandle(data, dst_type.scalar)
+        data = src.data
+        dst_np_dtype = _get_np_dtype(dst_type)
+        if src_element_type.is_floating() and np.issubdtype(data.dtype, np.integer) and dst_element_type.is_int():
+            data = _convert_float(data, src_element_type, tl.float32, None).view(np.float32)
+            src_element_type = tl.float32
+        elif src_element_type.is_int() and dst_element_type.is_floating() and np.issubdtype(dst_np_dtype, np.integer):
+            data = data.astype(np.float64)
+            if src_element_type.int_bitwidth == 64:
+                # Round to odd before encoding so an inexact fp64 intermediate
+                # preserves which side of a destination midpoint the integer lies on.
+                magnitude = src.data.astype(np.uint64)
+                if src_element_type.is_int_signed():
+                    magnitude = np.where(src.data < 0, -magnitude, magnitude)
+                shift = np.maximum(np.frexp(data)[1] - 53, 0).astype(np.uint64)
+                significand = magnitude >> shift
+                discarded = magnitude & ((np.uint64(1) << shift) - np.uint64(1))
+                significand |= (discarded != 0).astype(np.uint64)
+                data = np.copysign(np.ldexp(significand.astype(np.float64), shift.astype(np.int32)), data)
+            src_element_type = tl.float64
+            rounding_mode = _ir.ROUNDING_MODE.RTNE
+        if src_element_type.is_floating() and dst_element_type.is_floating():
+            data = _convert_float(data, src_element_type, dst_element_type, rounding_mode).view(dst_np_dtype)
         else:
-            return TensorHandle(src.data.astype(_get_np_dtype(dst_type)), dst_type.scalar)
+            data = data.astype(dst_np_dtype)
+        return TensorHandle(data, dst_element_type)
 
     create_si_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_ui_to_fp = lambda self, src, dst_type: self.cast_impl(src, dst_type)
@@ -577,13 +595,8 @@ class InterpreterBuilder:
     create_fp_to_ui = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_fp_ext = lambda self, src, dst_type: self.cast_impl(src, dst_type)
     create_fp_trunc = lambda self, src, dst_type: self.cast_impl(src, dst_type, _ir.ROUNDING_MODE.RTNE)
+    create_fp_to_fp = lambda self, src, dst_type, rounding_mode: self.cast_impl(src, dst_type, rounding_mode)
     create_int_cast = lambda self, src, dst_type, is_signed: self.cast_impl(src, dst_type)
-
-    def create_fp_to_fp(self, src, dst_type, rounding_mode):
-        src_element_type = src.dtype.scalar
-        dst_element_type = dst_type.scalar
-        data = _convert_float(src.data, src_element_type, dst_element_type, rounding_mode).view(_get_np_dtype(dst_type))
-        return TensorHandle(data, dst_type.scalar)
 
     def create_bitcast(self, src, dst_type):
         return TensorHandle(src.data.view(_get_np_dtype(dst_type)), dst_type.scalar)
