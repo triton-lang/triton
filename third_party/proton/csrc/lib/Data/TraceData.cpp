@@ -367,8 +367,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         // Uncaptured graph kernels are recorded under an untimed graph launch
         // op whose parent is the CPU scope active at replay.
         if (auto it = events.find(launchEventId);
-            !isGraphLinked && it != events.end() &&
-            it->second.cpuStartTimeNs == 0)
+            !isGraphLinked && it->second.cpuStartTimeNs == 0)
           launchEventId = it->second.parentEventId;
         kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
                                             contexts, startTimeNs, endTimeNs,
