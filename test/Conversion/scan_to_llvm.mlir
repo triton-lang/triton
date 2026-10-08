@@ -10,8 +10,8 @@
 // RUN: triton-opt %t/converted-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-RETAIN
 // RUN: triton-opt %t/converted-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=TERMINAL
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=REUSE
-// RUN: triton-opt %t/parallel-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=COLUMNS
-// RUN: triton-opt %t/parallel-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=COLUMNS
+// RUN: triton-opt %t/parallel-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefixes=COLUMNS,LOCAL
+// RUN: triton-opt %t/parallel-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefixes=COLUMNS,LOCAL
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
 // RUN: triton-opt %t/ship-chunks.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=SHIP
@@ -587,6 +587,7 @@ tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #conver
 
 //--- parallel-totals.mlir
 
+#lane_local = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
 #parallel_totals = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // Preserve the eight independent register columns while replicating four
@@ -604,6 +605,32 @@ tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_tot
   }) : (tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals>
   tt.return %result : tensor<128x8xf32, #parallel_totals>
 }
+
+// Each lane owns one column. The eight warp totals stay in that lane
+// throughout the register scan and carry lookup.
+// LOCAL-LABEL: llvm.func {{.*}}@test_scan_lane_local_carries(
+// LOCAL-NOT: {{shfl|ds.bpermute|ds.swizzle|permlane}}
+// LOCAL: llvm.return
+tt.func private @test_scan_lane_local_carries(%arg: tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local>
+  tt.return %result : tensor<8x32xi32, #lane_local>
+}
+// LOCAL-LABEL: llvm.func {{.*}}@test_scan_lane_local_carries_reverse(
+// LOCAL-NOT: {{shfl|ds.bpermute|ds.swizzle|permlane}}
+// LOCAL: llvm.return
+tt.func private @test_scan_lane_local_carries_reverse(%arg: tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local>
+  tt.return %result : tensor<8x32xi32, #lane_local>
+}
+
 }
 
 //--- ship-chunks.mlir
