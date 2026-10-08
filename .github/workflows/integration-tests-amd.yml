@@ -369,6 +369,8 @@ jobs:
               -n "$workers" --durations=20 "$@"
           }
 
+          run_rocjitsu_pytest 4 4 -s --tb=short \
+            third_party/amd/python/test/test_gluon_cdna5_consan.py
           run_rocjitsu_pytest 64 1 \
             third_party/amd/python/test/test_gluon_cdna5.py \
             -k "not test_runtime_tensor_copy"

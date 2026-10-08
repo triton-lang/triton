@@ -24,7 +24,7 @@ def barrier_storage_lifetime():
     mode = sys.argv[2]
 
     @gluon.jit
-    def kernel(MODE: ttgl.constexpr):
+    def kernel(output_ptr, MODE: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
         shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
         barrier_layout: ttgl.constexpr = ttgl.amd.cdna5.mbarrier.MBarrierLayout()
@@ -33,7 +33,8 @@ def barrier_storage_lifetime():
         ttgl.amd.cdna5.mbarrier.init(barrier, count=128)
 
         if MODE == "read":
-            storage.load(layout)
+            values = storage.load(layout)
+            ttgl.store(output_ptr + ttgl.arange(0, 2, layout), values)
         elif MODE == "atomic":
             indices = ttgl.full([2], 0, ttgl.int32, layout)
             values = ttgl.full([2], 1, ttgl.int32, layout)
@@ -51,9 +52,13 @@ def barrier_storage_lifetime():
             if MODE == "use-after-store" or MODE == "partial":
                 ttgl.amd.cdna5.mbarrier.arrive(barrier, count=1)
             else:
-                storage.load(layout)
+                values = storage.load(layout)
+                ttgl.store(output_ptr + ttgl.arange(0, 2, layout), values)
 
-    kernel[(1, )](MODE=mode, num_warps=4)
+    output = torch.empty((2, ), dtype=torch.int32, device="cuda")
+    kernel[(1, )](output, MODE=mode, num_warps=4)
+    if mode == "store":
+        torch.testing.assert_close(output, torch.full_like(output, 7))
 
 
 def barrier_storage_pending_completion():
@@ -348,7 +353,8 @@ def ws_two_loads_two_bars_loop():
         acc = ttgl.zeros([XBLOCK_C], ttgl.float16, layout)
         phase = 0
         for _ in range(10):
-            ttgl.amd.cdna5.mbarrier.wait(bar.index(2), phase=phase)
+            if MISSING_BAR != "2":
+                ttgl.amd.cdna5.mbarrier.wait(bar.index(2), phase=phase)
             phase = (phase + 1) % 2
             val = smem.index(0).load(layout)
             ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
@@ -360,7 +366,8 @@ def ws_two_loads_two_bars_loop():
         acc = ttgl.zeros([XBLOCK_C], ttgl.float16, layout)
         phase = 0
         for _ in range(10):
-            ttgl.amd.cdna5.mbarrier.wait(bar.index(3), phase=phase)
+            if MISSING_BAR != "3":
+                ttgl.amd.cdna5.mbarrier.wait(bar.index(3), phase=phase)
             phase = (phase + 1) % 2
             val = smem.index(0).load(layout)
             ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=1)
@@ -971,3 +978,5 @@ if __name__ == "__main__":
     tests["barrier_storage_lifetime"] = barrier_storage_lifetime
     tests["barrier_storage_pending_completion"] = barrier_storage_pending_completion
     tests[sys.argv[1]]()
+    torch.cuda.synchronize()
+    print("ConSan helper completed", flush=True)
