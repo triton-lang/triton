@@ -107,7 +107,23 @@ private:
   int axis;
 };
 
-// Plan layouts for contiguous thread/warp segments and their totals.
+// A simple three phase shuffle-based scan lowering algorithm.
+// 1. thread local phase: scan each thread's local segment, producing a
+// thread-local total for each segment.
+// 2. warp local phase: scan the thread-local totals within each warp, producing
+// a warp-local total for each segment.
+// 3. inter-warp phase: scan the warp-local totals across warps, propagate
+// carries back to the warp-local totals, then propagate carries back to the
+// thread-local totals.
+//
+// "Segment" is a contiguous range of elements along the
+// scan axis that are owned by a single thread/warp. For example
+//   thread 0: [x0, x1], [x4, x5], [x8, x9], [x12, x13]
+//   thread 1: [x2, x3], [x6, x7], [x10, x11], [x14, x15]
+// reg bases: [1, 4, 8]
+// thread bases : [2]
+// threadLocalSegmentSize = 2, warpLocalSegmentSize = 4
+//
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
@@ -117,28 +133,27 @@ public:
     return permutedLayout;
   }
   const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
-  // Number of consecutive logical elements already owned by each thread.
+
   unsigned getThreadLocalSegmentSize() const { return threadLocalSegmentSize; }
-  // Thread-segment totals in their original owners, present for lane scans.
+
   const std::optional<triton::LinearLayout> &getIntraWarpLayout() const {
     return intraWarpLayout;
   }
-  // The same totals with contiguous registers for the intra-warp scan.
+
   const std::optional<triton::LinearLayout> &getIntraWarpScanLayout() const {
     return intraWarpScanLayout;
   }
-  // Length of a contiguous logical segment contained in one warp, measured in
-  // original elements. It can be smaller than the warp's total element count.
+
   unsigned getWarpLocalSegmentSize() const { return warpLocalSegmentSize; }
-  // Present when segment totals must be exchanged between warps.
-  // Describes those totals in the warps that computed them.
+
   const std::optional<triton::LinearLayout> &getInterWarpLayout() const {
     return interWarpLayout;
   }
-  // The full segment sequence replicated within each participating warp.
+
   const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
     return interWarpScanLayout;
   }
+
   unsigned
   getScratchSizeInBytes(GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
