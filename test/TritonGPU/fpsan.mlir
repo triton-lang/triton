@@ -804,6 +804,69 @@ tt.func public @extern_binary_known(%a: tensor<4xf32>, %b: tensor<4xf32>) -> ten
 
 // -----
 
+// CHECK-LABEL: @extern_mul_rz_known
+tt.func public @extern_mul_rz_known(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed %arg0
+  // CHECK: %[[B:.*]] = tti.experimental_fpsan_embed %arg1
+  // CHECK: %[[MUL:.*]] = arith.muli %[[A]], %[[B]]
+  // CHECK: tti.experimental_fpsan_unembed %[[MUL]]
+  // CHECK-NOT: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_fmul_rz"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_add_rn_known
+tt.func public @extern_add_rn_known(%a: f32, %b: f32) -> f32 {
+  // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed %arg0
+  // CHECK: %[[B:.*]] = tti.experimental_fpsan_embed %arg1
+  // CHECK: %[[SUM:.*]] = arith.addi %[[A]], %[[B]]
+  // CHECK: tti.experimental_fpsan_unembed %[[SUM]]
+  // CHECK-NOT: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_fadd_rn"} : (f32, f32) -> f32
+  tt.return %0 : f32
+}
+
+// -----
+
+// CHECK-LABEL: @extern_mul_rz_wrong_arity
+tt.func public @extern_mul_rz_wrong_arity(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "__nv_fmul_rz"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_add_rn_wrong_type
+tt.func public @extern_add_rn_wrong_type(%a: tensor<4xf64>, %b: tensor<4xf64>) -> tensor<4xf64> {
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_fadd_rn"} : (tensor<4xf64>, tensor<4xf64>) -> tensor<4xf64>
+  tt.return %0 : tensor<4xf64>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_dmul_rz_fallback
+tt.func public @extern_dmul_rz_fallback(%a: tensor<4xf64>, %b: tensor<4xf64>) -> tensor<4xf64> {
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.addi
+  // CHECK: arith.xori
+  // CHECK-NOT: tt.extern_elementwise
+  %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_dmul_rz"} : (tensor<4xf64>, tensor<4xf64>) -> tensor<4xf64>
+  tt.return %0 : tensor<4xf64>
+}
+
+// -----
+
 // CHECK-LABEL: @extern_ternary_known
 tt.func public @extern_ternary_known(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
   // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed

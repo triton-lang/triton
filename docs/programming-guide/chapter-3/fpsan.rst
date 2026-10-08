@@ -423,7 +423,13 @@ Supported operation:
   - there is at least one operand
   - every operand is numeric
 
-Rewrite:
+Known extern aliases use the corresponding FPSan operation model.
+In particular, CUDA fp32 ``libdevice.mul_rz`` (``__nv_fmul_rz``) and
+``libdevice.add_rn`` (``__nv_fadd_rn``) use multiplication and addition
+payload semantics, respectively. FPSan intentionally ignores their
+rounding modes; ordinary execution retains the libdevice rounding modes.
+
+Unrecognized externs and supported inline assembly use a structural tag:
 
 - rotate each operand payload by its argument index
 - sum the rotated payloads
