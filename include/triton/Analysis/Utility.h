@@ -154,14 +154,29 @@ private:
 //    Slot j now holds Uj=T(8w)+...+Tj, where w is its warp. The layout stays
 //    intraWarpScanLayout. In particular, U7 sums x0..x15 and U15 sums x16..x31.
 //
-// 3. Inter-warp phase: interWarpTotalsLayout -> interWarpScanLayout
-//    Let W0=U7 and W1=U15. Extract the terminal register and broadcast from the
-//    terminal lane of each warp-local segment. interWarpTotalsLayout describes
-//    Wj: divide intraWarpScanLayout's bases by 8 and remove zero register
-//    bases, giving R=[], L=[0], W=[1]. Coordinates now index warp-local
-//    segments.
+// 3. Inter-warp phase
+//    a. intraWarpScanLayout -> interWarpTotalsLayout
+//    The scanned thread-local totals still use R=[1,2], L=[4], W=[8]:
+//      warp 0, lane 0: U0, U1, U2, U3
+//      warp 0, lane 1: U4, U5, U6, U7
+//      warp 1, lane 0: U8, U9, U10, U11
+//      warp 1, lane 1: U12, U13, U14, U15
+//    Each warp-local segment contains 8 thread-local totals, with 4 registers
+//    per lane. extractSegmentTotals selects register 3 in each lane:
+//      warp 0: lane 0 holds U3;  lane 1 holds U7
+//      warp 1: lane 0 holds U11; lane 1 holds U15
+//    Shuffle from terminal lane 1 to every lane in the segment. Define W0=U7
+//    and W1=U15. The resulting values use interWarpTotalsLayout:
 //      warp 0, every lane: W0
 //      warp 1, every lane: W1
+//    Construct this layout by integer-dividing the source axis bases by 8:
+//    R=[0,0], L=[0], W=[1]. Remove zero register bases to obtain
+//    R=[], L=[0], W=[1]. Coordinates now index warp-local segments. The zero
+//    lane bases describe the replicas produced by the broadcast. This step
+//    extracts a separate totals array; all Uj prefixes remain available in
+//    intraWarpScanLayout for carry propagation.
+//
+//    b. interWarpTotalsLayout -> interWarpScanLayout
 //    interWarpScanLayout places the full sequence in lanes and replicates it
 //    across warps: R=[], L=[1], W=[0]. Convert through shared memory.
 //      each warp, lane 0: W0
