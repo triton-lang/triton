@@ -88,7 +88,7 @@ tt.func public @anchor_warp_register_groups(%ptr: !llvm.ptr, %arg: !llvm.struct<
 // CHECK-LABEL: @test_2d_grouped
 tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d> {
   // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK: store {{.*}}, ptr addrspace(3)
+  // CHECK: asm sideeffect "@${{[0-9]+}} st.shared::cta.
   // CHECK: @llvm.nvvm.barrier
   // CHECK: load i32, ptr addrspace(3)
   // CHECK: ret
@@ -195,7 +195,7 @@ tt.func public @anchor_permuted_lanes(%ptr: !llvm.ptr, %arg: !llvm.struct<(i32, 
 // Exchange the full sequence once, scan it within each warp, then map the
 // exclusive carries back to their original owners.
 // CHECK-NOT: @llvm.nvvm.barrier
-// CHECK: store {{.*}}, ptr addrspace(3)
+// CHECK: asm sideeffect "@${{[0-9]+}} st.shared::cta.
 // CHECK: @llvm.nvvm.barrier
 // CHECK: load i32, ptr addrspace(3)
 // CHECK-NOT: @llvm.nvvm.barrier
@@ -241,7 +241,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
 
 // CARRIES-LABEL: @test_parallel_carries
 // Scan the replicated sequence and return carries to the original owners.
-// CARRIES: store {{.*}}, ptr addrspace(3)
+// CARRIES: asm sideeffect "@${{[0-9]+}} st.shared::cta.
 // CARRIES: @llvm.nvvm.barrier
 // CARRIES: load {{.*}}, ptr addrspace(3)
 // CARRIES: @llvm.nvvm.shfl.sync.idx.i32
@@ -280,7 +280,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // GROUPS-LABEL: @test_grouped_carries
 // Replicate all 128 segment totals within each warp, including register
 // sequences, and scan them after the shared-memory conversion.
-// GROUPS: store {{.*}}, ptr addrspace(3)
+// GROUPS: asm sideeffect "@${{[0-9]+}} st.shared::cta.
 // GROUPS: @llvm.nvvm.barrier
 // GROUPS: load {{.*}}, ptr addrspace(3)
 // GROUPS: @llvm.nvvm.shfl.sync.idx.i32
@@ -323,10 +323,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // TUPLE: ttg.shared = 1024 : i32
 // TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
 // TUPLE: llvm.getelementptr %arg2[512]
-// TUPLE: llvm.store {{.*}} : vector<{{.*}}i32>, !llvm.ptr<3>
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.{{.*}}b32{{.*}}, i1)
 // TUPLE: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
-// TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.{{.*}}b64{{.*}}, i1)
 // TUPLE: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
 // TUPLE: nvvm.shfl.sync
@@ -517,16 +517,19 @@ tt.func private @test_scan_reuse_lane_lookups(%arg: tensor<4x2xi32, #parallel>) 
 // after the exchange, when applying carries to the saved prefixes.
 #converted = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[16], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Broadcast each terminal total before converting its replicated layout.
+// Only the terminal lane of the first replica stores each segment total.
 // Apply the inter-warp carry to every scanned register prefix after the exchange.
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals(
-// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
+// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(31 : i32)
+// TERMINAL-DAG: %[[END:.*]] = llvm.mlir.constant(3 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
 // TERMINAL-COUNT-2: nvvm.shfl.sync idx
-// TERMINAL: %[[TERMINAL:.*]] = llvm.or %[[LANE]], %[[MASK]] : i32
-// TERMINAL: %[[TOTAL:.*]] = nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[TERMINAL]],
-// TERMINAL: llvm.insertelement %[[TOTAL]],
-// TERMINAL: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
+// TERMINAL-NOT: nvvm.shfl.sync
+// TERMINAL: %[[OWNER:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
+// TERMINAL: %[[LANEPRED:.*]] = llvm.icmp "eq" %[[OWNER]], %[[END]] : i32
+// TERMINAL: %[[PRED:.*]] = llvm.and %[[LANEPRED]], %{{.*}} : i1
+// TERMINAL-NOT: nvvm.shfl.sync
+// TERMINAL: llvm.inline_asm {{.*}}"@$2 st.shared::cta.b32 {{.*}} %[[PRED]] : (!llvm.ptr<3>, vector<1xi32>, i1)
 // TERMINAL-NEXT: nvvm.barrier
 // TERMINAL: llvm.load
 // TERMINAL: nvvm.shfl.sync idx
@@ -534,7 +537,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
 // RETAIN: nvvm.shfl.sync idx
 // RETAIN-NOT: nvvm.shfl.sync bfly
-// RETAIN: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
+// RETAIN: llvm.inline_asm {{.*}}st.shared::cta.b32
 // RETAIN: nvvm.barrier
 // RETAIN: llvm.load
 // RETAIN: nvvm.shfl.sync bfly
@@ -553,19 +556,22 @@ tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) ->
 }
 
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse(
-// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(-4 : i32)
+// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(31 : i32)
+// TERMINAL-DAG: %[[END:.*]] = llvm.mlir.constant(0 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
 // TERMINAL-COUNT-2: nvvm.shfl.sync idx
-// TERMINAL: %[[TERMINAL:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
-// TERMINAL: %[[TOTAL:.*]] = nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[TERMINAL]],
-// TERMINAL: llvm.insertelement %[[TOTAL]],
-// TERMINAL: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
+// TERMINAL-NOT: nvvm.shfl.sync
+// TERMINAL: %[[OWNER:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
+// TERMINAL: %[[LANEPRED:.*]] = llvm.icmp "eq" %[[OWNER]], %[[END]] : i32
+// TERMINAL: %[[PRED:.*]] = llvm.and %[[LANEPRED]], %{{.*}} : i1
+// TERMINAL-NOT: nvvm.shfl.sync
+// TERMINAL: llvm.inline_asm {{.*}}"@$2 st.shared::cta.b32 {{.*}} %[[PRED]] : (!llvm.ptr<3>, vector<1xi32>, i1)
 // TERMINAL-NEXT: nvvm.barrier
 // TERMINAL: llvm.load
 // TERMINAL: nvvm.shfl.sync idx
 // TERMINAL: llvm.return
 // RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse
-// RETAIN: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
+// RETAIN: llvm.inline_asm {{.*}}st.shared::cta.b32
 // RETAIN: nvvm.barrier
 // RETAIN: llvm.load
 // RETAIN: llvm.return

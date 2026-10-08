@@ -165,20 +165,21 @@ private:
 //    per lane. extractSegmentTotals selects register 3 in each lane:
 //      warp 0: lane 0 holds U3;  lane 1 holds U7
 //      warp 1: lane 0 holds U11; lane 1 holds U15
-//    Shuffle from terminal lane 1 to every lane in the segment. Define W0=U7
-//    and W1=U15. The resulting values use interWarpTotalsLayout:
-//      warp 0, every lane: W0
-//      warp 1, every lane: W1
+//    Define W0=U7 and W1=U15. Only terminal lane 1 supplies a complete total:
+//      warp 0, lane 1: W0
+//      warp 1, lane 1: W1
+//    interWarpTotalsLayout maps these selected owners to segment indices.
 //    Construct this layout by integer-dividing the source axis bases by 8:
 //    R=[0,0], L=[0], W=[1]. Remove zero register bases to obtain
-//    R=[], L=[0], W=[1]. Coordinates now index warp-local segments. The zero
-//    lane bases describe the replicas produced by the broadcast. This step
-//    extracts a separate totals array; all Uj prefixes remain available in
-//    intraWarpScanLayout for carry propagation.
+//    R=[], L=[0], W=[1]. Coordinates now index warp-local segments. Zero lane
+//    bases map each segment's lanes to the same address. A store predicate
+//    selects the terminal lane and one owner of each replicated total. All Uj
+//    prefixes remain available in intraWarpScanLayout for carry propagation.
 //
 //    b. interWarpTotalsLayout -> interWarpScanLayout
 //    interWarpScanLayout places the full sequence in lanes and replicates it
-//    across warps: R=[], L=[1], W=[0]. Convert through shared memory.
+//    across warps: R=[], L=[1], W=[0]. Store W0 and W1 from their selected
+//    owners, synchronize, then load according to interWarpScanLayout:
 //      each warp, lane 0: W0
 //      each warp, lane 1: W1
 //    Reuse the warp-local scan in this layout. Its output has the same layout:
