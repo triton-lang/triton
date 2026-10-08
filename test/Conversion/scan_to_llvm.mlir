@@ -1,6 +1,6 @@
 // RUN: split-file %s %t
 // RUN: triton-opt %t/grouped-shared.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=ALLLANES
-// RUN: triton-opt %t/grouped-shared.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=GROUPSCAN
+// RUN: triton-opt %t/grouped-shared.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -passes=instcombine | FileCheck %s --check-prefix=GROUPSCAN
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
 // RUN: triton-opt %t/parallel-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=CARRIES
@@ -645,16 +645,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // ALLLANES-NOT: llvm.cond_br
 // ALLLANES-NOT: nvvm.shfl.sync
 // ALLLANES: llvm.return
-// GROUPSCAN-LABEL: llvm.func {{.*}}@test_scan_grouped_shared_forward(
-// GROUPSCAN: nvvm.barrier
-// GROUPSCAN: llvm.load %[[BASE:[a-zA-Z0-9]+]] {{.*}} : !llvm.ptr<3> -> i32
-// GROUPSCAN: %[[NEXT:.*]] = llvm.getelementptr %[[BASE]][1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
-// GROUPSCAN: llvm.load %[[NEXT]]
-// GROUPSCAN: llvm.getelementptr %[[BASE]][2] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
-// GROUPSCAN: llvm.getelementptr %[[BASE]][3] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
-// GROUPSCAN: llvm.add
-// GROUPSCAN: llvm.load
-// GROUPSCAN: llvm.return
+// GROUPSCAN-LABEL: define {{.*}}@test_scan_grouped_shared_forward(
+// GROUPSCAN: @llvm.nvvm.barrier
+// GROUPSCAN: load i32, ptr addrspace(3) %[[BASE:[a-zA-Z0-9]+]],
+// GROUPSCAN: %[[NEXT:.*]] = getelementptr i8, ptr addrspace(3) %[[BASE]], i64 4
+// GROUPSCAN: load i32, ptr addrspace(3) %[[NEXT]],
+// GROUPSCAN: getelementptr i8, ptr addrspace(3) %[[BASE]], i64 8
+// GROUPSCAN: getelementptr i8, ptr addrspace(3) %[[BASE]], i64 12
+// GROUPSCAN: add i32
+// GROUPSCAN: load i32
+// GROUPSCAN: ret
 tt.func private @test_scan_grouped_shared_forward(%arg: tensor<512xi32, #grouped>) -> tensor<512xi32, #grouped> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
   ^bb0(%lhs: i32, %rhs: i32):
@@ -668,16 +668,16 @@ tt.func private @test_scan_grouped_shared_forward(%arg: tensor<512xi32, #grouped
 // ALLLANES-NOT: llvm.cond_br
 // ALLLANES-NOT: nvvm.shfl.sync
 // ALLLANES: llvm.return
-// GROUPSCAN-LABEL: llvm.func {{.*}}@test_scan_grouped_shared_reverse(
-// GROUPSCAN: nvvm.barrier
-// GROUPSCAN: %[[LAST:.*]] = llvm.getelementptr %[[REVERSE_BASE:[a-zA-Z0-9]+]][15] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
-// GROUPSCAN: llvm.load %[[LAST]]
-// GROUPSCAN: llvm.getelementptr %[[REVERSE_BASE]][14] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
-// GROUPSCAN: llvm.getelementptr %[[REVERSE_BASE]][13] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
-// GROUPSCAN: llvm.getelementptr %[[REVERSE_BASE]][12] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
-// GROUPSCAN: llvm.add
-// GROUPSCAN: llvm.load
-// GROUPSCAN: llvm.return
+// GROUPSCAN-LABEL: define {{.*}}@test_scan_grouped_shared_reverse(
+// GROUPSCAN: @llvm.nvvm.barrier
+// GROUPSCAN: %[[LAST:.*]] = getelementptr i8, ptr addrspace(3) %[[REVERSE_BASE:[a-zA-Z0-9]+]], i64 60
+// GROUPSCAN: load i32, ptr addrspace(3) %[[LAST]],
+// GROUPSCAN: getelementptr i8, ptr addrspace(3) %[[REVERSE_BASE]], i64 56
+// GROUPSCAN: getelementptr i8, ptr addrspace(3) %[[REVERSE_BASE]], i64 52
+// GROUPSCAN: getelementptr i8, ptr addrspace(3) %[[REVERSE_BASE]], i64 48
+// GROUPSCAN: add i32
+// GROUPSCAN: load i32
+// GROUPSCAN: ret
 tt.func private @test_scan_grouped_shared_reverse(%arg: tensor<512xi32, #grouped>) -> tensor<512xi32, #grouped> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
   ^bb0(%lhs: i32, %rhs: i32):
