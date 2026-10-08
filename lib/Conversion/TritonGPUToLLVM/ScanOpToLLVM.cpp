@@ -396,20 +396,24 @@ private:
     return llvm::to_vector(candidates);
   }
 
-  // Select after shuffling: each destination lane may request a different
+  // Select after fetching: each destination lane may request a different
   // register from its source lane.
-  SmallVector<Value> shuffleCarry(Location loc, const ScanValues &totals,
-                                  ArrayRef<unsigned> candidates, Value srcReg,
-                                  Value srcLane,
-                                  ConversionPatternRewriter &rewriter,
-                                  std::optional<unsigned> upDistance) const {
+  SmallVector<Value> gatherCarry(Location loc, const ScanValues &totals,
+                                 ArrayRef<unsigned> candidates, Value srcReg,
+                                 Value srcLane,
+                                 ConversionPatternRewriter &rewriter,
+                                 std::optional<unsigned> upDistance,
+                                 bool laneLocal) const {
     assert(!candidates.empty() && "each segment has a warp-local carry");
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto carry = shuffleValues(loc, totals[candidates.front()], srcLane,
-                               rewriter, upDistance);
+    auto fetch = [&](unsigned reg) {
+      return laneLocal ? totals[reg]
+                       : shuffleValues(loc, totals[reg], srcLane, rewriter,
+                                       upDistance);
+    };
+    auto carry = fetch(candidates.front());
     for (unsigned candidate : candidates.drop_front()) {
-      auto incoming =
-          shuffleValues(loc, totals[candidate], srcLane, rewriter, upDistance);
+      auto incoming = fetch(candidate);
       Value select = b.icmp_eq(srcReg, b.i32_val(candidate));
       for (auto [value, source] : llvm::zip(carry, incoming))
         value = b.select(select, source, value);
@@ -437,6 +441,10 @@ private:
     // is preserved, so lookup uses only register and lane coordinates.
     auto inverse = totalsLayout.pseudoinvert().sublayout(
         llvm::to_vector(totalsLayout.getOutDimNames()), {kReg, kLane});
+    // The unshifted lookup preserves lanes, and shifting the scan coordinate
+    // cannot change the source lane when axis bits map only to registers.
+    bool laneLocal = inverse.sublayoutIsZero({axis}, {kLane}) &&
+                     segmentLayout.compose(inverse).isIdentityOnOutDim(kLane);
     unsigned numSegments = segmentLayout.getOutDimSize(axis);
     SmallVector<ScanCarry> carries;
     auto upDistance = getShuffleUpDistance(segmentLayout, inverse, op.getAxis(),
@@ -461,8 +469,8 @@ private:
       Value srcLane = src[1].second;
       auto candidates = getCarryRegisters(
           segmentLayout, inverse, r, op.getAxis(), segmentsPerScan, reverse);
-      auto carry = shuffleCarry(loc, totals, candidates, srcReg, srcLane,
-                                rewriter, upDistance);
+      auto carry = gatherCarry(loc, totals, candidates, srcReg, srcLane,
+                               rewriter, upDistance, laneLocal);
       carries.push_back({std::move(carry), pred});
     }
     return carries;
