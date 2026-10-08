@@ -403,7 +403,7 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
                          if e.get("cat") == "scope" and e["args"]["call_stack"] == ["ROOT", replay])
             starts = [e for e in flow_starts if e["tid"] == scope["tid"] and e["ts"] == scope["ts"]]
             assert len(starts) == len(kernels)
-    else: # "tree"
+    else:  # "tree"
         with temp_file.open() as f:
             data = json.load(f)
         replay0_frame = None
