@@ -1,4 +1,6 @@
 // RUN: split-file %s %t
+// RUN: triton-opt %t/grouped-shared.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=ALLLANES
+// RUN: triton-opt %t/grouped-shared.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=GROUPSCAN
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
 // RUN: triton-opt %t/parallel-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=CARRIES
@@ -238,11 +240,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // CARRIES-LABEL: @test_parallel_carries
-// Scan the replicated sequence and return carries to the original owners.
+// Each lane scans the shared totals and applies its own carry.
 // CARRIES: st.shared::cta
 // CARRIES: @llvm.nvvm.barrier
 // CARRIES: load {{.*}}, ptr addrspace(3)
-// CARRIES: @llvm.nvvm.shfl.sync.idx.i32
+// CARRIES-NOT: call {{.*}}@llvm.nvvm.shfl.sync
 // CARRIES-NOT: @llvm.nvvm.barrier
 // CARRIES: ret
 tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
@@ -276,12 +278,12 @@ tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 
 // GROUPS-LABEL: @test_grouped_carries
-// Replicate all 128 segment totals within each warp, including register
-// sequences, and scan them after a single shared-memory exchange.
+// Scan all 128 segment totals in their consuming lanes after a single
+// shared-memory exchange.
 // GROUPS: st.shared::cta
 // GROUPS: @llvm.nvvm.barrier
 // GROUPS: load {{.*}}, ptr addrspace(3)
-// GROUPS: @llvm.nvvm.shfl.sync.idx.i32
+// GROUPS-NOT: call {{.*}}@llvm.nvvm.shfl.sync
 // GROUPS: fadd float
 // GROUPS-NOT: @llvm.nvvm.barrier
 // GROUPS: ret
@@ -319,27 +321,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // TUPLE: ttg.shared = 3072 : i32
 // TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
 // TUPLE: llvm.getelementptr %arg2[2048]
-// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.v4.b32
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.b32
 // TUPLE-NOT: nvvm.barrier
-// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.v2.b64
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.b64
 // TUPLE: nvvm.barrier
-// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i32
 // TUPLE-NOT: nvvm.barrier
-// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
-// TUPLE: nvvm.shfl.sync
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i64
 // TUPLE: llvm.mul
 // TUPLE: llvm.add
 // TUPLE: llvm.return
 // AMD-TUPLE: ttg.shared = 3072 : i32
 // AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
 // AMD-TUPLE: llvm.getelementptr %arg2[2048]
-// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i32>, !llvm.ptr<3>
+// AMD-TUPLE: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
 // AMD-TUPLE-NOT: rocdl.s.barrier
-// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
+// AMD-TUPLE: llvm.store {{.*}} : vector<1xi64>, !llvm.ptr<3>
 // AMD-TUPLE: rocdl.s.barrier
-// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i32
 // AMD-TUPLE-NOT: rocdl.s.barrier
-// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i64
 // AMD-TUPLE: llvm.mul
 // AMD-TUPLE: llvm.add
 // AMD-TUPLE: llvm.return
@@ -630,5 +631,59 @@ tt.func private @test_scan_register_lane_exchanges(%arg: tensor<512xf32, #ship>)
     tt.scan.return %sum : f32
   }) : (tensor<512xf32, #ship>) -> tensor<512xf32, #ship>
   tt.return %result : tensor<512xf32, #ship>
+}
+}
+
+//--- grouped-shared.mlir
+
+#grouped = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Store consecutive totals at consecutive shared offsets. Each lane scans
+// the totals and applies its own carry before loading the next group.
+// ALLLANES-LABEL: llvm.func {{.*}}@test_scan_grouped_shared_forward(
+// ALLLANES: nvvm.barrier
+// ALLLANES-NOT: llvm.cond_br
+// ALLLANES-NOT: nvvm.shfl.sync
+// ALLLANES: llvm.return
+// GROUPSCAN-LABEL: llvm.func {{.*}}@test_scan_grouped_shared_forward(
+// GROUPSCAN: nvvm.barrier
+// GROUPSCAN: llvm.load %[[BASE:[a-zA-Z0-9]+]] {{.*}} : !llvm.ptr<3> -> i32
+// GROUPSCAN: %[[NEXT:.*]] = llvm.getelementptr %[[BASE]][1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
+// GROUPSCAN: llvm.load %[[NEXT]]
+// GROUPSCAN: llvm.getelementptr %[[BASE]][2] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
+// GROUPSCAN: llvm.getelementptr %[[BASE]][3] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
+// GROUPSCAN: llvm.add
+// GROUPSCAN: llvm.load
+// GROUPSCAN: llvm.return
+tt.func private @test_scan_grouped_shared_forward(%arg: tensor<512xi32, #grouped>) -> tensor<512xi32, #grouped> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<512xi32, #grouped>) -> tensor<512xi32, #grouped>
+  tt.return %result : tensor<512xi32, #grouped>
+}
+// ALLLANES-LABEL: llvm.func {{.*}}@test_scan_grouped_shared_reverse(
+// ALLLANES: nvvm.barrier
+// ALLLANES-NOT: llvm.cond_br
+// ALLLANES-NOT: nvvm.shfl.sync
+// ALLLANES: llvm.return
+// GROUPSCAN-LABEL: llvm.func {{.*}}@test_scan_grouped_shared_reverse(
+// GROUPSCAN: nvvm.barrier
+// GROUPSCAN: %[[LAST:.*]] = llvm.getelementptr %[[REVERSE_BASE:[a-zA-Z0-9]+]][15] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
+// GROUPSCAN: llvm.load %[[LAST]]
+// GROUPSCAN: llvm.getelementptr %[[REVERSE_BASE]][14] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
+// GROUPSCAN: llvm.getelementptr %[[REVERSE_BASE]][13] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
+// GROUPSCAN: llvm.getelementptr %[[REVERSE_BASE]][12] : (!llvm.ptr<3>) -> !llvm.ptr<3>, i32
+// GROUPSCAN: llvm.add
+// GROUPSCAN: llvm.load
+// GROUPSCAN: llvm.return
+tt.func private @test_scan_grouped_shared_reverse(%arg: tensor<512xi32, #grouped>) -> tensor<512xi32, #grouped> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<512xi32, #grouped>) -> tensor<512xi32, #grouped>
+  tt.return %result : tensor<512xi32, #grouped>
 }
 }
