@@ -272,13 +272,21 @@ def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=
 
 @pytest.mark.parametrize("dtype", [torch.int8, torch.int16, torch.int64])
 @pytest.mark.parametrize("reverse", [False, True])
-def test_scan_warp_conversion_mixed_width(dtype, reverse, device):
+@pytest.mark.parametrize("local_prefix", [False, True])
+def test_scan_warp_conversion_mixed_width(dtype, reverse, local_prefix, device):
     # Interleaved register/lane bits require conversion of the thread totals.
-    # The tuple exercises narrow packing and 64-bit shuffles with a broadcast warp.
-    layout = ttgl.DistributedLinearLayout([[8, 0], [16, 0], [0, 4], [0, 8], [0, 16]],
-                                          [[1, 0], [0, 1], [2, 0], [0, 2], [4, 0]] + [[0, 0]] *
-                                          (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32])
-    test_scan_layouts_noncommutative(layout, axis=0, reverse=reverse, M=64, device=device, a_dtype=dtype)
+    # Local prefixes also require converting the exclusive carries back.
+    if local_prefix:
+        layout = ttgl.DistributedLinearLayout([[1, 0], [16, 0], [32, 0], [0, 4], [0, 8], [0, 16]],
+                                              [[2, 0], [0, 1], [4, 0], [0, 2], [8, 0]] + [[0, 0]] *
+                                              (THREADS_PER_WARP.bit_length() - 6), [[64, 0], [0, 0]], [], [128, 32])
+        M = 128
+    else:
+        layout = ttgl.DistributedLinearLayout([[8, 0], [16, 0], [0, 4], [0, 8], [0, 16]],
+                                              [[1, 0], [0, 1], [2, 0], [0, 2], [4, 0]] + [[0, 0]] *
+                                              (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32])
+        M = 64
+    test_scan_layouts_noncommutative(layout, axis=0, reverse=reverse, M=M, device=device, a_dtype=dtype)
 
 
 @pytest.mark.parametrize("layout, M", [

@@ -113,8 +113,7 @@ private:
 // Reserve the complete CTA-local totals array so tuple operands can share a
 // single store/load barrier instead of recycling a tile independently.
 LayoutConversionScratchConfig
-getScanScratchConfig(const triton::LinearLayout &src,
-                     const triton::LinearLayout &dst,
+getScanScratchConfig(const triton::LinearLayout &totals,
                      ArrayRef<Type> elementTypes);
 
 // Plan layouts for contiguous thread/warp segments and their totals.
@@ -145,10 +144,6 @@ public:
   const std::optional<triton::LinearLayout> &getInterWarpLayout() const {
     return interWarpLayout;
   }
-  // The full segment sequence replicated within each participating warp.
-  const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
-    return interWarpScanLayout;
-  }
   unsigned getScratchSizeInBytes(ArrayRef<Type> elementTypes) const;
 
 private:
@@ -156,7 +151,6 @@ private:
   triton::LinearLayout buildIntraWarpLayout() const;
   triton::LinearLayout buildIntraWarpScanLayout() const;
   triton::LinearLayout buildInterWarpLayout() const;
-  triton::LinearLayout buildInterWarpScanLayout() const;
 
   unsigned axis;
   triton::LinearLayout originalLayout;
@@ -168,7 +162,6 @@ private:
   std::optional<triton::LinearLayout> intraWarpLayout;
   std::optional<triton::LinearLayout> intraWarpScanLayout;
   std::optional<triton::LinearLayout> interWarpLayout;
-  std::optional<triton::LinearLayout> interWarpScanLayout;
 };
 
 // Helper class for lowering `tt.gather` operations. This class shares lowering

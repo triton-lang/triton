@@ -4,8 +4,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
-#include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/SetVector.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -48,14 +46,13 @@ LinearLayout getSharedScanLayout(const LinearLayout &src, unsigned axis) {
 SmallVector<SharedScanOperand>
 storeScanTotals(Location loc, ConversionPatternRewriter &rewriter,
                 triton::ScanOp op, const LinearLayout &src,
-                const LinearLayout &dst,
                 const SmallVector<SmallVector<Value>> &values,
                 const LLVMTypeConverter *typeConverter,
                 const TargetInfoBase &targetInfo, Value storePred = {}) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto *ctx = rewriter.getContext();
   auto shared = getSharedScanLayout(src, op.getAxis());
-  auto scratch = getScanScratchConfig(src, dst, op.getElementTypes());
+  auto scratch = getScanScratchConfig(src, op.getElementTypes());
   auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   if (!storePred) {
@@ -303,35 +300,32 @@ private:
     }
   }
 
-  // Complete lane totals with the inter-warp carry before shifting them to
-  // the local prefixes. Each nonterminal register receives one complete carry.
-  void completeLaneTotals(triton::ScanOp op, ScanValues &values,
-                          const LinearLayout &layout, unsigned numRegs,
-                          unsigned segmentSize,
-                          ArrayRef<ScanCarry> interWarpCarries, Value laneId,
-                          ConversionPatternRewriter &rewriter,
-                          unsigned firstSegment = 0) const {
+  // Complete inclusive totals and, when requested, their exclusive carries
+  // in the warp-scan layout. The first logical lane takes the inter-warp carry.
+  ScanValues completeLaneTotals(triton::ScanOp op, ScanValues &values,
+                                const LinearLayout &layout, unsigned numRegs,
+                                unsigned segmentSize,
+                                ArrayRef<ScanCarry> interWarpCarries,
+                                Value laneId, bool needCarries,
+                                ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     std::pair<Value, Value> step;
-    if (numRegs > 1)
+    if (numRegs > 1 || needCarries)
       step = getLaneScanStep(op, layout, numRegs, segmentSize, laneId, 1,
                              rewriter);
+    ScanValues carries(needCarries ? values.size() : 0);
     assert(interWarpCarries.empty() ||
-           values.size() >= (firstSegment + interWarpCarries.size()) * numRegs);
-    unsigned end = interWarpCarries.empty()
-                       ? values.size()
-                       : (firstSegment + interWarpCarries.size()) * numRegs;
-    for (unsigned base = firstSegment * numRegs; base < end; base += numRegs) {
+           values.size() == interWarpCarries.size() * numRegs);
+    for (unsigned base = 0; base < values.size(); base += numRegs) {
       unsigned last = base + (op.getReverse() ? 0 : numRegs - 1);
-      const ScanCarry *interWarp =
-          interWarpCarries.empty()
-              ? nullptr
-              : &interWarpCarries[base / numRegs - firstSegment];
+      const ScanCarry *interWarp = interWarpCarries.empty()
+                                       ? nullptr
+                                       : &interWarpCarries[base / numRegs];
       if (interWarp)
         values[last] = combineWithPrefix(op, interWarp->values, values[last],
                                          rewriter, interWarp->pred);
-      if (numRegs == 1)
+      if (numRegs == 1 && !needCarries)
         continue;
       auto [lane, pred] = step;
       auto prefix = shuffleValues(loc, values[last], lane, rewriter);
@@ -344,7 +338,14 @@ private:
       for (unsigned r = base; r < base + numRegs; ++r)
         if (r != last)
           values[r] = combineWithPrefix(op, prefix, values[r], rewriter, pred);
+      if (needCarries)
+        for (unsigned i = 0; i < numRegs; ++i) {
+          unsigned r = base + (op.getReverse() ? numRegs - 1 - i : i);
+          carries[r] =
+              i == 0 ? prefix : values[op.getReverse() ? r + 1 : r - 1];
+        }
     }
+    return carries;
   }
 
   // Scan thread-segment totals, leaving native prefixes untouched.
@@ -396,7 +397,6 @@ private:
       for (const auto &basis : layout.getBases().lookup(dim))
         groupSize = std::max(groupSize, unsigned(2 * basis[op.getAxis()]));
     bool reverse = op.getReverse();
-    unsigned numOperands = op.getNumOperands();
     SmallVector<Value> undef;
     SmallVector<LinearLayout> loadLayouts;
     for (auto [i, operand] : llvm::enumerate(operands)) {
@@ -406,30 +406,26 @@ private:
       loadLayouts.push_back(operand.layout.pseudoinvert());
     }
 
-    llvm::MapVector<SmallVector<int32_t>, SmallVector<unsigned>> columns;
-    SmallVector<unsigned> registerSegments;
-    for (unsigned r = 0; r < numRegs; ++r) {
-      auto coords =
-          layout.apply({{kReg, r}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
-      SmallVector<int32_t> column;
-      for (auto [dim, coord] : coords)
-        if (dim != axis)
-          column.push_back(coord);
-      columns[column].push_back(r);
-      registerSegments.push_back(coords[op.getAxis()].second);
-    }
-    for (const auto &[column, registers] : columns) {
-      llvm::MapVector<unsigned, SmallVector<unsigned>> groups;
-      for (unsigned r : registers)
-        groups[registerSegments[r] / groupSize].push_back(r);
+    auto axisRegisters = layout.sublayout({kReg}, {axis});
+    unsigned regsPerScan =
+        axisRegisters.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
+    unsigned regsPerGroup = axisRegisters.resizeOutDim(axis, groupSize)
+                                .removeZeroBasesAlongDim(kReg)
+                                .getInDimSize(kReg);
+    for (unsigned column = 0; column < numRegs; column += regsPerScan) {
       SmallVector<Value> acc;
-      for (unsigned g = 0; g < groups.size(); ++g) {
-        auto &[group, groupRegs] =
-            *(groups.begin() + (reverse ? groups.size() - 1 - g : g));
-        assert(groupRegs.back() - groupRegs.front() + 1 == groupRegs.size());
+      for (unsigned g = 0; g < regsPerScan; g += regsPerGroup) {
+        unsigned firstReg =
+            column + (reverse ? regsPerScan - g - regsPerGroup : g);
+        auto groupRegs = llvm::seq(firstReg, firstReg + regsPerGroup);
+        unsigned firstIndex = layout
+                                  .apply({{kReg, firstReg},
+                                          {kLane, 0},
+                                          {kWarp, 0},
+                                          {kBlock, 0}})[op.getAxis()]
+                                  .second;
         SmallVector<Value> indices;
-        SmallVector<Value> predicates;
-        SmallVector<Value> carries;
+        SmallVector<ScanCarry> carries;
         for (unsigned r : groupRegs) {
           auto coords = applyLinearLayout(loc, rewriter, layout,
                                           {{kReg, b.i32_val(r)},
@@ -438,25 +434,22 @@ private:
                                            {kBlock, b.i32_val(0)}});
           Value index = coords[op.getAxis()].second;
           indices.push_back(index);
-          predicates.push_back(
-              b.icmp_ne(index, b.i32_val(reverse ? numSegments - 1 : 0)));
-          llvm::append_range(carries, undef);
+          carries.push_back(
+              {undef,
+               b.icmp_ne(index, b.i32_val(reverse ? numSegments - 1 : 0))});
         }
         auto coords = applyLinearLayout(loc, rewriter, layout,
-                                        {{kReg, b.i32_val(groupRegs.front())},
+                                        {{kReg, b.i32_val(firstReg)},
                                          {kLane, laneId},
                                          {kWarp, warpId},
                                          {kBlock, b.i32_val(0)}});
         for (unsigned step = 0; step < groupSize; ++step) {
-          unsigned index =
-              group * groupSize + (reverse ? groupSize - 1 - step : step);
+          unsigned index = firstIndex + (reverse ? groupSize - 1 - step : step);
           if (!acc.empty())
             for (unsigned r = 0; r < groupRegs.size(); ++r) {
               Value take = b.icmp_eq(indices[r], b.i32_val(index));
-              for (unsigned i = 0; i < numOperands; ++i) {
-                unsigned slot = r * numOperands + i;
-                carries[slot] = b.select(take, acc[i], carries[slot]);
-              }
+              for (auto [carry, prefix] : llvm::zip(carries[r].values, acc))
+                carry = b.select(take, prefix, carry);
             }
           // No consumer needs the total after the final segment.
           if (index == (reverse ? 0 : numSegments - 1))
@@ -482,13 +475,7 @@ private:
           }
           acc = applyCombineOp(loc, rewriter, op.getCombineOp(), acc, incoming);
         }
-        SmallVector<ScanCarry> result;
-        for (unsigned r = 0; r < groupRegs.size(); ++r) {
-          SmallVector<Value> values(carries.begin() + r * numOperands,
-                                    carries.begin() + (r + 1) * numOperands);
-          result.push_back({std::move(values), predicates[r]});
-        }
-        consume(groupRegs.front(), result);
+        consume(firstReg, carries);
       }
     }
   }
@@ -511,7 +498,6 @@ private:
     if (helper.getIntraWarpScanLayout())
       segmentSize /= helper.getThreadLocalSegmentSize();
     const auto &interWarpLayout = *helper.getInterWarpLayout();
-    const auto &totalsLayout = *helper.getInterWarpScanLayout();
     bool reverse = op.getReverse();
     auto kReg = StringAttr::get(ctx, "register");
     unsigned segmentRegs =
@@ -537,190 +523,125 @@ private:
             storePred ? b.and_(storePred, representative) : representative;
       }
     auto operands = storeScanTotals(loc, rewriter, op, interWarpLayout,
-                                    totalsLayout, transposeValues(totals),
-                                    getTypeConverter(), targetInfo, storePred);
-    scanSharedTotals(op, interWarpLayout, operands, laneId, warpId, rewriter,
-                     [&](unsigned firstSegment, ArrayRef<ScanCarry> carries) {
-                       applyScanCarries(op, helper, values, intraWarpTotals,
-                                        carries, laneId, warpId, rewriter,
-                                        firstSegment);
-                     });
+                                    transposeValues(totals), getTypeConverter(),
+                                    targetInfo, storePred);
+    unsigned valuesPerSegment =
+        values.size() / interWarpLayout.getInDimSize(kReg);
+    unsigned totalsPerSegment =
+        intraWarpTotals.size() / interWarpLayout.getInDimSize(kReg);
+    scanSharedTotals(
+        op, interWarpLayout, operands, laneId, warpId, rewriter,
+        [&](unsigned first, ArrayRef<ScanCarry> carries) {
+          auto groupValues = MutableArrayRef(values).slice(
+              first * valuesPerSegment, carries.size() * valuesPerSegment);
+          auto groupTotals = ArrayRef(intraWarpTotals)
+                                 .slice(first * totalsPerSegment,
+                                        carries.size() * totalsPerSegment);
+          applyScanCarries(op, helper, groupValues, groupTotals, carries,
+                           laneId, warpId, rewriter);
+        });
+  }
+
+  // Restrict register ownership to one group and compact its coordinates.
+  // Omitted register bits select other groups or independent scans.
+  static LinearLayout getGroupLayout(const LinearLayout &layout,
+                                     unsigned numRegs) {
+    auto kReg = StringAttr::get(layout.getInDimNames().begin()->getContext(),
+                                "register");
+    auto group = layout.resizeInDim(kReg, numRegs);
+    auto bases = group.getBases();
+    auto inDims = llvm::to_vector(group.getInDimNames());
+    auto outDims = llvm::to_vector(group.getOutDimNames());
+    for (auto [d, dim] : llvm::enumerate(outDims)) {
+      unsigned mask = getOutputBasisMask(group, inDims, dim);
+      for (auto &[inDim, dimBases] : bases)
+        for (auto &basis : dimBases)
+          if (basis[d])
+            basis[d] = 1u << llvm::popcount(mask & (basis[d] - 1));
+    }
+    return LinearLayout(std::move(bases), outDims);
   }
 
   // Include inter-warp carries in the thread totals before fetching the
   // preceding thread's total, so each local prefix receives one complete carry.
   void applyScanCarries(triton::ScanOp op, const ScanLoweringHelper &helper,
-                        ScanValues &values, ScanValues &intraWarpTotals,
+                        MutableArrayRef<SmallVector<Value>> values,
+                        ArrayRef<SmallVector<Value>> intraWarpTotals,
                         ArrayRef<ScanCarry> interWarpCarries, Value laneId,
-                        Value warpId, ConversionPatternRewriter &rewriter,
-                        unsigned firstSegment = 0) const {
+                        Value warpId,
+                        ConversionPatternRewriter &rewriter) const {
     auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
     auto kReg = StringAttr::get(op.getContext(), "register");
-    unsigned interWarpRegs = 0;
-    if (helper.getInterWarpLayout()) {
-      const auto &layout = *helper.getInterWarpLayout();
-      interWarpRegs = helper.getPermutedLayout().getInDimSize(kReg) /
-                      layout.getInDimSize(kReg);
-    }
-    unsigned firstReg = firstSegment * interWarpRegs;
-    unsigned endReg = interWarpCarries.empty()
-                          ? values.size()
-                          : firstReg + interWarpCarries.size() * interWarpRegs;
+    unsigned interWarpRegs =
+        interWarpCarries.empty() ? 0 : values.size() / interWarpCarries.size();
     if (!helper.getIntraWarpLayout()) {
       if (!interWarpCarries.empty())
         applySegmentCarries(op, values, interWarpCarries, interWarpRegs,
-                            rewriter, /*skipTerminal=*/false, firstSegment);
+                            rewriter);
       return;
     }
 
-    const auto &intraWarpLayout = *helper.getIntraWarpLayout();
+    // Restrict the layouts to this group's registers. Higher register bits
+    // select other groups and independent scans, whose carries are separate.
+    auto intraWarpLayout =
+        getGroupLayout(*helper.getIntraWarpLayout(), intraWarpTotals.size());
     unsigned segmentRegs = helper.getThreadLocalSegmentSize();
     unsigned numSegments = helper.getWarpLocalSegmentSize() / segmentRegs;
-    const auto &scanLayout = *helper.getIntraWarpScanLayout();
+    auto scanLayout = getGroupLayout(*helper.getIntraWarpScanLayout(),
+                                     intraWarpTotals.size());
     auto axis =
         StringAttr::get(op.getContext(), "dim" + std::to_string(op.getAxis()));
     unsigned numRegs =
         scanLayout.sublayout({kReg}, {axis}).getNumConsecutiveInOut();
-    auto completedTotals = intraWarpTotals;
-    completeLaneTotals(op, completedTotals, scanLayout, numRegs, numSegments,
-                       interWarpCarries, laneId, rewriter, firstSegment);
+    auto completedTotals = llvm::to_vector(intraWarpTotals);
+    auto threadCarries = completeLaneTotals(
+        op, completedTotals, scanLayout, numRegs, numSegments, interWarpCarries,
+        laneId, /*needCarries=*/segmentRegs > 1, rewriter);
     convertScanValues(op, completedTotals, scanLayout, intraWarpLayout,
                       rewriter);
 
     // Terminal prefixes are complete; only the other registers need carries.
-    for (unsigned r = firstReg / segmentRegs; r < endReg / segmentRegs; ++r)
+    for (unsigned r = 0; r < completedTotals.size(); ++r)
       values[r * segmentRegs + (op.getReverse() ? 0 : segmentRegs - 1)] =
           completedTotals[r];
     if (segmentRegs == 1)
       return;
 
-    auto carries =
-        getSegmentCarries(op, completedTotals, intraWarpLayout, intraWarpLayout,
-                          numSegments, laneId, warpId, rewriter);
-    if (!interWarpCarries.empty()) {
-      for (unsigned r = firstReg / segmentRegs; r < endReg / segmentRegs; ++r) {
-        auto &carry = carries[r];
-        const auto &interWarpCarry =
-            interWarpCarries[r * segmentRegs / interWarpRegs - firstSegment];
-        // The first thread segment has no preceding local total. Use the
-        // inter-warp carry there, and leave the scan boundary untouched.
-        for (auto [value, interWarpValue] :
-             llvm::zip(carry.values, interWarpCarry.values))
-          value = b.select(carry.pred, value, interWarpValue);
-        carry.pred = b.or_(carry.pred, interWarpCarry.pred);
-      }
-    }
-    applySegmentCarries(
-        op, values,
-        ArrayRef<ScanCarry>(carries).slice(firstReg / segmentRegs,
-                                           (endReg - firstReg) / segmentRegs),
-        segmentRegs, rewriter, /*skipTerminal=*/true, firstReg / segmentRegs);
-  }
-
-  // Enumerate the source registers that the lanes of this segment can request.
-  static SmallVector<unsigned>
-  getCarryRegisters(const LinearLayout &segmentLayout,
-                    const LinearLayout &inverseTotalsLayout, unsigned reg,
-                    unsigned axis, unsigned segmentsPerScan, bool reverse) {
-    auto *ctx = segmentLayout.getInDimNames().begin()->getContext();
-    auto kReg = StringAttr::get(ctx, "register");
-    auto kLane = StringAttr::get(ctx, "lane");
-    auto kWarp = StringAttr::get(ctx, "warp");
-    auto kBlock = StringAttr::get(ctx, "block");
-    unsigned mask = segmentsPerScan - 1;
-    llvm::SmallSetVector<unsigned, 8> candidates;
-    for (unsigned warp = 0; warp < segmentLayout.getInDimSize(kWarp); ++warp)
-      for (unsigned lane = 0; lane < segmentLayout.getInDimSize(kLane);
-           ++lane) {
-        auto coords = segmentLayout.apply(
-            {{kReg, reg}, {kLane, lane}, {kWarp, warp}, {kBlock, 0}});
-        auto &index = coords[axis].second;
-        index = (index & ~mask) | ((index + (reverse ? 1 : -1)) & mask);
-        candidates.insert(inverseTotalsLayout.apply(coords).front().second);
-      }
-    return llvm::to_vector(candidates);
-  }
-
-  // Select after shuffling: each destination lane may request a different
-  // register from its source lane.
-  SmallVector<Value> shuffleCarry(Location loc, const ScanValues &totals,
-                                  ArrayRef<unsigned> candidates, Value srcReg,
-                                  Value srcLane,
-                                  ConversionPatternRewriter &rewriter) const {
-    assert(!candidates.empty() && "each segment has a warp-local carry");
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto carry =
-        shuffleValues(loc, totals[candidates.front()], srcLane, rewriter);
-    for (unsigned candidate : candidates.drop_front()) {
-      auto incoming = shuffleValues(loc, totals[candidate], srcLane, rewriter);
-      Value select = b.icmp_eq(srcReg, b.i32_val(candidate));
-      for (auto [value, source] : llvm::zip(carry, incoming))
-        value = b.select(select, source, value);
-    }
-    return carry;
-  }
-
-  // Map each native segment to its exclusive carry in the totals layout.
-  SmallVector<ScanCarry>
-  getSegmentCarries(triton::ScanOp op, const ScanValues &totals,
-                    const LinearLayout &segmentLayout,
-                    const LinearLayout &totalsLayout, unsigned segmentsPerScan,
-                    Value laneId, Value warpId,
-                    ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto *ctx = op.getContext();
-    auto kReg = StringAttr::get(ctx, "register");
-    auto kLane = StringAttr::get(ctx, "lane");
-    auto kWarp = StringAttr::get(ctx, "warp");
-    auto kBlock = StringAttr::get(ctx, "block");
-    auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
-    bool reverse = op.getReverse();
-    // All required totals are present in this warp.
-    auto inverse = totalsLayout.pseudoinvert().sublayout(
-        llvm::to_vector(totalsLayout.getOutDimNames()), {kReg, kLane});
-    unsigned numSegments = segmentLayout.getOutDimSize(axis);
+    convertScanValues(op, threadCarries, scanLayout, intraWarpLayout, rewriter);
+    auto kLane = StringAttr::get(op.getContext(), "lane");
+    auto kWarp = StringAttr::get(op.getContext(), "warp");
+    auto kBlock = StringAttr::get(op.getContext(), "block");
     SmallVector<ScanCarry> carries;
-    for (unsigned r = 0; r < segmentLayout.getInDimSize(kReg); ++r) {
-      // Evaluate the logical segment before shifting. CTA ownership is
-      // unchanged.
-      auto coords = applyLinearLayout(loc, rewriter, segmentLayout,
+    for (unsigned r = 0; r < threadCarries.size(); ++r) {
+      auto coords = applyLinearLayout(op.getLoc(), rewriter, intraWarpLayout,
                                       {{kReg, b.i32_val(r)},
                                        {kLane, laneId},
                                        {kWarp, warpId},
                                        {kBlock, b.i32_val(0)}});
-      Value segment = coords[op.getAxis()].second;
-      Value segmentInScan = segment;
-      if (segmentsPerScan != numSegments)
-        segmentInScan = b.and_(segment, b.i32_val(segmentsPerScan - 1));
-      Value pred = b.icmp_ne(segmentInScan,
-                             b.i32_val(reverse ? segmentsPerScan - 1 : 0));
-      // Wrap within this scan; pred excludes the boundary without an identity.
-      coords[op.getAxis()].second = shiftWithinSegment(
-          b, segment, reverse ? 1 : -1, segmentsPerScan, numSegments);
-      auto src = applyLinearLayout(loc, rewriter, inverse, coords);
-      Value srcReg = src[0].second;
-      Value srcLane = src[1].second;
-      auto candidates = getCarryRegisters(
-          segmentLayout, inverse, r, op.getAxis(), segmentsPerScan, reverse);
-      auto carry =
-          shuffleCarry(loc, totals, candidates, srcReg, srcLane, rewriter);
-      carries.push_back({std::move(carry), pred});
+      Value index =
+          b.and_(coords[op.getAxis()].second, b.i32_val(numSegments - 1));
+      Value pred =
+          b.icmp_ne(index, b.i32_val(op.getReverse() ? numSegments - 1 : 0));
+      if (!interWarpCarries.empty())
+        pred =
+            b.or_(pred, interWarpCarries[r * segmentRegs / interWarpRegs].pred);
+      carries.push_back({std::move(threadCarries[r]), pred});
     }
-    return carries;
+    applySegmentCarries(op, values, carries, segmentRegs, rewriter,
+                        /*skipTerminal=*/true);
   }
 
-  void applySegmentCarries(triton::ScanOp op, ScanValues &values,
+  void applySegmentCarries(triton::ScanOp op,
+                           MutableArrayRef<SmallVector<Value>> values,
                            ArrayRef<ScanCarry> carries, unsigned segmentRegs,
                            ConversionPatternRewriter &rewriter,
-                           bool skipTerminal = false,
-                           unsigned firstSegment = 0) const {
-    assert(values.size() >= (firstSegment + carries.size()) * segmentRegs);
+                           bool skipTerminal = false) const {
+    assert(values.size() == carries.size() * segmentRegs);
     unsigned begin = skipTerminal && op.getReverse() ? 1 : 0;
     unsigned end = segmentRegs - (skipTerminal && !op.getReverse());
     for (auto [r, carry] : llvm::enumerate(carries))
       for (unsigned j = begin; j < end; ++j) {
-        unsigned reg = (firstSegment + r) * segmentRegs + j;
+        unsigned reg = r * segmentRegs + j;
         values[reg] = combineWithPrefix(op, carry.values, values[reg], rewriter,
                                         carry.pred);
       }

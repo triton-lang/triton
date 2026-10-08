@@ -349,7 +349,6 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
     return;
 
   interWarpLayout = buildInterWarpLayout();
-  interWarpScanLayout = buildInterWarpScanLayout();
 }
 
 LinearLayout ScanLoweringHelper::buildPermutedLayout() {
@@ -419,37 +418,6 @@ LinearLayout ScanLoweringHelper::buildInterWarpLayout() const {
   return getScanTotalsLayout(sourceLayout, axis, segmentSize);
 }
 
-LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
-  // Replicate every segment total within each participating warp. With two
-  // free lane bits and eight segments: lane=[1,2], register=[4], warp=[0].
-  // Independent scans and CTA ownership retain their original coordinates.
-  auto *ctx = interWarpLayout->getInDimNames().begin()->getContext();
-  auto kReg = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
-  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
-  unsigned numSegments = interWarpLayout->getOutDimSize(axisDim);
-  auto bases = interWarpLayout->getBases();
-  for (auto &[dim, dimBases] : bases)
-    for (auto &basis : dimBases)
-      basis[axis] = 0;
-  unsigned next = 1;
-  for (auto &basis : bases[kLane])
-    if (next < numSegments &&
-        llvm::all_of(basis, [](int32_t x) { return x == 0; })) {
-      basis[axis] = next;
-      next *= 2;
-    }
-  while (next < numSegments) {
-    std::vector<int32_t> basis(interWarpLayout->getNumOutDims(), 0);
-    basis[axis] = next;
-    bases[kReg].push_back(std::move(basis));
-    next *= 2;
-  }
-  return LinearLayout(std::move(bases),
-                      llvm::to_vector(interWarpLayout->getOutDimNames()))
-      .removeZeroBasesAlongDim(kReg);
-}
-
 bool ScanLoweringHelper::isSupported() {
   // A CTA may own or replicate an independent scan, but two CTAs cannot own
   // different parts of one scan's axis: this lowering has no cross-CTA carry.
@@ -460,10 +428,9 @@ bool ScanLoweringHelper::isSupported() {
 }
 
 LayoutConversionScratchConfig
-getScanScratchConfig(const LinearLayout &src, const LinearLayout &dst,
-                     ArrayRef<Type> elementTypes) {
+getScanScratchConfig(const LinearLayout &src, ArrayRef<Type> elementTypes) {
   return getLayoutConversionScratchConfig(
-      src, dst, elementTypes,
+      src, src, elementTypes,
       [](const LinearLayout &src, const LinearLayout &, unsigned) {
         unsigned blocks = product(triton::gpu::getCTASplitNum(
             triton::gpu::GenericLinearEncodingAttr::get(
@@ -478,9 +445,7 @@ ScanLoweringHelper::getScratchSizeInBytes(ArrayRef<Type> elementTypes) const {
   // Store the complete CTA-local array for the single totals exchange.
   if (!interWarpLayout)
     return 0;
-  return getScanScratchConfig(*interWarpLayout, *interWarpScanLayout,
-                              elementTypes)
-      .sizeInBytes;
+  return getScanScratchConfig(*interWarpLayout, elementTypes).sizeInBytes;
 }
 
 static void computeTranspositionSelectors(
