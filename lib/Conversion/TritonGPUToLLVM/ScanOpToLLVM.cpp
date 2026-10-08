@@ -131,131 +131,13 @@ private:
 
   void convertScanValues(triton::ScanOp op, ScanValues &values,
                          const LinearLayout &src, const LinearLayout &dst,
-                         ConversionPatternRewriter &rewriter) const {
+                         ConversionPatternRewriter &rewriter,
+                         bool forceWarpShuffle = true) const {
     if (src == dst)
       return;
     auto operands = convertLayoutValues(
         op.getLoc(), rewriter, op, src, dst, transposeValues(values),
-        getTypeConverter(), targetInfo, /*forceWarpShuffle=*/true);
-    values = transposeValues(operands);
-  }
-
-  // Store only complete segment totals. Loads replicate them into the layout
-  // used to scan the full totals sequence within each warp.
-  void convertScanTotals(triton::ScanOp op, ScanValues &values,
-                         const LinearLayout &src, const LinearLayout &dst,
-                         Value storePred, Value laneId, Value warpId,
-                         ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    auto *ctx = op.getContext();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto kReg = StringAttr::get(ctx, "register");
-    auto kBlock = StringAttr::get(ctx, "block");
-    auto kReps = StringAttr::get(ctx, "reps");
-    auto kOffset = StringAttr::get(ctx, "offset");
-    auto scratch = getLayoutConversionScratchConfig(
-        src, dst, op.getElementTypes(),
-        [&](const LinearLayout &src, const LinearLayout &dst,
-            unsigned bitwidth) {
-          auto vecBitwidth =
-              triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
-          auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-          return getNumScratchElemsSwizzledCvt(
-              src, dst, bitwidth, targetInfo.getSharedMemoryBanks(), srcTile,
-              dstTile);
-        });
-    auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-    struct OperandConversion {
-      Type originalType, elemType;
-      LinearLayout storeCvt, loadCvt;
-      ColumnAction restoreOrder;
-      Value smemBase;
-      unsigned numReps;
-      SmallVector<Value> result;
-    };
-    SmallVector<OperandConversion, 2> conversions;
-    unsigned maxNumReps = 0;
-    auto operands = transposeValues(values);
-    for (auto [i, operand] : llvm::enumerate(operands)) {
-      Type originalType = operand.front().getType();
-      bool isPointer = isa<LLVM::LLVMPointerType>(originalType);
-      bool isSubByte = !isPointer && originalType.getIntOrFloatBitWidth() < 8;
-      Type elemType = isPointer   ? Type(rewriter.getI64Type())
-                      : isSubByte ? Type(rewriter.getI8Type())
-                                  : originalType;
-      if (isPointer || isSubByte)
-        for (Value &value : operand)
-          value = isPointer ? Value(b.ptrtoint(elemType, value))
-                            : Value(b.zext(elemType, value));
-      unsigned bitwidth = elemType.getIntOrFloatBitWidth();
-      auto vecBitwidth = triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
-      auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-      auto smem = triton::gpu::optimalSwizzlingLdSt(
-          src, dst, bitwidth, targetInfo.getSharedMemoryBanks(), srcTile,
-          dstTile);
-      unsigned numReps = smem.getInDimSize(kReps);
-      auto reps = LinearLayout::identity1D(numReps, kReg, kReps);
-      auto storeCvt = src.invertAndCompose(smem);
-      auto loadCvt = invertAndComposeLocal(smem, dst, {kBlock});
-      auto storeOrder = regPermForDivide(storeCvt, reps, false).value();
-      auto loadOrder = regPermForDivide(loadCvt, reps, false).value();
-      storeCvt = *divideRight(storeOrder.apply(storeCvt), reps);
-      loadCvt = *divideRight(loadOrder.apply(loadCvt), reps);
-      unsigned numBlocks = storeCvt.getInDimSize(kBlock);
-      storeCvt = storeCvt.reshapeOuts(
-          {{kOffset, storeCvt.getTotalOutDimSize() / numBlocks},
-           {kBlock, numBlocks}});
-      loadCvt = loadCvt.reshapeOuts(
-          {{kOffset, loadCvt.getTotalOutDimSize() / numBlocks},
-           {kBlock, numBlocks}});
-      operand = storeOrder.apply(operand);
-      Value smemBase = b.gep(base.getType(), rewriter.getI8Type(), base,
-                             b.i32_val(scratch.offsets[i]));
-      maxNumReps = std::max(maxNumReps, numReps);
-      conversions.push_back({originalType,
-                             elemType,
-                             std::move(storeCvt),
-                             std::move(loadCvt),
-                             loadOrder.inverse(),
-                             smemBase,
-                             numReps,
-                             {}});
-    }
-
-    // Operands have separate scratch allocations and may use different numbers
-    // of tiles. Share each tile's barrier across all participating operands.
-    for (unsigned rep = 0; rep < maxNumReps; ++rep) {
-      if (rep)
-        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
-      for (auto [operand, cvt] : llvm::zip(operands, conversions)) {
-        if (rep >= cvt.numReps)
-          continue;
-        unsigned tileSize = cvt.storeCvt.getInDimSize(kReg);
-        lowerLdSt(loc, ctx, cvt.storeCvt,
-                  ArrayRef<Value>(operand).slice(rep * tileSize, tileSize),
-                  cvt.elemType, cvt.smemBase, {}, b.i32_val(0), 0, Value(), 0,
-                  laneId, warpId, rewriter, targetInfo, {},
-                  makeSharedStoreEmitter(targetInfo, storePred));
-      }
-      targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
-      for (auto &cvt : conversions) {
-        if (rep >= cvt.numReps)
-          continue;
-        llvm::append_range(cvt.result,
-                           lowerLdSt(loc, ctx, cvt.loadCvt, {}, cvt.elemType,
-                                     cvt.smemBase, {}, b.i32_val(0), 0, Value(),
-                                     0, laneId, warpId, rewriter, targetInfo,
-                                     {}, makeSharedLoadEmitter(targetInfo)));
-      }
-    }
-    for (auto [operand, cvt] : llvm::zip(operands, conversions)) {
-      operand = cvt.restoreOrder.apply(cvt.result);
-      if (cvt.originalType != cvt.elemType)
-        for (Value &value : operand)
-          value = isa<LLVM::LLVMPointerType>(cvt.originalType)
-                      ? Value(b.inttoptr(cvt.originalType, value))
-                      : Value(b.trunc(cvt.originalType, value));
-    }
+        getTypeConverter(), targetInfo, forceWarpShuffle);
     values = transposeValues(operands);
   }
 
@@ -362,8 +244,8 @@ private:
     return totals;
   }
 
-  // Store each warp-local segment total once, then load and scan the full
-  // sequence in each participating warp. Return exclusive carries in the
+  // Convert warp-local segment totals into the full sequence in each
+  // participating warp, then scan it. Return exclusive carries in the
   // original warp-segment ownership.
   SmallVector<ScanCarry>
   scanAcrossWarps(triton::ScanOp op, const ScanLoweringHelper &helper,
@@ -391,19 +273,20 @@ private:
     unsigned segmentLaneMask = getInputBasisMask(
         sourceLayout.resizeOutDim(axis, valuesPerSegment), kLane, {axis});
 
-    // Select the terminal lane and one owner of each replicated total.
-    auto freeMasks = interWarpTotalsLayout.getFreeVariableMasks();
-    Value storePred =
-        b.icmp_eq(b.and_(laneId, b.i32_val(freeMasks.lookup(kLane))),
-                  b.i32_val(reverse ? 0 : segmentLaneMask));
-    auto kWarp = StringAttr::get(ctx, "warp");
-    if (unsigned warpMask = freeMasks.lookup(kWarp))
-      storePred =
-          b.and_(storePred,
-                 b.icmp_eq(b.and_(warpId, b.i32_val(warpMask)), b.i32_val(0)));
+    // Replicate each complete total according to interWarpTotalsLayout before
+    // the conversion selects a source owner for its shared-memory store.
     auto totals = extractSegmentTotals(values, segmentRegs, reverse);
-    convertScanTotals(op, totals, interWarpTotalsLayout, totalsLayout,
-                      storePred, laneId, warpId, rewriter);
+    if (segmentLaneMask) {
+      Value terminalLane;
+      if (reverse)
+        terminalLane = b.and_(laneId, b.i32_val(~segmentLaneMask));
+      else
+        terminalLane = b.or_(laneId, b.i32_val(segmentLaneMask));
+      for (auto &total : totals)
+        total = shuffleValues(loc, total, terminalLane, rewriter);
+    }
+    convertScanValues(op, totals, interWarpTotalsLayout, totalsLayout, rewriter,
+                      /*forceWarpShuffle=*/false);
 
     ScanLoweringHelper totalsHelper(totalsLayout, op.getAxis());
     assert(!totalsHelper.getInterWarpTotalsLayout() &&
