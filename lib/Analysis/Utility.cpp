@@ -127,11 +127,10 @@ ReduceOpHelper::getInThreadVectorizeOpKind(bool supportBitwidth16Elementwise,
 
 LayoutConversionScratchConfig getLayoutConversionScratchConfig(
     const LinearLayout &src, const LinearLayout &dst,
-    ArrayRef<Type> elementTypes, GetNumScratchElemsFn numScratchElemsGetter,
-    bool forceSharedMemory) {
+    ArrayRef<Type> elementTypes, GetNumScratchElemsFn numScratchElemsGetter) {
   LayoutConversionScratchConfig config;
   config.offsets.resize(elementTypes.size(), 0);
-  if (!forceSharedMemory && !cvtNeedsSharedMemory(src, dst))
+  if (!cvtNeedsSharedMemory(src, dst))
     return config;
   auto bitwidthOf = [](Type type) {
     return isa<triton::PointerType>(type)
@@ -459,27 +458,14 @@ bool ScanLoweringHelper::isSupported() {
                                         {axisDim});
 }
 
-LayoutConversionScratchConfig
-getScanScratchConfig(const LinearLayout &src, const LinearLayout &dst,
-                     ArrayRef<Type> elementTypes) {
-  return getLayoutConversionScratchConfig(
-      src, dst, elementTypes,
-      [](const LinearLayout &src, const LinearLayout &, unsigned) {
-        unsigned blocks = product(triton::gpu::getCTASplitNum(
-            triton::gpu::GenericLinearEncodingAttr::get(
-                src.getInDimNames().begin()->getContext(), src)));
-        return src.getTotalOutDimSize() / blocks;
-      },
-      /*forceSharedMemory=*/true);
-}
-
-unsigned
-ScanLoweringHelper::getScratchSizeInBytes(ArrayRef<Type> elementTypes) const {
-  // Store the complete CTA-local array for the single totals exchange.
+unsigned ScanLoweringHelper::getScratchSizeInBytes(
+    ArrayRef<Type> elementTypes,
+    GetNumScratchElemsFn numScratchElemsGetter) const {
   if (!interWarpLayout)
     return 0;
-  return getScanScratchConfig(*interWarpLayout, *interWarpScanLayout,
-                              elementTypes)
+  return getLayoutConversionScratchConfig(*interWarpLayout,
+                                          *interWarpScanLayout, elementTypes,
+                                          numScratchElemsGetter)
       .sizeInBytes;
 }
 

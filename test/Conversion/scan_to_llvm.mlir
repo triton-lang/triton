@@ -86,7 +86,7 @@ tt.func public @anchor_warp_register_groups(%ptr: !llvm.ptr, %arg: !llvm.struct<
 // CHECK-LABEL: @test_2d_grouped
 tt.func private @test_2d_grouped(%arg0: tensor<16x1xi32, #layout_2d>) -> tensor<16x1xi32, #layout_2d> {
   // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32
-  // CHECK: st.shared::cta
+  // CHECK: store {{.*}}, ptr addrspace(3)
   // CHECK: @llvm.nvvm.barrier
   // CHECK: load i32, ptr addrspace(3)
   // CHECK: ret
@@ -193,7 +193,7 @@ tt.func public @anchor_permuted_lanes(%ptr: !llvm.ptr, %arg: !llvm.struct<(i32, 
 // Exchange the full sequence once, scan it within each warp, then map the
 // exclusive carries back to their original owners.
 // CHECK-NOT: @llvm.nvvm.barrier
-// CHECK: st.shared::cta
+// CHECK: store {{.*}}, ptr addrspace(3)
 // CHECK: @llvm.nvvm.barrier
 // CHECK: load i32, ptr addrspace(3)
 // CHECK-NOT: @llvm.nvvm.barrier
@@ -239,7 +239,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
 
 // CARRIES-LABEL: @test_parallel_carries
 // Scan the replicated sequence and return carries to the original owners.
-// CARRIES: st.shared::cta
+// CARRIES: store {{.*}}, ptr addrspace(3)
 // CARRIES: @llvm.nvvm.barrier
 // CARRIES: load {{.*}}, ptr addrspace(3)
 // CARRIES: @llvm.nvvm.shfl.sync.idx.i32
@@ -277,8 +277,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // GROUPS-LABEL: @test_grouped_carries
 // Replicate all 128 segment totals within each warp, including register
-// sequences, and scan them after a single shared-memory exchange.
-// GROUPS: st.shared::cta
+// sequences, and scan them after the shared-memory conversion.
+// GROUPS: store {{.*}}, ptr addrspace(3)
 // GROUPS: @llvm.nvvm.barrier
 // GROUPS: load {{.*}}, ptr addrspace(3)
 // GROUPS: @llvm.nvvm.shfl.sync.idx.i32
@@ -316,29 +316,29 @@ tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
 // ordering; the operands' shared scratch allocations must not overlap.
 #tuple = #ttg.linear<{register = [[8, 0], [16, 0], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4]], warp = [[4, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-// TUPLE: ttg.shared = 3072 : i32
+// Conversion tiles reuse each operand's allocation. Keep the 32-bit scratch
+// after the 64-bit scratch, with a barrier between each tile's stores and loads.
+// TUPLE: ttg.shared = 1024 : i32
 // TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
-// TUPLE: llvm.getelementptr %arg2[2048]
-// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.v4.b32
-// TUPLE-NOT: nvvm.barrier
-// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.v2.b64
+// TUPLE: llvm.getelementptr %arg2[512]
+// TUPLE: llvm.store {{.*}} : vector<{{.*}}i32>, !llvm.ptr<3>
 // TUPLE: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
-// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
+// TUPLE: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
 // TUPLE: nvvm.shfl.sync
 // TUPLE: llvm.mul
 // TUPLE: llvm.add
 // TUPLE: llvm.return
-// AMD-TUPLE: ttg.shared = 3072 : i32
+// AMD-TUPLE: ttg.shared = 1024 : i32
 // AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
-// AMD-TUPLE: llvm.getelementptr %arg2[2048]
+// AMD-TUPLE: llvm.getelementptr %arg2[512]
 // AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i32>, !llvm.ptr<3>
-// AMD-TUPLE-NOT: rocdl.s.barrier
-// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
 // AMD-TUPLE: rocdl.s.barrier
 // AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
-// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
+// AMD-TUPLE: rocdl.s.barrier
 // AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
 // AMD-TUPLE: llvm.mul
 // AMD-TUPLE: llvm.add
@@ -515,19 +515,16 @@ tt.func private @test_scan_reuse_lane_lookups(%arg: tensor<4x2xi32, #parallel>) 
 // after the exchange, when applying carries to the saved prefixes.
 #converted = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[16], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Terminal lanes store directly. Apply the inter-warp carry to every scanned
-// register prefix after the exchange.
+// Broadcast each terminal total before converting its replicated layout.
+// Apply the inter-warp carry to every scanned register prefix after the exchange.
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals(
 // TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
 // TERMINAL-COUNT-2: nvvm.shfl.sync idx
-// TERMINAL-NOT: nvvm.shfl.sync idx
-// TERMINAL: %[[LANE_IN_SEGMENT:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
-// TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[MASK]] : i32
-// TERMINAL-NOT: nvvm.shfl.sync idx
-// TERMINAL: %[[LANE_PRED:.*]] = llvm.and %[[PRED]], {{.*}} : i1
-// TERMINAL: %[[STORE_PRED:.*]] = llvm.and %[[LANE_PRED]], {{.*}} : i1
-// TERMINAL: llvm.inline_asm {{.*}}st.shared::cta.b32{{.*}} %[[STORE_PRED]] :
+// TERMINAL: %[[TERMINAL:.*]] = llvm.or %[[LANE]], %[[MASK]] : i32
+// TERMINAL: %[[TOTAL:.*]] = nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[TERMINAL]],
+// TERMINAL: llvm.insertelement %[[TOTAL]],
+// TERMINAL: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
 // TERMINAL-NEXT: nvvm.barrier
 // TERMINAL: llvm.load
 // TERMINAL: nvvm.shfl.sync idx
@@ -535,13 +532,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
 // RETAIN: nvvm.shfl.sync idx
 // RETAIN-NOT: nvvm.shfl.sync bfly
-// RETAIN: llvm.inline_asm {{.*}}st.shared::cta
+// RETAIN: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
 // RETAIN: nvvm.barrier
 // RETAIN: llvm.load
 // RETAIN: nvvm.shfl.sync bfly
 // RETAIN: llvm.return
 // AMD-RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
-// AMD-RETAIN: llvm.cond_br
 // AMD-RETAIN: llvm.store
 // AMD-RETAIN: llvm.load
 // AMD-RETAIN: llvm.return
@@ -555,28 +551,23 @@ tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) ->
 }
 
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse(
-// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
-// TERMINAL-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(-4 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
 // TERMINAL-COUNT-2: nvvm.shfl.sync idx
-// TERMINAL-NOT: nvvm.shfl.sync idx
-// TERMINAL: %[[LANE_IN_SEGMENT:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
-// TERMINAL: %[[PRED:.*]] = llvm.icmp "eq" %[[LANE_IN_SEGMENT]], %[[ZERO]] : i32
-// TERMINAL-NOT: nvvm.shfl.sync idx
-// TERMINAL: %[[LANE_PRED:.*]] = llvm.and %[[PRED]], {{.*}} : i1
-// TERMINAL: %[[STORE_PRED:.*]] = llvm.and %[[LANE_PRED]], {{.*}} : i1
-// TERMINAL: llvm.inline_asm {{.*}}st.shared::cta.b32{{.*}} %[[STORE_PRED]] :
+// TERMINAL: %[[TERMINAL:.*]] = llvm.and %[[LANE]], %[[MASK]] : i32
+// TERMINAL: %[[TOTAL:.*]] = nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[TERMINAL]],
+// TERMINAL: llvm.insertelement %[[TOTAL]],
+// TERMINAL: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
 // TERMINAL-NEXT: nvvm.barrier
 // TERMINAL: llvm.load
 // TERMINAL: nvvm.shfl.sync idx
 // TERMINAL: llvm.return
 // RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse
-// RETAIN: llvm.inline_asm {{.*}}st.shared::cta
+// RETAIN: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
 // RETAIN: nvvm.barrier
 // RETAIN: llvm.load
 // RETAIN: llvm.return
 // AMD-RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse
-// AMD-RETAIN: llvm.cond_br
 // AMD-RETAIN: llvm.store
 // AMD-RETAIN: llvm.load
 // AMD-RETAIN: llvm.return

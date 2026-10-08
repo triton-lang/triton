@@ -37,13 +37,11 @@ struct LayoutConversionScratchConfig {
 };
 
 // Byte offsets in operand order, packed widest first to preserve alignment.
-// Register-only and warp-shuffle conversions require no scratch storage unless
-// the caller explicitly requests a shared-memory exchange.
+// Register-only and warp-shuffle conversions require no scratch storage.
 LayoutConversionScratchConfig getLayoutConversionScratchConfig(
     const triton::LinearLayout &src, const triton::LinearLayout &dst,
     ArrayRef<Type> elementTypes,
-    GetNumScratchElemsFn numScratchElemsGetter = nullptr,
-    bool forceSharedMemory = false);
+    GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
 class ReduceOpHelper {
 public:
@@ -110,13 +108,6 @@ private:
   int axis;
 };
 
-// Reserve the complete CTA-local totals array so tuple operands can share a
-// single store/load barrier instead of recycling a tile independently.
-LayoutConversionScratchConfig
-getScanScratchConfig(const triton::LinearLayout &src,
-                     const triton::LinearLayout &dst,
-                     ArrayRef<Type> elementTypes);
-
 // Plan layouts for contiguous thread/warp segments and their totals.
 class ScanLoweringHelper {
 public:
@@ -149,7 +140,9 @@ public:
   const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
     return interWarpScanLayout;
   }
-  unsigned getScratchSizeInBytes(ArrayRef<Type> elementTypes) const;
+  unsigned getScratchSizeInBytes(
+      ArrayRef<Type> elementTypes,
+      GetNumScratchElemsFn numScratchElemsGetter = nullptr) const;
 
 private:
   triton::LinearLayout buildPermutedLayout();
