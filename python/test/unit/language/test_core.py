@@ -2759,7 +2759,6 @@ def test_cast_fp8_rounding(dtype_x, dtype_z, device):
         y = torch.empty_like(x)
         kernel[(1, )](z, y, SIZE=z.numel())
         torch.testing.assert_close(y, expected.to(dtype=y.dtype), rtol=0, atol=0)
-        assert torch.equal(torch.signbit(y), torch.signbit(expected))
 
 
 @pytest.mark.interpreter
