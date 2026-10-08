@@ -157,3 +157,39 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return %9 : tensor<512xf16>
   }
 }
+
+// -----
+
+// A tensor-condition select materializes one scf.if yield, while the other
+// yield can remain a (base, offset) pair. The if result must use one
+// representation on both paths.
+// CHECK-LABEL: tt.func @scf_if_mixed_pointer_representations
+// CHECK: [[INNER:%.*]] = arith.select {{.*}} : tensor<4xi1>, tensor<4x!tt.ptr<f32>>
+// CHECK: [[IF:%.*]] = scf.if %arg2 -> (tensor<4x!tt.ptr<f32>>) {
+// CHECK: scf.yield [[INNER]]
+// CHECK: } else {
+// CHECK: [[OTHER:%.*]] = tt.addptr
+// CHECK: scf.yield [[OTHER]]
+// CHECK: tt.load [[IF]]
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @scf_if_mixed_pointer_representations(
+      %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %arg2: i1, %arg3: i32) -> tensor<4xf32> {
+    %range = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
+    %scalar = tt.splat %arg3 : i32 -> tensor<4xi32>
+    %cmp = arith.cmpi eq, %range, %scalar : tensor<4xi32>
+    %base0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+    %base1 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+    %ptr0 = tt.addptr %base0, %range : tensor<4x!tt.ptr<f32>>, tensor<4xi32>
+    %ptr1 = tt.addptr %base1, %range : tensor<4x!tt.ptr<f32>>, tensor<4xi32>
+    %selected = arith.select %cmp, %ptr0, %ptr1 : tensor<4xi1>, tensor<4x!tt.ptr<f32>>
+    %ptr = scf.if %arg2 -> (tensor<4x!tt.ptr<f32>>) {
+      scf.yield %selected : tensor<4x!tt.ptr<f32>>
+    } else {
+      scf.yield %ptr1 : tensor<4x!tt.ptr<f32>>
+    }
+    %value = tt.load %ptr : tensor<4x!tt.ptr<f32>>
+    tt.return %value : tensor<4xf32>
+  }
+}
