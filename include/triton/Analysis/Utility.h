@@ -27,6 +27,8 @@ inline bool isZeroFillConst(Value v) {
   return false;
 }
 
+// Callback to allow backends to specify a target-specific getter for scratch
+// elements.
 using GetNumScratchElemsFn =
     std::function<unsigned(const triton::LinearLayout &src,
                            const triton::LinearLayout &dst, unsigned bitwidth)>;
@@ -36,6 +38,7 @@ struct LayoutConversionScratchConfig {
   unsigned sizeInBytes = 0;
 };
 
+// Byte offsets in operand order and total storage for one layout conversion.
 LayoutConversionScratchConfig getLayoutConversionScratchConfig(
     const triton::LinearLayout &src, const triton::LinearLayout &dst,
     ArrayRef<Type> elementTypes,
