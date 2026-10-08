@@ -449,11 +449,10 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
 
 
 // After conversion, each of four logical lanes owns four consecutive values.
-// Two scan rounds compute the inclusive total. A third indexed shuffle
-// fetches the preceding logical lane's total as the exclusive carry.
+// Two scan rounds update every register prefix with the preceding lanes' total.
 // The register/lane conversions use butterfly shuffles.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
-// TRANSPOSE-COUNT-3: nvvm.shfl.sync idx
+// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
 // TRANSPOSE-NOT: nvvm.shfl.sync idx
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
@@ -468,7 +467,7 @@ tt.func private @test_scan_exclusive_carry_forward(%arg: tensor<16xi32, #transpo
   tt.return %result : tensor<16xi32, #transpose>
 }
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
-// TRANSPOSE-COUNT-3: nvvm.shfl.sync idx
+// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
 // TRANSPOSE-NOT: nvvm.shfl.sync idx
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
@@ -516,8 +515,8 @@ tt.func private @test_scan_reuse_lane_lookups(%arg: tensor<4x2xi32, #parallel>) 
 // after the exchange, when applying carries to the saved prefixes.
 #converted = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[16], [0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Terminal lanes store directly. The carry shuffle and local-prefix updates
-// follow the inter-warp exchange.
+// Terminal lanes store directly. Apply the inter-warp carry to every scanned
+// register prefix after the exchange.
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals(
 // TERMINAL-DAG: %[[MASK:.*]] = llvm.mlir.constant(3 : i32)
 // TERMINAL-DAG: %[[LANE:.*]] = llvm.urem
