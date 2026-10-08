@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/CGAEncodingAttr.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "llvm/Support/Debug.h"
 #include <variant>
 
@@ -443,52 +444,90 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   return true;
 }
 
+// Rewrites `forOp` to iterate over [0, tripCount) with step 1. Unlike
+// denormalizeInductionVariable, each use of the original induction variable
+// gets its own `lb + iv * step`, so that it is scheduled with its user and the
+// expander rebases it to the user's stage instead of carrying it.
+void normalizeLoop(scf::ForOp forOp) {
+  Value lb = forOp.getLowerBound();
+  Value step = forOp.getStep();
+  bool zeroLb = isConstantIntValue(lb, 0);
+  bool unitStep = isConstantIntValue(step, 1);
+  if (zeroLb && unitStep)
+    return;
+
+  IRRewriter rewriter(forOp);
+  Location loc = forOp.getLoc();
+  Type ivType = lb.getType();
+  Value tripCount = forOp.getUpperBound();
+  if (!zeroLb)
+    tripCount = arith::SubIOp::create(rewriter, loc, tripCount, lb);
+  if (!unitStep)
+    tripCount = arith::CeilDivSIOp::create(rewriter, loc, tripCount, step);
+
+  Value iv = forOp.getInductionVar();
+  auto uses = llvm::map_to_vector(iv.getUses(), [](OpOperand &use) {
+    return &use;
+  });
+  for (OpOperand *use : uses) {
+    rewriter.setInsertionPoint(
+        forOp.getBody()->findAncestorOpInBlock(*use->getOwner()));
+    Value origIv = iv;
+    if (!unitStep)
+      origIv = arith::MulIOp::create(rewriter, loc, origIv, step);
+    if (!zeroLb)
+      origIv = arith::AddIOp::create(rewriter, loc, lb, origIv);
+    use->set(origIv);
+  }
+
+  rewriter.setInsertionPoint(forOp);
+  forOp.getLowerBoundMutable().assign(arith::ConstantOp::create(
+      rewriter, loc, rewriter.getIntegerAttr(ivType, 0)));
+  forOp.getUpperBoundMutable().assign(tripCount);
+  forOp.getStepMutable().assign(arith::ConstantOp::create(
+      rewriter, loc, rewriter.getIntegerAttr(ivType, 1)));
+}
+
 // Convert load ops into shared memory allocation loads and apply
 // multi-buffering based on the required number of buffers.
 LoadToStreamOpMap
 createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
                 const int &numBuffers, bool useAsyncCopy,
                 tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  if (llvm::none_of(loadToInfo,
+                    [](const auto &it) { return it.second.sharedEncoding; }))
+    return {};
+
   IRRewriter builder(forOp);
   Location loc = forOp.getLoc();
-  Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
-  Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
-  Value numBuffersVal =
-      arith::ConstantIntOp::create(builder, loc, numBuffers, 32);
 
-  unsigned newOperandIndex = forOp.getBody()->getNumArguments();
-  // Carry the slot used by the unpipelined iteration. Pipeline expansion maps
-  // the store to the next phase and the load to the current phase.
-  Value initPhase = zero;
-  if (numBuffers == 1)
-    initPhase = arith::ConstantIntOp::create(builder, loc, -1, 32);
-  forOp = addIterArgsToLoop(builder, forOp, {initPhase});
-  Value phase = forOp.getBody()->getArgument(newOperandIndex);
-
-  builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
-  Value insertIdx;
-  Value extractIdx;
-  Value nextPhase;
+  // Returns the slot indices of the store and the load of one buffer.
+  std::function<std::pair<Value, Value>()> getSlotIndices;
   if (numBuffers == 1) {
-    // There are no disjoint slots to expose. Keep one shared view so the
-    // single-buffer pipeline retains its existing cross-stage dependency.
-    Value incremented = arith::AddIOp::create(builder, loc, phase, one);
-    Value inRange = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::slt, incremented, numBuffersVal);
-    nextPhase =
-        arith::SelectOp::create(builder, loc, inRange, incremented, zero);
-    insertIdx = nextPhase;
-    extractIdx = nextPhase;
+    // The store and the load always access the only slot.
+    Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+    getSlotIndices = [=]() { return std::make_pair(zero, zero); };
   } else {
-    insertIdx = phase;
-    // Rematerialize the load index in its own stage. This gives membar
-    // matching modulo expressions after expansion instead of two unrelated
-    // loop carries.
-    extractIdx = arith::RemSIOp::create(builder, loc, phase, numBuffersVal);
-    nextPhase = triton::createIncrementModulo(builder, loc, phase,
-                                              numBuffersVal, zero, one);
+    // Index the slots by the iteration count. Each index is computed from the
+    // induction variable in the stage of its user, where the expander rebases
+    // it to that stage's iteration, so that membar sees the store and load
+    // slots as offsets of the same value.
+    normalizeLoop(forOp);
+    Value iv = forOp.getInductionVar();
+    Value numBuffersVal = arith::ConstantOp::create(
+        builder, loc, builder.getIntegerAttr(iv.getType(), numBuffers));
+    getSlotIndices = [&, iv, numBuffersVal]() {
+      auto bodyBuilder = OpBuilder::atBlockBegin(forOp.getBody());
+      auto getSlot = [&]() -> Value {
+        Value slot =
+            arith::RemSIOp::create(bodyBuilder, loc, iv, numBuffersVal);
+        return getValueOrCreateCastToIndexLike(bodyBuilder, loc,
+                                               bodyBuilder.getI32Type(), slot);
+      };
+      Value insertIdx = getSlot();
+      return std::make_pair(insertIdx, getSlot());
+    };
   }
-  appendToForOpYield(forOp, {nextPhase});
 
   LoadToStreamOpMap loadToStreamOp;
   for (auto &[op, info] : loadToInfo) {
@@ -500,6 +539,7 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     auto gatherOp = dyn_cast<tt::DescriptorGatherOp>(op);
     if (!loadOp && !descLoadOp && !gatherOp)
       continue;
+    auto [insertIdx, extractIdx] = getSlotIndices();
 
     // Create an allocation that can hold distance number of loadOp shapes.
     auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
