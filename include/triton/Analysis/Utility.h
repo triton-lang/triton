@@ -147,9 +147,9 @@ private:
 //      warp 1: lane 0 holds U11; lane 1 holds U15
 //    Only terminal lane 1 has the complete warp total: W0=U7, W1=U15.
 //    Divide the source axis bases by eight and remove zero register bases.
-//    Coordinates now index warp segments. Zero lane bases map all lanes to
-//    the same address; a store predicate selects the terminal lane of one
-//    replica. Keep the Uj prefixes in intraWarpScanLayout for later use.
+//    Coordinates now index warp segments. Broadcast each terminal value to
+//    the lanes represented by zero lane bases. Keep the Uj prefixes in
+//    intraWarpScanLayout for later use.
 //
 //    interWarpScanLayout: R=[], L=[1], W=[0].
 //    Broadcast the full sequence across participating warps. Store W0 and W1
