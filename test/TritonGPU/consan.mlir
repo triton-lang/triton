@@ -1890,6 +1890,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+// Check commit-counter saturation in kernels without async-copy mbarriers
+// and verify that large wait counts are clamped to 127.
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: tt.func private @__triton_consan_commit_accesses
+  // CHECK: %[[COMMITS:.*]] = tt.load
+  // CHECK: %[[PLUS_ONE:.*]] = arith.addi %[[COMMITS]], %{{.*}} : tensor<{{.*}}xi8
+  // CHECK: %[[MAX_AGE:.*]] = arith.constant dense<127> : tensor<{{.*}}xi8
+  // CHECK: %[[AT_MAX:.*]] = arith.cmpi eq, %[[COMMITS]], %[[MAX_AGE]]
+  // CHECK: %[[SATURATED:.*]] = arith.select %[[AT_MAX]], %[[COMMITS]], %[[PLUS_ONE]]
+  // CHECK: arith.select %{{.*}}, %[[SATURATED]], %[[COMMITS]]
+  // CHECK-LABEL: @async_wait_count_above_max_age
+  tt.func public @async_wait_count_above_max_age() {
+    // CHECK: tt.call @__triton_consan_commit_accesses
+    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
+    // CHECK: %[[THREAD_MASK:.*]] = arith.constant 1 : i64
+    // CHECK: %[[OUTSTANDING_NUM:.*]] = arith.constant 127 : i32
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes{{.*}}(%[[THREAD_BIT]], %[[THREAD_MASK]], %[[OUTSTANDING_NUM]]
+    %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    ttg.async_commit_group
+    ttg.async_wait {num = 200 : i32}
+    ttg.local_load %shmem : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
