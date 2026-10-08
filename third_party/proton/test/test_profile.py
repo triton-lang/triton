@@ -396,7 +396,7 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
         flow_starts = [e for e in trace_events if e.get("cat") == "flow" and e["ph"] == "s"]
         for replay in ("replay0", "replay1"):
             kernels = [e for e in trace_events if e.get("cat") == "kernel" and e["args"]["call_stack"][1] == replay]
-            assert len(kernels) >= 3
+            assert len(kernels) == 4
             assert any(e["dur"] > 0 for e in kernels)
             # Each kernel's launch arrow starts at the CPU scope around replay.
             scope = next(e for e in trace_events
