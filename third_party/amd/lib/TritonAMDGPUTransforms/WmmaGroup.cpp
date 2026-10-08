@@ -141,10 +141,6 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
                     "llvm.amdgcn.wmma.bf16.16x16x16.bf16", 16, 16),
       TRITON_WMMA_v(2, 16, 16, bf16T, bf16T, 16, bf16T,
                     "llvm.amdgcn.wmma.bf16.16x16x16.bf16", 16, 8),
-      // wmma_bf16_16x16x32_bf16
-      TRITON_WMMA_v_feature(3, 16, 16, bf16T, bf16T, 16, bf16T,
-                            "llvm.amdgcn.wmma.bf16.16x16x32.bf16", 32, 16,
-                            kWmmaRestrictedInstsFeature),
 
       // fp8/bf8 inputs
       // wmma_f32_16x16x16_fp8_fp8
