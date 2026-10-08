@@ -3485,3 +3485,109 @@ def test_scaled_upcast_fp4_compact_scales(device, dtype, scale_factor, fresh_kno
     # Encode the integer results as FP16/BF16 bits and compare the bits.
     expected = _unmix_payload_to_float_bits(payload, "bf16" if dtype == torch.bfloat16 else "f16")
     _assert_payload_equal(out.view(torch.int16), expected)
+
+
+def _narrow_float_payload(payload, src_bitwidth: int, dst_bitwidth: int, homomorphic_casts: bool) -> np.ndarray:
+    if homomorphic_casts:
+        return payload & _low_mask_u64(dst_bitwidth)
+    return _cast_float_payload_u64(payload, src_bitwidth, dst_bitwidth)
+
+
+def _e8m0_scale_payload(scale_bytes: np.ndarray, dtype: str, homomorphic_casts: bool) -> np.ndarray:
+    s = scale_bytes.astype(np.uint64)
+    if dtype == "bf16":
+        return _mix_float_bits(np.maximum(s << np.uint64(7), np.uint64(0x40)), "bf16")
+    payload = _mix_float_bits(s << np.uint64(23), "f32")
+    return payload if dtype == "f32" else _narrow_float_payload(payload, 32, 16, homomorphic_casts)
+
+
+def _fp4_payload(payload, bitwidth: int, homomorphic_casts: bool) -> np.ndarray:
+    # Narrow to an unsigned 4-bit payload. Unless casts are homomorphic, fold
+    # the discarded bits into it, so values unpacked by fp4_to_fp (payloads
+    # 0..15) round-trip unchanged.
+    nibble = payload & np.uint64(0xF)
+    if homomorphic_casts:
+        return nibble
+    mask = _low_mask_u64(bitwidth)
+    multiplier = np.uint64(7) * (mask // np.uint64(15))
+    folded = (((payload ^ nibble) * multiplier) & mask) >> np.uint64(bitwidth - 4)
+    return nibble ^ folded ^ (folded >> np.uint64(2))
+
+
+@pytest.mark.skipif(not (is_hip_cdna4() or is_hip_gfx1250()), reason="Requires CDNA4 or CDNA5")
+@pytest.mark.parametrize("dtype, scale_factor", [("f16", 8), ("bf16", 32), ("f32", 64)])
+@pytest.mark.parametrize("format", ["e2m1", "e4m3", "e5m2"])
+@pytest.mark.parametrize("homomorphic_casts", [False, True])
+def test_scaled_downcast_payload_semantics(device, dtype, format, scale_factor, homomorphic_casts, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    fresh_knobs.compilation.fpsan_homomorphic_casts = homomorphic_casts
+    amd = gl.amd.cdna5 if is_hip_gfx1250() else gl.amd.cdna4
+
+    @gluon.jit
+    def kernel(x_ptr, scale_ptr, out_ptr, FORMAT: gl.constexpr, SCALE_FACTOR: gl.constexpr,
+               THREADS_PER_WARP: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([SCALE_FACTOR], [THREADS_PER_WARP], [1], [0])
+        scale_layout: gl.constexpr = gl.BlockedLayout([1], [THREADS_PER_WARP], [1], [0])
+        x = gl.load(x_ptr + gl.arange(0, 512, layout=layout))
+        scale = gl.load(scale_ptr + gl.arange(0, 512 // SCALE_FACTOR, layout=scale_layout))
+        result = amd.scaled_downcast(x, scale, FORMAT)
+        if FORMAT != "e2m1":
+            result = result.to(gl.uint8, bitcast=True)
+        gl.store(out_ptr + gl.arange(0, result.shape[0], layout=result.type.layout), result)
+
+    rs = np.random.RandomState(42)
+    input_bits = _random_float_bits(rs, (512, ), dtype)
+    scale_edges = np.array([0, 1, 126, 127, 128, 129, 254, 255], dtype=np.uint8)
+    scale_bytes = np.resize(scale_edges, 512 // scale_factor)
+    # Cover both accepted scale dtypes.
+    scales = torch.tensor(scale_bytes, device=device, dtype=torch.int8 if dtype == "bf16" else torch.uint8)
+    _, input_tensor = _as_float_bits_tensor(input_bits, dtype)
+    output = torch.empty((256 if format == "e2m1" else 512, ), device=device, dtype=torch.uint8)
+    kernel[(1, )](input_tensor, scales, output, format, scale_factor, THREADS_PER_WARP, num_warps=1)
+
+    # Decode each scale and repeat it for its group of inputs.
+    scale_payload = np.repeat(_e8m0_scale_payload(scale_bytes, dtype, homomorphic_casts), scale_factor)
+
+    # Divide by multiplying with the inverse of the scale payload.
+    width = _float_dtype_info(dtype)[0]
+    inverse = _expected_u32_inv(scale_payload.astype(np.uint32)).astype(np.uint64)
+    payload = (_mix_float_bits(input_bits, dtype) * inverse) & _low_mask_u64(width)
+
+    # Narrow to the output format. FP4 packs even elements into the low nibble.
+    if format == "e2m1":
+        nibbles = _fp4_payload(payload, width, homomorphic_casts)
+        expected = (nibbles[0::2] | (nibbles[1::2] << np.uint64(4))).astype(np.uint8)
+    else:
+        fp8_payload = _narrow_float_payload(payload, width, 8, homomorphic_casts)
+        expected = _unmix_payload_to_float_bits(fp8_payload, format).view(np.uint8)
+    np.testing.assert_array_equal(output.cpu().numpy(), expected)
+
+
+@pytest.mark.skipif(not (is_hip_cdna4() or is_hip_gfx1250()), reason="Requires CDNA4 or CDNA5")
+@pytest.mark.parametrize("dtype", ["f16", "bf16", "f32"])
+@pytest.mark.parametrize("homomorphic_casts", [False, True])
+def test_scaled_downcast_fp4_roundtrip(device, dtype, homomorphic_casts, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    fresh_knobs.compilation.fpsan_homomorphic_casts = homomorphic_casts
+    amd = gl.amd.cdna5 if is_hip_gfx1250() else gl.amd.cdna4
+
+    @gluon.jit
+    def kernel(packed_ptr, scale_ptr, out_ptr, DTYPE: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+        packed_layout: gl.constexpr = gl.BlockedLayout([4], [THREADS_PER_WARP], [1], [0])
+        scale_layout: gl.constexpr = gl.BlockedLayout([1], [THREADS_PER_WARP], [1], [0])
+        offsets = gl.arange(0, 256, layout=packed_layout)
+        packed = gl.load(packed_ptr + offsets)
+        # fp4_to_fp has no f32 result, so unpack to f16 and widen.
+        unpack_dtype: gl.constexpr = gl.float16 if DTYPE == gl.float32 else DTYPE
+        unpacked = gl.fp4_to_fp(packed, unpack_dtype, axis=0).to(DTYPE)
+        scale = gl.load(scale_ptr + gl.arange(0, 64, layout=scale_layout))
+        result = amd.scaled_downcast(unpacked, scale, "e2m1")
+        gl.store(out_ptr + offsets, result)
+
+    packed = torch.arange(256, device=device, dtype=torch.int32).to(torch.uint8)
+    scales = torch.full((64, ), 127, device=device, dtype=torch.uint8)
+    output = torch.empty_like(packed)
+    kernel[(1, )](packed, scales, output, _float_dtype_info(dtype)[5], THREADS_PER_WARP, num_warps=1)
+    _assert_payload_equal(output, packed)

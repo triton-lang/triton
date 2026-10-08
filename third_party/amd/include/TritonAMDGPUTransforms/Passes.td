@@ -367,7 +367,12 @@ def TritonAMDGPUFpSanitizer : Pass<"tritonamdgpu-fp-sanitizer", "mlir::ModuleOp"
   let description = [{
     Extends the main FP sanitizer with patterns for AMD-specific ops.
   }];
-  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect",
+                           "mlir::triton::instrument::TritonInstrumentDialect"];
+  let options = [
+    Option<"homomorphicCasts", "homomorphic-casts", "bool", /*default*/"false",
+           "Use truncating FpSan payload downcasts">
+  ];
 }
 
 #endif
