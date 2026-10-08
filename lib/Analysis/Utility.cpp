@@ -368,15 +368,17 @@ LinearLayout ScanLoweringHelper::buildPermutedLayout() {
   return registerOrder.apply(uniqueLayout);
 }
 
-// Collapse axis coordinates from element indices to segment indices.
+// Collapse source-layout coordinates to segment indices. Each source value
+// represents an original element or a thread-local segment total.
 static LinearLayout getScanTotalsLayout(const LinearLayout &layout,
-                                        unsigned axis, unsigned segmentSize) {
+                                        unsigned axis,
+                                        unsigned valuesPerSegment) {
   auto *ctx = layout.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto bases = layout.getBases();
   for (auto &[dim, dimBases] : bases)
     for (auto &basis : dimBases)
-      basis[axis] /= segmentSize;
+      basis[axis] /= valuesPerSegment;
   return LinearLayout(std::move(bases),
                       llvm::to_vector(layout.getOutDimNames()))
       .removeZeroBasesAlongDim(kReg);
@@ -394,16 +396,16 @@ LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
   auto *ctx = intraWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
-  unsigned segmentSize = warpSegmentSize / threadSegmentSize;
+  unsigned numSegments = warpSegmentSize / threadSegmentSize;
   auto bases = intraWarpTotalsLayout->getBases();
   unsigned next = 1;
   for (auto dim : {kReg, kLane})
     for (auto &basis : bases[dim])
-      if (basis[axis] && basis[axis] < segmentSize) {
+      if (basis[axis] && basis[axis] < numSegments) {
         basis[axis] = next;
         next *= 2;
       }
-  assert(next == segmentSize);
+  assert(next == numSegments);
   return LinearLayout(std::move(bases),
                       llvm::to_vector(intraWarpTotalsLayout->getOutDimNames()));
 }
@@ -412,10 +414,10 @@ LinearLayout ScanLoweringHelper::buildInterWarpTotalsLayout() const {
   // Collapse warp-local segments in the layout that holds their prefixes.
   const auto &sourceLayout =
       intraWarpScanLayout ? *intraWarpScanLayout : permutedLayout;
-  unsigned segmentSize = warpSegmentSize;
+  unsigned valuesPerSegment = warpSegmentSize;
   if (intraWarpScanLayout)
-    segmentSize /= threadSegmentSize;
-  return getScanTotalsLayout(sourceLayout, axis, segmentSize);
+    valuesPerSegment /= threadSegmentSize;
+  return getScanTotalsLayout(sourceLayout, axis, valuesPerSegment);
 }
 
 LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
