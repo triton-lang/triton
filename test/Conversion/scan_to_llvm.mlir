@@ -316,33 +316,77 @@ tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
 // Their scan spans registers and lanes in each warp. Reverse tuple operands
 // require separate, aligned shared-memory allocations.
 #tuple = #ttg.linear<{register = [[8, 0], [16, 0], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4]], warp = [[4, 0], [0, 0]], block = []}>
+#single_tile = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-// Conversion tiles reuse each operand's allocation. Keep the 32-bit scratch
-// after the 64-bit scratch, with a barrier between each tile's stores and loads.
+// The i32 operand uses two tiles and the i64 operand uses four. Batch
+// stores and loads per tile, retaining barriers before reusing scratch.
 // TUPLE: ttg.shared = 1024 : i32
 // TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
 // TUPLE: llvm.getelementptr %arg2[512]
+// TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.inline_asm {{.*}}st.shared::cta.{{.*}}b32{{.*}}, i1)
-// TUPLE: nvvm.barrier
-// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.inline_asm {{.*}}st.shared::cta.{{.*}}b64{{.*}}, i1)
 // TUPLE: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
-// TUPLE: nvvm.shfl.sync
-// TUPLE: llvm.mul
-// TUPLE: llvm.add
+// TUPLE: nvvm.barrier
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.{{.*}}b32{{.*}}, i1)
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.{{.*}}b64{{.*}}, i1)
+// TUPLE: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// TUPLE: nvvm.barrier
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.{{.*}}b64{{.*}}, i1)
+// TUPLE: nvvm.barrier
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// TUPLE: nvvm.barrier
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.{{.*}}b64{{.*}}, i1)
+// TUPLE: nvvm.barrier
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.return
 // AMD-TUPLE: ttg.shared = 1024 : i32
 // AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
 // AMD-TUPLE: llvm.getelementptr %arg2[512]
+// AMD-TUPLE-NOT: rocdl.s.barrier
 // AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i32>, !llvm.ptr<3>
-// AMD-TUPLE: rocdl.s.barrier
-// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// AMD-TUPLE-NOT: rocdl.s.barrier
 // AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
 // AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// AMD-TUPLE-NOT: rocdl.s.barrier
 // AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
-// AMD-TUPLE: llvm.mul
-// AMD-TUPLE: llvm.add
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i32>, !llvm.ptr<3>
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.store {{.*}} : vector<{{.*}}i64>, !llvm.ptr<3>
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// AMD-TUPLE-NOT: rocdl.s.barrier
 // AMD-TUPLE: llvm.return
 tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tensor<128x8xi64, #tuple>) -> (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>) {
   %a_out, %b_out = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = true}> ({
@@ -355,6 +399,42 @@ tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tens
   }) : (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>) -> (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>)
   tt.return %a_out, %b_out : tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>
 }
+// Both operands share one store-to-load barrier.
+// TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_single_tile
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.b32
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.inline_asm {{.*}}st.shared::cta.b64
+// TUPLE: nvvm.barrier
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i32
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i64
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.return
+// AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_single_tile
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.store {{.*}} : vector<1xi64>, !llvm.ptr<3>
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.return
+tt.func private @test_scan_tuple_single_tile(%a: tensor<256xi32, #single_tile>, %b: tensor<256xi64, #single_tile>) -> (tensor<256xi32, #single_tile>, tensor<256xi64, #single_tile>) {
+  %a_out, %b_out = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%a1: i32, %b1: i64, %a2: i32, %b2: i64):
+    %sum = arith.addi %a1, %a2 : i32
+    %same = arith.cmpi eq, %b1, %b2 : i64
+    %result = arith.select %same, %sum, %a2 : i32
+    tt.scan.return %result, %b2 : i32, i64
+  }) : (tensor<256xi32, #single_tile>, tensor<256xi64, #single_tile>) -> (tensor<256xi32, #single_tile>, tensor<256xi64, #single_tile>)
+  tt.return %a_out, %b_out : tensor<256xi32, #single_tile>, tensor<256xi64, #single_tile>
+}
+
 }
 
 //--- warp-transpose.mlir

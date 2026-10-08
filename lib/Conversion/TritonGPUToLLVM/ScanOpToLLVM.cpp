@@ -174,6 +174,16 @@ private:
               dstTile);
         });
     auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+    struct OperandConversion {
+      Type originalType, elemType;
+      LinearLayout storeCvt, loadCvt;
+      ColumnAction restoreOrder;
+      Value smemBase;
+      unsigned numReps;
+      SmallVector<Value> result;
+    };
+    SmallVector<OperandConversion, 2> conversions;
+    unsigned maxNumReps = 0;
     auto operands = transposeValues(values);
     for (auto [i, operand] : llvm::enumerate(operands)) {
       Type originalType = operand.front().getType();
@@ -210,28 +220,50 @@ private:
       operand = storeOrder.apply(operand);
       Value smemBase = b.gep(base.getType(), rewriter.getI8Type(), base,
                              b.i32_val(scratch.offsets[i]));
-      unsigned tileSize = storeCvt.getInDimSize(kReg);
-      SmallVector<Value> result;
-      for (unsigned rep = 0; rep < numReps; ++rep) {
-        if (rep)
-          targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
-        lowerLdSt(loc, ctx, storeCvt,
-                  ArrayRef<Value>(operand).slice(rep * tileSize, tileSize),
-                  elemType, smemBase, {}, b.i32_val(0), 0, Value(), 0, laneId,
-                  warpId, rewriter, targetInfo, {},
-                  makeSharedStoreEmitter(targetInfo, storePred));
+      maxNumReps = std::max(maxNumReps, numReps);
+      conversions.push_back({originalType,
+                             elemType,
+                             std::move(storeCvt),
+                             std::move(loadCvt),
+                             loadOrder.inverse(),
+                             smemBase,
+                             numReps,
+                             {}});
+    }
+
+    // Operands have separate scratch allocations and may use different numbers
+    // of tiles. Share each tile's barrier across all participating operands.
+    for (unsigned rep = 0; rep < maxNumReps; ++rep) {
+      if (rep)
         targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
-        llvm::append_range(result,
-                           lowerLdSt(loc, ctx, loadCvt, {}, elemType, smemBase,
-                                     {}, b.i32_val(0), 0, Value(), 0, laneId,
-                                     warpId, rewriter, targetInfo, {},
-                                     makeSharedLoadEmitter(targetInfo)));
+      for (auto [operand, cvt] : llvm::zip(operands, conversions)) {
+        if (rep >= cvt.numReps)
+          continue;
+        unsigned tileSize = cvt.storeCvt.getInDimSize(kReg);
+        lowerLdSt(loc, ctx, cvt.storeCvt,
+                  ArrayRef<Value>(operand).slice(rep * tileSize, tileSize),
+                  cvt.elemType, cvt.smemBase, {}, b.i32_val(0), 0, Value(), 0,
+                  laneId, warpId, rewriter, targetInfo, {},
+                  makeSharedStoreEmitter(targetInfo, storePred));
       }
-      operand = loadOrder.inverse().apply(result);
-      if (isPointer || isSubByte)
+      targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+      for (auto &cvt : conversions) {
+        if (rep >= cvt.numReps)
+          continue;
+        llvm::append_range(cvt.result,
+                           lowerLdSt(loc, ctx, cvt.loadCvt, {}, cvt.elemType,
+                                     cvt.smemBase, {}, b.i32_val(0), 0, Value(),
+                                     0, laneId, warpId, rewriter, targetInfo,
+                                     {}, makeSharedLoadEmitter(targetInfo)));
+      }
+    }
+    for (auto [operand, cvt] : llvm::zip(operands, conversions)) {
+      operand = cvt.restoreOrder.apply(cvt.result);
+      if (cvt.originalType != cvt.elemType)
         for (Value &value : operand)
-          value = isPointer ? Value(b.inttoptr(originalType, value))
-                            : Value(b.trunc(originalType, value));
+          value = isa<LLVM::LLVMPointerType>(cvt.originalType)
+                      ? Value(b.inttoptr(cvt.originalType, value))
+                      : Value(b.trunc(cvt.originalType, value));
     }
     values = transposeValues(operands);
   }
