@@ -571,8 +571,7 @@ class InterpreterBuilder:
         elif src_element_type.is_int() and dst_element_type.is_floating() and np.issubdtype(dst_np_dtype, np.integer):
             data = data.astype(np.float64)
             if src_element_type.int_bitwidth == 64:
-                # Round to odd before encoding so an inexact fp64 intermediate
-                # preserves which side of a destination midpoint the integer lies on.
+                # int64 to fp8/bf16 is not exact, round to odd first
                 magnitude = src.data.astype(np.uint64)
                 if src_element_type.is_int_signed():
                     magnitude = np.where(src.data < 0, -magnitude, magnitude)
