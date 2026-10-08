@@ -2700,17 +2700,15 @@ def test_cast_bf16_rounding(dtype_x, rounding, device):
         if dtype_x == "float32" and rounding != "rtz":
             # NaN payloads can disappear on truncation or overflow on rounding.
             x[8:10] = torch.tensor([0x7F800001, 0x7FFFFFFF], dtype=torch.int32, device=device).view(torch.float32)
+        expected = x.to(torch.bfloat16)
         if dtype_x == "float64":
             midpoint = 1 + 2**-8
             values = [midpoint - 2**-40, midpoint, midpoint + 2**-40, 1 + 3 * 2**-8]
+            expected_values = [1.0, 1.0, 1 + 2**-7, 1 + 2**-6]
             values += [-value for value in values]
+            expected_values += [-value for value in expected_values]
             x[10:18] = torch.tensor(values, dtype=dtype, device=device)
-        expected = x.to(torch.bfloat16)
-        if dtype_x == "float64":
-            # The torch CPU cast rounds through fp32, losing the offset from the midpoint.
-            values = [1.0, 1.0, 1 + 2**-7, 1 + 2**-6]
-            values += [-value for value in values]
-            expected[10:18] = torch.tensor(values, dtype=torch.bfloat16, device=device)
+            expected[10:18] = torch.tensor(expected_values, dtype=torch.bfloat16, device=device)
         if rounding == "rtz":
             expected = (x.view(torch.int32) >> 16).to(torch.int16).view(torch.bfloat16)
     z = torch.empty_like(x, dtype=torch.bfloat16)
