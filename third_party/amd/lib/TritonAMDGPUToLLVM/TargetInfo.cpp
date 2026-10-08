@@ -725,16 +725,16 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
       rewriter, loc, IntegerType::get(ctx, 64), msgBuffer.size_in_bytes());
   SmallVector<Value> callArgs = {msgValue, msgLen};
   b.call(assertFailFunc, callArgs);
+}
 
-  // Set block barrier before aborting kernel, give a chance for all
-  // the threads in a block to check/print the assert failure.
-  b.barrier(triton::gpu::AddrSpace::All);
+void TargetInfo::assertTrap(RewriterBase &rewriter, Location loc) const {
   // Perform the trap to abort the kernel.
   // Use inline asm "s_trap 2" instead of LLVM::Trap because llvm.trap is
   // noreturn, inserting 'unreachable' which causes StructurizeCFG to defer
   // the block past convergence points, making ConSan lock releases
-  // unreachable and causing deadlocks. The noinline helper above prevents
-  // the printf code from being inlined and bloating the kernel.
+  // unreachable and causing deadlocks. The noinline helper in assertFail
+  // prevents the printf code from being inlined and bloating the kernel.
+  auto *ctx = rewriter.getContext();
   LLVM::InlineAsmOp::create(
       rewriter, loc, LLVM::LLVMVoidType::get(ctx), /*operands=*/ValueRange{},
       "s_trap 2", /*constraints=*/"",
