@@ -550,7 +550,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
   LDBG("Inferring ranges for " << *op);
 
   // This callback is almost exactly like the callback in
-  // IntegerRangeAnalysis::visitOperation except we do not "short-cicruit" the
+  // IntegerRangeAnalysis::visitOperation except we do not "short-circuit" the
   // analysis by inferring a maximum range for loop results (instead we
   // perform a check based on visit counts in visitRegionSuccessors).
   auto joinCallback = [&op, &operands, &resultsLattices,
@@ -659,7 +659,7 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
     RegionSuccessor successor,
     ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) {
   LLVM_DEBUG({
-    DBGS() << "Visit Region Succesors of ";
+    DBGS() << "Visit Region Successors of ";
     OpPrintingFlags flags;
     flags.skipRegions(true);
     branch.print(llvm::dbgs(), flags);

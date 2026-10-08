@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef TRITON_AMD_TARGET_MFMASCHEDULE_H
-#define TRITON_AMD_TARGET_MFMASCHEDULE_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TARGET_MFMASCHEDULE_MFMASCHEDULE_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TARGET_MFMASCHEDULE_MFMASCHEDULE_H_
 
 namespace llvm {
 class Function;
@@ -20,4 +20,4 @@ bool runMFMASchedulePass(llvm::Function &F);
 
 } // namespace mlir::triton::AMD
 
-#endif // TRITON_AMD_TARGET_MFMASCHEDULE_H
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TARGET_MFMASCHEDULE_MFMASCHEDULE_H_

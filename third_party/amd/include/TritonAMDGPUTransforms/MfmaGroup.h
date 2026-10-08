@@ -6,14 +6,14 @@
 #include "llvm/ADT/StringRef.h"
 
 namespace mlir {
-// Returns true if the given type is an OCP FP8/FP6/FP6 type.
+// Returns true if the given type is an OCP FP8/FP6/FP4 type.
 inline bool isF8F6F4(mlir::Type type) {
   return llvm::isa<Float8E4M3FNType, Float8E5M2Type, Float6E3M2FNType,
                    Float6E2M3FNType, Float4E2M1FNType>(type);
 }
 
 struct MfmaIntrinsic {
-  // Chooses a suitable mfma instrinsic for the given input case.
+  // Chooses a suitable mfma intrinsic for the given input case.
   static FailureOr<MfmaIntrinsic> selectFor(Location loc, int version,
                                             unsigned mDim, unsigned nDim,
                                             unsigned inputKDim, Type aElemType,
@@ -29,10 +29,6 @@ struct MfmaIntrinsic {
                 unsigned kB, Type aET, Type bET)
       : name(symbol), mDim(m), nDim(n), kDim(k), kBase(kB), aElementType(aET),
         bElementType(bET) {}
-  MfmaIntrinsic(const MfmaIntrinsic &other) = default;
-  MfmaIntrinsic(MfmaIntrinsic &&other) = default;
-  MfmaIntrinsic() = default;
-  MfmaIntrinsic &operator=(MfmaIntrinsic &&other) = default;
 
   llvm::StringRef name;
 

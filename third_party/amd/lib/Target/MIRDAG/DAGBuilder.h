@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef TRITON_MIR_DAG_DAGBUILDER_H
-#define TRITON_MIR_DAG_DAGBUILDER_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TARGET_MIRDAG_DAGBUILDER_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TARGET_MIRDAG_DAGBUILDER_H_
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -168,4 +168,4 @@ const char *livePipelineDAGPassName();
 } // namespace mir_dag
 } // namespace llvm
 
-#endif // TRITON_MIR_DAG_DAGBUILDER_H
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TARGET_MIRDAG_DAGBUILDER_H_

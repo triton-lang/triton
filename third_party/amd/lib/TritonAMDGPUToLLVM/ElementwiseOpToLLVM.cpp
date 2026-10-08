@@ -378,7 +378,7 @@ struct SqrtOpConversion
     }
 
     // llvm.amdgcn.sqrt.f32 provides direct access to v_sqrt_f32, which provides
-    // 1ULP accuracy and flushs denorms.
+    // 1ULP accuracy and flushes denorms.
     Value intrinsicsOutput =
         ROCDL::ROCDLSqrt::create(rewriter, loc, elemTy, scaledSrc);
 

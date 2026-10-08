@@ -187,10 +187,9 @@ bool AMDGPUAssignDescriptorMemoryLayouts::isCompatibleSharedEncoding(
 //     scf.yield %di                    ; same encoding is propagated
 //   }
 //
-class TritonAMDGPUOptimizeDescriptorEncodingPass
-    : public impl::TritonAMDGPUOptimizeDescriptorEncodingBase<
+struct TritonAMDGPUOptimizeDescriptorEncodingPass
+    : impl::TritonAMDGPUOptimizeDescriptorEncodingBase<
           TritonAMDGPUOptimizeDescriptorEncodingPass> {
-public:
   void runOnOperation() override {
     mlir::ModuleOp m = getOperation();
 

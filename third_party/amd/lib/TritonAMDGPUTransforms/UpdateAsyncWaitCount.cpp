@@ -20,7 +20,7 @@
 // number of hardware instructions/intrinsics corresponding to the outstanding
 // async operations. For waits that carry async tokens, the pass walks the
 // def-use chains of each token and sums the number of async intrinsics
-// oustanding excluding the producer of the async token. Tokens may be copied
+// outstanding excluding the producer of the async token. Tokens may be copied
 // across loop boundaries (e.g., passed as loop initial arguments and yielded
 // from the loop body); in such cases, the pass takes the minimum count across
 // the possible paths. The final wait count is the minimum over all tokens and
@@ -367,7 +367,7 @@ void updateWaitCount(WaitType waitOp,
     // tokens
     for (auto token : waitOp.getOperands()) {
       // Traverse def chain from waitOp to the producer of the token and count
-      // the minumum number of vmcnt instructions
+      // the minimum number of vmcnt instructions
       auto tokenWaitCnt =
           deduceMinCountOnDefChain(token, waitOp, computeCountForOp);
       waitCnt = std::min(waitCnt, tokenWaitCnt);
@@ -496,7 +496,7 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
         } else if (isa<AsyncTDMScatterOp, AsyncTDMGatherOp>(op)) {
           auto rowIndicesType =
               cast<RankedTensorType>(op->getOperandTypes()[1]);
-          return mlir::LLVM::AMD::getTDMGatherScatterInstrinsicCount(
+          return mlir::LLVM::AMD::getTDMGatherScatterIntrinsicCount(
               rowIndicesType);
         } else {
           return 0;

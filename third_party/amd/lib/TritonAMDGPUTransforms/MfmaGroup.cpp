@@ -273,7 +273,7 @@ MfmaIntrinsic::selectFor(Location loc, int version, unsigned mDim,
 
   const SmallVector<MfmaMapValue, 2> &values = it->second;
 
-  // If We have more than one instrinsics, prefer those with a larger K.
+  // If we have more than one intrinsic, prefer those with a larger K.
   for (const auto [symbol, k, kBase] : llvm::drop_end(values)) {
     if (inputKDim >= k)
       return MfmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType);
