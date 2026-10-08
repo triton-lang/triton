@@ -71,9 +71,9 @@ private:
     scanWithinThreads(op, values, helper.getThreadSegmentSize(), rewriter);
     ScanValues intraWarpTotals;
     SmallVector<ScanCarry> interWarpCarries;
-    if (helper.getIntraWarpLayout())
+    if (helper.getIntraWarpTotalsLayout())
       intraWarpTotals = scanWithinWarps(op, helper, values, laneId, rewriter);
-    if (helper.getInterWarpLayout())
+    if (helper.getInterWarpTotalsLayout())
       interWarpCarries = scanAcrossWarps(
           op, helper, intraWarpTotals.empty() ? values : intraWarpTotals,
           laneId, warpId, rewriter);
@@ -232,14 +232,14 @@ private:
                              const ScanLoweringHelper &helper,
                              const ScanValues &values, Value laneId,
                              ConversionPatternRewriter &rewriter) const {
-    const auto &intraWarpLayout = *helper.getIntraWarpLayout();
+    const auto &intraWarpTotalsLayout = *helper.getIntraWarpTotalsLayout();
     const auto &scanLayout = *helper.getIntraWarpScanLayout();
     unsigned segmentRegs = helper.getThreadSegmentSize();
     unsigned numSegments = helper.getWarpSegmentSize() / segmentRegs;
     bool reverse = op.getReverse();
 
     auto totals = extractSegmentTotals(values, segmentRegs, reverse);
-    convertScanValues(op, totals, intraWarpLayout, scanLayout, rewriter);
+    convertScanValues(op, totals, intraWarpTotalsLayout, scanLayout, rewriter);
 
     auto kReg = StringAttr::get(op.getContext(), "register");
     auto axis =
@@ -270,12 +270,12 @@ private:
     // Express the segment size in source-layout units.
     if (helper.getIntraWarpScanLayout())
       segmentSize /= helper.getThreadSegmentSize();
-    const auto &interWarpLayout = *helper.getInterWarpLayout();
+    const auto &interWarpTotalsLayout = *helper.getInterWarpTotalsLayout();
     const auto &totalsLayout = *helper.getInterWarpScanLayout();
     bool reverse = op.getReverse();
     auto kReg = StringAttr::get(ctx, "register");
-    unsigned segmentRegs =
-        sourceLayout.getInDimSize(kReg) / interWarpLayout.getInDimSize(kReg);
+    unsigned segmentRegs = sourceLayout.getInDimSize(kReg) /
+                           interWarpTotalsLayout.getInDimSize(kReg);
     unsigned segmentLaneMask =
         getSegmentMask(sourceLayout, kLane, op.getAxis(), segmentSize);
 
@@ -291,17 +291,17 @@ private:
       for (auto &total : totals)
         total = shuffleValues(loc, total, terminalLane, rewriter);
     }
-    convertScanValues(op, totals, interWarpLayout, totalsLayout, rewriter,
+    convertScanValues(op, totals, interWarpTotalsLayout, totalsLayout, rewriter,
                       /*forceWarpShuffle=*/false);
 
     // Reuse the warp-local scan, including sequences spanning registers.
     ScanLoweringHelper totalsHelper(totalsLayout, op.getAxis());
-    assert(!totalsHelper.getInterWarpLayout() &&
+    assert(!totalsHelper.getInterWarpTotalsLayout() &&
            "the full totals sequence must be warp-local");
     scanWithinCTA(op, totalsHelper, totals, laneId, warpId, rewriter);
     auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
-    return getSegmentCarries(op, totals, interWarpLayout, totalsLayout,
-                             interWarpLayout.getOutDimSize(axis), laneId,
+    return getSegmentCarries(op, totals, interWarpTotalsLayout, totalsLayout,
+                             interWarpTotalsLayout.getOutDimSize(axis), laneId,
                              warpId, rewriter);
   }
 
@@ -313,19 +313,19 @@ private:
                         Value warpId,
                         ConversionPatternRewriter &rewriter) const {
     auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
-    if (!helper.getIntraWarpLayout()) {
+    if (!helper.getIntraWarpTotalsLayout()) {
       if (!interWarpCarries.empty())
         applySegmentCarries(op, values, interWarpCarries, rewriter);
       return;
     }
 
-    const auto &intraWarpLayout = *helper.getIntraWarpLayout();
+    const auto &intraWarpTotalsLayout = *helper.getIntraWarpTotalsLayout();
     unsigned segmentRegs = helper.getThreadSegmentSize();
     unsigned numSegments = helper.getWarpSegmentSize() / segmentRegs;
     const auto &scanLayout = *helper.getIntraWarpScanLayout();
     if (!interWarpCarries.empty())
       applySegmentCarries(op, intraWarpTotals, interWarpCarries, rewriter);
-    convertScanValues(op, intraWarpTotals, scanLayout, intraWarpLayout,
+    convertScanValues(op, intraWarpTotals, scanLayout, intraWarpTotalsLayout,
                       rewriter);
 
     // Terminal prefixes are complete; only the other registers need carries.
@@ -335,9 +335,9 @@ private:
     if (segmentRegs == 1)
       return;
 
-    auto carries =
-        getSegmentCarries(op, intraWarpTotals, intraWarpLayout, intraWarpLayout,
-                          numSegments, laneId, warpId, rewriter);
+    auto carries = getSegmentCarries(op, intraWarpTotals, intraWarpTotalsLayout,
+                                     intraWarpTotalsLayout, numSegments, laneId,
+                                     warpId, rewriter);
     if (!interWarpCarries.empty()) {
       unsigned segmentsPerWarp = carries.size() / interWarpCarries.size();
       for (auto [r, carry] : llvm::enumerate(carries)) {

@@ -134,8 +134,8 @@ private:
 //    [x(2j), x(2j+1)] becomes [x(2j), Tj], where Tj=x(2j)+x(2j+1).
 //    These element prefixes stay in permutedLayout until carries are applied.
 //
-// 2. Warp-local phase: intraWarpLayout -> intraWarpScanLayout
-//    intraWarpLayout describes the extracted Tj values in their original
+// 2. Warp-local phase: intraWarpTotalsLayout -> intraWarpScanLayout
+//    intraWarpTotalsLayout describes the extracted Tj values in their original
 //    owners. Divide the element bases by threadSegmentSize=2 and remove zero
 //    register bases: R=[2,4], L=[1], W=[8]. Coordinates now index thread-local
 //    segments.
@@ -154,11 +154,12 @@ private:
 //    Slot j now holds Uj=T(8w)+...+Tj, where w is its warp. The layout stays
 //    intraWarpScanLayout. In particular, U7 sums x0..x15 and U15 sums x16..x31.
 //
-// 3. Inter-warp phase: interWarpLayout -> interWarpScanLayout
+// 3. Inter-warp phase: interWarpTotalsLayout -> interWarpScanLayout
 //    Let W0=U7 and W1=U15. Extract the terminal register and broadcast from the
-//    terminal lane of each warp-local segment. interWarpLayout describes Wj:
-//    divide intraWarpScanLayout's bases by 8 and remove zero register bases,
-//    giving R=[], L=[0], W=[1]. Coordinates now index warp-local segments.
+//    terminal lane of each warp-local segment. interWarpTotalsLayout describes
+//    Wj: divide intraWarpScanLayout's bases by 8 and remove zero register
+//    bases, giving R=[], L=[0], W=[1]. Coordinates now index warp-local
+//    segments.
 //      warp 0, every lane: W0
 //      warp 1, every lane: W1
 //    interWarpScanLayout places the full sequence in lanes and replicates it
@@ -170,11 +171,11 @@ private:
 //      each warp, lane 1: S1=W0+W1
 //
 // Carry propagation
-//    Map each consumer in interWarpLayout to the preceding segment's prefix
-//    in interWarpScanLayout. Warp 0 has no carry; warp 1 reads S0 from lane 0.
-//    Apply that carry to every Uj in warp 1. The totals now hold global
+//    Map each consumer in interWarpTotalsLayout to the preceding segment's
+//    prefix in interWarpScanLayout. Warp 0 has no carry; warp 1 reads S0 from
+//    lane 0. Apply that carry to every Uj in warp 1. The totals now hold global
 //    prefixes Qj=T0+...+Tj in intraWarpScanLayout. Convert back to
-//    intraWarpLayout:
+//    intraWarpTotalsLayout:
 //      warp 0, lane 0: Q0, Q2, Q4, Q6
 //      warp 0, lane 1: Q1, Q3, Q5, Q7
 //      warp 1, lane 0: Q8, Q10, Q12, Q14
@@ -197,8 +198,8 @@ public:
 
   unsigned getThreadSegmentSize() const { return threadSegmentSize; }
 
-  const std::optional<triton::LinearLayout> &getIntraWarpLayout() const {
-    return intraWarpLayout;
+  const std::optional<triton::LinearLayout> &getIntraWarpTotalsLayout() const {
+    return intraWarpTotalsLayout;
   }
 
   const std::optional<triton::LinearLayout> &getIntraWarpScanLayout() const {
@@ -207,8 +208,8 @@ public:
 
   unsigned getWarpSegmentSize() const { return warpSegmentSize; }
 
-  const std::optional<triton::LinearLayout> &getInterWarpLayout() const {
-    return interWarpLayout;
+  const std::optional<triton::LinearLayout> &getInterWarpTotalsLayout() const {
+    return interWarpTotalsLayout;
   }
 
   const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
@@ -220,9 +221,9 @@ public:
 
 private:
   triton::LinearLayout buildPermutedLayout();
-  triton::LinearLayout buildIntraWarpLayout() const;
+  triton::LinearLayout buildIntraWarpTotalsLayout() const;
   triton::LinearLayout buildIntraWarpScanLayout() const;
-  triton::LinearLayout buildInterWarpLayout() const;
+  triton::LinearLayout buildInterWarpTotalsLayout() const;
   triton::LinearLayout buildInterWarpScanLayout() const;
 
   triton::ScanOp op;
@@ -233,9 +234,9 @@ private:
   triton::ColumnAction registerOrder;
   unsigned threadSegmentSize = 1;
   unsigned warpSegmentSize = 1;
-  std::optional<triton::LinearLayout> intraWarpLayout;
+  std::optional<triton::LinearLayout> intraWarpTotalsLayout;
   std::optional<triton::LinearLayout> intraWarpScanLayout;
-  std::optional<triton::LinearLayout> interWarpLayout;
+  std::optional<triton::LinearLayout> interWarpTotalsLayout;
   std::optional<triton::LinearLayout> interWarpScanLayout;
 };
 

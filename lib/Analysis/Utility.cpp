@@ -341,13 +341,13 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
     if (basis[axis])
       threadSegmentSize = std::min(threadSegmentSize, unsigned(basis[axis]));
   if (threadSegmentSize < warpSegmentSize) {
-    intraWarpLayout = buildIntraWarpLayout();
+    intraWarpTotalsLayout = buildIntraWarpTotalsLayout();
     intraWarpScanLayout = buildIntraWarpScanLayout();
   }
   if (warpSegmentSize == axisSize)
     return;
 
-  interWarpLayout = buildInterWarpLayout();
+  interWarpTotalsLayout = buildInterWarpTotalsLayout();
   interWarpScanLayout = buildInterWarpScanLayout();
 }
 
@@ -382,7 +382,7 @@ static LinearLayout getScanTotalsLayout(const LinearLayout &layout,
       .removeZeroBasesAlongDim(kReg);
 }
 
-LinearLayout ScanLoweringHelper::buildIntraWarpLayout() const {
+LinearLayout ScanLoweringHelper::buildIntraWarpTotalsLayout() const {
   // Collapse each thread-local segment to one total in its original owner.
   return getScanTotalsLayout(permutedLayout, axis, threadSegmentSize);
 }
@@ -391,11 +391,11 @@ LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
   // Put all segment register bits before lane bits. For register=[4,8] and
   // lane=[1,2], this gives register=[1,2], lane=[4,8]. Ownership stays in a
   // warp.
-  auto *ctx = intraWarpLayout->getInDimNames().begin()->getContext();
+  auto *ctx = intraWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   unsigned segmentSize = warpSegmentSize / threadSegmentSize;
-  auto bases = intraWarpLayout->getBases();
+  auto bases = intraWarpTotalsLayout->getBases();
   unsigned next = 1;
   for (auto dim : {kReg, kLane})
     for (auto &basis : bases[dim])
@@ -405,10 +405,10 @@ LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
       }
   assert(next == segmentSize);
   return LinearLayout(std::move(bases),
-                      llvm::to_vector(intraWarpLayout->getOutDimNames()));
+                      llvm::to_vector(intraWarpTotalsLayout->getOutDimNames()));
 }
 
-LinearLayout ScanLoweringHelper::buildInterWarpLayout() const {
+LinearLayout ScanLoweringHelper::buildInterWarpTotalsLayout() const {
   // Collapse warp-local segments in the layout that holds their prefixes.
   const auto &sourceLayout =
       intraWarpScanLayout ? *intraWarpScanLayout : permutedLayout;
@@ -422,12 +422,12 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
   // Replicate every segment total within each participating warp. With two
   // free lane bits and eight segments: lane=[1,2], register=[4], warp=[0].
   // Independent scans and CTA ownership retain their original coordinates.
-  auto *ctx = interWarpLayout->getInDimNames().begin()->getContext();
+  auto *ctx = interWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
-  unsigned numSegments = interWarpLayout->getOutDimSize(axisDim);
-  auto bases = interWarpLayout->getBases();
+  unsigned numSegments = interWarpTotalsLayout->getOutDimSize(axisDim);
+  auto bases = interWarpTotalsLayout->getBases();
   for (auto &[dim, dimBases] : bases)
     for (auto &basis : dimBases)
       basis[axis] = 0;
@@ -439,13 +439,13 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
       next *= 2;
     }
   while (next < numSegments) {
-    std::vector<int32_t> basis(interWarpLayout->getNumOutDims(), 0);
+    std::vector<int32_t> basis(interWarpTotalsLayout->getNumOutDims(), 0);
     basis[axis] = next;
     bases[kReg].push_back(std::move(basis));
     next *= 2;
   }
   return LinearLayout(std::move(bases),
-                      llvm::to_vector(interWarpLayout->getOutDimNames()))
+                      llvm::to_vector(interWarpTotalsLayout->getOutDimNames()))
       .removeZeroBasesAlongDim(kReg);
 }
 
@@ -460,11 +460,11 @@ bool ScanLoweringHelper::isSupported() {
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes(
     GetNumScratchElemsFn numScratchElemsGetter) {
-  if (!interWarpLayout)
+  if (!interWarpTotalsLayout)
     return 0;
   assert(op && "scratch sizing requires a scan operation");
   return getLayoutConversionScratchConfig(
-             *interWarpLayout, *interWarpScanLayout, op.getElementTypes(),
+             *interWarpTotalsLayout, *interWarpScanLayout, op.getElementTypes(),
              numScratchElemsGetter)
       .sizeInBytes;
 }
