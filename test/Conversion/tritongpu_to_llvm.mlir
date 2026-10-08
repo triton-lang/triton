@@ -3609,6 +3609,64 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:75", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @sqrt_rsqrt_f32_tensor
+  // CHECK-NOT: __nv_
+  tt.func public @sqrt_rsqrt_f32_tensor(%arg0 : tensor<128xf32, #blocked>) {
+    // CHECK: llvm.call_intrinsic "llvm.sqrt"({{.*}}) {fastmathFlags = #llvm.fastmath<afn>} : (f32) -> f32
+    // CHECK-NOT: __nv_
+    %0 = math.sqrt %arg0 : tensor<128xf32, #blocked>
+    // CHECK: nvvm.rsqrt %{{.*}} : f32
+    // CHECK-NOT: __nv_
+    %1 = math.rsqrt %arg0 : tensor<128xf32, #blocked>
+    // CHECK: llvm.return
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @sqrt_rsqrt_f64_tensor
+  // CHECK-NOT: __nv_
+  tt.func public @sqrt_rsqrt_f64_tensor(%arg0 : tensor<128xf64, #blocked>) {
+    // CHECK: llvm.call_intrinsic "llvm.sqrt"({{.*}}) {fastmathFlags = #llvm.fastmath<afn>} : (f64) -> f64
+    // CHECK-NOT: __nv_
+    %0 = math.sqrt %arg0 : tensor<128xf64, #blocked>
+    // CHECK: nvvm.rsqrt %{{.*}} : f64
+    // CHECK-NOT: __nv_
+    %1 = math.rsqrt %arg0 : tensor<128xf64, #blocked>
+    // CHECK: llvm.return
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @sqrt_rsqrt_f32_scalar
+  // CHECK-NOT: __nv_
+  tt.func public @sqrt_rsqrt_f32_scalar(%arg0 : f32) {
+    // CHECK: llvm.call_intrinsic "llvm.sqrt"({{.*}}) {fastmathFlags = #llvm.fastmath<afn>} : (f32) -> f32
+    // CHECK-NOT: __nv_
+    %0 = math.sqrt %arg0 : f32
+    // CHECK: nvvm.rsqrt %{{.*}} : f32
+    // CHECK-NOT: __nv_
+    %1 = math.rsqrt %arg0 : f32
+    // CHECK: llvm.return
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @sqrt_rsqrt_f64_scalar
+  // CHECK-NOT: __nv_
+  tt.func public @sqrt_rsqrt_f64_scalar(%arg0 : f64) {
+    // CHECK: llvm.call_intrinsic "llvm.sqrt"({{.*}}) {fastmathFlags = #llvm.fastmath<afn>} : (f64) -> f64
+    // CHECK-NOT: __nv_
+    %0 = math.sqrt %arg0 : f64
+    // CHECK: nvvm.rsqrt %{{.*}} : f64
+    // CHECK-NOT: __nv_
+    %1 = math.rsqrt %arg0 : f64
+    // CHECK: llvm.return
+    tt.return
+  }
+}
+
+// -----
+
 // We had a bug where DotOp lowering treated any input where shape[1] == 1 as an
 // outer product and rejected it. This was incorrect in 3D tensors, since
 // the dimension to look at would have been shape[2].
