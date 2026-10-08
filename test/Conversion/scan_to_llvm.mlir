@@ -654,6 +654,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // GROUPSCAN: getelementptr i8, ptr addrspace(3) %[[BASE]], i64 12
 // GROUPSCAN: add i32
 // GROUPSCAN: load i32
+// GROUPSCAN: %[[FINAL:.*]] = getelementptr i8, ptr addrspace(3) %[[BASE]], i64 56
+// GROUPSCAN: load i32, ptr addrspace(3) %[[FINAL]],
+// GROUPSCAN-NOT: getelementptr i8, ptr addrspace(3) %[[BASE]], i64 60
 // GROUPSCAN: ret
 tt.func private @test_scan_grouped_shared_forward(%arg: tensor<512xi32, #grouped>) -> tensor<512xi32, #grouped> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
@@ -677,6 +680,9 @@ tt.func private @test_scan_grouped_shared_forward(%arg: tensor<512xi32, #grouped
 // GROUPSCAN: getelementptr i8, ptr addrspace(3) %[[REVERSE_BASE]], i64 48
 // GROUPSCAN: add i32
 // GROUPSCAN: load i32
+// GROUPSCAN: %[[REVERSE_FINAL:.*]] = getelementptr i8, ptr addrspace(3) %[[REVERSE_BASE]], i64 4
+// GROUPSCAN: load i32, ptr addrspace(3) %[[REVERSE_FINAL]],
+// GROUPSCAN-NOT: load i32, ptr addrspace(3) %[[REVERSE_BASE]],
 // GROUPSCAN: ret
 tt.func private @test_scan_grouped_shared_reverse(%arg: tensor<512xi32, #grouped>) -> tensor<512xi32, #grouped> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
