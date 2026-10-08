@@ -332,6 +332,11 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
 
 
 @pytest.mark.parametrize("layout, M, N", [
+    # Each logical lane scans two converted totals. Check every register's
+    # boundary predicate, with and without a carry from another warp.
+    *[(ttgl.DistributedLinearLayout([[4, 0], [0, 1], [0, 2]], [[1, 0], [2, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
+                                    (THREADS_PER_WARP.bit_length() - 6), [[warp, 0], [0, 0]], [], [M, 32]), M, 32)
+      for warp, M in [(0, 8), (8, 16)]],
     (ttgl.BlockedLayout([8, 1], [THREADS_PER_WARP, 1], [4, 1], [0, 1]), 2048, 4),
     # Thread totals need a register/lane conversion before the warp scan.
     (ttgl.DistributedLinearLayout([[1, 0], [4, 0], [16, 0], [0, 1], [0, 2]],
