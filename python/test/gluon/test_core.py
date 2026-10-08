@@ -4124,6 +4124,62 @@ def test_packed_arith(op, dtype):
     assert f"ttng.packed_arith {op_name}" in compiled.asm["ttgir"]
 
 
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+def test_rubin_packed_arith_mixed_precision():
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+        offsets = ttgl.arange(0, 256, layout=layout)
+        a = ttgl.load(a_ptr + offsets)
+        b = ttgl.load(b_ptr + offsets)
+        c = ttgl.load(c_ptr + offsets)
+
+        narrow = rubin.add2(a, b, dtype=ttgl.float16)
+        out = rubin.add2(narrow, c, dtype=ttgl.float32)
+        ttgl.store(out_ptr + offsets, out)
+
+    a_pattern = torch.tensor([1.0, -1.0, 2**-15, -(2**-15)], dtype=torch.float32, device="cuda")
+    b_pattern = torch.tensor([3 * 2**-12, -(3 * 2**-12), 0.0, 0.0], dtype=torch.float32, device="cuda")
+    c_pattern = torch.full_like(a_pattern, 0.25)
+    a = a_pattern.repeat(64)
+    b = b_pattern.repeat(64)
+    c = c_pattern.repeat(64)
+    out = torch.empty_like(a)
+    compiled = kernel[(1, )](a, b, c, out)
+
+    # The first two values distinguish RZ from RN, while the other two
+    # exercise FTZ for positive and negative f16 subnormal results.
+    reference = torch.tensor([1.25, -0.75, 0.25, 0.25], dtype=torch.float32, device="cuda").repeat(64)
+    torch.testing.assert_close(reference, out, atol=0, rtol=0)
+    assert compiled.asm["ttgir"].count("ttng.packed_arith add") == 2
+    assert "add.rz.ftz.f16x2.f32x2.f32x2" in compiled.asm["ptx"]
+    assert "add.f32x2.f16x2.f32x2" in compiled.asm["ptx"]
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_packed_exp2(dtype):
+
+    @gluon.jit
+    def kernel(inp_ptr, out_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+        offsets = ttgl.arange(0, 256, layout=layout)
+        value = ttgl.load(inp_ptr + offsets)
+        ttgl.store(out_ptr + offsets, blackwell.exp2(value))
+
+    inp = torch.linspace(-4.0, 4.0, 256, dtype=torch.float32, device="cuda").to(dtype)
+    out = torch.empty_like(inp)
+    compiled = kernel[(1, )](inp, out)
+
+    reference = torch.exp2(inp.to(device="cpu", dtype=torch.float32)).to(device="cuda", dtype=dtype)
+    tolerance = 2e-3 if dtype == torch.float16 else 1e-2
+    torch.testing.assert_close(reference, out, atol=0, rtol=tolerance)
+
+    mnemonic = "ex2.approx.f16x2" if dtype == torch.float16 else "ex2.approx.ftz.bf16x2"
+    assert mnemonic in compiled.asm["ptx"]
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 def test_packed_arith_chains(dtype):

@@ -1,5 +1,7 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' -cse | FileCheck %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=93' -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=91' -cse | FileCheck --check-prefix=FALLBACK %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=94' -cse | FileCheck --check-prefix=FALLBACK %s
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
@@ -401,6 +403,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+#packed_exp2 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_exp2_f16
+  // CHECK: llvm.inline_asm {{.*}} "ex2.approx.f16x2 $0, $1;", "=r,r"
+  // FALLBACK-LABEL: @packed_exp2_f16
+  // FALLBACK: llvm.inline_asm {{.*}} "ex2.approx.f16x2 $0, $1;", "=r,r"
+  tt.func private @packed_exp2_f16(%arg0: tensor<256xf16, #packed_exp2>) -> tensor<256xf16, #packed_exp2> {
+    %0 = math.exp2 %arg0 : tensor<256xf16, #packed_exp2>
+    tt.return %0 : tensor<256xf16, #packed_exp2>
+  }
+
+  // CHECK-LABEL: @packed_exp2_bf16
+  // CHECK: llvm.inline_asm {{.*}} "ex2.approx.ftz.bf16x2 $0, $1;", "=r,r"
+  // FALLBACK-LABEL: @packed_exp2_bf16
+  // FALLBACK: llvm.inline_asm {{.*}} "ex2.approx.ftz.bf16x2 $0, $1;", "=r,r"
+  tt.func private @packed_exp2_bf16(%arg0: tensor<256xbf16, #packed_exp2>) -> tensor<256xbf16, #packed_exp2> {
+    %0 = math.exp2 %arg0 : tensor<256xbf16, #packed_exp2>
+    tt.return %0 : tensor<256xbf16, #packed_exp2>
+  }
+}
+
+// -----
+
+#packed_exp2_tail = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @packed_exp2_f16_tail
+  // CHECK-COUNT-1: llvm.inline_asm {{.*}} "ex2.approx.f16x2 $0, $1;", "=r,r"
+  // FALLBACK-LABEL: @packed_exp2_f16_tail
+  // FALLBACK-COUNT-1: llvm.inline_asm {{.*}} "ex2.approx.f16x2 $0, $1;", "=r,r"
+  tt.func private @packed_exp2_f16_tail(%arg0: tensor<128xf16, #packed_exp2_tail>) -> tensor<128xf16, #packed_exp2_tail> {
+    %0 = math.exp2 %arg0 : tensor<128xf16, #packed_exp2_tail>
+    tt.return %0 : tensor<128xf16, #packed_exp2_tail>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith_f32x2
@@ -420,6 +459,144 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %mul = ttng.packed_arith mul %sub, %b : (tensor<128x2xf32, #blocked>, tensor<128x2xf32, #blocked>) -> tensor<128x2xf32, #blocked>
     %fma = ttng.packed_arith fma %mul, %b, %c : (tensor<128x2xf32, #blocked>, tensor<128x2xf32, #blocked>, tensor<128x2xf32, #blocked>) -> tensor<128x2xf32, #blocked>
     tt.return %fma : tensor<128x2xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked_mixed_reduce = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked_independent_mixed_reduce = #ttg.blocked<{sizePerThread = [8, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  // FALLBACK-LABEL: @reduce_f16_to_f32
+  // FALLBACK-COUNT-16: llvm.fpext {{.*}} : f16 to f32
+  // FALLBACK: %[[FB_V0_LO:.*]] = llvm.insertelement
+  // FALLBACK: %[[FB_V0:.*]] = llvm.insertelement {{.*}}, %[[FB_V0_LO]]
+  // FALLBACK: %[[FB_V1_LO:.*]] = llvm.insertelement
+  // FALLBACK: %[[FB_V1:.*]] = llvm.insertelement {{.*}}, %[[FB_V1_LO]]
+  // FALLBACK: %[[FB_V2_LO:.*]] = llvm.insertelement
+  // FALLBACK: %[[FB_V2:.*]] = llvm.insertelement {{.*}}, %[[FB_V2_LO]]
+  // FALLBACK: %[[FB_V3_LO:.*]] = llvm.insertelement
+  // FALLBACK: %[[FB_V3:.*]] = llvm.insertelement {{.*}}, %[[FB_V3_LO]]
+  // FALLBACK: %[[FB_V4_LO:.*]] = llvm.insertelement
+  // FALLBACK: %[[FB_V4:.*]] = llvm.insertelement {{.*}}, %[[FB_V4_LO]]
+  // FALLBACK: %[[FB_V5_LO:.*]] = llvm.insertelement
+  // FALLBACK: %[[FB_V5:.*]] = llvm.insertelement {{.*}}, %[[FB_V5_LO]]
+  // FALLBACK: %[[FB_V6_LO:.*]] = llvm.insertelement
+  // FALLBACK: %[[FB_V6:.*]] = llvm.insertelement {{.*}}, %[[FB_V6_LO]]
+  // FALLBACK: %[[FB_V7_LO:.*]] = llvm.insertelement
+  // FALLBACK: %[[FB_V7:.*]] = llvm.insertelement {{.*}}, %[[FB_V7_LO]]
+  // FALLBACK: %[[FB_L0:.*]] = llvm.fadd %[[FB_V0]], %[[FB_V1]] : vector<2xf32>
+  // FALLBACK-NEXT: %[[FB_L1:.*]] = llvm.fadd %[[FB_V2]], %[[FB_V3]] : vector<2xf32>
+  // FALLBACK-NEXT: %[[FB_L2:.*]] = llvm.fadd %[[FB_V4]], %[[FB_V5]] : vector<2xf32>
+  // FALLBACK-NEXT: %[[FB_L3:.*]] = llvm.fadd %[[FB_V6]], %[[FB_V7]] : vector<2xf32>
+  // FALLBACK-NEXT: %[[FB_T0:.*]] = llvm.fadd %[[FB_L0]], %[[FB_L1]] : vector<2xf32>
+  // FALLBACK-NEXT: %[[FB_T1:.*]] = llvm.fadd %[[FB_L2]], %[[FB_L3]] : vector<2xf32>
+  // FALLBACK-NEXT: %[[FB_RESULT:.*]] = llvm.fadd %[[FB_T0]], %[[FB_T1]] : vector<2xf32>
+  // FALLBACK-NEXT: %[[FB_LO:.*]] = llvm.extractelement %[[FB_RESULT]]{{.*}} : vector<2xf32>
+  // FALLBACK-NEXT: %[[FB_HI:.*]] = llvm.extractelement %[[FB_RESULT]]{{.*}} : vector<2xf32>
+  // FALLBACK-NEXT: llvm.fadd %[[FB_LO]], %[[FB_HI]] : f32
+  // FALLBACK-NOT: llvm.fadd
+  // FALLBACK: llvm.return
+  // CHECK-LABEL: @reduce_f16_to_f32
+  // CHECK-COUNT-16: llvm.fpext {{.*}} : f16 to f32
+  // CHECK: %[[F16_V0_LO:.*]] = llvm.insertelement
+  // CHECK: %[[F16_V0:.*]] = llvm.insertelement {{.*}}, %[[F16_V0_LO]]
+  // CHECK: %[[F16_V1_LO:.*]] = llvm.insertelement
+  // CHECK: %[[F16_V1:.*]] = llvm.insertelement {{.*}}, %[[F16_V1_LO]]
+  // CHECK: %[[F16_V2_LO:.*]] = llvm.insertelement
+  // CHECK: %[[F16_V2:.*]] = llvm.insertelement {{.*}}, %[[F16_V2_LO]]
+  // CHECK: %[[F16_V3_LO:.*]] = llvm.insertelement
+  // CHECK: %[[F16_V3:.*]] = llvm.insertelement {{.*}}, %[[F16_V3_LO]]
+  // CHECK: %[[F16_V4_LO:.*]] = llvm.insertelement
+  // CHECK: %[[F16_V4:.*]] = llvm.insertelement {{.*}}, %[[F16_V4_LO]]
+  // CHECK: %[[F16_V5_LO:.*]] = llvm.insertelement
+  // CHECK: %[[F16_V5:.*]] = llvm.insertelement {{.*}}, %[[F16_V5_LO]]
+  // CHECK: %[[F16_V6_LO:.*]] = llvm.insertelement
+  // CHECK: %[[F16_V6:.*]] = llvm.insertelement {{.*}}, %[[F16_V6_LO]]
+  // CHECK: %[[F16_V7_LO:.*]] = llvm.insertelement
+  // CHECK: %[[F16_V7:.*]] = llvm.insertelement {{.*}}, %[[F16_V7_LO]]
+  // CHECK: %[[F16_A1:.*]] = llvm.fadd %[[F16_V1]], %[[F16_V0]] : vector<2xf32>
+  // CHECK-NEXT: %[[F16_A2:.*]] = llvm.fadd %[[F16_V2]], %[[F16_A1]] : vector<2xf32>
+  // CHECK-NEXT: %[[F16_A3:.*]] = llvm.fadd %[[F16_V3]], %[[F16_A2]] : vector<2xf32>
+  // CHECK-NEXT: %[[F16_A4:.*]] = llvm.fadd %[[F16_V4]], %[[F16_A3]] : vector<2xf32>
+  // CHECK-NEXT: %[[F16_A5:.*]] = llvm.fadd %[[F16_V5]], %[[F16_A4]] : vector<2xf32>
+  // CHECK-NEXT: %[[F16_A6:.*]] = llvm.fadd %[[F16_V6]], %[[F16_A5]] : vector<2xf32>
+  // CHECK-NEXT: %[[F16_RESULT:.*]] = llvm.fadd %[[F16_V7]], %[[F16_A6]] : vector<2xf32>
+  // CHECK-NEXT: %[[F16_LO:.*]] = llvm.extractelement %[[F16_RESULT]]{{.*}} : vector<2xf32>
+  // CHECK-NEXT: %[[F16_HI:.*]] = llvm.extractelement %[[F16_RESULT]]{{.*}} : vector<2xf32>
+  // CHECK-NEXT: llvm.fadd %[[F16_LO]], %[[F16_HI]] : f32
+  // CHECK-NOT: llvm.fadd
+  // CHECK: llvm.return
+  tt.func private @reduce_f16_to_f32(%arg0: tensor<1x16xf16, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>> {
+    %wide = arith.extf %arg0 : tensor<1x16xf16, #blocked_mixed_reduce> to tensor<1x16xf32, #blocked_mixed_reduce>
+    %sum = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %add = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %add : f32
+    }) : (tensor<1x16xf32, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.return %sum : tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+  }
+
+  // The vector lanes are independent results when packing is not along the
+  // reduction axis. The vector reduction still uses one accumulator chain.
+  // FALLBACK-LABEL: @reduce_f16_to_f32_independent_lanes
+  // FALLBACK: %[[IND_FB_V0_LO:.*]] = llvm.insertelement
+  // FALLBACK: %[[IND_FB_V0:.*]] = llvm.insertelement {{.*}}, %[[IND_FB_V0_LO]]
+  // FALLBACK: %[[IND_FB_V1_LO:.*]] = llvm.insertelement
+  // FALLBACK: %[[IND_FB_V1:.*]] = llvm.insertelement {{.*}}, %[[IND_FB_V1_LO]]
+  // FALLBACK: llvm.fadd %[[IND_FB_V0]], %[[IND_FB_V1]] : vector<2xf32>
+  // CHECK-LABEL: @reduce_f16_to_f32_independent_lanes
+  // CHECK: %[[IND_V0_LO:.*]] = llvm.insertelement
+  // CHECK: %[[IND_V0:.*]] = llvm.insertelement {{.*}}, %[[IND_V0_LO]]
+  // CHECK: %[[IND_V1_LO:.*]] = llvm.insertelement
+  // CHECK: %[[IND_V1:.*]] = llvm.insertelement {{.*}}, %[[IND_V1_LO]]
+  // CHECK: %[[IND_V2_LO:.*]] = llvm.insertelement
+  // CHECK: %[[IND_V2:.*]] = llvm.insertelement {{.*}}, %[[IND_V2_LO]]
+  // CHECK: %[[IND_V3_LO:.*]] = llvm.insertelement
+  // CHECK: %[[IND_V3:.*]] = llvm.insertelement {{.*}}, %[[IND_V3_LO]]
+  // CHECK: %[[IND_V4_LO:.*]] = llvm.insertelement
+  // CHECK: %[[IND_V4:.*]] = llvm.insertelement {{.*}}, %[[IND_V4_LO]]
+  // CHECK: %[[IND_V5_LO:.*]] = llvm.insertelement
+  // CHECK: %[[IND_V5:.*]] = llvm.insertelement {{.*}}, %[[IND_V5_LO]]
+  // CHECK: %[[IND_V6_LO:.*]] = llvm.insertelement
+  // CHECK: %[[IND_V6:.*]] = llvm.insertelement {{.*}}, %[[IND_V6_LO]]
+  // CHECK: %[[IND_V7_LO:.*]] = llvm.insertelement
+  // CHECK: %[[IND_V7:.*]] = llvm.insertelement {{.*}}, %[[IND_V7_LO]]
+  // CHECK: %[[IND_A1:.*]] = llvm.fadd %[[IND_V1]], %[[IND_V0]] : vector<2xf32>
+  // CHECK-NEXT: %[[IND_A2:.*]] = llvm.fadd %[[IND_V2]], %[[IND_A1]] : vector<2xf32>
+  // CHECK-NEXT: %[[IND_A3:.*]] = llvm.fadd %[[IND_V3]], %[[IND_A2]] : vector<2xf32>
+  // CHECK-NEXT: %[[IND_A4:.*]] = llvm.fadd %[[IND_V4]], %[[IND_A3]] : vector<2xf32>
+  // CHECK-NEXT: %[[IND_A5:.*]] = llvm.fadd %[[IND_V5]], %[[IND_A4]] : vector<2xf32>
+  // CHECK-NEXT: %[[IND_A6:.*]] = llvm.fadd %[[IND_V6]], %[[IND_A5]] : vector<2xf32>
+  // CHECK-NEXT: %[[IND_RESULT:.*]] = llvm.fadd %[[IND_V7]], %[[IND_A6]] : vector<2xf32>
+  // CHECK-NEXT: llvm.extractelement %[[IND_RESULT]]{{.*}} : vector<2xf32>
+  // CHECK-NEXT: llvm.extractelement %[[IND_RESULT]]{{.*}} : vector<2xf32>
+  tt.func private @reduce_f16_to_f32_independent_lanes(
+      %arg0: tensor<8x64xf16, #blocked_independent_mixed_reduce>) -> tensor<64xf32, #ttg.slice<{dim = 0, parent = #blocked_independent_mixed_reduce}>> {
+    %wide = arith.extf %arg0 : tensor<8x64xf16, #blocked_independent_mixed_reduce> to tensor<8x64xf32, #blocked_independent_mixed_reduce>
+    %sum = "tt.reduce"(%wide) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %add = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %add : f32
+    }) : (tensor<8x64xf32, #blocked_independent_mixed_reduce>) -> tensor<64xf32, #ttg.slice<{dim = 0, parent = #blocked_independent_mixed_reduce}>>
+    tt.return %sum : tensor<64xf32, #ttg.slice<{dim = 0, parent = #blocked_independent_mixed_reduce}>>
+  }
+
+  // A non-widened reduction on the same target must keep the generic tree
+  // schedule rather than use the Rubin-specific accumulator chains.
+  // CHECK-LABEL: @reduce_f32_tree_fallback
+  // CHECK: %[[F32_V0_LO:.*]] = llvm.insertelement
+  // CHECK: %[[F32_V0:.*]] = llvm.insertelement {{.*}}, %[[F32_V0_LO]]
+  // CHECK: %[[F32_V1_LO:.*]] = llvm.insertelement
+  // CHECK: %[[F32_V1:.*]] = llvm.insertelement {{.*}}, %[[F32_V1_LO]]
+  // CHECK: llvm.fadd %[[F32_V0]], %[[F32_V1]] : vector<2xf32>
+  tt.func private @reduce_f32_tree_fallback(%arg0: tensor<1x16xf32, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>> {
+    %sum = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %add = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %add : f32
+    }) : (tensor<1x16xf32, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.return %sum : tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
   }
 }
 

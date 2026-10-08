@@ -34,6 +34,12 @@ void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                     PatternBenefit benefit);
 
+void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                    const TargetInfo &targetInfo,
+                                    ModuleOp module,
+                                    RewritePatternSet &patterns,
+                                    PatternBenefit benefit);
+
 void populateConvertLayoutOpToLLVMOptimizedPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit);

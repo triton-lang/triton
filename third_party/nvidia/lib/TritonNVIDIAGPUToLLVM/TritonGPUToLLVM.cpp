@@ -195,8 +195,8 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
   populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
                                     computeCapability, patterns,
                                     axisInfoAnalysis, benefit);
-  mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
-                                               targetInfo, benefit);
+  mlir::triton::NVIDIA::populateReduceOpToLLVMPatterns(
+      typeConverter, targetInfo, getOperation(), patterns, benefit);
   mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
                                              targetInfo, benefit);
   mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
@@ -251,7 +251,9 @@ LogicalResult ConvertTritonGPUToLLVM::lowerTritonGPUOps(
   populateConversionPatterns(typeConverter, patterns, axisInfoAnalysis,
                              targetInfo);
   TritonLLVMConversionTarget target(*mod.getContext());
-  return applyPartialConversion(mod, target, std::move(patterns));
+  if (failed(applyPartialConversion(mod, target, std::move(patterns))))
+    return failure();
+  return success();
 }
 
 LogicalResult

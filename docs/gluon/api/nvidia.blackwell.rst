@@ -23,6 +23,7 @@ rejected on unsupported targets before instrumentation and lowering.
 
     add2
     allocate_tensor_memory
+    exp2
     fence_async_shared
     fma2
     max2

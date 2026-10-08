@@ -27,6 +27,7 @@ __all__ = [
     "async_store",
     "clc",
     "cluster",
+    "exp2",
     "fence_async_shared",
     "fma2",
     "mbarrier",
@@ -92,6 +93,20 @@ def _packed_arith(operation, operands, dtype, semantic):
     result_ir_type = result_type.to_ir(builder)
     handle = builder.create_packed_arith(result_ir_type, operation, normalized)
     return semantic._wrap_handle_infer_layout(handle, dtype, shape)
+
+
+@builtin
+def exp2(x, _semantic=None):
+    """Compute an approximate base-2 exponential with a packed half instruction.
+
+    ``x`` must have FP16 or BF16 element type. The result has the same type and
+    layout as ``x``.
+    """
+    x = _semantic.to_tensor(x)
+    _check(isinstance(x.type, ttgl.distributed_type), lambda: "packed exp2 requires a distributed tensor input")
+    _check(x.dtype in (ttgl.float16, ttgl.bfloat16),
+           lambda: f"packed exp2 only supports fp16 and bf16 inputs, got {x.dtype}")
+    return ttgl.tensor(_semantic.builder.create_exp2(x.handle), x.type)
 
 
 @builtin

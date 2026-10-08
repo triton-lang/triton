@@ -23,6 +23,7 @@ NVIDIA Rubin
     add4
     allocate_tensor_memory
     async_store
+    exp2
     fence_async_shared
     fma2
     fma4
