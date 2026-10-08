@@ -335,12 +335,12 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     // try to use oversized shared memory via new API
     // L1$ size is set to 8KB, CGA scheduling must be in SPREAD mode.
     // Use the same CC 10.7 guard as the oversized device-attribute query.
-    if (major != 10 || minor != 7 ||
-        CUDA_SUCCESS !=
-            cuFuncSetAttribute(
-                fun, CU_FUNC_ATTRIBUTE_SHARED_MEMORY_MODE,
-                CU_SHARED_MEMORY_MODE_ALLOW_OVERSIZED_SHARED_MEMORY)) {
-      // Use legacy opt-in on other devices or if oversized setup fails.
+    if (major == 10 && minor == 7) {
+      CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuFuncSetAttribute(
+          fun, CU_FUNC_ATTRIBUTE_SHARED_MEMORY_MODE,
+          CU_SHARED_MEMORY_MODE_ALLOW_OVERSIZED_SHARED_MEMORY));
+    } else {
+      // Use legacy opt-in on other devices.
       CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
           cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
       int shared_total, shared_static;
