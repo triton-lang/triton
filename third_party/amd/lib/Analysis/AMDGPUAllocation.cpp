@@ -49,7 +49,7 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
           AMDGetNumScratchElemsFn);
     auto scanOp = cast<ScanOp>(op);
     return ScanLoweringHelper(scanOp).getScratchSizeInBytes(
-        scanOp.getElementTypes(), AMDGetNumScratchElemsFn);
+        AMDGetNumScratchElemsFn);
   }
 
   if (auto cvtLayout = dyn_cast<mlir::triton::gpu::ConvertLayoutOp>(op)) {
