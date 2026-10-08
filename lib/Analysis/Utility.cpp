@@ -310,7 +310,9 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
 ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
     : ScanLoweringHelper(
           triton::gpu::toLinearLayout(op.getInputTypes().front()),
-          op.getAxis()) {}
+          op.getAxis()) {
+  this->op = op;
+}
 
 ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
                                        unsigned axis)
@@ -459,13 +461,13 @@ bool ScanLoweringHelper::isSupported() {
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes(
-    ArrayRef<Type> elementTypes,
-    GetNumScratchElemsFn numScratchElemsGetter) const {
+    GetNumScratchElemsFn numScratchElemsGetter) {
   if (!interWarpLayout)
     return 0;
-  return getLayoutConversionScratchConfig(*interWarpLayout,
-                                          *interWarpScanLayout, elementTypes,
-                                          numScratchElemsGetter)
+  assert(op && "scratch sizing requires a scan operation");
+  return getLayoutConversionScratchConfig(
+             *interWarpLayout, *interWarpScanLayout, op.getElementTypes(),
+             numScratchElemsGetter)
       .sizeInBytes;
 }
 

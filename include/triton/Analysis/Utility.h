@@ -140,9 +140,8 @@ public:
   const std::optional<triton::LinearLayout> &getInterWarpScanLayout() const {
     return interWarpScanLayout;
   }
-  unsigned getScratchSizeInBytes(
-      ArrayRef<Type> elementTypes,
-      GetNumScratchElemsFn numScratchElemsGetter = nullptr) const;
+  unsigned
+  getScratchSizeInBytes(GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
 private:
   triton::LinearLayout buildPermutedLayout();
@@ -151,6 +150,7 @@ private:
   triton::LinearLayout buildInterWarpLayout() const;
   triton::LinearLayout buildInterWarpScanLayout() const;
 
+  triton::ScanOp op;
   unsigned axis;
   triton::LinearLayout originalLayout;
   // Register zero bases removed, then axis register bits ordered logically.
