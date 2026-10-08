@@ -384,6 +384,15 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def is_within_2gb(arg):
+        """Whether byte offsets through ``arg`` fit the signed 32-bit range.
+
+        A callable ``ptr_range()`` must return a non-negative byte extent from
+        ``data_ptr()``. The extent describes the half-open range
+        ``[data_ptr(), data_ptr() + ptr_range())`` and must cover every byte the
+        kernel may access through that pointer. When no callable is present,
+        a Torch tensor's full storage size is used. Extents up to and including
+        ``2**31 - 1`` qualify.
+        """
         if HIPBackend._torch_available is None:
             try:
                 import torch

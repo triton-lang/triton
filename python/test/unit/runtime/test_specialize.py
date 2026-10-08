@@ -5,6 +5,7 @@ from collections import namedtuple
 from triton._C.libtriton import native_specialize_impl
 from triton.runtime.jit import MockTensor, JITCallable
 from triton._utils import canonicalize_dtype
+from triton import knobs
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.amd.compiler import HIPBackend
 from triton.language import constexpr
@@ -186,4 +187,19 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
     for arg in input_generator():
         result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
         expected = reference_specialize_impl(backend, arg, is_const, specialize_value, align)
+        assert result == expected
+
+
+def test_hip_specialization_honors_instance_ptr_range():
+    with knobs.amd.scope():
+        knobs.amd.use_buffer_ops = True
+        tensor = torch.empty(2**31, dtype=torch.uint8, device="meta")
+        assert type(tensor) is torch.Tensor
+        assert tensor.untyped_storage().size() > 2**31 - 1
+
+        tensor.ptr_range = lambda: 64
+        expected = reference_specialize_impl(HIPBackend, tensor, False, True, True)
+        result = native_specialize_impl(HIPBackend, tensor, False, True, True)
+
+        assert expected[1].endswith("S")
         assert result == expected
