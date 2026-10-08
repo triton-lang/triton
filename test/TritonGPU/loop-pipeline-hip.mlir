@@ -1309,3 +1309,147 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// The loop is normalized to [0, ceildiv(ub - lb, step)) with step 1, so that
+// the slot indices are offsets of the induction variable. The address of B uses
+// the original induction variable, which is rebuilt as lb + iv * step in the
+// stage of the load. B is not aligned, so it is lowered through local_store
+// even with async copies.
+
+// COMMON-LABEL: tt.func public @pipeline_normalize_loop_bounds
+//  COMMON-SAME: (%[[LB:[^:]+]]: i32, %[[UB:[^:]+]]: i32, %[[STEP:[^:]+]]: i32
+//       COMMON:   %[[RANGE:.*]] = arith.subi %[[UB]], %[[LB]]
+//       COMMON:   %[[TRIP:.*]] = arith.ceildivsi %[[RANGE]], %[[STEP]]
+//       COMMON:   %[[LOOP_UB:.*]] = arith.subi %[[TRIP]], %c2_i32
+//       COMMON:   scf.for %[[IV:.*]] = %c0_i32 to %[[LOOP_UB]] step %c1_i32
+
+//         SYNC:     %[[B_READ:.*]] = arith.remsi %[[IV]], %c2_i32
+//    SYNC-NEXT:     %[[A_READ:.*]] = arith.remsi %[[IV]], %c2_i32
+//    SYNC-NEXT:     %[[B_NEXT:.*]] = arith.addi %[[IV]], %c2_i32
+//    SYNC-NEXT:     %[[B_SCALED:.*]] = arith.muli %[[B_NEXT]], %[[STEP]]
+//    SYNC-NEXT:     %[[B_ITER:.*]] = arith.addi %[[LB]], %[[B_SCALED]]
+//    SYNC-NEXT:     tt.splat %[[B_ITER]]
+//         SYNC:     ttg.memdesc_index %{{.*}}[%[[A_READ]]]
+//    SYNC-NEXT:     ttg.local_load
+//         SYNC:     ttg.memdesc_index %{{.*}}[%[[B_READ]]]
+//    SYNC-NEXT:     ttg.local_load
+//         SYNC:     %[[B_SHIFTED:.*]] = arith.addi %[[IV]], %c2_i32
+//    SYNC-NEXT:     %[[B_WRITE:.*]] = arith.remsi %[[B_SHIFTED]], %c2_i32
+//    SYNC-NEXT:     %[[A_SHIFTED:.*]] = arith.addi %[[IV]], %c2_i32
+//    SYNC-NEXT:     %[[A_WRITE:.*]] = arith.remsi %[[A_SHIFTED]], %c2_i32
+//    SYNC-NEXT:     ttg.memdesc_index %{{.*}}[%[[A_WRITE]]]
+//    SYNC-NEXT:     ttg.local_store
+//    SYNC-NEXT:     ttg.memdesc_index %{{.*}}[%[[B_WRITE]]]
+//    SYNC-NEXT:     ttg.local_store
+
+//        ASYNC:     ttg.async_wait
+//        ASYNC:     %[[B_READ:.*]] = arith.remsi %[[IV]], %c3_i32
+//   ASYNC-NEXT:     %[[A_SHIFTED:.*]] = arith.addi %[[IV]], %c2_i32
+//   ASYNC-NEXT:     %[[A_WRITE:.*]] = arith.remsi %[[A_SHIFTED]], %c3_i32
+//   ASYNC-NEXT:     %[[A_READ:.*]] = arith.remsi %[[IV]], %c3_i32
+//   ASYNC-NEXT:     %[[B_NEXT:.*]] = arith.addi %[[IV]], %c2_i32
+//   ASYNC-NEXT:     %[[B_SCALED:.*]] = arith.muli %[[B_NEXT]], %[[STEP]]
+//   ASYNC-NEXT:     %[[B_ITER:.*]] = arith.addi %[[LB]], %[[B_SCALED]]
+//   ASYNC-NEXT:     tt.splat %[[B_ITER]]
+//        ASYNC:     ttg.memdesc_index %{{.*}}[%[[A_WRITE]]]
+//   ASYNC-NEXT:     ttg.async_copy_global_to_local
+//        ASYNC:     ttg.memdesc_index %{{.*}}[%[[A_READ]]]
+//   ASYNC-NEXT:     ttg.local_load
+//        ASYNC:     ttg.memdesc_index %{{.*}}[%[[B_READ]]]
+//   ASYNC-NEXT:     ttg.local_load
+//        ASYNC:     %[[B_SHIFTED:.*]] = arith.addi %[[IV]], %c2_i32
+//   ASYNC-NEXT:     %[[B_WRITE:.*]] = arith.remsi %[[B_SHIFTED]], %c3_i32
+//   ASYNC-NEXT:     ttg.memdesc_index %{{.*}}[%[[B_WRITE]]]
+//   ASYNC-NEXT:     ttg.local_store
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @pipeline_normalize_loop_bounds(%lb: i32, %ub: i32, %step: i32, %arg1: tensor<64x32x!tt.ptr<f16>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 4]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<32x64x!tt.ptr<f16>, #blocked1> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 4]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg3: tensor<64x64x!tt.ptr<f32>, #mma>) {
+    %cst = arith.constant dense<32> : tensor<64x32xi32, #blocked>
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %0:2 = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_1, %a = %arg1) -> (tensor<64x64xf32, #mma>, tensor<64x32x!tt.ptr<f16>, #blocked>)  : i32 {
+      %kb = tt.splat %iv : i32 -> tensor<32x64xi32, #blocked1>
+      %pb = tt.addptr %arg2, %kb : tensor<32x64x!tt.ptr<f16>, #blocked1>, tensor<32x64xi32, #blocked1>
+      %1 = tt.load %a : tensor<64x32x!tt.ptr<f16>, #blocked>
+      %2 = tt.load %pb : tensor<32x64x!tt.ptr<f16>, #blocked1>
+      %3 = ttg.convert_layout %1 : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+      %4 = ttg.convert_layout %2 : tensor<32x64xf16, #blocked1> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      %5 = tt.dot %3, %4, %acc : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<64x64xf32, #mma>
+      %6 = tt.addptr %a, %cst : tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<64x32xi32, #blocked>
+      scf.yield %5, %6 : tensor<64x64xf32, #mma>, tensor<64x32x!tt.ptr<f16>, #blocked>
+    } {tt.num_stages = 3 : i32}
+    tt.store %arg3, %0#0 : tensor<64x64x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// The slot indices are computed in the type of the induction variable and
+// truncated to the i32 operand of memdesc_index.
+
+// COMMON-LABEL: tt.func public @pipeline_i64_induction_variable
+//       ASYNC:   scf.for %[[IV:.*]] = %c0_i64 to %{{.*}} step %c1_i64
+//       ASYNC:     %[[B_SHIFTED:.*]] = arith.addi %[[IV]], %c2_i64
+//  ASYNC-NEXT:     %[[B_WRITE_I64:.*]] = arith.remsi %[[B_SHIFTED]], %c3_i64
+//  ASYNC-NEXT:     %[[B_WRITE:.*]] = arith.trunci %[[B_WRITE_I64]] : i64 to i32
+//  ASYNC-NEXT:     %[[B_READ_I64:.*]] = arith.remsi %[[IV]], %c3_i64
+//  ASYNC-NEXT:     %[[B_READ:.*]] = arith.trunci %[[B_READ_I64]] : i64 to i32
+//       ASYNC:     ttg.memdesc_index %{{.*}}[%[[B_WRITE]]]
+//  ASYNC-NEXT:     ttg.async_copy_global_to_local
+//       ASYNC:     ttg.memdesc_index %{{.*}}[%[[B_READ]]]
+//  ASYNC-NEXT:     ttg.local_load
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @pipeline_i64_induction_variable(%ub: i64, %arg1: tensor<64x32x!tt.ptr<f16>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 4]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<32x64x!tt.ptr<f16>, #blocked1> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 4]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg3: tensor<64x64x!tt.ptr<f32>, #mma>) {
+    %c0 = arith.constant 0 : i64
+    %c1 = arith.constant 1 : i64
+    %cst = arith.constant dense<32> : tensor<64x32xi32, #blocked>
+    %cst_0 = arith.constant dense<32> : tensor<32x64xi32, #blocked1>
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %0:3 = scf.for %iv = %c0 to %ub step %c1 iter_args(%acc = %cst_1, %a = %arg1, %b = %arg2) -> (tensor<64x64xf32, #mma>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x64x!tt.ptr<f16>, #blocked1>)  : i64 {
+      %1 = tt.load %a : tensor<64x32x!tt.ptr<f16>, #blocked>
+      %2 = tt.load %b : tensor<32x64x!tt.ptr<f16>, #blocked1>
+      %3 = ttg.convert_layout %1 : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+      %4 = ttg.convert_layout %2 : tensor<32x64xf16, #blocked1> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      %5 = tt.dot %3, %4, %acc : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<64x64xf32, #mma>
+      %6 = tt.addptr %a, %cst : tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<64x32xi32, #blocked>
+      %7 = tt.addptr %b, %cst_0 : tensor<32x64x!tt.ptr<f16>, #blocked1>, tensor<32x64xi32, #blocked1>
+      scf.yield %5, %6, %7 : tensor<64x64xf32, #mma>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x64x!tt.ptr<f16>, #blocked1>
+    } {tt.num_stages = 3 : i32}
+    tt.store %arg3, %0#0 : tensor<64x64x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+// No load goes through shared memory, so the loop keeps its bounds and step.
+
+// COMMON-LABEL: tt.func public @pipeline_no_shared_loads_keeps_loop_bounds
+//  COMMON-SAME: (%[[LB:[^:]+]]: i32, %{{[^:]+}}: i32, %[[STEP:[^:]+]]: i32
+//   COMMON-NOT:   arith.ceildivsi
+//       COMMON:   scf.for %{{.*}} = %[[LB]] to %{{.*}} step %[[STEP]]
+
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 2], instrShape = [32, 32, 8], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @pipeline_no_shared_loads_keeps_loop_bounds(%lb: i32, %ub: i32, %step: i32, %in: tensor<64x64x!tt.ptr<f32>, #mma>, %out: tensor<64x64x!tt.ptr<f32>, #mma>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %0 = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst) -> (tensor<64x64xf32, #mma>)  : i32 {
+      %offsets = tt.splat %iv : i32 -> tensor<64x64xi32, #mma>
+      %ptrs = tt.addptr %in, %offsets : tensor<64x64x!tt.ptr<f32>, #mma>, tensor<64x64xi32, #mma>
+      %1 = tt.load %ptrs : tensor<64x64x!tt.ptr<f32>, #mma>
+      %2 = arith.addf %acc, %1 : tensor<64x64xf32, #mma>
+      scf.yield %2 : tensor<64x64xf32, #mma>
+    } {tt.num_stages = 3 : i32}
+    tt.store %out, %0 : tensor<64x64x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}

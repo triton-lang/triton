@@ -4,15 +4,25 @@
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @direct_chained_dots
+  // CHECK-SAME: %[[UB:[^:]+]]: i32, %[[STEP:[^:]+]]: i32)
 
   // We have no ops between the dots so we just check that dot and memory ops are in the correct order and check if basic pipelining (prologue, epilogue) is working correctly.
+  // The loop is normalized to step 1 and the slot indices are offsets of the induction variable.
+  // CHECK: %[[TRIP:.*]] = arith.ceildivsi %[[UB]], %[[STEP]]
   // CHECK-COUNT-2: ttg.local_load
-  // CHECK: scf.for
+  // CHECK: %[[LOOP_UB:.*]] = arith.subi %[[TRIP]], %c3_i32
+  // CHECK: scf.for %[[IV:.*]] = %c0_i32 to %[[LOOP_UB]] step %c1_i32
   // CHECK: tt.dot
-  // CHECK: ttg.async_copy_global_to_local
+  // CHECK: %[[SHIFTED_WRITE:.*]] = arith.addi %[[IV]], %c3_i32
+  // CHECK-NEXT: %[[WRITE:.*]] = arith.remsi %[[SHIFTED_WRITE]], %c2_i32
+  // CHECK-NEXT: %[[WRITE_VIEW:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[WRITE]]{{\]}}
+  // CHECK-NEXT: ttg.async_copy_global_to_local %{{.*}}, %[[WRITE_VIEW]]
   // CHECK: tt.dot
   // CHECK: ttg.async_wait
-  // CHECK: ttg.local_load
+  // CHECK-NEXT: %[[SHIFTED_READ:.*]] = arith.addi %[[IV]], %c2_i32
+  // CHECK-NEXT: %[[READ:.*]] = arith.remsi %[[SHIFTED_READ]], %c2_i32
+  // CHECK-NEXT: %[[READ_VIEW:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[READ]]{{\]}}
+  // CHECK-NEXT: ttg.local_load %[[READ_VIEW]]
   // CHECK: scf.yield
   // CHECK: ttg.async_wait
   // CHECK: ttg.local_load
@@ -47,8 +57,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // Ops between dots
   // dot1 -> reduce -> addf %dot1, %reduce1 -> add -> exp2 -> add -> dot2
   // We expect to split after the reduce because the result is used twice
+  // Each slot index is an offset of the induction variable for the stage of its user.
 
-  // CHECK: scf.for
+  // CHECK: scf.for %[[IV:.*]] = %c0_i32
 
   // CHECK: tt.dot
   // CHECK: arith.addf
@@ -56,15 +67,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: arith.addf
 
   // CHECK: ttg.async_wait
-  // CHECK: ttg.local_load
-  // CHECK: ttg.async_copy_global_to_local
+  // CHECK-NEXT: %[[B_READ:.*]] = arith.remsi %[[IV]], %c2_i32
+  // CHECK-NEXT: %[[B_READ_VIEW:.*]] = ttg.memdesc_index %[[B_ALLOC:[0-9]+]]{{\[}}%[[B_READ]]{{\]}}
+  // CHECK-NEXT: ttg.local_load %[[B_READ_VIEW]]
+  // CHECK-NEXT: %[[A_SHIFTED_WRITE:.*]] = arith.addi %[[IV]], %c3_i32
+  // CHECK-NEXT: %[[A_WRITE:.*]] = arith.remsi %[[A_SHIFTED_WRITE]], %c2_i32
+  // CHECK-NEXT: %[[A_WRITE_VIEW:.*]] = ttg.memdesc_index %[[A_ALLOC:[0-9]+]]{{\[}}%[[A_WRITE]]{{\]}}
+  // CHECK-NEXT: ttg.async_copy_global_to_local %{{.*}}, %[[A_WRITE_VIEW]]
 
   // CHECK: tt.dot
   // CHECK: tt.reduce
 
   // CHECK: ttg.async_wait
-  // CHECK: ttg.local_load
-  // CHECK: ttg.async_copy_global_to_local
+  // CHECK-NEXT: %[[A_SHIFTED_READ:.*]] = arith.addi %[[IV]], %c2_i32
+  // CHECK-NEXT: %[[A_READ:.*]] = arith.remsi %[[A_SHIFTED_READ]], %c2_i32
+  // CHECK-NEXT: %[[A_READ_VIEW:.*]] = ttg.memdesc_index %[[A_ALLOC]]{{\[}}%[[A_READ]]{{\]}}
+  // CHECK-NEXT: ttg.local_load %[[A_READ_VIEW]]
+  // CHECK-NEXT: %[[B_SHIFTED_WRITE:.*]] = arith.addi %[[IV]], %c2_i32
+  // CHECK-NEXT: %[[B_WRITE:.*]] = arith.remsi %[[B_SHIFTED_WRITE]], %c2_i32
+  // CHECK-NEXT: %[[B_WRITE_VIEW:.*]] = ttg.memdesc_index %[[B_ALLOC]]{{\[}}%[[B_WRITE]]{{\]}}
+  // CHECK-NEXT: ttg.async_copy_global_to_local %{{.*}}, %[[B_WRITE_VIEW]]
 
   // CHECK: scf.yield
 
