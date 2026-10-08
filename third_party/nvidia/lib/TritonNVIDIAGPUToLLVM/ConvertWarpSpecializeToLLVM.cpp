@@ -210,6 +210,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     createRegRealloc(b, maxnreg.getInt(), defRegs);
 
   WarpSpecializeCallbacks callbacks;
+  callbacks.workerRegisterReallocationEnabled = emitDynamicRegRealloc;
   callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b, unsigned barIdx) {
     assert(barIdx < kNumBarriers && "not enough barriers");
     LLVM::createLLVMIntrinsicCallOp(
@@ -232,9 +233,6 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       switch (phase) {
       case RegisterReallocPhase::WorkerPartitionStart:
         createRegRealloc(b, lowRegs, (*actRegs)[regionNumber + 1]);
-        break;
-      case RegisterReallocPhase::WorkerPartitionEnd:
-        createRegRealloc(b, (*actRegs)[regionNumber + 1], lowRegs);
         break;
       case RegisterReallocPhase::DefaultPartitionStart:
         createRegRealloc(b, defRegs, actRegs->front());

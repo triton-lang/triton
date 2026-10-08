@@ -8,6 +8,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/DenseMap.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -388,10 +389,6 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     // if there are any.
     b.setInsertionPointToStart(&partition->front());
 
-    callbacks.reallocRegisters(b, ws,
-                               RegisterReallocPhase::WorkerPartitionStart,
-                               partition->getRegionNumber());
-
     if (partition->getNumArguments()) {
       auto captureType = LLVM::LLVMStructType::getLiteral(
           b.getContext(), llvm::to_vector(partition->getArgumentTypes()),
@@ -420,12 +417,36 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     partition->walk([&](WarpReturnOp op) {
       TritonLLVMIRRewriter b(op.getLoc(), op);
       callbacks.createAllBarrier(b, switchLoopBarrierIdx);
-      callbacks.reallocRegisters(b, ws,
-                                 RegisterReallocPhase::WorkerPartitionEnd,
-                                 partition->getRegionNumber());
       b.replaceOpWithNewOp<LLVM::BrOp>(op, switchLoop);
     });
   }
+}
+
+static LogicalResult verifyWorkerRegisterTargets(WarpSpecializeOp ws) {
+  auto actualRegisters = ws.getActualRegisters();
+  if (!actualRegisters)
+    return success();
+
+  auto startIds = ws.getWarpGroupStartIds();
+  if (!startIds)
+    return ws.emitError("expected warp group start IDs when actual registers "
+                        "are assigned");
+
+  DenseMap<int32_t, int32_t> targetPerWarpGroup;
+  for (auto [startId, numWarps, region] : llvm::zip(
+           *startIds, ws.getPartitionNumWarps(), ws.getPartitionRegions())) {
+    int32_t target = (*actualRegisters)[region->getRegionNumber() + 1];
+    int32_t firstWarpGroup = startId / 4;
+    int32_t lastWarpGroup = (startId + numWarps - 1) / 4;
+    for (int32_t warpGroup = firstWarpGroup; warpGroup <= lastWarpGroup;
+         ++warpGroup) {
+      auto [it, inserted] = targetPerWarpGroup.try_emplace(warpGroup, target);
+      if (!inserted && it->second != target)
+        return ws.emitError("worker partitions in one warpgroup must have the "
+                            "same actual register target");
+    }
+  }
+  return success();
 }
 
 LogicalResult mlir::triton::lowerWarpSpecializeCommon(
@@ -459,6 +480,19 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
   // partition.
   SmallVector<Block *> partitionBlocks;
   SmallVector<int32_t> partitionStates;
+  SmallVector<Block *> registerDispatchBlocks;
+  struct RegisterDispatch {
+    WarpSpecializeOp ws;
+    int32_t targetRegisters;
+    unsigned regionNumber;
+    Block *block;
+  };
+  SmallVector<RegisterDispatch> registerDispatches;
+  bool useRegisterTrampoline = callbacks.workerRegisterReallocationEnabled &&
+                               llvm::any_of(wsOps, [](WarpSpecializeOp op) {
+                                 return op.getActualRegisters().has_value();
+                               });
+  Block *partitionDispatch = useRegisterTrampoline ? new Block : nullptr;
   int32_t partitionStateCounter = 0;
   // This represents the data that the default warp group will fill into the
   // state pointer before entering each `warp_specialize` region, which maps
@@ -470,16 +504,39 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
   for (size_t i = 0; i < wsOps.size(); ++i) {
     WarpSpecializeOp op = wsOps[i];
     auto &stateMap = warpToState[i];
+    if (useRegisterTrampoline && failed(verifyWorkerRegisterTargets(op)))
+      return failure();
     rewritePartitionRegions(op, switchLoop, targetInfo, callbacks,
                             switchLoopBarrierIdx);
+    auto actualRegisters = op.getActualRegisters();
     for (auto [partition, partitionNumWarps, startId] :
          llvm::zip(op.getPartitionRegions(), op.getPartitionNumWarps(),
                    *op.getWarpGroupStartIds())) {
-      partitionStates.push_back(partitionStateCounter++);
+      int32_t state = partitionStateCounter++;
+      partitionStates.push_back(state);
       partitionBlocks.push_back(&partition->front());
+
+      Block *dispatchBlock =
+          useRegisterTrampoline ? partitionDispatch : &partition->front();
+      if (useRegisterTrampoline && actualRegisters) {
+        int32_t target = (*actualRegisters)[partition->getRegionNumber() + 1];
+        auto it = llvm::find_if(registerDispatches, [&](const auto &dispatch) {
+          return dispatch.ws == op && dispatch.targetRegisters == target;
+        });
+        if (it == registerDispatches.end()) {
+          registerDispatches.push_back(
+              {op, target, static_cast<unsigned>(partition->getRegionNumber()),
+               new Block});
+          dispatchBlock = registerDispatches.back().block;
+        } else {
+          dispatchBlock = it->block;
+        }
+      }
+      registerDispatchBlocks.push_back(dispatchBlock);
+
       for (int32_t &stateId : MutableArrayRef(stateMap).slice(
                startId - defaultNumWarps, partitionNumWarps))
-        stateId = partitionStates.back();
+        stateId = state;
     }
   }
 
@@ -508,17 +565,64 @@ LogicalResult mlir::triton::lowerWarpSpecializeCommon(
   // Exit state.
   Block *switchExit = new Block;
   funcBlocks.insert(std::next(defaultBlock->getIterator()), switchExit);
-  partitionBlocks.push_back(switchExit);
-  partitionStates.push_back(partitionStateCounter);
 
-  // Create the switch.
+  Block *insertAfter = switchExit;
+  if (useRegisterTrampoline) {
+    for (RegisterDispatch &dispatch : registerDispatches) {
+      funcBlocks.insert(std::next(insertAfter->getIterator()), dispatch.block);
+      insertAfter = dispatch.block;
+    }
+    funcBlocks.insert(std::next(insertAfter->getIterator()), partitionDispatch);
+  }
+
+  // All selector states with the same allocation target in a warp specialize
+  // op share one register adjustment instruction. The partition entry barrier
+  // below synchronizes the warpgroup before it enters the partition body.
+  for (RegisterDispatch &dispatch : registerDispatches) {
+    TritonLLVMIRRewriter rb(dispatch.ws.getLoc(), ctx);
+    rb.setInsertionPointToStart(dispatch.block);
+    callbacks.reallocRegisters(rb, dispatch.ws,
+                               RegisterReallocPhase::WorkerPartitionStart,
+                               dispatch.regionNumber);
+    LLVM::BrOp::create(rb, rb.getLoc(), partitionDispatch);
+  }
+
   b.setInsertionPointToEnd(switchLoop);
-  SmallVector<APInt> caseValues;
-  for (int32_t state : partitionStates)
-    caseValues.push_back(APInt(8, state));
-  LLVM::SwitchOp::create(b, b.getLoc(), warpState, defaultBlock, ValueRange(),
-                         caseValues, partitionBlocks,
-                         SmallVector<ValueRange>(partitionBlocks.size()));
+  if (useRegisterTrampoline) {
+    // First select a common register adjustment block. Different partitions
+    // within one warpgroup can have different selector states, but share one
+    // actual register target.
+    SmallVector<APInt> registerCaseValues;
+    SmallVector<Block *> registerCaseBlocks;
+    for (auto [state, block] :
+         llvm::zip(partitionStates, registerDispatchBlocks)) {
+      registerCaseValues.push_back(APInt(8, state));
+      registerCaseBlocks.push_back(block);
+    }
+    registerCaseValues.push_back(APInt(8, partitionStateCounter));
+    registerCaseBlocks.push_back(switchExit);
+    LLVM::SwitchOp::create(b, b.getLoc(), warpState, defaultBlock, ValueRange(),
+                           registerCaseValues, registerCaseBlocks,
+                           SmallVector<ValueRange>(registerCaseBlocks.size()));
+
+    // Then dispatch each warp to its original partition.
+    b.setInsertionPointToStart(partitionDispatch);
+    SmallVector<APInt> partitionCaseValues;
+    for (int32_t state : partitionStates)
+      partitionCaseValues.push_back(APInt(8, state));
+    LLVM::SwitchOp::create(b, b.getLoc(), warpState, switchExit, ValueRange(),
+                           partitionCaseValues, partitionBlocks,
+                           SmallVector<ValueRange>(partitionBlocks.size()));
+  } else {
+    SmallVector<APInt> caseValues;
+    for (int32_t state : partitionStates)
+      caseValues.push_back(APInt(8, state));
+    caseValues.push_back(APInt(8, partitionStateCounter));
+    partitionBlocks.push_back(switchExit);
+    LLVM::SwitchOp::create(b, b.getLoc(), warpState, defaultBlock, ValueRange(),
+                           caseValues, partitionBlocks,
+                           SmallVector<ValueRange>(partitionBlocks.size()));
+  }
 
   // Now add synchronization around the default regions.
   for (size_t i = 0; i < wsOps.size(); ++i) {

@@ -1113,31 +1113,46 @@ llvm.func @dynamic_register_reallocation() attributes {allocation.offset = 0 : i
   // CHECK-NEXT: nvvm.setmaxregister decrease 24
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK: llvm.switch
-  // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
-  // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
-  // CHECK-NEXT: 2: [[PARTITION2:\^.*]],
+  // CHECK-NEXT: 0: [[REGISTERS0:\^.*]],
+  // CHECK-NEXT: 1: [[REGISTERS1:\^.*]],
+  // CHECK-NEXT: 2: [[REGISTERS2:\^.*]],
   // CHECK-NEXT: 3: [[EXIT:\^.*]]
 
-  // CHECK: [[PARTITION0]]:
+  // CHECK: [[REGISTERS0]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 80
+  // CHECK-NEXT: llvm.br [[PARTITION_DISPATCH:\^.*]]
+
+  // CHECK: [[REGISTERS1]]:
+  // CHECK-NEXT: nvvm.setmaxregister increase 48
+  // CHECK-NEXT: llvm.br [[PARTITION_DISPATCH]]
+
+  // CHECK: [[REGISTERS2]]:
+  // CHECK-NEXT: nvvm.setmaxregister increase 128
+  // CHECK-NEXT: llvm.br [[PARTITION_DISPATCH]]
+
+  // CHECK: [[PARTITION_DISPATCH]]:
+  // CHECK-NEXT: llvm.switch {{.*}} : i8, [[EXIT]] [
+  // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
+  // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
+  // CHECK-NEXT: 2: [[PARTITION2:\^.*]]
+
+  // CHECK: [[PARTITION0]]:
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition0"()
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
-  // CHECK-NEXT: nvvm.setmaxregister decrease 24
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // CHECK: [[PARTITION1]]:
-  // CHECK-NEXT: nvvm.setmaxregister increase 48
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition1"()
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
-  // CHECK-NEXT: nvvm.setmaxregister decrease 24
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // CHECK: [[PARTITION2]]:
-  // CHECK-NEXT: nvvm.setmaxregister increase 128
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition2"()
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
-  // CHECK-NEXT: nvvm.setmaxregister decrease 24
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // CHECK: [[ENTRY]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 248
@@ -1187,31 +1202,42 @@ llvm.func @dynamic_register_reallocation_overalloc() attributes {allocation.offs
   // CHECK-NEXT: nvvm.setmaxregister decrease 80
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK: llvm.switch
-  // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
-  // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
-  // CHECK-NEXT: 2: [[PARTITION2:\^.*]],
+  // CHECK-NEXT: 0: [[REGISTERS0:\^.*]],
+  // CHECK-NEXT: 1: [[REGISTERS1:\^.*]],
+  // CHECK-NEXT: 2: [[REGISTERS1]],
   // CHECK-NEXT: 3: [[EXIT:\^.*]]
 
-  // CHECK: [[PARTITION0]]:
+  // CHECK: [[REGISTERS0]]:
   // CHECK-NEXT: nvvm.setmaxregister decrease 24
+  // CHECK-NEXT: llvm.br [[PARTITION_DISPATCH:\^.*]]
+
+  // CHECK: [[REGISTERS1]]:
+  // CHECK-NEXT: nvvm.setmaxregister increase 192
+  // CHECK-NEXT: llvm.br [[PARTITION_DISPATCH]]
+
+  // CHECK: [[PARTITION_DISPATCH]]:
+  // CHECK-NEXT: llvm.switch {{.*}} : i8, [[EXIT]] [
+  // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
+  // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
+  // CHECK-NEXT: 2: [[PARTITION2:\^.*]]
+
+  // CHECK: [[PARTITION0]]:
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition0"()
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
-  // CHECK-NEXT: nvvm.setmaxregister increase 80
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // CHECK: [[PARTITION1]]:
-  // CHECK-NEXT: nvvm.setmaxregister increase 192
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition1"()
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
-  // CHECK-NEXT: nvvm.setmaxregister decrease 80
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // CHECK: [[PARTITION2]]:
-  // CHECK-NEXT: nvvm.setmaxregister increase 192
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
   // CHECK-NEXT: "partition2"()
   // CHECK-NEXT: "llvm.nvvm.barrier.cta.sync.all"([[C1]])
-  // CHECK-NEXT: nvvm.setmaxregister decrease 80
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
 
   // CHECK: [[ENTRY]]:
   // CHECK-NEXT: nvvm.setmaxregister increase 256
