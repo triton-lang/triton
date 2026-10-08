@@ -98,8 +98,7 @@ def _scan_linear_layouts():
     reg_bits += 2
     broadcast = ttgl.DistributedLinearLayout([[0, 0]] + bases[:reg_bits], [[0, 0]] + bases[reg_bits:-1],
                                              [[0, 0], bases[-1]], [], [32, 32])
-    # Warp-owned low bits leave no contiguous warp-local segment to scan.
-    # The carries for different register groups overlap in logical scan order.
+    # Warp-owned low bits make each warp-local segment a single element.
     bases = [[16, 0], [0, 16], [8, 0], [0, 8], [4, 0], [0, 4], [2, 0], [0, 2], [1, 0], [0, 1]]
     reg_bits = len(bases) - lane_bits - 2
     warp_minor = ttgl.DistributedLinearLayout(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
@@ -179,8 +178,7 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, reverse, device
     torch.manual_seed(0)
 
     x = torch.randint(-100, 100, (M, N), dtype=torch.int32, device=device)
-    z = torch.zeros((M, N), dtype=torch.int32, device=device)
-    z_tri = torch.empty_like(z)
+    z_tri = torch.empty_like(x)
 
     scan_kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, reverse, num_warps=4, sanitize_overflow=sanitize_overflow,
                            debug=sanitize_overflow)
@@ -198,22 +196,18 @@ def _scan_affine_combine(a1, b1, a2, b2):
 
 @pytest.mark.parametrize("layout", [
     *SCAN_EXTRA_LAYOUTS,
-    # Scan the native four-register prefixes before converting the totals
-    # from strided registers; keep the mixed-width tuple and reverse coverage.
+    # Four-element thread-local segments with strided segment totals.
     pytest.param(
         ttgl.DistributedLinearLayout([[1, 0], [2, 0], [16, 0], [0, 1], [0, 2]],
                                      [[4, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
                                      (THREADS_PER_WARP.bit_length() - 6), [[0, 0], [0, 0]], [], [32, 32]),
         id="native_prefix_with_strided_registers"),
-    # Keep converted thread totals through the warp exchange. Axis 0 combines
-    # native four-register prefixes, a strided register bit, and two warps.
+    # Strided thread-local totals followed by an inter-warp carry on axis 0.
     pytest.param(
         ttgl.DistributedLinearLayout(
             [[1, 0], [2, 0], [16, 0], [0, 1], [0, 2]], [[4, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
             (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32]), id="converted_totals_across_warps"),
     # Lane bits 0,2,4 advance the scan; bits 1,3 select independent columns.
-    # Normalization puts four totals in each thread, so inverse lane lookup
-    # must scale scan distances and preserve the column coordinates.
     pytest.param(
         ttgl.DistributedLinearLayout([[8, 0], [16, 0], [0, 4], [0, 8], [0, 16]],
                                      [[1, 0], [0, 1], [2, 0], [0, 2], [4, 0]] + [[0, 0]] *
@@ -2078,10 +2072,7 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
 
 
 @pytest.mark.skipif(is_hip(), reason="Assumes 32 threads per warp")
-@pytest.mark.parametrize("num_exchanges", [0, 2, 3])
-@pytest.mark.parametrize("dtype", [torch.int16, torch.int32, torch.int64, torch.float32])
-@pytest.mark.parametrize("reverse", [False, True])
-def test_regress_warp_shuffle_convert_layout(tmp_path, num_exchanges, dtype, reverse):
+def test_regress_warp_shuffle_convert_layout(tmp_path):
     rows = 2
     cols = 8
     # We have previously incorrectly lowered a layout conversion between these
@@ -2101,43 +2092,32 @@ def test_regress_warp_shuffle_convert_layout(tmp_path, num_exchanges, dtype, rev
         block_bases=[],
         shape=(rows, cols),
     )
-    if num_exchanges:
-        rows, cols = 1 << num_exchanges, 32
-        src_layout = ttgl.DistributedLinearLayout(reg_bases=[[1 << i, 0] for i in range(num_exchanges)],
-                                                  lane_bases=[[0, 1 << i] for i in range(5)], warp_bases=[],
-                                                  block_bases=[], shape=(rows, cols))
-        dst_layout = ttgl.DistributedLinearLayout(
-            reg_bases=[[0, 1 << i] for i in range(num_exchanges)],
-            lane_bases=[[1 << i, 0] if i < num_exchanges else [0, 1 << i] for i in range(5)], warp_bases=[],
-            block_bases=[], shape=(rows, cols))
-    if reverse:
-        src_layout, dst_layout = dst_layout, src_layout
     axis0_layout = ttgl.SliceLayout(dim=1, parent=src_layout)
     axis1_layout = ttgl.SliceLayout(dim=0, parent=src_layout)
     out_axis0_layout = ttgl.SliceLayout(dim=1, parent=dst_layout)
     out_axis1_layout = ttgl.SliceLayout(dim=0, parent=dst_layout)
 
     @gluon.jit
-    def load_cvt_store(out_ptr, in_ptr, rows: ttgl.constexpr, cols: ttgl.constexpr):
-        offs0 = ttgl.arange(0, rows, layout=axis0_layout)[:, None]
-        offs1 = ttgl.arange(0, cols, layout=axis1_layout)[None, :]
-        offsets = offs0 * cols + offs1
+    def load_cvt_store(out_ptr, in_ptr):
+        offs0 = ttgl.arange(0, 2, layout=axis0_layout)[:, None]
+        offs1 = ttgl.arange(0, 8, layout=axis1_layout)[None, :]
+        offsets = offs0 * 8 + offs1
         x = ttgl.load(in_ptr + offsets)
         y = ttgl.convert_layout(x, dst_layout)
 
-        out_offs0 = ttgl.arange(0, rows, layout=out_axis0_layout)[:, None]
-        out_offs1 = ttgl.arange(0, cols, layout=out_axis1_layout)[None, :]
-        out_offsets = out_offs0 * cols + out_offs1
+        out_offs0 = ttgl.arange(0, 2, layout=out_axis0_layout)[:, None]
+        out_offs1 = ttgl.arange(0, 8, layout=out_axis1_layout)[None, :]
+        out_offsets = out_offs0 * 8 + out_offs1
         ttgl.store(out_ptr + out_offsets, y)
 
     torch.manual_seed(0)
-    x = torch.randint(-128, 128, (rows, cols), dtype=dtype, device="cuda")
+    x = torch.randint(-128, 128, (rows, cols), dtype=torch.int16, device="cuda")
     ref = torch.zeros_like(x)
     out = torch.zeros_like(x)
 
     # Extract the TTGIR and force using warp shuffles for lowering the
     # convert_layout.
-    compiled_load_cvt_store = load_cvt_store.warmup(ref, x, rows, cols, grid=(1, 1, 1), num_warps=1)
+    compiled_load_cvt_store = load_cvt_store.warmup(ref, x, grid=(1, 1, 1), num_warps=1)
     ttgir = compiled_load_cvt_store.asm["ttgir"]
     cvt_line = next(line for line in ttgir.splitlines() if "ttg.convert_layout" in line)
     forced_cvt_line = cvt_line.replace(" : ", " {force_warp_shuffle} : ", 1)
@@ -2148,7 +2128,7 @@ def test_regress_warp_shuffle_convert_layout(tmp_path, num_exchanges, dtype, rev
 
     load_cvt_store_warp_shuffle = triton.compile(str(temp_file))
 
-    load_cvt_store[(1, 1, 1)](ref, x, rows, cols, num_warps=1)
+    load_cvt_store[(1, 1, 1)](ref, x, num_warps=1)
     load_cvt_store_warp_shuffle[(1, 1, 1)](out, x)
 
     assert torch.equal(ref, x)

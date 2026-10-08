@@ -107,100 +107,72 @@ private:
   int axis;
 };
 
-// A three-phase scan lowering algorithm.
-// 1. Thread-local phase: scan each thread-local segment and extract its total.
-// 2. Warp-local phase: scan the thread-local totals within each warp-local
-//    segment, using a layout with consecutive totals in each thread's
-//    registers.
-// 3. Inter-warp phase: exchange warp-local totals through shared memory.
-//    Scan their full sequence within each warp. Apply exclusive carries
-//    to the thread-local totals, then complete the saved element prefixes.
+// Lower a scan in three phases: scan thread-local segments, scan their totals
+// within each warp-local segment, then exchange and scan warp-local totals.
+// Propagate exclusive carries back to the saved thread-local prefixes.
 //
 // Segment: a contiguous range along the scan axis owned by one thread or warp.
-// The following forward sum scans x0..x31 in one CTA with two warps. Each warp
-// has two distinct lane owners; the remaining lanes replicate those owners.
-// R, L, and W list the scan-axis bases for register, lane, and warp input bits.
-// Four additional zero lane bases and the empty block dimension are omitted.
-// R=[] means one register value per thread.
+// A totals layout maps physical owners to segment indices. A scan layout
+// redistributes those totals for ordered accumulation.
 //
-// 1. Thread-local phase: originalLayout and permutedLayout
-//    R=[1,4,8], L=[2], W=[16], with coordinates in original elements.
-//    The register order is already canonical, so these two layouts are equal.
-//      warp 0, lane 0: [x0, x1],   [x4, x5],   [x8, x9],   [x12, x13]
-//      warp 0, lane 1: [x2, x3],   [x6, x7],   [x10, x11], [x14, x15]
-//      warp 1, lane 0: [x16, x17], [x20, x21], [x24, x25], [x28, x29]
-//      warp 1, lane 1: [x18, x19], [x22, x23], [x26, x27], [x30, x31]
-//    threadSegmentSize=2 and warpSegmentSize=16. Each pair is scanned locally:
-//    [x(2j), x(2j+1)] becomes [x(2j), Tj], where Tj=x(2j)+x(2j+1).
-//    These element prefixes stay in permutedLayout until carries are applied.
+// Example: forward sum of x0..x31 with two warps and two distinct lane owners
+// per warp. R, L, W list scan-axis register, lane, and warp bases. Four zero
+// lane bases and the empty block dimension are omitted. R=[] means one value
+// per thread.
 //
-// 2. Warp-local phase: intraWarpTotalsLayout -> intraWarpScanLayout
-//    intraWarpTotalsLayout describes the extracted Tj values in their original
-//    owners. Divide the element bases by threadSegmentSize=2 and remove zero
-//    register bases: R=[2,4], L=[1], W=[8]. Coordinates now index thread-local
-//    segments.
-//      warp 0, lane 0: T0, T2, T4, T6
-//      warp 0, lane 1: T1, T3, T5, T7
-//      warp 1, lane 0: T8, T10, T12, T14
-//      warp 1, lane 1: T9, T11, T13, T15
-//    Each warp-local segment contains 16/2=8 thread-local totals. Put its
-//    register bases before its lane bases to form intraWarpScanLayout:
-//    R=[1,2], L=[4], W=[8]. Convert the totals using warp shuffles.
-//      warp 0, lane 0: T0, T1, T2, T3
-//      warp 0, lane 1: T4, T5, T6, T7
-//      warp 1, lane 0: T8, T9, T10, T11
-//      warp 1, lane 1: T12, T13, T14, T15
-//    Scan the four registers per thread, then scan across the two lane owners.
-//    Slot j now holds Uj=T(8w)+...+Tj, where w is its warp. The layout stays
-//    intraWarpScanLayout. In particular, U7 sums x0..x15 and U15 sums x16..x31.
+// 1. originalLayout = permutedLayout: R=[1,4,8], L=[2], W=[16].
+//    Coordinates index original elements; the register order is canonical.
+//      warp 0, lane 0: [x0,x1], [x4,x5], [x8,x9], [x12,x13]
+//      warp 0, lane 1: [x2,x3], [x6,x7], [x10,x11], [x14,x15]
+//      warp 1: the same pattern with element indices increased by 16.
+//    threadSegmentSize=2, warpSegmentSize=16. Scan each pair locally to obtain
+//    [x(2j), Tj], where Tj=x(2j)+x(2j+1). Save these element prefixes.
 //
-// 3. Inter-warp phase
-//    a. intraWarpScanLayout -> interWarpTotalsLayout
-//    The scanned thread-local totals still use R=[1,2], L=[4], W=[8]:
-//      warp 0, lane 0: U0, U1, U2, U3
-//      warp 0, lane 1: U4, U5, U6, U7
-//      warp 1, lane 0: U8, U9, U10, U11
-//      warp 1, lane 1: U12, U13, U14, U15
-//    Each warp-local segment contains 8 thread-local totals, with 4 registers
-//    per lane. extractSegmentTotals selects register 3 in each lane:
-//      warp 0: lane 0 holds U3;  lane 1 holds U7
+// 2. intraWarpTotalsLayout: R=[2,4], L=[1], W=[8].
+//    Extract each pair's total. Divide the element bases by threadSegmentSize
+//    and remove zero register bases; coordinates now index thread segments.
+//      warp 0, lane 0: T0,T2,T4,T6; lane 1: T1,T3,T5,T7
+//      warp 1, lane 0: T8,T10,T12,T14; lane 1: T9,T11,T13,T15
+//    intraWarpScanLayout: R=[1,2], L=[4], W=[8].
+//    Put the segment's register bits before its lane bits and convert with
+//    warp shuffles. Each thread now holds four consecutive totals:
+//      warp 0, lane 0: T0,T1,T2,T3; lane 1: T4,T5,T6,T7
+//      warp 1, lane 0: T8,T9,T10,T11; lane 1: T12,T13,T14,T15
+//    Scan registers, then lanes. Slot j holds Uj=T(8w)+...+Tj in warp w.
+//    These warp-local prefixes retain intraWarpScanLayout.
+//
+// 3. interWarpTotalsLayout: R=[], L=[0], W=[1].
+//    Each warp segment contains eight thread totals. Extract register 3:
+//      warp 0: lane 0 holds U3; lane 1 holds U7
 //      warp 1: lane 0 holds U11; lane 1 holds U15
-//    Define W0=U7 and W1=U15. Only terminal lane 1 supplies a complete total:
-//      warp 0, lane 1: W0
-//      warp 1, lane 1: W1
-//    interWarpTotalsLayout maps these selected owners to segment indices.
-//    Construct this layout by integer-dividing the source axis bases by 8:
-//    R=[0,0], L=[0], W=[1]. Remove zero register bases to obtain
-//    R=[], L=[0], W=[1]. Coordinates now index warp-local segments. Zero lane
-//    bases map each segment's lanes to the same address. A store predicate
-//    selects the terminal lane and one owner of each replicated total. All Uj
-//    prefixes remain available in intraWarpScanLayout for carry propagation.
+//    Only terminal lane 1 has the complete warp total: W0=U7, W1=U15.
+//    Divide the source axis bases by eight and remove zero register bases.
+//    Coordinates now index warp segments. Zero lane bases map all lanes to
+//    the same address; a store predicate selects the terminal lane of one
+//    replica. Keep the Uj prefixes in intraWarpScanLayout for later use.
 //
-//    b. interWarpTotalsLayout -> interWarpScanLayout
-//    interWarpScanLayout places the full sequence in lanes and replicates it
-//    across warps: R=[], L=[1], W=[0]. Store W0 and W1 from their selected
-//    owners, synchronize, then load according to interWarpScanLayout:
-//      each warp, lane 0: W0
-//      each warp, lane 1: W1
-//    Reuse the warp-local scan in this layout. Its output has the same layout:
-//      each warp, lane 0: S0=W0
-//      each warp, lane 1: S1=W0+W1
+//    interWarpScanLayout: R=[], L=[1], W=[0].
+//    Broadcast the full sequence across participating warps. Store W0 and W1
+//    from their selected owners, synchronize, then load this layout:
+//      each warp, lane 0: W0; lane 1: W1
+//    Scan the totals, preserving their layout:
+//      each warp, lane 0: S0=W0; lane 1: S1=W0+W1
 //
-// Carry propagation
-//    Map each consumer in interWarpTotalsLayout to the preceding segment's
-//    prefix in interWarpScanLayout. Warp 0 has no carry; warp 1 reads S0 from
-//    lane 0. Apply that carry to every Uj in warp 1. The totals now hold global
-//    prefixes Qj=T0+...+Tj in intraWarpScanLayout. Convert back to
-//    intraWarpTotalsLayout:
-//      warp 0, lane 0: Q0, Q2, Q4, Q6
-//      warp 0, lane 1: Q1, Q3, Q5, Q7
-//      warp 1, lane 0: Q8, Q10, Q12, Q14
-//      warp 1, lane 1: Q9, Q11, Q13, Q15
-//    Replace each saved pair's terminal value with Qj. Complete its first value
-//    with Q(j-1)+x(2j), leaving x0 unchanged. The first pair in warp 1 uses its
-//    inter-warp carry S0=Q7. Results use permutedLayout, then the inverse
-//    register permutation restores originalLayout. Here the permutation is the
-//    identity.
+// Carry propagation:
+//    Map the consumer's warp-segment index s to the preceding prefix S(s-1)
+//    using the inverse of interWarpScanLayout. Warp 0 has no carry; warp 1
+//    reads S0 from lane 0 of its own warp. Apply this carry to the saved Uj:
+//      warp 0: Qj=Uj                for j=0..7
+//      warp 1: Qj=S0+Uj=T0+...+Tj  for j=8..15
+//    Qj is a prefix from the scan's start and retains intraWarpScanLayout.
+//    The Sj values remain broadcast across warps in interWarpScanLayout.
+//    Convert Qj back to intraWarpTotalsLayout:
+//      warp 0, lane 0: Q0,Q2,Q4,Q6; lane 1: Q1,Q3,Q5,Q7
+//      warp 1, lane 0: Q8,Q10,Q12,Q14; lane 1: Q9,Q11,Q13,Q15
+//    Replace each saved pair's terminal value with Qj. Complete its first
+//    value with Q(j-1)+x(2j), leaving x0 unchanged. The first pair in warp 1
+//    uses its inter-warp carry S0=Q7. Invert the register permutation to return
+//    the completed element prefixes from permutedLayout to originalLayout.
 //
 class ScanLoweringHelper {
 public:
@@ -253,6 +225,8 @@ private:
   std::optional<triton::LinearLayout> intraWarpTotalsLayout;
   std::optional<triton::LinearLayout> intraWarpScanLayout;
   std::optional<triton::LinearLayout> interWarpTotalsLayout;
+  // Broadcast each scan's full segment sequence across participating warps;
+  // distribute it over registers and lanes while preserving independent scans.
   std::optional<triton::LinearLayout> interWarpScanLayout;
 };
 

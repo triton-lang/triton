@@ -317,8 +317,6 @@ ScanLoweringHelper::ScanLoweringHelper(triton::ScanOp op)
 ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
                                        unsigned axis)
     : axis(axis), originalLayout(inputLayout) {
-  // Plan thread prefixes, intra-warp totals, and inter-warp totals separately.
-  // Communicate totals, then map their carries back to the native prefixes.
   permutedLayout = buildPermutedLayout();
   if (!isSupported())
     return;
@@ -390,9 +388,8 @@ LinearLayout ScanLoweringHelper::buildIntraWarpTotalsLayout() const {
 }
 
 LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
-  // Put all segment register bits before lane bits. For register=[4,8] and
-  // lane=[1,2], this gives register=[1,2], lane=[4,8]. Ownership stays in a
-  // warp.
+  // Order axis bits within each warp-local segment: registers, then lanes.
+  // R=[4,8], L=[1,2] becomes R=[1,2], L=[4,8]. Warp ownership is preserved.
   auto *ctx = intraWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -421,8 +418,9 @@ LinearLayout ScanLoweringHelper::buildInterWarpTotalsLayout() const {
 }
 
 LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
-  // Replicate every segment total within each participating warp. With two
-  // free lane bits and eight segments: lane=[1,2], register=[4], warp=[0].
+  // Broadcast the full segment sequence across participating warps, with zero
+  // scan-axis warp bases. Distribute the sequence over lanes and registers.
+  // Two free lane bits and eight segments give L=[1,2], R=[4], W=[0].
   // Independent scans and CTA ownership retain their original coordinates.
   auto *ctx = interWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
