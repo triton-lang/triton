@@ -107,11 +107,14 @@ private:
     return totals;
   }
 
-  SmallVector<Value> shuffleValues(Location loc, SmallVector<Value> values,
-                                   Value lane,
-                                   ConversionPatternRewriter &rewriter) const {
+  SmallVector<Value>
+  shuffleValues(Location loc, SmallVector<Value> values, Value lane,
+                ConversionPatternRewriter &rewriter,
+                std::optional<unsigned> upDistance = {}) const {
     for (Value &value : values)
-      value = targetInfo.shuffleIdx(rewriter, loc, value, lane);
+      value = upDistance
+                  ? targetInfo.shuffleUp(rewriter, loc, value, *upDistance)
+                  : targetInfo.shuffleIdx(rewriter, loc, value, lane);
     return values;
   }
 
@@ -176,11 +179,12 @@ private:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto kLane = StringAttr::get(op.getContext(), "lane");
+    auto kReg = StringAttr::get(op.getContext(), "register");
     unsigned axis = op.getAxis();
     bool reverse = op.getReverse();
     auto dims = llvm::to_vector(layout.getOutDimNames());
     auto laneLayout = layout.sublayout({kLane}, dims);
-    auto inverseLaneLayout = layout.pseudoinvert().sublayout(dims, {kLane});
+    auto inverseLayout = layout.pseudoinvert().sublayout(dims, {kReg, kLane});
     auto coords =
         applyLinearLayout(loc, rewriter, laneLayout, {{kLane, laneId}});
     Value index = coords[axis].second;
@@ -191,24 +195,31 @@ private:
 
     // Shift logical coordinates and invert the layout to find the source lane.
     // Preserve coordinates belonging to independent scans.
-    SmallVector<std::pair<Value, Value>> rounds;
+    SmallVector<std::tuple<Value, Value, std::optional<unsigned>>> rounds;
     for (unsigned offset = 1; offset < numLanes; offset *= 2) {
       int distance = offset * numRegs;
-      auto source = coords;
-      source[axis].second = shiftWithinSegment(
-          b, index, reverse ? distance : -distance, segmentSize, axisSize);
-      Value lane = applyLinearLayout(loc, rewriter, inverseLaneLayout, source)
-                       .front()
-                       .second;
+      auto upDistance =
+          getShuffleUpDistance(layout, inverseLayout, axis, segmentSize,
+                               reverse ? distance : -distance);
+      Value lane;
+      if (!upDistance) {
+        auto source = coords;
+        source[axis].second = shiftWithinSegment(
+            b, index, reverse ? distance : -distance, segmentSize, axisSize);
+        lane = applyLinearLayout(loc, rewriter, inverseLayout, source)
+                   .back()
+                   .second;
+      }
       Value pred =
           reverse ? b.icmp_ult(segmentIndex, b.i32_val(segmentSize - distance))
                   : b.icmp_uge(segmentIndex, b.i32_val(distance));
-      rounds.emplace_back(lane, pred);
+      rounds.emplace_back(lane, pred, upDistance);
     }
     for (unsigned base = 0; base < values.size(); base += numRegs) {
       unsigned last = base + (reverse ? 0 : numRegs - 1);
-      for (auto [lane, pred] : rounds) {
-        auto incoming = shuffleValues(loc, values[last], lane, rewriter);
+      for (auto [lane, pred, upDistance] : rounds) {
+        auto incoming =
+            shuffleValues(loc, values[last], lane, rewriter, upDistance);
         for (unsigned r = base; r < base + numRegs; ++r)
           values[r] =
               combineWithPrefix(op, incoming, values[r], rewriter, pred);
@@ -343,6 +354,32 @@ private:
                         /*skipTerminal=*/true);
   }
 
+  // Subtracting 2^k logical positions borrows through axis bits k and above.
+  // Consecutive physical lane bits make that subtraction a constant shuffle-up.
+  static std::optional<unsigned>
+  getShuffleUpDistance(const LinearLayout &layout,
+                       const LinearLayout &inverseLayout, unsigned axis,
+                       unsigned segmentSize, int distance) {
+    if (distance >= 0 || unsigned(-distance) >= segmentSize)
+      return std::nullopt;
+    auto *ctx = layout.getInDimNames().begin()->getContext();
+    auto kLane = StringAttr::get(ctx, "lane");
+    if (!layout.compose(inverseLayout).isIdentityOnOutDim(kLane))
+      return std::nullopt;
+
+    auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+    const auto &bases = inverseLayout.getBases().lookup(axisDim);
+    unsigned laneDim = inverseLayout.getOutDimIndex(kLane);
+    unsigned first = llvm::Log2_32(-distance);
+    unsigned stride = bases[first][laneDim];
+    if (!llvm::isPowerOf2_32(stride))
+      return std::nullopt;
+    for (unsigned bit = first + 1; bit < llvm::Log2_32(segmentSize); ++bit)
+      if (bases[bit][laneDim] != (stride << (bit - first)))
+        return std::nullopt;
+    return stride;
+  }
+
   // Enumerate the source registers that the lanes of this segment can request.
   static SmallVector<unsigned>
   getCarryRegisters(const LinearLayout &segmentLayout,
@@ -372,13 +409,15 @@ private:
   SmallVector<Value> shuffleCarry(Location loc, const ScanValues &totals,
                                   ArrayRef<unsigned> candidates, Value srcReg,
                                   Value srcLane,
-                                  ConversionPatternRewriter &rewriter) const {
+                                  ConversionPatternRewriter &rewriter,
+                                  std::optional<unsigned> upDistance) const {
     assert(!candidates.empty() && "each segment has a warp-local carry");
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto carry =
-        shuffleValues(loc, totals[candidates.front()], srcLane, rewriter);
+    auto carry = shuffleValues(loc, totals[candidates.front()], srcLane,
+                               rewriter, upDistance);
     for (unsigned candidate : candidates.drop_front()) {
-      auto incoming = shuffleValues(loc, totals[candidate], srcLane, rewriter);
+      auto incoming =
+          shuffleValues(loc, totals[candidate], srcLane, rewriter, upDistance);
       Value select = b.icmp_eq(srcReg, b.i32_val(candidate));
       for (auto [value, source] : llvm::zip(carry, incoming))
         value = b.select(select, source, value);
@@ -407,6 +446,8 @@ private:
         llvm::to_vector(totalsLayout.getOutDimNames()), {kReg, kLane});
     unsigned numSegments = segmentLayout.getOutDimSize(axis);
     SmallVector<ScanCarry> carries;
+    auto upDistance = getShuffleUpDistance(segmentLayout, inverse, op.getAxis(),
+                                           segmentsPerScan, reverse ? 1 : -1);
     for (unsigned r = 0; r < segmentLayout.getInDimSize(kReg); ++r) {
       // Evaluate the logical segment before shifting. CTA ownership is
       // unchanged.
@@ -429,8 +470,8 @@ private:
       Value srcLane = src[1].second;
       auto candidates = getCarryRegisters(
           segmentLayout, inverse, r, op.getAxis(), segmentsPerScan, reverse);
-      auto carry =
-          shuffleCarry(loc, totals, candidates, srcReg, srcLane, rewriter);
+      auto carry = shuffleCarry(loc, totals, candidates, srcReg, srcLane,
+                                rewriter, upDistance);
       carries.push_back({std::move(carry), pred});
     }
     return carries;
