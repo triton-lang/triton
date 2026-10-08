@@ -14,6 +14,9 @@
 // RUN: triton-opt %t/tiny-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TINY-TOTALS
 // RUN: triton-opt %t/small-lanes.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=SMALL-LANES --implicit-check-not="nvvm.shfl.sync idx" --implicit-check-not="nvvm.barrier"
 
+// RUN: triton-opt %t/lane-local-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=LOCAL
+// RUN: triton-opt %t/lane-local-carries.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=LOCAL
+
 //--- scan.mlir
 
 #layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [2], order = [0]}>
@@ -342,4 +345,56 @@ tt.func private @test_small_independent_lane_scans(%arg: tensor<64x8xi32, #layou
   }) : (tensor<64x8xi32, #layout>) -> tensor<64x8xi32, #layout>
   tt.return %result : tensor<64x8xi32, #layout>
 }
+}
+
+//--- lane-local-carries.mlir
+
+#lane_local = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// LOCAL-LABEL: llvm.func {{.*}}@test_scan_lane_local_carries(
+// LOCAL-NOT: {{shfl|ds.bpermute|ds.swizzle|permlane}}
+// LOCAL: llvm.return
+tt.func private @test_scan_lane_local_carries(%arg: tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local>
+  tt.return %result : tensor<8x32xi32, #lane_local>
+}
+// LOCAL-LABEL: llvm.func {{.*}}@test_scan_lane_local_carries_reverse(
+// LOCAL-NOT: {{shfl|ds.bpermute|ds.swizzle|permlane}}
+// LOCAL: llvm.return
+tt.func private @test_scan_lane_local_carries_reverse(%arg: tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8x32xi32, #lane_local>) -> tensor<8x32xi32, #lane_local>
+  tt.return %result : tensor<8x32xi32, #lane_local>
+}
+
+// LOCAL-LABEL: llvm.func {{.*}}@test_scan_lane_local_carries_broadcast_lanes(
+// LOCAL-NOT: {{shfl|ds.bpermute|ds.swizzle|permlane}}
+// LOCAL: llvm.return
+tt.func private @test_scan_lane_local_carries_broadcast_lanes(%arg: tensor<8x16xi32, #lane_local>) -> tensor<8x16xi32, #lane_local> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8x16xi32, #lane_local>) -> tensor<8x16xi32, #lane_local>
+  tt.return %result : tensor<8x16xi32, #lane_local>
+}
+// LOCAL-LABEL: llvm.func {{.*}}@test_scan_lane_local_carries_broadcast_lanes_reverse(
+// LOCAL-NOT: {{shfl|ds.bpermute|ds.swizzle|permlane}}
+// LOCAL: llvm.return
+tt.func private @test_scan_lane_local_carries_broadcast_lanes_reverse(%arg: tensor<8x16xi32, #lane_local>) -> tensor<8x16xi32, #lane_local> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<8x16xi32, #lane_local>) -> tensor<8x16xi32, #lane_local>
+  tt.return %result : tensor<8x16xi32, #lane_local>
+}
+
 }
