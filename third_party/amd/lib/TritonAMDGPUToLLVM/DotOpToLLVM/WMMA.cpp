@@ -400,14 +400,20 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto aElemTy = aTensorTy.getElementType();
   auto bElemTy = bTensorTy.getElementType();
   auto dElemTy = dTensorTy.getElementType();
+  Type mmaAElemTy = aElemTy;
+  Type mmaBElemTy = bElemTy;
+  if (op.getIsUnsigned()) {
+    mmaAElemTy = IntegerType::get(ctx, 8, IntegerType::Unsigned);
+    mmaBElemTy = IntegerType::get(ctx, 8, IntegerType::Unsigned);
+  }
 
   std::string intrinsicName;
   FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic =
       wmmaLayout.getIsTransposed()
           ? WmmaIntrinsic::get(wmmaVer, mnkDim[1], mnkDim[0], mnkDim[2],
-                               bElemTy, aElemTy, dElemTy)
+                               mmaBElemTy, mmaAElemTy, dElemTy)
           : WmmaIntrinsic::get(wmmaVer, mnkDim[0], mnkDim[1], mnkDim[2],
-                               aElemTy, bElemTy, dElemTy);
+                               mmaAElemTy, mmaBElemTy, dElemTy);
   if (failed(maybeWmmaIntrinsic)) {
     return op.emitError("no matching matrix core intrinsic ")
            << "for wmma version " << wmmaVer << " with instruction shape ["
@@ -547,12 +553,10 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
         auto aValue = subTied == 0 ? ha : haNext;
         acc = wmmaLayout.getIsTransposed()
                   ? generateWMMAOp(rewriter, loc, wmmaVer, hb, aValue, acc,
-                                   bTensorTy.getElementType(),
-                                   aTensorTy.getElementType(), dstElemTy,
+                                   mmaBElemTy, mmaAElemTy, dstElemTy,
                                    intrinsicName, optTied)
                   : generateWMMAOp(rewriter, loc, wmmaVer, aValue, hb, acc,
-                                   aTensorTy.getElementType(),
-                                   bTensorTy.getElementType(), dstElemTy,
+                                   mmaAElemTy, mmaBElemTy, dstElemTy,
                                    intrinsicName, optTied);
       }
     }

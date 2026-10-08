@@ -129,6 +129,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+// CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
+// CHECK: #{{.*}} = #ttg.amd_wmma<{version = 2, isTranspose = true, ctaLayout = {warp = {{\[\[0, 1\], \[1, 0\]\]}}}}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: wmma_dot_u8_i32
+  tt.func public @wmma_dot_u8_i32(
+      %a: tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %b: tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+      %out: tensor<32x32x!tt.ptr<i32>, #blocked>) {
+    %c = arith.constant dense<0> : tensor<32x32xi32, #blocked>
+    // CHECK: tt.dot {{.*}} {isUnsigned = true}
+    // CHECK-SAME: -> tensor<32x32xi32, #{{.*}}>
+    %d = tt.dot %a, %b, %c {isUnsigned = true} : tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x32xi32, #blocked>
+    tt.store %out, %d : tensor<32x32x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 // Test for mixed FP8 types (f8E4M3FN x f8E5M2) - verifies that no fp_to_fp
 // conversion is generated since hardware supports mixed FP8 natively.
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>

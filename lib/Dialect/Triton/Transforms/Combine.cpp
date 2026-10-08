@@ -189,7 +189,8 @@ public:
                         arith::ConstantOp::create(rewriter, op->getLoc(),
                                                   rewriter.getF32FloatAttr(0)));
     rewriter.replaceOpWithNewOp<DotOp>(op, lhs, rhs, newAcc,
-                                       InputPrecision::IEEE, 0);
+                                       InputPrecision::IEEE, 0,
+                                       /*isUnsigned=*/false);
     return success();
   }
 };

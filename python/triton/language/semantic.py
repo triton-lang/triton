@@ -1594,7 +1594,7 @@ class TritonSemantic(Generic[TensorTy]):
             and rhs.shape[-1].value >= min_dot_size[1], \
                 f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
         if lhs.type.scalar.is_int():
-            assert lhs.type.scalar == tl.int8, "only int8 supported!"
+            assert lhs.type.scalar in (tl.int8, tl.uint8), "only int8 and uint8 are supported!"
             _0 = self.builder.get_int32(0)
             ret_scalar_ty = tl.int32
         elif out_dtype.is_bf16():
@@ -1637,7 +1637,8 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"max_num_imprecise_acc ({max_num_imprecise_acc}) must be <= K ({K})")
 
         return self.make_tensor(
-            self.builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc), ret_ty)
+            self.builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc,
+                                    lhs.dtype == tl.uint8), ret_ty)
 
     def _str_to_fp_type(self, float_format: str):
         ty_enum = getattr(ir.ScaleDotElemTypeTY, float_format.upper(), None)
