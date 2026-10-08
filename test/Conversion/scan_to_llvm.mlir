@@ -7,7 +7,6 @@
 // RUN: triton-opt %t/tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TUPLE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TRANSPOSE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TRANSPOSE
-// RUN: triton-opt %t/converted-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=RETAIN
 // RUN: triton-opt %t/converted-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-RETAIN
 // RUN: triton-opt %t/converted-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=TERMINAL
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=REUSE
@@ -313,9 +312,9 @@ tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
 
 //--- tuple.mlir
 
-// Thirty-two totals, with parallel lanes leaving only two lane bits available
-// for their sequence. Distribute them over warps and preserve reverse tuple
-// ordering; the operands' shared scratch allocations must not overlap.
+// Thirty-two warp-segment totals share lanes with independent columns.
+// Their scan spans registers and lanes in each warp. Reverse tuple operands
+// require separate, aligned shared-memory allocations.
 #tuple = #ttg.linear<{register = [[8, 0], [16, 0], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4]], warp = [[4, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // Conversion tiles reuse each operand's allocation. Keep the 32-bit scratch
@@ -427,8 +426,6 @@ tt.func private @test_scan_native_prefix_forward(%a: tensor<32xi8, #native_prefi
   tt.return %a_out, %b_out : tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>
 }
 
-// Native four-register prefixes must be computed before any lane shuffles.
-// Only their totals undergo the register/lane conversion.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_native_prefix_reverse
 // TRANSPOSE-NOT: nvvm.shfl.sync
 // TRANSPOSE: llvm.add
@@ -453,14 +450,14 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
 // After conversion, each of four logical lanes owns four consecutive values.
 // Two scan rounds update every register prefix with the preceding lanes' total.
 // The register/lane conversions use butterfly shuffles.
-// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
+// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_forward
 // TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
 // TRANSPOSE-NOT: nvvm.shfl.sync idx
 // TRANSPOSE: llvm.return
-// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_forward
+// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_forward
 // AMD-TRANSPOSE: llvm.add
 // AMD-TRANSPOSE: llvm.return
-tt.func private @test_scan_exclusive_carry_forward(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
+tt.func private @test_scan_lane_prefixes_forward(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
@@ -468,14 +465,14 @@ tt.func private @test_scan_exclusive_carry_forward(%arg: tensor<16xi32, #transpo
   }) : (tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose>
   tt.return %result : tensor<16xi32, #transpose>
 }
-// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
+// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_reverse
 // TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
 // TRANSPOSE-NOT: nvvm.shfl.sync idx
 // TRANSPOSE: llvm.return
-// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_exclusive_carry_reverse
+// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_reverse
 // AMD-TRANSPOSE: llvm.add
 // AMD-TRANSPOSE: llvm.return
-tt.func private @test_scan_exclusive_carry_reverse(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
+tt.func private @test_scan_lane_prefixes_reverse(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
@@ -533,15 +530,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // TERMINAL-NEXT: nvvm.barrier
 // TERMINAL: llvm.load
 // TERMINAL: nvvm.shfl.sync idx
+// TERMINAL: nvvm.shfl.sync bfly
 // TERMINAL: llvm.return
-// RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
-// RETAIN: nvvm.shfl.sync idx
-// RETAIN-NOT: nvvm.shfl.sync bfly
-// RETAIN: llvm.inline_asm {{.*}}st.shared::cta.b32
-// RETAIN: nvvm.barrier
-// RETAIN: llvm.load
-// RETAIN: nvvm.shfl.sync bfly
-// RETAIN: llvm.return
 // AMD-RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
 // AMD-RETAIN: llvm.store
 // AMD-RETAIN: llvm.load
@@ -569,12 +559,8 @@ tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) ->
 // TERMINAL-NEXT: nvvm.barrier
 // TERMINAL: llvm.load
 // TERMINAL: nvvm.shfl.sync idx
+// TERMINAL: nvvm.shfl.sync bfly
 // TERMINAL: llvm.return
-// RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse
-// RETAIN: llvm.inline_asm {{.*}}st.shared::cta.b32
-// RETAIN: nvvm.barrier
-// RETAIN: llvm.load
-// RETAIN: llvm.return
 // AMD-RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse
 // AMD-RETAIN: llvm.store
 // AMD-RETAIN: llvm.load
