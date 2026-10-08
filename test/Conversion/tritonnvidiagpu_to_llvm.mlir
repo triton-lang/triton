@@ -63,7 +63,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @wait_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32, %pred: i1) {
     // CHECK: waitLoop:
     // CHECK: mbarrier.try_wait.parity.shared::cta.b64
-    // CHECK: @!complete bra.uni waitLoop
+    // CHECK-NOT: @!complete bra.uni waitLoop
+    // CHECK: @!complete bra waitLoop
     // CHECK-NOT: skipWait
     // CHECK: %{{[0-9]+}}, %arg1 :
     ttng.wait_barrier %alloc, %phase : !ttg.memdesc<1xi64, #shared0, #smem>
@@ -71,7 +72,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
     // CHECK: waitLoop:
     // CHECK: mbarrier.try_wait.parity.shared::cta.b64
-    // CHECK: @!complete bra.uni waitLoop
+    // CHECK-NOT: @!complete bra.uni waitLoop
+    // CHECK: @!complete bra waitLoop
     // CHECK-NOT: skipWait
     // CHECK: %{{[0-9]+}}, %arg1 :
     ttng.wait_barrier %alloc, %phase, %true : !ttg.memdesc<1xi64, #shared0, #smem>
@@ -79,7 +81,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: @!$2 bra.uni skipWait
     // CHECK: waitLoop:
     // CHECK: mbarrier.try_wait.parity.shared::cta.b64
-    // CHECK: @!complete bra.uni waitLoop
+    // CHECK-NOT: @!complete bra.uni waitLoop
+    // CHECK: @!complete bra waitLoop
     // CHECK: skipWait:
     // CHECK: %{{[0-9]+}}, %arg1, %arg2 :
     ttng.wait_barrier %alloc, %phase, %pred : !ttg.memdesc<1xi64, #shared0, #smem>
@@ -971,6 +974,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK-NOT: mapa
       // CHECK: mbarrier.arrive.release.cluster.shared::cluster.b64
       // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+      // CHECK-NOT: @!complete bra.uni waitLoop
+      // CHECK: @!complete bra waitLoop
       // CHECK-NOT: nvvm.barrier
       // CHECK: %[[NEXT_COUNTER:.*]] = llvm.add %[[COUNTER]]
       // CHECK: llvm.and %[[NEXT_COUNTER]]
@@ -1021,6 +1026,8 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-COUNT-1: mbarrier.arrive.release.cluster.shared::cluster.b64
   // CHECK-NOT: mbarrier.arrive
   // CHECK: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+  // CHECK-NOT: @!complete bra.uni waitLoop
+  // CHECK: @!complete bra waitLoop
   // CHECK: nvvm.barrier
   // RUBIN-LABEL: @cluster_barrier_inside_warp_specialize_rubin
   // RUBIN-COUNT-2: mbarrier.init.shared::cta.b64 [$1], 3;
@@ -1035,6 +1042,8 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // RUBIN-COUNT-1: mbarrier.arrive.release.cluster.shared::cluster.multicast::cluster::32b.b64 _, [$1], $2;
   // RUBIN-NOT: mbarrier.arrive
   // RUBIN: mbarrier.try_wait.parity.acquire.cluster.shared::cta.b64
+  // RUBIN-NOT: @!complete bra.uni waitLoop
+  // RUBIN: @!complete bra waitLoop
   // RUBIN-NOT: nvvm.barrier
   // RUBIN: %[[RUBIN_NEXT_COUNTER:.*]] = llvm.add %[[RUBIN_COUNTER]]
   // RUBIN: llvm.and %[[RUBIN_NEXT_COUNTER]]

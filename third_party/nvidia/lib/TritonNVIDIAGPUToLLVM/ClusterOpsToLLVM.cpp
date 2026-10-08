@@ -96,7 +96,7 @@ static void createMBarrierWait(OpBuilder &b, Location loc, Value barrierPtr,
                          "waitLoop:\n"
                          "\tmbarrier.try_wait.parity.acquire.cluster.shared::"
                          "cta.b64 complete, [$0], $1;\n"
-                         "\t@!complete bra.uni waitLoop;\n"
+                         "\t@!complete bra waitLoop;\n"
                          "}\n");
   wait({ptxBuilder.newOperand(barrierPtr, "r"),
         ptxBuilder.newOperand(parity, "r")},

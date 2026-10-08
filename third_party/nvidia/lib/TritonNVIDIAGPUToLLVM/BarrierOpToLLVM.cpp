@@ -346,7 +346,7 @@ struct WaitBarrierOpConversion
 	waitLoop:
 	mbarrier.test_wait.parity.shared::cta.b64 complete, [$0], $1;
 	@!complete nanosleep.u32 20;
-	@!complete bra.uni waitLoop;
+	@!complete bra waitLoop;
 }
 )";
       } else {
@@ -357,7 +357,7 @@ struct WaitBarrierOpConversion
 	waitLoop:
 	mbarrier.test_wait.parity.shared::cta.b64 complete, [$0], $1;
 	@!complete nanosleep.u32 20;
-	@!complete bra.uni waitLoop;
+	@!complete bra waitLoop;
 	skipWait:
 }
 )";
@@ -369,7 +369,7 @@ struct WaitBarrierOpConversion
 	.reg .pred complete;
 	waitLoop:
 	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
-	@!complete bra.uni waitLoop;
+	@!complete bra waitLoop;
 }
 )";
       } else {
@@ -379,7 +379,7 @@ struct WaitBarrierOpConversion
 	.reg .pred complete;
 	waitLoop:
 	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
-	@!complete bra.uni waitLoop;
+	@!complete bra waitLoop;
 	skipWait:
 }
 )";
