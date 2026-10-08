@@ -327,17 +327,12 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
   unsigned axisSize = originalLayout.getOutDimSize(axisDim);
   // Cross-CTA scans are unsupported, so the lowest warp axis bit bounds
   // a contiguous warp-local segment.
-  warpSegmentSize = axisSize;
-  for (const auto &basis : originalLayout.getBases().lookup(kWarp)) {
-    if (basis[axis])
-      warpSegmentSize = std::min(warpSegmentSize, unsigned(basis[axis]));
-  }
+  unsigned warpMask = getOutputBasisMask(originalLayout, {kWarp}, axisDim);
+  warpSegmentSize = 1u << llvm::countr_zero(warpMask | axisSize);
   // The lowest lane axis bit also bounds a thread-local segment.
   auto kLane = StringAttr::get(ctx, "lane");
-  threadSegmentSize = warpSegmentSize;
-  for (const auto &basis : originalLayout.getBases().lookup(kLane))
-    if (basis[axis])
-      threadSegmentSize = std::min(threadSegmentSize, unsigned(basis[axis]));
+  unsigned laneMask = getOutputBasisMask(originalLayout, {kLane}, axisDim);
+  threadSegmentSize = 1u << llvm::countr_zero(laneMask | warpSegmentSize);
   if (threadSegmentSize < warpSegmentSize) {
     intraWarpTotalsLayout = buildIntraWarpTotalsLayout();
     intraWarpScanLayout = buildIntraWarpScanLayout();

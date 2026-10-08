@@ -81,15 +81,6 @@ private:
     permuteRegisters(values, helper.getRegisterOrder().inverse());
   }
 
-  static unsigned getSegmentMask(const LinearLayout &layout, StringAttr dim,
-                                 unsigned axis, unsigned valuesPerSegment) {
-    unsigned mask = 0;
-    for (auto [bit, basis] : llvm::enumerate(layout.getBases().lookup(dim)))
-      if (basis[axis] && basis[axis] < valuesPerSegment)
-        mask |= 1u << bit;
-    return mask;
-  }
-
   static ScanValues transposeValues(const ScanValues &values) {
     ScanValues result(values.front().size());
     for (const auto &row : values)
@@ -396,8 +387,9 @@ private:
     auto kReg = StringAttr::get(ctx, "register");
     unsigned segmentRegs = sourceLayout.getInDimSize(kReg) /
                            interWarpTotalsLayout.getInDimSize(kReg);
-    unsigned segmentLaneMask =
-        getSegmentMask(sourceLayout, kLane, op.getAxis(), valuesPerSegment);
+    auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
+    unsigned segmentLaneMask = getInputBasisMask(
+        sourceLayout.resizeOutDim(axis, valuesPerSegment), kLane, {axis});
 
     // Select the terminal lane and one owner of each replicated total.
     auto freeMasks = interWarpTotalsLayout.getFreeVariableMasks();
@@ -417,7 +409,6 @@ private:
     assert(!totalsHelper.getInterWarpTotalsLayout() &&
            "the full totals sequence must be warp-local");
     scanWithinCTA(op, totalsHelper, totals, laneId, warpId, rewriter);
-    auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
     return getSegmentCarries(op, totals, interWarpTotalsLayout, totalsLayout,
                              interWarpTotalsLayout.getOutDimSize(axis), laneId,
                              warpId, rewriter);
