@@ -433,8 +433,8 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device):
     if dst_dtype in FP8_DTYPES and is_hip_rdna3():
         pytest.skip(f"{dst_dtype} is not supported on AMDGPU RDNA3")
 
-    if mode in ('inf', '-inf') and (is_hip_rdna4() or is_hip_gfx1250()):
-        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX12")
+    if mode in ('inf', '-inf') and is_hip_gfx1250():
+        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX1250")
 
     converter = {
         tl.float8e4nv: torch.float8_e4m3fn,

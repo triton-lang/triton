@@ -2555,12 +2555,13 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         check_type_supported(dtype_z, device)
 
     if is_hip():
-        if not is_hip_cdna3() and not is_hip_cdna4() and not is_hip_gfx1250() and (dtype_x == 'float8_e4m3fn'
-                                                                                   or dtype_z == 'float8_e4m3fn'):
-            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA3/CDNA4 and above.')
-        if (not (is_hip_cdna4() or is_hip_gfx1250())) and ((dtype_x == 'bfloat16' and dtype_z == "float8_e4m3fn") or
-                                                           (dtype_x == "float8_e4m3fn" and dtype_z == 'bfloat16')):
-            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA4 and above.')
+        if not is_hip_cdna3() and not is_hip_cdna4() and not is_hip_rdna4() and not is_hip_gfx1250() and (
+                dtype_x == 'float8_e4m3fn' or dtype_z == 'float8_e4m3fn'):
+            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA3/CDNA4/RDNA4 and above.')
+        if (not (is_hip_cdna4() or is_hip_rdna4() or is_hip_gfx1250())) and (
+            (dtype_x == 'bfloat16' and dtype_z == "float8_e4m3fn") or
+            (dtype_x == "float8_e4m3fn" and dtype_z == 'bfloat16')):
+            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA4/RDNA4 and above.')
 
     torch.manual_seed(0)
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
@@ -2676,8 +2677,9 @@ def test_cast_fp8_rounding(dtype_x, dtype_z, device):
         check_type_supported(dtype_z, device)
         if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("FP8 RTNE boundary tests require compute capability >= 90")
-        if is_hip() and dtype_z == "float8_e4m3fn" and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx1250()):
-            pytest.skip("float8e4nv requires CDNA3 or newer")
+        if is_hip() and dtype_z == "float8_e4m3fn" and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna4()
+                                                            or is_hip_gfx1250()):
+            pytest.skip("float8e4nv requires CDNA3, RDNA4 or newer")
 
     @triton.jit
     def kernel(X, Z, SIZE: tl.constexpr):
