@@ -425,13 +425,25 @@ def test_compilation_trace_grades_attempted_warmup_tests(tmp_path):
 
 def test_is_lazy():
     from importlib import reload
-    reload(sys.modules["triton.runtime.driver"])
-    reload(sys.modules["triton.runtime"])
-    assert triton.runtime.driver._active is None
-    assert triton.runtime.driver._default is None
-    assert isinstance(triton.runtime.driver.active, getattr(triton.backends.driver, "DriverBase"))
-    assert isinstance(triton.runtime.driver.default, getattr(triton.backends.driver, "DriverBase"))
-    utils = triton.runtime.driver.active.utils  # noqa: F841
+    driver_module = sys.modules["triton.runtime.driver"]
+    original = driver_module.driver
+    try:
+        reload(driver_module)
+        reload(sys.modules["triton.runtime"])
+        assert triton.runtime.driver._active is None
+        assert triton.runtime.driver._default is None
+        assert isinstance(triton.runtime.driver.active, getattr(triton.backends.driver, "DriverBase"))
+        assert isinstance(triton.runtime.driver.default, getattr(triton.backends.driver, "DriverBase"))
+        utils = triton.runtime.driver.active.utils  # noqa: F841
+    finally:
+        # The reloads build a second DriverConfig. Modules that imported the
+        # singleton by value keep the first one, so leaving the second in place
+        # splits the process: patching one config is then invisible to code
+        # reading the other.
+        driver_module.driver = original
+        triton.runtime.driver = original
+
+    assert triton.runtime.driver is triton.compiler.compiler.driver
 
 
 def test_profile_scratch_stream_zero_uses_default_stream(monkeypatch):

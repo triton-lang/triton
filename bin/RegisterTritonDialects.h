@@ -21,7 +21,6 @@
 // Below headers will allow registration to ROCm passes
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "TritonAMDGPUTransforms/TritonGPUConversion.h"
 
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
