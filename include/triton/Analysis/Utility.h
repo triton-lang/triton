@@ -107,22 +107,83 @@ private:
   int axis;
 };
 
-// A simple three phase shuffle-based scan lowering algorithm.
-// 1. thread local phase: scan each thread's local segment, producing a
-// thread-local total for each segment.
-// 2. warp local phase: scan the thread-local totals within each warp, producing
-// a warp-local total for each segment.
-// 3. inter-warp phase: scan the warp-local totals across warps, propagate
-// carries back to the warp-local totals, then propagate carries back to the
-// thread-local totals.
+// A three-phase scan lowering algorithm.
+// 1. Thread-local phase: scan each thread-local segment and extract its total.
+// 2. Warp-local phase: scan the thread-local totals within each warp-local
+//    segment, using a layout with consecutive totals in each thread's
+//    registers.
+// 3. Inter-warp phase: exchange warp-local totals through shared memory.
+//    Scan their full sequence within each warp. Apply exclusive carries
+//    to the thread-local totals, then complete the saved element prefixes.
 //
-// "Segment" is a contiguous range of elements along the
-// scan axis that are owned by a single thread/warp. For example
-//   thread 0: [x0, x1], [x4, x5], [x8, x9], [x12, x13]
-//   thread 1: [x2, x3], [x6, x7], [x10, x11], [x14, x15]
-// reg bases: [1, 4, 8]
-// thread bases : [2]
-// threadLocalSegmentSize = 2, warpLocalSegmentSize = 4
+// Segment: a contiguous range along the scan axis owned by one thread or warp.
+// The following forward sum scans x0..x31 in one CTA with two warps. Each warp
+// has two distinct lane owners; the remaining lanes replicate those owners.
+// R, L, and W list the scan-axis bases for register, lane, and warp input bits.
+// Four additional zero lane bases and the empty block dimension are omitted.
+// R=[] means one register value per thread.
+//
+// 1. Thread-local phase: originalLayout and permutedLayout
+//    R=[1,4,8], L=[2], W=[16], with coordinates in original elements.
+//    The register order is already canonical, so these two layouts are equal.
+//      warp 0, lane 0: [x0, x1],   [x4, x5],   [x8, x9],   [x12, x13]
+//      warp 0, lane 1: [x2, x3],   [x6, x7],   [x10, x11], [x14, x15]
+//      warp 1, lane 0: [x16, x17], [x20, x21], [x24, x25], [x28, x29]
+//      warp 1, lane 1: [x18, x19], [x22, x23], [x26, x27], [x30, x31]
+//    threadSegmentSize=2 and warpSegmentSize=16. Each pair is scanned locally:
+//    [x(2j), x(2j+1)] becomes [x(2j), Tj], where Tj=x(2j)+x(2j+1).
+//    These element prefixes stay in permutedLayout until carries are applied.
+//
+// 2. Warp-local phase: intraWarpLayout -> intraWarpScanLayout
+//    intraWarpLayout describes the extracted Tj values in their original
+//    owners. Divide the element bases by threadSegmentSize=2 and remove zero
+//    register bases: R=[2,4], L=[1], W=[8]. Coordinates now index thread-local
+//    segments.
+//      warp 0, lane 0: T0, T2, T4, T6
+//      warp 0, lane 1: T1, T3, T5, T7
+//      warp 1, lane 0: T8, T10, T12, T14
+//      warp 1, lane 1: T9, T11, T13, T15
+//    Each warp-local segment contains 16/2=8 thread-local totals. Put its
+//    register bases before its lane bases to form intraWarpScanLayout:
+//    R=[1,2], L=[4], W=[8]. Convert the totals using warp shuffles.
+//      warp 0, lane 0: T0, T1, T2, T3
+//      warp 0, lane 1: T4, T5, T6, T7
+//      warp 1, lane 0: T8, T9, T10, T11
+//      warp 1, lane 1: T12, T13, T14, T15
+//    Scan the four registers per thread, then scan across the two lane owners.
+//    Slot j now holds Uj=T(8w)+...+Tj, where w is its warp. The layout stays
+//    intraWarpScanLayout. In particular, U7 sums x0..x15 and U15 sums x16..x31.
+//
+// 3. Inter-warp phase: interWarpLayout -> interWarpScanLayout
+//    Let W0=U7 and W1=U15. Extract the terminal register and broadcast from the
+//    terminal lane of each warp-local segment. interWarpLayout describes Wj:
+//    divide intraWarpScanLayout's bases by 8 and remove zero register bases,
+//    giving R=[], L=[0], W=[1]. Coordinates now index warp-local segments.
+//      warp 0, every lane: W0
+//      warp 1, every lane: W1
+//    interWarpScanLayout places the full sequence in lanes and replicates it
+//    across warps: R=[], L=[1], W=[0]. Convert through shared memory.
+//      each warp, lane 0: W0
+//      each warp, lane 1: W1
+//    Reuse the warp-local scan in this layout. Its output has the same layout:
+//      each warp, lane 0: S0=W0
+//      each warp, lane 1: S1=W0+W1
+//
+// Carry propagation
+//    Map each consumer in interWarpLayout to the preceding segment's prefix
+//    in interWarpScanLayout. Warp 0 has no carry; warp 1 reads S0 from lane 0.
+//    Apply that carry to every Uj in warp 1. The totals now hold global
+//    prefixes Qj=T0+...+Tj in intraWarpScanLayout. Convert back to
+//    intraWarpLayout:
+//      warp 0, lane 0: Q0, Q2, Q4, Q6
+//      warp 0, lane 1: Q1, Q3, Q5, Q7
+//      warp 1, lane 0: Q8, Q10, Q12, Q14
+//      warp 1, lane 1: Q9, Q11, Q13, Q15
+//    Replace each saved pair's terminal value with Qj. Complete its first value
+//    with Q(j-1)+x(2j), leaving x0 unchanged. The first pair in warp 1 uses its
+//    inter-warp carry S0=Q7. Results use permutedLayout, then the inverse
+//    register permutation restores originalLayout. Here the permutation is the
+//    identity.
 //
 class ScanLoweringHelper {
 public:
@@ -134,7 +195,7 @@ public:
   }
   const triton::ColumnAction &getRegisterOrder() const { return registerOrder; }
 
-  unsigned getThreadLocalSegmentSize() const { return threadLocalSegmentSize; }
+  unsigned getThreadSegmentSize() const { return threadSegmentSize; }
 
   const std::optional<triton::LinearLayout> &getIntraWarpLayout() const {
     return intraWarpLayout;
@@ -144,7 +205,7 @@ public:
     return intraWarpScanLayout;
   }
 
-  unsigned getWarpLocalSegmentSize() const { return warpLocalSegmentSize; }
+  unsigned getWarpSegmentSize() const { return warpSegmentSize; }
 
   const std::optional<triton::LinearLayout> &getInterWarpLayout() const {
     return interWarpLayout;
@@ -170,8 +231,8 @@ private:
   // Register zero bases removed, then axis register bits ordered logically.
   triton::LinearLayout permutedLayout;
   triton::ColumnAction registerOrder;
-  unsigned threadLocalSegmentSize = 1;
-  unsigned warpLocalSegmentSize = 1;
+  unsigned threadSegmentSize = 1;
+  unsigned warpSegmentSize = 1;
   std::optional<triton::LinearLayout> intraWarpLayout;
   std::optional<triton::LinearLayout> intraWarpScanLayout;
   std::optional<triton::LinearLayout> interWarpLayout;

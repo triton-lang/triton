@@ -68,7 +68,7 @@ private:
                      ConversionPatternRewriter &rewriter) const {
     // Keep native thread prefixes in place and communicate only segment totals.
     permuteRegisters(values, helper.getRegisterOrder());
-    scanWithinThreads(op, values, helper.getThreadLocalSegmentSize(), rewriter);
+    scanWithinThreads(op, values, helper.getThreadSegmentSize(), rewriter);
     ScanValues intraWarpTotals;
     SmallVector<ScanCarry> interWarpCarries;
     if (helper.getIntraWarpLayout())
@@ -234,8 +234,8 @@ private:
                              ConversionPatternRewriter &rewriter) const {
     const auto &intraWarpLayout = *helper.getIntraWarpLayout();
     const auto &scanLayout = *helper.getIntraWarpScanLayout();
-    unsigned segmentRegs = helper.getThreadLocalSegmentSize();
-    unsigned numSegments = helper.getWarpLocalSegmentSize() / segmentRegs;
+    unsigned segmentRegs = helper.getThreadSegmentSize();
+    unsigned numSegments = helper.getWarpSegmentSize() / segmentRegs;
     bool reverse = op.getReverse();
 
     auto totals = extractSegmentTotals(values, segmentRegs, reverse);
@@ -266,10 +266,10 @@ private:
     const auto &sourceLayout = helper.getIntraWarpScanLayout()
                                    ? *helper.getIntraWarpScanLayout()
                                    : helper.getPermutedLayout();
-    unsigned segmentSize = helper.getWarpLocalSegmentSize();
+    unsigned segmentSize = helper.getWarpSegmentSize();
     // Express the segment size in source-layout units.
     if (helper.getIntraWarpScanLayout())
-      segmentSize /= helper.getThreadLocalSegmentSize();
+      segmentSize /= helper.getThreadSegmentSize();
     const auto &interWarpLayout = *helper.getInterWarpLayout();
     const auto &totalsLayout = *helper.getInterWarpScanLayout();
     bool reverse = op.getReverse();
@@ -320,8 +320,8 @@ private:
     }
 
     const auto &intraWarpLayout = *helper.getIntraWarpLayout();
-    unsigned segmentRegs = helper.getThreadLocalSegmentSize();
-    unsigned numSegments = helper.getWarpLocalSegmentSize() / segmentRegs;
+    unsigned segmentRegs = helper.getThreadSegmentSize();
+    unsigned numSegments = helper.getWarpSegmentSize() / segmentRegs;
     const auto &scanLayout = *helper.getIntraWarpScanLayout();
     if (!interWarpCarries.empty())
       applySegmentCarries(op, intraWarpTotals, interWarpCarries, rewriter);
