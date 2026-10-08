@@ -15,13 +15,21 @@ def _element_ptrs(array: np.ndarray) -> np.ndarray:
 
 
 @pytest.mark.parametrize("dtype, prefix", [
-    (tl.float16, "fcmpO"), (tl.float32, "fcmpO"), (tl.float64, "fcmpO"), (tl.float32, "fcmpU"),
-    (tl.int32, "icmpS"), (tl.uint32, "icmpU"), (tl.int1, "icmpU"),
+    (tl.float16, "fcmpO"),
+    (tl.float32, "fcmpO"),
+    (tl.float64, "fcmpO"),
+    (tl.float32, "fcmpU"),
+    (tl.int32, "icmpS"),
+    (tl.uint32, "icmpU"),
+    (tl.int1, "icmpU"),
 ])
 @pytest.mark.parametrize("op, expected", [
-    ("LT", [True, False, False, False]), ("LE", [True, True, False, True]),
-    ("GT", [False, False, True, False]), ("GE", [False, True, True, True]),
-    ("EQ", [False, True, False, True]), ("NE", [True, False, True, False]),
+    ("LT", [True, False, False, False]),
+    ("LE", [True, True, False, True]),
+    ("GT", [False, False, True, False]),
+    ("GE", [False, True, True, True]),
+    ("EQ", [False, True, False, True]),
+    ("NE", [True, False, True, False]),
 ])
 def test_compare_op_return_type(dtype, prefix, op, expected):
     builder = interpreter.InterpreterBuilder()
