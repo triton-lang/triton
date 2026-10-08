@@ -5527,6 +5527,24 @@ def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
     torch.testing.assert_close(output, reference_out)
 
 
+@pytest.mark.interpreter
+def test_masked_load_negative_zero_other(device):
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr, n, other):
+        pid = tl.program_id(0)
+        x = tl.load(in_ptr + pid, mask=pid < n, other=other)
+        tl.store(out_ptr + pid, x)
+
+    input = torch.ones(2, device=device)
+    output = torch.empty(2, device=device)
+    kernel[(2, )](input, output, 1, -0.0)
+
+    expected = torch.tensor([1.0, -0.0], device=device)
+    torch.testing.assert_close(output, expected)
+    assert torch.equal(torch.signbit(output), torch.signbit(expected))
+
+
 # Testing masked loads with a copy to shared memory.
 # FIXME: Shape too small for ldmatrix when num_ctas=4
 @pytest.mark.interpreter
