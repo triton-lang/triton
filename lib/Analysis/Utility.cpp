@@ -329,24 +329,22 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
   unsigned axisSize = originalLayout.getOutDimSize(axisDim);
   // Cross-CTA scans are unsupported, so the lowest warp axis bit bounds
   // a contiguous warp-local segment.
-  warpLocalSegmentSize = axisSize;
+  warpSegmentSize = axisSize;
   for (const auto &basis : originalLayout.getBases().lookup(kWarp)) {
     if (basis[axis])
-      warpLocalSegmentSize =
-          std::min(warpLocalSegmentSize, unsigned(basis[axis]));
+      warpSegmentSize = std::min(warpSegmentSize, unsigned(basis[axis]));
   }
   // The lowest lane axis bit also bounds a thread-local segment.
   auto kLane = StringAttr::get(ctx, "lane");
-  threadLocalSegmentSize = warpLocalSegmentSize;
+  threadSegmentSize = warpSegmentSize;
   for (const auto &basis : originalLayout.getBases().lookup(kLane))
     if (basis[axis])
-      threadLocalSegmentSize =
-          std::min(threadLocalSegmentSize, unsigned(basis[axis]));
-  if (threadLocalSegmentSize < warpLocalSegmentSize) {
+      threadSegmentSize = std::min(threadSegmentSize, unsigned(basis[axis]));
+  if (threadSegmentSize < warpSegmentSize) {
     intraWarpLayout = buildIntraWarpLayout();
     intraWarpScanLayout = buildIntraWarpScanLayout();
   }
-  if (warpLocalSegmentSize == axisSize)
+  if (warpSegmentSize == axisSize)
     return;
 
   interWarpLayout = buildInterWarpLayout();
@@ -386,7 +384,7 @@ static LinearLayout getScanTotalsLayout(const LinearLayout &layout,
 
 LinearLayout ScanLoweringHelper::buildIntraWarpLayout() const {
   // Collapse each thread-local segment to one total in its original owner.
-  return getScanTotalsLayout(permutedLayout, axis, threadLocalSegmentSize);
+  return getScanTotalsLayout(permutedLayout, axis, threadSegmentSize);
 }
 
 LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
@@ -396,7 +394,7 @@ LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
   auto *ctx = intraWarpLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
-  unsigned segmentSize = warpLocalSegmentSize / threadLocalSegmentSize;
+  unsigned segmentSize = warpSegmentSize / threadSegmentSize;
   auto bases = intraWarpLayout->getBases();
   unsigned next = 1;
   for (auto dim : {kReg, kLane})
@@ -414,9 +412,9 @@ LinearLayout ScanLoweringHelper::buildInterWarpLayout() const {
   // Collapse warp-local segments in the layout that holds their prefixes.
   const auto &sourceLayout =
       intraWarpScanLayout ? *intraWarpScanLayout : permutedLayout;
-  unsigned segmentSize = warpLocalSegmentSize;
+  unsigned segmentSize = warpSegmentSize;
   if (intraWarpScanLayout)
-    segmentSize /= threadLocalSegmentSize;
+    segmentSize /= threadSegmentSize;
   return getScanTotalsLayout(sourceLayout, axis, segmentSize);
 }
 
