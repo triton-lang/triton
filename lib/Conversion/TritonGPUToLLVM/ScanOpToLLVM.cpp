@@ -275,8 +275,8 @@ private:
     return {lane, pred};
   }
 
-  // Compute inclusive lane totals. Local prefixes are completed after the
-  // inter-warp carry is available.
+  // Each round shuffles the preceding lanes' terminal total and combines it
+  // with every register prefix in the group.
   void scanLaneTotals(triton::ScanOp op, ScanValues &values,
                       const LinearLayout &layout, unsigned numRegs,
                       unsigned segmentSize, Value laneId,
@@ -291,51 +291,12 @@ private:
                                        offset, rewriter));
     for (unsigned base = 0; base < values.size(); base += numRegs) {
       unsigned last = base + (op.getReverse() ? 0 : numRegs - 1);
-      auto acc = values[last];
       for (auto [lane, pred] : rounds) {
-        auto incoming = shuffleValues(loc, acc, lane, rewriter);
-        acc = combineWithPrefix(op, incoming, acc, rewriter, pred);
+        auto incoming = shuffleValues(loc, values[last], lane, rewriter);
+        for (unsigned r = base; r < base + numRegs; ++r)
+          values[r] =
+              combineWithPrefix(op, incoming, values[r], rewriter, pred);
       }
-      values[last] = acc;
-    }
-  }
-
-  // Complete lane totals with the inter-warp carry before shifting them to
-  // the local prefixes. Each nonterminal register receives one complete carry.
-  void completeLaneTotals(triton::ScanOp op, ScanValues &values,
-                          const LinearLayout &layout, unsigned numRegs,
-                          unsigned segmentSize,
-                          ArrayRef<ScanCarry> interWarpCarries, Value laneId,
-                          ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    std::pair<Value, Value> step;
-    if (numRegs > 1)
-      step = getLaneScanStep(op, layout, numRegs, segmentSize, laneId, 1,
-                             rewriter);
-    assert(interWarpCarries.empty() ||
-           values.size() == interWarpCarries.size() * numRegs);
-    for (unsigned base = 0; base < values.size(); base += numRegs) {
-      unsigned last = base + (op.getReverse() ? 0 : numRegs - 1);
-      const ScanCarry *interWarp = interWarpCarries.empty()
-                                       ? nullptr
-                                       : &interWarpCarries[base / numRegs];
-      if (interWarp)
-        values[last] = combineWithPrefix(op, interWarp->values, values[last],
-                                         rewriter, interWarp->pred);
-      if (numRegs == 1)
-        continue;
-      auto [lane, pred] = step;
-      auto prefix = shuffleValues(loc, values[last], lane, rewriter);
-      if (interWarp) {
-        // The first logical lane receives only the inter-warp carry.
-        for (auto [value, carry] : llvm::zip(prefix, interWarp->values))
-          value = b.select(pred, value, carry);
-        pred = b.or_(pred, interWarp->pred);
-      }
-      for (unsigned r = base; r < base + numRegs; ++r)
-        if (r != last)
-          values[r] = combineWithPrefix(op, prefix, values[r], rewriter, pred);
     }
   }
 
@@ -458,12 +419,14 @@ private:
     unsigned segmentRegs = helper.getThreadLocalSegmentSize();
     unsigned numSegments = helper.getWarpLocalSegmentSize() / segmentRegs;
     const auto &scanLayout = *helper.getIntraWarpScanLayout();
-    auto axis =
-        StringAttr::get(op.getContext(), "dim" + std::to_string(op.getAxis()));
-    unsigned numRegs =
-        scanLayout.sublayout({kReg}, {axis}).getNumConsecutiveInOut();
-    completeLaneTotals(op, intraWarpTotals, scanLayout, numRegs, numSegments,
-                       interWarpCarries, laneId, rewriter);
+    if (!interWarpCarries.empty()) {
+      auto axis = StringAttr::get(op.getContext(),
+                                  "dim" + std::to_string(op.getAxis()));
+      unsigned numRegs =
+          scanLayout.sublayout({kReg}, {axis}).getNumConsecutiveInOut();
+      applySegmentCarries(op, intraWarpTotals, interWarpCarries, numRegs,
+                          rewriter);
+    }
     convertScanValues(op, intraWarpTotals, scanLayout, intraWarpLayout,
                       rewriter);
 
