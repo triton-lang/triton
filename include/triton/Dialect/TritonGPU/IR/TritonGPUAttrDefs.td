@@ -3,6 +3,13 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 
+// Set bits select lane and warp coordinates that must be zero.
+def ThreadDomainAttr : TritonGPU_Attr<"ThreadDomain", "thread_domain"> {
+  let mnemonic = "thread_domain";
+  let parameters = (ins "uint32_t":$lane, "uint32_t":$warp);
+  let assemblyFormat = "`<` $lane `,` $warp `>`";
+}
+
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
