@@ -35,6 +35,35 @@ def test_cuda_round_f32_to_tf32(rounding):
     assert torch.equal(out.view(torch.int32), expected.view(torch.int32))
 
 
+@pytest.mark.parametrize("op", ["min", "max"])
+@pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
+def test_cuda_minmax_xorsign_abs(op, propagate_nan):
+    if not is_cuda() or torch.cuda.get_device_capability() < (8, 6):
+        pytest.skip("requires CUDA compute capability 8.6+")
+
+    @triton.jit
+    def kernel(A, B, Out, OP: tl.constexpr, PROPAGATE_NAN: tl.constexpr):
+        offsets = tl.arange(0, 8)
+        a = tl.load(A + offsets)
+        b = tl.load(B + offsets)
+        if OP == "min":
+            result = tl.extra.cuda.min_xorsign_abs_f32(a, b, propagate_nan=PROPAGATE_NAN)
+        else:
+            result = tl.extra.cuda.max_xorsign_abs_f32(a, b, propagate_nan=PROPAGATE_NAN)
+        tl.store(Out + offsets, result)
+
+    a = torch.tensor([2., -2., 2., -2., float("nan"), 1., -0., 0.], device="cuda")
+    b = torch.tensor([3., 3., -3., -3., 1., float("nan"), 0., -0.], device="cuda")
+    out = torch.empty_like(a)
+    kernel[(1,)](a, b, out, op, propagate_nan)
+    magnitude = 2. if op == "min" else 3.
+    nan_result = float("nan") if propagate_nan == tl.PropagateNan.ALL else 1.
+    expected = torch.tensor([magnitude, -magnitude, -magnitude, magnitude, nan_result, nan_result, -0., -0.],
+                            device="cuda")
+    torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
+    assert torch.equal(torch.signbit(out[6:]), torch.signbit(expected[6:]))
+
+
 @triton.jit
 def tanh_kernel(
     x_ptr,
