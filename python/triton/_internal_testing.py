@@ -526,3 +526,46 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
         knobs.propagate_env = prev_propagate_env
 
     return fresh_function, reset_function
+
+
+def assert_no_collectives_in_ptx_loop(ptx, *, warp_specialized=False):
+    # Block order does not imply a loop: LLVM may place the exit before the
+    # header. Follow branches and fallthroughs to identify actual cycles.
+    lines = [line.partition("//")[0].strip() for line in ptx.splitlines()]
+    labels = {line[:-1]: i for i, line in enumerate(lines) if re.fullmatch(r"\$\w+:", line)}
+    successors = [{i + 1} if i + 1 < len(lines) else set() for i in range(len(lines))]
+    branches = []
+    dispatch_boundaries = []
+    for i, line in enumerate(lines):
+        branch = re.fullmatch(r"(@!?%\w+\s+)?bra(?:\.uni)?\s+(\$\w+);", line)
+        if branch:
+            successors[i] = {labels[branch[2]]} | (successors[i] if branch[1] else set())
+            branches.append(i)
+        elif re.fullmatch(r"(?:ret|exit)(?:\.uni)?;", line):
+            successors[i] = set()
+        elif warp_specialized and re.fullmatch(r"barrier\.sync\s+1;", line):
+            # ConvertWarpSpecializeToLLVM reserves barrier 1 for its dispatch
+            # loop. Check cycles within one worker invocation, excluding the
+            # outer dispatcher cycle that necessarily synchronizes workers.
+            successors[i] = set()
+            dispatch_boundaries.append(i)
+    if warp_specialized:
+        assert dispatch_boundaries, "Expected warp-specialization dispatch rendezvous"
+
+    def on_cycle(start):
+        pending = list(successors[start])
+        visited = set()
+        while pending:
+            node = pending.pop()
+            if node == start:
+                return True
+            if node not in visited:
+                visited.add(node)
+                pending.extend(successors[node])
+        return False
+
+    assert any(on_cycle(branch) for branch in branches), "Expected a polling loop"
+    for i, line in enumerate(lines):
+        if any(op in line for op in ("bar.sync", "barrier.sync", "bar.warp.sync", "bar.red", "barrier.red", "shfl.sync",
+                                     "vote.sync")):
+            assert not on_cycle(i), "Collective instruction inside a polling loop"
