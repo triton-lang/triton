@@ -11,6 +11,7 @@ import triton.language as tl
 from triton import CompilationError
 
 from triton._internal_testing import (
+    assert_no_collectives_in_ptx_loop,
     is_compile_warmup,
     is_cuda,
     is_ampere_or_newer,
@@ -7605,7 +7606,9 @@ def test_fabric_wait_pending(aborted, num_warps, blocking, monitor, device):
     buffer = _make_fabric_buffer(device)
     out = torch.empty_like(buffer.ptr)
     success = torch.empty(64, dtype=torch.bool, device=device)
-    kernel[(2, )](buffer, out, success, aborted, blocking, monitor, num_warps=num_warps)
+    compiled = kernel[(2, )](buffer, out, success, aborted, blocking, monitor, num_warps=num_warps)
+    if not compiled.metadata.instrumentation_mode:
+        assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
     expected = torch.full_like(out, -1) if aborted else torch.arange(64, device=device, dtype=out.dtype) + 17
     torch.testing.assert_close(out, expected)
     assert success.tolist() == [not aborted] * 64
@@ -7772,7 +7775,9 @@ def test_fabric_store_wait_nonblocking_poll_loop(worker_warps, device):
     buffer = _make_fabric_buffer(device, send_count=6, sends_completed=4)
     started = torch.zeros(1, dtype=torch.int32, device=device)
     out = torch.zeros(128, dtype=torch.bool, device=device)
-    kernel[(2, )](buffer, started, out, worker_warps)
+    compiled = kernel[(2, )](buffer, started, out, worker_warps)
+    if not compiled.metadata.instrumentation_mode:
+        assert_no_collectives_in_ptx_loop(compiled.asm["ptx"], warp_specialized=bool(worker_warps))
     assert out.all().item()
     assert started.item() == 1
     assert buffer.state.send_count.item() == 6
@@ -7808,7 +7813,9 @@ def test_fabric_submit_pending(aborted, head, device):
     buffer.queue.head.fill_(head)
     buffer.queue.tail.fill_(head + 7)
     out = torch.full((128, ), aborted, dtype=torch.bool, device=device)
-    kernel[(2, )](buffer, out, aborted, head)
+    compiled = kernel[(2, )](buffer, out, aborted, head)
+    if not compiled.metadata.instrumentation_mode:
+        assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
     assert out.tolist() == [not aborted] * 128
     assert buffer.queue.head.item() == (head if aborted else head + 1)
     assert buffer.queue.cached_head.item() == (head if aborted else head + 1)
@@ -7897,3 +7904,117 @@ def test_fabric_submit_one_request_per_region(op, aborted, worker_warps, capacit
     if op != "ack":
         assert sorted(records) == [(4 * (index + 2), 4 * (index + 1), 0 if op == "zero_send" else 28)
                                    for index in range(nrequests)]
+
+
+@pytest.mark.parametrize("kind", ["recv", "ack", "send", "abort", "submit", "arrive"])
+@pytest.mark.parametrize("num_warps", [1, 4])
+@pytest.mark.parametrize("width", [1, 32, 64, 128])
+def test_fabric_thread_regions_codegen(kind, num_warps, width, device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(Argument, Out, iterations, KIND: ttgl.constexpr, WIDTH: ttgl.constexpr):
+        buffer = fabric.bind(Argument)
+        total = 0
+        for _ in range(iterations):
+            if KIND == "recv":
+                ready = fabric.barrier.wait(buffer.recv_barrier, blocking=False, consume=False)
+            elif KIND == "ack":
+                ready = fabric.barrier.wait(buffer.ack_barrier, blocking=False, consume=False)
+            elif KIND == "send":
+                ready = buffer.store_wait(blocking=False)
+            elif KIND == "abort":
+                ready = not buffer.is_aborted()
+            elif KIND == "submit":
+                ready = buffer.async_store(buffer.ptr, 1)
+            else:
+                ready = fabric.barrier.arrive(buffer.peer.ack_barrier)
+            total += ready.to(ttgl.int32)
+        if WIDTH == 1:
+            ttgl.store(Out, total)
+        else:
+            offsets = ttgl.arange(0, WIDTH, layout=ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0]))
+            ttgl.store(Out + offsets, total)
+
+    buffer = _make_fabric_buffer(device, recv_lock=1, ack_lock=1)
+    out = torch.empty(width, dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](buffer, out, 3, kind, width, num_warps=num_warps)
+    assert out.tolist() == [3] * width
+    assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
+    assert (compiled.metadata.shared > 0) == (num_warps > 1 and width > 32)
+
+
+@pytest.mark.parametrize("atomic", [False, True])
+def test_thread_regions_async_wait_scalar_store(atomic, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(In, Out, Flag, ATOMIC: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        offsets = ttgl.arange(0, 128, layout=layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        async_copy.async_load(smem, In + offsets)
+        async_copy.commit_group()
+        async_copy.wait_group(0)
+        if ATOMIC:
+            ttgl.atomic_store(Flag, 1, sem="relaxed")
+        else:
+            ttgl.store(Flag, 1)
+        values = smem.load(layout)
+        ttgl.store(Out + offsets, values)
+
+    data = torch.arange(128, device=device, dtype=torch.int32)
+    out = torch.empty_like(data)
+    flag = torch.zeros((), device=device, dtype=torch.int32)
+    kernel[(1, )](data, out, flag, atomic, num_warps=4)
+    torch.testing.assert_close(out, data)
+    assert flag.item() == 1
+
+
+@pytest.mark.parametrize("call_depth", [0, 1, 2], ids=["inline", "noinline", "transitive"])
+def test_thread_regions_map_elementwise_callees(call_depth, device, fresh_knobs):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+    fresh_knobs.compilation.instrumentation_mode = ""
+    # Map calls currently lack the debug locations required for noinline callees.
+    fresh_knobs.compilation.disable_line_info = call_depth > 0
+
+    @gluon.jit
+    def conditional_load(pointer, enabled):
+        if enabled:
+            value = ttgl.load(pointer)
+        else:
+            value = 0
+        return value
+
+    @gluon.jit(noinline=True)
+    def noinline_load(pointer, enabled):
+        return conditional_load(pointer, enabled)
+
+    @gluon.jit(noinline=True)
+    def forward_load(pointer, enabled):
+        return noinline_load(pointer, enabled)
+
+    callback = (conditional_load, noinline_load, forward_load)[call_depth]
+
+    @gluon.jit
+    def kernel(In, Out):
+        value = ttgl.atomic_load(In, sem="relaxed")
+        ttgl.store(Out + 128, value)
+        offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        values = ttgl.map_elementwise(callback, In + offsets, offsets % 2 == 0)
+        ttgl.store(Out + offsets, values)
+
+    offsets = torch.arange(128, device=device, dtype=torch.int32)
+    values = offsets * 3 + 7
+    output = torch.empty(129, device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](values, output, num_warps=4)
+
+    torch.testing.assert_close(output[:128], torch.where(offsets % 2 == 0, values, 0))
+    assert output[128].item() == values[0].item()
+    assert compiled.asm["ttgir"].count("noinline = true") >= call_depth
+    # The scalar atomic/store outside the map should still avoid a broadcast.
+    assert compiled.metadata.shared == 0

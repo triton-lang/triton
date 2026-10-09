@@ -253,6 +253,75 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct ThreadPredicateOpConversion
+    : public ConvertOpToLLVMPattern<ThreadPredicateOp> {
+  ThreadPredicateOpConversion(LLVMTypeConverter &converter,
+                              const TargetInfoBase &targetInfo,
+                              PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(ThreadPredicateOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *ctx = op.getContext();
+    llvm::MapVector<StringAttr, int32_t> masks;
+    masks[StringAttr::get(ctx, "lane")] = op.getDomain().getLane();
+    masks[StringAttr::get(ctx, "warp")] = op.getDomain().getWarp();
+    Value predicate =
+        emitRedundantThreadPredicate(masks, rewriter, op.getLoc(), targetInfo);
+    if (!predicate)
+      predicate = TritonLLVMOpBuilder(op.getLoc(), rewriter).true_val();
+    rewriter.replaceOp(op, predicate);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
+struct ThreadHandoffOpConversion
+    : public ConvertOpToLLVMPattern<ThreadHandoffOp> {
+  ThreadHandoffOpConversion(LLVMTypeConverter &converter,
+                            const TargetInfoBase &targetInfo,
+                            PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(ThreadHandoffOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value result = adaptor.getSrc();
+    auto source = op.getSource();
+    auto destination = op.getDestination();
+    if (source == destination) {
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    auto loc = op.getLoc();
+    if (source.getWarp() == destination.getWarp()) {
+      result = shuffleFromCanonicalLane(loc, result, source.getLane(), rewriter,
+                                        targetInfo);
+    } else {
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      // Every source domain contains lane zero of warp zero. Publish just that
+      // copy even when other source threads also hold the scalar.
+      llvm::MapVector<StringAttr, int32_t> masks;
+      masks[StringAttr::get(op.getContext(), "lane")] =
+          lookupThreadsPerWarp(rewriter) - 1;
+      masks[StringAttr::get(op.getContext(), "warp")] = lookupNumWarps(op) - 1;
+      Value predicate =
+          emitRedundantThreadPredicate(masks, rewriter, loc, targetInfo);
+      result = broadcastScalarResult(op, result.getType(), result, rewriter, b,
+                                     predicate, targetInfo);
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
 class BarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::BarrierOp> {
 public:
@@ -542,8 +611,8 @@ struct AtomicLoadOpConversion
     Type valueElemTy =
         getTypeConverter()->convertType(getElementTypeOrSelf(resultTy));
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
-    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
-                                                         loc, targetInfo);
+    Value threadPred =
+        ttg::emitMemoryThreadPredicate(op, freeVarMasks, rewriter, targetInfo);
     SmallVector<Value> resultVals;
     resultVals.reserve(ptrElements.size());
 
@@ -600,8 +669,8 @@ struct AtomicStoreOpConversion
       maskElements =
           unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
-    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
-                                                         loc, targetInfo);
+    Value threadPred =
+        ttg::emitMemoryThreadPredicate(op, freeVarMasks, rewriter, targetInfo);
     if (op.getSem() == MemSemantic::RELEASE)
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
                             syncScope);
@@ -644,6 +713,8 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BarrierOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<ThreadPredicateOpConversion, ThreadHandoffOpConversion>(
+      typeConverter, targetInfo, benefit);
   patterns.add<AtomicLoadOpConversion>(typeConverter, targetInfo,
                                        axisInfoAnalysis, benefit);
   patterns.add<AtomicPollOpConversion>(typeConverter, targetInfo, benefit);

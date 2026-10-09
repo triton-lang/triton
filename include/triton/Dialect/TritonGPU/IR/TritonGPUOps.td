@@ -56,6 +56,63 @@ def TTG_InlineAsmOp : TTG_Op<"inline_asm", [
   let hasVerifier = 1;
 }
 
+// These operations are introduced after logical control flow has been assigned
+// a physical execution domain. They do not change tensor placement layouts.
+def TTG_ThreadPredicateOp : TTG_Op<"thread_predicate"> {
+  let summary = "select the threads in a compiler-generated execution domain";
+  let description = [{
+    This operation marks entry into a restricted thread region and executes in
+    the enclosing domain before its branch. Its conservative effects let
+    synchronization analysis finish pending waits before entering the region.
+    It must not be speculated, merged, or eliminated before that analysis.
+  }];
+  let arguments = (ins ThreadDomainAttr:$domain);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$domain attr-dict";
+  let hasVerifier = 1;
+}
+
+def TTG_ThreadScopeOp : TTG_Op<"thread_scope", [
+  RecursiveMemoryEffects,
+  DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>
+]> {
+  let summary = "preserve a compiler-generated single-thread scope during lowering";
+  let description = [{
+    The body executes unconditionally within an enclosing guard that selects
+    the canonical thread. Entry/exit synchronization remains outside the guard.
+    This wrapper survives control-flow lowering so memory operations can query
+    their enclosing scope, and is inlined after memory operations are lowered.
+  }];
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let assemblyFormat = "(`->` `(` type($results)^ `)`)? $body attr-dict";
+}
+
+def TTG_ThreadYieldOp : TTG_Op<"thread_yield", [
+  Pure, Terminator, ReturnLike, HasParent<"ThreadScopeOp">
+]> {
+  let summary = "yield results from a single-thread scope";
+  let arguments = (ins Variadic<AnyType>:$values);
+  let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
+}
+
+def TTG_ThreadHandoffOp : TTG_Op<"thread_handoff", [SameOperandsAndResultType]> {
+  let summary = "distribute a scalar at the boundary of a thread region";
+  let description = [{
+    The source scalar is available in `source` and is copied to `destination`.
+    Both domains are relative to the enclosing warp-specialized partition.
+    The destination may only widen the source domain. Lane transfers execute
+    with every lane of the destination warps participating. Cross-warp transfers
+    execute in the full enclosing domain and return a fully distributed scalar.
+    This operation may synchronize and must not be speculated or eliminated.
+  }];
+  let arguments = (ins TT_Type:$src, ThreadDomainAttr:$source,
+                       ThreadDomainAttr:$destination);
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = "$src $source `->` $destination attr-dict `:` type($src)";
+  let hasVerifier = 1;
+}
+
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
                                   SameOperandsAndResultElementType,
