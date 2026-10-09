@@ -484,11 +484,53 @@ bool ScanLoweringHelper::isSupported() {
                                         {axisDim});
 }
 
+unsigned ScanLoweringHelper::getInterWarpScanGroupSize() const {
+  if (!op || !interWarpScanLayout)
+    return 0;
+  auto scanOp = op;
+  auto *ctx = scanOp.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  const auto &layout = *interWarpScanLayout;
+  if (!layout.sublayoutIsZero({kLane}, {axisDim}) ||
+      !layout.sublayoutIsZero({kBlock},
+                              llvm::to_vector(layout.getOutDimNames())))
+    return 0;
+  unsigned words = 0;
+  for (Type type : scanOp.getElementTypes()) {
+    if (!type.isIntOrFloat() || type.getIntOrFloatBitWidth() < 8)
+      return 0;
+    words += llvm::divideCeil(type.getIntOrFloatBitWidth(), 32u);
+  }
+  // Group long register-only scans when their replicated totals exceed 128
+  // logical 32-bit words per thread. Keep the full shared table within 64 KiB.
+  // Eight totals keep a mixed f32/i64 group at 24 logical register words.
+  if (layout.getOutDimSize(axisDim) < 32 ||
+      layout.getInDimSize(kReg) * words <= 128 ||
+      getGroupedInterWarpScratchConfig().sizeInBytes > 64 * 1024)
+    return 0;
+  return 8;
+}
+
+LayoutConversionScratchConfig
+ScanLoweringHelper::getGroupedInterWarpScratchConfig() const {
+  auto scanOp = op;
+  return getLayoutConversionScratchConfig(
+      *interWarpTotalsLayout, *interWarpScanLayout, scanOp.getElementTypes(),
+      [](const LinearLayout &src, const LinearLayout &, unsigned) {
+        return src.getTotalOutDimSize();
+      });
+}
+
 unsigned ScanLoweringHelper::getScratchSizeInBytes(
     GetNumScratchElemsFn numScratchElemsGetter) {
   if (!interWarpTotalsLayout)
     return 0;
   assert(op && "scratch sizing requires a scan operation");
+  if (getInterWarpScanGroupSize())
+    return getGroupedInterWarpScratchConfig().sizeInBytes;
   return getLayoutConversionScratchConfig(
              *interWarpTotalsLayout, *interWarpScanLayout, op.getElementTypes(),
              numScratchElemsGetter)

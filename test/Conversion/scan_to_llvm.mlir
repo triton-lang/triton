@@ -22,6 +22,8 @@
 // RUN: triton-opt %t/register-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=REGISTER-TOTALS
 
 // RUN: triton-opt %t/boundary-carry-owners.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=BOUNDARY-OWNERS
+// RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS
+// RUN: triton-opt %t/interwarp-groups.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-INTERWARP-GROUPS
 
 //--- scan.mlir
 
@@ -835,4 +837,33 @@ tt.func private @test_scan_preserve_boundary_carry_owners(%arg: tensor<2048xi32,
   }) : (tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes>
   tt.return %result : tensor<2048xi32, #boundary_prefixes>
 }
+}
+
+//--- interwarp-groups.mlir
+
+#columns = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+// Both operands share one store-to-load barrier and retain their complete table.
+// INTERWARP-GROUPS: ttg.shared = 49152 : i32
+// INTERWARP-GROUPS-LABEL: llvm.func {{.*}}@test_scan_interwarp_groups(
+// INTERWARP-GROUPS-NOT: shfl
+// INTERWARP-GROUPS: nvvm.barrier
+// INTERWARP-GROUPS-NOT: {{shfl|nvvm.barrier}}
+// INTERWARP-GROUPS: llvm.return
+// AMD-INTERWARP-GROUPS: ttg.shared = 49152 : i32
+// AMD-INTERWARP-GROUPS-LABEL: llvm.func {{.*}}@test_scan_interwarp_groups(
+// AMD-INTERWARP-GROUPS-NOT: {{ds.bpermute|ds.swizzle|permlane}}
+// AMD-INTERWARP-GROUPS: rocdl.s.barrier
+// AMD-INTERWARP-GROUPS-NOT: {{ds.bpermute|ds.swizzle|permlane|rocdl.s.barrier}}
+// AMD-INTERWARP-GROUPS: llvm.return
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+  tt.func private @test_scan_interwarp_groups(%values: tensor<128x32xf32, #columns>, %keys: tensor<128x32xi64, #columns>) -> (tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>) {
+    %result:2 = "tt.scan"(%values, %keys) <{axis = 0 : i32, reverse = false}> ({
+    ^bb0(%a: f32, %ka: i64, %b: f32, %kb: i64):
+      %same = arith.cmpi eq, %ka, %kb : i64
+      %sum = arith.addf %a, %b : f32
+      %value = arith.select %same, %sum, %b : f32
+      tt.scan.return %value, %kb : f32, i64
+    }) : (tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>) -> (tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>)
+    tt.return %result#0, %result#1 : tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>
+  }
 }
