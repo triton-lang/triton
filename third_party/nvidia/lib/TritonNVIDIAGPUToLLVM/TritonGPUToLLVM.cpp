@@ -5,11 +5,13 @@
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -66,8 +68,28 @@ public:
                triton::gpu::WarpYieldOp,
                triton::gpu::WarpSpecializePartitionsOp,
                triton::gpu::WarpReturnOp>();
+    // Preserve scope ancestry until memory lowering has finished.
+    addLegalOp<triton::gpu::ThreadScopeOp, triton::gpu::ThreadYieldOp>();
   }
 };
+
+void convertThreadScopesToSCF(ModuleOp mod) {
+  IRRewriter rewriter(mod.getContext());
+  mod.walk<WalkOrder::PostOrder>([&](triton::gpu::ThreadScopeOp scope) {
+    for (Block &block : scope.getBody()) {
+      if (auto yield =
+              dyn_cast<triton::gpu::ThreadYieldOp>(block.getTerminator())) {
+        rewriter.setInsertionPoint(yield);
+        rewriter.replaceOpWithNewOp<scf::YieldOp>(yield, yield.getValues());
+      }
+    }
+    rewriter.setInsertionPoint(scope);
+    auto execute = scf::ExecuteRegionOp::create(rewriter, scope.getLoc(),
+                                                scope.getResultTypes());
+    execute.getRegion().takeBody(scope.getBody());
+    rewriter.replaceOp(scope, execute.getResults());
+  });
+}
 
 void createSharedMemoryGlobal(ModuleOp mod, LLVMTypeConverter &typeConverter) {
   OpBuilder builder(mod.getBodyRegion());
@@ -257,10 +279,13 @@ LogicalResult ConvertTritonGPUToLLVM::lowerTritonGPUOps(
 LogicalResult
 ConvertTritonGPUToLLVM::lowerControlFlow(ModuleOp mod,
                                          LLVMTypeConverter &typeConverter) {
+  convertThreadScopesToSCF(mod);
   MLIRContext *context = mod.getContext();
   NvidiaLLVMConversionTarget target(*context);
   target.addIllegalDialect<cf::ControlFlowDialect>();
+  target.addIllegalOp<scf::ExecuteRegionOp>();
   RewritePatternSet patterns(context);
+  mlir::populateSCFToControlFlowConversionPatterns(patterns);
   mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                         patterns);
   return applyPartialConversion(mod, target, std::move(patterns));
