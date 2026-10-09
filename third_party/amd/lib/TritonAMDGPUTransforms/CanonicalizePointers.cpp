@@ -1436,6 +1436,17 @@ public:
   }
 };
 
+static SmallVector<int64_t> getYieldFatPtrOffsets(scf::YieldOp yieldOp) {
+  SmallVector<int64_t> offsets;
+  auto attr = yieldOp->getDiscardableAttr(kSCFIfOpYieldFatPtrOffsets);
+  if (!attr)
+    return offsets;
+  auto indices = llvm::dyn_cast<DenseI64ArrayAttr>(attr);
+  assert(indices && "expected fat ptr indices to be a DenseI64ArrayAttr");
+  llvm::append_range(offsets, indices.asArrayRef());
+  return offsets;
+}
+
 /// Rewrite result type only after both arms have been visited.
 /// We contrive this to happen, even though DialectConversion does a PreOrder
 /// walk, by checking for two attributes in the ConversionTarget
@@ -1446,10 +1457,77 @@ public:
   LogicalResult
   matchAndRewrite_(scf::IfOp ifOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
-    assert(ifOp.thenYield()->hasAttr(kSCFIfOpYieldFatPtrOffsets) &&
-           "expected then yield to report fat ptr indices");
-
     bool withElseRegion = ifOp.getNumRegions() > 1;
+
+    // A select between different bases under a tensor condition materializes
+    // a full tensor of pointers (see ConvertArithSelectOp), so one arm's
+    // yield can carry a plain pointer where the other arm still carries a
+    // (base, offset) pair. Materialize the fat side of each such result so
+    // both yields agree; consumers accept materialized pointers already.
+    if (withElseRegion) {
+      scf::YieldOp thenYield = ifOp.thenYield();
+      scf::YieldOp elseYield = ifOp.elseYield();
+      SmallVector<int64_t> thenOffsets = getYieldFatPtrOffsets(thenYield);
+      SmallVector<int64_t> elseOffsets = getYieldFatPtrOffsets(elseYield);
+
+      SmallVector<Value> thenOperands;
+      SmallVector<Value> elseOperands;
+      SmallVector<int64_t> normalizedOffsets;
+      bool mixed = false;
+      int64_t thenIdx = 0;
+      int64_t elseIdx = 0;
+      for (unsigned r = 0, e = ifOp.getNumResults(); r != e; ++r) {
+        bool thenFat = llvm::is_contained(thenOffsets, thenIdx);
+        bool elseFat = llvm::is_contained(elseOffsets, elseIdx);
+        assert((!(thenFat || elseFat) ||
+                isa<tt::PointerType>(
+                    getElementTypeOrSelf(ifOp.getResult(r).getType()))) &&
+               "fat ptr yield for a non-pointer result");
+        if (thenFat != elseFat) {
+          mixed = true;
+          auto materialize = [&](scf::YieldOp yieldOp, int64_t start) {
+            Value base = yieldOp.getOperand(start);
+            Value offset = yieldOp.getOperand(start + 1);
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPoint(yieldOp);
+            return createTensorPointer(rewriter, base, offset, yieldOp.getLoc(),
+                                       fatPtrs.at({base, offset}));
+          };
+          thenOperands.push_back(thenFat ? materialize(thenYield, thenIdx)
+                                         : thenYield.getOperand(thenIdx));
+          elseOperands.push_back(elseFat ? materialize(elseYield, elseIdx)
+                                         : elseYield.getOperand(elseIdx));
+        } else {
+          if (thenFat)
+            normalizedOffsets.push_back(thenOperands.size());
+          thenOperands.push_back(thenYield.getOperand(thenIdx));
+          elseOperands.push_back(elseYield.getOperand(elseIdx));
+          if (thenFat) {
+            thenOperands.push_back(thenYield.getOperand(thenIdx + 1));
+            elseOperands.push_back(elseYield.getOperand(elseIdx + 1));
+          }
+        }
+        thenIdx += thenFat ? 2 : 1;
+        elseIdx += elseFat ? 2 : 1;
+      }
+
+      if (mixed) {
+        auto resetYield = [&](scf::YieldOp yieldOp, ArrayRef<Value> operands) {
+          rewriter.modifyOpInPlace(yieldOp, [&] {
+            yieldOp.getResultsMutable().clear();
+            yieldOp.getResultsMutable().append(operands);
+            if (normalizedOffsets.empty())
+              yieldOp->removeDiscardableAttr(kSCFIfOpYieldFatPtrOffsets);
+            else
+              yieldOp->setDiscardableAttr(
+                  kSCFIfOpYieldFatPtrOffsets,
+                  rewriter.getDenseI64ArrayAttr(normalizedOffsets));
+          });
+        };
+        resetYield(thenYield, thenOperands);
+        resetYield(elseYield, elseOperands);
+      }
+    }
 
 #ifndef NDEBUG
     if (withElseRegion) {
@@ -1496,10 +1574,8 @@ public:
     // effectively 1:N type conversion and thus only the types are important
     // (and for `scf.if` the types along both `then`/`else` branches must be the
     // same).
-    ArrayRef<int64_t> yieldPtrOffsets =
-        llvm::cast<DenseI64ArrayAttr>(
-            newIfOp.thenYield()->getDiscardableAttr(kSCFIfOpYieldFatPtrOffsets))
-            .asArrayRef();
+    SmallVector<int64_t> yieldPtrOffsets =
+        getYieldFatPtrOffsets(newIfOp.thenYield());
     for (int64_t idx : yieldPtrOffsets) {
       Value thenFatPtrBase = newIfOp.thenYield().getOperand(idx);
       Value thenFatPtrOffset = newIfOp.thenYield().getOperand(idx + 1);
