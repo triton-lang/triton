@@ -111,8 +111,8 @@ struct DotI8OpConversion
 
     auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dEncoding);
     if (!mmaLayout || mmaLayout.getVersionMajor() != 2 || mmaLayout.isTuring())
-      return rewriter.notifyMatchFailure(op,
-                                         "DotI8Op requires an Ampere MMA layout");
+      return rewriter.notifyMatchFailure(
+          op, "DotI8Op requires an Ampere MMA layout");
     return convertMMA(op, adaptor, getTypeConverter(), rewriter);
   }
 };
