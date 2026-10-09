@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import math
 from warnings import warn
 from contextlib import contextmanager
@@ -1634,6 +1635,7 @@ else:
 
 
 _AGGREGATE_MISSING = object()
+_aggregate_semantic_context = contextvars.ContextVar("_aggregate_semantic_context", default=None)
 
 
 def _resolve_aggregate_fields(cls):
@@ -1714,6 +1716,11 @@ def _aggregate(cls):
             return super().__new__(this_cls)
 
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
+            # Nested aggregate constructors invoked from a user-defined
+            # constructor do not go through the AST code generator, so inherit
+            # the active semantic context when one was not passed explicitly.
+            if _semantic is None:
+                _semantic = _aggregate_semantic_context.get()
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
             # Track init phase so __setattr__ accepts writes during __init__
@@ -1729,7 +1736,11 @@ def _aggregate(cls):
                     extra_kwargs["_semantic"] = _semantic
                 if "_generator" in inspect.signature(init).parameters:
                     extra_kwargs["_generator"] = _generator
-            init(instance, *args, **extra_kwargs, **kwargs)
+            semantic_token = _aggregate_semantic_context.set(_semantic)
+            try:
+                init(instance, *args, **extra_kwargs, **kwargs)
+            finally:
+                _aggregate_semantic_context.reset(semantic_token)
 
             # Require that the user-defined constructor initialized all fields.
             for name in all_annotations.keys():

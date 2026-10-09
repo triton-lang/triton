@@ -1877,6 +1877,27 @@ def test_aggregate_tensor_field_rejects_scalar_on_host():
         _AggScalarFieldConstexprInit(tl.constexpr(1))
 
 
+@triton.aggregate
+class _NestedAggScalarField:
+    val: tl.tensor
+
+
+@triton.aggregate
+class _NestedAggConstructor:
+    inner: _NestedAggScalarField
+
+    def __init__(self, val):
+        self.inner = _NestedAggScalarField(val)
+
+
+def test_aggregate_nested_constructor_materializes_scalar():
+    @triton.jit
+    def kernel(val):
+        anchor(_NestedAggConstructor(val).inner.val)
+
+    run_parser(kernel, args=(1,))
+
+
 def test_dot_fp16_accumulator():
 
     @triton.jit
