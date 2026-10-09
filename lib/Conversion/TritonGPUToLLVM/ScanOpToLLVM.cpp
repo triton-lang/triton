@@ -147,6 +147,21 @@ private:
     values = transposeValues(operands);
   }
 
+  // Broadcast each segment carry to its thread totals and restore their owners.
+  ScanValues convertScanCarries(triton::ScanOp op, ArrayRef<ScanCarry> carries,
+                                const LinearLayout &src,
+                                const LinearLayout &dst,
+                                ConversionPatternRewriter &rewriter) const {
+    auto kReg = StringAttr::get(op.getContext(), "register");
+    unsigned numRegs = src.getInDimSize(kReg) / carries.size();
+    ScanValues values;
+    for (const auto &carry : carries)
+      for (unsigned r = 0; r < numRegs; ++r)
+        values.push_back(carry.values);
+    convertScanValues(op, values, src, dst, rewriter);
+    return values;
+  }
+
   // Scan each thread-local segment in traversal order, preserving combiner
   // operand order for both forward and reverse scans.
   void scanWithinThreads(triton::ScanOp op, ScanValues &values,
@@ -337,15 +352,30 @@ private:
                                      intraWarpTotalsLayout, numSegments, laneId,
                                      warpId, rewriter);
     if (!interWarpCarries.empty()) {
-      unsigned segmentsPerWarp = carries.size() / interWarpCarries.size();
+      auto boundaryCarries = convertScanCarries(
+          op, interWarpCarries, scanLayout, intraWarpTotalsLayout, rewriter);
+      auto *ctx = op.getContext();
+      auto kReg = StringAttr::get(ctx, "register");
+      auto kLane = StringAttr::get(ctx, "lane");
+      auto kWarp = StringAttr::get(ctx, "warp");
+      auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
+      auto axisLayout =
+          intraWarpTotalsLayout.sublayout({kReg, kLane, kWarp}, {axis});
+      unsigned boundary =
+          op.getReverse() ? axisLayout.getOutDimSize(axis) - 1 : 0;
       for (auto [r, carry] : llvm::enumerate(carries)) {
-        const auto &interWarpCarry = interWarpCarries[r / segmentsPerWarp];
+        const auto &interWarpCarry = boundaryCarries[r];
         // The first thread segment has no preceding local total. Use the
         // inter-warp carry there, and leave the scan boundary untouched.
         for (auto [value, interWarpValue] :
-             llvm::zip(carry.values, interWarpCarry.values))
+             llvm::zip(carry.values, interWarpCarry))
           value = b.select(carry.pred, value, interWarpValue);
-        carry.pred = b.or_(carry.pred, interWarpCarry.pred);
+        Value index =
+            applyLinearLayout(
+                op.getLoc(), rewriter, axisLayout,
+                {{kReg, b.i32_val(r)}, {kLane, laneId}, {kWarp, warpId}})[0]
+                .second;
+        carry.pred = b.icmp_ne(index, b.i32_val(boundary));
       }
     }
     applySegmentCarries(op, values, carries, rewriter,

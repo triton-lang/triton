@@ -321,23 +321,27 @@ tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
 #tuple = #ttg.linear<{register = [[8, 0], [16, 0], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4]], warp = [[4, 0], [0, 0]], block = []}>
 #single_tile = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-// The i32 operand uses two scratch tiles and the i64 operand uses four.
+// The i32 operand uses one scratch tile and the i64 operand uses two.
 // Each operand conversion synchronizes before loads and before scratch reuse.
-// TUPLE: ttg.shared = 1024 : i32
+// TUPLE: ttg.shared = 2048 : i32
 // TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
-// TUPLE: llvm.getelementptr %arg2[512]
-// TUPLE-COUNT-3: nvvm.barrier
+// TUPLE: llvm.getelementptr %arg2[1024]
+// TUPLE: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
-// TUPLE-COUNT-7: nvvm.barrier
+// TUPLE: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// TUPLE-COUNT-2: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
 // TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.return
-// AMD-TUPLE: ttg.shared = 1024 : i32
+// AMD-TUPLE: ttg.shared = 2048 : i32
 // AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
-// AMD-TUPLE: llvm.getelementptr %arg2[512]
-// AMD-TUPLE-COUNT-3: rocdl.s.barrier
+// AMD-TUPLE: llvm.getelementptr %arg2[1024]
+// AMD-TUPLE: rocdl.s.barrier
 // AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
-// AMD-TUPLE-COUNT-7: rocdl.s.barrier
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// AMD-TUPLE-COUNT-2: rocdl.s.barrier
 // AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
 // AMD-TUPLE-NOT: rocdl.s.barrier
 // AMD-TUPLE: llvm.return
@@ -588,10 +592,9 @@ tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #conver
 #parallel_totals = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // Replicate four segment totals in each warp and scan them in registers.
-// Two register groups use three adds each, plus 40 intra-warp adds and eight
-// carry adds, for 54 in total.
+// Register scans and carry propagation require 33 adds in total.
 // COLUMNS-LABEL: llvm.func {{.*}}@test_scan_parallel_totals(
-// COLUMNS-COUNT-54: llvm.fadd
+// COLUMNS-COUNT-33: llvm.fadd
 // COLUMNS-NOT: llvm.fadd
 // COLUMNS: llvm.return
 tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals> {
@@ -779,14 +782,13 @@ tt.func private @test_scan_shuffle_down_gapped(%arg: tensor<4x8xi32, #gapped>) -
 
 #parallel_rows = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Four of the five lane axis bits move to registers. Each of the two register
-// groups holds 16 adjacent totals and needs one remaining lane-scan round.
+// All five lane axis bits move to registers. Each thread scans 32 adjacent
+// totals without a lane-scan round.
 // REGISTER-TOTALS: ttg.shared = 0 : i32
-// REGISTER-TOTALS-LABEL: llvm.func {{.*}}@test_scan_register_totals_cap(
-// REGISTER-TOTALS-COUNT-2: nvvm.shfl.sync up
+// REGISTER-TOTALS-LABEL: llvm.func {{.*}}@test_scan_register_totals_all_lanes(
 // REGISTER-TOTALS-NOT: nvvm.shfl.sync up
 // REGISTER-TOTALS: llvm.return
-tt.func private @test_scan_register_totals_cap(%arg: tensor<128x32xi32, #parallel_rows>) -> tensor<128x32xi32, #parallel_rows> {
+tt.func private @test_scan_register_totals_all_lanes(%arg: tensor<128x32xi32, #parallel_rows>) -> tensor<128x32xi32, #parallel_rows> {
   %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = false}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
@@ -795,13 +797,13 @@ tt.func private @test_scan_register_totals_cap(%arg: tensor<128x32xi32, #paralle
   tt.return %result : tensor<128x32xi32, #parallel_rows>
 }
 
-// Three existing scan register bits leave room for one promoted lane bit.
-// Each of two register groups scans 16 lanes in four rounds.
-// REGISTER-TOTALS-LABEL: llvm.func {{.*}}@test_scan_existing_register_totals_cap(
-// REGISTER-TOTALS-COUNT-8: nvvm.shfl.sync up
+// Three existing scan register bits and two promoted bits give 32 adjacent
+// totals per thread. Eight lanes require three scan rounds.
+// REGISTER-TOTALS-LABEL: llvm.func {{.*}}@test_scan_existing_register_totals(
+// REGISTER-TOTALS-COUNT-3: nvvm.shfl.sync up
 // REGISTER-TOTALS-NOT: nvvm.shfl.sync up
 // REGISTER-TOTALS: llvm.return
-tt.func private @test_scan_existing_register_totals_cap(%arg: tensor<16x256xi32, #parallel_rows>) -> tensor<16x256xi32, #parallel_rows> {
+tt.func private @test_scan_existing_register_totals(%arg: tensor<16x256xi32, #parallel_rows>) -> tensor<16x256xi32, #parallel_rows> {
   %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = false}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
