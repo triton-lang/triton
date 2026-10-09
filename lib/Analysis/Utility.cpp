@@ -383,11 +383,10 @@ LinearLayout ScanLoweringHelper::buildIntraWarpTotalsLayout() const {
 }
 
 LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
-  // Place contiguous segment totals in registers, followed by lanes. Exchange
-  // independent-scan register bases with lane bases to expose up to 16 adjacent
-  // totals per thread. For example, R=[(8,0)], L=[(0,1),(0,2)] becomes
-  // R=[(0,1)], L=[(8,0),(0,2)] for a scan along dimension 1.
-  // Warp ownership is preserved.
+  // Put the segment's axis bits in registers before lanes. Exchange register
+  // bases for other segments or independent scans with available lane bits.
+  // R=[128,256,512], L=[1,2,4,8,16], W=[32,64] becomes
+  // R=[1,2,4], L=[8,16,128,256,512], W=[32,64]. Warp ownership is preserved.
   auto *ctx = intraWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -396,29 +395,23 @@ LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
   auto inSegment = [&](const auto &basis) {
     return basis[axis] && basis[axis] < numSegments;
   };
-  unsigned registerBits = llvm::count_if(bases[kReg], inSegment);
-  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
-  // Inter-warp boundary carries retain the original independent-scan owners.
-  // Exchanging row bases is valid when the entire scan is warp-local.
-  bool warpLocal = warpSegmentSize == originalLayout.getOutDimSize(axisDim);
-  for (; warpLocal && registerBits < 4; ++registerBits) {
-    auto reg = llvm::find_if(
-        bases[kReg], [&](const auto &basis) { return basis[axis] == 0; });
-    auto lane =
-        llvm::min_element(bases[kLane], [&](const auto &a, const auto &b) {
-          unsigned x = inSegment(a) ? a[axis] : numSegments;
-          unsigned y = inSegment(b) ? b[axis] : numSegments;
-          return x < y;
-        });
-    if (reg == bases[kReg].end() || lane == bases[kLane].end() ||
-        !inSegment(*lane))
+  bool exchanged = false;
+  for (auto &reg : bases[kReg]) {
+    if (inSegment(reg))
+      continue;
+    auto lane = llvm::find_if(bases[kLane], inSegment);
+    if (lane == bases[kLane].end())
       break;
-    std::swap(*reg, *lane);
+    std::swap(reg, *lane);
+    exchanged = true;
   }
-  // Promoted axis bits precede register bits for other segments and scans.
   llvm::stable_sort(bases[kReg], [&](const auto &a, const auto &b) {
     return inSegment(a) && !inSegment(b);
   });
+  if (exchanged)
+    llvm::stable_sort(bases[kLane], [&](const auto &a, const auto &b) {
+      return inSegment(a) && !inSegment(b);
+    });
   unsigned next = 1;
   for (auto dim : {kReg, kLane})
     for (auto &basis : bases[dim])
