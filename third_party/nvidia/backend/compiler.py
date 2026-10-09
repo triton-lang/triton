@@ -540,9 +540,9 @@ class CUDABackend(BaseBackend):
         proc = sm_arch_from_capability(capability)
         features = get_features(opt, capability)
         flags = get_llvm_flags()
-        canonicalize_gep = is_enabled(opt, "fpsan")
-        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep,
-                                    sched4reg=opt.sched4reg)
+        enable_fpsan = is_enabled(opt, "fpsan")
+        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, enable_fpsan,
+                                    sched4reg=opt.sched4reg, enable_fpsan=enable_fpsan)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1
