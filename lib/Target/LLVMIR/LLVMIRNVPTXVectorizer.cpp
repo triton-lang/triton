@@ -5,15 +5,18 @@
 #include "LLVMPasses.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Transforms/Utils/Local.h"
 
@@ -60,11 +63,19 @@ struct LoadedAccumulator {
   unsigned lane;
 };
 
-struct ArithmeticPlan {
-  unsigned scalarCost = 0;
-  unsigned vectorCost = 0;
-  SmallVector<InstructionPair, 8> instructions;
-  SmallVector<ValuePair, 8> packedInputs;
+struct PackNode {
+  ValuePair values{nullptr, nullptr};
+  Instruction *operation = nullptr;
+  Instruction *insertion = nullptr;
+  SmallVector<unsigned, 3> operands;
+  bool horizontal = false;
+  Value *emitted = nullptr;
+};
+
+struct PackPlan {
+  SmallVector<PackNode, 32> nodes;
+  DenseMap<ValuePair, unsigned> cached;
+  DenseSet<Instruction *> replaced;
   SmallVector<PackedLoopCarry, 4> loopCarries;
 };
 
@@ -84,11 +95,20 @@ public:
     return supportsPackedType(elementType);
   }
 
+  bool supportsPackedIntegerMax(Type *elementType) const {
+    return computeCapability >= 100 && elementType->isIntegerTy(16);
+  }
+
   // Packing a 32-bit register tuple is cheaper than floating-point arithmetic,
   // but still consumes register bandwidth and can extend live ranges.
   unsigned getScalarOperationCost(const Instruction &instruction,
                                   unsigned fusedConversionChainLength) const {
     Type *elementType = instruction.getType();
+    if (isa<BitCastInst>(instruction) ||
+        instruction.getOpcode() == Instruction::FNeg)
+      return 0;
+    if (isa<FPTruncInst>(instruction))
+      return 2;
     // Scalar zero adds can use the zero register, without keeping a packed
     // constant live. Signed-zero semantics can prevent eliminating these adds.
     if (isFloatZeroAdd(instruction))
@@ -101,6 +121,10 @@ public:
   }
   unsigned getPackedOperationCost(const Instruction &instruction,
                                   bool registerChain) const {
+    if (isa<BitCastInst>(instruction) ||
+        (instruction.getOpcode() == Instruction::FNeg &&
+         instruction.getType()->isFloatTy()))
+      return 0;
     // An existing register pair feeding packed arithmetic can use a broadcast
     // zero register without materializing a constant or repacking its result.
     if (registerChain && isFloatZeroAdd(instruction))
@@ -109,11 +133,11 @@ public:
   }
 
   unsigned getPackCost(Type *elementType) const {
-    return elementType->isFloatTy() ? 1 : 2;
+    return elementType->getScalarSizeInBits() == 32 ? 1 : 2;
   }
 
   unsigned getUnpackCost(Type *elementType) const {
-    return elementType->isFloatTy() ? 1 : 2;
+    return elementType->getScalarSizeInBits() == 32 ? 1 : 2;
   }
 
 private:
@@ -140,7 +164,8 @@ private:
 class NVPTXVectorizer {
 public:
   NVPTXVectorizer(Function &function, unsigned computeCapability)
-      : function(function), costModel(computeCapability) {}
+      : function(function), costModel(computeCapability), dominators(function) {
+  }
 
   bool run() {
     collectFusedConversionChains();
@@ -148,11 +173,395 @@ public:
     for (BasicBlock &block : function) {
       changed |= vectorizeInterleavedAccumulators(block);
       changed |= vectorizeArithmetic(block);
+      changed |= vectorizeIntegerMaxReductions(block);
     }
     return changed;
   }
 
 private:
+  static IntrinsicInst *getUnsignedMax(Value *value, BasicBlock &block) {
+    auto *intrinsic = dyn_cast<IntrinsicInst>(value);
+    if (!intrinsic || intrinsic->getParent() != &block ||
+        intrinsic->getIntrinsicID() != Intrinsic::umax ||
+        !intrinsic->getType()->isIntegerTy(16))
+      return nullptr;
+    return intrinsic;
+  }
+
+  static bool collectIntegerMaxLeaves(Value *value, BasicBlock &block,
+                                      SmallVectorImpl<Value *> &leaves) {
+    SmallVector<std::pair<Value *, unsigned>, 32> pending{{value, 0}};
+    while (!pending.empty()) {
+      auto [current, depth] = pending.pop_back_val();
+      if (depth > 256)
+        return false;
+      auto *maximum = getUnsignedMax(current, block);
+      if (maximum && maximum->hasOneUse()) {
+        pending.emplace_back(maximum->getArgOperand(1), depth + 1);
+        pending.emplace_back(maximum->getArgOperand(0), depth + 1);
+      } else {
+        leaves.push_back(current);
+        if (leaves.size() > 1024)
+          return false;
+      }
+    }
+    return true;
+  }
+
+  bool isFreePack(ValuePair values) const {
+    return values.first == values.second ||
+           (isa<Constant>(values.first) && isa<Constant>(values.second)) ||
+           getExtractedVector(values).has_value() || isRegisterTuple(values);
+  }
+
+  bool insertionDominates(Instruction *anchor, Instruction *use) const {
+    return anchor == use || dominators.dominates(anchor, use);
+  }
+
+  std::optional<unsigned> planPack(ValuePair values, Instruction *use,
+                                   PackPlan &plan, unsigned depth = 0,
+                                   Instruction *rootInsertion = nullptr) const {
+    if (values.first->getType() != values.second->getType() ||
+        values.first->getType()->isVectorTy() || plan.nodes.size() >= 4096)
+      return std::nullopt;
+    auto found = plan.cached.find(values);
+    if (found != plan.cached.end()) {
+      PackNode &node = plan.nodes[found->second];
+      if (!insertionDominates(node.insertion, use)) {
+        if (node.operation || !insertionDominates(use, node.insertion) ||
+            !dominators.dominates(values.first, use) ||
+            !dominators.dominates(values.second, use))
+          return std::nullopt;
+        node.insertion = use;
+      }
+      return found->second;
+    }
+
+    PackNode node;
+    node.values = values;
+    node.insertion = use;
+    auto *first = dyn_cast<Instruction>(values.first);
+    auto *second = dyn_cast<Instruction>(values.second);
+    if (!isFreePack(values) && depth < 8 && first && second &&
+        canPair(*first, *second)) {
+      Instruction *last = first->comesBefore(second) ? second : first;
+      Instruction *insertion =
+          rootInsertion ? rootInsertion : last->getNextNode();
+      if (insertion && insertionDominates(insertion, use)) {
+        node.operation = first;
+        node.insertion = insertion;
+        for (unsigned operand = 0; operand < getOperandCount(*first);
+             ++operand) {
+          ValuePair inputs{first->getOperand(operand),
+                           second->getOperand(operand)};
+          if (auto carry = getLoopCarry(inputs, *first, *second)) {
+            if (!plan.cached.contains(inputs)) {
+              unsigned index = plan.nodes.size();
+              PackNode input;
+              input.values = inputs;
+              input.insertion = insertion;
+              plan.nodes.push_back(input);
+              plan.cached[inputs] = index;
+              plan.loopCarries.push_back(*carry);
+            }
+            node.operands.push_back(plan.cached.lookup(inputs));
+          } else {
+            auto input = planPack(inputs, insertion, plan, depth + 1);
+            if (!input)
+              return std::nullopt;
+            node.operands.push_back(*input);
+          }
+        }
+      }
+    }
+    if (!node.operation && (!dominators.dominates(values.first, use) ||
+                            !dominators.dominates(values.second, use)))
+      return std::nullopt;
+    unsigned index = plan.nodes.size();
+    plan.nodes.push_back(std::move(node));
+    plan.cached[values] = index;
+    return index;
+  }
+
+  SmallVector<char, 64> reachableNodes(const PackPlan &plan, unsigned root) const {
+    SmallVector<char, 64> live(plan.nodes.size(), false);
+    live[root] = true;
+    for (unsigned index = plan.nodes.size(); index-- > 0;)
+      if (live[index])
+        for (unsigned input : plan.nodes[index].operands)
+          live[input] = true;
+    return live;
+  }
+
+  int getPlanCost(const PackPlan &plan, unsigned root,
+                  unsigned outputCost) const {
+    auto live = reachableNodes(plan, root);
+    DenseSet<Instruction *> removed = plan.replaced;
+    DenseSet<Value *> retainedInputs;
+    for (unsigned index = 0; index < plan.nodes.size(); ++index) {
+      const PackNode &node = plan.nodes[index];
+      if (live[index] && !node.operation &&
+          llvm::none_of(plan.loopCarries, [&](const PackedLoopCarry &carry) {
+            return node.values == ValuePair{carry.first, carry.second};
+          })) {
+        retainedInputs.insert(node.values.first);
+        retainedInputs.insert(node.values.second);
+      }
+    }
+    for (unsigned index = plan.nodes.size(); index-- > 0;) {
+      const PackNode &node = plan.nodes[index];
+      if (!live[index] || !node.operation || !node.values.first)
+        continue;
+      for (Value *value : {node.values.first, node.values.second}) {
+        auto *instruction = cast<Instruction>(value);
+        if (!retainedInputs.contains(instruction) &&
+            llvm::all_of(instruction->users(), [&](User *user) {
+              return removed.contains(dyn_cast<Instruction>(user));
+            }))
+          removed.insert(instruction);
+      }
+    }
+    unsigned scalarCost = 0;
+    for (Instruction *instruction : removed)
+      scalarCost += costModel.getScalarOperationCost(
+          *instruction, fusedConversionChainLengths.lookup(instruction));
+    unsigned vectorCost = outputCost;
+    bool materializesInputPair = false;
+    for (unsigned index = 0; index < plan.nodes.size(); ++index) {
+      if (!live[index])
+        continue;
+      const PackNode &node = plan.nodes[index];
+      if (node.operation) {
+        if (node.horizontal) {
+          vectorCost += costModel.getScalarOperationCost(*node.operation, 0) +
+                        costModel.getUnpackCost(node.operation->getType());
+        } else {
+          bool registerChain = llvm::all_of(node.operands, [&](unsigned input) {
+            const PackNode &operand = plan.nodes[input];
+            return operand.operation || isFreePack(operand.values);
+          });
+          vectorCost +=
+              costModel.getPackedOperationCost(*node.operation, registerChain);
+        }
+      } else {
+        bool carried =
+            llvm::any_of(plan.loopCarries, [&](const PackedLoopCarry &carry) {
+              return node.values == ValuePair{carry.first, carry.second};
+            });
+        if (!carried && !isFreePack(node.values)) {
+          vectorCost += costModel.getPackCost(node.values.first->getType());
+          materializesInputPair = true;
+        }
+      }
+    }
+    bool livePackedCarry =
+        llvm::any_of(plan.loopCarries, [&](const PackedLoopCarry &carry) {
+          return live[plan.cached.lookup({carry.first, carry.second})];
+        });
+    bool scalarExit = outputCost != 0 || plan.nodes[root].horizontal;
+    // Require an extra profitability margin for scalar-to-packed-to-scalar
+    // regions: forming a temporary register pair can constrain scheduling.
+    // Live packed carries amortize that boundary.
+    if (materializesInputPair && scalarExit && !livePackedCarry)
+      ++vectorCost;
+    return static_cast<int>(vectorCost) - static_cast<int>(scalarCost);
+  }
+
+  bool isProfitable(PackPlan &plan, unsigned root,
+                    unsigned outputCost = 0) const {
+    int cost = getPlanCost(plan, root, outputCost);
+    unsigned work = 0;
+    for (unsigned index = 0; index < plan.nodes.size(); ++index) {
+      PackNode original = plan.nodes[index];
+      if (!original.operation || !original.values.first ||
+          plan.replaced.contains(cast<Instruction>(original.values.first)) ||
+          plan.replaced.contains(cast<Instruction>(original.values.second)))
+        continue;
+      if (!dominators.dominates(original.values.first, original.insertion) ||
+          !dominators.dominates(original.values.second, original.insertion))
+        continue;
+      work += plan.nodes.size();
+      if (work > 1024 * 1024)
+        break;
+      plan.nodes[index].operation = nullptr;
+      plan.nodes[index].operands.clear();
+      int boundaryCost = getPlanCost(plan, root, outputCost);
+      if (boundaryCost <= cost)
+        cost = boundaryCost;
+      else
+        plan.nodes[index] = std::move(original);
+    }
+    auto live = reachableNodes(plan, root);
+    llvm::erase_if(plan.loopCarries, [&](const PackedLoopCarry &carry) {
+      return !live[plan.cached.lookup({carry.first, carry.second})];
+    });
+    return cost < 0;
+  }
+
+  Value *emitPack(unsigned index, PackPlan &plan) const {
+    PackNode &node = plan.nodes[index];
+    if (node.emitted)
+      return node.emitted;
+    IRBuilder<> builder(node.insertion);
+    if (!node.operation)
+      return node.emitted = buildVector(node.values, builder);
+    SmallVector<Value *, 3> operands;
+    for (unsigned input : node.operands)
+      operands.push_back(emitPack(input, plan));
+    Instruction &operation = *node.operation;
+    if (node.horizontal)
+      return node.emitted = builder.CreateIntMaxReduce(operands.front(), false);
+    if (isa<FPMathOperator>(operation) && node.values.first) {
+      builder.setFastMathFlags(
+          operation.getFastMathFlags() &
+          cast<Instruction>(node.values.second)->getFastMathFlags());
+    }
+    auto *type = FixedVectorType::get(operation.getType(), 2);
+    auto *intrinsic = dyn_cast<IntrinsicInst>(&operation);
+    bool absolute = intrinsic && intrinsic->getIntrinsicID() == Intrinsic::fabs;
+    bool negate16 = operation.getOpcode() == Instruction::FNeg &&
+                    operation.getType()->getScalarSizeInBits() == 16;
+    if (absolute || negate16) {
+      // Packed floating sign operations can canonicalize NaN payloads in PTXAS.
+      // Keep their masks integer even when later InstCombine revisits them.
+      Type *bitsType = builder.getInt32Ty();
+      auto *signature = FunctionType::get(bitsType, {bitsType}, false);
+      auto *mask = InlineAsm::get(signature,
+                                  absolute ? "and.b32 $0, $1, 0x7fff7fff;"
+                                           : "xor.b32 $0, $1, 0x80008000;",
+                                  "=r,r", /*hasSideEffects=*/false);
+      Value *bits = builder.CreateBitCast(operands[0], bitsType);
+      Value *result =
+          builder.CreateCall(signature, mask, {bits}, "nvptx.sign.bits");
+      return node.emitted = builder.CreateBitCast(
+                 result, type, absolute ? "nvptx.abs" : "nvptx.negate");
+    }
+    if (isa<CastInst>(operation))
+      node.emitted = builder.CreateCast(
+          static_cast<Instruction::CastOps>(operation.getOpcode()), operands[0],
+          type, isa<FPTruncInst>(operation) ? "nvptx.narrow" : "nvptx.bits");
+    else if (operation.getOpcode() == Instruction::FNeg)
+      node.emitted = builder.CreateFNeg(operands[0], "nvptx.negate");
+    else if (intrinsic) {
+      StringRef name = intrinsic->getIntrinsicID() == Intrinsic::umax
+                           ? "nvptx.max"
+                           : "nvptx.packed.fma";
+      node.emitted = builder.CreateIntrinsic(intrinsic->getIntrinsicID(),
+                                             {type}, operands, nullptr, name);
+    } else
+      node.emitted = builder.CreateBinOp(
+          static_cast<Instruction::BinaryOps>(operation.getOpcode()),
+          operands[0], operands[1], "nvptx.packed");
+    return node.emitted;
+  }
+
+  unsigned planReductionNode(Instruction *operation,
+                             ArrayRef<unsigned> operands, PackPlan &plan,
+                             bool horizontal = false) const {
+    PackNode node;
+    node.operation = operation;
+    node.insertion = operation;
+    node.operands.append(operands.begin(), operands.end());
+    node.horizontal = horizontal;
+    unsigned index = plan.nodes.size();
+    plan.nodes.push_back(std::move(node));
+    return index;
+  }
+
+  bool vectorizeIntegerMaxReductions(BasicBlock &block) const {
+    if (!costModel.supportsPackedIntegerMax(
+            Type::getInt16Ty(function.getContext())))
+      return false;
+    SmallVector<WeakTrackingVH, 8> roots;
+    for (Instruction &instruction : block) {
+      auto *maximum = getUnsignedMax(&instruction, block);
+      if (maximum && !maximum->use_empty() &&
+          llvm::none_of(maximum->users(), [&](User *user) {
+            return getUnsignedMax(user, block) != nullptr;
+          }))
+        roots.push_back(maximum);
+    }
+    bool changed = false;
+    for (WeakTrackingVH &handle : roots) {
+      auto *root = dyn_cast_or_null<IntrinsicInst>(handle);
+      if (!root)
+        continue;
+      SmallVector<Value *, 64> leaves;
+      if (!collectIntegerMaxLeaves(root->getArgOperand(0), block, leaves) ||
+          !collectIntegerMaxLeaves(root->getArgOperand(1), block, leaves) ||
+          leaves.size() < 4)
+        continue;
+      BasicBlock *inputBlock = nullptr;
+      bool validInputs = true;
+      for (Value *leaf : leaves) {
+        if (isa<Constant>(leaf) || isa<Argument>(leaf))
+          continue;
+        auto *instruction = dyn_cast<Instruction>(leaf);
+        if (!instruction ||
+            (inputBlock && instruction->getParent() != inputBlock)) {
+          validInputs = false;
+          break;
+        }
+        inputBlock = instruction->getParent();
+      }
+      if (!inputBlock)
+        inputBlock = &block;
+      if (!validInputs || !dominators.dominates(inputBlock, &block))
+        continue;
+      DenseMap<Value *, unsigned> order;
+      unsigned index = 0;
+      for (Argument &argument : function.args())
+        order[&argument] = index++;
+      for (Instruction &instruction : *inputBlock)
+        order[&instruction] = index++;
+      llvm::stable_sort(leaves, [&](Value *first, Value *second) {
+        return order.lookup(first) < order.lookup(second);
+      });
+      PackPlan plan;
+      SmallVector<Value *, 64> pending{root};
+      while (!pending.empty()) {
+        Value *value = pending.pop_back_val();
+        auto *maximum = getUnsignedMax(value, block);
+        if (maximum && (maximum == root || maximum->hasOneUse())) {
+          plan.replaced.insert(maximum);
+          pending.push_back(maximum->getArgOperand(0));
+          pending.push_back(maximum->getArgOperand(1));
+        }
+      }
+      SmallVector<unsigned, 32> level;
+      bool validPlan = true;
+      for (unsigned lane = 0; lane < leaves.size(); lane += 2) {
+        Value *second = lane + 1 < leaves.size()
+                            ? leaves[lane + 1]
+                            : ConstantInt::get(root->getType(), 0);
+        auto input = planPack({leaves[lane], second}, root, plan);
+        if (!input) {
+          validPlan = false;
+          break;
+        }
+        level.push_back(*input);
+      }
+      if (!validPlan)
+        continue;
+      while (level.size() > 1) {
+        SmallVector<unsigned, 32> next;
+        for (unsigned lane = 0; lane + 1 < level.size(); lane += 2)
+          next.push_back(planReductionNode(root, {level[lane], level[lane + 1]}, plan));
+        if (level.size() % 2)
+          next.push_back(level.back());
+        level = std::move(next);
+      }
+      unsigned resultNode = planReductionNode(root, level, plan, true);
+      if (!isProfitable(plan, resultNode))
+        continue;
+      Value *result = emitPack(resultNode, plan);
+      root->replaceAllUsesWith(result);
+      RecursivelyDeleteTriviallyDeadInstructions(root);
+      changed = true;
+    }
+    return changed;
+  }
+
   bool isFusedHalfAddition(Instruction &instruction) const {
     if (instruction.getOpcode() != Instruction::FAdd ||
         !instruction.getType()->isFloatTy())
@@ -188,17 +597,37 @@ private:
   }
 
   bool isPackedOperation(Instruction &instruction) const {
-    Type *elementType = instruction.getType();
-    if (!elementType->isFloatingPointTy())
+    Type *type = instruction.getType();
+    if (type->isVectorTy())
       return false;
-
+    if (isa<BitCastInst>(instruction)) {
+      Type *source = instruction.getOperand(0)->getType();
+      return !source->isVectorTy() &&
+             (source->isFloatingPointTy() || source->isIntegerTy()) &&
+             (type->isFloatingPointTy() || type->isIntegerTy());
+    }
+    if (isa<FPTruncInst>(instruction))
+      return instruction.getOperand(0)->getType()->isFloatTy() &&
+             (type->isHalfTy() || type->isBFloatTy()) &&
+             costModel.supportsPackedFMA(type);
+    if (instruction.getOpcode() == Instruction::FNeg)
+      return costModel.supportsPackedFMA(type);
     if (auto *arithmetic = dyn_cast<BinaryOperator>(&instruction))
-      return costModel.supportsPackedArithmetic(arithmetic->getOpcode(),
-                                                elementType);
-
+      return costModel.supportsPackedArithmetic(arithmetic->getOpcode(), type);
     auto *intrinsic = dyn_cast<IntrinsicInst>(&instruction);
-    return intrinsic && intrinsic->getIntrinsicID() == Intrinsic::fma &&
-           costModel.supportsPackedFMA(elementType);
+    if (!intrinsic)
+      return false;
+    switch (intrinsic->getIntrinsicID()) {
+    case Intrinsic::fma:
+      return costModel.supportsPackedFMA(type);
+    case Intrinsic::fabs:
+      return (type->isHalfTy() || type->isBFloatTy()) &&
+             costModel.supportsPackedFMA(type);
+    case Intrinsic::umax:
+      return costModel.supportsPackedIntegerMax(type);
+    default:
+      return false;
+    }
   }
 
   bool canPair(Instruction &first, Instruction &second) const {
@@ -215,11 +644,15 @@ private:
                                     secondIntrinsic->getIntrinsicID();
     }
 
-    return isa<BinaryOperator>(second);
+    if (isa<CastInst>(first))
+      return first.getOperand(0)->getType() == second.getOperand(0)->getType();
+    return isa<BinaryOperator>(second) || isa<UnaryOperator>(second);
   }
 
   unsigned getOperandCount(Instruction &instruction) const {
-    return isa<BinaryOperator>(instruction) ? 2 : 3;
+    if (auto *intrinsic = dyn_cast<IntrinsicInst>(&instruction))
+      return intrinsic->arg_size();
+    return instruction.getNumOperands();
   }
 
   std::optional<LoopAccumulator> getLoopAccumulator(PHINode &phi) const {
@@ -524,45 +957,6 @@ private:
     });
   }
 
-  bool usesStayPacked(Instruction &first, Instruction &second) const {
-    if (first.use_empty() || second.use_empty())
-      return false;
-
-    // Paired narrowing conversions consume both registers directly and pack
-    // their results into one register. No scalar extraction is needed in SASS.
-    if (first.hasOneUse() && second.hasOneUse()) {
-      auto *firstTrunc = dyn_cast<FPTruncInst>(*first.user_begin());
-      auto *secondTrunc = dyn_cast<FPTruncInst>(*second.user_begin());
-      if (firstTrunc && secondTrunc && first.getType()->isFloatTy() &&
-          firstTrunc->getType() == secondTrunc->getType() &&
-          (firstTrunc->getType()->isHalfTy() ||
-           firstTrunc->getType()->isBFloatTy()) &&
-          getPackedResultUse(*firstTrunc, *secondTrunc))
-        return true;
-    }
-
-    auto hasMatchingUser = [&](Instruction &source, Instruction &other) {
-      return llvm::all_of(source.users(), [&](User *user) {
-        auto *instruction = dyn_cast<Instruction>(user);
-        if (!instruction || !isPackedOperation(*instruction))
-          return false;
-        return llvm::any_of(other.users(), [&](User *otherUser) {
-          auto *paired = dyn_cast<Instruction>(otherUser);
-          if (!paired || !canPair(*instruction, *paired))
-            return false;
-          for (unsigned index = 0, count = getOperandCount(*instruction);
-               index < count; ++index)
-            if (instruction->getOperand(index) == &source &&
-                paired->getOperand(index) == &other)
-              return true;
-          return false;
-        });
-      });
-    };
-
-    return hasMatchingUser(first, second) && hasMatchingUser(second, first);
-  }
-
   std::optional<PackedLoopCarry> getLoopCarry(ValuePair values,
                                               Instruction &first,
                                               Instruction &second) const {
@@ -634,100 +1028,7 @@ private:
     return insertion;
   }
 
-  std::optional<ValuePair> getNegatedOperands(ValuePair values) const {
-    auto *first = dyn_cast<UnaryOperator>(values.first);
-    auto *second = dyn_cast<UnaryOperator>(values.second);
-    if (!first || !second || first->getOpcode() != Instruction::FNeg ||
-        second->getOpcode() != Instruction::FNeg || !first->hasOneUse() ||
-        !second->hasOneUse())
-      return std::nullopt;
-    return ValuePair{first->getOperand(0), second->getOperand(0)};
-  }
-
-  void addInputCost(ValuePair values, ArithmeticPlan &plan) const {
-    // Negating a packed input replaces the two existing scalar negations. It
-    // also keeps the sign visible to arithmetic combines, without extra packs.
-    if (auto operands = getNegatedOperands(values)) {
-      addInputCost(*operands, plan);
-      return;
-    }
-    if (values.first == values.second ||
-        (isa<Constant>(values.first) && isa<Constant>(values.second)) ||
-        getExtractedVector(values) || isRegisterTuple(values))
-      return;
-
-    if (llvm::is_contained(plan.packedInputs, values))
-      return;
-
-    plan.packedInputs.push_back(values);
-    plan.vectorCost += costModel.getPackCost(values.first->getType());
-  }
-
-  unsigned getScalarPairCost(Instruction &first, Instruction &second) const {
-    return costModel.getScalarOperationCost(
-               first, fusedConversionChainLengths.lookup(&first)) +
-           costModel.getScalarOperationCost(
-               second, fusedConversionChainLengths.lookup(&second));
-  }
-
-  unsigned getPackedPairCost(Instruction &first, Instruction &second) const {
-    bool registerChain = usesStayPacked(first, second);
-    for (unsigned index = 0, count = getOperandCount(first); index < count;
-         ++index) {
-      ValuePair operands{first.getOperand(index), second.getOperand(index)};
-      registerChain &=
-          operands.first == operands.second ||
-          (isa<Constant>(operands.first) && isa<Constant>(operands.second)) ||
-          getExtractedVector(operands).has_value() || isRegisterTuple(operands);
-    }
-    return std::max(costModel.getPackedOperationCost(first, registerChain),
-                    costModel.getPackedOperationCost(second, registerChain));
-  }
-
-  void addInstructionCost(Instruction &first, Instruction &second,
-                          ArithmeticPlan &plan, unsigned depth = 0) const {
-    InstructionPair pair{&first, &second};
-    if (llvm::is_contained(plan.instructions, pair))
-      return;
-
-    plan.instructions.push_back(pair);
-    plan.scalarCost += getScalarPairCost(first, second);
-    plan.vectorCost += getPackedPairCost(first, second);
-
-    for (unsigned index = 0, count = getOperandCount(first); index < count;
-         ++index) {
-      ValuePair operands{first.getOperand(index), second.getOperand(index)};
-      if (auto carry = getLoopCarry(operands, first, second)) {
-        plan.loopCarries.push_back(*carry);
-        continue;
-      }
-      auto *firstOperand = dyn_cast<Instruction>(operands.first);
-      auto *secondOperand = dyn_cast<Instruction>(operands.second);
-      if (depth < 8 && firstOperand && secondOperand &&
-          firstOperand->hasOneUse() && secondOperand->hasOneUse() &&
-          *firstOperand->user_begin() == &first &&
-          *secondOperand->user_begin() == &second &&
-          canPair(*firstOperand, *secondOperand) &&
-          getPackedPairCost(*firstOperand, *secondOperand) +
-                  costModel.getPackCost(firstOperand->getType()) <
-              getScalarPairCost(*firstOperand, *secondOperand)) {
-        addInstructionCost(*firstOperand, *secondOperand, plan, depth + 1);
-        continue;
-      }
-      addInputCost(operands, plan);
-    }
-  }
-
   Value *buildVector(ValuePair values, IRBuilder<> &builder) const {
-    if (auto operands = getNegatedOperands(values)) {
-      Value *packed = buildVector(*operands, builder);
-      IRBuilder<>::FastMathFlagGuard guard(builder);
-      builder.setFastMathFlags(
-          cast<Instruction>(values.first)->getFastMathFlags() &
-          cast<Instruction>(values.second)->getFastMathFlags());
-      return builder.CreateFNeg(packed, "nvptx.negate");
-    }
-
     auto *vectorType = FixedVectorType::get(values.first->getType(), 2);
 
     if (auto extracted = getExtractedVector(values)) {
@@ -749,58 +1050,6 @@ private:
                                        "nvptx.pack");
   }
 
-  Value *buildPackedArithmetic(
-      Instruction &first, Instruction &second, IRBuilder<> &builder,
-      const ArithmeticPlan &plan,
-      SmallVectorImpl<std::pair<InstructionPair, Value *>> &built,
-      SmallVectorImpl<std::pair<ValuePair, Value *>> &builtInputs) const {
-    InstructionPair pair{&first, &second};
-    auto existing = llvm::find_if(
-        built, [&](const auto &entry) { return entry.first == pair; });
-    if (existing != built.end())
-      return existing->second;
-
-    SmallVector<Value *, 3> operands;
-    for (unsigned index = 0, count = getOperandCount(first); index < count;
-         ++index) {
-      ValuePair lanes{first.getOperand(index), second.getOperand(index)};
-      auto *firstOperand = dyn_cast<Instruction>(lanes.first);
-      auto *secondOperand = dyn_cast<Instruction>(lanes.second);
-      InstructionPair child{firstOperand, secondOperand};
-      if (firstOperand && secondOperand &&
-          llvm::is_contained(plan.instructions, child)) {
-        operands.push_back(buildPackedArithmetic(
-            *firstOperand, *secondOperand, builder, plan, built, builtInputs));
-      } else {
-        auto packedInput = llvm::find_if(builtInputs, [&](const auto &entry) {
-          return entry.first == lanes;
-        });
-        if (packedInput != builtInputs.end()) {
-          operands.push_back(packedInput->second);
-        } else {
-          Value *input = buildVector(lanes, builder);
-          builtInputs.emplace_back(lanes, input);
-          operands.push_back(input);
-        }
-      }
-    }
-
-    IRBuilder<>::FastMathFlagGuard guard(builder);
-    builder.setFastMathFlags(first.getFastMathFlags() &
-                             second.getFastMathFlags());
-    Value *packed = nullptr;
-    if (auto *arithmetic = dyn_cast<BinaryOperator>(&first)) {
-      packed = builder.CreateBinOp(
-          static_cast<Instruction::BinaryOps>(arithmetic->getOpcode()),
-          operands[0], operands[1], "nvptx.packed");
-    } else {
-      packed = builder.CreateFMA(operands[0], operands[1], operands[2], {},
-                                 "nvptx.packed.fma");
-    }
-    built.emplace_back(pair, packed);
-    return packed;
-  }
-
   bool vectorizePair(Instruction &first, Instruction &second) const {
     if (first.use_empty() || second.use_empty() ||
         ((first.getOpcode() == Instruction::FAdd ||
@@ -812,28 +1061,25 @@ private:
     if (!insertion)
       return false;
 
-    ArithmeticPlan plan;
-    addInstructionCost(first, second, plan);
+    PackPlan plan;
+    plan.replaced.insert(&first);
+    plan.replaced.insert(&second);
+    auto root = planPack({&first, &second}, insertion, plan, 0, insertion);
+    if (!root || !plan.nodes[*root].operation)
+      return false;
     std::optional<PackedResultUse> packedUse =
         getPackedResultUse(first, second);
-    if (!packedUse && !usesStayPacked(first, second))
-      plan.vectorCost += costModel.getUnpackCost(first.getType());
-    if (plan.vectorCost >= plan.scalarCost)
+    unsigned outputCost =
+        packedUse ? 0 : costModel.getUnpackCost(first.getType());
+    if (!isProfitable(plan, *root, outputCost))
       return false;
 
     SmallVector<WeakTrackingVH, 16> deadInstructions;
-    for (InstructionPair pair : plan.instructions) {
-      deadInstructions.push_back(pair.first);
-      deadInstructions.push_back(pair.second);
-      for (Instruction *instruction : {pair.first, pair.second})
-        for (Use &operand : instruction->operands())
-          if (auto *definition = dyn_cast<Instruction>(operand.get()))
-            deadInstructions.push_back(definition);
-    }
-
+    for (const PackNode &node : plan.nodes)
+      for (Value *value : {node.values.first, node.values.second})
+        if (auto *instruction = dyn_cast_or_null<Instruction>(value))
+          deadInstructions.push_back(instruction);
     IRBuilder<> builder(insertion);
-    SmallVector<std::pair<InstructionPair, Value *>, 8> built;
-    SmallVector<std::pair<ValuePair, Value *>, 8> builtInputs;
     SmallVector<std::pair<PackedLoopCarry, PHINode *>, 4> packedCarries;
     for (const PackedLoopCarry &carry : plan.loopCarries) {
       IRBuilder<> phiBuilder(carry.first);
@@ -854,20 +1100,18 @@ private:
         IRBuilder<> incomingBuilder(block->getTerminator());
         packedPhi->addIncoming(buildVector(incoming, incomingBuilder), block);
       }
-      builtInputs.emplace_back(ValuePair{carry.first, carry.second}, packedPhi);
+      unsigned input = plan.cached.lookup(ValuePair{carry.first, carry.second});
+      plan.nodes[input].emitted = packedPhi;
       packedCarries.emplace_back(carry, packedPhi);
     }
-    Value *packed =
-        buildPackedArithmetic(first, second, builder, plan, built, builtInputs);
+    Value *packed = emitPack(*root, plan);
     for (const auto &packedCarry : packedCarries) {
       const PackedLoopCarry &carry = packedCarry.first;
-      PHINode *phi = packedCarry.second;
-      auto update = llvm::find_if(built, [&](const auto &entry) {
-        return entry.first ==
-               InstructionPair{carry.firstUpdate, carry.secondUpdate};
-      });
-      assert(update != built.end() && "missing packed loop accumulator update");
-      phi->setIncomingValue(carry.backedgeIndex, update->second);
+      auto update = plan.cached.find({carry.firstUpdate, carry.secondUpdate});
+      assert(update != plan.cached.end() &&
+             "missing packed loop accumulator update");
+      packedCarry.second->setIncomingValue(carry.backedgeIndex,
+                                           emitPack(update->second, plan));
     }
 
     if (packedUse) {
@@ -894,7 +1138,8 @@ private:
   bool vectorizeArithmetic(BasicBlock &block) const {
     SmallVector<WeakTrackingVH, 32> candidates;
     for (Instruction &instruction : block)
-      if (isPackedOperation(instruction))
+      if (instruction.getType()->isFloatingPointTy() &&
+          isPackedOperation(instruction))
         candidates.push_back(&instruction);
 
     bool changed = false;
@@ -917,6 +1162,7 @@ private:
 
   Function &function;
   NVPTXCostModel costModel;
+  DominatorTree dominators;
   DenseMap<const Instruction *, unsigned> fusedConversionChainLengths;
 };
 
