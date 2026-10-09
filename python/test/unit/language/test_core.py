@@ -2635,6 +2635,29 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("block_size, stride", [(1, 1), (256, 1), (256, 2)])
+def test_cast_bfloat16_to_float32_all_values(block_size, stride, device):
+    check_type_supported("bfloat16", device)
+
+    @triton.jit
+    def kernel(X, Y, BLOCK_SIZE: tl.constexpr, STRIDE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE
+        if BLOCK_SIZE != 1:
+            offsets += tl.arange(0, BLOCK_SIZE)
+        values = tl.load(X + offsets * STRIDE)
+        tl.store(Y + offsets, values.to(tl.float32))
+
+    x = torch.empty_strided((1 << 16, ), (stride, ), dtype=torch.bfloat16, device=device)
+    x.copy_(torch.arange(1 << 16, dtype=torch.int32, device=device).to(torch.int16).view(torch.bfloat16))
+    y = torch.empty(x.shape, dtype=torch.float32, device=device)
+    kernel[(x.numel() // block_size, )](x, y, block_size, stride, num_warps=4)
+
+    expected = x.float()
+    nan = expected.isnan()
+    assert y[nan].isnan().all()
+    torch.testing.assert_close(y.view(torch.int32)[~nan], expected.view(torch.int32)[~nan], rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, rounding", [("float32", None), ("float32", "rtne"), ("float32", "rtz"),
                                                ("float16", None)])

@@ -313,6 +313,27 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
   return converter;
 }
 
+struct ExtFOpConversion
+    : ElementwiseOpConversionBase<arith::ExtFOp, ExtFOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
+
+  SmallVector<Value> createDestOps(arith::ExtFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // Expose the bits so LLVM folds packed high-half extraction into a mask.
+    // With ptxas 13.4, BF16x2 then uses IMAD + LOP3 instead of the PRMT + two
+    // IMADs generated for two cvt.f32.bf16 instructions.
+    if (getElementTypeOrSelf(op.getIn()).isBF16() && elemTy.isF32()) {
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      Value bits = b.zext(i32_ty, b.bitcast(operands[0][0], i16_ty));
+      return {b.bitcast(b.shl(bits, b.i32_val(16)), f32_ty)};
+    }
+    return {LLVM::FPExtOp::create(rewriter, loc, elemTy, operands[0],
+                                  adaptor.getAttributes().getValue())};
+  }
+};
+
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<FpToFpOp, FpToFpOpConversion> {
@@ -949,12 +970,12 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   POPULATE_OP(arith::AddFOp, LLVM::FAddOp);
   POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
 
-  POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);
 
 #undef POPULATE_OP
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
