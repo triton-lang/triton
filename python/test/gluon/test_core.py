@@ -7940,3 +7940,97 @@ def test_fabric_single_thread_codegen(kind, num_warps, width, device):
     assert out.tolist() == [3] * width
     assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
     assert (compiled.metadata.shared > 0) == (num_warps > 1 and width > 32)
+
+
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64, torch.float16, torch.float32])
+@pytest.mark.parametrize("n,num_warps", [(32, 4), (128, 1), (128, 4), (128, 8), (1024, 4)])
+@pytest.mark.parametrize("width", [1, 32, 128])
+def test_partial_reduction_scalar_consumers(dtype, n, num_warps, width, device):
+    if not is_cuda():
+        pytest.skip("requires NVIDIA availability pass")
+
+    @gluon.jit
+    def kernel(X, Out, N: ttgl.constexpr, WIDTH: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
+        offsets = ttgl.arange(0, N, layout=layout)
+        x = ttgl.load(X + offsets)
+        value = ttgl.sum(x, 0)
+        if WIDTH == 1:
+            ttgl.store(Out, value)
+        else:
+            outputs = ttgl.arange(0, WIDTH, layout=layout)
+            ttgl.store(Out + outputs, value)
+
+    x = torch.randint(-16, 17, (n, ), dtype=torch.int32, device=device).to(dtype)
+    output_dtype = torch.float32 if dtype == torch.float16 else dtype
+    out = torch.empty(width, dtype=output_dtype, device=device)
+    compiled = kernel[(1, )](x, out, n, width, num_warps=num_warps)
+    expected = x.to(output_dtype).sum(dtype=output_dtype).expand_as(out)
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    # The required cross-warp accumulation still uses shared storage. No final
+    # scalar-result broadcast is needed when only the leader stores the sum.
+    if n > 32 and num_warps > 1:
+        assert compiled.metadata.shared > 0
+
+
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_partial_reduction_tuple_scratch(num_warps, device):
+    if not is_cuda():
+        pytest.skip("requires NVIDIA availability pass")
+
+    @gluon.jit
+    def combine(ai, af, bi, bf):
+        return ai + bi, af + bf
+
+    @gluon.jit
+    def kernel(X, OutI, OutF):
+        offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0]))
+        values = ttgl.load(X + offsets)
+        i, f = ttgl.reduce((values.to(ttgl.int64), values.to(ttgl.float32)), 0, combine)
+        ttgl.store(OutI, i)
+        ttgl.store(OutF, f)
+
+    x = torch.arange(128, dtype=torch.int32, device=device)
+    i = torch.empty((), dtype=torch.int64, device=device)
+    f = torch.empty((), dtype=torch.float32, device=device)
+    kernel[(1, )](x, i, f, num_warps=num_warps)
+    assert i.item() == f.item() == 8128
+
+
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("width", [1, 32])
+def test_partial_reduction_combiner_order(num_warps, width, device):
+    if not is_cuda():
+        pytest.skip("requires NVIDIA availability pass")
+
+    @gluon.jit
+    def combine(af, al, asum, bf, bl, bsum):
+        return af, bl, asum + bsum
+
+    @gluon.jit
+    def kernel(X, First, Last, Sum, WIDTH: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
+        offsets = ttgl.arange(0, 128, layout=layout)
+        x = ttgl.load(X + offsets)
+        first, last, value = ttgl.reduce((offsets, offsets.to(ttgl.int64), x), 0, combine)
+        outputs = ttgl.arange(0, WIDTH, layout=layout)
+        ttgl.store(First + outputs, first)
+        ttgl.store(Last + outputs, last)
+        ttgl.store(Sum + outputs, value)
+
+    torch.manual_seed(123)
+    x = torch.randn(128, device=device)
+    first = torch.empty(width, dtype=torch.int32, device=device)
+    last = torch.empty(width, dtype=torch.int64, device=device)
+    out = torch.empty(width, device=device)
+    kernel[(1, )](x, first, last, out, width, num_warps=num_warps)
+    # Match both levels of the original descending-XOR reduction tree exactly.
+    expected = x.reshape(4, 32)
+    for stride in (16, 8, 4, 2, 1):
+        expected = expected[:, :stride] + expected[:, stride:2 * stride]
+    expected = expected[:, 0]
+    for stride in (2, 1):
+        expected = expected[:stride] + expected[stride:2 * stride]
+    torch.testing.assert_close(first, torch.zeros_like(first), rtol=0, atol=0)
+    torch.testing.assert_close(last, torch.full_like(last, 127), rtol=0, atol=0)
+    torch.testing.assert_close(out, expected.expand_as(out), rtol=0, atol=0)

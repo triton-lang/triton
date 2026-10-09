@@ -53,6 +53,11 @@ public:
 
   bool isReduceWithinCTA();
 
+  // One-dimensional reductions whose last inter-warp stage fits in a warp can
+  // return only the copies requested by their partial scalar result layouts.
+  bool supportsPartialScalarResult();
+  bool hasPartialScalarResult();
+
   bool isAssociative();
 
   // Callback to allow backends to specify a target-specific getter for scratch

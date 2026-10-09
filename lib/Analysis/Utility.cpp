@@ -7,6 +7,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -42,6 +43,36 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 
 bool ReduceOpHelper::isReduceWithinCTA() {
   return getCTASplitNum(srcEncoding)[axis] == 1;
+}
+
+bool ReduceOpHelper::supportsPartialScalarResult() {
+  if (srcTy.getRank() != 1 || triton::gpu::lookupNumCTAs(op) != 1 ||
+      !triton::gpu::isPermutationMatrixLayout(
+          triton::gpu::toLinearLayout(srcTy)) ||
+      !llvm::all_of(op.getElementTypes(),
+                    [](Type type) { return type.isIntOrFloat(); }))
+    return false;
+  // Inactive result copies may carry arbitrary values through the final
+  // in-thread combiner. It must not branch, trap or have observable effects.
+  if (!llvm::all_of(op.getCombineOp().front().without_terminator(),
+                    [](Operation &op) {
+                      return op.getNumRegions() == 0 &&
+                             isMemoryEffectFree(&op) && isSpeculatable(&op);
+                    }))
+    return false;
+  auto reduced = reducedRegLaneLayout(srcTy, axis);
+  return reduced.getTotalOutDimSize() <=
+         reduced.getInDimSize(StringAttr::get(op.getContext(), "lane"));
+}
+
+bool ReduceOpHelper::hasPartialScalarResult() {
+  return supportsPartialScalarResult() &&
+         llvm::all_of(op.getResultTypes(), [](Type type) {
+           auto tensor = dyn_cast<RankedTensorType>(type);
+           return tensor && tensor.getRank() == 0 &&
+                  isa_and_nonnull<triton::gpu::PartialEncodingAttr>(
+                      tensor.getEncoding());
+         });
 }
 
 bool ReduceOpHelper::isAssociative() {
@@ -144,7 +175,11 @@ ReduceOpHelper::getScratchConfig(const LinearLayout &src,
   config.offsets.resize(inputTypes.size());
   for (unsigned idx : indices) {
     unsigned bitwidth = getBitwidth(inputTypes[idx]);
-    unsigned elems = numScratchElemsGetter
+    // Partial scalar reductions store one contiguous value per contributing
+    // warp. Only the requested threads load these values for the final
+    // reduction.
+    unsigned elems = hasPartialScalarResult() ? src.getTotalOutDimSize()
+                     : numScratchElemsGetter
                          ? numScratchElemsGetter(src, dst, bitwidth)
                          : getNumScratchElemsSwizzledCvt(src, dst, bitwidth);
     config.offsets[idx] = config.sizeInBytes;

@@ -1090,3 +1090,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @reduce_wrong_result_shape(%x: tensor<128xf32, #blocked>) {
+    // expected-error@+2 {{inferred type(s) 'f32' are incompatible}}
+    // expected-error@+1 {{failed to infer returned types}}
+    %sum = "tt.reduce"(%x) ({
+    ^bb0(%a: f32, %b: f32):
+      %value = arith.addf %a, %b : f32
+      tt.reduce.return %value : f32
+    }) {axis = 0 : i32} : (tensor<128xf32, #blocked>) -> tensor<1xf32, #blocked>
+    tt.return
+  }
+}
