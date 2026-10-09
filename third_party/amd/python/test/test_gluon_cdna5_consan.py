@@ -394,6 +394,62 @@ def test_consan_async_copy(FAILURE):
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("empty_groups", None),
+        ("large_count", "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared"),
+        ("negative_count", "Buffer being accessed has outstanding writes"),
+    ],
+)
+def test_async_wait_count_bounds(mode, message):
+    stderr = _run_consan_subprocess("async_wait_count_bounds", mode)
+    if message is None:
+        assert not stderr, stderr
+    else:
+        assert message in stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("load", None),
+        ("store", None),
+        ("wait_zero", "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared"),
+        ("store_wait_zero", "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"),
+    ],
+)
+def test_async_wait_uncommitted(mode, message):
+    stderr = _run_consan_subprocess("async_wait_uncommitted", mode)
+    if message is None:
+        assert not stderr, stderr
+    else:
+        assert message in stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("interleaved", None),
+        ("read_store_source", None),
+        ("store_partial_wait", None),
+        ("store_partial_wait_younger",
+         "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"),
+        ("load_into_store_source",
+         "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"),
+    ],
+)
+def test_async_copy_load_store(mode, message):
+    stderr = _run_consan_subprocess("async_copy_load_store", mode)
+    if message is None:
+        assert not stderr, stderr
+    else:
+        assert message in stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_consan_tdm_store(FAILURE):
     """

@@ -341,7 +341,8 @@ The common hook implementation covers these TritonGPU operations:
 
 - `ttg.async_copy_global_to_local`: shared-memory write tracked with
   `AsyncCp` commit counts and recorded as a generic-side proxy access.
-- `ttg.async_commit_group`: commits staged `AsyncCp` accesses.
+- `ttg.async_commit_group`: commits staged `AsyncCp` and `AsyncCpRead`
+  accesses.
 - `ttg.async_wait`: clears `AsyncCp` entries beyond the pending-count threshold
   and transfers write visibility.
 - `ttg.local_load` and `ttg.local_gather`: barrier-tracked shared-memory
@@ -402,8 +403,12 @@ AMD hooks additionally cover:
 - Async TDM global-to-local and local-to-global copies. With a barrier, these
   are modeled through barrier arrivals; without a barrier, they use `TmaStore`
   commit counts and implicit commits.
-- AMD async wait variants for `AsyncCp`, and TDM wait variants for `TmaStore`
-  commit counts.
+- `amdg.async_copy_local_to_global` reads shared memory; ConSan tracks these
+  reads using `AsyncCpRead` commit counts.
+- AMD async waits clear `AsyncCp` and `AsyncCpRead` entries beyond the same
+  pending-count threshold, transferring write visibility for loads and read
+  visibility for stores.
+- TDM wait variants for `TmaStore` commit counts.
 - Ordered TDM commit kinds, using the self-column exclusion described above.
 
 ## Implementation Notes

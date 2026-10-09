@@ -24,8 +24,17 @@ constexpr int numMemTypes = getMaxEnumValForMemType() + 1;
 constexpr int MAX_NUM_BASE_THREADS = 16;
 
 namespace CommitKind {
-enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
-}
+// AsyncCp tracks async copies that write shared memory and AsyncCpRead those
+// that read it. Both advance with the same async commit groups.
+enum Kind {
+  None = -1,
+  AsyncCp = 0,
+  Wgmma,
+  TmaStore,
+  AsyncCpRead,
+  NumCommitKinds
+};
+} // namespace CommitKind
 
 // -- ConSan capture-count constants -----------------------------------------
 // Each constant corresponds to specific passToWarpSpecialize() calls in
@@ -288,7 +297,6 @@ struct AuxDataMap {
   // present; TMA/TC/CLC peer ranges are added only when the module uses them.
   ThreadLayout threadLayout;
 
-  bool hasAsyncCopyReads = false;
   bool hasAsyncProxyFenceTracking = false;
 
   LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
