@@ -638,20 +638,6 @@ private:
   int computeCapability;
 };
 
-struct FPToSIOpConversion
-    : ElementwiseOpConversionBase<arith::FPToSIOp, FPToSIOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::FPToSIOp, FPToSIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::FPToSIOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    return {LLVM::FPToSIOp::create(rewriter, loc, elemTy, operands[0][0])};
-  }
-};
-
 struct ExpOpConversionApprox
     : ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox> {
   using Base = ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox>;
@@ -928,33 +914,33 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
-  patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseSqrtOp>>(
-      typeConverter, axisInfoAnalysis, "llvm.nvvm.sqrt.rn.f", benefit);
-  patterns.add<ElementwiseToIntrinsicOpConversion<triton::ApproxDivFOp>>(
-      typeConverter, axisInfoAnalysis, "llvm.nvvm.div.approx.f", benefit);
-
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
 
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis,
                                     benefit.getBenefit() + 1);
 
-#define POPULATE_OP(SRC_OP, DST_OP)                                            \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+#define POPULATE_OP(SRC_OP, DST_OP, ...)                                       \
+  patterns.add<                                                                \
+      ElementwiseOpConversion<SRC_OP, DST_OP __VA_OPT__(, ) __VA_ARGS__>>(     \
       typeConverter, axisInfoAnalysis, benefit)
 
   POPULATE_OP(arith::SubFOp, LLVM::FSubOp);
   POPULATE_OP(arith::AddFOp, LLVM::FAddOp);
   POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
   POPULATE_OP(triton::PreciseDivFOp, LLVM::FDivOp);
+  POPULATE_OP(triton::PreciseSqrtOp, LLVM::SqrtOp);
+  POPULATE_OP(triton::ApproxDivFOp, LLVM::FDivOp, [](LLVM::FDivOp op) {
+    op.setFastmathFlags(LLVM::FastmathFlags::afn);
+  });
 
   POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);
+  POPULATE_OP(arith::FPToSIOp, LLVM::FPToSIOp);
 
 #undef POPULATE_OP
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
