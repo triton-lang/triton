@@ -3,6 +3,12 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonGPUOptimizeThreadAvailability : Pass<"tritongpu-optimize-thread-availability", "mlir::ModuleOp"> {
+  let summary = "Delay replication and isolate scalar polling regions";
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect", "mlir::arith::ArithDialect"];
+}
+
 def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 

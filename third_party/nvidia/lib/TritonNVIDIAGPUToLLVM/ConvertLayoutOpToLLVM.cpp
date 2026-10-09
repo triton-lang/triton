@@ -33,6 +33,11 @@ struct ConvertLayoutOpSwizzlingConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
+    // Replica materialization is handled by the common partial-layout path;
+    // the swizzling path below only describes changes in placement.
+    if (isa<PartialEncodingAttr>(srcTy.getEncoding()) ||
+        isa<PartialEncodingAttr>(dstTy.getEncoding()))
+      return failure();
     auto *ctx = op.getContext();
 
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);

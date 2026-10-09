@@ -1449,7 +1449,7 @@ AxisInfoAnalysis::loadDefaultAnalysis(DataFlowSolver *solver) {
 
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorTy)
+  if (!tensorTy || tensorTy.getRank() == 0)
     return 1;
   auto elemTy = tensorTy.getElementType();
   // Get the pointee type if we have a tensor of ptrs to compute contiguity for
@@ -1465,6 +1465,8 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
   auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
+  if (tensorTy.getRank() == 0)
+    return 1;
   auto order = gpu::getOrder(tensorTy);
   unsigned align = getAlignment(offsetsValue, elementBitWidth);
 
@@ -1480,7 +1482,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
 
 unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorTy)
+  if (!tensorTy || tensorTy.getRank() == 0)
     return 1;
 
   auto elemTy = tensorTy.getElementType();
@@ -1494,6 +1496,8 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
 unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
                                               unsigned elementBitWidth) {
   auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
+  if (tensorTy.getRank() == 0)
+    return 1;
   auto *axisInfo = getAxisInfo(offsetsValue);
   if (!axisInfo)
     return 1;
@@ -1523,7 +1527,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
 
 unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto tensorTy = dyn_cast<RankedTensorType>(mask.getType());
-  if (!tensorTy)
+  if (!tensorTy || tensorTy.getRank() == 0)
     return 1;
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)

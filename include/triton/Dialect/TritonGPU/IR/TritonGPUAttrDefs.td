@@ -3,6 +3,15 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 
+// Availability is a restriction of a distributed layout's hardware domain.
+// A set bit requires that coordinate bit to be zero. The underlying placement
+// and the physical execution context are unchanged.
+def ThreadAvailabilityAttr : TritonGPU_Attr<"ThreadAvailability", "thread_availability"> {
+  let mnemonic = "available";
+  let parameters = (ins "uint32_t":$lane, "uint32_t":$warp, "uint32_t":$block);
+  let assemblyFormat = "`<` $lane `,` $warp `,` $block `>`";
+}
+
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
@@ -635,6 +644,29 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
+}
+
+//===----------------------------------------------------------------------===//
+// Partial Layout Encoding
+//===----------------------------------------------------------------------===//
+
+def PartialEncodingAttr : DistributedEncoding<"PartialEncoding", "partial_encoding"> {
+  let mnemonic = "partial";
+  let description = [{
+    A late distributed layout consisting of a placement and a restriction of
+    its hardware domain. Copies exist only where all bits selected by
+    availability are zero. Restricting the domain must preserve every logical
+    element. Introduced after the final remove-layout-conversions pass.
+    Rank-zero tensors use this same encoding to represent distributed scalars.
+    toLinearLayout returns the placement component; layout equality and
+    conversion must additionally account for availability.
+  }];
+  let parameters = (ins "Attribute":$parent, "ThreadAvailabilityAttr":$availability);
+  let assemblyFormat = "`<` $parent `,` $availability `>`";
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    unsigned getRank() const;
+  }];
+  let genVerifyDecl = 1;
 }
 
 //===----------------------------------------------------------------------===//

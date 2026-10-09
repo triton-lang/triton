@@ -91,6 +91,8 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory", createAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_allocate_global_scratch_memory",
                      createTritonGPUGlobalScratchAllocationPass);
+  ADD_PASS_WRAPPER_0("add_optimize_thread_availability",
+                     createTritonGPUOptimizeThreadAvailability);
   ADD_PASS_WRAPPER_0("add_combine_tensor_select_and_if",
                      createTritonGPUCombineTensorSelectAndIf);
   ADD_PASS_WRAPPER_0("add_optimize_accumulator_init",
