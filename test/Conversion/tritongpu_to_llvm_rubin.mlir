@@ -408,7 +408,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: llvm.fadd {{.*}} : vector<2xf32>
   // CHECK: llvm.fsub {{.*}} : vector<2xf32>
   // CHECK: llvm.fmul {{.*}} : vector<2xf32>
-  // CHECK: llvm.intr.fma{{.*}} : (vector<2xf32>, vector<2xf32>, vector<2xf32>) -> vector<2xf32>
+  // CHECK: llvm.inline_asm {{.*}} "fma.rn.f32x2 $0, $1, $2, $3;", "=l,l,l,l" {{.*}} : (i64, i64, i64) -> i64
   tt.func private @packed_arith_f32x2(
       %a: tensor<128x2xf32, #blocked>,
       %b: tensor<128x2xf32, #blocked>,

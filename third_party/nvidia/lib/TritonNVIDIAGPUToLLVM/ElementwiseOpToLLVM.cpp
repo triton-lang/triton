@@ -644,6 +644,10 @@ struct PackedArithOpConversion
                                    packedOperands[0], packedOperands[1]);
           break;
         case nvidia_gpu::PackedArithOpKind::FMA:
+          // Keep FP32 FMA opaque so sinking cannot extend the lifetime of
+          // contiguous TMEM register tuples and cause spills.
+          if (resultInfo.suffix == "f32x2")
+            break;
           resultVector = LLVM::FMAOp::create(
               rewriter, loc, resultVectorType, packedOperands[0],
               packedOperands[1], packedOperands[2]);
