@@ -352,8 +352,8 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
     # Independent scans provide register bits for the totals layout to exchange.
     pytest.param(ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP // 2, 2], [1, 4], [0, 1]), 64, 128,
                  id="register_axis_parallel_scans"),
-    # Both high axis bits and row bits move into lanes. Original thread-local
-    # prefixes need inter-warp boundary carries in their original owners.
+    # Multi-element thread segments retain boundary-carry ownership when the
+    # scan crosses warps, including high axis register bits and row bits.
     pytest.param(ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP // 2, 2], [2, 2], [0, 1]), 2048, 8,
                  id="register_axis_boundary_carry_owners"),
     # Five lane bits can move into registers without a fixed promotion cap.

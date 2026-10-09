@@ -21,6 +21,8 @@
 
 // RUN: triton-opt %t/register-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=REGISTER-TOTALS
 
+// RUN: triton-opt %t/boundary-carry-owners.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=BOUNDARY-OWNERS
+
 //--- scan.mlir
 
 #layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [2], order = [0]}>
@@ -812,4 +814,25 @@ tt.func private @test_scan_existing_register_totals(%arg: tensor<16x256xi32, #pa
   tt.return %result : tensor<16x256xi32, #parallel_rows>
 }
 
+}
+
+//--- boundary-carry-owners.mlir
+
+#boundary_prefixes = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Four original register groups each use five lane-scan rounds. Preserve their
+// ownership so the inter-warp boundary carries can complete local prefixes.
+// BOUNDARY-OWNERS-LABEL: llvm.func {{.*}}@test_scan_preserve_boundary_carry_owners(
+// BOUNDARY-OWNERS-COUNT-20: nvvm.shfl.sync up
+// BOUNDARY-OWNERS-NOT: nvvm.shfl.sync up
+// BOUNDARY-OWNERS: nvvm.barrier
+// BOUNDARY-OWNERS: llvm.return
+tt.func private @test_scan_preserve_boundary_carry_owners(%arg: tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes>
+  tt.return %result : tensor<2048xi32, #boundary_prefixes>
+}
 }
