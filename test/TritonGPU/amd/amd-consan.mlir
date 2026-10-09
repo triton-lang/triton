@@ -754,11 +754,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 // -----
 
 // A tokenless amdg.async_wait for a negative number of groups with num_inst = 0
-// waits for all async operations, so it also completes staged accesses.
+// waits for all async copies, including loads and stores not yet committed.
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 4, maxPhase = 4, order = [1, 0]}>
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: tt.func private @__triton_consan_clear_outstanding_commits_transfer_reads
+  // CHECK: %[[COMMITS:.*]] = tt.load
+  // CHECK: %[[OLDER:.*]] = arith.cmpi sgt, %[[COMMITS]], %{{.*}} : tensor<{{.*}}xi8
+  // CHECK: %[[STAGED_AGE:.*]] = arith.constant -1 : i8
+  // CHECK: %[[STAGED_AGES:.*]] = tt.splat %[[STAGED_AGE]]
+  // CHECK: %[[STAGED:.*]] = arith.cmpi eq, %[[COMMITS]], %[[STAGED_AGES]] : tensor<{{.*}}xi8
+  // CHECK: arith.ori %[[OLDER]], %[[STAGED]]
   // CHECK-LABEL: tt.func private @__triton_consan_clear_outstanding_commits_transfer_writes
   // CHECK: %[[COMMITS:.*]] = tt.load
   // CHECK: %[[OLDER:.*]] = arith.cmpi sgt, %[[COMMITS]], %{{.*}} : tensor<{{.*}}xi8
@@ -771,10 +778,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-LABEL: @amdg_async_wait_all
   tt.func public @amdg_async_wait_all(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_reads
     %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf16, #shared, #smem, mutable>
+    %source = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<32x32xf16, #shared, #smem, mutable>
     %ptrs = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x32x!tt.ptr<f16>, #blocked>
     %copy = ttg.async_copy_global_to_local %ptrs, %shmem : tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
+    %store = amdg.async_copy_local_to_global %source, %ptrs : !ttg.memdesc<32x32xf16, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f16>, #blocked>
     amdg.async_wait {"ttg.num_commit_groups" = -1 : i64, num_inst = 0 : i32}
     ttg.local_load %shmem : !ttg.memdesc<32x32xf16, #shared, #smem, mutable> -> tensor<32x32xf16, #blocked>
     tt.return
@@ -1325,7 +1336,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 // An asynchronous LDS-to-global store is an outstanding shared-memory read;
-// a following write must check it and the native wait must publish both sides.
+// a following write must check it, and the wait retires it and updates
+// read visibility.
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
@@ -1345,8 +1357,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"
     // CHECK: ttg.local_store
     ttg.local_store %value, %buffer : tensor<32x32xf32, #blocked> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-    // CHECK-NOT: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes
-    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_both
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_reads
     // CHECK-NOT: tt.call @__triton_consan_clear_outstanding_commits_transfer_
     // CHECK: ttg.async_wait
     %wait = ttg.async_wait %group {num = 0 : i32}
@@ -1356,7 +1367,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
-// Lowered AMD waits retain the same read-and-write completion behavior.
+// Like ttg.async_wait, amdg.async_wait clears completed async-store commit
+// entries and updates read visibility.
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
@@ -1367,11 +1379,89 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %token = amdg.async_copy_local_to_global %buffer, %dst : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
     %group = ttg.async_commit_group tokens %token
-    // CHECK-NOT: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes
-    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_both
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_reads
     // CHECK-NOT: tt.call @__triton_consan_clear_outstanding_commits_transfer_
     // CHECK: amdg.async_wait
     amdg.async_wait {"ttg.num_commit_groups" = 0 : i64, num_inst = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
+// Async loads and stores have separate commit tables. Every commit group
+// advances both, even if it contains only one direction, and a wait applies the
+// same count to both: loads transfer write visibility and stores read
+// visibility.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @async_copy_load_store_streams
+  tt.func public @async_copy_load_store_streams(%src: tensor<32x32x!tt.ptr<f32>, #blocked>, %dst: tensor<32x32x!tt.ptr<f32>, #blocked>, %value: tensor<32x32xf32, #blocked>) {
+    %loaded = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    %stored = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}(%{{.*}}, %{{.*}}, %{{.*}}, %[[LOADS:.*]]) :
+    // CHECK: ttg.async_copy_global_to_local
+    %load = ttg.async_copy_global_to_local %src, %loaded : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+    // CHECK: tt.call @__triton_consan_commit_accesses{{.*}}(%{{.*}}, %{{.*}}, %[[LOADS]])
+    // CHECK: tt.call @__triton_consan_commit_accesses{{.*}}(%{{.*}}, %{{.*}}, %[[STORES:[^)]+]])
+    // CHECK: ttg.async_commit_group
+    %load_group = ttg.async_commit_group tokens %load
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}(%{{.*}}, %{{.*}}, %{{.*}}, %[[STORES]]) :
+    // CHECK: amdg.async_copy_local_to_global
+    %store = amdg.async_copy_local_to_global %stored, %dst : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+    // CHECK: tt.call @__triton_consan_commit_accesses{{.*}}(%{{.*}}, %{{.*}}, %[[LOADS]])
+    // CHECK: tt.call @__triton_consan_commit_accesses{{.*}}(%{{.*}}, %{{.*}}, %[[STORES]])
+    // CHECK: ttg.async_commit_group
+    %store_group = ttg.async_commit_group tokens %store
+    // CHECK: %[[LOAD_COUNT:.*]] = arith.constant 1 : i32
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes{{.*}}(%{{.*}}, %{{.*}}, %[[LOAD_COUNT]], %{{.*}}, %[[LOADS]], %{{.*}})
+    // CHECK: %[[STORE_COUNT:.*]] = arith.constant 1 : i32
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_reads{{.*}}(%{{.*}}, %{{.*}}, %[[STORE_COUNT]], %{{.*}}, %[[STORES]], %{{.*}})
+    // CHECK: amdg.async_wait
+    amdg.async_wait {"ttg.num_commit_groups" = 1 : i64, num_inst = 0 : i32}
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}(%{{.*}}, %{{.*}}, %{{.*}}, %[[STORES]], %{{.*}})
+    // CHECK-NEXT: "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"
+    // CHECK: ttg.local_store
+    ttg.local_store %value, %stored : tensor<32x32xf32, #blocked> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Both commit tables are passed into the partition as extra captures, which must
+// fit the space reserved by capture preparation.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 5 : i32} {
+  // CHECK-LABEL: @async_copy_streams_in_partition
+  tt.func public @async_copy_streams_in_partition(%ptr: !tt.ptr<f32>) {
+    %loaded = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    %stored = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
+    ttg.warp_specialize(%ptr, %loaded, %stored) attributes {actualRegisters = array<i32: 32, 32>, allocation.offset = 0 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
+    default {
+      ttg.warp_yield
+    }
+    // CHECK: partition0
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}(%{{.*}}, %{{.*}}, %{{.*}}, %[[LOADS:arg[0-9]+]]) :
+    // CHECK: ttg.async_copy_global_to_local
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}(%{{.*}}, %{{.*}}, %{{.*}}, %[[STORES:arg[0-9]+]]) :
+    // CHECK: amdg.async_copy_local_to_global
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes{{.*}}(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[LOADS]], %arg{{[0-9]+}})
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_reads{{.*}}(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[STORES]], %arg{{[0-9]+}})
+    partition0(%arg0: !tt.ptr<f32>, %arg1: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, %arg2: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) num_warps(1) {
+      %ptrs = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %load = ttg.async_copy_global_to_local %ptrs, %arg1 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+      %store = amdg.async_copy_local_to_global %arg2, %ptrs : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %group = ttg.async_commit_group tokens %load, %store
+      amdg.async_wait {"ttg.num_commit_groups" = 0 : i64, num_inst = 0 : i32}
+      ttg.warp_return
+    } : (!tt.ptr<f32>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>) -> ()
     tt.return
   }
 }
