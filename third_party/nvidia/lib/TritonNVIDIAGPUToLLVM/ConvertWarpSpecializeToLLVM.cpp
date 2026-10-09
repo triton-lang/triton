@@ -175,13 +175,16 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       lowRegs = (startRegs - giveRegs) / 8 * 8;
     }
 
-    // Returning workers surrender their registers at the common switch-loop
-    // entry. Its decrease must not exceed any worker's current target, including
-    // when the bootstrap allocation above raises lowRegs after capping defRegs.
-    for (WarpSpecializeOp ws : wsOps)
-      if (auto actualRegisters = ws.getActualRegisters())
-        for (int target : actualRegisters->drop_front())
-          lowRegs = std::min(lowRegs, target);
+    // Returning workers adjust their registers at the common switch-loop entry.
+    // If it uses a decrease, its target must not exceed any worker's allocation,
+    // including when the bootstrap calculation raises lowRegs after capping
+    // defRegs. Preserve the existing equal-target increase when no decrease is
+    // needed, since its placement also guides PTXAS register allocation.
+    if (lowRegs < startRegs)
+      for (WarpSpecializeOp ws : wsOps)
+        if (auto actualRegisters = ws.getActualRegisters())
+          for (int target : actualRegisters->drop_front())
+            lowRegs = std::min(lowRegs, target);
   }
 
   // Attempt to elide captures of trivial computations by hoisting them into the
