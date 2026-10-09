@@ -1098,17 +1098,17 @@ private:
           funcBuilder.createClearOutstandingCommitsTransferBothCall(
               b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
               info->pendingCount, nullptr, info->commitKind,
-              MemType::SHARED_MEM, op);
+              MemType::SHARED_MEM, op, info->includeStaged);
         } else if (info->transferWrites) {
           funcBuilder.createClearOutstandingCommitsTransferWritesCall(
               b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
               info->pendingCount, nullptr, info->commitKind,
-              MemType::SHARED_MEM, op);
+              MemType::SHARED_MEM, op, info->includeStaged);
         } else if (info->transferReads) {
           funcBuilder.createClearOutstandingCommitsTransferReadsCall(
               b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
               info->pendingCount, nullptr, info->commitKind,
-              MemType::SHARED_MEM, op);
+              MemType::SHARED_MEM, op, info->includeStaged);
         }
       } else if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
         funcBuilder.createClearOutstandingCommitsTransferWritesCall(

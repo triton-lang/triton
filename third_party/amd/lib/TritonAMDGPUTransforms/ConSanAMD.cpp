@@ -66,8 +66,14 @@ public:
     if (auto asyncWaitOp = dyn_cast<ttag::AsyncWaitOp>(op)) {
       if (auto attr = asyncWaitOp->getAttrOfType<IntegerAttr>(
               "ttg.num_commit_groups")) {
+        // A tokenless wait for a negative number of groups lowers to a wait
+        // for all async operations, including uncommitted ones. Token-bearing
+        // waits take their instruction count from the tokens instead.
+        bool includeStaged = asyncWaitOp.getAsyncToken().empty() &&
+                             attr.getInt() < 0 && asyncWaitOp.getNumInst() == 0;
         return WaitOpInfo{tti::CommitKind::AsyncCp, (int)attr.getInt(),
-                          /*transferWrites=*/true, auxData.hasAsyncCopyReads};
+                          /*transferWrites=*/true, auxData.hasAsyncCopyReads,
+                          includeStaged};
       }
       return std::nullopt;
     }

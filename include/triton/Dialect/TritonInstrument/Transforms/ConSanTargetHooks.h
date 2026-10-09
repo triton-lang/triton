@@ -107,6 +107,8 @@ struct WaitOpInfo {
   int pendingCount;
   bool transferWrites;
   bool transferReads;
+  // If true, the wait also completes accesses not yet committed to a group.
+  bool includeStaged = false;
 };
 
 struct AsyncProxyFenceInfo {
