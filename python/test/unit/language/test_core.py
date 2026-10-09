@@ -2663,43 +2663,73 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, rounding", [("float32", None), ("float32", "rtne"), ("float32", "rtz"),
-                                               ("float16", None)])
+                                               ("float16", None), ("float64", None), ("int64", None), ("uint64", None)])
 def test_cast_bf16_rounding(dtype_x, rounding, device):
     if not is_interpreter():
+        if dtype_x in ["int64", "uint64"] and (is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] < 9)):
+            pytest.skip("64-bit integer to bf16 conversions round through fp32 on this target")
         check_type_supported("bfloat16", device)
 
     @triton.jit
     def kernel(X, Z, SIZE: tl.constexpr, ROUNDING: tl.constexpr):
         offs = tl.arange(0, SIZE)
-        tl.store(Z + offs, tl.load(X + offs).to(tl.bfloat16, fp_downcast_rounding=ROUNDING))
+        tl.store(Z + offs, tl.load(X + offs).to(Z.dtype.element_ty, fp_downcast_rounding=ROUNDING))
 
     torch.manual_seed(0)
     dtype = getattr(torch, dtype_x)
-    x = torch.randn(1024, dtype=dtype, device=device)
-    # Ties, a carry out of the mantissa and an overflow tell round-to-nearest-even
-    # apart from truncation and from rounding ties away from zero.
-    x[:8] = torch.tensor([
-        1 + 2**-8, 1 + 2**-7 + 2**-8, 1 + 2**-8 + 2**-10, 2 - 2**-9,
-        torch.finfo(dtype).max,
-        float("nan"), -0.0,
-        torch.finfo(dtype).tiny / 4
-    ], dtype=dtype, device=device)
-    if dtype_x == "float32" and rounding != "rtz":
-        # NaN payloads can disappear on truncation or overflow on rounding.
-        x[8:10] = torch.tensor([0x7F800001, 0x7FFFFFFF], dtype=torch.int32, device=device).view(torch.float32)
+    if dtype_x in ["int64", "uint64"]:
+        midpoint = 2**62 + 2**54
+        values = [midpoint - 1, midpoint, midpoint + 1, midpoint + 2**55]
+        expected = [2**62, 2**62, 2**62 + 2**55, 2**62 + 2**56]
+        bits = 64 if dtype_x == "uint64" else 63
+        values += [0, 2**bits - 1, 2**62, 2**53 + 1]
+        expected += [0, 2**bits, 2**62, 2**53]
+        if dtype_x == "int64":
+            values += [-value for value in values]
+            expected += [-value for value in expected]
+        x = torch.tensor(values, dtype=dtype, device=device)
+        expected = torch.tensor(expected, dtype=torch.bfloat16, device=device)
+    else:
+        x = torch.randn(1024, dtype=dtype, device=device)
+        # Ties, a carry out of the mantissa and an overflow tell round-to-nearest-even
+        # apart from truncation and from rounding ties away from zero.
+        x[:8] = torch.tensor([
+            1 + 2**-8, 1 + 2**-7 + 2**-8, 1 + 2**-8 + 2**-10, 2 - 2**-9,
+            torch.finfo(dtype).max,
+            float("nan"), -0.0,
+            torch.finfo(dtype).tiny / 4
+        ], dtype=dtype, device=device)
+        if dtype_x == "float32" and rounding != "rtz":
+            # NaN payloads can disappear on truncation or overflow on rounding.
+            x[8:10] = torch.tensor([0x7F800001, 0x7FFFFFFF], dtype=torch.int32, device=device).view(torch.float32)
+        expected = x.to(torch.bfloat16)
+        if dtype_x == "float64":
+            midpoint = 1 + 2**-8
+            values = [midpoint - 2**-40, midpoint, midpoint + 2**-40, 1 + 3 * 2**-8]
+            expected_values = [1.0, 1.0, 1 + 2**-7, 1 + 2**-6]
+            values += [-value for value in values]
+            expected_values += [-value for value in expected_values]
+            x[10:18] = torch.tensor(values, dtype=dtype, device=device)
+            expected[10:18] = torch.tensor(expected_values, dtype=torch.bfloat16, device=device)
+        if rounding == "rtz":
+            expected = (x.view(torch.int32) >> 16).to(torch.int16).view(torch.bfloat16)
     z = torch.empty_like(x, dtype=torch.bfloat16)
     kernel[(1, )](x, z, SIZE=x.numel(), ROUNDING=rounding)
-    expected = x.to(torch.bfloat16)
-    if rounding == "rtz":
-        expected = (x.view(torch.int32) >> 16).to(torch.int16).view(torch.bfloat16)
     torch.testing.assert_close(z, expected, rtol=0, atol=0, equal_nan=True)
+    if dtype_x == "float64":
+        y = torch.empty_like(x)
+        kernel[(1, )](z, y, SIZE=z.numel(), ROUNDING=None)
+        torch.testing.assert_close(y, expected.to(dtype), rtol=0, atol=0, equal_nan=True)
+        assert torch.equal(torch.signbit(y[~torch.isnan(y)]), torch.signbit(expected[~torch.isnan(expected)]))
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_x", ["float32", "float16"])
+@pytest.mark.parametrize("dtype_x", ["float32", "float16", "float64"])
 @pytest.mark.parametrize("dtype_z", ["float8_e5m2", "float8_e4m3fn"])
 def test_cast_fp8_rounding(dtype_x, dtype_z, device):
     if not is_interpreter():
+        if dtype_x == "float64":
+            pytest.skip("Direct fp64 <-> fp8 GPU lowering is not implemented")
         check_type_supported(dtype_z, device)
         if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("FP8 RTNE boundary tests require compute capability >= 90")
@@ -2725,6 +2755,10 @@ def test_cast_fp8_rounding(dtype_x, dtype_z, device):
     expected = torch.tensor(expected, dtype=torch.float32, device=device)
     torch.testing.assert_close(z.float(), expected, rtol=0, atol=0)
     assert torch.equal(torch.signbit(z.float()), torch.signbit(expected))
+    if dtype_x == "float64":
+        y = torch.empty_like(x)
+        kernel[(1, )](z, y, SIZE=z.numel())
+        torch.testing.assert_close(y, expected.to(dtype=y.dtype), rtol=0, atol=0)
 
 
 @pytest.mark.interpreter
