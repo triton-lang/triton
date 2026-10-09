@@ -9,8 +9,9 @@ def globaltimer(_semantic=None):
 
 @core.extern
 def smid(_semantic=None):
-    return core.inline_asm_elementwise("mov.u32 $0, %smid;", "=r", [], dtype=core.int32, is_pure=True, pack=1,
-                                       _semantic=_semantic)
+    return core.extern_elementwise("", "", [], {
+        (): ("llvm.nvvm.read.ptx.sreg.smid", core.int32),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.builtin
