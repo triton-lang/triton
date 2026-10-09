@@ -16,6 +16,7 @@ import triton.language.core as tl_core
 from triton.language.core import (
     _CachePolicy as CachePolicy,
     _normalize_cache_policy,
+    _aggregate as aggregate,
     aggregate_replace,
     base_value,
     base_type,
@@ -53,6 +54,7 @@ from triton.language.core import (
 # We define __all__ only to appease the python linter, these are not used in
 # this file but we want to import them anyway so they are importable from here.
 __all__ = [
+    "aggregate",
     "aggregate_replace",
     "CachePolicy",
     "constexpr",
