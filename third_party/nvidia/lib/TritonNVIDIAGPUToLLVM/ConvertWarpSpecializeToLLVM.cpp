@@ -174,6 +174,14 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       int giveRegs = (defRegs - startRegs) * defaultNumWarps / numWorkerWarps;
       lowRegs = (startRegs - giveRegs) / 8 * 8;
     }
+
+    // Returning workers surrender their registers at the common switch-loop
+    // entry. Its decrease must not exceed any worker's current target, including
+    // when the bootstrap allocation above raises lowRegs after capping defRegs.
+    for (WarpSpecializeOp ws : wsOps)
+      if (auto actualRegisters = ws.getActualRegisters())
+        for (int target : actualRegisters->drop_front())
+          lowRegs = std::min(lowRegs, target);
   }
 
   // Attempt to elide captures of trivial computations by hoisting them into the

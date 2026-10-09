@@ -1199,7 +1199,9 @@ llvm.func @dynamic_register_reallocation_overalloc() attributes {allocation.offs
   // CHECK: cond_br %{{.*}}, [[ENTRY:\^.*]], [[SWITCH_LOOP:\^.*]]
 
   // CHECK: [[SWITCH_LOOP]]:
-  // CHECK-NEXT: nvvm.setmaxregister decrease 80
+  // Returning partition0 owns only 24 registers. The common decrease must
+  // remain valid for that path even though the bootstrap calculation allows 80.
+  // CHECK-NEXT: nvvm.setmaxregister decrease 24
   // CHECK-NEXT: nvvm.barrier id = [[C1]] {aligned = false}
   // CHECK: llvm.switch
   // CHECK-NEXT: 0: [[REGISTERS0:\^.*]],
@@ -1208,7 +1210,7 @@ llvm.func @dynamic_register_reallocation_overalloc() attributes {allocation.offs
   // CHECK-NEXT: 3: [[EXIT:\^.*]]
 
   // CHECK: [[REGISTERS0]]:
-  // CHECK-NEXT: nvvm.setmaxregister decrease 24
+  // CHECK-NEXT: nvvm.setmaxregister increase 24
   // CHECK-NEXT: llvm.br [[PARTITION_DISPATCH:\^.*]]
 
   // CHECK: [[REGISTERS1]]:
