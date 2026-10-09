@@ -10,6 +10,7 @@ import triton.language as tl
 from triton import CompilationError
 
 from triton._internal_testing import (
+    assert_no_collectives_in_ptx_loop,
     is_compile_warmup,
     is_cuda,
     is_ampere_or_newer,
@@ -7446,3 +7447,77 @@ def test_tma_cache_policy_ptx(target, rank, kind, multicast, policy, expected, t
             assert all(re.search(r", %rs[0-9]+, %rd[0-9]+;", line) for line in loads)
         if kind == "im2col":
             assert all(re.search(r"\}, (?:%rs[0-9]+, )?%rd[0-9]+;", line) for line in loads)
+
+
+@pytest.mark.parametrize("atomic", [False, True])
+def test_thread_regions_async_wait_scalar_store(atomic, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(In, Out, Flag, ATOMIC: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        offsets = ttgl.arange(0, 128, layout=layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        async_copy.async_load(smem, In + offsets)
+        async_copy.commit_group()
+        async_copy.wait_group(0)
+        if ATOMIC:
+            ttgl.atomic_store(Flag, 1, sem="relaxed")
+        else:
+            ttgl.store(Flag, 1)
+        values = smem.load(layout)
+        ttgl.store(Out + offsets, values)
+
+    data = torch.arange(128, device=device, dtype=torch.int32)
+    out = torch.empty_like(data)
+    flag = torch.zeros((), device=device, dtype=torch.int32)
+    kernel[(1, )](data, out, flag, atomic, num_warps=4)
+    torch.testing.assert_close(out, data)
+    assert flag.item() == 1
+
+
+@pytest.mark.parametrize("call_depth", [0, 1, 2], ids=["inline", "noinline", "transitive"])
+def test_thread_regions_map_elementwise_callees(call_depth, device, fresh_knobs):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+    fresh_knobs.compilation.instrumentation_mode = ""
+    # Map calls currently lack the debug locations required for noinline callees.
+    fresh_knobs.compilation.disable_line_info = call_depth > 0
+
+    @gluon.jit
+    def conditional_load(pointer, enabled):
+        if enabled:
+            value = ttgl.load(pointer)
+        else:
+            value = 0
+        return value
+
+    @gluon.jit(noinline=True)
+    def noinline_load(pointer, enabled):
+        return conditional_load(pointer, enabled)
+
+    @gluon.jit(noinline=True)
+    def forward_load(pointer, enabled):
+        return noinline_load(pointer, enabled)
+
+    callback = (conditional_load, noinline_load, forward_load)[call_depth]
+
+    @gluon.jit
+    def kernel(In, Out):
+        value = ttgl.atomic_load(In, sem="relaxed")
+        ttgl.store(Out + 128, value)
+        offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        values = ttgl.map_elementwise(callback, In + offsets, offsets % 2 == 0)
+        ttgl.store(Out + offsets, values)
+
+    offsets = torch.arange(128, device=device, dtype=torch.int32)
+    values = offsets * 3 + 7
+    output = torch.empty(129, device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](values, output, num_warps=4)
+
+    torch.testing.assert_close(output[:128], torch.where(offsets % 2 == 0, values, 0))
+    assert output[128].item() == values[0].item()
+    assert compiled.asm["ttgir"].count("noinline = true") >= call_depth
+    # The scalar atomic/store outside the map should still avoid a broadcast.
+    assert compiled.metadata.shared == 0
