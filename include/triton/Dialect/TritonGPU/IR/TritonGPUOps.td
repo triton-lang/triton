@@ -72,6 +72,30 @@ def TTG_ThreadPredicateOp : TTG_Op<"thread_predicate"> {
   let hasVerifier = 1;
 }
 
+def TTG_ThreadScopeOp : TTG_Op<"thread_scope", [
+  RecursiveMemoryEffects,
+  DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>
+]> {
+  let summary = "preserve a compiler-generated single-thread scope during lowering";
+  let description = [{
+    The body executes unconditionally within an enclosing guard that selects
+    the canonical thread. Entry/exit synchronization remains outside the guard.
+    This wrapper survives control-flow lowering so memory operations can query
+    their enclosing scope, and is inlined after memory operations are lowered.
+  }];
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region MinSizedRegion<1>:$body);
+  let assemblyFormat = "(`->` `(` type($results)^ `)`)? $body attr-dict";
+}
+
+def TTG_ThreadYieldOp : TTG_Op<"thread_yield", [
+  Pure, Terminator, ReturnLike, HasParent<"ThreadScopeOp">
+]> {
+  let summary = "yield results from a single-thread scope";
+  let arguments = (ins Variadic<AnyType>:$values);
+  let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
+}
+
 def TTG_ThreadHandoffOp : TTG_Op<"thread_handoff", [SameOperandsAndResultType]> {
   let summary = "distribute a scalar at the boundary of a thread region";
   let description = [{

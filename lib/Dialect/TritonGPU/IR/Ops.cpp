@@ -84,6 +84,19 @@ LogicalResult ThreadPredicateOp::verify() {
   return verifyThreadDomain(*this, getDomain());
 }
 
+void ThreadScopeOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  if (src.isParent())
+    successors.emplace_back(&getBody());
+  else
+    successors.emplace_back(getOperation());
+}
+
+ValueRange ThreadScopeOp::getSuccessorInputs(RegionSuccessor successor) {
+  return successor.isOperation() ? ValueRange(getResults())
+                                 : ValueRange(getBody().getArguments());
+}
+
 LogicalResult ThreadHandoffOp::verify() {
   if (!getType().isIntOrFloat() && !isa<triton::PointerType>(getType()))
     return emitOpError(

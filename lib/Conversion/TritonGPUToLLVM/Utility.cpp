@@ -308,7 +308,7 @@ Value emitRedundantThreadPredicate(
 Value emitMemoryThreadPredicate(
     Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo) {
-  if (op->hasAttr("ttg.thread_local"))
+  if (op->getParentOfType<ThreadScopeOp>())
     return TritonLLVMOpBuilder(op->getLoc(), rewriter).true_val();
   return emitRedundantThreadPredicate(freeVarMasks, rewriter, op->getLoc(),
                                       targetInfo);
@@ -1258,7 +1258,7 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
                                   bool emitBarrierAfter, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo) {
   // The region's entry/exit barriers already provide this ordering.
-  if (op->hasAttr("ttg.thread_local"))
+  if (op->getParentOfType<triton::gpu::ThreadScopeOp>())
     return;
   auto emitBarrier = [&] {
     if (triton::gpu::lookupNumCTAs(op) == 1)

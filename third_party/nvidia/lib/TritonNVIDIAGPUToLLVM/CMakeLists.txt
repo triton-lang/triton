@@ -32,6 +32,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TritonInstrumentIR
     TritonInstrumentToLLVM
     MLIRReconcileUnrealizedCasts
+    MLIRSCFToControlFlow
     NVGPUIR
     MLIRUBToLLVM
 )

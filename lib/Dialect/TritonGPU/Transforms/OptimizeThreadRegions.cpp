@@ -204,15 +204,13 @@ scf::IfOp wrapThreadRegion(ArrayRef<Operation *> ops, ValueRange outputs,
   OpBuilder b(ops.front());
   Location loc = ops.front()->getLoc();
   Value pred = ThreadPredicateOp::create(b, loc, b.getI1Type(), domain);
-  auto guard = scf::IfOp::create(b, loc, outputs.getTypes(), pred,
-                                 /*addThenBlock=*/true, /*addElseBlock=*/true);
+  auto guard = scf::IfOp::create(b, loc, outputs.getTypes(), pred);
   guard->setAttr("ttg.execution_domain", domain);
-  Block *body = &guard.getThenRegion().front();
+  Block *body = b.createBlock(&guard.getThenRegion());
   for (Operation *op : ops)
     op->moveBefore(body, body->end());
-  b.setInsertionPointToEnd(body);
   scf::YieldOp::create(b, loc, outputs);
-  b.setInsertionPointToEnd(&guard.getElseRegion().front());
+  b.createBlock(&guard.getElseRegion());
   SmallVector<Value> inactive;
   for (Type type : outputs.getTypes())
     inactive.push_back(zero(b, loc, type));
@@ -223,23 +221,19 @@ scf::IfOp wrapThreadRegion(ArrayRef<Operation *> ops, ValueRange outputs,
 void wrapScalarRegion(ArrayRef<Operation *> ops, const RegionEffects &effects,
                       const TensorTail &tail, RegionOutputs results) {
   Domain owner = ownerDomain(ops.front());
-  auto &outputs = results.values;
+  ValueRange outputs = results.values;
 
   OpBuilder b(ops.front());
   Location loc = ops.front()->getLoc();
   if (effects.before)
     BarrierOp::create(b, loc, AddrSpace::All);
-  auto guard = wrapThreadRegion(ops, outputs, owner);
-  guard.getThenRegion().walk<WalkOrder::PostOrder>([&](Operation *op) {
-    if (isa<BarrierOp>(op)) {
-      op->erase();
-      return;
-    }
-    if (isa<LoadOp, StoreOp, AtomicLoadOp, AtomicStoreOp, AtomicCASOp,
-            AtomicRMWOp>(op) &&
-        llvm::all_of(op->getOperandTypes(), isScalar))
-      op->setAttr("ttg.thread_local", b.getUnitAttr());
-  });
+  auto scope = ThreadScopeOp::create(b, loc, outputs.getTypes());
+  Block *body = b.createBlock(&scope.getBody());
+  for (Operation *op : ops)
+    op->moveBefore(body, body->end());
+  ThreadYieldOp::create(b, loc, outputs);
+  scope.walk([](BarrierOp barrier) { barrier.erase(); });
+  auto guard = wrapThreadRegion({scope}, scope.getResults(), owner);
   // Cross-warp handoffs execute in the full region so every barrier has all
   // its participants. A single-warp tail needs only its own shuffle.
   OpBuilder tailBuilder(b.getContext());
@@ -252,9 +246,8 @@ void wrapScalarRegion(ArrayRef<Operation *> ops, const RegionEffects &effects,
     BarrierOp::create(b, loc, AddrSpace::All);
   for (auto [output, destination, result] :
        llvm::zip_equal(outputs, results.destinations, guard.getResults())) {
-    Value value =
-        ThreadHandoffOp::create(isFull(destination) ? b : tailBuilder, loc,
-                                output.getType(), result, owner, destination);
+    Value value = ThreadHandoffOp::create(isFull(destination) ? b : tailBuilder,
+                                          loc, result, owner, destination);
     output.replaceUsesWithIf(value, [&](OpOperand &use) {
       return !guard->isProperAncestor(use.getOwner());
     });
@@ -359,8 +352,8 @@ void assertValidRegions(ModuleOp module) {
              "handoff must execute in its destination domain");
     }
     Domain domain = executionDomain(op);
-    assert((!op->hasAttr("ttg.thread_local") || domain == ownerDomain(op)) &&
-           "thread-local memory requires the canonical thread region");
+    assert((!isa<ThreadScopeOp>(op) || domain == ownerDomain(op)) &&
+           "thread scope requires the canonical thread region");
     if (isFull(domain))
       return;
     assert(!isa<BarrierOp>(op) &&

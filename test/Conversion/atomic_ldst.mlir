@@ -475,7 +475,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS-LABEL: @thread_regions_scalar_chain(
   // THREAD-REGIONS: %[[LEADER:.*]] = ttg.thread_predicate <31, 3>
   // THREAD-REGIONS-NEXT: scf.if %[[LEADER]]
-  // THREAD-REGIONS: tt.atomic_load relaxed, gpu, {{.*}} {ttg.thread_local}
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.atomic_load relaxed, gpu,
   // THREAD-REGIONS: arith.subi
   // THREAD-REGIONS: arith.shli
   // THREAD-REGIONS: tt.store
@@ -493,7 +494,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS-LABEL: @thread_regions_warp_tail(
   // THREAD-REGIONS: %[[W_LEADER:.*]] = ttg.thread_predicate <31, 3>
   // THREAD-REGIONS-NEXT: %[[W_RESULT:.*]] = scf.if %[[W_LEADER]] -> (i32)
-  // THREAD-REGIONS: tt.atomic_load relaxed, gpu, {{.*}} {ttg.thread_local}
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.atomic_load relaxed, gpu,
   // THREAD-REGIONS: arith.addi
   // THREAD-REGIONS: %[[W_WARP:.*]] = ttg.thread_predicate <0, 3>
   // THREAD-REGIONS-NEXT: scf.if %[[W_WARP]]
@@ -516,7 +518,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS-LABEL: @thread_regions_cta_tail(
   // THREAD-REGIONS: %[[C_LEADER:.*]] = ttg.thread_predicate <31, 3>
   // THREAD-REGIONS-NEXT: %[[C_RESULT:.*]] = scf.if %[[C_LEADER]] -> (i32)
-  // THREAD-REGIONS: tt.atomic_load relaxed, gpu, {{.*}} {ttg.thread_local}
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.atomic_load relaxed, gpu,
   // THREAD-REGIONS: ttg.execution_domain
   // THREAD-REGIONS-NEXT: %[[C_BROADCAST:.*]] = ttg.thread_handoff %[[C_RESULT]] <31, 3> -> <0, 0> : i32
   // THREAD-REGIONS-NEXT: tt.splat %[[C_BROADCAST]]
@@ -535,7 +538,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS-LABEL: @thread_regions_acquire_without_value(
   // THREAD-REGIONS: %[[A_LEADER:.*]] = ttg.thread_predicate <31, 3>
   // THREAD-REGIONS-NEXT: scf.if %[[A_LEADER]]
-  // THREAD-REGIONS: tt.atomic_load acquire, gpu, {{.*}} {ttg.thread_local}
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.atomic_load acquire, gpu,
   // THREAD-REGIONS: ttg.execution_domain
   // THREAD-REGIONS-NEXT: ttg.barrier all
   // THREAD-REGIONS-NEXT: tt.return
