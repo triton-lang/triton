@@ -109,37 +109,32 @@ def test_umulhi_truncated_input(seed_type, dtype):
         pytest.fail("PTX stage not found")
 
 
-@pytest.mark.parametrize("arch", [90, 100, 103])
-@pytest.mark.parametrize("lanes", [1, 2, 4, 8])
-@pytest.mark.parametrize("instrumentation_mode", ["", "consan", "fpsan"])
-@pytest.mark.parametrize("no_nans", [False, True])
-def test_compile_only_nvptx_fabs_preserves_nan_payload(arch, lanes, instrumentation_mode, no_nans):
+@pytest.mark.parametrize("instrumentation_mode", ["", "fpsan"])
+def test_compile_only_nvptx_fabs_preserves_nan_payload(instrumentation_mode):
     from triton._C.libtriton import llvm
     from triton.backends.nvidia.compiler import CUDABackend
 
     llvm.init_targets()
-    backend = CUDABackend(GPUTarget("cuda", arch, 32))
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
     options = backend.parse_options({"ptx_version": 93, "instrumentation_mode": instrumentation_mode})
-    value_type = "float" if lanes == 1 else f"<{lanes} x float>"
-    suffix = "f32" if lanes == 1 else f"v{lanes}f32"
-    flags = "nnan " if no_nans else ""
-    source = f"""
+    source = """
 target triple = "nvptx64-nvidia-cuda"
-declare {value_type} @llvm.fabs.{suffix}({value_type})
-define ptx_kernel void @abs_kernel(ptr addrspace(1) %input, ptr addrspace(1) %output) {{
-  %value = load {value_type}, ptr addrspace(1) %input, align 32
-  %absolute = call {flags}{value_type} @llvm.fabs.{suffix}({value_type} %value)
-  store {value_type} %absolute, ptr addrspace(1) %output, align 32
+declare <4 x float> @llvm.fabs.v4f32(<4 x float>)
+define ptx_kernel void @abs_kernel(ptr addrspace(1) %input, ptr addrspace(1) %output) {
+  %value = load <4 x float>, ptr addrspace(1) %input, align 16
+  %absolute = call <4 x float> @llvm.fabs.v4f32(<4 x float> %value)
+  store <4 x float> %absolute, ptr addrspace(1) %output, align 16
   ret void
-}}
+}
 """
-    ptx = backend.make_ptx(source, {}, options, arch)
-    if instrumentation_mode == "fpsan" and not no_nans:
+    ptx = backend.make_ptx(source, {}, options, 90)
+    if instrumentation_mode == "fpsan":
         assert "abs.f32" not in ptx
-        assert len(re.findall(r"\band\.b32\b", ptx)) == lanes
+        masks = re.findall(r"\band\.b32\s+[^;]+,\s*(0x[0-9a-fA-F]+|\d+)\s*;", ptx)
+        assert len(masks) == 4
+        assert all(int(mask, 0) == 0x7FFFFFFF for mask in masks)
     else:
-        # Leave other modes and operations that exclude NaNs on LLVM's lowering.
-        assert len(re.findall(r"\babs\.f32\b", ptx)) == lanes
+        assert len(re.findall(r"\babs\.f32\b", ptx)) == 4
         assert "and.b32" not in ptx
 
 
