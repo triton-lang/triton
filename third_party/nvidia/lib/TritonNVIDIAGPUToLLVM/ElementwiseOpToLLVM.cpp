@@ -600,6 +600,35 @@ struct FDivOpConversion
   }
 };
 
+struct RemFOpConversion
+    : ElementwiseOpConversionBase<arith::RemFOp, RemFOpConversion> {
+  using Base = ElementwiseOpConversionBase<arith::RemFOp, RemFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(arith::RemFOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // NVPTX expands llvm.frem inline as a - trunc(a/b) * b, which drops the
+    // dividend's sign on an exact-zero remainder and mishandles inf/NaN
+    // (#11986). libdevice fmod covers the whole domain and costs about the
+    // same (same div/multiply sequence inside fmodf).
+    StringRef funcName;
+    if (elemTy.isF32())
+      funcName = "__nv_fmodf";
+    else if (elemTy.isF64())
+      funcName = "__nv_fmod";
+    else
+      return {}; // let the generic llvm.frem lowering take it
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    return {
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+  }
+};
+
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
@@ -955,6 +984,10 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 #undef POPULATE_OP
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  // One above the default so we take frem from the generic LLVM::FRemOp
+  // mapping registered by the shared populate.
+  patterns.add<RemFOpConversion>(typeConverter, axisInfoAnalysis,
+                                 PatternBenefit(benefit.getBenefit() + 1));
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
