@@ -183,6 +183,26 @@ def test_ragged_layout_storage_shape():
     assert BlackwellActMXScaleLayout(metadata).storage_shape([100, 94], False) == [1, 4, 24, 2, 256]
 
 
+def test_blackwell_act_four_column_roundtrip():
+    data = torch.arange(512, dtype=torch.int32).reshape(2, 256, 1)
+    data = (data + data // 256).to(torch.uint8)
+    layout = BlackwellActMXScaleLayout(None, column_alignment=4)
+    encoded = convert_layout(wrap_torch_tensor(data), layout)
+    assert encoded.data.shape == (1, 4, 1, 2, 256)
+    assert torch.equal(convert_layout(encoded, StridedLayout(-1)).data, data)
+
+
+def test_blackwell_act_column_alignment_conversion():
+    data = torch.arange(512, dtype=torch.int32).reshape(2, 256, 1)
+    data = (data + data // 256).to(torch.uint8)
+    compact = BlackwellActMXScaleLayout(None, column_alignment=4)
+    encoded = convert_layout(wrap_torch_tensor(data), compact)
+    padded = convert_layout(encoded, BlackwellActMXScaleLayout(None))
+    assert padded.data.shape == (1, 4, 2, 2, 256)
+    assert torch.equal(convert_layout(padded, StridedLayout(-1)).data, data)
+    assert torch.equal(convert_layout(padded, compact).data, encoded.data)
+
+
 def test_import_does_not_initialize_cuda():
     subprocess.run([
         sys.executable, "-c", """
