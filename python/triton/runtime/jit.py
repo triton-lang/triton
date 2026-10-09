@@ -19,7 +19,7 @@ from .driver import driver
 from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
-from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
+from triton._C.libtriton import native_specialize_impl, ir
 
 TRITON_MODULE = "triton.language"
 GLUON_MODULE = "triton.experimental.gluon.language"
@@ -493,6 +493,7 @@ class JITCallable:
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._src = src
         self.hash = None
+        self._hash_line_info_enabled = False
 
         # Map of global variables used by the function and any functions it
         # transitively calls, plus their values.  The values are collected when
@@ -523,8 +524,12 @@ class JITCallable:
     def cache_key(self) -> str:
         # TODO : hash should be attribute of `self`
         with self._hash_lock:
-            if self.hash is not None:
+            line_info_enabled = not knobs.compilation.disable_line_info
+            # Only the last mode's hash is cached: enabled -> disabled -> enabled
+            # recomputes the hash twice.
+            if self.hash is not None and self._hash_line_info_enabled == line_info_enabled:
                 return self.hash
+            self._hash_line_info_enabled = line_info_enabled
             # Set a placeholder hash to break recursion in case the function
             # transitively calls itself. The full hash is set after.
             self.hash = f"recursion:{self._fn_name}"
@@ -532,7 +537,14 @@ class JITCallable:
             dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals,
                                                      src=self.src)
             dependencies_finder.visit(self.parse())
-            self.hash = dependencies_finder.ret + str(self.starting_line_number)
+            self.hash = dependencies_finder.ret
+            if line_info_enabled:
+                self.hash += str((
+                    self.file_name,
+                    self.starting_line_number,
+                    self.def_file_line_number,
+                    self.def_file_col_number,
+                ))
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
             from triton.language.core import constexpr
@@ -895,7 +907,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         async_mode = _async_compile.active_mode.get()
         if async_mode is not None:
 
-            env_vars = get_cache_invalidating_env_vars()
+            env_vars = knobs.compilation.cache_invalidating_env_vars()
             cache_key = get_cache_key(src, backend, options, env_vars)
 
             def async_compile():

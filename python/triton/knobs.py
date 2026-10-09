@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
-from triton._C.libtriton import getenv, getenv_bool  # type: ignore
+from triton._C.libtriton import getenv, getenv_bool, get_cache_invalidating_env_vars  # type: ignore
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -370,6 +370,17 @@ class compilation_knobs(base_knobs):
     instrumentation_mode: str = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
     fpsan_homomorphic_casts: env_bool = env_bool("TRITON_FPSAN_HOMOMORPHIC_CASTS")
     listener: Union[CompilationListener, None] = None
+
+    def cache_invalidating_env_vars(self) -> dict[str, str]:
+        env_vars = get_cache_invalidating_env_vars()
+        name = "TRITON_DISABLE_LINE_INFO"
+        # Disabling line info is opt-in, so unset and explicitly false have
+        # identical compilation behavior and should share a cache entry.
+        if self.disable_line_info:
+            env_vars[name] = "true"
+        else:
+            env_vars.pop(name, None)
+        return env_vars
 
 
 class AutotuneListener(Protocol):
