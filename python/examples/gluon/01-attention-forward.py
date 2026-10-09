@@ -643,16 +643,20 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, exp_turnstile, corr_bar,  #
                         offs_m, m_i, l_i, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
+    # A TMEM reduction on the causal diagonal would see scores before the
+    # causal mask is applied. Load that tile without a reduction and compute
+    # its maximum from the masked register values instead.
+    use_tmem_red_for_tile: gl.constexpr = use_tmem_red and STAGE != 2
 
     for start_n in range(lo, hi, config.BLOCK_N):
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
-        qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red)
+        qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red_for_tile)
 
         if STAGE == 2:
             col_limit_right = (offs_m - start_n + 1)[:, None]
             qk = _apply_causal_mask(qk, col_limit_right)
 
-        if use_tmem_red:
+        if use_tmem_red_for_tile:
             qk_max = gl.convert_layout(qk_max, m_i.type.layout)
             m_ij = gl.maximum(m_i, qk_max * config.qk_scale)
         else:
@@ -1238,7 +1242,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 @pytest.mark.parametrize("cga_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, profile=False,
-            p: KernelConfig | None = None):
+            p: KernelConfig | None = None, config_selector=select_kernel_config):
     device = "cuda"
 
     def alloc_fn(size: int, alignment: int, stream):
@@ -1246,8 +1250,8 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
 
     triton.set_allocator(alloc_fn)
 
-    if use_tmem_red and not is_blackwell_ultra():
-        pytest.skip("TMEM reduction is only supported on Blackwell Ultra GPUs")
+    if use_tmem_red and not (is_blackwell_ultra() or is_rubin()):
+        pytest.skip("TMEM reduction requires Blackwell Ultra or Rubin")
 
     torch.manual_seed(42)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
@@ -1257,7 +1261,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
 
     tri_m = torch.full(q.shape[:-1], float("nan"), device=device, dtype=torch.float32)
     tri_out, tri_m = attention_forward(q, k, v, causal, sm_scale, M=tri_m, use_tmem_red=use_tmem_red, p=p,
-                                       cga_layout=cga_layout)
+                                       cga_layout=cga_layout, config_selector=config_selector)
     if dtype == torch.float8_e5m2:
         ref_out = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=sm_scale,
                                                                    is_causal=causal)
@@ -1286,6 +1290,13 @@ def test_op_consan(dtype, cga_layout):
         triton.knobs.compilation.instrumentation_mode = "consan"
         test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False, cga_layout=cga_layout,
                 p=p)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
+@pytest.mark.skipif(not (is_blackwell_ultra() or is_rubin()), reason="Requires TMEM reduction support")
+def test_causal_tmem_red(dtype):
+    test_op(Z=1, H=2, N_CTX=1024, HEAD_DIM=128, causal=True, dtype=dtype, use_tmem_red=True, cga_layout=(),
+            config_selector=select_benchmark_kernel_config)
 
 
 # ===-----------------------------------------------------------------------===#
