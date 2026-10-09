@@ -412,6 +412,14 @@ struct CanonicalizeConvertFromConvert
 };
 
 LogicalResult ConvertLayoutOp::verify() {
+  if (isa_and_nonnull<PartialEncodingAttr>(getSrc().getType().getEncoding()) ||
+      isa_and_nonnull<PartialEncodingAttr>(getType().getEncoding())) {
+    if (toLinearLayout(getSrc().getType()) != toLinearLayout(getType()))
+      return emitOpError("materialize availability before changing placement");
+    if (getForceWarpShuffle())
+      return emitOpError(
+          "force_warp_shuffle is not supported for partial layouts");
+  }
   if (!getForceWarpShuffle())
     return success();
 
@@ -1717,3 +1725,32 @@ LogicalResult BarrierOp::verify() {
 }
 
 } // namespace mlir::triton::gpu
+
+mlir::LogicalResult mlir::triton::gpu::ThreadPredicateOp::verify() {
+  return verifyThreadAvailability(getOperation(), getResult().getType(),
+                                  getDomain());
+}
+
+mlir::LogicalResult mlir::triton::gpu::ExtractScalarOp::verify() {
+  auto src = getSrc().getType();
+  if (src.getRank() != 0 || getType() != src.getElementType())
+    return emitOpError(
+        "requires a rank-zero tensor of the result element type");
+  auto a = getThreadAvailability(src);
+  auto d = getDomain();
+  if ((a.getLane() & ~d.getLane()) || (a.getWarp() & ~d.getWarp()) ||
+      (a.getBlock() & ~d.getBlock()))
+    return emitOpError("source is unavailable in the scalar execution domain");
+  return verifyThreadAvailability(getOperation(), src, d);
+}
+
+mlir::LogicalResult mlir::triton::gpu::ScalarSplatOp::verify() {
+  auto src = getSrc().getType();
+  if (src.getRank() != 0 || src.getElementType() != getType().getElementType())
+    return emitOpError(
+        "requires a rank-zero tensor with the result element type");
+  if (!availabilityCovers(src, getType()))
+    return emitOpError(
+        "source is unavailable on threads required by the result");
+  return success();
+}

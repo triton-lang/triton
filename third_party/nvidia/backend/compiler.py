@@ -428,6 +428,10 @@ class CUDABackend(BaseBackend):
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm, is_enabled(options, "consan"))
+        # Partial layouts are introduced only after all remove-layout-conversions
+        # calls in make_ttgir/gluon_to_ttgir, and after warp domains are assigned.
+        if not is_enabled(options, "gsan") and not is_enabled(options, "consan"):
+            passes.ttgpuir.add_optimize_thread_availability(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         if is_enabled(options, "consan"):

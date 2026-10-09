@@ -1248,6 +1248,10 @@ emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
                                   bool emitBarrierAfter, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo) {
+  // The availability pass supplies the entry/exit rendezvous for a complete
+  // scalar region. The atomic itself still retains its original scope/fences.
+  if (op->hasAttr("ttg.thread_local"))
+    return;
   auto emitBarrier = [&] {
     if (triton::gpu::lookupNumCTAs(op) == 1)
       targetInfo.barrier(op->getLoc(), rewriter, triton::gpu::AddrSpace::Local);
@@ -2249,12 +2253,43 @@ static Value synchronizeAtomicResults(Operation *op,
       if (*laneMask != triton::gpu::lookupThreadsPerWarp(rewriter) - 1)
         srcLane = b.and_(getLaneAndWarpId(rewriter, loc).first,
                          b.i32_val(~*laneMask));
+      auto available = triton::getThreadAvailability(op->getResult(0));
+      auto *ctx = op->getContext();
+      Block *continuation = nullptr;
+      if (available.getWarp() || available.getBlock()) {
+        // The shuffle's participant mask still covers the entire warp. Guard
+        // whole warps, so every named lane participates and other warps do not
+        // execute a redundant shuffle with unavailable source copies.
+        llvm::MapVector<StringAttr, int32_t> masks;
+        masks[str_attr("warp")] = available.getWarp();
+        masks[str_attr("block")] = available.getBlock();
+        Value pred = triton::gpu::emitRedundantThreadPredicate(masks, rewriter,
+                                                               loc, targetInfo);
+        Block *head = rewriter.getInsertionBlock();
+        continuation = head->splitBlock(rewriter.getInsertionPoint());
+        Block *active = rewriter.createBlock(continuation);
+        for (Value value : resultVals)
+          continuation->addArgument(value.getType(), loc);
+        rewriter.setInsertionPointToEnd(head);
+        LLVM::CondBrOp::create(rewriter, loc, pred, active, ValueRange{},
+                               continuation, resultVals);
+        rewriter.setInsertionPointToEnd(active);
+      }
       for (Value &value : resultVals)
         value = targetInfo.shuffleIdx(rewriter, loc, value, srcLane);
+      if (continuation) {
+        LLVM::BrOp::create(rewriter, loc, resultVals, continuation);
+        rewriter.setInsertionPointToStart(continuation);
+        resultVals.assign(continuation->getArguments().begin(),
+                          continuation->getArguments().end());
+      }
     }
-  } else if (!tensorTy) {
-    return broadcastScalarAtomicResult(op, valueElemTy, resultVals[0], rewriter,
-                                       b, threadPred, targetInfo);
+  } else if (!tensorTy || tensorTy.getRank() == 0) {
+    Value result = broadcastScalarAtomicResult(
+        op, valueElemTy, resultVals[0], rewriter, b, threadPred, targetInfo);
+    if (!tensorTy)
+      return result;
+    resultVals.assign(1, result);
   } else {
     resultVals = broadcastTensorResult(op, tensorTy, rewriter, resultVals,
                                        valueElemTy, b, threadPred, targetInfo);

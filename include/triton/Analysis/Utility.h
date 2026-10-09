@@ -298,6 +298,11 @@ BarrierStages getAtomicBarrierStages(MemSemantic semantic,
 // Returns nullopt when broadcasting the result requires shared memory.
 std::optional<int32_t> getAtomicResultShuffleMask(Value result);
 
+// Canonical representatives and guaranteed physical copies of a value. Masks
+// are relative to the current warp-specialized execution context.
+gpu::ThreadAvailabilityAttr getOwnerAvailability(Type type, Operation *context);
+gpu::ThreadAvailabilityAttr getThreadAvailability(Value value);
+
 // Whether distributing an atomic result requires communication between CTAs.
 bool atomicResultHasCTABroadcast(Operation *op);
 
