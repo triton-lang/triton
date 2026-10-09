@@ -65,7 +65,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
   tt.func public @precise_reciprocal_f32(%ptr: !tt.ptr<f32>, %arg: f32) {
     // CHECK-LABEL: precise_reciprocal_f32(
-    // CHECK: div.rn.f32
+    // CHECK: rcp.rn.f32
     %one = arith.constant 1.0 : f32
     %result = tt.precise_divf %one, %arg : f32
     tt.store %ptr, %result : !tt.ptr<f32>
@@ -169,6 +169,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     %2 = tt.splat %ptr : !tt.ptr<f16> -> tensor<256x!tt.ptr<f16>, #blocked>
     %3 = tt.addptr %2, %1 : tensor<256x!tt.ptr<f16>, #blocked>, tensor<256xi32, #blocked>
     tt.store %3, %0 : tensor<256x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: .entry precise_divf(
+  // CHECK-DAG: div.rn.f32
+  // CHECK-DAG: rcp.rn.f32
+  tt.func public @precise_divf(%out: !tt.ptr<f32>, %rcp_out: !tt.ptr<f32>, %x: f32, %y: f32) {
+    %one = arith.constant 1.0 : f32
+    %div = tt.precise_divf %x, %y : f32
+    %rcp = tt.precise_divf %one, %y : f32
+    tt.store %out, %div : !tt.ptr<f32>
+    tt.store %rcp_out, %rcp : !tt.ptr<f32>
+    tt.return
+  }
+
+  // CHECK-LABEL: .entry precise_divf_f64(
+  // CHECK-DAG: div.rn.f64
+  // CHECK-DAG: rcp.rn.f64
+  tt.func public @precise_divf_f64(%out: !tt.ptr<f64>, %rcp_out: !tt.ptr<f64>, %x: f64, %y: f64) {
+    %one = arith.constant 1.0 : f64
+    %div = tt.precise_divf %x, %y : f64
+    %rcp = tt.precise_divf %one, %y : f64
+    tt.store %out, %div : !tt.ptr<f64>
+    tt.store %rcp_out, %rcp : !tt.ptr<f64>
     tt.return
   }
 
