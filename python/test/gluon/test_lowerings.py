@@ -352,6 +352,8 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
                  id="interwarp_groups_independent_registers"),
     pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [2, 2], [0, 1]), 64, 64,
                  id="interwarp_groups_independent_warps"),
+    pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [2, 2], [0, 1]), 128, 32,
+                 id="interwarp_groups_broadcast_warp"),
     pytest.param(
         ttgl.DistributedLinearLayout([[2, 0], [4, 0], [8, 0], [32, 0], [64, 0]],
                                      [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
