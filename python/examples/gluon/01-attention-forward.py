@@ -1091,7 +1091,6 @@ def select_kernel_config(
             split_exp_factor = _default_split_exp_factor(head_dim)
             use_selected_tmem_red = use_tmem_red and not causal
 
-    # Use broad Rubin configs with only targeted sequence-length thresholds.
     if is_rubin():
         if head_dim == 64 and is_fp8 and (causal or not use_tmem_red):
             group_size_n = 8 if causal else 1
@@ -1295,10 +1294,10 @@ def test_op_consan(dtype, cga_layout):
 
 BATCH = [4]
 N_HEADS = [32]
-HEAD_DIM = [128]
+HEAD_DIM = [64, 128]
 causal = [False, True]
 providers = ["triton-fp16", "triton-fp8"]
-N_CTX = [2**i for i in range(10, 15)]
+N_CTX = [2**i for i in range(10, 17)]
 use_tmem_reds = [False, True] if is_blackwell_ultra() or is_rubin() else [False]
 
 bench_configs = []
