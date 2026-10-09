@@ -736,6 +736,13 @@ def async_wait_uncommitted():
             ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + offs, smem)
             ttgl.amd.cdna5.async_copy.wait_group(-1)
             smem.store(ttgl.full([XBLOCK_C, XBLOCK_C], 0, ttgl.float16, blocked_layout))
+        elif MODE == "store_wait_zero":
+            smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK_C, XBLOCK_C], smem_layout,
+                                               ttgl.load(input_ptr + offs))
+            ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + offs, smem)
+            ttgl.amd.cdna5.async_copy.wait_group(0)
+            smem.store(ttgl.full([XBLOCK_C, XBLOCK_C], 0, ttgl.float16, blocked_layout))
+            ttgl.amd.cdna5.async_copy.wait_group(-1)
         else:
             smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK_C, XBLOCK_C], smem_layout)
             ttgl.amd.cdna5.async_copy.global_to_shared(smem, input_ptr + offs)
@@ -750,6 +757,66 @@ def async_wait_uncommitted():
         torch.testing.assert_close(output, input_t.expand(2, XBLOCK, XBLOCK))
     elif mode == "store":
         torch.testing.assert_close(output[0], input_t)
+
+
+def async_copy_load_store():
+    mode = sys.argv[2]
+    XBLOCK_C: ttgl.constexpr = ttgl.constexpr(XBLOCK)
+
+    @gluon.jit
+    def kernel(input_ptr, output_ptr, MODE: ttgl.constexpr):
+        num_warps: ttgl.constexpr = ttgl.num_warps()
+        smem_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [XBLOCK_C, XBLOCK_C], [1, 0])
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
+        offs_m = ttgl.arange(0, XBLOCK_C, layout=ttgl.SliceLayout(dim=1, parent=blocked_layout))[:, None]
+        offs_n = ttgl.arange(0, XBLOCK_C, layout=ttgl.SliceLayout(dim=0, parent=blocked_layout))[None, :]
+        offs = offs_m * XBLOCK_C + offs_n
+        zeros = ttgl.full([XBLOCK_C, XBLOCK_C], 0, ttgl.float16, blocked_layout)
+        source = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK_C, XBLOCK_C], smem_layout,
+                                             ttgl.load(input_ptr + offs))
+        if MODE == "interleaved":
+            loaded = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK_C, XBLOCK_C], smem_layout)
+            ttgl.amd.cdna5.async_copy.global_to_shared(loaded, input_ptr + offs)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + offs, source)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.wait_group(0)
+            ttgl.store(output_ptr + XBLOCK_C * XBLOCK_C + offs, loaded.load(blocked_layout))
+            source.store(zeros)
+        elif MODE == "read_store_source":
+            ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + offs, source)
+            ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + XBLOCK_C * XBLOCK_C + offs, source)
+            ttgl.store(output_ptr + 2 * XBLOCK_C * XBLOCK_C + offs, source.load(blocked_layout))
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.wait_group(0)
+            source.store(zeros)
+        elif MODE == "load_into_store_source":
+            ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + offs, source)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.global_to_shared(source, input_ptr + offs)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.wait_group(0)
+        else:
+            younger = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK_C, XBLOCK_C], smem_layout,
+                                                  ttgl.load(input_ptr + offs))
+            ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + offs, source)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + XBLOCK_C * XBLOCK_C + offs, younger)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.wait_group(1)
+            if MODE == "store_partial_wait":
+                source.store(zeros)
+            else:
+                younger.store(zeros)
+            ttgl.amd.cdna5.async_copy.wait_group(0)
+
+    input_t = torch.randn((XBLOCK, XBLOCK), dtype=torch.float16).cuda()
+    output = torch.empty((3, XBLOCK, XBLOCK), dtype=torch.float16).cuda()
+    kernel[(1, )](input_t, output, MODE=mode, num_warps=4)
+    if mode == "read_store_source":
+        torch.testing.assert_close(output, input_t.expand(3, XBLOCK, XBLOCK))
+    elif mode in ("interleaved", "store_partial_wait"):
+        torch.testing.assert_close(output[:2], input_t.expand(2, XBLOCK, XBLOCK))
 
 
 def tdm_store_kernel():
@@ -1069,6 +1136,7 @@ if __name__ == "__main__":
     tests["barrier_storage_pending_completion"] = barrier_storage_pending_completion
     tests["async_wait_count_bounds"] = async_wait_count_bounds
     tests["async_wait_uncommitted"] = async_wait_uncommitted
+    tests["async_copy_load_store"] = async_copy_load_store
     tests[sys.argv[1]]()
     torch.cuda.synchronize()
     print("ConSan helper completed", flush=True)

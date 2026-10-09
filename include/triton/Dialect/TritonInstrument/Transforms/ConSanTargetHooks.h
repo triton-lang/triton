@@ -137,8 +137,7 @@ public:
   virtual std::optional<BarrierInvalidateInfo>
   getBarrierInvalidateInfo(Operation *op) const = 0;
 
-  virtual std::optional<WaitOpInfo>
-  getWaitOpInfo(Operation *op, const AuxDataMap &auxData) const = 0;
+  virtual SmallVector<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
 
   virtual std::optional<AsyncProxyFenceInfo>
   getAsyncProxyFenceInfo(Operation *op) const {
@@ -194,8 +193,7 @@ public:
 
   // Returns commit kinds used by addReadChecks to detect outstanding
   // read accesses to shared memory.
-  virtual SmallVector<CommitKindDesc>
-  getOutstandingReadCommitKinds(const AuxDataMap &auxData) const {
+  virtual SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const {
     return {};
   }
 
