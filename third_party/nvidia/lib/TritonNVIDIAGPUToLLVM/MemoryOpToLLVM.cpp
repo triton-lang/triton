@@ -33,6 +33,12 @@ bool isConstI32OneTensor(Value value) {
 Value emitSharedInc(ConversionPatternRewriter &rewriter, Location loc,
                     Value ptr, bool returnOld, bool isCluster,
                     Value pred = Value()) {
+  if (!pred) {
+    TritonLLVMOpBuilder b(loc, rewriter);
+    return emitLLVMAtomicRMW(
+        rewriter, loc, ptr, b.i32_val(-1), LLVM::AtomicBinOp::uinc_wrap,
+        LLVM::AtomicOrdering::monotonic, isCluster ? "cluster" : "block");
+  }
   PTXBuilder ptxBuilder;
   // PTX atom/red.inc resets to 0 only when the old value reaches the bound, so
   // using UINT32_MAX makes it equivalent to a wrapping increment-by-1.
@@ -307,6 +313,14 @@ struct AsyncSharedStoreOpConversion
         storeValues.emplace_back(value, constraint);
       }
 
+      if (storeVec == 1 && !threadPred) {
+        LLVM::createLLVMIntrinsicCallOp(
+            rewriter, storeLoc, "llvm.nvvm.st.async", TypeRange{},
+            {dst, storeValues.front().first, mbarrier});
+        return {};
+      }
+
+      // The intrinsic does not support predicated or vector stores.
       PTXBuilder ptxBuilder;
       auto &store = ptxBuilder.create("st.async")
                         ->o("weak")

@@ -33,7 +33,8 @@ static constexpr const char *FP4ToBP16Ptx =
     "prmt.b32 $3, a6, a12, 29538;\n\t"
     "}";
 
-// NVVM's FP4-to-BF16 op emits a scaled instruction; keep this unscaled.
+// Unpack in PTX so ptxas can use conversion byte selectors. NVVM's byte
+// extraction adds separate permutes.
 static constexpr const char *FP4ToBf16NativePtx =
     "{\n"
     ".reg .b8 b<4>;\n"
