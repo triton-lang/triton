@@ -589,8 +589,8 @@ class InterpreterBuilder:
         return TensorHandle(src.data.view(_get_np_dtype(dst_type)), dst_type.scalar)
 
     # binary operators
-    def binary_op(self, lhs, rhs, op):
-        tl_dtype = lhs.dtype.scalar
+    def binary_op(self, lhs, rhs, op, ret_type=None):
+        tl_dtype = lhs.dtype.scalar if ret_type is None else ret_type
 
         if lhs.data.dtype == np.bool_ and rhs.data.dtype == np.bool_:
             # numpy uses logical/saturating semantics for bool arithmetic
@@ -606,6 +606,9 @@ class InterpreterBuilder:
             output = output.astype(_get_np_dtype(tl_dtype))
 
         return TensorHandle(output, tl_dtype)
+
+    def comparison_op(self, lhs, rhs, op):
+        return self.binary_op(lhs, rhs, op, tl.int1)
 
     create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
@@ -633,28 +636,28 @@ class InterpreterBuilder:
     create_maxui = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
     create_maximumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
     create_maxnumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmax)
-    create_icmpSLE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less_equal)
-    create_icmpSLT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less)
-    create_icmpSGE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater_equal)
-    create_icmpSGT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater)
-    create_icmpULE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less_equal)
-    create_icmpULT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less)
-    create_icmpUGE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater_equal)
-    create_icmpUGT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater)
-    create_icmpEQ = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.equal)
-    create_icmpNE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.not_equal)
-    create_fcmpOLT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less)
-    create_fcmpOGT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater)
-    create_fcmpOLE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less_equal)
-    create_fcmpOGE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater_equal)
-    create_fcmpOEQ = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.equal)
-    create_fcmpONE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.not_equal)
-    create_fcmpULT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less)
-    create_fcmpUGT = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater)
-    create_fcmpULE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.less_equal)
-    create_fcmpUGE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.greater_equal)
-    create_fcmpUEQ = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.equal)
-    create_fcmpUNE = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.not_equal)
+    create_icmpSLE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.less_equal)
+    create_icmpSLT = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.less)
+    create_icmpSGE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.greater_equal)
+    create_icmpSGT = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.greater)
+    create_icmpULE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.less_equal)
+    create_icmpULT = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.less)
+    create_icmpUGE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.greater_equal)
+    create_icmpUGT = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.greater)
+    create_icmpEQ = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.equal)
+    create_icmpNE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.not_equal)
+    create_fcmpOLT = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.less)
+    create_fcmpOGT = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.greater)
+    create_fcmpOLE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.less_equal)
+    create_fcmpOGE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.greater_equal)
+    create_fcmpOEQ = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.equal)
+    create_fcmpONE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.not_equal)
+    create_fcmpULT = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.less)
+    create_fcmpUGT = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.greater)
+    create_fcmpULE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.less_equal)
+    create_fcmpUGE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.greater_equal)
+    create_fcmpUEQ = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.equal)
+    create_fcmpUNE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.not_equal)
     create_and = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_and)
     create_xor = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_xor)
     create_or = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.bitwise_or)
