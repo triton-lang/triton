@@ -4033,6 +4033,19 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @extern_tf32
+  // CHECK: %[[RN_BITS:.*]] = llvm.call @llvm.nvvm.f2tf32.rn(%arg0) : (f32) -> i32
+  // CHECK: llvm.bitcast %[[RN_BITS]] : i32 to f32
+  // CHECK: %[[RNA_BITS:.*]] = llvm.call @llvm.nvvm.f2tf32.rna(%arg0) : (f32) -> i32
+  // CHECK: llvm.bitcast %[[RNA_BITS]] : i32 to f32
+  // CHECK: llvm.call @llvm.nvvm.f2tf32.rn(%arg0) : (f32) -> i32
+  tt.func private @extern_tf32(%arg: f32) -> (f32, f32, i32) {
+    %rn = tt.extern_elementwise %arg {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.f2tf32.rn"} : (f32) -> f32
+    %rna = tt.extern_elementwise %arg {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.f2tf32.rna"} : (f32) -> f32
+    %bits = tt.extern_elementwise %arg {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.f2tf32.rn"} : (f32) -> i32
+    tt.return %rn, %rna, %bits : f32, f32, i32
+  }
+
   // CHECK-LABEL: @bf16_to_fp16_fallback
   // CHECK: llvm.fpext {{.*}} : bf16 to f32
   // CHECK: llvm.inline_asm {{.*}} "cvt.rn.f16.f32 $0, $1;", "=h,r"

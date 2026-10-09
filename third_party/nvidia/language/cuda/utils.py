@@ -23,6 +23,17 @@ def num_warps(_semantic=None):
     return core.constexpr(_semantic.builder.options.num_warps)
 
 
+@core.extern
+def round_f32_to_tf32(x, rounding: core.constexpr, _semantic=None):
+    """Round float32 to TF32, with ties to even (rn) or away from zero (rna)."""
+    rounding = core._unwrap_if_constexpr(rounding)
+    assert rounding in ("rn", "rna"), 'rounding must be "rn" or "rna"'
+    intrinsic = f"llvm.nvvm.f2tf32.{rounding}"
+    return core.extern_elementwise("", "", [x], {
+        (core.float32, ): (intrinsic, core.float32),
+    }, is_pure=True, _semantic=_semantic)
+
+
 # ----- FP8E4M3B15 ------
 # This data-type is a variant of the standard FP8E4M3 format.
 # It was designed for fast software conversion to FP16 on
