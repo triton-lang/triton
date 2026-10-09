@@ -101,6 +101,11 @@ unsigned getAtomicResultScratchSize(Value result) {
 }
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
+  if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op)) {
+    if (handoff.getSource().getWarp() == handoff.getDestination().getWarp())
+      return 0;
+    return std::max(8, getIntOrFloatOrPtrBitWidth(handoff.getType())) / 8;
+  }
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes();
   }

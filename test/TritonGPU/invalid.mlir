@@ -1052,3 +1052,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @thread_handoff_partial_warp(%value: i32) {
+    // expected-error @+1 {{lane handoff requires every destination warp lane}}
+    %result = ttg.thread_handoff %value <31, 3> -> <15, 3> : i32
+    tt.return
+  }
+}

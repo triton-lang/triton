@@ -66,6 +66,46 @@ LogicalResult InlineAsmOp::verify() {
   return verifyInlineAsmOperands(*this, getPure());
 }
 
+static LogicalResult verifyThreadDomain(Operation *op,
+                                        ThreadDomainAttr domain) {
+  auto module = op->getParentOfType<ModuleOp>();
+  uint32_t laneMask = TritonGPUDialect::getThreadsPerWarp(module) - 1;
+  uint32_t warpMask = lookupNumWarps(op) - 1;
+  if ((domain.getLane() & ~laneMask) || (domain.getWarp() & ~warpMask))
+    return op->emitOpError(
+        "thread domain exceeds the enclosing execution domain");
+  if (lookupNumCTAs(op) != 1)
+    return op->emitOpError(
+        "thread regions require a single-CTA execution domain");
+  return success();
+}
+
+LogicalResult ThreadPredicateOp::verify() {
+  return verifyThreadDomain(*this, getDomain());
+}
+
+LogicalResult ThreadHandoffOp::verify() {
+  if (!getType().isIntOrFloat() && !isa<triton::PointerType>(getType()))
+    return emitOpError(
+        "requires an integer, floating-point, or pointer scalar");
+  auto source = getSource();
+  auto destination = getDestination();
+  if (failed(verifyThreadDomain(*this, source)) ||
+      failed(verifyThreadDomain(*this, destination)))
+    return failure();
+  if ((destination.getLane() & ~source.getLane()) ||
+      (destination.getWarp() & ~source.getWarp()))
+    return emitOpError("destination must widen the source thread domain");
+  if (source != destination && source.getWarp() == destination.getWarp() &&
+      destination.getLane())
+    return emitOpError("lane handoff requires every destination warp lane");
+  if (source.getWarp() != destination.getWarp() &&
+      (destination.getLane() || destination.getWarp()))
+    return emitOpError(
+        "cross-warp handoff requires the full destination domain");
+  return success();
+}
+
 namespace {
 
 template <typename T> bool hasEncoding(Value value) {

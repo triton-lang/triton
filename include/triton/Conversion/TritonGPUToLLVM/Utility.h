@@ -361,6 +361,11 @@ Value emitRedundantThreadPredicate(
     ConversionPatternRewriter &rewriter, Location loc,
     const TargetInfoBase &targetInfo);
 
+// Thread-local memory operations already execute in their owner's branch.
+Value emitMemoryThreadPredicate(
+    Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo);
+
 // Takes two values that may be boolean, or null to represent constant True.
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b);
 
@@ -759,11 +764,14 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
 /// Must run after scratch allocation.
 bool atomicResultHasOrderingBarrier(Operation *op);
 
-Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
-                                  Value resultVal,
-                                  ConversionPatternRewriter &rewriter,
-                                  TritonLLVMOpBuilder &b, Value threadPred,
-                                  const TargetInfoBase &targetInfo);
+Value shuffleFromCanonicalLane(Location loc, Value value, uint32_t laneMask,
+                               ConversionPatternRewriter &rewriter,
+                               const TargetInfoBase &targetInfo);
+
+Value broadcastScalarResult(Operation *op, Type valueElemTy, Value resultVal,
+                            ConversionPatternRewriter &rewriter,
+                            TritonLLVMOpBuilder &b, Value threadPred,
+                            const TargetInfoBase &targetInfo);
 
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx);
 

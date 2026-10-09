@@ -541,8 +541,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
     if (op.getIgnoreCta())
       freeVarMasks[str_attr("block")] = 0;
-    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
-                                                         loc, targetInfo);
+    Value threadPred =
+        ttg::emitMemoryThreadPredicate(op, freeVarMasks, rewriter, targetInfo);
     const int numVecs = elemsPerThread / vec;
     // The L2 cache policy register is loop-invariant; create it once instead of
     // re-emitting an identical createpolicy per vectorized store.
@@ -669,8 +669,8 @@ struct AtomicCASOpConversion
                  : valueTy;
     auto elemsPerThread = getUniqueElemsPerThread(op.getVal().getType());
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
-    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
-                                                         loc, targetInfo);
+    Value threadPred =
+        ttg::emitMemoryThreadPredicate(op, freeVarMasks, rewriter, targetInfo);
 
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -829,8 +829,8 @@ public:
                        << " numElems = " << numElems;
 
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
-    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
-                                                         loc, targetInfo);
+    Value threadPred =
+        ttg::emitMemoryThreadPredicate(op, freeVarMasks, rewriter, targetInfo);
     Value resultPred = threadPred;
 
     SmallVector<Value> resultVals(elemsPerThread);

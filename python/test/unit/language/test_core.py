@@ -18,6 +18,7 @@ import triton.language as tl
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import (
+    assert_no_collectives_in_ptx_loop,
     integral_dtypes,
     int_dtypes,
     str_to_triton_dtype,
@@ -8395,3 +8396,162 @@ def test_libdevice_rint(dtype_str, device):
     rint_kernel[(triton.cdiv(numel, BLOCK_SIZE), )](res_out, x_tri, numel, BLOCK_SIZE)
     ref_out = np.rint(x_np)
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
+@pytest.mark.parametrize("width", [1, 32, 64, 128])
+@pytest.mark.parametrize("atomic", [False, True])
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int32, torch.int64, torch.float16, torch.float32])
+def test_thread_regions_scalar_consumers(width, atomic, dtype, device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @triton.jit
+    def kernel(A, B, WIDTH: tl.constexpr, ATOMIC: tl.constexpr):
+        if ATOMIC:
+            a = tl.atomic_load(A, sem="relaxed")
+        else:
+            a = tl.load(A)
+        if WIDTH == 1:
+            tl.store(B, a + 1)
+        else:
+            offsets = tl.arange(0, WIDTH)
+            tl.store(B + offsets, a)
+
+    value = (1 << 40) + 41 if dtype == torch.int64 else 41
+    a = torch.tensor([value], device=device, dtype=dtype)
+    b = torch.empty((width, ), device=device, dtype=dtype)
+    compiled = kernel[(1, )](a, b, width, atomic, num_warps=4)
+    expected = a + 1 if width == 1 else a.expand(width)
+    torch.testing.assert_close(b, expected)
+    if width <= 32:
+        assert compiled.metadata.shared == 0
+        assert "bar.sync" not in compiled.asm["ptx"]
+        assert ("shfl.sync" in compiled.asm["ptx"]) == (width == 32)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
+@pytest.mark.parametrize("width", [32, 128])
+def test_thread_regions_pointer_handoff(width, device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @triton.jit
+    def kernel(Index, Out, WIDTH: tl.constexpr):
+        index = tl.atomic_load(Index, sem="relaxed")
+        destination = Out + index
+        offsets = tl.arange(0, WIDTH)
+        tl.store(destination + offsets, offsets)
+
+    index = torch.tensor([7], device=device, dtype=torch.int32)
+    out = torch.full((width + 14, ), -1, device=device, dtype=torch.int32)
+    kernel[(1, )](index, out, width, num_warps=4)
+    expected = torch.full_like(out, -1)
+    expected[7:7 + width] = torch.arange(width, device=device, dtype=torch.int32)
+    torch.testing.assert_close(out, expected)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
+def test_thread_regions_scalar_shift(device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @triton.jit
+    def kernel(A, B):
+        amount = tl.load(A)
+        shifted = 1 << (amount - 1)
+        offsets = tl.arange(0, 16)
+        tl.store(B + offsets, shifted + offsets)
+
+    amount = torch.tensor([3], device=device, dtype=torch.int32)
+    out = torch.empty(16, device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](amount, out, num_warps=4)
+    torch.testing.assert_close(out, torch.arange(16, device=device, dtype=torch.int32) + 4)
+    assert compiled.metadata.shared == 0
+    assert "shfl.sync" in compiled.asm["ptx"]
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
+@pytest.mark.parametrize("enabled", [False, True])
+def test_thread_regions_explicit_scalar_mask(enabled, device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @triton.jit
+    def kernel(Enabled, A, B, C):
+        mask = tl.load(Enabled)
+        old = tl.atomic_add(A, 1, mask=mask, sem="relaxed")
+        tl.store(B, old, mask=mask)
+        tl.atomic_store(C, old, mask=mask, sem="relaxed")
+
+    flag = torch.tensor([enabled], device=device, dtype=torch.bool)
+    a = torch.tensor([7], device=device, dtype=torch.int32)
+    b = torch.full_like(a, -1)
+    c = torch.full_like(a, -1)
+    compiled = kernel[(1, )](flag, a, b, c, num_warps=4)
+    assert (a.item(), b.item(), c.item()) == ((8, 7, 7) if enabled else (7, -1, -1))
+    assert compiled.metadata.shared == 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
+@pytest.mark.parametrize("result_width", [0, 1, 32, 64, 128])
+def test_thread_regions_poll_acquire(result_width, device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @triton.jit
+    def kernel(Flag, Payload, Out, RESULT_WIDTH: tl.constexpr):
+        offsets = tl.arange(0, 128)
+        if tl.program_id(0) == 0:
+            tl.store(Payload + offsets, offsets + 17)
+            tl.atomic_store(Flag, 7, sem="release")
+        else:
+            value = tl.atomic_load(Flag, sem="acquire")
+            while value < 7:
+                value = tl.atomic_load(Flag, sem="acquire")
+            data = tl.load(Payload + offsets)
+            tl.store(Out + offsets, data)
+            if RESULT_WIDTH == 1:
+                tl.store(Out + 128, value)
+            elif RESULT_WIDTH > 1:
+                result_offsets = tl.arange(0, RESULT_WIDTH)
+                tl.store(Out + 128 + result_offsets, value + result_offsets)
+
+    flag = torch.zeros((), device=device, dtype=torch.int32)
+    payload = torch.zeros((128, ), device=device, dtype=torch.int32)
+    out = torch.zeros((128 + max(result_width, 1), ), device=device, dtype=torch.int32)
+    compiled = kernel[(2, )](flag, payload, out, result_width, num_warps=4)
+    assert (compiled.metadata.shared > 0) == (result_width > 32)
+    assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
+    torch.testing.assert_close(out[:128], torch.arange(128, device=device, dtype=torch.int32) + 17)
+    if result_width:
+        torch.testing.assert_close(out[128:], torch.arange(result_width, device=device, dtype=torch.int32) + 7)
+    else:
+        assert out[128].item() == 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
+@pytest.mark.parametrize("abort", [False, True])
+def test_thread_regions_conditional_poll(abort, device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @triton.jit
+    def kernel(Flags, Out, ABORT: tl.constexpr):
+        if tl.program_id(0) == 0:
+            value = tl.atomic_load(Flags, sem="acquire", scope="sys")
+            aborted = False
+            spins = 0
+            while value < 7 and not aborted:
+                value = tl.atomic_load(Flags, sem="acquire", scope="sys")
+                spins += 1
+                if (spins & 3) == 0:
+                    aborted = tl.atomic_load(Flags + 1, sem="acquire", scope="sys") != 0
+            tl.store(Out, value)
+            tl.store(Out + 1, aborted)
+        else:
+            if ABORT:
+                tl.atomic_store(Flags + 1, 1, sem="release", scope="sys")
+            else:
+                tl.atomic_store(Flags, 7, sem="release", scope="sys")
+
+    flags = torch.zeros(2, dtype=torch.int32, device=device)
+    out = torch.empty(2, dtype=torch.int32, device=device)
+    compiled = kernel[(2, )](flags, out, abort, num_warps=4)
+    assert out.tolist() == ([0, 1] if abort else [7, 0])
+    assert compiled.metadata.shared == 0
+    assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])

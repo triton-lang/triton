@@ -1204,7 +1204,7 @@ BarrierStages getAtomicBarrierStages(MemSemantic semantic,
 }
 
 std::optional<int32_t> getAtomicResultShuffleMask(Value result) {
-  if (result.use_empty())
+  if (result.use_empty() || result.getDefiningOp()->hasAttr("ttg.thread_local"))
     return 0;
 
   int32_t laneMask, warpMask, blockMask;

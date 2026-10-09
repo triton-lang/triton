@@ -428,6 +428,8 @@ class CUDABackend(BaseBackend):
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm, is_enabled(options, "consan"))
+        if not any(is_enabled(options, mode) for mode in ("gsan", "consan")):
+            passes.ttgpuir.add_optimize_thread_regions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         if is_enabled(options, "consan"):
