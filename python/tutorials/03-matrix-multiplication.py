@@ -161,6 +161,22 @@ def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
+def supports_native_ocp_fp8_matmul(target):
+    # OCP FP8 dot is native on CDNA4, RDNA4/RDNA4m, and gfx1250.
+    return target.backend == "hip" and (target.arch in ("gfx950", "gfx1250") or target.arch.startswith(
+        ("gfx117", "gfx120")))
+
+
+def get_fp8_dtype():
+    if not hasattr(torch, "float8_e5m2"):
+        return None
+    target = triton.runtime.driver.active.get_current_target()
+    # Preserve the existing CUDA path. On HIP, avoid architectures that emulate OCP FP8 dot with FP16.
+    if target.backend == "cuda" or supports_native_ocp_fp8_matmul(target):
+        return torch.float8_e5m2
+    return None
+
+
 def get_cuda_autotune_config():
     return [
         triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3,
@@ -371,15 +387,15 @@ if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
 else:
     print("❌ Triton and Torch differ")
 
-TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
-if TORCH_HAS_FP8 and is_cuda():
+FP8_DTYPE = get_fp8_dtype()
+if FP8_DTYPE is not None:
     torch.manual_seed(0)
     a = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
     b = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
-    a = a.to(torch.float8_e5m2)
+    a = a.to(FP8_DTYPE)
     # pre-transpose b for efficiency.
     b = b.T
-    b = b.to(torch.float8_e5m2)
+    b = b.to(FP8_DTYPE)
     triton_output = matmul(a, b)
     torch_output = torch.matmul(a.to(torch.float16), b.to(torch.float16))
     print(f"triton_output_with_fp8_inputs={triton_output}")
@@ -403,7 +419,7 @@ ref_lib = 'cuBLAS' if is_cuda() else 'rocBLAS'
 
 configs = []
 for fp8_inputs in [False, True]:
-    if fp8_inputs and (not TORCH_HAS_FP8 or not is_cuda()):
+    if fp8_inputs and FP8_DTYPE is None:
         continue
     configs.append(
         triton.testing.Benchmark(
@@ -411,7 +427,7 @@ for fp8_inputs in [False, True]:
             x_vals=[128 * i for i in range(2, 33)],  # Different possible values for `x_name`
             line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
             # Possible values for `line_arg`
-            # Don't compare to cublas for fp8 cases as torch.matmul doesn't support fp8 at the moment.
+            # Benchmark only Triton for FP8 because the vendor-library path does not provide the same FP8 contract.
             line_vals=["triton"] if fp8_inputs else [ref_lib.lower(), "triton"],  # Label name for the lines
             line_names=["Triton"] if fp8_inputs else [ref_lib, "Triton"],  # Line styles
             styles=[("green", "-"), ("blue", "-")],
@@ -426,10 +442,10 @@ for fp8_inputs in [False, True]:
 def benchmark(M, N, K, provider, fp8_inputs):
     a = torch.randn((M, K), device=DEVICE, dtype=torch.float16)
     b = torch.randn((K, N), device=DEVICE, dtype=torch.float16)
-    if TORCH_HAS_FP8 and fp8_inputs:
-        a = a.to(torch.float8_e5m2)
+    if fp8_inputs:
+        a = a.to(FP8_DTYPE)
         b = b.T
-        b = b.to(torch.float8_e5m2)
+        b = b.to(FP8_DTYPE)
     quantiles = [0.5, 0.2, 0.8]
     if provider == ref_lib.lower():
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
