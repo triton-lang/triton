@@ -838,4 +838,24 @@ tt.func private @reduce_broadcast_halves_minui_small(%arg0: tensor<8x4xi32, #hal
   tt.return %0 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
 }
 
+
+// All warps contribute, but only the result owner gathers the final subtotals.
+// REDUX-LABEL: @reduce_partial_scalar
+// REDUX: nvvm.barrier
+// REDUX-NOT: llvm.cond_br
+// REDUX: llvm.icmp "eq"
+// REDUX: @$5 ld.shared::cta.v4.b32
+// REDUX-NOT: nvvm.barrier
+// REDUX-NOT: nvvm.shfl
+// REDUX-NOT: nvvm.redux
+// REDUX-NOT: llvm.cond_br
+// REDUX: llvm.return
+tt.func private @reduce_partial_scalar(%x: tensor<128xi32, #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>>) -> tensor<i32, #ttg.partial<#ttg.linear<{register = [], lane = [[], [], [], [], []], warp = [[], []], block = []}>, <31, 3, 0>>> {
+  %sum = "tt.reduce"(%x) ({
+  ^bb0(%a: i32, %b: i32):
+    %value = arith.addi %a, %b : i32
+    tt.reduce.return %value : i32
+  }) {axis = 0 : i32, allocation.offset = 0 : i32} : (tensor<128xi32, #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>>) -> tensor<i32, #ttg.partial<#ttg.linear<{register = [], lane = [[], [], [], [], []], warp = [[], []], block = []}>, <31, 3, 0>>>
+  tt.return %sum : tensor<i32, #ttg.partial<#ttg.linear<{register = [], lane = [[], [], [], [], []], warp = [[], []], block = []}>, <31, 3, 0>>>
+}
 }

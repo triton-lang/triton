@@ -513,6 +513,30 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct ThreadPredicateOpConversion : ConvertOpToLLVMPattern<ThreadPredicateOp> {
+  const TargetInfoBase &targetInfo;
+  ThreadPredicateOpConversion(LLVMTypeConverter &converter,
+                              const TargetInfoBase &targetInfo,
+                              PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+  LogicalResult
+  matchAndRewrite(ThreadPredicateOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto a = op.getDomain();
+    auto *ctx = op.getContext();
+    llvm::MapVector<StringAttr, int32_t> masks;
+    masks[StringAttr::get(ctx, "lane")] = a.getLane();
+    masks[StringAttr::get(ctx, "warp")] = a.getWarp();
+    masks[StringAttr::get(ctx, "block")] = a.getBlock();
+    Value pred =
+        emitRedundantThreadPredicate(masks, rewriter, op.getLoc(), targetInfo);
+    if (!pred)
+      pred = TritonLLVMOpBuilder(op.getLoc(), rewriter).true_val();
+    rewriter.replaceOp(op, pred);
+    return success();
+  }
+};
+
 struct AtomicLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicLoadOp> {
   AtomicLoadOpConversion(LLVMTypeConverter &converter,
@@ -528,8 +552,9 @@ struct AtomicLoadOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto sem = op.getSem();
-    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
-                                 rewriter, targetInfo);
+    if (!op->hasAttr("ttg.thread_local"))
+      insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
+                                   rewriter, targetInfo);
 
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
     auto ptrElements =
@@ -644,6 +669,7 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BarrierOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<ThreadPredicateOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AtomicLoadOpConversion>(typeConverter, targetInfo,
                                        axisInfoAnalysis, benefit);
   patterns.add<AtomicPollOpConversion>(typeConverter, targetInfo, benefit);

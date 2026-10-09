@@ -849,6 +849,9 @@ def TT_ReduceOp: TT_Op<"reduce",
     let hasVerifier = 1;
     let hasRegionVerifier = 1;
     let extraClassDeclaration = [{
+      static bool isCompatibleReturnTypes(::mlir::TypeRange lhs,
+                                          ::mlir::TypeRange rhs);
+
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
 
