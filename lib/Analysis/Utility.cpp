@@ -383,13 +383,42 @@ LinearLayout ScanLoweringHelper::buildIntraWarpTotalsLayout() const {
 }
 
 LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
-  // Order axis bits within each warp-local segment: registers, then lanes.
-  // R=[4,8], L=[1,2] becomes R=[1,2], L=[4,8]. Warp ownership is preserved.
+  // Place contiguous segment totals in registers, followed by lanes. Exchange
+  // independent-scan register bases with lane bases to expose up to 16 adjacent
+  // totals per thread. For example, R=[(8,0)], L=[(0,1),(0,2)] becomes
+  // R=[(0,1)], L=[(8,0),(0,2)] for a scan along dimension 1.
+  // Warp ownership is preserved.
   auto *ctx = intraWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   unsigned numSegments = warpSegmentSize / threadSegmentSize;
   auto bases = intraWarpTotalsLayout->getBases();
+  auto inSegment = [&](const auto &basis) {
+    return basis[axis] && basis[axis] < numSegments;
+  };
+  unsigned registerBits = llvm::count_if(bases[kReg], inSegment);
+  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  // Inter-warp boundary carries retain the original independent-scan owners.
+  // Exchanging row bases is valid when the entire scan is warp-local.
+  bool warpLocal = warpSegmentSize == originalLayout.getOutDimSize(axisDim);
+  for (; warpLocal && registerBits < 4; ++registerBits) {
+    auto reg = llvm::find_if(
+        bases[kReg], [&](const auto &basis) { return basis[axis] == 0; });
+    auto lane =
+        llvm::min_element(bases[kLane], [&](const auto &a, const auto &b) {
+          unsigned x = inSegment(a) ? a[axis] : numSegments;
+          unsigned y = inSegment(b) ? b[axis] : numSegments;
+          return x < y;
+        });
+    if (reg == bases[kReg].end() || lane == bases[kLane].end() ||
+        !inSegment(*lane))
+      break;
+    std::swap(*reg, *lane);
+  }
+  // Promoted axis bits precede register bits for other segments and scans.
+  llvm::stable_sort(bases[kReg], [&](const auto &a, const auto &b) {
+    return inSegment(a) && !inSegment(b);
+  });
   unsigned next = 1;
   for (auto dim : {kReg, kLane})
     for (auto &basis : bases[dim])
