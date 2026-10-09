@@ -316,6 +316,19 @@ std::pair<Value, Value> TargetInfo::shuffleUp(RewriterBase &rewriter,
   return {shuffleIdx(rewriter, loc, val, index), sourceInBounds};
 }
 
+std::pair<Value, Value> TargetInfo::shuffleDown(RewriterBase &rewriter,
+                                                Location loc, Value val,
+                                                int delta) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value laneId = getLaneId(rewriter, loc);
+  auto mod = rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  Value source = b.add(laneId, b.i32_val(delta));
+  Value sourceInBounds = b.icmp_ult(source, b.i32_val(warpSize));
+  Value index = b.select(sourceInBounds, source, laneId);
+  return {shuffleIdx(rewriter, loc, val, index), sourceInBounds};
+}
+
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
