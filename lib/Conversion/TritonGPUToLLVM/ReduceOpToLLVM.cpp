@@ -78,11 +78,17 @@ public:
       if (i > 0) {
         sync(rewriter, loc, lastCvtCrossesCTAs, op);
       }
-      accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
-      lastCvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
-
-      std::tie(regLl, accs) =
-          reduceWithinWarps(op, std::move(tmpLl), std::move(accs), rewriter);
+      bool cvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
+      if (helper.hasPartialScalarResult()) {
+        accs = finishPartialScalarReduction(op, regLl, tmpLl, accs, rewriter);
+        regLl = ReduceOpHelper::zeroBasesAlongDimAndReorder(
+            tmpLl, axis, StringAttr::get(ctx, "lane"));
+      } else {
+        accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
+        std::tie(regLl, accs) =
+            reduceWithinWarps(op, std::move(tmpLl), std::move(accs), rewriter);
+      }
+      lastCvtCrossesCTAs = cvtCrossesCTAs;
       ++i;
     }
     assert(i <= 2 && "expected at most 2 rounds of warp reductions");
@@ -458,6 +464,84 @@ private:
       for (Value &value : acc)
         value = targetInfo.shuffleIdx(rewriter, op.getLoc(), value, leader);
     }
+  }
+
+  // All contributing warps publish their subtotal and rendezvous. Threads
+  // required by the result layouts gather those subtotals into registers and
+  // finish locally, without broadcasting the scalar or reducing another warp.
+  SmallVector<SmallVector<Value>>
+  finishPartialScalarReduction(triton::ReduceOp op,
+                               const LinearLayout &srcLayout,
+                               const LinearLayout &dstLayout,
+                               const SmallVector<SmallVector<Value>> &accs,
+                               ConversionPatternRewriter &rewriter) const {
+    auto *ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto kReg = str_attr("register");
+    auto kLane = str_attr("lane");
+    auto kWarp = str_attr("warp");
+    auto kBlock = str_attr("block");
+    auto index = [&](const LinearLayout &layout) {
+      return applyLinearLayout(loc, rewriter, layout,
+                               {{kReg, b.i32_val(0)},
+                                {kLane, laneId},
+                                {kWarp, warpId},
+                                {kBlock, b.i32_val(0)}})
+          .front()
+          .second;
+    };
+    auto scratch = ReduceOpHelper(op).getScratchConfig(srcLayout, dstLayout);
+    Value base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+    Value sourceIndex = index(srcLayout);
+    Value storePred = triton::gpu::emitRedundantThreadPredicate(
+        srcLayout.getFreeVariableMasks(), rewriter, loc, targetInfo);
+    SmallVector<Value> bases;
+    for (unsigned i = 0; i < accs.size(); ++i) {
+      assert(accs[i].size() == 1 && "expected a scalar warp subtotal");
+      Value ptr =
+          b.gep(base.getType(), i8_ty, base, b.i32_val(scratch.offsets[i]));
+      bases.push_back(ptr);
+      Value offsetPtr =
+          b.gep(ptr.getType(), accs[i][0].getType(), ptr, sourceIndex);
+      targetInfo.storeShared(rewriter, loc, offsetPtr, accs[i][0], storePred);
+    }
+    sync(rewriter, loc, /*crossCTA=*/false, op);
+    uint32_t laneMask = ~uint32_t{0}, warpMask = ~uint32_t{0};
+    for (Type type : op.getResultTypes()) {
+      auto domain = triton::gpu::getThreadAvailability(type);
+      laneMask &= domain.getLane();
+      warpMask &= domain.getWarp();
+    }
+    llvm::MapVector<StringAttr, int32_t> masks;
+    masks[kLane] = laneMask;
+    masks[kWarp] = warpMask;
+    Value pred = triton::gpu::emitRedundantThreadPredicate(masks, rewriter, loc,
+                                                           targetInfo);
+    if (!pred)
+      pred = b.true_val();
+    unsigned numPartials = srcLayout.getTotalOutDimSize();
+    SmallVector<SmallVector<Value>> partials(numPartials);
+    for (unsigned i = 0; i < accs.size(); ++i) {
+      Type type = accs[i][0].getType();
+      Value loaded = targetInfo.loadShared(rewriter, loc, bases[i],
+                                           vec_ty(type, numPartials), pred);
+      auto elements = unpackLLVector(loc, loaded, rewriter);
+      for (unsigned j = 0; j < numPartials; ++j)
+        partials[j].push_back(elements[j]);
+    }
+    // Match the descending XOR tree used by reduceWithinWarps, including its
+    // operand order for floating-point and noncommutative combiners. Subtotal
+    // indices follow the increasing nonzero warp bases in srcLayout.
+    for (unsigned width = numPartials / 2; width; width /= 2)
+      for (unsigned j = 0; j < width; ++j)
+        accumulate(loc, rewriter, op.getCombineOp(), partials[j],
+                   partials[j + width]);
+    SmallVector<SmallVector<Value>> values;
+    for (Value value : partials.front())
+      values.push_back({value});
+    return values;
   }
 
   // Pack the accumulator values and replace the reduce op with the result.

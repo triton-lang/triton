@@ -291,4 +291,116 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     }
     tt.return
   }
+  // A reduction consumes the complete tensor, then keeps only the scalar
+  // store's copy of the result. The combine region still operates on scalars.
+  // CHECK-LABEL: @availability_reduce_scalar(
+  // CHECK: %[[REDUCED:.*]] = "tt.reduce"(%{{.*}})
+  // CHECK: arith.addf {{.*}} : f32
+  // CHECK: tt.reduce.return {{.*}} : f32
+  // CHECK: (tensor<128xf32, #blocked>) -> tensor<f32, #ttg.partial<#[[$SCALAR]], <31, 3, 0>>>
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.store {{.*}} %[[REDUCED]] : tensor<!tt.ptr<f32>, #ttg.partial<#[[$SCALAR]], <31, 3, 0>>>
+  // CHECK: tt.return
+  tt.func @availability_reduce_scalar(%x: tensor<128xf32, #blocked>, %out: !tt.ptr<f32>) {
+    %sum = "tt.reduce"(%x) ({
+    ^bb0(%a: f32, %b: f32):
+      %value = arith.addf %a, %b : f32
+      tt.reduce.return %value : f32
+    }) {axis = 0 : i32} : (tensor<128xf32, #blocked>) -> f32
+    tt.store %out, %sum : !tt.ptr<f32>
+    tt.return
+  }
+
+  // Every lane of warp zero consumes the final sum; other warps do not.
+  // CHECK-LABEL: @availability_reduce_warp(
+  // CHECK: "tt.reduce"
+  // CHECK: (tensor<128xf32, #blocked>) -> tensor<f32, #ttg.partial<#[[$SCALAR]], <0, 3, 0>>>
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: ttg.splat_scalar
+  // CHECK: tt.return
+  tt.func @availability_reduce_warp(%x: tensor<128xf32, #blocked>, %out: tensor<32x!tt.ptr<f32>, #blocked>) {
+    %sum = "tt.reduce"(%x) ({
+    ^bb0(%a: f32, %b: f32):
+      %value = arith.addf %a, %b : f32
+      tt.reduce.return %value : f32
+    }) {axis = 0 : i32} : (tensor<128xf32, #blocked>) -> f32
+    %values = tt.splat %sum : f32 -> tensor<32xf32, #blocked>
+    tt.store %out, %values : tensor<32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+
+  // A consumer spanning all warps retains full result availability.
+  // CHECK-LABEL: @availability_reduce_full(
+  // CHECK-NOT: #ttg.partial
+  // CHECK: (tensor<128xf32, #blocked>) -> f32
+  // CHECK-NOT: #ttg.partial
+  // CHECK: tt.return
+  tt.func @availability_reduce_full(%x: tensor<128xf32, #blocked>, %out: tensor<128x!tt.ptr<f32>, #blocked>) {
+    %sum = "tt.reduce"(%x) ({
+    ^bb0(%a: f32, %b: f32):
+      %value = arith.addf %a, %b : f32
+      tt.reduce.return %value : f32
+    }) {axis = 0 : i32} : (tensor<128xf32, #blocked>) -> f32
+    %values = tt.splat %sum : f32 -> tensor<128xf32, #blocked>
+    tt.store %out, %values : tensor<128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+
+  // Tuple reductions retain their scalar combiner arguments and can return
+  // partial copies when all components have narrow consumers.
+  // CHECK-LABEL: @availability_reduce_tuple(
+  // CHECK: "tt.reduce"
+  // CHECK: tt.reduce.return {{.*}} : i32, f32
+  // CHECK: -> (tensor<i32, #ttg.partial<#[[$SCALAR]], <31, 3, 0>>>, tensor<f32, #ttg.partial<#[[$SCALAR]], <31, 3, 0>>>)
+  // CHECK: tt.return
+  tt.func @availability_reduce_tuple(%x: tensor<128xi32, #blocked>, %y: tensor<128xf32, #blocked>, %out_x: !tt.ptr<i32>, %out_y: !tt.ptr<f32>) {
+    %sum:2 = "tt.reduce"(%x, %y) ({
+    ^bb0(%a: i32, %b: f32, %c: i32, %d: f32):
+      %i = arith.addi %a, %c : i32
+      %f = arith.addf %b, %d : f32
+      tt.reduce.return %i, %f : i32, f32
+    }) {axis = 0 : i32} : (tensor<128xi32, #blocked>, tensor<128xf32, #blocked>) -> (i32, f32)
+    tt.store %out_x, %sum#0 : !tt.ptr<i32>
+    tt.store %out_y, %sum#1 : !tt.ptr<f32>
+    tt.return
+  }
+  // Float casts may omit their optional fast-math attribute. The reduction
+  // result remains partial through the widening cast to the store's dtype.
+  // CHECK-LABEL: @availability_reduce_cast(
+  // CHECK: (tensor<128xf16, #blocked>) -> tensor<f16, #ttg.partial<#[[$SCALAR]], <31, 3, 0>>>
+  // CHECK: arith.extf {{.*}} : tensor<f16, #ttg.partial<#[[$SCALAR]], <31, 3, 0>>> to tensor<f32, #ttg.partial<#[[$SCALAR]], <31, 3, 0>>>
+  // CHECK: tt.return
+  tt.func @availability_reduce_cast(%x: tensor<128xf16, #blocked>, %out: !tt.ptr<f32>) {
+    %sum = "tt.reduce"(%x) ({
+    ^bb0(%a: f16, %b: f16):
+      %value = arith.addf %a, %b : f16
+      tt.reduce.return %value : f16
+    }) {axis = 0 : i32} : (tensor<128xf16, #blocked>) -> f16
+    %wide = arith.extf %sum : f16 to f32
+    tt.store %out, %wide : !tt.ptr<f32>
+    tt.return
+  }
+
+  // An associative first-nonzero combiner with control flow keeps its existing
+  // lowering: inactive final-stage values must not enter a branch predicate.
+  // CHECK-LABEL: @availability_reduce_control_flow(
+  // CHECK: "tt.reduce"
+  // CHECK: scf.if
+  // CHECK: (tensor<128xi32, #blocked>) -> i32
+  // CHECK: tt.return
+  tt.func @availability_reduce_control_flow(%x: tensor<128xi32, #blocked>, %out: !tt.ptr<i32>) {
+    %sum = "tt.reduce"(%x) ({
+    ^bb0(%a: i32, %b: i32):
+      %zero = arith.constant 0 : i32
+      %nonzero = arith.cmpi ne, %a, %zero : i32
+      %value = scf.if %nonzero -> i32 {
+        scf.yield %a : i32
+      } else {
+        scf.yield %b : i32
+      }
+      tt.reduce.return %value : i32
+    }) {axis = 0 : i32} : (tensor<128xi32, #blocked>) -> i32
+    tt.store %out, %sum : !tt.ptr<i32>
+    tt.return
+  }
 }

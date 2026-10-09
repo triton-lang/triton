@@ -3537,11 +3537,12 @@ def test_reduce64_integer(op, dtype_str, num_warps, device):
     compiled = kernel[(1, )](to_triton(x, device=device), output, num_warps=num_warps)
     expected = np.sum(x, dtype=x.dtype) if op == "add" else getattr(np, f"bitwise_{op}").reduce(x)
     np.testing.assert_equal(to_numpy(output)[0], expected)
-    if torch.cuda.get_device_capability()[0] >= 8:
+    if torch.cuda.get_device_capability()[0] >= 8 and not compiled.metadata.instrumentation_mode:
         if op == "add":
             assert "redux.sync.add.s32" in compiled.asm["ptx"]
         else:
-            assert compiled.asm["ptx"].count(f"redux.sync.{op}.b32") == 4
+            # Partial scalar results combine warp subtotals in registers.
+            assert compiled.asm["ptx"].count(f"redux.sync.{op}.b32") == 2
 
 
 # TODO: [Qingyi] Fix argmin / argmax

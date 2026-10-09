@@ -55,10 +55,11 @@ bool isLocalArithmetic(Operation *op) {
       overflow && overflow.getOverflowAttr().getValue() !=
                       arith::IntegerOverflowFlags::none)
     return false;
-  if (auto fastmath = dyn_cast<arith::ArithFastMathInterface>(op);
-      fastmath &&
-      fastmath.getFastMathFlagsAttr().getValue() != arith::FastMathFlags::none)
-    return false;
+  if (auto fastmath = dyn_cast<arith::ArithFastMathInterface>(op)) {
+    auto flags = fastmath.getFastMathFlagsAttr();
+    if (flags && flags.getValue() != arith::FastMathFlags::none)
+      return false;
+  }
   if (auto nonneg = dyn_cast<arith::ArithNonNegFlagInterface>(op);
       nonneg && nonneg.getNonNeg())
     return false;
@@ -603,6 +604,22 @@ public:
       for (Value operand : op->getOperands())
         require(operand, needed, op);
     }
+    // A reduction consumes every input element, but only its demanded result
+    // copies need to be available. Keep tuple results together when any result
+    // needs full availability, since the combiner computes them jointly.
+    module.walk([&](ReduceOp reduce) {
+      if (!ReduceOpHelper(reduce).supportsPartialScalarResult())
+        return;
+      SmallVector<Domain> needed;
+      for (Value result : reduce.getResults()) {
+        Domain requested = demand.count(result) ? demand.lookup(result) : full;
+        if (isFull(requested))
+          return;
+        needed.push_back(requested);
+      }
+      for (auto [result, requested] : llvm::zip(reduce.getResults(), needed))
+        availability[result] = requested;
+    });
     SmallVector<Operation *> producers;
     module.walk([&](Operation *op) {
       if (isa<LoadOp, AtomicLoadOp>(op) || casts.contains(op))
