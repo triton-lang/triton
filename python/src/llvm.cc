@@ -217,6 +217,36 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
+void lowerNVPTXFAbs(llvm::Module &module) {
+  if (!module.getTargetTriple().isNVPTX())
+    return;
+
+  SmallVector<IntrinsicInst *> calls;
+  for (Function &function : module) {
+    if (function.getIntrinsicID() != Intrinsic::fabs ||
+        !function.getReturnType()->getScalarType()->isFloatTy())
+      continue;
+    for (User *user : function.users())
+      if (auto *call = dyn_cast<IntrinsicInst>(user))
+        if (!call->hasNoNaNs())
+          calls.push_back(call);
+  }
+
+  // FPSan needs NaN payloads preserved, but PTX abs.f32 may canonicalize them.
+  // Rewrite after IR optimization: InstCombine can otherwise recreate fabs,
+  // and NVPTX does not consistently lower its scalar and vector forms alike.
+  for (IntrinsicInst *call : calls) {
+    IRBuilder<> builder(call);
+    Type *bitsType = builder.getInt32Ty();
+    if (auto *vectorType = dyn_cast<VectorType>(call->getType()))
+      bitsType = VectorType::get(bitsType, vectorType->getElementCount());
+    Value *bits = builder.CreateBitCast(call->getArgOperand(0), bitsType);
+    Value *magnitude = builder.CreateAnd(bits, 0x7fffffff);
+    call->replaceAllUsesWith(builder.CreateBitCast(magnitude, call->getType()));
+    call->eraseFromParent();
+  }
+}
+
 std::string
 translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
                      const std::string &proc, const std::string &features,
@@ -299,10 +329,13 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   return result;
 }
 
-std::string translateLLVMIRToASM(
-    llvm::Module &module, const std::string &triple, const std::string &proc,
-    const std::string &features, const std::vector<std::string> &flags,
-    bool enable_fp_fusion, bool isObject, bool canonicalizeGEP) {
+std::string translateLLVMIRToASM(llvm::Module &module,
+                                 const std::string &triple,
+                                 const std::string &proc,
+                                 const std::string &features,
+                                 const std::vector<std::string> &flags,
+                                 bool enable_fp_fusion, bool isObject,
+                                 bool canonicalizeGEP, bool enableFpSan) {
   using namespace mlir;
 
   LLVMOptionSettings options;
@@ -357,6 +390,8 @@ std::string translateLLVMIRToASM(
     cleanup.add(llvm::createEarlyCSEPass());
     cleanup.run(module);
   }
+  if (enableFpSan)
+    lowerNVPTXFAbs(module);
   // emit machine code
   std::string result;
   {
@@ -797,7 +832,7 @@ void init_triton_llvm(py::module_ &m) {
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
-         bool sched4reg) -> py::object {
+         bool sched4reg, bool enableFpSan) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -816,9 +851,9 @@ void init_triton_llvm(py::module_ &m) {
                 "failed to parse IR: " + error.getMessage() +
                 "lineno: " + std::to_string(error.getLineNo()));
           }
-          obj =
-              translateLLVMIRToASM(*module, triple, proc, features, flags,
-                                   enable_fp_fusion, isObject, canonicalizeGEP);
+          obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
+                                     enable_fp_fusion, isObject,
+                                     canonicalizeGEP, enableFpSan);
         }
         if (isObject)
           return py::object(py::bytes(obj.c_str(), obj.size()));
@@ -828,7 +863,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("llvm_ir"), py::arg("triple"), py::arg("proc"),
       py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
       py::arg("is_object"), py::arg("canonicalize_gep"),
-      py::arg("sched4reg") = false);
+      py::arg("sched4reg") = false, py::arg("enable_fpsan") = false);
 
   m.def("translate_to_mir",
         [](std::string llvmIR, std::string triple, std::string proc,
