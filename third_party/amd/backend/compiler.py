@@ -260,8 +260,13 @@ class HIPOptions:
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
 
-    # The following option provides hints to the AMDGPU backend regarding instruction scheduling
-    # for all `tt.dot` operations in a kernel. Experimental; right now no effect.
+    # Experimental hint for how the AMD backend schedules a kernel's instructions. The only
+    # recognized value is "mfma-schedule" (gfx950 only): run the MFMA scheduler on the optimized
+    # LLVM IR. It interleaves the MFMAs of each hot loop with the memory operations that are
+    # independent of them, keeping the matrix unit busy, and pins that order with
+    # llvm.amdgcn.sched.barrier so LLVM's machine schedulers preserve it. Kernels without an
+    # eligible loop are left untouched. MFMA accumulators pinned with `cd_regclass` keep their
+    # pins next to the moved MFMAs.
     schedule_hint: str = ''
 
     # Experimental: intended for development and debugging; may change or be removed without notice.
@@ -335,6 +340,8 @@ class HIPBackend(BaseBackend):
             opts["sanitize_overflow"] = False
 
         args = {'arch': knobs.runtime.override_arch or self.target.arch}
+        if opts.get("schedule_hint", "") not in ("", "mfma-schedule"):
+            raise ValueError(f"schedule_hint: unknown value {opts['schedule_hint']!r}; supported: 'mfma-schedule'")
 
         if opts.get("num_ctas", 1) > 1 and not amd.supports_multi_cta_launch(self.target.arch):
             raise ValueError(f"num_ctas > 1 not supported on {self.target.arch}")
@@ -713,6 +720,10 @@ class HIPBackend(BaseBackend):
 
         if knobs.amd.scalarize_packed_fops:
             amd.add_scalarize_packed_fops_llvm_pass(kernel_fn)
+
+        # Opt-in MFMA scheduler, see the schedule_hint option (validated in parse_options).
+        if options.schedule_hint == "mfma-schedule" and options.arch == "gfx950":
+            amd.add_mfma_schedule_pass(kernel_fn)
 
         # Get some metadata
         metadata["num_warps"] = total_warps_num
