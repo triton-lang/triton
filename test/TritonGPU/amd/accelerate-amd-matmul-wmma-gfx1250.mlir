@@ -571,6 +571,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %b: tensor<128x32xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
       %out: tensor<32x32x!tt.ptr<f16>, #blocked>) {
     // GFX1250-NOT: tt.fp_to_fp
+    // GFX1250-NOT: arith.extf
     // GFX1250: tt.dot {{.*}} : tensor<32x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<128x32xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<32x32xf16, #mma>
     // GFX1250-NOT: arith.truncf
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #blocked>
