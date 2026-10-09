@@ -5714,12 +5714,11 @@ def test_load_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        all_modifiers = ['.ca', '.cg', '.cs', '.cv']
-        for modifier in all_modifiers:
-            if modifier == cache:
-                assert f'ld.global{modifier}' in ptx
-            else:
-                assert f'ld.global{modifier}' not in ptx
+        modifiers = re.findall(r'\bld\.global(?:\.(ca|cg|cs|cv))?\.(?:v[248]\.)?[busf]\d+\b', ptx)
+        assert modifiers
+        # An omitted load cache modifier means .ca.
+        expected = cache.removeprefix('.') or 'ca'
+        assert all((modifier or 'ca') == expected for modifier in modifiers)
 
 
 @pytest.mark.interpreter
@@ -5889,12 +5888,11 @@ def test_store_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        all_modifiers = ['.wb', '.cg', '.cs', '.wt']
-        for modifier in all_modifiers:
-            if modifier == cache:
-                assert f'st.global{modifier}' in ptx
-            else:
-                assert f'st.global{modifier}' not in ptx
+        modifiers = re.findall(r'\bst\.global(?:\.(wb|cg|cs|wt))?\.(?:v[248]\.)?[busf]\d+\b', ptx)
+        assert modifiers
+        # An omitted store cache modifier means .wb.
+        expected = cache.removeprefix('.') or 'wb'
+        assert all((modifier or 'wb') == expected for modifier in modifiers)
 
 
 @pytest.mark.interpreter

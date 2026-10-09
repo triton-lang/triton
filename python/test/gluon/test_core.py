@@ -570,7 +570,7 @@ def test_async_shared_store():
 
     compiled = async_shared_store_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
 
-    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes" in compiled.asm["ptx"]
+    assert re.search(r"st\.async\.(?:weak\.)?shared::cluster\.mbarrier::complete_tx::bytes", compiled.asm["ptx"])
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.int32))
 
 
@@ -581,7 +581,7 @@ def test_async_shared_store_packed_f16():
 
     compiled = async_shared_store_f16_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
 
-    assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32" in compiled.asm["ptx"]
+    assert re.search(r"st\.async\.(?:weak\.)?shared::cluster\.mbarrier::complete_tx::bytes\.b32", compiled.asm["ptx"])
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.float16))
 
 
@@ -4045,8 +4045,7 @@ def test_packed_arith_reduction(dtype):
     torch.testing.assert_close(out_b, b.sum(dim=1), atol=0, rtol=0)
     suffix = {torch.float32: "f32x2", torch.float16: "f16x2", torch.bfloat16: "bf16x2"}[dtype]
     assert "ttng.packed_arith add" in compiled.asm["ttgir"]
-    modifier = "" if dtype == torch.float32 else ".rn"
-    assert f"add{modifier}.{suffix}" in compiled.asm["ptx"]
+    assert re.search(rf"\badd(?:\.rn)?\.{suffix}\b", compiled.asm["ptx"])
     if dtype == torch.float32:
         assert "prmt.b32" not in compiled.asm["ptx"]
 
@@ -4119,9 +4118,64 @@ def test_packed_arith(op, dtype):
     torch.testing.assert_close(ref, out, atol=tolerance, rtol=tolerance)
 
     suffix = {torch.float32: "f32x2", torch.float16: "f16x2", torch.bfloat16: "bf16x2"}[dtype]
-    modifier = ".rn" if op_name == "fma" or (dtype != torch.float32 and op_name in ("add", "sub")) else ""
-    assert f"{op_name}{modifier}.{suffix}" in compiled.asm["ptx"]
+    modifier = r"(?:\.rn)?" if op_name in ("add", "sub", "mul", "fma") else ""
+    assert re.search(rf"\b{op_name}{modifier}\.{suffix}\b", compiled.asm["ptx"])
     assert f"ttng.packed_arith {op_name}" in compiled.asm["ttgir"]
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("op", ["min", "max"])
+def test_packed_arith_minmax_special_values(op, dtype):
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, out_ptr, OP: ttgl.constexpr):
+        offsets = ttgl.arange(0, 16, layout=ttgl.BlockedLayout([2], [32], [4], [0]))
+        a = ttgl.load(a_ptr + offsets)
+        b = ttgl.load(b_ptr + offsets)
+        if OP == "min":
+            result = blackwell.min2(a, b)
+        else:
+            result = blackwell.max2(a, b)
+        ttgl.store(out_ptr + offsets, result)
+
+    one, inf, qnan, snan = {
+        torch.float16: (0x3c00, 0x7c00, 0x7e00, 0x7d00),
+        torch.bfloat16: (0x3f80, 0x7f80, 0x7fc0, 0x7fa0),
+    }[dtype]
+    neg_one, neg_inf = one | 0x8000, inf | 0x8000
+    pairs = [
+        (0x0000, 0x8000),
+        (0x8000, 0x0000),
+        (qnan, one),
+        (one, qnan),
+        (snan, one),
+        (one, snan),
+        (qnan, neg_one),
+        (neg_one, qnan),
+        (snan, neg_one),
+        (neg_one, snan),
+        (inf, neg_inf),
+        (neg_inf, inf),
+        (inf, one),
+        (one, inf),
+        (neg_inf, neg_one),
+        (neg_one, neg_inf),
+    ]
+    a_bits, b_bits = zip(*pairs)
+    a = torch.tensor(a_bits, dtype=torch.uint16, device="cuda").view(dtype)
+    b = torch.tensor(b_bits, dtype=torch.uint16, device="cuda").view(dtype)
+    out = torch.empty_like(a)
+    kernel[(1, )](a, b, out, op)
+
+    zero = 0x8000 if op == "min" else 0x0000
+    expected = [zero, zero, one, one, one, one, neg_one, neg_one, neg_one, neg_one]
+    if op == "min":
+        expected += [neg_inf, neg_inf, one, one, neg_inf, neg_inf]
+    else:
+        expected += [inf, inf, inf, inf, neg_one, neg_one]
+    expected = torch.tensor(expected, dtype=torch.uint16, device="cuda")
+    torch.testing.assert_close(out.view(torch.int16), expected.view(torch.int16), atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")

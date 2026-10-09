@@ -893,8 +893,9 @@ public:
                               static_cast<int32_t>(scope), sourceLoc);
 
       SmallVector<Value> rmwVals{rmwVal};
-      auto old = NVIDIA::emitPtxAtomicRMW(rewriter, loc, valueElemTy, rmwPtr,
-                                          rmwVals, rmwOp, sem, scope, pred);
+      auto old =
+          NVIDIA::emitAtomicRMW(rewriter, loc, valueElemTy, rmwPtr, rmwVals,
+                                rmwOp, sem, scope, pred, *targetInfo);
       if (failed(old))
         return failure();
 
@@ -972,8 +973,9 @@ public:
                               /*doesRead=*/true, static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 
-      Value old = NVIDIA::emitPtxAtomicCAS(rewriter, loc, valueElemTy, casPtr,
-                                           casCmp, casVal, sem, scope, pred);
+      Value old =
+          NVIDIA::emitAtomicCAS(rewriter, loc, valueElemTy, casPtr, casCmp,
+                                casVal, sem, scope, pred, *targetInfo);
 
       auto oldInt = bitcastToScalarInt(rewriter, loc, old);
       auto cmpInt = bitcastToScalarInt(rewriter, loc, casCmp);
