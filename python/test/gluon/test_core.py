@@ -2,6 +2,7 @@ import torch
 import math
 import pytest
 import re
+import struct
 from collections import Counter
 from itertools import product
 
@@ -34,7 +35,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
-from triton.experimental.gluon.language.nvidia import blackwell
+from triton.experimental.gluon.language.nvidia import blackwell, fabric
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import tma as blackwell_tma
@@ -52,6 +53,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     clc,
 )
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+from triton.experimental.gluon.nvidia.fabric import Protocol, RequestLayout, SynchronizedBuffer, _SynchronizedBufferArgs, _State, _Queue
 from triton._C.libtriton.gluon_ir import make_cga_layout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
@@ -7413,3 +7415,485 @@ def test_tma_cache_policy_ptx(target, rank, kind, multicast, policy, expected, t
             assert all(re.search(r", %rs[0-9]+, %rd[0-9]+;", line) for line in loads)
         if kind == "im2col":
             assert all(re.search(r"\}, (?:%rs[0-9]+, )?%rd[0-9]+;", line) for line in loads)
+
+
+def _make_fabric_buffer(device, *, request_layout=None, **values):
+    if request_layout is None:
+        request_layout = RequestLayout(stride=56, ready_offset=48, type_offset=0, handle_offset=8, src_offset=16,
+                                       dst_offset=24, length_offset=32, bypass_ar_offset=40)
+    protocol = Protocol(request_layout, 1, 6, 0, 1, 1 << 63, 33)
+    values = {"sends_completed": -1, "aborted": 32, **values}
+    state = _State(*(torch.tensor([values.get(name, 0)], dtype=torch.int64, device=device) for name in _State._fields))
+    queue = _Queue(*(torch.zeros(1, dtype=torch.int64, device=device) for _ in range(3)),
+                   torch.zeros(8 * request_layout.stride, dtype=torch.int8, device=device))
+    ptr = torch.arange(64, dtype=torch.float32, device=device)
+    return _SynchronizedBufferArgs(ptr, state, queue, 1, ttgl.constexpr(8), ttgl.constexpr(protocol))
+
+
+def test_fabric_descriptor_nested_selection(device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def offset_second(buffers):
+        return ((buffers[0][0], buffers[0][1] + 2), buffers[1])
+
+    @gluon.jit
+    def kernel(Buffers, Out):
+        Buffers = ((fabric.bind(Buffers[0][0]), fabric.bind(Buffers[0][1])), (fabric.bind(Buffers[1][0]), ))
+        pid = ttgl.program_id(0)
+        selected = Buffers[0][0]
+        for i in range(pid):
+            if i == 0:
+                Buffers = offset_second(Buffers)
+                selected = Buffers[0][1]
+            else:
+                selected = Buffers[1][0]
+        ttgl.static_assert(selected._handle.type == ttgl.int32)
+        ttgl.store(Out + 2 * pid, selected._handle)
+        ttgl.store(Out + 2 * pid + 1, ttgl.load(selected.ptr).to(ttgl.int32))
+
+    allocations = [_make_fabric_buffer(device)._replace(handle=handle) for handle in (1, 7, 9)]
+    for index, buffer in enumerate(allocations):
+        buffer.ptr.add_(21 + index)
+    buffers = [
+        SynchronizedBuffer(address=buffer.ptr.data_ptr(), dtype=buffer.ptr.dtype,
+                           state={name: ptr.data_ptr()
+                                  for name, ptr in buffer.state._asdict().items()},
+                           queue={name: ptr.data_ptr()
+                                  for name, ptr in buffer.queue._asdict().items()}, handle=buffer.handle,
+                           capacity=buffer.capacity.value, protocol=buffer.protocol.value)
+        for buffer in allocations
+    ]
+    out = torch.empty((3, 2), dtype=torch.int32, device=device)
+    compiled = kernel[(3, )](((buffers[0], buffers[1]), (buffers[2], )), out)
+    assert out.tolist() == [[1, 21], [7, 24], [9, 23]]
+    buffers = [buffer._replace(handle=handle) for buffer, handle in zip(buffers, (9, 1, 7))]
+    assert kernel[(3, )](((buffers[0], buffers[1]), (buffers[2], )), out) is compiled
+    assert out.tolist() == [[9, 21], [1, 24], [7, 23]]
+
+
+@pytest.mark.parametrize("kind", ["recv", "ack"])
+@pytest.mark.parametrize("worker_warps", [0, 1, 4])
+def test_fabric_barrier_selection(kind, worker_warps, device):
+    if not is_blackwell() and worker_warps:
+        pytest.skip("warp specialization requires Blackwell")
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def passthrough(nested):
+        return nested[0][1]
+
+    @gluon.jit
+    def wait(bar, out, pid):
+        copy = passthrough(((0, bar), ))
+        first = fabric.barrier.wait(copy, count=2, blocking=False, monitor=True)
+        second = fabric.barrier.wait(bar, count=3, blocking=False)
+        ttgl.store(out + 2 * pid, first)
+        ttgl.store(out + 2 * pid + 1, second)
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(a, b, out, KIND: ttgl.constexpr, WORKER_WARPS: ttgl.constexpr):
+        a, b = fabric.bind(a), fabric.bind(b)
+        pid = ttgl.program_id(0)
+        if KIND == "recv":
+            if pid == 0:
+                bar = (a + 1).recv_barrier
+            else:
+                bar = b.recv_barrier
+        else:
+            if pid == 0:
+                bar = (a + 1).ack_barrier
+            else:
+                bar = b.ack_barrier
+        if WORKER_WARPS:
+            ttgl.warp_specialize([(idle, ()), (wait, (bar, out, pid))], [WORKER_WARPS])
+        else:
+            wait(bar, out, pid)
+
+    a = _make_fabric_buffer(device, recv_lock=9, ack_lock=9, wait_count=4, ack_count=4)
+    b = _make_fabric_buffer(device, recv_lock=9, ack_lock=9, wait_count=4, ack_count=4)
+    b = b._replace(ptr=b.ptr.to(torch.float16), capacity=ttgl.constexpr(7))
+    out = torch.empty((2, 2), dtype=torch.bool, device=device)
+    kernel[(2, )](a, b, out, kind, worker_warps)
+    assert out.tolist() == [[True, True], [True, True]]
+    for buffer in (a, b):
+        cursor = buffer.state.wait_count if kind == "recv" else buffer.state.ack_count
+        monitor = buffer.state.periscope_recv_lock if kind == "recv" else buffer.state.periscope_ack_lock
+        other_cursor = buffer.state.ack_count if kind == "recv" else buffer.state.wait_count
+        assert cursor.item() == 9
+        assert monitor.item() == 6
+        assert other_cursor.item() == 4
+
+
+@gluon.jit
+def _fabric_wait_view(view, COUNT, CONSUME: ttgl.constexpr, BLOCKING: ttgl.constexpr):
+    return fabric.barrier.wait(view, blocking=BLOCKING, count=COUNT, consume=CONSUME)
+
+
+@pytest.mark.parametrize("kind", ["recv", "ack"])
+@pytest.mark.parametrize("count", [0, 3])
+@pytest.mark.parametrize("constant_count", [False, True], ids=["runtime-count", "constant-count"])
+@pytest.mark.parametrize("consume", [False, True])
+@pytest.mark.parametrize("aborted", [False, True])
+@pytest.mark.parametrize("blocking", [False, True])
+def test_fabric_wait_cursor(kind, count, constant_count, consume, aborted, blocking, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(Buffer, Out, KIND: ttgl.constexpr, COUNT, CONSUME: ttgl.constexpr, BLOCKING: ttgl.constexpr):
+        Buffer = fabric.bind(Buffer)
+        view = Buffer + 2
+        if KIND == "recv":
+            success = _fabric_wait_view(view.recv_barrier, COUNT, CONSUME, BLOCKING)
+        else:
+            success = _fabric_wait_view(view.ack_barrier, COUNT, CONSUME, BLOCKING)
+        offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        ttgl.store(Out + offsets, success)
+        ttgl.store(Out + 128 + offsets, Buffer.is_aborted())
+
+    buffer = _make_fabric_buffer(device, recv_lock=9, ack_lock=9, wait_count=4, ack_count=4,
+                                 aborted=33 if aborted else 32)
+    out = torch.empty((2, 128), dtype=torch.bool, device=device)
+    kernel[(1, )](buffer, out, kind, ttgl.constexpr(count) if constant_count else count, consume, blocking)
+    assert out[0].tolist() == [not aborted] * 128
+    assert out[1].tolist() == [aborted] * 128
+    cursor = buffer.state.wait_count if kind == "recv" else buffer.state.ack_count
+    assert cursor.item() == 4 + (count if consume and not aborted else 0)
+    other_cursor = buffer.state.ack_count if kind == "recv" else buffer.state.wait_count
+    assert other_cursor.item() == 4
+
+
+@pytest.mark.parametrize("aborted", [False, True])
+@pytest.mark.parametrize("num_warps,blocking,monitor", [(4, True, False), (4, True, True), (1, False, True)])
+def test_fabric_wait_pending(aborted, num_warps, blocking, monitor, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(Buffer, Out, Success, ABORT: ttgl.constexpr, BLOCKING: ttgl.constexpr, MONITOR: ttgl.constexpr):
+        Buffer = fabric.bind(Buffer)
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        if ttgl.program_id(0) == 0:
+            success = fabric.barrier.wait(Buffer.recv_barrier, blocking=BLOCKING, monitor=MONITOR)
+            if not BLOCKING:
+                while not success and not Buffer.is_aborted():
+                    success = fabric.barrier.wait(Buffer.recv_barrier, blocking=False)
+            ttgl.store(Success + offsets, success)
+            if success:
+                values = ttgl.load(Buffer.ptr + offsets)
+            else:
+                values = ttgl.full([64], -1, ttgl.float32, layout)
+            ttgl.store(Out + offsets, values)
+        else:
+            # Publish the payload or abort once the waiter announces its target.
+            ttgl.atomic_poll(Buffer._state.periscope_recv_lock, 1, scope="sys")
+            if ABORT:
+                ttgl.atomic_xchg(Buffer._state.aborted, 33, sem="release", scope="sys")
+            else:
+                ttgl.store(Buffer.ptr + offsets, offsets + 17)
+                ttgl.barrier()
+                ttgl.atomic_xchg(Buffer._state.recv_lock, 1, sem="release", scope="sys")
+
+    buffer = _make_fabric_buffer(device)
+    out = torch.empty_like(buffer.ptr)
+    success = torch.empty(64, dtype=torch.bool, device=device)
+    kernel[(2, )](buffer, out, success, aborted, blocking, monitor, num_warps=num_warps)
+    expected = torch.full_like(out, -1) if aborted else torch.arange(64, device=device, dtype=out.dtype) + 17
+    torch.testing.assert_close(out, expected)
+    assert success.tolist() == [not aborted] * 64
+    assert buffer.state.wait_count.item() == (0 if aborted else 1)
+    assert buffer.state.periscope_recv_lock.item() == 1
+
+
+@pytest.mark.parametrize("send_count,completed", [(0, -1), (6, 5)])
+@pytest.mark.parametrize("aborted", [False, True])
+@pytest.mark.parametrize("blocking", [False, True])
+def test_fabric_store_wait_completion(send_count, completed, aborted, blocking, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(Buffer, Out, BLOCKING: ttgl.constexpr):
+        Buffer = fabric.bind(Buffer)
+        success = Buffer.store_wait(blocking=BLOCKING)
+        offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        ttgl.store(Out + offsets, success)
+
+    buffer = _make_fabric_buffer(device, send_count=send_count, sends_completed=completed,
+                                 aborted=33 if aborted else 32)
+    out = torch.empty(128, dtype=torch.bool, device=device)
+    kernel[(1, )](buffer, out, blocking)
+    assert out.tolist() == [not aborted] * 128
+    assert buffer.state.send_count.item() == send_count
+    assert buffer.state.sends_completed.item() == completed
+
+
+@pytest.mark.parametrize("kind", ["recv", "ack", "send"])
+@pytest.mark.parametrize("aborted", [False, True])
+@pytest.mark.parametrize("base", [0, 2**63 - 8])
+def test_fabric_wait_nonblocking_pending(kind, aborted, base, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(Buffer, Out, KIND: ttgl.constexpr):
+        Buffer = fabric.bind(Buffer)
+        if KIND == "recv":
+            success = fabric.barrier.wait(Buffer.recv_barrier, blocking=False, count=3)
+        elif KIND == "ack":
+            success = fabric.barrier.wait(Buffer.ack_barrier, blocking=False, count=3)
+        else:
+            success = Buffer.store_wait(blocking=False)
+        offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        ttgl.store(Out + offsets, success)
+
+    buffer = _make_fabric_buffer(device, recv_lock=base + 6, ack_lock=base + 6, wait_count=base + 4, ack_count=base + 4,
+                                 send_count=base + 3, sends_completed=-1 if base == 0 else base + 1,
+                                 periscope_recv_lock=17, periscope_ack_lock=19, periscope_sends_completed=23)
+    out = torch.empty(128, dtype=torch.bool, device=device)
+    initial_state = [value.item() for value in buffer.state]
+    for _ in range(2):
+        out.fill_(True)
+        kernel[(1, )](buffer, out, kind)
+        assert not out.any().item()
+        assert [value.item() for value in buffer.state] == initial_state
+
+    counter, cursor, target = {
+        "recv": (buffer.state.recv_lock, buffer.state.wait_count, base + 7),
+        "ack": (buffer.state.ack_lock, buffer.state.ack_count, base + 7),
+        "send": (buffer.state.sends_completed, buffer.state.send_count, base + 2),
+    }[kind]
+    counter.fill_(target)
+    if aborted:
+        buffer.state.aborted.fill_(33)
+    kernel[(1, )](buffer, out, kind)
+    assert out.tolist() == [not aborted] * 128
+    assert cursor.item() == base + (3 if kind == "send" else 4 if aborted else 7)
+    assert buffer.state.periscope_recv_lock.item() == 17
+    assert buffer.state.periscope_ack_lock.item() == 19
+    assert buffer.state.periscope_sends_completed.item() == 23
+
+
+@pytest.mark.parametrize("kind", ["recv", "ack", "send"])
+@pytest.mark.parametrize("state", ["ready", "pending", "aborted", "zero"])
+def test_fabric_wait_monitor(kind, state, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(Buffer, Out, KIND: ttgl.constexpr, COUNT, MONITOR: ttgl.constexpr, CONSUME: ttgl.constexpr):
+        Buffer = fabric.bind(Buffer)
+        if KIND == "recv":
+            ready = fabric.barrier.wait(Buffer.recv_barrier, blocking=False, count=COUNT, consume=CONSUME,
+                                        monitor=MONITOR)
+        elif KIND == "ack":
+            ready = fabric.barrier.wait(Buffer.ack_barrier, blocking=False, count=COUNT, consume=CONSUME,
+                                        monitor=MONITOR)
+        else:
+            ready = Buffer.store_wait(blocking=False, monitor=MONITOR)
+        offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        ttgl.store(Out + offsets, ready)
+
+    count = 0 if state == "zero" else 3
+    buffer = _make_fabric_buffer(device, recv_lock=6 if state == "pending" else 7,
+                                 ack_lock=6 if state == "pending" else 7, wait_count=4, ack_count=4,
+                                 send_count=0 if state == "zero" else 3,
+                                 sends_completed=-1 if state == "zero" else 1 if state == "pending" else 2,
+                                 aborted=33 if state == "aborted" else 32, periscope_recv_lock=17,
+                                 periscope_ack_lock=19, periscope_sends_completed=23)
+    counter, cursor, monitor = {
+        "recv": (buffer.state.recv_lock, buffer.state.wait_count, buffer.state.periscope_recv_lock),
+        "ack": (buffer.state.ack_lock, buffer.state.ack_count, buffer.state.periscope_ack_lock),
+        "send": (buffer.state.sends_completed, buffer.state.send_count, buffer.state.periscope_sends_completed),
+    }[kind]
+    initial_cursor = cursor.item()
+    target = initial_cursor - 1 if kind == "send" else initial_cursor + count
+    out = torch.empty(128, dtype=torch.bool, device=device)
+    kernel[(1, )](buffer, out, kind, count, True, False)
+    assert out.tolist() == [state in ("ready", "zero")] * 128
+    assert monitor.item() == target
+    assert cursor.item() == initial_cursor
+
+    if state == "pending":
+        # Probe a prefix without replacing the full-batch target or consuming it.
+        kernel[(1, )](buffer, out, kind, 1, False, False)
+        assert out.tolist() == [kind != "send"] * 128
+        assert monitor.item() == target
+        assert cursor.item() == initial_cursor
+        counter.fill_(target)
+        kernel[(1, )](buffer, out, kind, count, False, True)
+        assert out.all().item()
+        assert monitor.item() == target
+        assert cursor.item() == (initial_cursor if kind == "send" else target)
+
+
+@pytest.mark.parametrize("worker_warps", [0, 1, 4], ids=["cta", "one-warp", "four-warps"])
+def test_fabric_store_wait_nonblocking_poll_loop(worker_warps, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def poll(Buffer, Started, Out):
+        if ttgl.program_id(0) == 0:
+            ttgl.atomic_xchg(Started, 1, sem="release", scope="gpu")
+            ready = Buffer.store_wait(blocking=False)
+            while not ready and not Buffer.is_aborted():
+                ready = Buffer.store_wait(blocking=False)
+            offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0]))
+            ttgl.store(Out + offsets, ready)
+        else:
+            ttgl.atomic_poll(Started, 1, scope="gpu")
+            # Keep the consumer polling without adding operations to its loop.
+            for _ in range(256):
+                ttgl.inline_asm_elementwise("nanosleep.u32 $1; mov.b32 $0, 0;", "=r,r", [1000], ttgl.int32,
+                                            is_pure=False, pack=1)
+            ttgl.atomic_xchg(Buffer._state.sends_completed, 5, sem="release", scope="sys")
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(Buffer, Started, Out, WORKER_WARPS: ttgl.constexpr):
+        Buffer = fabric.bind(Buffer)
+        if WORKER_WARPS:
+            ttgl.warp_specialize([(idle, ()), (poll, (Buffer, Started, Out))], [WORKER_WARPS])
+        else:
+            poll(Buffer, Started, Out)
+
+    buffer = _make_fabric_buffer(device, send_count=6, sends_completed=4)
+    started = torch.zeros(1, dtype=torch.int32, device=device)
+    out = torch.zeros(128, dtype=torch.bool, device=device)
+    kernel[(2, )](buffer, started, out, worker_warps)
+    assert out.all().item()
+    assert started.item() == 1
+    assert buffer.state.send_count.item() == 6
+    assert buffer.state.sends_completed.item() == 5
+    assert buffer.state.periscope_sends_completed.item() == 0
+
+
+@pytest.mark.parametrize("aborted", [False, True])
+@pytest.mark.parametrize("head", [1, 9])
+def test_fabric_submit_pending(aborted, head, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(Buffer, Out, ABORT: ttgl.constexpr, HEAD: ttgl.constexpr):
+        Buffer = fabric.bind(Buffer)
+        if ttgl.program_id(0) == 0:
+            view = Buffer + 1
+            success = view.async_store(Buffer.ptr + 2, 7)
+            offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+            ttgl.store(Out + offsets, success)
+        else:
+            # A head refresh releases the observer.
+            while ttgl.atomic_load(Buffer._queue.cached_head, sem="relaxed", scope="gpu") == 0:
+                pass
+            if ABORT:
+                ttgl.atomic_xchg(Buffer._state.aborted, 33, sem="release", scope="sys")
+            else:
+                ttgl.atomic_xchg(Buffer._queue.head, HEAD + 1, sem="release", scope="sys")
+
+    buffer = _make_fabric_buffer(device)
+    # Head 9 models an old cached-head snapshot paired with a later tail load.
+    buffer.queue.head.fill_(head)
+    buffer.queue.tail.fill_(head + 7)
+    out = torch.full((128, ), aborted, dtype=torch.bool, device=device)
+    kernel[(2, )](buffer, out, aborted, head)
+    assert out.tolist() == [not aborted] * 128
+    assert buffer.queue.head.item() == (head if aborted else head + 1)
+    assert buffer.queue.cached_head.item() == (head if aborted else head + 1)
+    assert buffer.queue.tail.item() == (head + 7 if aborted else head + 8)
+    assert buffer.state.send_count.item() == (0 if aborted else 1)
+    assert buffer.state.aborted.item() == (33 if aborted else 32)
+
+    expected = bytearray(buffer.queue.buffer.numel())
+    if not aborted:
+        struct.pack_into("<I4xI", expected, 0, 1, 1)
+        struct.pack_into("<QQQ", expected, 16, 8, 4, 28)
+        struct.pack_into("<Q", expected, 48, 1 << 63)
+    assert buffer.queue.buffer.cpu().numpy().tobytes() == expected
+
+
+@gluon.jit
+def _fabric_offset_view(nested, offset):
+    return nested[0] + offset
+
+
+@gluon.jit
+def _fabric_submit_region(Buffer, Out, OP: ttgl.constexpr, REGION: ttgl.constexpr, NREGIONS: ttgl.constexpr):
+    index = ttgl.program_id(0) * NREGIONS + REGION
+    view = Buffer
+    for _ in range(index + 1):
+        view = _fabric_offset_view((view, ), 1)
+    if OP == "ack":
+        success = fabric.barrier.arrive(view.peer.ack_barrier)
+    else:
+        success = view.async_store(Buffer.ptr + index + 2, 0 if OP == "zero_send" else 7, bypass_ar=OP == "bypass_send")
+    offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0]))
+    ttgl.store(Out + index * 128 + offsets, success)
+
+
+@pytest.mark.parametrize("op", ["send", "bypass_send", "zero_send", "ack"])
+@pytest.mark.parametrize("aborted", [False, True])
+@pytest.mark.parametrize("worker_warps,capacity,permuted_layout", [(0, 8, False), (4, 8, False), (1, 7, True)])
+def test_fabric_submit_one_request_per_region(op, aborted, worker_warps, capacity, permuted_layout, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(Buffer, Out, OP: ttgl.constexpr, WORKER_WARPS: ttgl.constexpr):
+        Buffer = fabric.bind(Buffer)
+        if WORKER_WARPS:
+            ttgl.warp_specialize([
+                (_fabric_submit_region, (Buffer, Out, OP, 0, 2)),
+                (_fabric_submit_region, (Buffer, Out, OP, 1, 2)),
+            ], [WORKER_WARPS])
+        else:
+            _fabric_submit_region(Buffer, Out, OP, 0, 1)
+
+    layout = None
+    if permuted_layout:
+        layout = RequestLayout(stride=64, ready_offset=0, type_offset=60, handle_offset=56, src_offset=8, dst_offset=24,
+                               length_offset=40, bypass_ar_offset=20)
+    buffer = _make_fabric_buffer(device, request_layout=layout, aborted=33 if aborted else 32)
+    buffer = buffer._replace(capacity=ttgl.constexpr(capacity))
+    layout = buffer.protocol.value.request_layout
+    # Exercise ring wraparound and refresh of the initially stale cached head.
+    buffer.queue.head.fill_(6)
+    buffer.queue.tail.fill_(6)
+    nrequests = 3 * (2 if worker_warps else 1)
+    out = torch.empty((nrequests, 128), dtype=torch.bool, device=device)
+    kernel[(3, )](buffer, out, op, worker_warps)
+    assert out.flatten().tolist() == [not aborted] * out.numel()
+    assert buffer.queue.tail.item() == 6 + (0 if aborted else nrequests)
+    assert buffer.state.send_count.item() == (nrequests if not aborted and op != "ack" else 0)
+    if aborted:
+        assert torch.count_nonzero(buffer.queue.buffer).item() == 0
+        return
+
+    raw = buffer.queue.buffer.cpu().numpy().tobytes()
+    records = []
+    for index in range(nrequests):
+        offset = ((6 + index) % capacity) * layout.stride
+        assert struct.unpack_from("<Q", raw, offset + layout.ready_offset)[0] == 1 << 63
+        assert struct.unpack_from("<I", raw, offset + layout.type_offset)[0] == (6 if op == "ack" else 1)
+        assert struct.unpack_from("<I", raw, offset + layout.handle_offset)[0] == 1
+        if op != "ack":
+            records.append(
+                tuple(
+                    struct.unpack_from("<Q", raw, offset + field_offset)[0]
+                    for field_offset in (layout.src_offset, layout.dst_offset, layout.length_offset)))
+            assert struct.unpack_from("<I", raw, offset + layout.bypass_ar_offset)[0] == int(op == "bypass_send")
+    if op != "ack":
+        assert sorted(records) == [(4 * (index + 2), 4 * (index + 1), 0 if op == "zero_send" else 28)
+                                   for index in range(nrequests)]
