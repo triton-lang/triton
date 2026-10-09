@@ -31,6 +31,7 @@ enum class ShflKind : uint32_t {
   bfly = 0,
   up = 1,
   idx = 2,
+  down = 3,
 };
 
 Value emitDpp(Location loc, RewriterBase &rewriter, Value old, Value src,
@@ -225,6 +226,12 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
     Value index = b.select(mask, laneId, delta);
     return bpermute(index);
   }
+  case ShflKind::down: {
+    Value delta = b.add(laneId, i);
+    Value mask = b.icmp_uge(delta, warpSize);
+    Value index = b.select(mask, laneId, delta);
+    return bpermute(index);
+  }
   case ShflKind::idx:
     return bpermute(i);
   default:
@@ -263,6 +270,13 @@ Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   return shuffleCommon(loc, rewriter, isaFamily, val, b.i32_val(i), i,
                        ShflKind::up, b.i32_val(0x0));
+}
+
+Value shuffleDown(Location loc, RewriterBase &rewriter, Value val, int i,
+                  ISAFamily isaFamily) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleCommon(loc, rewriter, isaFamily, val, b.i32_val(i), i,
+                       ShflKind::down, b.i32_val(0x1f));
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
