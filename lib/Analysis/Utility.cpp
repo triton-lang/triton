@@ -485,7 +485,8 @@ bool ScanLoweringHelper::isSupported() {
 }
 
 unsigned ScanLoweringHelper::getInterWarpScanGroupSize() const {
-  if (!op || !interWarpScanLayout)
+  // Grouping completes the original thread-local prefixes directly.
+  if (!op || !interWarpScanLayout || intraWarpTotalsLayout)
     return 0;
   auto scanOp = op;
   auto *ctx = scanOp.getContext();
