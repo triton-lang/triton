@@ -395,15 +395,24 @@ LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
   auto inSegment = [&](const auto &basis) {
     return basis[axis] && basis[axis] < numSegments;
   };
+  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  // Multi-element thread segments need boundary carries in their original
+  // owners after an inter-warp scan. Preserve that ownership to avoid another
+  // layout conversion when completing their local prefixes.
+  bool preserveCarryOwners =
+      threadSegmentSize > 1 &&
+      warpSegmentSize < originalLayout.getOutDimSize(axisDim);
   bool exchanged = false;
-  for (auto &reg : bases[kReg]) {
-    if (inSegment(reg))
-      continue;
-    auto lane = llvm::find_if(bases[kLane], inSegment);
-    if (lane == bases[kLane].end())
-      break;
-    std::swap(reg, *lane);
-    exchanged = true;
+  if (!preserveCarryOwners) {
+    for (auto &reg : bases[kReg]) {
+      if (inSegment(reg))
+        continue;
+      auto lane = llvm::find_if(bases[kLane], inSegment);
+      if (lane == bases[kLane].end())
+        break;
+      std::swap(reg, *lane);
+      exchanged = true;
+    }
   }
   llvm::stable_sort(bases[kReg], [&](const auto &a, const auto &b) {
     return inSegment(a) && !inSegment(b);
