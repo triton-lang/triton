@@ -213,10 +213,10 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %out0 = tt.fp_to_fp %in0 : tensor<128xf8E5M2, #blocked> -> tensor<128xf16, #blocked>
     // CHECK-COUNT-2: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E4M3FN) -> vector<2xf16>
     %out1 = tt.fp_to_fp %in1 : tensor<128xf8E4M3FN, #blocked> -> tensor<128xf16, #blocked>
-    // CHECK-COUNT-2: cvt.rn.f16x2.e5m2x2 a, $1;
-    // CHECK-SAME: cvt.bf16.f16 b0, a0;
-    // CHECK-SAME: cvt.bf16.f16 b1, a1;
-    // CHECK-SAME: "=r,h"
+    // CHECK: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E5M2) -> vector<2xf16>
+    // CHECK-COUNT-2: "cvt.rn.bf16.f16 $0, $1;", "=h,h"
+    // CHECK: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E5M2) -> vector<2xf16>
+    // CHECK-COUNT-2: "cvt.rn.bf16.f16 $0, $1;", "=h,h"
     %out2 = tt.fp_to_fp %in0 : tensor<128xf8E5M2, #blocked> -> tensor<128xbf16, #blocked>
 
     // CHECK-COUNT-2: nvvm.convert.f16x2.to.f8x2 {{.*}} : vector<2xf16> -> vector<2xi8>(f8E5M2)

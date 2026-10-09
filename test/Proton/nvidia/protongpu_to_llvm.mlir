@@ -20,8 +20,9 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_read_counter
   llvm.func @convert_read_counter() {
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.u32 $0, %clock;", "=r"  : () -> i32
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.readcyclecounter"() : () -> i64
     %1 = proton_gpu.read_counter : i32
+    %2 = proton_gpu.read_counter : i32
     llvm.return
   }
 }
@@ -82,7 +83,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
     // CHECK-DAG: scf.for
     // CHECK-DAG: scf.for
-    // CHECK-DAG: %[[CYCLE1:.*]] = llvm.inline_asm has_side_effects{{.*}}%clock
+    // CHECK-DAG: %[[RAW_CYCLE1:.*]] = llvm.call_intrinsic "llvm.readcyclecounter"() : () -> i64
+    // CHECK-DAG: %[[CYCLE1:.*]] = llvm.trunc %[[RAW_CYCLE1]] : i64 to i32
     // CHECK-DAG: %[[INDEX:.*]] = llvm.urem
     // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add {{.*}}, %[[INDEX]]
     // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
@@ -116,7 +118,8 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[ADDR1:.*]] = llvm.select %[[P1]]
     // CHECK-DAG: %[[P2:.*]] = llvm.icmp "eq" %[[WARPID]], %{{.*}}
     // CHECK-DAG: %[[ADDR2:.*]] = llvm.select %[[P2]], %{{.*}}, %[[ADDR1]]
-    // CHECK-DAG: %[[CYCLE1:.*]] = llvm.inline_asm has_side_effects{{.*}}%clock
+    // CHECK-DAG: %[[RAW_CYCLE1:.*]] = llvm.call_intrinsic "llvm.readcyclecounter"() : () -> i64
+    // CHECK-DAG: %[[CYCLE1:.*]] = llvm.trunc %[[RAW_CYCLE1]] : i64 to i32
     // CHECK-DAG: %[[INDEX:.*]] = llvm.urem
     // CHECK-DAG: %[[SMEM_OFFSET:.*]] = llvm.add %{{.*}} %[[INDEX]]
     // CHECK-DAG: %[[SMEM_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMEM_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i32
@@ -218,12 +221,12 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: use_clock64
-  // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.u32 $0, %clock;", "=r"  : () -> i32
-  // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "mov.u32 $0, %clock_hi;", "=r"  : () -> i32
+  // CHECK-COUNT-2: llvm.call_intrinsic "llvm.readcyclecounter"() : () -> i64
   // CHECK: llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$3 st.shared::cta.v2.b32{{.*}}(!llvm.ptr<3>, i32, i32, i1)
   llvm.func @use_clock64() {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %3 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp, [0, 1]>
+    %7 = proton_gpu.read_counter : i64
     %8 = proton_gpu.read_counter : i64
     proton_gpu.circular_store start %3, %8 {scopeId = 1 : i32} : !proton_gpu.segment<2048, #smem, warp, [0, 1]>, i64
     llvm.return

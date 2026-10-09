@@ -327,6 +327,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                   : IntegerAttr();
     int64_t l2PrefetchSize =
         l2PrefetchSizeAttr ? l2PrefetchSizeAttr.getInt() : 0;
+    bool useLLVM = (cachePolicy->modifier == CacheModifier::NONE ||
+                    cachePolicy->modifier == CacheModifier::CA) &&
+                   !llMask && l1Policy.empty() && !l2PolicyReg &&
+                   !l2PrefetchSize && valueElemTy.getIntOrFloatBitWidth() >= 8;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       // TODO: optimization when ptr is GEP with constant offset
       const size_t runStart = vecStart - vecStart % scalarizedContiguousRun;
@@ -341,9 +345,30 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       assert(movWidth <= 64 && "load words must be at most 64 bits");
       assert(wordNElems * nWords * numVecs == numElems);
 
-      PTXBuilder ptxBuilder;
-
       Value pred = mask ? maskElems[vecStart] : Value{};
+      if (useLLVM) {
+        Value globalPtr = ptrElems[vecStart];
+        if (cast<LLVM::LLVMPointerType>(globalPtr.getType())
+                .getAddressSpace() != 1)
+          globalPtr = b.addrspacecast(ptr_ty(ctx, 1), globalPtr);
+        // Unpack two-byte loads with shifts to avoid redundant byte permutes.
+        bool packedBytes = valueElemNBits == 8 && vec == 2;
+        Type loadTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
+        if (packedBytes)
+          loadTy = i16_ty;
+        Value loaded = b.load(loadTy, globalPtr, /*align=*/totalWidth / 8,
+                              op.getIsVolatile());
+        if (packedBytes) {
+          loadedVals.push_back(b.trunc(i8_ty, loaded));
+          loadedVals.push_back(b.trunc(i8_ty, b.lshr(loaded, b.i16_val(8))));
+        } else {
+          auto values = unpackLLVector(loc, loaded, rewriter);
+          loadedVals.append(values.begin(), values.end());
+        }
+        continue;
+      }
+
+      PTXBuilder ptxBuilder;
 
       const std::string readConstraint =
           (width == 64) ? "l" : ((width == 32) ? "r" : "c");
@@ -552,6 +577,10 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       return failure();
     Value l2PolicyReg = *l2Policy;
     StringRef l1Policy = getL1EvictionPriority(*cachePolicy);
+    bool useLLVM = (cachePolicy->modifier == CacheModifier::NONE ||
+                    cachePolicy->modifier == CacheModifier::WB) &&
+                   !llMask && !threadPred && l1Policy.empty() && !l2PolicyReg &&
+                   valueElemTy.getIntOrFloatBitWidth() >= 8;
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       // TODO: optimization when ptr is AddPtr with constant offset
       const size_t runStart = vecStart - vecStart % scalarizedContiguousRun;
@@ -563,6 +592,25 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNBits;
       assert(wordNElems * nWords * numVecs == elemsPerThread);
+
+      Value pred = threadPred;
+      if (llMask)
+        pred = ttg::maybeAnd(rewriter, loc, pred, maskElems[vecStart]);
+      if (useLLVM) {
+        Value globalPtr = ptrElems[vecStart];
+        if (cast<LLVM::LLVMPointerType>(globalPtr.getType())
+                .getAddressSpace() != 1)
+          globalPtr = b.addrspacecast(ptr_ty(ctx, 1), globalPtr);
+        Value stored =
+            vec == 1
+                ? valueElems[vecStart]
+                : packLLVector(loc, ArrayRef(valueElems).slice(vecStart, vec),
+                               rewriter);
+        if (valueElemNBits == 8 && vec == 2)
+          stored = b.bitcast(stored, i16_ty);
+        b.store(stored, globalPtr, /*align=*/totalWidth / 8);
+        continue;
+      }
 
       Type valArgTy = IntegerType::get(ctx, width);
       auto wordTy = vec_ty(valueElemTy, wordNElems);
@@ -591,12 +639,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;
       auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
-
-      Value pred = threadPred;
-      if (llMask) {
-        auto mask = maskElems[vecStart];
-        pred = ttg::maybeAnd(rewriter, loc, pred, mask);
-      }
 
       auto *asmAddr =
           ptxBuilder.newAddrOperand(ptrElems[runStart], "l", in_off);
@@ -678,9 +720,9 @@ struct AtomicCASOpConversion
       Value casVal = valElements[i];
       Value casCmp = cmpElements[i];
       Value casPtr = ptrElements[i];
-      Value old = NVIDIA::emitPtxAtomicCAS(rewriter, loc, valueElemTy, casPtr,
-                                           casCmp, casVal, op.getSem(),
-                                           op.getScope(), threadPred);
+      Value old = NVIDIA::emitAtomicCAS(rewriter, loc, valueElemTy, casPtr,
+                                        casCmp, casVal, op.getSem(),
+                                        op.getScope(), threadPred, targetInfo);
 
       resultVals[i] = old;
     }
@@ -909,11 +951,9 @@ public:
       rmwVals.reserve(vec > 1 ? vec : packed);
       for (unsigned ii = 0; ii < (vec > 1 ? vec : packed); ++ii)
         rmwVals.push_back(valElements[i + ii]);
-      auto old = NVIDIA::emitPtxAtomicRMWImpl(
+      auto old = NVIDIA::emitAtomicRMW(
           rewriter, loc, valueElemTy, rmwPtr, rmwVals, atomicRmwAttr,
-          op.getSem(), stringifyMemSyncScope(op.getScope()).str(), pred, vec,
-          packed, NVIDIA::PtxAtomicAddrSpace::Global,
-          useRed ? NVIDIA::PtxAtomicInstr::Red : NVIDIA::PtxAtomicInstr::Atom);
+          op.getSem(), op.getScope(), pred, targetInfo, vec, packed, !useRed);
       if (failed(old))
         return failure();
       if (useRed)
@@ -1061,9 +1101,12 @@ struct AsyncCopyGlobalToLocalOpConversion
                                   : IntegerAttr();
     int64_t l2PrefetchSize =
         l2PrefetchSizeAttr ? l2PrefetchSizeAttr.getInt() : 0;
+    bool useIntrinsic = !llMask && !l2PolicyReg && !l2PrefetchSize &&
+                        !freeVarMasks.lookup(str_attr("lane")) &&
+                        !freeVarMasks.lookup(str_attr("warp"));
 
     auto emitCpAsync = [&b, threadPred, ptrTy, l2PolicyReg, l2PrefetchSize,
-                        cacheModifier = cachePolicy->modifier,
+                        useIntrinsic, cacheModifier = cachePolicy->modifier,
                         hasMask =
                             bool(llMask)](RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> vals, Value shmemAddr,
@@ -1085,6 +1128,20 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto structElem = vals[startIdx];
       auto srcElem = b.extract_val(ptrTy, structElem, 0);
       auto maskElem = b.extract_val(i1_ty, structElem, 1);
+
+      // NVVM supports copies without instruction predicates or cache hints.
+      if (useIntrinsic) {
+        Value globalPtr = srcElem;
+        if (cast<LLVM::LLVMPointerType>(srcElem.getType()).getAddressSpace() !=
+            1)
+          globalPtr = b.addrspacecast(ptr_ty(ctx, 1), srcElem);
+        auto modifier = srcCacheModifier == CacheModifier::CG
+                            ? NVVM::LoadCacheModifierKind::CG
+                            : NVVM::LoadCacheModifierKind::CA;
+        NVVM::CpAsyncOp::create(rewriter, loc, shmemAddr, globalPtr, nBytes,
+                                modifier, Value());
+        return {};
+      }
 
       PTXBuilder ptxBuilder;
       auto &copyAsyncOp =
