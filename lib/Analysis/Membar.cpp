@@ -442,7 +442,7 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
   }
 
   if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op)) {
-    if (op->hasAttr("ttg.thread_local"))
+    if (op->getParentOfType<triton::gpu::ThreadScopeOp>())
       return stages;
     // Atomic result broadcast uses a scratch write, rendezvous, and read for
     // every memory semantic, including relaxed.
