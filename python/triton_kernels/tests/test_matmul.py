@@ -843,6 +843,7 @@ def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, devic
 @pytest.mark.parametrize("scale_source, epilogue_subtile, has_beta, expected", [
     ("global", 2, False, 0.00787353515625),
     ("global", 2, True, 0.0079345703125),
+    ("row", 1, False, 0.00787353515625),
     ("row", 2, False, 0.0079345703125),
     ("row", 2, True, 0.0079345703125),
     ("column", 1, False, 0.00787353515625),
