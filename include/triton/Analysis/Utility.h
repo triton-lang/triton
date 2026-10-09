@@ -214,8 +214,8 @@ public:
     return interWarpScanLayout;
   }
 
-  // Number of register-only totals loaded and scanned together. Zero selects
-  // the layout-conversion path.
+  // Maximum number of register-only totals scanned together. Zero selects the
+  // layout-conversion path.
   unsigned getInterWarpScanGroupSize() const;
   LayoutConversionScratchConfig getGroupedInterWarpScratchConfig() const;
 
