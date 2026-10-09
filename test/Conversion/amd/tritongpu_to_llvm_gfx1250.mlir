@@ -178,6 +178,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %1 : tensor<64xbf16, #blocked>
   }
 
+  // GFX1250-LABEL: @ocp_fp8_to_f32
+  tt.func @ocp_fp8_to_f32(%arg0: tensor<64xf8E4M3FN, #blocked>, %arg1: tensor<64xf8E5M2, #blocked>) {
+    // GFX1250: rocdl.cvt.scale.pk8.f32.fp8
+    %0 = tt.fp_to_fp %arg0 : tensor<64xf8E4M3FN, #blocked> -> tensor<64xf32, #blocked>
+    // GFX1250: rocdl.cvt.scale.pk8.f32.bf8
+    %1 = tt.fp_to_fp %arg1 : tensor<64xf8E5M2, #blocked> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+
   // GFX1250-LABEL: @bf16_addf
   tt.func @bf16_addf(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xbf16, #blocked>) -> tensor<64xbf16, #blocked> {
     // GFX1250-NOT: llvm.fadd {{.*}} : f32
@@ -191,6 +200,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // GFX1250-NOT: llvm.fsub {{.*}} : f32
     // GFX1250: llvm.fsub {{.*}} : vector<2xbf16>
     %0 = arith.subf %arg0, %arg1 : tensor<64xbf16, #blocked>
+    tt.return %0 : tensor<64xbf16, #blocked>
+  }
+
+  // GFX1250-LABEL: @f32_fma
+  tt.func @f32_fma(%arg0: tensor<64xf32, #blocked>, %arg1: tensor<64xf32, #blocked>, %arg2: tensor<64xf32, #blocked>) -> tensor<64xf32, #blocked> {
+    // GFX1250-NOT: llvm.intr.fma({{.*}}) : (f32, f32, f32) -> f32
+    // GFX1250: llvm.intr.fma({{.*}}) : (vector<2xf32>, vector<2xf32>, vector<2xf32>) -> vector<2xf32>
+    %0 = math.fma %arg0, %arg1, %arg2 : tensor<64xf32, #blocked>
+    tt.return %0 : tensor<64xf32, #blocked>
+  }
+
+  // GFX1250-LABEL: @bf16_fma
+  tt.func @bf16_fma(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xbf16, #blocked>, %arg2: tensor<64xbf16, #blocked>) -> tensor<64xbf16, #blocked> {
+    // GFX1250-NOT: llvm.intr.fma({{.*}}) : (bf16, bf16, bf16) -> bf16
+    // GFX1250: llvm.intr.fma({{.*}}) : (vector<2xbf16>, vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
+    %0 = math.fma %arg0, %arg1, %arg2 : tensor<64xbf16, #blocked>
     tt.return %0 : tensor<64xbf16, #blocked>
   }
 }
@@ -209,5 +234,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
   tt.func private @outlined_indices_8() -> tensor<256xi32, #blocked8> attributes {noinline = true, "ttg.num-warps" = 8 : i32, "ttg.warp-id-offset" = 4 : i32} {
     %range = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #blocked8>
     tt.return %range : tensor<256xi32, #blocked8>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Only the thread that acquires the lock, lane 0 of warp 0, may release it.
+  // GFX1250-LABEL: @experimental_lock_release
+  // GFX1250: [[WAVE:%.*]] = rocdl.wave.id : i32
+  // GFX1250: llvm.cond_br %arg1, ^[[PRED:bb[0-9]+]], ^[[END:bb[0-9]+]]
+  // GFX1250: ^[[PRED]]:
+  // GFX1250: rocdl.s.barrier
+  // GFX1250: [[LANE0:%.*]] = llvm.icmp "eq" {{%.*}}, {{%.*}} : i32
+  // GFX1250: [[WARP0:%.*]] = llvm.icmp "eq" [[WAVE]], {{%.*}} : i32
+  // GFX1250: [[OWNER:%.*]] = llvm.and [[LANE0]], [[WARP0]] : i1
+  // GFX1250: llvm.cond_br [[OWNER]], ^[[RELEASE:bb[0-9]+]], ^[[JOIN:bb[0-9]+]]
+  // GFX1250: ^[[RELEASE]]:
+  // GFX1250-NEXT: llvm.atomicrmw xchg %arg0, {{%.*}} syncscope("agent") release
+  // GFX1250-NEXT: llvm.br ^[[JOIN]]
+  // GFX1250: ^[[JOIN]]:
+  // GFX1250-NEXT: llvm.br ^[[END]]
+  // GFX1250-NOT: llvm.atomicrmw
+  tt.func private @experimental_lock_release(%lock: !tt.ptr<i32>, %pred: i1) {
+    tti.experimental_lock_release %lock, %pred : !tt.ptr<i32>
+    tt.return
   }
 }

@@ -105,6 +105,25 @@ struct ScaledUpcastFp4OpPattern
     if (!scale)
       return failure();
 
+    auto scaleTy = cast<RankedTensorType>(scale.getType());
+    if (scaleTy.getShape() != dstTy.getShape()) {
+      // ConvertLayoutOp preserves shape, so first repeat each compact scale
+      // over its group of output elements. Insert the repeat dimension after
+      // axis to keep each group contiguous. For axis=1 and group size 32:
+      //   [8, 16] -> [8, 16, 1] -> [8, 16, 32] -> [8, 512].
+      int axis = op.getAxis();
+      auto expandedShape = llvm::to_vector(scaleTy.getShape());
+      expandedShape.insert(expandedShape.begin() + axis + 1, 1);
+      scale = tt::ReshapeOp::create(rewriter, loc, expandedShape, scale);
+      // The op verifier guarantees an integral number of elements per scale.
+      expandedShape[axis + 1] =
+          dstTy.getShape()[axis] / scaleTy.getShape()[axis];
+      auto broadcastTy =
+          cast<RankedTensorType>(scale.getType()).clone(expandedShape);
+      scale = tt::BroadcastOp::create(rewriter, loc, broadcastTy, scale);
+      scale = tt::ReshapeOp::create(rewriter, loc, dstTy.getShape(), scale);
+    }
+
     // ScaledUpcastFp4Op does not have SameOperandsAndResultEncoding, so
     // maybe convert_layout to dstTy.
     if (upcasted.getType() != dstTy)

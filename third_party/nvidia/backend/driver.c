@@ -326,14 +326,21 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       device));
   assert(shared_optin <= 228 * 1024 && "sanity check");
   if (shared > 49152 && shared_optin > 49152) {
+    int major, minor;
+    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuDeviceGetAttribute(
+        &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
+    CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuDeviceGetAttribute(
+        &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
     // XXX: remove attribute enum defs once latest cuda.h is in use
     // try to use oversized shared memory via new API
     // L1$ size is set to 8KB, CGA scheduling must be in SPREAD mode.
-    if (CUDA_SUCCESS !=
-        cuFuncSetAttribute(
-            fun, CU_FUNC_ATTRIBUTE_SHARED_MEMORY_MODE,
-            CU_SHARED_MEMORY_MODE_ALLOW_OVERSIZED_SHARED_MEMORY)) {
-      // use legacy api if cuda doesn't support oversized shared memory
+    // Use the same CC 10.7 guard as the oversized device-attribute query.
+    if (major == 10 && minor == 7) {
+      CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuFuncSetAttribute(
+          fun, CU_FUNC_ATTRIBUTE_SHARED_MEMORY_MODE,
+          CU_SHARED_MEMORY_MODE_ALLOW_OVERSIZED_SHARED_MEMORY));
+    } else {
+      // Use legacy opt-in on other devices.
       CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
           cuFuncSetCacheConfig(fun, CU_FUNC_CACHE_PREFER_SHARED));
       int shared_total, shared_static;

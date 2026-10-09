@@ -19,7 +19,7 @@ jobs:
         image_variant: ["default"]
         include:
           - image: rocm/pytorch:rocm7.0_ubuntu24.04_py3.12_pytorch_release_2.8.0
-            runner: ["self-hosted", "gfx90a"]
+            runner: ["amd-gfx90a"]
             # Cache save/restore is on the host machine at directory /home/runner/.triton, while in the docker
             # container expect it at /github/home/.triton. So map here to make sure visible in docker.
             options: >-
@@ -369,6 +369,8 @@ jobs:
               -n "$workers" --durations=20 "$@"
           }
 
+          run_rocjitsu_pytest 4 4 -s --tb=short \
+            third_party/amd/python/test/test_gluon_cdna5_consan.py
           run_rocjitsu_pytest 64 1 \
             third_party/amd/python/test/test_gluon_cdna5.py \
             -k "not test_runtime_tensor_copy"

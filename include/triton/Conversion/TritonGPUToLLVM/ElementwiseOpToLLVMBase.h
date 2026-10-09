@@ -151,13 +151,12 @@ protected:
 };
 
 // Trivial case where we map elementwise to an existing LLVM operator
-template <typename SourceOp, typename DestOp>
+template <typename SourceOp, typename DestOp, auto Customize = [](DestOp) {}>
 struct ElementwiseOpConversion
     : public ElementwiseOpConversionBase<
-          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
-  using Base =
-      ElementwiseOpConversionBase<SourceOp,
-                                  ElementwiseOpConversion<SourceOp, DestOp>>;
+          SourceOp, ElementwiseOpConversion<SourceOp, DestOp, Customize>> {
+  using Base = ElementwiseOpConversionBase<
+      SourceOp, ElementwiseOpConversion<SourceOp, DestOp, Customize>>;
   using Base::Base;
   using OpAdaptor = typename Base::OpAdaptor;
 
@@ -166,8 +165,10 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    return {DestOp::create(rewriter, loc, elemTy, operands[0],
-                           adaptor.getAttributes().getValue())};
+    auto result = DestOp::create(rewriter, loc, elemTy, operands[0],
+                                 adaptor.getAttributes().getValue());
+    Customize(result);
+    return {result};
   }
 };
 

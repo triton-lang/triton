@@ -56,24 +56,13 @@ struct PackedArithOpConversion
     if (operands.size() < 2 || !(elemTy.isF32() || elemTy.isBF16()))
       return {};
 
-    Value va = packLLVector(loc, {operands[0][0], operands[1][0]}, rewriter);
-    Value vb = packLLVector(loc, {operands[0][1], operands[1][1]}, rewriter);
-    Value vr = LLVMOp::create(rewriter, loc, va.getType(), va, vb);
+    SmallVector<Value> packedOperands;
+    for (unsigned i = 0, e = operands[0].size(); i < e; ++i)
+      packedOperands.push_back(
+          packLLVector(loc, {operands[0][i], operands[1][i]}, rewriter));
+    Value vr = LLVMOp::create(rewriter, loc, packedOperands[0].getType(),
+                              packedOperands);
     return unpackLLVector(loc, vr, rewriter);
-  }
-};
-
-struct FDivOpConversion
-    : ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion> {
-  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
-
-  SmallVector<Value> createDestOps(arith::DivFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-
-    return {LLVM::FDivOp::create(rewriter, loc, elemTy, operands[0][0],
-                                 operands[0][1])};
   }
 };
 
@@ -476,8 +465,8 @@ void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo) {
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
-    const TargetInfo &targetInfo, PatternBenefit benefit) {
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfo &targetInfo,
+    PatternBenefit benefit) {
 
   // fmin (return NaN if either op is NaN)
   patterns.add<ElementwiseOpConversion<arith::MinimumFOp, LLVM::MinimumOp>>(
@@ -500,9 +489,12 @@ void populateElementwiseOpToLLVMPatterns(
         typeConverter, axisInfoAnalysis, gfx1250Benefit);
     patterns.add<PackedArithOpConversion<arith::MulFOp, LLVM::FMulOp>>(
         typeConverter, axisInfoAnalysis, gfx1250Benefit);
+    patterns.add<PackedArithOpConversion<math::FmaOp, LLVM::FMAOp>>(
+        typeConverter, axisInfoAnalysis, gfx1250Benefit);
   }
 
-  patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);

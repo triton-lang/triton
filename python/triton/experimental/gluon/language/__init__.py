@@ -128,6 +128,8 @@ from ._math import (
     ceil,
 )
 from ._standard import (
+    all,
+    any,
     cdiv,
     cumprod,
     cumsum,

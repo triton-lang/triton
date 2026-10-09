@@ -38,7 +38,6 @@ namespace {
 #define S(v) StringAttr::get(ctx, (v))
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::LinearEncodingAttr;
 
 Value prepareOperands(ConversionPatternRewriter &rewriter, Value rawElems,
                       Type type, int wmmaVer, int kBase, Location loc,

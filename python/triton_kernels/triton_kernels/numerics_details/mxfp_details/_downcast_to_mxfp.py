@@ -91,21 +91,7 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
         lo_f32 = lo_f.to(tl.float32)
         hi_f32 = hi_f.to(tl.float32)
 
-        # Inline PTX: cvt.rn.satfinite.e2m1x2.f32 takes two f32 sources and produces one .b8 packed e2m1x2.
-        out_tensor = tl.inline_asm_elementwise(
-            """
-            {
-                .reg .b8 r;
-                cvt.rn.satfinite.e2m1x2.f32 r, $1, $2;
-                mov.b32 $0, {r, r, r, r};
-            }
-            """,
-            constraints="=r,f,f",
-            args=[hi_f32, lo_f32],
-            dtype=tl.uint8,
-            is_pure=True,
-            pack=1,
-        )
+        out_tensor = tl.extra.cuda.f32_to_e2m1x2_satfinite(hi_f32, lo_f32).to(tl.uint8)
     else:
         quant_tensor = quant_tensor.to(tl.uint32, bitcast=True)
         signs = quant_tensor & 0x80000000

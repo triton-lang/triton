@@ -176,7 +176,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // CHECK-COMMON-LABEL: @atomic_poll
   // CHECK-COMMON: nvvm.read.ptx.sreg.tid.x
-  // CHECK-COMMON: %[[START:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-COMMON: %[[START:.*]] = nvvm.read.ptx.sreg.globaltimer : i64
   // CHECK-COMMON: llvm.br ^[[LOOP:bb[0-9]+]]
   // CHECK-COMMON: ^[[LOOP]]:
   // CHECK-COMMON: %[[LOADED:.*]] = llvm.inline_asm has_side_effects {{.*}}@$2 ld.relaxed.sys.global.b32 $0, [ $1 + 0 ];{{.*}}"=r,l,b" %{{.*}}, %[[ELECTED:.*]] : (!llvm.ptr<1>, i1) -> i32
@@ -187,7 +187,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-COMMON: llvm.fence acquire
   // CHECK-COMMON: llvm.br ^[[DONE:bb[0-9]+]](%[[ELECTED]] : i1)
   // CHECK-COMMON: ^[[TIMEOUT]]:
-  // CHECK-COMMON: %[[NOW:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-COMMON: %[[NOW:.*]] = nvvm.read.ptx.sreg.globaltimer : i64
   // CHECK-COMMON: %[[ELAPSED:.*]] = llvm.sub %[[NOW]], %[[START]] : i64
   // CHECK-COMMON: %[[TIMED_OUT:.*]] = llvm.icmp "uge" %[[ELAPSED]], %{{.*}} : i64
   // CHECK-COMMON: llvm.cond_br %[[TIMED_OUT]], ^[[DONE]](%{{.*}} : i1), ^[[LOOP]]
@@ -246,10 +246,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-COMMON-LABEL: @atomic_poll_tensor_timeout
-  // CHECK-COMMON: llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"
+  // CHECK-COMMON: nvvm.read.ptx.sreg.globaltimer
   // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b32
   // CHECK-COMMON: llvm.fence syncscope("device") acquire
-  // CHECK-COMMON: llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"
+  // CHECK-COMMON: nvvm.read.ptx.sreg.globaltimer
   // CHECK-COMMON: llvm.icmp "uge"
   // CHECK-COMMON: nvvm.barrier
   // CHECK-COMMON-NOT: !llvm.ptr<3>
@@ -262,13 +262,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-COMMON-LABEL: @atomic_poll_shared_timeout
-  // CHECK-COMMON: %[[START:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-COMMON: %[[START:.*]] = nvvm.read.ptx.sreg.globaltimer : i64
   // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b32
-  // CHECK-COMMON: %[[NOW0:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-COMMON: %[[NOW0:.*]] = nvvm.read.ptx.sreg.globaltimer : i64
   // CHECK-COMMON: llvm.sub %[[NOW0]], %[[START]] : i64
-  // CHECK-COMMON-NOT: llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"
+  // CHECK-COMMON-NOT: nvvm.read.ptx.sreg.globaltimer
   // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b32
-  // CHECK-COMMON: %[[NOW1:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-COMMON: %[[NOW1:.*]] = nvvm.read.ptx.sreg.globaltimer : i64
   // CHECK-COMMON: llvm.sub %[[NOW1]], %[[START]] : i64
   // CHECK-COMMON: nvvm.barrier
   // CHECK-COMMON: llvm.return

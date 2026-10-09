@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4, is_hip_gfx1250
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_gfx1250
 
 FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
@@ -276,8 +276,7 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 ])
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
-    # On HIP, fp8e4nv upcasting to fp32 is only supported on CDNA4, and
-    # fp8e4nv upcasting to bf16 and fp16 is only supported on CDNA3 and CDNA4.
+    # On HIP, fp8e4nv upcasting is only supported on CDNA3, CDNA4, RDNA4m, and RDNA4.
     if is_cuda():
         if ((src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9))
             or src_dtype in ('float8e4b8', 'float8e5b16')):
@@ -288,7 +287,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     elif is_hip():
         if src_dtype in FP8_DTYPES and is_hip_rdna3():
             pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
-        if  (src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4())):
+        if src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna4m() or is_hip_rdna4()):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
         if  src_dtype == 'float8e4b15':
             # If the dtype should error out in the given device, we assert that and return
@@ -434,8 +433,8 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device):
     if dst_dtype in FP8_DTYPES and is_hip_rdna3():
         pytest.skip(f"{dst_dtype} is not supported on AMDGPU RDNA3")
 
-    if mode in ('inf', '-inf') and (is_hip_rdna4() or is_hip_gfx1250()):
-        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX12")
+    if mode in ('inf', '-inf') and is_hip_gfx1250():
+        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX1250")
 
     converter = {
         tl.float8e4nv: torch.float8_e4m3fn,
