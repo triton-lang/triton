@@ -413,7 +413,6 @@ private:
       while (groupSize < available &&
              consumers[registerAt(step + groupSize)] == groupConsumers)
         ++groupSize;
-      unsigned base = reverse ? numRegs - step - groupSize : step;
       bool firstGroup = step % numSegments == 0;
       if (firstGroup) {
         acc.clear();
@@ -431,54 +430,59 @@ private:
       SmallVector<Type> resultTypes;
       for (Value value : initial)
         resultTypes.push_back(value.getType());
-      SmallVector<Type> loopTypes{rewriter.getI32Type()};
+      SmallVector<Type> loopTypes(2, rewriter.getI32Type());
       llvm::append_range(loopTypes, resultTypes);
       SmallVector<Location> loopLocs(loopTypes.size(), loc);
-      Value initialOffset = offset(loadLayout, base);
+      unsigned firstReg = registerAt(step);
+      Value initialOffset = offset(loadLayout, firstReg);
+      SmallVector<Value> wantedIterations;
+      for (unsigned r : groupConsumers)
+        wantedIterations.push_back(
+            reverse ? b.sub(b.i32_val(firstReg), sourceRegs[r])
+                    : b.sub(sourceRegs[r], b.i32_val(firstReg)));
       Block *before = rewriter.getBlock();
       Block *after = rewriter.splitBlock(before, rewriter.getInsertionPoint());
       for (Type type : resultTypes)
         after->addArgument(type, loc);
       Block *loop = rewriter.createBlock(after, loopTypes, loopLocs);
       rewriter.setInsertionPointToEnd(before);
-      SmallVector<Value> loopArgs{b.i32_val(0)};
+      SmallVector<Value> loopArgs{b.i32_val(0), initialOffset};
       llvm::append_range(loopArgs, initial);
       LLVM::BrOp::create(rewriter, loc, loopArgs, loop);
       rewriter.setInsertionPointToStart(loop);
       Value iteration = loop->getArgument(0);
-      Value position =
-          reverse ? b.sub(b.i32_val(groupSize - 1), iteration) : iteration;
-      Value index = b.add(initialOffset, b.mul(position, b.i32_val(rowStride)));
+      Value index = loop->getArgument(1);
       SmallVector<Value> current;
       for (unsigned i = 0; i < numOperands; ++i) {
         Value ptr = b.gep(smem.getType(), types[i], bases[i], index);
         current.push_back(targetInfo.loadDShared(rewriter, loc, ptr, Value(),
                                                  types[i], b.true_val()));
       }
-      ValueRange incoming = loop->getArguments().slice(1, numOperands);
+      ValueRange incoming = loop->getArguments().slice(2, numOperands);
       auto combined =
           firstGroup ? combineWithPrefix(op, incoming, current, rewriter,
                                          b.icmp_ne(iteration, b.i32_val(0)))
                      : applyCombineOp(loc, rewriter, op.getCombineOp(),
                                       incoming, current);
       SmallVector<Value> results = combined;
-      Value reg = b.add(b.i32_val(base), position);
-      for (auto [j, r] : llvm::enumerate(groupConsumers)) {
-        Value selected = b.icmp_eq(sourceRegs[r], reg);
+      for (auto [j, wantedIteration] : llvm::enumerate(wantedIterations)) {
+        Value selected = b.icmp_eq(iteration, wantedIteration);
         for (unsigned i = 0; i < numOperands; ++i)
           results.push_back(
               b.select(selected, combined[i],
-                       loop->getArgument(1 + (j + 1) * numOperands + i)));
+                       loop->getArgument(2 + (j + 1) * numOperands + i)));
       }
       Value next = b.add(iteration, b.i32_val(1));
-      SmallVector<Value> nextArgs{next};
+      int32_t indexStep = reverse ? -int32_t(rowStride) : int32_t(rowStride);
+      Value nextIndex = b.add(index, b.i32_val(indexStep));
+      SmallVector<Value> nextArgs{next, nextIndex};
       llvm::append_range(nextArgs, results);
       auto branch = LLVM::CondBrOp::create(
           rewriter, loc, b.icmp_ult(next, b.i32_val(groupSize)), loop, nextArgs,
           after, results);
-      // Keep the group loop rolled to bound the live shared-memory loads.
-      auto unroll = LLVM::LoopUnrollAttr::get(ctx, rewriter.getBoolAttr(true),
-                                              {}, {}, {}, {}, {}, {});
+      // Unroll two iterations to share loop control and address calculations.
+      auto unroll = LLVM::LoopUnrollAttr::get(
+          ctx, {}, rewriter.getI32IntegerAttr(2), {}, {}, {}, {}, {});
       branch.setLoopAnnotationAttr(LLVM::LoopAnnotationAttr::get(
           ctx, {}, {}, {}, unroll, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}));
       rewriter.setInsertionPointToStart(after);

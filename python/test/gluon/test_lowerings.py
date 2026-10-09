@@ -359,6 +359,12 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
                                      [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
                                      (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [16, 0]], [], [128, 32]), 128, 32,
         id="interwarp_groups_separated_warp_bits"),
+    # Restart shared-memory traversal at each independent scan's register base.
+    pytest.param(
+        ttgl.DistributedLinearLayout([[0, 1], [2, 0], [4, 0], [8, 0], [32, 0]],
+                                     [[0, 2], [0, 4], [0, 8], [0, 16], [0, 32]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[16, 0], [1, 0]], [], [64, 64]), 64, 64,
+        id="interwarp_groups_interleaved_independent_registers"),
     # No intra-warp carry in the original layout; totals span registers.
     pytest.param(ttgl.BlockedLayout([2, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 256, 32,
                  id="interwarp_groups_thread_prefixes"),
