@@ -3,6 +3,12 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonGPUOptimizeThreadRegions : Pass<"tritongpu-optimize-thread-regions", "mlir::ModuleOp"> {
+  let summary = "Execute scalar protocols and their consumers on their owning threads";
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect", "mlir::arith::ArithDialect"];
+}
+
 def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
