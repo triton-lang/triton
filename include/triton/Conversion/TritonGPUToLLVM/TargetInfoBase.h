@@ -88,6 +88,8 @@ public:
                            int i) const = 0;
   virtual Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
                           int i) const = 0;
+  virtual Value shuffleDown(RewriterBase &rewriter, Location loc, Value val,
+                            int i) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
