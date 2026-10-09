@@ -715,6 +715,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+// Check that commit counters saturate at 127 even without async-copy mbarriers
+// and that wait counts are clamped to the range [0, 127].
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 4, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: tt.func private @__triton_consan_commit_accesses
+  // CHECK: %[[COMMITS:.*]] = tt.load
+  // CHECK: %[[PLUS_ONE:.*]] = arith.addi %[[COMMITS]], %{{.*}} : tensor<{{.*}}xi8
+  // CHECK: %[[MAX_AGE:.*]] = arith.constant dense<127> : tensor<{{.*}}xi8
+  // CHECK: %[[AT_MAX:.*]] = arith.cmpi eq, %[[COMMITS]], %[[MAX_AGE]]
+  // CHECK: %[[SATURATED:.*]] = arith.select %[[AT_MAX]], %[[COMMITS]], %[[PLUS_ONE]]
+  // CHECK: arith.select %{{.*}}, %[[SATURATED]], %[[COMMITS]]
+  // CHECK-LABEL: @amdg_async_wait_count_bounds
+  tt.func public @amdg_async_wait_count_bounds() {
+    // CHECK: tt.call @__triton_consan_commit_accesses
+    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
+    // CHECK: %[[THREAD_MASK:.*]] = arith.constant 1 : i64
+    // CHECK: %[[NEGATIVE_NUM:.*]] = arith.constant 0 : i32
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes{{.*}}(%[[THREAD_BIT]], %[[THREAD_MASK]], %[[NEGATIVE_NUM]]
+    // CHECK: %[[LARGE_NUM:.*]] = arith.constant 127 : i32
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes{{.*}}(%{{.*}}, %{{.*}}, %[[LARGE_NUM]]
+    %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf16, #shared, #smem, mutable>
+    ttg.async_commit_group
+    amdg.async_wait {"ttg.num_commit_groups" = -1 : i64, num_inst = 0 : i32}
+    amdg.async_wait {"ttg.num_commit_groups" = 200 : i64, num_inst = 0 : i32}
+    ttg.local_load %shmem : !ttg.memdesc<32x32xf16, #shared, #smem, mutable> -> tensor<32x32xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [32, 32]}>
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
