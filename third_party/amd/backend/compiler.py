@@ -718,9 +718,6 @@ class HIPBackend(BaseBackend):
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-y")
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-z")
 
-        if knobs.amd.scalarize_packed_fops:
-            amd.add_scalarize_packed_fops_llvm_pass(kernel_fn)
-
         # Opt-in MFMA scheduler, see the schedule_hint option (validated in parse_options).
         if options.schedule_hint == "mfma-schedule" and options.arch == "gfx950":
             amd.add_mfma_schedule_pass(kernel_fn)
