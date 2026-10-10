@@ -24,7 +24,7 @@ def barrier_storage_lifetime():
     mode = sys.argv[2]
 
     @gluon.jit
-    def kernel(MODE: ttgl.constexpr):
+    def kernel(output_ptr, MODE: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
         shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
         barrier_layout: ttgl.constexpr = ttgl.amd.cdna5.mbarrier.MBarrierLayout()
@@ -33,7 +33,8 @@ def barrier_storage_lifetime():
         ttgl.amd.cdna5.mbarrier.init(barrier, count=128)
 
         if MODE == "read":
-            storage.load(layout)
+            values = storage.load(layout)
+            ttgl.store(output_ptr + ttgl.arange(0, 2, layout), values)
         elif MODE == "atomic":
             indices = ttgl.full([2], 0, ttgl.int32, layout)
             values = ttgl.full([2], 1, ttgl.int32, layout)
@@ -51,9 +52,13 @@ def barrier_storage_lifetime():
             if MODE == "use-after-store" or MODE == "partial":
                 ttgl.amd.cdna5.mbarrier.arrive(barrier, count=1)
             else:
-                storage.load(layout)
+                values = storage.load(layout)
+                ttgl.store(output_ptr + ttgl.arange(0, 2, layout), values)
 
-    kernel[(1, )](MODE=mode, num_warps=4)
+    output = torch.empty((2, ), dtype=torch.int32, device="cuda")
+    kernel[(1, )](output, MODE=mode, num_warps=4)
+    if mode == "store":
+        torch.testing.assert_close(output, torch.full_like(output, 7))
 
 
 def barrier_storage_pending_completion():
@@ -348,7 +353,8 @@ def ws_two_loads_two_bars_loop():
         acc = ttgl.zeros([XBLOCK_C], ttgl.float16, layout)
         phase = 0
         for _ in range(10):
-            ttgl.amd.cdna5.mbarrier.wait(bar.index(2), phase=phase)
+            if MISSING_BAR != "2":
+                ttgl.amd.cdna5.mbarrier.wait(bar.index(2), phase=phase)
             phase = (phase + 1) % 2
             val = smem.index(0).load(layout)
             ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
@@ -360,7 +366,8 @@ def ws_two_loads_two_bars_loop():
         acc = ttgl.zeros([XBLOCK_C], ttgl.float16, layout)
         phase = 0
         for _ in range(10):
-            ttgl.amd.cdna5.mbarrier.wait(bar.index(3), phase=phase)
+            if MISSING_BAR != "3":
+                ttgl.amd.cdna5.mbarrier.wait(bar.index(3), phase=phase)
             phase = (phase + 1) % 2
             val = smem.index(0).load(layout)
             ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=1)
@@ -653,6 +660,54 @@ def async_copy_kernel():
 
     input_t = torch.randn((XBLOCK, XBLOCK), dtype=torch.float16).cuda()
     kernel[(1, )](input_t, FAILURE=FAILURE, num_warps=4)
+
+
+def async_wait_count_bounds():
+    mode = sys.argv[2]
+    XBLOCK_C: ttgl.constexpr = ttgl.constexpr(XBLOCK)
+
+    @gluon.jit
+    def kernel(input_ptr, output_ptr, MODE: ttgl.constexpr):
+        num_warps: ttgl.constexpr = ttgl.num_warps()
+        smem_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [XBLOCK_C, XBLOCK_C], [1, 0])
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
+        offs_m = ttgl.arange(0, XBLOCK_C, layout=ttgl.SliceLayout(dim=1, parent=blocked_layout))[:, None]
+        offs_n = ttgl.arange(0, XBLOCK_C, layout=ttgl.SliceLayout(dim=0, parent=blocked_layout))[None, :]
+        offs = offs_m * XBLOCK_C + offs_n
+        if MODE == "empty_groups":
+            smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK_C, XBLOCK_C], smem_layout,
+                                               ttgl.load(input_ptr + offs))
+            ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + offs, smem)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            for _ in range(130):
+                ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.wait_group(0)
+            smem.store(ttgl.full([XBLOCK_C, XBLOCK_C], 0, ttgl.float16, blocked_layout))
+        elif MODE == "large_count":
+            smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK_C, XBLOCK_C], smem_layout)
+            ttgl.amd.cdna5.async_copy.global_to_shared(smem, input_ptr + offs)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.wait_group(200)
+            ttgl.store(output_ptr + offs, smem.load(blocked_layout))
+            ttgl.amd.cdna5.async_copy.wait_group(0)
+        else:
+            tdm_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+            desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                             strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                             layout=tdm_layout)
+            smem = ttgl.allocate_shared_memory(ttgl.float16, desc.block_shape, desc.layout)
+            bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+            ttgl.amd.cdna5.mbarrier.init(bar, count=num_warps)
+            ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], smem, mbarrier=bar)
+            ttgl.amd.cdna5.async_copy.wait_group(-1)
+            ttgl.store(output_ptr + offs, smem.load(blocked_layout))
+            ttgl.amd.cdna5.mbarrier.wait(bar, phase=0)
+
+    input_t = torch.randn((XBLOCK, XBLOCK), dtype=torch.float16).cuda()
+    output = torch.empty((XBLOCK, XBLOCK), dtype=torch.float16).cuda()
+    kernel[(1, )](input_t, output, MODE=mode, num_warps=4)
+    if mode == "empty_groups":
+        torch.testing.assert_close(output, input_t)
 
 
 def tdm_store_kernel():
@@ -970,4 +1025,7 @@ if __name__ == "__main__":
     }
     tests["barrier_storage_lifetime"] = barrier_storage_lifetime
     tests["barrier_storage_pending_completion"] = barrier_storage_pending_completion
+    tests["async_wait_count_bounds"] = async_wait_count_bounds
     tests[sys.argv[1]]()
+    torch.cuda.synchronize()
+    print("ConSan helper completed", flush=True)

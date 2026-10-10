@@ -831,9 +831,28 @@ Value Fp16ToFp32OneValue(Location loc, ConversionPatternRewriter &rewriter,
 template <typename ConvertOp>
 SmallVector<Value> Pk4Fp32ToF8(Location loc,
                                ConversionPatternRewriter &rewriter,
-                               const SmallVector<Value> &v) {
+                               ISAFamily family, SmallVector<Value> v) {
   assert(v.size() == 4);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  // The fp16_ovfl mode bit (see adjustModeRegister) saturates finite overflow,
+  // but the unscaled cvt keeps infinities: OCP fp8 turns them into NaN and bf8
+  // keeps them as inf. OCP saturation maps +-inf to +-max as well, so clamp the
+  // inputs first; the NaN-propagating minimum/maximum keep NaNs intact. FNUZ
+  // formats have no infinity and convert it to NaN, which is what we want.
+  if (hasUnscaledOcpFp8Cvt(family)) {
+    constexpr bool isBf8 = std::is_same_v<ConvertOp, ROCDL::CvtPkBf8F32Op>;
+    const llvm::fltSemantics &dstSemantic =
+        isBf8 ? llvm::APFloat::Float8E5M2() : llvm::APFloat::Float8E4M3FN();
+    float dstMax = llvm::APFloat::getLargest(dstSemantic).convertToFloat();
+    Value maxVal = b.f32_val(dstMax);
+    Value minVal = b.f32_val(-dstMax);
+    for (Value &x : v) {
+      x = LLVM::MinimumOp::create(rewriter, loc, x, maxVal);
+      x = LLVM::MaximumOp::create(rewriter, loc, x, minVal);
+    }
+  }
+
   Value result = b.undef(i32_ty);
 
   result = ConvertOp::create(rewriter, loc, i32_ty, v[0], v[1], result,
@@ -1606,7 +1625,7 @@ public:
     return result;
   }
 
-  // Fp16 -> Fp8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
+  // Fp16 -> Fp8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m/RDNA4)
   SmallVector<Value> Fp16ToFp8E4M3HW(Location loc,
                                      ConversionPatternRewriter &rewriter,
                                      const SmallVector<Value> &v) {
@@ -1616,7 +1635,7 @@ public:
       f32Vec[i] = Fp16ToFp32OneValue(loc, rewriter, v[i]);
 
     // Convert fp32 to fp8
-    return Pk4Fp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, f32Vec);
+    return Pk4Fp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, isaFamily, f32Vec);
   }
 
 private:
@@ -1674,7 +1693,7 @@ public:
     return std::nullopt;
   }
 
-  // Fp16 -> Bf8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
+  // Fp16 -> Bf8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m/RDNA4)
   SmallVector<Value> Fp16ToFp8E5M2HW(Location loc,
                                      ConversionPatternRewriter &rewriter,
                                      const SmallVector<Value> &v) {
@@ -1683,7 +1702,7 @@ public:
       f32Vec[i] = Fp16ToFp32OneValue(loc, rewriter, v[i]);
 
     // Convert fp32 to bf8
-    return Pk4Fp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, f32Vec);
+    return Pk4Fp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, isaFamily, f32Vec);
   }
 
   SmallVector<Value> Fp16ToFp8E5M2fnuzSW(Location loc,
@@ -1835,7 +1854,7 @@ public:
     return result;
   }
 
-  // Bf16 -> Fp8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
+  // Bf16 -> Fp8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m/RDNA4)
   SmallVector<Value> Bf16ToFp8E4M3HW(Location loc,
                                      ConversionPatternRewriter &rewriter,
                                      const SmallVector<Value> &v) {
@@ -1843,7 +1862,7 @@ public:
     SmallVector<Value> fp32Vec(4);
     for (size_t i = 0; i < 4; i++)
       fp32Vec[i] = AMD::convertBf16ToFp32(loc, rewriter, v[i]);
-    return Pk4Fp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, fp32Vec);
+    return Pk4Fp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, isaFamily, fp32Vec);
   }
 
   SmallVector<Value> Bf16ToFp8E4M3fnuzSW(Location loc,
@@ -1984,7 +2003,7 @@ public:
     return result;
   }
 
-  // Bf16 -> Bf8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
+  // Bf16 -> Bf8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m/RDNA4)
   SmallVector<Value> Bf16ToFp8E5M2HW(Location loc,
                                      ConversionPatternRewriter &rewriter,
                                      const SmallVector<Value> &v) {
@@ -1992,7 +2011,7 @@ public:
     SmallVector<Value> f32Vec(4);
     for (size_t i = 0; i < 4; i++)
       f32Vec[i] = AMD::convertBf16ToFp32(loc, rewriter, v[i]);
-    return Pk4Fp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, f32Vec);
+    return Pk4Fp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, isaFamily, f32Vec);
   }
 
   SmallVector<Value> Bf16ToFp8E5M2fnuzSW(Location loc,
@@ -2188,12 +2207,12 @@ public:
     return std::nullopt;
   }
 
-  // Fp32 -> Fp8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
+  // Fp32 -> Fp8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m/RDNA4)
   SmallVector<Value> Fp32ToFp8E4M3HW(Location loc,
                                      ConversionPatternRewriter &rewriter,
                                      const SmallVector<Value> &v) {
     assert(v.size() == 4);
-    return Pk4Fp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, v);
+    return Pk4Fp32ToF8<ROCDL::CvtPkFp8F32Op>(loc, rewriter, isaFamily, v);
   }
 
   SmallVector<Value> Fp32ToFp8E4M3fnuzSW(Location loc,
@@ -2276,12 +2295,12 @@ public:
     return std::nullopt;
   }
 
-  // Fp32 -> Bf8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m)
+  // Fp32 -> Bf8 via the unscaled cvt (FNUZ on CDNA3, OCP on RDNA4m/RDNA4)
   SmallVector<Value> Fp32ToFp8E5M2HW(Location loc,
                                      ConversionPatternRewriter &rewriter,
                                      const SmallVector<Value> &v) {
     assert(v.size() == 4);
-    return Pk4Fp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, v);
+    return Pk4Fp32ToF8<ROCDL::CvtPkBf8F32Op>(loc, rewriter, isaFamily, v);
   }
 
   SmallVector<Value> Fp32ToFp8E5M2fnuzSW(Location loc,

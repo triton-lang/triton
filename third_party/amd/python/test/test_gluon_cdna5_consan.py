@@ -8,23 +8,59 @@ from triton._internal_testing import is_hip_gfx1250
 
 
 def _run_consan_subprocess(test_name, *args, timeout=120):
-    """Run a ConSan test kernel in a subprocess and return captured stderr.
+    """Run a ConSan test in a subprocess, validate its outcome, and return stderr.
 
     The subprocess pipe captures all stderr output including messages
     flushed during process exit.
     """
     helper_script = os.path.join(os.path.dirname(__file__), "cdna5_consan_helper.py")
-    proc = subprocess.Popen(
-        [sys.executable, helper_script, test_name] + [str(a) for a in args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    command = [sys.executable, helper_script, test_name] + [str(a) for a in args]
+    return _run_consan_command(command, timeout=timeout)
+
+
+def _run_consan_command(command, *, timeout):
+    proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        _, stderr = proc.communicate(timeout=timeout)
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
-        _, stderr = proc.communicate()
-    return stderr.decode(errors="replace")
+        stdout, stderr = proc.communicate()
+        pytest.fail(f"ConSan helper {command} timed out after {timeout}s.\n"
+                    f"stdout:\n{stdout.decode(errors='replace')}\n"
+                    f"stderr:\n{stderr.decode(errors='replace')}")
+    stdout = stdout.decode(errors="replace")
+    stderr = stderr.decode(errors="replace")
+    # A device assertion may stop execution before normal completion;
+    # the calling test checks the expected diagnostic.
+    # If no assertion was reported, require a successful exit and the
+    # completion marker printed after device synchronization.
+    if "device assertion failed" not in stderr:
+        assert proc.returncode == 0, (f"ConSan helper {command} exited with {proc.returncode}.\n"
+                                      f"stdout:\n{stdout}\nstderr:\n{stderr}")
+        assert "ConSan helper completed" in stdout.splitlines(), (f"ConSan helper {command} did not complete.\n"
+                                                                  f"stdout:\n{stdout}\nstderr:\n{stderr}")
+    return stderr
+
+
+@pytest.mark.parametrize(
+    ("script", "timeout", "error"),
+    [
+        ('print("ConSan helper completed")', 10, None),
+        ('raise RuntimeError("compilation failed")', 10, "exited with 1"),
+        ('import os; os._exit(0)', 10, "did not complete"),
+        ('import time; time.sleep(60)', 0.5, "timed out"),
+        ('import sys; print("device assertion failed: expected", file=sys.stderr); sys.exit(1)', 10, None),
+        ('import sys; print("device assertion failed: expected", file=sys.stderr)', 10, None),
+    ],
+)
+def test_consan_subprocess_completion(script, timeout, error):
+    # Exercise real subprocess exits and timeout cleanup without a GPU kernel.
+    command = [sys.executable, "-c", script]
+    if error is None:
+        _run_consan_command(command, timeout=timeout)
+    else:
+        with pytest.raises((AssertionError, pytest.fail.Exception), match=error):
+            _run_consan_command(command, timeout=timeout)
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
@@ -68,8 +104,9 @@ def test_ws_store_wait_load(FAILURE):
     stderr_str = _run_consan_subprocess("ws_store_wait_load_failure", FAILURE)
 
     if FAILURE:
-        assert "Buffer being accessed has outstanding writes" in stderr_str, \
-            f"Expected 'Buffer being accessed has outstanding writes' in stderr, got:\n{stderr_str}"
+        # Without the wait, either partition can access the buffer first.
+        assert "Buffer being accessed has outstanding" in stderr_str, \
+            f"Expected an unsynchronized access diagnostic, got:\n{stderr_str}"
     else:
         assert "device assertion failed" not in stderr_str, \
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
@@ -86,8 +123,9 @@ def test_ws_load_wait_store(FAILURE):
     stderr_str = _run_consan_subprocess("ws_load_wait_store_failure", FAILURE)
 
     if FAILURE:
-        assert "Buffer being accessed has outstanding reads" in stderr_str, \
-            f"Expected 'Buffer being accessed has outstanding reads' in stderr, got:\n{stderr_str}"
+        # Without the wait, either partition can access the buffer first.
+        assert "Buffer being accessed has outstanding" in stderr_str, \
+            f"Expected an unsynchronized access diagnostic, got:\n{stderr_str}"
     else:
         assert "device assertion failed" not in stderr_str, \
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
@@ -205,21 +243,22 @@ def test_ws_two_loads_one_bar(FAILURE):
     partitions load from the same buffer via a single shared barrier and
     the writer partition skips the wait.
 
-    FAILURE=True should trigger "Buffer being accessed has outstanding
-    reads". False should be clean.
+    FAILURE=True should trigger an unsynchronized access diagnostic.
+    False should be clean.
     """
     stderr_str = _run_consan_subprocess("ws_two_loads_one_bar", FAILURE)
 
     if FAILURE:
-        assert "Buffer being accessed has outstanding reads" in stderr_str, \
-            f"Expected 'Buffer being accessed has outstanding reads' in stderr, got:\n{stderr_str}"
+        # Without the wait, either partition can access the buffer first.
+        assert "Buffer being accessed has outstanding" in stderr_str, \
+            f"Expected an unsynchronized access diagnostic, got:\n{stderr_str}"
     else:
         assert "device assertion failed" not in stderr_str, \
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
-@pytest.mark.parametrize("MISSING_BAR", ["none", "0", "1"])
+@pytest.mark.parametrize("MISSING_BAR", ["none", "0", "1", "2", "3"])
 def test_ws_two_loads_two_bars_loop(MISSING_BAR):
     """
     Verifies that ConSan detects unsynchronized access in a looped
@@ -228,12 +267,15 @@ def test_ws_two_loads_two_bars_loop(MISSING_BAR):
     """
     stderr_str = _run_consan_subprocess("ws_two_loads_two_bars_loop", MISSING_BAR)
 
-    if MISSING_BAR == "0":
-        assert "Buffer being accessed has outstanding reads" in stderr_str, \
-            f"Expected 'outstanding reads' in stderr, got:\n{stderr_str}"
-    elif MISSING_BAR == "1":
-        assert "Buffer being accessed has outstanding reads" in stderr_str, \
-            f"Expected 'outstanding reads' in stderr, got:\n{stderr_str}"
+    if MISSING_BAR != "none":
+        expected = ["Buffer being accessed has outstanding"]
+        # If the partition with the missing producer wait runs ahead and
+        # retires first, the same broken protocol can be reported as an
+        # mbarrier deadlock instead of an overlapping access.
+        if MISSING_BAR in ("2", "3"):
+            expected.append("Deadlock detected")
+        assert any(msg in stderr_str for msg in expected), \
+            f"Expected one of {expected} in stderr, got:\n{stderr_str}"
     else:
         assert "device assertion failed" not in stderr_str, \
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
@@ -246,14 +288,15 @@ def test_ws_load_ordering(FAILURE):
     Verifies that ConSan detects unsynchronized access when ws_1 loads
     from smem[1] (protected by bar[1]) after only waiting on bar[0].
 
-    FAILURE=True should trigger "Buffer being accessed has outstanding
-    writes". False should be clean.
+    FAILURE=True should trigger an unsynchronized access diagnostic.
+    False should be clean.
     """
     stderr_str = _run_consan_subprocess("ws_load_ordering", FAILURE)
 
     if FAILURE:
-        assert "Buffer being accessed has outstanding writes" in stderr_str, \
-            f"Expected 'outstanding writes' in stderr, got:\n{stderr_str}"
+        # Without the wait, either partition can access the buffer first.
+        assert "Buffer being accessed has outstanding" in stderr_str, \
+            f"Expected an unsynchronized access diagnostic, got:\n{stderr_str}"
     else:
         assert "device assertion failed" not in stderr_str, \
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
@@ -265,14 +308,15 @@ def test_ws_different_warp_sizes(MISSING_BAR):
     """
     Verifies that ConSan detects unsynchronized access when three partitions
     with different warp counts (4, 2, 8) share a buffer.  The writer partition
-    (ws_2, 8 warps) skips one of two barrier waits, storing to smem[0] while
-    readers still have outstanding reads.
+    (ws_2, 8 warps) skips one of two barrier waits, so its store to smem[0]
+    races with a reader's load.
     """
     stderr_str = _run_consan_subprocess("ws_different_warp_sizes", MISSING_BAR)
 
     if MISSING_BAR != "none":
-        assert "Buffer being accessed has outstanding reads" in stderr_str, \
-            f"Expected 'Buffer being accessed has outstanding reads' in stderr, got:\n{stderr_str}"
+        # Without the wait, either partition can access the buffer first.
+        assert "Buffer being accessed has outstanding" in stderr_str, \
+            f"Expected an unsynchronized access diagnostic, got:\n{stderr_str}"
     else:
         assert "device assertion failed" not in stderr_str, \
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
@@ -347,6 +391,23 @@ def test_consan_async_copy(FAILURE):
     else:
         assert "device assertion failed" not in stderr_str, \
             f"Unexpected ConSan violation in stderr:\n{stderr_str}"
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("empty_groups", None),
+        ("large_count", "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared"),
+        ("negative_count", "Buffer being accessed has outstanding writes"),
+    ],
+)
+def test_async_wait_count_bounds(mode, message):
+    stderr = _run_consan_subprocess("async_wait_count_bounds", mode)
+    if message is None:
+        assert not stderr, stderr
+    else:
+        assert message in stderr, stderr
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")

@@ -236,3 +236,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
     tt.return %range : tensor<256xi32, #blocked8>
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Only the thread that acquires the lock, lane 0 of warp 0, may release it.
+  // GFX1250-LABEL: @experimental_lock_release
+  // GFX1250: [[WAVE:%.*]] = rocdl.wave.id : i32
+  // GFX1250: llvm.cond_br %arg1, ^[[PRED:bb[0-9]+]], ^[[END:bb[0-9]+]]
+  // GFX1250: ^[[PRED]]:
+  // GFX1250: rocdl.s.barrier
+  // GFX1250: [[LANE0:%.*]] = llvm.icmp "eq" {{%.*}}, {{%.*}} : i32
+  // GFX1250: [[WARP0:%.*]] = llvm.icmp "eq" [[WAVE]], {{%.*}} : i32
+  // GFX1250: [[OWNER:%.*]] = llvm.and [[LANE0]], [[WARP0]] : i1
+  // GFX1250: llvm.cond_br [[OWNER]], ^[[RELEASE:bb[0-9]+]], ^[[JOIN:bb[0-9]+]]
+  // GFX1250: ^[[RELEASE]]:
+  // GFX1250-NEXT: llvm.atomicrmw xchg %arg0, {{%.*}} syncscope("agent") release
+  // GFX1250-NEXT: llvm.br ^[[JOIN]]
+  // GFX1250: ^[[JOIN]]:
+  // GFX1250-NEXT: llvm.br ^[[END]]
+  // GFX1250-NOT: llvm.atomicrmw
+  tt.func private @experimental_lock_release(%lock: !tt.ptr<i32>, %pred: i1) {
+    tti.experimental_lock_release %lock, %pred : !tt.ptr<i32>
+    tt.return
+  }
+}

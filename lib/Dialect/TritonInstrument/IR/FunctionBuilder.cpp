@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/xxhash.h"
 
 namespace mlir::triton::instrument {
@@ -88,6 +89,10 @@ struct AssertInfo {
   StringRef message;
   Type type;
 };
+
+static int getMaxCommitAge(RankedTensorType commitsType) {
+  return llvm::maxIntN(commitsType.getElementTypeBitWidth());
+}
 
 static uint64_t expandActiveMask(uint64_t activeMask, unsigned numBaseThreads) {
   uint64_t expanded = 0;
@@ -4128,13 +4133,11 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
   ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
-  bool retainCopies =
-      auxData.hasAsyncCopyMbarriers && commitKind == CommitKind::AsyncCp;
   SmallVector<Value> args = {threadVal, pred, outstandingCommits.value};
   createCallToCachedFunction(
       b, "commit_accesses", args,
-      /*assertInfo=*/std::nullopt, {commitsType, uint64_t(retainCopies)},
-      [commitsType, retainCopies](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {commitsType},
+      [commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value threadVal = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value outstandingCommitsPtr = entryBlock->getArgument(2);
@@ -4159,14 +4162,12 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
             fb, commits, zero, arith::CmpIPredicate::sgt);
         commitsGtZero = arith::AndIOp::create(fb, commitsGtZero, threadMask);
         Value commitsPlusOne = arith::AddIOp::create(fb, commits, ones);
-        if (retainCopies) {
-          Value maximum =
-              tti::createConstIntTensor(fb, fb.getLoc(), 127, commitsType);
-          Value saturated = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
-                                                  commits, maximum);
-          commitsPlusOne =
-              arith::SelectOp::create(fb, saturated, commits, commitsPlusOne);
-        }
+        Value maximum = tti::createConstIntTensor(
+            fb, fb.getLoc(), getMaxCommitAge(commitsType), commitsType);
+        Value saturated = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                                commits, maximum);
+        commitsPlusOne =
+            arith::SelectOp::create(fb, saturated, commits, commitsPlusOne);
         commits =
             arith::SelectOp::create(fb, commitsGtZero, commitsPlusOne, commits);
 
@@ -4234,6 +4235,9 @@ void FunctionBuilder::createClearOutstandingCommitsTransferCall(
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
   Value transferMaskVal =
       arith::ConstantIntOp::create(b, transferThreadMask, 64);
+  // Clamp negative wait counts to zero so only outstanding committed accesses
+  // are treated as completed.
+  outstandingNum = std::clamp(outstandingNum, 0, getMaxCommitAge(commitsType));
   Value outstandingNumVal = arith::ConstantIntOp::create(b, outstandingNum, 32);
   SmallVector<Value> args = {threadVal, transferMaskVal, outstandingNumVal,
                              pred, outstandingCommits.value};

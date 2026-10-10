@@ -125,34 +125,34 @@ module attributes {
     // LOWER-NEXT: 7: [[PARTITION7:\^.*]]
     // LOWER: [[PARTITION0]]:
     // LOWER-NOT: nvvm.setmaxregister
-    // LOWER: llvm.call_intrinsic "llvm.nvvm.barrier.cta.sync.all"({{.*}})
+    // LOWER: nvvm.barrier id = {{.*}} {aligned = false}
     // LOWER-NOT: nvvm.setmaxregister
     // LOWER: "worker0"()
     // LOWER-NOT: nvvm.setmaxregister
-    // LOWER: llvm.call_intrinsic "llvm.nvvm.barrier.cta.sync.all"({{.*}})
+    // LOWER: nvvm.barrier id = {{.*}} {aligned = false}
     // LOWER-NOT: nvvm.setmaxregister
     // LOWER: llvm.br {{\^.*}}
     // LOWER: [[PARTITION1]]:
     // LOWER-NOT: nvvm.setmaxregister
-    // LOWER: llvm.call_intrinsic "llvm.nvvm.barrier.cta.sync.all"({{.*}})
+    // LOWER: nvvm.barrier id = {{.*}} {aligned = false}
     // LOWER-NOT: nvvm.setmaxregister
     // LOWER: "worker1"()
     // LOWER-NOT: nvvm.setmaxregister
-    // LOWER: llvm.call_intrinsic "llvm.nvvm.barrier.cta.sync.all"({{.*}})
+    // LOWER: nvvm.barrier id = {{.*}} {aligned = false}
     // LOWER-NOT: nvvm.setmaxregister
     // LOWER: llvm.br {{\^.*}}
     // LOWER: [[PARTITION2]]:
     // LOWER-NOT: nvvm.setmaxregister
-    // LOWER: llvm.call_intrinsic "llvm.nvvm.barrier.cta.sync.all"({{.*}})
+    // LOWER: nvvm.barrier id = {{.*}} {aligned = false}
     // LOWER-NOT: nvvm.setmaxregister
-    // LOWER: llvm.call_intrinsic "llvm.nvvm.barrier.cta.sync.all"({{.*}})
+    // LOWER: nvvm.barrier id = {{.*}} {aligned = false}
     // LOWER-NOT: nvvm.setmaxregister
     // LOWER: llvm.br {{\^.*}}
     // LOWER: [[PARTITION3]]:
     // LOWER-NOT: nvvm.setmaxregister
-    // LOWER: llvm.call_intrinsic "llvm.nvvm.barrier.cta.sync.all"({{.*}})
+    // LOWER: nvvm.barrier id = {{.*}} {aligned = false}
     // LOWER-NOT: nvvm.setmaxregister
-    // LOWER: llvm.call_intrinsic "llvm.nvvm.barrier.cta.sync.all"({{.*}})
+    // LOWER: nvvm.barrier id = {{.*}} {aligned = false}
     // LOWER-NOT: nvvm.setmaxregister
     // LOWER: llvm.br {{\^.*}}
     // LOWER: [[PARTITION4]]:
