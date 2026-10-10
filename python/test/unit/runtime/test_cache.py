@@ -341,6 +341,7 @@ def test_invalid_constexpr_fn():
 
 
 def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
+    temp_file.parent.mkdir(parents=True, exist_ok=True)
     temp_file.write_text(('# extra line\n' * num_extra_lines) + code)
     spec = importlib.util.spec_from_file_location("module.name", str(temp_file))
     module = importlib.util.module_from_spec(spec)
@@ -348,7 +349,8 @@ def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     return module
 
 
-def test_changed_line_numbers_invalidate_cache(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("env_value, path_hashed", [("0", True), ("1", False), ("yes", True)])
+def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, monkeypatch, env_value, path_hashed):
     from textwrap import dedent
     code = dedent("""
         import triton
@@ -356,14 +358,176 @@ def test_changed_line_numbers_invalidate_cache(tmp_path: pathlib.Path):
         def test_kernel(i):
             i = i + 1
     """)
-    temp_file0 = tmp_path / "test_changed_line_numbers_invalidate_cache0.py"
-    orig_mod = write_and_load_module(temp_file0, code, 0)
-    orig_cache_key = orig_mod.test_kernel.cache_key
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", env_value)
 
-    temp_file1 = tmp_path / "test_changed_line_numbers_invalidate_cache1.py"
-    updated_mod = write_and_load_module(temp_file1, code, 1)
-    updated_cache_key = updated_mod.test_kernel.cache_key
-    assert orig_cache_key != updated_cache_key
+    line_file = tmp_path / "line" / "kernel.py"
+    orig_mod = write_and_load_module(line_file, code, 0)
+    orig_line_key = orig_mod.test_kernel.cache_key
+    shifted_mod = write_and_load_module(line_file, code, 1)
+    shifted_line_key = shifted_mod.test_kernel.cache_key
+    assert orig_line_key != shifted_line_key
+
+    path0_mod = write_and_load_module(tmp_path / "path0" / "kernel.py", code, 0)
+    path1_mod = write_and_load_module(tmp_path / "path1" / "kernel.py", code, 0)
+    path0_key = path0_mod.test_kernel.cache_key
+    path1_key = path1_mod.test_kernel.cache_key
+    if path_hashed:
+        assert path0_key != path1_key
+    else:
+        assert path0_key == path1_key
+
+
+def test_starting_line_separates_kernels_without_line_info(tmp_path, fresh_knobs, monkeypatch):
+    from textwrap import dedent
+    code = dedent("""
+        import triton
+        import triton.language as tl
+        def fp16_kernel():
+            dtype = tl.float16
+            @triton.jit
+            def kernel(X, Y):
+                tl.store(Y, tl.load(X).to(dtype))
+            return kernel
+        def fp32_kernel():
+            dtype = tl.float32
+            @triton.jit
+            def kernel(X, Y):
+                tl.store(Y, tl.load(X).to(dtype))
+            return kernel
+    """)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+    module = write_and_load_module(tmp_path / "kernel.py", code, 0)
+    assert module.fp16_kernel().cache_key != module.fp32_kernel().cache_key
+
+
+def test_line_info_change_rehashes_source_locations(tmp_path, fresh_knobs, monkeypatch):
+    from textwrap import dedent
+    code = dedent("""
+        import triton
+        @triton.jit
+        def callee(i):
+            return i + 1
+        @triton.jit
+        def test_kernel(i):
+            i = callee(i)
+    """)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
+    module = write_and_load_module(tmp_path / "kernel.py", code, 0)
+    keys = {}
+    for env_value in ["0", "1", "true", "false"]:
+        monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", env_value)
+        keys[env_value] = (module.callee.cache_key, module.test_kernel.cache_key)
+    assert keys["0"] == keys["false"]
+    assert keys["1"] == keys["true"]
+    assert keys["0"][0] != keys["1"][0]
+    assert keys["0"][1] != keys["1"][1]
+
+
+def test_line_info_rehash_keeps_recorded_globals(tmp_path, fresh_knobs, monkeypatch):
+    from textwrap import dedent
+    code = dedent("""
+        import triton
+        import triton.language as tl
+        CONSTANT = tl.constexpr(1)
+        @triton.jit
+        def test_kernel(i):
+            i = i + CONSTANT
+    """)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
+    module = write_and_load_module(tmp_path / "kernel.py", code, 0)
+    kernel = module.test_kernel
+    enabled_key = kernel.cache_key
+
+    module.CONSTANT = module.tl.constexpr(2)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+    assert kernel.cache_key != enabled_key
+    recorded = {name: val.value for (name, _), (val, _) in kernel.used_global_vals.items()}
+    assert recorded == {"CONSTANT": 1}
+
+
+def test_line_info_rehash_failure_is_retried(tmp_path, fresh_knobs, monkeypatch):
+    from textwrap import dedent
+    code = dedent("""
+        import triton
+        import triton.language as tl
+        CONSTANT = tl.constexpr(1)
+        @triton.jit
+        def callee(i):
+            return i + CONSTANT
+        @triton.jit
+        def test_kernel(i):
+            i = i + CONSTANT
+            i = callee(i)
+    """)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+    module = write_and_load_module(tmp_path / "kernel.py", code, 0)
+    disabled_key = module.test_kernel.cache_key
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
+    module.test_kernel.cache_key
+
+    module.CONSTANT = module.tl.constexpr(2)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+    with pytest.raises(RuntimeError, match="Global variable CONSTANT"):
+        module.test_kernel.cache_key
+    module.CONSTANT = module.tl.constexpr(1)
+    assert module.test_kernel.cache_key == disabled_key
+
+
+def test_emitted_source_coordinates_invalidate_cache(tmp_path, fresh_knobs):
+    from textwrap import dedent
+    fresh_knobs.compilation.disable_line_info = False
+
+    one_decorator = dedent("""
+        import triton
+        def identity(fn):
+            return fn
+        @identity
+        @triton.jit
+        def test_kernel(i):
+            i = i + 1
+    """)
+    two_decorators = one_decorator.replace("@identity\n", "@identity\n@identity\n")
+    decorator_file = tmp_path / "decorator" / "kernel.py"
+    one_decorator_kernel = write_and_load_module(decorator_file, one_decorator, 0).test_kernel
+    one_decorator_key = one_decorator_kernel.cache_key
+    two_decorators_kernel = write_and_load_module(decorator_file, two_decorators, 0).test_kernel
+    two_decorators_key = two_decorators_kernel.cache_key
+    assert one_decorator_kernel.src == two_decorators_kernel.src
+    assert one_decorator_kernel.starting_line_number == two_decorators_kernel.starting_line_number
+    assert one_decorator_kernel.def_file_line_number != two_decorators_kernel.def_file_line_number
+    assert one_decorator_key != two_decorators_key
+
+    four_space_indent = dedent("""
+        import triton
+        def make_kernel():
+            if False:
+                pass
+            @triton.jit
+            def test_kernel(i):
+                i = i + 1
+            return test_kernel
+        test_kernel = make_kernel()
+    """)
+    eight_space_indent = four_space_indent.replace("if False:", "if True:").replace(
+        "    @triton.jit\n"
+        "    def test_kernel(i):\n"
+        "        i = i + 1\n"
+        "    return test_kernel",
+        "        @triton.jit\n"
+        "        def test_kernel(i):\n"
+        "            i = i + 1\n"
+        "        return test_kernel",
+    )
+    indent_file = tmp_path / "indent" / "kernel.py"
+    four_space_kernel = write_and_load_module(indent_file, four_space_indent, 0).test_kernel
+    four_space_key = four_space_kernel.cache_key
+    eight_space_kernel = write_and_load_module(indent_file, eight_space_indent, 0).test_kernel
+    eight_space_key = eight_space_kernel.cache_key
+    assert four_space_kernel.src == eight_space_kernel.src
+    assert four_space_kernel.starting_line_number == eight_space_kernel.starting_line_number
+    assert four_space_kernel.def_file_line_number == eight_space_kernel.def_file_line_number
+    assert four_space_kernel.def_file_col_number != eight_space_kernel.def_file_col_number
+    assert four_space_key != eight_space_key
 
 
 def test_reuse(device, fresh_triton_cache):
