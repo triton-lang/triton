@@ -592,10 +592,6 @@ void init_triton_amd(py::module_ &m) {
       // hold the GIL meanwhile.
       py::call_guard<py::gil_scoped_release>());
 
-  m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
-    mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
-  });
-
   m.def("add_mfma_schedule_pass", [](llvm::Function *fn) -> bool {
     return mlir::triton::AMD::runMFMASchedulePass(*fn);
   });
