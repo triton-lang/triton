@@ -71,7 +71,7 @@ jobs:
       options: ${{ matrix.options }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: 'true'
       - name: Inspect AMD runner
@@ -290,7 +290,7 @@ jobs:
         --volume /home/runner/.triton:/github/home/.triton
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: 'true'
       - name: Compute cache keys
