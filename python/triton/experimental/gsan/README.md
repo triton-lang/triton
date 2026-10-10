@@ -108,6 +108,50 @@ shadow_ptr = vmem_base_ptr + word_offset * SHADOW_SIZE_BYTES
 
 We also have the option to encode more information into the pointer addresses, since we have a full 64-bit address space to play with e.g. we might have one memory region for “bulk” data with course-grained shadow memory, and one for fine-grained word-level tracking.
 
+## Shadow placement on a peer GPU
+
+`configure(shadow_device=...)` can place shadow memory on a separate, visible
+CUDA GPU with native peer atomic support. Tensor storage and per-SM runtime
+state stay on the compute GPU. Configure this before the first GSan allocation:
+
+```python
+from triton.experimental import gsan
+
+gsan.configure(device_ranks={0: 0}, num_devices=1, shadow_device=1)
+pool = gsan.create_mem_pool()
+```
+
+Here CUDA device 0 computes and CUDA device 1 only holds shadow memory. The
+helper does not consume GSan thread IDs. With multiple processes, each process
+selects its helper using its own local CUDA device ordinals. Omitting
+`shadow_device` retains local placement by default. Both normal and write-once
+allocations use the selected placement, including exported shadow handles.
+
+To keep shadow memory local until space runs low, also set a local reserve:
+
+```python
+gsan.configure(
+    device_ranks={0: 0}, num_devices=1, shadow_device=1,
+    shadow_local_reserve_bytes=8 * 1024**3,
+)
+```
+
+This prefers local shadow backing while leaving an estimated 8 GiB free on the
+compute GPU after the real and shadow allocations. Otherwise the entire new
+shadow allocation goes to GPU 1. An actual local shadow out-of-memory error is
+also retried on GPU 1. The reserve is best effort because other allocators may
+consume memory concurrently; real tensor storage must still fit locally.
+
+Placement is decided per backing allocation. Existing and cached allocations
+do not migrate or split across GPUs. New allocations can become local again
+when memory is freed. Omitting the reserve preserves forced peer placement;
+setting it to zero prefers local memory with peer fallback and no headroom.
+
+Remote shadow accesses add peer-link traffic and latency, including lock
+atomics. This option trades execution speed for compute-GPU memory capacity;
+measure it on the intended topology. It does not allocate memory on GPUs that
+are invisible to the process or provide a remote allocation service.
+
 # **4\. Triton API Changes**
 
 Currently, we have atomic read-modify-write operations which have memory semantic and scope qualifiers in the frontend. Strictly speaking this is all we need as you can simply add 0 to load, or use `atomic_xchg` to store. However, these have overly strong synchronizing effects which may hurt performance of distributed comms.
