@@ -1,3 +1,5 @@
+import os
+
 import torch
 
 import triton
@@ -6,6 +8,131 @@ import pytest
 
 import pathlib
 from triton._internal_testing import is_cuda, is_hip_cdna2, is_rubin
+from triton.runtime.autotuner import Autotuner
+from triton.runtime.errors import OutOfResources
+
+PARALLEL_AUTOTUNE_MODES = [
+    pytest.param(1, False, id="serial"),
+    pytest.param(2, False, id="parallel-no-overlap"),
+    pytest.param(2, True, id="parallel-overlap"),
+]
+
+
+def test_parallel_autotuner_default_knobs(fresh_knobs):
+    assert fresh_knobs.autotuning.compile_workers == 1
+    assert not fresh_knobs.autotuning.overlap_bench
+
+
+def test_parallel_autotuner_auto_workers_respect_affinity(monkeypatch, fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = 0
+    monkeypatch.delattr(os, "process_cpu_count", raising=False)
+    monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(6)))
+    monkeypatch.setattr(os, "cpu_count", lambda: 128)
+
+    assert Autotuner._available_cpu_count() == 6
+    assert Autotuner._resolve_num_workers() == 3
+
+
+def test_parallel_autotuner_auto_workers_use_process_cpu_count(monkeypatch, fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = 0
+    monkeypatch.setattr(os, "process_cpu_count", lambda: 4, raising=False)
+    monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: pytest.fail("unexpected affinity fallback"))
+
+    assert Autotuner._available_cpu_count() == 4
+    assert Autotuner._resolve_num_workers() == 2
+
+
+def test_parallel_autotuner_rejects_negative_workers(fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = -1
+
+    with pytest.raises(RuntimeError, match="must be non-negative"):
+        Autotuner._resolve_num_workers()
+
+
+@pytest.mark.parametrize("overlap_bench", [False, True], ids=["no-overlap", "overlap"])
+def test_parallel_autotuner_preserves_config_order_and_retries_compile_failures(overlap_bench, monkeypatch,
+                                                                                fresh_knobs):
+    fresh_knobs.autotuning.overlap_bench = overlap_bench
+    configs = [
+        triton.Config(kwargs={"BLOCK_SIZE": 32}),
+        triton.Config(kwargs={"BLOCK_SIZE": 64}),
+        triton.Config(kwargs={"BLOCK_SIZE": 128}),
+    ]
+    tuner = object.__new__(Autotuner)
+    benchmarked = []
+
+    def compile_config(*args, config, **kwargs):
+        if config is configs[1]:
+            raise OutOfResources(128, 64, "threads")
+
+    def bench(*args, config, **kwargs):
+        benchmarked.append(config)
+        return [1.0, 1.0, 1.0]
+
+    monkeypatch.setattr(tuner, "_compile_config", compile_config)
+    monkeypatch.setattr(tuner, "_bench", bench)
+
+    timings = tuner._parallel_bench(configs=configs, num_workers=2)
+
+    assert list(timings) == configs
+    assert set(benchmarked) == set(configs)
+
+
+def test_parallel_autotuner_compile_pre_hook_uses_private_arguments():
+
+    class Descriptor:
+
+        def __init__(self):
+            self.block_shape = [1, 1]
+
+    class RecordingKernel:
+
+        def __init__(self):
+            self.calls = []
+
+        def run(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    def set_block_shape(nargs):
+        nargs["descriptor"].block_shape = [nargs["BLOCK_M"], nargs["BLOCK_N"]]
+
+    descriptor = Descriptor()
+    kernel = RecordingKernel()
+    tuner = object.__new__(Autotuner)
+    tuner.arg_names = ["descriptor"]
+    tuner.nargs = {"descriptor": descriptor}
+    tuner.fn = kernel
+    config = triton.Config({"BLOCK_M": 64, "BLOCK_N": 128}, pre_hook=set_block_shape)
+
+    tuner._compile_config(descriptor, config=config)
+
+    compiled_descriptor, = kernel.calls[0][0]
+    assert compiled_descriptor is not descriptor
+    assert compiled_descriptor.block_shape == [64, 128]
+    assert descriptor.block_shape == [1, 1]
+    assert kernel.calls[0][1]["warmup"] is True
+
+
+def test_parallel_autotuner_warmup_preserves_config_order(fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = 2
+    configs = [
+        triton.Config(kwargs={"BLOCK_SIZE": 32}),
+        triton.Config(kwargs={"BLOCK_SIZE": 64}),
+        triton.Config(kwargs={"BLOCK_SIZE": 128}),
+    ]
+
+    class RecordingKernel:
+
+        def warmup(self, **kwargs):
+            return kwargs["BLOCK_SIZE"]
+
+    tuner = object.__new__(Autotuner)
+    tuner.arg_names = []
+    tuner.fn = RecordingKernel()
+    tuner.prune_configs = lambda _kwargs: configs
+
+    assert tuner.warmup() == [32, 64, 128]
+    assert tuner.nargs is None
 
 
 def do_bench(kernel_call, quantiles, use_cuda_graph=False):
@@ -62,7 +189,10 @@ def test_no_do_bench(device: str):
 
 
 @pytest.mark.parametrize('pass_kwargs_to_kernel', [False, True])
-def test_restore(pass_kwargs_to_kernel, device):
+@pytest.mark.parametrize("compile_workers,overlap_bench", PARALLEL_AUTOTUNE_MODES)
+def test_restore(pass_kwargs_to_kernel, compile_workers, overlap_bench, device, fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = compile_workers
+    fresh_knobs.autotuning.overlap_bench = overlap_bench
     N = 1024
     src = torch.zeros(N, device=device)
 
@@ -147,7 +277,10 @@ def test_restore_with_none(pass_kwargs_to_kernel, device):
 
 
 @pytest.mark.skipif(is_hip_cdna2(), reason="Hit LLVM assertion in splitLiveThroughBlock")
-def test_hooks(device):
+@pytest.mark.parametrize("compile_workers,overlap_bench", PARALLEL_AUTOTUNE_MODES)
+def test_hooks(compile_workers, overlap_bench, device, fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = compile_workers
+    fresh_knobs.autotuning.overlap_bench = overlap_bench
     # Autotuner's pre- and post- hooks should be called the same number of times
     N = 4096
     src = torch.zeros(N, device=device)
@@ -659,7 +792,10 @@ def test_exceed_tmem(device):
     ) == f"out of resource: tensor memory, Required: 640, Hardware limit: {tmem_size}. Reducing block sizes or `num_stages` may help."
 
 
-def test_exceed_threads(device):
+@pytest.mark.parametrize("compile_workers,overlap_bench", PARALLEL_AUTOTUNE_MODES)
+def test_exceed_threads(compile_workers, overlap_bench, device, fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = compile_workers
+    fresh_knobs.autotuning.overlap_bench = overlap_bench
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
     x = torch.empty(1024, device=device, dtype=torch.float32)
@@ -698,6 +834,30 @@ def test_exceed_threads(device):
     warp_size = triton.runtime.driver.active.get_current_target().warp_size
     assert exception_out_of_resource is not None and f"out of resource: threads, Required: {128 * warp_size}" in str(
         exception_out_of_resource)
+
+
+@pytest.mark.parametrize("compile_workers", [1, 2], ids=["serial", "parallel"])
+def test_autotuner_warmup(compile_workers, device, fresh_knobs):
+    from triton.runtime.jit import MockTensor
+
+    fresh_knobs.autotuning.compile_workers = compile_workers
+    configs = [
+        triton.Config(kwargs={"BLOCK_SIZE": 32}),
+        triton.Config(kwargs={"BLOCK_SIZE": 64}),
+        triton.Config(kwargs={"BLOCK_SIZE": 128}),
+    ]
+
+    @triton.autotune(configs=configs, key=["N"])
+    @triton.jit
+    def copy_kernel(src_ptr, dst_ptr, N, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < N
+        tl.store(dst_ptr + offsets, tl.load(src_ptr + offsets, mask=mask), mask=mask)
+
+    compiled = copy_kernel.warmup(MockTensor(torch.float16), MockTensor(torch.float16), 4096, grid=(128, ))
+
+    assert len(compiled) == len(configs)
+    assert all(kernel is not None for kernel in compiled)
 
 
 def test_prune_all_configs(device):
