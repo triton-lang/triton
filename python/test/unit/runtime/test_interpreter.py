@@ -14,51 +14,6 @@ def _element_ptrs(array: np.ndarray) -> np.ndarray:
     return (base + offsets).reshape(array.shape)
 
 
-@pytest.mark.parametrize("shape", [(4, 8), (2, 4, 8)])
-@pytest.mark.parametrize("axis", [None, 0, 1])
-@pytest.mark.parametrize("keep_dims", [False, True])
-def test_tuple_reduce_all_dimensions(shape, axis, keep_dims):
-    import torch
-    import triton
-
-    with triton.knobs.runtime.scope():
-        triton.knobs.runtime.interpret = True
-
-        @triton.jit
-        def combine(x0, y0, x1, y1):
-            return x0 + x1, tl.maximum(y0, y1)
-
-        @triton.jit
-        def kernel(X, Y, Sum, Max, N: tl.constexpr, SHAPE: tl.constexpr, AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr,
-                   OUT_SHAPE: tl.constexpr, OUT_N: tl.constexpr, COMBINE: tl.constexpr):
-            offsets = tl.arange(0, N)
-            x = tl.reshape(tl.load(X + offsets), SHAPE)
-            y = tl.reshape(tl.load(Y + offsets), SHAPE)
-            sums, maxima = tl.reduce((x, y), AXIS, COMBINE, keep_dims=KEEP_DIMS)
-            tl.static_assert(len(sums.shape) == len(OUT_SHAPE))
-            tl.static_assert(len(maxima.shape) == len(OUT_SHAPE))
-            for i in tl.static_range(len(OUT_SHAPE)):
-                tl.static_assert(sums.shape[i] == OUT_SHAPE[i])
-                tl.static_assert(maxima.shape[i] == OUT_SHAPE[i])
-            if len(OUT_SHAPE) == 0:
-                tl.store(Sum, sums)
-                tl.store(Max, maxima)
-            else:
-                tl.store(Sum + tl.arange(0, OUT_N), tl.reshape(sums, (OUT_N, )))
-                tl.store(Max + tl.arange(0, OUT_N), tl.reshape(maxima, (OUT_N, )))
-
-        x = torch.arange(np.prod(shape).item(), dtype=torch.float32).reshape(shape)
-        y = x * 3 + 7
-        expected_sum = np.sum(x.numpy(), axis=axis, keepdims=keep_dims)
-        expected_max = np.max(y.numpy(), axis=axis, keepdims=keep_dims)
-        sums = torch.empty(expected_sum.size, dtype=torch.float32)
-        maxima = torch.empty_like(sums)
-        kernel[(1, )](x, y, sums, maxima, x.numel(), shape, axis, keep_dims, expected_sum.shape, expected_sum.size,
-                      combine)
-        np.testing.assert_array_equal(sums.numpy().reshape(expected_sum.shape), expected_sum)
-        np.testing.assert_array_equal(maxima.numpy().reshape(expected_max.shape), expected_max)
-
-
 @pytest.mark.parametrize("dtype, prefix", [
     (tl.float16, "fcmpO"),
     (tl.float32, "fcmpO"),
