@@ -1298,6 +1298,78 @@ def _extern_ternary_math_kernel(x_ptr, y_ptr, z_ptr, out_ptr, n_elements, OP: gl
     gl.store(out_ptr + offs, out, mask=mask)
 
 
+@triton.jit
+def _triton_extern_arithmetic_kernel(x_ptr, y_ptr, alias_ptr, arithmetic_ptr, n_elements, OP: tl.constexpr,
+                                     BLOCK: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
+    if OP == "mul_rz":
+        alias = tl.extra.libdevice.mul_rz(x, y)
+        arithmetic = x * y
+    else:
+        alias = tl.extra.libdevice.add_rn(x, y)
+        arithmetic = x + y
+    tl.store(alias_ptr + offsets, alias, mask=mask)
+    tl.store(arithmetic_ptr + offsets, arithmetic, mask=mask)
+
+
+@gluon.jit
+def _gluon_extern_arithmetic_kernel(x_ptr, y_ptr, alias_ptr, arithmetic_ptr, n_elements, OP: gl.constexpr,
+                                    BLOCK: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    offsets = gl.program_id(0) * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offsets < n_elements
+    x = gl.load(x_ptr + offsets, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offsets, mask=mask, other=0.0)
+    if OP == "mul_rz":
+        alias = gl.extra.libdevice.mul_rz(x, y)
+        arithmetic = x * y
+    else:
+        alias = gl.extra.libdevice.add_rn(x, y)
+        arithmetic = x + y
+    gl.store(alias_ptr + offsets, alias, mask=mask)
+    gl.store(arithmetic_ptr + offsets, arithmetic, mask=mask)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA libdevice arithmetic aliases")
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("op", ["mul_rz", "add_rn"])
+@pytest.mark.parametrize("instrumentation_mode", ["fpsan", ""], ids=["fpsan", "regular"])
+def test_extern_arithmetic_payload_and_rounding(device, fresh_knobs, frontend, op, instrumentation_mode):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = instrumentation_mode
+
+    if instrumentation_mode == "fpsan":
+        rng = np.random.RandomState(37)
+        x_bits = rng.randint(-(2**31), 2**31, size=1024, dtype=np.int32)
+        y_bits = rng.randint(-(2**31), 2**31, size=1024, dtype=np.int32)
+        expected_fn = _expected_mul_i32 if op == "mul_rz" else _expected_add_i32
+        expected_alias = expected_arithmetic = expected_fn(x_bits, y_bits)
+    else:
+        # The product lies halfway between two f32 values. RZ and RN differ
+        # for both signs, so this also checks ordinary libdevice rounding.
+        x_bits = np.array([0x3F800800, 0xBF800800], dtype=np.uint32).view(np.int32)
+        y_bits = np.array([0x3F801800, 0x3F801800], dtype=np.uint32).view(np.int32)
+        if op == "mul_rz":
+            expected_alias = np.array([0x3F802001, 0xBF802001], dtype=np.uint32)
+            expected_arithmetic = np.array([0x3F802002, 0xBF802002], dtype=np.uint32)
+        else:
+            expected_alias = expected_arithmetic = np.array([0x40001000, 0x3A000000], dtype=np.uint32)
+
+    x = torch.tensor(x_bits, dtype=torch.int32, device=device)
+    y = torch.tensor(y_bits, dtype=torch.int32, device=device)
+    alias_out = torch.empty_like(x)
+    arithmetic_out = torch.empty_like(x)
+    args = [triton.TensorWrapper(tensor, dtype=torch.float32) for tensor in (x, y, alias_out, arithmetic_out)]
+    kernel = _triton_extern_arithmetic_kernel if frontend == "triton" else _gluon_extern_arithmetic_kernel
+    kernel[(triton.cdiv(x.numel(), 256), )](*args, x.numel(), OP=op, BLOCK=256)
+
+    _assert_payload_equal(alias_out, expected_alias)
+    _assert_payload_equal(arithmetic_out, expected_arithmetic)
+
+
 @gluon.jit
 def _extern_mixed_math_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
                               THREADS_PER_WARP: gl.constexpr):
