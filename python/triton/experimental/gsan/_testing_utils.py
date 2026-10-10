@@ -4,8 +4,8 @@ import torch
 import triton
 import triton.language as tl
 
-from ._allocator import get_global_state_pointer
-from triton._C.libtriton.gsan_testing import is_write_once_address, shadow_cell_size, shadow_granularity, thread_state_address, PER_DEVICE_STATE_STRIDE_BYTES, GLOBAL_STATE_SIZE_BYTES, shadow_cell_address, thread_state_stride_bytes
+from ._allocator import get_global_state_pointer, get_per_device_state_stride
+from triton._C.libtriton.gsan_testing import is_write_once_address, shadow_cell_size, shadow_granularity, thread_state_address, GLOBAL_STATE_SIZE_BYTES, shadow_cell_address, thread_state_stride_bytes
 from ._testing import (decode_global_state_tensor, decode_shadow_cell_tensor, decode_thread_state_tensor)
 from ._utils import uint8_cuda_tensor_from_ptr
 
@@ -37,7 +37,7 @@ def shadow_cell_from_address(real_address: int, *, device_index: int | None = No
 def global_state_tensor(*, device_index: int | None = None) -> torch.Tensor:
     if device_index is None:
         device_index = torch.cuda.current_device()
-    ptr = get_global_state_pointer() + device_index * PER_DEVICE_STATE_STRIDE_BYTES
+    ptr = get_global_state_pointer() + device_index * get_per_device_state_stride()
     return uint8_cuda_tensor_from_ptr(ptr, GLOBAL_STATE_SIZE_BYTES, device_index)
 
 
@@ -50,7 +50,7 @@ def thread_state_tensor(smid: int, *, device_index: int | None = None) -> torch.
         device_index = torch.cuda.current_device()
     gs = global_state(device_index=device_index)
     ptr = thread_state_address(
-        get_global_state_pointer() + device_index * PER_DEVICE_STATE_STRIDE_BYTES,
+        get_global_state_pointer() + device_index * get_per_device_state_stride(),
         gs.num_threads,
         gs.clock_buffer_size,
         smid,

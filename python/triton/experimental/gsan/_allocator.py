@@ -12,6 +12,7 @@ from triton.runtime.build import compile_module_from_file
 
 _THIS_DIR = Path(__file__).resolve().parent
 _GSAN_SOURCE_PATH = _THIS_DIR / "src" / "GSanAllocator.cc"
+_GSAN_HIP_SOURCE_PATH = _THIS_DIR / "src" / "GSanAllocatorHIP.cc"
 
 
 class ShareableHandleType(IntEnum):
@@ -21,8 +22,13 @@ class ShareableHandleType(IntEnum):
 
 @functools.lru_cache()
 def _load_gsan_module() -> ModuleType:
-    if runtime_driver.active.get_current_target().backend != "cuda":
-        raise RuntimeError("GSan allocator requires the CUDA backend.")
+    backend = runtime_driver.active.get_current_target().backend
+
+    if backend == "hip":
+        return _load_gsan_module_hip()
+
+    if backend != "cuda":
+        raise RuntimeError(f"GSan allocator requires the CUDA or HIP backend, got '{backend}'.")
 
     from triton.backends.nvidia.driver import library_dirs, include_dirs
 
@@ -32,6 +38,43 @@ def _load_gsan_module() -> ModuleType:
         library_dirs=library_dirs(),
         include_dirs=include_dirs,
         libraries=["libcuda.so.1"],
+    )
+
+
+@functools.lru_cache()
+def _load_gsan_module_hip() -> ModuleType:
+    """Compile and load GSanAllocatorHIP.cc against the HIP headers Triton bundles."""
+    from triton.backends.amd.driver import _get_path_to_hip_runtime_dylib, include_dirs as amd_include_dirs
+
+    include_dirs = list(amd_include_dirs) + [
+        str(_THIS_DIR / "src" / "hip_shim"),  # dummy cuda.h to satisfy #include <cuda.h>
+        str(_THIS_DIR / "src"),  # for GSan.h and friends
+    ]
+
+    # The build cache only hashes GSanAllocatorHIP.cc, which #includes the CUDA
+    # sources; fold their contents into the flags so edits there force a rebuild.
+    import hashlib
+    deps_hash = hashlib.sha256()
+    for path in sorted((_THIS_DIR / "src").rglob("*")):
+        if path.suffix in (".cc", ".h"):
+            deps_hash.update(path.read_bytes())
+
+    # The embedded GSanAllocator.cc defines PyInit_gsan_allocator, so use that
+    # as the module name so Python finds the right init symbol. The HIP runtime
+    # is dlopen'ed from the same library the AMD driver uses.
+    return compile_module_from_file(
+        src_path=str(_GSAN_HIP_SOURCE_PATH),
+        name="gsan_allocator",
+        include_dirs=include_dirs,
+        libraries=["dl"],
+        ccflags=[
+            "-std=c++17",
+            "-D__HIP_PLATFORM_AMD__",
+            "-DGSAN_HIP",
+            "-DGSAN_HIP_LARGE_STRIDE",
+            f'-DGSAN_LIBHIP_PATH="{_get_path_to_hip_runtime_dylib()}"',
+            f"-DGSAN_SOURCES_HASH={deps_hash.hexdigest()[:16]}",
+        ],
     )
 
 
@@ -124,6 +167,11 @@ def has_live_allocations() -> bool:
     initialize GSan runtime state or freeze its configuration.
     """
     return _load_gsan_module().has_live_allocations()
+
+
+def get_per_device_state_stride() -> int:
+    """Return the byte distance between consecutive devices' runtime state."""
+    return _load_gsan_module().PER_DEVICE_STATE_STRIDE_BYTES
 
 
 def supports_fabric_handles(device: int) -> bool:
