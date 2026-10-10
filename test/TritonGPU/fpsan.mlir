@@ -713,6 +713,61 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @cast_int_to_float
+  tt.func public @cast_int_to_float(%a: tensor<4xi8>, %b: i64, %c: i1) -> (tensor<4xf32>, tensor<4xf32>, f16, f32) {
+    // CHECK: %[[S:.*]] = arith.extsi %arg0 : tensor<4xi8> to tensor<4xi32>
+    // CHECK: %[[SF:.*]] = tti.experimental_fpsan_unembed %[[S]]
+    // CHECK: %[[U:.*]] = arith.extui %arg0 : tensor<4xi8> to tensor<4xi32>
+    // CHECK: %[[UF:.*]] = tti.experimental_fpsan_unembed %[[U]]
+    // CHECK: %[[N:.*]] = arith.trunci %arg1 : i64 to i16
+    // CHECK: %[[NF:.*]] = tti.experimental_fpsan_unembed %[[N]] : (i16) -> f16
+    // CHECK: %[[B:.*]] = arith.extui %arg2 : i1 to i32
+    // CHECK: %[[BF:.*]] = tti.experimental_fpsan_unembed %[[B]] : (i32) -> f32
+    // CHECK: tt.return %[[SF]], %[[UF]], %[[NF]], %[[BF]]
+    %s = arith.sitofp %a : tensor<4xi8> to tensor<4xf32>
+    %u = arith.uitofp %a : tensor<4xi8> to tensor<4xf32>
+    %n = arith.sitofp %b : i64 to f16
+    %bool = arith.uitofp %c : i1 to f32
+    tt.return %s, %u, %n, %bool : tensor<4xf32>, tensor<4xf32>, f16, f32
+  }
+
+  // Helper widening composes with conversion to either signedness.
+  // CHECK-LABEL: @cast_float_to_int
+  tt.func public @cast_float_to_int(%a: tensor<4xf32>, %b: f16) -> (tensor<4xi8>, tensor<4xi32>, i64, i64) {
+    // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed %arg0
+    // CHECK: %[[N:.*]] = arith.trunci %[[A]] : tensor<4xi32> to tensor<4xi8>
+    // CHECK: %[[SAME:.*]] = tti.experimental_fpsan_embed %arg0
+    // CHECK: %[[B:.*]] = tti.experimental_fpsan_embed %arg1 : (f16) -> i16
+    // CHECK: %[[W:.*]] = arith.extsi %[[B]] : i16 to i64
+    // CHECK: %[[B2:.*]] = tti.experimental_fpsan_embed %arg1 : (f16) -> i16
+    // CHECK: %[[W2:.*]] = arith.extsi %[[B2]] : i16 to i64
+    // CHECK-NOT: arith.extf
+    // CHECK-NOT: arith.fpto
+    // CHECK: tt.return %[[N]], %[[SAME]], %[[W]], %[[W2]]
+    %n = arith.fptoui %a : tensor<4xf32> to tensor<4xi8>
+    %same = arith.fptosi %a : tensor<4xf32> to tensor<4xi32>
+    %direct = arith.fptosi %b : f16 to i64
+    %wide = arith.extf %b : f16 to f32
+    %indirect = arith.fptoui %wide : f32 to i64
+    tt.return %n, %same, %direct, %indirect : tensor<4xi8>, tensor<4xi32>, i64, i64
+  }
+
+  // Casts reaching FPSan must be rewritten before ordinary constant folding.
+  // CHECK-LABEL: @cast_int_float_constants
+  tt.func public @cast_int_float_constants() -> (f32, i32) {
+    // CHECK-DAG: %[[TWO:.*]] = arith.constant 2 : i32
+    // CHECK-DAG: %[[NAN:.*]] = arith.constant 0x7FA12345 : f32
+    // CHECK: %[[F:.*]] = tti.experimental_fpsan_unembed %[[TWO]] : (i32) -> f32
+    // CHECK: %[[I:.*]] = tti.experimental_fpsan_embed %[[NAN]] : (f32) -> i32
+    // CHECK-NOT: poison
+    // CHECK: tt.return %[[F]], %[[I]]
+    %two = arith.constant 2 : i32
+    %nan = arith.constant 0x7FA12345 : f32
+    %f = arith.sitofp %two : i32 to f32
+    %i = arith.fptoui %nan : f32 to i32
+    tt.return %f, %i : f32, i32
+  }
+
   // CHECK-LABEL: @cast_fp_to_fp
   tt.func public @cast_fp_to_fp(%a: tensor<4xf8E4M3FN>) -> tensor<4xf16> {
     // CHECK: tti.experimental_fpsan_embed

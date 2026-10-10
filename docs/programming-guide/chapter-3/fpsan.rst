@@ -388,6 +388,22 @@ Important caveat:
   precision or range, so for example under fpsan
   ``fn(a.to(tl.float16)).to(tl.bfloat16) == fn(a)`` (for any bfloat16 ``a``).
 
+Integer/Float Conversions
+=========================
+
+For casts between integers and FP16, BF16, FP32, or FP64:
+
+- integer-to-float: resize the integer, then ``unembed``
+- float-to-integer: ``embed``, then resize the integer
+
+Widening sign-extends signed integer inputs and floating payloads (including
+unsigned destinations), and zero-extends unsigned integer inputs. Narrowing
+always keeps the low bits. Same-width round trips preserve all bits.
+
+These are payload conversions without numeric rounding or saturation.
+Float-to-boolean casts use comparisons with zero. Literal promotion and casts
+folded before FPSan retain ordinary semantics.
+
 Packed fp4 conversion
 =====================
 
