@@ -92,6 +92,10 @@ def _bitwidth(dtype: str) -> int:
     return int(re.search(r'(\d+)$', dtype).group(1))
 
 
+def _assert_128bit_global_memory(ptx, op):
+    assert re.search(rf"\b{op}\.global\.v(?:4\.b32|2\.b64)\b", ptx)
+
+
 def _dtype(dtype: str) -> str:
     # ex.: "int64" -> "int"
     return re.match(r'([a-zA-Z]+)', dtype).group(0)
@@ -4219,11 +4223,11 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
 
     # parse ptx to make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
+    _assert_128bit_global_memory(ptx, 'ld')
+    _assert_128bit_global_memory(ptx, 'st')
     ptx = pgm_contiguous.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
+    _assert_128bit_global_memory(ptx, 'ld')
+    _assert_128bit_global_memory(ptx, 'st')
 
 
 @pytest.mark.interpreter
@@ -4687,20 +4691,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     ptx = pgm.asm['ptx']
 
     # XXX: skip small sizes because they are not vectorized; with runtime
-    # strides, v4 needs the contiguous dim >= 16 (K for loads, N for stores).
+    # strides, 128-bit vectors need the contiguous dim >= 16 (K for loads, N for stores).
     enough_work = (M * N // (num_warps * 32) >= 4) and (K > 16 or N > 16 or M > 16)
     if enough_work and K >= 16:
-        if 'float64' in in_dtype:
-            assert 'ld.global.v2.b64' in ptx
-        else:
-            assert 'ld.global.v4' in ptx
+        _assert_128bit_global_memory(ptx, 'ld')
     if enough_work and N >= 16:
         if 'float8' in in_dtype:
             assert 'st.global.v2' in ptx
-        elif 'float64' in in_dtype:
-            assert 'st.global.v2.b64' in ptx
         else:
-            assert 'st.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'st')
 
     is_tcgen5 = (capability[0] == 10) and (num_warps % 4) == 0 and (M % 64) == 0 and (N % 8) == 0
 
@@ -5031,9 +5030,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     if is_cuda():
         ptx = pgm.asm['ptx']
         if (max(M, N) * K) // (num_warps * 32) >= 4:
-            assert 'ld.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'ld')
         if M * N // (num_warps * 32) >= 4:
-            assert 'st.global.v4' in ptx
+            _assert_128bit_global_memory(ptx, 'st')
         assert (re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
                 or "tcgen05.mma.cta_group::1.kind::f16" in ptx)
     if is_hip_cdna4() and normal_type in ["bf16", "fp16"]:
@@ -5714,12 +5713,11 @@ def test_load_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        all_modifiers = ['.ca', '.cg', '.cs', '.cv']
-        for modifier in all_modifiers:
-            if modifier == cache:
-                assert f'ld.global{modifier}' in ptx
-            else:
-                assert f'ld.global{modifier}' not in ptx
+        modifiers = re.findall(r'\bld\.global(?:\.(ca|cg|cs|cv))?\.(?:v[248]\.)?[busf]\d+\b', ptx)
+        assert modifiers
+        # An omitted load cache modifier means .ca.
+        expected = cache.removeprefix('.') or 'ca'
+        assert all((modifier or 'ca') == expected for modifier in modifiers)
 
 
 @pytest.mark.interpreter
@@ -5889,12 +5887,11 @@ def test_store_cache_modifier(cache, device):
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        all_modifiers = ['.wb', '.cg', '.cs', '.wt']
-        for modifier in all_modifiers:
-            if modifier == cache:
-                assert f'st.global{modifier}' in ptx
-            else:
-                assert f'st.global{modifier}' not in ptx
+        modifiers = re.findall(r'\bst\.global(?:\.(wb|cg|cs|wt))?\.(?:v[248]\.)?[busf]\d+\b', ptx)
+        assert modifiers
+        # An omitted store cache modifier means .wb.
+        expected = cache.removeprefix('.') or 'wb'
+        assert all((modifier or 'wb') == expected for modifier in modifiers)
 
 
 @pytest.mark.interpreter

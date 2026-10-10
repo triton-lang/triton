@@ -1,4 +1,6 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --dump-input-context 20 --implicit-check-not=tti.
+// RUN: split-file %s %t
+// RUN: triton-opt %t/lock-acquire.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck %s --check-prefix=PTX
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
@@ -56,7 +58,9 @@ tt.func private @experimental_assert_uniform(%arg0: i1) {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_acquire
-// CHECK: 09atom.global.acquire.gpu.cas.b32
+// CHECK: %[[CAS:.*]] = llvm.cmpxchg {{.*}} syncscope("device") acquire acquire
+// CHECK: %[[ACQUIRED:.*]] = llvm.extractvalue %[[CAS]][1]
+// CHECK: llvm.cond_br %[[ACQUIRED]],
 // CHECK: nvvm.barrier
 tt.func private @experimental_lock_acquire(
   %lock: !tt.ptr<i32>,
@@ -193,4 +197,21 @@ tt.func private @experimental_local_gather(%out: !tt.ptr<i32>) {
   tt.store %out_ptrs, %g : tensor<2x32x!tt.ptr<i32>, #local_gather_blocked>
   tt.return
 }
+}
+
+// -----
+
+//--- lock-acquire.mlir
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: @lock_acquire
+  // CHECK: llvm.cmpxchg {{.*}} syncscope("device") acquire acquire
+  // PTX-LABEL: .visible .entry lock_acquire(
+  // PTX: atom.acquire.gpu.global.cas.b32
+  // PTX: bar.sync
+  tt.func public @lock_acquire(%lock: !tt.ptr<i32>, %pred: i1) {
+    tti.experimental_lock_acquire %lock, %pred : !tt.ptr<i32>
+    tti.experimental_lock_release %lock, %pred : !tt.ptr<i32>
+    tt.return
+  }
 }

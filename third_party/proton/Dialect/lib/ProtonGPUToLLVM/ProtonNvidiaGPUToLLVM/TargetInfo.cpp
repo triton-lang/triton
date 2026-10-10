@@ -3,7 +3,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h" // TODO(fywkevin): move Utility.h to include/
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/NVPTXAddrSpace.h"
@@ -12,30 +11,13 @@ namespace mlir::triton::proton::gpu::NVIDIA {
 
 Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
-
-  auto getClockReg = [&](const std::string &clkName) {
-    PTXBuilder builder;
-    auto &movLow = builder.create("mov")->o("u32");
-    auto *destLowOpr = builder.newOperand("=r");
-    auto *sRegLowOpr = builder.newConstantOperand(clkName);
-    movLow(destLowOpr, sRegLowOpr);
-    Value clkLow32 =
-        builder.launch(rewriter, loc, rewriter.getIntegerType(32), true);
-    return clkLow32;
-  };
-
-  Value clkLow32 = getClockReg("%clock");
-
+  // Keep counter reads ordered with memory accesses.
+  Value clock = LLVM::createLLVMIntrinsicCallOp(
+                    rewriter, loc, "llvm.readcyclecounter", i64_ty, {})
+                    .getResult(0);
   if (!isClock64)
-    return clkLow32;
-
-  Value clkHigh32 = getClockReg("%clock_hi");
-
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value clkLow64 = b.zext(i64_ty, clkLow32);
-  Value clkHigh64 = b.zext(i64_ty, clkHigh32);
-  Value clock64 = b.or_(b.shl(clkHigh64, b.i64_val(32)), clkLow64);
-  return clock64;
+    clock = LLVM::TruncOp::create(rewriter, loc, i32_ty, clock);
+  return clock;
 }
 
 Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,

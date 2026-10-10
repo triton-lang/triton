@@ -186,11 +186,14 @@ module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tar
     ptx = triton.compile(str(source_file), target=GPUTarget("cuda", 100, 32)).asm["ptx"]
     pattern = re.compile(
         rf"^\s*(?P<operation>add|sub|mul|fma|min|max)\.(?:rn\.)?{packed_type}\s+"
-        r"(?P<output>%\w+),\s*(?P<input>%\w+)", re.MULTILINE)
+        r"(?P<output>%\w+),\s*(?P<inputs>[^;]+);", re.MULTILINE)
     emitted_operations = list(pattern.finditer(ptx))
     assert [match.group("operation") for match in emitted_operations] == [name for name, _, _ in operations]
     for previous, current in zip(emitted_operations, emitted_operations[1:]):
-        assert current.group("input") == previous.group("output")
+        inputs = re.findall(r"%\w+", current.group("inputs"))
+        # Subtraction keeps its operand order; FMA only commutes multiplicands.
+        input_count = 1 if current.group("operation") == "sub" else 2
+        assert previous.group("output") in inputs[:input_count]
     assert "prmt.b32" not in ptx
 
 
