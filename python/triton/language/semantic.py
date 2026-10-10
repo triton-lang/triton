@@ -1049,9 +1049,9 @@ class TritonSemantic(Generic[TensorTy]):
 
         # For a pointer of scalar, check the type of `mask` and `other`
         if not ptr.type.is_block():
-            if mask and mask.type.is_block():
+            if mask is not None and mask.type.is_block():
                 raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
-            if other and other.type.is_block():
+            if other is not None and other.type.is_block():
                 raise ValueError("Other argument cannot be block type if pointer argument is not a block")
 
         # Make `mask` and `other` into the same shape as `ptr`
@@ -1088,8 +1088,8 @@ class TritonSemantic(Generic[TensorTy]):
             ret = self.make_tensor(self.builder.create_load(ptr.handle, cache_policy, is_volatile), dst_ty)
         else:
             ret = self.make_tensor(
-                self.builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache_policy,
-                                                is_volatile), dst_ty)
+                self.builder.create_masked_load(ptr.handle, mask.handle, other.handle if other is not None else None,
+                                                cache_policy, is_volatile), dst_ty)
         if is_bool:
             ret = self.cast(ret, tl.int1)
         return ret
@@ -1251,7 +1251,7 @@ class TritonSemantic(Generic[TensorTy]):
         if not ptr.type.is_block():
             if val.type.is_block():
                 raise ValueError("Value argument cannot be block type if pointer argument is not a block")
-            if mask and mask.type.is_block():
+            if mask is not None and mask.type.is_block():
                 raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
 
         # Make `mask` and `val` into the same shape as `ptr`
