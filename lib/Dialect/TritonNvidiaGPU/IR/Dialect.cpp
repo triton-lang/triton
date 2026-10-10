@@ -531,14 +531,12 @@ unsigned getMMAv5InstructionN(MemDescType type) {
   return n;
 }
 
-LogicalResult impl::verifyMMAv5Op(Operation *op) {
-  auto itf = cast<MMAv5OpInterface>(op);
+// Establish the ranks and encodings needed by the layout checks below.
+static LogicalResult verifyMMAv5OperandTypes(MMAv5OpInterface itf) {
+  Operation *op = itf.getOperation();
   auto aType = itf.getA().getType();
   auto bType = itf.getB().getType();
   auto dType = itf.getAccumulator().getType();
-  auto barriers = itf.getCompletionBarriers();
-  if (!itf.isAsync() && !barriers.empty())
-    return op->emitOpError("The op is synchronous but a barrier is present.");
   auto encoding = dyn_cast<TensorMemoryEncodingAttr>(dType.getEncoding());
   if (!encoding || aType.getRank() != 2 || bType.getRank() != 2 ||
       dType.getRank() != 2 ||
@@ -549,6 +547,16 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
       !bType.getElementType().isIntOrFloat())
     return op->emitOpError("expected rank-2 MMA operands, a shared-memory RHS, "
                            "and a tensor-memory accumulator");
+  return success();
+}
+
+static LogicalResult verifyMMAv5OperandLayouts(MMAv5OpInterface itf) {
+  Operation *op = itf.getOperation();
+  auto aType = itf.getA().getType();
+  auto bType = itf.getB().getType();
+  auto dType = itf.getAccumulator().getType();
+  auto encoding = cast<TensorMemoryEncodingAttr>(dType.getEncoding());
+  // The accumulator stores unpacked results.
   if (encoding.getFp4Padded())
     return op->emitOpError("accumulator layout must not be fp4_padded");
 
@@ -570,6 +578,7 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
            getTmemAllocSizes(memdesc).numRows != 64;
   };
 
+  // A and D cannot both interleave 64-row instruction blocks in TMEM.
   if (isInterleaved(aType) && isInterleaved(dType)) {
     return op->emitOpError(
         "does not support blockM=64 with interleaved blocks in TMEM layout");
@@ -577,48 +586,35 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
   if (encoding.getTwoCTAs() != itf.getTwoCtas())
     return op->emitOpError("accumulator layout must match the MMA CTA group");
 
-  auto *ctx = op->getContext();
-  auto dims = standardOutDimNames(ctx, 2);
+  return success();
+}
+
+static LogicalResult verifyMMAv5Shape(MMAv5OpInterface itf) {
+  Operation *op = itf.getOperation();
+  auto dType = itf.getAccumulator().getType();
   unsigned ctaGroupSize = itf.getTwoCtas() ? 2 : 1;
   unsigned n = getMMAv5InstructionN(dType);
   if (n < 8 * ctaGroupSize || n > 256)
     return op->emitOpError("MMA instruction N must be between ")
            << 8 * ctaGroupSize << " and 256; got " << n;
 
+  return success();
+}
+
+static LogicalResult verifyMMAv5RHSLayout(MMAv5OpInterface itf) {
+  Operation *op = itf.getOperation();
+  auto bType = itf.getB().getType();
+  auto dType = itf.getAccumulator().getType();
+  auto *ctx = op->getContext();
+  auto dims = standardOutDimNames(ctx, 2);
+  unsigned ctaGroupSize = itf.getTwoCtas() ? 2 : 1;
+  unsigned n = getMMAv5InstructionN(dType);
   int64_t nPerCTA = getShapePerCTA(dType)[1];
   auto scaled = dyn_cast<TCGen5MMAScaledOp>(op);
   bool bIsFp4 = scaled && scaled.getBType() == ScaleDotElemType::E2M1;
   if (itf.getTwoCtas()) {
-    // [Note: numRepN > 1 and two_ctas]
-    // Consider, just as an example, num_ctas=16, and a huge tile of shape
-    // MNK = 512x64x2048
-    // This is an example of layout with numRepN=2 and two_ctas=true:
-    // Layout RHS:
-    // #ttg.memdesc<64x2048xf16,
-    //   #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true,
-    //                      elementBitWidth = 16,
-    //                      CGALayout = [[0, 1], [0, 2], [0, 4], [0, 0]]}>>
-    //
-    // As a LinearLayout:
-    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
-    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [32, 0]]
-    // block = [[0, 256], [0, 512], [0, 1024], [0, 0]]
-    //
-    // The issue is that the data from the CTA1 should be next to that of the
-    // first part of the instruction. Now, the max instruction size is 128x256,
-    // so the layout we should use is
-    // offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [8, 2],
-    //           [16, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 256], [32, 0]]
-    // block = [[0, 128], [0, 512], [0, 1024], [0, 0]]
-    // (note how we swapped the bases [0, 256] and [0, 128])
-    // The issue with this layout is that it breaks the invariant that the
-    // CGALayout splits the CGA tile into contiguous CTA tiles,
-    // i.e. total_layout = cta_layout * cga_layout.
-    // This is used all over the place, to the point that for all legacy layouts
-    // we represent the CGALayout as the `cga_layout` we have to multiply on the
-    // right.
-    // We could allow with a bit of effort SharedLinearLayouts that did not
-    // divide on the right by a CGALayout, but for now we throw a lovely error.
+    // Repeated N instructions would interleave CTA tiles, but CGA layouts
+    // require each CTA tile to be contiguous.
     if (nPerCTA > n)
       return op->emitOpError(
           "two-CTA MMA requires a single instruction along N");
@@ -641,6 +637,7 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
              << n;
   }
 
+  // Padded instructions must fit the storage reserved by the logical B view.
   if (nPerCTA < n) {
     auto bLayout = toLinearLayout(bType).pseudoinvert();
     for (auto [dim, size] : llvm::zip_equal(dims, bType.getShape()))
@@ -672,11 +669,22 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
              << n;
   }
 
+  return success();
+}
+
+static LogicalResult verifyMMAv5AccumulatorLayout(MMAv5OpInterface itf) {
+  Operation *op = itf.getOperation();
+  auto dType = itf.getAccumulator().getType();
+  auto encoding = cast<TensorMemoryEncodingAttr>(dType.getEncoding());
   // Complete allocations already have the declared instruction layout.
   auto allocShape = dropPipeliningDim(dType.getAllocShape(), encoding);
   if (dType.getShape() == allocShape)
     return success();
 
+  // Subviews must retain the allocation's physical instruction layout.
+  auto *ctx = op->getContext();
+  auto dims = standardOutDimNames(ctx, 2);
+  unsigned n = getMMAv5InstructionN(dType);
   auto instrEncoding = TensorMemoryEncodingAttr::get(
       ctx, encoding.getBlockM(), n, encoding.getColStride(),
       encoding.getCGALayout(), encoding.getTwoCTAs());
@@ -692,6 +700,18 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
                "accumulator layout does not match MMA instruction N = ")
            << n;
   return success();
+}
+
+LogicalResult impl::verifyMMAv5Op(Operation *op) {
+  auto itf = cast<MMAv5OpInterface>(op);
+  if (!itf.isAsync() && !itf.getCompletionBarriers().empty())
+    return op->emitOpError("The op is synchronous but a barrier is present.");
+
+  if (failed(verifyMMAv5OperandTypes(itf)) ||
+      failed(verifyMMAv5OperandLayouts(itf)) || failed(verifyMMAv5Shape(itf)) ||
+      failed(verifyMMAv5RHSLayout(itf)))
+    return failure();
+  return verifyMMAv5AccumulatorLayout(itf);
 }
 
 } // namespace nvidia_gpu
