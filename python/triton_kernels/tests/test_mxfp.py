@@ -138,7 +138,10 @@ def _upcast_mxfp4_tile_kernel(
 def _mxfp_scale_boundary_data(src_dtype, dst_dtype, device):
     values = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, get_max_quant_val(src_dtype)], dtype=torch.float64)
     values = torch.cat((values, -values)).repeat(2)
-    scale = torch.tensor([0, 1, 2, 125, 126, 127, 128, 255], dtype=torch.uint8).repeat(64, 1)
+    # FP16 holds 2**k only for -24 <= k <= 15 (bytes 103 to 142); scales outside that range must
+    # still give the exact product when it fits in FP16.
+    scale = torch.tensor([0, 1, 2, 101, 102, 103, 104, 125, 126, 127, 128, 141, 142, 143, 144, 255],
+                         dtype=torch.uint8).repeat(64, 1)
     expected = torch.ldexp(values[None, None, :], scale.to(torch.int32)[..., None] - 127)
     expected = expected.masked_fill(scale[..., None] == 255, float("nan"))
     expected = expected.clamp(torch.finfo(dst_dtype).min, torch.finfo(dst_dtype).max).to(dst_dtype).flatten(1)
