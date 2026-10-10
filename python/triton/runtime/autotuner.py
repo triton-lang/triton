@@ -329,15 +329,19 @@ class Autotuner(KernelInterface):
 
     def warmup(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
-        ret = []
-        for autotune_config in self.prune_configs(kwargs):
-            ret.append(self.fn.warmup(
-                *args,
-                **kwargs,
-                **autotune_config.all_kwargs(),
-            ))
-        self.nargs = None
-        return ret
+        try:
+            ret = []
+            for config in self.prune_configs(kwargs):
+                if config.pre_hook is not None:
+                    config.pre_hook({**self.nargs, **kwargs, **config.all_kwargs()})
+                ret.append(self.fn.warmup(
+                    *args,
+                    **kwargs,
+                    **config.all_kwargs(),
+                ))
+            return ret
+        finally:
+            self.nargs = None
 
 
 class Config:
@@ -447,6 +451,20 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     If the environment variable :code:`TRITON_PRINT_AUTOTUNING` is set to
     :code:`"1"`, Triton will print a message to stdout after autotuning each
     kernel, including the time spent autotuning and the best configuration.
+
+    To compile configurations concurrently before normal autotuning, explicitly
+    warm them up with a caller-owned executor::
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            with triton.AsyncCompileMode(executor, ignore_errors=True):
+                kernel.warmup(x, x_size, grid=grid)
+        kernel[grid](x, x_size)
+
+    Benchmarking and the final launch remain sequential.
+    Warmup invokes each config's pre-hook on the calling thread before capturing
+    its specialization, so hooks can prepare tensor descriptor block shapes.
 
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
