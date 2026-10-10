@@ -141,7 +141,12 @@ class _JITFunctionPickler(CloudPickler):
                 globals_[node.id] = capture_scope[node.id]
         for expression in _iter_argument_expressions(jit_function):
             if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
-                expression = ast.parse(expression.value, mode="eval").body
+                try:
+                    expression = ast.parse(expression.value, mode="eval").body
+                except SyntaxError:
+                    # A plain string default (not a forward-reference
+                    # annotation); it references no globals.
+                    continue
             for node in ast.walk(expression):
                 if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in function.__globals__):
                     globals_[node.id] = function.__globals__[node.id]
@@ -515,9 +520,11 @@ class ProcessPoolWarmupDispatcher:
         return result
 
     def finish(self):
-        if self._connection is not None:
-            self._connection.close()
-            self._connection = None
+        if self._executor is None:
+            # Client of a shared coordinator: nothing to compile locally.
+            if self._connection is not None:
+                self._connection.close()
+                self._connection = None
             return
         worker_results = []
         submitted = len(self._pending)
@@ -562,45 +569,51 @@ class ProcessPoolWarmupDispatcher:
 class SharedWarmupCoordinator:
     """Share one bounded compiler pool across every pytest capture worker."""
 
+    # Every capture worker connects once at startup, so the accept queue has to
+    # be able to hold all of them (the multiprocessing default is 1).
+    _BACKLOG = 128
+
     def __init__(self, *, max_workers, trace_directory):
         self._directory = tempfile.TemporaryDirectory(prefix="triton-warmup-")
         self.address = os.path.join(self._directory.name, "coordinator.sock")
-        self._listener = Listener(self.address, family="AF_UNIX")
+        self._listener = Listener(self.address, family="AF_UNIX", backlog=self._BACKLOG)
         self._dispatcher = ProcessPoolWarmupDispatcher(max_workers=max_workers, trace_directory=trace_directory,
                                                        phase="warmup")
+        self._closing = False
         self._connections = []
         self._accept_thread = threading.Thread(target=self._accept, daemon=True)
         self._accept_thread.start()
 
     def _accept(self):
         while True:
-            connection = self._listener.accept()
             try:
-                message = connection.recv()
-            except EOFError:
-                connection.close()
-                continue
-            if message is None:
+                connection = self._listener.accept()
+            except OSError:
+                return
+            if self._closing:
                 connection.close()
                 return
-            thread = threading.Thread(target=self._consume, args=(connection, message), daemon=True)
+            # Read each client on its own thread so an idle client can never
+            # block the accept loop or delay other clients.
+            thread = threading.Thread(target=self._consume, args=(connection, ), daemon=True)
             self._connections.append(thread)
             thread.start()
 
-    def _consume(self, connection, message):
+    def _consume(self, connection):
         try:
             while True:
-                digest, task = message
+                digest, task = connection.recv()
                 with self._dispatcher._capture_lock:
                     self._dispatcher._submit(digest, task)
-                message = connection.recv()
-        except EOFError:
+        except (EOFError, OSError):
+            pass
+        finally:
             connection.close()
 
     def close(self):
-        stopper = Client(self.address, family="AF_UNIX")
-        stopper.send(None)
-        stopper.close()
+        self._closing = True
+        # Wake the accept loop so it can observe the flag and exit.
+        Client(self.address, family="AF_UNIX").close()
         self._accept_thread.join()
         for thread in self._connections:
             thread.join()
