@@ -7,12 +7,15 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "triton/Tools/GenericSwizzling.h"
 
 //
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include <iterator>
-#include <type_traits>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
@@ -21,7 +24,6 @@ using namespace mlir::triton;
 
 namespace mlir::triton {
 class ReduceOp;
-class ScanOp;
 
 inline SmallVector<Value>
 inlineCombineBlock(ConversionPatternRewriter &rewriter, Block &combineBlock,
@@ -106,57 +108,72 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   return SmallVector<Value>(thenBlock->getArguments());
 }
 
-} // namespace mlir::triton
-
 template <typename SourceOp>
-class ConvertTritonGPUReduceScanToLLVMPattern
-    : public ConvertOpToLLVMPattern<SourceOp> {
-public:
-  // Make sure the class is only instantiated with Reduce and Scan
-  static_assert(std::is_same_v<SourceOp, ReduceOp> ||
-                std::is_same_v<SourceOp, ScanOp>);
-
-  using ConvertOpToLLVMPattern<SourceOp>::getTypeConverter;
-  using ConvertOpToLLVMPattern<SourceOp>::ConvertOpToLLVMPattern;
-
-  // Return the pointee type of the shared memory pointer for operand i.
-  Type getElementType(SourceOp op, int i) const {
-    auto ty = op.getInputTypes()[i].getElementType();
-    return getTypeConverter()->convertType(ty);
+SmallVector<SmallVector<Value>> convertLayoutValues(
+    Location loc, ConversionPatternRewriter &rewriter, SourceOp op,
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+    const SmallVector<SmallVector<Value>> &inVals,
+    const LLVMTypeConverter *typeConverter, const TargetInfoBase &targetInfo,
+    bool forceWarpShuffle = false) {
+  SmallVector<SmallVector<Value>> outVals(op.getNumOperands());
+  auto *ctx = rewriter.getContext();
+  SmallVector<int64_t> shape;
+  for (auto dim : srcLayout.getOutDimNames()) {
+    shape.push_back(srcLayout.getOutDimSize(dim));
   }
-
-  // Helper to compute the smem bases in both reductions and scans
-  SmallVector<Value> getSmemBases(SourceOp op, unsigned elems,
-                                  ConversionPatternRewriter &rewriter,
-                                  const TargetInfoBase &targetInfo) const {
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    // indices will store the index of the op operands in descending order
-    // of their bitwidths
-    std::vector<unsigned> indices(op.getNumOperands());
-    std::iota(indices.begin(), indices.end(), 0);
-
-    std::sort(indices.begin(), indices.end(), [&](unsigned i, unsigned j) {
-      return op.getElementTypes()[i].getIntOrFloatBitWidth() >
-             op.getElementTypes()[j].getIntOrFloatBitWidth();
-    });
-    // Assign base index to each operand in their order in indices
-    std::map<unsigned, Value> indexToBase;
-    auto basePtr =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-    indexToBase[indices[0]] = basePtr;
-    for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      indexToBase[indices[i]] =
-          b.gep(basePtr.getType(), getElementType(op, indices[i - 1]),
-                indexToBase[indices[i - 1]], b.i32_val(elems));
-    }
-    // smemBases[k] is the base pointer for the k-th operand
-    SmallVector<Value> smemBases(op.getNumOperands());
-    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      smemBases[i] = indexToBase[i];
-    }
-    return smemBases;
+  auto srcEnc = triton::gpu::LinearEncodingAttr::get(ctx, srcLayout);
+  auto dstEnc = triton::gpu::LinearEncodingAttr::get(ctx, dstLayout);
+  // The proper way to lower reduce would be to lower it to:
+  // reduce_threads / reduce_lanes / convert_layout
+  // and let AllocationAnalysis handle the shared memory allocation
+  // and Membar the barriers.
+  // Forced warp-local conversions never need an allocation, even when the
+  // default conversion heuristic would choose shared memory.
+  LayoutConversionScratchConfig scratch;
+  if (!forceWarpShuffle)
+    scratch = getLayoutConversionScratchConfig(
+        srcLayout, dstLayout, op.getElementTypes(),
+        [&](const LinearLayout &src, const LinearLayout &dst,
+            unsigned bitwidth) {
+          auto vecBitwidth =
+              triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
+          auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
+          return getNumScratchElemsSwizzledCvt(
+              src, dst, bitwidth, targetInfo.getSharedMemoryBanks(), srcTile,
+              dstTile);
+        });
+  auto baseOffsetAttr =
+      op->template getAttrOfType<IntegerAttr>("allocation.offset");
+  assert((!scratch.sizeInBytes || baseOffsetAttr) &&
+         "expected allocation.offset for shared-memory conversion");
+  int64_t baseOffset = baseOffsetAttr ? baseOffsetAttr.getInt() : 0;
+  auto offsetTy = IntegerType::get(ctx, 32);
+  for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+    auto elemTy = op.getElementTypes()[i];
+    auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
+    auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
+    Value packed = packUniqueTensorElements(loc, typeConverter, inVals[i],
+                                            rewriter, srcTy);
+    auto srcTensor =
+        UnrealizedConversionCastOp::create(rewriter, loc, srcTy, packed)
+            .getResult(0);
+    auto cvt =
+        triton::gpu::ConvertLayoutOp::create(rewriter, loc, dstTy, srcTensor);
+    if (forceWarpShuffle)
+      cvt.setForceWarpShuffleAttr(rewriter.getUnitAttr());
+    triton::nvidia_gpu::copyClusterBarrierMbarOffset(op, cvt);
+    if (scratch.sizeInBytes)
+      cvt->setAttr("allocation.offset",
+                   IntegerAttr::get(offsetTy, baseOffset + scratch.offsets[i]));
+    Type packedDstTy = typeConverter->convertType(dstTy);
+    auto packedDst = UnrealizedConversionCastOp::create(
+                         rewriter, loc, packedDstTy, cvt.getResult())
+                         .getResult(0);
+    outVals[i] = unpackUniqueTensorElements(loc, packedDst, rewriter);
   }
-};
+  return outVals;
+}
+
+} // namespace mlir::triton
 
 #endif
