@@ -3177,26 +3177,25 @@ def test_max_returns_zero(device):
 
 
 @pytest.mark.interpreter
-def test_max_min_with_nan(device):
-    # In triton, we implement a "nan ignore" style, which means if there is NaN
-    # in the reduce dimesion, we should ignore it and return the max/min number,
-    # it's different with torch.max/min.
+@pytest.mark.parametrize("propagate_nan", ["NONE", "ALL"])
+def test_max_min_with_nan(propagate_nan, device):
+    # Ignore NaNs by default, or propagate them when explicitly requested.
     @triton.jit
-    def max_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr):
+    def max_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr, PROPAGATE_NAN: tl.constexpr):
         offsets = tl.arange(0, BLOCK_SIZE)
         x = tl.load(x_ptr + offsets)
 
-        max_val = tl.max(x, axis=0)
+        max_val = tl.max(x, axis=0, propagate_nan=PROPAGATE_NAN)
 
         if tl.program_id(0) == 0:
             tl.store(y_ptr, max_val)
 
     @triton.jit
-    def min_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr):
+    def min_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr, PROPAGATE_NAN: tl.constexpr):
         offsets = tl.arange(0, BLOCK_SIZE)
         x = tl.load(x_ptr + offsets)
 
-        min_val = tl.min(x, axis=0)
+        min_val = tl.min(x, axis=0, propagate_nan=PROPAGATE_NAN)
 
         if tl.program_id(0) == 0:
             tl.store(y_ptr, min_val)
@@ -3212,11 +3211,17 @@ def test_max_min_with_nan(device):
 
     y = torch.ones(1, device=device)
 
-    max_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE)
-    assert y[0] == float('inf')
+    max_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE, PROPAGATE_NAN=getattr(tl.PropagateNan, propagate_nan))
+    if propagate_nan == "ALL":
+        assert torch.isnan(y[0])
+    else:
+        assert y[0] == float('inf')
 
-    min_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE)
-    assert y[0] == float('-inf')
+    min_kernel[(1, )](x, y, BLOCK_SIZE=BLOCK_SIZE, PROPAGATE_NAN=getattr(tl.PropagateNan, propagate_nan))
+    if propagate_nan == "ALL":
+        assert torch.isnan(y[0])
+    else:
+        assert y[0] == float('-inf')
 
 
 @pytest.mark.interpreter
