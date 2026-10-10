@@ -69,8 +69,7 @@ void elideTrivialCaptures(LLVM::LLVMFuncOp func,
 /// Phase indicator for register reallocation during warp specialization.
 enum class RegisterReallocPhase {
   SwitchLoopStart,       // Reallocate at the beginning of switch loop
-  WorkerPartitionStart,  // Reallocate at worker partition region start
-  WorkerPartitionEnd,    // Reallocate at worker partition region end
+  WorkerPartitionStart,  // Reallocate before dispatching to worker partitions
   DefaultPartitionStart, // Reallocate at default partition region start
   DefaultPartitionEnd    // Reallocate at default partition region end
 };
@@ -81,9 +80,11 @@ struct WarpSpecializeCallbacks {
   /// Create a barrier to synchronize threads across the whole CTA
   std::function<void(TritonLLVMIRRewriter &, unsigned barIdx)> createAllBarrier;
 
+  /// Whether worker register reallocation is active for this target.
+  bool workerRegisterReallocationEnabled = false;
+
   /// Reallocate registers.
-  /// regionNumber is only used for WorkerPartitionStart and WorkerPartitionEnd
-  /// phases.
+  /// regionNumber is only used for WorkerPartitionStart.
   std::function<void(TritonLLVMIRRewriter &, gpu::WarpSpecializeOp,
                      RegisterReallocPhase, unsigned regionNumber)>
       reallocRegisters;

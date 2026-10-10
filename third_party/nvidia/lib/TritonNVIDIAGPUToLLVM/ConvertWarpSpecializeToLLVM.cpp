@@ -174,6 +174,18 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       int giveRegs = (defRegs - startRegs) * defaultNumWarps / numWorkerWarps;
       lowRegs = (startRegs - giveRegs) / 8 * 8;
     }
+
+    // Returning workers adjust their registers at the common switch-loop entry.
+    // If it uses a decrease, its target must not exceed any worker's
+    // allocation, including when the bootstrap calculation raises lowRegs after
+    // capping defRegs. Preserve the existing equal-target increase when no
+    // decrease is needed, since its placement also guides PTXAS register
+    // allocation.
+    if (lowRegs < startRegs)
+      for (WarpSpecializeOp ws : wsOps)
+        if (auto actualRegisters = ws.getActualRegisters())
+          for (int target : actualRegisters->drop_front())
+            lowRegs = std::min(lowRegs, target);
   }
 
   // Attempt to elide captures of trivial computations by hoisting them into the
@@ -210,6 +222,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     createRegRealloc(b, maxnreg.getInt(), defRegs);
 
   WarpSpecializeCallbacks callbacks;
+  callbacks.workerRegisterReallocationEnabled = emitDynamicRegRealloc;
   callbacks.createAllBarrier = [](TritonLLVMIRRewriter &b, unsigned barIdx) {
     assert(barIdx < kNumBarriers && "not enough barriers");
     NVVM::BarrierOp::create(b, b.getLoc(), b.i32_val(barIdx), Value{},
@@ -232,9 +245,6 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       switch (phase) {
       case RegisterReallocPhase::WorkerPartitionStart:
         createRegRealloc(b, lowRegs, (*actRegs)[regionNumber + 1]);
-        break;
-      case RegisterReallocPhase::WorkerPartitionEnd:
-        createRegRealloc(b, (*actRegs)[regionNumber + 1], lowRegs);
         break;
       case RegisterReallocPhase::DefaultPartitionStart:
         createRegRealloc(b, defRegs, actRegs->front());
