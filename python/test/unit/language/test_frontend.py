@@ -1823,6 +1823,81 @@ def test_aggregate_replace_ir():
     anchor(state.vals)
 
 
+@triton.aggregate
+class _AggScalarField:
+    val: tl.tensor
+
+
+@triton.aggregate
+class _AggScalarFieldConstexprInit:
+    val: tl.tensor
+
+    @triton.constexpr_function
+    def __init__(self, val):
+        self.val = val
+
+
+def test_aggregate_tensor_field_from_specialized_int():
+    # An unannotated int argument equal to 1 is specialized to a constexpr, so the
+    # kernel has no runtime argument. The field still gets the i32 type a runtime
+    # argument would produce.
+
+    @triton.jit
+    def kernel(val):
+        # CHECK-LABEL: @kernel()
+        # CHECK: [[DEFAULT_INIT:%.*]] = arith.constant 1
+        # CHECK: call @{{.*}}_AggScalarField<i32>{{.*}}([[DEFAULT_INIT]])
+        anchor(_AggScalarField(val))
+        # CHECK: [[CONSTEXPR_INIT:%.*]] = arith.constant 1
+        # CHECK: call @{{.*}}_AggScalarFieldConstexprInit<i32>{{.*}}([[CONSTEXPR_INIT]])
+        anchor(_AggScalarFieldConstexprInit(val))
+        # CHECK: [[REPLACED:%.*]] = arith.constant 1
+        # CHECK: call @{{.*}}_AggScalarField<i32>{{.*}}([[REPLACED]])
+        anchor(tl.aggregate_replace(_AggScalarField(0), val=val))
+
+    run_filecheck_test(kernel, args=(1, ))
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_tensor_field_scalar_dtypes():
+    # CHECK-LABEL: test_aggregate_tensor_field_scalar_dtypes
+    # CHECK: call @{{.*}}_AggScalarField<u1>
+    anchor(_AggScalarField(True))
+    # CHECK: call @{{.*}}_AggScalarField<i64>
+    anchor(_AggScalarField(tl.constexpr(2**40)))
+    # CHECK: call @{{.*}}_AggScalarField<fp32>
+    anchor(_AggScalarField(1.5))
+
+
+def test_aggregate_tensor_field_rejects_scalar_on_host():
+    with pytest.raises(TypeError, match="Expected .*tensor.* for attribute 'val'"):
+        _AggScalarField(1)
+    with pytest.raises(TypeError, match="Expected .*tensor.* for attribute 'val'"):
+        _AggScalarFieldConstexprInit(tl.constexpr(1))
+
+
+@triton.aggregate
+class _NestedAggScalarField:
+    val: tl.tensor
+
+
+@triton.aggregate
+class _NestedAggConstructor:
+    inner: _NestedAggScalarField
+
+    def __init__(self, val):
+        self.inner = _NestedAggScalarField(val)
+
+
+def test_aggregate_nested_constructor_materializes_scalar():
+    @triton.jit
+    def kernel(val):
+        anchor(_NestedAggConstructor(val).inner.val)
+
+    run_parser(kernel, args=(1,))
+
+
 def test_dot_fp16_accumulator():
 
     @triton.jit

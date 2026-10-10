@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import math
 from warnings import warn
 from contextlib import contextmanager
@@ -1640,6 +1641,7 @@ else:
 
 
 _AGGREGATE_MISSING = object()
+_aggregate_semantic_context = contextvars.ContextVar("_aggregate_semantic_context", default=None)
 
 
 def _resolve_aggregate_fields(cls):
@@ -1703,6 +1705,12 @@ def _aggregate(cls):
 
         init.__triton_builtin__ = True
 
+    tensor_fields = {
+        name
+        for name, annotation in all_annotations.items()
+        if isinstance(annotation, type) and issubclass(tensor, annotation)
+    }
+
     # Define the wrapped Triton value type.
     class aggregate_value(base_value):
         __triton_builtin__ = True
@@ -1714,11 +1722,17 @@ def _aggregate(cls):
             return super().__new__(this_cls)
 
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
+            # Nested aggregate constructors invoked from a user-defined
+            # constructor do not go through the AST code generator, so inherit
+            # the active semantic context when one was not passed explicitly.
+            if _semantic is None:
+                _semantic = _aggregate_semantic_context.get()
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
             # Track init phase so __setattr__ accepts writes during __init__
             # but rejects post-construction mutation.
             object.__setattr__(instance, "_aggregate_init_complete", False)
+            object.__setattr__(instance, "_aggregate_semantic", _semantic)
             extra_kwargs = {}
             if isinstance(init, JITCallable):
                 # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
@@ -1728,7 +1742,11 @@ def _aggregate(cls):
                     extra_kwargs["_semantic"] = _semantic
                 if "_generator" in inspect.signature(init).parameters:
                     extra_kwargs["_generator"] = _generator
-            init(instance, *args, **extra_kwargs, **kwargs)
+            semantic_token = _aggregate_semantic_context.set(_semantic)
+            try:
+                init(instance, *args, **extra_kwargs, **kwargs)
+            finally:
+                _aggregate_semantic_context.reset(semantic_token)
 
             # Require that the user-defined constructor initialized all fields.
             for name in all_annotations.keys():
@@ -1736,6 +1754,7 @@ def _aggregate(cls):
                     raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
 
             # Lock further attribute assignment after __init__.
+            object.__delattr__(instance, "_aggregate_semantic")
             object.__setattr__(instance, "_aggregate_init_complete", True)
             return instance
 
@@ -1744,6 +1763,13 @@ def _aggregate(cls):
         def __setattr__(self, name, value):
             if name not in all_annotations:
                 raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
+            # Like assigning to an unannotated variable, storing a scalar into a
+            # tensor field materializes it as a scalar tensor.
+            semantic = getattr(self, "_aggregate_semantic", None)
+            if name in tensor_fields and semantic is not None and not isinstance(value, all_annotations[name]):
+                scalar = _unwrap_if_constexpr(value)
+                if isinstance(scalar, (bool, int, float)):
+                    value = semantic.to_tensor(scalar)
             if not isinstance(value, all_annotations[name]):
                 raise TypeError(f"Expected {all_annotations[name]} for attribute '{name}', got {type(value)}")
             if getattr(self, "_aggregate_init_complete", False):
@@ -1798,7 +1824,7 @@ def _aggregate(cls):
     return aggregate_value
 
 
-def aggregate_replace(instance, **changes):
+def aggregate_replace(instance, *, _semantic=None, **changes):
     """Create a copy of an aggregate instance with specified fields replaced.
 
     Similar to dataclasses.replace() — returns a new instance of the same
@@ -1820,8 +1846,10 @@ def aggregate_replace(instance, **changes):
     kwargs = {name: getattr(instance, name) for name in field_names}
     kwargs.update(changes)
 
-    return type(instance)(**kwargs)
+    return type(instance)(**kwargs, _semantic=_semantic)
 
+
+aggregate_replace.__triton_builtin__ = True
 
 # -----------------------
 # SPMD Programming Model
