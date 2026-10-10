@@ -380,9 +380,11 @@ class ProcessPoolWarmupDispatcher:
             output.write(json.dumps({"phase": phase, "test": test}, sort_keys=True) + "\n")
 
     def dispatch(self, *args, kernel, grid, test, **kwargs):
+        from triton._C.libtriton import get_cache_invalidating_env_vars
+
         with self._capture_lock:
             instrumentation_mode = triton.knobs.compilation.instrumentation_mode
-            environment = triton.knobs.compilation.cache_invalidating_env_vars()
+            environment = get_cache_invalidating_env_vars()
             captures = self._capture_preloads(
                 instrumentation_mode,
                 environment,

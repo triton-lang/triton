@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
-from .._C.libtriton import ir
+from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
 from ..backends.compiler import Language
 from ..backends.compiler import BaseBackend, GPUTarget
@@ -242,7 +242,7 @@ def compile(src, target=None, options=None, _env_vars=None):
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
     # create cache manager
-    env_vars = knobs.compilation.cache_invalidating_env_vars() if _env_vars is None else _env_vars
+    env_vars = get_cache_invalidating_env_vars() if _env_vars is None else _env_vars
     key = get_cache_key(src, backend, options, env_vars=env_vars)
     if knobs.runtime.add_stages_inspection_hook is not None:
         inspect_stages_key, inspect_stages_hash = knobs.runtime.add_stages_inspection_hook()

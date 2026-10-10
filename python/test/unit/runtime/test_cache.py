@@ -349,27 +349,8 @@ def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     return module
 
 
-def test_line_info_cache_invalidating_env_var(monkeypatch, fresh_knobs):
-    from triton._C.libtriton import get_cache_invalidating_env_vars
-
-    name = "TRITON_DISABLE_LINE_INFO"
-    monkeypatch.delenv(name, raising=False)
-    line_info_enabled_from_unset = fresh_knobs.compilation.cache_invalidating_env_vars()
-
-    monkeypatch.setenv(name, "false")
-    assert get_cache_invalidating_env_vars()[name] == "false"
-    line_info_enabled_from_false = fresh_knobs.compilation.cache_invalidating_env_vars()
-    assert line_info_enabled_from_false == line_info_enabled_from_unset
-
-    monkeypatch.setenv(name, "true")
-    assert get_cache_invalidating_env_vars()[name] == "true"
-    line_info_disabled = fresh_knobs.compilation.cache_invalidating_env_vars()
-    assert line_info_disabled[name] == "true"
-    assert line_info_disabled != line_info_enabled_from_unset
-
-
-@pytest.mark.parametrize("disable_line_info", [False, True])
-def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, disable_line_info):
+@pytest.mark.parametrize("env_value, path_hashed", [("0", True), ("1", False), ("yes", True)])
+def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, monkeypatch, env_value, path_hashed):
     from textwrap import dedent
     code = dedent("""
         import triton
@@ -377,25 +358,119 @@ def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, 
         def test_kernel(i):
             i = i + 1
     """)
-    fresh_knobs.compilation.disable_line_info = disable_line_info
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", env_value)
 
     line_file = tmp_path / "line" / "kernel.py"
     orig_mod = write_and_load_module(line_file, code, 0)
     orig_line_key = orig_mod.test_kernel.cache_key
     shifted_mod = write_and_load_module(line_file, code, 1)
     shifted_line_key = shifted_mod.test_kernel.cache_key
+    assert orig_line_key != shifted_line_key
 
     path0_mod = write_and_load_module(tmp_path / "path0" / "kernel.py", code, 0)
     path1_mod = write_and_load_module(tmp_path / "path1" / "kernel.py", code, 0)
     path0_key = path0_mod.test_kernel.cache_key
     path1_key = path1_mod.test_kernel.cache_key
-
-    if disable_line_info:
-        assert orig_line_key == shifted_line_key
-        assert path0_key == path1_key
-    else:
-        assert orig_line_key != shifted_line_key
+    if path_hashed:
         assert path0_key != path1_key
+    else:
+        assert path0_key == path1_key
+
+
+def test_starting_line_separates_kernels_without_line_info(tmp_path, fresh_knobs, monkeypatch):
+    from textwrap import dedent
+    code = dedent("""
+        import triton
+        import triton.language as tl
+        def fp16_kernel():
+            dtype = tl.float16
+            @triton.jit
+            def kernel(X, Y):
+                tl.store(Y, tl.load(X).to(dtype))
+            return kernel
+        def fp32_kernel():
+            dtype = tl.float32
+            @triton.jit
+            def kernel(X, Y):
+                tl.store(Y, tl.load(X).to(dtype))
+            return kernel
+    """)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+    module = write_and_load_module(tmp_path / "kernel.py", code, 0)
+    assert module.fp16_kernel().cache_key != module.fp32_kernel().cache_key
+
+
+def test_line_info_change_rehashes_source_locations(tmp_path, fresh_knobs, monkeypatch):
+    from textwrap import dedent
+    code = dedent("""
+        import triton
+        @triton.jit
+        def callee(i):
+            return i + 1
+        @triton.jit
+        def test_kernel(i):
+            i = callee(i)
+    """)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
+    module = write_and_load_module(tmp_path / "kernel.py", code, 0)
+    keys = {}
+    for env_value in ["0", "1", "true", "false"]:
+        monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", env_value)
+        keys[env_value] = (module.callee.cache_key, module.test_kernel.cache_key)
+    assert keys["0"] == keys["false"]
+    assert keys["1"] == keys["true"]
+    assert keys["0"][0] != keys["1"][0]
+    assert keys["0"][1] != keys["1"][1]
+
+
+def test_line_info_rehash_keeps_recorded_globals(tmp_path, fresh_knobs, monkeypatch):
+    from textwrap import dedent
+    code = dedent("""
+        import triton
+        import triton.language as tl
+        CONSTANT = tl.constexpr(1)
+        @triton.jit
+        def test_kernel(i):
+            i = i + CONSTANT
+    """)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
+    module = write_and_load_module(tmp_path / "kernel.py", code, 0)
+    kernel = module.test_kernel
+    enabled_key = kernel.cache_key
+
+    module.CONSTANT = module.tl.constexpr(2)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+    assert kernel.cache_key != enabled_key
+    recorded = {name: val.value for (name, _), (val, _) in kernel.used_global_vals.items()}
+    assert recorded == {"CONSTANT": 1}
+
+
+def test_line_info_rehash_failure_is_retried(tmp_path, fresh_knobs, monkeypatch):
+    from textwrap import dedent
+    code = dedent("""
+        import triton
+        import triton.language as tl
+        CONSTANT = tl.constexpr(1)
+        @triton.jit
+        def callee(i):
+            return i + CONSTANT
+        @triton.jit
+        def test_kernel(i):
+            i = i + CONSTANT
+            i = callee(i)
+    """)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+    module = write_and_load_module(tmp_path / "kernel.py", code, 0)
+    disabled_key = module.test_kernel.cache_key
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
+    module.test_kernel.cache_key
+
+    module.CONSTANT = module.tl.constexpr(2)
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+    with pytest.raises(RuntimeError, match="Global variable CONSTANT"):
+        module.test_kernel.cache_key
+    module.CONSTANT = module.tl.constexpr(1)
+    assert module.test_kernel.cache_key == disabled_key
 
 
 def test_emitted_source_coordinates_invalidate_cache(tmp_path, fresh_knobs):

@@ -13,6 +13,7 @@ from .jit import KernelInterface, JITFunction
 from .errors import OutOfResources, PTXASError, AutotunerError
 from .driver import driver
 from .cache import get_cache_manager, triton_key
+from triton._C.libtriton import get_cache_invalidating_env_vars
 
 
 class Autotuner(KernelInterface):
@@ -198,7 +199,7 @@ class Autotuner(KernelInterface):
         while not isinstance(fn, JITFunction):
             fn = fn.fn
 
-        env_vars = knobs.compilation.cache_invalidating_env_vars()
+        env_vars = get_cache_invalidating_env_vars()
         cache_key = [
             triton_key(),
             make_backend(driver.active.get_current_target()).hash(),
