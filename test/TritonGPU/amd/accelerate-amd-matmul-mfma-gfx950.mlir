@@ -356,3 +356,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+// CHECK{LITERAL}: #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [32, 32, 64], isTransposed = true}>
+// MFMA16{LITERAL}: #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [16, 16, 128], isTransposed = true}>
+// CHECK-LABEL: mfma_dot_scaled_fp8_fp8_single_warp
+// MFMA16-LABEL: mfma_dot_scaled_fp8_fp8_single_warp
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_scaled_fp8_fp8_single_warp(
+      %arg0: tensor<32x128xf8E4M3FN, #blocked>,
+      %arg1: tensor<128x32xf8E4M3FN, #blocked>,
+      %arg2: tensor<32x32x!tt.ptr<f32>, #blocked>
+      ) {
+    // The scaled MFMA pattern must also apply with a single warp, and both scales stay absent.
+    // CHECK-NOT: tt.fp_to_fp
+    // CHECK: tt.dot_scaled {{[^ ]+}}, {{[^ ]+}}, {{[^ ]+}} lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>> * tensor<128x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>> -> tensor<32x32xf32, #mma>
+    // MFMA16-NOT: tt.fp_to_fp
+    // MFMA16: tt.dot_scaled {{[^ ]+}}, {{[^ ]+}}, {{[^ ]+}} lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>> * tensor<128x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>> -> tensor<32x32xf32, #mma>
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %1 = tt.dot_scaled %arg0, %arg1, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x128xf8E4M3FN, #blocked> * tensor<128x32xf8E4M3FN, #blocked> -> tensor<32x32xf32, #blocked>
+    tt.store %arg2, %1 : tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+// CHECK{LITERAL}: #linear = #ttg.linear<{register = [[0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [], block = []}>
+// CHECK{LITERAL}: #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [32, 32, 64], isTransposed = true}>
+// MFMA16{LITERAL}: #linear = #ttg.linear<{register = [[16, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp = [], block = []}>
+// MFMA16{LITERAL}: #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [16, 16, 128], isTransposed = true}>
+// CHECK-LABEL: mfma_dot_scaled_fp8_fp8_single_warp_scales
+// MFMA16-LABEL: mfma_dot_scaled_fp8_fp8_single_warp_scales
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_scaled_fp8_fp8_single_warp_scales(
+      %arg0: tensor<32x128xf8E4M3FN, #blocked>,
+      %arg1: tensor<128x32xf8E4M3FN, #blocked>,
+      %arg2: tensor<32x4xi8, #blocked1>,
+      %arg3: tensor<32x4xi8, #blocked1>,
+      %arg4: tensor<32x32x!tt.ptr<f32>, #blocked>
+      ) {
+    // A single warp must also lower when both scales are present.
+    // CHECK-NOT: tt.fp_to_fp
+    // CHECK: tt.dot_scaled {{[^ ]+}} scale {{[^ ]+}}, {{[^ ]+}} scale {{[^ ]+}}, {{[^ ]+}} lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<32x4xi8, #linear> * tensor<128x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<32x4xi8, #linear> -> tensor<32x32xf32, #mma>
+    // MFMA16-NOT: tt.fp_to_fp
+    // MFMA16: tt.dot_scaled {{[^ ]+}} scale {{[^ ]+}}, {{[^ ]+}} scale {{[^ ]+}}, {{[^ ]+}} lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<32x4xi8, #linear> * tensor<128x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<32x4xi8, #linear> -> tensor<32x32xf32, #mma>
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %1 = tt.dot_scaled %arg0 scale %arg2, %arg1 scale %arg3, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x128xf8E4M3FN, #blocked>, tensor<32x4xi8, #blocked1> * tensor<128x32xf8E4M3FN, #blocked>, tensor<32x4xi8, #blocked1> -> tensor<32x32xf32, #blocked>
+    tt.store %arg4, %1 : tensor<32x32x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

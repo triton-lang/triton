@@ -4208,7 +4208,6 @@ def test_amd_mfma_scaled_none(target):
     module = run_parser(kernel, *make_args(num_warps=1), target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#linear = #ttg.linear<{register = [], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp = [], block = []}>
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [16, 16, 128], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
@@ -4218,16 +4217,50 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %cst_0 = arith.constant dense<34> : tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
     %cst_1 = arith.constant 0.000000e+00 : f32
     %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
-    %c127_i8 = arith.constant 127 : i8
-    %cst_3 = arith.constant dense<127> : tensor<16x4xi8, #linear>
-    %c127_i8_4 = arith.constant 127 : i8
-    %cst_5 = arith.constant dense<127> : tensor<16x4xi8, #linear>
-    %cst_6 = arith.constant 0.000000e+00 : f32
-    %0 = tt.dot_scaled %cst scale %cst_3, %cst_0 scale %cst_5, %cst_2 lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> * tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> -> tensor<16x16xf32, #mma>
+    %cst_3 = arith.constant 0.000000e+00 : f32
+    %0 = tt.dot_scaled %cst, %cst_0, %cst_2 lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>> * tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>> -> tensor<16x16xf32, #mma>
     tt.return
   }
 }
 """)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
+@pytest.mark.parametrize("scale_side", ["lhs", "rhs"])
+def test_amd_mfma_scaled_single_scale(target, scale_side):
+    # The backend requires either both scales or none, so a single `None` scale
+    # must still be materialized with a default value.
+
+    @gluon.jit
+    def kernel(LHS_ONLY: ttgl.constexpr):
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(4, [16, 16, 128], True, [1, 1])
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, 16)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, 16)
+        a = ttgl.full([16, 64], 0x11, ttgl.uint8, a_layout)
+        b = ttgl.full([64, 16], 0x22, ttgl.uint8, b_layout)
+        acc = ttgl.full([16, 16], 0, ttgl.float32, mfma_layout)
+        if LHS_ONLY:
+            ttgl.amd.cdna4.mfma_scaled(a, 0x02, 'e2m1', b, None, 'e2m1', acc)
+        else:
+            ttgl.amd.cdna4.mfma_scaled(a, None, 'e2m1', b, 0x02, 'e2m1', acc)
+
+    module = run_parser(kernel, *make_args(scale_side == "lhs", num_warps=1), target=target)
+    module_text = module.str_nodebug()
+    dot_line = next(line for line in module_text.splitlines() if "tt.dot_scaled" in line)
+    scales = re.search(r"tt\.dot_scaled \S+ scale (%\S+), \S+ scale (%\S+),", dot_line)
+    assert scales, dot_line
+
+    def dense_value(ssa):
+        found = re.search(rf"{re.escape(ssa)} = arith\.constant dense<(\d+)>", module_text)
+        assert found, ssa
+        return int(found.group(1))
+
+    # The user scale (2) stays on the operand that was provided; the missing side is the unit scale (127).
+    lhs_value, rhs_value = dense_value(scales.group(1)), dense_value(scales.group(2))
+    if scale_side == "lhs":
+        assert (lhs_value, rhs_value) == (2, 127)
+    else:
+        assert (lhs_value, rhs_value) == (127, 2)
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
