@@ -1,0 +1,3 @@
+Temporary publication smoke test.
+Do not merge.
+Verification revision: 1.
