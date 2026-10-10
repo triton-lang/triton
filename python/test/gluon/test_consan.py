@@ -1080,9 +1080,6 @@ def test_local_indexed_cross_cta_visibility(OP, FAILURE, device, run_wrapper, mo
         values = ttgl.load(inp + offsets)
         smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 32], shared_layout)
         peer_cols = (cols ^ 16)[None, :] + rows[:, None] * 0
-        # Finish ConSan's untracked poison initialization before peer DSM access.
-        ttgl.barrier(cluster=True)
-
         if FAILURE:
             result = smem.gather(peer_cols, axis=1)
             ttgl.store(out + offsets, result)
