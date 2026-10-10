@@ -1928,6 +1928,42 @@ def test_loop_carry_swap():
 
 @filecheck_test
 @triton.jit
+def test_loop_carry_copy_alias():
+    # CHECK-LABEL: test_loop_carry_copy_alias
+    # CHECK: %[[SEED:.*]] = arith.constant 0 : i32
+    cur = 0
+    prev = cur
+    # CHECK: scf.for {{.*}} iter_args(%[[CUR:.*]] = %[[SEED]], %[[PREV:.*]] = %[[SEED]])
+    for i in range(3):
+        # CHECK: %[[NEXT_CUR:.*]] = arith.addi %[[CUR]],
+        prev = cur
+        cur = cur + 1
+        # CHECK: scf.yield %[[NEXT_CUR]], %[[CUR]] : i32, i32
+    anchor(prev)
+    anchor(cur)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_while_copy_alias():
+    # CHECK-LABEL: test_loop_carry_while_copy_alias
+    # CHECK: %[[SEED:.*]] = arith.constant 0 : i32
+    cur = 0
+    prev = cur
+    # CHECK: scf.while
+    while cur < 4:
+        # CHECK: } do {
+        # CHECK-NEXT: ^bb0(%[[CUR:.*]]: i32, %[[PREV:.*]]: i32):
+        # CHECK: %[[NEXT_CUR:.*]] = arith.addi %[[CUR]],
+        prev = cur
+        cur = cur + 1
+        # CHECK: scf.yield %[[NEXT_CUR]], %[[CUR]] : i32, i32
+    anchor(prev)
+    anchor(cur)
+
+
+@filecheck_test
+@triton.jit
 def test_loop_carry_invariant_identity():
     # CHECK-LABEL: test_loop_carry_invariant_identity
     seed = 1
