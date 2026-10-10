@@ -38,6 +38,20 @@ Note that, if llvm is not present on your system, the setup.py script will downl
 
 For building with a custom LLVM, review the `Building with a custom LLVM <https://github.com/triton-lang/triton?tab=readme-ov-file#building-with-a-custom-llvm>`_ section on Github.
 
+If you are bringing up a newer NVIDIA architecture with a system CUDA toolkit that has a newer ``ptxas`` than the one bundled with Triton, point Triton at the system assembler before building:
+
+.. code-block:: bash
+
+      export TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+
+Triton also supports a separate override for the Blackwell-specific assembler binary:
+
+.. code-block:: bash
+
+      export TRITON_PTXAS_BLACKWELL_PATH=/usr/local/cuda/bin/ptxas
+
+Use ``TRITON_PTXAS_PATH`` as the general override for newer NVIDIA bring-up flows, and use ``TRITON_PTXAS_BLACKWELL_PATH`` only when you need a separate Blackwell-specific assembler override without changing the bundled toolchain for other architectures.
+
 You can then test your installation by running the tests:
 
 .. code-block:: bash
