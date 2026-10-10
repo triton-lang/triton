@@ -8,6 +8,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -44,6 +45,19 @@ struct AllocateSharedMemoryNv
 
 namespace mlir::triton::nvidia_gpu {
 
+// [Correctness] Aligned reductions require every thread in the CTA.
+bool isWholeCTA(Operation *op) {
+  auto totalWarps = op->getParentOfType<ModuleOp>()->getAttrOfType<IntegerAttr>(
+      "ttg.total-num-warps");
+  return totalWarps && totalWarps.getInt() == gpu::lookupNumWarps(op);
+}
+
+bool isSingleWarpPoll(Operation *op) {
+  auto wait = dyn_cast<CommunicationWaitOp>(op);
+  return (isa<CommunicationIsAbortedOp>(op) || (wait && !wait.getBlocking())) &&
+         gpu::lookupNumWarps(op) == 1;
+}
+
 static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
                                               RankedTensorType dstTy,
                                               TargetInfoBase &targetInfo) {
@@ -70,6 +84,11 @@ static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
 std::function<unsigned(Operation *)>
 getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
   auto allocation = [&targetInfo](Operation *op) -> unsigned {
+    if (isSingleWarpPoll(op))
+      return 0;
+    if (isa<CommunicationSubmitOp, CommunicationIsAbortedOp>(op) &&
+        isWholeCTA(op))
+      return 0;
     if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtOp.getSrc().getType();
       auto dstTy = cvtOp.getType();

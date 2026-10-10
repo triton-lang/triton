@@ -983,6 +983,11 @@ def jit(
         implicitly converted to pointers if they have a :code:`.data_ptr()` method
         and a `.dtype` attribute.
 
+    :note: Namedtuple argument classes can define :code:`__triton_do_not_specialize__`
+        as a collection of field names to disable automatic specialization for
+        those fields. This also applies to namedtuples nested in other arguments.
+        Explicit :code:`constexpr` values remain compile-time constants.
+
     :note: This function will be compiled and run on the GPU. It will only have access to:
 
            * python primitives,
