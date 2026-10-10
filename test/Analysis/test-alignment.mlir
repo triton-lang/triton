@@ -1610,3 +1610,41 @@ tt.func @negative_constants() {
   %sum = arith.addi %neg8_dense, %sixteen : tensor<128xi32>
   tt.return
 }
+
+// -----
+
+// Truncation wraps: after trunci to i8 the values of make_range(0, 1024) restart
+// every 256 and change sign every 128, so contiguity and divisibility are capped
+// at 128 and a comparison against 0 is not constant across the whole tensor.
+tt.func @trunc_wraps() {
+  // expected-remark @below {{contiguity = [1024], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %range = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [128], constancy = [1], constant_value = <none>}}
+  %trunc = arith.trunci %range : tensor<1024xi32> to tensor<1024xi8>
+  // expected-remark @below {{contiguity = [1], divisibility = [4611686018427387904], constancy = [1024], constant_value = 0}}
+  %zero = arith.constant dense<0> : tensor<1024xi8>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>}}
+  %neg = arith.cmpi slt, %trunc, %zero : tensor<1024xi8>
+  tt.return
+}
+
+// -----
+
+// A run that starts at an unknown offset is contiguous only modulo 2^32, so
+// extension must not keep it; a run that starts at a multiple of its length
+// keeps it.
+tt.func @ext_of_unaligned_run(%base: i32) {
+  // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>}}
+  %splat = tt.splat %base : i32 -> tensor<128xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %offs = arith.addi %splat, %range : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %zext = arith.extui %offs : tensor<128xi32> to tensor<128xi64>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %sext = arith.extsi %offs : tensor<128xi32> to tensor<128xi64>
+  // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %zext_aligned = arith.extui %range : tensor<128xi32> to tensor<128xi64>
+  tt.return
+}

@@ -381,10 +381,22 @@ public:
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     const AxisInfo &info = operands[0]->getValue();
+    // Integer casts wrap. Truncation to N bits changes the sign at multiples
+    // of 2^(N-1), so no larger divisibility survives it. Extension splits a
+    // run that crosses the wrap point of the narrow type into two runs far
+    // apart. A run that starts at a multiple of its length never crosses a
+    // wrap point, so contiguity is kept only up to the divisibility.
+    AxisInfo::DimVectorT contiguity = info.getContiguity();
+    AxisInfo::DimVectorT divisibility = info.getDivisibility();
+    unsigned width = getIntegerBitWidth(op.getType());
+    for (int d = 0; d < info.getRank(); ++d) {
+      if constexpr (std::is_same_v<OpTy, arith::TruncIOp>)
+        divisibility[d] = std::min(divisibility[d], int64_t(1) << (width - 1));
+      contiguity[d] = std::min(contiguity[d], divisibility[d]);
+    }
     // Exact casts are handled before the bound visitors. An unproven or poison
     // cast must not retain its operand's constant value.
-    return AxisInfo(info.getContiguity(), info.getDivisibility(),
-                    info.getConstancy());
+    return AxisInfo(contiguity, divisibility, info.getConstancy());
   }
 };
 
