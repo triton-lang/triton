@@ -167,3 +167,20 @@ def test_python_func_in_visit_call(device):
     x = torch.randn(4, device=device)
     out = torch.zeros_like(x)
     test_py_call_const_kernel[(4, )](x, out, 4, 4)
+
+
+def test_free_threaded_gil_status():
+    if not hasattr(sys, "_is_gil_enabled") or sys._is_gil_enabled():
+        pytest.skip("Test requires a free-threaded Python build with GIL disabled")
+    script = textwrap.dedent("""
+        import sys
+        import warnings
+        with warnings.catch_warnings(record=True) as recorded_warnings:
+            warnings.simplefilter("always")
+            import triton._C.libtriton
+            assert not sys._is_gil_enabled(), "GIL should not be re-enabled by libtriton"
+            for w in recorded_warnings:
+                assert "global interpreter lock (GIL) has been enabled" not in str(w.message)
+    """)
+    subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+

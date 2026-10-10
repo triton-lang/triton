@@ -300,6 +300,8 @@ class CMakeBuild(build_ext):
             f"-DTRITON_CACHE_PATH={get_triton_cache_path()}",
             f"-DTRITON_VERSION={TRITON_VERSION}",
         ]
+        if sysconfig.get_config_var("Py_GIL_DISABLED"):
+            cmake_args.append("-DTRITON_FREE_THREADED=ON")
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)
@@ -355,6 +357,7 @@ class CMakeBuild(build_ext):
             "TRITON_OFFLINE_BUILD",
             "TRITON_LLVM_SYSTEM_SUFFIX",
             "TRITON_STABLE_ABI",
+            "TRITON_FREE_THREADED",
             "LLVM_SYSPATH",
             "JSON_SYSPATH",
             "TRITON_CUDACRT_PATH",
