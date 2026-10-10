@@ -1,6 +1,9 @@
 import pytest
 
+import triton
+import triton.language as tl
 from triton.backends.amd import compiler
+from triton.backends.compiler import GPUTarget
 
 
 def test_fp_fusion():
@@ -219,3 +222,43 @@ define amdgpu_kernel void @named_barrier_kernel(i1 %condition) {
   ret void
 }
 """)
+
+
+@pytest.mark.parametrize("a_dtype,b_dtype,k_dim", [
+    ("fp16", "fp16", 32),
+    *[(a, b, k) for a in ["fp8e4nv", "fp8e5"] for b in ["fp8e4nv", "fp8e5"] for k in [64, 128]],
+])
+def test_gfx1250_tl_dot_fp16_acc(a_dtype, b_dtype, k_dim):
+    # AccelerateAMDMatmul must keep the f16 accumulator and select the
+    # f16-accumulate wmma instead of widening the dot to f32.
+    @triton.jit
+    def kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+               NUM_K_ITERS: tl.constexpr):
+        offs_m = tl.arange(0, BLOCK_M)
+        offs_n = tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.dtype.element_ty)
+        for k in range(NUM_K_ITERS):
+            a = tl.load(a_ptr + offs_m[:, None] * BLOCK_K * NUM_K_ITERS + k * BLOCK_K + offs_k[None, :])
+            b = tl.load(b_ptr + (k * BLOCK_K + offs_k[:, None]) * BLOCK_N + offs_n[None, :])
+            acc = tl.dot(a, b, acc, out_dtype=c_ptr.dtype.element_ty)
+        tl.store(c_ptr + offs_m[:, None] * BLOCK_N + offs_n[None, :], acc)
+
+    signature = {
+        "a_ptr": f"*{a_dtype}", "b_ptr": f"*{b_dtype}", "c_ptr": "*fp16",  #
+        "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "BLOCK_K": "constexpr", "NUM_K_ITERS": "constexpr"
+    }
+    constexprs = {"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": k_dim, "NUM_K_ITERS": 4}
+    k = triton.compile(src=triton.compiler.ASTSource(kernel, signature, constexprs),
+                       target=GPUTarget("hip", "gfx1250", 32))
+    amdgcn = k.asm["amdgcn"]
+
+    if a_dtype == "fp16":
+        operands = "f16"
+    else:
+        a_ty = "fp8" if a_dtype == "fp8e4nv" else "bf8"
+        b_ty = "fp8" if b_dtype == "fp8e4nv" else "bf8"
+        # NOTE: the wmma layout is transposed, which swaps A and B
+        operands = b_ty + "_" + a_ty
+    assert f"v_wmma_f16_16x16x{k_dim}_{operands}" in amdgcn
+    assert "v_wmma_f32_" not in amdgcn
