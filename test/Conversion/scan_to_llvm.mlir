@@ -17,6 +17,7 @@
 // RUN: triton-opt %t/ship-chunks.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=SHIP
 
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=OFFSETS
+// RUN: triton-opt %t/shuffle-offsets.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-OFFSETS
 
 //--- scan.mlir
 
@@ -706,6 +707,70 @@ tt.func private @test_scan_shuffle_up_strided(%arg: tensor<2x16xi32, #strided>) 
 // OFFSETS: llvm.return
 tt.func private @test_scan_shuffle_up_gapped(%arg: tensor<4x8xi32, #gapped>) -> tensor<4x8xi32, #gapped> {
   %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<4x8xi32, #gapped>) -> tensor<4x8xi32, #gapped>
+  tt.return %result : tensor<4x8xi32, #gapped>
+}
+// Five scan rounds and the exclusive carry use shuffle-down.
+// OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_carry(
+// OFFSETS-NOT: nvvm.shfl.sync idx
+// OFFSETS-COUNT-6: nvvm.shfl.sync down
+// OFFSETS-NOT: nvvm.shfl.sync
+// OFFSETS: llvm.return
+// AMD-OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_carry(
+// AMD-OFFSETS-COUNT-6: rocdl.ds_bpermute
+// AMD-OFFSETS-NOT: rocdl.ds_bpermute
+// AMD-OFFSETS: llvm.return
+tt.func private @test_scan_shuffle_down_carry(%arg: tensor<64xi32, #groups>) -> tensor<64xi32, #groups> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<64xi32, #groups>) -> tensor<64xi32, #groups>
+  tt.return %result : tensor<64xi32, #groups>
+}
+
+// Physical lane bit zero selects an independent row. The scan strides are
+// 2, 4, 8, and 16, preserving that row bit.
+// OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_strided(
+// OFFSETS-DAG: %[[TWO:.*]] = llvm.mlir.constant(2 : i32)
+// OFFSETS-DAG: %[[FOUR:.*]] = llvm.mlir.constant(4 : i32)
+// OFFSETS-DAG: %[[EIGHT:.*]] = llvm.mlir.constant(8 : i32)
+// OFFSETS-DAG: %[[SIXTEEN:.*]] = llvm.mlir.constant(16 : i32)
+// OFFSETS: nvvm.shfl.sync down %{{.*}}, %{{.*}}, %[[TWO]],
+// OFFSETS: nvvm.shfl.sync down %{{.*}}, %{{.*}}, %[[FOUR]],
+// OFFSETS: nvvm.shfl.sync down %{{.*}}, %{{.*}}, %[[EIGHT]],
+// OFFSETS: nvvm.shfl.sync down %{{.*}}, %{{.*}}, %[[SIXTEEN]],
+// OFFSETS: llvm.return
+// AMD-OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_strided(
+// AMD-OFFSETS-COUNT-4: rocdl.ds_bpermute
+// AMD-OFFSETS-NOT: rocdl.ds_bpermute
+// AMD-OFFSETS: llvm.return
+tt.func private @test_scan_shuffle_down_strided(%arg: tensor<2x16xi32, #strided>) -> tensor<2x16xi32, #strided> {
+  %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<2x16xi32, #strided>) -> tensor<2x16xi32, #strided>
+  tt.return %result : tensor<2x16xi32, #strided>
+}
+
+// The first two rounds cross gaps between scan lane bits 0, 2, and 4.
+// The last round changes only bit 4 and has a uniform distance of 16.
+// OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_gapped(
+// OFFSETS: %[[SIXTEEN:.*]] = llvm.mlir.constant(16 : i32)
+// OFFSETS-COUNT-2: nvvm.shfl.sync idx
+// OFFSETS: nvvm.shfl.sync down %{{.*}}, %{{.*}}, %[[SIXTEEN]],
+// OFFSETS-NOT: nvvm.shfl.sync
+// OFFSETS: llvm.return
+// AMD-OFFSETS-LABEL: llvm.func {{.*}}@test_scan_shuffle_down_gapped(
+// AMD-OFFSETS-COUNT-3: rocdl.ds_bpermute
+// AMD-OFFSETS-NOT: rocdl.ds_bpermute
+// AMD-OFFSETS: llvm.return
+tt.func private @test_scan_shuffle_down_gapped(%arg: tensor<4x8xi32, #gapped>) -> tensor<4x8xi32, #gapped> {
+  %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = true}> ({
   ^bb0(%lhs: i32, %rhs: i32):
     %sum = arith.addi %lhs, %rhs : i32
     tt.scan.return %sum : i32

@@ -76,6 +76,8 @@ public:
                    int i) const override;
   Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
                   int i) const override;
+  Value shuffleDown(RewriterBase &rewriter, Location loc, Value val,
+                    int i) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
   Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,

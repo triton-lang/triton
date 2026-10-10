@@ -317,6 +317,11 @@ Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::AMD::shuffleUp(loc, rewriter, val, i, getISAFamily());
 }
 
+Value TargetInfo::shuffleDown(RewriterBase &rewriter, Location loc, Value val,
+                              int i) const {
+  return LLVM::AMD::shuffleDown(loc, rewriter, val, i, getISAFamily());
+}
+
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
