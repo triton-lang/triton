@@ -112,3 +112,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Keep the scaled dot's allocation, but redistribute warps for the following
+// ordinary dot: the producer search must stop at the preceding dot.
+// CHECK-DAG: #[[$MMA:.+]] = #ttg.amd_mfma<{{.*}}warpsPerCTA = [2, 2, 1],
+// CHECK-DAG: #[[$CHAIN_MMA:.+]] = #ttg.amd_mfma<{{.*}}warpsPerCTA = [2, 1, 2],
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 4, 16], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @mfma_bmm_scaled_then_ordinary(
+  tt.func @mfma_bmm_scaled_then_ordinary(
+      %a: tensor<2x64x64xbf16, #blocked>,
+      %b: tensor<2x64x64xf8E4M3FN, #blocked>,
+      %s_ptr: tensor<2x64x2x!tt.ptr<i8>, #blocked>,
+      %d: tensor<2x64x64xbf16, #blocked>) -> tensor<2x64x64xf32, #blocked> {
+    %s = tt.load %s_ptr : tensor<2x64x2x!tt.ptr<i8>, #blocked>
+    %zero = arith.constant dense<0.0> : tensor<2x64x64xf32, #blocked>
+    // CHECK: amdg.scaled_upcast_fp8
+    // CHECK: tt.dot {{.*}} -> tensor<2x64x64xf32, #[[$MMA]]>
+    %result = tt.dot_scaled %a, %b scale %s, %zero lhs = bf16 rhs = e4m3 {fastMath = false} : tensor<2x64x64xbf16, #blocked> * tensor<2x64x64xf8E4M3FN, #blocked>, tensor<2x64x2xi8, #blocked> -> tensor<2x64x64xf32, #blocked>
+    %x = arith.truncf %result : tensor<2x64x64xf32, #blocked> to tensor<2x64x64xbf16, #blocked>
+    %lhs = ttg.convert_layout %x : tensor<2x64x64xbf16, #blocked> -> tensor<2x64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %rhs = ttg.convert_layout %d : tensor<2x64x64xbf16, #blocked> -> tensor<2x64x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    // CHECK: tt.dot {{.*}} -> tensor<2x64x64xf32, #[[$CHAIN_MMA]]>
+    %out = tt.dot %lhs, %rhs, %zero : tensor<2x64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<2x64x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<2x64x64xf32, #blocked>
+    tt.return %out : tensor<2x64x64xf32, #blocked>
+  }
+}

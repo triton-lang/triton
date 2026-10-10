@@ -82,16 +82,39 @@ FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
       .Default([](Type) { return failure(); });
 }
 
-// This function is to lay out numWarps warps into 2d dimension for the given
-// dot operation, where
+// Identify operands produced by scaled-dot decomposition by looking for scaled
+// upcasts. Stop at block arguments and preceding dots, and leave scale-source
+// markers unchanged.
+static FailureOr<bool> hasScaledUpcastProducer(Value operand) {
+  Operation *producer = operand.getDefiningOp();
+  if (!producer)
+    return false;
+
+  BackwardSliceOptions options;
+  options.inclusive = true;
+  options.omitBlockArguments = true;
+  options.filter = [](Operation *op) { return !isa<tt::DotOpInterface>(op); };
+
+  SetVector<Operation *> slice;
+  if (failed(getBackwardSlice(producer, &slice, options)))
+    return failure();
+  return llvm::any_of(slice, [](Operation *op) {
+    return isa<triton::amdgpu::ScaledUpcastFp4Op,
+               triton::amdgpu::ScaledUpcastFp8Op>(op);
+  });
+}
+
+// This function lays out numWarps warps over the batch and matrix dimensions
+// for the given dot operation, where
 //  - shape : is the shape of the resulting data a single CTA will produce
 //  - instrShape: is shape of data a single wmma/mfma hardware instruction
 //     will consume
 //
-// This function takes into account three situations
-//  a) 1st dot in a chained dot operations (e.g. in FA)
-//  b) 2nd dot in a chained dot operations
-//  c) single dot operation
+// After allocating batch warps, this function takes into account three
+// situations for the matrix dimensions:
+//  a) 1st dot in rank-two chained dot operations (e.g. in FA)
+//  b) 2nd dot in rank-two chained dot operations
+//  c) single dot operations and batched dot operations
 //
 // In case a), it will return {numWarp, 1} for the first dot in an attempt to
 // reduce subsequent reduction overhead.
@@ -108,15 +131,24 @@ SmallVector<unsigned, 3> planWarps(Operation *dotOp, ArrayRef<int64_t> shape,
                                    int numWarps,
                                    std::pair<int64_t, int64_t> instrShape) {
   auto rank = shape.size();
-  // Case 1: Early exit for batched matmul
-  if (rank == 3)
+  auto ttDotOp = cast<tt::DotOpInterface>(dotOp);
+  // Case 1: Batched matmul
+  // Redistributing batch warps for decomposed scaled dots can introduce costly
+  // scale-layout conversions. Keep their allocation, also if analysis fails.
+  if (rank == 3 && (hasScaledUpcastProducer(ttDotOp.getA()).value_or(true) ||
+                    hasScaledUpcastProducer(ttDotOp.getB()).value_or(true)))
     return {static_cast<unsigned>(numWarps), 1, 1};
 
-  // Case 2: For FA-like pattern, i.e. result of 1st tl.dot is used as the opA
-  // of the 2nd dot, we will set warpsPerCTA differently for 1st and 2nd dot
-  auto ttDotOp = cast<tt::DotOpInterface>(dotOp);
-  bool isHeadDot = isChainDotHead(ttDotOp);
-  bool isTailDot = isChainDotTail(ttDotOp);
+  // Distribute warps over the batch first, then distribute the remaining warps
+  // over the matrix dimensions using the regular heuristic below.
+  unsigned batchWarps = rank == 3 ? std::min<int64_t>(shape[0], numWarps) : 1;
+  numWarps /= batchWarps;
+
+  // Case 2: For rank-two FA-like pattern, i.e. result of 1st tl.dot is used as
+  // the opA of the 2nd dot, we will set warpsPerCTA differently for 1st and 2nd
+  // dot
+  bool isHeadDot = rank == 2 && isChainDotHead(ttDotOp);
+  bool isTailDot = rank == 2 && isChainDotTail(ttDotOp);
   // For the 1st dot in chain-dot, we always set warpsPerCTA={numWarps, 1}
   // because this eliminates
   // 1) inter-warp reduction in the softmax step.
@@ -142,8 +174,8 @@ SmallVector<unsigned, 3> planWarps(Operation *dotOp, ArrayRef<int64_t> shape,
     return ret;
   }
 
-  // Case 3: Regular cases
-  SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
+  // Case 3: Regular cases, including remaining warps of batched matmul
+  auto tensorShape = shape.take_back(2);
   SmallVector<unsigned, 3> ret = {1, 1};
   do {
     if (ret[0] * ret[1] >= numWarps)
@@ -161,8 +193,11 @@ SmallVector<unsigned, 3> planWarps(Operation *dotOp, ArrayRef<int64_t> shape,
   } while (true);
 
   if (ret[1] * instrShape.second > tensorShape[1]) {
-    return {ret[1], ret[0]};
+    std::swap(ret[0], ret[1]);
   }
+
+  if (rank == 3)
+    ret.insert(ret.begin(), batchWarps);
 
   return ret;
 }
