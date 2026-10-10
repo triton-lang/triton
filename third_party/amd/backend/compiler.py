@@ -704,8 +704,12 @@ class HIPBackend(BaseBackend):
                 if not fn.is_declaration():
                     fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, core_llvm_arch, '', get_llvm_flags(options.arch),
-                             options.enable_fp_fusion, disable_vector_combine=True)
+        # InstCombine folds an extractelement/insertelement chain into a single
+        # shufflevector only if SimplifyDemandedVectorElts can walk the whole
+        # chain, and its depth limit defaults to 10. 32 covers the chain without
+        # deepening the recursion further than needed.
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options.arch),
+                             options.enable_fp_fusion, disable_vector_combine=True, simplify_vector_elts_depth=32)
         if target_triple != layout_triple:
             amd.set_target_triple(llvm_mod, target_triple)
 
