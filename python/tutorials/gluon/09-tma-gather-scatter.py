@@ -523,9 +523,9 @@ def matmul_fused_gather_scatter_kernel(X_desc, W_desc, out_desc, X_gather_indx_p
     for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
         producer = issue_loads(producer, X_desc, W_desc, X_gather_indx_ptr, off_m, off_n, ki, bars, x_bufs, w_bufs,
                                BLOCK_M, num_buffers)
-    k = BLOCK_K * (num_buffers - 2)
-    producer = issue_loads(producer, X_desc, W_desc, X_gather_indx_ptr, off_m, off_n, k, bars, x_bufs, w_bufs, BLOCK_M,
-                           num_buffers)
+    k_peel = BLOCK_K * (num_buffers - 2)
+    producer = issue_loads(producer, X_desc, W_desc, X_gather_indx_ptr, off_m, off_n, k_peel, bars, x_bufs, w_bufs,
+                           BLOCK_M, num_buffers)
 
     for _ in range(num_tiles):
         consumer, mma = issue_mma(consumer, mma, bars, x_bufs, w_bufs, num_buffers)
