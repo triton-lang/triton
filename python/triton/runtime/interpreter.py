@@ -1099,17 +1099,13 @@ class ReduceOps(ReduceScanOpInterface):
         self.keep_dims = keep_dims
 
     def unravel(self, input, axis):
-        ret = []
-        for data in input:
-            if axis is not None:
-                ret.append(data)
-            else:
-                axis = 0
-                ret.append(self.to_tensor(data.handle.data.flatten(), data.dtype))
-        return tuple(ret), axis
+        if axis is not None:
+            return input, axis
+        return tuple(self.to_tensor(data.handle.data.flatten(), data.dtype) for data in input), 0
 
     def generic_reduce(self, input):
         original_axis = self.axis
+        original_ndim = len(input[0].handle.data.shape)
         input, axis = self.unravel(input, self.axis)
         input_data = []
         output_data = []
@@ -1142,7 +1138,7 @@ class ReduceOps(ReduceScanOpInterface):
                 if original_axis is not None:
                     data = np.expand_dims(data, axis)
                 else:
-                    for _ in range(len(input_shape)):
+                    for _ in range(original_ndim):
                         data = np.expand_dims(data, 0)
 
             elif original_axis is None:
