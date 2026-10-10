@@ -354,15 +354,18 @@ def test_line_info_cache_invalidating_env_var(monkeypatch, fresh_knobs):
 
     name = "TRITON_DISABLE_LINE_INFO"
     monkeypatch.delenv(name, raising=False)
-    unset = fresh_knobs.compilation.cache_invalidating_env_vars()
+    line_info_enabled_from_unset = fresh_knobs.compilation.cache_invalidating_env_vars()
 
     monkeypatch.setenv(name, "false")
     assert get_cache_invalidating_env_vars()[name] == "false"
-    assert fresh_knobs.compilation.cache_invalidating_env_vars() == unset
+    line_info_enabled_from_false = fresh_knobs.compilation.cache_invalidating_env_vars()
+    assert line_info_enabled_from_false == line_info_enabled_from_unset
 
     monkeypatch.setenv(name, "true")
     assert get_cache_invalidating_env_vars()[name] == "true"
-    assert fresh_knobs.compilation.cache_invalidating_env_vars()[name] == "true"
+    line_info_disabled = fresh_knobs.compilation.cache_invalidating_env_vars()
+    assert line_info_disabled[name] == "true"
+    assert line_info_disabled != line_info_enabled_from_unset
 
 
 @pytest.mark.parametrize("disable_line_info", [False, True])

@@ -374,12 +374,13 @@ class compilation_knobs(base_knobs):
     def cache_invalidating_env_vars(self) -> dict[str, str]:
         env_vars = get_cache_invalidating_env_vars()
         name = "TRITON_DISABLE_LINE_INFO"
-        # Disabling line info is opt-in, so unset and explicitly false have
-        # identical compilation behavior and should share a cache entry.
-        if self.disable_line_info:
-            env_vars[name] = "true"
-        else:
+        line_info_enabled = not self.disable_line_info
+
+        if line_info_enabled:
             env_vars.pop(name, None)
+        else:
+            env_vars[name] = "true"
+
         return env_vars
 
 
