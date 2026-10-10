@@ -913,8 +913,13 @@ def test_globaltime(tmp_path: pathlib.Path):
     n_elements = output.numel()
     BLOCK_SIZE = 1024
     grid = lambda meta: (triton.cdiv(n_elements, BLOCK_SIZE), )
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE, num_warps=16)
+    pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE, num_warps=16)
     proton.finalize()
+
+    if is_cuda():
+        clock_reads = [line for line in pgm.asm["sass"].splitlines() if "SR_CLOCKLO" in line]
+        assert clock_reads
+        assert all("CS2R.32" in line for line in clock_reads)
 
     with temp_file.open() as f:
         data = json.load(f)
