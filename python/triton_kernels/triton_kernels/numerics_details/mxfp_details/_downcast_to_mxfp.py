@@ -187,7 +187,8 @@ def _downcast_to_mxfp(
     mask_mxt_quant = start_mx_quant + offs_mxt_quant < quant_dim // K_DIVISOR  # requires quant_dim % K_DIVISOR == 0
     full_mask_mxt = mask_mxt_quant & mask_n
 
-    scale_mask_k = start_mx_scale_quant + offs_scale_quant < quant_dim // MICROBLOCK_SIZE  # requires quant_dim % MICROBLOCK_SIZE == 0
+    # A trailing partial microblock still gets a scale; its padding lanes are masked out of the max.
+    scale_mask_k = start_mx_scale_quant + offs_scale_quant < tl.cdiv(quant_dim, MICROBLOCK_SIZE)
     full_scale_mask = scale_mask_k & mask_n
 
     src_tensor_offsets = offs_src_quant * stride_src_quant + offs_outer * stride_src_outer

@@ -379,6 +379,13 @@ def test_downcast_to_mxfp_accepts_pitched_strided_input(device):
         ((2, 16, 512), -1, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((2, 64, 3), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value),
         ((2, 64, 3), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_NEAREST, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value),
+
+        # Quantized axis not a multiple of the microblock size
+        ((4, 720, 64), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((3, 64, 2), -1, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((40, 16, 8), 0, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((3, 48, 100), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
+        ((2, 24, 8), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_NEAREST, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value),
     ],
 )
 # fmt: on
