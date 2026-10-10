@@ -233,7 +233,7 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
 
 """
 AMD Buffer Atomic RMW operations.
-The supported operatios are max, min, add, and, or, xor, xchg.
+The supported operations are max, min, add, and, or, xor, xchg.
 Similar to normal atomic ops: it loads data at ptr plus offsets, do `op` with `value`, and store result to `ptr` plus `offsets` with
 the specified memory semantics and scope.
 

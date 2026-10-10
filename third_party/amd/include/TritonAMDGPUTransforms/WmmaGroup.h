@@ -23,10 +23,6 @@ struct WmmaIntrinsic {
       : name(symbol), mDim(m), nDim(n), kDim(k), kBase(kB), aElementType(aET),
         bElementType(bET), dElementType(dET), requiredFeature(requiredFeature) {
   }
-  WmmaIntrinsic(const WmmaIntrinsic &other) = default;
-  WmmaIntrinsic(WmmaIntrinsic &&other) = default;
-  WmmaIntrinsic() = default;
-  WmmaIntrinsic &operator=(WmmaIntrinsic &&other) = default;
 
   llvm::StringRef name;
 
@@ -59,10 +55,6 @@ struct WmmaScaleIntrinsic {
                      StringRef requiredFeature = "")
       : name(symbol), mDim(m), nDim(n), kDim(kDim), kBaseA(kBaseAVal),
         kBaseB(kBaseBVal), dElemType(dET), requiredFeature(requiredFeature) {}
-  WmmaScaleIntrinsic(const WmmaScaleIntrinsic &other) = default;
-  WmmaScaleIntrinsic(WmmaScaleIntrinsic &&other) = default;
-  WmmaScaleIntrinsic() = default;
-  WmmaScaleIntrinsic &operator=(WmmaScaleIntrinsic &&other) = default;
 
   llvm::StringRef name;
   // m, n, and k refer to the shapes of the two operands of an wmma intrinsic:

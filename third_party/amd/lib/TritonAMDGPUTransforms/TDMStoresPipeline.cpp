@@ -134,8 +134,8 @@ bool mlir::pipelineTDMStores(scf::ForOp forOp) {
   }
 
   // Seed one "empty" loop-carried token per allocation; this is slightly
-  // conservative but the best we can do as we do not have an unitialized token
-  // state.
+  // conservative but the best we can do as we do not have an uninitialized
+  // token state.
   OpBuilder preBuilder(forOp);
   SmallVector<Value> initTokens;
   initTokens.reserve(uniqueAllocs.size());

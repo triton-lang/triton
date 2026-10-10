@@ -1,15 +1,10 @@
-#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H
-#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H_
 
-#include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/Operation.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <optional>
-
-using mlir::triton::AMD::TargetInfo;
-using PartitionedSharedEncodingAttr =
-    mlir::triton::gpu::PartitionedSharedEncodingAttr;
 
 namespace mlir::LLVM::AMD {
 
@@ -143,7 +138,7 @@ distributeTDMWarpsAlignToPartition(ArrayRef<int64_t> blockShape, int numWarps,
 // Calculate the number of TDM gather/scatter instructions needed using the
 // same LinearLayout analysis as emitTDMGatherScatter: broadcasts are removed
 // and contiguity is considered when batching indices per instruction.
-size_t getTDMGatherScatterInstrinsicCount(RankedTensorType indicesType);
+size_t getTDMGatherScatterIntrinsicCount(RankedTensorType indicesType);
 
 // Emit a TDM gather or scatter operation for non-contiguous row access.
 // Gather: reads from non-contiguous global rows into LDS
@@ -183,4 +178,4 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
 
 } // namespace mlir::LLVM::AMD
 
-#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_TDMUTILITY_H_

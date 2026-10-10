@@ -711,7 +711,7 @@ void scheduleTDMOps(Operation *tdmOp, Operation *waitOp,
   // to ensure all warps are finished reading the shared buffer we will write
   // into. This is done by scheduling AsyncWait as the first cluster.
   // If AsyncCopy and LocalLoads are in the same stage we do not assign a
-  // schdule so they are placed before the LocalLoads
+  // schedule so they are placed before the LocalLoads
   if (loadStage != stages[SCHED_LOCAL_LOAD])
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);
@@ -736,7 +736,7 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
   // to ensure all warps are finished reading the shared buffer we will write
   // into. This is done by scheduling AsyncWait as the first cluster.
   // If AsyncCopy and LocalLoads are in the same stage we do not assign a
-  // schdule so they are placed before the LocalLoads
+  // schedule so they are placed before the LocalLoads
   if (loadStage != stages[SCHED_LOCAL_LOAD])
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);

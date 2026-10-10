@@ -171,7 +171,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
 
   // TODO:
   //   The ops in ROCDL (e.g., RawPtrBufferAtomicFaddOp) have no return value,
-  //   but they lower to instrinsics that can return values. This causes the
+  //   but they lower to intrinsics that can return values. This causes the
   //   LLVM verifier to fail. When this is fixed, the ROCDL ops should be used
   //   here.
   auto rmwOpStr = stringifyRMWOp(rmwType).str();
@@ -187,11 +187,11 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
     StringRef prefix = isa<FloatType>(getElementTypeOrSelf(type)) ? "f" : "s";
     rmwOpStr = (prefix + rmwOpStr).str();
   }
-  auto instrinsic = "llvm.amdgcn.raw.ptr.buffer.atomic." + rmwOpStr;
+  auto intrinsic = "llvm.amdgcn.raw.ptr.buffer.atomic." + rmwOpStr;
   SmallVector<Value, 6> intrinsicArgs = args;
   intrinsicArgs.push_back(b.i32_val(aux));
   auto bufferAtomicRMW = LLVM::createLLVMIntrinsicCallOp(
-      rewriter, loc, instrinsic, bufferType, intrinsicArgs);
+      rewriter, loc, intrinsic, bufferType, intrinsicArgs);
 
   return b.bitcast(bufferAtomicRMW.getResult(0), type);
 }

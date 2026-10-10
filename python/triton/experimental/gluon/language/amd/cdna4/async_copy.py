@@ -146,7 +146,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 @builtin
 def commit_group(_semantic=None):
     """
-    Commit oustanding async operations.
+    Commit outstanding async operations.
 
     This finalizes a set of async copy operations which can be waited upon via :func:`wait_group`.
     """
@@ -159,7 +159,7 @@ def wait_group(num_outstanding=0, _semantic=None):
     Wait for outstanding commit groups.
 
     It will block until the number of outstanding commit groups is less than or equal to
-    ``num_outstanding``. Note that uncommited async operations will be waited upon even if
+    ``num_outstanding``. Note that uncommitted async operations will be waited upon even if
     ``num_outstanding`` is 0.
 
     Args:
