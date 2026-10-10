@@ -63,6 +63,7 @@ static PyObject *data_ptr_attr = nullptr;
 static PyObject *dtype_attr = nullptr;
 static PyObject *cache_key_attr = nullptr;
 static PyObject *_fields_attr = nullptr;
+static PyObject *do_not_specialize_attr = nullptr;
 static PyObject *block_shape_attr = nullptr;
 static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
@@ -134,6 +135,7 @@ void init_interned_strings() {
   dtype_attr = intern_from_string("dtype");
   cache_key_attr = intern_from_string("cache_key");
   _fields_attr = intern_from_string("_fields");
+  do_not_specialize_attr = intern_from_string("__triton_do_not_specialize__");
   block_shape_attr = intern_from_string("block_shape");
   shape_attr = intern_from_string("shape");
   layout_attr = intern_from_string("layout");
@@ -450,6 +452,21 @@ std::pair<py::object, py::object> handle_tuple(PyObject *backend, PyObject *arg,
 
   bool is_namedtuple = PyObject_HasAttr(arg, _fields_attr);
   auto tuple_type = Py_TYPE(arg);
+  py::object do_not_specialize;
+  py::object fields;
+  if (is_namedtuple) {
+    do_not_specialize = from_new_ref(
+        PyObject_GetAttr((PyObject *)tuple_type, do_not_specialize_attr));
+    if (!do_not_specialize) {
+      if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+        return {};
+      PyErr_Clear();
+    } else {
+      fields = from_new_ref(PyObject_GetAttr(arg, _fields_attr));
+      if (!fields)
+        return {};
+    }
+  }
 
   // Create tuples directly instead of lists
   auto tys_tuple = from_new_ref(PyTuple_New(size));
@@ -464,9 +481,19 @@ std::pair<py::object, py::object> handle_tuple(PyObject *backend, PyObject *arg,
     PyObject *item = PyTuple_GetItem(arg, i); // Borrowed reference
     if (!item)
       return {};
-    // python reference calls specialize recursively with default arguments set
-    // currently this is is_const=False, specialize_value=True, align=True
-    auto [type, key] = specialize_arg(backend, item, false, true, true);
+    // Namedtuple classes may disable value specialization for selected fields.
+    bool specialize_field = true;
+    if (do_not_specialize) {
+      PyObject *field = PyTuple_GetItem(fields.ptr(), i);
+      if (!field)
+        return {};
+      int skip = PySequence_Contains(do_not_specialize.ptr(), field);
+      if (skip < 0)
+        return {};
+      specialize_field = !skip;
+    }
+    auto [type, key] =
+        specialize_arg(backend, item, false, specialize_field, true);
     if (!type || !key)
       return {};
     // Steals references on success.
