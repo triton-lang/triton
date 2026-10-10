@@ -1,0 +1,3 @@
+Temporary publication smoke test.
+This text-only file verifies draft pull request publication and cleanup.
+Do not merge. The test branch and draft will be removed or closed after verification.
