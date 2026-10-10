@@ -56,6 +56,14 @@ void updateTensorDescriptor(RewriterBase &rewriter, Location loc,
                             ArrayRef<Value> setBounds, Value pred,
                             bool clampBounds = false);
 
+// The group1[0] LDS padding fields: enable (bit 20), log2(interval in dwords)
+// - 1 (bits 22-24) and amount in dwords - 1 (bits 25-31).
+constexpr uint32_t tdmPaddingFields = (1u << 20) | (0x7u << 22) | (0x7Fu << 25);
+
+// Encodes the padding fields for `amountInDwords` after every
+// `intervalInDwords`, which triton::amdgpu::isValidTDMPadding must accept.
+uint32_t encodeTDMPadding(int64_t intervalInDwords, int64_t amountInDwords);
+
 // Create the base TDM descriptor from tensor metadata: global base pointer,
 // tensor shape, strides, and padding.  Fields that depend on a particular TDM
 // operation (pred, LDS address, barrier, tile_dim*) are filled later by the
@@ -74,6 +82,11 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // `warpUsedHint`: see TritonAMDGPUOps.td for the axis-aligned hint rule.
 // `isPureForm`: inherit `pred` from the descriptor (group0[0]) instead of the
 // `pred` arg, and leave the barrier-enable bit untouched.
+// `sharedLayout`: layout of the whole allocation, with one dimension per
+// descriptor dimension. Each warp starts at its tile origin in it.
+// `rowPitch`: for loads into a subview whose rows are spread out in the
+// allocation, their pitch from getTDMRowPitch. TDM pads the tile rows out to
+// the pitch.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> blockShape, int numWarps,
@@ -84,13 +97,15 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const triton::LinearLayout &sharedLayout, Value ctaId,
                        bool isStore, ArrayRef<unsigned> warpsPerCTA,
                        std::optional<uint32_t> warpUsedHint = std::nullopt,
-                       bool isPureForm = false);
+                       bool isPureForm = false,
+                       std::optional<int64_t> rowPitch = std::nullopt);
 
 // Emit a TDM load/store for regular contiguous transfers (1D-5D).
 // PartitionedSharedEncoding aligns warps to LDS partitions; without a hint
 // the op auto-splits into multiple instructions when warps don't cover all
 // pieces, while a hint guarantees single-instruction emission (verifier).
 // `warpUsedHint`: see TritonAMDGPUOps.td.
+// `rowPitch`: see fillTDMDescriptor.
 void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter,
                       ArrayRef<Value> desc, ArrayRef<int64_t> blockShape,
@@ -101,7 +116,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const triton::LinearLayout &sharedLayout,
                       Attribute encoding, Value ctaId, int32_t auxBits,
                       std::optional<uint32_t> warpUsedHint = std::nullopt,
-                      bool isPureForm = false);
+                      bool isPureForm = false,
+                      std::optional<int64_t> rowPitch = std::nullopt);
 
 // A struct representing information needed for one member of a fused TDM load.
 struct TDMFusedLoadMemberInfo {
@@ -112,10 +128,11 @@ struct TDMFusedLoadMemberInfo {
   Attribute sharedEncoding;
   SmallVector<int64_t> shapePerCTA;
   Value multicastMask;
-  SmallVector<Value> desc;        // unpacked descriptor groups
-  SmallVector<Value> copyOffsets; // per-member copy offsets
-  SmallVector<Value> dstPtrs;     // shared-memory base pointers
-  Value pred;                     // optional per-copy predicate
+  SmallVector<Value> desc;         // unpacked descriptor groups
+  SmallVector<Value> copyOffsets;  // per-member copy offsets
+  SmallVector<Value> dstPtrs;      // shared-memory base pointers
+  Value pred;                      // optional per-copy predicate
+  std::optional<int64_t> rowPitch; // See fillTDMDescriptor.
 };
 
 // Emit one fused TDM load intrinsic, `select`ing each wave's descriptor on an

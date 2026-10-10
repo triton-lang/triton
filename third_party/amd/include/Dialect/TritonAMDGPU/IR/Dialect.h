@@ -56,6 +56,18 @@ inline int getTensorDescNumDwords(triton::TensorDescType type) {
 FailureOr<triton::LinearLayout> inferScaledUpcastFp4ScaleLayout(
     const triton::LinearLayout &outputLL, ArrayRef<int64_t> scaleShape,
     int64_t axis, function_ref<InFlightDiagnostic()> emitError = nullptr);
+
+/// Returns the distance in elements between consecutive rows of a shared
+/// memory subview per CTA in its allocation, where a row spans the innermost
+/// dimension. TDM accesses the rows one after another from the subview's base,
+/// so this fails if they are not evenly spaced.
+FailureOr<int64_t>
+getTDMRowPitch(triton::gpu::MemDescType smemTy,
+               function_ref<InFlightDiagnostic()> emitError = nullptr);
+
+/// Returns whether the LDS padding fields of a TDM descriptor can skip
+/// `amountInDwords` after every `intervalInDwords`.
+bool isValidTDMPadding(int64_t intervalInDwords, int64_t amountInDwords);
 } // namespace mlir::triton::amdgpu
 
 // clang-format off

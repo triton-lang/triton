@@ -35,6 +35,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 #include <limits>
+#include <numeric>
 #include <optional>
 
 // clang-format off
@@ -108,19 +109,30 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
   Attribute allocLayout = smemTy.getEncoding();
 
   bool compatible = descLayout == allocLayout;
-  // Rank-reducing descriptor loads drop leading unit dimensions from the
+  // Rank-reducing descriptor accesses drop leading unit dimensions from the
   // allocation, so the two swizzled encodings have different ranks even though
-  // they describe the same LDS layout. Compare the physical layouts with the
-  // dropped dimensions projected away.
-  int descRank = descTy.getShape().size();
-  int allocRank = smemTy.getRank();
-  if (descRank > allocRank &&
-      llvm::isa<gpu::SwizzledSharedEncodingAttr>(descLayout) &&
-      llvm::isa<gpu::SwizzledSharedEncodingAttr>(allocLayout)) {
-    auto descLL = gpu::toLinearLayout(descTy.getShape(), descLayout);
-    for (int i = 0; i < descRank - allocRank; ++i)
-      descLL = triton::removeStandardDim(descLL, 0);
-    compatible = descLL == gpu::toLinearLayout(smemTy);
+  // they describe the same LDS layout. Compare the encodings with the dropped
+  // dimensions removed from the descriptor's order and CGA layout. TDM doesn't
+  // swizzle (verifyTDMCommonLayout requires maxPhase == 1), so vec and perPhase
+  // don't affect the layout.
+  int numDropped = descTy.getShape().size() - smemTy.getRank();
+  auto descSwizzled =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(descLayout);
+  auto allocSwizzled =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(allocLayout);
+  if (numDropped > 0 && descSwizzled && allocSwizzled &&
+      llvm::all_of(descTy.getShape().take_front(numDropped),
+                   [](int64_t dim) { return dim == 1; })) {
+    SmallVector<unsigned> order;
+    for (unsigned dim : descSwizzled.getOrder())
+      if (dim >= numDropped)
+        order.push_back(dim - numDropped);
+    LinearLayout cgaLayout = descSwizzled.getCGALayout().getLinearLayout();
+    for (int i = 0; i < numDropped; ++i)
+      cgaLayout = triton::removeStandardDim(cgaLayout, 0);
+    compatible = descSwizzled.getMaxPhase() == allocSwizzled.getMaxPhase() &&
+                 order == allocSwizzled.getOrder() &&
+                 cgaLayout == allocSwizzled.getCGALayout().getLinearLayout();
   }
   // Padded layouts bake in the tile shape, so compare the physical padding
   // only.
@@ -141,10 +153,164 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
   return success();
 }
 
+// The order in which TDM writes each CTA's part of a block of `shape`:
+// row-major, whatever the order of the shared layout `enc`.
+LinearLayout getTDMWriteLayout(Attribute enc, ArrayRef<int64_t> shape) {
+  auto shapePerCTA =
+      llvm::to_vector_of<unsigned>(gpu::getShapePerCTA(enc, shape));
+  SmallVector<unsigned> rowMajor(shape.size());
+  std::iota(rowMajor.rbegin(), rowMajor.rend(), 0);
+  return gpu::combineCtaCgaWithShape(
+      identityStandardND(StringAttr::get(enc.getContext(), "offset"),
+                         shapePerCTA, rowMajor),
+      gpu::getCGALayout(enc), shape);
+}
+
+// TDM transfers each warp's tile as consecutive rows of the shared memory's
+// innermost width per CTA, starting at the tile origin's address in the
+// allocation, and can pad each row out to a common pitch. It can therefore only
+// access a `region` of `shape` placed at the origin of an allocation of
+// `allocShape` if each CTA holds the region as a dense row-major allocation of
+// the region's shape would, with evenly spaced rows. Returns the pitch of the
+// rows.
+FailureOr<int64_t>
+getTDMRegionRowPitch(function_ref<InFlightDiagnostic()> emitError,
+                     StringRef region, Attribute enc, ArrayRef<int64_t> shape,
+                     ArrayRef<int64_t> allocShape) {
+  auto fail = [&](auto &&...msg) -> FailureOr<int64_t> {
+    if (emitError)
+      (emitError() << ... << msg);
+    return failure();
+  };
+  int64_t width = gpu::getShapePerCTA(enc, shape).back();
+  if (shape == allocShape)
+    return width;
+  bool padded = isa<gpu::PaddedSharedEncodingAttr>(enc);
+  if (!padded && !isa<gpu::SwizzledSharedEncodingAttr>(enc))
+    return fail("TDM only supports a ", region,
+                " of a swizzled or padded shared layout");
+  MLIRContext *ctx = enc.getContext();
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto kBlock = StringAttr::get(ctx, "block");
+  // Map each (offset, block) that TDM writes for the region to its location in
+  // the allocation, before padding. TDM addresses each CTA's part of the region
+  // from that CTA's base, so only offsets within a CTA can differ: consecutive
+  // within each row of `width` elements, and a common pitch apart between rows.
+  LinearLayout viewToAlloc =
+      getTDMWriteLayout(enc, shape)
+          .invertAndCompose(
+              gpu::toLinearLayoutIgnoringPadding(allocShape, enc));
+  if (!viewToAlloc.sublayoutIsZero({kOffset}, {kBlock}) ||
+      !viewToAlloc.sublayoutIsZero({kBlock}, {kOffset}))
+    return fail("the ", region, " is sliced across CTAs");
+  int log2Width = llvm::Log2_64(width);
+  int numOffsetBits = viewToAlloc.getInDimSizeLog2(kOffset);
+  int64_t pitch = numOffsetBits > log2Width
+                      ? viewToAlloc.getBasis(kOffset, log2Width, kOffset)
+                      : width;
+  // A padded layout's padding takes the TDM padding fields, so its rows must
+  // be contiguous.
+  if (padded && pitch != width)
+    return fail("TDM requires the ", region,
+                " of a padded layout to be contiguous in the allocation");
+  for (int i = 0; i < numOffsetBits; ++i) {
+    int64_t expected =
+        i < log2Width ? int64_t(1) << i : pitch << (i - log2Width);
+    if (viewToAlloc.getBasis(kOffset, i, kOffset) != expected)
+      return fail("TDM requires the rows of the ", region,
+                  " to be evenly spaced in the allocation");
+  }
+  return pitch;
+}
+
+// `allowRowPitch`: whether the op can skip the elements between the rows of a
+// subview whose rows are spread out in the allocation.
+LogicalResult verifyTDMSharedMemorySubview(Operation *op,
+                                           gpu::MemDescType smemTy,
+                                           bool allowRowPitch) {
+  auto emitSubviewError = [&]() {
+    return op->emitOpError("TDM cannot access the shared memory subview ")
+           << smemTy << ": ";
+  };
+  FailureOr<int64_t> pitch = getTDMRowPitch(smemTy, emitSubviewError);
+  if (failed(pitch))
+    return failure();
+  int64_t width = gpu::getShapePerCTA(smemTy).back();
+  if (*pitch == width)
+    return success();
+  if (!allowRowPitch)
+    return emitSubviewError()
+           << "rows of " << width << " elements are " << *pitch
+           << " elements apart in the allocation, and only "
+           << AsyncTDMCopyGlobalToLocalOp::getOperationName() << " and "
+           << AsyncTDMFusedCopyGlobalToLocalOp::getOperationName()
+           << " can skip the elements between rows";
+
+  int64_t bitWidth = smemTy.getElementType().getIntOrFloatBitWidth();
+  int64_t widthBits = width * bitWidth;
+  int64_t gapBits = (*pitch - width) * bitWidth;
+  if (widthBits % 32 != 0 || gapBits % 32 != 0 ||
+      !isValidTDMPadding(widthBits / 32, gapBits / 32))
+    return emitSubviewError()
+           << "rows of " << width << " elements are " << *pitch
+           << " elements apart in the allocation, but TDM padding can only "
+              "skip 1 to 128 dwords after rows of a power-of-2 number of "
+              "dwords between 2 and 256";
+  return success();
+}
+
+// TDM copies the descriptor block to or from the start of the shared memory.
+// Rank-reducing accesses drop leading unit dimensions of the block from the
+// shared memory shape. Loads may fill only the start of the shared memory with
+// a smaller block, which must then be a contiguous region of the allocation
+// like a subview; stores copy the whole shared memory.
+LogicalResult verifyTDMBlockFitsSharedMemory(Operation *op,
+                                             triton::TensorDescType descTy,
+                                             gpu::MemDescType smemTy,
+                                             bool allowPartialBlock) {
+  ArrayRef<int64_t> blockShape = descTy.getShape();
+  ArrayRef<int64_t> smemShape = smemTy.getShape();
+  auto emitMismatchError = [&]() {
+    return op->emitOpError("shared memory shape (")
+           << smemShape << ") must match the TDM block shape (" << blockShape
+           << "), up to leading unit dimensions dropped from the block";
+  };
+  if (smemShape.size() > blockShape.size() ||
+      !llvm::all_of(blockShape.drop_back(smemShape.size()),
+                    [](int64_t dim) { return dim == 1; }))
+    return emitMismatchError();
+  ArrayRef<int64_t> blockDims = blockShape.take_back(smemShape.size());
+  if (blockDims == smemShape)
+    return success();
+  if (!allowPartialBlock)
+    return emitMismatchError();
+  for (auto [blockDim, smemDim] : llvm::zip_equal(blockDims, smemShape))
+    if (blockDim > smemDim)
+      return op->emitOpError("TDM block shape (")
+             << blockShape << ") exceeds the shared memory shape (" << smemShape
+             << ")";
+  Attribute enc = smemTy.getEncoding();
+  auto emitBlockError = [&]() {
+    return op->emitOpError("TDM cannot load the block (")
+           << blockShape << ") into the start of the shared memory " << smemTy
+           << ": ";
+  };
+  FailureOr<int64_t> pitch =
+      getTDMRegionRowPitch(emitBlockError, "partial block", enc, blockDims,
+                           gpu::dropPipeliningDim(smemTy.getAllocShape(), enc));
+  if (failed(pitch))
+    return failure();
+  if (*pitch != gpu::getShapePerCTA(enc, blockDims).back())
+    return emitBlockError() << "TDM requires the rows of the partial block to "
+                               "be contiguous in the allocation";
+  return success();
+}
+
 // Verify the TDM layout constraints common to all TDM ops
 LogicalResult verifyTDMCommonLayout(Operation *op,
                                     triton::TensorDescType descTy,
-                                    gpu::MemDescType smemTy) {
+                                    gpu::MemDescType smemTy,
+                                    bool allowRowPitch = false) {
   if (failed(verifyTDMBlockSize(op, descTy.getShape())))
     return failure();
 
@@ -153,7 +319,10 @@ LogicalResult verifyTDMCommonLayout(Operation *op,
   if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
     return op->emitOpError("TDM does not support swizzling");
 
-  return verifyTDMLayoutConsistency(op, descTy, smemTy);
+  if (failed(verifyTDMLayoutConsistency(op, descTy, smemTy)))
+    return failure();
+
+  return verifyTDMSharedMemorySubview(op, smemTy, allowRowPitch);
 }
 
 // A v_cvt_scalef32 group applies one scale to `groupSize` register-consecutive
@@ -448,6 +617,21 @@ LogicalResult verifyScaledDowncastScaleShapeAndAxis(OpT op,
 }
 
 } // namespace
+
+FailureOr<int64_t>
+getTDMRowPitch(gpu::MemDescType smemTy,
+               function_ref<InFlightDiagnostic()> emitError) {
+  Attribute enc = smemTy.getEncoding();
+  return getTDMRegionRowPitch(
+      emitError, "subview", enc, gpu::dropPipeliningDim(smemTy.getShape(), enc),
+      gpu::dropPipeliningDim(smemTy.getAllocShape(), enc));
+}
+
+bool isValidTDMPadding(int64_t intervalInDwords, int64_t amountInDwords) {
+  return llvm::isPowerOf2_64(intervalInDwords) && intervalInDwords >= 2 &&
+         intervalInDwords <= 256 && amountInDwords >= 1 &&
+         amountInDwords <= 128;
+}
 
 FailureOr<LinearLayout>
 inferScaledUpcastFp4ScaleLayout(const LinearLayout &outputLL,
@@ -1305,17 +1489,16 @@ LogicalResult verifyTDMSharedMemoryEncoding(Operation *op,
   Type elementType = smemTy.getElementType();
   auto elementBitWidth = elementType.getIntOrFloatBitWidth();
   if (paddedEnc) {
-    unsigned dwordSize = 32;
     for (auto [interval, padding] :
          llvm::zip(paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
-      auto intervalInDwords = interval * elementBitWidth / dwordSize;
-      if (intervalInDwords < 2)
-        return op->emitOpError(
-            "TDM padding interval must be at least 2 dwords");
-
-      auto paddingInDwords = padding * elementBitWidth / dwordSize;
-      if (paddingInDwords < 1)
-        return op->emitOpError("TDM padding amount must be at least 1 dword");
+      int64_t intervalBits = int64_t(interval) * elementBitWidth;
+      int64_t paddingBits = int64_t(padding) * elementBitWidth;
+      if (intervalBits % 32 != 0 || paddingBits % 32 != 0 ||
+          !isValidTDMPadding(intervalBits / 32, paddingBits / 32))
+        return op->emitOpError("TDM padding can only skip 1 to 128 dwords "
+                               "after every power-of-2 number of dwords "
+                               "between 2 and 256, but the layout adds ")
+               << padding << " elements every " << interval << " elements";
     }
   }
 
@@ -1355,7 +1538,13 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   auto tensorDescTy = getDesc().getType();
   auto smemTy = getResult().getType();
 
-  if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy)))
+  if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy,
+                                   /*allowRowPitch=*/true)))
+    return failure();
+
+  if (failed(verifyTDMBlockFitsSharedMemory(getOperation(), tensorDescTy,
+                                            smemTy,
+                                            /*allowPartialBlock=*/true)))
     return failure();
 
   if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
@@ -1406,7 +1595,12 @@ LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
     auto [desc, dest, hint] = member;
     auto tensorDescTy = cast<triton::TensorDescType>(desc.getType());
     auto smemTy = cast<gpu::MemDescType>(dest.getType());
-    if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy)))
+    if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy,
+                                     /*allowRowPitch=*/true)))
+      return failure();
+    if (failed(verifyTDMBlockFitsSharedMemory(getOperation(), tensorDescTy,
+                                              smemTy,
+                                              /*allowPartialBlock=*/true)))
       return failure();
     if (failed(verifyTDMSharedMemoryEncoding(getOperation(), smemTy)))
       return failure();
@@ -1436,6 +1630,11 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto smemTy = getSrc().getType();
 
   if (failed(verifyTDMCommonLayout(getOperation(), tensorDescTy, smemTy)))
+    return failure();
+
+  if (failed(verifyTDMBlockFitsSharedMemory(getOperation(), tensorDescTy,
+                                            smemTy,
+                                            /*allowPartialBlock=*/false)))
     return failure();
 
   auto enc = smemTy.getEncoding();
