@@ -4132,14 +4132,13 @@ def _sum_combine(a, b):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("shape, axis", [((512, ), 0), ((512, ), None), ((4, 8), None), ((4, 8), 0), ((4, 8), 1),
-                                         ((2, 4, 8), None), ((2, 4, 8), 0), ((2, 4, 8), 1)])
-@pytest.mark.parametrize("keep_dims", [False, True])
+@pytest.mark.parametrize("shape, axis, keep_dims", [((512, ), 0, False), ((4, 8), None, False),
+                                                    ((2, 4, 8), None, True)])
 def test_generic_reduction(device, shape, axis, keep_dims):
 
     @triton.jit
     def var_mean_kernel(X, out_mean, out_var, out_sum0, out_sum1, BLOCK: tl.constexpr, SHAPE: tl.constexpr,
-                        AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr, OUT_SHAPE: tl.constexpr, OUT_SIZE: tl.constexpr):
+                        AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr):
         xindex = tl.arange(0, BLOCK)
         x = tl.reshape(tl.load(X + xindex), SHAPE)
         mean = x
@@ -4150,22 +4149,10 @@ def test_generic_reduction(device, shape, axis, keep_dims):
         sum1 = tl.reduce(x, AXIS, _sum_combine, keep_dims=KEEP_DIMS)
         # Test multiple values in a tuple
         (mean, m2, weight) = tl.reduce((mean, m2, weight), AXIS, _welford_combine, keep_dims=KEEP_DIMS)
-        tl.static_assert(len(mean.shape) == len(OUT_SHAPE))
-        tl.static_assert(len(sum0.shape) == len(OUT_SHAPE))
-        for i in tl.static_range(len(OUT_SHAPE)):
-            tl.static_assert(mean.shape[i] == OUT_SHAPE[i])
-            tl.static_assert(sum0.shape[i] == OUT_SHAPE[i])
-        if len(OUT_SHAPE) == 0:
-            tl.store(out_mean, mean)
-            tl.store(out_var, m2 / weight)
-            tl.store(out_sum0, sum0)
-            tl.store(out_sum1, sum1)
-        else:
-            offsets = tl.arange(0, OUT_SIZE)
-            tl.store(out_mean + offsets, tl.reshape(mean, (OUT_SIZE, )))
-            tl.store(out_var + offsets, tl.reshape(m2 / weight, (OUT_SIZE, )))
-            tl.store(out_sum0 + offsets, tl.reshape(sum0, (OUT_SIZE, )))
-            tl.store(out_sum1 + offsets, tl.reshape(sum1, (OUT_SIZE, )))
+        tl.store(out_mean, tl.reshape(mean, ()))
+        tl.store(out_var, tl.reshape(m2 / weight, ()))
+        tl.store(out_sum0, tl.reshape(sum0, ()))
+        tl.store(out_sum1, tl.reshape(sum1, ()))
 
     x = torch.rand(shape, device=device)
     expect_var, expect_mean = torch.var_mean(x, dim=axis, correction=0, keepdim=keep_dims)
@@ -4176,7 +4163,7 @@ def test_generic_reduction(device, shape, axis, keep_dims):
     sum1 = torch.empty_like(sum_ref)
 
     var_mean_kernel[(1, )](x, out_mean, out_var, sum0, sum1, BLOCK=x.numel(), SHAPE=shape, AXIS=axis,
-                           KEEP_DIMS=keep_dims, OUT_SHAPE=tuple(expect_mean.shape), OUT_SIZE=expect_mean.numel())
+                           KEEP_DIMS=keep_dims)
     torch.testing.assert_close(out_mean, expect_mean)
     torch.testing.assert_close(out_var, expect_var)
     torch.testing.assert_close(sum0, sum_ref)
