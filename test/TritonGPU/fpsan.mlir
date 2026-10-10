@@ -562,6 +562,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // The mask maps INT_MIN (negative zero) to zero after integer abs.
+  // CHECK-LABEL: @absf
+  tt.func public @absf(%x: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: %[[MASK:.*]] = arith.constant dense<2147483647> : tensor<4xi32>
+    // CHECK: %[[X:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[ABS:.*]] = math.absi %[[X]] : tensor<4xi32>
+    // CHECK: %[[PAYLOAD:.*]] = arith.andi %[[ABS]], %[[MASK]] : tensor<4xi32>
+    // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[PAYLOAD]] : (tensor<4xi32>) -> tensor<4xf32>
+    // CHECK-NOT: math.absf
+    // CHECK: tt.return %[[OUT]] : tensor<4xf32>
+    %out = math.absf %x : tensor<4xf32>
+    tt.return %out : tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @chained_ops
   tt.func public @chained_ops(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
     // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
