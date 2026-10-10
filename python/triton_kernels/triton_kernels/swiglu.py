@@ -30,6 +30,8 @@ class SwiGLU(torch.autograd.Function):
         M = a.numel() // N
         assert a.stride()[-1] == 1
         assert a.shape[-1] % 2 == 0
+        # Flatten leading dimensions, copying only if they cannot share a row stride.
+        a_flat = a.reshape(M, N)
         out = torch.empty(size=(M, N // 2), dtype=a.dtype, device=a.device)
         flex_ctx = precision_config.flex_ctx
         # optimization hyperparameters
@@ -58,12 +60,12 @@ class SwiGLU(torch.autograd.Function):
             flex_ctx.out_data.expected_scale,
             flex_ctx.out_data.actual_scale,
             flex_ctx.out_data.checksum_scale,
-            flex_ctx.inp_data.reinterpret(a),
+            flex_ctx.inp_data.reinterpret(a_flat),
             flex_ctx.inp_data.scale,
             alpha,
             M,
             N // 2,
-            a.shape[-1],
+            a_flat.stride(0),
             1,
             out.shape[-1],
             1,
