@@ -369,8 +369,18 @@ static PyObject *unloadModule(PyObject *self, PyObject *args) {
     return NULL;
   }
 
+  // The garbage collector can free a kernel while a CUDA graph is being
+  // captured. The default capture modes prohibit cuModuleUnload, and the
+  // rejected call invalidates the capture, so relax this thread's mode for it.
+  CUstreamCaptureMode mode = CU_STREAM_CAPTURE_MODE_RELAXED;
+  CUresult unload_result;
   Py_BEGIN_ALLOW_THREADS;
-  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(cuModuleUnload(mod));
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+      cuThreadExchangeStreamCaptureMode(&mode));
+  unload_result = cuModuleUnload(mod);
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(
+      cuThreadExchangeStreamCaptureMode(&mode));
+  CUDA_CHECK_AND_RETURN_NULL_ALLOW_THREADS(unload_result);
   Py_END_ALLOW_THREADS;
 
   return Py_None;
