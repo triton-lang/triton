@@ -232,6 +232,40 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         computeCapability(computeCapability),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
+  LogicalResult lowerWithLLVM(triton::LoadOp op, ArrayRef<Value> ptrElems,
+                              Type valueElemTy, unsigned vec,
+                              ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto ctx = getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
+    unsigned alignment = valueElemNBits * vec / 8;
+    // Unpack two-byte loads with shifts to avoid redundant byte permutes.
+    bool packedBytes = valueElemNBits == 8 && vec == 2;
+    Type loadTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
+    if (packedBytes)
+      loadTy = i16_ty;
+    SmallVector<Value> loadedVals;
+    for (size_t vecStart = 0; vecStart < ptrElems.size(); vecStart += vec) {
+      Value globalPtr = ptrElems[vecStart];
+      if (cast<LLVM::LLVMPointerType>(globalPtr.getType()).getAddressSpace() !=
+          1)
+        globalPtr = b.addrspacecast(ptr_ty(ctx, 1), globalPtr);
+      Value loaded = b.load(loadTy, globalPtr, alignment, op.getIsVolatile());
+      if (packedBytes) {
+        loadedVals.push_back(b.trunc(i8_ty, loaded));
+        loadedVals.push_back(b.trunc(i8_ty, b.lshr(loaded, b.i16_val(8))));
+      } else {
+        auto values = unpackLLVector(loc, loaded, rewriter);
+        loadedVals.append(values.begin(), values.end());
+      }
+    }
+    Value resultStruct = packUniqueTensorElements(
+        loc, getTypeConverter(), loadedVals, rewriter, op.getType());
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
+  }
+
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -241,7 +275,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     if (failed(verifyDetailedCachePolicySupport(op, *cachePolicy,
                                                 computeCapability)))
       return failure();
-    auto ctx = getContext();
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
@@ -327,10 +360,12 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                   : IntegerAttr();
     int64_t l2PrefetchSize =
         l2PrefetchSizeAttr ? l2PrefetchSizeAttr.getInt() : 0;
-    bool useLLVM = (cachePolicy->modifier == CacheModifier::NONE ||
-                    cachePolicy->modifier == CacheModifier::CA) &&
-                   !llMask && l1Policy.empty() && !l2PolicyReg &&
-                   !l2PrefetchSize && valueElemTy.getIntOrFloatBitWidth() >= 8;
+    if ((cachePolicy->modifier == CacheModifier::NONE ||
+         cachePolicy->modifier == CacheModifier::CA) &&
+        !llMask && l1Policy.empty() && !l2PolicyReg && !l2PrefetchSize &&
+        valueElemTy.getIntOrFloatBitWidth() >= 8)
+      return lowerWithLLVM(op, ptrElems, valueElemTy, vec, rewriter);
+
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       // TODO: optimization when ptr is GEP with constant offset
       const size_t runStart = vecStart - vecStart % scalarizedContiguousRun;
@@ -346,27 +381,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       assert(wordNElems * nWords * numVecs == numElems);
 
       Value pred = mask ? maskElems[vecStart] : Value{};
-      if (useLLVM) {
-        Value globalPtr = ptrElems[vecStart];
-        if (cast<LLVM::LLVMPointerType>(globalPtr.getType())
-                .getAddressSpace() != 1)
-          globalPtr = b.addrspacecast(ptr_ty(ctx, 1), globalPtr);
-        // Unpack two-byte loads with shifts to avoid redundant byte permutes.
-        bool packedBytes = valueElemNBits == 8 && vec == 2;
-        Type loadTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
-        if (packedBytes)
-          loadTy = i16_ty;
-        Value loaded = b.load(loadTy, globalPtr, /*align=*/totalWidth / 8,
-                              op.getIsVolatile());
-        if (packedBytes) {
-          loadedVals.push_back(b.trunc(i8_ty, loaded));
-          loadedVals.push_back(b.trunc(i8_ty, b.lshr(loaded, b.i16_val(8))));
-        } else {
-          auto values = unpackLLVector(loc, loaded, rewriter);
-          loadedVals.append(values.begin(), values.end());
-        }
-        continue;
-      }
 
       PTXBuilder ptxBuilder;
 
@@ -503,6 +517,33 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         computeCapability(computeCapability),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
+  LogicalResult lowerWithLLVM(triton::StoreOp op, ArrayRef<Value> ptrElems,
+                              ArrayRef<Value> valueElems, Type valueElemTy,
+                              unsigned vec,
+                              ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto ctx = getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    unsigned valueElemNBits =
+        std::max(1u, valueElemTy.getIntOrFloatBitWidth() / 8) * 8;
+    unsigned alignment = valueElemNBits * vec / 8;
+    for (size_t vecStart = 0; vecStart < ptrElems.size(); vecStart += vec) {
+      Value globalPtr = ptrElems[vecStart];
+      if (cast<LLVM::LLVMPointerType>(globalPtr.getType()).getAddressSpace() !=
+          1)
+        globalPtr = b.addrspacecast(ptr_ty(ctx, 1), globalPtr);
+      Value stored =
+          vec == 1
+              ? valueElems[vecStart]
+              : packLLVector(loc, valueElems.slice(vecStart, vec), rewriter);
+      if (valueElemNBits == 8 && vec == 2)
+        stored = b.bitcast(stored, i16_ty);
+      b.store(stored, globalPtr, alignment);
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -577,10 +618,13 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       return failure();
     Value l2PolicyReg = *l2Policy;
     StringRef l1Policy = getL1EvictionPriority(*cachePolicy);
-    bool useLLVM = (cachePolicy->modifier == CacheModifier::NONE ||
-                    cachePolicy->modifier == CacheModifier::WB) &&
-                   !llMask && !threadPred && l1Policy.empty() && !l2PolicyReg &&
-                   valueElemTy.getIntOrFloatBitWidth() >= 8;
+    if ((cachePolicy->modifier == CacheModifier::NONE ||
+         cachePolicy->modifier == CacheModifier::WB) &&
+        !llMask && !threadPred && l1Policy.empty() && !l2PolicyReg &&
+        valueElemTy.getIntOrFloatBitWidth() >= 8)
+      return lowerWithLLVM(op, ptrElems, valueElems, valueElemTy, vec,
+                           rewriter);
+
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       // TODO: optimization when ptr is AddPtr with constant offset
       const size_t runStart = vecStart - vecStart % scalarizedContiguousRun;
@@ -596,21 +640,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       Value pred = threadPred;
       if (llMask)
         pred = ttg::maybeAnd(rewriter, loc, pred, maskElems[vecStart]);
-      if (useLLVM) {
-        Value globalPtr = ptrElems[vecStart];
-        if (cast<LLVM::LLVMPointerType>(globalPtr.getType())
-                .getAddressSpace() != 1)
-          globalPtr = b.addrspacecast(ptr_ty(ctx, 1), globalPtr);
-        Value stored =
-            vec == 1
-                ? valueElems[vecStart]
-                : packLLVector(loc, ArrayRef(valueElems).slice(vecStart, vec),
-                               rewriter);
-        if (valueElemNBits == 8 && vec == 2)
-          stored = b.bitcast(stored, i16_ty);
-        b.store(stored, globalPtr, /*align=*/totalWidth / 8);
-        continue;
-      }
 
       Type valArgTy = IntegerType::get(ctx, width);
       auto wordTy = vec_ty(valueElemTy, wordNElems);
