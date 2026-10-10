@@ -89,7 +89,9 @@ def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
     tl.static_assert(tensor.shape[0] == scale.shape[0])
     tl.static_assert(tensor.shape[1] * 2 == scale.shape[1] * MXFP_BLOCK_SIZE)
 
-    dst_scale = upcast_ue8m0_scale(scale, dst_dtype, handle_nan=False)
+    # FP16 holds 2**k only for -24 <= k <= 15: decode the scale to FP32 and round only the product.
+    scale_dtype: tl.constexpr = tl.float32 if dst_dtype == tl.float16 else dst_dtype
+    dst_scale = upcast_ue8m0_scale(scale, scale_dtype, handle_nan=False)
     dst_tensor = _upcast_mxfp4_values(tensor, dst_dtype)
     dst_tensor = dst_tensor.reshape([tensor.shape[0], scale.shape[1], MXFP_BLOCK_SIZE])
     dst_scale = dst_scale.reshape([scale.shape[0], scale.shape[1], 1])
@@ -246,7 +248,8 @@ def _upcast_from_mxfp(
 
     # Upcast the scale to the destination type.
     if scale_is_ocp:
-        dst_scale = upcast_ue8m0_scale(scale, dst_dtype, handle_nan=False)
+        scale_dtype: tl.constexpr = tl.float32 if dst_dtype == tl.float16 else dst_dtype
+        dst_scale = upcast_ue8m0_scale(scale, scale_dtype, handle_nan=False)
     else:
         dst_scale = scale.to(dst_dtype)
 
@@ -292,5 +295,5 @@ def _upcast_from_mxfp(
     # Correct any NaNs encoded via OCP E8M0 scales.
     if scale_is_ocp:
         out_tensor = tl.where(scale == 0xFF, float("nan"), out_tensor)
-    out_tensor = out_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM])
+    out_tensor = out_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM]).to(dst_dtype)
     out_desc.store([start_out.to(tl.int32), start_out_quant.to(tl.int32)], out_tensor)
