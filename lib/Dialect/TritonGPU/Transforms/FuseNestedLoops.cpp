@@ -213,11 +213,12 @@ static Logue createLogueFrom(llvm::iterator_range<Block::iterator> ops,
     return logue;
 
   // An op result is an output of the logue if the last operation in the logue
-  // dominates any of its users.
+  // dominates any of its users. A user nested inside the last operation is
+  // still part of the logue, so an enclosing op does not count as dominating.
   Operation &lastOp = *std::prev(ops.end());
   auto isOutput = [&](OpResult result) {
     for (Operation *user : result.getUsers()) {
-      if (domInfo.properlyDominates(&lastOp, user))
+      if (domInfo.properlyDominates(&lastOp, user, /*enclosingOpOk=*/false))
         return true;
     }
     return false;
