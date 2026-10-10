@@ -7031,7 +7031,8 @@ def test_globaltimer(device):
         start = func()
         off = tl.arange(0, 128)
         for i in range(10000):
-            tl.store(Out1 + off, tl.load(Out1 + off) + 1)
+            # Keep the timed loop from folding into a single addition.
+            tl.store(Out1 + off, tl.load(Out1 + off, volatile=True) + 1)
         end = func()
         tl.store(Out2, start)
         tl.store(Out2 + 1, end)
