@@ -258,15 +258,40 @@ def _normalize_axis(axis, rank, axis_required_message):
     return axis
 
 
-def _validate_scaled_downcast_common(input, scale):
+def _is_e8m0_power_of_two(value):
+    mantissa, exponent = math.frexp(value)
+    # Positive powers of two have mantissa 0.5.
+    # E8M0 spans 2**-127..2**127. 2**-127 is an fp32 subnormal, but its zero
+    # exponent field is still read as 2**-127.
+    return mantissa == 0.5 and -126 <= exponent <= 128
+
+
+def _prepare_scaled_downcast_scale(scale, semantic):
+    scale = _unwrap_if_constexpr(scale)
+    if isinstance(scale, float):
+        _check(
+            _is_e8m0_power_of_two(scale), lambda: "fp32 scaled_downcast scales must be positive powers of two "
+            f"representable in E8M0 (2**-127 to 2**127), but got {scale}")
+        scale = semantic.make_scalar(scale, ttgl.float32)
+    _check(isinstance(scale, ttgl.tensor),
+           lambda: f"Expected scale to be a tensor, an fp32 scalar, or a float constant but got {scale!r}")
+    if isinstance(scale.type, ttgl.distributed_type):
+        _check(scale.dtype in {ttgl.int8, ttgl.uint8, ttgl.float32},
+               lambda: f"Expected raw E8M0 scale in int8/uint8 or fp32 scale but got {scale.dtype}")
+    else:
+        _check(scale.dtype == ttgl.float32, lambda: f"Expected scalar scale to be fp32 but got {scale.dtype}")
+    if scale.dtype != ttgl.float32:
+        return scale
+    # E8M0 is the biased fp32 exponent field; drop the mantissa and sign bits.
+    exponent = semantic.lshr(semantic.bitcast(scale, ttgl.uint32), 23)
+    return semantic.cast(exponent, ttgl.uint8)
+
+
+def _validate_scaled_downcast_input(input):
     _check(isinstance(input.type, ttgl.distributed_type),
            lambda: f"Expected input to have a distributed_type but got {input.type}")
-    _check(isinstance(scale.type, ttgl.distributed_type),
-           lambda: f"Expected scale to have a distributed_type but got {scale.type}")
     supported_dtypes = {ttgl.float16, ttgl.bfloat16, ttgl.float32}
     _check(input.dtype in supported_dtypes, lambda: f"Expected fp16, bf16, or fp32 input but got {input.dtype}")
-    _check(scale.dtype in {ttgl.int8, ttgl.uint8},
-           lambda: f"Expected raw E8M0 scale in int8/uint8 but got {scale.dtype}")
     return len(input.type.shape)
 
 
@@ -285,16 +310,27 @@ def _check_scaled_downcast_scale_shape(input_shape, scale_shape, axis, axis_exte
         f"along axis {axis}, but got {block_size}")
 
 
+def _broadcast_scalar_scale(input, scale, axis, semantic):
+    if isinstance(scale.type, ttgl.distributed_type):
+        return scale
+    # A scalar scale becomes a single scale block spanning the whole axis. With
+    # extent 1 along `axis`, the input's layout is already the compact scale layout.
+    shape = list(input.type.shape)
+    shape[axis] = 1
+    return semantic.full(shape, scale, scale.dtype, input.type.layout)
+
+
 def _scaled_downcast(input, scale, elem_type, axis, semantic):
-    rank = _validate_scaled_downcast_common(input, scale)
+    rank = _validate_scaled_downcast_input(input)
+    scale = _prepare_scaled_downcast_scale(scale, semantic)
     input_shape = input.type.shape
-    scale_shape = scale.type.shape
 
     # fp8: elementwise downcast; scale axis is based on input shape.
     if elem_type in {ttgl.float8e4nv, ttgl.float8e5}:
         axis = _normalize_axis(axis, rank, "axis is required for fp8 scaled_downcast")
+        scale = _broadcast_scalar_scale(input, scale, axis, semantic)
         _check_scaled_downcast_scale_shape(
-            input_shape, scale_shape, axis, input_shape[axis],
+            input_shape, scale.type.shape, axis, input_shape[axis],
             "Expected scale shape for fp8 scaled_downcast to match the input shape on non-axis dimensions")
 
         handle = semantic.builder.create_scaled_downcast_fp8(input.handle, scale.handle,
@@ -309,8 +345,9 @@ def _scaled_downcast(input, scale, elem_type, axis, semantic):
 
     # fp4: packed output halves axis extent; scale axis uses packed output size.
     packed_output_axis_extent = input_shape[axis] // 2
+    scale = _broadcast_scalar_scale(input, scale, axis, semantic)
     _check_scaled_downcast_scale_shape(
-        input_shape, scale_shape, axis, packed_output_axis_extent,
+        input_shape, scale.type.shape, axis, packed_output_axis_extent,
         "Expected scale shape for packed fp4 scaled_downcast to match the packed output shape on non-axis dimensions")
 
     handle = semantic.builder.create_scaled_downcast_fp4(input.handle, scale.handle, axis)
@@ -323,8 +360,28 @@ def _scaled_downcast(input, scale, elem_type, axis, semantic):
 @builtin
 def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
     """
-    Scale and convert FP16, BF16, or FP32 values to a low-precision MX format,
-    dividing by the raw E8M0 ``scale`` payload (``int8`` or ``uint8``).
+    Scale and convert FP16, BF16, or FP32 values to a low-precision format.
+
+    ``scale`` is one of:
+
+    * a tensor of raw E8M0 payloads (``int8`` or ``uint8``), as used by the
+      MX formats;
+    * a tensor of ``fp32`` scales; or
+    * a single ``fp32`` scale applied to every element of ``input`` (e.g. for
+      per-tensor scaling), given either as an ``fp32`` scalar or as a
+      ``float`` constant.
+
+    .. warning::
+        Only the exponent bits of an ``fp32`` scale are used: it is converted
+        to the E8M0 payload holding its exponent field. Every ``fp32`` scale
+        must therefore be a positive power of two representable in E8M0.
+        Constant ``float`` scales are checked at compile time, but runtime
+        values (``fp32`` scalars and tensors) cannot be, so the caller is
+        responsible for ensuring them, e.g. by rounding the scale to a power of
+        two before calling this function. In particular, do not convert E8M0
+        payloads with ``.to(ttgl.float32)``: that converts their integer value
+        (127, meaning a scale of 1, becomes ``127.0``, a scale of 64). Pass the
+        ``int8``/``uint8`` tensor directly instead.
 
     ``format`` selects the target type and packing behavior:
 
@@ -336,9 +393,12 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
       of ``scaled_upcast``).
 
     ``axis`` (default: last dim) selects the dimension along which scales are
-    shared. ``scale`` must be compact along ``axis`` with one E8M0 byte per
-    block of consecutive input elements along ``axis``, and each block must
-    span a multiple of 8 consecutive input elements.
+    shared and along which fp4 values are packed. A tensor ``scale`` must be
+    compact along ``axis`` with one value per block of consecutive input
+    elements along ``axis``, and each block must span a multiple of 8
+    consecutive input elements. A scalar ``scale`` is applied as a single block
+    spanning ``axis``, so, as with tensor scales, ``axis`` must be the dimension
+    along which each thread holds consecutive values of ``input``.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _downcast_format_to_elem_type(format)
