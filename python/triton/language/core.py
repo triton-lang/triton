@@ -380,7 +380,7 @@ def _unwrap_if_constexpr(o):
 def _normalize_tuple(t):
     normalized_tuple = _unwrap_if_constexpr(t)
     if isinstance(normalized_tuple, (list, builtins.tuple)):
-        normalized_tuple = tuple(normalized_tuple)
+        normalized_tuple = tuple(_normalize_tuple(x) for x in normalized_tuple)
     return normalized_tuple
 
 
@@ -1039,66 +1039,66 @@ class tensor(base_value):
     # >
     @builtin
     def __gt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_than(self, other)
 
     @builtin
     def __rgt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_than(other, self)
 
     # >=
     @builtin
     def __ge__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_equal(self, other)
 
     @builtin
     def __rge__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.greater_equal(other, self)
 
     # <
     @builtin
     def __lt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_than(self, other)
 
     @builtin
     def __rlt__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_than(other, self)
 
     # <=
     @builtin
     def __le__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_equal(self, other)
 
     @builtin
     def __rle__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.less_equal(other, self)
 
     # ==
     @builtin
     def __eq__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.equal(self, other)
 
     @builtin
     def __req__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.equal(other, self)
 
     @builtin
     def __ne__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.not_equal(self, other)
 
     @builtin
     def __rne__(self, other, _semantic=None):
-        other = _semantic.to_tensor(other)
+        other = _unwrap_if_constexpr(other)
         return _semantic.not_equal(other, self)
 
     @builtin
@@ -1124,12 +1124,16 @@ class tensor(base_value):
         if isinstance(slices, tuple):
             slices = slices.values
         ret = self
+        src_rank = len(self.shape)
+        indexed_dims = 0
         for dim, sl in enumerate(slices):
             if _unwrap_if_constexpr(sl) is None:
                 ret = _semantic.expand_dims(ret, dim)
             elif isinstance(sl, (builtins.slice, slice)) and all(
                     _unwrap_if_constexpr(arg) is None for arg in (sl.start, sl.stop, sl.step)):
-                pass  # an unsqueeze
+                indexed_dims += 1
+                if indexed_dims > src_rank:
+                    raise ValueError(f"too many indices for tensor of rank {src_rank}")
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
         return ret
@@ -1274,6 +1278,12 @@ class tensor(base_value):
     def ravel(self) -> tensor:
         ...
 
+    def all(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
+    def any(self, axis=None, keep_dims=False) -> tensor:
+        ...
+
     def max(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
         ...
 
@@ -1295,10 +1305,10 @@ class tensor(base_value):
     def reduce_or(self, axis=None, keep_dims=False) -> tensor:
         ...
 
-    def cumsum(self, axis=0, reverse=False) -> tensor:
+    def cumsum(self, axis=0, reverse=False, dtype=None) -> tensor:
         ...
 
-    def cumprod(self, axis=0, reverse=False) -> tensor:
+    def cumprod(self, axis=0, reverse=False, dtype=None) -> tensor:
         ...
 
     def sort(self, dim: constexpr = None, descending: constexpr = CONSTEXPR_0) -> tensor:
@@ -1779,6 +1789,9 @@ def _aggregate(cls):
     aggregate_value.__module__ = cls.__module__
     aggregate_value.__qualname__ = cls.__qualname__
     aggregate_value.__doc__ = cls.__doc__
+    # Preserve the original class location for inspect.getsource on Python 3.13+.
+    if "__firstlineno__" in cls.__dict__:
+        aggregate_value.__firstlineno__ = cls.__firstlineno__
     aggregate_value.__aggregate_fields__ = builtins.tuple(all_annotations.keys())
     aggregate_value.__aggregate_defaults__ = dict(all_defaults)
 
@@ -2836,9 +2849,7 @@ def expect_zero(x, mask, _semantic=None):
     if is_enabled(_semantic.builder.options, "fpsan"):
         return _semantic.where(mask, 0, x)
     if _semantic.builder.options.debug:
-        x_tensor = _semantic.to_tensor(x)
-        zero = _semantic.to_tensor(0)
-        cond = _semantic.or_(_semantic.equal(x_tensor, zero), _semantic.not_(mask))
+        cond = _semantic.or_(_semantic.equal(x, 0), _semantic.not_(mask))
         _semantic.device_assert(cond, "expect_zero expected x == 0 where mask is true", None)
     return x
 
@@ -2908,10 +2919,8 @@ def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _semantic=None):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    y = _promote_bfloat16_to_float32(y, _semantic=_semantic)
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
     return _semantic.minimum(x, y, propagate_nan)
 
@@ -2930,10 +2939,8 @@ def maximum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _semantic=None):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    y = _promote_bfloat16_to_float32(y, _semantic=_semantic)
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
     return _semantic.maximum(x, y, propagate_nan)
 
@@ -2956,12 +2963,9 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _semantic=N
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    min = _semantic.to_tensor(min)
-    max = _semantic.to_tensor(max)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    min = _promote_bfloat16_to_float32(min, _semantic=_semantic)
-    max = _promote_bfloat16_to_float32(max, _semantic=_semantic)
+    x = _unwrap_if_constexpr(x)
+    min = _unwrap_if_constexpr(min)
+    max = _unwrap_if_constexpr(max)
 
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
 
@@ -3066,16 +3070,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
 
 
 @builtin
-def _promote_bfloat16_to_float32(t, _semantic=None):
-    scalar_ty = t.type.scalar
-
-    # hardware doesn't support FMAX, FMIN, CMP for bfloat16
-    if scalar_ty is bfloat16:
-        return t.to(float32, _semantic=_semantic)
-    return t
-
-
-@builtin
 def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=None):
     axis = _unwrap_if_constexpr(axis)
     n = input.shape[axis]
@@ -3113,7 +3107,7 @@ def _add_scan_docstr(name: str, dtype_arg: str = None) -> Callable[[T], T]:
 
         if dtype_arg is not None:
             docstr += f"""
-    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. If not specified, small integer types (< 32 bits) are upcasted to prevent overflow. Note that :code:`tl.bfloat16` inputs are automatically promoted to :code:`tl.float32`.
+    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. If not specified, signed integer dtypes narrower than 32 bits are upcasted to :code:`tl.int32`, while unsigned integer and bool dtypes narrower than 32 bits are upcasted to :code:`tl.uint32`. Other dtypes are kept as-is.
     :type {dtype_arg}: tl.dtype"""
 
         func.__doc__ = docstr.format(name=name)

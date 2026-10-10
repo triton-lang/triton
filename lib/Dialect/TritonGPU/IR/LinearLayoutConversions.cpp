@@ -26,7 +26,8 @@ namespace {
 //
 //  - ctaLayout: A layout for one CTA (one block), i.e. input dims
 //    [register, lane, warp]
-//    for register layouts, and input dims [offset] for shared layouts.
+//    for register layouts, [offset] for shared layouts, and [row, col] for
+//    TMEM.
 //  - cgaLayout: Arrangement of multiple blocks, i.e. input dims [block].
 
 #define S(v) StringAttr::get(ctx, (v))
@@ -47,8 +48,11 @@ SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
   return ret;
 }
 
-LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
-                                          SwizzledSharedEncodingAttr shared) {
+} // namespace
+
+LinearLayout
+SwizzledSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -96,8 +100,8 @@ LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
 }
 
 LinearLayout
-sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
-                                AMDRotatingSharedEncodingAttr shared) {
+AMDRotatingSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -147,8 +151,6 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
 
   return combineCtaCgaWithShape(ctaLayout, shared.getCGALayout(), shape);
 }
-
-} // namespace
 
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
@@ -272,16 +274,18 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
     return failure();
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
-  auto shapePerCTA = getShapePerCTA(shared, shape);
   auto kOffset = S("offset");
+  SmallVector<int64_t> maybeTransposedTmaShape(tmaShape.begin(),
+                                               tmaShape.end());
+  if (shared.getTransposed()) {
+    // Move the outer dim to the inner position.
+    // TODO: we should move back to using `order` instead of transposed to make
+    // the order more explicit.
+    std::rotate(maybeTransposedTmaShape.begin(),
+                maybeTransposedTmaShape.begin() + 1,
+                maybeTransposedTmaShape.end());
+  }
   if (shared.getSwizzlingByteWidth() == 0) {
-    SmallVector<int64_t> maybeTransposedTmaShape(tmaShape.begin(),
-                                                 tmaShape.end());
-    if (shared.getTransposed()) {
-      std::rotate(maybeTransposedTmaShape.begin(),
-                  maybeTransposedTmaShape.begin() + 1,
-                  maybeTransposedTmaShape.end());
-    }
     auto outDimNames = standardOutDimNames(ctx, rank);
     LinearLayout layout = LinearLayout::identity1D(
         maybeTransposedTmaShape[rank - 1], kOffset, outDimNames[rank - 1]);
@@ -296,7 +300,6 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
       }
       layout = transposeLinearLayout(layout, order);
     }
-    layout = ensureLayoutNotSmallerThan(layout, outDimNames, shapePerCTA);
     return combineCtaCgaWithShape(layout, shared.getCGALayout(), shape);
   }
   assert(rank >= 2);
@@ -331,20 +334,10 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
   }
 
   // Distribute the remaining rows and cols.
-  auto layout =
-      ensureLayoutNotSmallerThan(tileLayout, outDimNames, collapsedTmaShape);
+  auto layout = ensureLayoutNotSmallerThan(tileLayout, outDimNames,
+                                           collapsedTmaShape, kOffset);
 
   // Reshape the layout to the N-D pre-transposed shape per CTA.
-  SmallVector<int64_t> maybeTransposedTmaShape(tmaShape.begin(),
-                                               tmaShape.end());
-  if (shared.getTransposed()) {
-    // Move the outer dim to the inner position.
-    // TODO: we should move back to using `order` instead of transposed to make
-    // the order more explicit.
-    std::rotate(maybeTransposedTmaShape.begin(),
-                maybeTransposedTmaShape.begin() + 1,
-                maybeTransposedTmaShape.end());
-  }
   // This condition can fail if a layout is speculatively constructed for
   // equivalence checking.
   if (layout.getTotalOutDimSize() != product(maybeTransposedTmaShape))
@@ -359,10 +352,13 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
     reshapedLayout = transposeLinearLayout(reshapedLayout, order);
   }
 
-  reshapedLayout = ensureLayoutNotSmallerThan(
-      reshapedLayout, standardOutDimNames(ctx, shapePerCTA.size()),
-      shapePerCTA);
   return combineCtaCgaWithShape(reshapedLayout, shared.getCGALayout(), shape);
+}
+
+LinearLayout
+NVMMASharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
+  return nvmmaSharedToLinearLayout(shape, *this, TMAMode::Tiled);
 }
 
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
@@ -1069,14 +1065,10 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   auto kCol = S("col");
   auto dims = standardOutDimNames(ctx, 2);
   auto cgaLayout = encoding.getCGALayout();
-  auto cgaLL = cgaLayout.getLinearLayout();
   bool isM64TwoCTA = encoding.getBlockM() == 64 && encoding.getTwoCTAs();
 
-  auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
-  assert(shapePerCTA.size() == 2);
-
   auto blockM = encoding.getBlockM();
-  auto blockN = std::min<int32_t>(encoding.getBlockN(), shapePerCTA[1]);
+  int32_t blockN = encoding.getBlockN();
   assert(blockM == 64 || blockM == 128);
   LinearLayout tile =
       LinearLayout::zeros1D(encoding.getColStride(), kCol, dims[1]);
@@ -1087,18 +1079,17 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     // column bits start one bit later than they do for dense TMEM layouts.
     colLayout *= LinearLayout::zeros1D(2, kCol, dims[1]);
   }
-  colLayout *= LinearLayout::identity1D(blockN, kCol, dims[1]);
+  colLayout *= LinearLayout::identity1D(
+      llvm::divideCeil(blockN, isM64TwoCTA ? 2 : 1), kCol, dims[1]);
 
   if (blockM == 64 && !encoding.getTwoCTAs()) {
     tile *= LinearLayout::identity1D(16, kRow, dims[0]) * colLayout;
     auto bases = tile.getBases();
+    auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
     if (shapePerCTA[0] > blockM) {
       bases[kRow].push_back({64, 0});
-    } else if (shapePerCTA[1] > blockN) {
-      bases[kRow].push_back({0, blockN});
     } else {
-      // Empty, meaning the element is not defined
-      bases[kRow].push_back({0, 0});
+      bases[kRow].push_back({0, blockN});
     }
     bases[kRow].push_back({16, 0});
     bases[kRow].push_back({32, 0});
@@ -1107,20 +1098,11 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) * colLayout;
     if (isM64TwoCTA) {
       auto bases = tile.getBases();
-      bases[kRow].push_back(bases[kCol].back());
-      bases[kCol].pop_back();
-      tile = LinearLayout(std::move(bases), tile.getOutDims(),
-                          tile.isSurjective());
+      bases[kRow].push_back({0, blockN / 2});
+      tile = LinearLayout(std::move(bases), dims);
     }
   }
-  auto repsM = shapePerCTA[0] / tile.getOutDimSize(dims[0]);
-  auto repsN = shapePerCTA[1] / tile.getOutDimSize(dims[1]);
-  assert(repsM >= 1 && repsN >= 1);
-  // Broadcast the remaining dimensions in order [0, 1]
-  tile = tile * LinearLayout::identity1D(repsM, kCol, dims[0]) *
-         LinearLayout::identity1D(repsN, kCol, dims[1]);
-  tile *= cgaLL;
-  return tile;
+  return combineCtaCgaWithShape(tile, cgaLayout, shape);
 }
 
 LinearLayout
@@ -1130,11 +1112,9 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   auto *ctx = encoding.getContext();
   auto kRow = S("row");
   auto kCol = S("col");
-  auto kBlock = S("block");
   auto dims = standardOutDimNames(ctx, 2);
   auto cgaLayout = encoding.getCGALayout();
   auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
-  assert(shapePerCTA.size() == 2);
 
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
   auto tile = LinearLayout::identity1D(32, kRow, dims[0]) *
@@ -1142,37 +1122,14 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
               LinearLayout::zeros1D(4, kRow, dims[0]) *
               LinearLayout::identity1D(4, kCol, dims[1]) *
               LinearLayout::identity1D(2, kCol, dims[0]);
-  auto repsMn = llvm::divideCeil(shapePerCTA[0], tile.getOutDimSize(dims[0]));
-  auto repsK = llvm::divideCeil(shapePerCTA[1], tile.getOutDimSize(dims[1]));
-
-  if (repsMn > 1) {
-    // blockRepOrder applies after this normalization step. First merge the two
-    // MN-adjacent 64x4 pieces into the repeated scale block, then order the
-    // remaining block repetitions along MN and K.
+  if (shapePerCTA[0] > tile.getOutDimSize(dims[0])) {
+    // Pair adjacent 64x4 pieces before applying blockRepOrder.
     tile *= LinearLayout::identity1D(2, kCol, dims[0]);
-    repsMn /= 2;
   }
 
-  if (encoding.getBlockRepOrder() ==
-      TensorMemoryScalesBlockRepOrder::K_THEN_MN) {
-    // kThenMn uses repOrder = [1, 0] at the repeated block level.
-    tile *= LinearLayout::identity1D(repsK, kCol, dims[1]) *
-            LinearLayout::identity1D(repsMn, kCol, dims[0]);
-  } else {
-    // mnThenK uses repOrder = [0, 1] at the repeated block level.
-    tile *= LinearLayout::identity1D(repsMn, kCol, dims[0]) *
-            LinearLayout::identity1D(repsK, kCol, dims[1]);
-  }
-  // Add a trivial block dimension
-  tile *= LinearLayout::identity1D(1, kBlock, dims[0]);
-  // See [Zeros in TMEM LinearLayouts]
-  // Set some rows/cols to 0 if shape is smaller than 64 x 4
-  llvm::SmallDenseMap<StringAttr, int64_t> shapeMap;
-  for (auto [dim, size] : llvm::zip(dims, shapePerCTA)) {
-    shapeMap[dim] = size;
-  }
-  tile = ensureLayoutNotLargerThan(tile, shapeMap);
-  return tile * cgaLayout.getLinearLayout();
+  if (encoding.getBlockRepOrder() == TensorMemoryScalesBlockRepOrder::K_THEN_MN)
+    tile = tile.transposeOuts({dims[1], dims[0]});
+  return combineCtaCgaWithShape(tile, cgaLayout, shape);
 }
 
 // Convert a PartitionedSharedEncodingAttr to a LinearLayout.
@@ -1208,6 +1165,14 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
           ? cast<PaddedSharedEncodingAttr>(partitionLayout).getLinearComponent()
           : toLinearLayout(partitionShape, partitionLayout);
 
+  // Partitioning is local to each CTA. Factor the CGA mapping out before
+  // adding partition/group bits so each CTA owns contiguous local pieces.
+  auto cga = maybeLinearToCGAEncodingAttr(baseLayout);
+  assert(succeeded(cga) && "partition layout must factor into CTA and CGA");
+  auto maybeLocalLayout = divideRight(baseLayout, cga->getLinearLayout());
+  assert(maybeLocalLayout && "failed to factor CGA from partition layout");
+  LinearLayout localLayout = *maybeLocalLayout;
+
   auto *ctx = partitioned.getContext();
   auto outDimNames = standardOutDimNames(ctx, baseLayout.getNumOutDims());
 
@@ -1221,7 +1186,8 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   LinearLayout extension = LinearLayout::identity1D(
       partitioned.getNumGroups(), kOffset, outDimNames[partitionDim]);
 
-  return baseLayout * partLayout * extension;
+  localLayout = localLayout * partLayout * extension;
+  return combineCtaCgaWithShape(localLayout, partitioned.getCGALayout(), shape);
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
@@ -1242,21 +1208,8 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
                           return llvm::isPowerOf2_32(dim) && dim >= 1;
                         }) &&
            "shape must be a postive power of 2");
-    if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = swizzledSharedToLinearLayout(shape, shared);
-    } else if (auto shared = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+    if (auto shared = dyn_cast<SharedEncodingTrait>(layout)) {
       result = shared.toLinearLayout(shape);
-    } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
-      result = nvmmaSharedToLinearLayout(shape, shared, TMAMode::Tiled);
-    } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutAMDRotating(shape, sbl);
-    } else if (auto partitioned =
-                   dyn_cast<PartitionedSharedEncodingAttr>(layout)) {
-      assert(!isa<PaddedSharedEncodingAttr>(partitioned.getPartitionLayout()) &&
-             "toLinearLayout does not support partitioned layouts wrapping "
-             "padded layouts; use paddedLinearLayout instead");
-      result = partitionedSharedToLinearLayout(shape, partitioned);
     } else if (auto tensorMemoryEncoding =
                    dyn_cast<TensorMemoryEncodingAttr>(layout)) {
       result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);
@@ -1286,17 +1239,16 @@ LinearLayout toLinearLayout(MemDescType type) {
         dropPipeliningDim(type.getAllocShape(), type.getEncoding());
     auto ll = toLinearLayout(allocShape, type.getEncoding());
     auto outDims = llvm::to_vector(ll.getOutDimNames());
-    // Trim the shape
-    for (auto [dim, size] : llvm::zip_equal(outDims, shape))
-      ll = ll.resizeOutDim(dim, size);
+    ll = ensureLayoutNotLargerThan(ll, outDims, shape);
 
     auto kCol = StringAttr::get(type.getContext(), "col");
-    int bitwidth = type.getElementType().getIntOrFloatBitWidth();
-    int minColBases = llvm::Log2_32(32 / bitwidth);
-    uint64_t nonZeroColBases = getInputBasisMask(ll, kCol, outDims);
-    int nColBases =
-        std::max(minColBases, int(llvm::bit_width(nonZeroColBases)));
-    return ll.resizeInDim(kCol, 1u << nColBases);
+    unsigned minCols = 32 / type.getElementTypeBitWidth();
+    // Keep padding declared by a complete allocation.
+    unsigned nCols =
+        shape == allocShape
+            ? ll.getInDimSize(kCol)
+            : 1u << llvm::bit_width(getInputBasisMask(ll, kCol, outDims));
+    return ll.resizeInDim(kCol, std::max(minCols, nCols));
   }
   // Shared memory needs the allocation shape so that invertAndCompose can trim
   // subviews. We also remove the first dimension of the allocation shape if
@@ -1322,6 +1274,24 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
   return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
                                                                    layout);
+}
+
+LinearLayout
+PartitionedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  if (isa<PaddedSharedEncodingAttr>(getPartitionLayout())) {
+    llvm::report_fatal_error(
+        "toLinearLayout does not support partitioned layouts wrapping padded "
+        "layouts; use paddedLinearLayout instead");
+  }
+  return partitionedSharedToLinearLayout(shape, *this);
+}
+
+LinearLayout
+PaddedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  // A padded layout's interval padding is not expressible as a LinearLayout;
+  // toLinearLayoutIgnoringPadding() routes it to paddedLinearLayout() instead.
+  llvm::report_fatal_error("padded shared encoding has no linear layout; use "
+                           "paddedLinearLayout instead");
 }
 
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
@@ -1367,37 +1337,28 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
                                     ArrayRef<int64_t> shape) {
   int rank = shape.size();
   assert(ctaLayout.getNumOutDims() == rank);
-  assert(cgaLayoutAttr.getCTAOrder().size() == rank);
+  assert(cgaLayoutAttr.getRank() == rank);
   MLIRContext *ctx = cgaLayoutAttr.getContext();
 
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  llvm::SmallDenseMap<StringAttr, int64_t> labeledShape;
-  for (auto [dim, size] : llvm::zip(outDimNames, shape)) {
-    labeledShape[dim] = size;
-  }
-
+  auto shapePerCTA = getShapePerCTA(cgaLayoutAttr.getCTASplitNum(), shape);
   LinearLayout cgaLayout =
-      ensureLayoutNotLargerThan(cgaLayoutAttr.getLinearLayout(), labeledShape)
+      ensureLayoutNotLargerThan(cgaLayoutAttr.getLinearLayout(), outDimNames,
+                                shape)
           .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
-  // Calculate the shape of the ctaLayout, which is `shape` divided by the
-  // cgaLayout's size.
-  llvm::SmallDenseMap<StringAttr, int64_t> ctaShape;
-  assert(llvm::to_vector(ctaLayout.getOutDimNames()) ==
-         llvm::to_vector(cgaLayout.getOutDimNames()));
-  for (auto dim : ctaLayout.getOutDimNames()) {
-    ctaShape[dim] =
-        std::max(int64_t{1}, labeledShape[dim] / cgaLayout.getOutDimSize(dim));
-  }
-
-  ctaLayout = ensureLayoutNotSmallerThan(ctaLayout, ctaShape);
-  ctaLayout = ensureLayoutNotLargerThan(ctaLayout, ctaShape);
+  auto kCol = S("col");
+  auto kOffset = S("offset");
+  auto kReg = S("register");
+  auto inDim = ctaLayout.hasInDim(kCol)      ? kCol
+               : ctaLayout.hasInDim(kOffset) ? kOffset
+                                             : kReg;
+  ctaLayout =
+      ensureLayoutNotSmallerThan(ctaLayout, outDimNames, shapePerCTA, inDim);
+  ctaLayout = ensureLayoutNotLargerThan(ctaLayout, outDimNames, shapePerCTA);
 
   LinearLayout ret = (ctaLayout * cgaLayout).transposeOuts(outDimNames);
-  for (auto dim : ret.getOutDimNames()) {
-    assert(ret.getOutDimSize(dim) == labeledShape[dim]);
-  }
+  assert(llvm::equal(ret.getOutDimSizes(), shape));
   return ret;
 }
 

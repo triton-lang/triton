@@ -142,31 +142,20 @@ struct MulhiUIOpConversion
   using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
-  explicit MulhiUIOpConversion(LLVMTypeConverter &typeConverter,
-                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               const TargetInfoBase &targetInfo,
-                               PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        targetInfo(targetInfo) {}
 
   SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-
-    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
-    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
-
-    auto funcName = targetInfo.getMulhiFuncName(resultElementTy);
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-    return {
-        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
+    assert(bitWidth == 32 || bitWidth == 64);
+    Type wideTy = rewriter.getIntegerType(2 * bitWidth);
+    Value lhs = b.zext(wideTy, operands[0][0]);
+    Value rhs = b.zext(wideTy, operands[0][1]);
+    Value high = b.lshr(b.mul(lhs, rhs), b.int_val(2 * bitWidth, bitWidth));
+    return {b.trunc(elemTy, high)};
   }
-
-protected:
-  const TargetInfoBase &targetInfo;
 };
 
 struct ExternElementwiseOpConversion
@@ -186,11 +175,20 @@ struct ExternElementwiseOpConversion
     if (funcName.empty())
       llvm::errs() << "ExternElementwiseOpConversion";
 
-    Type funcType = getFunctionType(elemTy, operands[0]);
+    // Keep TF32 as f32 in Triton IR; NVVM returns its raw i32 bits.
+    bool bitcastTf32 = elemTy.isF32() && operands[0].size() == 1 &&
+                       operands[0][0].getType().isF32() &&
+                       (funcName == "llvm.nvvm.f2tf32.rn" ||
+                        funcName == "llvm.nvvm.f2tf32.rna");
+    Type funcType = getFunctionType(
+        bitcastTf32 ? rewriter.getI32Type() : elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
         rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
-    return {
-        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+    Value result =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult();
+    if (bitcastTf32)
+      result = LLVM::BitcastOp::create(rewriter, loc, elemTy, result);
+    return {result};
   }
 };
 
@@ -447,21 +445,6 @@ struct InlineAsmOpConversion
   }
 };
 
-struct AbsIOpConversion
-    : ElementwiseOpConversionBase<math::AbsIOp, AbsIOpConversion> {
-  using Base = ElementwiseOpConversionBase<math::AbsIOp, AbsIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(math::AbsIOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    return {LLVM::AbsOp::create(rewriter, loc, elemTy, operands[0][0],
-                                /*is_int_min_poison=*/false)};
-  }
-};
-
 struct AbsFOpConversion
     : ElementwiseOpConversionBase<math::AbsFOp, AbsFOpConversion> {
   using Base = ElementwiseOpConversionBase<math::AbsFOp, AbsFOpConversion>;
@@ -706,10 +689,10 @@ void mlir::triton::populateClampFOpToLLVMPattern(
 
 void mlir::triton::populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
-    PatternBenefit benefit) {
-#define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+#define POPULATE_UNARY_OP(SRC_OP, DST_OP, ...)                                 \
+  patterns.add<                                                                \
+      ElementwiseOpConversion<SRC_OP, DST_OP __VA_OPT__(, ) __VA_ARGS__>>(     \
       typeConverter, axisInfoAnalysis, benefit);
 
   POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
@@ -718,6 +701,8 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
   POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
   POPULATE_UNARY_OP(arith::NegFOp, LLVM::FNegOp)
+  POPULATE_UNARY_OP(math::AbsIOp, LLVM::AbsOp,
+                    [](LLVM::AbsOp op) { op.setIsIntMinPoison(false); })
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
@@ -768,13 +753,11 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<AddPtrOpConversion>(typeConverter, benefit);
   patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<CmpFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
-                                    benefit);
+  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
   patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
   patterns.add<InlineAsmOpConversion>(typeConverter, benefit);
-  patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MapElementwiseOpConversion>(typeConverter, benefit);

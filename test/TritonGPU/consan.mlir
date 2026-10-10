@@ -1,6 +1,33 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --implicit-check-not=cluster_waiting --implicit-check-not=always_use_warp_shuffle
 // RUN: env TRITON_CONSAN_INIT_ALLOCATIONS=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --check-prefix=NO-INIT
 
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 2056 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // Track four total arrivals and the original total bytes, not per-warp bytes.
+  // CHECK-LABEL: @distributed_expect
+  // CHECK: ttng.init_barrier
+  // CHECK: %[[COUNT:.*]] = arith.constant 4 : i32
+  // CHECK-NEXT: %[[BYTES:.*]] = arith.constant 2048 : i64
+  // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{.*}}({{[^,]+}}, {{[^,]+}}, %[[COUNT]], %[[BYTES]],
+  // CHECK: ttng.barrier_expect {{.*}}, 2048 {per_warp},
+  tt.func public @distributed_expect(%desc: !tt.tensordesc<16x64xf16, #shared>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %mem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %bar, 4 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, 2048 {per_warp}, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -33,6 +60,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttg.local_load %0 : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: @private_masked_store_barrier_workaround
+// CHECK: tt.store %{{[^,]+}}, %{{[^,]+}}, %{{[^ ]+}} : !tt.ptr<i32>
+// CHECK-NEXT: ttg.barrier global_write
+// CHECK-NEXT: tt.return
+// CHECK-LABEL: @masked_store_barrier_workaround
+// CHECK: cf.cond_br
+// CHECK: tt.store %{{[^,]+}}, %{{[^,]+}}, %{{[^ ]+}} : !tt.ptr<i32>
+// CHECK-NEXT: ttg.barrier global_write
+// CHECK-NEXT: cf.br
+// CHECK: tt.store %{{[^,]+}}, %{{[^ ]+}} : !tt.ptr<i32>
+// CHECK-NEXT: tt.return
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func private @private_masked_store_barrier_workaround(%ptr: !tt.ptr<i32>, %value: i32, %mask: i1) {
+    tt.store %ptr, %value, %mask : !tt.ptr<i32>
+    tt.return
+  }
+  tt.func public @masked_store_barrier_workaround(%masked: !tt.ptr<i32>, %unmasked: !tt.ptr<i32>, %value: i32, %mask: i1, %branch: i1) {
+    cf.cond_br %branch, ^masked_store, ^join
+  ^masked_store:
+    tt.store %masked, %value, %mask : !tt.ptr<i32>
+    cf.br ^join
+  ^join:
+    tt.store %unmasked, %value : !tt.ptr<i32>
     tt.return
   }
 }
@@ -106,6 +162,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-NEXT: %[[ACTIVE_CTAS:.*]] = tt.splat %[[ACTIVE_CTA]] : i32 -> tensor<2xi32
   // CHECK-NEXT: %[[ACTIVE_STORE_MASK:.*]] = arith.cmpi eq, {{.*}}, %[[ACTIVE_CTAS]] : tensor<2xi32
   // CHECK-NOT: tt.load
+  // ConSan-generated masked stores are created after the source-store snapshot
+  // and must not receive the PTXAS workaround barrier.
   // CHECK: tt.store %{{[^,]+}}, %[[ACTIVE_VALUES]], %[[ACTIVE_STORE_MASK]] {ignore_cta} : tensor<2x!tt.ptr<i32>
   // CHECK-NEXT: tt.return
 
@@ -653,14 +711,19 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
 
     // Runtime indices along the sharded axis can target either CTA row.
     // CHECK: %[[ATOMIC_CTAS:.*]] = arith.constant 3 : i32
-    // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
+    // CHECK: arith.constant dense<[true, false, false, false]> : tensor<4xi1
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[ATOMIC_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
-    // The explicit destination remains checked, but result-staging scratch
-    // adds no further checks to the same operation.
-    // CHECK-NOT: tt.call @__triton_consan
+    // The existing destination reaches both CTAs, while independent result
+    // staging remains private to the issuer's shared-memory frame.
+    // CHECK: arith.constant dense<[false, false, true, false]> : tensor<4xi1
+    // CHECK: %[[ATOMIC_SCRATCH_CTA_ID:.*]] = tti.experimental_cluster_cta_id
+    // CHECK: %[[ATOMIC_SCRATCH_CTA:.*]] = arith.shli {{.*}}, %[[ATOMIC_SCRATCH_CTA_ID]] : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ATOMIC_SCRATCH_CTA]]
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ATOMIC_SCRATCH_CTA]]
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[ATOMIC_SCRATCH_CTA]]
     // CHECK: ttg.local_atomic_scatter_rmw
     %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {allocation.offset = 1024 : i32, allocation.size = 512 : i32, axis = 1 : i32} : (!ttg.memdesc<8x32xi32, #local_atomic_shared, #local_atomic_smem, mutable>, tensor<8x32xi32, #local_atomic_blocked>, tensor<8x32xi32, #local_atomic_blocked>) -> tensor<8x32xi32, #local_atomic_blocked>
     tt.store %result, %old : tensor<8x32x!tt.ptr<i32>, #local_atomic_blocked>
@@ -907,7 +970,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK: #[[BUFS_L:.*]] = #ttg.linear<{register = [], lane = {{\[}}[0], [0], [0], [0], [0]], warp = [], block = []}>
   // CHECK: @tmem_alloc
   tt.func public @tmem_alloc() {
@@ -1487,7 +1550,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen5_mma
   tt.func public @tcgen5_mma(%arg0: !tt.tensordesc<32x32xf32, #shared>) {
     // CHECK-DAG: %[[SM_WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 16 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i32>
@@ -1550,7 +1613,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen5_mma_lhs_in_tmem
   tt.func public @tcgen5_mma_lhs_in_tmem(%arg0: !tt.tensordesc<32x32xf32, #shared>) {
     // CHECK-DAG: %[[SM_WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 8 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i32>
@@ -1613,7 +1676,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tcgen5_commit
   tt.func public @tcgen5_commit(%arg0: !tt.tensordesc<32x32xf32, #shared>) {
 
@@ -1639,7 +1702,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[0, 0]]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, "ttng.two-ctas" = true} {
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, "ttng.two-ctas" = true} {
   // CHECK-LABEL: @tmem_copy_2cta
   tt.func public @tmem_copy_2cta() {
     %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
@@ -1827,11 +1890,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+// Check commit-counter saturation in kernels without async-copy mbarriers
+// and verify that large wait counts are clamped to 127.
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: tt.func private @__triton_consan_commit_accesses
+  // CHECK: %[[COMMITS:.*]] = tt.load
+  // CHECK: %[[PLUS_ONE:.*]] = arith.addi %[[COMMITS]], %{{.*}} : tensor<{{.*}}xi8
+  // CHECK: %[[MAX_AGE:.*]] = arith.constant dense<127> : tensor<{{.*}}xi8
+  // CHECK: %[[AT_MAX:.*]] = arith.cmpi eq, %[[COMMITS]], %[[MAX_AGE]]
+  // CHECK: %[[SATURATED:.*]] = arith.select %[[AT_MAX]], %[[COMMITS]], %[[PLUS_ONE]]
+  // CHECK: arith.select %{{.*}}, %[[SATURATED]], %[[COMMITS]]
+  // CHECK-LABEL: @async_wait_count_above_max_age
+  tt.func public @async_wait_count_above_max_age() {
+    // CHECK: tt.call @__triton_consan_commit_accesses
+    // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
+    // CHECK: %[[THREAD_MASK:.*]] = arith.constant 1 : i64
+    // CHECK: %[[OUTSTANDING_NUM:.*]] = arith.constant 127 : i32
+    // CHECK: tt.call @__triton_consan_clear_outstanding_commits_transfer_writes{{.*}}(%[[THREAD_BIT]], %[[THREAD_MASK]], %[[OUTSTANDING_NUM]]
+    %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    ttg.async_commit_group
+    ttg.async_wait {num = 200 : i32}
+    ttg.local_load %shmem : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tmem_load
   tt.func public @tmem_load() {
     %result = ttng.tmem_alloc  {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
@@ -1942,7 +2035,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @tmem_alloc_with_src
   tt.func public @tmem_alloc_with_src(%acc: tensor<128x128xf16, #blocked>) {
     // CHECK: %[[BUF:.*]] = ttng.tmem_alloc
@@ -2339,7 +2432,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @alias_matrix_tensor
   tt.func public @alias_matrix_tensor() {
     // CHECK-DAG: arith.constant dense<[true, true, false, false]> : tensor<4xi1
@@ -2361,7 +2454,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @alias_matrix_mixed
   tt.func public @alias_matrix_mixed() {
     %smem0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
@@ -2428,7 +2521,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
   // CHECK-LABEL: @initialize_uninitialized_allocs
   // NO-INIT-LABEL: @initialize_uninitialized_allocs
   tt.func public @initialize_uninitialized_allocs() {
@@ -2462,7 +2555,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 256 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 256 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
   // CHECK-LABEL: @initialize_multibuffer_allocs
   tt.func public @initialize_multibuffer_allocs() {
     // CHECK: %[[SMEM:.*]] = ttg.local_alloc
@@ -2496,7 +2589,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
   // CHECK-LABEL: @skip_source_backed_allocs
   tt.func public @skip_source_backed_allocs(%src: tensor<128x128xf32, #blocked>) {
     // CHECK: ttg.local_alloc %{{.*}}
@@ -2898,8 +2991,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #direct_reduce = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
-  // CHECK-LABEL: @conversion_and_reduction_omit_scratch_checks
-  tt.func public @conversion_and_reduction_omit_scratch_checks(
+  // CHECK-LABEL: @conversion_and_reduction_detect_outstanding_tma
+  tt.func public @conversion_and_reduction_detect_outstanding_tma(
       %desc: !tt.tensordesc<256xi32, #direct_shared>,
       %value: tensor<128xi32, #direct_src>,
       %reduce: tensor<1x256xf32, #direct_reduce>) {
@@ -2909,19 +3002,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     ttng.async_tma_copy_local_to_global %desc[%zero] %buffer
         : !tt.tensordesc<256xi32, #direct_shared>,
           !ttg.memdesc<256xi32, #direct_shared, #direct_smem, mutable>
-    // CHECK: ttg.local_dealloc
     ttg.local_dealloc %buffer
         : !ttg.memdesc<256xi32, #direct_shared, #direct_smem, mutable>
 
-    // Operation-local scratch does not check the pending TMA read.
-    // CHECK-NOT: tt.call @__triton_consan
-    // CHECK-NOT: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_verify_read_visibility
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: ttg.convert_layout
     %converted = ttg.convert_layout %value {allocation.offset = 0 : i32, allocation.size = 512 : i32}
         : tensor<128xi32, #direct_src> -> tensor<128xi32, #direct_dst>
 
-    // CHECK-NOT: tt.call @__triton_consan
-    // CHECK-NOT: tti.experimental_lock_acquire
+    // CHECK: tt.call @__triton_consan_verify_read_visibility
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: "tt.reduce"
     %reduced = "tt.reduce"(%reduce) <{axis = 1 : i32}> ({
     ^bb0(%lhs: f32, %rhs: f32):
@@ -2940,13 +3033,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #reduce_groups = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [0, 1]]}>
 
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 32 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
-  // CHECK-LABEL: @reduce_cross_cta_omits_scratch_checks
-  tt.func public @reduce_cross_cta_omits_scratch_checks(
+  // CHECK-LABEL: @reduce_cross_cta_scratch_is_cta_local
+  tt.func public @reduce_cross_cta_scratch_is_cta_local(
       %value: tensor<8x256xf32, #reduce_groups>) {
-    // Scratch-only reductions do not acquire the instrumentation lock.
-    // CHECK: ttng.cluster_barrier
-    // CHECK-NOT: tt.call @__triton_consan
-    // CHECK-NOT: tti.experimental_lock_acquire
+    // Reduction groups {0,2} and {1,3} read peers only after their intrinsic
+    // cluster barrier; scratch writes touch the current CTA alone.
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: arith.constant dense<true> : tensor<1xi1
+    // CHECK: %[[REDUCE_CTA:.*]] = tti.experimental_cluster_cta_id
+    // CHECK: %[[REDUCE_ONE:.*]] = arith.constant 1 : i32
+    // CHECK: %[[REDUCE_OWNER:.*]] = arith.shli %[[REDUCE_ONE]], %[[REDUCE_CTA]] : i32
+    // CHECK: %[[REDUCE_GROUP_CTA:.*]] = tti.experimental_cluster_cta_id
+    // CHECK: %[[REDUCE_GROUP_FIXED:.*]] = arith.constant 1 : i32
+    // CHECK: %[[REDUCE_GROUP_BASE:.*]] = arith.andi %[[REDUCE_GROUP_CTA]], %[[REDUCE_GROUP_FIXED]] : i32
+    // CHECK: %[[REDUCE_GROUP_PATTERN:.*]] = arith.constant 5 : i32
+    // CHECK: %[[REDUCE_GROUP_SHIFT:.*]] = arith.shli %[[REDUCE_GROUP_PATTERN]], %[[REDUCE_GROUP_BASE]] : i32
+    // CHECK: %[[REDUCE_READERS:.*]] = arith.ori {{.*}}, %[[REDUCE_GROUP_SHIFT]] : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[REDUCE_READERS]]
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[REDUCE_OWNER]]
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[REDUCE_OWNER]]
     // CHECK: "tt.reduce"
     %reduced = "tt.reduce"(%value) <{axis = 1 : i32}> ({
     ^bb0(%lhs: f32, %rhs: f32):
@@ -2980,9 +3085,18 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     ttg.local_dealloc %buffer : !ttg.memdesc<8x32xi32, #cross_shared, #cross_smem, mutable>
     // CHECK: ttng.cluster_barrier {relaxed = true}
     ttng.cluster_barrier {relaxed = true}
-    // Cross-CTA scratch is omitted along with CTA-local scratch.
-    // CHECK-NOT: tt.call @__triton_consan
-    // CHECK-NOT: tti.experimental_lock_acquire
+    // Peer reads follow the conversion's intrinsic cluster barrier; the
+    // compiler-owned scratch write belongs only to its issuing CTA.
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: arith.constant dense<true> : tensor<1xi1
+    // CHECK: %[[CONVERT_CTA:.*]] = tti.experimental_cluster_cta_id
+    // CHECK: %[[CONVERT_ONE:.*]] = arith.constant 1 : i32
+    // CHECK: %[[CONVERT_OWNER:.*]] = arith.shli %[[CONVERT_ONE]], %[[CONVERT_CTA]] : i32
+    // CHECK: %[[CONVERT_PEERS:.*]] = arith.constant 3 : i32
+    // CHECK: %[[CONVERT_READERS:.*]] = arith.ori {{.*}}, %[[CONVERT_PEERS]] : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[CONVERT_READERS]]
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[CONVERT_OWNER]]
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[CONVERT_OWNER]]
     // CHECK: ttg.convert_layout
     %converted = ttg.convert_layout %loaded {allocation.offset = 0 : i32, allocation.size = 512 : i32}
         : tensor<8x32xi32, #cross_src> -> tensor<8x32xi32, #cross_dst>
@@ -3010,9 +3124,17 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     }
     // CHECK: ttng.cluster_barrier {relaxed = true}
     ttng.cluster_barrier {relaxed = true}
-    // Result-broadcast scratch does not add shared-memory checks.
-    // CHECK-NOT: tt.call @__triton_consan
-    // CHECK-NOT: tti.experimental_lock_acquire
+    // Both CTAs consume the result, but only CTA zero owns the scratch. The
+    // live barrier in CTA one does not overlap the atomic's physical storage.
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: %[[SCALAR_PRODUCER:.*]] = arith.cmpi eq, {{.*}} : i32
+    // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
+    // CHECK: %[[SCALAR_CTA:.*]] = tti.experimental_cluster_cta_id
+    // CHECK: %[[SCALAR_ONE:.*]] = arith.constant 1 : i32
+    // CHECK: %[[SCALAR_OWNER:.*]] = arith.shli %[[SCALAR_ONE]], %[[SCALAR_CTA]] : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[SCALAR_PRODUCER]]{{.*}}%[[SCALAR_OWNER]]
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[SCALAR_PRODUCER]]{{.*}}%[[SCALAR_OWNER]]
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[SCALAR_PRODUCER]]{{.*}}%[[SCALAR_OWNER]]
     // CHECK: tt.atomic_rmw
     %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %one
         {allocation.offset = 0 : i32, allocation.size = 4 : i32}
@@ -3047,9 +3169,19 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %remote, %bar, %lead : !tt.tensordesc<8x32xi32, #tma_shared>, !ttg.memdesc<2xi64, #tma_barrier, #tma_smem, mutable> -> !ttg.memdesc<8x32xi32, #tma_shared, #tma_smem, mutable, 16x32>
     // CHECK: ttg.local_dealloc
     ttg.local_dealloc %parent : !ttg.memdesc<16x32xi32, #tma_shared, #tma_smem, mutable>
-    // The TMA write remains tracked, but conversion scratch does not check it.
-    // CHECK-NOT: tt.call @__triton_consan
-    // CHECK-NOT: tti.experimental_lock_acquire
+    // CTA zero's pending async write targets CTA one. Conversion must check
+    // that remote owner but publish its own CTA-local scratch write only.
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
+    // CHECK: %[[TMA_OWNER_CTA:.*]] = tti.experimental_cluster_cta_id
+    // CHECK: %[[TMA_OWNER_ONE:.*]] = arith.constant 1 : i32
+    // CHECK: %[[TMA_OWNER:.*]] = arith.shli %[[TMA_OWNER_ONE]], %[[TMA_OWNER_CTA]] : i32
+    // CHECK: %[[TMA_PEERS:.*]] = arith.constant 3 : i32
+    // CHECK: %[[TMA_READERS:.*]] = arith.ori {{.*}}, %[[TMA_PEERS]] : i32
+    // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}%[[TMA_READERS]]
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[TMA_READERS]]
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[TMA_OWNER]]
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[TMA_OWNER]]
     // CHECK: ttg.convert_layout
     %converted = ttg.convert_layout %value {allocation.offset = 0 : i32, allocation.size = 1024 : i32} : tensor<16x32xi32, #tma_src> -> tensor<16x32xi32, #tma_dst>
     tt.return

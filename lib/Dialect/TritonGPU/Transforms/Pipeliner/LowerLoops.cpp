@@ -75,7 +75,7 @@ bool mustLoadToRegisters(Operation *op) {
 
 int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
                        CoarseSchedule &schedule) {
-  assert(schedule.count(op) && "Op not found in the schedule");
+  assert(schedule.contains(op) && "Op not found in the schedule");
   int defStage = schedule[op].first;
   CoarseSchedule::Cluster defCluster = schedule[op].second;
   std::optional<int> useStage;
@@ -106,7 +106,9 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   for (Operation *topLevelUser : topLevelUsers) {
     int _useStage = schedule[topLevelUser].first;
     CoarseSchedule::Cluster _useCluster = schedule[topLevelUser].second;
-    if (*_useCluster > *defCluster) {
+    // This adds an *extra* buffer, so only bump already-pipelined loads:
+    // stageDiff 0 -> 1 would create a never-prefetched single-buffered copy.
+    if (*_useCluster > *defCluster && _useStage > defStage) {
       // Check if we need extra buffer due to unusual execution order
       // The issue occurs when users of the load are scheduled in a later
       // cluster, which happens when conditional code gets moved to epilogue
@@ -239,7 +241,9 @@ void createTMAAsyncLoad(scf::ForOp forOp, tt::DescriptorLoadOp loadOp,
                                 Value barrier, Value view, Value pred) {
                               ttng::AsyncTMACopyGlobalToLocalOp::create(
                                   builder, loadOp.getLoc(), desc,
-                                  loadOp.getIndices(), barrier, view, pred);
+                                  loadOp.getIndices(), barrier, view, pred,
+                                  /*multicast=*/false,
+                                  loadOp.getCachePolicyAttr());
                             });
 }
 
@@ -327,7 +331,7 @@ void createTMABarrierAndWait(
   // Find groups of loads that can share the same barrier. We look consecutive
   // loads and check that there are uses in between.
   for (auto &[loadOp, asyncLoad] : asyncLoads) {
-    if (!isTMALoad(loadOp) || visited.count(loadOp))
+    if (!isTMALoad(loadOp) || visited.contains(loadOp))
       continue;
     llvm::SmallDenseSet<Operation *> users;
     SmallVector<Operation *> group;
@@ -355,9 +359,9 @@ void createTMABarrierAndWait(
     Operation *nextOp = loadOp->getNextNode();
     int numBuffers = asyncLoad.stageDiff;
     while (nextOp) {
-      if (users.count(nextOp) || visited.count(nextOp))
+      if (users.contains(nextOp) || visited.contains(nextOp))
         break;
-      if (isTMALoad(nextOp) && asyncLoads.count(nextOp)) {
+      if (isTMALoad(nextOp) && asyncLoads.contains(nextOp)) {
         if (asyncLoads[nextOp].stageDiff != numBuffers)
           break;
         if (group.size() > 0 && schedule[group[0]] == schedule[nextOp]) {
@@ -632,10 +636,10 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 
   // Make sure all ops have attributes.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!schedule.count(&op)) {
+    if (!schedule.contains(&op)) {
       op.emitError() << "op not found in the schedule";
     }
-    assert(schedule.count(&op) && "op not found in the schedule");
+    assert(schedule.contains(&op) && "op not found in the schedule");
   }
   return forOp;
 }

@@ -56,13 +56,10 @@ struct GridDependencyOpConversion : public ConvertOpToLLVMPattern<OpTy> {
   LogicalResult
   matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    PTXBuilder ptxBuilder;
-    if constexpr (std::is_same_v<OpTy, triton::GridDependencyWaitOp>)
-      (*ptxBuilder.create("griddepcontrol.wait"))();
-    else
-      (*ptxBuilder.create("griddepcontrol.launch_dependents"))();
-    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(rewriter.getContext()));
-    rewriter.eraseOp(op);
+    auto kind = std::is_same_v<OpTy, triton::GridDependencyWaitOp>
+                    ? NVVM::GridDepActionKind::wait
+                    : NVVM::GridDepActionKind::launch_dependents;
+    rewriter.replaceOpWithNewOp<NVVM::GriddepcontrolOp>(op, kind);
     return success();
   }
 };
@@ -85,14 +82,13 @@ struct FromCTALowering {
 
 FromCTALowering getFromCTALowering(Location loc,
                                    ConversionPatternRewriter &rewriter,
-                                   Value barrierPtr, uint32_t fromCTA,
+                                   Value barrierPtr, Value id, uint32_t fromCTA,
                                    bool supportsMBarrierMulticast) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   uint32_t broadcastMask =
       (triton::gpu::lookupNumCTAs(rewriter) - 1) & ~fromCTA;
   Type i32Ty = rewriter.getIntegerType(32);
 
-  Value id = getThreadId(rewriter, loc);
   Value pred =
       supportsMBarrierMulticast
           ? b.icmp_eq(id, b.i32_val(0))
@@ -103,7 +99,8 @@ FromCTALowering getFromCTALowering(Location loc,
 
   if (supportsMBarrierMulticast)
     return {pred, barrierPtr,
-            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastMask)};
+            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastMask,
+                                                 ctaId)};
 
   Value peerOffset = b.i32_val(0);
   unsigned srcBit = 0;
@@ -266,22 +263,22 @@ struct BarrierExpectConversion
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
-    // Because this operation can signal other partitions we need to synchronize
-    // the current partition first.
-    ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
-
-    // The partition-relative thread ID lowers the same or marginally better
-    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
-    Value id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    unsigned size = op.getSize();
+    if (op.getPerWarp())
+      size /= ttg::lookupNumWarps(op);
     bool isCrossClusterBarrier =
         LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
+    // Each expectation registers its bytes before consuming its arrival, so
+    // pending arrivals keep the phase open even when TMA copies complete first.
+    Value id =
+        op.getPerWarp() ? getLaneId(rewriter, loc) : getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(id, b.i32_val(0));
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
       FromCTALowering lowering =
-          getFromCTALowering(loc, rewriter, smemObj.getBase(), *fromCTA,
+          getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
                              supportsMBarrierMulticast);
       pred = lowering.pred;
       barrierPtr = lowering.barrierPtr;
@@ -295,7 +292,7 @@ struct BarrierExpectConversion
         "@$0 mbarrier.arrive.expect_tx." +
         std::string(isCrossClusterBarrier ? "shared::cluster" : "shared::cta") +
         std::string(multicastMask ? ".multicast::cluster::32b" : "") +
-        ".b64 _, [$1], " + std::to_string(op.getSize()) +
+        ".b64 _, [$1], " + std::to_string(size) +
         std::string(multicastMask ? ", $2" : "") + ";";
     auto &expectOp = *expectPtxBuilder.create(expectPtx);
     SmallVector<PTXBuilder::Operand *, 3> operands = {
@@ -412,6 +409,15 @@ struct ArriveBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    unsigned count = op.getCount();
+    if (op.getPerWarp()) {
+      unsigned numWarps = ttg::lookupNumWarps(op);
+      if (count % numWarps != 0)
+        return op.emitOpError("per_warp count must be divisible by the warp "
+                              "count before lowering");
+      count /= numWarps;
+    }
+
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto barrierTy = op.getAlloc().getType();
@@ -419,43 +425,43 @@ struct ArriveBarrierOpConversion
         loc, adaptor.getAlloc(),
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
 
-    // Arrive has block-level semantics, so we must synchronize
-    // Technically, this should be MemBar's job but it can include TMEM
-    // accesses which doesn't have a MemBar equivalent :/
-    ttg::BarrierOp::create(rewriter, loc, ttg::AddrSpace::Local);
-
-    // The partition-relative thread ID lowers the same or marginally better
-    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
-    Value id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
-
     bool isCrossClusterBarrier =
         op.isMulticast() || LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
+    Value pred;
+    // Warp-aligned partition offsets preserve the lane ID.
+    Value id =
+        op.getPerWarp() ? getLaneId(rewriter, loc) : getThreadId(rewriter, loc);
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
+      // Routing may use several lane IDs to address peer CTAs.
       FromCTALowering lowering =
-          getFromCTALowering(loc, rewriter, smemObj.getBase(), *fromCTA,
+          getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
                              supportsMBarrierMulticast && !op.isMulticast());
       pred = lowering.pred;
       barrierPtr = lowering.barrierPtr;
       multicastMask = lowering.multicastMask;
       isCrossClusterBarrier = true;
+    } else {
+      pred = b.icmp_eq(id, b.i32_val(0));
     }
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
+    if (op.isMulticast())
+      multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+          loc, rewriter, static_cast<uint16_t>(op.getMulticastCTA()));
     // TODO: Add phase result as needed.
     std::stringstream ptxAsm;
     ptxAsm << "@$0 mbarrier.arrive."
            << (isCrossClusterBarrier ? "shared::cluster" : "shared::cta");
-    if (op.isMulticast() || multicastMask)
+    if (multicastMask)
       ptxAsm << ".multicast::cluster::32b";
     ptxAsm << ".b64 _, [$1]";
-    if (op.getCount() > 1) {
-      ptxAsm << ", " << op.getCount();
+    if (count > 1) {
+      ptxAsm << ", " << count;
     }
-    if (op.isMulticast() || multicastMask)
+    if (multicastMask)
       ptxAsm << ", $2";
     ptxAsm << ";";
 
@@ -463,10 +469,6 @@ struct ArriveBarrierOpConversion
     SmallVector<PTXBuilder::Operand *, 3> operands = {
         ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(barrierPtr, "r")};
-    if (op.isMulticast()) {
-      multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
-          loc, rewriter, static_cast<uint16_t>(op.getMulticastCTA()));
-    }
     if (multicastMask)
       operands.push_back(ptxBuilder.newOperand(multicastMask, "r"));
 
@@ -575,18 +577,9 @@ struct CLCIsCanceledOpConversion
       return op.emitError("CLC operations require SM100+ (Blackwell)");
     }
 
-    auto loc = op.getLoc();
-    std::string ptxAsm =
-        "clusterlaunchcontrol.query_cancel.is_canceled.pred.b128 $0, $1;";
-    PTXBuilder ptxBuilder;
-    auto &clcOp = *ptxBuilder.create(ptxAsm);
-    auto *resultOp = ptxBuilder.newOperand("=b");
-    auto *clcResultOp = ptxBuilder.newOperand(adaptor.getClcResult(), "q");
-    clcOp({resultOp, clcResultOp}, /*onlyAttachMLIRArgs=*/true);
-
-    Value result =
-        ptxBuilder.launch(rewriter, loc, i1_ty, /*hasSideEffects=*/false);
-    rewriter.replaceOp(op, result);
+    rewriter.replaceOpWithNewOp<NVVM::ClusterLaunchControlQueryCancelOp>(
+        op, NVVM::ClusterLaunchControlQueryType::IS_CANCELED,
+        adaptor.getClcResult());
 
     return success();
   }
@@ -610,30 +603,20 @@ struct CLCGetProgramIdOpConversion
 
     auto loc = op.getLoc();
 
-    const char *dimName = [&] {
+    auto queryType = [&] {
       switch (op.getDim()) {
       case ProgramIDDim::X:
-        return "x";
+        return NVVM::ClusterLaunchControlQueryType::GET_FIRST_CTA_ID_X;
       case ProgramIDDim::Y:
-        return "y";
+        return NVVM::ClusterLaunchControlQueryType::GET_FIRST_CTA_ID_Y;
       case ProgramIDDim::Z:
-        return "z";
+        return NVVM::ClusterLaunchControlQueryType::GET_FIRST_CTA_ID_Z;
       }
       llvm::llvm_unreachable_internal("Invalid program id dim");
     }();
 
-    auto ptxAsm = ("clusterlaunchcontrol.query_cancel.get_first_ctaid::" +
-                   llvm::Twine(dimName) + ".b32.b128 $0, $1;")
-                      .str();
-
-    PTXBuilder ptxBuilder;
-    auto &clcOp = *ptxBuilder.create(ptxAsm);
-    auto *resultOp = ptxBuilder.newOperand("=r");
-    auto *clcResultOp = ptxBuilder.newOperand(adaptor.getClcResult(), "q");
-    clcOp({resultOp, clcResultOp}, /*onlyAttachMLIRArgs=*/true);
-
-    Value result =
-        ptxBuilder.launch(rewriter, loc, i32_ty, /*hasSideEffects=*/false);
+    Value result = NVVM::ClusterLaunchControlQueryCancelOp::create(
+        rewriter, loc, queryType, adaptor.getClcResult());
 
     // Convert ctaid to clusterid, which is the real program id
     // Note that all cluster CTAs are distributed in the X dim

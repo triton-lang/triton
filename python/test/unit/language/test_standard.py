@@ -24,6 +24,63 @@ def test_maximum_minium(dtype, op, device):
     _test_binary(dtype, dtype, expr, numpy_expr, device=device)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", [torch.bool, torch.uint8, torch.int32, torch.float32])
+@pytest.mark.parametrize("axis", [None, 0, 1, -1])
+@pytest.mark.parametrize("keep_dims", [False, True])
+@pytest.mark.parametrize("member", [False, True])
+def test_all_any_reduction(dtype, axis, keep_dims, member, device):
+
+    @triton.jit
+    def kernel(X, All, Any, AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr, MEMBER: tl.constexpr, OUT_SHAPE: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8)[:, None] * 32 + tl.arange(0, 32)[None, :])
+        if MEMBER:
+            if AXIS is None:
+                a = x.all(keep_dims=KEEP_DIMS)
+                b = x.any(keep_dims=KEEP_DIMS)
+            else:
+                a = x.all(AXIS, keep_dims=KEEP_DIMS)
+                b = x.any(AXIS, keep_dims=KEEP_DIMS)
+        else:
+            if AXIS is None:
+                a = tl.all(x, keep_dims=KEEP_DIMS)
+                b = tl.any(x, keep_dims=KEEP_DIMS)
+            else:
+                a = tl.all(x, AXIS, keep_dims=KEEP_DIMS)
+                b = tl.any(x, AXIS, keep_dims=KEEP_DIMS)
+        tl.static_assert(a.dtype == tl.int1 and b.dtype == tl.int1)
+        tl.static_assert(a.shape == OUT_SHAPE and b.shape == OUT_SHAPE)
+        if AXIS is None and not KEEP_DIMS:
+            tl.store(All, a)
+            tl.store(Any, b)
+        else:
+            offsets = tl.arange(0, a.numel)
+            tl.store(All + offsets, a.reshape((a.numel, )))
+            tl.store(Any + offsets, b.reshape((b.numel, )))
+
+    for pattern in ("zeros", "nonzero", "mixed"):
+        x = torch.full((8, 32), 2, dtype=torch.int32, device=device)
+        x[:, ::2] = -2
+        x = x.to(dtype)
+        if dtype == torch.float32:
+            x[1, :4] = torch.tensor([float("nan"), float("inf"), -float("inf"), 0.5], device=device)
+        if pattern == "zeros":
+            x.fill_(0)
+            if dtype == torch.float32:
+                x[:, ::2] = -0.0
+        elif pattern == "mixed":
+            x[::2, ::2] = 0
+            x[0, :] = 0
+            x[:, 0] = 0
+        expected_all = torch.all(x.bool(), dim=axis, keepdim=keep_dims)
+        expected_any = torch.any(x.bool(), dim=axis, keepdim=keep_dims)
+        actual_all = torch.empty_like(expected_all)
+        actual_any = torch.empty_like(expected_any)
+        kernel[(1, )](x, actual_all, actual_any, axis, keep_dims, member, tuple(expected_all.shape))
+        torch.testing.assert_close(actual_all, expected_all)
+        torch.testing.assert_close(actual_any, expected_any)
+
+
 # ---------------
 # test sort op
 # ---------------
@@ -91,6 +148,20 @@ def test_flip(M, N, K, dtype_str, dim, device):
     z = torch.empty_like(x, device=device)
     flip_kernel[(1, )](x, z, M, N, K, dim, num_warps=8)
     assert (y == z).all(), (y, z)
+
+
+@pytest.mark.interpreter
+def test_flip_size_one(device):
+
+    @triton.jit
+    def flip_kernel(X, Z):
+        off = tl.arange(0, 1)
+        tl.store(Z + off, tl.flip(tl.load(X + off)))
+
+    x = torch.tensor([42], dtype=torch.int32, device=device)
+    z = torch.empty_like(x)
+    flip_kernel[(1, )](x, z)
+    assert z.item() == 42
 
 
 @pytest.mark.interpreter

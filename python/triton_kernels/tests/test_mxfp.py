@@ -15,7 +15,7 @@ from triton_kernels.numerics_details.mxfp import (
     upcast_from_mxfp,
     upcast_from_mxfp_torch,
 )
-from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_ue8m0_scale, nvfp4_to_mxfp8_tile
 from triton_kernels.target_info import cuda_capability_geq, is_cuda
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details.layout import StridedLayout
@@ -24,6 +24,87 @@ from triton_kernels.testing import assert_close, assert_equal
 
 def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
+
+
+@triton.jit
+def _nvfp4_to_mxfp8_tile_kernel(X, S, Y, YS, M: tl.constexpr, K: tl.constexpr, BLOCK_K: tl.constexpr):
+    rows = tl.program_id(0) * 16 + tl.arange(0, 16)
+    cols = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K // 2) * 2
+    x = tl.load(X + rows[:, None] * (K // 2) + cols[None, :] // 2, (rows[:, None] < M) & (cols[None, :] < K), other=0)
+    sc = tl.program_id(1) * (BLOCK_K // 16) + tl.arange(0, BLOCK_K // 16)
+    scales = tl.load(S + rows[:, None] * (K // 16) + sc[None, :], (rows[:, None] < M) & (sc[None, :] < K // 16),
+                     other=0.0)
+    y, ys = nvfp4_to_mxfp8_tile(x, scales)
+    out_cols = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K)
+    tl.store(Y + rows[:, None] * K + out_cols[None, :], y, (rows[:, None] < M) & (out_cols[None, :] < K))
+    out_sc = tl.program_id(1) * (BLOCK_K // 32) + tl.arange(0, BLOCK_K // 32)
+    tl.store(YS + rows[:, None] * (K // 32) + out_sc[None, :], ys, (rows[:, None] < M) & (out_sc[None, :] < K // 32))
+
+
+@pytest.mark.parametrize("block_k", [32, 128, 256])
+@pytest.mark.parametrize("k", [160, 256])
+def test_nvfp4_to_mxfp8_tile(block_k, k, device):
+    if not is_cuda() or not cuda_capability_geq(10, 0):
+        pytest.skip("requires Blackwell")
+    torch.manual_seed(42)
+    m = 17
+    values = torch.randint(0, 256, (m, k // 2), device=device, dtype=torch.uint8)
+    scale_values = torch.tensor([0, 2**-9, 0.5, 1.125, 448], device=device)
+    scales = scale_values[torch.arange(m * k // 16, device=device) % 5].reshape(m, k // 16).to(torch.float8_e4m3fn)
+    actual = torch.empty((m, k), dtype=torch.float8_e4m3fn, device=device)
+    actual_scale = torch.empty((m, k // 32), dtype=torch.uint8, device=device)
+    _nvfp4_to_mxfp8_tile_kernel[(triton.cdiv(m, 16), triton.cdiv(k, block_k))](values, scales, actual, actual_scale, m,
+                                                                               k, block_k)
+    decoded = upcast_from_mxfp_torch(values, scales, torch.float32, axis=-1)
+    expected, expected_scale = downcast_to_mxfp_torch(decoded, torch.float8_e4m3fn, axis=-1)
+    torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
+    torch.testing.assert_close(actual_scale, expected_scale, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("maximum0", range(8))
+def test_nvfp4_to_mxfp8_tile_scale_pairs(maximum0, device):
+    if not is_cuda() or not cuda_capability_geq(10, 0):
+        pytest.skip("requires Blackwell")
+    # Every finite nonnegative E4M3 scale pair, with independent FP4 maxima
+    # in the two NVFP4 blocks that share one MXFP8 scale.
+    cases = torch.arange(127 * 127 * 8, device=device)
+    scale_bits = torch.stack((cases // (127 * 8), cases // 8 % 127), dim=1).to(torch.uint8)
+    scales = scale_bits.view(torch.float8_e4m3fn)
+    maxima = torch.stack((torch.full_like(cases, maximum0), cases % 8), dim=1)
+    positions = torch.arange(8, device=device)
+    lo = torch.minimum(positions, maxima[:, :, None])
+    hi = torch.minimum(7 - positions, maxima[:, :, None])
+    # Exercise both signs, including negative zero, in both packed halves.
+    values = (lo | (hi << 4) | ((positions % 2) * 0x88)).to(torch.uint8).reshape(-1, 16)
+    m, k = values.shape[0], 32
+    actual = torch.empty((m, k), dtype=torch.float8_e4m3fn, device=device)
+    actual_scale = torch.empty((m, 1), dtype=torch.uint8, device=device)
+    _nvfp4_to_mxfp8_tile_kernel[(triton.cdiv(m, 16), 1)](values, scales, actual, actual_scale, m, k, k)
+    decoded = upcast_from_mxfp_torch(values, scales, torch.float32, axis=-1)
+    expected, expected_scale = downcast_to_mxfp_torch(decoded, torch.float8_e4m3fn, axis=-1)
+    torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
+    torch.testing.assert_close(actual_scale, expected_scale, rtol=0, atol=0)
+
+
+@triton.jit
+def _upcast_ue8m0_scale_kernel(out, scale, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    scale = tl.load(scale + offsets)
+    tl.store(out + offsets, upcast_ue8m0_scale(scale, out.dtype.element_ty))
+
+
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("scale_dtype", [torch.uint8, torch.int8])
+@pytest.mark.parametrize("block_size", [1, 128, 256])
+def test_ue8m0_scale_upcast(dst_dtype, scale_dtype, block_size, device):
+    scale = torch.arange(256, device=device).to(torch.uint8)
+    actual = torch.empty(256, dtype=dst_dtype, device=device)
+    expected = torch.ldexp(torch.ones(256, dtype=torch.float64, device=device), scale.to(torch.int32) - 127)
+    expected[-1] = float("nan")
+    kernel = _upcast_ue8m0_scale_kernel[(256 // block_size, )](actual, scale.view(scale_dtype), block_size)
+    torch.testing.assert_close(actual, expected.to(dst_dtype), rtol=0, atol=0, equal_nan=True)
+    if cuda_capability_geq(10, 0) and dst_dtype == torch.bfloat16 and block_size > 1:
+        assert "cvt.rn.bf16x2.ue8m0x2" in kernel.asm["ptx"]
 
 
 @triton.jit
@@ -52,6 +133,67 @@ def _upcast_mxfp4_tile_kernel(
     out_tile = upcast_mxfp4_tile(tensor, scale, dst_dtype)
     offs_k = tl.arange(0, PACKED_K * 2)[None, :]
     tl.store(out + offs_m * stride_out_m + offs_k * stride_out_k, out_tile)
+
+
+def _mxfp_scale_boundary_data(src_dtype, dst_dtype, device):
+    values = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, get_max_quant_val(src_dtype)], dtype=torch.float64)
+    values = torch.cat((values, -values)).repeat(2)
+    scale = torch.tensor([0, 1, 2, 125, 126, 127, 128, 255], dtype=torch.uint8).repeat(64, 1)
+    expected = torch.ldexp(values[None, None, :], scale.to(torch.int32)[..., None] - 127)
+    expected = expected.masked_fill(scale[..., None] == 255, float("nan"))
+    expected = expected.clamp(torch.finfo(dst_dtype).min, torch.finfo(dst_dtype).max).to(dst_dtype).flatten(1)
+    if src_dtype == torch.uint8:
+        nibbles = torch.arange(16, dtype=torch.uint8).repeat(2)
+        tensor = nibbles[::2] | (nibbles[1::2] << 4)
+    else:
+        tensor = values.to(src_dtype)
+    tensor = tensor.repeat(scale.shape)
+    return tensor.to(device), scale.to(device), expected.to(device)
+
+
+@pytest.mark.parametrize("upcast", [upcast_from_mxfp, upcast_from_mxfp_torch])
+@pytest.mark.parametrize("src_dtype", [torch.uint8, torch.float8_e4m3fn, torch.float8_e5m2])
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("axis", [0, -1])
+def test_mxfp_upcast_scale_boundaries(upcast, src_dtype, dst_dtype, axis, device):
+    if (upcast is upcast_from_mxfp and src_dtype == torch.float8_e4m3fn and is_cuda()
+            and torch.cuda.get_device_capability() < (8, 9)):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
+    tensor, scale, expected = _mxfp_scale_boundary_data(src_dtype, dst_dtype, device)
+    tensor, scale, expected = (x.transpose(axis, -1) for x in (tensor, scale, expected))
+    actual = upcast(tensor, scale, dst_dtype, axis)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_mxfp_upcast_torch_nan_scale(dst_dtype):
+    tensor = torch.tensor([float("inf"), -float("inf"), float("nan"), 1], dtype=torch.float8_e5m2).repeat(2, 8)
+    scale = torch.tensor([[127], [255]], dtype=torch.uint8)
+    expected = tensor.to(dst_dtype)
+    expected[1] = float("nan")
+    actual = upcast_from_mxfp_torch(tensor, scale, dst_dtype, axis=-1)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_mxfp4_tile_upcast_scale_boundaries(dst_dtype, device):
+    tensor, scale, expected = _mxfp_scale_boundary_data(torch.uint8, dst_dtype, device)
+    actual = torch.empty_like(expected)
+    _upcast_mxfp4_tile_kernel[(1, )](
+        actual,
+        tensor,
+        scale,
+        *actual.stride(),
+        *tensor.stride(),
+        *scale.stride(),
+        tensor.shape[0],
+        tensor.shape[1],
+        scale.shape[1],
+        {torch.float16: tl.float16, torch.bfloat16: tl.bfloat16, torch.float32: tl.float32}[dst_dtype],
+        # A ptxas bug causes this test to fail with fusion disabled on Hopper.
+        enable_fp_fusion=True,
+    )
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
@@ -154,8 +296,8 @@ def test_mxfp4_rounding_cases(dst_dtype, device):
 @pytest.mark.parametrize("src_dtype", ["float4_e2m1", "float8_e5m2", "float8_e4m3fn"])
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp_extreme_values(src_dtype, dst_dtype, device):
-    if "float8" in src_dtype and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
-        pytest.skip("Float8 not tested on A100")
+    if src_dtype == "float8_e4m3fn" and is_cuda() and torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
     src_dtype = dtype_str_to_torch(src_dtype)
     dst_dtype = dtype_str_to_torch(dst_dtype)
     BIG_VALUE = 65470 if dst_dtype == torch.float16 else 3.3895e38
@@ -171,8 +313,8 @@ def test_mxfp_extreme_values(src_dtype, dst_dtype, device):
 @pytest.mark.parametrize("src_dtype", ["float4_e2m1", "float8_e5m2", "float8_e4m3fn"])
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
-    if "float8" in src_dtype and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
-        pytest.skip("Float8 not tested on A100")
+    if src_dtype == "float8_e4m3fn" and is_cuda() and torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
     limit_range = src_dtype == "float8_e5m2" and dst_dtype == "float16"
 
     # This test checks that quantization and dequantization kernels produce the exact values for some inputs
@@ -251,9 +393,9 @@ def test_mxfp_casting(
     microblock_size: int,
     device,
 ):
-    if ("float8" in quant_dtype
-            or scale_dtype == torch.float8_e4m3fn) and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
-        pytest.skip("Float8 not tested on A100")
+    if ((quant_dtype == "float8_e4m3fn" or scale_dtype == torch.float8_e4m3fn) and is_cuda()
+            and torch.cuda.get_device_capability() < (8, 9)):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
     torch.manual_seed(0)
     quant_torch_type = dtype_str_to_torch(quant_dtype)
     dequant_torch_type = dtype_str_to_torch(dequant_dtype)

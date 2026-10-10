@@ -3,6 +3,8 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/include/hipblas_instance.h"
 #include "amd/include/hipblas_types.h"
+#include "amd/lib/Target/MFMASchedule/MFMASchedule.h"
+#include "dylib_utils.h"
 #include "lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
@@ -47,6 +49,11 @@ namespace py = nanobind;
 
 namespace {
 llvm::Triple getAMDTargetTriple(const std::string &arch) {
+  // Core LLVM has no gfx1250-strict processor. Returning the triple string
+  // does not build a target machine; callers that do must pass a base triple.
+  if (arch == "gfx1250-strict")
+    return llvm::Triple("amdgpu12.50s-amd-amdhsa");
+
   llvm::AMDGPU::GPUKind gpuKind = llvm::AMDGPU::parseArchAMDGCN(arch);
   llvm::Triple::SubArchType subArch = llvm::AMDGPU::getSubArch(gpuKind);
   if (subArch == llvm::Triple::NoSubArch)
@@ -359,7 +366,9 @@ static std::optional<std::string> lldInvoke(const char *inPath,
 }
 
 void init_triton_amd(py::module_ &m) {
+  mlir::triton::AMD::registerTargetInfo();
   m.doc() = "Python bindings to the AMD Triton backend";
+  init_triton_amd_loader(m);
 
   auto passes = m.def_submodule("passes");
   auto ttgpuir_m = passes.def_submodule("ttgpuir");
@@ -383,6 +392,12 @@ void init_triton_amd(py::module_ &m) {
   m.def("attach_target_triple",
         [](llvm::Module *module, const std::string &arch) {
           module->setTargetTriple(getAMDTargetTriple(arch));
+        });
+
+  // Set a triple string without core LLVM
+  m.def("set_target_triple",
+        [](llvm::Module *module, const std::string &triple) {
+          module->setTargetTriple(llvm::Triple(triple));
         });
 
   // Set target architecture ISA version
@@ -449,11 +464,13 @@ void init_triton_amd(py::module_ &m) {
   });
 
   m.def("assemble_amdgcn", [](const std::string &assembly,
+                              const std::string &tripleStr,
                               const std::string &arch,
                               const std::string &features) {
     std::string error;
 
-    llvm::Triple triple = getAMDTargetTriple(arch);
+    // tripleStr must be one this LLVM can assemble. amdgpu12.50s is not.
+    llvm::Triple triple(tripleStr);
     const llvm::Target *target =
         llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target)
@@ -507,17 +524,21 @@ void init_triton_amd(py::module_ &m) {
     return py::bytes(result.data(), result.size());
   });
 
-  m.def("has_architected_sgprs", [](const std::string &arch) {
-    std::string error;
-    llvm::Triple triple = getAMDTargetTriple(arch);
-    const llvm::Target *target =
-        llvm::TargetRegistry::lookupTarget(triple, error);
-    if (!target)
-      throw std::runtime_error("target lookup error: " + error);
-    std::unique_ptr<llvm::MCSubtargetInfo> sti(
-        target->createMCSubtargetInfo(triple, arch, ""));
-    return sti->checkFeatures("+architected-sgprs");
-  });
+  m.def("has_architected_sgprs",
+        [](const std::string &tripleStr, const std::string &arch) {
+          std::string error;
+          // tripleStr must be one this LLVM can build a subtarget for. The
+          // strict triple is amdgpu12.50s, which aborts here; pass the base
+          // triple instead.
+          llvm::Triple triple(tripleStr);
+          const llvm::Target *target =
+              llvm::TargetRegistry::lookupTarget(triple, error);
+          if (!target)
+            throw std::runtime_error("target lookup error: " + error);
+          std::unique_ptr<llvm::MCSubtargetInfo> sti(
+              target->createMCSubtargetInfo(triple, arch, ""));
+          return sti->checkFeatures("+architected-sgprs");
+        });
 
   m.def("supports_multi_cta_launch", [](const std::string &arch) {
     return mlir::triton::AMD::TargetInfo(arch).supportsMultiCTALaunch();
@@ -573,6 +594,10 @@ void init_triton_amd(py::module_ &m) {
 
   m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
     mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
+  });
+
+  m.def("add_mfma_schedule_pass", [](llvm::Function *fn) -> bool {
+    return mlir::triton::AMD::runMFMASchedulePass(*fn);
   });
 
   auto hipBlas = m.def_submodule("hipblas");

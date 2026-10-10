@@ -1,7 +1,6 @@
 #include "Utility.h"
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -101,7 +100,7 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
                             clamp);
 
     if (bits < 32)
-      val = b.trunc(int_ty(bits), val);
+      val = b.trunc(int_ty(bits), val, LLVM::IntegerOverflowFlags::nsw);
     if (!valType.isIntOrIndex())
       val = b.bitcast(val, valType);
     return val;
@@ -176,8 +175,7 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
                        makeDppCtrl(DppCtrl::ROW_XMASK0, mask));
       else if (mask < 32)
         return emitPermlaneX16Xor(loc, rewriter, val, mask & 0xf);
-    } else if ((triton::amdgpu::isCDNA(isaFamily) ||
-                isaFamily == ISAFamily::GCN5_1) &&
+    } else if (triton::amdgpu::isCDNA(isaFamily) &&
                (mask < 16 || usePermlaneSwap)) {
       Value result = val;
       uint32_t highBitsDppBasis = 0;
@@ -821,9 +819,12 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
   }
 }
 
-bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
-                                      const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp) {
+// Returns true if we can perform coalesced write from the source encoding to
+// the destination encoding.
+static bool
+canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
+                                 const LinearLayout &srcToSharedLayout,
+                                 unsigned threadsPerWarp) {
   auto kReg = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   auto kOffset = StringAttr::get(ctx, "offset");
@@ -854,7 +855,14 @@ bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
 //    produce wrong results if we invalidate the condition in the future
 bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
                         RankedTensorType srcTy, Attribute dstEnc,
-                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize) {
+                        ArrayRef<int64_t> dstAllocShape, unsigned &vectorSize,
+                        DirectToLdsVecInfo vecInfo,
+                        std::string *failureReason) {
+  auto setReason = [&](std::string reason) {
+    if (failureReason)
+      *failureReason = std::move(reason);
+  };
+
   // For padded encodings restrict vec by the min interval
   auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstEnc);
   if (paddedEnc) {
@@ -872,6 +880,27 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   int elemBitWidth = tt::getPointeeBitWidth(srcTy);
   if (fitToValidDirectToLdsVecSize(vectorSize, elemBitWidth, targetInfo) == 0) {
     LDBG("unsupported global load to LDS vectorSize (" << vectorSize << ")");
+    std::string guidance =
+        " Increase the provable alignment of the source (e.g. tl.multiple_of "
+        "on the base pointer, or aligning the leading dimensions) so a wider "
+        "vector can be used.";
+    if (vecInfo.maskIsLimiting()) {
+      guidance =
+          " The mask is the limiting factor: the pointers/offsets allow a "
+          "vector of " +
+          std::to_string(vecInfo.fromPtr) + " element(s) but the mask only " +
+          std::to_string(vecInfo.fromMask) +
+          ". A direct-to-LDS copy transfers each lane's whole vector in a "
+          "single transaction, so every vector-width group of mask values must "
+          "be identical. Align the mask boundary to the vector width, or peel "
+          "the ragged remainder into a separate load.";
+    }
+    setReason("the load can only be vectorized to " +
+              std::to_string(vectorSize) + " element(s) (" +
+              std::to_string(vectorSize * elemBitWidth) +
+              " bits), which is narrower than any direct-to-LDS transaction "
+              "width supported on this target." +
+              guidance);
     return false;
   }
 
@@ -906,6 +935,12 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   if (vectorSize < contig) {
     LDBG("Load vectorization (" << vectorSize << ") smaller than contiguity ("
                                 << contig << ") resulting in strided writes");
+    setReason(
+        "the global load vectorization (" + std::to_string(vectorSize) +
+        ") is smaller than the shared memory contiguity (" +
+        std::to_string(contig) +
+        "), which would require strided LDS writes. Adjust the blocked or "
+        "shared encoding so the two agree.");
     return false;
   }
   // If the requested load is wider than what the layout can write coalesced,
@@ -917,12 +952,20 @@ bool canLoadDirectToLDS(const triton::AMD::TargetInfo &targetInfo,
   if (!targetInfo.supportsDirectToLdsLoadBitWidth(vectorSize * elemBitWidth)) {
     LDBG("coalesced load width (" << vectorSize
                                   << ") is not a supported direct-to-LDS load");
+    setReason(
+        "the coalesced " + std::to_string(vectorSize * elemBitWidth) +
+        "-bit direct-to-LDS transaction width is not supported on this target");
     return false;
   }
 
   if (!canCoalesceWriteIntoSharedMemory(srcTy.getContext(), srcToSharedLayout,
                                         targetInfo.getWarpSize())) {
     LDBG("Does not write coalesced into LDS");
+    setReason("the resulting writes into shared memory are not coalesced for a "
+              "vectorization of " +
+              std::to_string(vectorSize) +
+              " element(s). Adjust the blocked or shared encoding so each warp "
+              "writes a contiguous range.");
     return false;
   }
 
@@ -1065,7 +1108,7 @@ Value convertF8ToF32_SW(RewriterBase &rewriter, Location loc, Value fp8Val,
 
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                     bool toFp16, Value packedVec,
-                                    ISAFamily isaFamily, Value scale) {
+                                    ISAFamily isaFamily) {
   assert((isa<triton::gpu::Fp4ToFpOp, triton::amdgpu::ScaledUpcastFp4Op>(op)) &&
          "Expected Fp4ToFpOp or ScaledUpcastFp4Op");
   Location loc = op->getLoc();
@@ -1116,25 +1159,8 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
     Value res_75 = ROCDL::CvtPkF32Fp8Op::create(
         rewriter, loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 1));
     SmallVector<Value> pkVals{res_20, res_64, res_31, res_75};
-    if (scale) {
-      // pack 2 values together to help llvm backend codegen
-      Value scaleF32 =
-          b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-      Type v2f32 = vec_ty(f32_ty, 2);
-      Value pkScale = b.undef(v2f32);
-      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(0));
-      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(1));
-      Type v2i32 = vec_ty(i32_ty, 2);
-      for (unsigned i = 0; i < 4; i++) {
-        Value pkScaled = b.fmul(pkScale, b.bitcast(pkVals[i], v2f32));
-        pkVals[i] = (b.bitcast(pkScaled, v2i32));
-      }
-    } else {
-      // bitcast to v2i32
-      for (unsigned i = 0; i < 4; i++) {
-        pkVals[i] = b.bitcast(pkVals[i], vec_ty(i32_ty, 2));
-      }
-    }
+    for (Value &value : pkVals)
+      value = b.bitcast(value, vec_ty(i32_ty, 2));
     Value e0 = b.extract_element(pkVals[0], b.i32_val(0));
     Value e1 = b.extract_element(pkVals[2], b.i32_val(0));
     Value e2 = b.extract_element(pkVals[0], b.i32_val(1));

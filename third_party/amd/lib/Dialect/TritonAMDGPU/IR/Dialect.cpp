@@ -169,6 +169,66 @@ bool groupSharesSingleScale(const LinearLayout &scaleLL, StringAttr kRegister,
       .sublayoutIsZero({kRegister}, outDims);
 }
 
+// A v_cvt_scalef32 group converts `groupSize` register-consecutive values with
+// a single intrinsic. Check that those values are consecutive along one tensor
+// axis, and that the thread holds whole groups.
+LogicalResult verifyRegisterConsecutiveGroups(Operation *op,
+                                              RankedTensorType type,
+                                              int64_t groupSize) {
+  assert(llvm::isPowerOf2_64(groupSize));
+  if (!type.getEncoding())
+    return success();
+  if (gpu::getUniqueElemsPerThread(type) % groupSize != 0)
+    return op->emitOpError() << "requires a multiple of " << groupSize
+                             << " unique values per thread";
+
+  auto notConsecutive = [&]() {
+    return op->emitOpError()
+           << "requires groups of " << groupSize
+           << " register-consecutive values along one tensor axis";
+  };
+
+  LinearLayout layout = gpu::toLinearLayout(type);
+  auto kRegister = StringAttr::get(op->getContext(), "register");
+  if (layout.getInDimSizeLog2(kRegister) < llvm::Log2_64(groupSize))
+    return notConsecutive();
+
+  // The first register group must cover an aligned segment along one tensor
+  // axis. Other input bits can move or permute the segment without splitting
+  // it.
+  auto outDims = llvm::to_vector(layout.getOutDimNames());
+  LinearLayout group =
+      layout.sublayout({kRegister}, outDims).resizeInDim(kRegister, groupSize);
+  auto isIdentityAlong = [&](StringAttr dim) {
+    LinearLayout identity = LinearLayout::identity1D(groupSize, kRegister, dim);
+    return divideLeft(group, identity).has_value();
+  };
+  if (!llvm::any_of(outDims, isIdentityAlong))
+    return notConsecutive();
+  return success();
+}
+
+std::optional<TargetFeatures> getScaledUpcastTarget(Operation *op) {
+  auto module = op->getParentOfType<ModuleOp>();
+  if (!module)
+    return std::nullopt;
+  TargetFeatures features = TargetFeatures::fromModuleOp(module);
+  if (!features.supportsHwScaledUpcast())
+    return std::nullopt;
+  return features;
+}
+
+LogicalResult verifyScaledUpcastScaleType(Operation *op,
+                                          RankedTensorType scaleTy,
+                                          const TargetFeatures &features) {
+  if (!features.supportsCvtPkScalePk8() ||
+      scaleTy.getElementType().isInteger(8))
+    return success();
+  return op->emitOpError()
+         << "v_cvt_scale_pk8 requires a raw E8M0 scale in i8, but got "
+         << scaleTy.getElementType();
+}
+
 // The v_cvt_scale_pk8 lowering upcasts 8 register-consecutive fp4 values with a
 // single scale, check that 8 elements in the scale layout are all broadcasts.
 bool pk8GroupSharesSingleScale(const LinearLayout &scaleLL,
@@ -755,8 +815,16 @@ LogicalResult ScaledUpcastFp4Op::verify() {
   if (failed(verifyScaledUpcastFp4ScaleLayout(*this)))
     return failure();
 
-  return mlir::triton::gpu::Fp4ToFpOp::verifyFp4ToFp(*this, inputTy, outputTy,
-                                                     getAxis());
+  if (failed(mlir::triton::gpu::Fp4ToFpOp::verifyFp4ToFp(*this, inputTy,
+                                                         outputTy, getAxis())))
+    return failure();
+
+  auto features = getScaledUpcastTarget(*this);
+  if (!features)
+    return success();
+  if (failed(verifyScaledUpcastScaleType(*this, scaleTy, *features)))
+    return failure();
+  return verifyRegisterConsecutiveGroups(*this, outputTy, /*groupSize=*/8);
 }
 
 Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
@@ -877,6 +945,18 @@ Attribute ScaledUpcastFp8Op::inferDstEncoding(unsigned opIdx,
 Attribute ScaledUpcastFp8Op::inferSrcEncoding(unsigned opIdx,
                                               Attribute dstEnc) {
   return dstEnc;
+}
+
+LogicalResult ScaledUpcastFp8Op::verify() {
+  auto features = getScaledUpcastTarget(*this);
+  if (!features)
+    return success();
+  if (failed(
+          verifyScaledUpcastScaleType(*this, getScale().getType(), *features)))
+    return failure();
+  int64_t groupSize = features->supportsCvtPkScalePk8() ? 8 : 4;
+  return verifyRegisterConsecutiveGroups(*this, getOutput().getType(),
+                                         groupSize);
 }
 
 LogicalResult ScaledDowncastFp8Op::verify() {
@@ -1376,7 +1456,7 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
       return emitOpError("TDM store padding is only supported when padding "
                          "interval equals the innermost block dimension (got "
                          "padInterval=")
-             << intervals[0] << ", innermost dimension=" << blockShape.back()
+             << intervals[0] << ", innermost dimension=" << shapePerCTA.back()
              << ")";
   }
 
@@ -1423,11 +1503,12 @@ LogicalResult AsyncTDMScatterOp::verify() {
     if (intervals.size() != 1)
       return emitOpError("TDM scatter only supports single interval paddings.");
 
-    if (intervals[0] != blockShape.back())
+    auto shapePerCTA = triton::gpu::getShapePerCTA(paddedEnc, blockShape);
+    if (intervals[0] != shapePerCTA.back())
       return emitOpError("TDM scatter padding is only supported when padding "
                          "interval equals the innermost block dimension (got "
                          "padInterval=")
-             << intervals[0] << ", innermost dimension=" << blockShape.back()
+             << intervals[0] << ", innermost dimension=" << shapePerCTA.back()
              << ")";
   }
 
@@ -1467,6 +1548,7 @@ LogicalResult AsyncTDMGatherOp::verify() {
     return emitOpError("src_row_indices size must be a power of 2, got ")
            << numIndices;
 
+  auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
   auto paddedEnc = llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(enc);
   if (paddedEnc) {
     if (!(paddedEnc.getIntervals().size() == 1 &&
@@ -1474,15 +1556,13 @@ LogicalResult AsyncTDMGatherOp::verify() {
       return emitOpError(
           "TDM gather does not support multiple interval-padding pairs");
 
-    if (blockShape.back() % paddedEnc.getIntervals()[0] != 0)
+    if (shapePerCTA.back() % paddedEnc.getIntervals()[0] != 0)
       return emitOpError(
                  "TDM gather padding interval must divide the innermost "
                  "block dimension (got padInterval=")
              << paddedEnc.getIntervals()[0]
-             << ", innermost dimension=" << blockShape.back() << ")";
+             << ", innermost dimension=" << shapePerCTA.back() << ")";
   }
-
-  auto shapePerCTA = triton::gpu::getShapePerCTA(smemTy);
   auto sharedOrder = triton::gpu::getOrder(
       cast<triton::gpu::SharedEncodingTrait>(smemTy.getEncoding()),
       shapePerCTA);

@@ -7,7 +7,7 @@ import tempfile
 import triton
 from triton.compiler import ASTSource, make_backend
 from triton.backends.compiler import GPUTarget
-from triton.experimental.gluon._runtime import GluonASTSource
+from triton.experimental.gluon import GluonASTSource
 from triton.runtime.jit import create_function_from_signature
 from triton._C.libtriton import ir
 

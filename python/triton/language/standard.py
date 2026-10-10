@@ -201,7 +201,6 @@ def _elementwise_max(a, b):
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
-    input = core._promote_bfloat16_to_float32(input)
     if return_indices:
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left, keep_dims=keep_dims)
@@ -260,7 +259,6 @@ def _elementwise_min(a, b):
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
-    input = core._promote_bfloat16_to_float32(input)
     if return_indices:
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left, keep_dims=keep_dims)
@@ -282,6 +280,45 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
 def argmin(input, axis, tie_break_left=True, keep_dims=False):
     _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left, keep_dims=keep_dims)
     return ret
+
+
+# logical reductions
+
+
+@core._tensor_member_fn
+@jit
+def all(input, axis=None, keep_dims=False):
+    """
+    Returns whether all elements in :code:`input` are nonzero along the provided :code:`axis`.
+
+    The result has dtype :code:`int1`. NaN and infinity are treated as nonzero.
+
+    :param input: the input values
+    :type input: Tensor
+    :param axis: the dimension to reduce. If None, reduce all dimensions
+    :type axis: int | None
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
+    """
+    return core.reduce(input.to(core.int1), axis, _elementwise_min, keep_dims=keep_dims)
+
+
+@core._tensor_member_fn
+@jit
+def any(input, axis=None, keep_dims=False):
+    """
+    Returns whether any element in :code:`input` is nonzero along the provided :code:`axis`.
+
+    The result has dtype :code:`int1`. NaN and infinity are treated as nonzero.
+
+    :param input: the input values
+    :type input: Tensor
+    :param axis: the dimension to reduce. If None, reduce all dimensions
+    :type axis: int | None
+    :param keep_dims: if true, keep the reduced dimensions with length 1
+    :type keep_dims: bool
+    """
+    return core.reduce(input.to(core.int1), axis, _elementwise_max, keep_dims=keep_dims)
 
 
 @jit
@@ -355,9 +392,6 @@ def reduce_or(input, axis, keep_dims=False):
 @jit
 @core._add_scan_docstr("cumsum", dtype_arg="dtype")
 def cumsum(input, axis=0, reverse=False, dtype: core.constexpr = None):
-    # todo rename this to a generic function name
-
-    input = core._promote_bfloat16_to_float32(input)
     out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
     input = input.to(out_dtype)
     return core.associative_scan(input, axis, _sum_combine, reverse)
@@ -373,10 +407,10 @@ def _prod_combine(a, b):
 
 @core._tensor_member_fn
 @jit
-@core._add_scan_docstr("cumprod")
-def cumprod(input, axis=0, reverse=False):
-    # todo rename this to a generic function name
-    input = core._promote_bfloat16_to_float32(input)
+@core._add_scan_docstr("cumprod", dtype_arg="dtype")
+def cumprod(input, axis=0, reverse=False, dtype: core.constexpr = None):
+    out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
+    input = input.to(out_dtype)
     return core.associative_scan(input, axis, _prod_combine, reverse)
 
 
@@ -556,13 +590,14 @@ def flip(x, dim=None):
     core.static_assert(0 <= _dim and _dim < len(x.shape), "flip: dim must be None or in [-rank, rank)")
     core.static_assert(_is_power_of_two(x.shape[_dim]))
     steps: core.constexpr = _log2(x.shape[_dim])
-
-    # reshape the swap dimension to (2, 2, ..., 2)
-    idtype = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
-    y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + [2] * steps + x.shape[_dim + 1:])
-    for i in core.static_range(steps):
-        y = y ^ xor_sum(y, _dim + i, True)
-    x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
+    # Flipping a dimension of size 1 is a no-op.
+    if steps > 0:
+        # reshape the swap dimension to (2, 2, ..., 2)
+        idtype = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+        y = core.reshape(x.to(idtype, bitcast=True), x.shape[:_dim] + [2] * steps + x.shape[_dim + 1:])
+        for i in core.static_range(steps):
+            y = y ^ xor_sum(y, _dim + i, True)
+        x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 
 

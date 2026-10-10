@@ -234,10 +234,11 @@ public:
                                           bool partitionScoped, MemType memType,
                                           Operation *insertPoint);
   // setProxyAccess: record a generic-proxy access by the current base thread
-  // and invalidate prior proxy-fence coverage for that source thread.
+  // and invalidate prior proxy-fence coverage for that source and access kind.
   void createSetProxyAccessCall(ImplicitLocOpBuilder &b, Value bufferMask,
-                                int thread, Value pred, Operation *insertPoint,
-                                Value effectCTAs, Value bufferIndex = {});
+                                int thread, bool isWrite, Value pred,
+                                Operation *insertPoint, Value effectCTAs,
+                                Value bufferIndex = {});
   // fenceProxyAccesses: mark all generic accesses visible to the current base
   // thread as covered by fence.proxy.async. A CTA fence covers the current
   // buffer row; a cluster fence covers every cluster buffer row.
@@ -261,12 +262,12 @@ public:
   void createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b, Value mbar,
                                      Value phase, int thread, Value pred,
                                      Operation *insertPoint);
-  // verifyProxyAccess: assert that every generic-proxy access visible to the
-  // issuing base thread has crossed fence.proxy.async.
+  // verifyProxyAccess: assert that every conflicting generic-proxy access
+  // visible to the issuing base thread has crossed fence.proxy.async.
   void createVerifyProxyAccessCall(ImplicitLocOpBuilder &b, Value bufferMask,
-                                   int thread, StringRef operandName,
-                                   Value pred, Operation *insertPoint,
-                                   Value effectCTAs);
+                                   int thread, bool isWrite,
+                                   StringRef operandName, Value pred,
+                                   Operation *insertPoint, Value effectCTAs);
   // copyProxyAccesses: copy a parent base thread's packed proxy frontier to
   // warp-specialization partition threads.
   void createCopyProxyAccessesCall(ImplicitLocOpBuilder &b, int sourceThread,

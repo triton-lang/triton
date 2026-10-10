@@ -11,23 +11,18 @@ from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_m
 from triton_kernels.tensor_details.layout_details.gfx1250_scale import unswizzle_mx_scale_gfx1250
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
-from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_nvfp4_tile
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_nvfp4_tile, nvfp4_to_mxfp8_tile
 from triton_kernels.target_info import cuda_capability_geq
 from ._common import (
     compute_offsets,
     get_scaled_dot_format_string,
+    matmul_dot,
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
     output_mx_scale_store_ptr,
+    round_f32_to_tf32,
 )
-
-
-@triton.jit
-def round_f32_to_tf32(x: tl.tensor):
-    # use cvt.rn on Hopper+ to match the rounding of TMA.
-    ASM: tl.constexpr = "cvt.rn.tf32.f32 $0, $1;" if cuda_capability_geq(9, 0) else "cvt.rna.tf32.f32 $0, $1;"
-    return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
 
 
 @triton.jit
@@ -88,6 +83,7 @@ def _matmul(
              # One of ["HOPPER", "BLACKWELL", None]
              SWIZZLE_MX_SCALE: tl.constexpr,
              MX_BLOCK_SIZE: tl.constexpr,
+             X_MX_BLOCK_SIZE: tl.constexpr,
              EPILOGUE_SUBTILE: tl.constexpr,
              EVEN_K: tl.constexpr, SPLIT_K: tl.constexpr,
              W_CACHE_MODIFIER: tl.constexpr,
@@ -137,6 +133,8 @@ def _matmul(
     has_x_tensor_scale: tl.constexpr = XTensorScale is not None
     has_w_tensor_scale: tl.constexpr = WTensorScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
+    REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
+    X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
     if is_x_microscaled or is_w_microscaled:
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
@@ -356,7 +354,7 @@ def _matmul(
         XMxScale += start_z.to(index_type) * stride_x_mx_z
         if GatherIndx is None:
             XMxScale += start_m * stride_x_mx_m
-        offs_x_k_scale = off_k_x // MX_BLOCK_SIZE + tl.arange(0, MX_SCALE_BLOCK_K)
+        offs_x_k_scale = off_k_x // X_MX_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
         XMxScalePtrs = XMxScale + offs_x_m.to(index_type)[:, None] * stride_x_mx_m + offs_x_k_scale.to(index_type)[None, :] * stride_x_mx_k
     else:
         XMxScalePtrs = None
@@ -398,7 +396,7 @@ def _matmul(
             if is_w_microscaled and SWIZZLE_MX_SCALE == "STRIDED":
                 mask_k_scale = tl.full([PACKED_MX_BLOCK], True, dtype=tl.int1)
             if is_x_microscaled:
-                mask_x_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
+                mask_x_k_scale = tl.full([X_SCALE_BLOCK_K], True, dtype=tl.int1)
         else:
             if is_x_fp4:
                 mask_k_x = offs_k_x * 2 < x_k_limit
@@ -411,7 +409,7 @@ def _matmul(
                 # packed per Byte along K)
                 mask_k_scale = offs_k_scale * (MX_PACK_DIVISOR // W_K_DIVISOR) < w_k_limit
             if is_x_microscaled:
-                mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < x_k_limit
+                mask_x_k_scale = offs_x_k_scale * X_MX_BLOCK_SIZE < x_k_limit
 
         x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
@@ -421,7 +419,7 @@ def _matmul(
             if w.dtype == tl.float32 and ALLOW_TF32:
                 w = round_f32_to_tf32(w)
         if is_x_microscaled or is_w_microscaled:
-            x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
+            x_format: tl.constexpr = "e4m3" if REQUANTIZE_X else get_scaled_dot_format_string(x.dtype)
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
 
             if is_x_microscaled:
@@ -453,6 +451,9 @@ def _matmul(
                     w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
             else:
                 w_scales: tl.constexpr = None
+
+            if REQUANTIZE_X:
+                x, x_scales = nvfp4_to_mxfp8_tile(x, x_scales)
 
             if is_x_fp4 and not is_w_microscaled and not cuda_capability_geq(10, 0):
                 tl.static_assert(w_format == "fp16" or w_format == "bf16")
@@ -493,12 +494,9 @@ def _matmul(
                 else:
                     WMxScalePtrs += (PACKED_MX_BLOCK * SPLIT_K) * stride_w_mx_k
             if is_x_microscaled:
-                XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
+                XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
         else:
-            if SWAP_XW:
-                acc = tl.dot(w.T, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
-            else:
-                acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+            acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32)
         if is_x_fp4:
             XPtrs += ((BLOCK_K // 2) * SPLIT_K) * stride_x_k
         else:
@@ -545,7 +543,7 @@ def _matmul(
     if SWAP_XW:
         acc = acc.trans()
     acc *= x_scale * w_scale
-    acc = acc + bias[None, :] * betas[:, None]
+    acc = tl.fma(bias[None, :], betas[:, None], acc)
     if out_alpha is not None:
         acc *= out_alpha
     if ACTIVATION_FN is not None:

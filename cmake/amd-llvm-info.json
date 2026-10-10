@@ -1,0 +1,27 @@
+{
+  "llvm_hash": "6bc4aaf6641c56ee104f6200c96a6a571bc77052",
+  "build_number": 3,
+  "sha256sum": {
+    "almalinux-arm64": "1b518ac45e1b4a2ef77971f3e49a518b023065b092b2953ecfc28b1df1d39687",
+    "almalinux-x64": "63d32ba2432065ddfda166c374b95a1b2120160325224d0a2b2aa240a9ff0922",
+    "macos-arm64": "ecf16f575a7938f398e03b3663e05c951f7f9a5ed15919d532d15968be8678f0",
+    "macos-x64": "cc2fa8acfd6a46f270cc01b4bc9c1f0dda0a4732d1dc3ee521ba8f58fb8d88a1",
+    "ubuntu-arm64": "b7c3e667f8a7c747f80a5a287788b76f01760c968c66d77ecff239a5686ab04e",
+    "ubuntu-x64": "1c5f43b40eb66f77f8dd500212efb41d9754c4fcc63d7666bf8bf6109e9a5eb6",
+    "windows-arm64": "a1ffe6765f00a4b8b2f70dcbbfd1a9ea630fea93ebf2e48400b6213a174a7867",
+    "windows-x64": "1e8a696ab18282c6e8f0a09e364eac85d2d045934d508c7428f3ebe32a1bb208"
+  },
+  "bootstrap_llvm": {
+    "build_number": 1,
+    "sha256sum": {
+      "almalinux-arm64": "b66134e232015cbdf443d5a2520714bc07c1546f30aa1a1f05b5571706debfc1",
+      "almalinux-x64": "8d2502f7647e393b580a10cbc3650467f84993d8be53db750706a437c349477e",
+      "macos-arm64": "4aaca94f931a4300c0041884a26149ef4bd9b5728b5d970d22f3440e75f8b034",
+      "macos-x64": "35a798de4116833ae7ecadf1fa6617e4546517d728ef69fc72603c76b2d70c70",
+      "ubuntu-arm64": "c0036e8bd18be160029dd9c24d2c87166fdd182ba6af8bf7ca4476cda4dbaa16",
+      "ubuntu-x64": "f20d30fdb2ea3c14ef032245214663ddb99c0ed0a9fdb46e1ebd47d3513d4ada",
+      "windows-arm64": "7260cc3e10bdddf690104d4e1ce14d6d7f942d4715e62471b3e0f9b1d8d9ca9f",
+      "windows-x64": "ac84a8d0e63db6b6d155c2ae9714d29aa3d9458d674a840f4684c5c02ce6401a"
+    }
+  }
+}

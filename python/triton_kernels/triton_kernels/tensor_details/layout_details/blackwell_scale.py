@@ -34,9 +34,15 @@ class BlackwellMXScaleLayout(Layout):
 class BlackwellActMXScaleLayout(Layout):
 
     ragged_metadata: RaggedTensorMetadata | None
+    column_alignment: int = 8
+
+    def __post_init__(self):
+        if self.column_alignment not in (4, 8):
+            raise ValueError("Scale column alignment must be 4 or 8")
 
     def can_preserve_storage_as(self, other: Layout, rank: int) -> bool:
-        return isinstance(other, BlackwellActMXScaleLayout) and self.ragged_metadata is other.ragged_metadata
+        return (isinstance(other, BlackwellActMXScaleLayout) and self.ragged_metadata is other.ragged_metadata
+                and self.column_alignment == other.column_alignment)
 
     @property
     def name(self):
@@ -49,7 +55,8 @@ class BlackwellActMXScaleLayout(Layout):
         return [1, block_shape[0] // 128, block_shape[1] // 4, 2, 256]
 
     def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
-        return BlackwellActMXScaleLayoutTransformation(shape, is_fp4, self.ragged_metadata)
+        return BlackwellActMXScaleLayoutTransformation(shape, is_fp4, self.ragged_metadata,
+                                                       ALIGN_K=self.column_alignment)
 
 
 # ------------------- Blackwell MX Scale Layout Transformation -------------------

@@ -1,12 +1,17 @@
-from typing import Sequence, List, TypeVar, Tuple, Callable
+from __future__ import annotations
+
+from typing import Sequence, List, TypeVar, Tuple, Callable, TYPE_CHECKING
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout, CoalescedLayout, SharedLinearLayout
-from triton._C.libtriton.gluon_ir import GluonOpBuilder, compute_tmem_reg_layout
+from triton._C.libtriton.gluon_ir import compute_tmem_reg_layout
 from triton._C.libtriton import ir
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 from triton.runtime.jit import BoundConstexprFunction, ConstexprFunction
+
+if TYPE_CHECKING:
+    from triton._C.libtriton.gluon_ir import GluonOpBuilder
 
 TensorTy = TypeVar("TensorTy")
 

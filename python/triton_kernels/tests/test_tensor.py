@@ -35,6 +35,7 @@ from triton_kernels.tensor_details.layout import (
     HopperMXScaleLayout,
     HopperMXValueLayout,
     StridedLayout,
+    TiledLayout,
 )
 
 _FP4_VALUE_LAYOUTS = [
@@ -180,6 +181,26 @@ def test_ragged_layout_storage_shape():
     metadata = make_ragged_tensor_metadata_torch(slice_sizes, 100)
 
     assert BlackwellActMXScaleLayout(metadata).storage_shape([100, 94], False) == [1, 4, 24, 2, 256]
+
+
+def test_blackwell_act_four_column_roundtrip():
+    data = torch.arange(512, dtype=torch.int32).reshape(2, 256, 1)
+    data = (data + data // 256).to(torch.uint8)
+    layout = BlackwellActMXScaleLayout(None, column_alignment=4)
+    encoded = convert_layout(wrap_torch_tensor(data), layout)
+    assert encoded.data.shape == (1, 4, 1, 2, 256)
+    assert torch.equal(convert_layout(encoded, StridedLayout(-1)).data, data)
+
+
+def test_blackwell_act_column_alignment_conversion():
+    data = torch.arange(512, dtype=torch.int32).reshape(2, 256, 1)
+    data = (data + data // 256).to(torch.uint8)
+    compact = BlackwellActMXScaleLayout(None, column_alignment=4)
+    encoded = convert_layout(wrap_torch_tensor(data), compact)
+    padded = convert_layout(encoded, BlackwellActMXScaleLayout(None))
+    assert padded.data.shape == (1, 4, 2, 2, 256)
+    assert torch.equal(convert_layout(padded, StridedLayout(-1)).data, data)
+    assert torch.equal(convert_layout(padded, compact).data, encoded.data)
 
 
 def test_import_does_not_initialize_cuda():
@@ -773,3 +794,23 @@ def test_keyed_add_large_key_no_int_overflow():
     # Compare in int64 (CUDA has no uint32 `arange`); values are well within int64.
     expected = (key << 16) | torch.arange(1, BLOCK + 1, dtype=torch.int64, device=device)
     assert torch.equal(out.to(torch.int64), expected)
+
+
+@pytest.mark.parametrize("shape", [(256, 384), (2, 256, 384)])
+@pytest.mark.parametrize("major_dim", [-1, -2])
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.bfloat16])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_tiled_layout_roundtrip(shape, major_dim, dtype, with_out):
+    values = (torch.arange(math.prod(shape)) % 251).to(dtype).reshape(shape)
+    source = wrap_torch_tensor(values)
+    layout = TiledLayout(major_dim)
+    tiled = convert_layout(source, layout)
+    assert convert_layout(tiled, layout) is tiled
+    if with_out:
+        out = wrap_torch_tensor(torch.empty_like(tiled.data), layout=layout)
+        assert convert_layout(source, layout, out=out) is out
+        torch.testing.assert_close(out.data, tiled.data, rtol=0, atol=0)
+        tiled = out
+    restored = convert_layout(tiled, StridedLayout(-1))
+    torch.testing.assert_close(restored.data, values, rtol=0, atol=0)
+    assert tiled.data.numel() == source.data.numel()

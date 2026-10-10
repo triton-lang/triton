@@ -131,6 +131,10 @@ def PredicatedOpInterface : OpInterface<"PredicatedOpInterface"> {
   let description = [{
     Common interface for operations that carry a predicate or mask operand that
     can be combined with a pipeline predicate.
+
+    A false predicate can still leave effects such as masked-copy zero filling
+    or MMA completion signals. Erasing an inactive operation requires a separate
+    guarantee that its predicate suppresses all effects.
   }];
 
   let cppNamespace = "::mlir::triton";
@@ -151,6 +155,28 @@ def PredicatedOpInterface : OpInterface<"PredicatedOpInterface"> {
       /*retType=*/"::mlir::Type",
       /*methodName=*/"getPredicateOperandTypeLike",
       /*args=*/(ins)>
+  ];
+}
+
+def EfficientLayoutOpInterface : OpInterface<"EfficientLayoutOpInterface"> {
+  let description = [{
+    Operations that can pin a compiler-chosen result layout.
+
+    `getEfficientLayout` is a hint that the current result encoding should be
+    kept. Layout conversion treats the operation as a layout anchor and will
+    not rewrite or rematerialize it in a different encoding. When false, the
+    operation participates in layout propagation normally.
+  }];
+
+  let cppNamespace = "::mlir::triton";
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Return true if the compiler has pinned the current result layout.",
+      /*retType=*/"bool",
+      /*methodName=*/"getEfficientLayout",
+      /*args=*/(ins)
+    >
   ];
 }
 

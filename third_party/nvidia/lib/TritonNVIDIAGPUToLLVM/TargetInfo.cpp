@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "llvm/Support/MathExtras.h"
+#include <limits>
 
 using namespace mlir;
 
@@ -87,6 +88,12 @@ LLVM::LLVMFuncOp getAssertfailDeclaration(RewriterBase &rewriter) {
 
 namespace mlir::triton::NVIDIA {
 
+void registerTargetInfo() {
+  TargetInfoBase::registerFactory("cuda", [](ModuleOp moduleOp) {
+    return std::make_unique<TargetInfo>(getNVIDIAComputeCapability(moduleOp));
+  });
+}
+
 // Check if the reduction can use a redux op and return the kind.
 static std::optional<NVVM::ReductionKind>
 matchReduxKind(triton::ReduceOp op, int computeCapability,
@@ -106,7 +113,13 @@ matchReduxKind(triton::ReduceOp op, int computeCapability,
       return NVVM::ReductionKind::FMIN;
   }
   auto intType = dyn_cast<IntegerType>(reduceOp->getResultTypes()[0]);
-  if (!intType || intType.getWidth() > 32)
+  if (!intType)
+    return std::nullopt;
+  if (intType.getWidth() > 32 &&
+      !(intType.getWidth() == 64 &&
+        isa<arith::AddIOp, arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp,
+            arith::MaxUIOp, arith::AndIOp, arith::OrIOp, arith::XOrIOp>(
+            reduceOp)))
     return std::nullopt;
   if (isa<arith::AddIOp>(reduceOp))
     return NVVM::ReductionKind::ADD;
@@ -125,6 +138,35 @@ matchReduxKind(triton::ReduceOp op, int computeCapability,
   if (isa<arith::MaxUIOp>(reduceOp))
     return NVVM::ReductionKind::UMAX;
   return std::nullopt;
+}
+
+static Value createReduxIdentity(TritonLLVMOpBuilder &b,
+                                 NVVM::ReductionKind kind,
+                                 bool useNanQualifier) {
+  switch (kind) {
+  case NVVM::ReductionKind::MIN:
+    return b.i32_val(INT32_MAX);
+  case NVVM::ReductionKind::MAX:
+    return b.i32_val(INT32_MIN);
+  case NVVM::ReductionKind::UMIN:
+  case NVVM::ReductionKind::AND:
+    return b.i32_val(UINT32_MAX);
+  case NVVM::ReductionKind::UMAX:
+  case NVVM::ReductionKind::ADD:
+  case NVVM::ReductionKind::OR:
+  case NVVM::ReductionKind::XOR:
+    return b.i32_val(0);
+  case NVVM::ReductionKind::FMIN:
+  case NVVM::ReductionKind::FMAX:
+    // NaN-ignoring min/max must return NaN for an all-NaN group. An
+    // infinity identity would incorrectly turn that result into infinity.
+    if (!useNanQualifier)
+      return b.f32_val(std::numeric_limits<float>::quiet_NaN());
+    return b.f32_val(kind == NVVM::ReductionKind::FMIN
+                         ? std::numeric_limits<float>::infinity()
+                         : -std::numeric_limits<float>::infinity());
+  }
+  llvm_unreachable("invalid redux kind");
 }
 
 bool TargetInfo::supportMaximumMinimum() const {
@@ -148,9 +190,7 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 }
 
 Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
-  return LLVM::createLLVMIntrinsicCallOp(
-             rewriter, loc, "llvm.nvvm.read.ptx.sreg.globaltimer", i64_ty, {})
-      .getResult(0);
+  return NVVM::GlobalTimerOp::create(rewriter, loc, i64_ty);
 }
 
 StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
@@ -189,30 +229,16 @@ static bool isConstantTruePred(Value pred) {
   return false;
 }
 
-static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
-                  Value pred) {
-  auto *ctx = rewriter.getContext();
-  auto clusterPtrTy = ptr_ty(ctx, /*addrspace=*/7);
-  if (isConstantTruePred(pred)) {
-    return NVVM::MapaOp::create(rewriter, loc, clusterPtrTy, ptr, ctaid);
-  }
-
-  PTXBuilder builder;
-  auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
-  assert(ptrTy.getAddressSpace() == 3);
-
-  auto &mapaInstr = *builder.create("mapa");
-  mapaInstr.o("shared::cluster.u32");
-  auto *dstOpr = builder.newOperand("=r");
-  auto *ptrOpr = builder.newOperand(ptr, "r");
-  auto *ctaidOpr = builder.newOperand(ctaid, "r");
-  mapaInstr(dstOpr, ptrOpr, ctaidOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, clusterPtrTy, /*hasSideEffect=*/false);
+static Value mapa(RewriterBase &rewriter, Location loc, Value ptr,
+                  Value ctaid) {
+  auto clusterPtrTy = ptr_ty(rewriter.getContext(), /*addrspace=*/7);
+  // Address translation is speculatable; the memory access keeps its predicate.
+  return NVVM::MapaOp::create(rewriter, loc, clusterPtrTy, ptr, ctaid);
 }
 
 Value TargetInfo::mapDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                             Value ctaId, Value pred) const {
-  return ctaId ? mapa(rewriter, loc, ptr, ctaId, pred) : ptr;
+                             Value ctaId, Value /*pred*/) const {
+  return ctaId ? mapa(rewriter, loc, ptr, ctaId) : ptr;
 }
 
 static std::string getConstraintForBitwidth(unsigned bitwidth) {
@@ -227,6 +253,98 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
   default:
     llvm_unreachable("unsupported bitwidth");
   }
+}
+
+unsigned TargetInfo::getMaxAtomicLoadStoreVectorSize(unsigned bitWidth) const {
+  return 128 / bitWidth;
+}
+
+Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Type valueTy, Value pred,
+                              MemSyncScope scope) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vectorTy = dyn_cast<VectorType>(valueTy);
+  Type elemTy = vectorTy ? vectorTy.getElementType() : valueTy;
+  unsigned vec = vectorTy ? vectorTy.getNumElements() : 1;
+  unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
+  assert(vec <= getMaxAtomicLoadStoreVectorSize(bitWidth));
+  unsigned packedBitWidth = std::min(32u, bitWidth * vec);
+  if (packedBitWidth > bitWidth) {
+    unsigned packedVec = bitWidth * vec / packedBitWidth;
+    Type wordTy = int_ty(packedBitWidth);
+    Type packedTy = packedVec == 1 ? wordTy : vec_ty(wordTy, packedVec);
+    Value loaded = loadRelaxed(rewriter, loc, ptr, packedTy, pred, scope);
+    return b.bitcast(loaded, valueTy);
+  }
+  PTXBuilder builder;
+  auto *outputs = builder.newListOperand();
+  for (unsigned i = 0; i < vec; ++i)
+    outputs->listAppend(builder.newOperand(
+        "=" + getConstraintForBitwidth(bitWidth), /*init=*/bool(pred)));
+  auto &load = builder.create("ld")
+                   ->o("relaxed")
+                   .o(stringifyMemSyncScope(scope).str())
+                   .o("global")
+                   .v(vec)
+                   .b(bitWidth);
+  load(vec == 1 ? outputs->listGet(0) : outputs,
+       builder.newAddrOperand(ptr, "l"))
+      .maybePredicate(pred);
+  // PTX has no 8-bit register constraint. Load into 16-bit registers and keep
+  // the low bytes, then reinterpret floating-point values without conversion.
+  Type regTy = int_ty(std::max(16u, bitWidth));
+  Type retTy = vec == 1
+                   ? regTy
+                   : LLVM::LLVMStructType::getLiteral(
+                         rewriter.getContext(), SmallVector<Type>(vec, regTy));
+  Value loaded = builder.launch(rewriter, loc, retTy, /*hasSideEffect=*/true);
+  auto results = unpackLLElements(loc, loaded, rewriter);
+  for (Value &result : results) {
+    if (bitWidth == 8)
+      result = b.trunc(i8_ty, result);
+    if (result.getType() != elemTy)
+      result = b.bitcast(result, elemTy);
+  }
+  return vectorTy ? packLLVector(loc, results, rewriter) : results.front();
+}
+
+void TargetInfo::storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Value value, Value pred,
+                              MemSyncScope scope) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vectorTy = dyn_cast<VectorType>(value.getType());
+  Type elemTy = vectorTy ? vectorTy.getElementType() : value.getType();
+  unsigned vec = vectorTy ? vectorTy.getNumElements() : 1;
+  unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
+  assert(vec <= getMaxAtomicLoadStoreVectorSize(bitWidth));
+  unsigned packedBitWidth = std::min(32u, bitWidth * vec);
+  if (packedBitWidth > bitWidth) {
+    unsigned packedVec = bitWidth * vec / packedBitWidth;
+    Type wordTy = int_ty(packedBitWidth);
+    Type packedTy = packedVec == 1 ? wordTy : vec_ty(wordTy, packedVec);
+    storeRelaxed(rewriter, loc, ptr, b.bitcast(value, packedTy), pred, scope);
+    return;
+  }
+  PTXBuilder builder;
+  auto *addr = builder.newAddrOperand(ptr, "l");
+  auto *inputs = builder.newListOperand();
+  for (Value element : unpackLLVector(loc, value, rewriter)) {
+    if (!elemTy.isInteger())
+      element = b.bitcast(element, int_ty(bitWidth));
+    if (bitWidth == 8)
+      element = b.zext(i16_ty, element);
+    inputs->listAppend(
+        builder.newOperand(element, getConstraintForBitwidth(bitWidth)));
+  }
+  auto &store = builder.create("st")
+                    ->o("relaxed")
+                    .o(stringifyMemSyncScope(scope).str())
+                    .o("global")
+                    .v(vec)
+                    .b(bitWidth);
+  store(addr, vec == 1 ? inputs->listGet(0) : inputs).maybePredicate(pred);
+  builder.launch(rewriter, loc, void_ty(rewriter.getContext()),
+                 /*hasSideEffect=*/true);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -320,7 +438,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
   // Get pointer to remote shared memory if needed.
   if (ctaId) {
-    ptr = mapa(rewriter, loc, ptr, ctaId, pred);
+    ptr = mapa(rewriter, loc, ptr, ctaId);
   }
 
   PTXBuilder builder;
@@ -386,7 +504,10 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     SmallVector<Value> vals = unpackLLVector(
         loc, loadDShared(rewriter, loc, ptr, ctaId, newLoadTy, pred), rewriter);
     for (Value &v : vals) {
-      v = b.bitcast(v, elemTy);
+      if (isa<LLVM::LLVMPointerType>(elemTy))
+        v = b.inttoptr(elemTy, v);
+      else
+        v = b.bitcast(v, elemTy);
     }
     return packLLVector(loc, vals, rewriter);
   }
@@ -437,7 +558,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
   // Get pointer to remote shared memory if needed.
   if (ctaId) {
-    ptr = mapa(rewriter, loc, ptr, ctaId, pred);
+    ptr = mapa(rewriter, loc, ptr, ctaId);
   }
 
   PTXBuilder builder;
@@ -505,54 +626,146 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, ProgramIDDim axis) const {
   return LLVM::NVIDIA::llGetPid(loc, rewriter, moduleOp, axis);
 }
+// Return an empty value when the reduction should use shuffles instead.
+static Value warpReduce32(RewriterBase &rewriter, Location loc, Value value,
+                          NVVM::ReductionKind kind, bool useNanQualifier,
+                          unsigned reduceLaneIdMask,
+                          unsigned broadcastLaneIdMask, int computeCapability) {
+  assert(value.getType().getIntOrFloatBitWidth() == 32);
+  constexpr unsigned fullMask = 31;
+  unsigned groupMask = fullMask & ~(reduceLaneIdMask | broadcastLaneIdMask);
+  bool partitioned = groupMask != 0;
+  // Use at most two converged full-warp reductions. Broadcast lanes
+  // share a result, so only lane bits identifying distinct groups count.
+  if (llvm::popcount(groupMask) > 1)
+    return {};
+  if (reduceLaneIdMask != fullMask) {
+    // Min/max use the faster CREDUX instructions on SM100+. The minimum
+    // group size also depends on whether we need one redux or two.
+    bool isMinMax =
+        kind == NVVM::ReductionKind::MIN || kind == NVVM::ReductionKind::MAX ||
+        kind == NVVM::ReductionKind::UMIN ||
+        kind == NVVM::ReductionKind::UMAX ||
+        kind == NVVM::ReductionKind::FMIN || kind == NVVM::ReductionKind::FMAX;
+    bool useFastMinMax = isMinMax && computeCapability >= 100;
+    // Heuristic thresholds based on latency/throughput benchmarks:
+    // https://github.com/triton-lang/triton/pull/11823
+    unsigned minLanes =
+        useFastMinMax ? (partitioned ? 8 : 2) : (partitioned ? 16 : 4);
+    unsigned numLanes = 1u << llvm::popcount(reduceLaneIdMask);
+    if (numLanes < minLanes)
+      return {};
+  }
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value mask = b.i32_val(0xFFFFFFFF);
+  bool maskBroadcast =
+      broadcastLaneIdMask &&
+      (kind == NVVM::ReductionKind::ADD || kind == NVVM::ReductionKind::XOR);
+  Value identity, firstGroup;
+  if (partitioned || maskBroadcast) {
+    identity = createReduxIdentity(b, kind, useNanQualifier);
+    Value laneId = getLaneId(rewriter, loc);
+    if (partitioned) {
+      Value group = b.and_(laneId, b.i32_val(groupMask));
+      firstGroup = b.icmp_eq(group, b.i32_val(0));
+    }
+    // Min/max, AND, and OR are idempotent. Add and XOR must count each
+    // broadcast value just once, even though all lanes execute the redux.
+    if (maskBroadcast) {
+      Value duplicate = b.and_(laneId, b.i32_val(broadcastLaneIdMask));
+      Value uniqueLane = b.icmp_eq(duplicate, b.i32_val(0));
+      value = b.select(uniqueLane, value, identity);
+    }
+  }
+  auto redux = [&](Value input) -> Value {
+    return NVVM::ReduxOp::create(rewriter, loc, input.getType(), input, kind,
+                                 mask, /*abs=*/false, /*nan=*/useNanQualifier);
+  };
+  if (partitioned) {
+    Value first = redux(b.select(firstGroup, value, identity));
+    Value second = redux(b.select(firstGroup, identity, value));
+    return b.select(firstGroup, first, second);
+  }
+  return redux(value);
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned reduceLaneIdMask) const {
-
-  // Based on benchmarking on A100 redux op gives a speed up only when doing
-  // a single reduction (not partitioned) and when the mask is static.
-  // Therefore we currently only enable it to reduce across all the lanes.
-  constexpr unsigned kWarpSize = 32;
-  unsigned fullMask = kWarpSize - 1;
-  if (reduceLaneIdMask != fullMask)
-    return false;
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
+                            unsigned reduceLaneIdMask,
+                            unsigned broadcastLaneIdMask) const {
   bool useNanQualifier = false;
-  if (auto kind = matchReduxKind(op, targetFeatures.getComputeCapability(),
-                                 useNanQualifier)) {
-    assert(acc.size() == 1);
-    Value mask = b.i32_val(0xFFFFFFFF);
-    // Even though we currently don't use redux for partitioned reduction
-    // the code below supports it in case we want to tweak the heuristic.
-    if (reduceLaneIdMask != fullMask) {
-      // For partitioned reduction we need to calculate the mask so that
-      // each group of threads has the correct mask.
-      Value laneId = getLaneId(rewriter, loc);
-      mask = b.shl(b.i32_val(reduceLaneIdMask),
-                   b.and_(laneId, b.i32_val(~reduceLaneIdMask)));
+  auto kind = matchReduxKind(op, getComputeCapability(), useNanQualifier);
+  if (!kind)
+    return false;
+  assert(acc.size() == 1);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto reduce32 = [&](Value value, NVVM::ReductionKind kind) {
+    return warpReduce32(rewriter, loc, value, kind, useNanQualifier,
+                        reduceLaneIdMask, broadcastLaneIdMask,
+                        getComputeCapability());
+  };
+  Value value = acc[0];
+  if (value.getType().isInteger(64)) {
+    // The i64 tree uses two shuffles per stage for all groups, while REDUX
+    // needs one instruction per piece and group. Require at least two
+    // shuffles per REDUX to cover splitting, masking, and merging.
+    unsigned groupMask = 31 & ~(reduceLaneIdMask | broadcastLaneIdMask);
+    unsigned stages = llvm::popcount(reduceLaneIdMask);
+    unsigned groups = 1u << llvm::popcount(groupMask);
+    unsigned pieces = *kind == NVVM::ReductionKind::ADD ? 3 : 2;
+    if (stages < pieces * groups)
+      return false;
+
+    Value high = b.trunc(i32_ty, b.lshr(value, b.i64_val(32)));
+    Value highResult = reduce32(high, *kind);
+    if (!highResult)
+      return false;
+    Value low = b.trunc(i32_ty, value);
+    if (*kind == NVVM::ReductionKind::ADD) {
+      // Each 16-bit sum fits in 21 bits; i64 adds propagate their carries.
+      Value lowResult = reduce32(b.and_(low, b.i32_val(0xFFFF)), *kind);
+      Value middleResult = reduce32(b.lshr(low, b.i32_val(16)), *kind);
+      if (!lowResult || !middleResult)
+        return false;
+      acc[0] = b.add(b.add(b.zext(i64_ty, lowResult),
+                           b.shl(b.zext(i64_ty, middleResult), b.i64_val(16))),
+                     b.shl(b.zext(i64_ty, highResult), b.i64_val(32)));
+      return true;
     }
-    for (unsigned i = 0; i < acc.size(); ++i) {
-      unsigned bitwidth = acc[i].getType().getIntOrFloatBitWidth();
-      if (acc[i].getType().isInteger()) {
-        if (bitwidth < 32) {
-          if (*kind == NVVM::ReductionKind::MIN ||
-              *kind == NVVM::ReductionKind::MAX)
-            acc[i] = b.sext(i32_ty, acc[i]);
-          else
-            acc[i] = b.zext(i32_ty, acc[i]);
-        }
-      }
-      acc[i] = NVVM::ReduxOp::create(rewriter, loc, acc[i].getType(), acc[0],
-                                     *kind, mask, /*abs=*/false,
-                                     /*nan=*/useNanQualifier);
-      if (acc[i].getType().isInteger()) {
-        if (bitwidth < 32)
-          acc[i] = b.trunc(int_ty(bitwidth), acc[i]);
-      }
+    auto lowKind = *kind;
+    if (*kind == NVVM::ReductionKind::MIN ||
+        *kind == NVVM::ReductionKind::UMIN ||
+        *kind == NVVM::ReductionKind::MAX ||
+        *kind == NVVM::ReductionKind::UMAX) {
+      bool isMin = *kind == NVVM::ReductionKind::MIN ||
+                   *kind == NVVM::ReductionKind::UMIN;
+      lowKind = isMin ? NVVM::ReductionKind::UMIN : NVVM::ReductionKind::UMAX;
+      // Only matching high words can win; compare their low words unsigned.
+      low = b.select(b.icmp_eq(high, highResult), low,
+                     b.i32_val(isMin ? 0xFFFFFFFF : 0));
     }
+    Value lowResult = reduce32(low, lowKind);
+    if (!lowResult)
+      return false;
+    acc[0] = b.or_(b.shl(b.zext(i64_ty, highResult), b.i64_val(32)),
+                   b.zext(i64_ty, lowResult));
     return true;
   }
-  return false;
+
+  Type type = value.getType();
+  unsigned bitwidth = type.getIntOrFloatBitWidth();
+  if (type.isInteger() && bitwidth < 32) {
+    if (*kind == NVVM::ReductionKind::MIN || *kind == NVVM::ReductionKind::MAX)
+      value = b.sext(i32_ty, value);
+    else
+      value = b.zext(i32_ty, value);
+  }
+  Value result = reduce32(value, *kind);
+  if (!result)
+    return false;
+  acc[0] = type.isInteger() && bitwidth < 32 ? b.trunc(type, result) : result;
+  return true;
 }
 
 unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
@@ -588,12 +801,6 @@ unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
     return 3;
 
   return 2;
-}
-
-std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  std::string funcName =
-      resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";
-  return funcName;
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
@@ -673,6 +880,10 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   SmallVector<Value> operands = {messageStringVal, fileStringVal, lineNumber,
                                  funcStringVal, charSize};
   b.call(funcOp, operands);
+}
+
+void TargetInfo::assertTrap(RewriterBase &rewriter, Location loc) const {
+  llvm_unreachable("__assertfail aborts the kernel; no separate trap needed");
 }
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }

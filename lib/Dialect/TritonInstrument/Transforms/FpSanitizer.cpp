@@ -31,6 +31,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 namespace {
 
 Type getIntTypeLike(Type ty);
+Region *getScratchScopeRegion(Operation *anchor);
 bool isFloatLike(Type ty) { return isa<FloatType>(getElementTypeOrSelf(ty)); }
 bool isIntLike(Type ty) { return isa<IntegerType>(getElementTypeOrSelf(ty)); }
 
@@ -162,9 +163,11 @@ ttg::BlockedEncodingAttr getOptimizedBlockedEncoding(PatternRewriter &rewriter,
     sizePerThread[dim] =
         static_cast<unsigned>(std::min<int64_t>(shape[dim], maxElems));
   }
-  return ttg::BlockedEncodingAttr::get(
-      rewriter.getContext(), sizePerThread, base.getThreadsPerWarp(),
-      base.getWarpsPerCTA(), order, base.getCGALayout());
+  // Recompute lane and warp distribution after increasing vector width;
+  // retaining the scalar layout can duplicate a narrow row across many lanes.
+  return ttg::BlockedEncodingAttr::get(rewriter.getContext(), shape,
+                                       sizePerThread, order, numWarps,
+                                       threadsPerWarp, base.getCGALayout());
 }
 
 struct ScratchInfo {
@@ -384,9 +387,12 @@ public:
       return info;
     }
 
+    // Build view pointers in the scope of their definitions, then remap the
+    // completed pointers to the consumer's scope.
     Value source = getFpSanTmemSource(memdesc);
     if (auto subslice = memdesc.getDefiningOp<ttng::TMEMSubSliceOp>()) {
-      auto baseInfo = getOrCreate(source, rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(subslice));
       if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
@@ -421,7 +427,8 @@ public:
     }
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescIndexOp>()) {
-      auto baseInfo = getOrCreate(source, rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(view));
       if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
@@ -451,17 +458,22 @@ public:
     }
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescReinterpretOp>()) {
-      auto baseInfo = getOrCreate(source, rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(view));
       if (!baseInfo)
         return std::nullopt;
 
       auto baseTy = cast<ttg::MemDescType>(source.getType());
       if (isa<ttng::TensorMemoryScalesEncodingAttr>(baseTy.getEncoding()) &&
-          !isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
-        return ScratchInfo{baseInfo->ptr, baseInfo->tensorType, baseTy};
+          !isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding())) {
+        Value ptr = remapToScope(baseInfo->ptr, rewriter, scope, view.getLoc());
+        return ScratchInfo{ptr, baseInfo->tensorType, baseTy};
+      }
       if (baseInfo->scaleSourceType) {
         if (isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
           return std::nullopt;
+        baseInfo->ptr =
+            remapToScope(baseInfo->ptr, rewriter, scope, view.getLoc());
         return baseInfo;
       }
 
@@ -1275,6 +1287,10 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
   unsigned shiftValue = computeElem.getFPMantissaWidth() - 1;
   auto shift = getUIntConstantLike(rewriter, loc, computeIntTy, shiftValue);
   Value rawCompute = arith::ShLIOp::create(rewriter, loc, scaleComputeI, shift);
+  if (computeElem == rewriter.getBF16Type()) {
+    auto minScale = getUIntConstantLike(rewriter, loc, computeIntTy, 0x0040);
+    rawCompute = arith::MaxUIOp::create(rewriter, loc, rawCompute, minScale);
+  }
   return embedFloatBitsToInt(rewriter, loc, rawCompute, computeElem);
 }
 
@@ -1946,9 +1962,10 @@ struct DivFOpPattern : public OpRewritePattern<arith::DivFOp> {
   }
 };
 
-struct PreciseDivFOpPattern : public OpRewritePattern<tt::PreciseDivFOp> {
-  using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(tt::PreciseDivFOp op,
+template <typename OpTy>
+struct TritonDivFOpPattern : public OpRewritePattern<OpTy> {
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+  LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
     if (!isFloatLike(op.getType()))
       return failure();
@@ -3365,19 +3382,20 @@ public:
     bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
     TmemScratchManager scratch(sharedClusterState);
     RewritePatternSet patterns(&getContext());
-    patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
-                 BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
-                 BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
-                 BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
-                 BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
-                 BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
-                 BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
-                 ClampFOpPattern, NegFOpPattern, DivFOpPattern,
-                 PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
-                 Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
-                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
-                 PackedArithPattern, DotPattern, DotScaledPattern>(
-        &getContext());
+    patterns
+        .add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
+             BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
+             BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
+             BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
+             BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
+             BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
+             BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
+             ClampFOpPattern, NegFOpPattern, DivFOpPattern,
+             TritonDivFOpPattern<tt::PreciseDivFOp>,
+             TritonDivFOpPattern<tt::ApproxDivFOp>, RemFOpPattern, FmaPattern,
+             ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
+             ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
+             PackedArithPattern, DotPattern, DotScaledPattern>(&getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);

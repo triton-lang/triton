@@ -78,7 +78,10 @@ size_t computeCost(Operation *op) {
     return cycles;
   }
 
-  if (isa<math::Exp2Op, ElementwiseInlineAsmOp>(op)) {
+  bool isExternExp2 = false;
+  if (auto externOp = dyn_cast<ExternElementwiseOp>(op))
+    isExternExp2 = externOp.getSymbol().starts_with("llvm.nvvm.ex2.");
+  if (isa<math::Exp2Op, ElementwiseInlineAsmOp>(op) || isExternExp2) {
     int elementCount = 0;
     for (Type type : op->getResultTypes()) {
       if (auto tensorTy = dyn_cast<RankedTensorType>(type))
@@ -200,7 +203,7 @@ void visualize(std::string key, std::string filename, std::string title,
       tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_LOOP_ONLY");
 
   static std::map<std::string, int> keys;
-  if (keys.find(key) == keys.end()) {
+  if (!keys.contains(key)) {
     keys[key] = 0;
   }
   auto idx = keys[key];
@@ -222,13 +225,13 @@ void visualize(std::string key, std::string filename, std::string title,
   DenseMap<Node *, size_t> node_ids;
 
   auto getPartitionId = [&](Partition *partition) {
-    if (info.partition_ids.count(partition) == 0)
+    if (!info.partition_ids.contains(partition))
       info.partition_ids[partition] = info.partition_ids.size();
     return info.partition_ids[partition];
   };
 
   auto getPartitionColor = [&](Partition *partition) {
-    if (info.partition_colors.count(partition) == 0) {
+    if (!info.partition_colors.contains(partition)) {
       size_t color = info.partition_colors.size() + 1;
       color = (color % 12) + 1;
       info.partition_colors[partition] =
@@ -318,8 +321,8 @@ void visualize(std::string key, std::string filename, std::string title,
       OutputPort outputPort{node, idx};
       for (auto inputPort : inputPorts) {
         Edge edge(outputPort, inputPort);
-        if (node_ids.count(outputPort.getNode()) == 0 ||
-            node_ids.count(inputPort.getNode()) == 0)
+        if (!node_ids.contains(outputPort.getNode()) ||
+            !node_ids.contains(inputPort.getNode()))
           continue;
         dot << "x" << node_ids[outputPort.getNode()];
         dot << ":";

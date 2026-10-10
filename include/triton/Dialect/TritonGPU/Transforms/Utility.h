@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <functional>
 #include <numeric>
+#include <optional>
 
 namespace mlir {
 class DominanceInfo;
@@ -21,7 +22,14 @@ class StoreOp;
 class FuncOp;
 namespace gpu {
 class SwizzledSharedEncodingAttr;
+
+// True when `op` implements EfficientLayoutOpInterface and has pinned its
+// result layout.
+inline bool hasEfficientLayout(Operation *op) {
+  auto iface = dyn_cast_if_present<EfficientLayoutOpInterface>(op);
+  return iface && iface.getEfficientLayout();
 }
+} // namespace gpu
 } // namespace triton
 
 // Return a tuple of two or three entries representing the shape of the
@@ -136,8 +144,10 @@ bool isExpensiveLoadOrStore(Operation *op);
 // Return true if an operation may be cloned by layout rematerialization.
 bool canBeRematerialized(Operation *op);
 
-// Return true if the op can use the target encoding for its result.
-bool canUseResultEncoding(Operation *op, Attribute targetEncoding);
+// Return the operands whose layouts must remain fixed for the op to use the
+// target result encoding, or nullopt if the encoding is incompatible.
+std::optional<SmallVector<OpOperand *>>
+canUseResultEncoding(Operation *op, Attribute targetEncoding);
 
 // Replace ForOp with a new ForOp with extra operands. The YieldOp is not
 // updated and needs to be updated separately for the loop to be correct.
