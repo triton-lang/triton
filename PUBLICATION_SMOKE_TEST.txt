@@ -1,0 +1,2 @@
+Temporary publication access test.
+This file has no runtime effect and is not intended to merge.
