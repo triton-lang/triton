@@ -349,6 +349,19 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
     (ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [1, 0]), 128, 32),
     # No intra-warp carry in the original layout; totals span registers.
     (ttgl.BlockedLayout([2, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 512, 32),
+    # Independent scans provide register bits for the totals layout to exchange.
+    pytest.param(ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP // 2, 2], [1, 4], [0, 1]), 64, 128,
+                 id="register_axis_parallel_scans"),
+    # Multi-element thread segments retain boundary-carry ownership when the
+    # scan crosses warps, including high axis register bits and row bits.
+    pytest.param(ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP // 2, 2], [2, 2], [0, 1]), 2048, 8,
+                 id="register_axis_boundary_carry_owners"),
+    # Five lane bits can move into registers without a fixed promotion cap.
+    pytest.param(ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 32, 128,
+                 id="register_axis_all_lane_bits"),
+    # A higher axis register bit separates warp-local segments before promotion.
+    pytest.param(ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 2, 2], [2, 2], [0, 1]), 256, 32,
+                 id="register_axis_interwarp_segments"),
 ])
 @pytest.mark.parametrize("reverse", [False, True])
 def test_scan_carry_predicates(layout, M, N, reverse, device):

@@ -19,6 +19,10 @@
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=OFFSETS
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-OFFSETS
 
+// RUN: triton-opt %t/register-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=REGISTER-TOTALS
+
+// RUN: triton-opt %t/boundary-carry-owners.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=BOUNDARY-OWNERS
+
 //--- scan.mlir
 
 #layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [2], order = [0]}>
@@ -319,23 +323,27 @@ tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
 #tuple = #ttg.linear<{register = [[8, 0], [16, 0], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4]], warp = [[4, 0], [0, 0]], block = []}>
 #single_tile = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-// The i32 operand uses two scratch tiles and the i64 operand uses four.
+// The i32 operand uses one scratch tile and the i64 operand uses two.
 // Each operand conversion synchronizes before loads and before scratch reuse.
-// TUPLE: ttg.shared = 1024 : i32
+// TUPLE: ttg.shared = 2048 : i32
 // TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
-// TUPLE: llvm.getelementptr %arg2[512]
-// TUPLE-COUNT-3: nvvm.barrier
+// TUPLE: llvm.getelementptr %arg2[1024]
+// TUPLE: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
-// TUPLE-COUNT-7: nvvm.barrier
+// TUPLE: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// TUPLE-COUNT-2: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
 // TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.return
-// AMD-TUPLE: ttg.shared = 1024 : i32
+// AMD-TUPLE: ttg.shared = 2048 : i32
 // AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
-// AMD-TUPLE: llvm.getelementptr %arg2[512]
-// AMD-TUPLE-COUNT-3: rocdl.s.barrier
+// AMD-TUPLE: llvm.getelementptr %arg2[1024]
+// AMD-TUPLE: rocdl.s.barrier
 // AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
-// AMD-TUPLE-COUNT-7: rocdl.s.barrier
+// AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
+// AMD-TUPLE-COUNT-2: rocdl.s.barrier
 // AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
 // AMD-TUPLE-NOT: rocdl.s.barrier
 // AMD-TUPLE: llvm.return
@@ -506,19 +514,13 @@ tt.func private @test_scan_lane_prefixes_reverse(%arg: tensor<16xi32, #transpose
   tt.return %result : tensor<16xi32, #transpose>
 }
 
-// Independent register groups share each round's lane lookup and predicate.
+// Promoted register prefixes share the lane lookup and boundary predicate.
 // REUSE-LABEL: llvm.func {{.*}}@test_scan_reuse_lane_lookups
-// REUSE: %[[P1:.*]] = llvm.icmp
-// REUSE: %[[P2:.*]] = llvm.icmp
-// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC1:[a-zA-Z0-9_]+]],
-// REUSE: llvm.select %[[P1]],
-// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC2:[a-zA-Z0-9_]+]],
-// REUSE: llvm.select %[[P2]],
+// REUSE: %[[P:.*]] = llvm.icmp "uge"
+// REUSE: nvvm.shfl.sync idx
+// REUSE: llvm.select %[[P]],
 // REUSE-NOT: llvm.icmp
-// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC1]],
-// REUSE: llvm.select %[[P1]],
-// REUSE: nvvm.shfl.sync idx %{{.*}}, %{{.*}}, %[[SRC2]],
-// REUSE: llvm.select %[[P2]],
+// REUSE: llvm.select %[[P]],
 // REUSE: llvm.return
 tt.func private @test_scan_reuse_lane_lookups(%arg: tensor<4x2xi32, #parallel>) -> tensor<4x2xi32, #parallel> {
   %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
@@ -591,11 +593,10 @@ tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #conver
 #lane_local = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
 #parallel_totals = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Preserve the eight independent register columns while replicating four
-// segment totals in each warp. The totals scan uses two adds per column,
-// plus 40 intra-warp adds and eight carry adds, for 64 in total.
+// Replicate four segment totals in each warp and scan them in registers.
+// Register scans and carry propagation require 33 adds in total.
 // COLUMNS-LABEL: llvm.func {{.*}}@test_scan_parallel_totals(
-// COLUMNS-COUNT-64: llvm.fadd
+// COLUMNS-COUNT-33: llvm.fadd
 // COLUMNS-NOT: llvm.fadd
 // COLUMNS: llvm.return
 tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals> {
@@ -776,5 +777,62 @@ tt.func private @test_scan_shuffle_down_gapped(%arg: tensor<4x8xi32, #gapped>) -
     tt.scan.return %sum : i32
   }) : (tensor<4x8xi32, #gapped>) -> tensor<4x8xi32, #gapped>
   tt.return %result : tensor<4x8xi32, #gapped>
+}
+}
+
+//--- register-totals.mlir
+
+#parallel_rows = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// All five lane axis bits move to registers. Each thread scans 32 adjacent
+// totals without a lane-scan round.
+// REGISTER-TOTALS: ttg.shared = 0 : i32
+// REGISTER-TOTALS-LABEL: llvm.func {{.*}}@test_scan_register_totals_all_lanes(
+// REGISTER-TOTALS-NOT: nvvm.shfl.sync up
+// REGISTER-TOTALS: llvm.return
+tt.func private @test_scan_register_totals_all_lanes(%arg: tensor<128x32xi32, #parallel_rows>) -> tensor<128x32xi32, #parallel_rows> {
+  %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<128x32xi32, #parallel_rows>) -> tensor<128x32xi32, #parallel_rows>
+  tt.return %result : tensor<128x32xi32, #parallel_rows>
+}
+
+// Three existing scan register bits and two promoted bits give 32 adjacent
+// totals per thread. Eight lanes require three scan rounds.
+// REGISTER-TOTALS-LABEL: llvm.func {{.*}}@test_scan_existing_register_totals(
+// REGISTER-TOTALS-COUNT-3: nvvm.shfl.sync up
+// REGISTER-TOTALS-NOT: nvvm.shfl.sync up
+// REGISTER-TOTALS: llvm.return
+tt.func private @test_scan_existing_register_totals(%arg: tensor<16x256xi32, #parallel_rows>) -> tensor<16x256xi32, #parallel_rows> {
+  %result = "tt.scan"(%arg) <{axis = 1 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<16x256xi32, #parallel_rows>) -> tensor<16x256xi32, #parallel_rows>
+  tt.return %result : tensor<16x256xi32, #parallel_rows>
+}
+
+}
+
+//--- boundary-carry-owners.mlir
+
+#boundary_prefixes = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Four original register groups each use five lane-scan rounds. Preserve their
+// ownership so the inter-warp boundary carries can complete local prefixes.
+// BOUNDARY-OWNERS-LABEL: llvm.func {{.*}}@test_scan_preserve_boundary_carry_owners(
+// BOUNDARY-OWNERS-COUNT-20: nvvm.shfl.sync up
+// BOUNDARY-OWNERS-NOT: nvvm.shfl.sync up
+// BOUNDARY-OWNERS: nvvm.barrier
+// BOUNDARY-OWNERS: llvm.return
+tt.func private @test_scan_preserve_boundary_carry_owners(%arg: tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes>
+  tt.return %result : tensor<2048xi32, #boundary_prefixes>
 }
 }

@@ -383,13 +383,44 @@ LinearLayout ScanLoweringHelper::buildIntraWarpTotalsLayout() const {
 }
 
 LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
-  // Order axis bits within each warp-local segment: registers, then lanes.
-  // R=[4,8], L=[1,2] becomes R=[1,2], L=[4,8]. Warp ownership is preserved.
+  // Put the segment's axis bits in registers before lanes. Exchange register
+  // bases for other segments or independent scans with available lane bits.
+  // R=[128,256,512], L=[1,2,4,8,16], W=[32,64] becomes
+  // R=[1,2,4], L=[8,16,128,256,512], W=[32,64]. Warp ownership is preserved.
   auto *ctx = intraWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   unsigned numSegments = warpSegmentSize / threadSegmentSize;
   auto bases = intraWarpTotalsLayout->getBases();
+  auto inSegment = [&](const auto &basis) {
+    return basis[axis] && basis[axis] < numSegments;
+  };
+  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  // Multi-element thread segments need boundary carries in their original
+  // owners after an inter-warp scan. Preserve that ownership to avoid another
+  // layout conversion when completing their local prefixes.
+  bool preserveCarryOwners =
+      threadSegmentSize > 1 &&
+      warpSegmentSize < originalLayout.getOutDimSize(axisDim);
+  bool exchanged = false;
+  if (!preserveCarryOwners) {
+    for (auto &reg : bases[kReg]) {
+      if (inSegment(reg))
+        continue;
+      auto lane = llvm::find_if(bases[kLane], inSegment);
+      if (lane == bases[kLane].end())
+        break;
+      std::swap(reg, *lane);
+      exchanged = true;
+    }
+  }
+  llvm::stable_sort(bases[kReg], [&](const auto &a, const auto &b) {
+    return inSegment(a) && !inSegment(b);
+  });
+  if (exchanged)
+    llvm::stable_sort(bases[kLane], [&](const auto &a, const auto &b) {
+      return inSegment(a) && !inSegment(b);
+    });
   unsigned next = 1;
   for (auto dim : {kReg, kLane})
     for (auto &basis : bases[dim])
