@@ -1566,6 +1566,38 @@ class _InterpreterComparison:
         return result
 
 
+class _InterpreterBoolOp:
+    """Adapt native Python `and`/`or` short-circuiting to Triton's tensor semantics."""
+
+    def __init__(self, is_and, value=None):
+        self.is_and = is_and
+        self.value = value
+        self.short_circuit = False
+        self.tensor_values = []
+
+    def __lt__(self, rhs):
+        # Like the compiler, only a compile-time value that decides the result
+        # stops the native chain; runtime tensors are collected and combined.
+        rhs.tensor_values = self.tensor_values
+        if isinstance(rhs.value, tl.core.base_value) and not isinstance(rhs.value, (tl.constexpr, tl.tuple)):
+            rhs.tensor_values.append(rhs.value)
+        else:
+            rhs.short_circuit = bool(rhs.value) != self.is_and
+        return rhs
+
+    def __bool__(self):
+        return not self.short_circuit
+
+    def get_result(self):
+        if self.short_circuit or not self.tensor_values:
+            return self.value
+        method = "logical_and" if self.is_and else "logical_or"
+        result = self.tensor_values[-1]
+        for value in reversed(self.tensor_values[:-1]):
+            result = getattr(value, method)(result)
+        return result
+
+
 class ASTTransformer(ast.NodeTransformer):
 
     def visit_Compare(self, node):
@@ -1589,6 +1621,24 @@ class ASTTransformer(ast.NodeTransformer):
         # operand once and uses the wrappers' truthiness to short-circuit.
         chain = ast.Compare(left=wrap_operand(node.left), ops=[ast.Lt() for _ in node.ops],
                             comparators=[wrap_operand(value, op) for op, value in zip(node.ops, node.comparators)])
+        return ast.copy_location(
+            ast.Call(func=ast.Attribute(value=chain, attr="get_result", ctx=ast.Load()), args=[], keywords=[]), node)
+
+    def visit_BoolOp(self, node):
+        node = self.generic_visit(node)
+        is_and = isinstance(node.op, ast.And)
+
+        def wrap_operand(value=None):
+            args = [ast.Constant(value=is_and)]
+            if value is not None:
+                args.append(value)
+            return ast.Call(func=ast.Name(id="_InterpreterBoolOp", ctx=ast.Load()), args=args, keywords=[])
+
+        # As in visit_Compare, rewrite `a and b` as the native chain
+        # `_InterpreterBoolOp(True) < _InterpreterBoolOp(True, a) < ...` so
+        # operands keep their scope and lazy evaluation order.
+        chain = ast.Compare(left=wrap_operand(), ops=[ast.Lt() for _ in node.values],
+                            comparators=[wrap_operand(value) for value in node.values])
         return ast.copy_location(
             ast.Call(func=ast.Attribute(value=chain, attr="get_result", ctx=ast.Load()), args=[], keywords=[]), node)
 

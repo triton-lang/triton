@@ -8291,6 +8291,135 @@ def test_chained_comparison_short_circuit(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.filterwarnings("ignore:Logical operators 'and' and 'or' are deprecated")
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("mode", ["and", "or", "long_and", "long_or", "nested"])
+def test_logical_operators_values(device, scalar, mode):
+
+    @triton.jit
+    def kernel(X, Y, SCALAR: tl.constexpr, MODE: tl.constexpr):
+        offsets = tl.program_id(0) if SCALAR else tl.arange(0, 16)
+        x = tl.load(X + offsets)
+        if MODE == "and":
+            result = (x >= 0) and (x <= 8)
+        elif MODE == "or":
+            result = (x < 0) or (x > 8)
+        elif MODE == "long_and":
+            result = (x > -2) and (x <= 8) and (x != 3)
+        elif MODE == "long_or":
+            result = (x == -4) or (x == 3) or (x > 8)
+        else:
+            result = (x > 0) and (x < 3) or (x > 8) and (x != 10)
+        tl.store(Y + offsets, result)
+
+    x = torch.arange(-4, 12, device=device, dtype=torch.int32)
+    y = torch.empty_like(x, dtype=torch.bool)
+    kernel[(16 if scalar else 1, )](x, y, scalar, mode)
+    if mode == "and":
+        expected = (x >= 0) & (x <= 8)
+    elif mode == "or":
+        expected = (x < 0) | (x > 8)
+    elif mode == "long_and":
+        expected = (x > -2) & (x <= 8) & (x != 3)
+    elif mode == "long_or":
+        expected = (x == -4) | (x == 3) | (x > 8)
+    else:
+        expected = (x > 0) & (x < 3) | (x > 8) & (x != 10)
+    torch.testing.assert_close(y, expected)
+
+
+@pytest.mark.interpreter
+@pytest.mark.filterwarnings("ignore:Logical operators 'and' and 'or' are deprecated")
+def test_logical_operators_broadcast(device):
+
+    @triton.jit
+    def kernel(Y):
+        rows = tl.arange(0, 8)[:, None]
+        cols = tl.arange(0, 8)[None, :]
+        tl.store(Y + rows * 8 + cols, (rows < cols) and (cols <= 6) or (rows == tl.program_id(0)))
+
+    y = torch.empty((8, 8), device=device, dtype=torch.bool)
+    kernel[(1, )](y)
+    x = torch.arange(8, device=device)
+    torch.testing.assert_close(y, (x[:, None] < x[None, :]) & (x[None, :] <= 6) | (x[:, None] == 0))
+
+
+@pytest.mark.interpreter
+@pytest.mark.filterwarnings("ignore:Logical operators 'and' and 'or' are deprecated")
+@pytest.mark.parametrize("initialize", [False, True])
+@pytest.mark.parametrize("position", ["left", "right", "nested"])
+def test_logical_operators_assignment_scope(device, initialize, position):
+
+    @triton.jit
+    def kernel(X, Values, Result, INITIALIZE: tl.constexpr, POSITION: tl.constexpr):
+        offsets = tl.arange(0, 16)
+        if INITIALIZE:
+            value = tl.full((16, ), -42, tl.int32)
+        if POSITION == "left":
+            result = ((value := tl.load(X + offsets)) > 0) and (offsets < 8)
+        elif POSITION == "right":
+            result = (offsets >= 0) or ((value := tl.load(X + offsets)) > 0)
+        else:
+            result = (offsets < 8) and ((offsets > 2) or ((value := tl.load(X + offsets)) > 0))
+        tl.store(Values + offsets, value)
+        tl.store(Result + offsets, result)
+
+    x = torch.arange(-4, 12, device=device, dtype=torch.int32)
+    values = torch.empty_like(x)
+    result = torch.empty_like(x, dtype=torch.bool)
+    kernel[(1, )](x, values, result, initialize, position)
+    torch.testing.assert_close(values, x)
+    offsets = torch.arange(16, device=device)
+    if position == "left":
+        expected = (x > 0) & (offsets < 8)
+    elif position == "right":
+        expected = torch.ones_like(result)
+    else:
+        expected = (offsets < 8) & ((offsets > 2) | (x > 0))
+    torch.testing.assert_close(result, expected)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("start", [0, 4])
+def test_logical_operators_evaluation_order(device, start):
+
+    @triton.jit
+    def kernel(Counter, Y):
+        # Runtime operands never short-circuit, including scalar tensors.
+        result = (tl.atomic_add(Counter, 1) < 2) and (tl.atomic_add(Counter, 1) < 2) and (tl.atomic_add(Counter, 1) < 4)
+        tl.store(Y, result)
+        tl.store(Y + 1, (tl.atomic_add(Counter, 1) > 2) or (tl.atomic_add(Counter, 1) > 8))
+
+    counter = torch.full((), start, device=device, dtype=torch.int32)
+    y = torch.empty((2, ), device=device, dtype=torch.bool)
+    kernel[(1, )](counter, y)
+    assert counter.item() == start + 5
+    assert y.tolist() == [start == 0, True]
+
+
+@pytest.mark.interpreter
+@pytest.mark.filterwarnings("ignore:Logical operators 'and' and 'or' are deprecated")
+@pytest.mark.parametrize("flag", [False, True])
+def test_logical_operators_short_circuit(device, flag):
+
+    @triton.jit
+    def kernel(Counter, X, Y, FLAG: tl.constexpr):
+        offsets = tl.arange(0, 16)
+        x = tl.load(X + offsets)
+        # Only compile-time values short-circuit and skip the remaining operands.
+        tl.store(Y + offsets, (x > 0) and FLAG and (tl.atomic_add(Counter, 1) >= 0))
+        tl.store(Y + 16 + offsets, (x > 0) or FLAG or (tl.atomic_add(Counter, 1) < 0))
+
+    counter = torch.zeros((), device=device, dtype=torch.int32)
+    x = torch.arange(-8, 8, device=device, dtype=torch.int32)
+    y = torch.empty((32, ), device=device, dtype=torch.bool)
+    kernel[(1, )](counter, x, y, flag)
+    assert counter.item() == 1
+    torch.testing.assert_close(y[:16], (x > 0) & flag)
+    torch.testing.assert_close(y[16:], (x > 0) | flag)
+
+
+@pytest.mark.interpreter
 def test_short_circuiting(device):
 
     @triton.jit
