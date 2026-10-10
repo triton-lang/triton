@@ -2136,6 +2136,11 @@ struct AtomicCASOpConversion
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (lookupNumCTAs(op) > 1 &&
+        !isa<RankedTensorType>(op.getResult().getType()))
+      return op.emitError(
+          "scalar atomic CAS is not supported in multi-CTA kernels on AMD");
+
     // extract relevant info from Module
     auto loc = op.getLoc();
     insertAtomicOrderingBarriers(op, op.getSem(),
@@ -2237,6 +2242,11 @@ struct AtomicRMWOpConversion
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (lookupNumCTAs(op) > 1 &&
+        !isa<RankedTensorType>(op.getResult().getType()))
+      return op.emitError(
+          "scalar atomic RMW is not supported in multi-CTA kernels on AMD");
+
     auto loc = op.getLoc();
     insertAtomicOrderingBarriers(op, op.getSem(),
                                  !atomicResultHasOrderingBarrier(op), rewriter,
