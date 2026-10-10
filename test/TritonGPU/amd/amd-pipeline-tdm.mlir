@@ -91,15 +91,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // Prologue: dot operands for the first iteration are pre-loaded from LDS.
 // LDS_PREFETCH: %[[PRO_A:.+]] = ttg.local_load {{.*}} -> tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
 // LDS_PREFETCH: %[[PRO_B:.+]] = ttg.local_load {{.*}} -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
-// LDS_PREFETCH: scf.for
+// The TDM copies fill buf[(iv + 2) % 2] and the local_loads read
+// buf[(iv + 1) % 2], both offsets of the induction variable.
+// LDS_PREFETCH: scf.for %[[IV:[^ ]+]] = %c0_i32
 // LDS_PREFETCH-SAME: %[[OP_A:[^ ]+]] = %[[PRO_A]]
 // LDS_PREFETCH-SAME: %[[OP_B:[^ ]+]] = %[[PRO_B]]
 // LDS_PREFETCH: tt.dot %[[OP_A]], %[[OP_B]]
 // LDS_PREFETCH: amdg.async_tdm_wait {{.*}} {num = 0 : i32}
-// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<512x32xf16
-// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<32x64xf16
-// LDS_PREFETCH: %[[NXT_A:.+]] = ttg.local_load {{.*}} -> tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
-// LDS_PREFETCH: %[[NXT_B:.+]] = ttg.local_load {{.*}} -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
+// LDS_PREFETCH: %[[B_SHIFTED:.+]] = arith.addi %[[IV]], %c2_i32
+// LDS_PREFETCH-NEXT: %[[B_WRITE:.+]] = arith.remsi %[[B_SHIFTED]], %c2_i32
+// LDS_PREFETCH-NEXT: %[[A_SHIFTED:.+]] = arith.addi %[[IV]], %c2_i32
+// LDS_PREFETCH-NEXT: %[[A_WRITE:.+]] = arith.remsi %[[A_SHIFTED]], %c2_i32
+// LDS_PREFETCH-NEXT: %[[A_WRITE_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[A_WRITE]]]
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} into %[[A_WRITE_VIEW]] : {{.*}} -> !ttg.memdesc<512x32xf16
+// LDS_PREFETCH: %[[B_WRITE_VIEW:.+]] = ttg.memdesc_index %{{.+}}[%[[B_WRITE]]]
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} into %[[B_WRITE_VIEW]] : {{.*}} -> !ttg.memdesc<32x64xf16
+// LDS_PREFETCH: %[[B_SHIFTED_READ:.+]] = arith.addi %[[IV]], %c1_i32
+// LDS_PREFETCH-NEXT: %[[B_READ:.+]] = arith.remsi %[[B_SHIFTED_READ]], %c2_i32
+// LDS_PREFETCH-NEXT: %[[A_SHIFTED_READ:.+]] = arith.addi %[[IV]], %c1_i32
+// LDS_PREFETCH-NEXT: %[[A_READ:.+]] = arith.remsi %[[A_SHIFTED_READ]], %c2_i32
+// LDS_PREFETCH-NEXT: ttg.memdesc_index %{{.+}}[%[[A_READ]]]
+// LDS_PREFETCH-NEXT: %[[NXT_A:.+]] = ttg.local_load {{.*}} -> tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
+// LDS_PREFETCH-NEXT: ttg.memdesc_index %{{.+}}[%[[B_READ]]]
+// LDS_PREFETCH-NEXT: %[[NXT_B:.+]] = ttg.local_load {{.*}} -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
 // LDS_PREFETCH: scf.yield {{.*}}, %[[NXT_A]], %[[NXT_B]]
 
 // -----
