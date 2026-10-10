@@ -82,6 +82,13 @@ struct TmemDataChannel : Channel {
 constexpr static char kWarpSpecializeGeneratedBarrierAttrName[] =
     "ttg.ws_generated_barrier";
 
+// Returns true when a TMA copy can fill `channel`'s buffer directly. A TMA copy
+// writes the descriptor's shared layout verbatim and descriptors cannot
+// describe a transposed layout, so a buffer that had to take a different
+// encoding to satisfy its consumer must be filled through registers instead.
+bool canFillBufferWithTMA(Channel *channel,
+                          const DenseMap<Channel *, Value> &bufferMap);
+
 bool enclosing(scf::IfOp ifOp, Operation *op);
 bool enclosing(scf::ForOp forOp, Operation *op);
 
