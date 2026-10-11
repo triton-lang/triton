@@ -261,6 +261,49 @@ define void @marginal_f32_broadcast_multiply(float %scale, float %first,
   ret void
 }
 
+; Adjacent fields of an aggregate are still two scalar inputs to gather.
+; A broadcast scale does not offset that cost for a single scalar-output pair.
+; BLACKWELL-LABEL: define void @unprofitable_f32_aggregate_gather(
+; BLACKWELL-NOT: fmul <2 x float>
+; BLACKWELL-COUNT-2: fmul float
+; BLACKWELL-NOT: fmul <2 x float>
+; BLACKWELL: ret void
+; PTX-LABEL: unprofitable_f32_aggregate_gather(
+; PTX-NOT: mul.rn.f32x2
+; PTX-COUNT-2: mul.rn.f32{{[ \t]}}
+; PTX-NOT: mul.rn.f32x2
+; PTX: ret;
+define void @unprofitable_f32_aggregate_gather({ float, float } %src,
+                                                float %scale) {
+  %first = extractvalue { float, float } %src, 0
+  %second = extractvalue { float, float } %src, 1
+  %first.result = fmul float %first, %scale
+  %second.result = fmul float %second, %scale
+  call void asm sideeffect "", "f,f"(float %first.result, float %second.result)
+  ret void
+}
+
+; Unlike a same-value broadcast, two unequal FP32 constants need a packed
+; operand. Even with a packed input, one multiply and scalar exit do not pay.
+; BLACKWELL-LABEL: define void @unprofitable_f32_unequal_constants(
+; BLACKWELL-NOT: fmul <2 x float>
+; BLACKWELL-COUNT-2: fmul float
+; BLACKWELL-NOT: fmul <2 x float>
+; BLACKWELL: ret void
+; PTX-LABEL: unprofitable_f32_unequal_constants(
+; PTX-NOT: mul.rn.f32x2
+; PTX-COUNT-2: mul.rn.f32{{[ \t]}}
+; PTX-NOT: mul.rn.f32x2
+; PTX: ret;
+define void @unprofitable_f32_unequal_constants(<2 x float> %src) {
+  %first = extractelement <2 x float> %src, i64 0
+  %second = extractelement <2 x float> %src, i64 1
+  %first.result = fmul float %first, 1.25
+  %second.result = fmul float %second, 2.5
+  call void asm sideeffect "", "f,f"(float %first.result, float %second.result)
+  ret void
+}
+
 ; The same operation remains profitable when its varying input is packed.
 ; BLACKWELL-LABEL: define void @packed_input_f32_broadcast_multiply(
 ; BLACKWELL: [[SCALE:%.*]] = insertelement <2 x float> poison, float %scale, i64 0
@@ -324,8 +367,8 @@ define void @scalar_f32_broadcast_fma(float %scale, float %first,
   ret void
 }
 
-; One register-tuple operand is free, but the other scalar input pair still
-; requires materialization; the scalar output makes this another marginal case.
+; Both the aggregate fields and the unrelated scalar input pair require
+; materialization; the scalar output cannot justify a single packed operation.
 ; BLACKWELL-LABEL: define void @scalar_f32_mixed_register_tuple(
 ; BLACKWELL-NOT: <2 x float>
 ; BLACKWELL: %result0 = fadd float %accumulator0, %value0
@@ -351,21 +394,226 @@ define void @scalar_f32_mixed_register_tuple(float %accumulator0,
   ret void
 }
 
+; Two paid scalar gathers make this two-operation chain tie the scalar cost.
+; Keep the original fixture scalar; the longer chain below amortizes both packs.
 ; BLACKWELL-LABEL: define void @profitable_f32_scalar_chain(
-; BLACKWELL: [[PRODUCT:%.*]] = fmul fast <2 x float>
-; BLACKWELL-NOT: extractelement <2 x float> [[PRODUCT]]
-; BLACKWELL: [[SUM:%.*]] = fadd <2 x float> [[PRODUCT]], splat (float 1.000000e+00)
-; BLACKWELL: extractelement <2 x float> [[SUM]], i64 0
-; BLACKWELL: extractelement <2 x float> [[SUM]], i64 1
+; BLACKWELL-NEXT: %product0 = fmul fast float %lhs0, %rhs0
+; BLACKWELL-NEXT: %product1 = fmul fast float %lhs1, %rhs1
+; BLACKWELL-NEXT: %sum0 = fadd float %product0, 1.000000e+00
+; BLACKWELL-NEXT: %sum1 = fadd float %product1, 1.000000e+00
+; BLACKWELL-NEXT: call void asm sideeffect "", "f,f"(float %sum0, float %sum1)
+; BLACKWELL-NEXT: ret void
 ; PTX-LABEL: .visible .func profitable_f32_scalar_chain(
-; PTX: mul.f32x2
-; PTX: add.rn.f32x2
+; PTX-NOT: f32x2
+; PTX: ret;
 define void @profitable_f32_scalar_chain(float %lhs0, float %lhs1,
                                           float %rhs0, float %rhs1) {
   %product0 = fmul fast float %lhs0, %rhs0
   %product1 = fmul fast float %lhs1, %rhs1
   %sum0 = fadd float %product0, 1.0
   %sum1 = fadd float %product1, 1.0
+  call void asm sideeffect "", "f,f"(float %sum0, float %sum1)
+  ret void
+}
+
+; Three operations amortize gathering both unrelated scalar input pairs.
+; Intermediate results stay packed through the complete consumer chain.
+; BLACKWELL-LABEL: define void @profitable_f32_long_scalar_chain(
+; BLACKWELL: [[PRODUCT:%.*]] = fmul fast <2 x float>
+; BLACKWELL-NOT: extractelement <2 x float> [[PRODUCT]]
+; BLACKWELL: [[SUM:%.*]] = fadd <2 x float> [[PRODUCT]], splat (float 1.000000e+00)
+; BLACKWELL-NOT: extractelement <2 x float> [[SUM]]
+; BLACKWELL: [[RESULT:%.*]] = fmul <2 x float> [[SUM]], splat (float 5.000000e-01)
+; BLACKWELL: extractelement <2 x float> [[RESULT]], i64 0
+; BLACKWELL: extractelement <2 x float> [[RESULT]], i64 1
+; PTX-LABEL: .visible .func profitable_f32_long_scalar_chain(
+; PTX: mul.f32x2
+; PTX: add.rn.f32x2
+; PTX: mul.rn.f32x2
+define void @profitable_f32_long_scalar_chain(float %lhs0, float %lhs1,
+                                             float %rhs0, float %rhs1) {
+  %product0 = fmul fast float %lhs0, %rhs0
+  %product1 = fmul fast float %lhs1, %rhs1
+  %sum0 = fadd float %product0, 1.0
+  %sum1 = fadd float %product1, 1.0
+  %result0 = fmul float %sum0, 0.5
+  %result1 = fmul float %sum1, 0.5
+  call void asm sideeffect "", "f,f"(float %result0, float %result1)
+  ret void
+}
+
+; Three otherwise marginal roots share one paid scalar bias pair. Charge that
+; pack once while retaining each root's scalar-output conversion and margin.
+; BLACKWELL-LABEL: define void @packed_f32_shared_bias_roots(
+; BLACKWELL: [[BIAS0:%.*]] = insertelement <2 x float> poison, float %bias0, i64 0
+; BLACKWELL-NEXT: [[BIAS:%.*]] = insertelement <2 x float> [[BIAS0]], float %bias1, i64 1
+; BLACKWELL-NOT: insertelement <2 x float>
+; BLACKWELL: [[FMA0:%.*]] = call <2 x float> @llvm.fma.v2f32(<2 x float> %lhs0, <2 x float> %rhs0, <2 x float> [[BIAS]])
+; BLACKWELL: [[OUT00:%.*]] = extractelement <2 x float> [[FMA0]], i64 0
+; BLACKWELL: [[OUT01:%.*]] = extractelement <2 x float> [[FMA0]], i64 1
+; BLACKWELL-NOT: insertelement <2 x float>
+; BLACKWELL: [[FMA1:%.*]] = call <2 x float> @llvm.fma.v2f32(<2 x float> %lhs1, <2 x float> %rhs1, <2 x float> [[BIAS]])
+; BLACKWELL: [[OUT10:%.*]] = extractelement <2 x float> [[FMA1]], i64 0
+; BLACKWELL: [[OUT11:%.*]] = extractelement <2 x float> [[FMA1]], i64 1
+; BLACKWELL-NOT: insertelement <2 x float>
+; BLACKWELL: [[FMA2:%.*]] = call <2 x float> @llvm.fma.v2f32(<2 x float> %lhs2, <2 x float> %rhs2, <2 x float> [[BIAS]])
+; BLACKWELL: [[OUT20:%.*]] = extractelement <2 x float> [[FMA2]], i64 0
+; BLACKWELL: [[OUT21:%.*]] = extractelement <2 x float> [[FMA2]], i64 1
+; BLACKWELL-NOT: insertelement <2 x float>
+; BLACKWELL: call void asm sideeffect "", "f,f,f,f,f,f"(float [[OUT00]], float [[OUT01]], float [[OUT10]], float [[OUT11]], float [[OUT20]], float [[OUT21]])
+; BLACKWELL: ret void
+; PTX-LABEL: packed_f32_shared_bias_roots(
+; PTX-COUNT-3: fma.rn.f32x2
+define void @packed_f32_shared_bias_roots(<2 x float> %lhs0, <2 x float> %rhs0,
+    <2 x float> %lhs1, <2 x float> %rhs1,
+    <2 x float> %lhs2, <2 x float> %rhs2,
+    float %bias0, float %bias1) {
+  %lhs0.0 = extractelement <2 x float> %lhs0, i64 0
+  %rhs0.0 = extractelement <2 x float> %rhs0, i64 0
+  %lhs0.1 = extractelement <2 x float> %lhs0, i64 1
+  %rhs0.1 = extractelement <2 x float> %rhs0, i64 1
+  %lhs1.0 = extractelement <2 x float> %lhs1, i64 0
+  %rhs1.0 = extractelement <2 x float> %rhs1, i64 0
+  %lhs1.1 = extractelement <2 x float> %lhs1, i64 1
+  %rhs1.1 = extractelement <2 x float> %rhs1, i64 1
+  %lhs2.0 = extractelement <2 x float> %lhs2, i64 0
+  %rhs2.0 = extractelement <2 x float> %rhs2, i64 0
+  %lhs2.1 = extractelement <2 x float> %lhs2, i64 1
+  %rhs2.1 = extractelement <2 x float> %rhs2, i64 1
+  %sum0.0 = call float @llvm.fma.f32(float %lhs0.0, float %rhs0.0, float %bias0)
+  %sum0.1 = call float @llvm.fma.f32(float %lhs0.1, float %rhs0.1, float %bias1)
+  %sum1.0 = call float @llvm.fma.f32(float %lhs1.0, float %rhs1.0, float %bias0)
+  %sum1.1 = call float @llvm.fma.f32(float %lhs1.1, float %rhs1.1, float %bias1)
+  %sum2.0 = call float @llvm.fma.f32(float %lhs2.0, float %rhs2.0, float %bias0)
+  %sum2.1 = call float @llvm.fma.f32(float %lhs2.1, float %rhs2.1, float %bias1)
+  call void asm sideeffect "", "f,f,f,f,f,f"(float %sum0.0, float %sum0.1,
+      float %sum1.0, float %sum1.1, float %sum2.0, float %sum2.1)
+  ret void
+}
+
+; Distinct paid bias pairs provide no shared materialization to amortize.
+; BLACKWELL-LABEL: define void @scalar_f32_distinct_bias_roots(
+; BLACKWELL-NOT: @llvm.fma.v2f32
+; BLACKWELL-COUNT-6: call float @llvm.fma.f32
+; BLACKWELL-NOT: @llvm.fma.v2f32
+; BLACKWELL: ret void
+; PTX-LABEL: scalar_f32_distinct_bias_roots(
+; PTX-NOT: fma.rn.f32x2
+; PTX-COUNT-6: fma.rn.f32{{[ \t]}}
+; PTX-NOT: fma.rn.f32x2
+; PTX: ret;
+define void @scalar_f32_distinct_bias_roots(<2 x float> %lhs0, <2 x float> %rhs0,
+    <2 x float> %lhs1, <2 x float> %rhs1,
+    <2 x float> %lhs2, <2 x float> %rhs2,
+    float %bias00, float %bias01, float %bias10, float %bias11,
+    float %bias20, float %bias21) {
+  %lhs0.0 = extractelement <2 x float> %lhs0, i64 0
+  %rhs0.0 = extractelement <2 x float> %rhs0, i64 0
+  %lhs0.1 = extractelement <2 x float> %lhs0, i64 1
+  %rhs0.1 = extractelement <2 x float> %rhs0, i64 1
+  %lhs1.0 = extractelement <2 x float> %lhs1, i64 0
+  %rhs1.0 = extractelement <2 x float> %rhs1, i64 0
+  %lhs1.1 = extractelement <2 x float> %lhs1, i64 1
+  %rhs1.1 = extractelement <2 x float> %rhs1, i64 1
+  %lhs2.0 = extractelement <2 x float> %lhs2, i64 0
+  %rhs2.0 = extractelement <2 x float> %rhs2, i64 0
+  %lhs2.1 = extractelement <2 x float> %lhs2, i64 1
+  %rhs2.1 = extractelement <2 x float> %rhs2, i64 1
+  %sum0.0 = call float @llvm.fma.f32(float %lhs0.0, float %rhs0.0, float %bias00)
+  %sum0.1 = call float @llvm.fma.f32(float %lhs0.1, float %rhs0.1, float %bias01)
+  %sum1.0 = call float @llvm.fma.f32(float %lhs1.0, float %rhs1.0, float %bias10)
+  %sum1.1 = call float @llvm.fma.f32(float %lhs1.1, float %rhs1.1, float %bias11)
+  %sum2.0 = call float @llvm.fma.f32(float %lhs2.0, float %rhs2.0, float %bias20)
+  %sum2.1 = call float @llvm.fma.f32(float %lhs2.1, float %rhs2.1, float %bias21)
+  call void asm sideeffect "", "f,f,f,f,f,f"(float %sum0.0, float %sum0.1,
+      float %sum1.0, float %sum1.1, float %sum2.0, float %sum2.1)
+  ret void
+}
+
+; The early scalar observer must precede the volatile high-lane bias load.
+; It prevents including the first pair in a batch or crediting its removal.
+; The remaining two roots do not justify a shared pack on their own.
+; An existing bias vector formed after all scalar uses cannot supply them.
+; BLACKWELL-LABEL: define void @scalar_f32_shared_bias_early_use(
+; BLACKWELL-NOT: @llvm.fma.v2f32
+; BLACKWELL: %bias0 = load volatile float
+; BLACKWELL: %sum0.0 = call float @llvm.fma.f32(float %lhs0.0, float %rhs0.0, float %bias0)
+; BLACKWELL-NEXT: call void asm sideeffect "", "f"(float %sum0.0)
+; BLACKWELL: %bias1 = load volatile float
+; BLACKWELL-COUNT-5: call float @llvm.fma.f32
+; BLACKWELL-NOT: @llvm.fma.v2f32
+; BLACKWELL: call void asm sideeffect "", "f,f,f,f,f,f"
+; BLACKWELL: %late.bias0 = insertelement <2 x float> poison, float %bias0, i64 0
+; BLACKWELL-NEXT: %late.bias1 = insertelement <2 x float> %late.bias0, float %bias1, i64 1
+; BLACKWELL: ret void
+; PTX-LABEL: scalar_f32_shared_bias_early_use(
+; PTX-NOT: fma.rn.f32x2
+; PTX-COUNT-6: fma.rn.f32{{[ \t]}}
+; PTX-NOT: fma.rn.f32x2
+; PTX: ret;
+define void @scalar_f32_shared_bias_early_use(<2 x float> %lhs0, <2 x float> %rhs0,
+    <2 x float> %lhs1, <2 x float> %rhs1,
+    <2 x float> %lhs2, <2 x float> %rhs2,
+    ptr addrspace(1) %bias.ptr) {
+  %lhs0.0 = extractelement <2 x float> %lhs0, i64 0
+  %rhs0.0 = extractelement <2 x float> %rhs0, i64 0
+  %lhs0.1 = extractelement <2 x float> %lhs0, i64 1
+  %rhs0.1 = extractelement <2 x float> %rhs0, i64 1
+  %lhs1.0 = extractelement <2 x float> %lhs1, i64 0
+  %rhs1.0 = extractelement <2 x float> %rhs1, i64 0
+  %lhs1.1 = extractelement <2 x float> %lhs1, i64 1
+  %rhs1.1 = extractelement <2 x float> %rhs1, i64 1
+  %lhs2.0 = extractelement <2 x float> %lhs2, i64 0
+  %rhs2.0 = extractelement <2 x float> %rhs2, i64 0
+  %lhs2.1 = extractelement <2 x float> %lhs2, i64 1
+  %rhs2.1 = extractelement <2 x float> %rhs2, i64 1
+  %bias0 = load volatile float, ptr addrspace(1) %bias.ptr, align 4
+  %sum0.0 = call float @llvm.fma.f32(float %lhs0.0, float %rhs0.0, float %bias0)
+  call void asm sideeffect "", "f"(float %sum0.0)
+  %bias.ptr1 = getelementptr float, ptr addrspace(1) %bias.ptr, i64 1
+  %bias1 = load volatile float, ptr addrspace(1) %bias.ptr1, align 4
+  %sum0.1 = call float @llvm.fma.f32(float %lhs0.1, float %rhs0.1, float %bias1)
+  %sum1.0 = call float @llvm.fma.f32(float %lhs1.0, float %rhs1.0, float %bias0)
+  %sum1.1 = call float @llvm.fma.f32(float %lhs1.1, float %rhs1.1, float %bias1)
+  %sum2.0 = call float @llvm.fma.f32(float %lhs2.0, float %rhs2.0, float %bias0)
+  %sum2.1 = call float @llvm.fma.f32(float %lhs2.1, float %rhs2.1, float %bias1)
+  call void asm sideeffect "", "f,f,f,f,f,f"(float %sum0.0, float %sum0.1,
+      float %sum1.0, float %sum1.1, float %sum2.0, float %sum2.1)
+  %late.bias0 = insertelement <2 x float> poison, float %bias0, i64 0
+  %late.bias1 = insertelement <2 x float> %late.bias0, float %bias1, i64 1
+  %late.bits = bitcast <2 x float> %late.bias1 to i64
+  call void asm sideeffect "", "l"(i64 %late.bits)
+  ret void
+}
+
+; A completed pair in a dominating predecessor is already available to use.
+; Reuse it directly instead of charging or emitting another scalar gather.
+; BLACKWELL-LABEL: define void @packed_f32_dominating_bias_pair(
+; BLACKWELL: %bias.low = insertelement <2 x float> poison, float %bias0, i64 0
+; BLACKWELL-NEXT: %bias = insertelement <2 x float> %bias.low, float %bias1, i64 1
+; BLACKWELL-NOT: insertelement
+; BLACKWELL: compute:
+; BLACKWELL-NOT: insertelement
+; BLACKWELL: [[SUM:%.*]] = call <2 x float> @llvm.fma.v2f32(<2 x float> %lhs, <2 x float> %rhs, <2 x float> %bias)
+; BLACKWELL-NEXT: [[LO:%.*]] = extractelement <2 x float> [[SUM]], i64 0
+; BLACKWELL-NEXT: [[HI:%.*]] = extractelement <2 x float> [[SUM]], i64 1
+; BLACKWELL-NEXT: call void asm sideeffect "", "f,f"(float [[LO]], float [[HI]])
+; BLACKWELL-NEXT: ret void
+define void @packed_f32_dominating_bias_pair(<2 x float> %lhs, <2 x float> %rhs,
+                                             float %bias0, float %bias1) {
+entry:
+  %bias.low = insertelement <2 x float> poison, float %bias0, i64 0
+  %bias = insertelement <2 x float> %bias.low, float %bias1, i64 1
+  %bias.bits = bitcast <2 x float> %bias to i64
+  call void asm sideeffect "", "l"(i64 %bias.bits)
+  br label %compute
+compute:
+  %lhs0 = extractelement <2 x float> %lhs, i64 0
+  %lhs1 = extractelement <2 x float> %lhs, i64 1
+  %rhs0 = extractelement <2 x float> %rhs, i64 0
+  %rhs1 = extractelement <2 x float> %rhs, i64 1
+  %sum0 = call float @llvm.fma.f32(float %lhs0, float %rhs0, float %bias0)
+  %sum1 = call float @llvm.fma.f32(float %lhs1, float %rhs1, float %bias1)
   call void asm sideeffect "", "f,f"(float %sum0, float %sum1)
   ret void
 }
@@ -617,8 +865,8 @@ exit:
 }
 
 ; SIToFP contributions cannot use the separate direct-call accumulator matcher.
-; Their paid input pack and scalar exit would make a single packed add marginal
-; without the shared DAG's live packed-carry exemption.
+; The paid input pair, packed add and scalar exit now tie the two scalar adds.
+; A live carry removes the extra boundary margin, not the materialization cost.
 ; HOPPER-ONLY-LABEL: define void @packed_f32_converted_loop_carry(
 ; HOPPER-ONLY-COUNT-2: phi float
 ; HOPPER-ONLY-NOT: fadd <2 x float>
@@ -626,21 +874,20 @@ exit:
 ; HOPPER-ONLY: ret void
 ; BLACKWELL-LABEL: define void @packed_f32_converted_loop_carry(
 ; BLACKWELL: loop:
-; BLACKWELL: [[ACC:%.*]] = phi <2 x float> [ [[NEXT:%.*]], %loop ], [ zeroinitializer, %entry ]
-; BLACKWELL-NOT: phi float
-; BLACKWELL-DAG: [[FIRST:%.*]] = sitofp i32 %first.input to float
-; BLACKWELL-DAG: [[SECOND:%.*]] = sitofp i32 %second.input to float
-; BLACKWELL: [[PACK0:%.*]] = insertelement <2 x float> poison, float [[FIRST]], i64 0
-; BLACKWELL: [[PACK1:%.*]] = insertelement <2 x float> [[PACK0]], float [[SECOND]], i64 1
-; BLACKWELL: [[NEXT]] = fadd <2 x float> [[ACC]], [[PACK1]]
-; BLACKWELL: [[LO:%.*]] = extractelement <2 x float> [[NEXT]], i64 0
-; BLACKWELL: [[HI:%.*]] = extractelement <2 x float> [[NEXT]], i64 1
+; BLACKWELL-NOT: phi <2 x float>
+; BLACKWELL-COUNT-2: phi float
+; BLACKWELL-COUNT-2: sitofp i32
+; BLACKWELL: %first.next = fadd float %first, %first.contribution
+; BLACKWELL-NEXT: %second.next = fadd float %second, %second.contribution
 ; BLACKWELL: br i1 %continue, label %loop, label %exit
 ; BLACKWELL: exit:
-; BLACKWELL: call void asm sideeffect "", "f,f"(float [[LO]], float [[HI]])
+; BLACKWELL: call void asm sideeffect "", "f,f"(float %first.next, float %second.next)
 ; BLACKWELL: ret void
 ; PTX-LABEL: .visible .func packed_f32_converted_loop_carry(
-; PTX: add.rn.f32x2
+; PTX-NOT: add.rn.f32x2
+; PTX-COUNT-2: add.rn.f32{{[ \t]}}
+; PTX-NOT: add.rn.f32x2
+; PTX: ret;
 define void @packed_f32_converted_loop_carry(i32 %first.input,
                                             i32 %second.input, i1 %continue) {
 entry:
@@ -762,20 +1009,26 @@ exit:
   ret void
 }
 
+; Contributions from separate load streams need paid gathers. Each single-add
+; recurrence ties the scalar cost after counting its scalar exit; no batch
+; shares that paid input pair, and loop carries are not grouped as roots.
 ; HOPPER-ONLY-LABEL: define void @packed_f32_interleaved_accumulators(
 ; HOPPER-ONLY-NOT: fadd <2 x float>
 ; HOPPER-ONLY-COUNT-4: fadd float
 ; BLACKWELL-LABEL: define void @packed_f32_interleaved_accumulators(
-; BLACKWELL: phi <2 x float>
-; BLACKWELL: phi <2 x float>
-; BLACKWELL: [[FIRST:%.*]] = call { i32, i32, i32, i32 } asm sideeffect
-; BLACKWELL: [[SECOND:%.*]] = call { i32, i32, i32, i32 } asm sideeffect
-; BLACKWELL: [[THIRD:%.*]] = call { i32, i32, i32, i32 } asm sideeffect
-; BLACKWELL: fadd <2 x float>
-; BLACKWELL: [[FOURTH:%.*]] = call { i32, i32, i32, i32 } asm sideeffect
-; BLACKWELL: fadd <2 x float>
+; BLACKWELL-NOT: phi <2 x float>
+; BLACKWELL-COUNT-4: phi float
+; BLACKWELL: %first.next = fadd float %first.acc, %first.value
+; BLACKWELL: %second.next = fadd float %second.acc, %second.value
+; BLACKWELL: %third.next = fadd float %third.acc, %third.value
+; BLACKWELL: %fourth.next = fadd float %fourth.acc, %fourth.value
+; BLACKWELL-NOT: fadd <2 x float>
+; BLACKWELL: ret void
 ; PTX-LABEL: .visible .func packed_f32_interleaved_accumulators(
-; PTX-COUNT-2: add.rn.f32x2
+; PTX-NOT: add.rn.f32x2
+; PTX-COUNT-4: add.rn.f32{{[ \t]}}
+; PTX-NOT: add.rn.f32x2
+; PTX: ret;
 define void @packed_f32_interleaved_accumulators(ptr addrspace(1) %first,
                                                    ptr addrspace(1) %second,
                                                    ptr addrspace(1) %third,
@@ -821,11 +1074,17 @@ exit:
   ret void
 }
 
+; The division calls remain scalar and their distinct results require a gather.
+; The single packed update plus its scalar exit offers no strict cost saving.
 ; BLACKWELL-LABEL: define void @different_divisor_accumulators(
-; BLACKWELL: [[ACC:%.*]] = phi <2 x float>
+; BLACKWELL-NOT: phi <2 x float>
+; BLACKWELL-COUNT-2: phi float
 ; BLACKWELL: call float @llvm.nvvm.div.full(float %first, float %first.divisor)
+; BLACKWELL: %first.next = fadd float %first.acc, %first.contribution
 ; BLACKWELL: call float @llvm.nvvm.div.full(float %second, float %second.divisor)
-; BLACKWELL: fadd <2 x float> [[ACC]],
+; BLACKWELL: %second.next = fadd float %second.acc, %second.contribution
+; BLACKWELL-NOT: fadd <2 x float>
+; BLACKWELL: ret void
 define void @different_divisor_accumulators(float %first, float %second,
                                              float %first.divisor,
                                              float %second.divisor,

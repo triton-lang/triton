@@ -4,6 +4,7 @@
 
 #include "LLVMPasses.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -79,6 +80,15 @@ struct PackPlan {
   SmallVector<PackedLoopCarry, 4> loopCarries;
 };
 
+struct PackRoot {
+  Instruction *first;
+  Instruction *second;
+  Instruction *insertion;
+  unsigned node;
+  unsigned outputCost;
+  std::optional<PackedResultUse> packedUse;
+};
+
 class NVPTXCostModel {
 public:
   explicit NVPTXCostModel(unsigned computeCapability)
@@ -99,8 +109,7 @@ public:
     return computeCapability >= 100 && elementType->isIntegerTy(16);
   }
 
-  // Packing a 32-bit register tuple is cheaper than floating-point arithmetic,
-  // but still consumes register bandwidth and can extend live ranges.
+  // Costs are relative instruction costs, not register-pressure estimates.
   unsigned getScalarOperationCost(const Instruction &instruction,
                                   unsigned fusedConversionChainLength) const {
     Type *elementType = instruction.getType();
@@ -132,8 +141,9 @@ public:
     return 3;
   }
 
-  unsigned getPackCost(Type *elementType) const {
-    return elementType->getScalarSizeInBits() == 32 ? 1 : 2;
+  unsigned getPackCost() const {
+    // An independent 32-bit pair can require a copy of each component.
+    return 2;
   }
 
   unsigned getUnpackCost(Type *elementType) const {
@@ -208,10 +218,50 @@ private:
     return true;
   }
 
-  bool isFreePack(ValuePair values) const {
+  bool isPackBoundary(ValuePair values) const {
     return values.first == values.second ||
            (isa<Constant>(values.first) && isa<Constant>(values.second)) ||
            getExtractedVector(values).has_value() || isRegisterTuple(values);
+  }
+
+  Value *findExistingPair(ValuePair values, Instruction *insertion) const {
+    if (!insertion || !values.first->hasUseList())
+      return nullptr;
+    for (User *user : values.first->users()) {
+      auto *first = dyn_cast<InsertElementInst>(user);
+      if (!first || first->getOperand(1) != values.first)
+        continue;
+      auto *type = dyn_cast<FixedVectorType>(first->getType());
+      auto *firstIndex = dyn_cast<ConstantInt>(first->getOperand(2));
+      if (!type || type->getNumElements() != 2 || !firstIndex ||
+          !firstIndex->isZero())
+        continue;
+      for (User *next : first->users()) {
+        auto *second = dyn_cast<InsertElementInst>(next);
+        if (!second || second->getOperand(0) != first ||
+            second->getOperand(1) != values.second || second == insertion)
+          continue;
+        auto *secondIndex = dyn_cast<ConstantInt>(second->getOperand(2));
+        if (secondIndex && secondIndex->isOne() &&
+            dominators.dominates(second, insertion))
+          return second;
+      }
+    }
+    return nullptr;
+  }
+
+  unsigned getPackMaterializationCost(ValuePair values,
+                                      Instruction *insertion) const {
+    // Existing vectors and native scalar broadcasts need no new pair. In
+    // contrast, adjacent fields of an aggregate are independent scalar SSA
+    // values: adjacency of extractvalue indices does not imply a register pair.
+    if (values.first == values.second || getExtractedVector(values) ||
+        findExistingPair(values, insertion))
+      return 0;
+    if (values.first->getType()->getScalarSizeInBits() != 32 &&
+        isPackBoundary(values))
+      return 0;
+    return costModel.getPackCost();
   }
 
   bool insertionDominates(Instruction *anchor, Instruction *use) const {
@@ -242,7 +292,7 @@ private:
     node.insertion = use;
     auto *first = dyn_cast<Instruction>(values.first);
     auto *second = dyn_cast<Instruction>(values.second);
-    if (!isFreePack(values) && depth < 8 && first && second &&
+    if (!isPackBoundary(values) && depth < 8 && first && second &&
         canPair(*first, *second)) {
       Instruction *last = first->comesBefore(second) ? second : first;
       Instruction *insertion =
@@ -283,9 +333,11 @@ private:
     return index;
   }
 
-  SmallVector<char, 64> reachableNodes(const PackPlan &plan, unsigned root) const {
+  SmallVector<char, 64> reachableNodes(const PackPlan &plan,
+                                      ArrayRef<unsigned> roots) const {
     SmallVector<char, 64> live(plan.nodes.size(), false);
-    live[root] = true;
+    for (unsigned root : roots)
+      live[root] = true;
     for (unsigned index = plan.nodes.size(); index-- > 0;)
       if (live[index])
         for (unsigned input : plan.nodes[index].operands)
@@ -293,9 +345,10 @@ private:
     return live;
   }
 
-  int getPlanCost(const PackPlan &plan, unsigned root,
-                  unsigned outputCost) const {
-    auto live = reachableNodes(plan, root);
+  int getPlanCost(const PackPlan &plan, ArrayRef<unsigned> roots,
+                  ArrayRef<unsigned> outputCosts) const {
+    assert(roots.size() == outputCosts.size());
+    auto live = reachableNodes(plan, roots);
     DenseSet<Instruction *> removed = plan.replaced;
     DenseSet<Value *> retainedInputs;
     for (unsigned index = 0; index < plan.nodes.size(); ++index) {
@@ -325,8 +378,10 @@ private:
     for (Instruction *instruction : removed)
       scalarCost += costModel.getScalarOperationCost(
           *instruction, fusedConversionChainLengths.lookup(instruction));
-    unsigned vectorCost = outputCost;
-    bool materializesInputPair = false;
+    unsigned vectorCost = 0;
+    for (unsigned outputCost : outputCosts)
+      vectorCost += outputCost;
+    SmallVector<char, 64> materialized(plan.nodes.size(), false);
     for (unsigned index = 0; index < plan.nodes.size(); ++index) {
       if (!live[index])
         continue;
@@ -338,7 +393,9 @@ private:
         } else {
           bool registerChain = llvm::all_of(node.operands, [&](unsigned input) {
             const PackNode &operand = plan.nodes[input];
-            return operand.operation || isFreePack(operand.values);
+            return operand.operation ||
+                   getPackMaterializationCost(operand.values,
+                                              operand.insertion) == 0;
           });
           vectorCost +=
               costModel.getPackedOperationCost(*node.operation, registerChain);
@@ -348,28 +405,36 @@ private:
             llvm::any_of(plan.loopCarries, [&](const PackedLoopCarry &carry) {
               return node.values == ValuePair{carry.first, carry.second};
             });
-        if (!carried && !isFreePack(node.values)) {
-          vectorCost += costModel.getPackCost(node.values.first->getType());
-          materializesInputPair = true;
+        unsigned packCost =
+            getPackMaterializationCost(node.values, node.insertion);
+        if (!carried && packCost != 0) {
+          vectorCost += packCost;
+          materialized[index] = true;
         }
       }
     }
-    bool livePackedCarry =
-        llvm::any_of(plan.loopCarries, [&](const PackedLoopCarry &carry) {
-          return live[plan.cached.lookup({carry.first, carry.second})];
-        });
-    bool scalarExit = outputCost != 0 || plan.nodes[root].horizontal;
     // Require an extra profitability margin for scalar-to-packed-to-scalar
     // regions: forming a temporary register pair can constrain scheduling.
     // Live packed carries amortize that boundary.
-    if (materializesInputPair && scalarExit && !livePackedCarry)
-      ++vectorCost;
+    for (auto [root, outputCost] : llvm::zip(roots, outputCosts)) {
+      auto rootLive = reachableNodes(plan, ArrayRef<unsigned>(root));
+      bool materializesInputPair = false;
+      for (unsigned index = 0; index < plan.nodes.size(); ++index)
+        materializesInputPair |= rootLive[index] && materialized[index];
+      bool livePackedCarry =
+          llvm::any_of(plan.loopCarries, [&](const PackedLoopCarry &carry) {
+            return rootLive[plan.cached.lookup({carry.first, carry.second})];
+          });
+      bool scalarExit = outputCost != 0 || plan.nodes[root].horizontal;
+      if (materializesInputPair && scalarExit && !livePackedCarry)
+        ++vectorCost;
+    }
     return static_cast<int>(vectorCost) - static_cast<int>(scalarCost);
   }
 
-  bool isProfitable(PackPlan &plan, unsigned root,
-                    unsigned outputCost = 0) const {
-    int cost = getPlanCost(plan, root, outputCost);
+  bool isProfitable(PackPlan &plan, ArrayRef<unsigned> roots,
+                    ArrayRef<unsigned> outputCosts) const {
+    int cost = getPlanCost(plan, roots, outputCosts);
     unsigned work = 0;
     for (unsigned index = 0; index < plan.nodes.size(); ++index) {
       PackNode original = plan.nodes[index];
@@ -385,17 +450,23 @@ private:
         break;
       plan.nodes[index].operation = nullptr;
       plan.nodes[index].operands.clear();
-      int boundaryCost = getPlanCost(plan, root, outputCost);
+      int boundaryCost = getPlanCost(plan, roots, outputCosts);
       if (boundaryCost <= cost)
         cost = boundaryCost;
       else
         plan.nodes[index] = std::move(original);
     }
-    auto live = reachableNodes(plan, root);
+    auto live = reachableNodes(plan, roots);
     llvm::erase_if(plan.loopCarries, [&](const PackedLoopCarry &carry) {
       return !live[plan.cached.lookup({carry.first, carry.second})];
     });
     return cost < 0;
+  }
+
+  bool isProfitable(PackPlan &plan, unsigned root,
+                    unsigned outputCost = 0) const {
+    return isProfitable(plan, ArrayRef<unsigned>(root),
+                        ArrayRef<unsigned>(outputCost));
   }
 
   Value *emitPack(unsigned index, PackPlan &plan) const {
@@ -1040,6 +1111,10 @@ private:
                                          "nvptx.subvector");
     }
 
+    Instruction *insertion = &*builder.GetInsertPoint();
+    if (Value *existing = findExistingPair(values, insertion))
+      return existing;
+
     if (isa<Constant>(values.first) && isa<Constant>(values.second))
       return ConstantVector::get(
           {cast<Constant>(values.first), cast<Constant>(values.second)});
@@ -1050,8 +1125,10 @@ private:
                                        "nvptx.pack");
   }
 
-  bool vectorizePair(Instruction &first, Instruction &second) const {
+  bool appendRoot(Instruction &first, Instruction &second, PackPlan &plan,
+                   SmallVectorImpl<PackRoot> &roots) const {
     if (first.use_empty() || second.use_empty() ||
+        plan.replaced.contains(&first) || plan.replaced.contains(&second) ||
         ((first.getOpcode() == Instruction::FAdd ||
           first.getOpcode() == Instruction::FSub) &&
          feedsOnlyScalarDivision(first) && feedsOnlyScalarDivision(second)))
@@ -1061,7 +1138,6 @@ private:
     if (!insertion)
       return false;
 
-    PackPlan plan;
     plan.replaced.insert(&first);
     plan.replaced.insert(&second);
     auto root = planPack({&first, &second}, insertion, plan, 0, insertion);
@@ -1071,15 +1147,17 @@ private:
         getPackedResultUse(first, second);
     unsigned outputCost =
         packedUse ? 0 : costModel.getUnpackCost(first.getType());
-    if (!isProfitable(plan, *root, outputCost))
-      return false;
+    roots.push_back({&first, &second, insertion, *root, outputCost, packedUse});
+    return true;
+  }
+
+  bool emitPlan(PackPlan &plan, ArrayRef<PackRoot> roots) const {
 
     SmallVector<WeakTrackingVH, 16> deadInstructions;
     for (const PackNode &node : plan.nodes)
       for (Value *value : {node.values.first, node.values.second})
         if (auto *instruction = dyn_cast_or_null<Instruction>(value))
           deadInstructions.push_back(instruction);
-    IRBuilder<> builder(insertion);
     SmallVector<std::pair<PackedLoopCarry, PHINode *>, 4> packedCarries;
     for (const PackedLoopCarry &carry : plan.loopCarries) {
       IRBuilder<> phiBuilder(carry.first);
@@ -1104,7 +1182,9 @@ private:
       plan.nodes[input].emitted = packedPhi;
       packedCarries.emplace_back(carry, packedPhi);
     }
-    Value *packed = emitPack(*root, plan);
+    SmallVector<Value *, 16> packedResults;
+    for (const PackRoot &root : roots)
+      packedResults.push_back(emitPack(root.node, plan));
     for (const auto &packedCarry : packedCarries) {
       const PackedLoopCarry &carry = packedCarry.first;
       auto update = plan.cached.find({carry.firstUpdate, carry.secondUpdate});
@@ -1114,25 +1194,125 @@ private:
                                            emitPack(update->second, plan));
     }
 
-    if (packedUse) {
-      packedUse->second->replaceAllUsesWith(packed);
-      packedUse->second->eraseFromParent();
-      packedUse->first->eraseFromParent();
-    } else {
-      Value *firstLane =
-          builder.CreateExtractElement(packed, uint64_t(0), "nvptx.extract");
-      Value *secondLane =
-          builder.CreateExtractElement(packed, uint64_t(1), "nvptx.extract");
-      first.replaceAllUsesWith(firstLane);
-      second.replaceAllUsesWith(secondLane);
+    for (auto [root, packed] : llvm::zip(roots, packedResults)) {
+      if (root.packedUse) {
+        root.packedUse->second->replaceAllUsesWith(packed);
+      } else {
+        IRBuilder<> builder(root.insertion);
+        Value *firstLane =
+            builder.CreateExtractElement(packed, uint64_t(0), "nvptx.extract");
+        Value *secondLane =
+            builder.CreateExtractElement(packed, uint64_t(1), "nvptx.extract");
+        root.first->replaceAllUsesWith(firstLane);
+        root.second->replaceAllUsesWith(secondLane);
+      }
     }
 
-    first.eraseFromParent();
-    second.eraseFromParent();
+    // Keep every original insertion anchor alive until all roots are emitted
+    // and rewritten. Materializations cached in the plan are shared by roots.
+    for (const PackRoot &root : roots)
+      if (root.packedUse) {
+        root.packedUse->second->eraseFromParent();
+        root.packedUse->first->eraseFromParent();
+      }
+    for (const PackRoot &root : roots) {
+      root.first->eraseFromParent();
+      root.second->eraseFromParent();
+    }
     for (WeakTrackingVH &instruction : deadInstructions)
       if (instruction)
         RecursivelyDeleteTriviallyDeadInstructions(instruction);
     return true;
+  }
+
+  bool vectorizePair(Instruction &first, Instruction &second) const {
+    PackPlan plan;
+    SmallVector<PackRoot, 1> roots;
+    if (!appendRoot(first, second, plan, roots) ||
+        !isProfitable(plan, roots.front().node, roots.front().outputCost))
+      return false;
+    return emitPlan(plan, roots);
+  }
+
+  SmallVector<ValuePair, 8> paidInputs(const PackPlan &plan,
+                                      unsigned root) const {
+    SmallVector<ValuePair, 8> inputs;
+    auto live = reachableNodes(plan, ArrayRef<unsigned>(root));
+    for (unsigned index = 0; index < plan.nodes.size(); ++index) {
+      const PackNode &node = plan.nodes[index];
+      if (live[index] && !node.operation &&
+          getPackMaterializationCost(node.values, node.insertion) != 0)
+        inputs.push_back(node.values);
+    }
+    return inputs;
+  }
+
+  bool vectorizeSharedInputs(Instruction &first, Instruction &second,
+                             ArrayRef<WeakTrackingVH> candidates) const {
+    PackPlan seed;
+    SmallVector<PackRoot, 1> seedRoots;
+    if (!appendRoot(first, second, seed, seedRoots) ||
+        !seed.loopCarries.empty())
+      return false;
+    // Bound planning work independently of the profitability model.
+    unsigned work = seed.nodes.size();
+    constexpr unsigned maxSharedPlanWork = 32768;
+    for (ValuePair shared : paidInputs(seed, seedRoots.front().node)) {
+      SmallVector<InstructionPair, 16> pairs{{&first, &second}};
+      DenseSet<Instruction *> used;
+      used.insert(&first);
+      used.insert(&second);
+      for (unsigned index = 0; index + 1 < candidates.size(); ++index) {
+        auto *left = dyn_cast_or_null<Instruction>(candidates[index]);
+        if (!left || used.contains(left) ||
+            left->getOpcode() != first.getOpcode() ||
+            left->getType() != first.getType())
+          continue;
+        for (unsigned other = index + 1; other < candidates.size(); ++other) {
+          auto *right = dyn_cast_or_null<Instruction>(candidates[other]);
+          if (!right || used.contains(right) || !canPair(*left, *right))
+            continue;
+          PackPlan candidate;
+          SmallVector<PackRoot, 1> candidateRoots;
+          bool valid = appendRoot(*left, *right, candidate, candidateRoots);
+          work += candidate.nodes.size();
+          if (work > maxSharedPlanWork)
+            return false;
+          if (!valid ||
+              !candidate.loopCarries.empty() ||
+              !llvm::is_contained(
+                  paidInputs(candidate, candidateRoots.front().node), shared))
+            continue;
+          pairs.emplace_back(left, right);
+          used.insert(left);
+          used.insert(right);
+          break;
+        }
+      }
+      if (pairs.size() < 2)
+        continue;
+      PackPlan plan;
+      SmallVector<PackRoot, 16> roots;
+      bool valid = true;
+      for (auto [left, right] : pairs)
+        if (!appendRoot(*left, *right, plan, roots)) {
+          valid = false;
+          break;
+        }
+      work += plan.nodes.size();
+      if (work > maxSharedPlanWork)
+        return false;
+      if (!valid || !plan.loopCarries.empty())
+        continue;
+      SmallVector<unsigned, 16> rootNodes, outputCosts;
+      for (const PackRoot &root : roots) {
+        rootNodes.push_back(root.node);
+        outputCosts.push_back(root.outputCost);
+      }
+      if (isProfitable(plan, rootNodes, outputCosts))
+        return emitPlan(plan, roots);
+    }
+    return false;
   }
 
   bool vectorizeArithmetic(BasicBlock &block) const {
@@ -1149,12 +1329,24 @@ private:
         continue;
 
       unsigned limit = std::min<unsigned>(candidates.size(), index + 33);
+      bool triedSharedInputs = false;
       for (unsigned other = index + 1; other < limit; ++other) {
         auto *second = dyn_cast_or_null<Instruction>(candidates[other]);
         if (!second || !canPair(*first, *second))
           continue;
-        changed |= vectorizePair(*first, *second);
-        break;
+        if (vectorizePair(*first, *second)) {
+          changed = true;
+          break;
+        }
+        if (!triedSharedInputs) {
+          triedSharedInputs = true;
+          if (vectorizeSharedInputs(
+                  *first, *second,
+                  ArrayRef<WeakTrackingVH>(candidates).slice(index, limit - index))) {
+            changed = true;
+            break;
+          }
+        }
       }
     }
     return changed;
