@@ -38,12 +38,8 @@ struct TritonAMDGPUMembar
     if (targetInfo.requiresAliasInfoForAsyncOps())
       AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
 
-    // Start with the CDNA4 LDS-direct path where the wait-placement regression
-    // was measured. Other targets retain their existing deferral policy.
-    auto policy = targetInfo.getISAFamily() == amdgpu::ISAFamily::CDNA4
-                      ? AMD::stopMembarDeferral
-                      : nullptr;
-    ModuleMembarAnalysis membarPass(allocation, AMD::membarFilter, policy);
+    ModuleMembarAnalysis membarPass(allocation, AMD::membarFilter,
+                                    AMD::stopMembarDeferral);
     membarPass.run();
   }
 };

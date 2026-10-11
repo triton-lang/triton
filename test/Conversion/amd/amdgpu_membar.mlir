@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' | FileCheck %s --check-prefix=CDNA3
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx950' | FileCheck %s --check-prefix=CDNA4
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' | FileCheck %s --check-prefix=DEFERRAL
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx950' | FileCheck %s --check-prefix=DEFERRAL
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' | FileCheck %s
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -749,16 +749,12 @@ tt.func @no_barrier_tdm_mbarrier_in_loop(
 #layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-// CDNA3-LABEL: @deferral_direct
-// CDNA3: ttg.async_wait
-// CDNA3-NEXT: arith.addf
-// CDNA3-NEXT: ttg.barrier local
-// CDNA4-LABEL: @deferral_direct
-// CDNA4: ttg.async_wait
-// CDNA4-NEXT: ttg.barrier local
-// CDNA4-NEXT: arith.addf
-// CDNA4-NOT: ttg.barrier local
-// CDNA4: tt.return
+// DEFERRAL-LABEL: @deferral_direct
+// DEFERRAL: ttg.async_wait
+// DEFERRAL-NEXT: ttg.barrier local
+// DEFERRAL-NEXT: arith.addf
+// DEFERRAL-NOT: ttg.barrier local
+// DEFERRAL: tt.return
 tt.func @deferral_direct(%ptr: !tt.ptr<f32>) {
   %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
   %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
@@ -775,12 +771,12 @@ tt.func @deferral_direct(%ptr: !tt.ptr<f32>) {
 #layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-// CDNA4-LABEL: @deferral_block_arg
-// CDNA4: ttg.async_wait
-// CDNA4-NEXT: ttg.barrier local
-// CDNA4-NEXT: arith.addf
-// CDNA4-NOT: ttg.barrier local
-// CDNA4: tt.return
+// DEFERRAL-LABEL: @deferral_block_arg
+// DEFERRAL: ttg.async_wait
+// DEFERRAL-NEXT: ttg.barrier local
+// DEFERRAL-NEXT: arith.addf
+// DEFERRAL-NOT: ttg.barrier local
+// DEFERRAL: tt.return
 tt.func @deferral_block_arg(%ptr: !tt.ptr<f32>) {
   %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
   %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
@@ -800,11 +796,11 @@ tt.func @deferral_block_arg(%ptr: !tt.ptr<f32>) {
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // The branch itself is a potential register-copy use; do not wait until the
 // successor's arithmetic use to rendezvous.
-// CDNA4-LABEL: @deferral_branch_transfer
-// CDNA4: ttg.async_wait
-// CDNA4-NEXT: ttg.barrier local
-// CDNA4-NOT: ttg.barrier local
-// CDNA4: tt.return
+// DEFERRAL-LABEL: @deferral_branch_transfer
+// DEFERRAL: ttg.async_wait
+// DEFERRAL-NEXT: ttg.barrier local
+// DEFERRAL-NOT: ttg.barrier local
+// DEFERRAL: tt.return
 tt.func @deferral_branch_transfer(%ptr: !tt.ptr<f32>) {
   %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
   %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
@@ -823,12 +819,12 @@ tt.func @deferral_branch_transfer(%ptr: !tt.ptr<f32>) {
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // Issuing an independent global load is allowed before the rendezvous.
-// CDNA4-LABEL: @deferral_independent_load
-// CDNA4: ttg.async_wait
-// CDNA4-NEXT: tt.load
-// CDNA4-NEXT: ttg.barrier local
-// CDNA4-NOT: ttg.barrier local
-// CDNA4: tt.return
+// DEFERRAL-LABEL: @deferral_independent_load
+// DEFERRAL: ttg.async_wait
+// DEFERRAL-NEXT: tt.load
+// DEFERRAL-NEXT: ttg.barrier local
+// DEFERRAL-NOT: ttg.barrier local
+// DEFERRAL: tt.return
 tt.func @deferral_independent_load(%ptr: !tt.ptr<f32>) {
   %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
   %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
@@ -846,11 +842,11 @@ tt.func @deferral_independent_load(%ptr: !tt.ptr<f32>) {
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // No completion means the performance policy must not create a barrier.
-// CDNA4-LABEL: @deferral_without_completion
-// CDNA4-NOT: ttg.barrier
-// CDNA4: arith.addf
-// CDNA4-NOT: ttg.barrier
-// CDNA4: tt.return
+// DEFERRAL-LABEL: @deferral_without_completion
+// DEFERRAL-NOT: ttg.barrier
+// DEFERRAL: arith.addf
+// DEFERRAL-NOT: ttg.barrier
+// DEFERRAL: tt.return
 tt.func @deferral_without_completion(%ptr: !tt.ptr<f32>) {
   %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
   %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
@@ -864,12 +860,12 @@ tt.func @deferral_without_completion(%ptr: !tt.ptr<f32>) {
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // An explicit rendezvous satisfies completion without a policy-inserted copy.
-// CDNA4-LABEL: @deferral_explicit_barrier
-// CDNA4: ttg.async_wait
-// CDNA4-NEXT: ttg.barrier local
-// CDNA4-NEXT: arith.addf
-// CDNA4-NOT: ttg.barrier
-// CDNA4: tt.return
+// DEFERRAL-LABEL: @deferral_explicit_barrier
+// DEFERRAL: ttg.async_wait
+// DEFERRAL-NEXT: ttg.barrier local
+// DEFERRAL-NEXT: arith.addf
+// DEFERRAL-NOT: ttg.barrier
+// DEFERRAL: tt.return
 tt.func @deferral_explicit_barrier(%ptr: !tt.ptr<f32>) {
   %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
   %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>

@@ -354,8 +354,7 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
 Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                                         MembarInfo *membarInfo,
                                         OpBuilder *builder, bool cluster) {
-  // Analysis-only runs model existing synchronization, without inserting or
-  // clearing state for hypothetical barriers.
+  // A null builder only analyzes existing barriers.
   if (!builder)
     return nullptr;
   auto &pending = membarInfo->pending;
@@ -374,10 +373,8 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
   bool needsSync =
       requiresThreadSync(pending, effects) ||
       pending.isIntersected(effects, canSkip, &allocation, sliceFilter);
-  // When correctness allows further deferral, the target may stop a pending
-  // shared-copy rendezvous before a potential load-result wait. Pure operations
-  // and branch transfers reach this check even without shared-memory effects.
-  // Leading barriers have already cleared pending state in updateMemoryEffects.
+  // Stop deferring an async-copy barrier before a use that may wait on a
+  // global load, even if that use has no shared-memory effects.
   if (!needsSync && !cluster && deferralStopPolicy &&
       pending.threadSync.completion == CompletionSync::Shared)
     needsSync = deferralStopPolicy(op);
