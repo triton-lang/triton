@@ -11,13 +11,17 @@ namespace mlir::triton::proton::gpu::NVIDIA {
 
 Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
                         bool isClock64) const {
-  // Keep counter reads ordered with memory accesses.
-  // ptxas narrows truncated reads to CS2R.32.
-  Value clock = LLVM::createLLVMIntrinsicCallOp(
-                    rewriter, loc, "llvm.readcyclecounter", i64_ty, {})
-                    .getResult(0);
-  if (!isClock64)
-    clock = LLVM::TruncOp::create(rewriter, loc, i32_ty, clock);
+  Value clock;
+  if (isClock64)
+    clock = NVVM::Clock64Op::create(rewriter, loc, i64_ty);
+  else
+    clock = NVVM::ClockOp::create(rewriter, loc, i32_ty);
+  // The unknown operand bundle gives the clock read ordinary memory read/write
+  // effects, keeping it ordered with the measured memory accesses.
+  clock.getDefiningOp()->setAttr(LLVM::LLVMDialect::getOpBundleSizesAttrName(),
+                                 rewriter.getDenseI32ArrayAttr({0}));
+  clock.getDefiningOp()->setAttr(LLVM::LLVMDialect::getOpBundleTagsAttrName(),
+                                 rewriter.getStrArrayAttr({"proton.clock"}));
   return clock;
 }
 

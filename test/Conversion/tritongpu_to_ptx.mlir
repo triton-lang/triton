@@ -660,4 +660,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     tt.store %ptrs, %result : tensor<256x!tt.ptr<f8E5M2>, #blocked>
     tt.return
   }
+
+  // The profiling bundle keeps ordinary loads and stores across the timestamp.
+  // CHECK-LABEL: .entry clock32_memory_order(
+  // CHECK: ld.global.b32
+  // CHECK: st.global.b32
+  // CHECK: mov.u32 {{%r[0-9]+}}, %clock;
+  // CHECK: ld.global.b32
+  llvm.func @clock32_memory_order(%ptr: !llvm.ptr<1>, %out: !llvm.ptr<1>) attributes {nvvm.kernel = 1 : ui1} {
+    %before = llvm.load %ptr : !llvm.ptr<1> -> i32
+    %one = llvm.mlir.constant(1 : i32) : i32
+    %inc = llvm.add %before, %one : i32
+    llvm.store %inc, %ptr : i32, !llvm.ptr<1>
+    %clock = nvvm.read.ptx.sreg.clock {op_bundle_sizes = array<i32: 0>, op_bundle_tags = ["proton.clock"]} : i32
+    %after = llvm.load %ptr : !llvm.ptr<1> -> i32
+    %sum = llvm.add %before, %after : i32
+    llvm.store %clock, %out : i32, !llvm.ptr<1>
+    llvm.store %sum, %ptr : i32, !llvm.ptr<1>
+    llvm.return
+  }
+
+  // CHECK-LABEL: .entry clock64_memory_order(
+  // CHECK: ld.global.b32
+  // CHECK: st.global.b32
+  // CHECK: mov.u64 {{%rd[0-9]+}}, %clock64;
+  // CHECK: ld.global.b32
+  llvm.func @clock64_memory_order(%ptr: !llvm.ptr<1>, %out: !llvm.ptr<1>) attributes {nvvm.kernel = 1 : ui1} {
+    %before = llvm.load %ptr : !llvm.ptr<1> -> i32
+    %one = llvm.mlir.constant(1 : i32) : i32
+    %inc = llvm.add %before, %one : i32
+    llvm.store %inc, %ptr : i32, !llvm.ptr<1>
+    %clock = nvvm.read.ptx.sreg.clock64 {op_bundle_sizes = array<i32: 0>, op_bundle_tags = ["proton.clock"]} : i64
+    %after = llvm.load %ptr : !llvm.ptr<1> -> i32
+    %sum = llvm.add %before, %after : i32
+    llvm.store %clock, %out : i64, !llvm.ptr<1>
+    llvm.store %sum, %ptr : i32, !llvm.ptr<1>
+    llvm.return
+  }
 }
