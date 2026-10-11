@@ -1,4 +1,7 @@
-// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --allocate-shared-memory -test-print-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --convert-scf-to-cf --allocate-shared-memory --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' | FileCheck %s --check-prefix=PREP
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --convert-scf-to-cf --allocate-shared-memory --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals | FileCheck %s --check-prefixes=FOLD,CLEANUP
+// RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-optimize-mbarrier-arrivals | FileCheck %s --check-prefix=WARP
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -83,6 +86,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 	// CHECK: local_alloc
 	// CHECK-NEXT: ttg.barrier local
 	// CHECK-NEXT: init_barrier
+	// CHECK-NEXT: ttg.barrier local
 	// CHECK-NEXT: barrier_expect
   tt.func @barrier_expect(%pred : i1) {
   	%cst = arith.constant dense<0> : tensor<1xi64, #blocked0>
@@ -182,9 +186,10 @@ tt.func @wait_after_mma(
 ) {
   %phase = arith.constant 0 : i32
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-  // The fused MMA's leading barrier also synchronizes the preceding wait.
+  // The scheduled barrier synchronizes both the wait and the fused MMA.
   // CHECK: ttg.async_wait
   ttg.async_wait {num = 0 : i32}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tc_gen5_mma
   ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
      !ttg.memdesc<128x128xf16, #shared, #smem>,
@@ -227,5 +232,901 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: {{.*}}ttg.local_load
     %value = ttg.local_load %mem : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #blocked>
     tt.return %value : tensor<128xi32, #blocked>
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#store = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#load = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Distributed publication leaves the cross-warp payload dependency pending.
+  // PREP-LABEL: @distributed_arrival_keeps_payload_hazard
+  // PREP: ttng.init_barrier %[[BAR:.*]], 1 :
+  // PREP: ttng.arrive_barrier %[[BAR]], 1 {per_warp}
+  // FOLD-LABEL: @distributed_arrival_keeps_payload_hazard
+  // FOLD: ttng.init_barrier {{.*}}, 4 :
+  // FOLD: ttg.local_store
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: %{{.*}} = ttg.local_load
+  tt.func @distributed_arrival_keeps_payload_hazard(%data: tensor<512xi32, #store>) -> tensor<512xi32, #load> {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    ttg.local_store %data, %mem : tensor<512xi32, #store> -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %loaded = ttg.local_load %mem : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> tensor<512xi32, #load>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return %loaded : tensor<512xi32, #load>
+  }
+
+  // A following CTA barrier covers both warp barriers across pure arithmetic.
+  // WARP-LABEL: @warp_barrier_before_cta
+  // WARP-NEXT: %[[SUM:.*]] = arith.addi
+  // WARP-NEXT: ttg.barrier local
+  // WARP-NEXT: tt.return %[[SUM]]
+  tt.func @warp_barrier_before_cta(%data: tensor<512xi32, #store>) -> tensor<512xi32, #store> {
+    ttg.barrier warp local
+    %sum = arith.addi %data, %data : tensor<512xi32, #store>
+    ttg.barrier warp local
+    ttg.barrier local
+    tt.return %sum : tensor<512xi32, #store>
+  }
+
+  // Explicit memory effects and implicit shared scratch stop subsumption.
+  // WARP-LABEL: @warp_barrier_before_cta_with_effects
+  // WARP-NEXT: ttg.barrier warp local
+  // WARP-NEXT: tt.store
+  // WARP-NEXT: ttg.barrier local
+  // WARP-NEXT: tt.store
+  // WARP-NEXT: ttg.barrier warp local
+  // WARP-NEXT: %[[CONVERTED:.*]] = ttg.convert_layout
+  // WARP-NEXT: ttg.barrier local
+  // WARP-NEXT: tt.return %[[CONVERTED]]
+  tt.func @warp_barrier_before_cta_with_effects(%out: !tt.ptr<i32>, %value: i32, %data: tensor<512xi32, #store>) -> tensor<512xi32, #load> {
+    ttg.barrier warp local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttg.barrier warp local
+    %converted = ttg.convert_layout %data : tensor<512xi32, #store> -> tensor<512xi32, #load>
+    ttg.barrier local
+    tt.return %converted : tensor<512xi32, #load>
+  }
+
+  // A CTA rendezvous without local-memory ordering cannot cover warp local.
+  // WARP-LABEL: @warp_barrier_before_cta_none
+  // WARP-NEXT: ttg.barrier warp local
+  // WARP-NEXT: ttg.barrier none
+  // WARP-NEXT: tt.return
+  tt.func @warp_barrier_before_cta_none() {
+    ttg.barrier warp local
+    ttg.barrier none
+    tt.return
+  }
+
+  // Initialized allocations still write shared memory before publication.
+  // Counts divisible by the warp count need no scaling.
+  // CLEANUP-LABEL: @arrival_after_initialized_shared_alloc
+  // CLEANUP: ttng.init_barrier {{.*}}, 4 :
+  // CLEANUP: ttg.barrier local
+  // CLEANUP-NEXT: %[[MEM:.*]] = ttg.local_alloc
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  tt.func @arrival_after_initialized_shared_alloc(%data: tensor<512xi32, #store>) -> tensor<512xi32, #store> {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 4 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    %mem = ttg.local_alloc %data : (tensor<512xi32, #store>) -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 4 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %result = ttg.local_load %mem : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> tensor<512xi32, #store>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return %result : tensor<512xi32, #store>
+  }
+
+  // A pure layout conversion can access shared scratch after the CTA barrier.
+  // CLEANUP-LABEL: @arrival_after_scratch_conversion
+  // CLEANUP: ttg.barrier local
+  // CLEANUP-NEXT: %[[CONVERTED:.*]] = ttg.convert_layout
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  // CLEANUP-NEXT: ttng.wait_barrier
+  // CLEANUP: ttng.inval_barrier
+  // CLEANUP-NEXT: tt.return %[[CONVERTED]]
+  tt.func @arrival_after_scratch_conversion(%data: tensor<512xi32, #store>) -> tensor<512xi32, #load> {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 4 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    %converted = ttg.convert_layout %data : tensor<512xi32, #store> -> tensor<512xi32, #load>
+    ttng.arrive_barrier %bar, 4 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return %converted : tensor<512xi32, #load>
+  }
+
+  tt.func private @store_before_arrival(%out: !tt.ptr<i32>, %value: i32) attributes {noinline = true} {
+    tt.store %out, %value : !tt.ptr<i32>
+    tt.return
+  }
+
+  // The callee's store remains pending after the caller's earlier CTA barrier.
+  // CLEANUP-LABEL: @arrival_after_call
+  // CLEANUP: ttng.init_barrier {{.*}}, 4 :
+  // CLEANUP: ttg.barrier local
+  // CLEANUP-NEXT: tt.call @store_before_arrival
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  tt.func @arrival_after_call(%out: !tt.ptr<i32>, %value: i32) {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    tt.call @store_before_arrival(%out, %value) : (!tt.ptr<i32>, i32) -> ()
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // The store ends warp coverage on one path through the join.
+  // FOLD-LABEL: @distributed_arrival_cfg_join
+  // FOLD: ttng.init_barrier {{.*}}, 4 :
+  // FOLD: cf.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^[[JOIN:bb[0-9]+]]
+  // FOLD: ^[[JOIN]]:
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  tt.func @distributed_arrival_cfg_join(%condition: i1, %out: !tt.ptr<i32>, %value: i32) {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    scf.if %condition {
+      tt.store %out, %value : !tt.ptr<i32>
+    }
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Partial contributions share a counter with only warp synchronization.
+  // FOLD-LABEL: @distributed_arrival_keeps_warp_barrier
+  // FOLD: ttng.init_barrier {{.*}}, 8 :
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 :
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  // FOLD-NEXT: ttng.wait_barrier
+  tt.func @distributed_arrival_keeps_warp_barrier() {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // A transaction-count arrival cannot share the software-only count scale.
+  // FOLD-LABEL: @arrival_with_expect_tx
+  // FOLD: ttng.init_barrier {{.*}}, 2 :
+  // FOLD: ttng.barrier_expect
+  // FOLD: ttng.arrive_barrier {{.*}}, 1 :
+  tt.func @arrival_with_expect_tx(%out: !tt.ptr<i32>, %value: i32) {
+    %phase = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttng.barrier_expect %bar, 0, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Scalar and distributed expectations contribute to the same phase.
+  // FOLD-LABEL: @multiple_expectations_per_phase
+  // FOLD: ttng.init_barrier {{.*}}, 8 :
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.barrier_expect %[[BAR:.*]], 0 {fromCTA = 0 : i32}, %[[PRED:.*]] :
+  // FOLD-NEXT: ttng.arrive_barrier %[[BAR]], 3, %[[PRED]] {fromCTA = 0 : i32} :
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: tt.store
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.barrier_expect %[[BAR]], 0 {per_warp}, %[[PRED]] :
+  tt.func @multiple_expectations_per_phase(%pred: i1, %out: !tt.ptr<i32>, %value: i32) {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.barrier_expect %bar, 0 {fromCTA = 0 : i32}, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttng.barrier_expect %bar, 0, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // A later predecessor adds loop-entry synchronization. Replay must discard
+  // the store effects propagated to the exit before that barrier was inserted.
+  // FOLD-LABEL: @expectation_after_converged_loop_entry_barrier
+  // FOLD: ttng.init_barrier %[[BAR:.*]], 1 :
+  // FOLD: tt.store
+  // FOLD-NEXT: cf.cond_br %{{.*}}, ^[[PREHEADER:bb[0-9]+]], ^[[SLOW:bb[0-9]+]]
+  // FOLD: ^[[SLOW]]:
+  // FOLD-NEXT: ttng.async_tma_store_wait
+  // FOLD-NEXT: cf.br ^[[PREHEADER]]
+  // FOLD: ^[[PREHEADER]]:
+  // FOLD-NEXT: %[[MORE:.*]] = arith.cmpi
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: cf.cond_br %[[MORE]], ^{{bb[0-9]+}}(%{{.*}} : i32), ^[[DONE:bb[0-9]+]]
+  // FOLD-NOT: ttg.barrier warp
+  // FOLD: ^[[DONE]]:
+  // FOLD-NEXT: ttng.barrier_expect %[[BAR]], 0, %{{.*}} :
+  // FOLD-NEXT: ttng.wait_barrier
+  // FOLD-NOT: ttng.arrive_barrier
+  // FOLD: tt.return
+  tt.func @expectation_after_converged_loop_entry_barrier(%out: !tt.ptr<i32>, %value: i32, %condition: i1, %iterations: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    cf.cond_br %condition, ^preheader, ^slow
+  ^slow:
+    ttng.async_tma_store_wait {pendings = 0 : i32}
+    cf.br ^preheader
+  ^preheader:
+    %more = arith.cmpi slt, %c0, %iterations : i32
+    cf.cond_br %more, ^loop(%c0 : i32), ^done
+  ^loop(%i: i32):
+    %next = arith.addi %i, %c1 : i32
+    %again = arith.cmpi slt, %next, %iterations : i32
+    cf.cond_br %again, ^loop(%next : i32), ^done
+  ^done:
+    ttng.barrier_expect %bar, 0, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Bound both physical arrivals and total bytes across a phase. These
+  // barriers have no asynchronous users and can be invalidated while pending.
+  // FOLD-LABEL: @expectation_count_limits
+  // FOLD: ttng.init_barrier {{.*}}, 1048572 :
+  // FOLD: ttng.init_barrier {{.*}}, 262144 :
+  // FOLD: ttng.init_barrier {{.*}}, 8 :
+  // FOLD: ttng.init_barrier {{.*}}, 2 :
+  // FOLD: ttng.barrier_expect {{.*}}, 0 {per_warp},
+  // FOLD: ttng.barrier_expect {{.*}}, 524284 {per_warp},
+  // FOLD: ttng.barrier_expect {{.*}}, 0,
+  // FOLD: ttng.barrier_expect {{.*}}, 524288,
+  tt.func @expectation_count_limits(%pred: i1, %out: !tt.ptr<i32>, %value: i32) {
+    %a = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %a, 262143 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %b, 262144 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %c = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %c, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %d = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %d, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttng.barrier_expect %a, 0, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.barrier_expect %c, 524284, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.barrier_expect %b, 0, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.barrier_expect %d, 524288, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %a : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %b : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %c : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %d : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Descriptor joins are rejected as a whole, including their direct users.
+  // FOLD-LABEL: @arrival_with_selected_barrier
+  // FOLD: ttng.init_barrier {{.*}}, 1 :
+  // FOLD: ttng.init_barrier {{.*}}, 1 :
+  // FOLD: ttng.arrive_barrier {{.*}}, 1 :
+  // FOLD: ttng.arrive_barrier {{.*}}, 1 :
+  // FOLD: arith.select
+  // FOLD: ttng.arrive_barrier {{.*}}, 1 :
+  tt.func @arrival_with_selected_barrier(%condition: i1, %out: !tt.ptr<i32>, %value: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %first = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %second = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %first, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttng.arrive_barrier %first, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %second, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %first, %c0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %second, %c0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %selected = arith.select %condition, %first, %second : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %selected, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %selected, %c1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#per_cta = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
+  // Each barrier receives one local, one routed, and two multicast contributions.
+  // FOLD-LABEL: @distributed_arrival_cta_routes
+  // FOLD: ttng.init_barrier {{.*}}, 16 :
+  // FOLD: ttng.arrive_barrier {{.*}}, 4 :
+  // FOLD: ttng.arrive_barrier {{.*}}, 4 {fromCTA = 0 : i32, per_warp} :
+  // FOLD: ttng.arrive_barrier {{.*}}, 4 {multicastCTA = 1 : i32, per_warp} :
+  // FOLD-NEXT: ttng.wait_barrier
+  tt.func @distributed_arrival_cta_routes() {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.init_barrier %bar, 4 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 {fromCTA = 0 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 {multicastCTA = 1 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    tt.return
+  }
+
+  // Both CTAs contribute their warps to the same physical barrier.
+  // FOLD-LABEL: @distributed_arrival_broadcast
+  // FOLD: ttng.init_barrier {{.*}}, 4 :
+  // FOLD: ttng.arrive_barrier {{.*}}, 4 {per_warp} :
+  // FOLD-NEXT: ttng.wait_barrier
+  tt.func @distributed_arrival_broadcast(%out: !tt.ptr<i32>, %value: i32) {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    tt.return
+  }
+
+  // Scaling fits the logical count but overflows the physical count: 131072 * 4 * 2.
+  // PREP-LABEL: @distributed_arrival_physical_count_overflow
+  // PREP: ttng.init_barrier {{.*}}, 131072 :
+  // PREP: ttng.arrive_barrier {{.*}}, 131071 :
+  // PREP: ttng.arrive_barrier {{.*}}, 1 :
+  tt.func @distributed_arrival_physical_count_overflow() {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.init_barrier %bar, 131072 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.arrive_barrier %bar, 131071 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    tt.return
+  }
+
+  // Routed scalar and per-warp expectations each contribute once per CTA.
+  // FOLD-LABEL: @distributed_expect_cta_routes
+  // FOLD: ttng.init_barrier %[[BAR:.*]], 8 :
+  // FOLD: ttng.barrier_expect %[[BAR]], 0 {fromCTA = 0 : i32, per_warp}, %[[PRED:.*]] :
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.barrier_expect %[[BAR]], 0 {fromCTA = 0 : i32}, %[[PRED]] :
+  // FOLD-NEXT: ttng.arrive_barrier %[[BAR]], 3, %[[PRED]] {fromCTA = 0 : i32} :
+  // FOLD-NEXT: ttng.wait_barrier
+  tt.func @distributed_expect_cta_routes(%out: !tt.ptr<i32>, %value: i32) {
+    %phase = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.init_barrier %bar, 2 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttng.barrier_expect %bar, 0 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier local
+    ttng.barrier_expect %bar, 0 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    tt.return
+  }
+
+  // The shared barrier's physical arrival count would be 131072 * 4 * 2.
+  // PREP-LABEL: @distributed_expect_physical_count_overflow
+  // PREP: ttng.init_barrier %[[BAR:.*]], 131072 :
+  // PREP: ttng.barrier_expect %[[BAR]], 0,
+  tt.func @distributed_expect_physical_count_overflow() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %count = arith.constant 131072 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.init_barrier %bar, 131072 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    scf.for %i = %c0 to %count step %c1 : i32 {
+      ttng.barrier_expect %bar, 0, %true : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    }
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    tt.return
+  }
+
+  tt.func private @pure_before_arrival(%value: i32) -> i32 attributes {noinline = true, "ttg.num-warps" = 2 : i32} {
+    tt.return %value : i32
+  }
+
+  // The pure call clears warp coverage without adding pending memory effects.
+  // PREP-LABEL: @outlined_arrival_uses_full_count
+  // PREP: tt.call @pure_before_arrival
+  // PREP-NEXT: ttg.barrier warp local
+  // PREP-NEXT: ttng.arrive_barrier {{.*}}, 1 {per_warp}
+  // CLEANUP-LABEL: @outlined_arrival_uses_full_count
+  // CLEANUP: ttng.init_barrier {{.*}}, 1 :
+  // CLEANUP: ttg.barrier local
+  // CLEANUP-NEXT: %[[VALUE:.*]] = tt.call @pure_before_arrival
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 1 :
+  // CLEANUP: tt.return %[[VALUE]]
+  tt.func private @outlined_arrival_uses_full_count(%value: i32) -> i32 attributes {noinline = true, "ttg.num-warps" = 2 : i32} {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier local
+    %result = tt.call @pure_before_arrival(%value) : (i32) -> i32
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    tt.return %result : i32
+  }
+
+  // Keep the outlined functions reachable by the dataflow analysis.
+  tt.func @call_outlined_arrival(%value: i32) -> i32 attributes {"ttg.num-warps" = 2 : i32} {
+    %result = tt.call @outlined_arrival_uses_full_count(%value) : (i32) -> i32
+    tt.return %result : i32
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Expectations follow captured and loop-carried views of one allocation.
+  // PREP-LABEL: @distributed_expect_loop_carried_view
+  // PREP: ttng.init_barrier {{.*}}, 1 :
+  // PREP: ttng.barrier_expect {{.*}}, 0 {per_warp},
+  // PREP: ttng.inval_barrier
+  tt.func @distributed_expect_loop_carried_view(%n: i32, %index: i32) {
+    %bars = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #shared, #smem, mutable>
+    %bar = ttg.memdesc_index %bars[%index] : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.warp_specialize(%n, %index, %bars, %bar)
+    default {
+      ttg.warp_yield
+    }
+    partition0(%limit: i32, %idx: i32, %storage: !ttg.memdesc<2x1xi64, #shared, #smem, mutable>, %initial: !ttg.memdesc<1xi64, #shared, #smem, mutable>) num_warps(4) {
+      %c0 = arith.constant 0 : i32
+      %c1 = arith.constant 1 : i32
+      %true = arith.constant true
+      %result:2 = scf.for %i = %c0 to %limit step %c1 iter_args(%iter = %initial, %phase = %c0) -> (!ttg.memdesc<1xi64, #shared, #smem, mutable>, i32) : i32 {
+        ttng.barrier_expect %iter, 0, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+        ttng.wait_barrier %iter, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+        %next = ttg.memdesc_index %storage[%idx] : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+        %next_phase = arith.xori %phase, %c1 : i32
+        scf.yield %next, %next_phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>, i32
+      }
+      ttng.inval_barrier %result#0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+      ttg.warp_return
+    } : (i32, i32, !ttg.memdesc<2x1xi64, #shared, #smem, mutable>, !ttg.memdesc<1xi64, #shared, #smem, mutable>) -> ()
+    tt.return
+  }
+
+  // Different-width producers can own successive phases of the same barrier.
+  // FOLD-LABEL: @expectations_with_different_warp_counts
+  // FOLD: ttng.init_barrier {{.*}}, 1 :
+  // FOLD: ttng.barrier_expect {{.*}}, 0,
+  // FOLD: ttng.barrier_expect {{.*}}, 0,
+  tt.func @expectations_with_different_warp_counts(%out: !tt.ptr<i32>, %value: i32) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttng.barrier_expect %bar, 0, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.warp_specialize(%bar)
+    default {
+      ttg.warp_yield
+    }
+    partition0(%captured: !ttg.memdesc<1xi64, #shared, #smem, mutable>) num_warps(2) {
+      %c1 = arith.constant 1 : i32
+      %pred = arith.constant true
+      ttng.barrier_expect %captured, 0, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+      ttng.wait_barrier %captured, %c1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+      ttg.warp_return
+    } : (!ttg.memdesc<1xi64, #shared, #smem, mutable>) -> ()
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Descriptor forwarding preserves the common software count scale.
+  // FOLD-LABEL: @software_arrival_same_allocation_join
+  // FOLD: ttng.init_barrier {{.*}}, 4 :
+  // FOLD: ttng.init_barrier {{.*}}, 4 :
+  // FOLD: ttng.arrive_barrier {{.*}}, 4 {per_warp}
+  // FOLD: ttng.wait_barrier {{.*}} deps {{.*}}
+  tt.func @software_arrival_same_allocation_join(%condition: i1, %out: !tt.ptr<i32>, %value: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %bars = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #shared, #smem, mutable>
+    %first = ttg.memdesc_index %bars[%c0] : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %second = ttg.memdesc_index %bars[%c1] : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %first, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    %joined = scf.if %condition -> (!ttg.memdesc<1xi64, #shared, #smem, mutable>) {
+      scf.yield %first : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    } else {
+      scf.yield %second : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    }
+    %selected = arith.select %condition, %joined, %first : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %selected, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %selected, %c0 deps %bars : !ttg.memdesc<1xi64, #shared, #smem, mutable>, !ttg.memdesc<2x1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Per-warp publication does not order another warp's old payload read.
+  // FOLD-LABEL: @distributed_expect_keeps_payload_war
+  // FOLD: ttg.local_load
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.barrier_expect {{.*}}, 2048 {per_warp},
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.async_tma_copy_global_to_local
+  // FOLD-NEXT: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.inval_barrier
+  tt.func @distributed_expect_keeps_payload_war(%desc: !tt.tensordesc<16x64xf16, #shared>, %data: tensor<16x64xf16, #blocked>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %mem = ttg.local_alloc %data : (tensor<16x64xf16, #blocked>) -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttg.barrier local
+    %old = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    ttng.barrier_expect %bar, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %old : tensor<16x64xf16, #blocked>
+  }
+
+  // Completion permits another TMA write to the same live payload.
+  // CHECK-LABEL: @tma_rows_reuse_payload
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: {{.*}}ttg.local_load
+  // FOLD-LABEL: @tma_rows_reuse_payload
+  // FOLD: ttng.init_barrier %[[FIRST:.*]], 1 :
+  // FOLD: ttng.init_barrier {{.*}}, 4 :
+  // FOLD: ttng.barrier_expect %[[FIRST]], 2048, {{.*}} :
+  // FOLD-NOT: ttng.arrive_barrier
+  // FOLD: ttng.barrier_expect {{.*}}, 2048 {per_warp},
+  // FOLD: ttng.async_tma_copy_global_to_local
+  // FOLD-NEXT: ttng.wait_barrier
+  // FOLD-NEXT: ttng.async_tma_copy_global_to_local
+  tt.func @tma_rows_reuse_payload(%desc: !tt.tensordesc<16x64xf16, #shared>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %true = arith.constant true
+    %first = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %second = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.init_barrier %first, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %first, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %second, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %first, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %first, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c16, %c0] %mem, %second, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %second, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %result = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    ttng.inval_barrier %first : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.inval_barrier %second : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+
+  // Distinct allocation origins keep physical storage reuse conservative.
+  // CHECK-LABEL: @tma_payload_distinct_allocations
+  // CHECK: ttg.local_alloc {{.*}}allocation.offset = [[PAYLOAD_OFFSET:[0-9]+]] : i32{{.*}}!ttg.memdesc<16x64xf16
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttg.local_dealloc
+  // CHECK-NEXT: ttg.local_alloc {{.*}}allocation.offset = [[PAYLOAD_OFFSET]] : i32{{.*}}!ttg.memdesc<16x64xf16
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+  tt.func @tma_payload_distinct_allocations(%desc: !tt.tensordesc<16x64xf16, #shared>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %true = arith.constant true
+    %first = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %second = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %first, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %first, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %second, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %a = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %a, %first, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %first, %c0 deps %a : !ttg.memdesc<1xi64, #barrier, #smem, mutable>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttg.local_dealloc %a : !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c16, %c0] %b, %second, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %second, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %result = ttg.local_load %b : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    ttng.inval_barrier %first : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.inval_barrier %second : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+
+  // The ordinary read must finish before another TMA overwrites the payload.
+  // CHECK-LABEL: @tma_payload_after_generic_read
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: {{.*}}ttg.local_load
+  // CHECK-NEXT: ttng.fence_async_shared
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+  tt.func @tma_payload_after_generic_read(%desc: !tt.tensordesc<16x64xf16, #shared>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %true = arith.constant true
+    %first = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %second = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.init_barrier %first, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %first, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %second, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %first, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %first, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %before = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    ttng.fence_async_shared {bCluster = false}
+    ttng.async_tma_copy_global_to_local %desc[%c16, %c0] %mem, %second, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %second, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %after = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    %result = arith.addf %before, %after : tensor<16x64xf16, #blocked>
+    ttng.inval_barrier %first : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.inval_barrier %second : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+
+  // A uniform selection preserves completion for either allocation and proxy.
+  // CHECK-LABEL: @tma_payload_selected_allocation
+  // CHECK: ttng.wait_barrier
+  // CHECK-NEXT: ttng.async_tma_copy_local_to_global
+  tt.func @tma_payload_selected_allocation(%src: !tt.tensordesc<16x64xf16, #shared>, %dst: !tt.tensordesc<16x64xf16, #shared>, %choose: i1) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %a = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %mem = arith.select %choose, %a, %b : !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %src[%c0, %c0] %mem, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_local_to_global %dst[%c0, %c0] %mem : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.async_tma_store_wait {pendings = 0 : i32}
+    ttg.local_dealloc %a : !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttg.local_dealloc %b : !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // The same progress guarantee holds for a distributed expectation.
+  // FOLD-LABEL: @wait_before_distributed_expectation
+  // FOLD: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.barrier_expect {{.*}}, 0 {per_warp},
+  // FOLD-NEXT: ttng.wait_barrier
+  tt.func @wait_before_distributed_expectation(%pred: i1) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.barrier_expect %bar, 0, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    ttng.wait_barrier %bar, %c0, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.barrier_expect %bar, 0, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Each warp finishes its wait before contributing to the next phase.
+  // FOLD-LABEL: @wait_before_distributed_arrival
+  // FOLD: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4, {{.*}} {per_warp}
+  // FOLD-NEXT: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.inval_barrier
+  tt.func @wait_before_distributed_arrival(%pred: i1) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    ttng.wait_barrier %bar, %c0, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // The preceding wait is in the previous iteration, after the static arrival.
+  // FOLD-LABEL: @distributed_arrival_on_backedge
+  // FOLD: cf.cond_br
+  // FOLD: ttg.barrier warp local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}} {per_warp}
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD: ttng.wait_barrier
+  tt.func @distributed_arrival_on_backedge(%iterations: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    scf.for %i = %c0 to %iterations step %c1 : i32 {
+      ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+      ttg.barrier local
+      %phase = arith.andi %i, %c1 : i32
+      ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    }
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#per_cta = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
+  // CTA 0's arrivals do not establish that CTA 1's warps passed their waits.
+  // FOLD-LABEL: @routed_arrival_after_wait
+  // FOLD: ttng.arrive_barrier
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}fromCTA = 0
+  tt.func @routed_arrival_after_wait() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier local
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 {fromCTA = 0 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.wait_barrier %bar, %c1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    tt.return
+  }
+
+  // CTA 0's expectations do not establish that CTA 1 passed its waits.
+  // FOLD-LABEL: @routed_expectation_after_wait
+  // FOLD: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.barrier_expect {{.*}}fromCTA = 0
+  tt.func @routed_expectation_after_wait() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.barrier_expect %bar, 0, %true : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier local
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.barrier_expect %bar, 0 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.wait_barrier %bar, %c1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    tt.return
+  }
+
+  // Multicast includes every waiting CTA's own contribution.
+  // FOLD-LABEL: @multicast_arrival_after_wait
+  // FOLD: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}multicastCTA = 1
+  tt.func @multicast_arrival_after_wait() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.init_barrier %bar, 2 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.arrive_barrier %bar, 2 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier local
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 {multicastCTA = 1 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.wait_barrier %bar, %c1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    tt.return
+  }
+
+  // A broadcast barrier only waits on its leader CTA.
+  // FOLD-LABEL: @broadcast_arrival_after_wait
+  // FOLD: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.arrive_barrier
+  tt.func @broadcast_arrival_after_wait() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.cluster_barrier
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.cluster_barrier
+    ttng.wait_barrier %bar, %c1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    tt.return
+  }
+
+  // A broadcast wait does not cover every CTA contributing expectations.
+  // FOLD-LABEL: @broadcast_expectation_after_wait
+  // FOLD: ttng.wait_barrier
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.barrier_expect
+  tt.func @broadcast_expectation_after_wait() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.barrier_expect %bar, 0, %true : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.cluster_barrier
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.barrier_expect %bar, 0, %true : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.cluster_barrier
+    ttng.wait_barrier %bar, %c1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    tt.return
   }
 }

@@ -1,7 +1,10 @@
 // RUN: triton-opt %s -tritongpu-F32DotTC="emu-tf32=1" -canonicalize  | FileCheck %s --check-prefixes=CHECK
 
-// CHECK:     %[[DOT1:.*]] = tt.dot %[[LHS_LOW:.*]], %[[RHS_HIGH:.*]], %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
-// CHECK:     %[[DOT2:.*]] = tt.dot %[[LHS_HIGH:.*]], %[[RHS_LOW:.*]], %[[DOT1]], inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+// CHECK-LABEL: tt.func @dot_test
+// CHECK:     %[[LHS_HIGH:.*]] = tt.extern_elementwise %arg0 {{.*}}symbol = "llvm.nvvm.f2tf32.rna"{{.*}} : (tensor<16x16xf32>) -> tensor<16x16xf32>
+// CHECK:     %[[RHS_HIGH:.*]] = tt.extern_elementwise %arg1 {{.*}}symbol = "llvm.nvvm.f2tf32.rna"{{.*}} : (tensor<16x16xf32>) -> tensor<16x16xf32>
+// CHECK:     %[[DOT1:.*]] = tt.dot %[[LHS_LOW:.*]], %[[RHS_HIGH]], %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+// CHECK:     %[[DOT2:.*]] = tt.dot %[[LHS_HIGH]], %[[RHS_LOW:.*]], %[[DOT1]], inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
 // CHECK:     %[[CMP:.*]] = arith.cmpf uno, %[[DOT2]], %[[DOT2]] : tensor<16x16xf32>
 // CHECK:     %[[MASKED:.*]] = arith.select %[[CMP]], %cst, %[[DOT2]] : tensor<16x16xi1>, tensor<16x16xf32>
 // CHECK:     %[[RESULT:.*]] = tt.dot %[[LHS_HIGH]], %[[RHS_HIGH]], %[[MASKED]], inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>

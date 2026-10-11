@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4, is_hip_gfx1250
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_gfx1250
 
 FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
@@ -276,8 +276,7 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 ])
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
-    # On HIP, fp8e4nv upcasting to fp32 is only supported on CDNA4, and
-    # fp8e4nv upcasting to bf16 and fp16 is only supported on CDNA3 and CDNA4.
+    # On HIP, fp8e4nv upcasting is only supported on CDNA3, CDNA4, RDNA4m, and RDNA4.
     if is_cuda():
         if ((src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9))
             or src_dtype in ('float8e4b8', 'float8e5b16')):
@@ -288,7 +287,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     elif is_hip():
         if src_dtype in FP8_DTYPES and is_hip_rdna3():
             pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
-        if  (src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4())):
+        if src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna4m() or is_hip_rdna4()):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
         if  src_dtype == 'float8e4b15':
             # If the dtype should error out in the given device, we assert that and return
@@ -310,6 +309,22 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     }[src_dtype]
 
     upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff, device=device)
+
+
+@pytest.mark.parametrize("BLOCK_SIZE", [128, 1024])
+def test_typeconvert_e5m2_bf16_all_encodings(BLOCK_SIZE, device):
+    if not is_cuda():
+        pytest.skip("tests NVIDIA E5M2 conversion")
+
+    # Cover every encoding and mix signs and magnitudes in packed conversions.
+    bits = (torch.arange(1024) * 73 + 19).to(torch.uint8)
+    expected = bits.view(torch.float8_e5m2).to(torch.bfloat16)
+    actual = launch_type_convert_triton(bits.to(device), tl.float8e5, tl.bfloat16, device,
+                                       BLOCK_SIZE=BLOCK_SIZE).cpu().view(torch.bfloat16)
+
+    torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
+    mask = ~torch.isnan(expected)
+    torch.testing.assert_close(actual.view(torch.int16)[mask], expected.view(torch.int16)[mask], rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("src_dtype, src_type", [
@@ -418,8 +433,8 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device):
     if dst_dtype in FP8_DTYPES and is_hip_rdna3():
         pytest.skip(f"{dst_dtype} is not supported on AMDGPU RDNA3")
 
-    if mode in ('inf', '-inf') and (is_hip_rdna4() or is_hip_gfx1250()):
-        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX12")
+    if mode in ('inf', '-inf') and is_hip_gfx1250():
+        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX1250")
 
     converter = {
         tl.float8e4nv: torch.float8_e4m3fn,

@@ -1,4 +1,5 @@
 import expecttest
+import math
 import pytest
 import re
 from dataclasses import replace
@@ -1452,6 +1453,30 @@ def test_math_scalar_promotion(dtype, value, ir_dtype):
     assert f"tensor<128x{ir_dtype}," in comparisons[0]
 
 
+@pytest.mark.parametrize("dtype, bound_dtype, result_dtype", [
+    (ttgl.int8, ttgl.int8, ttgl.int8),
+    (ttgl.uint64, ttgl.uint64, ttgl.uint64),
+    (ttgl.int1, ttgl.int1, ttgl.int1),
+    (ttgl.int8, ttgl.int16, ttgl.int16),
+    (ttgl.int32, ttgl.uint32, ttgl.uint32),
+    (ttgl.uint32, ttgl.int64, ttgl.int64),
+    (ttgl.int32, ttgl.float32, ttgl.float32),
+])
+def test_clamp_integer_broadcast_promotion(dtype, bound_dtype, result_dtype):
+
+    @gluon.jit
+    def kernel(dtype: ttgl.constexpr, bound_dtype: ttgl.constexpr, result_dtype: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        x = ttgl.full([4, 1], 1, dtype, layout)
+        upper = ttgl.full([1, 8], 1, bound_dtype, layout)
+        lower: ttgl.constexpr = False if dtype == ttgl.int1 else 0
+        result = ttgl.clamp(x, lower, upper)
+        ttgl.static_assert(result.dtype == result_dtype)
+        ttgl.static_assert(result.shape == [4, 8])
+
+    run_parser(kernel, args=(dtype, bound_dtype, result_dtype), target=BLACKWELL_TARGET)
+
+
 @gluon.jit
 def _packed_arith_invalid_frontend_kernel(case: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
@@ -1567,7 +1592,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %result = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
     %true = arith.constant true
     %true_0 = arith.constant true
-    %2 = ttng.tc_gen5_mma %0, %1, %result[], %true, %true_0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
+    %2 = ttng.tc_gen5_mma %0, %1, %result[], %true, %true_0 {is_async} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
@@ -1635,7 +1660,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %result_1 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
     %true = arith.constant true
     %true_2 = arith.constant true
-    %2 = ttng.tc_gen5_mma_scaled %0, %1, %result_1[], %result, %result_0, %true, %true_2 lhs = e5m2 rhs = e5m2 : !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>, !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    %2 = ttng.tc_gen5_mma_scaled %0, %1, %result_1[], %result, %result_0, %true, %true_2 lhs = e5m2 rhs = e5m2 {is_async} : !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>, !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
@@ -5846,3 +5871,102 @@ def test_compute_efficient_padded_shared_layout_invalid_returns_none():
 
     # fp32 has bitwidth 32, outside the supported {4, 8, 16}.
     assert ttgl.amd.cdna4.compute_efficient_padded_shared_layout(dot_op, [128, 64], ttgl.float32) is None
+
+
+@gluon.jit
+def tma_cache_policy_kernel(desc, pred, POLICY: ttgl.constexpr, KIND: ttgl.constexpr, MULTICAST: ttgl.constexpr):
+    if KIND == "gather" or KIND == "scatter":
+        shape: ttgl.constexpr = [32, desc.block_shape[1]]
+        offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
+            1, ttgl.BlockedLayout([4, 1], [1, 32], [4, 1], [0, 1], cga_layout=desc.layout.cga_layout))
+        offsets = 31 - ttgl.arange(0, 32, layout=offsets_layout)
+    else:
+        shape: ttgl.constexpr = desc.block_shape
+    smem = ttgl.allocate_shared_memory(desc.dtype, shape, desc.layout)
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, smem.nbytes_per_cta, pred=pred)
+    if KIND == "im2col":
+        hopper.tma.async_load_im2col(desc, [0, 0, 0, 0], [0, 0], bar, smem, pred=pred, multicast=MULTICAST,
+                                     cache_policy=POLICY)
+    elif KIND == "gather":
+        tma.async_gather(desc, offsets, 0, bar, smem, pred=pred, multicast=MULTICAST, cache_policy=POLICY)
+    elif KIND == "scatter":
+        tma.async_gather(desc, offsets, 0, bar, smem, pred=pred)
+    elif KIND == "store":
+        hopper.tma.async_load(desc, [0] * len(desc.block_shape), bar, smem, pred=pred)
+    else:
+        hopper.tma.async_load(desc, [0] * len(desc.block_shape), bar, smem, pred=pred, multicast=MULTICAST,
+                              cache_policy=POLICY)
+    hopper.mbarrier.wait(bar, phase=0, pred=pred, deps=[smem])
+    hopper.mbarrier.invalidate(bar)
+    if KIND == "store":
+        if pred:
+            hopper.tma.async_store(desc, [0] * len(shape), smem, cache_policy=POLICY)
+            hopper.tma.store_wait(0)
+    elif KIND == "scatter":
+        if pred:
+            tma.async_scatter(desc, offsets, 0, smem, cache_policy=POLICY)
+            hopper.tma.store_wait(0)
+
+
+def make_tma_cache_policy_desc(rank=2, kind="load", multicast=False):
+    shape = [16, 32] if kind == "im2col" else [32, 256] if kind in ("gather", "scatter") else [2] * (rank - 1) + [256]
+    layout = ttgl.NVMMASharedLayout(0, 16, rank=len(shape), cga_layout=(tuple(0 for _ in shape), ) if multicast else ())
+    data_shape = [1, 1, 16, 32] if kind == "im2col" else shape
+    strides = [math.prod(data_shape[i + 1:]) for i in range(len(data_shape))]
+    inp = MockTensor(ttgl.float16, tuple(data_shape))
+    if kind == "im2col":
+        from triton.experimental.gluon.nvidia.hopper import TensorDescriptorIm2Col
+        return TensorDescriptorIm2Col(inp, data_shape, strides, shape, layout, element_strides=[1, 1, 1, 1],
+                                      pixel_box_lower_corner=[0, 0], pixel_box_upper_corner=[0, 0])
+    block_shape = [1, shape[1]] if kind in ("gather", "scatter") else shape
+    return TensorDescriptor(inp, data_shape, strides, block_shape, layout)
+
+
+@pytest.mark.parametrize("kind", ["load", "im2col", "gather", "store", "scatter"])
+@pytest.mark.parametrize("policy", [
+    None,
+    ttgl.CachePolicy(),
+    ttgl.CachePolicy(eviction_policy="evict_first"),
+    ttgl.CachePolicy(eviction_policy="evict_last")
+])
+def test_tma_cache_policy_frontend_generic(kind, policy):
+    desc = make_tma_cache_policy_desc(kind=kind)
+    mod = run_parser(tma_cache_policy_kernel, *make_args(desc, False, policy, kind, False), target=BLACKWELL_TARGET)
+    text = mod.str_nodebug()
+    if policy is None or policy.eviction_policy == "evict_normal":
+        assert "cachePolicy" not in text
+    else:
+        assert f"cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = {policy.eviction_policy}>" in text
+
+
+@pytest.mark.parametrize("kind", ["load", "im2col", "gather", "store", "scatter"])
+@pytest.mark.parametrize("primary,fraction,secondary", [
+    ("evict_first", 1.0, "evict_unchanged"),
+    ("evict_last", 1.0, "evict_unchanged"),
+    ("evict_normal", 1.0, "evict_unchanged"),
+    ("evict_last", 0.5, "evict_first"),
+    ("evict_unchanged", 0.25, "evict_first"),
+])
+def test_tma_cache_policy_frontend_typed(kind, primary, fraction, secondary):
+    policy = hopper.CachePolicy(l2=hopper.FractionalEvictionPolicy(primary, fraction, secondary))
+    desc = make_tma_cache_policy_desc(kind=kind)
+    mod = run_parser(tma_cache_policy_kernel, *make_args(desc, False, policy, kind, False), target=BLACKWELL_TARGET)
+    text = mod.str_nodebug()
+    assert f"l2_primary = {primary}" in text
+    assert f"l2_secondary = {secondary}" in text
+    assert f"l2_fraction = {fraction:.6e} : f32" in text
+
+
+@pytest.mark.parametrize("kind", ["load", "im2col", "gather", "store", "scatter"])
+@pytest.mark.parametrize("policy,message", [
+    (hopper.CachePolicy(l1="evict_first"), "TMA operations do not support L1"),
+    (hopper.CachePolicy(cache_modifier="cg"), "TMA operations do not support cache modifiers"),
+    (hopper.CachePolicy(l2_prefetch_size=128), "TMA operations do not support L2 prefetch size"),
+    ("evict_first", "TMA cache_policy must be a CachePolicy"),
+])
+def test_tma_cache_policy_frontend_invalid(kind, policy, message):
+    with pytest.raises(CompilationError, match=message):
+        run_parser(tma_cache_policy_kernel, *make_args(make_tma_cache_policy_desc(kind=kind), False, policy, kind,
+                                                       False), target=BLACKWELL_TARGET)

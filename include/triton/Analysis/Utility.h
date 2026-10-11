@@ -42,22 +42,8 @@ public:
   };
 
   explicit ReduceOpHelper(triton::ReduceOp op)
-      : op(op.getOperation()), axis(op.getAxis()) {
-    auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
-    srcTy = firstTy;
-    srcShape = firstTy.getShape();
-    srcEncoding = firstTy.getEncoding();
-    srcElementTypes = op.getElementTypes();
-
-    for (const auto &t : op.getInputTypes()) {
-      if (t.getShape() != srcShape) {
-        op.emitError() << "shape mismatch";
-      }
-      if (t.getEncoding() != srcEncoding) {
-        op.emitError() << "encoding mismatch";
-      }
-    }
-  }
+      : op(op), srcTy(op.getInputTypes().front()), srcShape(srcTy.getShape()),
+        srcEncoding(srcTy.getEncoding()), axis(op.getAxis()) {}
 
   RankedTensorType getSrcTy() { return srcTy; }
 
@@ -69,19 +55,31 @@ public:
 
   bool isAssociative();
 
-  // Callback to allow backends to specify target-specific getter for scratch
+  // Callback to allow backends to specify a target-specific getter for scratch
   // elements.
   using GetNumScratchElemsFn = std::function<unsigned(
       const triton::LinearLayout &src, const triton::LinearLayout &dst,
       unsigned bitwidth)>;
 
+  // Allocation size for the whole reduction: the maximum sizeInBytes returned
+  // by getScratchConfig across its inter-warp/CTA reduction stages.
   unsigned
   getScratchSizeInBytes(GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
   InThreadVectorizeOpKind
-  getInThreadVectorizeOpKind(unsigned axisPack,
-                             bool supportBitwidth16Elementwise,
+  getInThreadVectorizeOpKind(bool supportBitwidth16Elementwise,
                              bool supportBitwidth32Elementwise);
+
+  struct ScratchConfig {
+    SmallVector<unsigned> offsets;
+    unsigned sizeInBytes = 0;
+  };
+
+  // Byte offsets in operand order and total storage for one layout conversion.
+  ScratchConfig
+  getScratchConfig(const triton::LinearLayout &src,
+                   const triton::LinearLayout &dst,
+                   GetNumScratchElemsFn numScratchElemsGetter = nullptr);
 
   static triton::ColumnAction
   moveAxisBasesToFront(const triton::LinearLayout &layout, int axis,
@@ -91,23 +89,19 @@ public:
   zeroBasesAlongDimAndReorder(const triton::LinearLayout &layout, unsigned axis,
                               mlir::StringAttr dim);
 
-  static triton::LinearLayout getInterLayout(const triton::LinearLayout &layout,
-                                             unsigned axis);
+  static triton::LinearLayout
+  getInterWarpReductionLayout(const triton::LinearLayout &layout,
+                              unsigned axis);
 
+  // Removes redundant register bases but retains replicated lanes.
   static triton::LinearLayout reducedRegLaneLayout(RankedTensorType srcTy,
                                                    unsigned axis);
-
-  static Value createInThreadVectorizedCombineOp(OpBuilder &builder,
-                                                 Location loc,
-                                                 InThreadVectorizeOpKind kind,
-                                                 Value lhs, Value rhs);
 
 private:
   triton::ReduceOp op;
   RankedTensorType srcTy;
   ArrayRef<int64_t> srcShape;
   Attribute srcEncoding;
-  SmallVector<Type> srcElementTypes;
   int axis;
 };
 
@@ -256,8 +250,6 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape);
 // If shape is empty, it means no shared memory is needed.
 unsigned getNumScratchElements(ArrayRef<unsigned> shape);
 
-bool supportWMMA(triton::DotOp op);
-
 bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(triton::DotOpInterface op, int version);
@@ -274,10 +266,6 @@ bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op);
 
 // The conversion requires data exchange through shared memory.
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op);
-
-// TODO: Move utility functions that belong to ConvertLayoutOp to class
-// ConvertLayoutOpHelper in the future
-bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout);
 
 /// Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();

@@ -61,9 +61,8 @@ static void handleIfPair(scf::IfOp currentIf, scf::IfOp nextIf,
 } // namespace
 
 struct TritonAMDGPUPrepareIfCombiningPass
-    : public impl::TritonAMDGPUPrepareIfCombiningBase<
+    : impl::TritonAMDGPUPrepareIfCombiningBase<
           TritonAMDGPUPrepareIfCombiningPass> {
-
   void runOnOperation() override {
     triton::FuncOp funcOp = getOperation();
     DominanceInfo domInfo(funcOp);

@@ -63,6 +63,20 @@ CONFIGURATIONS = {
             "PYTORCH_GPU_TARGETS": "gfx942,gfx950,gfx1250",
         },
     },
+    "rocm-10.2-pytorch-2.15-nightly-20260929": {
+        "tag": ("rocm10.2.0a20260929-pytorch2.15.0a0-"
+                "gfx942-gfx950-gfx1250-r1"),
+        "build_args": {
+            "BASE_IMAGE": ("ubuntu@sha256:"
+                           "4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90"),
+            "ROCM_VERSION": "10.2.0a20260929",
+            "ROCM_RELEASE_TYPE": "nightlies",
+            "ROCM_REPO_DIRECTORY": "whl-next",
+            "PYTORCH_VERSION": "2.15.0a0+rocm10.2.0a20260929",
+            "PYTORCH_INDEX_URL": ("https://nightly.repo.amd.com/rocm/whl-next/"),
+            "PYTORCH_GPU_TARGETS": "gfx942,gfx950,gfx1250",
+        },
+    },
 }
 
 
@@ -106,10 +120,11 @@ def validate_configurations() -> None:
             raise ValueError(f"{name}: PYTORCH_DEVICE_WHEEL_URL and "
                              "PYTORCH_EXTRA_INDEX_URL must be specified together")
 
-        if build_args["ROCM_RELEASE_TYPE"] == "nightlies" and not re.fullmatch(r"[0-9]{8}-[0-9]+",
-                                                                               build_args["ROCM_REPO_DIRECTORY"]):
+        nightly_repository = build_args["ROCM_REPO_DIRECTORY"]
+        if (build_args["ROCM_RELEASE_TYPE"] == "nightlies" and nightly_repository != "whl-next"
+                and not re.fullmatch(r"[0-9]{8}-[0-9]+", nightly_repository)):
             raise ValueError(f"{name}: ROCM_REPO_DIRECTORY must have the form "
-                             "YYYYMMDD-NUMERIC_ID for nightlies")
+                             "YYYYMMDD-NUMERIC_ID or be whl-next for nightlies")
 
         gpu_targets = build_args["PYTORCH_GPU_TARGETS"]
         if gpu_targets != "all" and not re.fullmatch(r"gfx[0-9][0-9a-z-]*(?:,gfx[0-9][0-9a-z-]*)*", gpu_targets):

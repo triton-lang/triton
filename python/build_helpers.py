@@ -48,7 +48,6 @@ class BuildHelperArgs:
     json_syspath: Optional[str]
     amd_codegen_path: Optional[str]
     ptxas_path: Optional[str]
-    ptxas_blackwell_path: Optional[str]
     cuobjdump_path: Optional[str]
     nvdisasm_path: Optional[str]
     cudacrt_path: Optional[str]
@@ -742,15 +741,6 @@ def get_nvidia_toolchain_packages():
             dst_path="bin/ptxas",
             override_attr="ptxas_path",
         ),
-        # Blackwell needs a separate ptxas because this version has Hopper bugs.
-        NvidiaToolchainPackage(
-            name="nvcc-blackwell",
-            component="cuda_nvcc",
-            version=versions["ptxas-blackwell"],
-            src_path=f"bin/ptxas{exe}",
-            dst_path="bin/ptxas-blackwell",
-            override_attr="ptxas_blackwell_path",
-        ),
         NvidiaToolchainPackage(
             name="cuobjdump",
             component="cuda_cuobjdump",
@@ -834,11 +824,6 @@ def add_common_args(parser: argparse.ArgumentParser):
     parser.add_argument("--json-syspath", default="", help="Path override for JSON_SYSPATH")
     parser.add_argument("--triton-amd-codegen-path", default="", help="Path override for TRITON_AMD_CODEGEN_PATH")
     parser.add_argument("--triton-ptxas-path", default="", help="Path override for TRITON_PTXAS_PATH")
-    parser.add_argument(
-        "--triton-ptxas-blackwell-path",
-        default="",
-        help="Path override for TRITON_PTXAS_BLACKWELL_PATH",
-    )
     parser.add_argument("--triton-cuobjdump-path", default="", help="Path override for TRITON_CUOBJDUMP_PATH")
     parser.add_argument("--triton-nvdisasm-path", default="", help="Path override for TRITON_NVDISASM_PATH")
     parser.add_argument("--triton-cudacrt-path", default="", help="Path override for TRITON_CUDACRT_PATH")
@@ -862,7 +847,6 @@ def normalize_parsed_args(parsed_args) -> BuildHelperArgs:
         json_syspath=_normalize_optional_path(parsed_args.json_syspath),
         amd_codegen_path=_normalize_optional_path(parsed_args.triton_amd_codegen_path),
         ptxas_path=_normalize_optional_path(parsed_args.triton_ptxas_path),
-        ptxas_blackwell_path=_normalize_optional_path(parsed_args.triton_ptxas_blackwell_path),
         cuobjdump_path=_normalize_optional_path(parsed_args.triton_cuobjdump_path),
         nvdisasm_path=_normalize_optional_path(parsed_args.triton_nvdisasm_path),
         cudacrt_path=_normalize_optional_path(parsed_args.triton_cudacrt_path),

@@ -1,11 +1,20 @@
+#include "LLVMABIGuard.h"
+
 #include "triton/Tools/LLVMOptions.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/AutoUpgrade.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -28,6 +37,8 @@
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/PassRegistry.h"
+#include "llvm/Support/AMDGPUAddrSpace.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Parallel.h"
@@ -125,6 +136,122 @@ void enableFPContraction(llvm::Module &module) {
         instruction.setHasAllowContract(true);
 }
 
+// LLVM 5bf967cb132b moved named barriers from the LDS address space into their
+// own address space, and AutoUpgrade does not convert the legacy form
+// emitted by Triton's LLVM. Retype barrier handles by following them forward
+// from the named-barrier globals through direct helper calls and SSA
+// forwarding.
+// TODO: Remove once Triton's LLVM (cmake/llvm-hash.txt) includes 5bf967cb132b
+// and ConvertWarpSpecializeToLLVM creates named barriers in the new address
+// space.
+llvm::Error upgradeLegacyNamedBarriers(llvm::Module &module) {
+  const llvm::Intrinsic::ID barrierIntrinsics[] = {
+      llvm::Intrinsic::amdgcn_s_barrier_init,
+      llvm::Intrinsic::amdgcn_s_barrier_join,
+      llvm::Intrinsic::amdgcn_s_barrier_signal_var,
+      llvm::Intrinsic::amdgcn_s_get_named_barrier_state,
+      llvm::Intrinsic::amdgcn_s_wakeup_barrier};
+  llvm::LLVMContext &context = module.getContext();
+  llvm::Type *barrierType =
+      llvm::Intrinsic::getType(context, llvm::Intrinsic::amdgcn_s_barrier_join)
+          ->getParamType(0);
+
+  llvm::SmallSetVector<llvm::Value *, 16> handles;
+  for (llvm::GlobalVariable &global : module.globals()) {
+    auto *type = llvm::dyn_cast<llvm::TargetExtType>(global.getValueType());
+    if (type && type->getName() == "amdgcn.named.barrier" &&
+        global.getAddressSpace() == llvm::AMDGPUAS::LOCAL_ADDRESS)
+      handles.insert(&global);
+  }
+
+  auto unsupported = [](const llvm::User *user) {
+    std::string message;
+    llvm::raw_string_ostream stream(message);
+    stream << "unsupported use of a legacy named barrier:\n";
+    user->print(stream);
+    return llvm::createStringError(message);
+  };
+
+  // Collect every handle before retyping anything.
+  llvm::SmallSetVector<llvm::Function *, 8> helpers;
+  for (size_t i = 0; i < handles.size(); ++i) {
+    for (llvm::Use &use : handles[i]->uses()) {
+      llvm::User *user = use.getUser();
+      if (llvm::isa<llvm::PHINode, llvm::SelectInst, llvm::FreezeInst>(user)) {
+        handles.insert(user);
+        continue;
+      }
+      auto *call = llvm::dyn_cast<llvm::CallBase>(user);
+      llvm::Function *callee = call ? call->getCalledFunction() : nullptr;
+      if (!callee || !call->isArgOperand(&use))
+        return unsupported(user);
+      unsigned argNo = call->getArgOperandNo(&use);
+      if (argNo == 0 &&
+          llvm::is_contained(barrierIntrinsics, callee->getIntrinsicID()))
+        continue;
+      if (callee->isDeclaration() || argNo >= callee->arg_size())
+        return unsupported(user);
+      handles.insert(callee->getArg(argNo));
+      helpers.insert(callee);
+    }
+  }
+  // Helpers (functions that receive a barrier handle) are rewritten below, so
+  // each of their uses must be a direct call whose signature matches the
+  // helper's original signature.
+  for (llvm::Function *helper : helpers)
+    for (llvm::Use &use : helper->uses()) {
+      auto *call = llvm::dyn_cast<llvm::CallBase>(use.getUser());
+      if (!call || !call->isCallee(&use) ||
+          call->getFunctionType() != helper->getFunctionType())
+        return unsupported(use.getUser());
+    }
+
+  for (llvm::Value *handle : handles)
+    handle->mutateType(barrierType);
+
+  // A function's signature cannot be changed in place, so move each helper's
+  // arguments and body into a new function whose signature matches the
+  // retyped arguments.
+  for (llvm::Function *helper : helpers) {
+    llvm::SmallVector<llvm::Type *> params;
+    for (llvm::Argument &arg : helper->args())
+      params.push_back(arg.getType());
+    llvm::Function *replacement = llvm::Function::Create(
+        llvm::FunctionType::get(helper->getReturnType(), params,
+                                helper->isVarArg()),
+        helper->getLinkage(), helper->getAddressSpace());
+    module.getFunctionList().insert(helper->getIterator(), replacement);
+    replacement->copyAttributesFrom(helper);
+    replacement->setComdat(helper->getComdat());
+    replacement->copyMetadata(helper, 0);
+    replacement->stealArgumentListFrom(*helper);
+    replacement->splice(replacement->begin(), helper);
+    for (llvm::Use &use : llvm::make_early_inc_range(helper->uses()))
+      llvm::cast<llvm::CallBase>(use.getUser())->setCalledFunction(replacement);
+    replacement->takeName(helper);
+    helper->eraseFromParent();
+  }
+
+  for (llvm::Intrinsic::ID id : barrierIntrinsics) {
+    llvm::Function *legacy =
+        llvm::Intrinsic::getDeclarationIfExists(&module, id);
+    if (!legacy ||
+        legacy->getFunctionType() == llvm::Intrinsic::getType(context, id))
+      continue;
+    legacy->setName("");
+    llvm::Function *declaration =
+        llvm::Intrinsic::getOrInsertDeclaration(&module, id);
+    for (llvm::Use &use : llvm::make_early_inc_range(legacy->uses())) {
+      auto *call = llvm::dyn_cast<llvm::CallBase>(use.getUser());
+      if (!call || !call->isCallee(&use))
+        return unsupported(use.getUser());
+      call->setCalledFunction(declaration);
+    }
+    legacy->eraseFromParent();
+  }
+  return llvm::Error::success();
+}
+
 } // namespace
 
 extern "C" TRITON_AMD_EXPORT int
@@ -171,19 +298,39 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
       if (!pass.empty())
         settings.emplace_back(pass.str(), "true");
   }
-  ScopedLLVMOptions optionScope(settings);
-
   llvm::LLVMContext context;
-  llvm::SMDiagnostic diagnostic;
-  auto buffer = llvm::MemoryBuffer::getMemBuffer(
-      llvm::StringRef(llvmIR, llvmIRSize), "triton-amd-codegen", false);
-  auto module = llvm::parseIR(buffer->getMemBufferRef(), diagnostic, context);
-  if (!module) {
+  std::unique_ptr<llvm::Module> module;
+  {
+    // UpgradeDebugInfo can abort on legacy named-barrier signatures while
+    // parsing. Defer it until after the barrier upgrade and verifyModule, so
+    // verification errors are returned through fail() instead of aborting the
+    // process.
+    std::vector<ScopedLLVMOptions::Setting> parseSettings = settings;
+    parseSettings.emplace_back("disable-auto-upgrade-debug-info", "true");
+    ScopedLLVMOptions parseScope(parseSettings);
+
+    llvm::SMDiagnostic diagnostic;
+    auto buffer = llvm::MemoryBuffer::getMemBuffer(
+        llvm::StringRef(llvmIR, llvmIRSize), "triton-amd-codegen", false);
+    module = llvm::parseIR(buffer->getMemBufferRef(), diagnostic, context);
+    if (!module) {
+      std::string message;
+      llvm::raw_string_ostream stream(message);
+      diagnostic.print("triton-amd-codegen", stream);
+      return fail(message, error);
+    }
+    if (llvm::Error upgradeError = upgradeLegacyNamedBarriers(*module))
+      return fail(llvm::toString(std::move(upgradeError)), error);
+
     std::string message;
     llvm::raw_string_ostream stream(message);
-    diagnostic.print("triton-amd-codegen", stream);
-    return fail(message, error);
+    bool brokenDebugInfo = false;
+    if (llvm::verifyModule(*module, &stream, &brokenDebugInfo))
+      return fail("invalid LLVM IR:\n" + message, error);
   }
+
+  ScopedLLVMOptions optionScope(settings);
+  llvm::UpgradeDebugInfo(*module);
 
   // LLVM no longer supports globally enabling FP contraction through
   // TargetOptions. Preserve enableFPFusion by expressing that permission on

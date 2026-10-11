@@ -348,8 +348,13 @@ def test_umulhi_scalar_out_of_range():
         run_parser(kernel, args=(MockTensor(tl.int32), ))
 
 
-@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
-@pytest.mark.parametrize("dtype, value", [(tl.float16, 1.0), (tl.bfloat16, 1.0), (tl.float32, 2.0**-127)])
+@pytest.mark.parametrize(
+    "op, dtype, value", [(op, dtype, value)
+                         for op in [tl.fma, tl.clamp]
+                         for dtype, value in [(tl.float16, 1.0), (tl.bfloat16, 1.0), (tl.float32, 2.0**-127)]] +
+    [(tl.clamp, dtype, 1)
+     for dtype in [tl.int8, tl.int16, tl.int32, tl.int64, tl.uint8, tl.uint16, tl.uint32, tl.uint64]] +
+    [(tl.clamp, tl.int1, True)])
 @pytest.mark.parametrize("tensor_args", range(1, 8))
 def test_ternary_math_scalar_promotion(op, dtype, value, tensor_args):
 

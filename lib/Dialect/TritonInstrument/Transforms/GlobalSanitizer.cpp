@@ -31,8 +31,8 @@ namespace ttng = mlir::triton::nvidia_gpu;
 namespace {
 
 static constexpr const char kGSanGlobalStateArgAttr[] = "tti.gsan_global_state";
-static constexpr const char kGSanStreamClockArgAttr[] = "tti.gsan_stream_clock";
-static constexpr const char kGSanKernelIdArgAttr[] = "tti.gsan_kernel_id";
+static constexpr const char kGSanLaunchTableArgAttr[] = "tti.gsan_launch_table";
+static constexpr const char kGSanLaunchIndexArgAttr[] = "tti.gsan_launch_index";
 static constexpr const char kGSanMBarrierScratchArgAttr[] =
     "tti.gsan_mbarrier_scratch";
 static constexpr const char kDisableSetMaxRegisterAttr[] =
@@ -373,10 +373,8 @@ public:
     ModuleOp module = getOperation();
     OpBuilder builder(module);
     Type gsanStatePtrTy = tt::PointerType::get(builder.getI8Type());
-    Type streamClockPtrTy = tt::PointerType::get(builder.getI32Type());
-    Type kernelIdTy = builder.getI64Type();
-    auto launchPdl = module->getAttrOfType<IntegerAttr>("tti.gsan_launch_pdl");
-    bool acquireStreamClock = !launchPdl || launchPdl.getInt() == 0;
+    Type launchTablePtrTy = tt::PointerType::get(builder.getI8Type());
+    Type launchIndexTy = builder.getI64Type();
     DenseSet<StringRef> calledFuncs;
     module.walk(
         [&](tt::CallOp callOp) { calledFuncs.insert(callOp.getCallee()); });
@@ -395,8 +393,8 @@ public:
       if (instrumentMBarriers && !isEntry)
         inputTys.push_back(gsanStatePtrTy);
       inputTys.push_back(gsanStatePtrTy);
-      inputTys.push_back(streamClockPtrTy);
-      inputTys.push_back(kernelIdTy);
+      inputTys.push_back(launchTablePtrTy);
+      inputTys.push_back(launchIndexTy);
       func.setType(FunctionType::get(module.getContext(), inputTys,
                                      funcTy.getResults()));
 
@@ -408,8 +406,8 @@ public:
       if (instrumentMBarriers && !isEntry)
         addHiddenArg(gsanStatePtrTy, kGSanMBarrierScratchArgAttr);
       addHiddenArg(gsanStatePtrTy, kGSanGlobalStateArgAttr);
-      addHiddenArg(streamClockPtrTy, kGSanStreamClockArgAttr);
-      addHiddenArg(kernelIdTy, kGSanKernelIdArgAttr);
+      addHiddenArg(launchTablePtrTy, kGSanLaunchTableArgAttr);
+      addHiddenArg(launchIndexTy, kGSanLaunchIndexArgAttr);
       SmallVector<Attribute> newArgAttrs;
       if (auto argAttrs = func.getAllArgAttrs())
         newArgAttrs.append(argAttrs.begin(), argAttrs.end());
@@ -427,7 +425,7 @@ public:
 
       if (isEntry) {
         OpBuilder b(&func.front(), func.front().begin());
-        ExperimentalGSanInitOp::create(b, func.getLoc(), acquireStreamClock);
+        ExperimentalGSanInitOp::create(b, func.getLoc());
         if (instrumentMBarriers) {
           int64_t scratchBytes = kGSanMBarrierTableHeaderBytes +
                                  mBarrierCapacity * kGSanMBarrierRecordBytes;
@@ -458,9 +456,10 @@ public:
                                   callOp.getOperands().end());
       Value gsanState =
           getFuncArgumentWithAttr(caller, kGSanGlobalStateArgAttr);
-      Value streamClock =
-          getFuncArgumentWithAttr(caller, kGSanStreamClockArgAttr);
-      Value kernelId = getFuncArgumentWithAttr(caller, kGSanKernelIdArgAttr);
+      Value launchTable =
+          getFuncArgumentWithAttr(caller, kGSanLaunchTableArgAttr);
+      Value launchIndex =
+          getFuncArgumentWithAttr(caller, kGSanLaunchIndexArgAttr);
       if (instrumentMBarriers) {
         auto scratchIt = mbarrierScratch.find(caller);
         assert(scratchIt != mbarrierScratch.end() &&
@@ -469,8 +468,8 @@ public:
             getValueForOp(callOp.getOperation(), scratchIt->second));
       }
       operands.push_back(getValueForOp(callOp.getOperation(), gsanState));
-      operands.push_back(getValueForOp(callOp.getOperation(), streamClock));
-      operands.push_back(getValueForOp(callOp.getOperation(), kernelId));
+      operands.push_back(getValueForOp(callOp.getOperation(), launchTable));
+      operands.push_back(getValueForOp(callOp.getOperation(), launchIndex));
 
       OpBuilder b(callOp);
       auto newCallOp =
