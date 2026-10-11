@@ -12,7 +12,7 @@ from pathlib import Path
 
 import triton
 
-from triton.runtime.build import compile_module_from_src
+from triton.runtime.build import _get_cache_manager, compile_module_from_src
 
 TEST_MODULE_C = """
 #include <Python.h>
@@ -68,6 +68,31 @@ def test_compile_module(fresh_triton_cache):
     # Make sure the module is cached
     mod2 = compile_module_from_src(TEST_MODULE_C, "test_module")
     assert mod2.__file__ == mod.__file__
+
+
+@pytest.mark.parametrize("option", ["include_dirs", "library_dirs", "libraries", "ccflags"])
+def test_build_cache_distinguishes_colons_in_options(fresh_triton_cache, option):
+    first = _get_cache_manager(b"source", {option: ["a:b", "c"]})
+    second = _get_cache_manager(b"source", {option: ["a", "b:c"]})
+    assert first.key != second.key
+
+
+def test_compile_module_distinguishes_include_directories(fresh_triton_cache, tmp_path, monkeypatch):
+    first_dirs = [tmp_path / "a:b", tmp_path / "c"]
+    second_dirs = [tmp_path / "a", tmp_path / "b:c"]
+    for directory in first_dirs + second_dirs:
+        directory.mkdir()
+    (first_dirs[0] / "greeting.h").write_text('#define GREETING "first"\n')
+    (second_dirs[0] / "greeting.h").write_text('#define GREETING "second"\n')
+    source = TEST_MODULE_C.replace("#include <Python.h>", '#include <Python.h>\n#include "greeting.h"')
+    source = source.replace('"hiya"', "GREETING")
+    monkeypatch.chdir(tmp_path)
+
+    first = compile_module_from_src(source, "test_module", include_dirs=[directory.name for directory in first_dirs])
+    second = compile_module_from_src(source, "test_module", include_dirs=[directory.name for directory in second_dirs])
+    assert first.go("hello") == "first"
+    assert second.go("hello") == "second"
+    assert first.__file__ != second.__file__
 
 
 def test_compile_module_bad_cache(fresh_knobs):

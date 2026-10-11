@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -118,13 +119,7 @@ def _get_cache_manager(src: bytes, config: dict[str, list[str] | None]):
     digest = hashlib.sha256()
     digest.update(src)
     digest.update(platform_key().encode("utf-8"))
-    for k, vs in config.items():
-        if vs is None:
-            continue
-        digest.update(k.encode("utf-8"))
-        for v in vs:
-            digest.update(v.encode("utf-8"))
-            digest.update(b":")
+    digest.update(json.dumps(config, sort_keys=True).encode("utf-8"))
     key = digest.hexdigest()
     return get_cache_manager(key)
 
