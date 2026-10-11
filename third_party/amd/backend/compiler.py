@@ -274,7 +274,7 @@ class HIPOptions:
     # Example: llvm_fn_attrs="amdgpu-sched-strategy=iterative-ilp,noinline"
     llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
 
-    # WGP/CU execution mode for gfx10, gfx11 and gfx120x; ignored on other targets.
+    # WGP/CU execution mode for gfx11 and gfx120x; ignored on other targets.
     wgp_cu_mode: str = "wgp"
 
     def __post_init__(self):
@@ -596,7 +596,7 @@ class HIPBackend(BaseBackend):
             # insert dbg intrinsic with several DI Attribute including source
             # var name and type info note: unknown reason for now, but this
             # pass and add_di_scope has to be run separately, otherwise if we
-            # put them into previous pipline, it trigger a segmentfault without
+            # put them into previous pipeline, it trigger a segmentfault without
             # any error message; could be due to a bug in mlir or pybind11
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()

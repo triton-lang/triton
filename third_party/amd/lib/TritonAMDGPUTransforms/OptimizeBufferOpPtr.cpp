@@ -50,7 +50,7 @@ namespace {
 //
 // Goal of this transformation is to decrease amount of work done by vector
 // instructions(decrease number of v_add). This could save cycles in a loop, and
-// give more parallelism on architectures where MFMA and vector instrcutions
+// give more parallelism on architectures where MFMA and vector instructions
 // executed on the same hardware module.
 struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
 
@@ -60,7 +60,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
 
   // Check if same value is stored in every element of tensor val
   // Return true if all elelemts are equal, false if not or it was not able for
-  // proove it.
+  // prove it.
   static bool isScalarizableValue(mlir::Value val) {
     if (isa<IntegerType>(val.getType()))
       return true;
@@ -118,7 +118,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     const auto *stepRange =
         solver->lookupState<dataflow::IntegerValueRangeLattice>(value);
     if (stepRange->getValue().isUninitialized()) {
-      LDBG("Rejected: value range is unintialized");
+      LDBG("Rejected: value range is uninitialized");
       return {};
     }
     return stepRange->getValue().getValue();
@@ -154,14 +154,14 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     const auto *blockArgRange =
         solver->lookupState<dataflow::IntegerValueRangeLattice>(blockArg);
     if (blockArgRange->getValue().isUninitialized()) {
-      LDBG("Rejected: blockArg range is unintialized");
+      LDBG("Rejected: blockArg range is uninitialized");
       return {};
     }
 
     const auto *stepRange =
         solver->lookupState<dataflow::IntegerValueRangeLattice>(advanceStep);
     if (stepRange->getValue().isUninitialized()) {
-      LDBG("Rejected: step range is unintialized");
+      LDBG("Rejected: step range is uninitialized");
       return {};
     }
 
@@ -171,7 +171,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     // Use limit to crop MSB from negative indexing
     constexpr uint64_t maxOffsetValue = 0xff'ff'ff'ff;
 
-    // Range analysys for block argument and step should not return values
+    // Range analysis for block argument and step should not return values
     // larger than maximum uint32_t
     assert(blockArgRangeValue.umax().getLimitedValue() <= maxOffsetValue &&
            "expect block argument to be a 32 bit value");

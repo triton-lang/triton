@@ -485,7 +485,7 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
   // because we can visit one value in two directions
   SetVector<Value> visitedValsForward;
   SetVector<Value> visitedValsBackward;
-  // breadth-first search for reachable opeations
+  // breadth-first search for reachable operations
   GlobalToSharedMemoryOpChain foundNetwork;
   SmallVector<Operation *> traversalStep{root};
   while (!traversalStep.empty()) {
@@ -514,15 +514,15 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
       } else if (isa<ttg::LocalLoadOp, ttg::LocalDeallocOp>(candidate)) {
         smemOperand = candidate->getOperand(0);
       } else if (candidate->hasTrait<mlir::OpTrait::GlobalToLocalCopyTrait>()) {
-        // InTheadTranspose cannot be used with direct-to-lds loads
+        // InThreadTranspose cannot be used with direct-to-lds loads
         LDBG(" skip because of direct-to-lds load");
         return failure();
       } else {
         // this operation is not part of shared memory def-use network,
         // algorithm should not reach this point
-        LDBG("  catched operation unrelated to shared memory" << *candidate);
+        LDBG("  caught operation unrelated to shared memory" << *candidate);
         // this is critical error, assert in debug mode.
-        assert(false && "  catched operation unrelated to shared memory");
+        assert(false && "  caught operation unrelated to shared memory");
         return failure();
       }
 
@@ -599,7 +599,7 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
   // operations
   auto sharedMemSearch = findReachableSMemOps(lLoad);
   if (failed(sharedMemSearch)) {
-    LDBG("Failed to traverse shared memmory operation network");
+    LDBG("Failed to traverse shared memory operation network");
     return failure();
   }
   auto pattern = sharedMemSearch.value();
@@ -779,11 +779,9 @@ public:
 
 } // anonymous namespace
 
-class TritonAMDGPUInThreadTransposePass
-    : public impl::TritonAMDGPUInThreadTransposeBase<
+struct TritonAMDGPUInThreadTransposePass
+    : impl::TritonAMDGPUInThreadTransposeBase<
           TritonAMDGPUInThreadTransposePass> {
-
-public:
   void runOnOperation() override {
     tt::FuncOp f = getOperation();
 

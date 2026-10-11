@@ -856,7 +856,7 @@ private:
     ValueRange nonRemappedOffset = adaptor.getOffset();
 
     assert(remappedPtr.size() == 2 && nonRemappedOffset.size() == 1 &&
-           "expected to be satisified in caller "
+           "expected to be satisfied in caller "
            "ConvertAddPtrOp::matchAndRewrite_");
 
     Value fatPtrBase = remappedPtr[0];
@@ -1828,7 +1828,7 @@ public:
       return success();
     }
     // Exhaustive checking we're converting ONLY unrealized_casts inserted (by
-    // the 1:N conversion) in ConvertFuncOp.
+    // the 1:N conversion) in InitFuncPtrArgs.
     ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
     if (remappedOperands.size() != 2 || remappedOperands[0].size() != 1 ||
         remappedOperands[1].size() != 1)
@@ -1921,12 +1921,11 @@ public:
 /// 3. Clean up remaining `unrealized_casts` (currently only handling one
 /// category of such remaining casts but can be extended to handle all; see
 /// bullet 1 in TODOs).
-class TritonAMDGPUCanonicalizePointersPass
-    : public impl::TritonAMDGPUCanonicalizePointersBase<
+struct TritonAMDGPUCanonicalizePointersPass
+    : impl::TritonAMDGPUCanonicalizePointersBase<
           TritonAMDGPUCanonicalizePointersPass> {
   using Base::Base;
 
-public:
   void runOnOperation() override;
 };
 
@@ -1934,7 +1933,7 @@ public:
 /// This is a port/adaptation of upstream's getForwardSliceImpl
 /// that operates on values instead of ops so that we can track tt.ptr through
 /// the operands/args of region ops like scf.for/scf.while.
-/// It also handles scf.if in a special way beacuse scf.if does not have
+/// It also handles scf.if in a special way because scf.if does not have
 /// operands.
 ///
 /// TODO(max): this is still just a heuristic approximation to a "dataflow
@@ -1956,7 +1955,7 @@ static void getForwardSliceImpl(OpOperand *use, Operation *op,
   };
 
   // all of this is necessary because both the LoopLikeInterface and
-  // BrancOpInterface are bad...
+  // BranchOpInterface are bad...
   auto addBlockArgUses = [&use, &addUses](
                              const Block::BlockArgListType &blockArgs,
                              unsigned argOffset = 0, unsigned useOffset = 0) {

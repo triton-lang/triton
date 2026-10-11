@@ -11,7 +11,7 @@ using namespace mlir::triton;
 using mlir::LLVM::AMD::convertF8ToF32_SW;
 using mlir::LLVM::AMD::upcast8xMxfp4_SW;
 
-// TODO: using if-then-else to repalce ternary operator on template
+// TODO: using if-then-else to replace ternary operator on template
 namespace {
 
 // For each v_cvt_scale_pk8 group of 8 fp4 (4 consecutive input bytes) that a
@@ -174,8 +174,8 @@ SmallVector<Value> upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc,
 // it is already transformed via `reshape(broadcast_to(expand_dims(a_scale, 2),
 // (32, 4, 32)), (32, 128))` and output layout in the wave is `register = [[0,
 // 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[0, 32], [0, 64], [1, 0], [2,
-// 0], [4, 0]]` which means every lane will hold continous 32 elements and these
-// 32 elements share one scale since the block mode is 32.
+// 0], [4, 0]]` which means every lane will hold continuous 32 elements and
+// these 32 elements share one scale since the block mode is 32.
 //
 // 3) for `opSel` used in the rocdl.cvt.scale.pk8
 //

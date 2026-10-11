@@ -2155,7 +2155,7 @@ def tensor_device_tdm_multi_cta_load_and_store_kernel(a_ptr, b_ptr, M, N,  #
 def test_runtime_tensor_load_and_store_multi_cta(M, N, BLOCK_M, BLOCK_N, NUM_WARPS, CGALayout, USE_TDM_LOAD,
                                                  USE_TDM_STORE):
     torch.manual_seed(42)
-    # Overallocate to catch out of bounds writes, the padding of our input is random and the pading of the output is 0
+    # Overallocate to catch out of bounds writes, the padding of our input is random and the padding of the output is 0
     # to catch out of bounds writes.
     overallocation_factor = 4
     a = torch.randint(0x0, 0xFFFF, (M * overallocation_factor, N), dtype=torch.uint16)
@@ -2415,7 +2415,7 @@ def test_compile_tensor_descriptor_prefetch_nd(dtype, ndim, INNER_BLOCK, SPECULA
             "PREFETCH_SPECULATIVE": "constexpr",
         }
         constexprs = {
-            # For tuples we need to specifiy the parameter index
+            # For tuples we need to specify the parameter index
             **{(2, i): STRIDES[i]
                for i in range(ndim)},
             **{(3, i): BLOCK_SHAPE[i]
