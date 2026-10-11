@@ -1,4 +1,4 @@
-//===- MFMASchedule.cpp - MFMA <-> memory interleave for gfx950 -----------===//
+//===- MFMASchedule.cpp - MFMA <-> memory interleave for CDNA3/4 ----------===//
 //
 // An opt-in LLVM-IR pass that interleaves the MFMAs of a matrix-core hot loop
 // with the memory operations that are independent of them, so the matrix unit
@@ -33,6 +33,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
@@ -215,7 +216,7 @@ iterator_range<BasicBlock::iterator> instructionsInSpan(const Span &R) {
   return make_range(ItBegin, ItEnd);
 }
 
-// Issue-to-issue cost of an MFMA on gfx950: its pass count times 4 cycles
+// Issue-to-issue cost of an MFMA: its pass count times 4 cycles
 // (SISchedule.td: 16x16xK shapes are 4 passes, 32x32xK shapes 8, whatever the
 // element type). Returns 0 for a shape the table does not know; the span is
 // then left to LLVM's schedulers.
@@ -272,11 +273,14 @@ unsigned getLDSAccessBits(const Instruction *I) {
   return 0;
 }
 
-// Cycles of MFMA cover an LDS access asks for: the LDS port moves one byte
-// per cycle in steady state, so the cost is proportional to the access width.
-unsigned getLDSCoverCycles(const Instruction *I, unsigned MFMACycles) {
+// Cycles of MFMA cover an LDS access asks for. With all four SIMDs issuing
+// it, the access moves 64 lanes x 4 SIMDs x Bits/8 bytes = Bits * 32 bytes
+// through an LDS that services LDSBytesPerClk per cycle: Bits / 8 cycles on
+// gfx950, Bits / 4 on gfx942 (a ds_read_b128 is 16 and 32 cycles).
+unsigned getLDSCoverCycles(const Instruction *I, unsigned MFMACycles,
+                           unsigned LDSBytesPerClk) {
   unsigned Bits = getLDSAccessBits(I);
-  return Bits ? (Bits / 8) : MFMACycles;
+  return Bits ? (Bits * 32 / LDSBytesPerClk) : MFMACycles;
 }
 
 // MFMAs to place at this LDS access. Reads and writes share the one LDS issue
@@ -284,8 +288,8 @@ unsigned getLDSCoverCycles(const Instruction *I, unsigned MFMACycles) {
 // each access adds its cover cycles and takes floor(balance / MFMACycles)
 // MFMAs, keeping the remainder for the next one.
 unsigned takeMFMAsForLDS(const Instruction *I, unsigned MFMACycles,
-                         unsigned &AccumCycles) {
-  AccumCycles += getLDSCoverCycles(I, MFMACycles);
+                         unsigned LDSBytesPerClk, unsigned &AccumCycles) {
+  AccumCycles += getLDSCoverCycles(I, MFMACycles, LDSBytesPerClk);
   unsigned N = AccumCycles / MFMACycles;
   AccumCycles -= N * MFMACycles;
   return N;
@@ -293,13 +297,16 @@ unsigned takeMFMAsForLDS(const Instruction *I, unsigned MFMACycles,
 
 class MFMAScheduler {
 public:
+  explicit MFMAScheduler(unsigned LDSBytesPerClk)
+      : LDSBytesPerClk(LDSBytesPerClk) {}
+
   // Schedule the spans of the range [Begin, End) of BB; End == nullptr means
   // the end of the block. A range with no schedulable span is left untouched.
   // Returns true if any span was scheduled.
   bool runRange(BasicBlock &BB, Instruction *Begin, Instruction *End) {
     SpanList Spans;
     analyzeSpan(Begin, End ? End->getIterator() : BB.end(), Spans);
-    return scheduleSpans(BB, Spans, End);
+    return scheduleSpans(BB, Spans, End, LDSBytesPerClk);
   }
 
   bool runBlock(BasicBlock &BB) { return runRange(BB, &BB.front(), nullptr); }
@@ -323,6 +330,8 @@ public:
   }
 
 private:
+  unsigned LDSBytesPerClk;
+
   // Cut the range [Begin, End) into spans in one program-order pass. A new
   // span opens at every MFMA that follows a memory op seen since the current
   // span's MFMAs began: that op feeds this MFMA, so it belongs to the next
@@ -482,7 +491,8 @@ private:
   //     between the span's head and tail (an odd MFMA favors the head).
   static void scheduleMFMAWithSpacing(SmallVectorImpl<AnchorInst> &Anchors,
                                       SmallVectorImpl<Instruction *> &MFMAInsts,
-                                      unsigned MFMACycles) {
+                                      unsigned MFMACycles,
+                                      unsigned LDSBytesPerClk) {
     unsigned MFMAPerGR = llvm::divideCeil(64, MFMACycles);
     unsigned NumGR = 0, NumGRBeforeLR = 0, TotalLDSCycles = 0;
     for (size_t j = 0; j < Anchors.size(); ++j) {
@@ -491,7 +501,8 @@ private:
         if (j + 1 < Anchors.size() && Anchors[j + 1].Kind == SchedKind::LR)
           NumGRBeforeLR++;
       } else {
-        TotalLDSCycles += getLDSCoverCycles(Anchors[j].I, MFMACycles);
+        TotalLDSCycles +=
+            getLDSCoverCycles(Anchors[j].I, MFMACycles, LDSBytesPerClk);
       }
     }
     unsigned Total = MFMAInsts.size();
@@ -514,7 +525,8 @@ private:
             idx + 1 < Anchors.size() && Anchors[idx + 1].Kind == SchedKind::LR;
         Count = FollowedByLR ? 1 : MFMAPerGR;
       } else {
-        Count = takeMFMAsForLDS(Anchors[idx].I, MFMACycles, LDSAccum);
+        Count = takeMFMAsForLDS(Anchors[idx].I, MFMACycles, LDSBytesPerClk,
+                                LDSAccum);
       }
       moveMFMAsAfter(MFMAInsts, MFMAIdx, Count, Anchors[idx].I);
     }
@@ -534,7 +546,7 @@ private:
   // Schedule the spans of one range; RangeEnd bounds the last span (nullptr
   // for the end of the block).
   static bool scheduleSpans(BasicBlock &BB, const SpanList &Spans,
-                            Instruction *RangeEnd) {
+                            Instruction *RangeEnd, unsigned LDSBytesPerClk) {
     unsigned Scheduled = 0;
     for (unsigned i = 0; i < Spans.size(); ++i) {
       Span R;
@@ -553,7 +565,8 @@ private:
         continue;
 
       SpanContents Res = preprocessSpan(R);
-      scheduleMFMAWithSpacing(Res.Anchors, Res.MFMAInsts, MFMACycles);
+      scheduleMFMAWithSpacing(Res.Anchors, Res.MFMAInsts, MFMACycles,
+                              LDSBytesPerClk);
 
       // Pin the interleave. A fence in front of each anchor makes every window
       // between fences `anchor, mfma...`, with the memory op leading; a fence
@@ -576,14 +589,16 @@ private:
 
 namespace mlir::triton::AMD {
 
-bool runMFMASchedulePass(llvm::Function &F) {
+bool runMFMASchedulePass(llvm::Function &F, llvm::StringRef Arch) {
   if (F.isDeclaration())
     return false;
 
   // A function that already carries sched.barriers is cut at them; the pass
   // never moves anything across one.
   const bool Spanned = hasSchedBarrier(F);
-  MFMAScheduler Scheduler;
+  // LDS bytes serviced per clock per CU: 128 on CDNA3, 256 on CDNA4.
+  MFMAScheduler Scheduler(
+      StringSwitch<unsigned>(Arch).Case("gfx942", 128).Default(256));
   bool Changed = false;
   for (BasicBlock &BB : F) {
     SmallVector<Instruction *, 64> Snapshot;

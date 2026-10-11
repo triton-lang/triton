@@ -1,4 +1,4 @@
-"""Tests for the gfx950 MFMA scheduler (schedule_hint="mfma-schedule").
+"""Tests for the MFMA scheduler (schedule_hint="mfma-schedule"), which runs on gfx942 and gfx950.
 
 The fixture is a small Gluon GEMM with local prefetch (the next K tile's LDS
 reads are issued before the current tile's MFMAs), which is the loop shape the
@@ -113,6 +113,36 @@ def gemm_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak, stride_bk, s
 
 
 @gluon.jit
+def lds_write_kernel(a_ptr, b_ptr, c_ptr, K):
+    """One 64x64 tile staged through registers, as on CDNA3: each iteration loads the next K tile,
+    computes the current one from LDS, and then writes the next one to LDS, after the MFMAs."""
+    blocked: gl.constexpr = gl.BlockedLayout([1, 8], [8, 8], [4, 1], [1, 0])
+    mfma_layout: gl.constexpr = gl.amd.AMDMFMALayout(version=3, instr_shape=[16, 16, 16], transposed=True,
+                                                     warps_per_cta=[2, 2])
+    dot_a: gl.constexpr = gl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=4)
+    dot_b: gl.constexpr = gl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=4)
+    shared: gl.constexpr = gl.SwizzledSharedLayout(8, 1, 8, order=[1, 0])
+    smem_a = gl.allocate_shared_memory(gl.float16, [64, 64], shared)
+    smem_b = gl.allocate_shared_memory(gl.float16, [64, 64], shared)  # B^T: [N, K]
+    rows = gl.arange(0, 64, layout=gl.SliceLayout(1, blocked))
+    cols = gl.arange(0, 64, layout=gl.SliceLayout(0, blocked))
+    offs = rows[:, None] * K + cols[None, :]
+    smem_a.store(gl.amd.cdna3.buffer_load(a_ptr, offs))
+    smem_b.store(gl.amd.cdna3.buffer_load(b_ptr, offs))
+    acc = gl.zeros((64, 64), gl.float32, mfma_layout)
+    for k in range(64, K, 64):
+        a_next = gl.amd.cdna3.buffer_load(a_ptr + k, offs)
+        b_next = gl.amd.cdna3.buffer_load(b_ptr + k, offs)
+        acc = gl.amd.cdna3.mfma(smem_a.load(dot_a), smem_b.permute([1, 0]).load(dot_b), acc)
+        smem_a.store(a_next)
+        smem_b.store(b_next)
+    acc = gl.amd.cdna3.mfma(smem_a.load(dot_a), smem_b.permute([1, 0]).load(dot_b), acc)
+    out = gl.arange(0, 64, layout=gl.SliceLayout(1, mfma_layout))[:, None] * 64 + gl.arange(
+        0, 64, layout=gl.SliceLayout(0, mfma_layout))[None, :]
+    gl.store(c_ptr + out, acc)
+
+
+@gluon.jit
 def scale_kernel(x_ptr, y_ptr, n, BLOCK: gl.constexpr, WARP_SIZE: gl.constexpr):
     """No MFMA loop: the scheduler must leave this kernel alone."""
     layout: gl.constexpr = gl.BlockedLayout([4], [WARP_SIZE], [4], [0])
@@ -201,8 +231,28 @@ def test_kernel_without_mfma_loop_is_left_alone():
     assert SCHED_BARRIER not in k.asm["llir"]
 
 
-@pytest.mark.parametrize("arch", ["gfx942", "gfx1250"])
+@pytest.mark.parametrize("arch, mfmas_per_write", [("gfx942", 2), ("gfx950", 1)])
+def test_lds_cover_follows_the_target(arch, mfmas_per_write):
+    # A 128-bit LDS write needs 16 cycles of MFMA cover on gfx950 (256 B/clk of LDS) and 32 on gfx942
+    # (128 B/clk): one 16-cycle MFMA after each write on gfx950, two on gfx942. The last write's window
+    # also takes the span's tail, so it is left out.
+    signature = {"a_ptr": "*fp16", "b_ptr": "*fp16", "c_ptr": "*fp32", "K": "i32"}
+    attrs = {(i, ): [["tt.divisibility", 16]] for i in range(4)}
+    src = gluon._runtime.GluonASTSource(lds_write_kernel, signature, {}, attrs=attrs)
+    llir = triton.compile(src, target=GPUTarget("hip", arch, 64),
+                          options={"num_warps": 4, "schedule_hint": "mfma-schedule"}).asm["llir"]
+    counts = []
+    for window in llir.split(SCHED_BARRIER + "(i32 0)")[1:]:
+        first_mem = next(
+            (line.strip() for line in window.splitlines() if "addrspace(3)" in line or "buffer.load" in line), "")
+        if first_mem.startswith("store") and "addrspace(3)" in first_mem:
+            counts.append(window.count("@llvm.amdgcn.mfma"))
+    assert len(counts) > 1
+    assert counts[:-1] == [mfmas_per_write] * (len(counts) - 1)
+
+
+@pytest.mark.parametrize("arch", ["gfx90a", "gfx1250"])
 def test_other_archs_ignore_the_hint(arch):
-    # gfx950-only: on other targets the hint is accepted and does nothing.
+    # gfx942 and gfx950 only: on other targets the hint is accepted and does nothing.
     k = _compile_scale(target=GPUTarget("hip", arch, 32 if arch == "gfx1250" else 64), schedule_hint="mfma-schedule")
     assert SCHED_BARRIER not in k.asm["llir"]
