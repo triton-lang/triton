@@ -261,7 +261,7 @@ class HIPOptions:
     fpsan_homomorphic_casts: bool = False
 
     # Experimental hint for how the AMD backend schedules a kernel's instructions. The only
-    # recognized value is "mfma-schedule" (gfx950 only): run the MFMA scheduler on the optimized
+    # recognized value is "mfma-schedule" (gfx942 and gfx950): run the MFMA scheduler on the optimized
     # LLVM IR. It interleaves the MFMAs of each hot loop with the memory operations that are
     # independent of them, keeping the matrix unit busy, and pins that order with
     # llvm.amdgcn.sched.barrier so LLVM's machine schedulers preserve it. Kernels without an
@@ -719,8 +719,8 @@ class HIPBackend(BaseBackend):
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-z")
 
         # Opt-in MFMA scheduler, see the schedule_hint option (validated in parse_options).
-        if options.schedule_hint == "mfma-schedule" and options.arch == "gfx950":
-            amd.add_mfma_schedule_pass(kernel_fn)
+        if options.schedule_hint == "mfma-schedule" and options.arch in ("gfx942", "gfx950"):
+            amd.add_mfma_schedule_pass(kernel_fn, options.arch)
 
         # Get some metadata
         metadata["num_warps"] = total_warps_num

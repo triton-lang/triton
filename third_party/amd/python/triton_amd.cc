@@ -591,9 +591,10 @@ void init_triton_amd(py::module_ &m) {
       // hold the GIL meanwhile.
       py::call_guard<py::gil_scoped_release>());
 
-  m.def("add_mfma_schedule_pass", [](llvm::Function *fn) -> bool {
-    return mlir::triton::AMD::runMFMASchedulePass(*fn);
-  });
+  m.def("add_mfma_schedule_pass",
+        [](llvm::Function *fn, const std::string &arch) -> bool {
+          return mlir::triton::AMD::runMFMASchedulePass(*fn, arch);
+        });
 
   auto hipBlas = m.def_submodule("hipblas");
   py::class_<HipblasLtInstance>(hipBlas, "HipblasLt")
