@@ -858,3 +858,27 @@ tt.func @deferral_without_completion(%ptr: !tt.ptr<f32>) {
   tt.return
 }
 }
+
+// -----
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// An explicit rendezvous satisfies completion without a policy-inserted copy.
+// CDNA4-LABEL: @deferral_explicit_barrier
+// CDNA4: ttg.async_wait
+// CDNA4-NEXT: ttg.barrier local
+// CDNA4-NEXT: arith.addf
+// CDNA4-NOT: ttg.barrier
+// CDNA4: tt.return
+tt.func @deferral_explicit_barrier(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
+  %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %copy = ttg.async_copy_global_to_local %ptrs, %alloc : tensor<128x!tt.ptr<f32>, #layout> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %wait = ttg.async_wait %copy {num = 0 : i32}
+  ttg.barrier local
+  %sum = arith.addf %data, %data : tensor<128xf32, #layout>
+  %read = ttg.local_load %alloc token %wait : !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable> -> tensor<128xf32, #layout>
+  tt.return
+}
+}

@@ -354,6 +354,8 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
 Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                                         MembarInfo *membarInfo,
                                         OpBuilder *builder, bool cluster) {
+  // Analysis-only runs model existing synchronization, without inserting or
+  // clearing state for hypothetical barriers.
   if (!builder)
     return nullptr;
   auto &pending = membarInfo->pending;
@@ -369,8 +371,17 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
            (filter && filter(before, after, beforeIsRead, afterIsRead,
                              allocation, beforeSlice, afterSlice));
   };
-  if (!requiresThreadSync(pending, effects) &&
-      !pending.isIntersected(effects, canSkip, &allocation, sliceFilter))
+  bool needsSync =
+      requiresThreadSync(pending, effects) ||
+      pending.isIntersected(effects, canSkip, &allocation, sliceFilter);
+  // When correctness allows further deferral, the target may stop a pending
+  // shared-copy rendezvous before a potential load-result wait. Pure operations
+  // and branch transfers reach this check even without shared-memory effects.
+  // Leading barriers have already cleared pending state in updateMemoryEffects.
+  if (!needsSync && !cluster && deferralStopPolicy &&
+      pending.threadSync.completion == CompletionSync::Shared)
+    needsSync = deferralStopPolicy(op);
+  if (!needsSync)
     return nullptr;
   // The barrier clears incoming state. The operation's own effects still
   // follow it, including a scratch write that conflicts with a pending read.
@@ -521,16 +532,6 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
       barrier && barrier.isWarp()) {
     membarInfo->syncWarps();
     return;
-  }
-  // Branch operands may become register copies. Check the target policy before
-  // control-flow handling, even when this operation has no memory effects.
-  // Analysis-only runs model existing barriers rather than hypothetical ones.
-  if (builder && deferralStopPolicy &&
-      membarInfo->pending.threadSync.completion == CompletionSync::Shared &&
-      deferralStopPolicy(op)) {
-    builder->setInsertionPoint(op);
-    insertBarrier(op, builder);
-    membarInfo->sync();
   }
   auto sync = getThreadSyncInfo(op);
   // Region control flow is visited by the dataflow engine. Its children
