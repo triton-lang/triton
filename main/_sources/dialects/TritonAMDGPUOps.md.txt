@@ -474,9 +474,10 @@ Syntax:
 operation ::= `amdg.async_wait` ($asyncToken^)? attr-dict
 ```
 
-Similar to ttg.async_wait but instead of waiting on oustanding ttg.async_commit_groups
-this op waits on the number of outstanding async instructions/intrinsics as required for the
-lowering to LLVM on the AMD backend.
+Similar to ttg.async_wait but instead of waiting on outstanding
+ttg.async_commit_groups this op waits on the number of outstanding async
+instructions/intrinsics as required for the lowering to LLVM on the AMD
+backend.
 
 Traits: `MemWaitOpTrait`
 
@@ -675,7 +676,8 @@ operation ::= `amdg.buffer_load_to_local` $ptr `[` $offsets `]` (`mask` `=` $mas
               attr-dict `:` qualified(type($ptr)) `[` type($offsets) `]` type($other) `->` type($dest)
 ```
 
-AMD Buffer load operation. Similar to amdg.buffer_load op but directly wirtes to shared memory instead of into registers.
+AMD Buffer load operation. Similar to amdg.buffer_load op but directly
+writes to shared memory instead of into registers.
 Contiguity is the maximum number of elements that can be loaded in a single vector with the given layout and mask.
 This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.
 
@@ -771,7 +773,8 @@ Syntax:
 operation ::= `amdg.cluster_barrier_arrive` attr-dict
 ```
 
-Signals that the cluster has arrived at a barrier, used to synchronizing CTAs within a cluster.
+Signals that the cluster has arrived at a barrier, used to synchronize
+CTAs within a cluster.
 
 See ClusterBarrierWaitOp for how to wait on the arrived cluster barrier.
 
