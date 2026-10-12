@@ -3573,3 +3573,126 @@ def test_scaled_upcast_fp4_compact_scales(device, dtype, scale_factor, fresh_kno
     # Encode the integer results as FP16/BF16 bits and compare the bits.
     expected = _unmix_payload_to_float_bits(payload, "bf16" if dtype == torch.bfloat16 else "f16")
     _assert_payload_equal(out.view(torch.int16), expected)
+
+
+@triton.jit
+def _atomic_rmw_payload_kernel(X, Y, Old, N: tl.constexpr, ATOMIC_OP: tl.constexpr, BLOCK: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    in_bounds = offsets < N
+    mask = in_bounds & (offsets % 3 != 0)
+    # Load skipped elements too, so ignoring the atomic mask changes their values.
+    value = tl.load(Y + offsets, in_bounds, other=0)
+    old = ATOMIC_OP(X + offsets, value, mask)
+    tl.store(Old + offsets, old, mask)
+
+
+@gluon.jit
+def _atomic_add_shared_payload_kernel(X, Y, Old, N: gl.constexpr, BLOCK: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+    offsets = gl.arange(0, BLOCK, layout=layout)
+    in_bounds = offsets < N
+    mask = in_bounds & (offsets % 3 != 0)
+    initial = gl.load(X + offsets, in_bounds, other=0)
+    value = gl.load(Y + offsets, in_bounds, other=0)
+    smem = gl.allocate_shared_memory(X.dtype.element_ty, [BLOCK], gl.SwizzledSharedLayout(1, 1, 1, [0]), initial)
+    old = smem.atomic_scatter_add(value, offsets, axis=0, mask=mask)
+    # Copy back masked-off elements too, so the test checks that they stayed unchanged.
+    gl.store(X + offsets, smem.load(layout), in_bounds)
+    gl.store(Old + offsets, old, mask)
+
+
+@pytest.mark.parametrize(
+    "memory,atomic_op,expected_op",
+    [
+        ("global", tl.atomic_add, np.add),
+        ("global", tl.atomic_min, np.minimum),
+        ("global", tl.atomic_max, np.maximum),
+        ("shared", None, np.add),
+    ],
+    ids=["global-add", "global-min", "global-max", "shared-add"],
+)
+@pytest.mark.parametrize("dtype", ["f32", "f64"])
+def test_atomic_rmw_payload_semantics(device, memory, atomic_op, expected_op, dtype, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    if is_hip():
+        # TODO: Remove once FpSan supports AMD buffer atomics.
+        fresh_knobs.amd.use_buffer_ops = False
+
+    n = 173  # Exercise both masked elements and a partial block.
+    mask = np.arange(n) % 3 != 0
+    rs = np.random.RandomState(42)
+    x_bits = _random_float_bits(rs, (n, ), dtype)
+    # Shift the payload edge cases so the two operands differ.
+    y_bits = np.roll(_random_float_bits(rs, (n, ), dtype), 1)
+    bitwidth, _, storage_dtype, _, _, _ = _float_dtype_info(dtype)
+    inf_bits = {"f32": 0x7F800000, "f64": 0x7FF0000000000000}[dtype]
+    # Cover both signs of zero, infinity, signaling NaN, and the largest finite carrier.
+    edges = np.asarray([0, inf_bits, inf_bits + 1, inf_bits - 1], dtype=np.uint64)
+    edges = np.concatenate([edges, edges ^ np.uint64(1 << (bitwidth - 1))]).astype(storage_dtype)
+    edge_indices = np.flatnonzero(mask)[-len(edges):]
+    x_bits[edge_indices] = edges
+    y_bits[edge_indices] = edges[::-1]
+
+    x, xw = _as_float_bits_tensor(x_bits, dtype)
+    _, yw = _as_float_bits_tensor(y_bits, dtype)
+    old, oldw = _as_float_bits_tensor(y_bits, dtype)
+    if memory == "shared":
+        _atomic_add_shared_payload_kernel[(1, )](xw, yw, oldw, n, BLOCK=256, THREADS_PER_WARP=THREADS_PER_WARP)
+    else:
+        _atomic_rmw_payload_kernel[(1, )](xw, yw, oldw, n, ATOMIC_OP=atomic_op, BLOCK=256)
+
+    # Fixed-width signed integers give wrapping addition and signed min/max.
+    lhs = _mix_float_bits(x_bits, dtype).astype(storage_dtype)
+    rhs = _mix_float_bits(y_bits, dtype).astype(storage_dtype)
+    payload = expected_op(lhs, rhs)
+    expected = np.where(mask, _unmix_payload_to_float_bits(payload, dtype), x_bits)
+    _assert_payload_equal(x.cpu().numpy(), expected)
+    # Masked-off return values are unspecified; the output sentinel must remain intact.
+    _assert_payload_equal(old.cpu().numpy(), np.where(mask, x_bits, y_bits))
+
+
+@gluon.jit
+def _atomic_add_contention_kernel(X, Old, MODE: gl.constexpr, RETURN_OLD: gl.constexpr, BLOCK: gl.constexpr,
+                                  THREADS_PER_WARP: gl.constexpr):
+    if MODE == "scalar":
+        offsets = 0
+        indices = 0
+    else:
+        layout: gl.constexpr = gl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+        offsets = gl.arange(0, BLOCK, layout=layout)
+        indices = gl.full([BLOCK], 0, gl.int32, layout)
+
+    # All elements increment the same location.
+    if MODE == "shared":
+        dtype: gl.constexpr = X.dtype.element_ty
+        smem = gl.allocate_shared_memory(dtype, [1], gl.SwizzledSharedLayout(1, 1, 1, [0]))
+        smem.store(gl.full([1], 0, dtype, layout))
+        values = gl.full([BLOCK], 1.0, dtype, layout)
+        old = smem.atomic_scatter_add(values, indices, axis=0)
+        gl.store(X + gl.arange(0, 1, layout=layout), smem.load(layout))
+    else:
+        old = gl.atomic_add(X + indices, 1.0)
+    if RETURN_OLD:
+        gl.store(Old + gl.program_id(0) * BLOCK + offsets, old)
+
+
+@pytest.mark.parametrize("return_old", [True, False], ids=["return_old", "discard_old"])
+@pytest.mark.parametrize("mode,dtype", [("scalar", "f32"), ("tensor", "f32"), ("shared", "f32"), ("shared", "f64")])
+def test_atomic_add_payload_contention(device, mode, dtype, return_old, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    block = 1 if mode == "scalar" else 256
+    programs = 1 if mode == "shared" else 8
+    num_updates = programs * block
+    storage_dtype = _float_dtype_info(dtype)[2]
+    x, xw = _as_float_bits_tensor(np.zeros(1, dtype=storage_dtype), dtype)
+    old, oldw = _as_float_bits_tensor(np.zeros(num_updates, dtype=storage_dtype), dtype)
+    _atomic_add_contention_kernel[(programs, )](xw, oldw, mode, return_old, block, THREADS_PER_WARP)
+
+    # FpSan maps 0.0 and 1.0 to payloads 0 and 1, so each add increments the payload.
+    assert _mix_float_bits(x.cpu().numpy(), dtype).item() == num_updates
+    if return_old:
+        tickets = _mix_float_bits(old.cpu().numpy(), dtype)
+        # Every increment returns a unique previous payload, regardless of execution order.
+        np.testing.assert_array_equal(np.sort(tickets), np.arange(num_updates, dtype=np.uint64))

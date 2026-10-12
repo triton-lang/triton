@@ -724,3 +724,18 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.instrumentation_mode" = "fpsan,gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // GSan's begin/end hooks must enclose FpSan's integer payload update and CAS loop.
+  // CHECK-LABEL: llvm.func @fpsan_atomic_rmw
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.add {{.*}} : i32
+  // CHECK: llvm.cmpxchg {{.*}} syncscope("block") monotonic monotonic{{.*}} : !llvm.ptr<1>, i32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  tt.func @fpsan_atomic_rmw(%ptr: !tt.ptr<f32>, %val: f32, %mask: i1) {
+    %add = tt.atomic_rmw fadd, relaxed, cta, %ptr, %val, %mask {tti.fpsan} : (!tt.ptr<f32>, f32, i1) -> f32
+    tt.return
+  }
+}

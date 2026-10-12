@@ -2564,6 +2564,29 @@ struct DotScaledPattern : public OpRewritePattern<tt::DotScaledOp> {
   }
 };
 
+template <typename OpTy>
+struct AtomicRMWPattern : public OpRewritePattern<OpTy> {
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                PatternRewriter &rewriter) const override {
+    if (!isFloatLike(op.getType()) || op->hasAttr("tti.fpsan"))
+      return failure();
+    if (!llvm::is_contained({RMWOp::FADD, RMWOp::MIN, RMWOp::MAX},
+                            op.getAtomicRmwOp()))
+      return failure();
+    // LLVM widens narrow CAS accesses, which can cross allocation or subview
+    // boundaries even when neighboring bits are written back unchanged.
+    if (getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth() < 32)
+      return emitFpSanUnsupported(op.getOperation());
+    // Keep the atomic operation for allocation and synchronization analysis.
+    // Its lowering commits the payload update with a compare-and-swap loop.
+    rewriter.modifyOpInPlace(
+        op, [&] { op->setAttr("tti.fpsan", rewriter.getUnitAttr()); });
+    return success();
+  }
+};
+
 struct TMEMLoadPattern : public OpRewritePattern<ttng::TMEMLoadOp> {
   TMEMLoadPattern(MLIRContext *ctx, TmemScratchManager *scratch)
       : OpRewritePattern(ctx), scratch(scratch) {}
@@ -3475,6 +3498,8 @@ public:
              ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
              ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
              PackedArithPattern, DotPattern, DotScaledPattern>(&getContext());
+    patterns.add<AtomicRMWPattern<tt::AtomicRMWOp>,
+                 AtomicRMWPattern<ttg::LocalAtomicScatterRMWOp>>(&getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);

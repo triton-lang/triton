@@ -237,7 +237,9 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
                                                       targetInfo, benefit);
   mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter, patterns,
                                                       targetInfo);
-  mlir::triton::populateFpSanToLLVMPatterns(typeConverter, patterns);
+  // Prioritize FpSan over native atomic lowering.
+  mlir::triton::populateFpSanToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                            benefit + 1);
   mlir::triton::populateGSanToLLVMPatterns(typeConverter, patterns,
                                            axisInfoAnalysis, targetInfo);
 }
