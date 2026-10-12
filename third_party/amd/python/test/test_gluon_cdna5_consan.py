@@ -439,6 +439,13 @@ def test_async_wait_uncommitted(mode, message):
          "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"),
         ("load_into_store_source",
          "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"),
+        ("mixed_partial_wait_store",
+         "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"),
+        ("mixed_partial_wait_load",
+         "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared"),
+        ("mixed_uncommitted_load",
+         "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"),
+        ("mixed_older_store", None),
     ],
 )
 def test_async_copy_load_store(mode, message):
@@ -447,6 +454,12 @@ def test_async_copy_load_store(mode, message):
         assert not stderr, stderr
     else:
         assert message in stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+def test_async_copy_partition_isolation():
+    stderr = _run_consan_subprocess("async_copy_partition_isolation")
+    assert not stderr, stderr
 
 
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
