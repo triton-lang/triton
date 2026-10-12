@@ -4492,11 +4492,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
     tt.return
   }
 
-  // CHECK-LABEL: @global_load_volatile_llvm
-  // CHECK: llvm.load volatile {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-  // PTX-LABEL: .visible .entry global_load_volatile_llvm(
+  // CHECK-LABEL: @global_load_volatile_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.volatile.global.b32
+  // PTX-LABEL: .visible .entry global_load_volatile_scalar(
   // PTX: ld.volatile.global.b32
-  tt.func public @global_load_volatile_llvm(%src: !tt.ptr<i32>) {
+  tt.func public @global_load_volatile_scalar(%src: !tt.ptr<i32>) {
     %value = tt.load %src {isVolatile = true} : !tt.ptr<i32>
     tt.return
   }
