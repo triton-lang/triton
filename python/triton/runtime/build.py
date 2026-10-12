@@ -128,6 +128,10 @@ def _compile_so(src: bytes, src_path: str, name: str, library_dirs: list[str] | 
                 libraries: list[str] | None, ccflags: list[str] | None, load_module: bool, language: str):
     config = dict(language=[language], library_dirs=library_dirs, include_dirs=include_dirs, libraries=libraries,
                   ccflags=ccflags)
+    if knobs.build.impl is None:
+        compiler = _find_compiler(language)
+        resolved = shutil.which(compiler)
+        config["compiler"] = [os.path.abspath(resolved) if resolved is not None else compiler]
     cache = _get_cache_manager(src, config=config)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
     cache_path = cache.get_file(f"{name}{suffix}")

@@ -4,14 +4,19 @@ import argparse
 import hashlib
 import io
 import json
-import pytest
+import os
+import shutil
+import sysconfig
 import tarfile
 import tempfile
+
+import pytest
 
 from pathlib import Path
 
 import triton
 
+from triton.runtime import build
 from triton.runtime.build import _get_cache_manager, compile_module_from_src
 
 TEST_MODULE_C = """
@@ -55,6 +60,17 @@ PyMODINIT_FUNC PyInit_test_module(void) {
 }
 """
 
+TEST_MODULE_COMPILER = TEST_MODULE_C.replace(
+    "#include <Python.h>", """#include <Python.h>
+#if defined(__clang__)
+#define COMPILER_NAME "clang"
+#elif defined(__GNUC__)
+#define COMPILER_NAME "gcc"
+#else
+#define COMPILER_NAME "unknown"
+#endif
+""").replace('res = "hiya";', "res = COMPILER_NAME;")
+
 
 def test_compile_module(fresh_triton_cache):
     mod = compile_module_from_src(TEST_MODULE_C, "test_module")
@@ -93,6 +109,83 @@ def test_compile_module_distinguishes_include_directories(fresh_triton_cache, tm
     assert first.go("hello") == "first"
     assert second.go("hello") == "second"
     assert first.__file__ != second.__file__
+
+
+@pytest.mark.parametrize(
+    ("language", "env_var", "compilers"),
+    [("c", "CC", ("gcc", "clang")), ("c++", "CXX", ("g++", "clang++"))],
+)
+def test_compile_module_cache_keys_compiler(language, env_var, compilers, fresh_triton_cache, monkeypatch):
+    compiler_paths = [shutil.which(compiler) for compiler in compilers]
+    if any(path is None for path in compiler_paths):
+        pytest.skip(f"requires both {compilers[0]} and {compilers[1]}")
+    compiler_paths = [path for path in compiler_paths if path is not None]
+    if Path(compiler_paths[0]).resolve() == Path(compiler_paths[1]).resolve():
+        pytest.skip("requires two distinct compiler executables")
+
+    module_paths = []
+    expected_compilers = ("gcc", "clang")
+    try:
+        for compiler, expected in zip(compilers, expected_compilers):
+            monkeypatch.setenv(env_var, compiler)
+            # A separate process would select the compiler from its current environment.
+            build._find_compiler.cache_clear()
+            mod = compile_module_from_src(TEST_MODULE_COMPILER, "test_module", language=language)
+            assert mod.go("hello") == expected
+            module_paths.append(mod.__file__)
+
+            cached_mod = compile_module_from_src(TEST_MODULE_COMPILER, "test_module", language=language)
+            assert cached_mod.__file__ == mod.__file__
+            assert cached_mod.go("hello") == expected
+    finally:
+        build._find_compiler.cache_clear()
+
+    assert module_paths[0] != module_paths[1]
+
+
+def test_compile_module_cache_keys_resolved_compiler_path(fresh_triton_cache, monkeypatch, tmp_path):
+    if os.name != "posix":
+        pytest.skip("requires POSIX executable symlinks")
+
+    compiler_paths = [shutil.which(compiler) for compiler in ("gcc", "clang")]
+    if any(path is None for path in compiler_paths):
+        pytest.skip("requires both gcc and clang")
+    compiler_paths = [path for path in compiler_paths if path is not None]
+
+    module_paths = []
+    original_path = os.environ.get("PATH", "")
+    try:
+        for compiler, compiler_path, expected in zip(("gcc", "clang"), compiler_paths, ("gcc", "clang")):
+            alias_dir = tmp_path / compiler
+            alias_dir.mkdir()
+            (alias_dir / "cc").symlink_to(compiler_path)
+            monkeypatch.setenv("CC", "cc")
+            monkeypatch.setenv("PATH", os.pathsep.join((str(alias_dir), original_path)))
+            build._find_compiler.cache_clear()
+
+            mod = compile_module_from_src(TEST_MODULE_COMPILER, "test_module")
+            assert mod.go("hello") == expected
+            module_paths.append(mod.__file__)
+    finally:
+        build._find_compiler.cache_clear()
+
+    assert module_paths[0] != module_paths[1]
+
+
+def test_custom_build_impl_does_not_require_compiler(fresh_triton_cache, monkeypatch):
+    mod = compile_module_from_src(TEST_MODULE_C, "test_module")
+
+    def custom_impl(name, src, srcdir, library_dirs, include_dirs, libraries):
+        suffix = sysconfig.get_config_var("EXT_SUFFIX")
+        output = Path(srcdir) / f"{name}{suffix}"
+        shutil.copyfile(mod.__file__, output)
+        return str(output)
+
+    monkeypatch.setattr(triton.knobs.build, "impl", custom_impl)
+    monkeypatch.setattr(build, "_find_compiler", lambda language: pytest.fail("custom builder selected a compiler"))
+
+    custom_mod = compile_module_from_src(f"/* custom builder */\n{TEST_MODULE_C}", "test_module")
+    assert custom_mod.go("hello") == "hiya"
 
 
 def test_compile_module_bad_cache(fresh_knobs):
