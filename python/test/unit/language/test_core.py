@@ -4132,36 +4132,38 @@ def _sum_combine(a, b):
 
 
 @pytest.mark.interpreter
-def test_generic_reduction(device):
+@pytest.mark.parametrize("shape, axis, keep_dims", [((512, ), 0, False), ((4, 8), None, False),
+                                                    ((2, 4, 8), None, True)])
+def test_generic_reduction(device, shape, axis, keep_dims):
 
     @triton.jit
-    def var_mean_kernel(X, out_mean, out_var, out_sum0, out_sum1, BLOCK: tl.constexpr):
+    def var_mean_kernel(X, out_mean, out_var, out_sum0, out_sum1, BLOCK: tl.constexpr, SHAPE: tl.constexpr,
+                        AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr):
         xindex = tl.arange(0, BLOCK)
-        x = tl.load(X + xindex)
+        x = tl.reshape(tl.load(X + xindex), SHAPE)
         mean = x
         m2 = tl.zeros_like(x)
         weight = tl.full(x.shape, 1, x.dtype)
         # Test return a tuple and a single value
-        sum0, = tl.reduce((x, ), 0, _sum_combine)
-        sum1 = tl.reduce(x, 0, _sum_combine)
+        sum0, = tl.reduce((x, ), AXIS, _sum_combine, keep_dims=KEEP_DIMS)
+        sum1 = tl.reduce(x, AXIS, _sum_combine, keep_dims=KEEP_DIMS)
         # Test multiple values in a tuple
-        (mean, m2, weight) = tl.reduce((mean, m2, weight), 0, _welford_combine)
-        tl.store(out_mean, mean)
-        tl.store(out_var, m2 / weight)
-        tl.store(out_sum0, sum0)
-        tl.store(out_sum1, sum1)
+        (mean, m2, weight) = tl.reduce((mean, m2, weight), AXIS, _welford_combine, keep_dims=KEEP_DIMS)
+        tl.store(out_mean, tl.reshape(mean, ()))
+        tl.store(out_var, tl.reshape(m2 / weight, ()))
+        tl.store(out_sum0, tl.reshape(sum0, ()))
+        tl.store(out_sum1, tl.reshape(sum1, ()))
 
-    SIZE = 512
-    x = torch.rand(SIZE, device=device)
-    out_mean = torch.empty((), device=device)
-    out_var = torch.empty((), device=device)
-    sum0 = torch.empty((), device=device)
-    sum1 = torch.empty((), device=device)
+    x = torch.rand(shape, device=device)
+    expect_var, expect_mean = torch.var_mean(x, dim=axis, correction=0, keepdim=keep_dims)
+    sum_ref = torch.sum(x, dim=axis, keepdim=keep_dims)
+    out_mean = torch.empty_like(expect_mean)
+    out_var = torch.empty_like(expect_var)
+    sum0 = torch.empty_like(sum_ref)
+    sum1 = torch.empty_like(sum_ref)
 
-    var_mean_kernel[(1, )](x, out_mean, out_var, sum0, sum1, BLOCK=SIZE)
-
-    expect_var, expect_mean = torch.var_mean(x, dim=0, correction=0)
-    sum_ref = torch.sum(x)
+    var_mean_kernel[(1, )](x, out_mean, out_var, sum0, sum1, BLOCK=x.numel(), SHAPE=shape, AXIS=axis,
+                           KEEP_DIMS=keep_dims)
     torch.testing.assert_close(out_mean, expect_mean)
     torch.testing.assert_close(out_var, expect_var)
     torch.testing.assert_close(sum0, sum_ref)
