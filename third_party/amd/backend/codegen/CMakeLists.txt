@@ -8,12 +8,17 @@ set(TRITON_AMD_LLVM_REVISION "unknown" CACHE STRING
     "Independently pinned AMD LLVM revision and build number")
 
 # Compile the option guard against this backend's LLVM so its registry remains
-# independent of the copy linked into Triton's core library.
+# independent of the copy linked into Triton's core library. The MIR DAG builder
+# is built from where it lives rather than copied, since Triton's core library
+# compiles it too; both out-of-directory sources are in llvm-build.yml's path
+# filter so editing them still retriggers the artifact build.
 set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../..")
 add_library(triton_amd_codegen SHARED amdgpu_codegen.cc
+            "${TRITON_SOURCE_DIR}/third_party/amd/lib/Target/MIRDAG/DAGBuilder.cpp"
             "${TRITON_SOURCE_DIR}/lib/Tools/LLVMOptions.cpp")
 target_compile_features(triton_amd_codegen PRIVATE cxx_std_20)
 target_include_directories(triton_amd_codegen PRIVATE
+                           "${TRITON_SOURCE_DIR}"
                            "${TRITON_SOURCE_DIR}/include")
 target_include_directories(triton_amd_codegen SYSTEM PRIVATE
                            ${LLVM_INCLUDE_DIRS})
@@ -49,7 +54,8 @@ endif()
 
 llvm_map_components_to_libnames(TRITON_AMD_LLVM_LIBRARIES
     AMDGPUCodeGen AMDGPUDesc AMDGPUInfo AMDGPUAsmParser AMDGPUUtils
-    IRReader IPO ScalarOpts TransformUtils Analysis CodeGen Target Support)
+    IRReader IPO ScalarOpts TransformUtils Analysis CodeGen MIRParser Target
+    Support)
 target_link_libraries(triton_amd_codegen PRIVATE
                       ${TRITON_AMD_LLVM_LIBRARIES})
 
@@ -68,13 +74,13 @@ set_target_properties(triton_amd_codegen PROPERTIES
 if(APPLE)
   set(TRITON_AMD_EXPORTS "${CMAKE_CURRENT_BINARY_DIR}/amd-codegen.exports")
   file(GENERATE OUTPUT "${TRITON_AMD_EXPORTS}" CONTENT
-      "_triton_amdgpu_assemble\n_triton_amdgpu_compile\n_triton_amdgpu_free\n_triton_amdgpu_revision\n")
+      "_triton_amdgpu_assemble\n_triton_amdgpu_compile\n_triton_amdgpu_free\n_triton_amdgpu_revision\n_triton_amdgpu_translate_mir_to_asm\n_triton_amdgpu_translate_to_mir\n")
   target_link_options(triton_amd_codegen PRIVATE
       "LINKER:-exported_symbols_list,${TRITON_AMD_EXPORTS}")
 elseif(UNIX)
   set(TRITON_AMD_EXPORTS "${CMAKE_CURRENT_BINARY_DIR}/amd-codegen.exports")
   file(GENERATE OUTPUT "${TRITON_AMD_EXPORTS}" CONTENT
-      "{\n  global:\n    triton_amdgpu_assemble;\n    triton_amdgpu_compile;\n    triton_amdgpu_free;\n    triton_amdgpu_revision;\n  local:\n    *;\n};\n")
+      "{\n  global:\n    triton_amdgpu_assemble;\n    triton_amdgpu_compile;\n    triton_amdgpu_free;\n    triton_amdgpu_revision;\n    triton_amdgpu_translate_mir_to_asm;\n    triton_amdgpu_translate_to_mir;\n  local:\n    *;\n};\n")
   target_link_options(triton_amd_codegen PRIVATE
       "LINKER:--version-script,${TRITON_AMD_EXPORTS}"
       "LINKER:--exclude-libs,ALL"

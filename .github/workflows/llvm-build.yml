@@ -8,6 +8,7 @@ on:
       - cmake/llvm-build-info.json
       - cmake/amd-llvm-build-info.json
       - third_party/amd/backend/codegen/**
+      - third_party/amd/lib/Target/MIRDAG/**
       - include/triton/Tools/LLVMOptions.h
       - lib/Tools/LLVMOptions.cpp
   pull_request:
@@ -16,6 +17,7 @@ on:
       - cmake/llvm-build-info.json
       - cmake/amd-llvm-build-info.json
       - third_party/amd/backend/codegen/**
+      - third_party/amd/lib/Target/MIRDAG/**
       - include/triton/Tools/LLVMOptions.h
       - lib/Tools/LLVMOptions.cpp
   workflow_dispatch:
