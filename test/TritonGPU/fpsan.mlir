@@ -511,6 +511,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @cmpf
+  tt.func public @cmpf(%x: tensor<4xf32>, %y: tensor<4xf32>) -> tensor<4xi1> {
+    // CHECK: %[[X:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[Y:.*]] = tti.experimental_fpsan_embed %arg1 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[OUT:.*]] = arith.cmpi slt, %[[X]], %[[Y]] : tensor<4xi32>
+    // CHECK-NOT: arith.cmpf
+    // CHECK: tt.return %[[OUT]] : tensor<4xi1>
+    %out = arith.cmpf olt, %x, %y : tensor<4xf32>
+    tt.return %out : tensor<4xi1>
+  }
+
+  // CHECK-LABEL: @cmpf_ordering
+  tt.func public @cmpf_ordering(%x: tensor<4xf32>, %y: tensor<4xf32>) -> (tensor<4xi1>, tensor<4xi1>) {
+    // CHECK-DAG: %[[TRUE:.*]] = arith.constant dense<true>
+    // CHECK-DAG: %[[FALSE:.*]] = arith.constant dense<false>
+    // CHECK-NOT: arith.cmpf
+    // CHECK: tt.return %[[TRUE]], %[[FALSE]]
+    %ord = arith.cmpf ord, %x, %y : tensor<4xf32>
+    %uno = arith.cmpf uno, %x, %y : tensor<4xf32>
+    tt.return %ord, %uno : tensor<4xi1>, tensor<4xi1>
+  }
+
+  // ueq with NaN is always true. Rewrite to payload equality
+  // before constant folding can erase the comparison.
+  // CHECK-LABEL: @cmpf_nan_constant
+  tt.func public @cmpf_nan_constant(%x: f32) -> i1 {
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: %[[OUT:.*]] = arith.cmpi eq,
+    // CHECK: tt.return %[[OUT]]
+    %nan = arith.constant 0x7FA12345 : f32
+    %out = arith.cmpf ueq, %x, %nan : f32
+    tt.return %out : i1
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @clamp_none
   tt.func public @clamp_none(%x: tensor<4xf32>, %lo: tensor<4xf32>, %hi: tensor<4xf32>) -> tensor<4xf32> {
     // CHECK: %[[X:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>

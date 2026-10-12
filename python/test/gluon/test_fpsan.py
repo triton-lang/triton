@@ -596,6 +596,18 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl
         z = gl.minimum(x, y)
     elif OP == "max":
         z = gl.maximum(x, y)
+    elif OP == "eq":
+        z = x == y
+    elif OP == "ne":
+        z = x != y
+    elif OP == "lt":
+        z = x < y
+    elif OP == "le":
+        z = x <= y
+    elif OP == "gt":
+        z = x > y
+    elif OP == "ge":
+        z = x >= y
     elif OP == "truediv":
         z = x / y
     elif OP == "fdiv":
@@ -778,6 +790,52 @@ def test_binops_payload_semantics(device, op, expected_fn, fresh_knobs):
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = expected_fn(x.cpu().numpy().astype(np.int32, copy=False), y.cpu().numpy().astype(np.int32, copy=False))
     _assert_payload_equal(out_np, exp_np)
+
+
+@pytest.mark.parametrize(
+    "op,expected_fn",
+    [
+        ("eq", np.equal),
+        ("ne", np.not_equal),
+        ("lt", np.less),
+        ("le", np.less_equal),
+        ("gt", np.greater),
+        ("ge", np.greater_equal),
+    ],
+)
+def test_cmpf_payload_semantics(device, op, expected_fn, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device="cuda")
+    g.manual_seed(0)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device="cuda", generator=g)
+    # Include equal pairs, which are unlikely with random inputs.
+    y[::2] = x[::2]
+
+    # Equal NaNs, opposite signed zeros, and finite values with reversed payload order.
+    x_bits = np.array([0x7FA12345, 0x80000000, 0x3F000000, 0xBF000000], dtype=np.uint32).view(np.int32)
+    y_bits = np.array([0x7FA12345, 0x00000000, 0x3F800000, 0xBF800000], dtype=np.uint32).view(np.int32)
+    x[:len(x_bits)] = torch.from_numpy(x_bits).to(device="cuda")
+    y[:len(y_bits)] = torch.from_numpy(y_bits).to(device="cuda")
+    out = torch.empty((n_elements, ), dtype=torch.bool, device="cuda")
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    yw = triton.TensorWrapper(y, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _binop_kernel[grid](xw, yw, out, n_elements, OP=op, BLOCK=BLOCK, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    out_np = out.cpu().numpy()
+    x_payload = _u32_to_i32(_mix_f32_bits_to_payload_u32(x.cpu().numpy()))
+    y_payload = _u32_to_i32(_mix_f32_bits_to_payload_u32(y.cpu().numpy()))
+    exp_np = expected_fn(x_payload, y_payload)
+    np.testing.assert_array_equal(out_np, exp_np)
 
 
 @pytest.mark.parametrize("propagate_nan", [False, True], ids=["none", "all"])
