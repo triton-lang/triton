@@ -190,7 +190,8 @@ void combineWaitOps(ModuleOp moduleOp, bool useAsyncCopy) {
 }
 } // namespace
 
-struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
+struct TritonAMDGPUPipelinePass
+    : impl::TritonAMDGPUPipelineBase<TritonAMDGPUPipelinePass> {
   using Base::Base;
 
   void runOnOperation() override {

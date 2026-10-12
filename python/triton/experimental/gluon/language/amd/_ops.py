@@ -184,7 +184,7 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
             return ttgl.uint8, 0x7F
 
         if a_format == b_format == "e2m1":
-            # Fp4 x Fp4 requries to use the same scale dtype for both operands.
+            # Fp4 x Fp4 requires to use the same scale dtype for both operands.
             other_scale = b_scale if op_idx == 0 else a_scale
             return other_scale.dtype, default_value_by_dtype[other_scale.dtype]
 

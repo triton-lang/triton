@@ -136,7 +136,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUWarpPipeline();
   mlir::registerTritonAMDFoldTrueCmpI();
   mlir::registerTritonAMDGPUFpSanitizer();
-  mlir::triton::amdgpu::registerTritonAMDGPUOptimizeDotOperands();
+  mlir::registerTritonAMDGPUOptimizeDotOperands();
   mlir::registerConSanAMDHooks();
 
   // NVWS passes

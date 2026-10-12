@@ -95,10 +95,9 @@ void init_triton_amd_passes_ttgpuir(py::module_ &m) {
   ADD_PASS_OPTION_WRAPPER_1("add_warp_pipeline_conversion",
                             mlir::triton::AMD::createConvertWarpPipelinePass,
                             const std::string &);
-  ADD_PASS_OPTION_WRAPPER_1(
-      "add_optimize_dot_operands",
-      mlir::triton::amdgpu::createTritonAMDGPUOptimizeDotOperands,
-      const std::string &);
+  ADD_PASS_OPTION_WRAPPER_1("add_optimize_dot_operands",
+                            mlir::createTritonAMDGPUOptimizeDotOperands,
+                            const std::string &);
   m.def("add_hoist_layout_conversions", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUHoistLayoutConversions());
@@ -592,13 +591,10 @@ void init_triton_amd(py::module_ &m) {
       // hold the GIL meanwhile.
       py::call_guard<py::gil_scoped_release>());
 
-  m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
-    mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
-  });
-
-  m.def("add_mfma_schedule_pass", [](llvm::Function *fn) -> bool {
-    return mlir::triton::AMD::runMFMASchedulePass(*fn);
-  });
+  m.def("add_mfma_schedule_pass",
+        [](llvm::Function *fn, const std::string &arch) -> bool {
+          return mlir::triton::AMD::runMFMASchedulePass(*fn, arch);
+        });
 
   auto hipBlas = m.def_submodule("hipblas");
   py::class_<HipblasLtInstance>(hipBlas, "HipblasLt")

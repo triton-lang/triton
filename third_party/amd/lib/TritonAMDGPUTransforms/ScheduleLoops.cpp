@@ -579,7 +579,8 @@ void pipelineLoop(scf::ForOp forOp, int numStages) {
 }
 } // namespace
 
-struct ScheduleLoops : impl::TritonAMDGPUScheduleLoopsBase<ScheduleLoops> {
+struct TritonAMDGPUScheduleLoopsPass
+    : impl::TritonAMDGPUScheduleLoopsBase<TritonAMDGPUScheduleLoopsPass> {
   using Base::Base;
 
   void runOnOperation() override {
