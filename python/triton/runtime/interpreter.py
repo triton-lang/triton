@@ -1561,8 +1561,6 @@ class _InterpreterBoolOp:
         self.tensor_values = []
 
     def __lt__(self, rhs):
-        # Like the compiler, only a compile-time value that decides the result
-        # stops the native chain; runtime tensors are collected and combined.
         rhs.tensor_values = self.tensor_values
         if isinstance(rhs.value, tl.core.base_value) and not isinstance(rhs.value, (tl.constexpr, tl.tuple)):
             rhs.tensor_values.append(rhs.value)
@@ -1619,9 +1617,6 @@ class ASTTransformer(ast.NodeTransformer):
                 args.append(value)
             return ast.Call(func=ast.Name(id="_InterpreterBoolOp", ctx=ast.Load()), args=args, keywords=[])
 
-        # As in visit_Compare, rewrite `a and b` as the native chain
-        # `_InterpreterBoolOp(True) < _InterpreterBoolOp(True, a) < ...` so
-        # operands keep their scope and lazy evaluation order.
         chain = ast.Compare(left=wrap_operand(), ops=[ast.Lt() for _ in node.values],
                             comparators=[wrap_operand(value) for value in node.values])
         return ast.copy_location(
