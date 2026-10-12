@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import builtins
+import copy
+import os
 import time
 import inspect
 import hashlib
@@ -187,6 +189,96 @@ class Autotuner(KernelInterface):
                 print(f"Autotuning failed with {e}")
             return [float("inf"), float("inf"), float("inf")]
 
+    @staticmethod
+    def _available_cpu_count():
+        """Return the number of CPUs available to this process."""
+        process_cpu_count = getattr(os, "process_cpu_count", None)
+        if process_cpu_count is not None:
+            count = process_cpu_count()
+            if count is not None:
+                return max(1, count)
+
+        sched_getaffinity = getattr(os, "sched_getaffinity", None)
+        if sched_getaffinity is not None:
+            try:
+                return max(1, len(sched_getaffinity(0)))
+            except OSError:
+                pass
+
+        return max(1, os.cpu_count() or 1)
+
+    @classmethod
+    def _resolve_num_workers(cls):
+        """Resolve the effective autotuning compile-worker count."""
+        num_workers = knobs.autotuning.compile_workers
+        if num_workers < 0:
+            raise RuntimeError("TRITON_AUTOTUNING_COMPILE_WORKERS must be non-negative")
+        if num_workers == 0:
+            num_workers = min(4, max(1, cls._available_cpu_count() // 2))
+        return num_workers
+
+    def _prepare_compile_args(self, args, config, meta):
+        """Apply a config pre-hook without sharing mutable launch metadata."""
+        current = dict(meta, **config.all_kwargs())
+        if config.pre_hook is None:
+            return args, current
+
+        # Config pre-hooks specialize mutable launch metadata such as tensor
+        # descriptor block shapes. Keep PyTorch values by reference because not
+        # every storage type can be copied and hooks must not mutate payloads.
+        def copy_launch_arg(value):
+            if type(value).__module__.split(".", 1)[0] == "torch":
+                return value
+            return copy.copy(value)
+
+        copied_nargs = {name: copy_launch_arg(value) for name, value in self.nargs.items()}
+        copied_current = {name: copy_launch_arg(value) for name, value in current.items()}
+        full_nargs = {**copied_nargs, **copied_current}
+        config.pre_hook(full_nargs)
+        prepared_args = tuple(copied_nargs.get(name, value) for name, value in zip(self.arg_names, args))
+        return prepared_args, copied_current
+
+    def _compile_config(self, *args, config, **meta):
+        """Compile one autotuning config without running its benchmark."""
+        args, current = self._prepare_compile_args(args, config, meta)
+        current["warmup"] = True
+        self.fn.run(*args, **current)
+
+    def _parallel_bench(self, *args, configs, num_workers, **kwargs):
+        """Compile configs in parallel and benchmark them sequentially."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from ..compiler.errors import CompileTimeAssertionFailure
+        import sysconfig
+
+        # Avoid racing Python's lazy sysconfig initialization in worker threads.
+        sysconfig.get_config_vars()
+
+        timings = {}
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_config = {
+                executor.submit(self._compile_config, *args, config=config, **kwargs): config
+                for config in configs
+            }
+            for future in as_completed(future_to_config):
+                config = future_to_config[future]
+                try:
+                    future.result()
+                except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as exc:
+                    # Do not discard a candidate solely because its speculative
+                    # parallel compile failed. The regular benchmark preserves
+                    # serial autotuning's exception handling and hook behavior.
+                    if knobs.autotuning.print:
+                        print(f"Parallel autotuning compile failed for {config}; retrying during benchmark: {exc}")
+
+                if knobs.autotuning.overlap_bench:
+                    timings[config] = self._bench(*args, config=config, **kwargs)
+
+        if not knobs.autotuning.overlap_bench:
+            timings = {config: self._bench(*args, config=config, **kwargs) for config in configs}
+
+        # Completion order must not change which config wins a timing tie.
+        return {config: timings[config] for config in configs}
+
     def check_disk_cache(self, tuning_key, configs, bench_fn):
         # We can't serialize prehooks, so just give up and run the benchmarks.
         if not tuning_key or any(cfg.pre_hook for cfg in configs):
@@ -251,9 +343,14 @@ class Autotuner(KernelInterface):
                 else:
 
                     def benchmark():
-                        bench_start = time.time()
-                        timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
-                        bench_end = time.time()
+                        num_workers = self._resolve_num_workers()
+                        bench_start = time.perf_counter()
+                        if num_workers > 1 and len(pruned_configs) > 1:
+                            timings = self._parallel_bench(*args, configs=pruned_configs, num_workers=num_workers,
+                                                           **kwargs)
+                        else:
+                            timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                        bench_end = time.perf_counter()
                         self.bench_time = bench_end - bench_start
                         self.cache[key] = builtins.min(timings, key=timings.get)
                         full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
@@ -329,13 +426,25 @@ class Autotuner(KernelInterface):
 
     def warmup(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
-        ret = []
-        for autotune_config in self.prune_configs(kwargs):
-            ret.append(self.fn.warmup(
-                *args,
-                **kwargs,
-                **autotune_config.all_kwargs(),
-            ))
+        pruned_configs = self.prune_configs(kwargs)
+
+        def warmup_config(config):
+            config_args, config_kwargs = self._prepare_compile_args(args, config, kwargs)
+            return self.fn.warmup(*config_args, **config_kwargs)
+
+        num_workers = self._resolve_num_workers()
+        if num_workers > 1 and len(pruned_configs) > 1:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import sysconfig
+
+            sysconfig.get_config_vars()
+            ret = [None] * len(pruned_configs)
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = {executor.submit(warmup_config, config): index for index, config in enumerate(pruned_configs)}
+                for future in as_completed(futures):
+                    ret[futures[future]] = future.result()
+        else:
+            ret = [warmup_config(config) for config in pruned_configs]
         self.nargs = None
         return ret
 
@@ -447,6 +556,13 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     If the environment variable :code:`TRITON_PRINT_AUTOTUNING` is set to
     :code:`"1"`, Triton will print a message to stdout after autotuning each
     kernel, including the time spent autotuning and the best configuration.
+
+    Set :code:`TRITON_AUTOTUNING_COMPILE_WORKERS` above :code:`"1"` to compile
+    independent configurations in parallel while keeping GPU benchmarking
+    sequential. :code:`"0"` selects an affinity-aware worker count. Set
+    :code:`TRITON_AUTOTUNING_OVERLAP_BENCH` to :code:`"1"` to overlap sequential
+    benchmarks with outstanding compilations; its default of :code:`"0"` waits
+    for every compilation before benchmarking.
 
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]
