@@ -30,6 +30,7 @@ def TritonNvidiaGPU_Dialect : Dialect {
   let cppNamespace = "::mlir::triton::nvidia_gpu";
 
   let hasOperationAttrVerify = 1;
+  let hasCanonicalizer = 1;
 
   let description = [{
     Triton Nvidia GPU Dialect.

@@ -182,7 +182,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
       assert(partitionIds.size() == 1 &&
              "aref producer must have exactly one partition");
-      if (producerGroups.count(partitionIds.front())) {
+      if (producerGroups.contains(partitionIds.front())) {
         continue;
       }
       producerGroups.insert(partitionIds.front());
@@ -250,14 +250,8 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
   auto depth = getArefDepth(arefBufTypes[0]);
 
-  SetVector<Operation *> arefUsers;
-  for (auto user : op->getUsers())
-    arefUsers.insert(user);
-  auto sorted = topologicalSort(arefUsers);
-
   ImplicitLocOpBuilder b1(op->getLoc(), op), b2(op->getLoc(), op);
-  auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
-  b2.setInsertionPointAfter(op1);
+  b2.setInsertionPoint(op->getBlock()->getTerminator());
 
   auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
   auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
@@ -298,7 +292,7 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
                    Value barrierAlloc, Value pred) {
   auto newLoadOp = triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
       rewriter, op.getLoc(), op.getDesc(), op.getIndices(), barrierAlloc,
-      op.getResult(), pred);
+      op.getResult(), pred, /*multicast=*/false, op.getCachePolicyAttr());
   assignStageCluster(newLoadOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 };

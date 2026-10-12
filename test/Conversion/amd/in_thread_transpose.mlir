@@ -50,13 +50,13 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 // Verify broadcasted registers in source layout are handled correctly
 // CHECK-LABEL: amd_in_thread_transpose_skinny_shape
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
-#linear1 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 0], [0, 0]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
-#linear2 = #ttg.linear<{register = [[1, 0], [0, 1], [0, 2], [0, 0]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
-#linear3 = #ttg.linear<{register = [[1, 0], [0, 1], [0, 2], [0, 0], [0, 256]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
+#linear2 = #ttg.linear<{register = [[1, 0], [0, 1], [0, 2]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
+#linear3 = #ttg.linear<{register = [[1, 0], [0, 1], [0, 2], [0, 256]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
 
 #blocked2 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [0, 1]}>
-#linear4 = #ttg.linear<{register = [[0, 1], [0, 2], [1, 0], [0, 0]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
-#linear5 = #ttg.linear<{register = [[0, 1], [0, 2], [1, 0], [0, 0], [0, 256]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
+#linear4 = #ttg.linear<{register = [[0, 1], [0, 2], [1, 0]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
+#linear5 = #ttg.linear<{register = [[0, 1], [0, 2], [1, 0], [0, 256]], lane = [[0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], warp = [], block = []}>
 
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory

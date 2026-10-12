@@ -1,4 +1,5 @@
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -561,6 +562,22 @@ public:
     } else {
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
+      // Let K = getShapePerCTA(oldAType).back() and computeBitwidth be the
+      // dot operand bitwidth. Since kWidth = max(32 / minBitwidth, 1),
+      // MMAv2's four K lanes require 4 * max(32 / minBitwidth, 1) <= K.
+      // We have:
+      //   (a) K >= 4;
+      //   (b) minBitwidth >= 128 / K.
+      //
+      // Native operand packing is preserved by the invariant:
+      //   (c) minBitwidth <= computeBitwidth.
+      // Raising it for (b) could violate (c) only if 128 / K > computeBitwidth,
+      // hence K < 128 / computeBitwidth. This contradicts the CUDA frontend's
+      // requirement K >= 256 / computeBitwidth, which also implies (a).
+      minBitwidth = std::max<int64_t>(minBitwidth,
+                                      4 * 32 / getShapePerCTA(oldAType).back());
+      assert(minBitwidth <= oldAType.getElementTypeBitWidth() &&
+             "minBitwidth must not exceed the dot operand bitwidth");
       a = convertDotOperandForMMA(a, 0, minBitwidth, mmaResult.newRetType,
                                   rewriter);
       b = convertDotOperandForMMA(b, 1, minBitwidth, mmaResult.newRetType,
@@ -874,18 +891,34 @@ public:
     // MMA_K = 64 is also not supported when BLOCK_M = 64.
     auto blockK = dotOp.getA().getType().getShape().back() * (isAFP4 ? 2 : 1);
     auto blockM = dotOp.getA().getType().getShape()[0];
-    // mxf4/mxf4nvf4 do not support MN-major operands, so fp4 x fp4 falls
-    // back to mxf8f6f4 if either operand is not K-packed. The mxf8f6f4
-    // shared-memory packing format requires padding for every fp4 operand,
-    // even if the operand is K packed.
-    bool isFp4MMAUsingMxf8f6f4 =
+    bool hasMNMajorFp4Operand =
         isFp4MMA && (!dotOp.getLhsKPack() || !dotOp.getRhsKPack());
+    auto aScaleType = dotOp.getAScale().getType();
+    auto bScaleType = dotOp.getBScale().getType();
+    auto aScaleElemType = aScaleType.getElementType();
+    auto bScaleElemType = bScaleType.getElementType();
+    auto isBlock16Scale = [blockK](RankedTensorType scaleType) {
+      return scaleType.getShape().back() * 16 == blockK;
+    };
+    bool hasUE4M3Scale = isa<Float8E4M3FNType>(aScaleElemType) ||
+                         isa<Float8E4M3FNType>(bScaleElemType);
+    bool hasUE5M3Scale =
+        (aScaleElemType.isInteger(8) && isBlock16Scale(aScaleType)) ||
+        (bScaleElemType.isInteger(8) && isBlock16Scale(bScaleType));
+    // mxf4nvf4 supports UE4M3/UE5M3 scales but not MN-major operands, while
+    // the mxf8f6f4 fallback for MN-major FP4 only supports E8M0 scales.
+    if (hasMNMajorFp4Operand && (hasUE4M3Scale || hasUE5M3Scale))
+      return failure();
+    // mxf4 does not support MN-major operands, so mxfp4 x mxfp4 falls back to
+    // mxf8f6f4 if either operand is not K-packed. The mxf8f6f4 shared-memory
+    // packing format requires padding for every fp4 operand, even if the
+    // operand is K packed.
     bool isMMAv5Fp4PaddedLhs =
-        isFp4MMAUsingMxf8f6f4 ||
+        hasMNMajorFp4Operand ||
         (IsAMixedPrecFp4 && (requiresFp4Padding || blockM == 64 ||
                              blockK == 32 || !dotOp.getLhsKPack()));
     bool isMMAv5Fp4PaddedRhs =
-        isFp4MMAUsingMxf8f6f4 ||
+        hasMNMajorFp4Operand ||
         (IsBMixedPrecFp4 &&
          (requiresFp4Padding || blockK == 32 || !dotOp.getRhsKPack()));
 
@@ -1038,7 +1071,9 @@ static void transposeDotOp(DotScaledOp dotOp) {
   Value result = DotScaledOp::create(
       builder, dotOp.getLoc(), cTransposed.getType(), rhsTransposed,
       lhsTransposed, cTransposed, dotOp.getBScale(), dotOp.getAScale(),
-      dotOp.getBElemType(), dotOp.getAElemType(), dotOp.getFastMath());
+      dotOp.getBElemType(), dotOp.getAElemType(), dotOp.getFastMath(),
+      /*lhs_k_pack=*/dotOp.getRhsKPack(),
+      /*rhs_k_pack=*/dotOp.getLhsKPack());
   Operation *transposedResult =
       TransOp::create(builder, result.getLoc(), result, transOrder);
   dotOp.replaceAllUsesWith(transposedResult);

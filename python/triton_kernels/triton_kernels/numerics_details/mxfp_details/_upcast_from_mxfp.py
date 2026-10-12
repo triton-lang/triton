@@ -6,6 +6,33 @@ from triton_kernels.target_info import cuda_capability_geq
 
 
 @triton.jit
+def upcast_ue8m0_scale(scale, dst_dtype: tl.constexpr, handle_nan: tl.constexpr = True):
+    scale = scale.to(tl.uint8)
+    if dst_dtype == tl.bfloat16 and scale.numel % 2 == 0 and cuda_capability_geq(10, 0):
+        return tl.inline_asm_elementwise(
+            "cvt.rn.bf16x2.ue8m0x2 $0, $1;",
+            constraints="=r,h",
+            args=[scale],
+            dtype=tl.bfloat16,
+            is_pure=True,
+            pack=2,
+        )
+    # E8M0 byte zero is 2**-127, which is subnormal in BF16 and FP32.
+    if dst_dtype == tl.bfloat16:
+        bits = tl.maximum(scale.to(tl.uint16) << 7, 0x0040)
+        scale = bits.to(tl.uint16).to(dst_dtype, bitcast=True)
+    else:
+        bits = scale.to(tl.uint32) << 23
+        if dst_dtype == tl.float32:
+            bits = tl.maximum(bits, 0x00400000)
+        scale = bits.to(tl.float32, bitcast=True)
+    # Saturating callers restore NaNs after clamping instead.
+    if handle_nan:
+        scale = tl.fma(scale, tl.zeros((), scale.dtype), scale)
+    return scale.to(dst_dtype)
+
+
+@triton.jit
 def _upcast_mxfp4_values(tensor, dst_dtype: tl.constexpr):
     tl.static_assert(tensor.dtype == tl.uint8)
     tl.static_assert(dst_dtype == tl.float16 or dst_dtype == tl.bfloat16 or dst_dtype == tl.float32)
@@ -62,13 +89,7 @@ def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
     tl.static_assert(tensor.shape[0] == scale.shape[0])
     tl.static_assert(tensor.shape[1] * 2 == scale.shape[1] * MXFP_BLOCK_SIZE)
 
-    if dst_dtype == tl.bfloat16:
-        dst_scale = (scale.to(tl.uint16) << 7).to(dst_dtype, bitcast=True)
-    else:
-        dst_scale = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
-        if dst_dtype == tl.float16:
-            dst_scale = dst_scale.to(tl.float16)
-
+    dst_scale = upcast_ue8m0_scale(scale, dst_dtype, handle_nan=False)
     dst_tensor = _upcast_mxfp4_values(tensor, dst_dtype)
     dst_tensor = dst_tensor.reshape([tensor.shape[0], scale.shape[1], MXFP_BLOCK_SIZE])
     dst_scale = dst_scale.reshape([scale.shape[0], scale.shape[1], 1])
@@ -103,6 +124,65 @@ def upcast_nvfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
     out_tensor = dst_tensor * dst_scale
     out_tensor = out_tensor.reshape([tensor.shape[0], tensor.shape[1] * 2])
     return out_tensor
+
+
+@triton.jit
+def _mxfp4_maximum_code(values):
+    # Pack explicit groups before the SIMD reduction; inline-asm pack ordering
+    # alone does not guarantee that elements belong to the same scale block.
+    even, odd = tl.split(values.reshape(values.shape[0], values.shape[1], 2, 2, 2))
+    byte0, byte2 = tl.split(even)
+    byte1, byte3 = tl.split(odd)
+    packed = (byte0.to(tl.uint32) | (byte1.to(tl.uint32) << 8)
+              | (byte2.to(tl.uint32) << 16) | (byte3.to(tl.uint32) << 24))
+    # Each halfword holds one magnitude code. Native packed maxima avoid
+    # expanding all sixteen FP4 magnitudes into separate scalar reductions.
+    word_maximum = tl.inline_asm_elementwise(
+        """{
+        .reg .b32 a, b;
+        and.b32 a, $1, 0x00070007;
+        shr.u32 b, $1, 4;  and.b32 b, b, 0x00070007; max.u16x2 a, a, b;
+        shr.u32 b, $1, 8;  and.b32 b, b, 0x00070007; max.u16x2 a, a, b;
+        shr.u32 b, $1, 12; and.b32 b, b, 0x00070007; max.u16x2 a, a, b;
+        shr.u32 b, a, 16;
+        and.b32 a, a, 7;
+        max.u32 $0, a, b;
+        }""",
+        constraints="=r,r",
+        args=[packed],
+        dtype=tl.uint32,
+        is_pure=True,
+        pack=1,
+    )
+    # Keep the reduction visible to prevent duplicating it into both scale layouts.
+    return tl.max(word_maximum, 2)
+
+
+@triton.jit
+def nvfp4_to_mxfp8_tile(values, scales):
+    # FP4 magnitude codes are ordered. Reduce before decoding so scale selection
+    # does not duplicate the full activation decode in a second register layout.
+    maximum_code = _mxfp4_maximum_code(values.reshape(values.shape[0], scales.shape[1], 8))
+    maximum_bits = (maximum_code << 22) + 0x3F000000
+    maximum = tl.where(maximum_code < 2, maximum_code.to(tl.float32) * 0.5, maximum_bits.to(tl.float32, bitcast=True))
+    maximum *= tl.abs(scales.to(tl.float32))
+    maximum = tl.max(maximum.reshape(values.shape[0], scales.shape[1] // 2, 2), 2)
+    dequant_scale = maximum / 448.0
+    scale_bits = (dequant_scale.to(tl.uint32, bitcast=True) + 0x007FFFFF) & 0x7F800000
+    rounded_scale = scale_bits.to(tl.float32, bitcast=True)
+    inverse_scale = tl.where(rounded_scale == 0, 0, 1.0 / rounded_scale)
+
+    # The MX scale is a power of two, so folding its inverse into each NVFP4
+    # block scale preserves FP32 rounding while avoiding per-value scale work.
+    block_scale = scales.to(tl.float32).reshape(values.shape[0], scales.shape[1] // 2, 2)
+    block_scale = (block_scale * inverse_scale[:, :, None]).reshape(values.shape[0], scales.shape[1], 1)
+    # Raw FP4 values fit exactly in FP16; promote before any scale arithmetic.
+    # This also lets the compiler use matrix loads for the packed input tile.
+    decoded = _upcast_mxfp4_values(values, tl.float16).to(tl.float32)
+    decoded = decoded.reshape(values.shape[0], scales.shape[1], 16)
+    quantized = (decoded * block_scale).reshape(values.shape[0], values.shape[1] * 2).to(tl.float8e4nv)
+    # Outer tensor/row scales remain in the matmul epilogue.
+    return quantized, (scale_bits >> 23).to(tl.uint8)
 
 
 # fmt: off
@@ -165,12 +245,8 @@ def _upcast_from_mxfp(
     scale = tl.load(scale_ptr_base + scale_offsets, mask=full_scale_mask)
 
     # Upcast the scale to the destination type.
-    if scale_is_ocp and dst_dtype == tl.bfloat16:
-        dst_scale = (scale.to(tl.uint16) << 7).to(dst_dtype, bitcast=True)
-    elif scale_is_ocp:
-        dst_scale = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
-        if dst_dtype == tl.float16:
-            dst_scale = dst_scale.to(tl.float16)
+    if scale_is_ocp:
+        dst_scale = upcast_ue8m0_scale(scale, dst_dtype, handle_nan=False)
     else:
         dst_scale = scale.to(dst_dtype)
 

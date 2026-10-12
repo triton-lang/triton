@@ -39,6 +39,7 @@ struct AllocateSharedMemoryNv
     mlir::triton::gpu::attachAllocationSizeAndOffsetAttr(mod, allocation);
   }
 };
+
 } // namespace
 
 namespace mlir::triton::nvidia_gpu {

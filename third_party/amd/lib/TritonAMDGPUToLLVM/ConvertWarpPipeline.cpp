@@ -129,7 +129,7 @@ static LogicalResult validatePipelinedForBody(scf::ForOp forOp) {
             "non-warp-pipeline scf.execute_region inside pipelined_for body");
       ++numClusters;
     } else if (isWarpPipelineIgnorableBarrier(&op)) {
-      if (existingBarrierMap.count(numClusters))
+      if (existingBarrierMap.contains(numClusters))
         return op.emitError("multiple pre-existing barriers between pipeline "
                             "stages; insert a dummy stage instead");
       existingBarrierMap[numClusters] = &op;
@@ -144,7 +144,8 @@ static LogicalResult validatePipelinedForBody(scf::ForOp forOp) {
   if (numClusters < 2)
     return forOp.emitError(
         "pipelined_for body must contain at least two pipeline stages");
-  if (existingBarrierMap.count(0) && existingBarrierMap.count(numClusters))
+  if (existingBarrierMap.contains(0) &&
+      existingBarrierMap.contains(numClusters))
     return forOp.emitError("pipelined_for body has both top-of-loop and "
                            "bottom-of-loop pre-existing barriers");
   return success();
@@ -210,6 +211,15 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
   const int N = clusterInfo.size();
   const int maxDist = circular ? N : N - 1;
 
+  // A descriptor can change between iterations. Preserve same-iteration
+  // disjointness proofs only for pairs that do not wrap around the loop.
+  SmallVector<BlockInfo> previousIterationInfo;
+  if (circular) {
+    previousIterationInfo.assign(clusterInfo.begin(), clusterInfo.end());
+    for (BlockInfo &info : previousIterationInfo)
+      info.invalidateIterationInfo();
+  }
+
   // Modular wrap; a no-op in linear mode where indices stay in range.
   auto wrap = [&](int i) -> int { return circular ? (i % N + N) % N : i; };
 
@@ -236,7 +246,9 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
       const int barrierLoc = (dist == 1) ? dst : wrap(dst - 1);
       if (isCovered(src, barrierLoc))
         continue;
-      if (!clusterInfo[src].isIntersected(
+      const BlockInfo &sourceInfo =
+          src + dist >= N ? previousIterationInfo[src] : clusterInfo[src];
+      if (!sourceInfo.isIntersected(
               clusterInfo[dst], mlir::triton::AMD::membarFilter, allocation))
         continue;
       bars[barrierLoc] = true;
@@ -425,9 +437,8 @@ private:
 
     // Normally, we don't expect a pipelined loop begins with a barrier
     // but sometimes required by memory prefetching pattern.
-    auto topBar = existingBarrierMap.find(0);
     auto bottomBar = existingBarrierMap.find(numClusters);
-    bool hasTopBarrier = topBar != existingBarrierMap.end();
+    bool hasTopBarrier = existingBarrierMap.contains(0);
     bool hasBottomBarrier = bottomBar != existingBarrierMap.end();
     if (bottomBar != existingBarrierMap.end()) {
       // validatePipelinedForBody guarantees we cannot have both top and

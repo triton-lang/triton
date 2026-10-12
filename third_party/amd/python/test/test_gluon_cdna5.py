@@ -1,5 +1,6 @@
 import re
 import math
+import contextlib
 import itertools
 import pytest
 import torch
@@ -8,12 +9,17 @@ from itertools import product
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes
+from triton._internal_testing import get_current_target, is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
 from triton.experimental.gluon.language.amd.cdna5 import get_wmma_scale_layout, PartitionedSharedLayout, _valid_dtype_combinations
 from triton._C.libtriton.gluon_ir import make_cga_layout
+
+
+def skip_if_gfx1250_strict_wmma():
+    if get_current_target().arch == "gfx1250-strict":
+        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
 
 
 @gluon.jit
@@ -95,6 +101,8 @@ def get_test_gemm_shapes():
 def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
+    if get_current_target().arch == "gfx1250-strict" and not (a_dtype == "float32" and k_dim == 4):
+        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
 
     a_dtype = str_to_triton_dtype(a_dtype).name
     b_dtype = str_to_triton_dtype(b_dtype).name
@@ -146,7 +154,6 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
     def scaled_upcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
                                  SCALE_FACTOR: ttgl.constexpr, COMPACT_SCALE: ttgl.constexpr):
         packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0])
-        compact_layout: ttgl.constexpr = ttgl.BlockedLayout([1, BLOCK_K // SCALE_FACTOR], [8, 4], [4, 1], [1, 0])
         unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
 
         offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, packed_layout))
@@ -155,7 +162,8 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
         x = ttgl.load(x_ptr + x_offsets)
 
         if COMPACT_SCALE:
-            scale_layout: ttgl.constexpr = compact_layout
+            scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_scaled_upcast_fp4_scale_layout(
+                x, SCALE_FACTOR, ttgl.bfloat16, axis=1)
             scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
         else:
             scale_layout: ttgl.constexpr = unpacked_layout
@@ -185,7 +193,10 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
     pgm = scaled_upcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, compact_scale,
                                           num_warps=4)
 
-    assert pgm.asm["amdgcn"].count("v_cvt_scale_pk8_bf16_fp4") == BLOCK_K // 32
+    if pgm.metadata.arch == "gfx1250-strict":
+        assert "v_pk_mul_f32" in pgm.asm["amdgcn"]
+    else:
+        assert pgm.asm["amdgcn"].count("v_cvt_scale_pk8_bf16_fp4") == BLOCK_K // 32
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -243,7 +254,10 @@ def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
     pgm = scaled_upcast_fp4_bf16_gemm_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_N, BLOCK_K, SCALE_FACTOR,
                                                     num_warps=4)
 
-    assert "v_cvt_scale_pk8_bf16_fp4" in pgm.asm["amdgcn"]
+    if pgm.metadata.arch == "gfx1250-strict":
+        assert "v_pk_mul_f32" in pgm.asm["amdgcn"]
+    else:
+        assert "v_cvt_scale_pk8_bf16_fp4" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -295,7 +309,10 @@ def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
 
     pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, ttgl_out, num_warps=1)
 
-    assert f"v_cvt_scale_pk8_{out_dtype}_{in_mnemonic}" in pgm.asm["amdgcn"]
+    if pgm.metadata.arch == "gfx1250-strict":
+        assert ("v_pk_mul_f32" if out_dtype == "bf16" else "v_cvt_pk_f16_f32") in pgm.asm["amdgcn"]
+    else:
+        assert f"v_cvt_scale_pk8_{out_dtype}_{in_mnemonic}" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch_out)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
@@ -338,9 +355,115 @@ def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
 
     pgm = scaled_upcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, num_warps=1)
 
-    assert "v_cvt_scale_pk8_bf16_fp8" in pgm.asm["amdgcn"]
+    if pgm.metadata.arch == "gfx1250-strict":
+        assert "v_pk_mul_f32" in pgm.asm["amdgcn"]
+    else:
+        assert "v_cvt_scale_pk8_bf16_fp8" in pgm.asm["amdgcn"]
     y_ref = (x_ref * scale_ref).to(torch.bfloat16)
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize("dtype,ttgl_dtype,in_suffix", [
+    (torch.float16, ttgl.float16, "f16"),
+    (torch.bfloat16, ttgl.bfloat16, "bf16"),
+    (torch.float32, ttgl.float32, "f32"),
+], ids=lambda v: getattr(v, "__name__", str(v)))
+@pytest.mark.parametrize("BLOCK_K", [64, 128, 256], ids=lambda v: f"BLOCK_K{v}")
+def test_runtime_scaled_downcast_fp4(dtype, ttgl_dtype, in_suffix, BLOCK_K):
+    # Inverse of test_runtime_scaled_upcast_fp4 (compact scale): pack unpacked
+    # high-precision values back to fp4 through the gfx1250 pk8 instruction.
+
+    @gluon.jit
+    def scaled_downcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                   SCALE_FACTOR: ttgl.constexpr):
+        compact_layout: ttgl.constexpr = ttgl.BlockedLayout([1, BLOCK_K // SCALE_FACTOR], [8, 4], [4, 1], [1, 0])
+        unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+
+        # `input` is the unpacked tile (twice as wide as the packed output).
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, unpacked_layout))
+        offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, unpacked_layout))
+        x = ttgl.load(x_ptr + offs_m[:, None] * BLOCK_K + offs_k[None, :])
+
+        scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
+        offs_scale_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, compact_layout))
+        offs_scale_k = ttgl.arange(0, scale_k, layout=ttgl.SliceLayout(0, compact_layout))
+        scale = ttgl.load(scale_ptr + offs_scale_m[:, None] * scale_k + offs_scale_k[None, :])
+
+        y = ttgl.amd.cdna5.scaled_downcast(x, scale, "e2m1", axis=1)
+        out_layout: ttgl.constexpr = y.type.layout
+        offs_out_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, out_layout))
+        offs_out_k = ttgl.arange(0, BLOCK_K // 2, layout=ttgl.SliceLayout(0, out_layout))
+        ttgl.store(y_ptr + offs_out_m[:, None] * (BLOCK_K // 2) + offs_out_k[None, :], y)
+
+    BLOCK_M = 16
+    SCALE_FACTOR = 32
+    torch.manual_seed(42)
+
+    # `packed` is the fp4 answer; `unpacked_ref` its per-element float values.
+    packed, unpacked_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, "e2m1")
+    scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
+    # input = answer * scale, so downcast(input / scale) recovers the fp4 bytes.
+    x = (unpacked_ref * scale_ref).to(dtype).contiguous()
+    y = torch.empty((BLOCK_M, BLOCK_K // 2), dtype=torch.uint8, device="cuda")
+
+    pgm = scaled_downcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, num_warps=4)
+
+    assert f"v_cvt_scalef32_pk8_fp4_{in_suffix}" in pgm.asm["amdgcn"]
+    torch.testing.assert_close(y.cpu(), packed, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize("fp8_dtype", ["e4m3", "e5m2"])
+@pytest.mark.parametrize("dtype,ttgl_dtype,in_suffix", [
+    (torch.float16, ttgl.float16, "f16"),
+    (torch.bfloat16, ttgl.bfloat16, "bf16"),
+    (torch.float32, ttgl.float32, "f32"),
+], ids=lambda v: getattr(v, "__name__", str(v)))
+def test_runtime_scaled_downcast_fp8(fp8_dtype, dtype, ttgl_dtype, in_suffix):
+    # Cover the eight v_cvt_scalef32_pk8 fp8 downcast instructions:
+    # {f16,bf16,f32} input x {fp8 (e4m3), bf8 (e5m2)} output.
+    # fp8 downcast is elementwise, but the scale is compact along `axis` (one
+    # E8M0 byte per SCALE_FACTOR values), so the 8 values of each pk8 group
+    # share a single scale.
+    torch_fp8 = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[fp8_dtype]
+    out_mnemonic = {"e4m3": "fp8", "e5m2": "bf8"}[fp8_dtype]
+
+    @gluon.jit
+    def scaled_downcast_fp8_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                   SCALE_FACTOR: ttgl.constexpr, FORMAT: ttgl.constexpr):
+        compact_layout: ttgl.constexpr = ttgl.BlockedLayout([1, BLOCK_K // SCALE_FACTOR], [8, 4], [4, 1], [1, 0])
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))
+        offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, layout))
+        x = ttgl.load(x_ptr + offs_m[:, None] * BLOCK_K + offs_k[None, :])
+
+        scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
+        offs_scale_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, compact_layout))
+        offs_scale_k = ttgl.arange(0, scale_k, layout=ttgl.SliceLayout(0, compact_layout))
+        scale = ttgl.load(scale_ptr + offs_scale_m[:, None] * scale_k + offs_scale_k[None, :])
+
+        y = ttgl.amd.cdna5.scaled_downcast(x, scale, FORMAT, axis=1)
+        ttgl.store(y_ptr + offs_m[:, None] * BLOCK_K + offs_k[None, :], y)
+
+    BLOCK_M = 16
+    BLOCK_K = 64
+    SCALE_FACTOR = 32
+    torch.manual_seed(42)
+
+    # `v` is the fp8 answer bytes; `v_ref` its float values.
+    v, v_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, fp8_dtype)
+    scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
+    # input = answer * scale, so downcast(input / scale) recovers the fp8 bytes.
+    x = (v_ref * scale_ref).to(dtype).contiguous()
+    y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch_fp8, device="cuda")
+
+    pgm = scaled_downcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, fp8_dtype,
+                                            num_warps=4)
+
+    assert f"v_cvt_scalef32_pk8_{out_mnemonic}_{in_suffix}" in pgm.asm["amdgcn"]
+    torch.testing.assert_close(y.view(torch.uint8).cpu(), v, atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("a_dtype,b_dtype,k_dim", get_test_gemm_variants())
@@ -349,6 +472,8 @@ def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
 def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
+    if get_current_target().arch == "gfx1250-strict" and not (a_dtype == "float32" and k_dim == 4):
+        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
 
     torch.manual_seed(42)
 
@@ -457,6 +582,7 @@ def gemm_3d_kernel(a_ptr, b_ptr, c_ptr,  #
 ])
 @pytest.mark.parametrize("BLOCK_B,BLOCK_M,BLOCK_N,BLOCK_K", [(4, 32, 32, 32)])
 def test_compile_gemm_3d(a_dtype, b_dtype, k_dim, BLOCK_B, BLOCK_M, BLOCK_N, BLOCK_K):
+    skip_if_gfx1250_strict_wmma()
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
 
@@ -490,6 +616,8 @@ def test_compile_gemm_3d(a_dtype, b_dtype, k_dim, BLOCK_B, BLOCK_M, BLOCK_N, BLO
 @pytest.mark.parametrize("BLOCK_B,BLOCK_M,BLOCK_N,BLOCK_K", [(4, 32, 32, 32)])
 @pytest.mark.parametrize("B,M,N,K", [(16, 256, 256, 256), (16, 250, 250, 250)])
 def test_runtime_gemm_3d(k_dim, BLOCK_B, BLOCK_M, BLOCK_N, BLOCK_K, B, M, N, K):
+    if get_current_target().arch == "gfx1250-strict":
+        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
     assert BLOCK_K >= k_dim
     assert B % BLOCK_B == 0
 
@@ -706,6 +834,7 @@ def gemm_async_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.parametrize("RESOLVE_PARTITION_CONFLICTS", [True, False])
 def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, ASYNC_LOAD_TYPE, B_K_CONTIG,
                                       RESOLVE_PARTITION_CONFLICTS):
+    skip_if_gfx1250_strict_wmma()
     if RESOLVE_PARTITION_CONFLICTS:
         if ASYNC_LOAD_TYPE == "ASYNC_COPY":
             pytest.skip("AsyncCopy is not supported with partition shared layouts")
@@ -782,6 +911,7 @@ def test_compile_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, AS
 @pytest.mark.parametrize("RESOLVE_PARTITION_CONFLICTS", [True, False])
 def test_runtime_gemm_async_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, M, N, K, ASYNC_LOAD_TYPE, B_K_CONTIG,
                                       RESOLVE_PARTITION_CONFLICTS):
+    skip_if_gfx1250_strict_wmma()
     if triton.cdiv(K, BLOCK_K) < NUM_BUFFERS:
         pytest.skip("Skip tests where K/BLOCK_K < NUM_BUFFERS")
 
@@ -912,6 +1042,7 @@ def gemm_async_kernel(a_ptr, b_ptr, c_ptr,  #
 ])
 @pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "TDM"])
 def test_compile_gemm_async(BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim, ASYNC_LOAD_TYPE):
+    skip_if_gfx1250_strict_wmma()
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
 
@@ -957,6 +1088,7 @@ def test_compile_gemm_async(BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim, 
 ])
 @pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "TDM"])
 def test_runtime_gemm_async(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim, ASYNC_LOAD_TYPE):
+    skip_if_gfx1250_strict_wmma()
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
     if ASYNC_LOAD_TYPE == "ASYNC_COPY" and any([x % 16 != 0 for x in [M, N, K]]):
@@ -1058,9 +1190,9 @@ def get_test_mxfp_variants():
     # Add non-square test cases
     [(32, 64, 128), (64, 32, 128)])
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
 @pytest.mark.parametrize("scale_factor", [16, 32])
-@pytest.mark.parametrize("with_a_scale, with_b_scale", itertools.product([True, False], repeat=2))
+@pytest.mark.parametrize("with_a_scale, with_b_scale", list(itertools.product([True, False], repeat=2)))
 def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor,
                          with_a_scale, with_b_scale):
     instr_m, instr_n = wmma_shape
@@ -1145,8 +1277,12 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
         b_scale_ref = 1.0
 
     c = torch.zeros((M, N), dtype=torch.float32).cuda()
-    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, instr_m, instr_n, transposed,
-                        num_warps=4)
+    is_restricted = get_current_target().arch == "gfx1250-strict"
+    with pytest.raises(RuntimeError, match="PassManager::run failed") if is_restricted else contextlib.nullcontext():
+        pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, instr_m, instr_n,
+                            transposed, num_warps=4)
+    if is_restricted:
+        return
 
     no_scales = not with_a_scale and not with_b_scale
 
@@ -1168,45 +1304,38 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
 @pytest.mark.parametrize("scale_factor", [16, 32])
-def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor):
+@pytest.mark.parametrize("ctas_per_cga", [(2, 1), (1, 2), (2, 2), (4, 1), (2, 4)])
+def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor, ctas_per_cga):
+    skip_if_gfx1250_strict_wmma()
 
     @gluon.constexpr_function
-    def _get_wmma_layout(cga_layout=[[0, 1], [1, 0]], packed=False):
+    def _get_wmma_layout(cga_layout, packed=False):
         instr_shape = [16, 16, 64] if packed else [16, 16, 128]
         return ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]], instr_shape=instr_shape,
-                                      cga_layout=cga_layout)
+                                      cga_layout=[list(basis) for basis in cga_layout])
 
     @gluon.constexpr_function
-    def _get_wmma_operand_layout(operand_index, dtype, transposed=False):
-        cga_layout = [[0, 0], [1, 0]] if operand_index == 0 else [[0, 1], [0, 0]]
-        if transposed:
-            cga_layout = [list(reversed(row)) for row in cga_layout]
+    def _get_wmma_operand_layout(cga_layout, operand_index, dtype):
         wmma_layout = _get_wmma_layout(cga_layout, packed=(dtype == "e2m1"))
         return ttgl.DotOperandLayout(operand_index, wmma_layout, k_width=16)
-
-    @gluon.constexpr_function
-    def _get_wmma_scale_layout(operand_index, dtype, shape, scale_factor):
-        transposed = True if operand_index == 1 else False
-        operand_layout = _get_wmma_operand_layout(operand_index, dtype, transposed)
-        return get_wmma_scale_layout(operand_layout, shape, scale_factor)
 
     @gluon.jit
     def kernel(c_ptr, a_ptr, a_scale_ptr, b_ptr, b_scale_ptr,  #
                a_type: ttgl.constexpr, b_type: ttgl.constexpr,  #
                BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
-               SCALE_FACTOR: ttgl.constexpr):
+               SCALE_FACTOR: ttgl.constexpr, CGA_LAYOUT: ttgl.constexpr):
         DIV_FACTOR_A: ttgl.constexpr = 2 if a_type == "e2m1" else 1
         DIV_FACTOR_B: ttgl.constexpr = 2 if b_type == "e2m1" else 1
 
-        acc_layout: ttgl.constexpr = _get_wmma_layout()
-        a_layout: ttgl.constexpr = _get_wmma_operand_layout(0, a_type)
-        b_layout: ttgl.constexpr = _get_wmma_operand_layout(1, b_type)
-        a_scale_layout: ttgl.constexpr = _get_wmma_scale_layout(0, a_type, [BLOCK_M, BLOCK_K // SCALE_FACTOR],
-                                                                SCALE_FACTOR)
-        b_scale_layout: ttgl.constexpr = _get_wmma_scale_layout(1, b_type, [BLOCK_N, BLOCK_K // SCALE_FACTOR],
-                                                                SCALE_FACTOR)
+        acc_layout: ttgl.constexpr = _get_wmma_layout(CGA_LAYOUT)
+        a_layout: ttgl.constexpr = _get_wmma_operand_layout(CGA_LAYOUT, 0, a_type)
+        b_layout: ttgl.constexpr = _get_wmma_operand_layout(CGA_LAYOUT, 1, b_type)
+        a_scale_layout: ttgl.constexpr = get_wmma_scale_layout(a_layout, [BLOCK_M, BLOCK_K // SCALE_FACTOR],
+                                                               SCALE_FACTOR)
+        b_scale_layout: ttgl.constexpr = get_wmma_scale_layout(b_layout, [BLOCK_N, BLOCK_K // SCALE_FACTOR],
+                                                               SCALE_FACTOR)
 
         a_offs = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_layout))[:, None] * (BLOCK_K // DIV_FACTOR_A) + \
                  ttgl.arange(0, BLOCK_K // DIV_FACTOR_A, layout=ttgl.SliceLayout(0, a_layout))[None, :]
@@ -1238,7 +1367,11 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
         pytest.skip(f"Invalid type combination: {a_type}, {a_scale_type}, {b_type}, {b_scale_type}")
 
     torch.manual_seed(42)
-    M, N = M * 2, N * 2
+    num_ctas = math.prod(ctas_per_cga)
+    M *= ctas_per_cga[0]
+    N *= ctas_per_cga[1]
+    # Tuples so that the layout can be passed as a constexpr kernel argument.
+    cga_layout = tuple(map(tuple, make_cga_layout(list(ctas_per_cga), list(ctas_per_cga), [1, 0])))
     a, a_ref = create_mxfp_operand(0, M, K, a_type)
     b, b_ref = create_mxfp_operand(1, K, N, b_type)
     a_scale, a_scale_ref = create_mxfp_scale(0, M, K, a_scale_type, scale_factor)
@@ -1248,7 +1381,8 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
     a, a_scale = a.cuda(), a_scale.cuda()
     b, b_scale = b.cuda(), b_scale.cuda()
     c = torch.zeros((M, N), dtype=torch.float32).cuda()
-    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, num_warps=4, num_ctas=4)
+    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, cga_layout, num_warps=4,
+                        num_ctas=num_ctas)
     if scale_factor == 32:
         assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
     else:
@@ -1262,9 +1396,10 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
 @pytest.mark.parametrize("scale_factor", [16, 32])
 def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor):
+    skip_if_gfx1250_strict_wmma()
 
     @gluon.constexpr_function
     def _slice_layout(layout, indices):
@@ -1354,6 +1489,7 @@ def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type, a_scale_type, b_sca
 @pytest.mark.parametrize("hasScale", [True, False])
 @pytest.mark.parametrize("scale_dtype, scale_factor", [("e8m0", 32), ("e4m3", 16)])
 def test_amd_wmma_scaled_tdm(M, N, K, mxfp_type, hasScale, scale_dtype, scale_factor):
+    skip_if_gfx1250_strict_wmma()
 
     @triton.jit
     def scaled_wmma_tdm_triton_kernel(a_base, stride_am, stride_ak, a_scale, b_base, stride_bk, stride_bn, b_scale, out,
@@ -1682,13 +1818,13 @@ def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM
     if ASYNC_LOAD_TYPE in {"DEVICE_TDM", "HOST_TDM"}:
         pattern = {"tensor_load_to_lds", "s_wait_tensorcnt 0x0"}
     else:
-        ASYNC_LOAD_TYPE == "ASYNC_COPY"
+        assert ASYNC_LOAD_TYPE == "ASYNC_COPY"
         pattern = {"global_load_async_to_lds", "s_wait_asynccnt 0x0"}
     for p in pattern:
         assert re.search(p, amdgcn), f"Can't find {p} in amdgcn"
 
 
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(2, 2), (32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
 @pytest.mark.parametrize("NUM_BUFFERS", [2])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("ASYNC_LOAD_TYPE", ["ASYNC_COPY", "DEVICE_TDM", "HOST_TDM", "DEVICE_TDM_PARTITIONED"])
@@ -2019,7 +2155,7 @@ def tensor_device_tdm_multi_cta_load_and_store_kernel(a_ptr, b_ptr, M, N,  #
 def test_runtime_tensor_load_and_store_multi_cta(M, N, BLOCK_M, BLOCK_N, NUM_WARPS, CGALayout, USE_TDM_LOAD,
                                                  USE_TDM_STORE):
     torch.manual_seed(42)
-    # Overallocate to catch out of bounds writes, the padding of our input is random and the pading of the output is 0
+    # Overallocate to catch out of bounds writes, the padding of our input is random and the padding of the output is 0
     # to catch out of bounds writes.
     overallocation_factor = 4
     a = torch.randint(0x0, 0xFFFF, (M * overallocation_factor, N), dtype=torch.uint16)
@@ -2279,7 +2415,7 @@ def test_compile_tensor_descriptor_prefetch_nd(dtype, ndim, INNER_BLOCK, SPECULA
             "PREFETCH_SPECULATIVE": "constexpr",
         }
         constexprs = {
-            # For tuples we need to specifiy the parameter index
+            # For tuples we need to specify the parameter index
             **{(2, i): STRIDES[i]
                for i in range(ndim)},
             **{(3, i): BLOCK_SHAPE[i]
@@ -2554,6 +2690,7 @@ def mxgemm_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, str
 @pytest.mark.parametrize("DTYPE_A", ["float8_e5m2", "float8_e4m3", "float4"])
 @pytest.mark.parametrize("DTYPE_B", ["float8_e5m2", "float8_e4m3", "float4"])
 def test_compile_mxgemm(BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B):
+    skip_if_gfx1250_strict_wmma()
     scale_block = 32
 
     triton_dtype_converter = {'float8_e5m2': "fp8e5", "float8_e4m3": "fp8e4nv", "float4": "u8"}
@@ -2594,6 +2731,7 @@ def init_mxfp_data(dtype, d0: int, d1: int):
 @pytest.mark.parametrize("DTYPE_A", ["e5m2", "e4m3", "e2m1"])
 @pytest.mark.parametrize("DTYPE_B", ["e5m2", "e4m3", "e2m1"])
 def test_runtime_mxgemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B):
+    skip_if_gfx1250_strict_wmma()
     scale_block = 32
 
     torch.manual_seed(0)
@@ -2907,6 +3045,7 @@ def scaled_wmma_scale_preshuffle(a_base, stride_am, stride_ak, a_scale, b_base, 
 @pytest.mark.parametrize("type_b", ["e5m2", "e2m1", "e4m3"])
 @pytest.mark.parametrize("TRANSPOSED_WMMA", [True, False])
 def test_compile_wmma_scale_preshuffle(M, N, K, type_a, type_b, TRANSPOSED_WMMA):
+    skip_if_gfx1250_strict_wmma()
     dtype_converter = {'e5m2': "fp8e5", "e4m3": "fp8e4nv", "e2m1": "u8"}
 
     signature = {
@@ -2938,6 +3077,7 @@ def test_compile_wmma_scale_preshuffle(M, N, K, type_a, type_b, TRANSPOSED_WMMA)
 @pytest.mark.parametrize("type_b", ["e5m2", "e2m1", "e4m3"])
 @pytest.mark.parametrize("TRANSPOSED_WMMA", [True, False])
 def test_runtime_wmma_scale_preshuffle(M, N, K, type_a, type_b, TRANSPOSED_WMMA):
+    skip_if_gfx1250_strict_wmma()
 
     def pack_scale(x):
         PRESHUFFLE_FACTOR = 64
@@ -3817,6 +3957,43 @@ def test_compile_cluster_barrier_wait():
     assert "s_barrier_wait -3" in amdgcn
 
 
+@gluon.jit(noinline=True)
+def ws_noinline_barrier_helper(smem, layout: ttgl.constexpr):
+    smem.store(ttgl.arange(0, 128, layout))
+    smem.store(smem.load(layout) + 1)
+
+
+@gluon.jit
+def ws_noinline_barrier_worker(smem):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    ws_noinline_barrier_helper(smem, layout)
+
+
+@gluon.jit
+def ws_noinline_barrier_default():
+    pass
+
+
+@gluon.jit
+def ws_noinline_barrier_kernel():
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+    # Two worker partitions use different barriers while calling the same helper. This keeps its barrier handle variable instead of allowing it to fold into a constant
+    ttgl.warp_specialize([
+        (ws_noinline_barrier_default, ()),
+        (ws_noinline_barrier_worker, (smem.index(0), )),
+        (ws_noinline_barrier_worker, (smem.index(1), )),
+    ], [4, 4])
+
+
+def test_compile_warp_specialize_noinline_barrier():
+    k = triton.compile(src=gluon._runtime.GluonASTSource(ws_noinline_barrier_kernel, {}, {}),
+                       target=GPUTarget("hip", 'gfx1250', 32))
+    assert re.search(r"call .*@\S+_ws\(.*ptr addrspace\(3\) @nbar", k.asm["llir"])
+    amdgcn = k.asm["amdgcn"]
+    assert "s_barrier_join m0" in amdgcn
+    assert "s_barrier_signal m0" in amdgcn
+
+
 @gluon.jit
 def cluster_barrier_arrive_and_wait_kernel():
     ttgl.amd.cdna5.cluster.arrive()
@@ -4269,6 +4446,7 @@ def tdm_gather_multi_cta_kernel(inp_ptr, out_ptr, src_row_indices_ptr, M_inp, N_
     idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
     src_row_indices = ttgl.load(src_row_indices_ptr + idx_offs)
 
+    inp_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(inp_desc, add_offsets=[0, SRC_COL_OFFSET], clamp_bounds=True)
     ttgl.amd.cdna5.tdm.async_gather(inp_desc, src_row_indices, smem)
     ttgl.amd.cdna5.tdm.async_wait(0)
 
@@ -4978,6 +5156,7 @@ def gemm_3d_cga_split_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("num_ctas", [2, 4])
 def test_runtime_gemm_3d_multi_cta(num_ctas):
+    skip_if_gfx1250_strict_wmma()
     BLOCK_M = BLOCK_N = 32
     BLOCK_K = 64
     num_warps = 4

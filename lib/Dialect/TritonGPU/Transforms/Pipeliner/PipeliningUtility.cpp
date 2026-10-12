@@ -1,7 +1,9 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -205,9 +207,28 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   }
 
-  op->emitOpError("pipeliner doesn't know how to predicate this op.");
-  llvm::report_fatal_error("Fatal pipeliner error");
-  return op;
+  // General fallback: wrap the op in an scf.if gated on the predicate.
+  rewriter.setInsertionPoint(op);
+  Location loc = op->getLoc();
+  SmallVector<Type> resultTypes(op->getResultTypes());
+  auto ifOp = scf::IfOp::create(rewriter, loc, resultTypes, pred);
+  Block *thenBlock = rewriter.createBlock(&ifOp.getThenRegion());
+  op->moveBefore(thenBlock, thenBlock->end());
+  rewriter.setInsertionPointToEnd(thenBlock);
+  scf::YieldOp::create(rewriter, loc, op->getResults());
+  Block *elseBlock = rewriter.createBlock(&ifOp.getElseRegion());
+  rewriter.setInsertionPointToEnd(elseBlock);
+  SmallVector<Value> poisonResults;
+  for (Type ty : resultTypes) {
+    poisonResults.push_back(ub::PoisonOp::create(rewriter, loc, ty));
+  }
+  scf::YieldOp::create(rewriter, loc, poisonResults);
+  for (auto [oldRes, newRes] : llvm::zip(op->getResults(), ifOp.getResults())) {
+    oldRes.replaceUsesWithIf(newRes, [&](OpOperand &use) {
+      return use.getOwner() != ifOp.thenYield();
+    });
+  }
+  return ifOp;
 }
 
 Operation *mlir::triton::wrapInMaskOp(RewriterBase &rewriter, Operation *op,
@@ -437,7 +458,7 @@ void mlir::triton::combineRedundantWaitOps(
         createWait) {
   llvm::MapVector<Operation *, Operation *> toDelete;
   for (Operation *waitOp : waitOps) {
-    if (toDelete.count(waitOp))
+    if (toDelete.contains(waitOp))
       continue;
     StringRef waitName = waitOp->getName().getStringRef();
     auto getNum = [](Operation *op) {
@@ -791,7 +812,8 @@ static Operation *getUseOfPipelinedOp(
     topLevelUsers.insert(users.begin(), users.end());
   }
   for (Operation *topLevelUser : topLevelUsers) {
-    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
+    assert(schedule.contains(topLevelUser) &&
+           "op user not found in the schedule");
     if (!selectedUser || shouldPrefer(topLevelUser, selectedUser)) {
       selectedUser = topLevelUser;
     }
