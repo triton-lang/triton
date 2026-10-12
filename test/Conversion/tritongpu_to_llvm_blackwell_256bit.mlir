@@ -100,16 +100,16 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 #blocked_fp8 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // FP8-LABEL: @bf16_to_fp8e4
-  // PACKED: cvt.rn.satfinite.e4m3x2.bf16x2 $0, $1;", "=h,r"
-  // LEGACY: cvt.rn.satfinite.e4m3x2.f32
+  // PACKED: nvvm.convert.bf16x2.to.f8x2 {{.*}} {rnd = #nvvm.fp_rnd_mode<rn>, sat = #nvvm.sat_mode<satfinite>} : vector<2xbf16> -> vector<2xi8>(f8E4M3FN)
+  // LEGACY: nvvm.convert.f32x2.to.f8x2 {{.*}} {rnd = #nvvm.fp_rnd_mode<rn>, sat = #nvvm.sat_mode<satfinite>} : vector<2xi8>(f8E4M3FN)
   tt.func private @bf16_to_fp8e4(%in: tensor<64xbf16, #blocked_fp8>) -> tensor<64xf8E4M3FN, #blocked_fp8> {
     %out = tt.fp_to_fp %in, rounding = rtne : tensor<64xbf16, #blocked_fp8> -> tensor<64xf8E4M3FN, #blocked_fp8>
     tt.return %out : tensor<64xf8E4M3FN, #blocked_fp8>
   }
 
   // FP8-LABEL: @bf16_to_fp8e5
-  // PACKED: cvt.rn.satfinite.e5m2x2.bf16x2 $0, $1;", "=h,r"
-  // LEGACY: cvt.rn.satfinite.e5m2x2.f32
+  // PACKED: nvvm.convert.bf16x2.to.f8x2 {{.*}} {rnd = #nvvm.fp_rnd_mode<rn>, sat = #nvvm.sat_mode<satfinite>} : vector<2xbf16> -> vector<2xi8>(f8E5M2)
+  // LEGACY: nvvm.convert.f32x2.to.f8x2 {{.*}} {rnd = #nvvm.fp_rnd_mode<rn>, sat = #nvvm.sat_mode<satfinite>} : vector<2xi8>(f8E5M2)
   tt.func private @bf16_to_fp8e5(%in: tensor<64xbf16, #blocked_fp8>) -> tensor<64xf8E5M2, #blocked_fp8> {
     %out = tt.fp_to_fp %in, rounding = rtne : tensor<64xbf16, #blocked_fp8> -> tensor<64xf8E5M2, #blocked_fp8>
     tt.return %out : tensor<64xf8E5M2, #blocked_fp8>
@@ -156,15 +156,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
   // FP4-LABEL: @fp4_to_fp16
   // FP4-NOT: cvt.rn.bf16x2.e2m1x2
-  // FP16-NATIVE: .reg .b8 b<4>;
-  // FP16-NATIVE-SAME: mov.b32 {b0, b1, b2, b3}, $4;
-  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $0, b0;
-  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $1, b1;
-  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $2, b2;
-  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $3, b3;
-  // FP16-LEGACY-NOT: cvt.rn.f16x2.e2m1x2
+  // FP16-NATIVE-COUNT-4: nvvm.convert.f4x2.to.f16x2 {{.*}} : i8(f4E2M1FN) -> vector<2xf16>
+  // FP16-LEGACY-NOT: nvvm.convert.f4x2.to.f16x2
   // FP16-LEGACY: cvt.rn.f16x2.e4m3x2
-  // FP16-LEGACY-NOT: cvt.rn.f16x2.e2m1x2
+  // FP16-LEGACY-NOT: nvvm.convert.f4x2.to.f16x2
   // FP4-NOT: cvt.rn.bf16x2.e2m1x2
   tt.func private @fp4_to_fp16(%in: tensor<128xi8, #packed_fp4>) -> tensor<256xf16, #unpacked_fp4> {
     %out = ttg.fp4_to_fp %in {axis = 0 : i32} : tensor<128xi8, #packed_fp4> -> tensor<256xf16, #unpacked_fp4>

@@ -21,19 +21,27 @@ public:
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
-  int getWarpSize() const;
+  int getWarpSize() const { return targetFeatures.getWarpSize(); }
 
-  int getSharedMemorySize() const;
+  int getSharedMemorySize() const {
+    return targetFeatures.getSharedMemorySize();
+  }
 
   int getSharedMemoryBanks() const override;
 
-  size_t getSharedMemoryPartitionSize() const override;
+  size_t getSharedMemoryPartitionSize() const override {
+    return targetFeatures.getSharedMemoryPartitionSize();
+  }
 
-  bool supportMaximumMinimum() const override;
+  bool supportMaximumMinimum() const override {
+    return targetFeatures.supportMaximumMinimum();
+  }
 
-  bool supportDppBroadcast() const;
+  bool supportDppBroadcast() const {
+    return targetFeatures.supportDppBroadcast();
+  }
 
-  bool isGFX1250Strict() const;
+  bool isGFX1250Strict() const { return targetFeatures.isGFX1250Strict(); }
 
   Value getClusterCTAId(RewriterBase &rewriter, Location loc) const override;
 
@@ -111,40 +119,62 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
-  bool supportBitwidth16Elementwise() const override;
-  bool supportBitwidth32Elementwise() const override;
+  bool supportBitwidth16Elementwise() const override {
+    return targetFeatures.supportBitwidth16Elementwise();
+  }
+  bool supportBitwidth32Elementwise() const override {
+    return targetFeatures.supportBitwidth32Elementwise();
+  }
 
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
 
   // Returns true if the target supports per lane addresses into LDS for
   // direct-to-lds loads. Some architectures (e.g. GFX9) do not support
   // scattering and instead have to write warp coalesced into LDS
-  bool supportsDirectToLdsScatter() const;
+  bool supportsDirectToLdsScatter() const {
+    return targetFeatures.supportsDirectToLdsScatter();
+  }
 
   // Some architectures (GFX9) require alias information on direct-to-lds loads
   // and loads from LDS so LLVM does not add conservative waits between those
-  // ops. For such case we ensure syncronization between data hazards via
+  // ops. For such case we ensure synchronization between data hazards via
   // ttg.async_wait
-  bool requiresAliasInfoForAsyncOps() const;
-  bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
-  bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const;
-  bool supportsBufferLoadToLocal() const;
+  bool requiresAliasInfoForAsyncOps() const {
+    return targetFeatures.requiresAliasInfoForAsyncOps();
+  }
+  bool supportsDirectToLdsLoadBitWidth(int bitWidth) const {
+    return targetFeatures.supportsDirectToLdsLoadBitWidth(bitWidth);
+  }
+  bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
+    return targetFeatures.supportsDirectFromLdsStoreBitWidth(bitWidth);
+  }
+  bool supportsBufferLoadToLocal() const {
+    return targetFeatures.supportsBufferLoadToLocal();
+  }
 
   // Whether this target uses asyncmark/wait_asyncmark intrinsics for
   // async memory ops synchronization instead of waitcnt-based intrinsics waits.
-  bool useAsyncMarks() const;
+  bool useAsyncMarks() const { return targetFeatures.useAsyncMarks(); }
 
-  bool supportsMultiCTALaunch() const;
-  bool supportsMulticast() const;
-  unsigned getMaxMulticastMaskPopcount() const;
-  bool supportsTDM() const;
-  bool supportsClusterLoadBitWidth(int biwWidth) const;
+  bool supportsMultiCTALaunch() const {
+    return targetFeatures.supportsMultiCTALaunch();
+  }
+  bool supportsMulticast() const { return targetFeatures.supportsMulticast(); }
+  unsigned getMaxMulticastMaskPopcount() const {
+    return targetFeatures.getMaxMulticastMaskPopcount();
+  }
+  bool supportsTDM() const { return targetFeatures.supportsTDM(); }
+  bool supportsClusterLoadBitWidth(int bitWidth) const {
+    return targetFeatures.supportsClusterLoadBitWidth(bitWidth);
+  }
 
   // Whether this target supports buffer atomic read-modify-write (RMW)
   // operations. This gates all buffer RMW conversions (BUFFER_ATOMIC_ADD,
   // _AND, _OR, _XOR, _UMIN, _UMAX, _SWAP, _ADD_F32, _PK_ADD_F16, etc.).
   // CAS (BUFFER_ATOMIC_CMPSWAP) is handled separately.
-  bool supportsBufferAtomicRMW() const;
+  bool supportsBufferAtomicRMW() const {
+    return targetFeatures.supportsBufferAtomicRMW();
+  }
   // Additional per-type gate for buffer atomic FADD. Integer RMW ops (ADD,
   // AND, etc.) work on i32/i64 universally, but float FADD has ISA-specific
   // type restrictions for BUFFER_ATOMIC_ADD_{F32,F64} and
@@ -153,19 +183,35 @@ public:
   //   - RDNA3: BUFFER_ATOMIC_ADD_F32 only
   //   - RDNA4: no BUFFER_ATOMIC_ADD_F64
   //   - CDNA4, GFX1250: all float types supported (GFX1250 adds PK_ADD_BF16)
-  bool supportsBufferAtomicFadd(mlir::Type elementType) const;
+  bool supportsBufferAtomicFadd(mlir::Type elementType) const {
+    return targetFeatures.supportsBufferAtomicFadd(elementType);
+  }
   // Returns the cache policy (cpol) immediate for buffer atomic instructions.
   // When hasUsers is true, sets SC0/TH_ATOMIC_RETURN to return pre-op value.
   // On gfx1250, also sets SCOPE_DEV for device-wide visibility.
-  int32_t getBufferAtomicCachePolicy(bool hasUsers) const;
+  int32_t getBufferAtomicCachePolicy(bool hasUsers) const {
+    return targetFeatures.getBufferAtomicCachePolicy(hasUsers);
+  }
 
-  bool supportsWaveId() const;
-  bool supportsPermlaneSwap() const;
-  bool supportsCvtPkScalePk8() const;
-  bool supportsCvtPkScalePk8Upcast() const;
-  bool supportsCvtPkScalePk8Block16() const;
-  bool supportsHwScaledUpcast() const;
-  bool supportsHwScaledDowncast() const;
+  bool supportsWaveId() const { return targetFeatures.supportsWaveId(); }
+  bool supportsPermlaneSwap() const {
+    return targetFeatures.supportsPermlaneSwap();
+  }
+  bool supportsCvtPkScalePk8() const {
+    return targetFeatures.supportsCvtPkScalePk8();
+  }
+  bool supportsCvtPkScalePk8Upcast() const {
+    return targetFeatures.supportsCvtPkScalePk8Upcast();
+  }
+  bool supportsCvtPkScalePk8Block16() const {
+    return targetFeatures.supportsCvtPkScalePk8Block16();
+  }
+  bool supportsHwScaledUpcast() const {
+    return targetFeatures.supportsHwScaledUpcast();
+  }
+  bool supportsHwScaledDowncast() const {
+    return targetFeatures.supportsHwScaledDowncast();
+  }
 
   // Returns the hardware-specific tiles for shared memory loads and stores.
   // The returned pair is in the format {LoadTile, StoreTile}.

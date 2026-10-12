@@ -141,9 +141,8 @@ void populateAmdFpSanPatterns(RewritePatternSet &patterns) {
       patterns.getContext());
 }
 
-class TritonAMDGPUFpSanitizerPass
-    : public impl::TritonAMDGPUFpSanitizerBase<TritonAMDGPUFpSanitizerPass> {
-public:
+struct TritonAMDGPUFpSanitizerPass
+    : impl::TritonAMDGPUFpSanitizerBase<TritonAMDGPUFpSanitizerPass> {
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     populateAmdFpSanPatterns(patterns);

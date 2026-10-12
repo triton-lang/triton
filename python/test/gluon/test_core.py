@@ -4045,7 +4045,8 @@ def test_packed_arith_reduction(dtype):
     torch.testing.assert_close(out_b, b.sum(dim=1), atol=0, rtol=0)
     suffix = {torch.float32: "f32x2", torch.float16: "f16x2", torch.bfloat16: "bf16x2"}[dtype]
     assert "ttng.packed_arith add" in compiled.asm["ttgir"]
-    assert f"add.{suffix}" in compiled.asm["ptx"]
+    modifier = "" if dtype == torch.float32 else ".rn"
+    assert f"add{modifier}.{suffix}" in compiled.asm["ptx"]
     if dtype == torch.float32:
         assert "prmt.b32" not in compiled.asm["ptx"]
 
@@ -4118,7 +4119,7 @@ def test_packed_arith(op, dtype):
     torch.testing.assert_close(ref, out, atol=tolerance, rtol=tolerance)
 
     suffix = {torch.float32: "f32x2", torch.float16: "f16x2", torch.bfloat16: "bf16x2"}[dtype]
-    modifier = ".rn" if op_name == "fma" else ""
+    modifier = ".rn" if op_name == "fma" or (dtype != torch.float32 and op_name in ("add", "sub")) else ""
     assert f"{op_name}{modifier}.{suffix}" in compiled.asm["ptx"]
     assert f"ttng.packed_arith {op_name}" in compiled.asm["ttgir"]
 

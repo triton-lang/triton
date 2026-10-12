@@ -28,6 +28,7 @@ from ._common import (
     matmul_launch_metadata,
     compute_pids,
     output_mx_scale_store_ptr,
+    round_f32_to_tf32,
 )
 
 
@@ -65,9 +66,17 @@ def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
 
 
 @triton.jit
-def round_f32_to_tf32(x: tl.tensor):
-    ASM: tl.constexpr = "cvt.rn.tf32.f32 $0, $1;" if cuda_capability_geq(9, 0) else "cvt.rna.tf32.f32 $0, $1;"
-    return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
+def _scaled_add(a, a_scale, b, b_scale=1):
+    a_scaled = a * a_scale
+    b_scaled = b * b_scale
+    result = a_scaled + b_scaled
+    # Preserve narrower products' rounding before the addition widens them.
+    if a_scaled.dtype == result.dtype:
+        result = tl.fma(a, a_scale, b_scaled)
+    elif b_scaled.dtype == result.dtype:
+        result = tl.fma(b, b_scale, a_scaled)
+    return result
+
 
 _matmul_repr = make_matmul_repr("_p_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
@@ -242,6 +251,14 @@ def _p_matmul(
         SUBTILE_FACTOR: tl.constexpr = EPILOGUE_SUBTILE
     EPILOGUE_BLOCK_N: tl.constexpr = BLOCK_N // SUBTILE_FACTOR
     OUT_BLOCK_N: tl.constexpr = EPILOGUE_BLOCK_N // ACTIVATION_REDUCTION_N
+    # Fuse alpha with the residual when activation and gamma are absent.
+    FUSE_ALPHA: tl.constexpr = OutAcc is not None and Gammas is None and ACTIVATION_FN is None and out_alpha is not None
+    # Preserve separate scale/bias rounding for dense sub-tiles.
+    FUSE_TENSOR_SCALE: tl.constexpr = (
+        (XTensorScale is not None or WTensorScale is not None)
+        and XScale is None and WScale is None and B is not None and Betas is None
+        and (is_out_microscaled or SUBTILE_FACTOR == 1)
+    )
     yN = N // ACTIVATION_REDUCTION_N
 
     num_blocks = batch_size * useful_grid_m * grid_n * SPLIT_K
@@ -537,10 +554,11 @@ def _p_matmul(
                     mask=offs_w_tensor_scale_n < N,
                     other=0.0,
                 )
-            if SWAP_XW:
-                acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
-            else:
-                acc *= x_tensor_scales[:, None] * w_tensor_scales[None, :]
+            if not FUSE_TENSOR_SCALE:
+                if SWAP_XW:
+                    acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
+                else:
+                    acc *= x_tensor_scales[:, None] * w_tensor_scales[None, :]
 
         # ------------------------------------------------------------
         # epilogue
@@ -608,6 +626,12 @@ def _p_matmul(
         else:
             w_scale = load_scale(WScale)
 
+        if FUSE_TENSOR_SCALE:
+            if SWAP_XW:
+                acc = _scaled_add(acc, w_tensor_scales[:, None] * x_tensor_scales[None, :], bias[:, None])
+            else:
+                acc = _scaled_add(acc, x_tensor_scales[:, None] * w_tensor_scales[None, :], bias[None, :])
+
         accs = (acc,)
         biases = (bias,)
 
@@ -643,13 +667,18 @@ def _p_matmul(
 
         for a_i in tl.static_range(len(accs)):
             acc_tile = accs[a_i]
-            acc_tile *= x_scale * w_scale
 
             if SWAP_XW:
                 acc_tile = acc_tile.T
 
-            acc_tile = tl.fma(biases[a_i][None, :], betas[:, None], acc_tile)
-            if out_alpha is not None:
+            if not FUSE_TENSOR_SCALE:
+                if Betas is None:
+                    # Preserve the scale-plus-bias rounding when beta is implicit.
+                    acc_tile = _scaled_add(acc_tile, x_scale * w_scale, biases[a_i][None, :])
+                else:
+                    acc_tile *= x_scale * w_scale
+                    acc_tile = tl.fma(biases[a_i][None, :], betas[:, None], acc_tile)
+            if out_alpha is not None and not FUSE_ALPHA:
                 acc_tile *= out_alpha
 
             if ACTIVATION_FN is not None:
@@ -658,8 +687,6 @@ def _p_matmul(
             else:
                 tl.static_assert(ACTIVATION_REDUCTION_N == 1, "Activation reduction must be 1 if no activation fn is provided")
                 out = acc_tile
-
-            out *= gammas[:, None]
 
             if OutAcc is not None:
                 tl.static_assert(not USE_SCATTER_TMA)
@@ -674,7 +701,6 @@ def _p_matmul(
                     off_kz = pid_k * batch_size + start_z1
                     acc = Y.load([off_kz, off_m1, out_off_n])
                     acc = acc.reshape(out.shape)
-                    out += acc * load_scale(ScalePtr)
                 else:
                     offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                     mask_n = offs_y_n < yN
@@ -682,7 +708,16 @@ def _p_matmul(
                     AccPtrs = YPtr + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                     mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
                     acc = tl.load(AccPtrs, mask=mask, other=0.0)
-                    out += acc * load_scale(ScalePtr)
+                if Gammas is not None:
+                    out = _scaled_add(out, gammas[:, None], acc, load_scale(ScalePtr))
+                elif FUSE_ALPHA:
+                    out = _scaled_add(out, out_alpha, acc, load_scale(ScalePtr))
+                else:
+                    # Preserve FP32 promotion for low-precision activations.
+                    out *= gammas[:, None]
+                    out = _scaled_add(acc, load_scale(ScalePtr), out)
+            else:
+                out *= gammas[:, None]
 
             if MASK_ACC:
                 out = tl.where(mask_m[:, None], out, 0.0)

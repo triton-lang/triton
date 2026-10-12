@@ -156,11 +156,9 @@ public:
 
     // Aux functions
     auto f32ToTF32 = [&](Value value) -> Value {
-      return ElementwiseInlineAsmOp::create(
-                 rewriter, dotOp.getLoc(), value.getType(),
-                 "cvt.rna.tf32.f32 $0, $1;", "=r,r",
-                 /*isPure=*/true, /*pack=*/1, ArrayRef<Value>{value})
-          .getResult()[0];
+      return ExternElementwiseOp::create(
+          rewriter, dotOp.getLoc(), value.getType(), ValueRange{value}, "", "",
+          "llvm.nvvm.f2tf32.rna", /*pure=*/true);
     };
     auto add = [&](Value a, Value b) -> Value {
       return arith::AddFOp::create(rewriter, dotOp.getLoc(), a, b);

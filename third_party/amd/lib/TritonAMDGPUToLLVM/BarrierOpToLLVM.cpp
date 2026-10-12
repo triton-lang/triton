@@ -69,7 +69,7 @@ struct ArriveBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
     auto count = adaptor.getCount();
-    // NOTE: The LLVM intrisic expects an i64_ty for count (update value)
+    // NOTE: The LLVM intrinsic expects an i64_ty for count (update value)
     // But count cannot be more than 32bits according to ISA docs.
     Value priorState = ROCDL::DsAtomicBarrierArriveRtnOp::create(
         rewriter, loc, i64_ty, smemObj.getBase(), b.i64_val(count), {}, {}, {});

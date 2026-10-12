@@ -626,15 +626,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: st.shared::cta.b32
     // CHECK: bar.warp.sync
     // CHECK: llvm.cond_br
-    // CHECK: llvm.inline_asm has_side_effects {{.*}} "tensormap.replace.tile.global_address.shared::cta.b1024.b64 [ $0 + 0 ], $1;"
-    // CHECK-NOT: tensormap.replace.tile.rank
-    // CHECK: tensormap.replace.tile.box_dim.shared::cta.b1024.b32 [ $0 + 0 ], 0x0, $1;
-    // CHECK: tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [ $0 + 0 ], 0x0, $1;
-    // CHECK: tensormap.replace.tile.element_stride.shared::cta.b1024.b32 [ $0 + 0 ], 0x0, $1;
-    // CHECK: tensormap.replace.tile.elemtype.shared::cta.b1024.b32 [ $0 + 0 ], 0x3;
-    // CHECK-NOT: tensormap.replace.tile.interleave_layout
-    // CHECK: tensormap.replace.tile.swizzle_mode.shared::cta.b1024.b32 [ $0 + 0 ], 0x2;
-    // CHECK-NOT: tensormap.replace.tile.fill_mode
+    // CHECK: nvvm.tensormap.replace field = global_address{{.*}} : !llvm.ptr<3>, i64
+    // CHECK-NOT: nvvm.tensormap.replace field = rank
+    // CHECK: nvvm.tensormap.replace field = box_dim[0]
+    // CHECK: nvvm.tensormap.replace field = global_dim[0]
+    // CHECK: nvvm.tensormap.replace field = element_stride[0]
+    // CHECK: nvvm.tensormap.replace field = elemtype
+    // CHECK-NOT: nvvm.tensormap.replace field = interleave_layout
+    // CHECK: nvvm.tensormap.replace field = swizzle_mode
+    // CHECK-NOT: nvvm.tensormap.replace field = fill_mode
     // CHECK: tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [ $0 + 0 ], [ $1 + 0 ], 0x80;
     ttng.tensormap_create %arg1, %arg0, [%c256_i32], [%arg2], [], [%c1_i32] {elem_type = 3 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 2 : i32, allocation.offset = 0 : i32} : (!tt.ptr<i8>, !tt.ptr<i16>, i32, i32, i32) -> ()
     tt.return
@@ -653,19 +653,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: st.shared::cta.b32
     // CHECK: bar.warp.sync
     // CHECK: llvm.cond_br {{.*}}, ^{{bb[0-9]+}}, ^[[COPY:bb[0-9]+]]
-    // CHECK: llvm.inline_asm has_side_effects {{.*}} "tensormap.replace.tile.global_address.shared::cta.b1024.b64 [ $0 + 0 ], $1;"
-    // CHECK: tensormap.replace.tile.rank.shared::cta.b1024.b32 [ $0 + 0 ], 0x1;
-    // CHECK: tensormap.replace.tile.box_dim.shared::cta.b1024.b32 [ $0 + 0 ], 0x0, $1;
-    // CHECK: tensormap.replace.tile.box_dim.shared::cta.b1024.b32 [ $0 + 0 ], 0x1, $1;
-    // CHECK: tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [ $0 + 0 ], 0x0, $1;
-    // CHECK: tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [ $0 + 0 ], 0x1, $1;
-    // CHECK: tensormap.replace.tile.global_stride.shared::cta.b1024.b64 [ $0 + 0 ], 0x0, $1;
-    // CHECK: tensormap.replace.tile.element_stride.shared::cta.b1024.b32 [ $0 + 0 ], 0x0, $1;
-    // CHECK: tensormap.replace.tile.element_stride.shared::cta.b1024.b32 [ $0 + 0 ], 0x1, $1;
-    // CHECK: tensormap.replace.tile.elemtype.shared::cta.b1024.b32 [ $0 + 0 ], 0x3;
-    // CHECK: tensormap.replace.tile.interleave_layout.shared::cta.b1024.b32 [ $0 + 0 ], 0x1;
-    // CHECK: tensormap.replace.tile.swizzle_mode.shared::cta.b1024.b32 [ $0 + 0 ], 0x2;
-    // CHECK: tensormap.replace.tile.fill_mode.shared::cta.b1024.b32 [ $0 + 0 ], 0x1;
+    // CHECK: nvvm.tensormap.replace field = global_address{{.*}} : !llvm.ptr<3>, i64
+    // CHECK: nvvm.tensormap.replace field = rank
+    // CHECK: nvvm.tensormap.replace field = box_dim[0]
+    // CHECK: nvvm.tensormap.replace field = box_dim[1]
+    // CHECK: nvvm.tensormap.replace field = global_dim[0]
+    // CHECK: nvvm.tensormap.replace field = global_dim[1]
+    // CHECK: nvvm.tensormap.replace field = global_stride[0]{{.*}} : !llvm.ptr<3>, i64
+    // CHECK: nvvm.tensormap.replace field = element_stride[0]
+    // CHECK: nvvm.tensormap.replace field = element_stride[1]
+    // CHECK: nvvm.tensormap.replace field = elemtype
+    // CHECK: nvvm.tensormap.replace field = interleave_layout
+    // CHECK: nvvm.tensormap.replace field = swizzle_mode
+    // CHECK: nvvm.tensormap.replace field = fill_mode
     // CHECK: ^[[COPY]]:
     // CHECK: bar.warp.sync
     // CHECK: tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [ $0 + 0 ], [ $1 + 0 ], 0x80;
