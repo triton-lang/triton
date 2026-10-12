@@ -53,6 +53,10 @@ constexpr int kBarrierBaseCaptures = 3;
 // exist and the memory type has buffers).
 constexpr int kBarrierTrackingCapturesPerMemType = 2;
 
+// asyncCopyIssueAges (only when required by the target and the module has
+// shared-memory buffers to track).
+constexpr int kAsyncCopyIssueAgeCaptures = 1;
+
 // The lock variable (always present).
 constexpr int kFixedCaptures = 1;
 
@@ -65,10 +69,13 @@ constexpr int kCaptureSizeBytes = 8;
 /// \p hasMBarriers       Whether mbarriers exist in the module.
 /// \p hasClusterBarriers Whether cluster barriers exist in the module.
 /// \p numCommitKinds     Number of distinct commit kinds required.
+/// \p hasAsyncProxyFenceTracking Whether async-proxy fences are tracked.
+/// \p hasAsyncCopyIssueAges Whether async-copy issue ages are tracked.
 inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
                                       bool hasClusterBarriers,
                                       int numCommitKinds,
-                                      bool hasAsyncProxyFenceTracking) {
+                                      bool hasAsyncProxyFenceTracking,
+                                      bool hasAsyncCopyIssueAges) {
   int perMemType = kCapturesPerMemType * numActiveMemTypes;
   int barrierCaptures =
       hasMBarriers || hasClusterBarriers ? kBarrierBaseCaptures : 0;
@@ -80,7 +87,8 @@ inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
                 (hasMBarriers ? kProxyFenceBarrierCaptures : 0)
           : 0;
   return perMemType + barrierCaptures + proxyFenceCaptures + kFixedCaptures +
-         numCommitKinds;
+         numCommitKinds +
+         (hasAsyncCopyIssueAges ? kAsyncCopyIssueAgeCaptures : 0);
 }
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
@@ -255,6 +263,15 @@ struct AuxDataMap {
   // intra-CTA.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
   bool hasAsyncCopyMbarriers = false;
+
+  // scratch, <C x 2 x P x i8>
+  // Commit age of the most recently issued async copy, per CTA and logical
+  // thread: global to shared in direction 0, shared to global in direction 1.
+  // Entries are 0 if no copy has been issued, -1 if uncommitted, and positive
+  // for committed copies (1 is the newest group; ages saturate at 127).
+  // Updated when copies are issued or groups are committed. Waits do not clear
+  // these entries, so ConSan can use the recorded ages at subsequent waits.
+  RegionToValueMap asyncCopyIssueAges;
 
   // State-lane plans and analysis-derived runtime-base, state-mask, and CTA
   // cases for each memdesc. bufferRegions preserves the ordered region list

@@ -408,6 +408,12 @@ AMD hooks additionally cover:
 - AMD async waits clear `AsyncCp` and `AsyncCpRead` entries beyond the same
   pending-count threshold, transferring write visibility for loads and read
   visibility for stores.
+- Async loads and stores can complete out of order relative to each other. An
+  `amdg.async_wait` with a nonzero `num_inst` may leave copies issued earlier
+  incomplete even when copies issued later in the opposite direction have
+  completed. ConSan accounts for this by treating the older copies as incomplete
+  while the wait leaves copies of the opposite direction outstanding, and
+  reporting accesses that conflict with them.
 - TDM wait variants for `TmaStore` commit counts.
 - Ordered TDM commit kinds, using the self-column exclusion described above.
 
