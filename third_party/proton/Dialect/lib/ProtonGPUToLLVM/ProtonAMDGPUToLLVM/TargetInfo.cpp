@@ -2,7 +2,6 @@
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "third_party/amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/MathExtras.h"
@@ -53,58 +52,50 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
   return b.mul(globalTimeVal, b.i64_val(10));
 }
 
-// The helpers below read the CDNA (gfx940-942, gfx950) wave-placement fields
-// using the symbolic HW_REG_* names, which LLVM's AMDGPU AsmParser accepts on
-// those targets and which document exactly which register is read.
+// Reads `size` bits starting at bit `offset` of hardware register `id` via
+// s_getreg_b32. The intrinsic takes the instruction's packed simm16 operand:
+// id[5:0] | offset[10:6] | (size - 1)[15:11].
+static Value getHwReg(ConversionPatternRewriter &rewriter, Location loc,
+                      unsigned id, unsigned offset, unsigned size) {
+  assert(id < 64 && offset < 32 && size >= 1 && size <= 32);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value simm16 = b.i32_val(id | (offset << 6) | ((size - 1) << 11));
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.getreg",
+                                         i32_ty, {simm16})
+      .getResult(0);
+}
+
+// The helpers below read the CDNA (gfx940-942, gfx950) wave-placement fields.
 //
 // IMPORTANT: these registers do NOT exist under the same ids on gfx1250.
-// The equivalent numeric ids decode to unrelated registers
+// The same numeric ids decode to unrelated registers there
 // (hwreg(20,...) -> WAVE_SCRATCH_BASE_LO, hwreg(4,...) -> WAVE_STATE_PRIV), so
 // they would read garbage. gfx1250 wave placement is read separately in
 // processorId(); see below.
 //
 // https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/include/hip/amd_detail/amd_device_functions.h#L898
-// XCC_ID Register bit structure for gfx940-942, gfx950.
+//
+// XCC_ID Register (HW_REG_XCC_ID, id 20) bit structure for gfx940-942, gfx950.
 // XCC_ID      3:0     XCC the wave is assigned to.
 static Value getXCCID(ConversionPatternRewriter &rewriter, Location loc) {
-  GCNBuilder builder;
-  auto &gethwid = *builder.create("s_getreg_b32");
-  auto xcc_id = builder.newOperand("=s");
-  auto xcc_reg = builder.newConstantOperand("hwreg(HW_REG_XCC_ID, 0, 4)");
-  gethwid(xcc_id, xcc_reg);
-  return builder.launch(rewriter, loc, i32_ty, false);
+  return getHwReg(rewriter, loc, /*HW_REG_XCC_ID=*/20, 0, 4);
 }
 
-// HW_ID Register bit structure for GCN and CDNA (reg 4).
+// HW_ID Register (HW_REG_HW_ID, id 4) bit structure for GCN and CDNA.
 // CU_ID       11:8    Compute Unit the wave is assigned to.
 static Value getCUID(ConversionPatternRewriter &rewriter, Location loc) {
-  GCNBuilder builder;
-  auto &gethwid = *builder.create("s_getreg_b32");
-  auto cu_id = builder.newOperand("=s");
-  auto hwreg = builder.newConstantOperand("hwreg(HW_REG_HW_ID, 8, 4)");
-  gethwid(cu_id, hwreg);
-  return builder.launch(rewriter, loc, i32_ty, false);
+  return getHwReg(rewriter, loc, /*HW_REG_HW_ID=*/4, 8, 4);
 }
 // SE_ID       15:13   Shader Engine the wave is assigned to for gfx940-942,
 // gfx950.
 static Value getSEID(ConversionPatternRewriter &rewriter, Location loc) {
-  GCNBuilder builder;
-  auto &gethwid = *builder.create("s_getreg_b32");
-  auto se_id = builder.newOperand("=s");
-  auto hwreg = builder.newConstantOperand("hwreg(HW_REG_HW_ID, 13, 3)");
-  gethwid(se_id, hwreg);
-  return builder.launch(rewriter, loc, i32_ty, false);
+  return getHwReg(rewriter, loc, /*HW_REG_HW_ID=*/4, 13, 3);
 }
 
 // gfx1250 WAVE_HW_ID1 (hwreg id 23) holds the wave's WGP/SA/SIMD placement.
 // Read the complete register once so all fields come from the same snapshot.
 static Value getWaveHwId1(ConversionPatternRewriter &rewriter, Location loc) {
-  GCNBuilder builder;
-  auto &gethwid = *builder.create("s_getreg_b32");
-  auto dst = builder.newOperand("=s");
-  auto reg = builder.newConstantOperand("hwreg(HW_REG_WAVE_HW_ID1)");
-  gethwid(dst, reg);
-  return builder.launch(rewriter, loc, i32_ty, false);
+  return getHwReg(rewriter, loc, /*HW_REG_WAVE_HW_ID1=*/23, 0, 32);
 }
 
 // gfx1250 uses a separate packing in processorId().
@@ -173,7 +164,6 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
     return id;
   }
 
-  GCNBuilder builder;
   Value xcc_id = b.i32_val(0);
   // Multi-XCD CDNA-family targets: gfx942, gfx950.
   switch (GPUKind) {
@@ -187,7 +177,6 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
 
   Value cu_id = getCUID(rewriter, loc); // local CU ID
   Value se_id = getSEID(rewriter, loc);
-  builder.create<>("s_waitcnt lgkmcnt(0)")->operator()();
 
   // For XCC based architectures to get a unique CU id for a wave:
   // global_cu_id = xcc_id * CU_PER_XCD + se_id * CU_PER_SE + cu_id (local)

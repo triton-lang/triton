@@ -253,11 +253,11 @@ def _p_matmul(
     OUT_BLOCK_N: tl.constexpr = EPILOGUE_BLOCK_N // ACTIVATION_REDUCTION_N
     # Fuse alpha with the residual when activation and gamma are absent.
     FUSE_ALPHA: tl.constexpr = OutAcc is not None and Gammas is None and ACTIVATION_FN is None and out_alpha is not None
-    # Preserve rounding for dense sub-tiles and unswapped row scales.
+    # Preserve separate scale/bias rounding for dense sub-tiles.
     FUSE_TENSOR_SCALE: tl.constexpr = (
         (XTensorScale is not None or WTensorScale is not None)
         and XScale is None and WScale is None and B is not None and Betas is None
-        and (is_out_microscaled or (SUBTILE_FACTOR == 1 and (SWAP_XW or WTensorScale is not None)))
+        and (is_out_microscaled or SUBTILE_FACTOR == 1)
     )
     yN = N // ACTIVATION_REDUCTION_N
 

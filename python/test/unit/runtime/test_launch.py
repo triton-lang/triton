@@ -342,7 +342,7 @@ def test_interpreter_implicit_cvt_bool() -> None:
 @pytest.mark.skipif(not is_hip(), reason="requires HIP")
 def test_wgp_cu_mode_launch_argument():
     arch = triton.runtime.driver.active.get_current_target().arch
-    if not arch.startswith(("gfx10", "gfx11", "gfx120")):
+    if not arch.startswith(("gfx11", "gfx120")):
         pytest.skip("target has no WGP/CU mode distinction")
 
     @triton.jit

@@ -1,5 +1,5 @@
-#ifndef TRITONAMD_ANALYSIS_RANGE_ANALYSIS_H
-#define TRITONAMD_ANALYSIS_RANGE_ANALYSIS_H
+#ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_RANGEANALYSIS_H_
+#define TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_RANGEANALYSIS_H_
 
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
@@ -185,4 +185,4 @@ void initializeFuncOps(Operation *op,
 
 } // namespace mlir::triton::AMD
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_INCLUDE_ANALYSIS_RANGEANALYSIS_H_
