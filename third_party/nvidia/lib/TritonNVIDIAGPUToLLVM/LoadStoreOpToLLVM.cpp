@@ -360,7 +360,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                   : IntegerAttr();
     int64_t l2PrefetchSize =
         l2PrefetchSizeAttr ? l2PrefetchSizeAttr.getInt() : 0;
-    if ((cachePolicy->modifier == CacheModifier::NONE ||
+    // Keep legacy scalar loads to avoid a ptxas 13.4.59 constant-propagation
+    // miscompile in FP8 reductions.
+    if (isa<RankedTensorType>(op.getType()) &&
+        (cachePolicy->modifier == CacheModifier::NONE ||
          cachePolicy->modifier == CacheModifier::CA) &&
         !llMask && l1Policy.empty() && !l2PolicyReg && !l2PrefetchSize &&
         valueElemTy.getIntOrFloatBitWidth() >= 8)
