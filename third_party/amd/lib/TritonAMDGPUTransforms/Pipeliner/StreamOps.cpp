@@ -114,4 +114,23 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
   return {newLoadOp, viewLoad, storeOp, maybeLocalLoad};
 }
 
+ttg::LocalLoadOp getChainLocalLoad(const StreamOpVariant &streamOps) {
+  return std::visit([](const auto &ops) { return ops.maybeLocalLoadOp; },
+                    streamOps);
+}
+
+Operation *getChainFillOp(const StreamOpVariant &streamOps) {
+  return std::visit(
+      [](const auto &ops) -> Operation * {
+        using Ops = std::decay_t<decltype(ops)>;
+        if constexpr (std::is_same_v<Ops, TDMChainOps>)
+          return ops.tdmOp;
+        else if constexpr (std::is_same_v<Ops, AsyncCopyChainOps>)
+          return ops.copyOp;
+        else
+          return ops.loadOp;
+      },
+      streamOps);
+}
+
 } // namespace mlir
