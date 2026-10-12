@@ -52,6 +52,12 @@ AsyncCopyChainOps createAsyncCopy(triton::LoadOp loadOp, Value alloc,
 StreamCopyChainOps createStreamCopy(triton::LoadOp loadOp, Value alloc,
                                     Value extractIdx);
 
+// The local load a chain ends in, if it has one.
+triton::gpu::LocalLoadOp getChainLocalLoad(const StreamOpVariant &streamOps);
+
+// The op that fills a chain's buffer; chains sharing a buffer share it.
+Operation *getChainFillOp(const StreamOpVariant &streamOps);
+
 } // namespace mlir
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_STREAMOPS_H_

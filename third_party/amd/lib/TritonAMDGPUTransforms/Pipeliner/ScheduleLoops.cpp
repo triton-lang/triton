@@ -382,6 +382,23 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   if (failed(scheduleLoads(loadToInfo, maxDist, stages, clusters, schedule)))
     return {};
 
+  // A load feeding several dots only records its first one as its use, so a
+  // dot all of whose loads were used by earlier dots stays unscheduled and
+  // later lands at the end of the loop body, keeping its operand tiles live
+  // for the rest of the iteration. Put every dot that consumes a pipelined
+  // load in the compute cluster so it keeps its place in program order.
+  for (auto dot : forOp.getBody()->getOps<tt::DotOpInterface>()) {
+    if (schedule.contains(dot))
+      continue;
+    BackwardSliceOptions options;
+    options.omitBlockArguments = true;
+    SetVector<Operation *> slice;
+    (void)getBackwardSlice(dot.getOperation(), &slice, options);
+    if (llvm::any_of(slice,
+                     [&](Operation *op) { return loadToInfo.count(op); }))
+      schedule.insert(dot, stages[SCHED_COMPUTE], clusters[SCHED_COMPUTE]);
+  }
+
   dumpScheduleDebug(schedule, DEBUG_TYPE, "Coarse schedule loads only:");
 
   return schedule;
