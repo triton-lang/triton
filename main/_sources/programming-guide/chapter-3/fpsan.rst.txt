@@ -164,6 +164,33 @@ Important caveat:
 
 - This is ring arithmetic modulo ``2^w``, not IEEE arithmetic.
 
+Absolute Value
+==============
+
+Supported operation:
+
+- ``tl.abs(x)``
+
+Rewrite:
+
+- clear the sign bit of ``x``, preserving all other bits, including NaN bits
+
+This is implemented with signed integer absolute value on ``embed(x)``,
+mapping the most negative payload to zero before unembedding.
+
+Exact preserved properties:
+
+- ``abs(x) = abs(-x)``
+- ``abs(abs(x)) = abs(x)``
+- ``embed(abs(x)) >= 0`` in signed payload order
+
+Important caveat:
+
+- ``abs(x) = maximum(x, -x)`` except for negative zero. Its payload is the
+  most negative signed integer, which wraps back to itself under FPSan
+  negation. Thus ``maximum(x, -x)`` returns negative zero, while ``abs(x)``
+  returns positive zero.
+
 Min, Max, and Clamp
 ===================
 
@@ -191,6 +218,35 @@ Important caveats:
 - The order is the signed integer order of payloads, not IEEE float order.
 - NaN handling, and the exact signed-zero contract, are not modeled.
 - Both ``propagate_nan`` modes use the same payload semantics.
+
+Comparisons
+===========
+
+Supported operations:
+
+- ``x == y`` and ``x != y``
+- ``x < y``, ``x <= y``, ``x > y``, and ``x >= y``
+
+Rewrite:
+
+- exact equality or signed integer comparison on embedded payloads
+- ordered and unordered predicates use the same payload comparison;
+  ``ord`` is always true and ``uno`` is always false
+
+Float-to-boolean casts (``x.to(tl.int1)``) lower to comparisons with zero,
+so they become ``embed(x) != 0``.
+
+Exact preserved properties:
+
+- ``x == x``, including NaN carriers produced by sanitized arithmetic
+- ``where(x < y, x, y) = minimum(x, y)``
+- ``where(x > y, x, y) = maximum(x, y)``
+
+Important caveats:
+
+- Payload order can differ from floating-point order.
+- Positive and negative zero compare unequal; negative zero casts to true.
+- Comparisons optimized away before FPSan runs are not rewritten.
 
 Division
 ========

@@ -87,7 +87,9 @@
 <li class="toctree-l2"><a class="reference internal" href="#what-fpsan-does-not-preserve">What FpSan Does Not Preserve</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#common-arithmetic-ops">Common Arithmetic Ops</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#add-sub-neg-mul">Add, Sub, Neg, Mul</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#absolute-value">Absolute Value</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#min-max-and-clamp">Min, Max, and Clamp</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#comparisons">Comparisons</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#division">Division</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#remainder">Remainder</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#fma">FMA</a></li>
@@ -280,6 +282,32 @@ result</p></li>
 <li><p>This is ring arithmetic modulo <code class="docutils literal notranslate"><span class="pre">2^w</span></code>, not IEEE arithmetic.</p></li>
 </ul>
 </section>
+<section id="absolute-value">
+<h3>Absolute Value<a class="headerlink" href="#absolute-value" title="Link to this heading"></a></h3>
+<p>Supported operation:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tl.abs(x)</span></code></p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>clear the sign bit of <code class="docutils literal notranslate"><span class="pre">x</span></code>, preserving all other bits, including NaN bits</p></li>
+</ul>
+<p>This is implemented with signed integer absolute value on <code class="docutils literal notranslate"><span class="pre">embed(x)</span></code>,
+mapping the most negative payload to zero before unembedding.</p>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">abs(x)</span> <span class="pre">=</span> <span class="pre">abs(-x)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">abs(abs(x))</span> <span class="pre">=</span> <span class="pre">abs(x)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">embed(abs(x))</span> <span class="pre">&gt;=</span> <span class="pre">0</span></code> in signed payload order</p></li>
+</ul>
+<p>Important caveat:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">abs(x)</span> <span class="pre">=</span> <span class="pre">maximum(x,</span> <span class="pre">-x)</span></code> except for negative zero. Its payload is the
+most negative signed integer, which wraps back to itself under FPSan
+negation. Thus <code class="docutils literal notranslate"><span class="pre">maximum(x,</span> <span class="pre">-x)</span></code> returns negative zero, while <code class="docutils literal notranslate"><span class="pre">abs(x)</span></code>
+returns positive zero.</p></li>
+</ul>
+</section>
 <section id="min-max-and-clamp">
 <h3>Min, Max, and Clamp<a class="headerlink" href="#min-max-and-clamp" title="Link to this heading"></a></h3>
 <p>Supported operations:</p>
@@ -306,6 +334,34 @@ result</p></li>
 <li><p>The order is the signed integer order of payloads, not IEEE float order.</p></li>
 <li><p>NaN handling, and the exact signed-zero contract, are not modeled.</p></li>
 <li><p>Both <code class="docutils literal notranslate"><span class="pre">propagate_nan</span></code> modes use the same payload semantics.</p></li>
+</ul>
+</section>
+<section id="comparisons">
+<h3>Comparisons<a class="headerlink" href="#comparisons" title="Link to this heading"></a></h3>
+<p>Supported operations:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">==</span> <span class="pre">y</span></code> and <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">!=</span> <span class="pre">y</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">&lt;</span> <span class="pre">y</span></code>, <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">&lt;=</span> <span class="pre">y</span></code>, <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">&gt;</span> <span class="pre">y</span></code>, and <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">&gt;=</span> <span class="pre">y</span></code></p></li>
+</ul>
+<p>Rewrite:</p>
+<ul class="simple">
+<li><p>exact equality or signed integer comparison on embedded payloads</p></li>
+<li><p>ordered and unordered predicates use the same payload comparison;
+<code class="docutils literal notranslate"><span class="pre">ord</span></code> is always true and <code class="docutils literal notranslate"><span class="pre">uno</span></code> is always false</p></li>
+</ul>
+<p>Float-to-boolean casts (<code class="docutils literal notranslate"><span class="pre">x.to(tl.int1)</span></code>) lower to comparisons with zero,
+so they become <code class="docutils literal notranslate"><span class="pre">embed(x)</span> <span class="pre">!=</span> <span class="pre">0</span></code>.</p>
+<p>Exact preserved properties:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">==</span> <span class="pre">x</span></code>, including NaN carriers produced by sanitized arithmetic</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">where(x</span> <span class="pre">&lt;</span> <span class="pre">y,</span> <span class="pre">x,</span> <span class="pre">y)</span> <span class="pre">=</span> <span class="pre">minimum(x,</span> <span class="pre">y)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">where(x</span> <span class="pre">&gt;</span> <span class="pre">y,</span> <span class="pre">x,</span> <span class="pre">y)</span> <span class="pre">=</span> <span class="pre">maximum(x,</span> <span class="pre">y)</span></code></p></li>
+</ul>
+<p>Important caveats:</p>
+<ul class="simple">
+<li><p>Payload order can differ from floating-point order.</p></li>
+<li><p>Positive and negative zero compare unequal; negative zero casts to true.</p></li>
+<li><p>Comparisons optimized away before FPSan runs are not rewritten.</p></li>
 </ul>
 </section>
 <section id="division">

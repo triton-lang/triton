@@ -146,60 +146,60 @@ to download the full example code.</p>
 </ul>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=False:
      N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-0   1024.0              109.467567              82.264632
-1   2048.0              134.312013             100.368146
-2   4096.0              150.035108             112.612438
-3   8192.0              157.802649             118.680914
-4  16384.0              163.397862             122.349794
+0   1024.0              109.034742              82.379288
+1   2048.0              134.355573             100.448353
+2   4096.0              151.176605             113.106049
+3   8192.0              157.123753             119.366984
+4  16384.0              163.913365             122.252285
 fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=False:
      N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-0   1024.0              141.343714             112.521849
-1   2048.0              160.656540             120.922532
-2   4096.0              155.225339             122.679702
-3   8192.0              157.232658             125.082044
-4  16384.0              159.643436             124.897276
+0   1024.0              141.813924             113.055095
+1   2048.0              160.849075             121.562738
+2   4096.0              156.419920             123.004344
+3   8192.0              158.424079             125.598530
+4  16384.0              157.674236             126.465768
 fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
      N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-0   1024.0               56.543337              55.548882
-1   2048.0               71.546919              71.165285
-2   4096.0               83.370698              82.989231
-3   8192.0               89.336539              89.780746
-4  16384.0               93.970267              93.945599
+0   1024.0               56.411861              56.021572
+1   2048.0               71.643160              71.917369
+2   4096.0               83.203435              83.542418
+3   8192.0               89.419867              90.838030
+4  16384.0               94.650336              93.383470
 fused-attention-batch4-head32-d64-bwd-causal=False-warp_specialize=False:
      N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-0   1024.0               74.652997              73.728948
-1   2048.0               84.281149              84.446919
-2   4096.0               90.150609              88.268229
-3   8192.0               93.213226              92.090795
-4  16384.0               94.258576              93.968619
+0   1024.0               74.642230              74.252762
+1   2048.0               84.621227              84.558874
+2   4096.0               90.581568              89.526233
+3   8192.0               93.137226              92.850503
+4  16384.0               93.547814              94.242438
 fused-attention-batch4-head32-d128-fwd-causal=True-warp_specialize=False:
      N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-0   1024.0              113.718735              91.693434
-1   2048.0              138.396671             113.283822
-2   4096.0              153.424160             124.181597
-3   8192.0              166.156950             130.682758
-4  16384.0              170.509644             132.485069
+0   1024.0              113.986714              91.574072
+1   2048.0              138.938441             113.039147
+2   4096.0              153.771893             123.417311
+3   8192.0              163.555493             129.849904
+4  16384.0              170.357468             132.634404
 fused-attention-batch4-head32-d128-fwd-causal=False-warp_specialize=False:
      N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-0   1024.0              147.991795             127.521929
-1   2048.0              158.649797             135.894727
-2   4096.0              163.745055             136.478939
-3   8192.0              163.435169             139.430391
-4  16384.0              165.192644             139.204060
+0   1024.0              148.299845             126.810553
+1   2048.0              158.459148             131.048192
+2   4096.0              159.104291             138.735297
+3   8192.0              164.390171             138.172926
+4  16384.0              164.540800             136.942678
 fused-attention-batch4-head32-d128-bwd-causal=True-warp_specialize=False:
      N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-0   1024.0                2.318095               2.314322
-1   2048.0                2.439027               2.436884
-2   4096.0                2.510075               2.509873
-3   8192.0                2.541383               2.542258
-4  16384.0                2.561403               2.560881
+0   1024.0                2.315568               2.313524
+1   2048.0                2.439400               2.440127
+2   4096.0                2.509005               2.509094
+3   8192.0                2.541333               2.543043
+4  16384.0                2.560350               2.560401
 fused-attention-batch4-head32-d128-bwd-causal=False-warp_specialize=False:
      N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-0   1024.0                2.451555               2.448228
-1   2048.0                2.512547               2.510901
-2   4096.0                2.540845               2.540809
-3   8192.0                2.554576               2.554090
-4  16384.0                2.558935               2.559296
+0   1024.0                2.450159               2.451806
+1   2048.0                2.509409               2.510413
+2   4096.0                2.540314               2.539746
+3   8192.0                2.553979               2.553548
+4  16384.0                2.561486               2.561487
 </pre></div>
 </div>
 <div class="line-block">
@@ -986,7 +986,7 @@ fused-attention-batch4-head32-d128-bwd-causal=False-warp_specialize=False:
 </span>    <span class="c1"># only works on post-Ampere GPUs right now</span><span class="w">
 </span>    <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">.</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
 </span></pre></div></div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (15 minutes 23.933 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (15 minutes 18.821 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>
