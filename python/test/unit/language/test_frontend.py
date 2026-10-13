@@ -1928,15 +1928,185 @@ def test_loop_carry_swap():
 
 @filecheck_test
 @triton.jit
-def test_loop_carry_invariant_identity():
-    # CHECK-LABEL: test_loop_carry_invariant_identity
+def test_loop_carry_copy_alias():
+    # CHECK-LABEL: test_loop_carry_copy_alias
+    # CHECK: %[[SEED:.*]] = arith.constant 0 : i32
+    cur = 0
+    prev = cur
+    # CHECK: scf.for {{.*}} iter_args(%[[CUR:.*]] = %[[SEED]], %[[PREV:.*]] = %[[SEED]])
+    for i in range(3):
+        # CHECK: %[[NEXT_CUR:.*]] = arith.addi %[[CUR]],
+        prev = cur
+        cur = cur + 1
+        # CHECK: scf.yield %[[NEXT_CUR]], %[[CUR]] : i32, i32
+    anchor(prev)
+    anchor(cur)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_while_copy_alias():
+    # CHECK-LABEL: test_loop_carry_while_copy_alias
+    # CHECK: %[[SEED:.*]] = arith.constant 0 : i32
+    cur = 0
+    prev = cur
+    # CHECK: scf.while
+    while cur < 4:
+        # CHECK: } do {
+        # CHECK-NEXT: ^bb0(%[[CUR:.*]]: i32, %[[PREV:.*]]: i32):
+        # CHECK: %[[NEXT_CUR:.*]] = arith.addi %[[CUR]],
+        prev = cur
+        cur = cur + 1
+        # CHECK: scf.yield %[[NEXT_CUR]], %[[CUR]] : i32, i32
+    anchor(prev)
+    anchor(cur)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_copy_chain():
+    # CHECK-LABEL: test_loop_carry_copy_chain
+    # CHECK: %[[SEED:.*]] = arith.constant 0 : i32
+    cur = 0
+    prev = cur
+    older = cur
+    oldest = cur
+    # CHECK: scf.for {{.*}} iter_args(%[[CUR:.*]] = %[[SEED]], %[[PREV:.*]] = %[[SEED]], %[[OLDER:.*]] = %[[SEED]], %[[OLDEST:.*]] = %[[SEED]])
+    for i in range(5):
+        oldest = older
+        older = prev
+        prev = cur
+        # CHECK: %[[NEXT_CUR:.*]] = arith.addi %[[CUR]],
+        cur += 1
+        # CHECK: scf.yield %[[NEXT_CUR]], %[[CUR]], %[[PREV]], %[[OLDER]] : i32, i32, i32, i32
+    anchor(oldest)
+    anchor(older)
+    anchor(prev)
+    anchor(cur)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_tuple_copy_alias():
+    # CHECK-LABEL: test_loop_carry_tuple_copy_alias
+    # CHECK: %[[SEED:.*]] = arith.constant 0 : i32
+    seed = 0
+    cur = (seed, seed)
+    prev = cur
+    # CHECK: scf.for {{.*}} iter_args(%[[CUR0:.*]] = %[[SEED]], %[[CUR1:.*]] = %[[SEED]], %[[PREV0:.*]] = %[[SEED]], %[[PREV1:.*]] = %[[SEED]])
+    for i in range(3):
+        prev = cur
+        # CHECK: %[[NEXT0:.*]] = arith.addi %[[CUR0]],
+        # CHECK: %[[NEXT1:.*]] = arith.addi %[[CUR1]],
+        cur = (cur[0] + 1, cur[1] + 2)
+        # CHECK: scf.yield %[[NEXT0]], %[[NEXT1]], %[[CUR0]], %[[CUR1]] : i32, i32, i32, i32
+    anchor(prev)
+    anchor(cur)
+
+
+@pytest.mark.parametrize("assignment", ["self", "dead"])
+def test_loop_carry_invariant_assignment(assignment):
+
+    @triton.jit
+    def kernel(ASSIGNMENT: tl.constexpr):
+        # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+        seed = 1
+        alias = seed
+        acc = 0
+        # CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = {{.*}}) -> (i32)
+        for i in range(3):
+            if ASSIGNMENT == "self":
+                alias = alias
+            else:
+                if False:
+                    alias += 1
+            # CHECK: %[[SUM:.*]] = arith.addi %[[ACC]], %[[SEED]] : i32
+            acc += alias
+            # CHECK: scf.yield %[[SUM]] : i32
+        anchor(acc)
+
+    run_filecheck_test(kernel, args=(assignment, ))
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_invariant_copy():
+    # CHECK-LABEL: test_loop_carry_invariant_copy
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
     seed = 1
     alias = seed
     acc = 0
-    # CHECK: scf.for {{.*}} iter_args({{.*}}) -> (i32)
+    # CHECK: scf.for
     for i in range(3):
-        tl.static_assert(alias is seed)
+        alias = seed
+        # CHECK: %[[SUM:.*]] = arith.addi {{.*}}, %[[SEED]] : i32
+        acc += alias
+        # CHECK: scf.yield {{.*}}%[[SUM]]
+    anchor(acc)
+    anchor(alias)
+
+
+def test_loop_carry_constexpr_aggregate_identity():
+
+    @triton.aggregate
+    class Config:
+        value: tl.constexpr
+
+    @triton.jit
+    def kernel():
+        config = Config(7)
+        alias = config
+        acc = 0
+        # CHECK: scf.for {{.*}} iter_args({{.*}}) -> (i32)
+        for i in range(3):
+            tl.static_assert(alias is config)
+            alias = alias
+            acc += alias.value
+        anchor(acc)
+
+    run_filecheck_test(kernel)
+
+
+def test_loop_carry_aggregate_copy_alias():
+
+    @triton.aggregate
+    class State:
+        value: tl.tensor
+        tag: tl.constexpr
+
+    @triton.jit
+    def kernel():
+        # CHECK: %[[SEED:.*]] = arith.constant 0 : i32
+        seed = 0
+        cur = State(seed, "state")
+        prev = cur
+        # CHECK: scf.for {{.*}} iter_args(%[[CUR:.*]] = %[[SEED]], %[[PREV:.*]] = %[[SEED]])
+        for i in range(3):
+            tl.static_assert(cur.tag == "state")
+            tl.static_assert(prev.tag == "state")
+            prev = cur
+            # CHECK: %[[NEXT:.*]] = arith.addi %[[CUR]],
+            cur = State(cur.value + 1, cur.tag)
+            # CHECK: scf.yield %[[NEXT]], %[[CUR]] : i32, i32
+        anchor(prev.value)
+        anchor(cur.value)
+
+    run_filecheck_test(kernel)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_invariant_alias():
+    # CHECK-LABEL: test_loop_carry_invariant_alias
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    alias = seed
+    acc = 0
+    # CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = {{.*}}) -> (i32)
+    for i in range(3):
+        # CHECK: %[[SUM:.*]] = arith.addi %[[ACC]], %[[SEED]] : i32
         acc = acc + alias
+        # CHECK: scf.yield %[[SUM]] : i32
     anchor(acc)
 
 
@@ -2008,6 +2178,79 @@ def test_loop_carry_discovery_avoids_exponential_revisits(monkeypatch, kind):
     monkeypatch.setattr(CodeGenerator, "visit_compound_statement", counted)
     run_parser(_loop_carry_nest_depth_3, args=(kind, ))
     assert max(per_body.values()) == 4
+
+
+@triton.jit
+def _loop_carry_nested_aliases(DEPTH: tl.constexpr):
+    cur = 0
+    prev = cur
+    for i in range(2):
+        if DEPTH > 1:
+            cur1 = 0
+            prev1 = cur1
+            for j in range(2):
+                if DEPTH > 2:
+                    cur2 = 0
+                    prev2 = cur2
+                    for k in range(2):
+                        if DEPTH > 3:
+                            cur3 = 0
+                            prev3 = cur3
+                            for l in range(2):
+                                prev3 = cur3
+                                cur3 += 1
+                            anchor(prev3)
+                        prev2 = cur2
+                        cur2 += 1
+                    anchor(prev2)
+                prev1 = cur1
+                cur1 += 1
+            anchor(prev1)
+        prev = cur
+        cur += 1
+    anchor(prev)
+    anchor(cur)
+
+
+@pytest.mark.parametrize("depth", range(1, 5))
+def test_loop_carry_nested_aliases_avoid_exponential_revisits(monkeypatch, depth):
+    per_body = collections.Counter()
+    visit = CodeGenerator.visit_compound_statement
+
+    def counted(self, stmts):
+        per_body[id(stmts)] += 1
+        return visit(self, stmts)
+
+    monkeypatch.setattr(CodeGenerator, "visit_compound_statement", counted)
+    run_parser(_loop_carry_nested_aliases, args=(depth, ))
+    # One discovery per enclosing loop and one final lowering of the body.
+    assert max(per_body.values()) == depth + 1
+
+
+def test_loop_carry_nested_pointer_constness():
+
+    @triton.jit
+    def kernel(Const: tl.const, Mutable):
+        acc = 0
+        # CHECK: %[[OUTER:.*]] = scf.for {{.*}} iter_args(%[[ACC:.*]] = {{.*}}) -> (i32)
+        for outer in range(2):
+            for flag in tl.static_range(2):
+                if flag == 0:
+                    ptr = Mutable
+                else:
+                    ptr = Const
+                # The second instance of this loop updates acc; the first does not.
+                # CHECK: %[[INNER:.*]] = scf.for {{.*}} iter_args(%[[INNER_ACC:.*]] = %[[ACC]]) -> (i32)
+                for inner in range(3):
+                    if ptr.dtype.is_const():
+                        # CHECK: %[[NEXT:.*]] = arith.addi %[[INNER_ACC]],
+                        acc += 1
+                        # CHECK: scf.yield %[[NEXT]] : i32
+            # CHECK: scf.yield %[[INNER]] : i32
+        # CHECK: tt.call @{{.*}}anchor{{.*}}(%[[OUTER]])
+        anchor(acc)
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.int32), MockTensor(tl.int32)))
 
 
 def test_const_ptr_is_constant_addrspace():

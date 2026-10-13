@@ -8503,3 +8503,60 @@ def test_libdevice_rint(dtype_str, device):
     rint_kernel[(triton.cdiv(numel, BLOCK_SIZE), )](res_out, x_tri, numel, BLOCK_SIZE)
     ref_out = np.rint(x_np)
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("aliased", [True, False])
+@pytest.mark.parametrize("loop_kind", ["for", "while"])
+@pytest.mark.parametrize("n", [0, 1, 5])
+def test_loop_carry_aliased_initial_value(aliased, loop_kind, n, device):
+
+    @triton.jit(do_not_specialize=["n"])
+    def kernel(out_ptr, n, ALIASED: tl.constexpr, LOOP_KIND: tl.constexpr):
+        cur = 0
+        if ALIASED:
+            prev = cur
+        else:
+            prev = cur + 0
+        if LOOP_KIND == "for":
+            for i in range(n):
+                prev = cur
+                cur = cur + 1
+        else:
+            while cur < n:
+                prev = cur
+                cur = cur + 1
+        tl.store(out_ptr, prev)
+        tl.store(out_ptr + 1, cur)
+
+    out = torch.zeros(2, dtype=torch.int32, device=device)
+    kernel[(1, )](out, n, aliased, loop_kind)
+    assert out.tolist() == [max(n - 1, 0), n]
+
+
+def test_loop_carry_aliased_tensor_recurrence(device):
+
+    @triton.jit
+    def kernel(initial_ptr, delta_ptr, out_ptr, n, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        cur = tl.load(initial_ptr + offsets)
+        prev = cur
+        delta = tl.load(delta_ptr + offsets)
+        for i in range(n):
+            # A second-order recurrence needs the previous iteration's value.
+            next_value = cur + (cur - prev) + delta
+            prev = cur
+            cur = next_value
+        tl.store(out_ptr + offsets, cur)
+
+    block = 64
+    n = 5
+    initial = torch.arange(block, dtype=torch.int32, device=device)
+    delta = initial % 7 - 3
+    out = torch.empty_like(initial)
+    kernel[(1, )](initial, delta, out, n, block)
+
+    cur = initial
+    prev = cur
+    for _ in range(n):
+        prev, cur = cur, cur + (cur - prev) + delta
+    torch.testing.assert_close(out, cur, rtol=0, atol=0)
