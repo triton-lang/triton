@@ -285,6 +285,8 @@ class CPUBackend(BaseBackend):
         }
         if (vec_lib := options.get_vec_lib()) and vec_lib_requirements[vec_lib] & self.cpu_features:
             cpu.passes.ttcpuir.add_math_to_vec_lib(pm, vec_lib, self.cpu_features)
+            # Scalable SLEEF calls introduce loops after the earlier SCF lowering.
+            passes.convert.add_scf_to_cf(pm)
 
         cpu.passes.ttcpuir.add_math_to_llvmir(pm)
         cpu.passes.ttcpuir.add_math_to_libm(pm)
@@ -292,7 +294,7 @@ class CPUBackend(BaseBackend):
         cpu.passes.ttcpuir.add_memref_to_llvmir(pm)
         passes.convert.add_reconcile_unrealized_casts(pm)
         passes.convert.add_arith_to_llvmir(pm)
-        # passes.convert.add_cf_to_llvmir(pm)
+        passes.convert.add_cf_to_llvmir(pm)
         cpu.passes.ttcpuir.add_func_to_llvmir(pm)
         cpu.passes.ttcpuir.add_ub_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)

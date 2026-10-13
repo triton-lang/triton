@@ -16,5 +16,7 @@ add_triton_library(TritonCPUToLLVM
 
     LINK_LIBS PUBLIC
     TritonCPUIR
+    MLIRMemRefDialect
+    MLIRSCFDialect
     MLIRVectorToLLVMPass
 )

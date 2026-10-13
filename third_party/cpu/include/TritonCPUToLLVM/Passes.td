@@ -109,7 +109,10 @@ def MathToVecLib : Pass<"triton-cpu-math-to-vec-lib", "mlir::ModuleOp"> {
              "A list of available CPU features to choose proper vector functions">,
     ];
 
-    let dependentDialects = ["mlir::vector::VectorDialect",
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::memref::MemRefDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::vector::VectorDialect",
                              "mlir::triton::cpu::TritonCPUDialect",
                              "mlir::triton::TritonDialect",
                              "mlir::func::FuncDialect",
