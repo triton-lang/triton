@@ -1656,6 +1656,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// The async copy zero-fills masked lanes with +0.0, so an `other` of -0.0
+// still needs a select.
+// CHECK-LABEL: @masked_load_neg_zero_other
+// CHECK: %[[NEG_ZERO:.*]] = arith.constant dense<-0.000000e+00>
+// CHECK:   scf.for
+// CHECK: %[[A:.*]] = ttg.local_load
+// CHECK: arith.select {{.*}}, %[[A]], %[[NEG_ZERO]]
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @masked_load_neg_zero_other(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c1016800_i32 = arith.constant 1016800 : i32
+    %cst = arith.constant dense<-0.000000e+00> : tensor<1024xf32, #blocked>
+    %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %1 = tt.splat %arg2 : i32 -> tensor<1024xi32, #blocked>
+    %2 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %3 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    scf.for %arg3 = %c0_i32 to %c1016800_i32 step %c1024_i32  : i32 {
+      %4 = tt.splat %arg3 : i32 -> tensor<1024xi32, #blocked>
+      %5 = arith.addi %4, %0 : tensor<1024xi32, #blocked>
+      %6 = arith.cmpi slt, %5, %1 : tensor<1024xi32, #blocked>
+      %7 = tt.addptr %2, %5 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+      %8 = tt.load %7, %6, %cst : tensor<1024x!tt.ptr<f32>, #blocked>
+      %9 = tt.addptr %3, %5 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+      tt.store %9, %8, %6 : tensor<1024x!tt.ptr<f32>, #blocked>
+    }{tt.num_stages = 3 : i32}
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @predicate_stage1

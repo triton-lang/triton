@@ -11,12 +11,15 @@
 
 namespace mlir {
 
+// Returns true if `v` is a splat constant whose bits are all zero. -0.0 is not
+// included: it is not what a zero-filled load or buffer produces.
 inline bool isZeroConst(Value v) {
   auto constantOp = v.getDefiningOp<arith::ConstantOp>();
   if (!constantOp)
     return false;
   if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero();
+    return denseAttr.isSplat() &&
+           denseAttr.getSplatValue<APFloat>().isPosZero();
   if (auto denseAttr =
           dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
     return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
