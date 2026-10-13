@@ -410,6 +410,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// A rank-reducing store distributes the 64x64 allocation like the [1, 64, 64]
+// block: each warp stores a 1x16x64 tile (tile_dim0 = 64 in group1[3]<31:16>,
+// tile_dim1 = 16 and tile_dim2 = 1 in group1[4]), and the warps start
+// 16 * 64 = 2^10 elements apart.
+#desc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_store_rank_reducing
+  tt.func public @tdm_store_rank_reducing(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 16384 : i64
+    %c_stride1 = arith.constant 64 : i64
+    %c_stride2 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape, %c_shape], [%c_stride0, %c_stride1, %c_stride2] : <bf16>, <1x64x64xbf16, #desc>
+    // CHECK-DAG: %[[TILE_DIM0:.*]] = llvm.mlir.constant(4194304 : i32) : i32
+    // CHECK-DAG: %[[TILE_DIM12:.*]] = llvm.mlir.constant(65552 : i32) : i32
+    // CHECK-DAG: %[[WARP_SHIFT:.*]] = llvm.mlir.constant(10 : i32) : i32
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+    // CHECK: llvm.shl %{{.*}}, %[[WARP_SHIFT]] : i32
+    // CHECK: llvm.or %{{.*}}, %[[TILE_DIM0]] : i32
+    // CHECK: %[[GROUP1:.*]] = llvm.insertelement %[[TILE_DIM12]], %{{.*}}[%{{.*}} : i32] : vector<8xi32>
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"(%{{.*}}, %[[GROUP1]], {{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
+    amdg.async_tdm_copy_local_to_global %0 from %1 : !ttg.memdesc<64x64xbf16, #shared, #smem, mutable> -> !tt.tensordesc<1x64x64xbf16, #desc>
+    tt.return
+  }
+}
+
+// -----
+
 // Multi-chunk gather: 16 row indices lower to two TDM instructions.  Chunk 1's
 // LDS address is chunk 0 + a compile-time-constant byte delta (8 rows * 64 cols
 // * 2 bytes = 1024), and chunk 1 updates the group0 descriptor produced for
@@ -511,6 +541,207 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     // CHECK: llvm.select %[[IS_ACTIVE]]
     // CHECK: "llvm.amdgcn.tensor.store.from.lds"
     amdg.async_tdm_copy_local_to_global %0 from %1 : !ttg.memdesc<4x4xf16, #shared, #smem, mutable> -> !tt.tensordesc<4x4xf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+// A row subview keeps the dense layout of its shape, so TDM addresses it from
+// the subview base: the per-warp LDS address must be derived from the base
+// advanced by the subview offset, not from the start of the allocation.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_store_row_subview
+  tt.func public @tdm_load_store_row_subview(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 64 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <bf16>, <128x64xbf16, #shared>
+    // CHECK: %[[SMEM:.*]] = llvm.mlir.addressof @global_smem
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<256x64xbf16, #shared, #smem, mutable>
+    %2 = ttg.memdesc_subslice %1[128, 0] : !ttg.memdesc<256x64xbf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xbf16, #shared, #smem, mutable, 256x64>
+    // CHECK: %[[LOAD_BASE:.*]] = llvm.getelementptr %[[SMEM]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, bf16
+    // CHECK: %[[LOAD_WARP:.*]] = llvm.getelementptr %[[LOAD_BASE]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, bf16
+    // CHECK: llvm.ptrtoint %[[LOAD_WARP]] : !llvm.ptr<3> to i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    %3 = amdg.async_tdm_copy_global_to_local %0 into %2 : !tt.tensordesc<128x64xbf16, #shared> -> !ttg.memdesc<128x64xbf16, #shared, #smem, mutable, 256x64>
+    // CHECK: %[[STORE_BASE:.*]] = llvm.getelementptr %[[SMEM]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, bf16
+    // CHECK: %[[STORE_WARP:.*]] = llvm.getelementptr %[[STORE_BASE]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, bf16
+    // CHECK: llvm.ptrtoint %[[STORE_WARP]] : !llvm.ptr<3> to i32
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+    %4 = amdg.async_tdm_copy_local_to_global %0 from %2 : !ttg.memdesc<128x64xbf16, #shared, #smem, mutable, 256x64> -> !tt.tensordesc<128x64xbf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+// A load may fill the start of a larger destination. The warps split the
+// block's 64 rows, so each warp writes 16 full rows starting 16 * 64 = 1024
+// elements after the previous one.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_partial_block
+  tt.func public @tdm_load_partial_block(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 64 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <bf16>, <64x64xbf16, #shared>
+    // CHECK-DAG: %[[WARP_SHIFT:.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK-DAG: %[[SMEM:.*]] = llvm.mlir.addressof @global_smem
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<128x64xbf16, #shared, #smem, mutable>
+    // CHECK: %[[WARP_OFFSET:.*]] = llvm.shl %{{.*}}, %[[WARP_SHIFT]] : i32
+    // CHECK: %[[OFFSET:.*]] = llvm.or disjoint %[[WARP_OFFSET]], %{{.*}} : i32
+    // CHECK: %[[XOR:.*]] = llvm.xor %{{.*}}, %[[OFFSET]] : i32
+    // CHECK: %[[LOAD_WARP:.*]] = llvm.getelementptr %[[SMEM]][%[[XOR]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, bf16
+    // CHECK: llvm.ptrtoint %[[LOAD_WARP]] : !llvm.ptr<3> to i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    %2 = amdg.async_tdm_copy_global_to_local %0 into %1 : !tt.tensordesc<64x64xbf16, #shared> -> !ttg.memdesc<128x64xbf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// TDM pads the per-warp offsets it adds to the base of a row subview of a
+// padded layout, so the base pads the subview offset separately: for
+// [64:+4], offset + ((offset >> 6) << 2).
+#padded_desc = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [128, 64]}>
+#padded_alloc = #ttg.padded_shared<[64:+4] {order = [1, 0], shape = [256, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_store_padded_row_subview
+  tt.func public @tdm_load_store_padded_row_subview(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 64 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <128x64xf16, #padded_desc>
+    // CHECK: %[[SMEM:.*]] = llvm.mlir.addressof @global_smem
+    // CHECK-DAG: %[[INTERVAL:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK-DAG: %[[PADDING:.*]] = llvm.mlir.constant(2 : i32) : i32
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #padded_alloc, #smem, mutable>
+    %2 = ttg.memdesc_subslice %1[128, 0] : !ttg.memdesc<256x64xf16, #padded_alloc, #smem, mutable> -> !ttg.memdesc<128x64xf16, #padded_alloc, #smem, mutable, 256x64>
+    // CHECK: %[[LOAD_CHUNKS:.*]] = llvm.lshr %[[LOAD_OFFSET:.*]], %[[INTERVAL]] : i32
+    // CHECK: %[[LOAD_PAD:.*]] = llvm.shl %[[LOAD_CHUNKS]], %[[PADDING]] : i32
+    // CHECK: %[[LOAD_PADS:.*]] = llvm.add %[[LOAD_PAD]], %{{.*}} : i32
+    // CHECK: %[[LOAD_PADDED:.*]] = llvm.add %[[LOAD_OFFSET]], %[[LOAD_PADS]] : i32
+    // CHECK: %[[LOAD_BASE:.*]] = llvm.getelementptr %[[SMEM]][%[[LOAD_PADDED]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+    // CHECK: %[[LOAD_WARP:.*]] = llvm.getelementptr %[[LOAD_BASE]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+    // CHECK: llvm.ptrtoint %[[LOAD_WARP]] : !llvm.ptr<3> to i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    %3 = amdg.async_tdm_copy_global_to_local %0 into %2 : !tt.tensordesc<128x64xf16, #padded_desc> -> !ttg.memdesc<128x64xf16, #padded_alloc, #smem, mutable, 256x64>
+    // CHECK: %[[STORE_CHUNKS:.*]] = llvm.lshr %[[STORE_OFFSET:.*]], %[[INTERVAL]] : i32
+    // CHECK: %[[STORE_PAD:.*]] = llvm.shl %[[STORE_CHUNKS]], %[[PADDING]] : i32
+    // CHECK: %[[STORE_PADS:.*]] = llvm.add %[[STORE_PAD]], %{{.*}} : i32
+    // CHECK: %[[STORE_PADDED:.*]] = llvm.add %[[STORE_OFFSET]], %[[STORE_PADS]] : i32
+    // CHECK: %[[STORE_BASE:.*]] = llvm.getelementptr %[[SMEM]][%[[STORE_PADDED]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+    // CHECK: %[[STORE_WARP:.*]] = llvm.getelementptr %[[STORE_BASE]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+    // CHECK: llvm.ptrtoint %[[STORE_WARP]] : !llvm.ptr<3> to i32
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+    %4 = amdg.async_tdm_copy_local_to_global %0 from %2 : !ttg.memdesc<128x64xf16, #padded_alloc, #smem, mutable, 256x64> -> !tt.tensordesc<128x64xf16, #padded_desc>
+    tt.return
+  }
+}
+
+// -----
+
+// Each warp loads 64 rows of 32 bf16 (16 dwords) into a column subview whose
+// rows are 64 bf16 apart, so the warps start 64 * 64 = 2^12 elements apart in
+// the allocation, and TDM pads 16 dwords after every 16 dwords: group1[0] gets
+// pad enable (bit 20), interval log2(16) - 1 (bits 22-24) and amount 16 - 1
+// (bits 25-31), i.e. 516947968, after clearing those fields.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_column_subview
+  tt.func public @tdm_load_column_subview(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 64 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <bf16>, <256x32xbf16, #shared>
+    // CHECK-DAG: %[[PAD_MASK:.*]] = llvm.mlir.constant(3145727 : i32) : i32
+    // CHECK-DAG: %[[ROW_PAD:.*]] = llvm.mlir.constant(516947968 : i32) : i32
+    // CHECK-DAG: %[[WARP_SHIFT:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK: %[[SMEM:.*]] = llvm.mlir.addressof @global_smem
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<256x64xbf16, #shared, #smem, mutable>
+    %2 = ttg.memdesc_subslice %1[0, 32] : !ttg.memdesc<256x64xbf16, #shared, #smem, mutable> -> !ttg.memdesc<256x32xbf16, #shared, #smem, mutable, 256x64>
+    // CHECK: %[[BASE:.*]] = llvm.getelementptr %[[SMEM]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, bf16
+    // CHECK: llvm.shl %{{.*}}, %[[WARP_SHIFT]] : i32
+    // CHECK: %[[WARP:.*]] = llvm.getelementptr %[[BASE]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, bf16
+    // CHECK: llvm.ptrtoint %[[WARP]] : !llvm.ptr<3> to i32
+    // CHECK: %[[CLEARED:.*]] = llvm.and %{{.*}}, %[[PAD_MASK]] : i32
+    // CHECK: llvm.or %[[CLEARED]], %[[ROW_PAD]] : i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    %3 = amdg.async_tdm_copy_global_to_local %0 into %2 : !tt.tensordesc<256x32xbf16, #shared> -> !ttg.memdesc<256x32xbf16, #shared, #smem, mutable, 256x64>
+    tt.return
+  }
+}
+
+// -----
+
+// A rank-reducing load drops the leading unit dimension of the descriptor and
+// spreads out the rows of the column subview like a rank-2 load: each warp's 16
+// rows of 32 bf16 (16 dwords) are 64 bf16 apart, so the warps start
+// 16 * 64 = 2^10 elements apart and TDM pads 16 dwords after every 16 dwords.
+#desc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_load_rank_reducing_column_subview
+  tt.func public @tdm_load_rank_reducing_column_subview(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 256 : i32
+    %c_stride0 = arith.constant 16384 : i64
+    %c_stride1 = arith.constant 64 : i64
+    %c_stride2 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape, %c_shape], [%c_stride0, %c_stride1, %c_stride2] : <bf16>, <1x64x32xbf16, #desc>
+    // CHECK-DAG: %[[PAD_MASK:.*]] = llvm.mlir.constant(3145727 : i32) : i32
+    // CHECK-DAG: %[[ROW_PAD:.*]] = llvm.mlir.constant(516947968 : i32) : i32
+    // CHECK-DAG: %[[WARP_SHIFT:.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK: %[[SMEM:.*]] = llvm.mlir.addressof @global_smem
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>
+    %2 = ttg.memdesc_subslice %1[0, 32] : !ttg.memdesc<64x64xbf16, #shared, #smem, mutable> -> !ttg.memdesc<64x32xbf16, #shared, #smem, mutable, 64x64>
+    // CHECK: %[[BASE:.*]] = llvm.getelementptr %[[SMEM]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, bf16
+    // CHECK: llvm.shl %{{.*}}, %[[WARP_SHIFT]] : i32
+    // CHECK: %[[WARP:.*]] = llvm.getelementptr %[[BASE]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, bf16
+    // CHECK: llvm.ptrtoint %[[WARP]] : !llvm.ptr<3> to i32
+    // CHECK: %[[CLEARED:.*]] = llvm.and %{{.*}}, %[[PAD_MASK]] : i32
+    // CHECK: llvm.or %[[CLEARED]], %[[ROW_PAD]] : i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"({{.+}}) : (vector<4xi32>, vector<8xi32>, vector<4xi32>, vector<4xi32>, vector<8xi32>, i32) -> ()
+    %3 = amdg.async_tdm_copy_global_to_local %0 into %2 : !tt.tensordesc<1x64x32xbf16, #desc> -> !ttg.memdesc<64x32xbf16, #shared, #smem, mutable, 64x64>
+    tt.return
+  }
+}
+
+// -----
+
+// Gather and scatter address a row subview from its base, i.e. the allocation
+// base advanced by the subview offset.
+#blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_gather_scatter_row_subview
+  tt.func public @tdm_gather_scatter_row_subview(
+    %tensorDesc: !tt.tensordesc<16x64xf16, #shared>,
+    %row_indices: tensor<16xi32, #slice>
+  ) {
+    // CHECK: %[[SMEM:.*]] = llvm.mlir.addressof @global_smem
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    %1 = ttg.memdesc_subslice %0[16, 0] : !ttg.memdesc<32x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 32x64>
+    // CHECK: %[[GATHER_BASE:.*]] = llvm.getelementptr %[[SMEM]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+    // CHECK: %[[GATHER_ROWS:.*]] = llvm.getelementptr %[[GATHER_BASE]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+    // CHECK: llvm.ptrtoint %[[GATHER_ROWS]] : !llvm.ptr<3> to i32
+    // CHECK: "llvm.amdgcn.tensor.load.to.lds"
+    %2 = amdg.async_tdm_gather %tensorDesc[%row_indices] to %1 : tensor<16xi32, #slice>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 32x64> -> !tt.tensordesc<16x64xf16, #shared>
+    // CHECK: %[[SCATTER_BASE:.*]] = llvm.getelementptr %[[SMEM]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+    // CHECK: %[[SCATTER_ROWS:.*]] = llvm.getelementptr %[[SCATTER_BASE]][%{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+    // CHECK: llvm.ptrtoint %[[SCATTER_ROWS]] : !llvm.ptr<3> to i32
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+    amdg.async_tdm_scatter %tensorDesc[%row_indices] from %1 : tensor<16xi32, #slice>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 32x64> -> !tt.tensordesc<16x64xf16, #shared>
     tt.return
   }
 }
