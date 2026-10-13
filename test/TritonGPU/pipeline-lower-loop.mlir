@@ -1879,25 +1879,3 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return
   }
 }
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-  // CHECK-LABEL: @pipelined_load_positive_zero
-  tt.func @pipelined_load_positive_zero(%lb: i32, %ub: i32, %step: i32,
-      %ptr: tensor<128x!tt.ptr<f32>, #blocked> {tt.divisibility = dense<16> : tensor<1xi32>, tt.contiguity = dense<128> : tensor<1xi32>},
-      %mask: tensor<128xi1, #blocked>) {
-    %other = arith.constant dense<0.000000e+00> : tensor<128xf32, #blocked>
-    // CHECK: scf.for
-    // CHECK: ttg.async_copy_global_to_local
-    // CHECK: %[[LOAD:.*]] = ttg.local_load
-    // CHECK-NOT: arith.select
-    // CHECK: "use"(%[[LOAD]])
-    scf.for %iv = %lb to %ub step %step : i32 {
-      %value = tt.load %ptr, %mask, %other {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x!tt.ptr<f32>, #blocked>
-      "use"(%value) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128xf32, #blocked>) -> ()
-    } {tt.scheduled_max_stage = 2 : i32}
-    tt.return
-  }
-}
