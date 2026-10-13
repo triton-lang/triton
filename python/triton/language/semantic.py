@@ -287,6 +287,9 @@ class TritonSemantic(Generic[TensorTy]):
         scalar_ty = input.type.scalar
         # ptr - offset
         if scalar_ty.is_ptr():
+            if other.dtype.is_int_unsigned() and other.dtype.int_bitwidth < 64:
+                # Negating in the unsigned type would wrap around; zero-extend first, as `add` does.
+                other = self.cast(other, tl.int64)
             return self.add(input, self.minus(other), sanitize_overflow=False)
         # float - float
         if scalar_ty.is_floating():

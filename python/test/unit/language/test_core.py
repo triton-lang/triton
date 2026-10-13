@@ -533,6 +533,23 @@ def test_addptr(dtype, order, device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", int_dtypes + uint_dtypes)
+def test_subptr_integer_offset(dtype, device):
+
+    @triton.jit
+    def kernel(x, y, BASE: tl.constexpr, DTYPE: tl.constexpr, SIZE: tl.constexpr):
+        offs = tl.arange(0, SIZE)
+        tl.store(y + offs, tl.load(x + BASE - offs.to(DTYPE)))
+
+    SIZE = 64
+    BASE = 100
+    x = torch.arange(2 * BASE, dtype=torch.int32, device=device)
+    y = torch.empty(SIZE, dtype=torch.int32, device=device)
+    kernel[(1, )](x, y, BASE, getattr(tl, dtype), SIZE)
+    torch.testing.assert_close(y, BASE - torch.arange(SIZE, dtype=torch.int32, device=device))
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y", [  #
     (dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes
 ] + [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes])
