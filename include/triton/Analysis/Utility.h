@@ -17,7 +17,8 @@ inline bool isZeroFillConst(Value v) {
   if (!constantOp)
     return false;
   if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isPosZero();
+    return denseAttr.isSplat() &&
+           denseAttr.getSplatValue<APFloat>().isPosZero();
   if (auto denseAttr =
           dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
     return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
