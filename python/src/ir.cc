@@ -992,8 +992,8 @@ void init_triton_ir(py::module_ &m) {
       .def("get_bf16",
            [](TritonOpBuilder &self, float v) -> Value {
              auto type = self.getBuilder().getBF16Type();
-             return self.create<arith::ConstantFloatOp>(
-                 type, APFloat(type.getFloatSemantics(), std::to_string(v)));
+             return self.create<arith::ConstantOp>(
+                 self.getBuilder().getFloatAttr(type, v));
            })
       .def("get_fp16",
            [](TritonOpBuilder &self, float v) -> Value {
@@ -1314,6 +1314,10 @@ void init_triton_ir(py::module_ &m) {
       .def("create_fdiv",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::DivFOp>(lhs, rhs);
+           })
+      .def("create_approx_divf",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<ApproxDivFOp>(lhs, rhs);
            })
       .def("create_frem",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
@@ -1917,11 +1921,9 @@ void init_triton_ir(py::module_ &m) {
 
   // Add an `extend_with` static method that dynamically loads a plugin and
   // registers its custom operations as builder methods.
-  auto builderPtr =
-      std::make_shared<py::class_<TritonOpBuilder>>(TritonOpBuilderBinding);
   TritonOpBuilderBinding.def_static(
       "extend_with",
-      [builderPtr](const std::string &path) {
+      [](const std::string &path) {
         // Load the plugin library.
         auto pluginOrErr = mlir::triton::plugin::TritonPlugin::load(path);
         if (!pluginOrErr) {
@@ -1932,14 +1934,19 @@ void init_triton_ir(py::module_ &m) {
 
         // Extend the builder class with the ops defined in the plugin.
         py::gil_scoped_acquire acquire;
+        auto builder = py::borrow<py::class_<TritonOpBuilder>>(
+            py::type<TritonOpBuilder>());
+        if (!builder)
+          throw std::runtime_error(
+              "Triton builder type is no longer available");
         for (const auto &op : plugin.listOps()) {
           std::string wrapped = std::string("create_") + op.name;
-          builderPtr->def(wrapped.c_str(),
-                          [op](TritonOpBuilder &self, std::vector<Value> args) {
-                            args.insert(args.begin(), Value());
-                            op.addOp(self, args);
-                            return args[0];
-                          });
+          builder.def(wrapped.c_str(),
+                      [op](TritonOpBuilder &self, std::vector<Value> args) {
+                        args.insert(args.begin(), Value());
+                        op.addOp(self, args);
+                        return args[0];
+                      });
         }
       },
       "Given a path to a Triton extension, load it and create builder methods "

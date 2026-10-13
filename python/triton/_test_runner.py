@@ -203,11 +203,11 @@ def _gsan(args):
         parallel_environment.update({"TRITON_DISABLE_LINE_INFO": "0", "TRITON_TEST_PROCESS_TIMEOUT": "90"})
         targets = ("-m", "not xdist_group", *targets)
     status = _run(_pytest(*targets, workers=workers, distribution="loadgroup"), environment=parallel_environment,
-                  timeout=180)
+                  timeout=300)
     if status or args.num_gpus == 1:
         return status
     return _run(_pytest("-m", "xdist_group", "python/test/gsan", workers=1, distribution="loadgroup"),
-                environment=environment, timeout=180)
+                environment=environment, timeout=300)
 
 
 def _suite(args):

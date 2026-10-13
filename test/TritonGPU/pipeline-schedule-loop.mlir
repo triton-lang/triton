@@ -863,3 +863,61 @@ tt.func public @backwards_prop_existing(%arg0: i32, %arg1: tensor<128x4x!tt.ptr<
 }
 
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // A GDC wait in the loop orders loads after prerequisite grids.
+  // CHECK-LABEL: @gdc_wait_in_loop
+  // CHECK-NOT: loop.stage
+  // CHECK: tt.return
+  tt.func @gdc_wait_in_loop(%n: i32, %ptr: tensor<128x!tt.ptr<f32>, #blocked>) -> tensor<128xf32, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> tensor<128xf32, #blocked> : i32 {
+      tt.grid_dependency_wait
+      %x = tt.load %ptr {tt.latency = 2 : i32} : tensor<128x!tt.ptr<f32>, #blocked>
+      %sum = arith.addf %acc, %x : tensor<128xf32, #blocked>
+      scf.yield %sum : tensor<128xf32, #blocked>
+    }
+    tt.return %result : tensor<128xf32, #blocked>
+  }
+
+  // CHECK-LABEL: @gdc_wait_in_if
+  // CHECK-NOT: loop.stage
+  // CHECK: tt.return
+  tt.func @gdc_wait_in_if(%n: i32, %wait: i1, %ptr: tensor<128x!tt.ptr<f32>, #blocked>) -> tensor<128xf32, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> tensor<128xf32, #blocked> : i32 {
+      scf.if %wait {
+        tt.grid_dependency_wait
+      }
+      %x = tt.load %ptr {tt.latency = 2 : i32} : tensor<128x!tt.ptr<f32>, #blocked>
+      %sum = arith.addf %acc, %x : tensor<128xf32, #blocked>
+      scf.yield %sum : tensor<128xf32, #blocked>
+    }
+    tt.return %result : tensor<128xf32, #blocked>
+  }
+
+  // Waiting before the loop still allows its loads to be pipelined.
+  // CHECK-LABEL: @gdc_wait_before_loop
+  // CHECK: tt.grid_dependency_wait
+  // CHECK: tt.load {{.*}}loop.stage = 0 : i32
+  // CHECK: tt.scheduled_max_stage = 2 : i32
+  tt.func @gdc_wait_before_loop(%n: i32, %ptr: tensor<128x!tt.ptr<f32>, #blocked>) -> tensor<128xf32, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+    tt.grid_dependency_wait
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> tensor<128xf32, #blocked> : i32 {
+      %x = tt.load %ptr {tt.latency = 2 : i32} : tensor<128x!tt.ptr<f32>, #blocked>
+      %sum = arith.addf %acc, %x : tensor<128xf32, #blocked>
+      scf.yield %sum : tensor<128xf32, #blocked>
+    }
+    tt.return %result : tensor<128xf32, #blocked>
+  }
+}

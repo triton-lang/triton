@@ -46,28 +46,33 @@ enum class DFSState { Visiting, Visited };
 /// a backedge, i.e. its target dominates its source. Only blocks reachable
 /// from the function entry matter to membar's forward dataflow analysis.
 bool isReducibleCFG(Block *block, DenseMap<Block *, DFSState> &states,
-                    DominanceInfo &dominanceInfo) {
+                    DominanceInfo &dominanceInfo,
+                    llvm::SmallPtrSetImpl<Block *> &loopHeaders) {
   states[block] = DFSState::Visiting;
 
   for (Block *successor : block->getTerminator()->getSuccessors()) {
     auto it = states.find(successor);
     if (it == states.end()) {
-      if (!isReducibleCFG(successor, states, dominanceInfo))
+      if (!isReducibleCFG(successor, states, dominanceInfo, loopHeaders))
         return false;
       continue;
     }
-    if (it->second == DFSState::Visiting &&
-        !dominanceInfo.dominates(successor, block))
-      return false;
+    if (it->second == DFSState::Visiting) {
+      if (!dominanceInfo.dominates(successor, block))
+        return false;
+      loopHeaders.insert(successor);
+    }
   }
 
   states[block] = DFSState::Visited;
   return true;
 }
 
-bool isReducibleCFG(FunctionOpInterface funcOp, DominanceInfo &dominanceInfo) {
+bool isReducibleCFG(FunctionOpInterface funcOp, DominanceInfo &dominanceInfo,
+                    llvm::SmallPtrSetImpl<Block *> &loopHeaders) {
   DenseMap<Block *, DFSState> states;
-  return isReducibleCFG(&funcOp.getBlocks().front(), states, dominanceInfo);
+  return isReducibleCFG(&funcOp.getBlocks().front(), states, dominanceInfo,
+                        loopHeaders);
 }
 
 std::optional<int64_t> getConstantIntValue(Value v) {
@@ -258,7 +263,7 @@ triton::gpu::MemDescIndexOp extractBufferIndex(Value value) {
 
 BufferIndexAnalysis::BufferIndexAnalysis(FunctionOpInterface funcOp)
     : dominanceInfo(funcOp),
-      hasReducibleCFG(isReducibleCFG(funcOp, dominanceInfo)) {}
+      hasReducibleCFG(isReducibleCFG(funcOp, dominanceInfo, loopHeaders)) {}
 
 BufferIndexAnalysis::~BufferIndexAnalysis() = default;
 
@@ -322,6 +327,15 @@ bool BufferIndexAnalysis::isBackedgeSuccessor(Operation *terminator,
   // parent operation's continuation do not revisit the region's definitions.
   return isa<RegionBranchTerminatorOpInterface>(terminator) &&
          successor->getParentOp() == terminator->getParentOp();
+}
+
+bool BufferIndexAnalysis::entersLoop(Operation *terminator) const {
+  if (!isa<BranchOpInterface>(terminator))
+    return false;
+  return llvm::any_of(terminator->getSuccessors(), [&](Block *successor) {
+    return loopHeaders.contains(successor) &&
+           !isBackedgeSuccessor(terminator, successor);
+  });
 }
 
 } // namespace mlir

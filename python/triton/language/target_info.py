@@ -45,16 +45,16 @@ def is_hip():
 @constexpr_function
 def is_hip_cdna3():
     target = current_target()
-    return target is not None and target.arch == "gfx942"
+    return target is not None and target.backend == "hip" and target.arch == "gfx942"
 
 
 @constexpr_function
 def is_hip_cdna4():
     target = current_target()
-    return target is not None and target.arch == "gfx950"
+    return target is not None and target.backend == "hip" and target.arch == "gfx950"
 
 
 @constexpr_function
 def is_hip_gfx1250():
     target = current_target()
-    return target is not None and target.arch == "gfx1250"
+    return target is not None and target.backend == "hip" and target.arch.startswith("gfx1250")

@@ -14,6 +14,38 @@ def _element_ptrs(array: np.ndarray) -> np.ndarray:
     return (base + offsets).reshape(array.shape)
 
 
+@pytest.mark.parametrize("dtype, prefix", [
+    (tl.float16, "fcmpO"),
+    (tl.float32, "fcmpO"),
+    (tl.float64, "fcmpO"),
+    (tl.float32, "fcmpU"),
+    (tl.int32, "icmpS"),
+    (tl.uint32, "icmpU"),
+    (tl.int1, "icmpU"),
+])
+@pytest.mark.parametrize("op, expected", [
+    ("LT", [True, False, False, False]),
+    ("LE", [True, True, False, True]),
+    ("GT", [False, False, True, False]),
+    ("GE", [False, True, True, True]),
+    ("EQ", [False, True, False, True]),
+    ("NE", [True, False, True, False]),
+])
+def test_compare_op_return_type(dtype, prefix, op, expected):
+    builder = interpreter.InterpreterBuilder()
+    np_dtype = interpreter._get_np_dtype(dtype)
+    lhs = interpreter.TensorHandle(np.array([0, 1, 2, 3], dtype=np_dtype), dtype)
+    rhs = interpreter.TensorHandle(np.array([1, 1, 0, 3], dtype=np_dtype), dtype)
+    if dtype.is_int() and op in ("EQ", "NE"):
+        prefix = "icmp"
+    result = getattr(builder, f"create_{prefix}{op}")(lhs, rhs)
+    assert result.dtype == tl.int1
+    assert result.data.dtype == np.bool_
+    np.testing.assert_array_equal(result.data, expected)
+    converted = builder.create_ui_to_fp(result, tl.float16)
+    np.testing.assert_array_equal(converted.data, np.array(expected, dtype=np.float16))
+
+
 def test_bf16_to_fp16_rounding_and_overflow():
     # Signed zeros, finite values, overflow, subnormal rounding, and infinities.
     bits = np.array([0x0000, 0x8000, 0x3F80, 0xBF80, 0x4781, 0xC781, 0x3300, 0x3301, 0x33C0, 0xB3C0, 0x7F80, 0xFF80],
@@ -33,6 +65,18 @@ def test_fp16_to_bf16_exact_values():
     src = interpreter.TensorHandle(bits.view(np.float16), tl.float16)
     result = interpreter.InterpreterBuilder().create_fp_to_fp(src, tl.bfloat16, ir.ROUNDING_MODE.RTNE)
     np.testing.assert_array_equal(result.data, expected)
+
+
+@pytest.mark.parametrize("src_dtype, dst_dtype, bits, expected", [
+    (tl.float32, tl.bfloat16, [0x00008000, 0x00018000, 0x007F8000, 0x80008000], [0x0000, 0x0002, 0x0080, 0x8000]),
+    (tl.float16, tl.bfloat16, [0x0001, 0x8001], [0x3380, 0xB380]),
+    (tl.float8e4nv, tl.float8e5, [0x01, 0x02, 0x07], [0x18, 0x1C, 0x23]),
+])
+def test_float_conversion_subnormal_rounding(src_dtype, dst_dtype, bits, expected):
+    uint_dtype = getattr(np, f"uint{src_dtype.primitive_bitwidth}")
+    data = np.array(bits, dtype=uint_dtype).view(interpreter._get_np_dtype(src_dtype))
+    result = interpreter._convert_float(data, src_dtype, dst_dtype, ir.ROUNDING_MODE.RTNE)
+    np.testing.assert_array_equal(result, expected)
 
 
 def test_atomic_poll_tensor_shares_timeout(monkeypatch) -> None:

@@ -318,7 +318,7 @@ std::string GraphDumper::emitEdge(const std::string &srcId,
 
 std::string GraphDumper::emitValueNode(Value value) const {
   NodeInfo info = onValue(value);
-  if (info.find("label") == info.end()) {
+  if (!info.contains("label")) {
     std::string shapeStr = getShapeStr(value.getType());
     if (auto arg = mlir::dyn_cast<BlockArgument>(value))
       info["label"] =
@@ -331,7 +331,7 @@ std::string GraphDumper::emitValueNode(Value value) const {
 
 std::string GraphDumper::emitOperationNode(Operation *op) const {
   NodeInfo info = onOperation(op);
-  if (info.find("label") == info.end())
+  if (!info.contains("label"))
     info["label"] = op->getName().getStringRef().str();
   return emitNode(getUniqueId(op), info);
 }
@@ -659,6 +659,17 @@ bool isExpensiveLoadOrStore(Operation *op) {
 
 std::optional<SmallVector<OpOperand *>>
 canUseResultEncoding(Operation *op, Attribute targetEncoding) {
+  if (auto broadcast = dyn_cast<triton::BroadcastOp>(op)) {
+    auto dstType = broadcast.getType().cloneWithEncoding(targetEncoding);
+    auto srcType = broadcast.getSrc().getType();
+    if (failed(srcType.getEncoding()
+                   .getDialect()
+                   .getRegisteredInterface<DialectInferLayoutInterface>()
+                   ->verifyBroadcastOpEncoding(srcType, dstType)))
+      return std::nullopt;
+    return SmallVector<OpOperand *>{&broadcast.getSrcMutable()};
+  }
+
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -690,10 +701,8 @@ bool canBeRematerialized(Operation *op) {
     return !isExpensiveLoadOrStore(op);
   if (isa<AtomicOpInterface, DotOpInterface>(op))
     return false;
-  if (auto gather = dyn_cast<GatherOp>(op))
-    return !gather.getEfficientLayout();
-  if (auto reshape = dyn_cast<ReshapeOp>(op))
-    return !reshape.getEfficientLayout();
+  if (ttg::hasEfficientLayout(op))
+    return false;
 
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;

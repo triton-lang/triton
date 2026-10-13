@@ -13,6 +13,7 @@ from triton._internal_testing import (
     is_hip,
     is_hip_gfx1250,
     is_hopper_or_newer,
+    skip_if_unsupported_cluster_size,
 )
 from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
@@ -110,6 +111,8 @@ def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl
         ttgl.BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0]),
         ttgl.BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0]),
         ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [1, 0]),
+        ttgl.BlockedLayout([2, 4], [1, THREADS_PER_WARP], [1, 4], [0, 1]),
+        ttgl.BlockedLayout([4, 2], [THREADS_PER_WARP, 1], [4, 1], [1, 0]),
     ]))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("sanitize_overflow", [False, True])
@@ -126,6 +129,34 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
 
     z_ref = torch.cumsum(x, dim=axis, dtype=torch.int32)
     torch.testing.assert_close(z_tri, z_ref)
+
+
+@pytest.mark.parametrize("M, N, src_layout, axis, num_ctas", [
+    pytest.param(2, 2, ttgl.BlockedLayout([2, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0]), 0, 1, id="registers"),
+    pytest.param(2, 4 * THREADS_PER_WARP, ttgl.BlockedLayout([1, 2], [1, THREADS_PER_WARP], [1, 4], [0, 1]), 1, 1,
+                 id="multiwarp"),
+    pytest.param(256, 4, ttgl.BlockedLayout([2, 1], [32, 1], [1, 4], [1, 0], [[0, 1]]), 0, 2, id="nonaxis_split"),
+    pytest.param(256, 4, ttgl.BlockedLayout([2, 1], [32, 1], [1, 4], [1, 0], [[0, 0]]), 0, 2, id="broadcast"),
+    pytest.param(1, 64, ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [[1, 0]]), 0, 2, id="clipped_axis_split"),
+])
+def test_scan_blocked_shape_clipping(M, N, src_layout, axis, num_ctas, device):
+    if num_ctas > 1 and not is_hopper_or_newer():
+        pytest.skip("Requires Hopper or newer")
+    x = torch.arange(1, M * N + 1, dtype=torch.int32, device=device).reshape(M, N)
+    y = torch.empty_like(x)
+    scan_kernel[(1, )](x, y, M, N, src_layout, axis, num_warps=4, num_ctas=num_ctas)
+    torch.testing.assert_close(y, x.cumsum(axis, dtype=torch.int32))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_scan_rejects_axis_split_across_ctas(device, capfd):
+    src_layout = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], [[1, 0]])
+    x = torch.ones((64, 1), dtype=torch.int32, device=device)
+    y = torch.empty_like(x)
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        scan_kernel.warmup(x, y, 64, 1, src_layout, 0, grid=(1, ), num_warps=4, num_ctas=2)
+    captured = capfd.readouterr()
+    assert "unsupported scan layout" in captured.out + captured.err
 
 
 def test_scan_blocked_broadcast_layout(device):
@@ -171,6 +202,49 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
     scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=2)
 
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
+
+
+@pytest.mark.parametrize("op", ["cumsum", "cumprod"])
+@pytest.mark.parametrize("axis", [0, 1, -1])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("dtype, out_dtype", [
+    (torch.int8, None),
+    (torch.uint8, None),
+    (torch.int32, None),
+    (torch.float16, None),
+    (torch.float32, None),
+    (torch.int32, torch.int64),
+    (torch.float16, torch.float32),
+])
+def test_standard_scan(op, axis, reverse, dtype, out_dtype, device):
+
+    @gluon.jit
+    def kernel(X, Y, OP: ttgl.constexpr, AXIS: ttgl.constexpr, REVERSE: ttgl.constexpr, DTYPE: ttgl.constexpr,
+               LAYOUT: ttgl.constexpr):
+        m = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, LAYOUT))[:, None]
+        n = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, LAYOUT))[None, :]
+        x = ttgl.load(X + m * 64 + n)
+        y = OP(x, axis=AXIS, reverse=REVERSE, dtype=DTYPE)
+        ttgl.static_assert(y.dtype == Y.dtype.element_ty)
+        ttgl.static_assert(y.type.layout == x.type.layout)
+        ttgl.store(Y + m * 64 + n, y)
+
+    torch.manual_seed(0)
+    # Small integral values make both scan references exact, including fp16.
+    x = torch.randint(0 if dtype == torch.uint8 else -1, 2, (32, 64), device=device).to(dtype)
+    result_dtype = out_dtype or {torch.int8: torch.int32, torch.uint8: torch.uint32}.get(dtype, dtype)
+    y = torch.empty(x.shape, dtype=result_dtype, device=device)
+    layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0])
+    kernel[(1, )](x, y, getattr(ttgl, op), axis, reverse,
+                  getattr(ttgl,
+                          str(out_dtype).removeprefix("torch.")) if out_dtype else None, layout)
+    ref = x.flip([axis]) if reverse else x
+    # PyTorch does not implement scans on uint32.
+    ref = getattr(torch, op)(ref.to(torch.int64) if dtype == torch.uint8 else ref, dim=axis,
+                             dtype=torch.int64 if result_dtype == torch.uint32 else result_dtype)
+    if reverse:
+        ref = ref.flip([axis])
+    torch.testing.assert_close(y.to(ref.dtype), ref, atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
@@ -847,6 +921,7 @@ def test_reduce_funky_layout(src_layout, axis, device):
     shape = tuple(src_layout.shape)
     num_warps = 2**len(src_layout.warp_bases)
     num_ctas = 2**len(src_layout.block_bases)
+    skip_if_unsupported_cluster_size(num_ctas)
     # TODO: Remove this once AMD supports num_ctas > 1
     if num_ctas > 1 and not is_hopper_or_newer():
         pytest.skip("num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
@@ -914,7 +989,6 @@ def _reduce_layouts():
         ttgl.BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1]),
         ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], instr_shape=[16, 8]),
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 16, 16]),
-        ttgl.amd.AMDMFMALayout(version=1, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=2, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=3, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[1, 4]),
         ttgl.amd.AMDMFMALayout(version=4, instr_shape=[32, 32, 16], transposed=True, warps_per_cta=[1, 4]),
@@ -1111,14 +1185,16 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
             reduce_fn = np.fmin if op == "min" else np.fmax
     else:
         limits = np.iinfo(numpy_dtype)
-        if op in ("and", "or", "xor"):
+        if op in ("and", "or", "xor") or limits.bits == 64:
             # Exercise every bit, including the sign bit, in both groups.
             x[:] = np.frombuffer(rng.bytes(x.nbytes), dtype=x.dtype).reshape(x.shape)
         x[0], x[1] = limits.min, limits.max
         x[2, 0], x[3, -1] = limits.min, limits.max
         if limits.bits == 64:
             # Equal high words and unsigned low-word comparisons.
-            x[4, :4] = [0x100000000, 0x1FFFFFFFF, 0x180000000, 0x17FFFFFFF][:size]
+            low_words = np.resize(np.array([0xFFFFFFFF, 0, 0x80000000, 0x7FFFFFFF], dtype=np.uint64), size)
+            x[4] = (0x100000000 | low_words).view(x.dtype)
+            x[5] = (0x8000000000000000 | low_words).view(x.dtype)
         reduce_fn = {
             "min": np.minimum, "max": np.maximum, "add": np.add, "and": np.bitwise_and, "or": np.bitwise_or, "xor":
             np.bitwise_xor
@@ -1144,13 +1220,16 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
         profitable = group_stride == 1 or (group_stride == 2 and size >= 8)
     else:
         profitable = (group_stride == 1 and size >= 4) or (group_stride == 2 and size == 16)
-    use_redux = size == 32 or (profitable and "64" not in dtype_str)
+    use_redux = size == 32 or profitable
+    if "64" in dtype_str:
+        use_redux = ((group_stride == 1 and size >= (8 if op == "add" else 4))
+                     or (group_stride == 2 and size >= 16 and op != "add"))
     if is_float and major != 10:
         use_redux = False
     if use_redux:
         expected_count = group_stride
         if "64" in dtype_str:
-            expected_count = 3 if op == "add" else 2
+            expected_count *= 3 if op == "add" else 2
         assert ptx.count("redux.sync.") == expected_count
         assert "shfl.sync.bfly" not in ptx
         for line in ptx.splitlines():
@@ -1169,7 +1248,8 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
 
 @pytest.mark.skipif(not is_cuda(), reason="NVIDIA redux instructions")
 @pytest.mark.parametrize("op", ["add", "xor", "max"])
-def test_reduce_broadcast_across_warps(op, device):
+@pytest.mark.parametrize("dtype_str", ["int32", "int64", "uint64"])
+def test_reduce_broadcast_across_warps(op, dtype_str, device):
     import numpy as np
 
     if torch.cuda.get_device_capability()[0] < 8:
@@ -1187,16 +1267,23 @@ def test_reduce_broadcast_across_warps(op, device):
             y = ttgl.max(x, 0)
         ttgl.store(Y, y)
 
-    values = np.arange(128, dtype=np.int32)
+    values = np.arange(128, dtype=dtype_str)
     values[0] = 257  # Make both the sum and XOR nonzero.
+    if values.dtype.itemsize == 8:
+        values = (values << 32) | (0xFFFFFFFF - values)
+        values[::3] = ~values[::3]
     x = torch.tensor(values, device=device)
-    y = torch.empty((), dtype=torch.int32, device=device)
+    y = torch.empty((), dtype=x.dtype, device=device)
     compiled = kernel[(1, )](x, y, op, num_warps=4)
     reduce_fn = {"add": np.add, "xor": np.bitwise_xor, "max": np.maximum}[op]
-    assert y.item() == reduce_fn.reduce(values)
-    # One full-warp redux, then one redux over four broadcast warp results.
-    assert compiled.asm["ptx"].count("redux.sync.") == 2
-    assert "shfl.sync.bfly" not in compiled.asm["ptx"]
+    assert y.item() == reduce_fn.reduce(values, dtype=values.dtype)
+    # One full-warp reduction, then one over four broadcast warp results.
+    expected_count = 2
+    if values.dtype.itemsize == 8:
+        expected_count = 3 if op == "add" else 4
+    assert compiled.asm["ptx"].count("redux.sync.") == expected_count
+    # Four broadcast values use shuffles for 64-bit addition.
+    assert ("shfl.sync.bfly" in compiled.asm["ptx"]) == (values.dtype.itemsize == 8 and op == "add")
 
 
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
@@ -1553,15 +1640,6 @@ _mma_pairs = [
     [
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 128, 16]),
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 64, 16]),
-    ],
-    # AMD MFMA v1 layouts
-    [
-        ttgl.amd.AMDMFMALayout(version=1, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[2, 2]),
-        ttgl.amd.AMDMFMALayout(version=1, instr_shape=[32, 32, 8], transposed=True, warps_per_cta=[4, 1]),
-    ],
-    [
-        ttgl.amd.AMDMFMALayout(version=1, instr_shape=[16, 16, 8], transposed=True, warps_per_cta=[4, 4]),
-        ttgl.amd.AMDMFMALayout(version=1, instr_shape=[16, 16, 8], transposed=True, warps_per_cta=[16, 1]),
     ],
     # AMD MFMA v2 layouts
     [

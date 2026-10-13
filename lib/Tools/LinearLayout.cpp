@@ -1189,7 +1189,7 @@ LinearLayout::getFreeVariableMasks() const {
   for (StringAttr dim : getInDimNames()) {
     int32_t mask = 0;
     for (int i = 0; i < getInDimSizeLog2(dim); i++, c++) {
-      if (basicVars.count(c) == 0) {
+      if (!basicVars.contains(c)) {
         mask |= (1 << i);
       }
     }
