@@ -33,8 +33,28 @@ struct Fp32ToBf16Conversion : public OpRewritePattern<arith::TruncFOp> {
     if (!isBf16(op.getType()) || !isFp32(src.getType()))
       return failure();
 
+    // Only round-to-nearest-even (the default) and round-toward-zero are
+    // handled here.
+    auto roundingMode = op.getRoundingmode();
+    bool rtz = roundingMode == arith::RoundingMode::toward_zero;
+    if (roundingMode && !rtz &&
+        *roundingMode != arith::RoundingMode::to_nearest_even)
+      return failure();
+
     Location loc = op.getLoc();
     Value i32Src = op_bitcast(toInt32(src.getType()), src);
+    if (!rtz) {
+      // Round to nearest even: add 0x7fff plus the LSB of the result before
+      // truncating. NaNs are made quiet instead so that rounding cannot turn
+      // them into Inf.
+      Value lsb =
+          op_and(op_lshr(i32Src, cst_like(i32Src, 16)), cst_like(i32Src, 1));
+      Value rounded = op_addi(i32Src, op_addi(lsb, cst_like(i32Src, 0x7fff)));
+      Value isNan = op_icmp_ugt(op_and(i32Src, cst_like(i32Src, 0x7fffffff)),
+                                cst_like(i32Src, 0x7f800000));
+      Value quietNan = op_or(i32Src, cst_like(i32Src, 0x400000));
+      i32Src = op_select(isNan, quietNan, rounded);
+    }
     Value shiftedSrc = op_lshr(i32Src, cst_like(i32Src, 16));
     Value i16Res = op_trunci(toInt16(src.getType()), shiftedSrc);
     Value res = op_bitcast(op.getType(), i16Res);
