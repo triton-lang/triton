@@ -837,7 +837,8 @@ void init_triton_ir(py::module_ &m) {
              return self.getArgument(idx);
            })
       .def("get_arg_str_attr",
-           [](FuncOp &self, unsigned idx, const std::string &name) -> py::object {
+           [](FuncOp &self, unsigned idx,
+              const std::string &name) -> py::object {
              if (idx >= self.getNumArguments())
                throw py::index_error("Function argument index out of range");
              FunctionOpInterface funcOpIF(self);
@@ -849,7 +850,8 @@ void init_triton_ir(py::module_ &m) {
              return py::str(s.c_str(), s.size());
            })
       .def("get_arg_int_attr",
-           [](FuncOp &self, unsigned idx, const std::string &name) -> py::object {
+           [](FuncOp &self, unsigned idx,
+              const std::string &name) -> py::object {
              if (idx >= self.getNumArguments())
                throw py::index_error("Function argument index out of range");
              FunctionOpInterface funcOpIF(self);
