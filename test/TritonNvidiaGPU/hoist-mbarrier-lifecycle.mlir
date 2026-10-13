@@ -10,7 +10,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tt.func @hoist_loop_lifecycle
   // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
   // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
-  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %{{.*}}) -> (i32)
+  // CHECK: %[[INITIAL_PHASE:.*]] = arith.constant 0 : i32
+  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %[[INITIAL_PHASE]]) -> (i32)
+  // CHECK-NOT: arith.constant 0 : i32
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}} %[[BAR]], %true {multicast}
   // CHECK: ttng.wait_barrier %[[BAR]], %[[PHASE]]
   // CHECK-NEXT: %[[NEXT:.*]] = arith.xori %[[PHASE]],
@@ -18,7 +20,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.inval_barrier %[[BAR]]
   // CHECK-NEXT: tt.return
   tt.func @hoist_loop_lifecycle(%desc: !tt.tensordesc<64x128xf16, #nvmma>) {
-    %c0 = arith.constant 0 : i32
     %i0 = arith.constant 0 : index
     %i4 = arith.constant 4 : index
     %i1 = arith.constant 1 : index
@@ -26,6 +27,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c1 = arith.constant 1 : i32
     %true = arith.constant true
     scf.for %i = %i0 to %i4 step %i1 {
+      %c0 = arith.constant 0 : i32
       %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -741,5 +743,74 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     }
     tt.return
+  }
+}
+
+// -----
+
+#barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Hoist per-CTA barrier init/invalidation and carry its phase across two-CTA commits.
+  // CHECK-LABEL: tt.func @hoist_two_cta_commit_lifecycle
+  // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<4xi64,
+  // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
+  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %{{.*}}) -> (i32)
+  // CHECK: ttng.tc_gen5_commit %[[BAR]]
+  // CHECK-NEXT: ttng.wait_barrier %[[BAR]], %[[PHASE]]
+  // CHECK-NEXT: %[[NEXT:.*]] = arith.xori %[[PHASE]],
+  // CHECK: scf.yield %[[NEXT]]
+  // CHECK: ttng.inval_barrier %[[BAR]]
+  // CHECK-NEXT: tt.return
+  tt.func @hoist_two_cta_commit_lifecycle() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c4 = arith.constant 4 : i32
+    scf.for %i = %c0 to %c4 step %c1 : i32 {
+      %bar = ttg.local_alloc : () -> !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+      ttng.init_barrier %bar, 1 : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+      ttng.tc_gen5_commit %bar : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+      ttng.wait_barrier %bar, %c0 : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+      ttng.inval_barrier %bar : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // The phase zero also feeds the outer condition and the sibling branch.
+  // Hoisting the lifecycle must not sink this constant into the then region.
+  // CHECK-LABEL: tt.func @hoist_phase_zero_dominates_conditional
+  // CHECK: %[[ZERO:.*]] = arith.constant 0 : i32
+  // CHECK: %[[PRED:.*]] = arith.cmpi sgt, %{{.*}}, %[[ZERO]] : i32
+  // CHECK: scf.if %[[PRED]]
+  // CHECK-NOT: arith.constant 0 : i32
+  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %[[ZERO]])
+  // CHECK: ttng.wait_barrier %{{.*}}, %[[PHASE]]
+  // CHECK: } else {
+  // CHECK-NEXT: scf.yield %[[ZERO]] : i32
+  tt.func @hoist_phase_zero_dominates_conditional(%n: i32) -> i32 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %pred = arith.cmpi sgt, %n, %c0 : i32
+    %result = scf.if %pred -> i32 {
+      scf.for %i = %c0 to %n step %c1 : i32 {
+        %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.tc_gen5_commit %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      }
+      scf.yield %n : i32
+    } else {
+      scf.yield %c0 : i32
+    }
+    tt.return %result : i32
   }
 }

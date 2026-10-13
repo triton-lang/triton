@@ -853,6 +853,23 @@ void combineArefs(scf::ForOp loop) {
   llvm::DenseMap<std::pair<Operation *, int>, SmallVector<ArefGetEnterOp>>
       liveBeforeGroups;
   for (auto getEnterOp : getEnterOps) {
+    // Combining erases the original arefs, so require a single get-enter.
+    // Schematic IR from test_tma_matmul_mixed_consumers:
+    //   %a_ref = nvws.aref.create %a_buffer ...
+    //   %b_ref = nvws.aref.create %b_buffer ...
+    //   scf.for ... {
+    //     %a_aux, %t0 = nvws.aref.get.enter %a_ref[%stage, %phase] ...
+    //     %aux = ttg.local_load %a_aux ...
+    //     %a_mma, %t1 = nvws.aref.get.enter %a_ref[%stage, %phase] ...
+    //     %b_mma, %t2 = nvws.aref.get.enter %b_ref[%stage, %phase] ...
+    //     ttng.tc_gen5_mma %a_mma, %b_mma, ...
+    //   }
+    // Combining the MMA get-enters erases %a_ref and %b_ref, but the get-enter
+    // producing %a_aux still uses %a_ref.
+    if (llvm::any_of(getEnterOp.getAref().getUsers(), [&](Operation *user) {
+          return isa<ArefGetEnterOp>(user) && user != getEnterOp;
+        }))
+      continue;
     if (auto liveBeforeOp =
             getDominantConsumer(getEnterOp, *loop.getBody(), domInfo)) {
       assert(hasPartition(getEnterOp));
