@@ -349,86 +349,48 @@ def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     return module
 
 
-@pytest.mark.parametrize("disable_line_info", [False, True])
-def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, disable_line_info):
-    from textwrap import dedent
-    code = dedent("""
-        import triton
-        @triton.jit
-        def test_kernel(i):
-            i = i + 1
-    """)
-    fresh_knobs.compilation.disable_line_info = disable_line_info
+@pytest.mark.parametrize("change_line_info", [False, True])
+@pytest.mark.parametrize("filename, extra_lines, decorators, indentation", [
+    ("kernel.py", 0, 1, 4),
+    ("other.py", 0, 1, 4),
+    ("kernel.py", 1, 1, 4),
+    ("kernel.py", 0, 2, 4),
+    ("kernel.py", 0, 1, 8),
+], ids=["unchanged", "file", "line", "decorator", "column"])
+def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, fresh_triton_cache, change_line_info,
+                                           filename, extra_lines, decorators, indentation):
+    from textwrap import dedent, indent
 
-    line_file = tmp_path / "line" / "kernel.py"
-    orig_mod = write_and_load_module(line_file, code, 0)
-    orig_line_key = orig_mod.test_kernel.cache_key
-    shifted_mod = write_and_load_module(line_file, code, 1)
-    shifted_line_key = shifted_mod.test_kernel.cache_key
-    assert orig_line_key != shifted_line_key
-
-    path0_mod = write_and_load_module(tmp_path / "path0" / "kernel.py", code, 0)
-    path1_mod = write_and_load_module(tmp_path / "path1" / "kernel.py", code, 0)
-    path0_key = path0_mod.test_kernel.cache_key
-    path1_key = path1_mod.test_kernel.cache_key
-    assert path0_key != path1_key
-
-
-def test_emitted_source_coordinates_invalidate_cache(tmp_path, fresh_knobs):
-    from textwrap import dedent
     fresh_knobs.compilation.disable_line_info = False
 
-    one_decorator = dedent("""
-        import triton
-        def identity(fn):
-            return fn
-        @identity
-        @triton.jit
-        def test_kernel(i):
-            i = i + 1
-    """)
-    two_decorators = one_decorator.replace("@identity\n", "@identity\n@identity\n")
-    decorator_file = tmp_path / "decorator" / "kernel.py"
-    one_decorator_kernel = write_and_load_module(decorator_file, one_decorator, 0).test_kernel
-    one_decorator_key = one_decorator_kernel.cache_key
-    two_decorators_kernel = write_and_load_module(decorator_file, two_decorators, 0).test_kernel
-    two_decorators_key = two_decorators_kernel.cache_key
-    assert one_decorator_kernel.src == two_decorators_kernel.src
-    assert one_decorator_kernel.starting_line_number == two_decorators_kernel.starting_line_number
-    assert one_decorator_kernel.def_file_line_number != two_decorators_kernel.def_file_line_number
-    assert one_decorator_key != two_decorators_key
-
-    four_space_indent = dedent("""
-        import triton
-        def make_kernel():
-            if False:
-                pass
+    def load_kernel(filename="kernel.py", extra_lines=0, decorators=1, indentation=4):
+        code = dedent("""\
+            import triton
+            import triton.language as tl
+            def identity(fn):
+                return fn
+            def make_kernel():
+        """)
+        body = "@identity\n" * decorators + dedent("""\
             @triton.jit
-            def test_kernel(i):
-                i = i + 1
+            def test_kernel(X):
+                tl.store(X, 1)
             return test_kernel
-        test_kernel = make_kernel()
-    """)
-    eight_space_indent = four_space_indent.replace("if False:", "if True:").replace(
-        "    @triton.jit\n"
-        "    def test_kernel(i):\n"
-        "        i = i + 1\n"
-        "    return test_kernel",
-        "        @triton.jit\n"
-        "        def test_kernel(i):\n"
-        "            i = i + 1\n"
-        "        return test_kernel",
-    )
-    indent_file = tmp_path / "indent" / "kernel.py"
-    four_space_kernel = write_and_load_module(indent_file, four_space_indent, 0).test_kernel
-    four_space_key = four_space_kernel.cache_key
-    eight_space_kernel = write_and_load_module(indent_file, eight_space_indent, 0).test_kernel
-    eight_space_key = eight_space_kernel.cache_key
-    assert four_space_kernel.src == eight_space_kernel.src
-    assert four_space_kernel.starting_line_number == eight_space_kernel.starting_line_number
-    assert four_space_kernel.def_file_line_number == eight_space_kernel.def_file_line_number
-    assert four_space_kernel.def_file_col_number != eight_space_kernel.def_file_col_number
-    assert four_space_key != eight_space_key
+        """)
+        code += indent(body, " " * indentation) + "test_kernel = make_kernel()\n"
+        return write_and_load_module(tmp_path / filename, code, extra_lines).test_kernel
+
+    original = load_kernel()
+    original_key = original.cache_key
+    original_binary = triton.compile(triton.compiler.ASTSource(original, {"X": "*i32"})).kernel
+
+    fresh_knobs.compilation.disable_line_info = change_line_info
+    updated = load_kernel(filename, extra_lines, decorators, indentation)
+    updated_binary = triton.compile(triton.compiler.ASTSource(updated, {"X": "*i32"})).kernel
+    source_changed = (filename, extra_lines, decorators, indentation) != ("kernel.py", 0, 1, 4)
+    assert original.src == updated.src
+    assert (original_key != updated.cache_key) == source_changed
+    assert (original_binary != updated_binary) == (source_changed or change_line_info)
 
 
 def test_reuse(device, fresh_triton_cache):
