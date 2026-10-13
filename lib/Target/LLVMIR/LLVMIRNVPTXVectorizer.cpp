@@ -334,7 +334,7 @@ private:
   }
 
   SmallVector<char, 64> reachableNodes(const PackPlan &plan,
-                                      ArrayRef<unsigned> roots) const {
+                                       ArrayRef<unsigned> roots) const {
     SmallVector<char, 64> live(plan.nodes.size(), false);
     for (unsigned root : roots)
       live[root] = true;
@@ -617,7 +617,8 @@ private:
       while (level.size() > 1) {
         SmallVector<unsigned, 32> next;
         for (unsigned lane = 0; lane + 1 < level.size(); lane += 2)
-          next.push_back(planReductionNode(root, {level[lane], level[lane + 1]}, plan));
+          next.push_back(
+              planReductionNode(root, {level[lane], level[lane + 1]}, plan));
         if (level.size() % 2)
           next.push_back(level.back());
         level = std::move(next);
@@ -1126,7 +1127,7 @@ private:
   }
 
   bool appendRoot(Instruction &first, Instruction &second, PackPlan &plan,
-                   SmallVectorImpl<PackRoot> &roots) const {
+                  SmallVectorImpl<PackRoot> &roots) const {
     if (first.use_empty() || second.use_empty() ||
         plan.replaced.contains(&first) || plan.replaced.contains(&second) ||
         ((first.getOpcode() == Instruction::FAdd ||
@@ -1235,7 +1236,7 @@ private:
   }
 
   SmallVector<ValuePair, 8> paidInputs(const PackPlan &plan,
-                                      unsigned root) const {
+                                       unsigned root) const {
     SmallVector<ValuePair, 8> inputs;
     auto live = reachableNodes(plan, ArrayRef<unsigned>(root));
     for (unsigned index = 0; index < plan.nodes.size(); ++index) {
@@ -1278,8 +1279,7 @@ private:
           work += candidate.nodes.size();
           if (work > maxSharedPlanWork)
             return false;
-          if (!valid ||
-              !candidate.loopCarries.empty() ||
+          if (!valid || !candidate.loopCarries.empty() ||
               !llvm::is_contained(
                   paidInputs(candidate, candidateRoots.front().node), shared))
             continue;
@@ -1340,9 +1340,9 @@ private:
         }
         if (!triedSharedInputs) {
           triedSharedInputs = true;
-          if (vectorizeSharedInputs(
-                  *first, *second,
-                  ArrayRef<WeakTrackingVH>(candidates).slice(index, limit - index))) {
+          if (vectorizeSharedInputs(*first, *second,
+                                    ArrayRef<WeakTrackingVH>(candidates)
+                                        .slice(index, limit - index))) {
             changed = true;
             break;
           }
