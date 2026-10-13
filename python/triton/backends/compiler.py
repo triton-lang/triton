@@ -65,6 +65,15 @@ class BaseBackend(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    @property
+    def binary_exts(self):
+        """Extensions of the artifacts that are binaries, read as bytes."""
+        return {self.binary_ext}
+
+    def disassemble_asm(self, asm, key):
+        """Derives `asm[key]` for a key only this backend knows, e.g. a disassembly."""
+        raise KeyError(f"Unknown key: '{key}'")
+
     @abstractmethod
     def get_module_map(self) -> Dict[str, ModuleType]:
         """
