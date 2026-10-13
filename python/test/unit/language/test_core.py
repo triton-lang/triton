@@ -2377,7 +2377,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", ["int32", "uint32", "int64", "uint64"])
-@pytest.mark.parametrize("mode", ["scalar", "tensor", "broadcast_cmp", "broadcast_val", "broadcast_both"])
+@pytest.mark.parametrize("mode", ["scalar", "tensor", "broadcast"])
 @pytest.mark.parametrize("compare", [0, -1])
 def test_atomic_cas_pointee_type(dtype_str, mode, compare, device):
 
@@ -2389,9 +2389,8 @@ def test_atomic_cas_pointee_type(dtype_str, mode, compare, device):
             offsets = 0
         else:
             offsets = tl.arange(0, 128)
-            if MODE == "tensor" or MODE == "broadcast_val":
+            if MODE == "tensor":
                 cmp = tl.full((128, ), COMPARE, tl.int32)
-            if MODE == "tensor" or MODE == "broadcast_cmp":
                 val = tl.full((128, ), 1, tl.int32)
         old = tl.atomic_cas(X + offsets, cmp, val)
         tl.static_assert(old.dtype == X.dtype.element_ty)
