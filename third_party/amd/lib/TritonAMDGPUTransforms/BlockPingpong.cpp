@@ -5,9 +5,11 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
@@ -403,6 +405,17 @@ void Pingponger::determineDotMemoryOps(
   for (auto &&localLoad : dotLocalLoads)
     findClosestPredOps<ttg::MemDescIndexOp>(localLoad.getSrc(), subviews);
 
+  // The local store may write the buffer through a different subview of the
+  // same allocation than the one the local load reads.
+  DenseSet<ttg::MemDescIndexOp> allocSubviews;
+  for (auto &&subview : subviews)
+    if (forOp.isDefinedOutsideOfLoop(subview.getSrc()))
+      for (Operation *user : subview.getSrc().getUsers())
+        if (auto sibling = dyn_cast<ttg::MemDescIndexOp>(user))
+          if (forOp->isProperAncestor(sibling))
+            allocSubviews.insert(sibling);
+  subviews.insert(allocSubviews.begin(), allocSubviews.end());
+
   for (auto &&subview : subviews)
     for (auto &&user : subview->getUsers())
       if (auto localStore = dyn_cast<ttg::LocalStoreOp>(user))
@@ -516,6 +529,13 @@ LogicalResult Pingponger::sliceDot(OpBuilder &builder, Location loc,
   auto shapeB = typeB.getShape();
   int64_t sliceWidth = shapeB[0] / numSlices;
   if (shapeB[0] % numSlices != 0)
+    return failure();
+  // The slices of the local_loads are created after the first global load.
+  SmallVector<Value> lLoadSrcs = llvm::map_to_vector(
+      lLoadOps, [](ttg::LocalLoadOp lLoad) -> Value { return lLoad.getSrc(); });
+  IRRewriter rewriter(builder);
+  DominanceInfo dominance(forOp);
+  if (failed(moveValueDefinitions(rewriter, lLoadSrcs, gLoadOps[0], dominance)))
     return failure();
   genOffsetConstants(loc, builder, numSlices, sliceWidth);
   builder.setInsertionPointAfter(gLoadOps[0]);
@@ -1015,12 +1035,18 @@ void Pingponger::getDotPingponged() {
         .Case<ttg::LocalLoadOp>([&](auto lLoad) {
           // This scheduling doesn't help hiding intra-warp latency. So, we only
           // collect local_load ops that are software pipelined, which means
-          // their source is from loop carried values
+          // their source is either a loop carried value or a buffer of a
+          // multi-buffered allocation defined outside the loop.
           auto src = lLoad.getSrc();
-          if (auto arg = mlir::dyn_cast<BlockArgument>(src))
+          if (auto arg = mlir::dyn_cast<BlockArgument>(src)) {
             if (auto tiedLoopInit = forOp.getTiedLoopInit(arg))
               if (tiedLoopInit->get())
                 lLoadOps.push_back(lLoad);
+          } else if (auto index = src.template getDefiningOp<
+                                  ttg::MemDescIndexOp>()) {
+            if (forOp.isDefinedOutsideOfLoop(index.getSrc()))
+              lLoadOps.push_back(lLoad);
+          }
         })
         .Case<ttg::LocalStoreOp>(
             [&](auto lStore) { lStoreOps.push_back(lStore); })

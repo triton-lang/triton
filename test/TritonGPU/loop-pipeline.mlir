@@ -61,7 +61,7 @@
 //   AMD-DAG:   %[[C1:.*]] = arith.constant 1 : index
 //   AMD-DAG:   %[[C0:.*]] = arith.constant 0 : index
 //       AMD:   %[[UB1:.*]] = arith.subi %[[UB:.*]], %arg2 : index
-//       AMD:   %[[FOR:.*]]:6 = scf.for %[[ARG5:.*]] = %[[LB:.*]] to %[[UB1]] step %[[STEP:.*]] iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}})
+//       AMD:   %[[FOR:.*]]:5 = scf.for %[[ARG5:.*]] = %[[LB:.*]] to %[[UB1]] step %[[STEP:.*]] iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}})
 //       AMD:     %[[ADDPTR_34:.*]] = tt.addptr %[[ARG6]], %{{.*}}
 //       AMD:     %[[ADDPTR_35:.*]] = tt.addptr %[[ARG7]], %{{.*}}
 //       AMD:     %[[LOAD_36:.*]] = tt.load %[[ADDPTR_34]]
@@ -70,14 +70,11 @@
 //       AMD:     %[[LOCAL_LOAD_39:.*]] = ttg.local_load %[[ARG11]]
 //       AMD:     %[[MULF_40:.*]] = arith.mulf %[[LOCAL_LOAD_39]], %{{.*}}
 //       AMD:     %[[DOT_41:.*]] = tt.dot %[[LOCAL_LOAD_37]], %[[MULF_40]], %[[ARG8]]
-//       AMD:     %[[ADDI_42:.*]] = arith.addi %[[ARG9]], %{{.*}}
-//       AMD:     %[[CMPI_43:.*]] = arith.cmpi slt, %[[ADDI_42]], %{{.*}}
-//       AMD:     %[[SELECT_44:.*]] = arith.select %[[CMPI_43]], %[[ADDI_42]], %{{.*}}
-//       AMD:     %[[MEMDESC_SUBVIEW_45:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_44]]{{\]}}
+//       AMD:     %[[MEMDESC_SUBVIEW_45:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%c0_i32{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_36]], %[[MEMDESC_SUBVIEW_45]]
-//       AMD:     %[[MEMDESC_SUBVIEW_46:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_44]]{{\]}}
+//       AMD:     %[[MEMDESC_SUBVIEW_46:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%c0_i32{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_38]], %[[MEMDESC_SUBVIEW_46]]
-//       AMD:     scf.yield %[[ADDPTR_34]], %[[ADDPTR_35]], %[[DOT_41]], %[[SELECT_44]], %[[MEMDESC_SUBVIEW_45]], %[[MEMDESC_SUBVIEW_46]]
+//       AMD:     scf.yield %[[ADDPTR_34]], %[[ADDPTR_35]], %[[DOT_41]], %[[MEMDESC_SUBVIEW_45]], %[[MEMDESC_SUBVIEW_46]]
 //       AMD:   }
 //       AMD:   %[[CMPI_21:.*]] = arith.cmpi slt, %[[STEP]], %[[C0]]
 //       AMD:   %[[SELECT_22:.*]] = arith.select %[[CMPI_21]], %[[C1]], %[[CM1]]
@@ -86,8 +83,8 @@
 //       AMD:   %[[ADDI_25:.*]] = arith.addi %[[ADDI_24]], %[[SELECT_22]]
 //       AMD:   %[[DIVSI_26:.*]] = arith.divsi %[[ADDI_25]], %[[STEP]]
 //       AMD:   %[[CMPI_27:.*]] = arith.cmpi sge, %[[DIVSI_26]], %{{.*}}
-//       AMD:   %[[LOCAL_LOAD_28:.*]] = ttg.local_load %{{.*}}#4
-//       AMD:   %[[LOCAL_LOAD_29:.*]] = ttg.local_load %{{.*}}#5
+//       AMD:   %[[LOCAL_LOAD_28:.*]] = ttg.local_load %{{.*}}#3
+//       AMD:   %[[LOCAL_LOAD_29:.*]] = ttg.local_load %{{.*}}#4
 //       AMD:   %[[MULF_30:.*]] = arith.mulf %[[LOCAL_LOAD_29]], %{{.*}}
 //       AMD:   %[[IF_31:.*]] = scf.if %[[CMPI_27]]
 //       AMD:     %[[DOT_33:.*]] = tt.dot %[[LOCAL_LOAD_28]], %[[MULF_30]], %{{.*}}#2
@@ -213,7 +210,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 //         AMD:  ttg.local_store %{{.+}}, %[[SUBVIEW0]]
 //         AMD:  %[[SUBVIEW1:.*]] = ttg.memdesc_index
 //         AMD:  ttg.local_store %{{.+}}, %[[SUBVIEW1]]
-//         AMD:  %[[FOR:.*]]:6 = scf.for
+//         AMD:  %[[FOR:.*]]:5 = scf.for
 // AMD-COUNT-2:    tt.addptr
 //         AMD:    tt.load
 //         AMD:    ttg.local_load
@@ -315,17 +312,14 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:   %[[MEMDESC_SUBVIEW_16:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_12]]{{\[}}%{{.*}}{{\]}}
 //       AMD:   ttg.local_store %[[LOAD_15]], %[[MEMDESC_SUBVIEW_16]]
 //       AMD:   %[[SUBI_17:.*]] = arith.subi %{{.*}}, %{{.*}}
-//       AMD:   %{{.*}}:4 = scf.for %[[ARG5:.*]] = %{{.*}} to %[[SUBI_17]] step %{{.*}} iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[MEMDESC_SUBVIEW_16]])
+//       AMD:   %{{.*}}:3 = scf.for %[[ARG5:.*]] = %{{.*}} to %[[SUBI_17]] step %{{.*}} iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[MEMDESC_SUBVIEW_16]])
 //       AMD:       %[[ADDPTR_32:.*]] = tt.addptr %[[ARG6]], %{{.*}}
 //       AMD:       %[[LOAD_33:.*]] = tt.load %[[ADDPTR_32]]
 //       AMD:       %[[LOCAL_LOAD_30:.*]] = ttg.local_load %[[ARG9]]
 //       AMD:       %[[DOT_31:.*]] = tt.dot %[[CONVERT_LAYOUT_11]], %[[LOCAL_LOAD_30]], %[[ARG7]]
-//       AMD:       %[[ADDI_34:.*]] = arith.addi %[[ARG8]], %{{.*}}
-//       AMD:       %[[CMPI_35:.*]] = arith.cmpi slt, %[[ADDI_34]], %{{.*}}
-//       AMD:       %[[SELECT_36:.*]] = arith.select %[[CMPI_35]], %[[ADDI_34]], %{{.*}}
-//       AMD:       %[[MEMDESC_SUBVIEW_37:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_12]]{{\[}}%[[SELECT_36]]{{\]}}
+//       AMD:       %[[MEMDESC_SUBVIEW_37:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_12]]{{\[}}%c0_i32{{\]}}
 //       AMD:       ttg.local_store %[[LOAD_33]], %[[MEMDESC_SUBVIEW_37]]
-//       AMD:       scf.yield %[[ADDPTR_32]], %[[DOT_31]], %[[SELECT_36]], %[[MEMDESC_SUBVIEW_37]]
+//       AMD:       scf.yield %[[ADDPTR_32]], %[[DOT_31]], %[[MEMDESC_SUBVIEW_37]]
 //       AMD:  ttg.local_dealloc %[[LOCAL_ALLOC_12]]
 
 // AMD_3_STAGES-LABEL: tt.func @matmul_loop_single_pipeline
@@ -417,7 +411,7 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:     %[[MEMDESC_SUBVIEW_12:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%{{.*}}{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_10]], %[[MEMDESC_SUBVIEW_12]]
 //       AMD:     %[[SUBI_26:.*]] = arith.subi %{{.*}}, %{{.*}}
-//       AMD:     %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_26]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_11]], %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_12]])
+//       AMD:     %{{.*}}:6 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_26]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_11]], %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_12]])
 //       AMD:       %[[ADDPTR_38:.*]] = tt.addptr %[[ARG8]], %{{.*}}
 //       AMD:       %[[ADDPTR_39:.*]] = tt.addptr %[[ARG9]], %{{.*}}
 //       AMD:       %[[LOAD_40:.*]] = tt.load %[[ADDPTR_38]]
@@ -429,19 +423,16 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:       %[[LOAD_46:.*]] = tt.load %[[ADDPTR_45]]
 //       AMD:       %[[LOCAL_LOAD_47:.*]] = ttg.local_load %[[ARG13]]
 //       AMD:       %[[DOT_48:.*]] = tt.dot %[[LOCAL_LOAD_41]], %[[LOCAL_LOAD_47]], %[[ARG7]]
-//       AMD:       %[[ADDI_49:.*]] = arith.addi %[[ARG10]], %{{.*}}
-//       AMD:       %[[CMPI_50:.*]] = arith.cmpi slt, %[[ADDI_49]], %{{.*}}
-//       AMD:       %[[SELECT_51:.*]] = arith.select %[[CMPI_50]], %[[ADDI_49]], %{{.*}}
-//       AMD:       %[[MEMDESC_SUBVIEW_52:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_0]]{{\[}}%[[SELECT_51]]{{\]}}
+//       AMD:       %[[MEMDESC_SUBVIEW_52:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_0]]{{\[}}%c0_i32{{\]}}
 //       AMD:       ttg.local_store %[[LOAD_40]], %[[MEMDESC_SUBVIEW_52]]
-//       AMD:       %[[MEMDESC_SUBVIEW_53:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%[[SELECT_51]]{{\]}}
+//       AMD:       %[[MEMDESC_SUBVIEW_53:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%c0_i32{{\]}}
 //       AMD:       ttg.local_store %[[LOAD_46]], %[[MEMDESC_SUBVIEW_53]]
-//       AMD:       scf.yield %[[DOT_48]], %[[ADDPTR_38]], %[[ADDPTR_39]], %[[SELECT_51]], %[[MEMDESC_SUBVIEW_52]], %[[LOAD_42]], %[[MEMDESC_SUBVIEW_53]]
+//       AMD:       scf.yield %[[DOT_48]], %[[ADDPTR_38]], %[[ADDPTR_39]], %[[MEMDESC_SUBVIEW_52]], %[[LOAD_42]], %[[MEMDESC_SUBVIEW_53]]
 //       AMD:     } {tt.num_stages = 3
 //       AMD:     %[[CMPI_28:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
 //       AMD:     %[[CMPI_29:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
-//       AMD:     %[[LOCAL_LOAD_30:.*]] = ttg.local_load %{{.*}}#4
-//       AMD:     %[[LOCAL_LOAD_31:.*]] = ttg.local_load %{{.*}}#6
+//       AMD:     %[[LOCAL_LOAD_30:.*]] = ttg.local_load %{{.*}}#3
+//       AMD:     %[[LOCAL_LOAD_31:.*]] = ttg.local_load %{{.*}}#5
 //       AMD:     %[[IF_32:.*]] = scf.if %[[CMPI_28]]
 //       AMD:       %[[DOT_38:.*]] = tt.dot %[[LOCAL_LOAD_30]], %[[LOCAL_LOAD_31]], %{{.*}}#0
 //       AMD:       scf.yield %[[DOT_38]]
@@ -591,7 +582,7 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 //       AMD:   %[[MEMDESC_SUBVIEW_18:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%{{.*}}{{\]}}
 //       AMD:   ttg.local_store %[[LOAD_16]], %[[MEMDESC_SUBVIEW_18]]
 //       AMD:   %[[SUBI_19:.*]] = arith.subi %{{.*}}, %{{.*}}
-//       AMD:   %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_19]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[ADDPTR_6]], %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_17]], %[[ARG12:.*]] = %[[LOAD_10]], %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_18]])
+//       AMD:   %{{.*}}:6 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_19]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[ADDPTR_6]], %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_17]], %[[ARG12:.*]] = %[[LOAD_10]], %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_18]])
 //       AMD:     %[[ADDPTR_47:.*]] = tt.addptr %[[ARG8]], %{{.*}}
 //       AMD:     %[[ADDPTR_48:.*]] = tt.addptr %[[ARG9]], %{{.*}}
 //       AMD:     %[[LOAD_49:.*]] = tt.load %[[ADDPTR_47]]
@@ -604,14 +595,11 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 //       AMD:     %[[LOAD_56:.*]] = tt.load %[[ADDPTR_55]]
 //       AMD:     %[[LOCAL_LOAD_57:.*]] = ttg.local_load %[[ARG13]]
 //       AMD:     %[[DOT_58:.*]] = tt.dot %[[LOCAL_LOAD_50]], %[[LOCAL_LOAD_57]], %[[ARG7]]
-//       AMD:     %[[ADDI_59:.*]] = arith.addi %[[ARG10]], %{{.*}}
-//       AMD:     %[[CMPI_60:.*]] = arith.cmpi slt, %[[ADDI_59]], %{{.*}}
-//       AMD:     %[[SELECT_61:.*]] = arith.select %[[CMPI_60]], %[[ADDI_59]], %{{.*}}
-//       AMD:     %[[MEMDESC_SUBVIEW_62:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_0]]{{\[}}%[[SELECT_61]]{{\]}}
+//       AMD:     %[[MEMDESC_SUBVIEW_62:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_0]]{{\[}}%c0_i32{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_49]], %[[MEMDESC_SUBVIEW_62]]
-//       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%[[SELECT_61]]{{\]}}
+//       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%c0_i32{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_56]], %[[MEMDESC_SUBVIEW_63]]
-//       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
+//       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
 
 // AMD_3_STAGES-LABEL: tt.func @indirect_bmm_vector
 
@@ -996,7 +984,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // AMD-LABEL: tt.func @indirect_load_shared_layout
 //       AMD:   %[[LOCAL_ALLOC_0:.*]] = ttg.local_alloc
 //       AMD:   %[[LOCAL_ALLOC_1:.*]] = ttg.local_alloc
-//       AMD:   %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}}, %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %{{.*}})
+//       AMD:   %{{.*}}:6 = scf.for %[[ARG6:.*]] = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}}, %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %{{.*}})
 //       AMD:     %[[ADDPTR_47:.*]] = tt.addptr %[[ARG8]], %{{.*}}
 //       AMD:     %[[ADDPTR_48:.*]] = tt.addptr %[[ARG9]], %{{.*}}
 //       AMD:     %[[LOAD_49:.*]] = tt.load %[[ADDPTR_47]]
@@ -1009,40 +997,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 //       AMD:     %[[LOAD_56:.*]] = tt.load %[[ADDPTR_55]]
 //       AMD:     %[[LOCAL_LOAD_57:.*]] = ttg.local_load %[[ARG13]]
 //       AMD:     %[[DOT_58:.*]] = tt.dot %[[LOCAL_LOAD_50]], %[[LOCAL_LOAD_57]], %[[ARG7]]
-//       AMD:     %[[ADDI_59:.*]] = arith.addi %[[ARG10]], %{{.*}}
-//       AMD:     %[[CMPI_60:.*]] = arith.cmpi slt, %[[ADDI_59]], %{{.*}}
-//       AMD:     %[[SELECT_61:.*]] = arith.select %[[CMPI_60]], %[[ADDI_59]], %{{.*}}
-//       AMD:     %[[MEMDESC_SUBVIEW_62:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_61]]{{\]}}
+//       AMD:     %[[MEMDESC_SUBVIEW_62:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%c0_i32{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_49]], %[[MEMDESC_SUBVIEW_62]]
-//       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_61]]{{\]}}
+//       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%c0_i32{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_56]], %[[MEMDESC_SUBVIEW_63]]
-//       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
+//       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
 //       AMD:   }
 //       AMD:     %[[CMPI_21:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
 //       AMD:     %[[CMPI_22:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
 //       AMD:     %[[ADDPTR_23:.*]] = tt.addptr %{{.*}}#1, %{{.*}}
 //       AMD:     %[[SPLAT_24:.*]] = tt.splat %[[CMPI_22]]
 //       AMD:     %[[LOAD_25:.*]] = tt.load %[[ADDPTR_23]], %[[SPLAT_24]]
-//       AMD:     %[[LOCAL_LOAD_26:.*]] = ttg.local_load %{{.*}}#4
-//       AMD:     %[[EXPAND_DIMS_27:.*]] = tt.expand_dims %{{.*}}#5 {axis = 1 : i32}
+//       AMD:     %[[LOCAL_LOAD_26:.*]] = ttg.local_load %{{.*}}#3
+//       AMD:     %[[EXPAND_DIMS_27:.*]] = tt.expand_dims %{{.*}}#4 {axis = 1 : i32}
 //       AMD:     %[[BROADCAST_28:.*]] = tt.broadcast %[[EXPAND_DIMS_27]]
 //       AMD:     %[[MULI_29:.*]] = arith.muli %{{.*}}, %[[BROADCAST_28]]
 //       AMD:     %[[ADDPTR_30:.*]] = tt.addptr %{{.*}}, %[[MULI_29]]
 //       AMD:     %[[SPLAT_31:.*]] = tt.splat %[[CMPI_22]]
 //       AMD:     %[[LOAD_32:.*]] = tt.load %[[ADDPTR_30]], %[[SPLAT_31]]
-//       AMD:     %[[LOCAL_LOAD_33:.*]] = ttg.local_load %{{.*}}#6
+//       AMD:     %[[LOCAL_LOAD_33:.*]] = ttg.local_load %{{.*}}#5
 //       AMD:     %[[IF_34:.*]] = scf.if %[[CMPI_21]]
 //       AMD:       %[[DOT_45:.*]] = tt.dot %[[LOCAL_LOAD_26]], %[[LOCAL_LOAD_33]], %{{.*}}#0
 //       AMD:       scf.yield %[[DOT_45]]
 //       AMD:     } else {
 //       AMD:       scf.yield %{{.*}}#0
 //       AMD:     }
-//       AMD:     %[[ADDI_35:.*]] = arith.addi %{{.*}}#3, %{{.*}}
-//       AMD:     %[[CMPI_36:.*]] = arith.cmpi slt, %[[ADDI_35]], %{{.*}}
-//       AMD:     %[[SELECT_37:.*]] = arith.select %[[CMPI_36]], %[[ADDI_35]], %{{.*}}
-//       AMD:     %[[MEMDESC_SUBVIEW_38:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_37]]{{\]}}
+//       AMD:     %[[MEMDESC_SUBVIEW_38:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%c0_i32{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_25]], %[[MEMDESC_SUBVIEW_38]]
-//       AMD:     %[[MEMDESC_SUBVIEW_39:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_37]]{{\]}}
+//       AMD:     %[[MEMDESC_SUBVIEW_39:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%c0_i32{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_32]], %[[MEMDESC_SUBVIEW_39]]
 //       AMD:     %[[SELECT_40:.*]] = arith.select %[[CMPI_21]], %[[IF_34]], %{{.*}}#0
 //       AMD:     %[[LOCAL_LOAD_41:.*]] = ttg.local_load %[[MEMDESC_SUBVIEW_38]]
@@ -1601,7 +1583,6 @@ tt.func @matmul_nested_ops(%lb : index, %ub : index, %step : index,
 // AMD: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD: scf.for
-// AMD:   arith.select
 // AMD:   %[[A:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD:   %[[B:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD:   arith.addf
@@ -1614,7 +1595,6 @@ tt.func @matmul_nested_ops(%lb : index, %ub : index, %step : index,
 // AMD_3_STAGES: %[[CONSTANT:.*]] = arith.constant dense<0xFF800000>
 // AMD_3_STAGES-COUNT-4: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD_3_STAGES: scf.for
-// AMD_3_STAGES:   arith.select
 // AMD_3_STAGES:   %[[A:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD_3_STAGES:   %[[B:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD_3_STAGES:   arith.addf
