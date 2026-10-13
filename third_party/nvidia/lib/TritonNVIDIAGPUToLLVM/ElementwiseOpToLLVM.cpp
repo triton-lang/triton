@@ -869,8 +869,7 @@ struct MulhiUIOpConversion
                                    Location loc) const {
     unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
     assert(bitWidth == 32 || bitWidth == 64);
-    StringRef intrinsic =
-        bitWidth == 32 ? "llvm.nvvm.mulhi.ui" : "llvm.nvvm.mulhi.ull";
+    StringRef intrinsic = "llvm.umulh";
     // A widened multiply/shift relies on LLVM recognizing explicit extensions.
     // InstCombine can replace those extensions with masks, losing mul.hi.
     return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, elemTy,
