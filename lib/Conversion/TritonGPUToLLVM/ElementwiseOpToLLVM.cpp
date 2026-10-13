@@ -277,6 +277,7 @@ struct ElementwiseInlineAsmOpConversion
                            /*constraints=*/op.getConstraints(),
                            /*has_side_effects=*/!op.getPure(),
                            /*is_align_stack=*/false, LLVM::TailCallKind::None,
+                           /*convergent=*/false,
                            /*asm_dialect=*/
                            LLVM::AsmDialectAttr::get(rewriter.getContext(),
                                                      LLVM::AsmDialect::AD_ATT),
@@ -425,6 +426,7 @@ struct InlineAsmOpConversion
     auto call = LLVM::InlineAsmOp::create(
         rewriter, loc, returnType, operands, op.getAsmString(),
         op.getConstraints(), !op.getPure(), false, LLVM::TailCallKind::None,
+        /*convergent=*/false,
         LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT), ArrayAttr());
 
     SmallVector<Value> elements;
