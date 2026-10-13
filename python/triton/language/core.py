@@ -3069,24 +3069,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     return ret
 
 
-@builtin
-def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=None):
-    axis = _unwrap_if_constexpr(axis)
-    n = input.shape[axis]
-    index = arange(0, n, _semantic=_semantic)
-
-    if len(input.shape) > 1:
-        # Broadcast index across the non-reduced axes
-        axes_to_expand = [constexpr(d) for d in builtins.range(len(input.shape))]
-        del axes_to_expand[axis]
-        index = expand_dims(index, axes_to_expand, _semantic=_semantic)
-        index = broadcast_to(index, input.shape, _semantic=_semantic)
-
-    rvalue, rindices = reduce((input, index), axis, combine_fn, keep_dims=keep_dims, _semantic=_semantic,
-                              _generator=_generator)
-    return rvalue, rindices
-
-
 # -----------------------
 # Scans
 # -----------------------
