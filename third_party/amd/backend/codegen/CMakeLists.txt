@@ -20,6 +20,22 @@ target_include_directories(triton_amd_codegen SYSTEM PRIVATE
 target_compile_definitions(triton_amd_codegen PRIVATE
     TRITON_AMD_LLVM_REVISION="${TRITON_AMD_LLVM_REVISION}")
 
+# Keep this library's NDEBUG state identical to that of the LLVM it links.
+# LLVM's headers gate data members on NDEBUG, so a mismatch means the two sides
+# disagree about object layout; see LLVMABIGuard.h for what diverges and what
+# it costs. This library is configured independently of LLVM, so neither
+# direction is automatic. CMake's build-type flags define NDEBUG for Release,
+# and target_compile_options land after CMAKE_CXX_FLAGS_<CONFIG>, so -UNDEBUG
+# wins. LLVMABIGuard.h re-checks the result at compile time rather than
+# trusting this to be right.
+if(LLVM_ENABLE_ASSERTIONS)
+  target_compile_options(triton_amd_codegen PRIVATE
+      $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
+      $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
+else()
+  target_compile_definitions(triton_amd_codegen PRIVATE NDEBUG)
+endif()
+
 if(NOT LLVM_ENABLE_EH)
   target_compile_options(triton_amd_codegen PRIVATE
       $<$<CXX_COMPILER_ID:MSVC>:/EHs-c->

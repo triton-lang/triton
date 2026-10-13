@@ -215,7 +215,8 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
                                                     buffer, bufferIdx, true);
     copy = builder.createWithAsyncTaskIds<ttng::AsyncTMACopyGlobalToLocalOp>(
         loc, tmaLoad.getDesc(), tmaLoad.getIndices(), prodBarrier,
-        pipelineBuffer, pred);
+        pipelineBuffer, pred, /*multicast=*/false,
+        tmaLoad.getCachePolicyAttr());
   }
 
   // Create a wait_barrier before the first consumer.

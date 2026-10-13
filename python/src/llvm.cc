@@ -5,6 +5,7 @@
 #include "triton/Tools/LLVMOptions.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "triton/Version.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -216,6 +217,36 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
+void lowerNVPTXFAbs(llvm::Module &module) {
+  if (!module.getTargetTriple().isNVPTX())
+    return;
+
+  SmallVector<IntrinsicInst *> calls;
+  for (Function &function : module) {
+    if (function.getIntrinsicID() != Intrinsic::fabs ||
+        !function.getReturnType()->getScalarType()->isFloatTy())
+      continue;
+    for (User *user : function.users())
+      if (auto *call = dyn_cast<IntrinsicInst>(user))
+        if (!call->hasNoNaNs())
+          calls.push_back(call);
+  }
+
+  // FPSan needs NaN payloads preserved, but PTX abs.f32 may canonicalize them.
+  // Rewrite after IR optimization: InstCombine can otherwise recreate fabs,
+  // and NVPTX does not consistently lower its scalar and vector forms alike.
+  for (IntrinsicInst *call : calls) {
+    IRBuilder<> builder(call);
+    Type *bitsType = builder.getInt32Ty();
+    if (auto *vectorType = dyn_cast<VectorType>(call->getType()))
+      bitsType = VectorType::get(bitsType, vectorType->getElementCount());
+    Value *bits = builder.CreateBitCast(call->getArgOperand(0), bitsType);
+    Value *magnitude = builder.CreateAnd(bits, 0x7fffffff);
+    call->replaceAllUsesWith(builder.CreateBitCast(magnitude, call->getType()));
+    call->eraseFromParent();
+  }
+}
+
 std::string
 translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
                      const std::string &proc, const std::string &features,
@@ -236,7 +267,11 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   options.enable(flags);
   options.enableFlagsFromDisableLLVMOptEnv();
   options.enablePrintAfterAllIfRequested();
-  options.set("stop-before", "machine-scheduler");
+  // Stop right after the scheduling-DAG pass, which substitutes itself for the
+  // machine scheduler (see armLivePipelineDAGEmission). This truncates the
+  // pipeline at exactly the same point -stop-before=machine-scheduler did, so
+  // the MIR dumped below is unchanged.
+  options.set("stop-after", llvm::mir_dag::livePipelineDAGPassName());
   ScopedLLVMOptions optionScope(options.settings);
 
   // inline everything
@@ -256,9 +291,17 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   // set data layout
   module.setDataLayout(machine->createDataLayout());
 
-  // emit machine code (MIR text, since stop-before=machine-scheduler)
+  // Emit machine code (MIR text, since the pipeline stops before regalloc) and,
+  // in the same run, the scheduling DAG built on the live MachineFunction. The
+  // DAG pass takes the machine scheduler's slot, so it sees exactly the MF
+  // whose MIR is printed here -- (bb, position) maps 1:1 onto the dumped body
+  // lines, and `bb` is the number the MIR printer puts in the `bb.N` labels.
   std::string result;
+  std::string dagText;
   {
+    llvm::mir_dag::armLivePipelineDAGEmission(&dagText);
+    llvm::scope_exit disarm(
+        [] { llvm::mir_dag::disarmLivePipelineDAGEmission(); });
     llvm::raw_string_ostream stream(result);
     llvm::buffer_ostream pstream(stream);
     llvm::legacy::PassManager pass;
@@ -266,15 +309,6 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
                                  llvm::CodeGenFileType::AssemblyFile);
     pass.run(module);
   }
-
-  // Build the scheduling DAG by re-parsing the MIR text we just produced into a
-  // fresh MachineFunction and running DAGBuilder on it. We key instruction
-  // identity on (bb, position), NOT register names, so the re-parse's virtual-
-  // register renumbering is irrelevant: the re-parsed MF enumerates
-  // instructions in the exact order of the dumped MIR text, so (bb, pos) maps
-  // 1:1 onto the dumped body lines the scheduler reorders.
-  std::string dagText =
-      llvm::mir_dag::buildSchedulingDAGText(result, triple, proc);
 
   std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
   {
@@ -295,10 +329,13 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   return result;
 }
 
-std::string translateLLVMIRToASM(
-    llvm::Module &module, const std::string &triple, const std::string &proc,
-    const std::string &features, const std::vector<std::string> &flags,
-    bool enable_fp_fusion, bool isObject, bool canonicalizeGEP) {
+std::string translateLLVMIRToASM(llvm::Module &module,
+                                 const std::string &triple,
+                                 const std::string &proc,
+                                 const std::string &features,
+                                 const std::vector<std::string> &flags,
+                                 bool enable_fp_fusion, bool isObject,
+                                 bool canonicalizeGEP, bool enableFpSan) {
   using namespace mlir;
 
   LLVMOptionSettings options;
@@ -353,6 +390,8 @@ std::string translateLLVMIRToASM(
     cleanup.add(llvm::createEarlyCSEPass());
     cleanup.run(module);
   }
+  if (enableFpSan)
+    lowerNVPTXFAbs(module);
   // emit machine code
   std::string result;
   {
@@ -793,7 +832,7 @@ void init_triton_llvm(py::module_ &m) {
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
-         bool sched4reg) -> py::object {
+         bool sched4reg, bool enableFpSan) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -812,9 +851,9 @@ void init_triton_llvm(py::module_ &m) {
                 "failed to parse IR: " + error.getMessage() +
                 "lineno: " + std::to_string(error.getLineNo()));
           }
-          obj =
-              translateLLVMIRToASM(*module, triple, proc, features, flags,
-                                   enable_fp_fusion, isObject, canonicalizeGEP);
+          obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
+                                     enable_fp_fusion, isObject,
+                                     canonicalizeGEP, enableFpSan);
         }
         if (isObject)
           return py::object(py::bytes(obj.c_str(), obj.size()));
@@ -824,7 +863,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("llvm_ir"), py::arg("triple"), py::arg("proc"),
       py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
       py::arg("is_object"), py::arg("canonicalize_gep"),
-      py::arg("sched4reg") = false);
+      py::arg("sched4reg") = false, py::arg("enable_fpsan") = false);
 
   m.def("translate_to_mir",
         [](std::string llvmIR, std::string triple, std::string proc,

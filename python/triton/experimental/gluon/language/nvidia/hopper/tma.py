@@ -1,7 +1,8 @@
 from __future__ import annotations
 from typing import List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
-from triton.language.core import base_type, base_value
+from triton.language.core import base_type, base_value, _CachePolicy
+from ..ampere import CachePolicy
 import triton.experimental.gluon.language._core as ttgl
 from triton.experimental.gluon.language._layouts import NVMMASharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
@@ -196,8 +197,24 @@ def _convert_im2col_offsets(offsets, _semantic):
     return offsets_ir
 
 
+def _tma_cache_policy(cache_policy, builder):
+    policy = _unwrap_if_constexpr(cache_policy)
+    if policy is None:
+        policy = _CachePolicy()
+    if not isinstance(policy, (_CachePolicy, CachePolicy)):
+        raise TypeError("TMA cache_policy must be a CachePolicy")
+    if policy.cache_modifier not in (None, "none"):
+        raise ValueError("TMA operations do not support cache modifiers")
+    if isinstance(policy, CachePolicy):
+        if policy.l1 is not None:
+            raise ValueError("TMA operations do not support L1 eviction policies")
+        if policy.l2_prefetch_size is not None:
+            raise ValueError("TMA operations do not support L2 prefetch size")
+    return policy._to_ir(builder)
+
+
 @builtin
-def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, _semantic=None):
+def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, cache_policy=None, _semantic=None):
     """
     Load data from global memory to shared memory using TMA.
 
@@ -210,6 +227,9 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
         result: Destination memory descriptor
         pred: Predicate for conditional execution
         multicast: Enable multicast
+        cache_policy: A compile-time ``CachePolicy`` containing only an L2
+            eviction policy. None leaves the policy unspecified. Cache policies
+            are performance hints and do not affect synchronization.
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_load", "innermost coordinate", _semantic=_semantic)
@@ -217,6 +237,7 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
     multicast = _unwrap_if_constexpr(multicast)
+    cache_policy = _tma_cache_policy(cache_policy, _semantic.builder)
 
     _semantic.builder.create_async_tma_copy_global_to_local(
         tensor_desc.handle,
@@ -226,11 +247,13 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
         pred.handle,
         multicast,
         None,
+        cache_policy,
     )
 
 
 @builtin
-def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, multicast=False, _semantic=None):
+def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, multicast=False, cache_policy=None,
+                      _semantic=None):
     """
     Load data from global memory to shared memory using TMA in im2col mode.
 
@@ -247,6 +270,9 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
         result: Destination memory descriptor
         pred: Predicate for conditional execution
         multicast: Enable multicast
+        cache_policy: A compile-time ``CachePolicy`` containing only an L2
+            eviction policy. None leaves the policy unspecified. Cache policies
+            are performance hints and do not affect synchronization.
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_load", "innermost coordinate", _semantic=_semantic)
@@ -254,6 +280,7 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
     multicast = _unwrap_if_constexpr(multicast)
+    cache_policy = _tma_cache_policy(cache_policy, _semantic.builder)
     offsets_ir = _convert_im2col_offsets(offsets, _semantic)
 
     _semantic.builder.create_async_tma_copy_global_to_local(
@@ -264,11 +291,12 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
         pred.handle,
         multicast,
         offsets_ir,
+        cache_policy,
     )
 
 
 @builtin
-def async_store(tensor_desc, coord, src, _semantic=None):
+def async_store(tensor_desc, coord, src, cache_policy=None, _semantic=None):
     """
     Store data from shared memory to global memory using TMA.
 
@@ -276,11 +304,15 @@ def async_store(tensor_desc, coord, src, _semantic=None):
         tensor_desc (tensor_descriptor): Tensor descriptor (tiled).
         coord (Sequence[int | ttgl.constexpr | ttgl.tensor]): Coordinates in the destination tensor.
         src (ttgl.shared_memory_descriptor): Source memory descriptor.
+        cache_policy: A compile-time ``CachePolicy`` containing only an L2
+            eviction policy. None leaves the policy unspecified. Cache policies
+            are performance hints and do not affect synchronization.
     """
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, "async_store", "innermost coordinate", _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
-    _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle)
+    cache_policy = _tma_cache_policy(cache_policy, _semantic.builder)
+    _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle, cache_policy)
 
 
 @builtin

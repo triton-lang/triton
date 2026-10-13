@@ -995,7 +995,7 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
 
   LinearLayout layoutSwizzled({{S("offset"), bases2D}}, {S("row"), S("col")});
   layoutSwizzled = ensureLayoutNotSmallerThan(
-      layoutSwizzled, {{S("row"), M}, {S("col"), KPacked8b}});
+      layoutSwizzled, {S("row"), S("col")}, {M, KPacked8b}, S("offset"));
 
   auto layoutInverseSwizzled = layoutSwizzled.pseudoinvert();
 

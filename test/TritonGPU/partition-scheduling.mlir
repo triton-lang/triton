@@ -56,8 +56,12 @@ tt.func public @attention_forward(
     %QK_adj = "sub_row_max"(%QK, %row_max, %qk_scale) : (tensor<256x64xf32, #blocked>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, f32) -> tensor<256x64xf32, #blocked>
     // CHECK: [[SOFTMAX:%.*]] = math.exp2 {{.*}} {ttg.partition = array<i32: 0>} : tensor<256x64xf32
     %softmax = math.exp2 %QK_adj : tensor<256x64xf32, #blocked>
-    // CHECK-COUNT-4: ttg.partition = array<i32:
+    // Subtraction stays cheap, so both consumers get their own alpha computation.
+    // CHECK-NEXT: [[DIFF0:%.*]] = arith.subf {{.*}} {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: [[DIFF1:%.*]] = arith.subf {{.*}} {ttg.partition = array<i32: 1>}
     %diff = arith.subf %m_i, %row_max : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    // CHECK-NEXT: {{%.*}} = math.exp2 [[DIFF0]] {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: {{%.*}} = math.exp2 [[DIFF1]] {ttg.partition = array<i32: 1>}
     %alpha = math.exp2 %diff : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
 
     // CHECK-NEXT: tt.reduce

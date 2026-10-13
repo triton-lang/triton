@@ -67,8 +67,8 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr) {
   // The RDNA-style flags below have bits [3:0]=0, so they are effectively
   // ignored on GFX12+ but we include GFX1250 in the check for consistency.
   uint32_t flags = (7 << 12) | (4 << 15);
-  if (llvm::is_contained({ISAFamily::RDNA2, ISAFamily::RDNA3, ISAFamily::RDNA4m,
-                          ISAFamily::RDNA4, ISAFamily::GFX1250},
+  if (llvm::is_contained({ISAFamily::RDNA3, ISAFamily::RDNA4m, ISAFamily::RDNA4,
+                          ISAFamily::GFX1250},
                          targetInfo.getISAFamily())) {
     flags |= (1 << 24);
     uint32_t oob = 3;
@@ -162,6 +162,12 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(type, true);
+  // A swap only moves bits, so exchange an integer of the same total width.
+  // The AMDGPU backend only selects i32, i64 and f32 buffer swaps; it has no
+  // f64 or packed 16-bit (v2f16, v2bf16) patterns.
+  if (rmwType == RMWOp::XCHG)
+    bufferType = rewriter.getIntegerType(vecTy.getNumElements() *
+                                         vecTy.getElementTypeBitWidth());
   if (vecTy != bufferType)
     data = b.bitcast(data, bufferType);
 
@@ -171,7 +177,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
 
   // TODO:
   //   The ops in ROCDL (e.g., RawPtrBufferAtomicFaddOp) have no return value,
-  //   but they lower to instrinsics that can return values. This causes the
+  //   but they lower to intrinsics that can return values. This causes the
   //   LLVM verifier to fail. When this is fixed, the ROCDL ops should be used
   //   here.
   auto rmwOpStr = stringifyRMWOp(rmwType).str();
@@ -187,11 +193,11 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
     StringRef prefix = isa<FloatType>(getElementTypeOrSelf(type)) ? "f" : "s";
     rmwOpStr = (prefix + rmwOpStr).str();
   }
-  auto instrinsic = "llvm.amdgcn.raw.ptr.buffer.atomic." + rmwOpStr;
+  auto intrinsic = "llvm.amdgcn.raw.ptr.buffer.atomic." + rmwOpStr;
   SmallVector<Value, 6> intrinsicArgs = args;
   intrinsicArgs.push_back(b.i32_val(aux));
   auto bufferAtomicRMW = LLVM::createLLVMIntrinsicCallOp(
-      rewriter, loc, instrinsic, bufferType, intrinsicArgs);
+      rewriter, loc, intrinsic, bufferType, intrinsicArgs);
 
   return b.bitcast(bufferAtomicRMW.getResult(0), type);
 }

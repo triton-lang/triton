@@ -14,33 +14,29 @@
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/CodeGen/LiveIntervals.h"
-#include "llvm/CodeGen/MIRParser/MIRParser.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
-#include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/CodeGen/ScheduleDAGInstrs.h"
 #include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
 #include "llvm/PassRegistry.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/RegisterTargetPassConfigCallback.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
@@ -92,9 +88,37 @@ public:
     startBlock(&MBB);
     enterRegion(&MBB, Begin, End, std::distance(Begin, End));
 
+    // buildSchedGraph MUTATES the MachineFunction when lane-mask tracking is
+    // on:
+    //
+    //   // Clear undef flag, we'll re-add it later once we know which
+    //   // subregister Def is first.
+    //   MO.setIsUndef(false);      // ScheduleDAGInstrs::addVRegDefDeps
+    //
+    // The flag is re-added by the scheduler as it places instructions. We only
+    // build the graph -- we never schedule -- so nothing would restore it, and
+    // a subregister def that loses `undef` makes the MIR printed alongside the
+    // DAG unparseable ("Use not jointly dominated by defs"). That is harmless
+    // when the MF is a throwaway re-parse, but not when we run on the live
+    // codegen pipeline's MF (see armLivePipelineDAGEmission), so snapshot the
+    // flags and put them back ourselves.
+    //
+    // (Kill flags are safe: we pass RemoveKillFlags=false, and fixupKills only
+    // runs from the post-RA scheduler.)
+    SmallVector<std::pair<MachineInstr *, unsigned>, 16> UndefOperands;
+    for (MachineBasicBlock::iterator I = Begin; I != End; ++I)
+      for (unsigned OpIdx = 0, E = I->getNumOperands(); OpIdx != E; ++OpIdx) {
+        const MachineOperand &MO = I->getOperand(OpIdx);
+        if (MO.isReg() && MO.isUndef())
+          UndefOperands.emplace_back(&*I, OpIdx);
+      }
+
     // Call schedule() which calls buildSchedGraph internally.
     // This follows the same pattern as MachineScheduler.
     schedule();
+
+    for (const auto &[MI, OpIdx] : UndefOperands)
+      MI->getOperand(OpIdx).setIsUndef(true);
 
     // Extract edges from SUnits.
     for (const SUnit &SU : SUnits) {
@@ -414,73 +438,88 @@ INITIALIZE_PASS_DEPENDENCY(LiveIntervalsWrapperPass)
 INITIALIZE_PASS_END(EmitSchedulingDAGPass, "mir-dag-emit-scheduling-dag",
                     "Emit scheduling DAG (mir_dag)", false, true)
 
-// Parse `mirText` into a fresh MachineFunction and emit its scheduling DAG. A
-// small legacy PassManager computes LiveIntervals (via
-// LiveIntervalsWrapperPass) so the DAG has subregister-precise dependencies.
-// Because identity is (bb, pos), the parser's vreg renumbering is irrelevant --
-// the parsed MF preserves mirText's instruction order.
+//===----------------------------------------------------------------------===//
+// Live-pipeline DAG emission
+//===----------------------------------------------------------------------===//
 //
-// TODO(tyb0807): run EmitSchedulingDAGPass inside the original codegen
-// PassManager (at the machine-scheduler anchor) so the DAG is built on the live
-// MachineFunction directly, instead of serializing to MIR text and re-parsing
-// it here. That avoids the re-parse round-trip and reuses the LiveIntervals
-// already computed by the pipeline.
-std::string llvm::mir_dag::buildSchedulingDAGText(StringRef mirText,
-                                                  StringRef triple,
-                                                  StringRef cpu) {
-  using namespace llvm;
+// Build the DAG on the MachineFunction the codegen pipeline actually produced,
+// instead of serializing it to MIR text and re-parsing it.
+//
+// Besides avoiding the round-trip and reusing the pipeline's LiveIntervals,
+// this makes the `region <bb-number>` key unambiguous. On a re-parsed MF the
+// MIR parser assigns block numbers in the order it reads blocks, so the number
+// is the block's LAYOUT POSITION; the `bb.N` labels in the dumped text are the
+// original numbers. The two agree only when layout order happens to match
+// numbering, and a function laid out `bb.9 bb.12 bb.10 bb.11` silently hands
+// one block's constraints to another. Emitting from the live MF keys on the
+// same MachineBasicBlock the MIR printer labels, so the two cannot diverge.
+//
+// The obvious approach -- insertPass(&MachineSchedulerID, ...) -- does NOT work
+// here. TargetPassConfig::addPass(Pass*) only appends a pass's inserted passes
+// when that pass is itself added:
+//
+//   if (StopBefore == PassID) Stopped = true;
+//   if (Started && !Stopped) { PM->add(P); /* add InsertedPasses for P */ }
+//   else delete P;
+//
+// The MIR dump runs with -stop-before=machine-scheduler, so MachineScheduler
+// sets Stopped and takes the `delete P` branch; anything inserted at that
+// anchor is silently dropped. Anchoring on the preceding pass
+// (RenameIndependentSubregs) is no better: our callback runs before
+// GCNPassConfig::addOptimizedRegAlloc, so our entry would precede AMDGPU's own
+// insertPass(&RenameIndependentSubregsID, &GCNRewritePartialRegUsesID) -- and
+// GCNRewritePartialRegUses rewrites instructions, so the DAG would describe a
+// different MF than the one dumped.
+//
+// Instead we take MachineScheduler's slot via substitutePass and stop after
+// ourselves. addPass(AnalysisID) resolves the substitution before calling
+// addPass(Pass*), so the pass ID tested against StopBefore/StopAfter is OURS:
+// the pass is added and runs at exactly the point MachineScheduler would have,
+// with the same LiveIntervals, and the pipeline stops immediately after. The
+// pass preserves all analyses, and it restores the operand flags
+// buildSchedGraph perturbs (see buildAndExtractEdges), so the MIR printed by
+// addPassesToEmitFile is byte-identical to what -stop-before=machine-scheduler
+// produced.
 
-  llvm::Triple TT(triple.str());
-  std::string error;
-  const Target *target = TargetRegistry::lookupTarget(TT, error);
-  if (!target)
-    return "";
+static std::string *LivePipelineSink = nullptr;
 
-  TargetOptions options;
-  std::unique_ptr<TargetMachine> TM(target->createTargetMachine(
-      TT, cpu, /*Features=*/"", options, std::nullopt));
-  if (!TM)
-    return "";
+// Register the TargetPassConfig callback LAZILY, on first arm().
+//
+// It must NOT be a file-scope global: llvm::TargetPassConfigCallbacks (in
+// RegisterTargetPassConfigCallback.cpp) is itself a file-scope SmallVector with
+// a dynamic initializer, so a global here races it. When our global wins,
+// push_back() runs on an unconstructed vector and the vector's own constructor
+// then clears the registration -- the callback silently never fires. A
+// function-local static is constructed on first call, long after all static
+// initialization has completed.
+static void ensureLivePipelineCallbackRegistered() {
+  // Invoked for EVERY codegen pipeline created in this process (any target),
+  // so it must be inert unless armed.
+  static RegisterTargetPassConfigCallback Reg(
+      [](TargetMachine &TM, legacy::PassManagerBase &, TargetPassConfig *PC) {
+        if (!LivePipelineSink || !PC)
+          return;
+        if (!TM.getTargetTriple().isAMDGCN())
+          return;
+        PC->substitutePass(&MachineSchedulerID, &EmitSchedulingDAGPass::ID);
+      });
+  (void)Reg;
+}
 
-  LLVMContext ctx;
-  std::unique_ptr<MemoryBuffer> buffer = MemoryBuffer::getMemBuffer(mirText);
-  std::unique_ptr<MIRParser> parser = createMIRParser(std::move(buffer), ctx);
-  if (!parser)
-    return "";
+const char *llvm::mir_dag::livePipelineDAGPassName() {
+  return "mir-dag-emit-scheduling-dag";
+}
 
-  std::unique_ptr<Module> M = parser->parseIRModule();
-  if (!M)
-    return "";
-  M->setTargetTriple(TT);
-  M->setDataLayout(TM->createDataLayout());
-
-  // Register the passes we will run (and their dependencies) so the legacy
-  // PassManager can resolve them.
+void llvm::mir_dag::armLivePipelineDAGEmission(std::string *Sink) {
   PassRegistry &Registry = *PassRegistry::getPassRegistry();
   initializeEmitSchedulingDAGPassPass(Registry);
   initializeLiveIntervalsWrapperPassPass(Registry);
-  initializeSlotIndexesWrapperPassPass(Registry);
-  initializeMachineDominatorTreeWrapperPassPass(Registry);
-  initializeMachineLoopInfoWrapperPassPass(Registry);
+  ensureLivePipelineCallbackRegistered();
+  LivePipelineSink = Sink;
+  DAGTextSink = Sink;
+}
 
-  std::string out;
-  DAGTextSink = &out;
-
-  {
-    legacy::PassManager PM;
-    // Construct the MMI wrapper explicitly with the TargetMachine and add it
-    // first, so the PassManager does not default-construct one (which would
-    // have a null TargetMachine and crash).
-    auto *MMIWP = new MachineModuleInfoWrapperPass(TM.get());
-    PM.add(MMIWP);
-    PM.add(new EmitSchedulingDAGPass());
-    if (parser->parseMachineFunctions(*M, MMIWP->getMMI())) {
-      DAGTextSink = nullptr;
-      return "";
-    }
-    PM.run(*M);
-  }
-
+void llvm::mir_dag::disarmLivePipelineDAGEmission() {
+  LivePipelineSink = nullptr;
   DAGTextSink = nullptr;
-  return out;
 }

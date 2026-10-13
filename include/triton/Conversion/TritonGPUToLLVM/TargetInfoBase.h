@@ -129,6 +129,15 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
+  // Returns true if the target does not abort the kernel in |assertFail| and
+  // requires |assertTrap| to be emitted instead. The trap is emitted after a
+  // block-wide barrier so that all failing threads finish reporting first.
+  virtual bool requiresAssertTrap() const { return false; }
+
+  // Emits LLVM code with |rewriter| to abort the kernel after a failed
+  // assertion. Only called if |requiresAssertTrap| returns true.
+  virtual void assertTrap(RewriterBase &rewriter, Location loc) const = 0;
+
   virtual int getSharedMemoryBanks() const { return 32; }
 
   virtual int getSharedAddressSpace() const = 0;

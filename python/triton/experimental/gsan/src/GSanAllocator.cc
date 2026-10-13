@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <random>
 
 #include "GSan.h"
@@ -108,7 +109,7 @@ struct GSanConfig {
 struct AllocatorState {
   // User memory + shadow memory
   CUdeviceptr reserveBaseAddress = 0;
-  AllocNode treeRoots[2];
+  AllocNode treeRoots[gsan::kNumPools];
 
   // GSan global state
   CUdeviceptr globalStateAddress = 0;
@@ -187,10 +188,19 @@ size_t roundUp(size_t val, size_t alignment) {
   return cdiv(val, alignment) * alignment;
 }
 
-size_t getShadowSize(size_t realMemSize, uintptr_t address) {
-  bool writeOnce = gsan::isWriteOnceAddress(address);
-  return cdiv(realMemSize, gsan::getShadowGranularity(writeOnce)) *
-         gsan::getShadowCellSize(writeOnce);
+size_t roundDownToPowerOfTwo(size_t x) {
+  if (x == 0)
+    return 0;
+
+  for (size_t shift = 1; shift < sizeof(x) * 8; shift <<= 1)
+    x |= x >> shift;
+
+  return x - (x >> 1);
+}
+
+size_t getShadowSize(size_t realMemSize, uintptr_t realAddress) {
+  auto wordSize = cdiv(realMemSize, gsan::getShadowGranularity(realAddress));
+  return wordSize * gsan::getShadowCellSize(realAddress);
 }
 
 bool isLeaf(const AllocNode *node) {
@@ -307,6 +317,13 @@ bool canCoalesce(const AllocNode *node) {
   return leftFree && rightFree;
 }
 
+AllocNode *findAllocation(CUdeviceptr address) {
+  if (!gsan::isGsanManaged(address, alloc->reserveBaseAddress))
+    return nullptr;
+  return findNodeByAddress(&alloc->treeRoots[gsan::getPoolIndex(address)],
+                           address);
+}
+
 void coalesceUp(AllocNode *node) {
   if (node == nullptr)
     return;
@@ -353,11 +370,20 @@ int gsanEnsureInit() {
   alloc->reserveBaseAddress = reserveBase;
   alloc->globalStateAddress = globalsBase;
 
-  for (bool writeOnce : {false, true}) {
-    auto &root = alloc->treeRoots[writeOnce];
-    root.virtualAddress = gsan::getRealBaseAddress(reserveBase, writeOnce);
-    root.size = gsan::getRealCapacity(writeOnce);
-    root.maxFreeBlockSize = root.size;
+  for (int i = 0; i < gsan::kNumPools; ++i) {
+    bool writeOnce = (i & 1) != 0;
+    int granularity = 1 << (i >> 1);
+    auto *root = &alloc->treeRoots[i];
+    root->virtualAddress =
+        gsan::getRealBaseAddress(reserveBase, granularity, writeOnce);
+
+    // Both physical mappings must fit in their respective half of the pool.
+    auto shadowSize = gsan::kPoolReserveSize / 2;
+    auto realSize =
+        granularity * (shadowSize / gsan::getShadowCellSize(writeOnce));
+    realSize = roundDownToPowerOfTwo(std::min(shadowSize, realSize));
+    root->size = realSize;
+    root->maxFreeBlockSize = realSize;
   }
   return 0;
 }
@@ -605,9 +631,9 @@ void unmapNodeHandles(AllocNode *node, bool realMapped, bool shadowMapped) {
 } // namespace
 
 // TODO: Handle streams?
-static void *gsanMallocImpl(ssize_t size, int device, void *stream,
-                            bool writeOnce) {
-  if (size <= 0)
+void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
+                                int shadowGranularity, bool writeOnce = false) {
+  if (size <= 0 || !gsan::isValidShadowGranularity(shadowGranularity))
     return nullptr;
 
   std::lock_guard lg(mut);
@@ -638,8 +664,15 @@ static void *gsanMallocImpl(ssize_t size, int device, void *stream,
     printCUDAError(err);
     return nullptr;
   }
-  size_t allocSize = roundUp(static_cast<size_t>(size), granularity);
-  AllocNode *node = allocateNode(&alloc->treeRoots[writeOnce], allocSize);
+  // Scale real allocation alignment so fractional shadow-to-real ratios
+  // still produce page-aligned shadow addresses and sizes.
+  size_t alignment =
+      granularity * shadowGranularity /
+      std::gcd(shadowGranularity, gsan::getShadowCellSize(writeOnce));
+  size_t allocSize = roundUp(static_cast<size_t>(size), alignment);
+  auto *root = &alloc->treeRoots[gsan::getPoolIndexForGranularity(
+      shadowGranularity, writeOnce)];
+  AllocNode *node = allocateNode(root, allocSize);
   if (node == nullptr)
     return nullptr;
 
@@ -684,11 +717,43 @@ error:
 }
 
 extern "C" void *gsanMalloc(ssize_t size, int device, void *stream) {
-  return gsanMallocImpl(size, device, stream, false);
+  return gsanMallocWithGranularity(size, device, stream, 4);
 }
 
 extern "C" void *gsanMallocWriteOnce(ssize_t size, int device, void *stream) {
-  return gsanMallocImpl(size, device, stream, true);
+  return gsanMallocWithGranularity(size, device, stream, 1, true);
+}
+
+extern "C" void *gsanMallocWriteOnce2(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 2, true);
+}
+
+extern "C" void *gsanMallocWriteOnce4(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 4, true);
+}
+
+extern "C" void *gsanMallocWriteOnce8(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 8, true);
+}
+
+extern "C" void *gsanMallocWriteOnce16(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 16, true);
+}
+
+extern "C" void *gsanMalloc1(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 1);
+}
+
+extern "C" void *gsanMalloc2(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 2);
+}
+
+extern "C" void *gsanMalloc8(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 8);
+}
+
+extern "C" void *gsanMalloc16(ssize_t size, int device, void *stream) {
+  return gsanMallocWithGranularity(size, device, stream, 16);
 }
 
 extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
@@ -702,8 +767,7 @@ extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
   if (alloc == nullptr)
     return;
 
-  AllocNode *node =
-      findNodeByAddress(&alloc->treeRoots[gsan::isWriteOnceAddress(ptr)], ptr);
+  AllocNode *node = findAllocation(ptr);
   if (node == nullptr || node->maxFreeBlockSize != 0 ||
       node->virtualAddress != ptr) {
     fprintf(stderr, "gsanFree called with an invalid pointer\n");
@@ -750,7 +814,8 @@ int gsanExportAllocationHandles(void *void_ptr,
                                 GSanShareableHandle *realShareableHandle,
                                 GSanShareableHandle *shadowShareableHandle,
                                 size_t *allocSize,
-                                CUmemAllocationHandleType handleType) {
+                                CUmemAllocationHandleType handleType,
+                                bool includeGranularity) {
   if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
       allocSize == nullptr || !isSupportedShareableHandleType(handleType)) {
     return -1;
@@ -767,8 +832,7 @@ int gsanExportAllocationHandles(void *void_ptr,
   if (alloc == nullptr)
     return -1;
 
-  AllocNode *node =
-      findNodeByAddress(&alloc->treeRoots[gsan::isWriteOnceAddress(ptr)], ptr);
+  AllocNode *node = findAllocation(ptr);
   if (node == nullptr || node->maxFreeBlockSize != 0 ||
       ptr < node->virtualAddress ||
       ptr >= node->virtualAddress + node->allocSize) {
@@ -776,6 +840,9 @@ int gsanExportAllocationHandles(void *void_ptr,
             "gsanExportAllocationHandles called with invalid pointer\n");
     return -1;
   }
+  if (!includeGranularity && gsan::getShadowGranularity(ptr) !=
+                                 (gsan::isWriteOnceAddress(ptr) ? 1 : 4))
+    return -2;
 
   CUresult err = cuMemExportToShareableHandle(
       getShareableHandleExportArg(realShareableHandle, handleType),
@@ -819,8 +886,7 @@ int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
   if (alloc == nullptr)
     return -1;
 
-  AllocNode *node =
-      findNodeByAddress(&alloc->treeRoots[gsan::isWriteOnceAddress(ptr)], ptr);
+  AllocNode *node = findAllocation(ptr);
   if (node == nullptr || node->maxFreeBlockSize != 0 ||
       ptr < node->virtualAddress ||
       ptr >= node->virtualAddress + node->allocSize) {
@@ -888,9 +954,11 @@ void *
 gsanImportAllocationHandles(const GSanShareableHandle *realShareableHandle,
                             const GSanShareableHandle *shadowShareableHandle,
                             CUmemAllocationHandleType handleType,
-                            size_t allocSize, int device, bool writeOnce) {
+                            size_t allocSize, int device, int shadowGranularity,
+                            bool writeOnce = false) {
   if (realShareableHandle == nullptr || shadowShareableHandle == nullptr ||
-      !isSupportedShareableHandleType(handleType) || allocSize == 0)
+      !isSupportedShareableHandleType(handleType) || allocSize == 0 ||
+      !gsan::isValidShadowGranularity(shadowGranularity))
     return nullptr;
   if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR &&
       (realShareableHandle->fd < 0 || shadowShareableHandle->fd < 0)) {
@@ -911,7 +979,9 @@ gsanImportAllocationHandles(const GSanShareableHandle *realShareableHandle,
     return nullptr;
   }
 
-  AllocNode *node = allocateNode(&alloc->treeRoots[writeOnce], allocSize);
+  auto *root = &alloc->treeRoots[gsan::getPoolIndexForGranularity(
+      shadowGranularity, writeOnce)];
+  AllocNode *node = allocateNode(root, allocSize);
   if (node == nullptr)
     return nullptr;
 
@@ -1098,13 +1168,27 @@ bool parseVoidPtrArg(PyObject *obj, void **out) {
   return !(*out == nullptr && PyErr_Occurred());
 }
 
+bool parseShadowGranularityArg(PyObject *obj, int *out) {
+  if (PyBool_Check(obj) || !parseIntArg(obj, "shadow_granularity", out)) {
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_ValueError,
+                      "shadow_granularity must be 1, 2, 4, 8, or 16");
+    return false;
+  }
+  if (!gsan::isValidShadowGranularity(*out)) {
+    PyErr_SetString(PyExc_ValueError,
+                    "shadow_granularity must be 1, 2, 4, 8, or 16");
+    return false;
+  }
+  return true;
+}
+
 PyObject *pyMalloc([[maybe_unused]] PyObject *self, PyObject *const *args,
                    Py_ssize_t nargs) {
-  if (nargs < 2 || nargs > 4) {
-    PyErr_Format(
-        PyExc_TypeError,
-        "%s.malloc expected between 2 and 4 positional arguments, got %zd",
-        kModuleName, nargs);
+  if (nargs < 2 || nargs > 5) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.malloc expected 2 to 5 positional arguments, got %zd",
+                 kModuleName, nargs);
     return nullptr;
   }
 
@@ -1120,10 +1204,14 @@ PyObject *pyMalloc([[maybe_unused]] PyObject *self, PyObject *const *args,
   if (nargs >= 3 && !parseVoidPtrArg(args[2], &stream))
     return nullptr;
 
-  int writeOnce = nargs == 4 ? PyObject_IsTrue(args[3]) : 0;
+  int writeOnce = nargs >= 4 ? PyObject_IsTrue(args[3]) : 0;
   if (writeOnce < 0)
     return nullptr;
-  return PyLong_FromVoidPtr(gsanMallocImpl(size, device, stream, writeOnce));
+  int shadowGranularity = writeOnce ? 1 : gsan::kShadowMemGranularityBytes;
+  if (nargs == 5 && !parseShadowGranularityArg(args[4], &shadowGranularity))
+    return nullptr;
+  return PyLong_FromVoidPtr(gsanMallocWithGranularity(
+      size, device, stream, shadowGranularity, writeOnce));
 }
 
 PyObject *pyFree([[maybe_unused]] PyObject *self, PyObject *const *args,
@@ -1555,9 +1643,9 @@ PyObject *pyIsWriteOnceAllocation(PyObject *self, PyObject *arg) {
 PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
                                     Py_ssize_t nargs) {
   (void)self;
-  if (nargs != 2 && nargs != 3) {
+  if (nargs < 2 || nargs > 4) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.export_allocation_handles expected 2 or 3 positional "
+                 "%s.export_allocation_handles expected 2 to 4 positional "
                  "arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
@@ -1570,7 +1658,7 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
       !parseShareableHandleTypeArg(args[1], "handle_type", &handleType))
     return nullptr;
 
-  int writeOnce = nargs == 3 ? PyObject_IsTrue(args[2]) : 0;
+  int writeOnce = nargs >= 3 ? PyObject_IsTrue(args[2]) : 0;
   if (writeOnce < 0)
     return nullptr;
   if (gsan::isWriteOnceAddress(reinterpret_cast<uintptr_t>(ptr)) !=
@@ -1579,22 +1667,36 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
                     "write_once does not match the allocation mode");
     return nullptr;
   }
+  int includeGranularity = nargs == 4 ? PyObject_IsTrue(args[3]) : 0;
+  if (includeGranularity < 0)
+    return nullptr;
 
   GSanShareableHandle realShareableHandle = {};
   GSanShareableHandle shadowShareableHandle = {};
   size_t allocSize = 0;
   int rc = gsanExportAllocationHandles(ptr, &realShareableHandle,
                                        &shadowShareableHandle, &allocSize,
-                                       handleType);
+                                       handleType, includeGranularity != 0);
+  if (rc == -2) {
+    PyErr_SetString(PyExc_ValueError,
+                    "Non-default pools require include_granularity=True");
+    return nullptr;
+  }
   if (rc != 0) {
     PyErr_SetString(PyExc_RuntimeError, "gsanExportAllocationHandles failed.");
     return nullptr;
   }
 
+  if (!includeGranularity)
+    return Py_BuildValue(
+        "(NNK)", shareableHandleToPyObject(realShareableHandle, handleType),
+        shareableHandleToPyObject(shadowShareableHandle, handleType),
+        static_cast<unsigned long long>(allocSize));
   return Py_BuildValue(
-      "(NNK)", shareableHandleToPyObject(realShareableHandle, handleType),
+      "(NNKi)", shareableHandleToPyObject(realShareableHandle, handleType),
       shareableHandleToPyObject(shadowShareableHandle, handleType),
-      static_cast<unsigned long long>(allocSize));
+      static_cast<unsigned long long>(allocSize),
+      gsan::getShadowGranularity(reinterpret_cast<uintptr_t>(ptr)));
 }
 
 PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
@@ -1634,9 +1736,9 @@ PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
 PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
                                     Py_ssize_t nargs) {
   (void)self;
-  if (nargs != 5 && nargs != 6) {
+  if (nargs < 5 || nargs > 7) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.import_allocation_handles expected 5 or 6 positional "
+                 "%s.import_allocation_handles expected 5 to 7 positional "
                  "arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
@@ -1660,12 +1762,16 @@ PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
   if (allocSize == static_cast<size_t>(-1) && PyErr_Occurred())
     return nullptr;
 
-  int writeOnce = nargs == 6 ? PyObject_IsTrue(args[5]) : 0;
+  int writeOnce = nargs >= 6 ? PyObject_IsTrue(args[5]) : 0;
   if (writeOnce < 0)
     return nullptr;
-  void *ptr =
-      gsanImportAllocationHandles(&realShareableHandle, &shadowShareableHandle,
-                                  handleType, allocSize, device, writeOnce);
+  int shadowGranularity = writeOnce ? 1 : gsan::kShadowMemGranularityBytes;
+  if (nargs == 7 && !parseShadowGranularityArg(args[6], &shadowGranularity))
+    return nullptr;
+
+  void *ptr = gsanImportAllocationHandles(
+      &realShareableHandle, &shadowShareableHandle, handleType, allocSize,
+      device, shadowGranularity, writeOnce);
   if (ptr == nullptr) {
     PyErr_SetString(PyExc_RuntimeError, "gsanImportAllocationHandles failed.");
     return nullptr;

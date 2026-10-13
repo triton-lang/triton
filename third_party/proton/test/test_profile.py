@@ -356,7 +356,8 @@ def test_cudagraph_metric_queue_handles_inactive_replay(tmp_path: pathlib.Path, 
 
 
 @_skip_cudagraph_test
-def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str):
+@pytest.mark.parametrize("data", ["tree", "trace"])
+def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, device: str, data: str):
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -376,8 +377,9 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     with cuda_graph_without_gc(g):
         fn()
 
-    temp_file = tmp_path / "test_cudagraph_not_captured_by_profiler.hatchet"
-    proton.start(str(temp_file.with_suffix("")), context="shadow")
+    suffix = "chrome_trace" if data == "trace" else "hatchet"
+    temp_file = tmp_path / f"test_cudagraph_not_captured_by_profiler.{suffix}"
+    proton.start(str(temp_file.with_suffix("")), context="shadow", data=data)
     with proton.scope("replay0"):
         g.replay()
     with proton.scope("replay1"):
@@ -388,27 +390,41 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     assert captured.err.count("Cannot find graph for graphExecId:") == 1
     assert "start profiling before the graph is created" in captured.err
 
-    with temp_file.open() as f:
-        data = json.load(f)
-    replay0_frame = None
-    replay1_frame = None
-    for child in data[0]["children"]:
-        if child["frame"]["name"] == "replay0":
-            replay0_frame = child
-        elif child["frame"]["name"] == "replay1":
-            replay1_frame = child
-    assert replay0_frame is not None
-    assert replay1_frame is not None
-    assert len(replay0_frame["children"]) >= 3
-    assert len(replay1_frame["children"]) >= 3
+    if data == "trace":
+        with temp_file.open() as f:
+            trace_events = json.load(f)["traceEvents"]
+        flow_starts = [e for e in trace_events if e.get("cat") == "flow" and e["ph"] == "s"]
+        for replay in ("replay0", "replay1"):
+            kernels = [e for e in trace_events if e.get("cat") == "kernel" and e["args"]["call_stack"][1] == replay]
+            assert len(kernels) == 4
+            assert any(e["dur"] > 0 for e in kernels)
+            # Each kernel's launch arrow starts at the CPU scope around replay.
+            scope = next(e for e in trace_events
+                         if e.get("cat") == "scope" and e["args"]["call_stack"] == ["ROOT", replay])
+            starts = [e for e in flow_starts if e["tid"] == scope["tid"] and e["ts"] == scope["ts"]]
+            assert len(starts) == len(kernels)
+    else:  # "tree"
+        with temp_file.open() as f:
+            data = json.load(f)
+        replay0_frame = None
+        replay1_frame = None
+        for child in data[0]["children"]:
+            if child["frame"]["name"] == "replay0":
+                replay0_frame = child
+            elif child["frame"]["name"] == "replay1":
+                replay1_frame = child
+        assert replay0_frame is not None
+        assert replay1_frame is not None
+        assert len(replay0_frame["children"]) >= 3
+        assert len(replay1_frame["children"]) >= 3
 
-    def has_positive_time_metric(node):
-        if node["metrics"].get("time (ns)", 0) > 0:
-            return True
-        return any(has_positive_time_metric(child) for child in node["children"])
+        def has_positive_time_metric(node):
+            if node["metrics"].get("time (ns)", 0) > 0:
+                return True
+            return any(has_positive_time_metric(child) for child in node["children"])
 
-    assert has_positive_time_metric(replay0_frame)
-    assert has_positive_time_metric(replay1_frame)
+        assert has_positive_time_metric(replay0_frame)
+        assert has_positive_time_metric(replay1_frame)
 
 
 @_skip_cudagraph_test
@@ -1507,6 +1523,10 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
         "<metric>",
     ]
     assert all(event["name"] != "foo" for event in metadata_kernel_events)
+
+    flow_starts = [event for event in trace_events if event.get("cat") == "flow" and event["ph"] == "s"]
+    flow_finishes = [event for event in trace_events if event.get("cat") == "flow" and event["ph"] == "f"]
+    assert {event["id"] for event in flow_starts} == {event["id"] for event in flow_finishes}
 
     test0_scope = next(
         event for event in trace_events
