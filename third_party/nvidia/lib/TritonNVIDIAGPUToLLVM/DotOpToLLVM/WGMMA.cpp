@@ -209,7 +209,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   unsigned M = 4 * instrMNK[0];
   unsigned N = instrMNK[1];
   unsigned K = instrMNK[2];
-  bool zeroAcc = isZeroConst(c);
+  bool zeroAcc = isZeroFillConst(c);
   auto warpSize = mmaEncoding.getWarpsPerCTA();
   auto shapePerCTATile = SmallVector<unsigned>{instrMNK[0] * warpSize[0],
                                                instrMNK[1] * warpSize[1]};
