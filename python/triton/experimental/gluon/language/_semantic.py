@@ -481,7 +481,14 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = builder.create_memdesc_subslice(ty.to_ir(builder), mem_desc.handle, offsets)
         return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
+    def check_memdesc_index_in_range(self, mem_desc, index):
+        index = ttgl._unwrap_if_constexpr(index)
+        if isinstance(index, int):
+            _check(0 <= index < mem_desc.shape[0],
+                   lambda: f"index {index} is out of range for a buffer of {mem_desc.shape[0]} subviews")
+
     def memdesc_index(self, mem_desc, index):
+        self.check_memdesc_index_in_range(mem_desc, index)
         index = self.to_tensor(index)
         _check(index.type == ttgl.int32, lambda: f"expected 'index' to be int32 but got {index.type}")
         shape = mem_desc.shape[1:]

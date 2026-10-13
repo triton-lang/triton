@@ -1958,6 +1958,24 @@ def test_tensor_layout_type_changed():
 
 
 @gluon.jit
+def memdesc_index_out_of_range_kernel(IDX: ttgl.constexpr, TMEM: ttgl.constexpr):
+    if TMEM:
+        layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], col_stride=1)
+        mem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, [2, 128, 128], layout)
+    else:
+        mem = ttgl.allocate_shared_memory(ttgl.float32, [2, 128], ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]))
+    mem.index(IDX)
+
+
+@pytest.mark.parametrize("tmem", [False, True])
+@pytest.mark.parametrize("idx", [2, -1])
+def test_memdesc_index_out_of_range(idx, tmem):
+    with pytest.raises(CompilationError, match=f"index {idx} is out of range for a buffer of 2 subviews"):
+        run_parser(memdesc_index_out_of_range_kernel, *make_args(idx, tmem), target=BLACKWELL_TARGET)
+    run_parser(memdesc_index_out_of_range_kernel, *make_args(1, tmem), target=BLACKWELL_TARGET)
+
+
+@gluon.jit
 def tmem_index_kernel():
     layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], col_stride=1)
     tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, [2, 256, 256], layout)

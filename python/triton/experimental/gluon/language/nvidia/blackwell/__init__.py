@@ -501,6 +501,7 @@ class tensor_memory_descriptor(base_value):
         Returns:
             tensor_memory_descriptor: Descriptor for the indexed subview.
         """
+        _semantic.check_memdesc_index_in_range(self, index)
         index = _semantic.to_tensor(index)
         builder = _semantic.builder
         shape = self.shape[1:]
