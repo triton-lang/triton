@@ -26,6 +26,7 @@ AMD CDNA 5
     make_partitioned_dot_layouts
     scaled_downcast
     scaled_upcast
+    set_wmma_issue_mode
     wmma
     wmma_scaled
     PartitionedSharedLayout

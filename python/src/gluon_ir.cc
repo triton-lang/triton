@@ -19,6 +19,7 @@
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "third_party/amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -1392,6 +1393,19 @@ void init_gluon_ir(py::module_ &m) {
                throw std::invalid_argument("invalid scheduling barrier mask " +
                                            std::to_string(mask));
              self.create<ROCDL::SchedBarrier>(*schedMask);
+           })
+      .def("create_amd_setreg",
+           [](GluonOpBuilder &self, uint32_t simm16, uint32_t value) {
+             auto loc = self.getLastLoc();
+             auto &builder = self.getBuilder();
+             auto i32Ty = IntegerType::get(self.getContext(), 32);
+             auto simm16Val = LLVM::ConstantOp::create(
+                 builder, loc, i32Ty, IntegerAttr::get(i32Ty, simm16));
+             auto valueVal = LLVM::ConstantOp::create(
+                 builder, loc, i32Ty, IntegerAttr::get(i32Ty, value));
+             LLVM::createLLVMIntrinsicCallOp(
+                 builder, loc, "llvm.amdgcn.s.setreg", TypeRange{},
+                 ValueRange{simm16Val, valueVal});
            })
       .def("create_warp_pipeline_border",
            [](GluonOpBuilder &self, const std::string &marker, int priority) {

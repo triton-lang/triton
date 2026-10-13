@@ -69,6 +69,37 @@ def gemm_kernel(a_ptr, b_ptr, c_ptr,  #
     ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
 
 
+@gluon.jit
+def wmma_issue_mode_kernel(a_ptr, b_ptr, c_ptr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                           BLOCK_K: ttgl.constexpr, USE_ISSUE_MODE: ttgl.constexpr):
+    blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+    wmma: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [[0, 1], [1, 0]], [], [16, 16, 32])
+
+    offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, blocked))[:, None]
+    offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, blocked))[None, :]
+    offs_bk = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(1, blocked))[:, None]
+    offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, blocked))[None, :]
+    a = ttgl.load(a_ptr + offs_m * BLOCK_K + offs_k)
+    b = ttgl.load(b_ptr + offs_bk * BLOCK_N + offs_n)
+    a = ttgl.convert_layout(a, ttgl.DotOperandLayout(0, wmma, 8))
+    b = ttgl.convert_layout(b, ttgl.DotOperandLayout(1, wmma, 8))
+
+    acc = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=ttgl.float32, layout=wmma)
+    acc = ttgl.amd.cdna5.wmma(a, b, acc)
+    acc = ttgl.amd.cdna5.wmma(a, b, acc)
+    if USE_ISSUE_MODE:
+        ttgl.amd.cdna5.set_wmma_issue_mode(True)
+    acc = ttgl.amd.cdna5.wmma(a, b, acc)
+    acc = ttgl.amd.cdna5.wmma(a, b, acc)
+    if USE_ISSUE_MODE:
+        ttgl.amd.cdna5.set_wmma_issue_mode(False)
+    acc = ttgl.amd.cdna5.wmma(a, b, acc)
+
+    offs_cm = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, wmma))[:, None]
+    offs_cn = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, wmma))[None, :]
+    ttgl.store(c_ptr + offs_cm * BLOCK_N + offs_cn, acc)
+
+
 def get_test_gemm_block_mnk():
     return [
         (m, n, k) for (m, n) in [(32, 32), (64, 64)] \
@@ -140,6 +171,50 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
         # NOTE: we always use transposed=True for wmma layout, which will swap A and B
         wmma_pattern += b_ty + "_" + a_ty
     assert re.search(wmma_pattern, amdgcn)
+
+
+def test_compile_wmma_issue_mode_placement():
+    signature = {
+        "a_ptr": "*bf16",
+        "b_ptr": "*bf16",
+        "c_ptr": "*fp32",
+        "BLOCK_M": "constexpr",
+        "BLOCK_N": "constexpr",
+        "BLOCK_K": "constexpr",
+        "USE_ISSUE_MODE": "constexpr",
+    }
+    constexprs = {"BLOCK_M": 32, "BLOCK_N": 32, "BLOCK_K": 32, "USE_ISSUE_MODE": True}
+    compiled = triton.compile(
+        src=gluon._runtime.GluonASTSource(wmma_issue_mode_kernel, signature, constexprs),
+        target=GPUTarget("hip", "gfx1250", 32),
+    )
+    lines = compiled.asm["amdgcn"].splitlines()
+    wmma = [i for i, line in enumerate(lines) if re.search(r"\bv_wmma_", line)]
+    enabled = [i for i, line in enumerate(lines) if "s_setreg_imm32_b32 hwreg(HW_REG_WAVE_SCHED_MODE, 2, 1), 1" in line]
+    disabled = [
+        i for i, line in enumerate(lines) if "s_setreg_imm32_b32 hwreg(HW_REG_WAVE_SCHED_MODE, 2, 1), 0" in line
+    ]
+    assert len(enabled) == len(disabled) == 1
+    before = sum(i < enabled[0] for i in wmma)
+    between = sum(enabled[0] < i < disabled[0] for i in wmma)
+    after = sum(i > disabled[0] for i in wmma)
+    assert (before, between, after) == (2, 2, 1)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+def test_runtime_wmma_issue_mode():
+    torch.manual_seed(42)
+    block_m = block_n = block_k = 32
+    a = torch.randn((block_m, block_k), dtype=torch.bfloat16, device="cuda")
+    b = torch.randn((block_k, block_n), dtype=torch.bfloat16, device="cuda")
+    control = torch.empty((block_m, block_n), dtype=torch.float32, device="cuda")
+    toggled = torch.empty_like(control)
+
+    launch = {"BLOCK_M": block_m, "BLOCK_N": block_n, "BLOCK_K": block_k, "num_warps": 4}
+    wmma_issue_mode_kernel[(1, )](a, b, control, USE_ISSUE_MODE=False, **launch)
+    wmma_issue_mode_kernel[(1, )](a, b, toggled, USE_ISSUE_MODE=True, **launch)
+
+    torch.testing.assert_close(toggled, control, rtol=0, atol=0)
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")

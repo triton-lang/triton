@@ -15,8 +15,38 @@ from . import cluster
 __all__ = [
     "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "scaled_upcast", "scaled_downcast",
     "buffer_load", "buffer_store", "get_wmma_scale_layout", "PartitionedSharedLayout", "make_partitioned_dot_layouts",
-    "load_shared_fp4_repacked", "get_scaled_upcast_fp4_scale_layout"
+    "load_shared_fp4_repacked", "get_scaled_upcast_fp4_scale_layout", "set_wmma_issue_mode"
 ]
+
+_HW_REG_WAVE_SCHED_MODE = 26
+_DISABLE_VALU_ARB_STALL_OFFSET = 2
+_DISABLE_VALU_ARB_STALL_WIDTH = 1
+_DISABLE_VALU_ARB_STALL_SIMM16 = (_HW_REG_WAVE_SCHED_MODE
+                                  | (_DISABLE_VALU_ARB_STALL_OFFSET << 6)
+                                  | ((_DISABLE_VALU_ARB_STALL_WIDTH - 1) << 11))
+
+
+@builtin
+def set_wmma_issue_mode(allow_back_to_back, _semantic=None):
+    """Control back-to-back multi-cycle WMMA issue on gfx1250.
+
+    ``True`` sets ``HW_REG_WAVE_SCHED_MODE.DISABLE_VALU_ARB_STALL`` (also
+    called ``DISABLE_XDL_ARB_STALL``), allowing eligible independent WMMAs to
+    issue back-to-back. ``False`` clears the field and restores the default
+    arbitration stall. The setting is persistent per wave until changed again.
+
+    This control affects issue arbitration only. Compiler-managed WMMA data
+    dependency waits remain in force; see the AMD CDNA 5 Software Programming
+    Guide, section 4.6.12.1. The field is register 26, offset 2, width 1.
+    Expert-scheduling bits 0-1 are not modified.
+    """
+    allow_back_to_back = _unwrap_if_constexpr(allow_back_to_back)
+    if not isinstance(allow_back_to_back, bool):
+        raise TypeError("allow_back_to_back must be a constexpr bool")
+    arch = getattr(_semantic.builder.options, "base_arch", None)
+    if arch != "gfx1250":
+        raise ValueError(f"set_wmma_issue_mode requires gfx1250, got {arch}")
+    _semantic.builder.create_amd_setreg(_DISABLE_VALU_ARB_STALL_SIMM16, int(allow_back_to_back))
 
 
 @builtin

@@ -4989,6 +4989,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+def test_amd_cdna5_wmma_issue_mode():
+
+    @gluon.jit
+    def kernel():
+        ttgl.amd.cdna5.set_wmma_issue_mode(True)
+        ttgl.amd.cdna5.set_wmma_issue_mode(False)
+
+    module = run_parser(kernel, target=HIP_TARGET_CDNA5)
+    ir_str = anonymize_ir(module.str_nodebug())
+    ir_str = re.sub(r'("ttg\.threads-per-warp"\s*=\s*)\d{2}', r'\1...', ir_str)
+    expecttest.assert_expected_inline(
+        ir_str, """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = ... : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %0 = llvm.mlir.constant(154 : i32) : i32
+    %1 = llvm.mlir.constant(1 : i32) : i32
+    llvm.call_intrinsic "llvm.amdgcn.s.setreg"(%0, %1) : (i32, i32) -> ()
+    %2 = llvm.mlir.constant(154 : i32) : i32
+    %3 = llvm.mlir.constant(0 : i32) : i32
+    llvm.call_intrinsic "llvm.amdgcn.s.setreg"(%2, %3) : (i32, i32) -> ()
+    tt.return
+  }
+}
+""")
+
+
+def test_amd_cdna5_wmma_issue_mode_requires_bool():
+
+    @gluon.jit
+    def kernel(ENABLED: ttgl.constexpr):
+        ttgl.amd.cdna5.set_wmma_issue_mode(ENABLED)
+
+    with pytest.raises(CompilationError, match="allow_back_to_back must be a constexpr bool"):
+        run_parser(kernel, *make_args(1), target=HIP_TARGET_CDNA5)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_RDNA4])
+def test_amd_cdna5_wmma_issue_mode_rejects_other_targets(target):
+
+    @gluon.jit
+    def kernel():
+        ttgl.amd.cdna5.set_wmma_issue_mode(True)
+
+    with pytest.raises(CompilationError, match="set_wmma_issue_mode requires gfx1250"):
+        run_parser(kernel, target=target)
+
+
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
 def test_amd_warp_pipeline(target):
 
