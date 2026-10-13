@@ -1377,6 +1377,35 @@ def test_atomic_scalar_masks():
     tl.atomic_xor(ptrs, 1, mask=True)
 
 
+def test_atomic_cas_rejects_const_pointer():
+
+    @triton.jit
+    def kernel(X: tl.const):
+        tl.atomic_cas(X, 0, 1)
+
+    with pytest.raises(CompilationError, match="Cannot store to a constant pointer"):
+        run_parser(kernel, args=(MockTensor(tl.int32), ))
+
+
+@pytest.mark.parametrize("scalar", [True, False])
+@pytest.mark.parametrize("operand", ["cmp", "val"])
+def test_atomic_cas_rejects_pointer_broadcast(scalar, operand):
+
+    @triton.jit
+    def kernel(X, SCALAR: tl.constexpr, OPERAND: tl.constexpr):
+        if not SCALAR:
+            X = X + tl.arange(0, 1)
+        value = tl.full((32, ), 1, tl.int32)
+        if OPERAND == "cmp":
+            tl.atomic_cas(X, value, 1)
+        else:
+            tl.atomic_cas(X, 0, value)
+
+    message = "Value argument cannot be block type" if scalar else "Expected pointer argument to have shape"
+    with pytest.raises(CompilationError, match=message):
+        run_parser(kernel, args=(MockTensor(tl.int32), scalar, operand))
+
+
 @pytest.mark.parametrize("dtype", [tl.int1, tl.int8, tl.uint8, tl.int16, tl.int32, tl.int64], ids=str)
 def test_atomic_load_store(dtype):
 

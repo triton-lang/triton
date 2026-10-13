@@ -2375,6 +2375,43 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
     assert f"atom.global.{sem_str}" in h.asm["ptx"]
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["int32", "uint32", "int64", "uint64"])
+@pytest.mark.parametrize("mode", ["scalar", "tensor", "broadcast_cmp", "broadcast_val", "broadcast_both"])
+@pytest.mark.parametrize("compare", [0, -1])
+def test_atomic_cas_pointee_type(dtype_str, mode, compare, device):
+
+    @triton.jit
+    def kernel(X, Old, Positive, MODE: tl.constexpr, COMPARE: tl.constexpr):
+        cmp = COMPARE
+        val = 1
+        if MODE == "scalar":
+            offsets = 0
+        else:
+            offsets = tl.arange(0, 128)
+            if MODE == "tensor" or MODE == "broadcast_val":
+                cmp = tl.full((128, ), COMPARE, tl.int32)
+            if MODE == "tensor" or MODE == "broadcast_cmp":
+                val = tl.full((128, ), 1, tl.int32)
+        old = tl.atomic_cas(X + offsets, cmp, val)
+        tl.static_assert(old.dtype == X.dtype.element_ty)
+        tl.store(Old + offsets, old.to(tl.int64))
+        tl.store(Positive + offsets, old > 0)
+
+    size = 1 if mode == "scalar" else 128
+    signed_dtype = torch.int32 if dtype_str.endswith("32") else torch.int64
+    x = torch.full((size, ), -1, dtype=signed_dtype, device=device).view(getattr(torch, dtype_str))
+    old = torch.empty((size, ), dtype=torch.int64, device=device)
+    positive = torch.empty((size, ), dtype=torch.bool, device=device)
+    kernel[(1, )](x, old, positive, mode, compare)
+
+    expected_old = 2**32 - 1 if dtype_str == "uint32" else -1
+    torch.testing.assert_close(old, torch.full_like(old, expected_old))
+    torch.testing.assert_close(positive, torch.full_like(positive, dtype_str.startswith("uint")))
+    expected_x = 1 if compare == -1 else -1
+    torch.testing.assert_close(x.view(signed_dtype), torch.full_like(x.view(signed_dtype), expected_x))
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
 @pytest.mark.skipif(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm12x (consumer Blackwell)")

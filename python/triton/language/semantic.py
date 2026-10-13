@@ -1386,6 +1386,8 @@ class TritonSemantic(Generic[TensorTy]):
         return self.make_tensor(handle, expected.type.with_element_ty(tl.int1))
 
     def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, sem: str, scope: str) -> TensorTy:
+        ptr, cmp, _ = self._atomic_typechecking_impl(ptr, cmp, None, "cas")
+        ptr, val, _ = self._atomic_typechecking_impl(ptr, val, None, "cas")
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
         element_ty = ptr.type.scalar.element_ty
