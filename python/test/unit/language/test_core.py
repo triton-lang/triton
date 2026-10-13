@@ -2392,17 +2392,17 @@ def test_atomic_cas_pointee_type(dtype_str, mode, compare, device):
             cmp = tl.full((128, ), COMPARE, tl.int32)
             val = tl.full((128, ), 1, tl.int32)
         old = tl.atomic_cas(X + offsets, cmp, val)
-        tl.store(Out + 2 * offsets, old.to(tl.int64))
-        tl.store(Out + 2 * offsets + 1, (old > 0).to(tl.int64))
+        tl.store(Out + 2 * offsets, old.to(tl.uint64))
+        tl.store(Out + 2 * offsets + 1, (old > 0).to(tl.uint64))
 
     size = 1 if mode == "scalar" else 128
     signed_dtype = torch.int32 if dtype_str.endswith("32") else torch.int64
     x = torch.full((size, ), -1, dtype=signed_dtype, device=device).view(getattr(torch, dtype_str))
-    out = torch.empty((size, 2), dtype=torch.int64, device=device)
+    out = torch.empty((size, 2), dtype=torch.uint64, device=device)
     kernel[(1, )](x, out, mode, compare)
 
-    expected_old = 2**32 - 1 if dtype_str == "uint32" else -1
-    expected = torch.tensor([expected_old, int(dtype_str.startswith("uint"))], dtype=torch.int64, device=device)
+    expected_old = 2**32 - 1 if dtype_str == "uint32" else 2**64 - 1
+    expected = torch.tensor([expected_old, int(dtype_str.startswith("uint"))], dtype=torch.uint64, device=device)
     torch.testing.assert_close(out, expected.expand(size, 2))
 
 
