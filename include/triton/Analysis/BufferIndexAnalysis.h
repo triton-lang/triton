@@ -37,6 +37,13 @@ struct BufferIndexExpr;
 ///        select(cmpi slt(base + 1, N), base + 1, 0)
 ///      only when -1 <= base < N is proven.
 ///
+/// A view carried around a cf-form loop as a header block argument (the
+/// pipeliner rotates the slot views of the stages in flight this way) gets
+/// the slot of the view passed on the backedge, shifted back by one
+/// iteration of a header counter that every backedge advances by one slot
+/// modulo N. The derivation is inductive: every entry edge must pass the
+/// constant slot it predicts for the first iteration, otherwise it fails.
+///
 /// This is a per-function analysis. It owns dominance information used to
 /// detect cf-form loop backedges and interns the analyzed expressions whose
 /// pointers are stored on `AllocationSlice`. The select/cmpi recurrence base
