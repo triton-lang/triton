@@ -19,7 +19,7 @@ from .driver import driver
 from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
-from triton._C.libtriton import get_cache_invalidating_env_vars, getenv, native_specialize_impl, ir
+from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
 
 TRITON_MODULE = "triton.language"
 GLUON_MODULE = "triton.experimental.gluon.language"
@@ -48,10 +48,11 @@ class DependenciesFinder(ast.NodeVisitor):
     otherwise we could recompile).
     """
 
-    def __init__(self, name, globals, nonlocals, src) -> None:
+    def __init__(self, name, globals, nonlocals, src, source_location) -> None:
         super().__init__()
         self.name = name
         self.hasher = hashlib.sha256(src.encode("utf-8"))
+        self.hasher.update(str(source_location).encode("utf-8"))
 
         # This function's __globals__ dict.
         self.globals = globals
@@ -493,7 +494,6 @@ class JITCallable:
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._src = src
         self.hash = None
-        self._hash_line_info_env = None
 
         # Map of global variables used by the function and any functions it
         # transitively calls, plus their values.  The values are collected when
@@ -524,35 +524,20 @@ class JITCallable:
     def cache_key(self) -> str:
         # TODO : hash should be attribute of `self`
         with self._hash_lock:
-            line_info_env = getenv("TRITON_DISABLE_LINE_INFO")
-            # Only the last setting's hash is cached: enabled -> disabled -> enabled
-            # recomputes the hash twice.
-            if self.hash is not None and self._hash_line_info_env == line_info_env:
+            if self.hash is not None:
                 return self.hash
-            # The TTIR builder drops source locations only when getBoolEnv() parses this as true.
-            line_info_enabled = get_cache_invalidating_env_vars().get("TRITON_DISABLE_LINE_INFO") != "true"
-            # Rehashing for a new line-info setting must keep the globals recorded
-            # by the first hash, because run() compares against them.
-            first_hash = self.hash is None
-            previous_state = (self.hash, self._hash_line_info_env)
             try:
-                self._hash_line_info_env = line_info_env
                 # Set a placeholder hash to break recursion in case the function
                 # transitively calls itself. The full hash is set after.
                 self.hash = f"recursion:{self._fn_name}"
                 nonlocals = inspect.getclosurevars(self.fn).nonlocals
-                dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__,
-                                                         nonlocals=nonlocals, src=self.src)
+                dependencies_finder = DependenciesFinder(
+                    name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals, src=self.src,
+                    source_location=(self.file_name, self.starting_line_number, self.def_file_line_number,
+                                     self.def_file_col_number))
                 dependencies_finder.visit(self.parse())
-                self.hash = dependencies_finder.ret + str(self.starting_line_number)
-                if line_info_enabled:
-                    self.hash += str((
-                        self.file_name,
-                        self.def_file_line_number,
-                        self.def_file_col_number,
-                    ))
-                if first_hash:
-                    self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
+                self.hash = dependencies_finder.ret
+                self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
                 from triton.language.core import constexpr
                 constexpr_globals = [(name, val)
@@ -563,7 +548,7 @@ class JITCallable:
                 self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
             except BaseException:
                 # Do not leave a partial hash as the key; the next access retries.
-                self.hash, self._hash_line_info_env = previous_state
+                self.hash = None
                 raise
         return self.hash
 
