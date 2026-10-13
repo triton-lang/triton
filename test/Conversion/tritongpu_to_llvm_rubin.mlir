@@ -489,13 +489,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: nvvm.addf {{.*}} : vector<2xf16>
   // CHECK: nvvm.subf {{.*}} : vector<2xf16>
   // CHECK: llvm.inline_asm {{.*}} "mul.f16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: nvvm.fma {{.*}} {rnd = #nvvm.fp_rnd_mode<rn>} : vector<2xf16>
+  // CHECK: nvvm.fma {{.*}}, rnd = <rn> : vector<2xf16>
   // CHECK: llvm.call_intrinsic "llvm.nvvm.fmin.f16x2"
   // CHECK: llvm.call_intrinsic "llvm.nvvm.fmax.f16x2"
   // CHECK: nvvm.addf {{.*}} : vector<2xbf16>
   // CHECK: nvvm.subf {{.*}} : vector<2xbf16>
   // CHECK: llvm.inline_asm {{.*}} "mul.bf16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: nvvm.fma {{.*}} {rnd = #nvvm.fp_rnd_mode<rn>} : vector<2xbf16>
+  // CHECK: nvvm.fma {{.*}}, rnd = <rn> : vector<2xbf16>
   // CHECK: llvm.call_intrinsic "llvm.nvvm.fmin.bf16x2"
   // CHECK: llvm.call_intrinsic "llvm.nvvm.fmax.bf16x2"
   tt.func private @packed_arith_homogeneous_half(
@@ -573,7 +573,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith_mixed
   // CHECK: llvm.inline_asm {{.*}} "mul.f16x2 $0, $1, $2;", "=r,r,r" {{.*}} : (i32, i32) -> i32
-  // CHECK: nvvm.fma {{.*}} {rnd = #nvvm.fp_rnd_mode<rn>} : vector<2xbf16>
+  // CHECK: nvvm.fma {{.*}}, rnd = <rn> : vector<2xbf16>
   // CHECK: llvm.inline_asm {{.*}} "add.f32x2.f16x2.f32x2 $0, $1, $2;", "=l,r,l" {{.*}} : (i32, i64) -> i64
   // CHECK: llvm.inline_asm {{.*}} "add.f32x2.bf16x2.f32x2 $0, $1, $2;", "=l,r,l" {{.*}} : (i32, i64) -> i64
   // CHECK: llvm.inline_asm {{.*}} "sub.f32x2.f16x2.f32x2 $0, $1, $2;", "=l,r,l" {{.*}} : (i32, i64) -> i64
