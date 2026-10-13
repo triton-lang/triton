@@ -185,17 +185,12 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(type, true);
-  // A swap only moves bits, and the AMDGPU backend cannot select an f64
-  // buffer swap, so exchange floating-point values as integers.
-  if (rmwType == RMWOp::XCHG &&
-      isa<FloatType>(getElementTypeOrSelf(bufferType))) {
-    Type intTy = rewriter.getIntegerType(
-        getElementTypeOrSelf(bufferType).getIntOrFloatBitWidth());
-    if (auto bufferVecTy = dyn_cast<VectorType>(bufferType))
-      bufferType = VectorType::get(bufferVecTy.getShape(), intTy);
-    else
-      bufferType = intTy;
-  }
+  // A swap only moves bits, so exchange an integer of the same total width.
+  // The AMDGPU backend only selects i32, i64 and f32 buffer swaps; it has no
+  // f64 or packed 16-bit (v2f16, v2bf16) patterns.
+  if (rmwType == RMWOp::XCHG)
+    bufferType = rewriter.getIntegerType(vecTy.getNumElements() *
+                                         vecTy.getElementTypeBitWidth());
   if (vecTy != bufferType)
     data = b.bitcast(data, bufferType);
 
