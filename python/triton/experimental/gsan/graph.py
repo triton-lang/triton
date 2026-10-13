@@ -11,10 +11,9 @@ import weakref
 
 import triton
 import triton.language as tl
-from triton._C.libtriton.gsan_testing import PER_DEVICE_STATE_STRIDE_BYTES
 
 from . import _stream_sync as sync
-from ._allocator import get_device_rank, get_global_state_pointer
+from ._allocator import get_device_rank, get_global_state_pointer, get_per_device_state_stride
 
 _live_plans = weakref.WeakSet()
 _live_completions = weakref.WeakSet()
@@ -170,7 +169,7 @@ class GraphPlan:
         self.entries, self.waits = dependency_frontiers(self.nodes)
         self.closed = False
         self.num_threads = sync._runtime_state_layout(get_device_rank(device), device).num_threads
-        self.global_state = get_global_state_pointer() + get_device_rank(device) * PER_DEVICE_STATE_STRIDE_BYTES
+        self.global_state = get_global_state_pointer() + get_device_rank(device) * get_per_device_state_stride()
         with sync._clock_storage(device, stream), triton.knobs.compilation.scope():
             triton.knobs.compilation.instrumentation_mode = ""
             self.outputs = torch.zeros((len(self.nodes), self.num_threads), device=device, dtype=torch.int32)
