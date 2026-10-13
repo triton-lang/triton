@@ -499,12 +499,9 @@ private:
   bool analyzeSmallTensorOfst;
 };
 
-// Workaround to allow static_assert(false) on older compilers as it was
-// ill-formed before defect report CWG2518
-// (https://cplusplus.github.io/CWG/issues/2518.html)
-template <typename T> struct always_false : std::false_type {};
-
 template <typename SourceOp>
+  requires llvm::is_one_of<SourceOp, triton::LoadOp,
+                           triton::gpu::AsyncCopyGlobalToLocalOp>::value
 struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   using OpRewritePattern<SourceOp>::OpRewritePattern;
 
@@ -549,16 +546,11 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
               rewriter, op->getLoc(), op.getType(), basePtr, tensorOffset,
               blockStride, op.getCachePolicyAttr(), maybeMask, maybeOther,
               contig);
-        } else if constexpr (std::is_same_v<
-                                 SourceOp,
-                                 triton::gpu::AsyncCopyGlobalToLocalOp>) {
+        } else {
           return triton::amdgpu::BufferLoadToLocalOp::create(
               rewriter, op->getLoc(), op.getType(), op.getResult(), basePtr,
               tensorOffset, maybeMask, maybeOther, blockStride,
               op.getCachePolicyAttr(), op.getContiguity());
-        } else {
-          static_assert(always_false<SourceOp>::value,
-                        "Unsupported type in ConvertTritonLoadToBufferLoad");
         }
       }();
 

@@ -102,7 +102,7 @@ static void createClusterOp(OpBuilder &b, Location loc,
   for (Operation *op : ops) {
     for (OpResult r : op->getResults()) {
       bool hasExternalUse = llvm::any_of(r.getUsers(), [&](Operation *u) {
-        return !opsLookup.count(u) && u->getParentOp() != nullptr;
+        return !opsLookup.contains(u) && u->getParentOp() != nullptr;
       });
       if (hasExternalUse) {
         yieldedTypes.push_back(r.getType());

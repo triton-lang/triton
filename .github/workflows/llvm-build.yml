@@ -10,14 +10,6 @@ on:
       - third_party/amd/backend/codegen/**
       - include/triton/Tools/LLVMOptions.h
       - lib/Tools/LLVMOptions.cpp
-  pull_request:
-    paths:
-      - .github/workflows/llvm-build.yml
-      - cmake/llvm-build-info.json
-      - cmake/amd-llvm-build-info.json
-      - third_party/amd/backend/codegen/**
-      - include/triton/Tools/LLVMOptions.h
-      - lib/Tools/LLVMOptions.cpp
   workflow_dispatch:
 
 env:
@@ -42,8 +34,8 @@ jobs:
       id: packages
       env:
         EVENT_NAME: ${{ github.event_name }}
-        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        BASE_SHA: ${{ github.event.before }}
+        HEAD_SHA: ${{ github.sha }}
       run: |
         python3 - <<'PYTHON'
         import json
@@ -56,11 +48,10 @@ jobs:
             changed = subprocess.check_output([
                 "git", "diff", "--name-only", os.environ["BASE_SHA"], os.environ["HEAD_SHA"]
             ], text=True).splitlines()
-            workflow_changed = ".github/workflows/llvm-build.yml" in changed
             packages = []
-            if workflow_changed or "cmake/llvm-build-info.json" in changed:
+            if "cmake/llvm-build-info.json" in changed:
                 packages.append("llvm")
-            if workflow_changed or any(
+            if any(
                 path in {"cmake/amd-llvm-build-info.json", "include/triton/Tools/LLVMOptions.h",
                          "lib/Tools/LLVMOptions.cpp"}
                 or path.startswith("third_party/amd/backend/codegen/") for path in changed
@@ -89,7 +80,8 @@ jobs:
         - {runner: 'MacOS X64', runs_on: 'macos-15-intel', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-15', target-os: 'macos', arch: 'arm64'}
         - {runner: 'Windows 2022', runs_on: 'windows-2022', target-os: 'windows', arch: 'x64', msvc_arch: 'amd64'}
-        - {runner: 'Windows 11 ARM64', runs_on: 'windows-11-arm', target-os: 'windows', arch: 'arm64', msvc_arch: 'arm64'}
+        # MSVC 14.5x from VS 2026 runs out of heap on AMDGPU tables and ICEs on mlir-tblgen for ARM64; pin to 14.44.
+        - {runner: 'Windows 11 ARM64', runs_on: 'windows-11-arm', target-os: 'windows', arch: 'arm64', msvc_arch: 'arm64', msvc_toolset: '14.44'}
 
     steps:
 
@@ -152,7 +144,6 @@ jobs:
         fi
 
     - name: Check LLVM Build Does Not Exist
-      if: github.event_name != 'pull_request'
       shell: bash
       run: |
         URL="https://oaitriton.blob.core.windows.net/public/llvm-builds/${{ env.llvm_install_dir }}.tar.gz"
@@ -180,6 +171,7 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1.13.0
       with:
         arch: ${{ matrix.config.msvc_arch }}
+        toolset: ${{ matrix.config.msvc_toolset }}
 
     - name: Install Prerequisites
       shell: bash

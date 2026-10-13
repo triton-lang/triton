@@ -161,7 +161,7 @@ struct AuxDataMap {
   struct RegionToValueMap {
     DenseMap<Region *, ValueType> values;
     ValueType at(Region *region) {
-      if (values.find(region) == values.end()) {
+      if (!values.contains(region)) {
         assert(false && "Region not found in AuxDataMap");
       }
       return values[region];

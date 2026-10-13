@@ -4,6 +4,8 @@
 from . import math
 from . import extra
 from .standard import (
+    all,
+    any,
     argmax,
     argmin,
     bitonic_merge,
@@ -151,6 +153,8 @@ __all__ = [
     "tensor_descriptor",
     "abs",
     "add",
+    "all",
+    "any",
     "arange",
     "argmax",
     "argmin",

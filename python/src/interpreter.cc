@@ -1,4 +1,5 @@
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -97,30 +98,6 @@ template <typename T> T atomic_fadd(T *loc, T value, std::memory_order order) {
   }
 
   return old_value;
-}
-
-/** Create a value of type `To` from the bits of `from`.
- *
- * similar to `std::bit_cast` but compatible with C++17,
- * should perform similar to `*reinterpret_cast<To*>(&from)`
- * or through punning without expecting any undefined behaviors.
- *
- * Note: taken from
- * https://github.com/numpy/numpy/blob/70fde29fdd4d8fcc6098df7ef8a34c84844e347f/numpy/_core/src/common/utils.hpp#L32
- * with simplification.
- */
-template <typename To, typename From>
-inline To BitCast(const From &from) noexcept {
-  static_assert(sizeof(To) == sizeof(From),
-                "both data types must have the same size");
-
-  static_assert(std::is_trivially_copyable_v<To> &&
-                    std::is_trivially_copyable_v<From>,
-                "both data types must be trivially copyable");
-
-  To to;
-  memcpy(&to, &from, sizeof(from));
-  return to;
 }
 
 // Taken from
@@ -284,11 +261,11 @@ constexpr uint32_t ToFloatBits(uint16_t h) {
 }
 
 triton_half npy_float_to_half(float f) {
-  return {FromFloatBits(BitCast<uint32_t>(f))};
+  return {FromFloatBits(std::bit_cast<uint32_t>(f))};
 }
 
 float npy_half_to_float(triton_half h) {
-  return BitCast<float>(ToFloatBits(h.value));
+  return std::bit_cast<float>(ToFloatBits(h.value));
 }
 
 template <>

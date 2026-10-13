@@ -850,6 +850,7 @@ def reduce_forward(
         SUBTILE_HEAVY_BLOCKS=opt_flags.subtile_heavy_blocks,
         DIM=dim,  #
         num_warps=opt_flags.num_warps,  #
+        enable_fp_fusion=True,
     )
     return y, y_mxscale
 
