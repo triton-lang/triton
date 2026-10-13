@@ -503,15 +503,17 @@ class CUDABackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
 
+        # Opt in to LLVM SLP instead of the target-aware NVPTX vectorizer.
+        use_slp_vectorizer = knobs.nvidia.use_slp_vectorizer
         llvm.optimize_module(
             llvm_mod,
             llvm.OPTIMIZE_O3,
             # Same LLVM flags as make_ptx: compilations sharing a process only
             # run in parallel while their flag sets are identical.
             flags=flags,
-            disable_slp_vectorizer=True,
+            disable_slp_vectorizer=not use_slp_vectorizer,
             expand_masked_div_rem=True,
-            nvptx_compute_capability=capability,
+            nvptx_compute_capability=0 if use_slp_vectorizer else capability,
         )
 
         # Get some metadata
