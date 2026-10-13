@@ -4239,6 +4239,66 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 }
 
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @fp64_to_fp32_rtz
+  // CHECK: llvm.inline_asm {{.*}} "cvt.rz.f32.f64 $0, $1;", "=f,d" {{.*}} : (f64) -> f32
+  tt.func private @fp64_to_fp32_rtz(%arg: f64) -> f32 {
+    %out = tt.fp_to_fp %arg, rounding = rtz : f64 -> f32
+    tt.return %out : f32
+  }
+
+  // CHECK-LABEL: @fp64_to_fp16_rtz
+  // CHECK: %[[F32:.*]] = llvm.inline_asm {{.*}} "cvt.rz.f32.f64 $0, $1;", "=f,d" {{.*}} : (f64) -> f32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2f16.rz"(%[[F32]]) : (f32) -> f16
+  tt.func private @fp64_to_fp16_rtz(%arg: f64) -> f16 {
+    %out = tt.fp_to_fp %arg, rounding = rtz : f64 -> f16
+    tt.return %out : f16
+  }
+
+  // CHECK-LABEL: @fp64_to_bf16_rtz
+  // CHECK: %[[F32:.*]] = llvm.inline_asm {{.*}} "cvt.rz.f32.f64 $0, $1;", "=f,d" {{.*}} : (f64) -> f32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2bf16.rz"(%[[F32]]) : (f32) -> bf16
+  tt.func private @fp64_to_bf16_rtz(%arg: f64) -> bf16 {
+    %out = tt.fp_to_fp %arg, rounding = rtz : f64 -> bf16
+    tt.return %out : bf16
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @fp64_to_fp32_rtz_tensor
+  // CHECK-COUNT-2: llvm.inline_asm {{.*}} "cvt.rz.f32.f64 $0, $1;", "=f,d" {{.*}} : (f64) -> f32
+  tt.func private @fp64_to_fp32_rtz_tensor(%arg: tensor<256xf64, #blocked>) -> tensor<256xf32, #blocked> {
+    %out = tt.fp_to_fp %arg, rounding = rtz : tensor<256xf64, #blocked> -> tensor<256xf32, #blocked>
+    tt.return %out : tensor<256xf32, #blocked>
+  }
+
+  // CHECK-LABEL: @fp64_to_fp16_rtz_tensor
+  // CHECK: %[[F32_0:.*]] = llvm.inline_asm {{.*}} "cvt.rz.f32.f64 $0, $1;", "=f,d" {{.*}} : (f64) -> f32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2f16.rz"(%[[F32_0]]) : (f32) -> f16
+  // CHECK: %[[F32_1:.*]] = llvm.inline_asm {{.*}} "cvt.rz.f32.f64 $0, $1;", "=f,d" {{.*}} : (f64) -> f32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2f16.rz"(%[[F32_1]]) : (f32) -> f16
+  tt.func private @fp64_to_fp16_rtz_tensor(%arg: tensor<256xf64, #blocked>) -> tensor<256xf16, #blocked> {
+    %out = tt.fp_to_fp %arg, rounding = rtz : tensor<256xf64, #blocked> -> tensor<256xf16, #blocked>
+    tt.return %out : tensor<256xf16, #blocked>
+  }
+
+  // CHECK-LABEL: @fp64_to_bf16_rtz_tensor
+  // CHECK: %[[F32_0:.*]] = llvm.inline_asm {{.*}} "cvt.rz.f32.f64 $0, $1;", "=f,d" {{.*}} : (f64) -> f32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2bf16.rz"(%[[F32_0]]) : (f32) -> bf16
+  // CHECK: %[[F32_1:.*]] = llvm.inline_asm {{.*}} "cvt.rz.f32.f64 $0, $1;", "=f,d" {{.*}} : (f64) -> f32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2bf16.rz"(%[[F32_1]]) : (f32) -> bf16
+  tt.func private @fp64_to_bf16_rtz_tensor(%arg: tensor<256xf64, #blocked>) -> tensor<256xbf16, #blocked> {
+    %out = tt.fp_to_fp %arg, rounding = rtz : tensor<256xf64, #blocked> -> tensor<256xbf16, #blocked>
+    tt.return %out : tensor<256xbf16, #blocked>
+  }
+}
+
 // -----
 
 //--- masked-store-barrier.mlir
