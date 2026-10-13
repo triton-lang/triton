@@ -1367,7 +1367,8 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (result.failed())
     return false;
 
-  Operation *extOrBroadcastOp = nullptr;
+  SmallVector<std::pair<Operation *, Attribute>> extOrBroadcastOps;
+  int64_t newCvtCost = 0;
   unsigned sliceSize = slice.size();
   for (unsigned i = 0; i < sliceSize; i++) {
     Value v = slice[i];
@@ -1385,41 +1386,30 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
                                            slice, layout, existingRemats)))
       continue;
 
-    // Only apply it if there is a single ext op otherwise we would have to
-    // duplicate the convert.
-    if (extOrBroadcastOp != nullptr)
-      return false;
-    extOrBroadcastOp = op;
+    extOrBroadcastOps.emplace_back(op, srcEncoding);
+    newCvtCost += getConvertCost(op->getOperand(0), srcEncoding);
   }
 
-  if (extOrBroadcastOp == nullptr)
+  if (extOrBroadcastOps.empty())
     return false;
-  Attribute dstEncoding = layout[extOrBroadcastOp->getResult(0)];
-  Attribute srcEncoding = inferSrcEncoding(extOrBroadcastOp, dstEncoding);
-  if (!srcEncoding)
-    return false;
-  int64_t newCvtCost =
-      getConvertCost(extOrBroadcastOp->getOperand(0), srcEncoding);
   if (!isRematBeneficial(convertOp, slice, layout, newCvtCost,
                          /*disableRematSplitting=*/disableRematSplitting))
     return false;
-  // Move the convert before the ext op and rewrite the slice.
-  OpBuilder builder(extOrBroadcastOp);
-  auto tensorType =
-      cast<RankedTensorType>(extOrBroadcastOp->getOperand(0).getType());
-  auto newType = tensorType.cloneWithEncoding(srcEncoding);
-  auto newConvertOp = ConvertLayoutOp::create(
-      builder, convertOp.getLoc(), newType, extOrBroadcastOp->getOperand(0));
-  Operation *newExtOrBroadcast = builder.clone(*extOrBroadcastOp);
-  newExtOrBroadcast->setOperand(0, newConvertOp.getResult());
-  auto oldExtOrBroadcastType =
-      cast<RankedTensorType>(extOrBroadcastOp->getResult(0).getType());
-  Type newExtOrBroadcastType =
-      oldExtOrBroadcastType.cloneWithEncoding(dstEncoding);
-  newExtOrBroadcast->getResult(0).setType(newExtOrBroadcastType);
   IRMapping mapping;
-  mapping.map(extOrBroadcastOp->getResult(0), newExtOrBroadcast->getResult(0));
-  slice.remove(extOrBroadcastOp->getResult(0));
+  for (auto [op, srcEncoding] : extOrBroadcastOps) {
+    OpBuilder builder(op);
+    auto tensorType = cast<RankedTensorType>(op->getOperand(0).getType());
+    auto newType = tensorType.cloneWithEncoding(srcEncoding);
+    auto newConvertOp = ConvertLayoutOp::create(builder, convertOp.getLoc(),
+                                                newType, op->getOperand(0));
+    Operation *newOp = builder.clone(*op);
+    newOp->setOperand(0, newConvertOp.getResult());
+    auto oldType = cast<RankedTensorType>(op->getResult(0).getType());
+    newOp->getResult(0).setType(
+        oldType.cloneWithEncoding(layout[op->getResult(0)]));
+    mapping.map(op->getResult(0), newOp->getResult(0));
+    slice.remove(op->getResult(0));
+  }
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, existingRemats, convertOp, mapping);
   return true;
