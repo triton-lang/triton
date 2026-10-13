@@ -104,12 +104,14 @@ jobs:
           python -m pytest -s --tb=short --device cpu \
             python/test/unit/cpu/test_cpu_features.py
 
-          # Skip bfloat16 tests for now
-          # We are generating bfcvt for bfloat16 tests when converting to fp32.
-          # This is only for Clang15, works OK for Clang16
-          # TODO - fix this using driver flags.
+          # Run BF16 dot tests separately below; keep the broad BF16
+          # exclusions for the remaining macOS tests.
           python -m pytest -s -n 3 --device cpu \
             python/test/unit/language/test_core.py -k "not bfloat16"
+          # Collect the full file for CPU allowlist validation, then select BF16
+          # dot cases and run them through Triton's native CPU lowering.
+          TRITON_CPU_UKERNELS_LIB=None python -m pytest -s --tb=short -n 3 --device cpu \
+            python/test/unit/language/test_core.py -k "test_dot and bfloat16"
           python -m pytest -s -n 3 --device cpu \
             python/test/unit/cpu/test_math.py \
             python/test/unit/cpu/test_opt.py \

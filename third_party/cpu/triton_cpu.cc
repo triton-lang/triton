@@ -16,6 +16,7 @@
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVMIR/Dialect/ArmNeon/ArmNeonToLLVMIRTranslation.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
 
@@ -162,6 +163,11 @@ void init_triton_cpu_passes_ttcpuir(py::module_ &m) {
   m.def("add_convert_dot_generic", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::cpu::createConvertDotGeneric());
   });
+  m.def("add_convert_vector_contract_to_arm_neon_bfmmla",
+        [](mlir::PassManager &pm) {
+          pm.addPass(
+              mlir::triton::cpu::createConvertVectorContractToArmNeonBFMMLA());
+        });
   m.def("add_convert_dot_to_nanokernel", [](mlir::PassManager &pm,
                                             std::string cpuFeatures) {
     pm.addPass(mlir::triton::cpu::createConvertDotToNanokernel(cpuFeatures));
@@ -225,7 +231,9 @@ void init_triton_cpu_passes_ttcpuir(py::module_ &m) {
           mlir::ConvertVectorToLLVMPassOptions opts;
           opts.reassociateFPReductions = reassoc_fp_reduction;
           // opts.force32BitVectorIndices = true;
-          // opts.armNeon = false;
+          // Preserve emitted Neon intrinsics; keep upstream armBF16 lowering
+          // off.
+          opts.armNeon = true;
           // opts.armSVE = false;
           opts.x86 = true;
           // opts.vectorTransformsOptions();
@@ -307,6 +315,7 @@ void init_triton_cpu(py::module_ &m) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::cpu::TritonCPUDialect,
                     mlir::vector::VectorDialect>();
+    mlir::registerArmNeonDialectTranslation(registry);
     mlir::triton::cpu::registerTritonOpScalarizeExternalModels(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();

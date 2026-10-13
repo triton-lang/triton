@@ -3882,6 +3882,20 @@ def get_test_dot_base_cases():
 
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+def get_test_dot_cpu_bf16_cases():
+    if not is_cpu() or triton.runtime.driver.active.get_current_target().arch not in ("aarch64", "arm64"):
+        return []
+    # Stay within the default CPU limits so each shape is tested as specified.
+    # K=2 exercises FP32 fallback; 2x2x4 is the smallest BFMMLA tile.
+    shapes = [(2, 2, 2), (2, 2, 4), (4, 4, 4), (8, 8, 8), (16, 16, 16), (32, 32, 32), (64, 64, 32), (16, 32, 16),
+              (32, 16, 32), (16, 64, 32), (64, 16, 16)]
+    return [(*shape, 4, col_a, col_b, 'none', 'ieee', 'bfloat16', 'float32', 1, None)
+            for shape in shapes
+            for col_a in [False, True]
+            for col_b in [False, True]]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_small_fp64_cases():
     return [(*shape, 1, False, False, 'none', 'ieee', 'float64', 'float64', 1, None)
             for shape in [(8, 8, 4), (8, 8, 8), (16, 8, 4), (8, 8, 16)]]
@@ -4023,6 +4037,7 @@ def get_test_small_dots_cases():
     get_test_dot_vdot2_cases() + \
     get_test_dot_double_rate_cases() + \
     get_test_dot_base_cases() + \
+    get_test_dot_cpu_bf16_cases() + \
     get_test_dot_mixed_sizes_cases() + \
     get_test_dot_transposed_op_base_cases() + \
     get_test_dot_h100_shortcut_cases() + \

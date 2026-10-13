@@ -54,6 +54,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     PUBLIC
       MLIRVectorToSCF
       MLIRAffineToStandard
+      MLIRArmNeonToLLVMIRTranslation
       MLIRMathDialect
       MLIRMathToLLVM
       MLIRMathToLibm

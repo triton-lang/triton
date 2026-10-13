@@ -174,6 +174,24 @@ def ConvertDotGeneric : Pass<"triton-cpu-convert-dot-generic", "mlir::ModuleOp">
                              "mlir::triton::cpu::TritonCPUDialect"];
 }
 
+def ConvertVectorContractToArmNeonBFMMLA : Pass<"triton-cpu-convert-vector-contract-to-arm-neon-bfmmla", "mlir::ModuleOp"> {
+    let summary = "Lower eligible vector contractions to Arm Neon BFMMLA.";
+    let description = [{
+        Normalize eligible rank-2 BF16 contractions with FP32 accumulators
+        from ordinary matmul to MMT by transposing the RHS and updating its
+        indexing map, then replace eligible MMT contractions with shuffle
+        packing and Arm Neon BFMMLA instructions. Already-MMT contractions
+        need no transpose. Unsupported contractions remain unchanged for
+        existing unsupported-operation legalization.
+    }];
+
+    let constructor = "mlir::triton::cpu::createConvertVectorContractToArmNeonBFMMLA()";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::vector::VectorDialect",
+                             "mlir::arm_neon::ArmNeonDialect"];
+}
+
 def ConvertDotToNanokernel : Pass<"triton-cpu-convert-dot-to-nanokernel", "mlir::ModuleOp"> {
     let summary = "Convert dot product op to vector contraction and apply upstream patterns.";
     let description = [{
