@@ -135,7 +135,7 @@ public:
 
   void runHoistConvertPass(std::function<bool(ConvertLayoutOp)> tryHoist);
   void hoistConvertDotOperand();
-  void hoistConvertOnTopOfExtOrBroadcast(bool disableRematSplitting);
+  bool hoistConvertOnTopOfExtOrBroadcast(bool disableRematSplitting);
   void hoistConvertIntoConditionals();
 
   /// Attempt to hoist \p convertOp above operations that make the tensor larger
@@ -955,11 +955,21 @@ void LayoutRematerialization::runHoistConvertPass(
   }
 }
 
-void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
+bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     bool disableRematSplitting) {
-  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
-    return hoistConvertOnTopOfExtOrBroadcast(convertOp, disableRematSplitting);
-  });
+  bool changed = false;
+  SmallVector<ConvertLayoutOp> convertOps;
+  funcOp.walk(
+      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  for (ConvertLayoutOp convertOp : convertOps) {
+    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp, disableRematSplitting)) {
+      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
+                    convertOp.getResult());
+    } else {
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 void LayoutRematerialization::hoistConvertIntoConditionals() {
@@ -1369,9 +1379,7 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
 
   SmallVector<std::pair<Operation *, Attribute>> extOrBroadcastOps;
   int64_t newCvtCost = 0;
-  unsigned sliceSize = slice.size();
-  for (unsigned i = 0; i < sliceSize; i++) {
-    Value v = slice[i];
+  for (Value v : slice) {
     Operation *op = v.getDefiningOp();
     if (!op || !isExtOrBroadcastOp(op))
       continue;
@@ -1379,12 +1387,6 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
     if (!srcEncoding)
       return false;
-
-    // If we can rematerialize the rest of the ext slice we can ignore this ext
-    // as it won't need a convert.
-    if (succeeded(getRematerializableSlice(op->getOpOperand(0), srcEncoding,
-                                           slice, layout, existingRemats)))
-      continue;
 
     extOrBroadcastOps.emplace_back(op, srcEncoding);
     newCvtCost += getConvertCost(op->getOperand(0), srcEncoding);
@@ -1540,10 +1542,19 @@ bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
   return changed;
 }
 
+bool hoistConvertOnTopOfExtOrBroadcast(ModuleOp module,
+                                       bool disableRematSplitting) {
+  bool changed = false;
+  module.walk([&](FuncOp funcOp) {
+    changed |=
+        LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast(
+            disableRematSplitting);
+  });
+  return changed;
+}
+
 void hoistConvert(ModuleOp module, bool disableRematSplitting) {
   module.walk([&](FuncOp funcOp) {
-    LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast(
-        disableRematSplitting);
     if (disableRematSplitting)
       return;
 
@@ -1613,8 +1624,20 @@ public:
       cleanupConvertOps();
     } while (changed && ++numIterations < 20);
 
-    // 3. For remaining converts, try to hoist them above cast generating
-    // larger size types in order to reduce the cost of the convert op.
+    // 3. For remaining converts, try to hoist them above operations that
+    // increase the tensor size to reduce the cost of the convert op.
+    numIterations = 0;
+    while (numIterations++ < 20 &&
+           hoistConvertOnTopOfExtOrBroadcast(m, disableRematSplitting)) {
+      LLVM_DEBUG({
+        DBGS() << "Module after hoisting ext/broadcast converts:\n";
+        m.dump();
+      });
+      cleanupConvertOps();
+      backwardRematerialization(m, disableRematSplitting);
+      cleanupConvertOps();
+    }
+
     hoistConvert(m, disableRematSplitting);
     LLVM_DEBUG({
       DBGS() << "Module after hoisting converts:\n";
