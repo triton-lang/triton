@@ -210,6 +210,7 @@ def _argminmax_index(input, value, axis, keep_dims):
                             tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
         propagate_nan: core.constexpr = core.PropagateNan.NONE):
+    core.static_assert(isinstance(propagate_nan, core.PropagateNan), "propagate_nan must be a PropagateNan enum value")
     # Reduce matching indices with min to enable native redux instructions.
     # This selects the leftmost match, which is valid for either tie-breaking mode.
     if not return_indices:
@@ -256,6 +257,7 @@ def _elementwise_min_propagate_nan(a, b):
                             tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
         propagate_nan: core.constexpr = core.PropagateNan.NONE):
+    core.static_assert(isinstance(propagate_nan, core.PropagateNan), "propagate_nan must be a PropagateNan enum value")
     # Reduce matching indices with min to enable native redux instructions.
     # This selects the leftmost match, which is valid for either tie-breaking mode.
     if not return_indices:
