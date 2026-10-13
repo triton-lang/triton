@@ -1,6 +1,7 @@
 import expecttest
 import importlib.util
 import itertools
+import math
 import multiprocessing
 import os
 import re
@@ -678,7 +679,35 @@ def test_constexpr_cache_invalidation_recreated(device):
     assert test_run(1234) == 1234
 
 
-def test_jit_warmup_cache(device) -> None:
+@pytest.mark.parametrize("first, second", [(1, 1.0), (1.0, 1), (0.0, -0.0), ((1, ), (1.0, ))])
+def test_constexpr_cache_equal_values_of_different_types(first, second, device):
+
+    @triton.jit
+    def kernel(X, out, C: tl.constexpr, IS_TUPLE: tl.constexpr):
+        if IS_TUPLE:
+            tl.store(out, tl.load(X) * C[0])
+        else:
+            tl.store(out, tl.load(X) * C)
+
+    x = torch.tensor([2**30 + 1], dtype=torch.int32, device=device)
+    xf = torch.tensor([1.0], dtype=torch.float32, device=device)
+
+    def run(c):
+        is_tuple = isinstance(c, tuple)
+        if (c[0] if is_tuple else c) == 0.0:
+            # Distinguish 0.0 and -0.0 by the sign of the result.
+            out = torch.zeros(1, dtype=torch.float32, device=device)
+            kernel[(1, )](xf, out, c, is_tuple)
+            return math.copysign(1.0, out.item())
+        # x * 1 is exact in int32, x * 1.0 rounds to 2**30 in fp32.
+        out = torch.zeros(1, dtype=torch.int32, device=device)
+        kernel[(1, )](x, out, c, is_tuple)
+        return out.item()
+
+    expected = run(second)
+    kernel.device_caches.clear()
+    run(first)
+    assert run(second) == expected
 
     @triton.jit
     def kernel_add(a, b, o, N: tl.constexpr):

@@ -4,6 +4,7 @@ import copy
 import hashlib
 import inspect
 import itertools
+import math
 import threading
 import re
 import textwrap
@@ -608,8 +609,20 @@ def _replace_jit_callables(obj):
     return obj
 
 
+def _constexpr_cache_tag(value):
+    # Tuple equality treats 1, 1.0 and True (or 0.0 and -0.0) as the same key,
+    # but each of them specializes the kernel differently.
+    ty = type(value)
+    if ty is float:
+        return math.copysign(1.0, value)
+    if ty is tuple:
+        return tuple(map(_constexpr_cache_tag, value))
+    return ty
+
+
 def compute_cache_key(kernel_key_cache, specialization, options):
-    key = (tuple(specialization), str(options))
+    tags = tuple([_constexpr_cache_tag(x[1]) for x in specialization if x[0] == "constexpr"])
+    key = (tuple(specialization), str(options), tags)
     cache_key = kernel_key_cache.get(key, None)
     if cache_key is not None:
         return cache_key
