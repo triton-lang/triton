@@ -697,6 +697,8 @@ canUseResultEncoding(Operation *op, Attribute targetEncoding) {
 }
 
 bool canBeRematerialized(Operation *op) {
+  if (hasEffect<MemoryEffects::Write>(op))
+    return false;
   if (isa<LoadOp, StoreOp>(op))
     return !isExpensiveLoadOrStore(op);
   if (isa<AtomicOpInterface, DotOpInterface>(op))
@@ -707,7 +709,7 @@ bool canBeRematerialized(Operation *op) {
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
-  return !hasEffect<MemoryEffects::Write>(op);
+  return true;
 }
 
 scf::ForOp replaceForOpWithNewSignature(
