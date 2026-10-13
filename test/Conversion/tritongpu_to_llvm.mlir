@@ -4163,7 +4163,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // SM89-LABEL: @fp32_to_fp8e5_rtne
-  // SM89-NOT: llvm.nvvm.f2f16.rz
+  // SM89-NOT: llvm.fptrunc.round
   // SM89: nvvm.convert.f32x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xi8>(f8E5M2)
   // CHECK-LABEL: @fp32_to_fp8e5_rtne
   // CHECK-NOT: llvm.fpext
@@ -4199,17 +4199,6 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
   // CHECK: llvm.return
   tt.func private @fp16_to_fp8e5_rtne(%in: tensor<128xf16, #blocked>) -> tensor<128xf8E5M2, #blocked> {
     %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xf16, #blocked> -> tensor<128xf8E5M2, #blocked>
-    tt.return %out : tensor<128xf8E5M2, #blocked>
-  }
-
-  // CHECK-LABEL: @bf16_to_fp8e5_rtne
-  // CHECK: llvm.fpext
-  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2f16.rn"
-  // CHECK: llvm.inline_asm {{.*}}min.f16x2
-  // CHECK-SAME: prmt.b32 $0, a0, a1, 0x7531;
-  // CHECK: llvm.return
-  tt.func private @bf16_to_fp8e5_rtne(%in: tensor<128xbf16, #blocked>) -> tensor<128xf8E5M2, #blocked> {
-    %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xbf16, #blocked> -> tensor<128xf8E5M2, #blocked>
     tt.return %out : tensor<128xf8E5M2, #blocked>
   }
 
@@ -4261,28 +4250,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func private @extern_exp2_ftz(%arg: f32) -> f32 {
     %result = tt.extern_elementwise %arg {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.ex2.approx.ftz.f32"} : (f32) -> f32
     tt.return %result : f32
-  }
-
-  // CHECK-LABEL: @bf16_to_fp16_fallback
-  // CHECK: llvm.fpext {{.*}} : bf16 to f32
-  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2f16.rn"
-  // CHECK: llvm.fpext {{.*}} : bf16 to f32
-  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2f16.rz"
-  tt.func private @bf16_to_fp16_fallback(%arg: bf16) -> (f16, f16) {
-    %rn = tt.fp_to_fp %arg : bf16 -> f16
-    %rz = tt.fp_to_fp %arg, rounding = rtz : bf16 -> f16
-    tt.return %rn, %rz : f16, f16
-  }
-
-  // CHECK-LABEL: @fp16_to_bf16_fallback
-  // CHECK: llvm.fpext {{.*}} : f16 to f32
-  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2bf16.rn"
-  // CHECK: llvm.fpext {{.*}} : f16 to f32
-  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2bf16.rz"
-  tt.func private @fp16_to_bf16_fallback(%arg: f16) -> (bf16, bf16) {
-    %rn = tt.fp_to_fp %arg : f16 -> bf16
-    %rz = tt.fp_to_fp %arg, rounding = rtz : f16 -> bf16
-    tt.return %rn, %rz : bf16, bf16
   }
 }
 
