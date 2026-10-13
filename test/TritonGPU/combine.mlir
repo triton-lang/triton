@@ -2296,6 +2296,100 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+// Preserve the logical order of the reshape while propagating the source's
+// column-major layout. No allow_reorder or preceding triton-combine is needed.
+// CHECK: #[[$RESHAPE_LINEAR:.+]] = #ttg.linear<
+#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#row_major = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#flat = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#bins = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @reshape_reduce_to_scalar(
+  // CHECK-SAME: %[[PTR:[^:]+]]:
+  // CHECK-NEXT: %[[LOAD:.+]] = tt.load %[[PTR]]
+  // CHECK-NEXT: %[[RESHAPE:.+]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<256xi32, #[[$RESHAPE_LINEAR]]>
+  // CHECK-NEXT: %[[SUM:.+]] = "tt.reduce"(%[[RESHAPE]])
+  // CHECK: }) : (tensor<256xi32, #[[$RESHAPE_LINEAR]]>) -> i32
+  // CHECK-NEXT: tt.return %[[SUM]] : i32
+  tt.func @reshape_reduce_to_scalar(%ptr: tensor<32x8x!tt.ptr<i32>, #src>) -> i32 {
+    %value = tt.load %ptr : tensor<32x8x!tt.ptr<i32>, #src>
+    %converted = ttg.convert_layout %value : tensor<32x8xi32, #src> -> tensor<32x8xi32, #row_major>
+    %flat = tt.reshape %converted : tensor<32x8xi32, #row_major> -> tensor<256xi32, #flat>
+    %sum = "tt.reduce"(%flat) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: i32, %rhs: i32):
+      %add = arith.addi %lhs, %rhs : i32
+      tt.reduce.return %add : i32
+    }) : (tensor<256xi32, #flat>) -> i32
+    tt.return %sum : i32
+  }
+
+  // Both operands must retain their elementwise correspondence.
+  // CHECK-LABEL: @reshape_reduce_to_scalar_multiple_operands(
+  // CHECK-NEXT: %[[VALUES:.+]] = tt.load
+  // CHECK-NEXT: %[[INDICES:.+]] = tt.load
+  // CHECK-NEXT: %[[FLAT_VALUES:.+]] = tt.reshape %[[VALUES]] : {{.*}} -> tensor<256xi32, #[[$RESHAPE_LINEAR]]>
+  // CHECK-NEXT: %[[FLAT_INDICES:.+]] = tt.reshape %[[INDICES]] : {{.*}} -> tensor<256xi32, #[[$RESHAPE_LINEAR]]>
+  // CHECK-NEXT: %[[MAX:.+]]:2 = "tt.reduce"(%[[FLAT_VALUES]], %[[FLAT_INDICES]])
+  // CHECK: }) : (tensor<256xi32, #[[$RESHAPE_LINEAR]]>, tensor<256xi32, #[[$RESHAPE_LINEAR]]>) -> (i32, i32)
+  // CHECK-NEXT: tt.return %[[MAX]]#0, %[[MAX]]#1 : i32, i32
+  tt.func @reshape_reduce_to_scalar_multiple_operands(%values_ptr: tensor<32x8x!tt.ptr<i32>, #src>, %indices_ptr: tensor<32x8x!tt.ptr<i32>, #src>) -> (i32, i32) {
+    %values = tt.load %values_ptr : tensor<32x8x!tt.ptr<i32>, #src>
+    %indices = tt.load %indices_ptr : tensor<32x8x!tt.ptr<i32>, #src>
+    %converted_values = ttg.convert_layout %values : tensor<32x8xi32, #src> -> tensor<32x8xi32, #row_major>
+    %converted_indices = ttg.convert_layout %indices : tensor<32x8xi32, #src> -> tensor<32x8xi32, #row_major>
+    %flat_values = tt.reshape %converted_values : tensor<32x8xi32, #row_major> -> tensor<256xi32, #flat>
+    %flat_indices = tt.reshape %converted_indices : tensor<32x8xi32, #row_major> -> tensor<256xi32, #flat>
+    %max:2 = "tt.reduce"(%flat_values, %flat_indices) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: i32, %lhs_index: i32, %rhs: i32, %rhs_index: i32):
+      %greater = arith.cmpi sgt, %lhs, %rhs : i32
+      %value = arith.select %greater, %lhs, %rhs : i32
+      %index = arith.select %greater, %lhs_index, %rhs_index : i32
+      tt.reduce.return %value, %index : i32, i32
+    }) : (tensor<256xi32, #flat>, tensor<256xi32, #flat>) -> (i32, i32)
+    tt.return %max#0, %max#1 : i32, i32
+  }
+
+  // Histogram input and output conversions can both disappear independently.
+  // CHECK-LABEL: @reshape_histogram(
+  // CHECK-SAME: -> tensor<16xi32, #[[BINS:[a-zA-Z0-9_]+]]>
+  // CHECK-NEXT: %[[LOAD:.+]] = tt.load
+  // CHECK-NEXT: %[[RESHAPE:.+]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<256xi32, #[[$RESHAPE_LINEAR]]>
+  // CHECK-NEXT: %[[HIST:.+]] = tt.histogram %[[RESHAPE]] : tensor<256xi32, #[[$RESHAPE_LINEAR]]> -> tensor<16xi32, #[[BINS]]>
+  // CHECK-NEXT: tt.return %[[HIST]] : tensor<16xi32, #[[BINS]]>
+  tt.func @reshape_histogram(%ptr: tensor<32x8x!tt.ptr<i32>, #src>) -> tensor<16xi32, #bins> {
+    %value = tt.load %ptr : tensor<32x8x!tt.ptr<i32>, #src>
+    %converted = ttg.convert_layout %value : tensor<32x8xi32, #src> -> tensor<32x8xi32, #row_major>
+    %flat = tt.reshape %converted : tensor<32x8xi32, #row_major> -> tensor<256xi32, #flat>
+    %hist = tt.histogram %flat : tensor<256xi32, #flat> -> tensor<16xi32, #flat>
+    %result = ttg.convert_layout %hist : tensor<16xi32, #flat> -> tensor<16xi32, #bins>
+    tt.return %result : tensor<16xi32, #bins>
+  }
+
+  // The histogram mask must follow the same order-preserving reshape as values.
+  // CHECK-LABEL: @reshape_masked_histogram(
+  // CHECK-SAME: -> tensor<16xi32, #[[BINS:[a-zA-Z0-9_]+]]>
+  // CHECK-NEXT: %[[VALUES:.+]] = tt.load
+  // CHECK-NEXT: %[[MASK:.+]] = tt.load
+  // CHECK-NEXT: %[[FLAT_VALUES:.+]] = tt.reshape %[[VALUES]] : {{.*}} -> tensor<256xi32, #[[$RESHAPE_LINEAR]]>
+  // CHECK-NEXT: %[[FLAT_MASK:.+]] = tt.reshape %[[MASK]] : {{.*}} -> tensor<256xi1, #[[$RESHAPE_LINEAR]]>
+  // CHECK-NEXT: %[[HIST:.+]] = tt.histogram %[[FLAT_VALUES]], %[[FLAT_MASK]] : tensor<256xi32, #[[$RESHAPE_LINEAR]]> -> tensor<16xi32, #[[BINS]]>
+  // CHECK-NEXT: tt.return %[[HIST]] : tensor<16xi32, #[[BINS]]>
+  tt.func @reshape_masked_histogram(%values_ptr: tensor<32x8x!tt.ptr<i32>, #src>, %mask_ptr: tensor<32x8x!tt.ptr<i1>, #src>) -> tensor<16xi32, #bins> {
+    %values = tt.load %values_ptr : tensor<32x8x!tt.ptr<i32>, #src>
+    %mask = tt.load %mask_ptr : tensor<32x8x!tt.ptr<i1>, #src>
+    %converted_values = ttg.convert_layout %values : tensor<32x8xi32, #src> -> tensor<32x8xi32, #row_major>
+    %converted_mask = ttg.convert_layout %mask : tensor<32x8xi1, #src> -> tensor<32x8xi1, #row_major>
+    %flat_values = tt.reshape %converted_values : tensor<32x8xi32, #row_major> -> tensor<256xi32, #flat>
+    %flat_mask = tt.reshape %converted_mask : tensor<32x8xi1, #row_major> -> tensor<256xi1, #flat>
+    %hist = tt.histogram %flat_values, %flat_mask : tensor<256xi32, #flat> -> tensor<16xi32, #flat>
+    %result = ttg.convert_layout %hist : tensor<16xi32, #flat> -> tensor<16xi32, #bins>
+    tt.return %result : tensor<16xi32, #bins>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1,2], threadsPerWarp = [32,1], warpsPerCTA = [1,1], order = [1,0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>

@@ -275,8 +275,6 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
   auto *regularBlock = rewriter.createBlock(
       atomicBlock->getParent(), std::next(Region::iterator(atomicBlock)));
   rewriter.setInsertionPointToEnd(atomicBlock);
-
-  // If `checkPairs` was set to `false`, `packedBlock` must be removed by DCE
   LLVM::CondBrOp::create(rewriter, loc, enablePackedOpt, packedBlock,
                          regularBlock);
 

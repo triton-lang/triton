@@ -135,12 +135,6 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
           pm.addPass(mlir::triton::createAllocateSharedMemoryNvPass(
               capability, ptxVersion));
         });
-  m.def("add_set_minimum_shared_memory",
-        [](mlir::PassManager &pm, int32_t minimumSize) {
-          mlir::triton::SetMinimumSharedMemoryOptions options;
-          options.minimumSize = minimumSize;
-          pm.addPass(mlir::triton::createSetMinimumSharedMemory(options));
-        });
   ADD_PASS_OPTION_WRAPPER_2("add_membar",
                             mlir::triton::createTritonNvidiaGPUMembar, int32_t,
                             int32_t);
@@ -197,8 +191,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
                      int32_t);
   ADD_PASS_WRAPPER_0("add_tmem_barrier_insertion",
                      ttng::createTritonNvidiaGPUTMemBarrierInsertionPass);
-  ADD_PASS_WRAPPER_0("add_tmem_wait_insertion",
-                     ttng::createTritonNvidiaGPUTMemWaitInsertionPass);
+  ADD_PASS_WRAPPER_0("add_optimize_mbarrier_arrivals",
+                     ttng::createTritonNvidiaGPUOptimizeMBarrierArrivalsPass);
   ADD_PASS_WRAPPER_0(
       "add_cluster_barrier_mbar_allocator",
       ttng::createTritonNvidiaGPUClusterBarrierMbarAllocatorPass);

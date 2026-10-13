@@ -175,8 +175,7 @@ Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
                        makeDppCtrl(DppCtrl::ROW_XMASK0, mask));
       else if (mask < 32)
         return emitPermlaneX16Xor(loc, rewriter, val, mask & 0xf);
-    } else if ((triton::amdgpu::isCDNA(isaFamily) ||
-                isaFamily == ISAFamily::GCN5_1) &&
+    } else if (triton::amdgpu::isCDNA(isaFamily) &&
                (mask < 16 || usePermlaneSwap)) {
       Value result = val;
       uint32_t highBitsDppBasis = 0;
@@ -820,9 +819,12 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
   }
 }
 
-bool canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
-                                      const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp) {
+// Returns true if we can perform coalesced write from the source encoding to
+// the destination encoding.
+static bool
+canCoalesceWriteIntoSharedMemory(MLIRContext *ctx,
+                                 const LinearLayout &srcToSharedLayout,
+                                 unsigned threadsPerWarp) {
   auto kReg = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   auto kOffset = StringAttr::get(ctx, "offset");

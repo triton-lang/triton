@@ -100,6 +100,8 @@ public:
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
 
+  void assertTrap(RewriterBase &rewriter, Location loc) const override;
+
   int getSharedAddressSpace() const override;
 
   int getAddressSpace(Attribute addressSpace) const override;

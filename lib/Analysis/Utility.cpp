@@ -32,51 +32,6 @@ bool triton::canUseWarpBallotHistogram(HistogramOp op) {
          numBins * gpu::lookupNumWarps(op) <= 4;
 }
 
-// Cases where distributed shared memory is not required in ConvertLayout:
-// (1) numCTAs == 1
-// (2) numCTAs > 1 but srcCGALayout == dstCGALayout
-// TODO: Case with SliceLayout as srcLayout and numCTAs > 1 is to be implemented
-// in the future
-bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
-  unsigned numCTAs = getNumCTAs(srcLayout);
-  assert(numCTAs == getNumCTAs(dstLayout) &&
-         "Invalid layout conversion: the numbers of CTAs of src and dst "
-         "layouts are different");
-
-  // Case (1): Never use dsmem when numCTAs == 1
-  if (numCTAs == 1)
-    return false;
-
-  // Case where CTAsPerCGA of srcLayout in the sliced dim is not 1 is not
-  // implemented yet
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    auto dim = sliceLayout.getDim();
-    auto CTAsPerCGA = getCTAsPerCGA(sliceLayout.getParent());
-    if (CTAsPerCGA[dim] != 1)
-      llvm::report_fatal_error("Layout conversion to be implemented");
-  }
-
-  // Case where CTAsPerCGA of dstLayout in the sliced dim is not 1 is supported
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(dstLayout)) {
-    auto dim = sliceLayout.getDim();
-    auto CTAsPerCGA = getCTAsPerCGA(sliceLayout.getParent());
-    if (CTAsPerCGA[dim] != 1)
-      return true;
-  }
-
-  // The above two branches make sure that it is legal to call getCGALayout of
-  // srcLayout and dstLayout
-
-  // Case (2): Do not use dsmem when srcCGALayout == dstCGALayout
-  auto srcCGALayout = getCGALayout(srcLayout);
-  auto dstCGALayout = getCGALayout(dstLayout);
-  if (srcCGALayout == dstCGALayout)
-    return false;
-
-  // Dsmem access is required when srcCGALayout != dstCGALayout
-  return true;
-}
-
 unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
   return getWarpsPerCTA(srcEncoding, srcShape)[axis];
 }
@@ -104,11 +59,8 @@ bool ReduceOpHelper::isAssociative() {
 }
 
 ReduceOpHelper::InThreadVectorizeOpKind
-ReduceOpHelper::getInThreadVectorizeOpKind(unsigned axisPack,
-                                           bool supportBitwidth16Elementwise,
+ReduceOpHelper::getInThreadVectorizeOpKind(bool supportBitwidth16Elementwise,
                                            bool supportBitwidth32Elementwise) {
-  if (axisPack < 4 || op.getCombineOp().front().getOperations().size() != 2)
-    return InThreadVectorizeOpKind::None;
   Operation *combiner = op.getSingleCombiner();
   if (!combiner)
     return InThreadVectorizeOpKind::None;

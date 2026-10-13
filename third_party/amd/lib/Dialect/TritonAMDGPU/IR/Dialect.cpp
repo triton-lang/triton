@@ -42,11 +42,13 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.cpp.inc"
 // clang-format on
 
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/TDMUtility.h"
 
 using namespace mlir;
 using namespace mlir::triton::amdgpu;
+using mlir::triton::gpu::PartitionedSharedEncodingAttr;
 
 void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
   addAttributes<
@@ -1588,7 +1590,7 @@ LogicalResult AsyncTDMGatherOp::verify() {
     // Because indices only describe rows the CGA layout of the indices and the
     // destination must only match on the row dimension.
     // How the tensor is distributed across the columns is not relevant for the
-    // indicies and is only encoded in the CGA layout of the destination.
+    // indices and is only encoded in the CGA layout of the destination.
     auto sharedLL = paddedEnc ? paddedEnc.getLinearComponent()
                               : triton::gpu::toLinearLayout(smemTy);
     auto kDim0 = mlir::StringAttr::get(getContext(), "dim0");
@@ -1735,7 +1737,7 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
   return success();
 }
 
-// -- ClusterBarrierSignalOp --
+// -- ClusterBarrierArriveOp --
 LogicalResult ClusterBarrierArriveOp::verify() {
   int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
   if (numCTAs <= 1)

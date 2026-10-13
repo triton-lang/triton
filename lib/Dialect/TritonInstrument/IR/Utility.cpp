@@ -809,6 +809,11 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
           existing->mask |= bufferStatePlans[iMemType].regionMasks[id];
         }
       }
+      // Hash-table iteration must not determine the order of emitted cases.
+      llvm::sort(stateCandidates.cases, [](const auto &lhs, const auto &rhs) {
+        return std::tie(lhs.baseOffset, lhs.ctaMask) <
+               std::tie(rhs.baseOffset, rhs.ctaMask);
+      });
       bufferCandidates[iMemType].try_emplace(value, std::move(stateCandidates));
     }
   }

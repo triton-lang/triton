@@ -92,4 +92,4 @@ T getDotEncoding(Value inputValue, unsigned *opIdx, unsigned *vecSize) {
   return getDotEncoding<T>(user->getResult(0), opIdx, vecSize);
 }
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_UTILITY_H_

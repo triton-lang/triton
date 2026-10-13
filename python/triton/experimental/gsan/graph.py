@@ -101,7 +101,7 @@ def _kernel_launch(compiled, grid, arguments):
     compiled._init_handles()
     if compiled.metadata.global_scratch_size or compiled.metadata.profile_scratch_size:
         raise RuntimeError("GSan graph helpers must not require scratch allocations")
-    return KernelLaunch(compiled.function, grid, compiled.metadata.num_warps * 32, compiled.metadata.shared,
+    return KernelLaunch(compiled.function, grid, compiled.metadata.num_warps * 32, compiled.run.shared,
                         (*arguments, 0, 0))
 
 

@@ -8,7 +8,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 from .target_info import cuda_capability_geq
 from .tensor_details import bitmatrix as bitmatrix_details
 from .tensor_details import ragged_tensor as ragged_tensor_details
-from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
+from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout, TiledLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
 from .tensor_details.dtype import IntegerType, FloatType, DataType
 from .tensor_details.dtype import FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, BF16, FP32, FP64, INT16, INT32, INT64
@@ -140,6 +140,18 @@ def make_dense_tma(tensor, block_shape, is_scale):
         if isinstance(storage.layout, BlackwellMXValueLayout) and shape[-1] % 128 != 0:
             raise ValueError(
                 "inner shape need to be multiple of 128 for mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs.")
+    if isinstance(storage.layout, TiledLayout):
+        tile = storage.layout.tile_size
+        if len(shape) != 3 or any(size % tile for size in (*shape[-2:], *block_shape[-2:])):
+            raise ValueError("Tiled TMA requires aligned matrix dimensions and block sizes")
+        batch, rows, columns = shape
+        if strides[-2:] != [columns, 1] or (batch > 1 and strides[0] != rows * columns):
+            raise ValueError("Tiled TMA requires contiguous encoded storage")
+        if block_shape[-1] != tile:
+            raise ValueError("Tiled TMA supports one tile along the contiguous dimension")
+        shape = [batch, rows // tile, columns // tile, tile, tile]
+        strides = [rows * columns, columns * tile, tile * tile, tile, 1]
+        block_shape = [1, block_shape[-2] // tile, block_shape[-1] // tile, tile, tile]
     return TensorDescriptor(storage.data, shape, strides, block_shape)
 
 

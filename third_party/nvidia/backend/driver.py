@@ -10,7 +10,14 @@ from triton._instrumentation import is_enabled
 from triton.runtime.build import compile_module_from_file
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import (
+    GPUDriver,
+    TensorDescABI,
+    decompose_descriptor,
+    expand_signature,
+    get_kernel_argument_layout,
+    wrap_handle_tensordesc_impl,
+)
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
@@ -153,35 +160,14 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "double",
-        "bf16": "double",
-        "fp32": "double",
-        "f32": "double",
+        # Pass 16-bit floating-point scalars as raw bit patterns.
+        "fp16": "uint16_t",
+        "bf16": "uint16_t",
+        "fp32": "float",
+        "f32": "float",
         "fp64": "double",
         "nvTmaDesc": "CUtensorMap",
     }[ty]
-
-
-def make_kernel_signature(signature):
-    """
-    Creates a kernel signature in C to be able to efficiently extract
-    arguments in the launcher.
-    """
-
-    def _flatten_signature(sig, output):
-        # Flatten tuples
-        if isinstance(sig, tuple):
-            for x in sig:
-                _flatten_signature(x, output)
-        else:
-            output.append(sig)
-
-    flat_signature = []
-    for sig in signature:
-        _flatten_signature(sig, flat_signature)
-    kernel_signature = [x for x in flat_signature if x != "constexpr"]
-
-    return triton.runtime.driver.active.utils.build_signature_metadata(kernel_signature)
 
 
 def annotate_arguments(signature):
@@ -273,24 +259,33 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
 class CudaLauncher(object):
 
     def __init__(self, src, metadata):
-        constants = src.constants if hasattr(src, "constants") else dict()
-        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
-        constants = {arg_idx(idx): value for idx, value in constants.items()}
-        signature = {idx: value for idx, value in src.signature.items()}
+        signature = dict(src.signature)
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
+        tensordesc_abi = TensorDescABI.CUDA_TMA if tensordesc_meta else TensorDescABI.DECOMPOSED
 
         self.gsan_enabled = is_enabled(metadata, "gsan")
+        self.shared = metadata.shared
+        max_occupancy = getattr(metadata, "max_occupancy", None)
+        if max_occupancy is not None:
+            # Resolve device-dependent reservations here, keeping compilation
+            # independent of the current device and driver.
+            active_driver = triton.runtime.driver.active
+            device = active_driver.get_current_device()
+            properties = active_driver.utils.get_device_properties(device)
+            min_shared = properties["max_shared_mem_per_multiprocessor"] // (max_occupancy + 1) + 1
+            self.shared = max(self.shared, min_shared)
         if self.gsan_enabled:
             signature["_gsan_globals_ptr"] = "*i8"
             signature["_gsan_launch_table_ptr"] = "*i8"
             signature["_gsan_launch_index"] = "i64"
 
-        launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "nvTmaDesc")
+        utils = triton.runtime.driver.active.utils
+        expanded_signature = expand_signature(signature.values(), tensordesc_abi)
         self.arg_annotations = annotate_arguments(expanded_signature)
-        self.kernel_signature = make_kernel_signature(expanded_signature)
+        self.kernel_signature = utils.build_signature_metadata(
+            [ty for _, ty in get_kernel_argument_layout(signature.values(), tensordesc_abi)])
         self.num_ctas = getattr(metadata, "num_ctas", 1)
-        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta)
+        self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta)
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
@@ -337,6 +332,8 @@ class CudaLauncher(object):
             launch_table, launch_index = gsan_stream_sync.get_launch_state(device, stream, self.launch_pdl)
             kernel_args = (*args, gsan_state_ptr, launch_table, launch_index)
 
+        num_warps, num_ctas, _ = kernel_metadata
+        kernel_metadata = (num_warps, num_ctas, self.shared)
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,
                     kernel_metadata, launch_metadata, launch_enter_hook, launch_exit_hook, global_scratch,
                     profile_scratch, self.arg_annotations, self.kernel_signature, kernel_args)

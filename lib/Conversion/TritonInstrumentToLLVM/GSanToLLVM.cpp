@@ -21,8 +21,6 @@ namespace ttg = mlir::triton::gpu;
 
 namespace {
 
-static constexpr unsigned kGSanShadowGranularityBytes = 4;
-
 struct GSanSourceLocation {
   Value file;
   Value line;
@@ -119,7 +117,7 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
               ptr_ty(ctx), i32_ty,      i32_ty,      i32_ty,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanAtomicBeginRuntimeFn) {
-    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i64_ty,      i32_ty,
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i64_ty,      i32_ty, i32_ty,
               i32_ty,      i32_ty,      i32_ty, ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanAtomicEndRuntimeFn) {
     argTys = {ptr_ty(ctx), i32_ty, i32_ty,      i32_ty,
@@ -138,7 +136,7 @@ LLVM::LLVMStructType
 getGSanAtomicEventStateType(ConversionPatternRewriter &rewriter) {
   auto *ctx = rewriter.getContext();
   return LLVM::LLVMStructType::getLiteral(
-      ctx, {ptr_ty(ctx), array_ty(ptr_ty(ctx), 3), i8_ty});
+      ctx, {ptr_ty(ctx), array_ty(ptr_ty(ctx), 8), i8_ty});
 }
 
 FileLineColLoc extractSourceLocation(Location loc) {
@@ -257,19 +255,19 @@ Value castToGenericPointer(ConversionPatternRewriter &rewriter, Location loc,
 
 void emitGSanAtomicBeginCall(ConversionPatternRewriter &rewriter, Location loc,
                              Value gsanGlobalStatePtr, Value eventStatePtr,
-                             Value pred, Value ptr, int32_t bytesPerElem,
-                             bool doesRead, int32_t sem, int32_t scope,
-                             GSanSourceLocation sourceLoc) {
+                             Value pred, Value ptr, int32_t nBytes,
+                             int32_t bytesPerElem, bool doesRead, int32_t sem,
+                             int32_t scope, GSanSourceLocation sourceLoc) {
   TritonLLVMOpBuilder b(loc, rewriter);
   Value statePtr = b.bitcast(eventStatePtr, ptr_ty(rewriter.getContext()));
   auto runtimeFunc =
       getOrCreateGSanRuntimeFunction(rewriter, kGSanAtomicBeginRuntimeFn);
-  b.call(runtimeFunc,
-         ValueRange{gsanGlobalStatePtr, statePtr,
-                    materializeI32Bool(rewriter, b, pred),
-                    b.ptrtoint(i64_ty, ptr), b.i32_val(bytesPerElem),
-                    b.i32_val(doesRead), b.i32_val(sem), b.i32_val(scope),
-                    sourceLoc.file, sourceLoc.line});
+  b.call(runtimeFunc, ValueRange{gsanGlobalStatePtr, statePtr,
+                                 materializeI32Bool(rewriter, b, pred),
+                                 b.ptrtoint(i64_ty, ptr), b.i32_val(nBytes),
+                                 b.i32_val(bytesPerElem), b.i32_val(doesRead),
+                                 b.i32_val(sem), b.i32_val(scope),
+                                 sourceLoc.file, sourceLoc.line});
 }
 
 void emitGSanAtomicEndCall(ConversionPatternRewriter &rewriter, Location loc,
@@ -289,22 +287,14 @@ void emitGSanAtomicEndCall(ConversionPatternRewriter &rewriter, Location loc,
 
 template <typename OpT>
 unsigned getTensorAccessVecSize(OpT op,
-                                ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                bool keepWithinSingleShadowCell) {
-  auto ptrTy = op.getPtr().getType();
-  auto bytesPerElem = std::max(8u, tt::getPointeeBitWidth(ptrTy)) / 8;
+                                ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   auto contiguity = axisInfoAnalysis.getContiguity(op.getPtr());
-
-  if (keepWithinSingleShadowCell) {
-    if (bytesPerElem >= kGSanShadowGranularityBytes)
-      return 1;
-    contiguity =
-        std::min(contiguity, kGSanShadowGranularityBytes / bytesPerElem);
-  }
 
   if (!op.getMask())
     return contiguity;
 
+  // The pointer may refer to a byte-granular pool. Never merge masked-out
+  // bytes into an enabled range, even when they share a four-byte word.
   auto maskAlign = axisInfoAnalysis.getMaskAlignment(op.getMask());
   return std::min(contiguity, maskAlign);
 }
@@ -312,7 +302,7 @@ unsigned getTensorAccessVecSize(OpT op,
 void mergeTensorAccessElements(ConversionPatternRewriter &rewriter,
                                Location loc, SmallVector<Value> &ptrElems,
                                SmallVector<Value> &maskElems, unsigned mergeVec,
-                               unsigned maskAlign, int32_t &bytesPerElem) {
+                               int32_t &bytesPerElem) {
   if (mergeVec <= 1)
     return;
 
@@ -326,12 +316,7 @@ void mergeTensorAccessElements(ConversionPatternRewriter &rewriter,
     mergedPtrElems.push_back(ptrElems[i]);
     if (maskElems.empty())
       continue;
-    Value mergedMask = maskElems[i];
-    for (unsigned j = maskAlign; j < mergeVec; j += maskAlign) {
-      mergedMask =
-          arith::OrIOp::create(rewriter, loc, mergedMask, maskElems[i + j]);
-    }
-    mergedMaskElems.push_back(mergedMask);
+    mergedMaskElems.push_back(maskElems[i]);
   }
 
   ptrElems = std::move(mergedPtrElems);
@@ -415,8 +400,7 @@ public:
         axisInfoAnalysis(&axisInfoAnalysis) {}
 
   unsigned getVecSize(tti::ExperimentalGSanTensorAccessOp op) const {
-    return getTensorAccessVecSize(op, *axisInfoAnalysis,
-                                  /*keepWithinSingleShadowCell=*/false);
+    return getTensorAccessVecSize(op, *axisInfoAnalysis);
   }
 
   LogicalResult
@@ -434,10 +418,8 @@ public:
     }
 
     unsigned mergeVec = getVecSize(op);
-    auto maskAlign =
-        op.getMask() ? axisInfoAnalysis->getMaskAlignment(op.getMask()) : 1;
     mergeTensorAccessElements(rewriter, loc, ptrElems, maskElems, mergeVec,
-                              maskAlign, bytesPerElem);
+                              bytesPerElem);
 
     auto ctx = op.getContext();
     auto kReg = str_attr("register");
@@ -689,10 +671,10 @@ public:
           maskElements.empty()
               ? threadPred
               : ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]);
-      emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
-                              pred, ptrElements[i], bytesPerElem * vec,
-                              /*doesRead=*/true, static_cast<int32_t>(sem),
-                              static_cast<int32_t>(scope), sourceLoc);
+      emitGSanAtomicBeginCall(
+          rewriter, loc, *gsanGlobalStatePtr, eventState, pred, ptrElements[i],
+          bytesPerElem * vec, bytesPerElem, /*doesRead=*/true,
+          static_cast<int32_t>(sem), static_cast<int32_t>(scope), sourceLoc);
       Value loaded = targetInfo->loadRelaxed(rewriter, loc, ptrElements[i],
                                              loadTy, pred, op.getScope());
       auto values = unpackLLVector(loc, loaded, rewriter);
@@ -772,10 +754,10 @@ public:
           maskElements.empty()
               ? threadPred
               : ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]);
-      emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
-                              pred, ptrElements[i], bytesPerElem * vec,
-                              /*doesRead=*/false, static_cast<int32_t>(sem),
-                              static_cast<int32_t>(scope), sourceLoc);
+      emitGSanAtomicBeginCall(
+          rewriter, loc, *gsanGlobalStatePtr, eventState, pred, ptrElements[i],
+          bytesPerElem * vec, bytesPerElem, /*doesRead=*/false,
+          static_cast<int32_t>(sem), static_cast<int32_t>(scope), sourceLoc);
       Value value =
           vec == 1 ? valueElements[i]
                    : packLLVector(loc, ArrayRef(valueElements).slice(i, vec),
@@ -830,7 +812,7 @@ public:
     for (auto [ptr, success] : llvm::zip_equal(ptrs, matched)) {
       Value pred = ttg::maybeAnd(rewriter, loc, threadPred, success);
       emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
-                              pred, ptr, bytesPerElem,
+                              pred, ptr, bytesPerElem, bytesPerElem,
                               /*doesRead=*/true,
                               static_cast<int32_t>(op.getSem()),
                               static_cast<int32_t>(op.getScope()), sourceLoc);
@@ -906,7 +888,7 @@ public:
       Value rmwVal = valElements[i];
 
       emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
-                              pred, rmwPtr, bytesPerElem,
+                              pred, rmwPtr, bytesPerElem, bytesPerElem,
                               /*doesRead=*/true, static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 
@@ -986,7 +968,7 @@ public:
       Value casVal = valElements[i];
 
       emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
-                              pred, casPtr, bytesPerElem,
+                              pred, casPtr, bytesPerElem, bytesPerElem,
                               /*doesRead=*/true, static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 

@@ -3,9 +3,15 @@ This file implements a BSHD Flash Attention and tests against torch reference.
 """
 
 import torch
+import triton
 from triton.experimental import gluon
 import triton.experimental.gluon.language as gl
 import pytest
+
+
+def skip_if_gfx1250_strict_wmma():
+    if triton.runtime.driver.active.get_current_target().arch == "gfx1250-strict":
+        pytest.skip("gfx1250-strict currently only supports v_wmma_f32_16x16x4_f32")
 
 
 def compute_split_factor(batch, num_q_heads, seq_len_k):
@@ -1016,6 +1022,7 @@ def run_attention(config, check=True):
 
 @pytest.mark.parametrize("config", generate_configs())
 def test_attention(config):
+    skip_if_gfx1250_strict_wmma()
     run_attention(config)
 
 
