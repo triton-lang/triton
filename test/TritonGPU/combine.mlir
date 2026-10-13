@@ -4902,3 +4902,65 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return %cvt : tensor<2x2xi8, #b>
   }
 }
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#dst = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @hoist_multiple_extensions
+  // CHECK: %[[A:.*]] = ttg.convert_layout %arg0 : tensor<1024xi16,
+  // CHECK: %[[X:.*]] = arith.extsi %[[A]]
+  // CHECK: %[[B:.*]] = ttg.convert_layout %arg1 : tensor<1024xi16,
+  // CHECK: %[[Y:.*]] = arith.extui %[[B]]
+  // CHECK: %[[SUM:.*]] = arith.addi %[[X]], %[[Y]]
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.return %[[SUM]]
+  tt.func @hoist_multiple_extensions(%a: tensor<1024xi16, #src>, %b: tensor<1024xi16, #src>) -> tensor<1024xi64, #dst> {
+    %x = arith.extsi %a : tensor<1024xi16, #src> to tensor<1024xi64, #src>
+    %y = arith.extui %b : tensor<1024xi16, #src> to tensor<1024xi64, #src>
+    %sum = arith.addi %x, %y : tensor<1024xi64, #src>
+    %out = ttg.convert_layout %sum : tensor<1024xi64, #src> -> tensor<1024xi64, #dst>
+    tt.return %out : tensor<1024xi64, #dst>
+  }
+  // CHECK-LABEL: @retain_unprofitable_multiple_extensions
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: arith.extsi %arg0
+  // CHECK: arith.extui %arg1
+  // CHECK: arith.extsi %arg2
+  // CHECK: %[[SUM:.*]] = arith.addi
+  // CHECK: %[[SUM:.*]] = arith.addi
+  // CHECK: %[[OUT:.*]] = ttg.convert_layout %[[SUM]] : tensor<1024xi64,
+  // CHECK-NEXT: tt.return %[[OUT]]
+  tt.func @retain_unprofitable_multiple_extensions(%a: tensor<1024xi16, #src>, %b: tensor<1024xi16, #src>, %c: tensor<1024xi16, #src>) -> tensor<1024xi64, #dst> {
+    %x = arith.extsi %a : tensor<1024xi16, #src> to tensor<1024xi64, #src>
+    %y = arith.extui %b : tensor<1024xi16, #src> to tensor<1024xi64, #src>
+    %z = arith.extsi %c : tensor<1024xi16, #src> to tensor<1024xi64, #src>
+    %xy = arith.addi %x, %y : tensor<1024xi64, #src>
+    %sum = arith.addi %xy, %z : tensor<1024xi64, #src>
+    %out = ttg.convert_layout %sum : tensor<1024xi64, #src> -> tensor<1024xi64, #dst>
+    tt.return %out : tensor<1024xi64, #dst>
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @hoist_multiple_broadcasts
+  // CHECK: %[[A:.*]] = ttg.convert_layout %arg0 : tensor<1x128xf32,
+  // CHECK: %[[X:.*]] = tt.broadcast %[[A]]
+  // CHECK: %[[B:.*]] = ttg.convert_layout %arg1 : tensor<1x128xf32,
+  // CHECK: %[[Y:.*]] = tt.broadcast %[[B]]
+  // CHECK: %[[SUM:.*]] = arith.addf %[[X]], %[[Y]]
+  // CHECK-NOT: ttg.convert_layout
+  // CHECK: tt.return %[[SUM]]
+  tt.func @hoist_multiple_broadcasts(%a: tensor<1x128xf32, #src>, %b: tensor<1x128xf32, #src>) -> tensor<32x128xf32, #dst> {
+    %x = tt.broadcast %a : tensor<1x128xf32, #src> -> tensor<32x128xf32, #src>
+    %y = tt.broadcast %b : tensor<1x128xf32, #src> -> tensor<32x128xf32, #src>
+    %sum = arith.addf %x, %y : tensor<32x128xf32, #src>
+    %out = ttg.convert_layout %sum : tensor<32x128xf32, #src> -> tensor<32x128xf32, #dst>
+    tt.return %out : tensor<32x128xf32, #dst>
+  }
+}
