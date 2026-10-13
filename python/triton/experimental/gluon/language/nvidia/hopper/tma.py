@@ -275,7 +275,7 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
             are performance hints and do not affect synchronization.
     """
     if _semantic.builder.options.enable_iisan:
-        _emit_alignment_check(tensor_desc, coord, "async_load", "innermost coordinate", _semantic=_semantic)
+        _emit_alignment_check(tensor_desc, coord, "async_load_im2col", "innermost coordinate", _semantic=_semantic)
 
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
