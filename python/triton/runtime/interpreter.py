@@ -515,7 +515,7 @@ class InterpreterBuilder:
         return TensorHandle(np.array([value], dtype=np.float16), tl.float16)
 
     def get_bf16(self, value):
-        return self.create_fp_trunc(self.get_fp32(value), tl.bfloat16)
+        return self.create_fp_trunc(self.get_fp64(value), tl.bfloat16)
 
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)

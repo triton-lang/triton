@@ -5386,6 +5386,28 @@ def test_full_bf16_small_constant(value, device):
     torch.testing.assert_close(z, torch.full((32, ), value, dtype=torch.bfloat16, device=device), rtol=0, atol=0)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str, value, expected_bits", [
+    # Just above a tie: rounding through fp32 first drops 2**-30 and rounds the tie to even.
+    ("float16", 1 + 2**-11 + 2**-30, 0x3C01),
+    ("bfloat16", 1 + 2**-8 + 2**-30, 0x3F81),
+])
+def test_full_16bit_float_constant_rounded_once(dtype_str, value, expected_bits, device):
+    dtype = getattr(torch, dtype_str)
+    check_type_supported(dtype, device)
+
+    @triton.jit
+    def kernel(X, Z, VALUE: tl.constexpr, DTYPE: tl.constexpr, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(Z + offs, tl.full([BLOCK], VALUE, DTYPE))
+        tl.store(Z + BLOCK + offs, tl.load(X + offs) * VALUE)
+
+    x = torch.ones(16, dtype=dtype, device=device)
+    z = torch.empty(32, dtype=dtype, device=device)
+    kernel[(1, )](x, z, VALUE=value, DTYPE=getattr(tl, dtype_str), BLOCK=16)
+    assert (z.view(torch.uint16) == expected_bits).all()
+
+
 @pytest.mark.parametrize("literal, dtype_str", [(1e+50, "f64"), (1e+10, "f32"), (1.0, "f32"), ('float("inf")', "f32"),
                                                 ('float("-inf")', "f32"), ('float("nan")', "f32"),
                                                 ('float("-nan")', "f32"), (0., "f32"), (5, "i32"), (2**40, "i64")])

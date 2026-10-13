@@ -989,16 +989,19 @@ void init_triton_ir(py::module_ &m) {
              return Value(self.create<arith::ConstantIntOp>(
                  self.getBuilder().getI64Type(), v));
            })
+      // Take a double so that Python floats are rounded once, directly to the
+      // target type.
       .def("get_bf16",
-           [](TritonOpBuilder &self, float v) -> Value {
+           [](TritonOpBuilder &self, double v) -> Value {
              auto type = self.getBuilder().getBF16Type();
              return self.create<arith::ConstantOp>(
                  self.getBuilder().getFloatAttr(type, v));
            })
       .def("get_fp16",
-           [](TritonOpBuilder &self, float v) -> Value {
+           [](TritonOpBuilder &self, double v) -> Value {
+             auto type = self.getBuilder().getF16Type();
              return self.create<arith::ConstantOp>(
-                 self.getBuilder().getF16FloatAttr(v));
+                 self.getBuilder().getFloatAttr(type, v));
            })
       .def("get_fp32",
            [](TritonOpBuilder &self, float v) -> Value {
