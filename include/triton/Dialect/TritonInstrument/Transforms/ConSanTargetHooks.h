@@ -107,6 +107,8 @@ struct WaitOpInfo {
   int pendingCount;
   bool transferWrites;
   bool transferReads;
+  // If true, the wait also completes accesses not yet committed to a group.
+  bool includeStaged = false;
 };
 
 struct AsyncProxyFenceInfo {
@@ -135,8 +137,15 @@ public:
   virtual std::optional<BarrierInvalidateInfo>
   getBarrierInvalidateInfo(Operation *op) const = 0;
 
-  virtual std::optional<WaitOpInfo>
-  getWaitOpInfo(Operation *op, const AuxDataMap &auxData) const = 0;
+  virtual SmallVector<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
+
+  virtual Value createWaitCompletionPredicate(ImplicitLocOpBuilder &b,
+                                              FunctionBuilder &funcBuilder,
+                                              Operation *op,
+                                              const WaitOpInfo &info,
+                                              int thread) const {
+    return {};
+  }
 
   virtual std::optional<AsyncProxyFenceInfo>
   getAsyncProxyFenceInfo(Operation *op) const {
@@ -146,6 +155,8 @@ public:
   virtual bool needsAsyncProxyFenceTracking(ModuleOp module) const {
     return false;
   }
+
+  virtual bool needsAsyncCopyIssueAges(ModuleOp module) const { return false; }
 
   virtual bool needsPtxasMaskedStoreBarrierWorkaround() const { return false; }
 
@@ -192,8 +203,7 @@ public:
 
   // Returns commit kinds used by addReadChecks to detect outstanding
   // read accesses to shared memory.
-  virtual SmallVector<CommitKindDesc>
-  getOutstandingReadCommitKinds(const AuxDataMap &auxData) const {
+  virtual SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const {
     return {};
   }
 

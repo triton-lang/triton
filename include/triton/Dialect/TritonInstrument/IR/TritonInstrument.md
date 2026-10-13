@@ -402,8 +402,19 @@ AMD hooks additionally cover:
 - Async TDM global-to-local and local-to-global copies. With a barrier, these
   are modeled through barrier arrivals; without a barrier, they use `TmaStore`
   commit counts and implicit commits.
-- AMD async wait variants for `AsyncCp`, and TDM wait variants for `TmaStore`
-  commit counts.
+- `amdg.async_copy_local_to_global` reads shared memory; ConSan tracks these
+  reads using `AsyncCpRead` commit counts, which `ttg.async_commit_group`
+  commits together with `AsyncCp`.
+- AMD async waits clear `AsyncCp` and `AsyncCpRead` entries beyond the same
+  pending-count threshold, transferring write visibility for loads and read
+  visibility for stores.
+- Async loads and stores can complete out of order relative to each other. An
+  `amdg.async_wait` with a nonzero `num_inst` may leave copies issued earlier
+  incomplete even when copies issued later in the opposite direction have
+  completed. ConSan accounts for this by treating the older copies as incomplete
+  while the wait leaves copies of the opposite direction outstanding, and
+  reporting accesses that conflict with them.
+- TDM wait variants for `TmaStore` commit counts.
 - Ordered TDM commit kinds, using the self-column exclusion described above.
 
 ## Implementation Notes
