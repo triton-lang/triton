@@ -62,11 +62,17 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     order: list[int]
 
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
+        if (not isinstance(source, StridedLayoutTransformation) or (self.is_fp4 and data.dtype != torch.uint8)):
+            return super()._convert_data_from(data, source, out=out)
+        if out is None:
+            out = torch.empty_strided(self.storage_shape, self.storage_strides, dtype=data.dtype, device=data.device)
+        return repack(data, source.order[0], self.order[0], self.is_fp4, out=out)
+
     def _can_convert_fp4(self, data):
-        """Whether direct kernels can read this strided FP4 storage."""
+        """Packed shape identifies nibble pairs; readers use actual strides."""
         return (self.is_fp4 and len(self.shape) >= 2 and self.order[0] >= len(self.shape) - 2
-                and data.device.type == "cuda" and data.dtype == torch.uint8 and list(data.shape) == self.storage_shape
-                and data.stride(self.order[0]) == 1)
+                and data.device.type == "cuda" and data.dtype == torch.uint8 and list(data.shape) == self.storage_shape)
 
     @property
     def storage_shape(self) -> list[int]:
@@ -88,7 +94,6 @@ class StridedLayoutTransformation(LayoutTransformation):
         return strides
 
     def swizzle_data(self, data):
-        assert data.numel() == 0 or data.stride(-1) == 1
         r = len(self.shape)
         if r == 0:
             return self._validate_storage_shape(data)
@@ -98,7 +103,6 @@ class StridedLayoutTransformation(LayoutTransformation):
         return self._validate_storage_shape(out)
 
     def unswizzle_data(self, data):
-        assert data.stride(self.order[0]) == 1
         out_shape = list(self.shape)
         if self.is_fp4:
             out_shape[-1] //= 2

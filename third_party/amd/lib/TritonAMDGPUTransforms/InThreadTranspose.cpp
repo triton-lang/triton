@@ -589,10 +589,9 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     return failure();
 
   int kDimNum = opDotOpEnc.getOpIdx() == 0 ? 1 : 0;
-  // TODO: support wmma
   if (!isa<ttg::AMDMfmaEncodingAttr, ttg::AMDWmmaEncodingAttr>(
           opDotOpEnc.getParent())) {
-    LDBG("Operand's parent encoding is not MFMA");
+    LDBG("Operand's parent encoding is not MFMA or WMMA");
     return failure();
   }
 

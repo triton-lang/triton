@@ -1,6 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Fp4ToFpOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -32,6 +33,17 @@ static constexpr const char *FP4ToBP16Ptx =
     "prmt.b32 $3, a6, a12, 29538;\n\t"
     "}";
 
+// NVVM's FP4-to-BF16 op emits a scaled instruction; keep this unscaled.
+static constexpr const char *FP4ToBf16NativePtx =
+    "{\n"
+    ".reg .b8 b<4>;\n"
+    "mov.b32 {b0, b1, b2, b3}, $4;\n"
+    "cvt.rn.bf16x2.e2m1x2 $0, b0;\n"
+    "cvt.rn.bf16x2.e2m1x2 $1, b1;\n"
+    "cvt.rn.bf16x2.e2m1x2 $2, b2;\n"
+    "cvt.rn.bf16x2.e2m1x2 $3, b3;\n"
+    "}";
+
 static constexpr const char *FP4ToFP16Ptx =
     "{\n"
     ".reg .b32           a<11>;\n"
@@ -56,14 +68,15 @@ static constexpr const char *FP4ToFP16Ptx =
     "}";
 
 static Value createInlineAsmUpcast(Location loc, RewriterBase &rewriter,
-                                   bool toFp16, Type retType, Value packedVec) {
+                                   const std::string &ptx, Type retType,
+                                   Value packedVec) {
   PTXBuilder builder;
   SmallVector<PTXBuilder::Operand *> operands;
   for (int i = 0; i < 4; i++) {
     operands.push_back(builder.newOperand("=r"));
   }
   operands.push_back(builder.newOperand(packedVec, "r"));
-  auto &ptxOp = *builder.create(toFp16 ? FP4ToFP16Ptx : FP4ToBP16Ptx);
+  auto &ptxOp = *builder.create(ptx);
   ptxOp(operands, /*onlyAttachMLIRArgs=*/true);
   Value result = builder.launch(rewriter, loc, retType, false);
   return result;
@@ -72,8 +85,10 @@ static Value createInlineAsmUpcast(Location loc, RewriterBase &rewriter,
 namespace {
 class Fp4ToFpOpPattern : public Fp4ToFpOpConversionBase {
 public:
-  Fp4ToFpOpPattern(LLVMTypeConverter &typeConverter, PatternBenefit benefit)
-      : Fp4ToFpOpConversionBase(typeConverter, benefit) {}
+  Fp4ToFpOpPattern(LLVMTypeConverter &typeConverter,
+                   const NVIDIA::TargetInfo &targetInfo, PatternBenefit benefit)
+      : Fp4ToFpOpConversionBase(typeConverter, benefit),
+        targetInfo(targetInfo) {}
 
 protected:
   std::array<Value, 8> upcastPackedFp4(Fp4ToFpOp op,
@@ -84,11 +99,27 @@ protected:
     auto *ctx = op.getContext();
     bool toFp16 = elemType == f16_ty;
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    std::array<Value, 8> results;
+    if (toFp16 && targetInfo.getComputeCapability() >= 100 &&
+        targetInfo.getPtxVersion() >= 86) {
+      Value bytes = b.bitcast(packedVec, vec_ty(i8_ty, 4));
+      for (int i = 0; i < 4; ++i) {
+        Value byte = b.extract_element(bytes, b.i32_val(i));
+        Value elements = NVVM::ConvertF4x2ToF16x2Op::create(
+            rewriter, loc, vec_ty(f16_ty, 2), byte, Float4E2M1FNType::get(ctx),
+            false);
+        results[2 * i] = b.extract_element(elements, b.i32_val(0));
+        results[2 * i + 1] = b.extract_element(elements, b.i32_val(1));
+      }
+      return results;
+    }
+    std::string ptx = toFp16 ? FP4ToFP16Ptx : FP4ToBP16Ptx;
+    if (!toFp16 && targetInfo.getComputeCapability() >= 100 &&
+        targetInfo.getPtxVersion() >= 92)
+      ptx = FP4ToBf16NativePtx;
     SmallVector<Type> rets(4, i32_ty);
     Type retType = struct_ty(rets);
-    Value ret =
-        createInlineAsmUpcast(loc, rewriter, toFp16, retType, packedVec);
-    std::array<Value, 8> results;
+    Value ret = createInlineAsmUpcast(loc, rewriter, ptx, retType, packedVec);
     for (int i = 0; i < 4; i++) {
       Value extractI32 = b.extract_val(ret, i);
       Value elements = b.bitcast(extractI32, vec_ty(elemType, 2));
@@ -97,11 +128,14 @@ protected:
     }
     return results;
   }
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
 };
 } // anonymous namespace
 
 void mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<Fp4ToFpOpPattern>(typeConverter, benefit);
+    const TargetInfo &targetInfo, PatternBenefit benefit) {
+  patterns.add<Fp4ToFpOpPattern>(typeConverter, targetInfo, benefit);
 }

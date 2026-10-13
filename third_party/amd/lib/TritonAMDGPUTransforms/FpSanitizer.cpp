@@ -48,9 +48,16 @@ Value convertScaleElemType(PatternRewriter &rewriter, Location loc, Value scale,
       rewriter, loc, scaleTy.clone(largeIntTy),
       DenseElementsAttr::get(scaleTy.clone(largeIntTy),
                              rewriter.getIntegerAttr(largeIntTy, shiftValue)));
-  Value shifted = arith::ShLIOp::create(rewriter, loc, ext, shift);
-  Value scaleFP =
-      tt::BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), shifted);
+  Value scaleBits = arith::ShLIOp::create(rewriter, loc, ext, shift);
+  if (dstElemTy.isBF16()) {
+    Value minScale = arith::ConstantOp::create(
+        rewriter, loc, scaleTy.clone(largeIntTy),
+        DenseElementsAttr::get(scaleTy.clone(largeIntTy),
+                               rewriter.getIntegerAttr(largeIntTy, 0x0040)));
+    scaleBits = arith::MaxUIOp::create(rewriter, loc, scaleBits, minScale);
+  }
+  Value scaleFP = tt::BitcastOp::create(rewriter, loc,
+                                        scaleTy.clone(largeFpType), scaleBits);
   if (largeFpType != dstElemTy)
     scaleFP = arith::TruncFOp::create(rewriter, loc, scaleTy.clone(dstElemTy),
                                       scaleFP);
@@ -97,6 +104,25 @@ struct ScaledUpcastFp4OpPattern
     auto scale = convertScaleElemType(rewriter, loc, op.getScale(), dstElemTy);
     if (!scale)
       return failure();
+
+    auto scaleTy = cast<RankedTensorType>(scale.getType());
+    if (scaleTy.getShape() != dstTy.getShape()) {
+      // ConvertLayoutOp preserves shape, so first repeat each compact scale
+      // over its group of output elements. Insert the repeat dimension after
+      // axis to keep each group contiguous. For axis=1 and group size 32:
+      //   [8, 16] -> [8, 16, 1] -> [8, 16, 32] -> [8, 512].
+      int axis = op.getAxis();
+      auto expandedShape = llvm::to_vector(scaleTy.getShape());
+      expandedShape.insert(expandedShape.begin() + axis + 1, 1);
+      scale = tt::ReshapeOp::create(rewriter, loc, expandedShape, scale);
+      // The op verifier guarantees an integral number of elements per scale.
+      expandedShape[axis + 1] =
+          dstTy.getShape()[axis] / scaleTy.getShape()[axis];
+      auto broadcastTy =
+          cast<RankedTensorType>(scale.getType()).clone(expandedShape);
+      scale = tt::BroadcastOp::create(rewriter, loc, broadcastTy, scale);
+      scale = tt::ReshapeOp::create(rewriter, loc, dstTy.getShape(), scale);
+    }
 
     // ScaledUpcastFp4Op does not have SameOperandsAndResultEncoding, so
     // maybe convert_layout to dstTy.

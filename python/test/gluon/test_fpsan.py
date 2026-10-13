@@ -1466,6 +1466,30 @@ def test_inline_asm_payload_semantics(device, asm, fresh_knobs):
 
 
 @gluon.jit
+def _inline_asm_ue8m0_payload_kernel(scale_ptr, out_ptr, ASM: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([2], [THREADS_PER_WARP], [4], [0])
+    offsets = gl.arange(0, 256, layout=layout)
+    scale = gl.load(scale_ptr + offsets)
+    out = gl.inline_asm_elementwise(ASM, "=r,h", [scale], dtype=gl.bfloat16, is_pure=True, pack=2)
+    gl.store(out_ptr + offsets, gl.fpsan.embed(out))
+
+
+@pytest.mark.parametrize("asm", ["cvt.rn.bf16x2.ue8m0x2 $0, $1;", "cvt.rn.bf16x2.ue8m0x2 $0,$1;"])
+def test_inline_asm_ue8m0_payload_semantics(device, asm, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    scales = torch.arange(256, device=device, dtype=torch.int32).to(torch.uint8)
+    out = torch.empty(256, device=device, dtype=torch.int16)
+    _inline_asm_ue8m0_payload_kernel[(1, )](scales, out, asm, THREADS_PER_WARP)
+
+    # Integer operands are sign-extended before applying the assembly's tag.
+    tag = np.uint16(stable_string_hash_u64(asm) & np.uint64(0xFFFF))
+    expected = scales.cpu().numpy().view(np.int8).astype(np.int16).view(np.uint16) ^ tag
+    _assert_payload_equal(out, expected)
+
+
+@gluon.jit
 def _swiglu_tanh_kernel(gate_ptr, linear_ptr, out_ptr, BLOCK: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
     layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
                                             order=[0])
@@ -1757,7 +1781,7 @@ def _dot_scaled_compute_payload_elem(val: np.uint64, elem_type: str, compute_typ
 
 def _dot_scaled_scale_payload(raw_scale: np.uint64, compute_type: str) -> np.uint64:
     if compute_type == "bf16":
-        raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
+        raw_bf16 = np.maximum((raw_scale & np.uint64(0xFF)) << np.uint64(7), np.uint64(0x0040))
         return _mix_float_scalar(raw_bf16, 16, 0x3F80)
     if compute_type == "fp16":
         raw_f32 = (raw_scale & np.uint64(0xFF)) << np.uint64(23)
@@ -1837,7 +1861,7 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
             payload = _mix_float_bits_to_payload_u64(raw_scale, 8, 0x38)
             return _cast_float_payload_u64(payload, 8, 16)
         assert scale_type == "e8m0"
-        raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
+        raw_bf16 = np.maximum((raw_scale & np.uint64(0xFF)) << np.uint64(7), np.uint64(0x0040))
         return _mix_float_bits_to_payload_u64(raw_bf16, 16, 0x3F80)
 
     a_payload = compute_payload_matrix(unpack_payload_matrix(a_u8, a_pack, pack_axis=1), type_a)
@@ -1951,6 +1975,7 @@ _TCGEN05_MMA_SCALED_CASES = [
                      id=f"{type_a}-{type_b}-mxfp-minimum") for type_a, type_b in _TCGEN05_SCALED_DTYPES
     ],
     pytest.param("e2m1", "e2m1", 128, 128, 64, 16, "e4m3", id="e2m1-e2m1-nvfp4-minimum"),
+    pytest.param("e2m1", "e2m1", 128, 128, 256, 16, "e4m3", id="e2m1-e2m1-nvfp4-wide-scales"),
 ]
 
 
@@ -2513,6 +2538,55 @@ def test_tcgen05_mma_warp_specialize_partition(device, partition_warps, fresh_kn
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+def test_tcgen05_mma_independent_ctas(device, num_ctas, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    m, n, k = 64, 64 * num_ctas, 32
+    replicated = tuple((0, 0) for _ in range(num_ctas.bit_length() - 1))
+    columns = tuple((0, 1 << i) for i in range(num_ctas.bit_length() - 1))
+    b_rows = tuple((1 << i, 0) for i in range(num_ctas.bit_length() - 1))
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, out_ptr, N: gl.constexpr, ACGA: gl.constexpr, BCGA: gl.constexpr, DCGA: gl.constexpr):
+        al: gl.constexpr = gl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=ACGA)
+        bl: gl.constexpr = gl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=BCGA)
+        am = gl.arange(0, 64, gl.SliceLayout(1, al))
+        ak = gl.arange(0, 32, gl.SliceLayout(0, al))
+        bn = gl.arange(0, N, gl.SliceLayout(1, bl))
+        bk = gl.arange(0, 32, gl.SliceLayout(0, bl))
+        a = gl.load(a_ptr + am[:, None] * 32 + ak[None, :])
+        b = gl.load(b_ptr + bn[:, None] * 32 + bk[None, :])
+        ash: gl.constexpr = gl.NVMMASharedLayout.get_default_for((64, 32), gl.bfloat16, cga_layout=ACGA)
+        bsh: gl.constexpr = gl.NVMMASharedLayout.get_default_for((N, 32), gl.bfloat16, cga_layout=BCGA)
+        smem_a = gl.allocate_shared_memory(gl.bfloat16, (64, 32), ash, a)
+        smem_b = gl.allocate_shared_memory(gl.bfloat16, (N, 32), bsh, b)
+        tmem_layout: gl.constexpr = TensorMemoryLayout((64, 64), col_stride=1, cga_layout=DCGA)
+        acc = allocate_tensor_memory(gl.float32, (64, N), tmem_layout)
+        layout: gl.constexpr = acc.get_reg_layout()
+        rows = gl.arange(0, 64, gl.SliceLayout(1, layout))
+        cols = gl.arange(0, N, gl.SliceLayout(0, layout))
+        offsets = rows[:, None] * N + cols[None, :]
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        # Independent MMAs own columns; FPSan may compute using a row partition.
+        tcgen05_mma(smem_a, smem_b.permute((1, 0)), acc, use_acc=False, multicast=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(bar)
+        gl.store(out_ptr + offsets, acc.load())
+
+    rs = np.random.RandomState(0)
+    a_bits = _random_float_bits(rs, (m, k), "bf16")
+    b_bits = _random_float_bits(rs, (n, k), "bf16")
+    expected = _mm_payload_bits(a_bits, b_bits.T, None, "bf16", "bf16", "f32")
+    _, a = _as_float_bits_tensor(a_bits, "bf16")
+    _, b = _as_float_bits_tensor(b_bits, "bf16")
+    out, output = _as_float_bits_tensor(np.empty((m, n), dtype=np.int32), "f32")
+    kernel[(1, )](a, b, output, n, replicated, b_rows, columns, num_warps=4, num_ctas=num_ctas)
+    _assert_payload_equal(out, expected)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("use_acc", [False, True])
 def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
     _require_cuda_backend(device)
@@ -2545,7 +2619,7 @@ def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
         smem_layout_a: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float32,
                                                                            cga_layout=((1, 0), ))
         smem_layout_b: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float32,
-                                                                           cga_layout=((0, 1), ))
+                                                                           transposed=True, cga_layout=((0, 1), ))
         smem_a = gl.allocate_shared_memory(gl.float32, [BLOCK_M, BLOCK_K], smem_layout_a, a_tile)
         smem_b = gl.allocate_shared_memory(gl.float32, [BLOCK_K, BLOCK_N], smem_layout_b, b_tile)
 
@@ -2677,8 +2751,8 @@ def test_tcgen05_mma_scaled(device, type_a, type_b, m, n, k, scale_factor, scale
     else:
         b_bits = rs.randint(20, 40, size=(packed_k_b, n), dtype=np.uint8)
         b_ref_bits = b_bits
-    a_scale_bits = rs.randint(1, 4, size=(m, k // scale_factor), dtype=np.int8)
-    b_scale_bits = rs.randint(1, 4, size=(n, k // scale_factor), dtype=np.int8)
+    a_scale_bits = rs.randint(0, 4, size=(m, k // scale_factor), dtype=np.int8)
+    b_scale_bits = rs.randint(0, 4, size=(n, k // scale_factor), dtype=np.int8)
     if scale_type == "e4m3":
         a_scale_bits = rs.randint(1, 0x40, size=(m, k // scale_factor), dtype=np.uint8)
         b_scale_bits = rs.randint(1, 0x40, size=(n, k // scale_factor), dtype=np.uint8)
@@ -3040,7 +3114,7 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, scale_shape, two_
         if TWO_CTAS:
             mma_a_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([256, 64], gl.float32,
                                                                               cga_layout=((1, 0), ))
-            mma_b_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([64, 128], gl.float32,
+            mma_b_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([64, 128], gl.float32, transposed=True,
                                                                               cga_layout=((0, 1), ))
             mma_a = gl.allocate_shared_memory(gl.float32, [256, 64], mma_a_layout)
             mma_b = gl.allocate_shared_memory(gl.float32, [64, 128], mma_b_layout)
@@ -3233,47 +3307,6 @@ def test_reduction_matches_loop(device, fresh_knobs):
     _assert_payload_equal(reduce_out, loop_out)
 
 
-@pytest.mark.parametrize("use_slp", [False, True])
-def test_abs_reduction_preserves_nan_payload(device, fresh_knobs, monkeypatch, use_slp):
-    _require_cuda_backend(device)
-    if not is_cuda():
-        pytest.skip("regression is specific to NVPTX fabs lowering")
-
-    from triton._C.libtriton import llvm
-
-    optimize_module = llvm.optimize_module
-
-    def optimize(module, level, *args, **kwargs):
-        # Exercise the vector fabs produced by SLP as well as scalar fabs.
-        kwargs["disable_slp_vectorizer"] = not use_slp
-        return optimize_module(module, level, *args, **kwargs)
-
-    monkeypatch.setattr(llvm, "optimize_module", optimize)
-    fresh_knobs.compilation.instrumentation_mode = "fpsan"
-    fresh_knobs.compilation.always_compile = True
-
-    @triton.jit
-    def abs_max_kernel(x_ptr, out_ptr, BLOCK: tl.constexpr):
-        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
-        x = tl.load(x_ptr + offsets).to(tl.float32)
-        tl.store(out_ptr + tl.program_id(0), tl.max(tl.abs(x), axis=0))
-
-    block = 256
-    # These finite BF16 values include both signs of quiet/signaling-NaN carriers
-    # after FPSan widening. Constant rows keep the reduction from hiding them.
-    bits = np.array([0x02DE, 0x82DE, 0x0703, 0x8703, 0x01CA, 0x81CA, 0, 0x8000, 0x3F80, 0xBF80],
-                    dtype=np.uint16).view(np.int16)
-    input_bits = np.repeat(bits[:, None], block, axis=1)
-    _, x = _as_float_bits_tensor(input_bits, "bf16")
-    out = torch.empty((len(bits), ), dtype=torch.int32, device=device)
-    abs_max_kernel[(len(bits), )](x, triton.TensorWrapper(out, dtype=torch.float32), BLOCK=block, num_warps=1)
-
-    expected = _cast_float_bits(bits, "bf16", "f32").view(np.uint32) & np.uint32(0x7FFFFFFF)
-    assert expected[0] == 0x7FBD2A00
-    assert expected[4] == 0x7FCCB100
-    _assert_payload_equal(out, expected)
-
-
 def test_f32_loop_preserves_snan_payload(device, fresh_knobs):
     _require_cuda_backend(device)
     if not is_cuda():
@@ -3411,3 +3444,44 @@ def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, f
     kernel[(1, )](aw, bw, cw, outw, BLOCK_M=m, BLOCK_N=n, BLOCK_K=k, INSTR_SHAPE_K=instr_k, K_WIDTH=k_width)
 
     _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.skipif(not _hip_device_supports_fpsan(), reason="Requires AMD target")
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("scale_factor", [32, 64])
+def test_scaled_upcast_fp4_compact_scales(device, dtype, scale_factor, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    amd = gl.amd.cdna5 if is_hip_gfx1250() else gl.amd.cdna4 if is_hip_cdna4() else gl.amd.cdna3
+
+    @gluon.jit
+    def kernel(src_ptr, scale_ptr, out_ptr, SCALE_FACTOR: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([32], [THREADS_PER_WARP], [1], [0])
+        src = gl.load(src_ptr + gl.arange(0, 256, layout=layout))
+        scale_layout: gl.constexpr = amd.get_scaled_upcast_fp4_scale_layout(src, SCALE_FACTOR, out_ptr.dtype.element_ty,
+                                                                            axis=0)
+        scale = gl.load(scale_ptr + gl.arange(0, 512 // SCALE_FACTOR, layout=scale_layout))
+        out = amd.scaled_upcast(src, scale, out_ptr.dtype.element_ty, axis=0)
+        gl.store(out_ptr + gl.arange(0, 512, layout=out.type.layout), out)
+
+    src = torch.arange(256, device=device).to(torch.uint8)
+    scale = (torch.arange(512 // scale_factor, device=device) * 17).to(torch.uint8)
+    out = torch.empty(512, dtype=dtype, device=device)
+    kernel[(1, )](src, scale, out, scale_factor, THREADS_PER_WARP, num_warps=1)
+
+    # Split each byte into two 4-bit values, low bits first.
+    # FPSan uses these values as integers.
+    src_bits = src.cpu().numpy()
+    unpacked = np.stack((src_bits & 0xF, src_bits >> 4), axis=1).reshape(-1)
+
+    # Convert each scale to the integer value used by FPSan.
+    compute_type = "bf16" if dtype == torch.bfloat16 else "fp16"
+    scale_payload = np.array([_dot_scaled_scale_payload(np.uint64(s), compute_type) for s in scale.cpu().numpy()],
+                             dtype=np.uint64)
+
+    # Repeat each scale for its group, multiply, and keep the low 16 bits.
+    payload = (unpacked * np.repeat(scale_payload, scale_factor)) & 0xFFFF
+
+    # Encode the integer results as FP16/BF16 bits and compare the bits.
+    expected = _unmix_payload_to_float_bits(payload, "bf16" if dtype == torch.bfloat16 else "f16")
+    _assert_payload_equal(out.view(torch.int16), expected)

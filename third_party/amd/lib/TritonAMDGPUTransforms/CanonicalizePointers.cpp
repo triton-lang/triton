@@ -616,7 +616,6 @@ static Value getSingleValue(ValueRange values) {
 /// matchAndRewrite_ just as that would for conventional OpConversionPatterns.
 template <typename SourceOp>
 struct PointerCanonicalizationPattern : ConversionPattern {
-  using OpAdaptor = typename SourceOp::Adaptor;
   using OneToNOpAdaptor =
       typename SourceOp::template GenericAdaptor<ArrayRef<ValueRange>>;
 
@@ -2084,9 +2083,11 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   patterns.add<
       ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
       ConvertConvertLayoutOp, ConvertAddPtrOp, ConvertExtractSliceOp,
+      MaterializeFatPointer<tt::AtomicLoadOp>,
       MaterializeFatPointer<tt::AtomicCASOp>,
       MaterializeFatPointer<tt::AtomicPollOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
+      MaterializeFatPointer<tt::AtomicStoreOp>,
       MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,
       MaterializeFatPointer<triton::gpu::AsyncCopyGlobalToLocalOp>,
       MaterializeFatPointer<tt::PtrToIntOp>, MaterializeFatPointer<tt::StoreOp>,

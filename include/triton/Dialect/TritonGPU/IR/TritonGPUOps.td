@@ -29,6 +29,33 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
+def TTG_InlineAsmOp : TTG_Op<"inline_asm", [
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  DeclareOpInterfaceMethods<ConditionallySpeculatable>
+]> {
+  let summary = "Run inline assembly once per thread with explicit tensor layouts";
+  let description = [{
+    Each tensor operand is unpacked into all of its per-thread elements in
+    register order, including replicated register positions. Scalars and memory
+    descriptors contribute one operand; descriptors are passed as i32 addresses.
+    Results are packed according to their explicit types and layouts. There is
+    no elementwise broadcasting, chunking, or subword packing.
+
+    Assembly with memory descriptor operands must be impure. Descriptor accesses
+    are not modeled by the compiler. The caller must provide all synchronization
+    for them, including barriers, fences, and asynchronous completion before
+    storage reuse. Accesses must remain within the descriptor views.
+    Scalar results must be uniform and replicated tensor elements must agree.
+  }];
+  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure,
+                       Variadic<AnyTypeOf<[TT_Type, TTG_MemDescType]>>:$args);
+  let results = (outs Variadic<TT_Type>:$result);
+  let assemblyFormat = [{
+    $asm_string attr-dict ($args^)? `:` functional-type($args, $result)
+  }];
+  let hasVerifier = 1;
+}
+
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
                                   SameOperandsAndResultElementType,
@@ -119,8 +146,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     Arg<TTG_MemDescType, "", GenericSharedWrite>:$result,
     Optional<I1Tensor>:$mask,
     Optional<TT_Type>:$other,
-    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    OptionalAttr<AnyAttr>:$cachePolicy,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
     DefaultValuedAttr<I32Attr, "1">:$contiguity
   );
@@ -137,15 +163,8 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     }
   }];
 
-  // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
-  // them in attr-dict, because this way their values get printed as strings,
-  // rather than as opaque integers.
-  //
-  // Note there are no commas between other, cacheModifier, and evictionPolicy,
-  // due to limitations in MLIR's asm parser.
   let assemblyFormat = [{
     $src `,` $result (`mask` $mask^)? (`other` $other^)?
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     attr-dict `:` type($src) `->` type($result)
   }];
 }
@@ -736,9 +755,9 @@ def TTG_WarpReturnOp : TTG_Op<"warp_return", [
 }
 
 def TTG_BarrierOp : TTG_Op<"barrier"> {
-  let summary = "Synchronizes execution and reads/writes to the selected address spaces for all threads in the CTA.";
+  let summary = "Synchronizes execution and memory accesses within a CTA or warp.";
   let description = [{
-    The `barrier` op synchronises the execution and all operations between the selected address spaces for all
+    At the default CTA scope, the `barrier` op synchronises the execution and all operations between the selected address spaces for all
     threads in the CTA. It is used to coordinate communication between threads in the CTA.
 
     This operation waits until all threads in the CTA have reached a `barrier` (for synchronization) and operations
@@ -749,10 +768,13 @@ def TTG_BarrierOp : TTG_Op<"barrier"> {
 
     A `barrier` operation only provides synchronization and memory guarantees on the selected address spaces in the CTA.
 
+    Warp scope currently supports only the `local` address space. It synchronizes
+    all lanes of each participating warp and orders their shared memory accesses.
+
     The mandatory `addrspace` attribute is a bitmask describing which address spaces will be visible when the `barrier` completes:
 
     * `none`         control-only synchronization (no memory ordering).
-    * `local`        shared-memory operations are complete and visible CTA-wide.
+    * `local`        shared-memory operations are complete and visible within the selected scope.
     * `global_read`  global memory reads are complete and visible CTA-wide.
     * `global_write` global memory writes are complete and visible CTA-wide.
     * `tensor_read`  tensor memory read operations are complete and visible CTA-wide.
@@ -766,13 +788,18 @@ def TTG_BarrierOp : TTG_Op<"barrier"> {
     ```mlir
     ttg.barrier local
     ttg.barrier local|global_read|global_write
+    ttg.barrier warp local
     ```
   }];
 
-  let arguments = (ins TTG_AddrSpace:$addrSpace);
+  let arguments = (ins TTG_AddrSpace:$addrSpace,
+    DefaultValuedAttr<TTG_BarrierScope, "::mlir::triton::gpu::BarrierScope::CTA">:$scope);
   let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
 
   let extraClassDeclaration = [{
+    bool isWarp() { return getScope() == BarrierScope::Warp; }
+
     /// Returns true if the barrier includes all of the given address spaces.
     /// For example, hasAddrSpaces(Local | GlobalRead) returns true only if
     /// both Local and GlobalRead are set.

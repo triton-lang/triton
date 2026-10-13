@@ -94,3 +94,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @test_divf_f32(%arg0: f32, %arg1: f32) {
+    // COMMON-LABEL: test_divf_f32
+    // COMMON: llvm.fdiv
+    %0 = arith.divf %arg0, %arg1 : f32
+    tt.return
+  }
+
+  tt.func public @test_divf_approx_f32(%arg0: f32, %arg1: f32) {
+    // COMMON-LABEL: test_divf_approx_f32
+    // COMMON: llvm.call_intrinsic "llvm.amdgcn.fdiv.fast"
+    %0 = tt.approx_divf %arg0, %arg1 : f32
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @test_rcp_approx_f32(%arg0: tensor<128xf32, #blocked>) {
+    // COMMON-LABEL: test_rcp_approx_f32
+    // COMMON-COUNT-2: llvm.call_intrinsic "llvm.amdgcn.fdiv.fast"
+    %one = arith.constant dense<1.0> : tensor<128xf32, #blocked>
+    %0 = tt.approx_divf %one, %arg0 : tensor<128xf32, #blocked>
+    tt.return
+  }
+}

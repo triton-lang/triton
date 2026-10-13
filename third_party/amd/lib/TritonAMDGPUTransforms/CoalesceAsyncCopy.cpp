@@ -8,11 +8,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 
-#undef DEBUG_TYPE
-#define DEBUG_TYPE "tritonamdgpu-coalesce-async-copy"
-#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
-#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
-
 namespace ttg = triton::gpu;
 using mlir::triton::amdgpu::ISAFamily;
 

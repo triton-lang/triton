@@ -1,4 +1,6 @@
 #include <atomic>
+#include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -96,30 +98,6 @@ template <typename T> T atomic_fadd(T *loc, T value, std::memory_order order) {
   }
 
   return old_value;
-}
-
-/** Create a value of type `To` from the bits of `from`.
- *
- * similar to `std::bit_cast` but compatible with C++17,
- * should perform similar to `*reinterpret_cast<To*>(&from)`
- * or through punning without expecting any undefined behaviors.
- *
- * Note: taken from
- * https://github.com/numpy/numpy/blob/70fde29fdd4d8fcc6098df7ef8a34c84844e347f/numpy/_core/src/common/utils.hpp#L32
- * with simplification.
- */
-template <typename To, typename From>
-inline To BitCast(const From &from) noexcept {
-  static_assert(sizeof(To) == sizeof(From),
-                "both data types must have the same size");
-
-  static_assert(std::is_trivially_copyable_v<To> &&
-                    std::is_trivially_copyable_v<From>,
-                "both data types must be trivially copyable");
-
-  To to;
-  memcpy(&to, &from, sizeof(from));
-  return to;
 }
 
 // Taken from
@@ -283,11 +261,11 @@ constexpr uint32_t ToFloatBits(uint16_t h) {
 }
 
 triton_half npy_float_to_half(float f) {
-  return {FromFloatBits(BitCast<uint32_t>(f))};
+  return {FromFloatBits(std::bit_cast<uint32_t>(f))};
 }
 
 float npy_half_to_float(triton_half h) {
-  return BitCast<float>(ToFloatBits(h.value));
+  return std::bit_cast<float>(ToFloatBits(h.value));
 }
 
 template <>
@@ -639,6 +617,30 @@ void require_dtype(const AnyArray &array, const char *name) {
     throw std::invalid_argument(std::string(name) + " has unsupported dtype");
 }
 
+template <typename T>
+py::object fma_array(py::object x_obj, py::object y_obj, py::object z_obj) {
+  AnyArray x = py::cast<AnyArray>(x_obj);
+  AnyArray y = py::cast<AnyArray>(y_obj);
+  AnyArray z = py::cast<AnyArray>(z_obj);
+  require_dtype<T>(x, "x");
+  require_dtype<T>(y, "y");
+  require_dtype<T>(z, "z");
+  if (x.size() != y.size() || x.size() != z.size())
+    throw std::invalid_argument("fma operands must have the same size");
+  py::object ret = numpy_empty(x.size(), x_obj.attr("dtype"));
+  auto ret_array = py::cast<MutableArray>(ret);
+  auto *out = static_cast<T *>(ret_array.data());
+  for (size_t i = 0; i < x.size(); ++i) {
+    T a, b, c;
+    memcpy(&a, const_element_data(x, i), sizeof(T));
+    memcpy(&b, const_element_data(y, i), sizeof(T));
+    memcpy(&c, const_element_data(z, i), sizeof(T));
+    // Select the overload that rounds directly to the operand type.
+    out[i] = std::fma(a, b, c);
+  }
+  return ret.attr("reshape")(shape_list(x));
+}
+
 std::vector<uint64_t> copy_uint64_array(const AnyArray &array) {
   std::vector<uint64_t> data(array.size());
   for (size_t i = 0; i < array.size(); ++i)
@@ -721,6 +723,9 @@ void init_triton_interpreter(py::module_ &m) {
       .value("UMIN", RMWOp::UMIN)
       .value("UMAX", RMWOp::UMAX)
       .export_values();
+
+  m.def("fma_fp32", &fma_array<float>);
+  m.def("fma_fp64", &fma_array<double>);
 
   m.def("load",
         [](py::object ptr_obj, py::object mask_obj, py::object other_obj,

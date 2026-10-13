@@ -575,3 +575,62 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: amdg.async_tdm_copy_local_to_global {{.*}} from %[[A32]]
 // CHECK: ttg.local_dealloc %[[A64]]
 // CHECK: ttg.local_dealloc %[[A32]]
+
+// -----
+
+// TDM load + tt.dot_scaled (mxfp4 x mxfp4) pipeline on gfx1250.
+#blocked_sd   = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked_sd_b = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma_sd = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0], [4, 0]]}, instrShape = [16, 16, 128]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_scaled_dot_reorder(
+      %a_ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32},
+      %b_ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32},
+      %c_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+      %scale_a: tensor<128x4xi8, #blocked_sd>,
+      %scale_b: tensor<128x4xi8, #blocked_sd>,
+      %M: i32 {tt.divisibility = 16 : i32},
+      %N: i32 {tt.divisibility = 16 : i32},
+      %K: i32 {tt.divisibility = 16 : i32}) {
+    %c128_i32 = arith.constant 128 : i32
+    %c64_i32  = arith.constant 64  : i32
+    %c0_i32   = arith.constant 0   : i32
+    %c1_i64   = arith.constant 1   : i64
+    %c1_i32   = arith.constant 1   : i32
+    %c63_i32  = arith.constant 63  : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma_sd>
+    %pid_m = tt.get_program_id x : i32
+    %pid_n = tt.get_program_id y : i32
+    %m = arith.muli %pid_m, %c128_i32 : i32
+    %n = arith.muli %pid_n, %c128_i32 : i32
+    %k_stride = arith.extsi %K : i32 to i64
+    %a_desc = tt.make_tensor_descriptor %a_ptr, [%M, %K], [%k_stride, %c1_i64] : <i8>, <128x64xi8>
+    %n_stride = arith.extsi %N : i32 to i64
+    %b_desc = tt.make_tensor_descriptor %b_ptr, [%K, %N], [%n_stride, %c1_i64] : <i8>, <64x128xi8>
+    %k_ceil = arith.addi %K, %c63_i32 : i32
+    %num_k   = arith.divsi %k_ceil, %c64_i32 : i32
+    %result:2 = scf.for %iv = %c0_i32 to %num_k step %c1_i32
+        iter_args(%k_off = %c0_i32, %acc = %cst) -> (i32, tensor<128x128xf32, #mma_sd>) : i32 {
+      %a = tt.descriptor_load %a_desc[%m, %k_off] : !tt.tensordesc<128x64xi8> -> tensor<128x64xi8, #blocked_sd>
+      %b = tt.descriptor_load %b_desc[%k_off, %n] : !tt.tensordesc<64x128xi8>  -> tensor<64x128xi8, #blocked_sd_b>
+      %a_dot = ttg.convert_layout %a : tensor<128x64xi8, #blocked_sd>   -> tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma_sd, kWidth = 16}>>
+      %b_dot = ttg.convert_layout %b : tensor<64x128xi8, #blocked_sd_b> -> tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma_sd, kWidth = 16}>>
+      %d = tt.dot_scaled %a_dot scale %scale_a, %b_dot scale %scale_b, %acc lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma_sd, kWidth = 16}>>, tensor<128x4xi8, #blocked_sd> * tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma_sd, kWidth = 16}>>, tensor<128x4xi8, #blocked_sd> -> tensor<128x128xf32, #mma_sd>
+      %next_k = arith.addi %k_off, %c64_i32 : i32
+      scf.yield %next_k, %d : i32, tensor<128x128xf32, #mma_sd>
+    }
+    tt.return
+  }
+}
+
+// TDM copy reordering is on by default: all TDM copies precede the
+// single async_tdm_wait, which precedes the local_loads and dot_scaled.
+// CHECK-LABEL: tt.func @tdm_scaled_dot_reorder
+// CHECK: scf.for
+// CHECK: async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<128x64xi8
+// CHECK: async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<64x128xi8
+// CHECK: amdg.async_tdm_wait %{{[^,]+}}, %{{[^,]+}} {num = 0 : i32}
+// CHECK-NOT: async_tdm_copy_global_to_local
+// CHECK: ttg.local_load
+// CHECK: ttg.local_load
+// CHECK: tt.dot_scaled

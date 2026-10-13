@@ -1057,9 +1057,9 @@ static void prepareGatherScatterDescriptorBase(
   Value cgaColOffset = b.mul(b.zext(i64_ty, cgaColOffsetElem), tensorStride[1]);
   globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaColOffset);
 
-  // tensorShape[1] is the OOB extent carried by the descriptor (set once via
-  // update_tensor_descriptor set_bounds / clamp_bounds, like the contiguous
-  // copy).  No per-call column clamp here.
+  // The descriptor has the OOB extent relative to its base. We need to clamp
+  // based on the CTA's column offset.
+  tensorShape[1] = clampTensorDimByOffset(b, tensorShape[1], cgaColOffsetElem);
 
   // For scatter with padding (store-from-LDS): clamp tensor_dim0 to the
   // original column width so OOB checking drops padding elements before they

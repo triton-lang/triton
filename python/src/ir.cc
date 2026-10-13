@@ -46,6 +46,7 @@
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/SourceMgr.h"
 #include <memory>
+#include <stdexcept>
 
 namespace {
 
@@ -865,6 +866,19 @@ void init_triton_ir(py::module_ &m) {
       py::class_<TritonOpBuilder>(m, "builder", py::dynamic_attr());
   TritonOpBuilderBinding.def(py::init<MLIRContext *>())
       .def("get_op_builder", &TritonOpBuilder::getBuilder, ret::reference)
+      .def("get_cache_policy",
+           [](TritonOpBuilder &self, const std::string &cacheModifier,
+              const std::string &evictionPolicy) -> Attribute {
+             auto modifier = symbolizeCacheModifier(cacheModifier);
+             if (!modifier)
+               throw std::invalid_argument("invalid cache modifier '" +
+                                           cacheModifier + "'");
+             auto eviction = symbolizeEvictionPolicy(evictionPolicy);
+             if (!eviction)
+               throw std::invalid_argument("invalid eviction policy '" +
+                                           evictionPolicy + "'");
+             return buildCachePolicy(self.getBuilder(), *modifier, *eviction);
+           })
       // getters
       .def("create_module",
            [](TritonOpBuilder &self) -> ModuleOp {
@@ -978,8 +992,8 @@ void init_triton_ir(py::module_ &m) {
       .def("get_bf16",
            [](TritonOpBuilder &self, float v) -> Value {
              auto type = self.getBuilder().getBF16Type();
-             return self.create<arith::ConstantFloatOp>(
-                 type, APFloat(type.getFloatSemantics(), std::to_string(v)));
+             return self.create<arith::ConstantOp>(
+                 self.getBuilder().getFloatAttr(type, v));
            })
       .def("get_fp16",
            [](TritonOpBuilder &self, float v) -> Value {
@@ -1301,6 +1315,10 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::DivFOp>(lhs, rhs);
            })
+      .def("create_approx_divf",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             return self.create<ApproxDivFOp>(lhs, rhs);
+           })
       .def("create_frem",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::RemFOp>(lhs, rhs);
@@ -1550,36 +1568,34 @@ void init_triton_ir(py::module_ &m) {
            })
       // Input/Output
       .def("create_load",
-           [](TritonOpBuilder &self, Value &ptrs, CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy, bool isVolatile) -> Value {
-             return self.create<LoadOp>(ptrs, cacheModifier, evictionPolicy,
+           [](TritonOpBuilder &self, Value &ptrs, Attribute cachePolicy,
+              bool isVolatile) -> Value {
+             return self.create<LoadOp>(ptrs, Value(), Value(), cachePolicy,
                                         isVolatile);
            })
       .def("create_store",
            [](TritonOpBuilder &self, Value &ptrs, Value &value,
-              CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> void {
-             self.create<StoreOp>(ptrs, value, cacheModifier, evictionPolicy);
+              Attribute cachePolicy) -> void {
+             self.create<StoreOp>(ptrs, value, Value(), cachePolicy);
            })
       .def(
           "create_masked_load",
           [](TritonOpBuilder &self, Value &ptrs, Value &mask,
-             std::optional<Value> &other, CacheModifier cacheModifier,
-             EvictionPolicy evictionPolicy, bool isVolatile) -> Value {
+             std::optional<Value> &other, Attribute cachePolicy,
+             bool isVolatile) -> Value {
             return self.create<LoadOp>(ptrs, mask, other.value_or(Value()),
-                                       cacheModifier, evictionPolicy,
-                                       isVolatile);
+                                       cachePolicy, isVolatile);
           },
           py::arg("ptrs"), py::arg("mask"), py::arg("other").none(),
-          py::arg("cacheModifier"), py::arg("evictionPolicy"),
-          py::arg("isVolatile"))
-      .def("create_masked_store",
-           [](TritonOpBuilder &self, Value &ptrs, Value &val, Value &mask,
-              CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> void {
-             self.create<StoreOp>(ptrs, val, mask, cacheModifier,
-                                  evictionPolicy);
-           })
+          py::arg("cachePolicy"), py::arg("isVolatile"))
+      .def(
+          "create_masked_store",
+          [](TritonOpBuilder &self, Value &ptrs, Value &val, Value &mask,
+             Attribute cachePolicy) -> void {
+            self.create<StoreOp>(ptrs, val, mask, cachePolicy);
+          },
+          py::arg("ptrs"), py::arg("val"), py::arg("mask"),
+          py::arg("cachePolicy"))
       .def("create_tensor_descriptor_type",
            [](TritonOpBuilder &self, Type blockTy, bool isSigned) -> Type {
              auto rtt = cast<RankedTensorType>(blockTy);
@@ -1588,12 +1604,11 @@ void init_triton_ir(py::module_ &m) {
            })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
-              CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> Value {
+              Attribute cachePolicy) -> Value {
              auto descTy = cast<triton::TensorDescType>(desc.getType());
              auto resTy = descTy.getSignlessBlockType();
-             return self.create<DescriptorLoadOp>(
-                 resTy, desc, indices, cacheModifier, evictionPolicy);
+             return self.create<DescriptorLoadOp>(resTy, desc, indices,
+                                                  cachePolicy);
            })
       .def("create_descriptor_gather",
            [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,
@@ -1655,6 +1670,17 @@ void init_triton_ir(py::module_ &m) {
              return self.createOrFold<UnsplatOp>(arg);
            })
       // // atomic
+      .def("create_atomic_load",
+           [](TritonOpBuilder &self, Value &ptr, Value &mask, MemSemantic sem,
+              MemSyncScope scope) -> Value {
+             Type dstType = triton::getPointeeType(ptr.getType());
+             return self.create<AtomicLoadOp>(dstType, ptr, mask, sem, scope);
+           })
+      .def("create_atomic_store",
+           [](TritonOpBuilder &self, Value &ptr, Value &val, Value &mask,
+              MemSemantic sem, MemSyncScope scope) {
+             self.create<AtomicStoreOp>(ptr, val, mask, sem, scope);
+           })
       .def("create_atomic_poll",
            [](TritonOpBuilder &self, Value &ptr, Value &expected,
               std::optional<Value> timeout, MemSemantic sem,
@@ -1665,34 +1691,14 @@ void init_triton_ir(py::module_ &m) {
       .def("create_atomic_cas",
            [](TritonOpBuilder &self, Value &ptr, Value &cmp, Value &val,
               MemSemantic sem, MemSyncScope scope) -> Value {
-             Type dstType;
-             if (auto srcTensorType =
-                     dyn_cast<RankedTensorType>(ptr.getType())) {
-               Type dstElemType =
-                   cast<PointerType>(srcTensorType.getElementType())
-                       .getPointeeType();
-               dstType = srcTensorType.clone(dstElemType);
-             } else {
-               auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
-               dstType = ptrType.getPointeeType();
-             }
+             Type dstType = triton::getPointeeType(ptr.getType());
              return self.create<AtomicCASOp>(dstType, ptr, cmp, val, sem,
                                              scope);
            })
       .def("create_atomic_rmw",
            [](TritonOpBuilder &self, RMWOp rmwOp, Value &ptr, Value &val,
               Value &mask, MemSemantic sem, MemSyncScope scope) -> Value {
-             Type dstType;
-             if (auto srcTensorType =
-                     dyn_cast<RankedTensorType>(ptr.getType())) {
-               Type dstElemType =
-                   cast<PointerType>(srcTensorType.getElementType())
-                       .getPointeeType();
-               dstType = srcTensorType.clone(dstElemType);
-             } else {
-               auto ptrType = cast<PointerType>(getElementTypeOrSelf(ptr));
-               dstType = ptrType.getPointeeType();
-             }
+             Type dstType = triton::getPointeeType(ptr.getType());
              return self.create<AtomicRMWOp>(dstType, rmwOp, ptr, val, mask,
                                              sem, scope);
            })
@@ -1915,11 +1921,9 @@ void init_triton_ir(py::module_ &m) {
 
   // Add an `extend_with` static method that dynamically loads a plugin and
   // registers its custom operations as builder methods.
-  auto builderPtr =
-      std::make_shared<py::class_<TritonOpBuilder>>(TritonOpBuilderBinding);
   TritonOpBuilderBinding.def_static(
       "extend_with",
-      [builderPtr](const std::string &path) {
+      [](const std::string &path) {
         // Load the plugin library.
         auto pluginOrErr = mlir::triton::plugin::TritonPlugin::load(path);
         if (!pluginOrErr) {
@@ -1930,14 +1934,19 @@ void init_triton_ir(py::module_ &m) {
 
         // Extend the builder class with the ops defined in the plugin.
         py::gil_scoped_acquire acquire;
+        auto builder = py::borrow<py::class_<TritonOpBuilder>>(
+            py::type<TritonOpBuilder>());
+        if (!builder)
+          throw std::runtime_error(
+              "Triton builder type is no longer available");
         for (const auto &op : plugin.listOps()) {
           std::string wrapped = std::string("create_") + op.name;
-          builderPtr->def(wrapped.c_str(),
-                          [op](TritonOpBuilder &self, std::vector<Value> args) {
-                            args.insert(args.begin(), Value());
-                            op.addOp(self, args);
-                            return args[0];
-                          });
+          builder.def(wrapped.c_str(),
+                      [op](TritonOpBuilder &self, std::vector<Value> args) {
+                        args.insert(args.begin(), Value());
+                        op.addOp(self, args);
+                        return args[0];
+                      });
         }
       },
       "Given a path to a Triton extension, load it and create builder methods "

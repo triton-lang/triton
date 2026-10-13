@@ -138,8 +138,8 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
 
   auto copyOp = ttg::AsyncCopyGlobalToLocalOp::create(
       builder, loc, loadOp.getPtr(), viewLoad, loadOp.getMask(),
-      loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile(), contiguity);
+      loadOp.getOther(), loadOp.getCachePolicyAttr(), loadOp.getIsVolatile(),
+      contiguity);
   auto commitOp =
       ttg::AsyncCommitGroupOp::create(builder, loc, copyOp->getResult(0));
   ttg::AsyncWaitOp waitOp =
@@ -662,6 +662,16 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     localStoreCluster = 4;
   }
 
+  // TDM copy reordering to improve latency hiding.
+  bool tdmReorder = hasTDMLoad && hasScaledDot && !waitAtTail;
+  if (tdmReorder) {
+    globalLoadCluster = 0; // all TDM copies first
+    asyncWaitCluster = 1;  // single wait after the copies
+    localLoadCluster = 2;  // local_loads after the wait
+    computeCluster = 3;    // dot_scaled last
+    localStoreCluster = 4;
+  }
+
   // Create a hash map to associate cluster hash in old schedule with its
   // clusterID
   ClusterMap clusterMap = createClusterMap(schedule);
@@ -669,8 +679,8 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   // Make assignments
   Clusters clusterVec;
   schedule.clusters.clear();
-  std::generate(clusterVec.begin(), clusterVec.end(),
-                [&]() { return schedule.clusters.newAtBack(); });
+  std::ranges::generate(clusterVec,
+                        [&] { return schedule.clusters.newAtBack(); });
 
   clusters[SCHED_GLOBAL_LOAD] = clusterVec[globalLoadCluster];
   clusters[SCHED_LOCAL_STORE] = clusterVec[localStoreCluster];
