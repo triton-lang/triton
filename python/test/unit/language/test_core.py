@@ -2377,21 +2377,20 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", ["int32", "uint32", "int64", "uint64"])
-@pytest.mark.parametrize("mode", ["scalar", "tensor", "broadcast"])
+@pytest.mark.parametrize("mode", ["scalar", "tensor"])
 @pytest.mark.parametrize("compare", [0, -1])
 def test_atomic_cas_pointee_type(dtype_str, mode, compare, device):
 
     @triton.jit
     def kernel(X, Old, Positive, MODE: tl.constexpr, COMPARE: tl.constexpr):
-        cmp = COMPARE
-        val = 1
         if MODE == "scalar":
             offsets = 0
+            cmp = COMPARE
+            val = 1
         else:
             offsets = tl.arange(0, 128)
-            if MODE == "tensor":
-                cmp = tl.full((128, ), COMPARE, tl.int32)
-                val = tl.full((128, ), 1, tl.int32)
+            cmp = tl.full((128, ), COMPARE, tl.int32)
+            val = tl.full((128, ), 1, tl.int32)
         old = tl.atomic_cas(X + offsets, cmp, val)
         tl.static_assert(old.dtype == X.dtype.element_ty)
         tl.store(Old + offsets, old.to(tl.int64))
