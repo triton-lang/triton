@@ -11,13 +11,16 @@ void registerTargetInfo();
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  explicit TargetInfo(std::optional<StringRef> arch) : targetFeatures(arch) {}
+  explicit TargetInfo(std::optional<StringRef> arch, bool cuMode = false)
+      : targetFeatures(arch), cuMode(cuMode) {}
 
   StringRef getArch() const { return targetFeatures.getArch(); }
   StringRef getBaseArch() const { return targetFeatures.getBaseArch(); }
   amdgpu::ISAFamily getISAFamily() const {
     return targetFeatures.getISAFamily();
   }
+
+  bool isCuMode() const { return cuMode; }
 
   llvm::AMDGPU::GPUKind getGPUKind() const;
 
@@ -225,6 +228,7 @@ private:
                   bool useStdErr) const;
 
   amdgpu::TargetFeatures targetFeatures;
+  bool cuMode;
 };
 } // namespace mlir::triton::AMD
 
