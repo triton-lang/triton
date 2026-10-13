@@ -55,6 +55,7 @@ CPU_TEST_CORE_ALLOWLIST = frozenset([
     "test_full",
     "test_generic_reduction",
     "test_histogram",
+    "test_histogram_mask",
     "test_if",
     "test_if_call",
     "test_if_else",

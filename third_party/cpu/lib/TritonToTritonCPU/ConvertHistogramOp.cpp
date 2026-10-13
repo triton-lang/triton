@@ -64,6 +64,11 @@ struct HistogramOpConversion : public OpConversionPattern<triton::HistogramOp> {
         VectorType::get(resTy.getShape(), srcTy.getElementType());
     Value rangeVec = arith::ConstantOp::create(
         rewriter, loc, resTy, makeRangeAttr(cmpVecTy, rewriter));
+    Value srcMask;
+    if (op.getMask())
+      srcMask = rewriter.getRemappedValue(op.getMask());
+    VectorType maskVecTy =
+        VectorType::get(resTy.getShape(), rewriter.getI1Type());
     Value res = zero;
     for (int64_t i = 0; i < srcTy.getShape()[0]; ++i) {
       Value idx = arith::ConstantOp::create(
@@ -73,6 +78,13 @@ struct HistogramOpConversion : public OpConversionPattern<triton::HistogramOp> {
           vector::BroadcastOp::create(rewriter, loc, cmpVecTy, elem);
       Value mask = arith::CmpIOp::create(
           rewriter, loc, arith::CmpIPredicate::eq, elemVec, rangeVec);
+      // Masked-out source elements do not contribute to any bin.
+      if (srcMask) {
+        Value maskElem = vector::ExtractOp::create(rewriter, loc, srcMask, idx);
+        Value maskElemVec =
+            vector::BroadcastOp::create(rewriter, loc, maskVecTy, maskElem);
+        mask = arith::AndIOp::create(rewriter, loc, mask, maskElemVec);
+      }
       Value delta = vector::selectPassthru(rewriter, mask, one, zero);
       res = arith::AddIOp::create(rewriter, loc, res, delta);
     }
