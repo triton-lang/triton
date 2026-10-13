@@ -369,9 +369,16 @@ getOperandTypesForWmmaOp(PatternRewriter &rewriter, tt::DotOp dot, int version,
     });
   }
   if (version == 3) {
+    Type fp8e4nv = rewriter.getType<Float8E4M3FNType>();
+    Type fp8e5 = rewriter.getType<Float8E5M2Type>();
     applicableTypes.append({
         // clang-format off
         {f32, f32, f32, f32},
+        {f16, f16, f16, f16},
+        {fp8e4nv, fp8e4nv, f16, f16},
+        {fp8e4nv, fp8e5, f16, f16},
+        {fp8e5, fp8e4nv, f16, f16},
+        {fp8e5, fp8e5, f16, f16},
         // clang-format on
     });
   }

@@ -539,3 +539,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+// GFX1250{LITERAL}: #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+// CHECK-LABEL: wmma_dot_f16_f16
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_f16_f16(
+      %a: tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %b: tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+      %out: tensor<32x32x!tt.ptr<f16>, #blocked>) {
+    // GFX1250-NOT: arith.extf
+    // GFX1250: tt.dot {{.*}} : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<32x32xf16, #mma>
+    // GFX1250-NOT: arith.truncf
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #blocked>
+    %d = tt.dot %a, %b, %cst : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x32xf16, #blocked>
+    tt.store %out, %d : tensor<32x32x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+// GFX1250{LITERAL}: #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 128]}>
+// CHECK-LABEL: wmma_dot_fp8_f16_k128
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @wmma_dot_fp8_f16_k128(
+      %a: tensor<32x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %b: tensor<128x32xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+      %out: tensor<32x32x!tt.ptr<f16>, #blocked>) {
+    // GFX1250-NOT: tt.fp_to_fp
+    // GFX1250-NOT: arith.extf
+    // GFX1250: tt.dot {{.*}} : tensor<32x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<128x32xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<32x32xf16, #mma>
+    // GFX1250-NOT: arith.truncf
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #blocked>
+    %d = tt.dot %a, %b, %cst : tensor<32x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x32xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x32xf16, #blocked>
+    tt.store %out, %d : tensor<32x32x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
