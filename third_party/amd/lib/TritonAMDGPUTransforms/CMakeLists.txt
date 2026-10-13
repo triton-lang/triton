@@ -17,6 +17,8 @@ add_triton_library(TritonAMDGPUTransforms
   Pipeline.cpp
   ScheduleLoops.cpp
   LowerLoops.cpp
+  LDSEncoding.cpp
+  StreamOps.cpp
   TDMStoresPipeline.cpp
   MfmaGroup.cpp
   WmmaGroup.cpp
