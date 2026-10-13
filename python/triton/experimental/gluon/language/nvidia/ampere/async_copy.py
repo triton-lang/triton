@@ -37,6 +37,10 @@ def async_load(smem, pointer, mask=None, cache_modifier=None, eviction_policy=No
         smem.shape == pointer.shape, lambda:
         f"expected smem shape to match pointer shape but got smem.shape = {smem.shape}, pointer.shape = {pointer.shape}"
     )
+    _check(
+        smem.dtype == pointer.dtype.element_ty, lambda:
+        f"expected smem dtype to match pointer element type but got smem.dtype = {smem.dtype}, pointer element type = {pointer.dtype.element_ty}"
+    )
     mask_handle = mask.handle if mask is not None else ir.value()
     _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, ir.value(),
                                                         cache_policy, volatile)

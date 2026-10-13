@@ -3029,6 +3029,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@gluon.jit
+def async_copy_dtype_mismatch_kernel(inp, SMEM_DTYPE: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(SMEM_DTYPE, [128], ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]))
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    async_copy.async_load(smem, inp + ttgl.arange(0, 128, layout))
+
+
+@pytest.mark.parametrize("ptr_dtype, smem_dtype", [(ttgl.float32, ttgl.float16), (ttgl.float16, ttgl.float32)])
+def test_async_copy_dtype_mismatch(ptr_dtype, smem_dtype):
+    with pytest.raises(CompilationError, match="expected smem dtype to match pointer element type"):
+        run_parser(async_copy_dtype_mismatch_kernel, *make_args(MockTensor(ptr_dtype), smem_dtype),
+                   target=AMPERE_TARGET)
+
+
 @pytest.mark.parametrize("target", ALL_TARGETS)
 def test_split_join_subtile(target):
 
