@@ -1914,6 +1914,61 @@ def test_loop_carry_tuple_shared_initial_value():
 
 @filecheck_test
 @triton.jit
+def test_loop_carry_copy_of_shared_initial_value():
+    # CHECK-LABEL: test_loop_carry_copy_of_shared_initial_value
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    cur = 1
+    prev = cur
+    # CHECK: scf.for {{.*}} iter_args(%[[CUR:.*]] = %[[SEED]], %[[PREV:.*]] = %[[SEED]]) -> (i32, i32)
+    for i in range(3):
+        prev = cur
+        # CHECK: %[[NEXT:.*]] = arith.addi %[[CUR]],
+        cur = cur + 1
+        # CHECK: scf.yield %[[NEXT]], %[[CUR]] : i32, i32
+    anchor(prev)
+    anchor(cur)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_while_copy_of_shared_initial_value():
+    # CHECK-LABEL: test_loop_carry_while_copy_of_shared_initial_value
+    cur = 1
+    prev = cur
+    # CHECK: scf.while
+    while cur < 4:
+        # CHECK: } do {
+        # CHECK-NEXT: ^bb0(%[[CUR:.*]]: i32, %[[PREV:.*]]: i32):
+        prev = cur
+        # CHECK: %[[NEXT:.*]] = arith.addi %[[CUR]],
+        cur = cur + 1
+        # CHECK: scf.yield %[[NEXT]], %[[CUR]] : i32, i32
+    anchor(prev)
+    anchor(cur)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_conditional_copy_of_shared_initial_value():
+    # CHECK-LABEL: test_loop_carry_conditional_copy_of_shared_initial_value
+    cur = 1
+    prev = cur
+    # CHECK: scf.for %[[I:.*]] = {{.*}} iter_args(%[[CUR:.*]] = {{.*}}, %[[PREV:.*]] = {{.*}}) -> (i32, i32)
+    for i in range(3):
+        # CHECK: %[[PREV_NEXT:.*]] = scf.if {{.*}} -> (i32)
+        # CHECK: scf.yield %[[CUR]] : i32
+        # CHECK: scf.yield %[[PREV]] : i32
+        if i > 0:
+            prev = cur
+        # CHECK: %[[NEXT:.*]] = arith.addi %[[CUR]],
+        cur = cur + 1
+        # CHECK: scf.yield %[[NEXT]], %[[PREV_NEXT]] : i32, i32
+    anchor(prev)
+    anchor(cur)
+
+
+@filecheck_test
+@triton.jit
 def test_loop_carry_swap():
     # CHECK-LABEL: test_loop_carry_swap
     a = 0
