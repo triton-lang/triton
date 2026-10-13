@@ -2358,14 +2358,33 @@ def test_tensor_atomic_xchg(dtype_str, use_result, device):
 
     size = 256
     dtype = getattr(torch, dtype_str)
-    x = torch.arange(size, device=device).to(dtype) * 3 - 7
-    z = torch.arange(size, device=device).to(dtype) - 100
+    nbits = dtype.itemsize * 8
+    bits_torch = getattr(torch, f"int{nbits}")
+    # Exchange random bit patterns and compare bits: a swap must not convert
+    # values, so -0.0, infinities, NaN payloads and denormals have to survive.
+    rs = RandomState(17)
+    x_bits, z_bits = rs.randint(0, np.iinfo(f"uint{nbits}").max, size=(2, size), dtype=f"uint{nbits}")
+    # -0.0, +inf, -inf, a quiet NaN with a payload, a signaling NaN and the smallest denormal.
+    specials = {
+        "float32": [0x80000000, 0x7F800000, 0xFF800000, 0x7FC01234, 0x7F800001, 0x1],
+        "float64":
+        [0x8000000000000000, 0x7FF0000000000000, 0xFFF0000000000000, 0x7FF8000000001234, 0x7FF0000000000001, 0x1],
+    }.get(dtype_str, [])
+    x_bits[:len(specials)] = specials
+    z_bits[len(specials):2 * len(specials)] = specials
+    x = torch.from_numpy(x_bits.view(f"int{nbits}")).to(device).view(dtype)
+    z = torch.from_numpy(z_bits.view(f"int{nbits}")).to(device).view(dtype)
     z_ref = z.clone()
     old = torch.zeros_like(z)
-    kernel[(1, )](x, z, old, size, use_result)
-    torch.testing.assert_close(z, x, rtol=0, atol=0)
+    h = kernel[(1, )](x, z, old, size, use_result)
+    assert torch.equal(z.view(bits_torch), x.view(bits_torch))
     if use_result:
-        torch.testing.assert_close(old, z_ref, rtol=0, atol=0)
+        assert torch.equal(old.view(bits_torch), z_ref.view(bits_torch))
+
+    # Make sure AMD takes the buffer atomic path, where the backend cannot select f64 swaps.
+    if ((is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4() or is_hip_gfx1250())
+            and triton.knobs.amd.use_buffer_ops and triton.knobs.amd.use_buffer_atomics):
+        assert "buffer_atomic_swap" in h.asm["amdgcn"]
 
 
 # ---------------
