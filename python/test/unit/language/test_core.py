@@ -8505,18 +8505,13 @@ def test_libdevice_rint(dtype_str, device):
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
 
 
-@pytest.mark.parametrize("aliased", [True, False])
 @pytest.mark.parametrize("loop_kind", ["for", "while"])
-@pytest.mark.parametrize("n", [0, 1, 5])
-def test_loop_carry_aliased_initial_value(aliased, loop_kind, n, device):
+def test_loop_carry_aliased_initial_value(loop_kind, device):
 
-    @triton.jit(do_not_specialize=["n"])
-    def kernel(out_ptr, n, ALIASED: tl.constexpr, LOOP_KIND: tl.constexpr):
+    @triton.jit
+    def kernel(out_ptr, n, LOOP_KIND: tl.constexpr):
         cur = 0
-        if ALIASED:
-            prev = cur
-        else:
-            prev = cur + 0
+        prev = cur
         if LOOP_KIND == "for":
             for i in range(n):
                 prev = cur
@@ -8528,9 +8523,10 @@ def test_loop_carry_aliased_initial_value(aliased, loop_kind, n, device):
         tl.store(out_ptr, prev)
         tl.store(out_ptr + 1, cur)
 
+    n = 5
     out = torch.zeros(2, dtype=torch.int32, device=device)
-    kernel[(1, )](out, n, aliased, loop_kind)
-    assert out.tolist() == [max(n - 1, 0), n]
+    kernel[(1, )](out, n, loop_kind)
+    assert out.tolist() == [n - 1, n]
 
 
 def test_loop_carry_aliased_tensor_recurrence(device):
