@@ -526,30 +526,25 @@ class JITCallable:
         with self._hash_lock:
             if self.hash is not None:
                 return self.hash
-            try:
-                # Set a placeholder hash to break recursion in case the function
-                # transitively calls itself. The full hash is set after.
-                self.hash = f"recursion:{self._fn_name}"
-                nonlocals = inspect.getclosurevars(self.fn).nonlocals
-                dependencies_finder = DependenciesFinder(
-                    name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals, src=self.src,
-                    source_location=(self.file_name, self.starting_line_number, self.def_file_line_number,
-                                     self.def_file_col_number))
-                dependencies_finder.visit(self.parse())
-                self.hash = dependencies_finder.ret
-                self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
+            # Set a placeholder hash to break recursion in case the function
+            # transitively calls itself. The full hash is set after.
+            self.hash = f"recursion:{self._fn_name}"
+            nonlocals = inspect.getclosurevars(self.fn).nonlocals
+            dependencies_finder = DependenciesFinder(
+                name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals, src=self.src,
+                source_location=(self.file_name, self.starting_line_number, self.def_file_line_number,
+                                 self.def_file_col_number))
+            dependencies_finder.visit(self.parse())
+            self.hash = dependencies_finder.ret
+            self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
-                from triton.language.core import constexpr
-                constexpr_globals = [(name, val)
-                                     for (name, _), (val, _) in self.used_global_vals.items()
-                                     if isinstance(val, constexpr)]
-                constexpr_globals.sort(key=lambda item: (item[0], repr(item[1])))
-                self.hash += str(constexpr_globals)
-                self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
-            except BaseException:
-                # Do not leave a partial hash as the key; the next access retries.
-                self.hash = None
-                raise
+            from triton.language.core import constexpr
+            constexpr_globals = [(name, val)
+                                 for (name, _), (val, _) in self.used_global_vals.items()
+                                 if isinstance(val, constexpr)]
+            constexpr_globals.sort(key=lambda item: (item[0], repr(item[1])))
+            self.hash += str(constexpr_globals)
+            self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
 
     def __hash__(self):
