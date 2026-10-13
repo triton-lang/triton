@@ -4,7 +4,7 @@ from triton._C.libtriton.gluon_ir import (
     compute_amd_efficient_padded_shared_layout as _compute_efficient_padded_shared_layout,
 )
 
-from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
+from ..._core import builtin, int8, uint8, tensor, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
 from .._ops import _load_shared_fp4_repacked, _mma_scaled, _scaled_upcast, scaled_downcast
@@ -41,27 +41,19 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, cd_regclass=Non
 
     Args:
         a (tensor): The operand A to be multiplied.
-        a_scale (Optional[tensor]): Scale factor for operand A. See the note
-            below for the behavior when a scale is ``None``.
+        a_scale (Optional[tensor]): E8M0 scale factor for operand A, as an ``int8``/``uint8``
+            tensor or an ``int``. ``None`` is treated as a unit scale (1.0).
         a_format (str): Format of operand A. Available formats: ``e2m1``,
             ``e4m3``, ``e5m2``.
         b (tensor): The operand B to be multiplied.
-        b_scale (Optional[tensor]): Scale factor for operand B. See the note
-            below for the behavior when a scale is ``None``.
+        b_scale (Optional[tensor]): E8M0 scale factor for operand B, as an ``int8``/``uint8``
+            tensor or an ``int``. ``None`` is treated as a unit scale (1.0).
         b_format (str): Format of operand B. Available formats: ``e2m1``,
             ``e4m3``, ``e5m2``.
         acc (tensor): Accumulator tensor.
         cd_regclass (str, optional): Experimental. Register class for the accumulator input (C)
             and result (D) of the scaled MFMA instructions, as for ``mfma``: ``"a"`` for AGPRs or
             ``"v"`` for VGPRs. ``None`` (default) leaves the choice to the compiler.
-
-    .. note::
-
-        If both ``a_scale`` and ``b_scale`` are ``None``, the dot carries no scale operands.
-        LLVM lowering emits ``v_mfma_scale_f32_*_f8f6f4`` with an immediate 0 for both scale
-        operands, and the AMDGPU backend folds that sentinel to the non-scaled
-        ``v_mfma_f32_*_f8f6f4`` instruction. If only one scale is ``None``, the scaled
-        instruction is still used and the missing scale defaults to a unit scale (1.0).
     """
     layout = acc.type.layout
     assert isinstance(layout, AMDMFMALayout), "Expected layout to be an instance of AMDMFMALayout"
@@ -76,6 +68,9 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, cd_regclass=Non
     b_scale = _unwrap_if_constexpr(b_scale)
     assert a_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format}"
     assert b_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format}"
+    for scale in (a_scale, b_scale):
+        assert not isinstance(scale, float) and (not isinstance(scale, tensor) or scale.dtype in (int8, uint8)), \
+            "mfma_scaled only supports E8M0 scales, given as int8/uint8 tensors or ints"
 
     cd_regclass = _check_cd_regclass(cd_regclass, acc)
     ret = _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic,

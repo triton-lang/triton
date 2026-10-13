@@ -4264,6 +4264,30 @@ def test_amd_mfma_scaled_single_scale(target, scale_side):
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
+@pytest.mark.parametrize("scale_kind", ["float", "e4m3_tensor"])
+def test_amd_mfma_scaled_non_e8m0_scale(target, scale_kind):
+    # CDNA4 reads scales as E8M0, so a float or e4m3 scale would be bit-reinterpreted.
+
+    @gluon.jit
+    def kernel(FLOAT_SCALAR: ttgl.constexpr):
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(4, [16, 16, 128], True, [1, 1])
+        a = ttgl.full([16, 64], 0x11, ttgl.uint8, ttgl.DotOperandLayout(0, mfma_layout, 16))
+        b = ttgl.full([64, 16], 0x22, ttgl.uint8, ttgl.DotOperandLayout(1, mfma_layout, 16))
+        acc = ttgl.full([16, 16], 0, ttgl.float32, mfma_layout)
+        if FLOAT_SCALAR:
+            ttgl.amd.cdna4.mfma_scaled(a, 2.0, 'e2m1', b, None, 'e2m1', acc)
+        else:
+            scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(
+                ttgl.DotOperandLayout(0, mfma_layout, 16), [16, 4])
+            scale = ttgl.full([16, 4], 2.0, ttgl.float8e4nv, scale_layout)
+            ttgl.amd.cdna4.mfma_scaled(a, scale, 'e2m1', b, scale, 'e2m1', acc)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, *make_args(scale_kind == "float", num_warps=1), target=target)
+    assert "mfma_scaled only supports E8M0 scales" in str(e.value.__cause__)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
 def test_amd_mfma_scaled_scalar(target):
 
     @gluon.jit
