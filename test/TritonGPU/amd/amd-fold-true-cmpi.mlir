@@ -248,3 +248,83 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[TRUE:.*]] = arith.constant dense<true> : tensor<32xi1>
 // CHECK:           tt.return %[[TRUE]] : tensor<32xi1>
 // CHECK:         }
+
+// -----
+
+// A loop with a runtime trip count in [0, 1] can return either its initial
+// iter_arg or the value yielded by its only iteration.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @dontfold_dynamic_one_trip_loop() -> i1 {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c4 = arith.constant 4 : i32
+    %pid = tt.get_program_id x : i32
+    %has_work = arith.cmpi slt, %pid, %c4 : i32
+    %upper_i32 = arith.extui %has_work : i1 to i32
+    %upper = arith.index_cast %upper_i32 : i32 to index
+    %result = scf.for %iv = %c0 to %upper step %c1
+        iter_args(%value = %c0_i32) -> (i32) {
+      %next = arith.addi %value, %c1_i32 : i32
+      scf.yield %next : i32
+    }
+    %is_one = arith.cmpi eq, %result, %c1_i32 : i32
+    tt.return %is_one : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @dontfold_dynamic_one_trip_loop
+// CHECK:           %[[RESULT:.*]] = scf.for
+// CHECK:           %[[IS_ONE:.*]] = arith.cmpi eq, %[[RESULT]],
+// CHECK:           tt.return %[[IS_ONE]] : i1
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @dontfold_widening_inner_bound() -> i1 {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %outer:2 = scf.for %i = %c0 to %c4 step %c1
+        iter_args(%upper = %c1, %count = %c0_i32) -> (index, i32) {
+      %inner = scf.for %j = %c0 to %upper step %c1
+          iter_args(%value = %c0_i32) -> (i32) {
+        %next = arith.addi %value, %c1_i32 : i32
+        scf.yield %next : i32
+      }
+      %upper_next = arith.addi %upper, %c1 : index
+      scf.yield %upper_next, %inner : index, i32
+    }
+    %is_not_four = arith.cmpi ne, %outer#1, %c4_i32 : i32
+    tt.return %is_not_four : i1
+  }
+}
+
+// CHECK-LABEL:   tt.func @dontfold_widening_inner_bound
+// CHECK:           %[[OUTER:.*]]:2 = scf.for
+// CHECK:           %[[IS_NOT_FOUR:.*]] = arith.cmpi ne, %[[OUTER]]#1,
+// CHECK:           tt.return %[[IS_NOT_FOUR]] : i1
+
+// -----
+
+// Comparison on tt.histogram result should NOT be folded.
+// histogram returns [0, INT_MAX], so sgt against 0 is indeterminate.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @dontfoldhistogramcmpi(%arg0: tensor<1024xi32>) -> tensor<64xi1> {
+    %c0 = arith.constant dense<0> : tensor<64xi32>
+    %hist = tt.histogram %arg0 : tensor<1024xi32> -> tensor<64xi32>
+    %cmp = arith.cmpi sgt, %hist, %c0 : tensor<64xi32>
+    tt.return %cmp : tensor<64xi1>
+  }
+}
+
+// CHECK-LABEL:   tt.func @dontfoldhistogramcmpi
+// CHECK-NOT:       arith.constant dense<true>
+// CHECK-NOT:       arith.constant dense<false>
+// CHECK:           tt.histogram
+// CHECK:           arith.cmpi sgt
+// CHECK:         }

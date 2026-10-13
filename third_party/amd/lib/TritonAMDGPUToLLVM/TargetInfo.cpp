@@ -1,15 +1,21 @@
 #include "TargetInfo.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using mlir::LLVM::AMD::DppCtrl;
 using mlir::triton::amdgpu::ISAFamily;
 namespace mlir::triton::AMD {
+
+void registerTargetInfo() {
+  TargetInfoBase::registerFactory("hip", [](ModuleOp moduleOp) {
+    return std::make_unique<TargetInfo>(getAMDArch(moduleOp));
+  });
+}
 
 namespace {
 template <typename T>
@@ -119,18 +125,8 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
 }
 } // namespace
 
-llvm::AMDGPU::IsaVersion TargetInfo::getIsaVersion() const {
-  return llvm::AMDGPU::getIsaVersion(getArch());
-}
-
 llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(getArch());
-}
-
-int TargetInfo::getWarpSize() const { return targetFeatures.getWarpSize(); }
-
-int TargetInfo::getSharedMemorySize() const {
-  return targetFeatures.getSharedMemorySize();
 }
 
 int TargetInfo::getSharedMemoryBanks() const {
@@ -141,14 +137,6 @@ int TargetInfo::getSharedMemoryBanks() const {
   default:
     return 32;
   }
-}
-
-size_t TargetInfo::getSharedMemoryPartitionSize() const {
-  return targetFeatures.getSharedMemoryPartitionSize();
-}
-
-bool TargetInfo::supportMaximumMinimum() const {
-  return targetFeatures.supportMaximumMinimum();
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
@@ -201,6 +189,37 @@ StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
   llvm_unreachable("unknown memory synchronization scope");
 }
 
+Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Type valueTy, Value pred,
+                              MemSyncScope scope) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto results =
+      emitPredicated(rewriter, loc, pred, ValueRange{b.undef(valueTy)}, [&] {
+        unsigned alignment = valueTy.getIntOrFloatBitWidth() / 8;
+        Value loaded = LLVM::LoadOp::create(
+            rewriter, loc, valueTy, ptr, alignment, /*isVolatile=*/false,
+            /*isNonTemporal=*/false, /*isInvariant=*/false,
+            /*isInvariantGroup=*/false, LLVM::AtomicOrdering::monotonic,
+            getAtomicSyncScope(scope));
+        return SmallVector<Value>{loaded};
+      });
+  return results.front();
+}
+
+void TargetInfo::storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Value value, Value pred,
+                              MemSyncScope scope) const {
+  emitPredicated(rewriter, loc, pred, ValueRange{}, [&] {
+    unsigned alignment = value.getType().getIntOrFloatBitWidth() / 8;
+    LLVM::StoreOp::create(rewriter, loc, value, ptr, alignment,
+                          /*isVolatile=*/false, /*isNonTemporal=*/false,
+                          /*isInvariantGroup=*/false,
+                          LLVM::AtomicOrdering::monotonic,
+                          getAtomicSyncScope(scope));
+    return SmallVector<Value>{};
+  });
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -214,8 +233,17 @@ void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
 }
 
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
-  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.wave.barrier", {},
-                                  {});
+  Attribute localMMRA =
+      rewriter.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as", "local");
+  auto emitFence = [&](LLVM::AtomicOrdering ordering) {
+    auto fence = LLVM::FenceOp::create(rewriter, loc, ordering,
+                                       /*syncscope=*/"wavefront");
+    fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), localMMRA);
+  };
+
+  emitFence(LLVM::AtomicOrdering::release);
+  ROCDL::WaveBarrierOp::create(rewriter, loc);
+  emitFence(LLVM::AtomicOrdering::acquire);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -223,6 +251,12 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   if (ctaId) {
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
+  }
+  if (isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(val.getType()))) {
+    Type storeTy = i64_ty;
+    if (auto vecTy = dyn_cast<VectorType>(val.getType()))
+      storeTy = vecTy.clone(i64_ty);
+    val = TritonLLVMOpBuilder(loc, rewriter).ptrtoint(storeTy, val);
   }
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
@@ -242,12 +276,21 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
   }
+  if (isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(elemTy))) {
+    Type loadTy = i64_ty;
+    if (auto vecTy = dyn_cast<VectorType>(elemTy))
+      loadTy = vecTy.clone(i64_ty);
+    Value result =
+        loadDShared(rewriter, loc, ptr, ctaId, loadTy, pred, localLoadOp);
+    return TritonLLVMOpBuilder(loc, rewriter).inttoptr(elemTy, result);
+  }
   Value falseVal = LLVM::ConstantOp::create(rewriter, loc, elemTy,
                                             rewriter.getZeroAttr(elemTy));
   bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
                        isSyncedViaAsyncWait(localLoadOp);
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal, {},
-                                 triton::CacheModifier::NONE, addAliasGroup);
+                                 triton::CacheModifier::NONE,
+                                 /*isVolatile=*/false, addAliasGroup);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
@@ -316,7 +359,8 @@ static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
   Value toVal = val;
 
   if (originalBits < fromBits) {
-    toVal = b.trunc(int_ty(originalBits), toVal);
+    toVal =
+        b.trunc(int_ty(originalBits), toVal, LLVM::IntegerOverflowFlags::nsw);
   }
 
   if (!valType.isIntOrIndex()) {
@@ -408,7 +452,8 @@ static bool warpReduceSwap16or32(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned reduceLaneIdMask) const {
+                            unsigned reduceLaneIdMask,
+                            unsigned /*broadcastLaneIdMask*/) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   if (getISAFamily() == ISAFamily::CDNA4 &&
@@ -416,11 +461,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return true;
 
   if (reduceLaneIdMask != (getWarpSize() - 1))
-    return false;
-  // DPP warp reduce requires gfx90a+ (CDNA2+) or gfx11+ (RDNA3+).
-  // Pre-CDNA2 GFX9 (gfx906/gfx908) and GFX10 (RDNA1/2) are excluded.
-  auto v = getIsaVersion();
-  if (!((v.Major == 9 && (v.Minor > 0 || v.Stepping >= 0xa)) || v.Major >= 11))
     return false;
 
   Operation *reduxOp = op.getSingleCombiner();
@@ -630,12 +670,6 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
   }
 }
 
-std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  std::string funcName =
-      resultElementTy.isInteger(32) ? "__ockl_mul_hi_u32" : "__ockl_mul_hi_u64";
-  return funcName;
-}
-
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
                         int formatStrByteCount, ValueRange args,
                         ArrayRef<bool> isSigned) const {
@@ -677,16 +711,16 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
       rewriter, loc, IntegerType::get(ctx, 64), msgBuffer.size_in_bytes());
   SmallVector<Value> callArgs = {msgValue, msgLen};
   b.call(assertFailFunc, callArgs);
+}
 
-  // Set block barrier before aborting kernel, give a chance for all
-  // the threads in a block to check/print the assert failure.
-  b.barrier(triton::gpu::AddrSpace::All);
+void TargetInfo::assertTrap(RewriterBase &rewriter, Location loc) const {
   // Perform the trap to abort the kernel.
   // Use inline asm "s_trap 2" instead of LLVM::Trap because llvm.trap is
   // noreturn, inserting 'unreachable' which causes StructurizeCFG to defer
   // the block past convergence points, making ConSan lock releases
-  // unreachable and causing deadlocks. The noinline helper above prevents
-  // the printf code from being inlined and bloating the kernel.
+  // unreachable and causing deadlocks. The noinline helper in assertFail
+  // prevents the printf code from being inlined and bloating the kernel.
+  auto *ctx = rewriter.getContext();
   LLVM::InlineAsmOp::create(
       rewriter, loc, LLVM::LLVMVoidType::get(ctx), /*operands=*/ValueRange{},
       "s_trap 2", /*constraints=*/"",
@@ -714,14 +748,6 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
-bool TargetInfo::supportBitwidth16Elementwise() const {
-  return targetFeatures.supportBitwidth16Elementwise();
-}
-
-bool TargetInfo::supportBitwidth32Elementwise() const {
-  return targetFeatures.supportBitwidth32Elementwise();
-}
-
 unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
   // AMD has native ternary max/min instructions: v_max3/v_min3 on all GFX9+,
   // and v_maximum3/v_minimum3 additionally on GFX950 and GFX1250.
@@ -732,97 +758,18 @@ unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
   return 2;
 }
 
-bool TargetInfo::supportsDirectToLdsScatter() const {
-  return targetFeatures.supportsDirectToLdsScatter();
-}
-
-bool TargetInfo::requiresAliasInfoForAsyncOps() const {
-  return targetFeatures.requiresAliasInfoForAsyncOps();
-}
-
-bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
-  return targetFeatures.supportsDirectToLdsLoadBitWidth(bitWidth);
-}
-
-bool TargetInfo::supportsMultiCTALaunch() const {
-  return targetFeatures.supportsMultiCTALaunch();
-}
-
-unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
-  return targetFeatures.getMaxMulticastMaskPopcount();
-}
-
-bool TargetInfo::supportsTDM() const { return targetFeatures.supportsTDM(); }
-
-bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
-  return targetFeatures.supportsClusterLoadBitWidth(biwWidth);
-}
-
-bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
-  return targetFeatures.supportsDirectFromLdsStoreBitWidth(bitWidth);
-}
-
-bool TargetInfo::supportsBufferLoadToLocal() const {
-  return targetFeatures.supportsBufferLoadToLocal();
-}
-
-bool TargetInfo::useAsyncMarks() const {
-  return targetFeatures.useAsyncMarks();
-}
-
-bool TargetInfo::supportsBufferAtomicRMW() const {
-  return targetFeatures.supportsBufferAtomicRMW();
-}
-
-bool TargetInfo::supportsBufferAtomicFadd(mlir::Type elementType) const {
-  return targetFeatures.supportsBufferAtomicFadd(elementType);
-}
-
-int32_t TargetInfo::getBufferAtomicCachePolicy(bool hasUsers) const {
-  return targetFeatures.getBufferAtomicCachePolicy(hasUsers);
-}
-
-bool TargetInfo::supportsWaveId() const {
-  return targetFeatures.supportsWaveId();
-}
-
-bool TargetInfo::supportsPermlaneSwap() const {
-  return targetFeatures.supportsPermlaneSwap();
-}
-
-bool TargetInfo::supportsCvtPkScalePk8() const {
-  return targetFeatures.supportsCvtPkScalePk8();
-}
-
-bool TargetInfo::supportsHwScaledUpcast() const {
-  return targetFeatures.supportsHwScaledUpcast();
-}
-
-void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                                       Operation *llLoadOp) const {
-  if (requiresAliasInfoForAsyncOps())
-    AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
-}
-
-bool TargetInfo::supportDppBroadcast() const {
-  return targetFeatures.supportDppBroadcast();
-}
-
 std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
 TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA3:
-  case ISAFamily::RDNA1:
-  case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
     if (vecBitwidth == 128)
-      return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
+      return {/*load tile*/ {{}, {}, {1, 2, 20}}, /*store tile*/ {}};
     break;
   case ISAFamily::CDNA4:
-  case ISAFamily::GFX1250:
     if (vecBitwidth == 128)
-      return {/*load tile*/ {{}, {0, 1, 3, 4}}, /*store tile*/ {}};
+      return {/*load tile*/ {{}, {}, {1, 2, 12, 20}}, /*store tile*/ {}};
     break;
   default:
     break;

@@ -43,7 +43,8 @@ def _keyed_add(x, y):
 @triton.jit
 def _bitmatrix_metadata_compute_stage2(ColSortedIndx, RowSortedIndx, NonzeroIndx, n_tokens, ColPartialSum, stride_pm,
                                        stride_pn, ColOffs, TOKS_PER_ROW: tl.constexpr, BLOCK_PER_TOK: tl.constexpr):
-    BLOCK_SIZE: tl.constexpr = BLOCK_PER_TOK * TOKS_PER_ROW
+    BLOCK_SIZE_ACT: tl.constexpr = BLOCK_PER_TOK * TOKS_PER_ROW
+    BLOCK_SIZE: tl.constexpr = triton.next_power_of_2(BLOCK_SIZE_ACT)
     tl.static_assert(BLOCK_SIZE <= 32768)
     if isinstance(n_tokens, tl.tensor) and n_tokens.dtype.is_ptr():
         n_tokens = tl.load(n_tokens)
@@ -51,14 +52,14 @@ def _bitmatrix_metadata_compute_stage2(ColSortedIndx, RowSortedIndx, NonzeroIndx
     pid_m = tl.program_id(0)
     # load column indices
     offs_local = tl.arange(0, BLOCK_SIZE)
-    offs_global = pid_m * BLOCK_SIZE + offs_local
-    mask = offs_global < nonzero_indx_size
+    offs_global = pid_m * BLOCK_SIZE_ACT + offs_local
+    mask = (offs_local < BLOCK_SIZE_ACT) & (offs_global < nonzero_indx_size)
     col_indx = tl.load(NonzeroIndx + offs_global, mask=mask, other=-1).to(tl.uint32)
     # stable-sort by columns index
     kv_pairs = ((col_indx << 16) | offs_local).to(tl.uint32)
     kv_pairs = tl.sort(kv_pairs, 0)
     col_indx = kv_pairs >> 16
-    offs_global = pid_m * BLOCK_SIZE + (kv_pairs & 0xffff)
+    offs_global = pid_m * BLOCK_SIZE_ACT + (kv_pairs & 0xffff)
     mask = col_indx != 0xffff
     # compute run lengths in column-sorted order:
     x = (kv_pairs & 0xffff0000 | 0x00000001)

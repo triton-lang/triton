@@ -34,9 +34,9 @@ public:
   }
 
 private:
-  /// The set of allocated values that are aliased by this lattice.
-  /// For now, we only consider aliased value produced by the following
-  /// situations:
+  /// The set of allocated values and shared-memory function arguments
+  /// aliased by this lattice. Aliases propagate through views, calls, and
+  /// control flow, including:
   /// 1. values returned by scf.yield
   /// 2. block arguments in scf.for
   /// Example:
@@ -56,6 +56,12 @@ private:
   ///
   /// Therefore, v1's liveness range is the union of v3, v4, and v6
   /// v2's liveness range is the union of v4 and v5.
+  ///
+  /// Shared-memory function arguments remain in the set even when incoming
+  /// allocations are known. If argument p receives caller allocation a, a
+  /// view q of p retains both a and p. Keeping a preserves allocation
+  /// liveness; keeping p lets function summaries bind the view's effects to
+  /// each caller.
   DenseSet<Value> allocs;
 };
 
@@ -89,6 +95,11 @@ public:
   visitOperation(Operation *op,
                  ArrayRef<const dataflow::Lattice<AliasInfo> *> operands,
                  ArrayRef<dataflow::Lattice<AliasInfo> *> results) override;
+
+protected:
+  void visitCallableOperation(
+      CallableOpInterface callable,
+      ArrayRef<dataflow::AbstractSparseLattice *> arguments) override;
 };
 
 } // namespace mlir

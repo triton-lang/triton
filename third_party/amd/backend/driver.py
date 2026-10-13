@@ -1,11 +1,20 @@
 import functools
 import os
+import platform
 import subprocess
 import triton
 from pathlib import Path
 from triton import knobs
+from triton._C.libtriton import amd
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
+from triton.backends.driver import (
+    GPUDriver,
+    TensorDescABI,
+    decompose_descriptor,
+    expand_signature,
+    get_kernel_argument_layout,
+    wrap_handle_tensordesc_impl,
+)
 from triton.runtime import _allocation
 from triton.runtime.build import compile_module_from_src
 
@@ -19,51 +28,9 @@ ARG_TUPLE = None
 
 
 def _find_already_mmapped_dylib_on_linux(lib_name):
-    import platform
-    if platform.system() != 'Linux':
+    if platform.system() != "Linux":
         return None
-
-    # Use dl_iterate_phdr to walk through the list of shared libraries at runtime.
-    # See https://www.man7.org/linux/man-pages/man3/dl_iterate_phdr.3.html for details.
-
-    import ctypes
-    from ctypes import c_char, c_int, c_size_t, c_void_p, c_char_p, POINTER
-
-    class DlPhdrInfo(ctypes.Structure):
-        _fields_ = [
-            ('dlpi_addr', c_void_p),
-            ('dlpi_name', c_char_p),
-            # We don't care about the remaining fields.
-        ]
-
-    # callback_t must use POINTER(c_char) to avoid copying.
-    callback_t = ctypes.CFUNCTYPE(c_int, POINTER(DlPhdrInfo), POINTER(c_size_t), POINTER(c_char))
-
-    # Load libc and get the dl_iterate_phdr symbol.
-    try:
-        dl_iterate_phdr = ctypes.CDLL('libc.so.6').dl_iterate_phdr
-    except Exception:
-        return None
-    # argtypes must use c_char_p to accept create_string_buffer.
-    dl_iterate_phdr.argtypes = [callback_t, c_char_p]
-    dl_iterate_phdr.restype = c_int
-
-    max_path_length = 4096
-    path = ctypes.create_string_buffer(max_path_length + 1)
-
-    # Define callback to get the loaded dylib path.
-    def callback(info, size, data):
-        dlpi_name = info.contents.dlpi_name
-        p = Path(os.fsdecode(dlpi_name))
-        if lib_name in p.name:
-            # Found the dylib; get its path.
-            ctypes.memmove(data, dlpi_name, min(max_path_length, len(dlpi_name)))
-            return 1
-        return 0
-
-    if dl_iterate_phdr(callback_t(callback), path):
-        return os.fsdecode(ctypes.string_at(path))
-    return None
+    return amd.find_loaded_library(lib_name)
 
 
 @functools.lru_cache()
@@ -72,9 +39,25 @@ def _get_path_to_hip_runtime_dylib():
 
     # If we are told explicitly what HIP runtime dynamic library to use, obey that.
     if env_libhip_path := knobs.amd.libhip_path:
-        if env_libhip_path.endswith(lib_name) and os.path.exists(env_libhip_path):
+        if Path(env_libhip_path).name.startswith(lib_name) and os.path.isfile(env_libhip_path):
             return env_libhip_path
         raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_path}' does not point to a valid {lib_name}")
+
+    # A TheRock installation is a coherent SDK and must take precedence over
+    # system ROCm. Do not silently mix it with a different HIP runtime that was
+    # loaded earlier in the process.
+    try:
+        import rocm_sdk
+
+        therock_libhip_path = str(rocm_sdk.find_libraries("amdhip64")[0])
+    except (ImportError, ModuleNotFoundError, FileNotFoundError):
+        therock_libhip_path = None
+    if therock_libhip_path is not None:
+        mmapped_path = _find_already_mmapped_dylib_on_linux(lib_name)
+        if mmapped_path and not os.path.samefile(mmapped_path, therock_libhip_path):
+            raise RuntimeError(f"TheRock provides '{therock_libhip_path}', but a different HIP runtime "
+                               f"'{mmapped_path}' is already loaded; refusing to mix ROCm installations")
+        return therock_libhip_path
 
     # If the shared object is already mmapped to address space, use it.
     mmapped_path = _find_already_mmapped_dylib_on_linux(lib_name)
@@ -212,34 +195,13 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "double",
-        "bf16": "double",
-        "fp32": "double",
-        "f32": "double",
+        # Pass 16-bit floating-point scalars as raw bit patterns.
+        "fp16": "uint16_t",
+        "bf16": "uint16_t",
+        "fp32": "float",
+        "f32": "float",
         "fp64": "double",
     }[ty]
-
-
-def make_kernel_signature(signature):
-    """
-    Creates a kernel signature in C to be able to efficiently extract
-    arguments in the launcher.
-    """
-
-    def _flatten_signature(sig, output):
-        # Flatten tuples
-        if isinstance(sig, tuple):
-            for x in sig:
-                _flatten_signature(x, output)
-        else:
-            output.append(sig)
-
-    flat_signature = []
-    for sig in signature:
-        _flatten_signature(sig, flat_signature)
-    kernel_signature = [x for x in flat_signature if x != "constexpr"]
-
-    return triton.runtime.driver.active.utils.build_signature_metadata(kernel_signature)
 
 
 def annotate_arguments(signature):
@@ -314,16 +276,15 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
 class HIPLauncher(object):
 
     def __init__(self, src, metadata):
-        constants = src.constants if hasattr(src, "constants") else dict()
-        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
-        constants = {arg_idx(idx): value for idx, value in constants.items()}
-        signature = {idx: value for idx, value in src.signature.items()}
+        signature = dict(src.signature)
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
-        launcher = triton.runtime.driver.active.utils.launch
-        expanded_signature = expand_signature(signature.values(), tensordesc_meta, "tensordesc")
+        tensordesc_abi = TensorDescABI.HIP_TDM if tensordesc_meta else TensorDescABI.DECOMPOSED
+        utils = triton.runtime.driver.active.utils
+        expanded_signature = expand_signature(signature.values(), tensordesc_abi)
         self.arg_annotations = annotate_arguments(expanded_signature)
-        self.kernel_signature = make_kernel_signature(expanded_signature)
-        self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta)
+        self.kernel_signature = utils.build_signature_metadata(
+            [ty for _, ty in get_kernel_argument_layout(signature.values(), tensordesc_abi)])
+        self.launch = wrap_handle_tensordesc(utils.launch, signature, tensordesc_meta)
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.warp_size = metadata.warp_size
         # Check if cooperative groups are supported on the device.

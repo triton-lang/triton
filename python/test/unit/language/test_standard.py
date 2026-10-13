@@ -1,9 +1,13 @@
+import warnings
+
 import triton
 import pytest
 import torch
 import triton.language as tl
 
 from test_core import _test_binary, int_dtypes, uint_dtypes, float_dtypes, numpy_random
+from triton._internal_testing import is_interpreter
+from triton.runtime.errors import InterpreterError
 
 # ---------------
 # test maximum/minimum ops
@@ -18,6 +22,63 @@ def test_maximum_minium(dtype, op, device):
     expr = f'tl.{op}(x, y)'
     numpy_expr = f'np.{op}(x, y)'
     _test_binary(dtype, dtype, expr, numpy_expr, device=device)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", [torch.bool, torch.uint8, torch.int32, torch.float32])
+@pytest.mark.parametrize("axis", [None, 0, 1, -1])
+@pytest.mark.parametrize("keep_dims", [False, True])
+@pytest.mark.parametrize("member", [False, True])
+def test_all_any_reduction(dtype, axis, keep_dims, member, device):
+
+    @triton.jit
+    def kernel(X, All, Any, AXIS: tl.constexpr, KEEP_DIMS: tl.constexpr, MEMBER: tl.constexpr, OUT_SHAPE: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8)[:, None] * 32 + tl.arange(0, 32)[None, :])
+        if MEMBER:
+            if AXIS is None:
+                a = x.all(keep_dims=KEEP_DIMS)
+                b = x.any(keep_dims=KEEP_DIMS)
+            else:
+                a = x.all(AXIS, keep_dims=KEEP_DIMS)
+                b = x.any(AXIS, keep_dims=KEEP_DIMS)
+        else:
+            if AXIS is None:
+                a = tl.all(x, keep_dims=KEEP_DIMS)
+                b = tl.any(x, keep_dims=KEEP_DIMS)
+            else:
+                a = tl.all(x, AXIS, keep_dims=KEEP_DIMS)
+                b = tl.any(x, AXIS, keep_dims=KEEP_DIMS)
+        tl.static_assert(a.dtype == tl.int1 and b.dtype == tl.int1)
+        tl.static_assert(a.shape == OUT_SHAPE and b.shape == OUT_SHAPE)
+        if AXIS is None and not KEEP_DIMS:
+            tl.store(All, a)
+            tl.store(Any, b)
+        else:
+            offsets = tl.arange(0, a.numel)
+            tl.store(All + offsets, a.reshape((a.numel, )))
+            tl.store(Any + offsets, b.reshape((b.numel, )))
+
+    for pattern in ("zeros", "nonzero", "mixed"):
+        x = torch.full((8, 32), 2, dtype=torch.int32, device=device)
+        x[:, ::2] = -2
+        x = x.to(dtype)
+        if dtype == torch.float32:
+            x[1, :4] = torch.tensor([float("nan"), float("inf"), -float("inf"), 0.5], device=device)
+        if pattern == "zeros":
+            x.fill_(0)
+            if dtype == torch.float32:
+                x[:, ::2] = -0.0
+        elif pattern == "mixed":
+            x[::2, ::2] = 0
+            x[0, :] = 0
+            x[:, 0] = 0
+        expected_all = torch.all(x.bool(), dim=axis, keepdim=keep_dims)
+        expected_any = torch.any(x.bool(), dim=axis, keepdim=keep_dims)
+        actual_all = torch.empty_like(expected_all)
+        actual_any = torch.empty_like(expected_any)
+        kernel[(1, )](x, actual_all, actual_any, axis, keep_dims, member, tuple(expected_all.shape))
+        torch.testing.assert_close(actual_all, expected_all)
+        torch.testing.assert_close(actual_any, expected_any)
 
 
 # ---------------
@@ -90,6 +151,20 @@ def test_flip(M, N, K, dtype_str, dim, device):
 
 
 @pytest.mark.interpreter
+def test_flip_size_one(device):
+
+    @triton.jit
+    def flip_kernel(X, Z):
+        off = tl.arange(0, 1)
+        tl.store(Z + off, tl.flip(tl.load(X + off)))
+
+    x = torch.tensor([42], dtype=torch.int32, device=device)
+    z = torch.empty_like(x)
+    flip_kernel[(1, )](x, z)
+    assert z.item() == 42
+
+
+@pytest.mark.interpreter
 def test_flip_inf(device):
     # Reproducer for https://github.com/triton-lang/triton/issues/5439
 
@@ -144,6 +219,85 @@ def test_swizzle2d(size_i, size_j, size_g, device):
     expected_order = torch.tensor([[0, 3, 6, 9, 12, 15, 18], [1, 4, 7, 10, 13, 16, 19], [2, 5, 8, 11, 14, 17, 20],
                                    [21, 23, 25, 27, 29, 31, 33], [22, 24, 26, 28, 30, 32, 34]]).to(device)
     assert (output == expected_order).all(), (output, expected_order)
+
+
+# ---------------
+# test softmax
+# ---------------
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("shape, dim, ieee_rounding", [((2, 2), 1, False), ((8, 64), -1, True), ((128, ), 0, False)])
+def test_softmax(shape, dim, ieee_rounding, device):
+    # Reproducer for https://github.com/triton-lang/triton/issues/11406, where
+    # softmax normalized along the wrong axis for every dim but the default.
+
+    @triton.jit
+    def softmax_kernel(X, Z, numel: tl.constexpr, shape: tl.constexpr, dim: tl.constexpr, ieee_rounding: tl.constexpr):
+        # X is contiguous, so its row-major flat offsets are just an arange.
+        offs = tl.arange(0, numel).reshape(shape)
+        x = tl.load(X + offs)
+        if ieee_rounding:
+            z = x.softmax(dim=dim, ieee_rounding=True)
+        else:
+            z = tl.softmax(x, dim=dim)
+        tl.static_assert(z.shape == x.shape, "softmax must preserve the input shape")
+        tl.store(Z + offs, z)
+
+    x = numpy_random(shape, dtype_str='float32')
+    x = torch.from_numpy(x).to(device)
+    z = torch.empty_like(x)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*keep_dims.*")
+        softmax_kernel[(1, )](x, z, x.numel(), shape, dim, ieee_rounding)
+    torch.testing.assert_close(z, torch.softmax(x, dim=dim), rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("member", [False, True])
+def test_softmax_rejects_positional_keep_dims(member):
+
+    @triton.jit
+    def kernel(member: tl.constexpr):
+        x = tl.full((2, 2), 1.0, tl.float32)
+        if member:
+            x.softmax(1, True)
+        else:
+            tl.softmax(x, 1, True)
+
+    error = InterpreterError if is_interpreter() else triton.CompilationError
+    with pytest.raises(error, match="positional argument"):
+        kernel[(1, )](member)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("keep_dims", [None, False, True])
+@pytest.mark.parametrize("member", [False, True])
+def test_softmax_keep_dims_deprecated(keep_dims, member, device, fresh_triton_cache):
+
+    @triton.jit
+    def kernel(X, Z, keep_dims: tl.constexpr, member: tl.constexpr):
+        offs = tl.arange(0, 32).reshape((8, 4))
+        x = tl.load(X + offs)
+        if member:
+            z = x.softmax(dim=1, keep_dims=keep_dims, ieee_rounding=True)
+        else:
+            z = tl.softmax(x, dim=1, keep_dims=keep_dims, ieee_rounding=True)
+        tl.static_assert(z.shape == x.shape, "softmax must preserve the input shape")
+        tl.store(Z + offs, z)
+
+    x = torch.from_numpy(numpy_random((8, 4), dtype_str='float32')).to(device)
+    z = torch.empty_like(x)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        kernel[(1, )](x, z, keep_dims, member)
+    if keep_dims is None:
+        assert not caught
+    else:
+        assert len(caught) == 1
+        assert caught[0].category is UserWarning
+        assert "keep_dims argument to tl.softmax is deprecated and ignored" in str(caught[0].message)
+    torch.testing.assert_close(z, torch.softmax(x, dim=1), rtol=1e-5, atol=1e-6)
 
 
 @pytest.mark.interpreter

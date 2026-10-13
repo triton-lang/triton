@@ -10,6 +10,7 @@ Runtime
     :toctree: generated
     :nosignatures:
 
+    GluonASTSource
     GluonJITFunction
     jit
     constexpr_function

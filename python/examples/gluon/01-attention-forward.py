@@ -4,7 +4,7 @@ import torch
 import triton
 import pytest
 import itertools
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
@@ -643,16 +643,20 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, exp_turnstile, corr_bar,  #
                         offs_m, m_i, l_i, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
+    # A TMEM reduction on the causal diagonal would see scores before the
+    # causal mask is applied. Load that tile without a reduction and compute
+    # its maximum from the masked register values instead.
+    use_tmem_red_for_tile: gl.constexpr = use_tmem_red and STAGE != 2
 
     for start_n in range(lo, hi, config.BLOCK_N):
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
-        qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red)
+        qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red_for_tile)
 
         if STAGE == 2:
             col_limit_right = (offs_m - start_n + 1)[:, None]
             qk = _apply_causal_mask(qk, col_limit_right)
 
-        if use_tmem_red:
+        if use_tmem_red_for_tile:
             qk_max = gl.convert_layout(qk_max, m_i.type.layout)
             m_ij = gl.maximum(m_i, qk_max * config.qk_scale)
         else:
@@ -867,7 +871,7 @@ def _attn_fwd_correction(config, chnls, descs, M, STAGE: gl.constexpr):
         corr0_consumer, epi_producer, o_consumer = _attn_fwd_correction_epilogue(  #
             config, prog, s0_tmem, M, corr0_consumer, epi_producer, o_consumer)
         corr1_consumer, epi_producer, o_consumer = _attn_fwd_correction_epilogue(  #
-            config, prog, s1_tmem, M, corr1_consumer, epi_producer, o_consumer)
+            config, prog, s1_tmem, M + config.SPLIT_M, corr1_consumer, epi_producer, o_consumer)
 
 
 def attention_repr(specialization):
@@ -981,6 +985,10 @@ def is_blackwell_ultra():
     return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
 
 
+def is_rubin():
+    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 7)
+
+
 @dataclass(frozen=True, slots=True)
 class KernelConfig:
     BLOCK_M: int = 256
@@ -1087,6 +1095,33 @@ def select_kernel_config(
             split_exp_factor = _default_split_exp_factor(head_dim)
             use_selected_tmem_red = use_tmem_red and not causal
 
+    if is_rubin():
+        if head_dim == 64 and is_fp8 and (causal or not use_tmem_red):
+            group_size_n = 8 if causal else 1
+            split_exp_factor = 2 if causal and use_tmem_red else 1
+            maxnreg = 128
+            num_kv_buffers = 8
+            use_exp2_turnstile = True
+            cga_layout = ()
+        elif head_dim == 128:
+            if is_fp8:
+                group_size_n = 8 if causal else 1
+                split_exp_factor = 1
+                maxnreg = 128
+                num_kv_buffers = 5
+                use_exp2_turnstile = False
+                cga_layout = ()
+                if causal and not use_tmem_red and n_ctx >= 8192:
+                    split_exp_factor = 2
+                    num_kv_buffers = 4
+            elif dtype == torch.float16:
+                group_size_n = 8 if causal else 1
+                split_exp_factor = 1 if causal or use_tmem_red else 2
+                maxnreg = 128
+                num_kv_buffers = 4
+                use_exp2_turnstile = False
+                cga_layout = () if n_ctx <= 1024 else ((1, 0), )
+
     config = KernelConfig(
         BLOCK_M=block_m,
         BLOCK_N=block_n,
@@ -1108,6 +1143,18 @@ def select_kernel_config(
     return KernelConfig(**values)
 
 
+def select_benchmark_kernel_config(
+    head_dim: int,
+    n_ctx: int,
+    dtype: torch.dtype,
+    causal: bool,
+    use_tmem_red: bool,
+    override: KernelConfig | None = None,
+) -> KernelConfig:
+    config = select_kernel_config(head_dim, n_ctx, dtype, causal, use_tmem_red, override)
+    return replace(config, USE_TMEM_RED=use_tmem_red)
+
+
 def torch_dtype_to_triton(dtype):
     if dtype == torch.float8_e5m2:
         return gl.float8e5
@@ -1120,7 +1167,7 @@ def make_tensor_desc(x, shape, strides, block_shape, cga_layout=()):
 
 
 def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red=False, p: KernelConfig | None = None,
-                      cga_layout=None):
+                      cga_layout=None, config_selector=select_kernel_config):
     if isinstance(o, bool) and M is None and use_tmem_red is False:
         use_tmem_red = o
         o = None
@@ -1131,7 +1178,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
     assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
     stage = 3 if causal else 1
-    p = select_kernel_config(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red, override=p)
+    p = config_selector(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red, override=p)
     if cga_layout is None:
         cga_layout = p.CGA_LAYOUT
 
@@ -1194,7 +1241,8 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 @pytest.mark.parametrize("use_tmem_red", [False, True] if is_blackwell_ultra() else [False])
 @pytest.mark.parametrize("cga_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
-def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, profile=False):
+def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, profile=False,
+            p: KernelConfig | None = None, config_selector=select_kernel_config):
     device = "cuda"
 
     def alloc_fn(size: int, alignment: int, stream):
@@ -1202,8 +1250,8 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
 
     triton.set_allocator(alloc_fn)
 
-    if use_tmem_red and not is_blackwell_ultra():
-        pytest.skip("TMEM reduction is only supported on Blackwell Ultra GPUs")
+    if use_tmem_red and not (is_blackwell_ultra() or is_rubin()):
+        pytest.skip("TMEM reduction requires Blackwell Ultra or Rubin")
 
     torch.manual_seed(42)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
@@ -1211,7 +1259,9 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
     sm_scale = 0.5
 
-    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red, cga_layout=cga_layout)
+    tri_m = torch.full(q.shape[:-1], float("nan"), device=device, dtype=torch.float32)
+    tri_out, tri_m = attention_forward(q, k, v, causal, sm_scale, M=tri_m, use_tmem_red=use_tmem_red, p=p,
+                                       cga_layout=cga_layout, config_selector=config_selector)
     if dtype == torch.float8_e5m2:
         ref_out = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=sm_scale,
                                                                    is_causal=causal)
@@ -1220,15 +1270,33 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
         ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
+    # Sample rows from both subtiles without materializing full attention scores.
+    with torch.no_grad():
+        rows = torch.arange(0, N_CTX, 128, device=device)
+        scores = torch.matmul(q[..., rows, :].float(), k.float().transpose(-1, -2)) * sm_scale
+        if causal:
+            scores.masked_fill_(rows[:, None] < torch.arange(N_CTX, device=device)[None, :], float("-inf"))
+        ref_m = torch.logsumexp(scores, dim=-1) / math.log(2)
+        torch.testing.assert_close(tri_m[..., rows], ref_m, atol=1e-2, rtol=0)
+
 
 @pytest.mark.enable_warmup(min_capability=10, priority=3)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
 @pytest.mark.parametrize("cga_layout", [(), ((1, 0), )], ids=["1cta", "2ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op_consan(dtype, cga_layout):
+    p = KernelConfig(NUM_KV_BUFFERS=4) if dtype == torch.float16 and cga_layout and not is_blackwell_ultra() else None
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "consan"
-        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False, cga_layout=cga_layout)
+        test_op(Z=1, H=1, N_CTX=1024, HEAD_DIM=64, causal=False, dtype=dtype, use_tmem_red=False, cga_layout=cga_layout,
+                p=p)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
+@pytest.mark.skipif(not (is_blackwell_ultra() or is_rubin()), reason="Requires TMEM reduction support")
+def test_causal_tmem_red(dtype):
+    test_op(Z=1, H=2, N_CTX=1024, HEAD_DIM=128, causal=True, dtype=dtype, use_tmem_red=True, cga_layout=(),
+            config_selector=select_benchmark_kernel_config)
 
 
 # ===-----------------------------------------------------------------------===#
@@ -1241,7 +1309,7 @@ HEAD_DIM = [64, 128]
 causal = [False, True]
 providers = ["triton-fp16", "triton-fp8"]
 N_CTX = [2**i for i in range(10, 17)]
-use_tmem_reds = [False, True] if is_blackwell_ultra() else [False]
+use_tmem_reds = [False, True] if is_blackwell_ultra() or is_rubin() else [False]
 
 bench_configs = []
 for Z, H, D, is_causal, use_tmem_red in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal, use_tmem_reds):
@@ -1289,7 +1357,8 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
 
     with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
         if provider == "triton":
-            fn = lambda: attention_forward(q, k, v, causal, sm_scale, o, M, use_tmem_red=use_tmem_red)
+            fn = lambda: attention_forward(q, k, v, causal, sm_scale, o, M, use_tmem_red=use_tmem_red, config_selector=
+                                           select_benchmark_kernel_config)
         elif provider == "cudnn":
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         else:

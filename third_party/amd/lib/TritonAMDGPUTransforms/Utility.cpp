@@ -21,8 +21,8 @@ int deduceMinCountInBlock(Block &block,
 
 // Returns the minimum found when accumulating countFunc(op) between begin and
 // end (inclusive)
-int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
-                            const std::function<int(Operation *)> &countFunc) {
+int deduceMinCountBetweenOps(Operation *beginOp, Operation *endOp,
+                             const std::function<int(Operation *)> &countFunc) {
   assert(beginOp && endOp);
   assert(beginOp == endOp || beginOp->isBeforeInBlock(endOp));
   int count = 0;
@@ -60,7 +60,7 @@ int deduceMinCountInBlock(Block &block,
                           const std::function<int(Operation *)> &countFunc) {
   if (block.empty())
     return 0;
-  return deduceMinCountBetweeOps(&block.front(), &block.back(), countFunc);
+  return deduceMinCountBetweenOps(&block.front(), &block.back(), countFunc);
 }
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
@@ -69,8 +69,8 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
   // If the value is not defined in the same region as the consumer we need to
   // peel the parent region of consumer until we arrive at value's region
   while (consumerOp->getParentRegion() != defValue.getParentRegion()) {
-    pathSum += deduceMinCountBetweeOps(&consumerOp->getBlock()->front(),
-                                       consumerOp, countFunc);
+    pathSum += deduceMinCountBetweenOps(&consumerOp->getBlock()->front(),
+                                        consumerOp, countFunc);
     consumerOp = consumerOp->getParentOp();
   }
 
@@ -78,7 +78,7 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
   // ops between producer and consumer
   if (Operation *defOp = defValue.getDefiningOp()) {
     pathSum +=
-        deduceMinCountBetweeOps(defOp->getNextNode(), consumerOp, countFunc);
+        deduceMinCountBetweenOps(defOp->getNextNode(), consumerOp, countFunc);
     foundMin = std::min(foundMin, pathSum);
     return foundMin;
   }
@@ -94,7 +94,7 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
     }
 
     Operation *firstOpInLoop = &*forOp.getBody()->begin();
-    pathSum += deduceMinCountBetweeOps(firstOpInLoop, consumerOp, countFunc);
+    pathSum += deduceMinCountBetweenOps(firstOpInLoop, consumerOp, countFunc);
 
     // Break recursion early if we exceed previous min
     if (pathSum >= foundMin)
@@ -238,7 +238,9 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     padding = elemsPer8Bytes;
   }
 
-  unsigned contigLanes = contigDim / vecSize;
+  // Clamped to [1, warpSize]: a row wider than a warp still counts as one row
+  // per warp below, and a row narrower than a vector cannot make it zero.
+  unsigned contigLanes = std::clamp(contigDim / vecSize, 1u, warpSize);
   unsigned wrap = std::min(contigDim, elemPerBankRow) / padding;
   // wrap == 0 means padding > contigDim, which is not a valid configuration
   if (wrap == 0) {

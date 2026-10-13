@@ -9,15 +9,14 @@
 
 namespace mlir::triton::amdgpu {
 
+inline constexpr llvm::StringLiteral kWmmaRestrictedInstsFeature =
+    "wmma-restricted-insts";
+
 enum class ISAFamily {
   Unknown,
-  GCN5_1,
-  CDNA1,
   CDNA2,
   CDNA3,
   CDNA4,
-  RDNA1,
-  RDNA2,
   RDNA3,
   RDNA4m,
   RDNA4,
@@ -48,6 +47,7 @@ public:
   static TargetFeatures fromModuleOp(ModuleOp moduleOp);
 
   StringRef getArch() const;
+  StringRef getBaseArch() const;
 
   ISAFamily getISAFamily() const;
 
@@ -56,6 +56,7 @@ public:
   bool isCDNA3() const;
   bool isCDNA4() const;
   bool isGFX1250() const;
+  bool isGFX1250Strict() const;
 
   int getWarpSize() const;
   bool supportsWaveId() const;
@@ -74,18 +75,24 @@ public:
 
   bool supportsTDM() const;
   bool supportsMultiCTALaunch() const;
+  bool supportsMulticast() const;
   unsigned getMaxMulticastMaskPopcount() const;
   bool supportsClusterLoadBitWidth(int bitWidth) const;
 
   bool supportsBufferAtomicRMW() const;
   bool supportsBufferAtomicFadd(Type elementType) const;
+  bool supportsBufferAtomicFMinMax(Type elementType) const;
   int32_t getBufferAtomicCachePolicy(bool hasUsers) const;
 
   bool supportMaximumMinimum() const;
   bool supportDppBroadcast() const;
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
+  bool supportsCvtPkScalePk8Upcast() const;
+  bool supportsCvtPkScalePk8Block16() const;
+  ArrayRef<StringRef> getUnsupportedWmmaFeatures() const;
   bool supportsHwScaledUpcast() const;
+  bool supportsHwScaledDowncast() const;
 
   bool supportBitwidth16Elementwise() const;
   bool supportBitwidth32Elementwise() const;
@@ -94,6 +101,8 @@ private:
   static constexpr char kTargetPrefix[] = "hip:";
 
   std::string arch;
+  std::string baseArch;
+  ISAFamily isaFamily;
 };
 
 bool isCDNA(ISAFamily isaFamily);

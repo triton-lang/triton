@@ -37,8 +37,8 @@ class CDNA4MXScaleLayoutTransformation(LayoutTransformation):
         B = math.prod(leading_shape)
         ALIGN_K_SCALE = 8
         ALIGN_N = 32
-        K_SCALE_pad = math.ceil(K_SCALE / ALIGN_K_SCALE) * ALIGN_K_SCALE
-        N_pad = math.ceil(N / ALIGN_N) * ALIGN_N
+        K_SCALE_pad = (K_SCALE + (ALIGN_K_SCALE - 1)) // ALIGN_K_SCALE * ALIGN_K_SCALE
+        N_pad = (N + (ALIGN_N - 1)) // ALIGN_N * ALIGN_N
         object.__setattr__(self, "leading_shape", leading_shape)
         object.__setattr__(self, "B", B)
         object.__setattr__(self, "ALIGN_K_SCALE", ALIGN_K_SCALE)

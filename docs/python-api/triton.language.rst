@@ -135,6 +135,8 @@ Reduction Ops
     :toctree: generated
     :nosignatures:
 
+    all
+    any
     argmax
     argmin
     max
@@ -169,10 +171,12 @@ Atomic Ops
     atomic_add
     atomic_and
     atomic_cas
+    atomic_load
     atomic_max
     atomic_min
     atomic_or
     atomic_poll
+    atomic_store
     atomic_xchg
     atomic_xor
 

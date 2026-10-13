@@ -23,26 +23,18 @@ struct BufferIndexExpr {
   Value baseValue;
   int64_t constantOffset = 0;
   std::optional<int64_t> modulus;
+  Value indexedSource;
 
   bool operator==(const BufferIndexExpr &other) const {
     return baseValue == other.baseValue &&
-           constantOffset == other.constantOffset && modulus == other.modulus;
+           constantOffset == other.constantOffset && modulus == other.modulus &&
+           indexedSource == other.indexedSource;
   }
 
   bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
-    if (baseValue != other.baseValue)
-      return false;
-    if (modulus || other.modulus) {
-      if (modulus != other.modulus)
-        return false;
-      int64_t m = *modulus;
-      // Euclidean normalization: make 0 <= offset < m so that
-      // negative constants compare correctly against positive ones.
-      int64_t a = normalizeModuloOffset(constantOffset, m);
-      int64_t b = normalizeModuloOffset(other.constantOffset, m);
-      return a != b;
-    }
-    return constantOffset != other.constantOffset;
+    return baseValue == other.baseValue &&
+           indexedSource == other.indexedSource && modulus == other.modulus &&
+           constantOffset != other.constantOffset;
   }
 };
 
@@ -54,28 +46,33 @@ enum class DFSState { Visiting, Visited };
 /// a backedge, i.e. its target dominates its source. Only blocks reachable
 /// from the function entry matter to membar's forward dataflow analysis.
 bool isReducibleCFG(Block *block, DenseMap<Block *, DFSState> &states,
-                    DominanceInfo &dominanceInfo) {
+                    DominanceInfo &dominanceInfo,
+                    llvm::SmallPtrSetImpl<Block *> &loopHeaders) {
   states[block] = DFSState::Visiting;
 
   for (Block *successor : block->getTerminator()->getSuccessors()) {
     auto it = states.find(successor);
     if (it == states.end()) {
-      if (!isReducibleCFG(successor, states, dominanceInfo))
+      if (!isReducibleCFG(successor, states, dominanceInfo, loopHeaders))
         return false;
       continue;
     }
-    if (it->second == DFSState::Visiting &&
-        !dominanceInfo.dominates(successor, block))
-      return false;
+    if (it->second == DFSState::Visiting) {
+      if (!dominanceInfo.dominates(successor, block))
+        return false;
+      loopHeaders.insert(successor);
+    }
   }
 
   states[block] = DFSState::Visited;
   return true;
 }
 
-bool isReducibleCFG(FunctionOpInterface funcOp, DominanceInfo &dominanceInfo) {
+bool isReducibleCFG(FunctionOpInterface funcOp, DominanceInfo &dominanceInfo,
+                    llvm::SmallPtrSetImpl<Block *> &loopHeaders) {
   DenseMap<Block *, DFSState> states;
-  return isReducibleCFG(&funcOp.getBlocks().front(), states, dominanceInfo);
+  return isReducibleCFG(&funcOp.getBlocks().front(), states, dominanceInfo,
+                        loopHeaders);
 }
 
 std::optional<int64_t> getConstantIntValue(Value v) {
@@ -246,7 +243,7 @@ BufferIndexExpr analyzeBufferIndex(Value indexValue) {
   return BufferIndexExpr{indexValue, 0};
 }
 
-Value extractBufferIndex(Value value) {
+triton::gpu::MemDescIndexOp extractBufferIndex(Value value) {
   // MemDescIndexOp selects a whole slot of a multi-buffered allocation; its
   // index operand identifies the slot. MemDescViewTrait producers (trans,
   // reshape, reinterpret, subslice) are slot-preserving, so we can walk
@@ -254,19 +251,19 @@ Value extractBufferIndex(Value value) {
   Value v = value;
   while (auto *def = v.getDefiningOp()) {
     if (auto indexOp = dyn_cast<triton::gpu::MemDescIndexOp>(def))
-      return indexOp.getIndex();
+      return indexOp;
     if (!def->hasTrait<OpTrait::MemDescViewTrait>())
       break;
     v = def->getOperand(0);
   }
-  return Value();
+  return {};
 }
 
 } // namespace
 
 BufferIndexAnalysis::BufferIndexAnalysis(FunctionOpInterface funcOp)
     : dominanceInfo(funcOp),
-      hasReducibleCFG(isReducibleCFG(funcOp, dominanceInfo)) {}
+      hasReducibleCFG(isReducibleCFG(funcOp, dominanceInfo, loopHeaders)) {}
 
 BufferIndexAnalysis::~BufferIndexAnalysis() = default;
 
@@ -280,8 +277,9 @@ bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
 }
 
 const BufferIndexExpr *BufferIndexAnalysis::intern(BufferIndexExpr expr) {
-  // Canonicalize the modular offset so 0 <= constantOffset < m. Equivalent
-  // expressions (e.g. offset 0 and offset m) share a single interned entry.
+  // Euclidean normalization: make 0 <= constantOffset < m so negative constants
+  // compare correctly against positive ones. Equivalent expressions (e.g.
+  // offset 0 and offset m) share a single interned entry.
   if (expr.modulus) {
     int64_t m = *expr.modulus;
     expr.constantOffset = normalizeModuloOffset(expr.constantOffset, m);
@@ -310,31 +308,34 @@ void BufferIndexAnalysis::attachBufferIndex(AllocationSlice &slice,
   if (!hasReducibleCFG)
     return;
 
-  Value index = extractBufferIndex(value);
+  auto index = extractBufferIndex(value);
   if (!index)
     return;
-  slice.bufferIndexExpr = intern(analyzeBufferIndex(index));
+  auto expr = analyzeBufferIndex(index.getIndex());
+  expr.indexedSource = index.getSrc();
+  slice.bufferIndexExpr = intern(std::move(expr));
 }
 
 bool BufferIndexAnalysis::isBackedgeSuccessor(Operation *terminator,
                                               Block *successor) const {
   if (isa<BranchOpInterface>(terminator))
-    return dominanceInfo.dominates(successor, terminator->getBlock());
-  return false;
+    return !hasReducibleCFG ||
+           !isa<FunctionOpInterface>(terminator->getParentOp()) ||
+           dominanceInfo.dominates(successor, terminator->getBlock());
+  // Region-to-region edges can start another dynamic iteration (scf.for and
+  // scf.while). Conservatively invalidate on all such edges; exits to the
+  // parent operation's continuation do not revisit the region's definitions.
+  return isa<RegionBranchTerminatorOpInterface>(terminator) &&
+         successor->getParentOp() == terminator->getParentOp();
 }
 
-void BufferIndexAnalysis::invalidateBufferIndices(BlockInfo &info) const {
-  auto rebuild = [](BlockInfo::SliceMapT &m) {
-    BlockInfo::SliceMapT rebuilt;
-    for (const auto &[slice, ops] : m) {
-      AllocationSlice key = slice;
-      key.bufferIndexExpr = nullptr;
-      rebuilt[key].insert(ops.begin(), ops.end());
-    }
-    m = std::move(rebuilt);
-  };
-  rebuild(info.syncReadSlices);
-  rebuild(info.syncWriteSlices);
+bool BufferIndexAnalysis::entersLoop(Operation *terminator) const {
+  if (!isa<BranchOpInterface>(terminator))
+    return false;
+  return llvm::any_of(terminator->getSuccessors(), [&](Block *successor) {
+    return loopHeaders.contains(successor) &&
+           !isBackedgeSuccessor(terminator, successor);
+  });
 }
 
 } // namespace mlir
