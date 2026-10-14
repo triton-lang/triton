@@ -944,3 +944,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: volatile_load
+  tt.func public @volatile_load(%ptr: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %out: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
+    %1 = tt.splat %ptr : !tt.ptr<i32> -> tensor<64x!tt.ptr<i32>, #blocked>
+    %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #blocked>, tensor<64xi32, #blocked>
+    // Volatile loads stay tt.load. The buffer-load intrinsic is readonly.
+    // COMMON: tt.load {{.*}} {isVolatile = true}
+    %3 = tt.load %2 {isVolatile = true} : tensor<64x!tt.ptr<i32>, #blocked>
+    // COMMON: amdg.buffer_load
+    // COMMON-NOT: amdg.buffer_load
+    %4 = tt.load %2 : tensor<64x!tt.ptr<i32>, #blocked>
+    %5 = arith.addi %3, %4 : tensor<64xi32, #blocked>
+    %6 = tt.splat %out : !tt.ptr<i32> -> tensor<64x!tt.ptr<i32>, #blocked>
+    %7 = tt.addptr %6, %0 : tensor<64x!tt.ptr<i32>, #blocked>, tensor<64xi32, #blocked>
+    tt.store %7, %5 : tensor<64x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
