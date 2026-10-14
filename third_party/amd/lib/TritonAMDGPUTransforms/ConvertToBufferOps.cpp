@@ -516,6 +516,10 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   mlir::LogicalResult
   matchAndRewrite(SourceOp op, PatternRewriter &rewriter) const override {
     LDBG("Try to convert: " << op);
+    if constexpr (std::is_same_v<SourceOp, triton::LoadOp>)
+      if (op.getIsVolatile())
+        return rewriter.notifyMatchFailure(
+            op, "Unsupported volatile load in ConvertTritonLoadToBufferLoad");
     Value ptr = op.getOperand(0);
 
     if (canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst)) {
