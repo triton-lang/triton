@@ -163,15 +163,22 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
     CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
         &max_shared_mem,
         CU_DEVICE_ATTRIBUTE_MAX_OVERSIZED_SHARED_MEMORY_PER_BLOCK, device));
+    // The legacy per-SM attribute excludes oversized shared memory. Include
+    // the driver's per-block reservation to recover the full oversized pool.
+    int reserved_shared_mem;
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &reserved_shared_mem,
+        CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK, device));
+    max_shared_mem_per_multiprocessor = max_shared_mem + reserved_shared_mem;
   } else {
     CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
         &max_shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
         device));
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &max_shared_mem_per_multiprocessor,
+        CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device));
   }
 
-  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
-      &max_shared_mem_per_multiprocessor,
-      CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device));
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &max_num_regs, CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, device));
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(

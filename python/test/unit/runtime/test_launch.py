@@ -74,6 +74,7 @@ def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fres
         assert launcher.shared == 0
     else:
         properties = utils.get_device_properties(triton.runtime.driver.active.get_current_device())
+        assert properties["max_shared_mem_per_multiprocessor"] >= properties["max_shared_mem"]
         assert (max_occupancy + 1) * launcher.shared > properties["max_shared_mem_per_multiprocessor"]
         if num_ctas == 1:
             # Check CUDA's occupancy calculation, independently of the reservation formula.
@@ -125,7 +126,8 @@ def test_max_occupancy_preserves_required_shared_memory(device):
 
     inp = torch.randn(16384, device=device)
     out = torch.empty_like(inp)
-    compiled = kernel[(1, )](inp, out, max_occupancy=4)
+    # Keep the occupancy reservation below 64 KiB even with oversized shared memory.
+    compiled = kernel[(1, )](inp, out, max_occupancy=8)
     assert compiled.metadata.shared == 65536
     assert compiled.run.shared == compiled.metadata.shared
     torch.testing.assert_close(out, inp)
