@@ -382,15 +382,18 @@ def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, 
 
     original = load_kernel()
     original_key = original.cache_key
-    original_binary = triton.compile(triton.compiler.ASTSource(original, {"X": "*i32"})).kernel
+    original_compiled = triton.compile(triton.compiler.ASTSource(original, {"X": "*i32"}))
 
     fresh_knobs.compilation.disable_line_info = change_line_info
     updated = load_kernel(filename, extra_lines, decorators, indentation)
-    updated_binary = triton.compile(triton.compiler.ASTSource(updated, {"X": "*i32"})).kernel
+    updated_compiled = triton.compile(triton.compiler.ASTSource(updated, {"X": "*i32"}))
     source_changed = (filename, extra_lines, decorators, indentation) != ("kernel.py", 0, 1, 4)
     assert original.src == updated.src
     assert (original_key != updated.cache_key) == source_changed
-    assert (original_binary != updated_binary) == (source_changed or change_line_info)
+    # Column-only changes may produce identical binary bytes.
+    assert (original_compiled.hash != updated_compiled.hash) == (source_changed or change_line_info)
+    if change_line_info:
+        assert original_compiled.kernel != updated_compiled.kernel
 
 
 def test_reuse(device, fresh_triton_cache):
