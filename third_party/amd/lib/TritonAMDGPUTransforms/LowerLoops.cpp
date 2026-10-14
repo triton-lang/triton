@@ -672,11 +672,9 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     localStoreCluster = 4;
   }
 
-  // With a tail wait, stage synchronous LDS writes after the wait. Membar
-  // can then rendezvous before the writes without immediately draining them.
-  // Keep same-stage local-load dependencies in their existing order.
-  if (waitAtTail &&
-      stages[SCHED_LOCAL_STORE] < stages[SCHED_LOCAL_LOAD]) {
+  // Place synchronous LDS writes after the tail wait so Membar can rendezvous
+  // before issuing them. Preserve same-stage store-to-load ordering.
+  if (waitAtTail && stages[SCHED_LOCAL_STORE] < stages[SCHED_LOCAL_LOAD]) {
     asyncWaitCluster = 3;
     localStoreCluster = 4;
   }

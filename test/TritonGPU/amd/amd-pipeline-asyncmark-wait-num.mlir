@@ -66,7 +66,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16, 4], isTransposed = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tail_wait_before_synchronous_store
-  // Mixed async and synchronous staging keeps the LDS write after the tail wait.
+  // A uses a contiguous 32-bit async copy; B uses scalar 16-bit loads and
+  // synchronous LDS staging. Keep B's store after the tail wait.
   // CHECK: scf.for
   // CHECK-NOT: ttg.local_store
   // CHECK:   ttg.async_wait %{{.*}} {num = 1 : i32}

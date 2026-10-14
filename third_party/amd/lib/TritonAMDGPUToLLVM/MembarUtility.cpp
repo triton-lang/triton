@@ -95,9 +95,6 @@ bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
 
   return (isLDSMemoryBarrierOp(op1) && isLDSMemoryBarrierOp(op2));
 }
-} // namespace
-
-namespace {
 
 bool isGlobalLoadResult(Value value) {
   return isa_and_nonnull<triton::LoadOp, triton::amdgpu::BufferLoadOp>(
@@ -112,8 +109,7 @@ bool mayNeedGlobalLoadWait(Value value) {
     return false;
 
   Block *block = arg.getOwner();
-  // Inspect only direct incoming loads. Recursing through forwarding arguments
-  // would broaden the heuristic and require handling cyclic backedges.
+  // Follow one incoming edge; do not recurse through forwarding arguments.
   for (Block *pred : block->getPredecessors()) {
     auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
     if (!branch)
@@ -123,8 +119,7 @@ bool mayNeedGlobalLoadWait(Value value) {
         continue;
       auto operands = branch.getSuccessorOperands(i);
       unsigned index = arg.getArgNumber();
-      // SuccessorOperands indexes block arguments, including produced ones;
-      // those have no corresponding SSA value to inspect.
+      // Produced arguments have no incoming SSA value to inspect.
       if (index < operands.size() && !operands.isOperandProduced(index) &&
           isGlobalLoadResult(operands[index]))
         return true;

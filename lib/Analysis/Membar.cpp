@@ -373,8 +373,8 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
   bool needsSync =
       requiresThreadSync(pending, effects) ||
       pending.isIntersected(effects, canSkip, &allocation, sliceFilter);
-  // Stop deferring an async-copy barrier before a use that may wait on a
-  // global load, even if that use has no shared-memory effects.
+  // Let the backend stop deferral of a pending shared-copy rendezvous.
+  // Memory conflicts still require synchronization regardless of this policy.
   if (!needsSync && !cluster && deferralStopPolicy &&
       pending.threadSync.completion == CompletionSync::Shared)
     needsSync = deferralStopPolicy(op);
