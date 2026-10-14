@@ -360,6 +360,13 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
                                      [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
                                      (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [16, 0]], [], [128, 32]), 128, 32,
         id="interwarp_groups_separated_warp_bits"),
+    # A consumer's candidates span several groups; completed carries must
+    # survive groups that follow their target in either traversal direction.
+    pytest.param(
+        ttgl.DistributedLinearLayout([[2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [128, 0]],
+                                     [[0, 1], [0, 2], [0, 4], [0, 8], [0, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [64, 0]], [], [256, 16]), 256, 16,
+        id="interwarp_groups_carry_across_groups"),
     # Restart shared-memory traversal at each independent scan's register base.
     pytest.param(
         ttgl.DistributedLinearLayout([[0, 1], [2, 0], [4, 0], [8, 0], [32, 0]],

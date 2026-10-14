@@ -484,10 +484,10 @@ bool ScanLoweringHelper::isSupported() {
                                         {axisDim});
 }
 
-unsigned ScanLoweringHelper::getInterWarpScanGroupSize() const {
+bool ScanLoweringHelper::useGroupedInterWarpScan() const {
   // Grouping completes the original thread-local prefixes directly.
   if (!op || !interWarpScanLayout || intraWarpTotalsLayout)
-    return 0;
+    return false;
   auto scanOp = op;
   auto *ctx = scanOp.getContext();
   auto kReg = StringAttr::get(ctx, "register");
@@ -498,21 +498,20 @@ unsigned ScanLoweringHelper::getInterWarpScanGroupSize() const {
   if (!layout.sublayoutIsZero({kLane}, {axisDim}) ||
       !layout.sublayoutIsZero({kBlock},
                               llvm::to_vector(layout.getOutDimNames())))
-    return 0;
+    return false;
   unsigned words = 0;
   for (Type type : scanOp.getElementTypes()) {
     if (!type.isIntOrFloat() || type.getIntOrFloatBitWidth() < 8)
-      return 0;
+      return false;
     words += llvm::divideCeil(type.getIntOrFloatBitWidth(), 32u);
   }
   // Group long register-only scans when their replicated totals exceed 128
   // logical 32-bit words per thread. Keep the full shared table within 64 KiB.
-  // Eight totals keep a mixed f32/i64 group at 24 logical register words.
   if (layout.getOutDimSize(axisDim) < 32 ||
       layout.getInDimSize(kReg) * words <= 128 ||
       getGroupedInterWarpScratchConfig().sizeInBytes > 64 * 1024)
-    return 0;
-  return 8;
+    return false;
+  return true;
 }
 
 LayoutConversionScratchConfig
@@ -530,7 +529,7 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes(
   if (!interWarpTotalsLayout)
     return 0;
   assert(op && "scratch sizing requires a scan operation");
-  if (getInterWarpScanGroupSize())
+  if (useGroupedInterWarpScan())
     return getGroupedInterWarpScratchConfig().sizeInBytes;
   return getLayoutConversionScratchConfig(
              *interWarpTotalsLayout, *interWarpScanLayout, op.getElementTypes(),
