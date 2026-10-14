@@ -955,7 +955,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
     %1 = tt.splat %ptr : !tt.ptr<i32> -> tensor<64x!tt.ptr<i32>, #blocked>
     %2 = tt.addptr %1, %0 : tensor<64x!tt.ptr<i32>, #blocked>, tensor<64xi32, #blocked>
-    // Volatile loads stay tt.load. The buffer-load intrinsic is readonly.
+    // Volatile loads stay tt.load as amdg.buffer_load drops volatile.
     // COMMON: tt.load {{.*}} {isVolatile = true}
     %3 = tt.load %2 {isVolatile = true} : tensor<64x!tt.ptr<i32>, #blocked>
     // COMMON: amdg.buffer_load
