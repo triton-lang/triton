@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefixes=CHECK,GENERIC
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' | FileCheck %s --check-prefixes=CHECK,AMD
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' | FileCheck %s --check-prefix=CHECK
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>
@@ -145,9 +145,8 @@ tt.func @async_wait_pure_op_between_waits(%arg: tensor<32x16xf16, #AL>) {
   tt.return
 }
 
-// The global read itself can precede the rendezvous. AMD stops deferral at
-// its branch transfer, which may become a register copy; generic Membar waits
-// until the shared layout conversion at the join.
+// The global read can precede the rendezvous. Stop at its branch transfer,
+// which may lower to a register copy requiring a global-memory wait.
 // CHECK-LABEL: async_wait_conditional_global_read
 tt.func @async_wait_conditional_global_read(%ptrs: tensor<32x16x!tt.ptr<f16>, #AL>, %bias_ptrs: tensor<32x16x!tt.ptr<f16>, #AL>, %condition: i1) -> tensor<32x16xf16, #BL> {
   %zero = arith.constant dense<0.0> : tensor<32x16xf16, #AL>
@@ -158,9 +157,8 @@ tt.func @async_wait_conditional_global_read(%ptrs: tensor<32x16x!tt.ptr<f16>, #A
   // CHECK-NEXT: cf.cond_br
   // CHECK-NOT: ttg.barrier
   // CHECK: tt.load
-  // GENERIC-NEXT: cf.br
-  // AMD-NEXT: ttg.barrier local
-  // AMD-NEXT: cf.br
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: cf.br
   // CHECK: ttg.barrier local
   // CHECK-NEXT: {{.*}} = ttg.convert_layout
   // CHECK-NEXT: {{.*}} = ttg.local_load

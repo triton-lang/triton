@@ -266,6 +266,40 @@ bool hasOnlyGlobalReads(Operation *op) {
          });
 }
 
+// A result of a global read may require a memory wait when consumed.
+// Use memory effects so equivalent backend load operations are covered too.
+bool isGlobalReadResult(Value value) {
+  Operation *producer = value.getDefiningOp();
+  return producer && hasOnlyGlobalReads(producer);
+}
+
+bool mayNeedGlobalLoadWait(Value value) {
+  if (isGlobalReadResult(value))
+    return true;
+  auto arg = dyn_cast<BlockArgument>(value);
+  if (!arg)
+    return false;
+
+  Block *block = arg.getOwner();
+  // Follow one incoming edge; do not recurse through forwarding arguments.
+  for (Block *pred : block->getPredecessors()) {
+    auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
+    if (!branch)
+      continue;
+    for (unsigned i = 0; i < branch->getNumSuccessors(); ++i) {
+      if (branch->getSuccessor(i) != block)
+        continue;
+      auto operands = branch.getSuccessorOperands(i);
+      unsigned index = arg.getArgNumber();
+      // Produced arguments have no incoming SSA value to inspect.
+      if (index < operands.size() && !operands.isOperandProduced(index) &&
+          isGlobalReadResult(operands[index]))
+        return true;
+    }
+  }
+  return false;
+}
+
 ThreadIssuer getThreadIssuer(Operation *op) {
   auto kind = getThreadSyncInfo(op).issuer;
   return kind == ThreadIssuer::Unknown
@@ -373,11 +407,12 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
   bool needsSync =
       requiresThreadSync(pending, effects) ||
       pending.isIntersected(effects, canSkip, &allocation, sliceFilter);
-  // Let the backend stop deferral of a pending shared-copy rendezvous.
-  // Memory conflicts still require synchronization regardless of this policy.
-  if (!needsSync && !cluster && deferralStopPolicy &&
+  // Rendezvous before a potential global-memory wait, including register
+  // copies introduced by branch transfers. This only moves a pending barrier;
+  // it does not determine whether the global read has actually completed.
+  if (!needsSync && !cluster &&
       pending.threadSync.completion == CompletionSync::Shared)
-    needsSync = deferralStopPolicy(op);
+    needsSync = llvm::any_of(op->getOperands(), mayNeedGlobalLoadWait);
   if (!needsSync)
     return nullptr;
   // The barrier clears incoming state. The operation's own effects still
