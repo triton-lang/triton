@@ -40,6 +40,8 @@ class OptFlags:
     chain_factor: int = 1
     use_rowidxs: bool = False
     subtile_heavy_blocks: bool = False
+    maxnreg: Optional[int] = None
+    sched4reg: Optional[bool] = None
 
 
 _opt_flags_constraints: ContextVar[dict | None] = ContextVar("reduce_opt_flags_constraints", default=None)
@@ -142,6 +144,7 @@ def _select_reduce_forward_config(
     opt_flags_constraints = _get_opt_flags_constraints()
     chain_factor = opt_flags_constraints.get("chain_factor")
     num_warps = opt_flags_constraints.get("num_warps")
+    launch_options = {name: opt_flags_constraints.get(name) for name in ("maxnreg", "sched4reg")}
 
     use_static_loop = K <= 8
     if K in (2, 3, 4) and S0 <= 256 and Y_S1 >= 4096 and reduction_n == 1 and not has_mx:
@@ -170,7 +173,7 @@ def _select_reduce_forward_config(
             if min_s0_programs <= S0:
                 max_occupancy_block_s0 = max(1, S0 // min_s0_programs)
                 block_s0 = min(max_block_s0, max_occupancy_block_s0)
-                return OptFlags(block_s0, block_s1, block_s1, 4, use_static_loop, 1)
+                return OptFlags(block_s0, block_s1, block_s1, 4, use_static_loop, 1, **launch_options)
             block_s1 //= 2
 
     # When `row_idxs` is used, we use 32-bit bitmap and libdevice.ffs() to
@@ -210,6 +213,7 @@ def _select_reduce_forward_config(
         chain_factor=chain_factor,
         use_rowidxs=use_rowidxs,
         subtile_heavy_blocks=use_rowidxs and use_static_loop and K >= 5,
+        **launch_options,
     )
 
 
@@ -851,6 +855,8 @@ def reduce_forward(
         DIM=dim,  #
         num_warps=opt_flags.num_warps,  #
         enable_fp_fusion=True,
+        **{name: value for name in ("maxnreg", "sched4reg")
+           if (value := getattr(opt_flags, name)) is not None},
     )
     return y, y_mxscale
 
