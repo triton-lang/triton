@@ -185,13 +185,13 @@ public:
   //   - CDNA3 (gfx942): no BUFFER_ATOMIC_PK_ADD_BF16
   //   - RDNA3: BUFFER_ATOMIC_ADD_F32 only
   //   - RDNA4: no BUFFER_ATOMIC_ADD_F64
-  //   - CDNA4, GFX1250: all float types supported (GFX1250 adds PK_ADD_BF16)
+  //   - CDNA4, CDNA5: all float types supported (CDNA5 adds PK_ADD_BF16)
   bool supportsBufferAtomicFadd(mlir::Type elementType) const {
     return targetFeatures.supportsBufferAtomicFadd(elementType);
   }
   // Returns the cache policy (cpol) immediate for buffer atomic instructions.
   // When hasUsers is true, sets SC0/TH_ATOMIC_RETURN to return pre-op value.
-  // On gfx1250, also sets SCOPE_DEV for device-wide visibility.
+  // On CDNA5, also sets SCOPE_DEV for device-wide visibility.
   int32_t getBufferAtomicCachePolicy(bool hasUsers) const {
     return targetFeatures.getBufferAtomicCachePolicy(hasUsers);
   }

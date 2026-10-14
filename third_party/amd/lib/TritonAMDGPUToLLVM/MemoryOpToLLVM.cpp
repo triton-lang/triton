@@ -43,7 +43,7 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
   const auto numElemsI32 = (vTy.getNumElements() * physicalBitWidth / 32);
   const auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
 
-  // GFX1250 uses opaque LLVM intrinsic calls; their results cannot be cast to
+  // CDNA5 uses opaque LLVM intrinsic calls; their results cannot be cast to
   // AliasAnalysisOpInterface, so no no-alias scope is attached.
   auto callIntrinsic = [&](StringRef name, VectorType retTy) -> Value {
     return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, {retTy},
@@ -52,7 +52,7 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
   };
 
   switch (isaFamily) {
-  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA5:
     if (logicalBitWidth == 16)
       return callIntrinsic("llvm.amdgcn.ds.load.tr16.b128", vTy);
     if (logicalBitWidth == 8)
@@ -279,7 +279,7 @@ lowerDsReadTr(Operation *op,
     // source lane issuing the load. For ds_read_tr* the hardware shuffles
     // data across lanes, so the two differ: we need to remap.
     //
-    // Example: ds_load_tr8_b64 on gfx1250, from the test
+    // Example: ds_load_tr8_b64 on CDNA5, from the test
     // `ds_transpose_partitioned_remaps_lane`.
     //
     //  fullTile:

@@ -6,7 +6,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c_shape = arith.constant 128 : i32
     %c_stride0 = arith.constant 128 : i64
     %c_stride1 = arith.constant 1 : i64
-    // expected-error @+2 {{Padding with non-zero in TDM is not supported on GFX1250.}}
+    // expected-error @+2 {{Padding with non-zero in TDM is not supported on CDNA5.}}
     // expected-error @+1 {{failed to legalize operation}}
     %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] {padding = 2 : i32} : <f16>, <64x64xf16, #shared>
     tt.return

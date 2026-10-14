@@ -104,7 +104,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// Test TDM padding for fp8 (f8E5M2) matmul on gfx1250.
+// Test TDM padding for fp8 (f8E5M2) matmul on CDNA5.
 //
 // Operand A (opIdx=0, order=[1,0]): loadTransposed = (1 != 1) = false → non-transposed
 //   padAmount = 128/8 = 16 (sub-dword: no min with vecWidth, full 4-dword
@@ -195,7 +195,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// Test TDM padding for f32 matmul on gfx1250.
+// Test TDM padding for f32 matmul on CDNA5.
 //
 // Operand A (opIdx=0, order=[1,0]): loadTransposed = (1 != 1) = false → non-transposed
 //   padAmount = min(kWidth=8, 128/32) = min(8, 4) = 4
@@ -269,7 +269,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// Test TDM pipeline for gather + dot on gfx1250.
+// Test TDM pipeline for gather + dot on CDNA5.
 // Two gathers (A and B) inside a loop feed into a dot. The pipeline pass
 // should convert them to async_tdm_gather ops and software-pipeline the loop.
 
@@ -578,7 +578,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// TDM load + tt.dot_scaled (mxfp4 x mxfp4) pipeline on gfx1250.
+// TDM load + tt.dot_scaled (mxfp4 x mxfp4) pipeline on CDNA5.
 #blocked_sd   = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked_sd_b = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #mma_sd = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0], [4, 0]]}, instrShape = [16, 16, 128]}>

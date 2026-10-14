@@ -1,7 +1,7 @@
-"""Test that gfx1250 produces packed arith ops (v_pk_fma_f32 etc).
+"""Test that CDNA5 produces packed arith ops (v_pk_fma_f32 etc).
 
-Compile-only test — no gfx1250 hardware required.
-Compiles small Gluon kernels for gfx1250 and checks that:
+Compile-only test — no CDNA5 hardware required.
+Compiles small Gluon kernels for CDNA5 and checks that:
   - LLVM IR contains <2 x float> fmul/fsub/fadd (from packed conversion)
   - ASM contains v_pk_fma_f32 (from ISel contraction of packed fmul+fsub)
   - gl.fma lowers to packed FMA instructions
@@ -15,7 +15,7 @@ from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
-GFX1250_TARGET = GPUTarget("hip", "gfx1250", 32)
+CDNA5_TARGET = GPUTarget("hip", "gfx1250", 32)
 BLOCK = 1024
 # Each thread owns 8 elements, so a fully packed elementwise op lowers to 4
 # packed instructions per thread.
@@ -65,7 +65,7 @@ def compile_gluon(kernel, signature, constexprs, options=None, aligned=True):
     if aligned:
         attrs = {(i, ): [["tt.divisibility", 16]] for i, ty in enumerate(signature.values()) if ty.startswith("*")}
     src = gluon.GluonASTSource(kernel, signature, constexprs, attrs)
-    return triton.compile(src, target=GFX1250_TARGET, options=options)
+    return triton.compile(src, target=CDNA5_TARGET, options=options)
 
 
 def get_func_body_llir(llir):
@@ -87,8 +87,8 @@ def get_func_body_asm(amdgcn, kernel_name):
 
 # There is no v_pk_sub_f32; packed fsub selects v_pk_add_f32 with a neg modifier.
 @pytest.mark.parametrize("op, packed_inst", [("add", "v_pk_add_f32"), ("sub", "v_pk_add_f32"), ("mul", "v_pk_mul_f32")])
-def test_gfx1250_packed_f32_arith(op, packed_inst):
-    """f32 fadd/fsub/fmul on gfx1250 should lower to packed <2 x float> ops."""
+def test_cdna5_packed_f32_arith(op, packed_inst):
+    """f32 fadd/fsub/fmul on CDNA5 should lower to packed <2 x float> ops."""
     kernel = compile_gluon(
         gluon_binary_kernel,
         {"x_ptr": "*fp32", "y_ptr": "*fp32", "out_ptr": "*fp32", "OP": "constexpr", "BLOCK": "constexpr"},
@@ -102,7 +102,7 @@ def test_gfx1250_packed_f32_arith(op, packed_inst):
     assert asm.count(packed_inst) == NUM_PACKED, asm
 
 
-def test_gfx1250_packed_mul_sub_contracts_to_v_pk_fma_f32():
+def test_cdna5_packed_mul_sub_contracts_to_v_pk_fma_f32():
     """Packed fmul+fsub should be contracted into v_pk_fma_f32 when fp fusion is enabled."""
     kernel = compile_gluon(
         gluon_mul_sub_kernel,
@@ -121,8 +121,8 @@ def test_gfx1250_packed_mul_sub_contracts_to_v_pk_fma_f32():
 
 
 @pytest.mark.parametrize("dtype, packed_inst", [("fp32", "v_pk_fma_f32"), ("bf16", "v_pk_fma_bf16")])
-def test_gfx1250_gl_fma_packed(dtype, packed_inst):
-    """gl.fma on gfx1250 should lower to packed FMA instructions."""
+def test_cdna5_gl_fma_packed(dtype, packed_inst):
+    """gl.fma on CDNA5 should lower to packed FMA instructions."""
     ptr_ty = f"*{dtype}"
     kernel = compile_gluon(
         gluon_fma_kernel,

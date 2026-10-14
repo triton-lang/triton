@@ -195,8 +195,8 @@ tt.func public @atomic_add_f16_cuda80(%arg0: !tt.ptr<f16> {tt.divisibility = 16 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 // CHECK: #[[$ATOMIC_F16_LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @atomic_add_f16_gfx1250
-  tt.func public @atomic_add_f16_gfx1250(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32) {
+  // CHECK-LABEL: @atomic_add_f16_cdna5
+  tt.func public @atomic_add_f16_cdna5(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32) {
     %c1024_i32 = arith.constant 1024 : i32
     %cst = arith.constant dense<1.000000e+00> : tensor<1024xf16, #blocked>
     %0 = tt.get_program_id x : i32

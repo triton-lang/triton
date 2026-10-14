@@ -19,7 +19,7 @@ import triton.language as tl
 import argparse
 import pytest
 from triton.tools.mxfp import MXScaleTensor, MXFP4Tensor, fp8e8m0_to_float32
-from triton._internal_testing import is_hip_gfx1250
+from triton._internal_testing import is_hip_cdna5
 
 # ============================================================================
 # Constants
@@ -378,7 +378,7 @@ def run_mxfp_gemm(
 @pytest.mark.parametrize("dtype_a", ['float8_e5m2', 'float8_e4m3', 'float4'])
 @pytest.mark.parametrize("dtype_b", ['float8_e5m2', 'float8_e4m3', 'float4'])
 @pytest.mark.parametrize("TRANSPOSE_B", [True, False])
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Scaled dot with TDM is only tested on gfx1250.")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Scaled dot with TDM is only tested on CDNA5.")
 def test_mxgemm(M, N, K, BM, BN, BK, dtype_a, dtype_b, TRANSPOSE_B):
     """Test MXFP GEMM with descriptor loads and pre-shuffled scales."""
 

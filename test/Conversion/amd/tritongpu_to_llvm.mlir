@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,COMMON
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx950' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx1250' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx1250' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=CDNA5,COMMON
 
 // COMMON-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
 // COMMON-DAG: [[$GLOBAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"global">
@@ -42,7 +42,7 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
   // COMMON-DAG: llvm.mlir.constant(256 : i32)
   // CHECK-DAG: llvm.getelementptr {{.*}}[768]
   // GFX950-DAG: llvm.mlir.constant(768 : i32)
-  // GFX1250-DAG: llvm.mlir.constant(768 : i32)
+  // CDNA5-DAG: llvm.mlir.constant(768 : i32)
   // COMMON: llvm.mul
   // COMMON: llvm.getelementptr
   tt.func @amd_pipeline_stage_subslice_index(%index: i32) {
@@ -59,10 +59,10 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32_scalar
-  // GFX1250-LABEL: atomic_add_f32_scalar
+  // CDNA5-LABEL: atomic_add_f32_scalar
   tt.func @atomic_add_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : i1, %arg2 : f32) {
     // CHECK: llvm.cond_br
-    // GFX1250: llvm.cond_br
+    // CDNA5: llvm.cond_br
     // CHECK: llvm.atomicrmw
     // CHECK: llvm.store
     // CHECK: llvm.br
@@ -210,9 +210,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32
-  // GFX1250-LABEL: atomic_add_f32
+  // CDNA5-LABEL: atomic_add_f32
   tt.func @atomic_add_f32(%arg0 : tensor<256x!tt.ptr<f32>, #blocked0>, %arg1 : tensor<256xi1, #blocked0>, %arg2 : tensor<256xf32, #blocked0>) {
-    // GFX1250: llvm.cond_br
+    // CDNA5: llvm.cond_br
     // CHECK: llvm.cond_br
     // CHECK: llvm.atomicrmw
     // CHECK: llvm.atomicrmw
@@ -507,23 +507,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #linear = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [0, 0], [2, 0], [4, 0], [8, 0]], warp = [], block = []}>
 #slice = #ttg.slice<{dim = 0, parent = #linear}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // GFX1250-LABEL: reduce_xor_row_xmask
+  // CDNA5-LABEL: reduce_xor_row_xmask
   tt.func @reduce_xor_row_xmask(%arg0: tensor<16x2xf32, #linear>) {
     // stride 16
-    // GFX1250-NOT: rocdl.ds_bpermute
-    // GFX1250: rocdl.permlanex16
+    // CDNA5-NOT: rocdl.ds_bpermute
+    // CDNA5: rocdl.permlanex16
 
     // stride 8: ROW_XMASK:8
-    // GFX1250: rocdl.update.dpp
-    // GFX1250-SAME: with 360, 15, 15, true
+    // CDNA5: rocdl.update.dpp
+    // CDNA5-SAME: with 360, 15, 15, true
 
     // stride 4: ROW_XMASK:4
-    // GFX1250: rocdl.update.dpp
-    // GFX1250-SAME: with 356, 15, 15, true
+    // CDNA5: rocdl.update.dpp
+    // CDNA5-SAME: with 356, 15, 15, true
 
     // stride 1: ROW_XMASK:1
-    // GFX1250: rocdl.update.dpp
-    // GFX1250-SAME: with 353, 15, 15, true
+    // CDNA5: rocdl.update.dpp
+    // CDNA5-SAME: with 353, 15, 15, true
     %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
     ^bb0(%arg1: f32, %arg2: f32):
       %1 = arith.maxnumf %arg1, %arg2 : f32
