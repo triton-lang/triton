@@ -260,8 +260,13 @@ class HIPOptions:
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
 
-    # The following option provides hints to the AMDGPU backend regarding instruction scheduling
-    # for all `tt.dot` operations in a kernel. Experimental; right now no effect.
+    # Experimental hint for how the AMD backend schedules a kernel's instructions. The only
+    # recognized value is "mfma-schedule" (gfx942 and gfx950): run the MFMA scheduler on the optimized
+    # LLVM IR. It interleaves the MFMAs of each hot loop with the memory operations that are
+    # independent of them, keeping the matrix unit busy, and pins that order with
+    # llvm.amdgcn.sched.barrier so LLVM's machine schedulers preserve it. Kernels without an
+    # eligible loop are left untouched. MFMA accumulators pinned with `cd_regclass` keep their
+    # pins next to the moved MFMAs.
     schedule_hint: str = ''
 
     # Experimental: intended for development and debugging; may change or be removed without notice.
@@ -269,7 +274,7 @@ class HIPOptions:
     # Example: llvm_fn_attrs="amdgpu-sched-strategy=iterative-ilp,noinline"
     llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
 
-    # WGP/CU execution mode for gfx10, gfx11 and gfx120x; ignored on other targets.
+    # WGP/CU execution mode for gfx11 and gfx120x; ignored on other targets.
     wgp_cu_mode: str = "wgp"
 
     def __post_init__(self):
@@ -335,6 +340,8 @@ class HIPBackend(BaseBackend):
             opts["sanitize_overflow"] = False
 
         args = {'arch': knobs.runtime.override_arch or self.target.arch}
+        if opts.get("schedule_hint", "") not in ("", "mfma-schedule"):
+            raise ValueError(f"schedule_hint: unknown value {opts['schedule_hint']!r}; supported: 'mfma-schedule'")
 
         if opts.get("num_ctas", 1) > 1 and not amd.supports_multi_cta_launch(self.target.arch):
             raise ValueError(f"num_ctas > 1 not supported on {self.target.arch}")
@@ -557,7 +564,7 @@ class HIPBackend(BaseBackend):
         ## 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
         ##    For now it is used as a controller for developers only.
         __HIP_FTZ = True
-        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
+        amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ, options.wgp_cu_mode == "cu")
         # Lower Proton segment values before warp specialization captures partition operands.
         instrument(pm, point="llvmir-to-llvm", context=mod.context)
         amd.passes.ttgpuir.add_warp_specialize_to_llvm(pm, options.arch)
@@ -589,7 +596,7 @@ class HIPBackend(BaseBackend):
             # insert dbg intrinsic with several DI Attribute including source
             # var name and type info note: unknown reason for now, but this
             # pass and add_di_scope has to be run separately, otherwise if we
-            # put them into previous pipline, it trigger a segmentfault without
+            # put them into previous pipeline, it trigger a segmentfault without
             # any error message; could be due to a bug in mlir or pybind11
             pm = ir.pass_manager(mod.context)
             pm.enable_debug()
@@ -711,8 +718,9 @@ class HIPBackend(BaseBackend):
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-y")
             kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-z")
 
-        if knobs.amd.scalarize_packed_fops:
-            amd.add_scalarize_packed_fops_llvm_pass(kernel_fn)
+        # Opt-in MFMA scheduler, see the schedule_hint option (validated in parse_options).
+        if options.schedule_hint == "mfma-schedule" and options.arch in ("gfx942", "gfx950"):
+            amd.add_mfma_schedule_pass(kernel_fn, options.arch)
 
         # Get some metadata
         metadata["num_warps"] = total_warps_num

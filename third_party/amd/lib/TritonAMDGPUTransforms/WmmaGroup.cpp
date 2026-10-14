@@ -229,7 +229,7 @@ WmmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
   if (values.empty())
     return failure();
 
-  // If We have more than one instrinsics, prefer those with a larger K.
+  // If we have more than one intrinsic, prefer those with a larger K.
   for (const auto [symbol, k, kBase, feature] : llvm::drop_end(values)) {
     if (inputKDim >= k)
       return WmmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType,

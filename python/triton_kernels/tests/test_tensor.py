@@ -31,7 +31,7 @@ from triton_kernels.tensor_details.layout import (
     BlackwellMXScaleLayout,
     BlackwellMXValueLayout,
     CDNA4MXScaleLayout,
-    GFX1250MXScaleLayout,
+    CDNA5MXScaleLayout,
     HopperMXScaleLayout,
     HopperMXValueLayout,
     StridedLayout,
@@ -149,8 +149,8 @@ def test_fpsan_embed_unembed_torch_tensor(dtype, layout, fresh_knobs):
         ((0, 64), False, BlackwellActMXScaleLayout(None), [1, 0, 16, 2, 256]),
         ((3, 254, 60), False, CDNA4MXScaleLayout(), [3, 8192, 2]),
         ((0, 64), False, CDNA4MXScaleLayout(), [1, 0, 2]),
-        ((3, 254, 60), False, GFX1250MXScaleLayout(), [3, 32768, 1]),
-        ((0, 64), False, GFX1250MXScaleLayout(), [1, 0, 1]),
+        ((3, 254, 60), False, CDNA5MXScaleLayout(), [3, 32768, 1]),
+        ((0, 64), False, CDNA5MXScaleLayout(), [1, 0, 1]),
     ],
 )
 def test_layout_storage_shape_matches_conversion(logical_shape, is_fp4, layout, storage_shape):
@@ -181,6 +181,26 @@ def test_ragged_layout_storage_shape():
     metadata = make_ragged_tensor_metadata_torch(slice_sizes, 100)
 
     assert BlackwellActMXScaleLayout(metadata).storage_shape([100, 94], False) == [1, 4, 24, 2, 256]
+
+
+def test_blackwell_act_four_column_roundtrip():
+    data = torch.arange(512, dtype=torch.int32).reshape(2, 256, 1)
+    data = (data + data // 256).to(torch.uint8)
+    layout = BlackwellActMXScaleLayout(None, column_alignment=4)
+    encoded = convert_layout(wrap_torch_tensor(data), layout)
+    assert encoded.data.shape == (1, 4, 1, 2, 256)
+    assert torch.equal(convert_layout(encoded, StridedLayout(-1)).data, data)
+
+
+def test_blackwell_act_column_alignment_conversion():
+    data = torch.arange(512, dtype=torch.int32).reshape(2, 256, 1)
+    data = (data + data // 256).to(torch.uint8)
+    compact = BlackwellActMXScaleLayout(None, column_alignment=4)
+    encoded = convert_layout(wrap_torch_tensor(data), compact)
+    padded = convert_layout(encoded, BlackwellActMXScaleLayout(None))
+    assert padded.data.shape == (1, 4, 2, 2, 256)
+    assert torch.equal(convert_layout(padded, StridedLayout(-1)).data, data)
+    assert torch.equal(convert_layout(padded, compact).data, encoded.data)
 
 
 def test_import_does_not_initialize_cuda():
@@ -371,8 +391,8 @@ def test_convert_layout_between_strided_layouts_peak_allocation(dtype, with_out)
         ((64, 64), (64, 128), FP4, HopperMXValueLayout(-2, 3), HopperMXValueLayout(-2, 3)),
         ((10, 254, 60), None, UINT8, CDNA4MXScaleLayout(), CDNA4MXScaleLayout()),
         ((8, 1), None, UINT8, CDNA4MXScaleLayout(), CDNA4MXScaleLayout()),
-        ((10, 254, 60), None, UINT8, GFX1250MXScaleLayout(), GFX1250MXScaleLayout()),
-        ((4, 1), None, UINT8, GFX1250MXScaleLayout(), GFX1250MXScaleLayout()),
+        ((10, 254, 60), None, UINT8, CDNA5MXScaleLayout(), CDNA5MXScaleLayout()),
+        ((4, 1), None, UINT8, CDNA5MXScaleLayout(), CDNA5MXScaleLayout()),
     ],
 )
 def test_convert_layout_noop_for_equivalent_layout(storage_shape, logical_shape, dtype, layout, equivalent_layout):

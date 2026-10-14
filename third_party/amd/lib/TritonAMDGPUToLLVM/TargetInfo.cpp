@@ -129,28 +129,14 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(getArch());
 }
 
-int TargetInfo::getWarpSize() const { return targetFeatures.getWarpSize(); }
-
-int TargetInfo::getSharedMemorySize() const {
-  return targetFeatures.getSharedMemorySize();
-}
-
 int TargetInfo::getSharedMemoryBanks() const {
   switch (getISAFamily()) {
-  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA5:
   case ISAFamily::CDNA4:
     return 64;
   default:
     return 32;
   }
-}
-
-size_t TargetInfo::getSharedMemoryPartitionSize() const {
-  return targetFeatures.getSharedMemoryPartitionSize();
-}
-
-bool TargetInfo::supportMaximumMinimum() const {
-  return targetFeatures.supportMaximumMinimum();
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
@@ -174,7 +160,7 @@ Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
-  case ISAFamily::GFX1250: {
+  case ISAFamily::CDNA5: {
     Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
     timer = LLVM::createLLVMIntrinsicCallOp(
                 rewriter, loc, "llvm.amdgcn.s.sendmsg.rtn.i64", i64_ty, {msg})
@@ -762,112 +748,14 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
-bool TargetInfo::supportBitwidth16Elementwise() const {
-  return targetFeatures.supportBitwidth16Elementwise();
-}
-
-bool TargetInfo::supportBitwidth32Elementwise() const {
-  return targetFeatures.supportBitwidth32Elementwise();
-}
-
 unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
   // AMD has native ternary max/min instructions: v_max3/v_min3 on all GFX9+,
-  // and v_maximum3/v_minimum3 additionally on GFX950 and GFX1250.
+  // and v_maximum3/v_minimum3 additionally on GFX950 and CDNA5.
   // Use a ternary reduction tree so these map 1:1 to hardware.
   if (isa<arith::MaximumFOp, arith::MinimumFOp, arith::MaxNumFOp,
           arith::MinNumFOp>(combinerOp))
     return 3;
   return 2;
-}
-
-bool TargetInfo::supportsDirectToLdsScatter() const {
-  return targetFeatures.supportsDirectToLdsScatter();
-}
-
-bool TargetInfo::requiresAliasInfoForAsyncOps() const {
-  return targetFeatures.requiresAliasInfoForAsyncOps();
-}
-
-bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
-  return targetFeatures.supportsDirectToLdsLoadBitWidth(bitWidth);
-}
-
-bool TargetInfo::supportsMultiCTALaunch() const {
-  return targetFeatures.supportsMultiCTALaunch();
-}
-
-bool TargetInfo::supportsMulticast() const {
-  return targetFeatures.supportsMulticast();
-}
-
-unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
-  return targetFeatures.getMaxMulticastMaskPopcount();
-}
-
-bool TargetInfo::supportsTDM() const { return targetFeatures.supportsTDM(); }
-
-bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
-  return targetFeatures.supportsClusterLoadBitWidth(biwWidth);
-}
-
-bool TargetInfo::supportsDirectFromLdsStoreBitWidth(int bitWidth) const {
-  return targetFeatures.supportsDirectFromLdsStoreBitWidth(bitWidth);
-}
-
-bool TargetInfo::supportsBufferLoadToLocal() const {
-  return targetFeatures.supportsBufferLoadToLocal();
-}
-
-bool TargetInfo::useAsyncMarks() const {
-  return targetFeatures.useAsyncMarks();
-}
-
-bool TargetInfo::supportsBufferAtomicRMW() const {
-  return targetFeatures.supportsBufferAtomicRMW();
-}
-
-bool TargetInfo::supportsBufferAtomicFadd(mlir::Type elementType) const {
-  return targetFeatures.supportsBufferAtomicFadd(elementType);
-}
-
-int32_t TargetInfo::getBufferAtomicCachePolicy(bool hasUsers) const {
-  return targetFeatures.getBufferAtomicCachePolicy(hasUsers);
-}
-
-bool TargetInfo::supportsWaveId() const {
-  return targetFeatures.supportsWaveId();
-}
-
-bool TargetInfo::supportsPermlaneSwap() const {
-  return targetFeatures.supportsPermlaneSwap();
-}
-
-bool TargetInfo::supportsCvtPkScalePk8() const {
-  return targetFeatures.supportsCvtPkScalePk8();
-}
-
-bool TargetInfo::supportsCvtPkScalePk8Upcast() const {
-  return targetFeatures.supportsCvtPkScalePk8Upcast();
-}
-
-bool TargetInfo::supportsCvtPkScalePk8Block16() const {
-  return targetFeatures.supportsCvtPkScalePk8Block16();
-}
-
-bool TargetInfo::supportsHwScaledUpcast() const {
-  return targetFeatures.supportsHwScaledUpcast();
-}
-
-bool TargetInfo::supportsHwScaledDowncast() const {
-  return targetFeatures.supportsHwScaledDowncast();
-}
-
-bool TargetInfo::supportDppBroadcast() const {
-  return targetFeatures.supportDppBroadcast();
-}
-
-bool TargetInfo::isGFX1250Strict() const {
-  return targetFeatures.isGFX1250Strict();
 }
 
 std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>

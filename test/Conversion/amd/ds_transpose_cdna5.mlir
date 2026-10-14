@@ -212,7 +212,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
-  // GFX1250 ds_load_tr8_b64 maps source lane bit 2 to destination lane bit 3.
+  // CDNA5 ds_load_tr8_b64 maps source lane bit 2 to destination lane bit 3.
   // This test makes destination lane bit 3 select one of two LDS partitions, so
   // the lowering must remap the source lane before querying partitionLayout.
   // CHECK-LABEL: ds_transpose_partitioned_remaps_lane

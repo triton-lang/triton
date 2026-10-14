@@ -393,35 +393,38 @@ def test_cudagraph_not_captured_by_profiler(tmp_path: pathlib.Path, capfd, devic
     if data == "trace":
         with temp_file.open() as f:
             trace_events = json.load(f)["traceEvents"]
+        flow_starts = [e for e in trace_events if e.get("cat") == "flow" and e["ph"] == "s"]
         for replay in ("replay0", "replay1"):
             kernels = [e for e in trace_events if e.get("cat") == "kernel" and e["args"]["call_stack"][1] == replay]
-            assert len(kernels) >= 3
+            assert len(kernels) == 4
             assert any(e["dur"] > 0 for e in kernels)
-        # The graph launch has no CPU time range, so its kernels have no launch arrow.
-        assert not any(e.get("cat") == "flow" for e in trace_events)
-        return
+            # Each kernel's launch arrow starts at the CPU scope around replay.
+            scope = next(e for e in trace_events
+                         if e.get("cat") == "scope" and e["args"]["call_stack"] == ["ROOT", replay])
+            starts = [e for e in flow_starts if e["tid"] == scope["tid"] and e["ts"] == scope["ts"]]
+            assert len(starts) == len(kernels)
+    else:  # "tree"
+        with temp_file.open() as f:
+            data = json.load(f)
+        replay0_frame = None
+        replay1_frame = None
+        for child in data[0]["children"]:
+            if child["frame"]["name"] == "replay0":
+                replay0_frame = child
+            elif child["frame"]["name"] == "replay1":
+                replay1_frame = child
+        assert replay0_frame is not None
+        assert replay1_frame is not None
+        assert len(replay0_frame["children"]) >= 3
+        assert len(replay1_frame["children"]) >= 3
 
-    with temp_file.open() as f:
-        data = json.load(f)
-    replay0_frame = None
-    replay1_frame = None
-    for child in data[0]["children"]:
-        if child["frame"]["name"] == "replay0":
-            replay0_frame = child
-        elif child["frame"]["name"] == "replay1":
-            replay1_frame = child
-    assert replay0_frame is not None
-    assert replay1_frame is not None
-    assert len(replay0_frame["children"]) >= 3
-    assert len(replay1_frame["children"]) >= 3
+        def has_positive_time_metric(node):
+            if node["metrics"].get("time (ns)", 0) > 0:
+                return True
+            return any(has_positive_time_metric(child) for child in node["children"])
 
-    def has_positive_time_metric(node):
-        if node["metrics"].get("time (ns)", 0) > 0:
-            return True
-        return any(has_positive_time_metric(child) for child in node["children"])
-
-    assert has_positive_time_metric(replay0_frame)
-    assert has_positive_time_metric(replay1_frame)
+        assert has_positive_time_metric(replay0_frame)
+        assert has_positive_time_metric(replay1_frame)
 
 
 @_skip_cudagraph_test
@@ -1520,6 +1523,10 @@ def test_trace_cudagraph_graph_scope_ranges(tmp_path: pathlib.Path, device: str)
         "<metric>",
     ]
     assert all(event["name"] != "foo" for event in metadata_kernel_events)
+
+    flow_starts = [event for event in trace_events if event.get("cat") == "flow" and event["ph"] == "s"]
+    flow_finishes = [event for event in trace_events if event.get("cat") == "flow" and event["ph"] == "f"]
+    assert {event["id"] for event in flow_starts} == {event["id"] for event in flow_finishes}
 
     test0_scope = next(
         event for event in trace_events

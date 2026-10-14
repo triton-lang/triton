@@ -94,7 +94,7 @@ getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
 
   bool filterSmallVectors = !targetFeatures.isCDNA4() &&
                             !targetFeatures.isRDNA() &&
-                            !targetFeatures.isGFX1250();
+                            !targetFeatures.isCDNA5();
 
   bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
@@ -579,7 +579,8 @@ void pipelineLoop(scf::ForOp forOp, int numStages) {
 }
 } // namespace
 
-struct ScheduleLoops : impl::TritonAMDGPUScheduleLoopsBase<ScheduleLoops> {
+struct TritonAMDGPUScheduleLoopsPass
+    : impl::TritonAMDGPUScheduleLoopsBase<TritonAMDGPUScheduleLoopsPass> {
   using Base::Base;
 
   void runOnOperation() override {

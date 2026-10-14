@@ -89,7 +89,7 @@ static void moveUpLoad(tt::LoadOp load) {
 } // namespace
 
 struct TritonAMDGPUMoveUpPrologueLoadsPass
-    : public impl::TritonAMDGPUMoveUpPrologueLoadsBase<
+    : impl::TritonAMDGPUMoveUpPrologueLoadsBase<
           TritonAMDGPUMoveUpPrologueLoadsPass> {
   void runOnOperation() override {
     // Collect load ops with "amd.pipeliner_part" attribute.

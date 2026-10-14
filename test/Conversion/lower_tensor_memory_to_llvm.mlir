@@ -167,7 +167,7 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
   // CHECK: mbarrier.arrive.shared::cta
   // CHECK: tcgen05.st.sync.aligned
   // CHECK-NEXT: nvvm.tcgen05.wait <store>
-  // CHECK: tcgen05.ld.sync.aligned
+  // CHECK: nvvm.tcgen05.ld
   // CHECK-NOT: nvvm.tcgen05.wait
   // CHECK: tcgen05.st.sync.aligned
   // CHECK-NOT: nvvm.tcgen05.wait

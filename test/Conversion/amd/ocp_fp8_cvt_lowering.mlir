@@ -43,7 +43,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @downcast_f32_to_ocp_f8(%arg0: tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>) {
-    // HWCVT: %[[P0:.*]] = rocdl.cvt.pk.fp8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // HWCVT-DAG: %[[MAX:.*]] = llvm.mlir.constant(4.480000e+02 : f32) : f32
+    // HWCVT-DAG: %[[MIN:.*]] = llvm.mlir.constant(-4.480000e+02 : f32) : f32
+    // HWCVT: %[[LO:.*]] = llvm.intr.minimum(%{{.*}}, %[[MAX]]) : (f32, f32) -> f32
+    // HWCVT: %[[CLAMPED:.*]] = llvm.intr.maximum(%[[LO]], %[[MIN]]) : (f32, f32) -> f32
+    // HWCVT-COUNT-3: llvm.intr.maximum
+    // HWCVT: %[[P0:.*]] = rocdl.cvt.pk.fp8.f32 %[[CLAMPED]], %{{.*}} -> %{{.*}}[false]
     // HWCVT: rocdl.cvt.pk.fp8.f32 %{{.*}}, %{{.*}} -> %[[P0]][true]
     // HWCVT: %[[P1:.*]] = rocdl.cvt.pk.fp8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[false]
     // HWCVT: rocdl.cvt.pk.fp8.f32 %{{.*}}, %{{.*}} -> %[[P1]][true]
@@ -59,7 +64,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @downcast_f32_to_ocp_bf8(%arg0: tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>) {
-    // HWCVT: %[[P0:.*]] = rocdl.cvt.pk.bf8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[false]
+    // HWCVT-DAG: %[[MAX:.*]] = llvm.mlir.constant(5.734400e+04 : f32) : f32
+    // HWCVT-DAG: %[[MIN:.*]] = llvm.mlir.constant(-5.734400e+04 : f32) : f32
+    // HWCVT: %[[LO:.*]] = llvm.intr.minimum(%{{.*}}, %[[MAX]]) : (f32, f32) -> f32
+    // HWCVT: %[[CLAMPED:.*]] = llvm.intr.maximum(%[[LO]], %[[MIN]]) : (f32, f32) -> f32
+    // HWCVT-COUNT-3: llvm.intr.maximum
+    // HWCVT: %[[P0:.*]] = rocdl.cvt.pk.bf8.f32 %[[CLAMPED]], %{{.*}} -> %{{.*}}[false]
     // HWCVT: rocdl.cvt.pk.bf8.f32 %{{.*}}, %{{.*}} -> %[[P0]][true]
     // HWCVT: %[[P1:.*]] = rocdl.cvt.pk.bf8.f32 %{{.*}}, %{{.*}} -> %{{.*}}[false]
     // HWCVT: rocdl.cvt.pk.bf8.f32 %{{.*}}, %{{.*}} -> %[[P1]][true]

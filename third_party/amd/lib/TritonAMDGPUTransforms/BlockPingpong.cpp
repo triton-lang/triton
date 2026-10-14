@@ -712,7 +712,7 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
 // For ChainedDots with num_stage==4 the pipeliner already places ops in the
 // correct order to allow for efficient pingpong. The loop contains 2 pairs of
 // compute and memory clusters so we only have to place barriers/sched.barriers
-// at the bounaries and give higher priority to memory clusters.
+// at the boundaries and give higher priority to memory clusters.
 // See ScheduleLoops.cpp:ChainedDotSchedule for details about the schedule.
 //
 // Notes

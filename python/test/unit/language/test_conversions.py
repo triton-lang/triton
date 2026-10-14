@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_gfx1250
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_cdna5
 
 FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
@@ -433,8 +433,8 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device):
     if dst_dtype in FP8_DTYPES and is_hip_rdna3():
         pytest.skip(f"{dst_dtype} is not supported on AMDGPU RDNA3")
 
-    if mode in ('inf', '-inf') and (is_hip_rdna4() or is_hip_gfx1250()):
-        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX12")
+    if mode in ('inf', '-inf') and is_hip_cdna5():
+        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU CDNA5")
 
     converter = {
         tl.float8e4nv: torch.float8_e4m3fn,
