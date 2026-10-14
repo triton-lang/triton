@@ -25,6 +25,107 @@ def _assert_clc_ws_ir(compiled):
     assert ttgir.count("ttng.clc_try_cancel ") == 1
 
 
+@triton.jit
+def gather_ws_kernel(a_ptr, b_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+                     WARP_SPECIALIZE: tl.constexpr):
+    om = tl.arange(0, M)
+    on = tl.arange(0, N)
+    ok = tl.arange(0, K)
+    acc = tl.zeros([M, N], dtype=tl.float32)
+    for i in tl.range(0, 4, warp_specialize=WARP_SPECIALIZE):
+        a = tl.load(a_ptr + om[:, None] * K + ok[None, :] + i * M * K)
+        b = tl.load(b_ptr + ok[:, None] * N + on[None, :] + i * K * N)
+        idx = tl.full([M, K], 1, tl.int32)
+        a = tl.gather(a, idx, axis=1)
+        acc += tl.dot(a, b)
+    tl.store(out_ptr + om[:, None] * N + on[None, :], acc)
+
+
+@triton.jit
+def gather_ws_descriptor_kernel(a_ptr, b_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+                                WARP_SPECIALIZE: tl.constexpr):
+    a_desc = tl.make_tensor_descriptor(a_ptr, shape=[4 * M, K], strides=[K, 1], block_shape=[M, K])
+    b_desc = tl.make_tensor_descriptor(b_ptr, shape=[4 * K, N], strides=[N, 1], block_shape=[K, N])
+    acc = tl.zeros([M, N], dtype=tl.float32)
+    for i in tl.range(0, 4, warp_specialize=WARP_SPECIALIZE):
+        a = a_desc.load([i * M, 0])
+        b = b_desc.load([i * K, 0])
+        indices = tl.full([M, K], 1, tl.int32)
+        acc = tl.dot(tl.gather(a, indices, axis=1), b, acc)
+    om = tl.arange(0, M)
+    on = tl.arange(0, N)
+    tl.store(out_ptr + om[:, None] * N + on[None, :], acc.to(tl.float16))
+
+
+@pytest.mark.skipif(is_hip() or not is_hopper(), reason="Requires Hopper CUDA")
+def test_warp_specialize_gather_fallback_matches_plain_pipeline():
+    M = N = K = 128
+    torch.manual_seed(11952)
+    a = torch.randn((4, M, K), device="cuda", dtype=torch.float16)
+    b = torch.randn((4, K, N), device="cuda", dtype=torch.float16)
+    out_ws = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    out_plain = torch.empty_like(out_ws)
+
+    kernel_ws = gather_ws_kernel[(1, )](
+        a,
+        b,
+        out_ws,
+        M,
+        N,
+        K,
+        True,
+        num_warps=4,
+        num_stages=3,
+    )
+    gather_ws_kernel[(1, )](
+        a,
+        b,
+        out_plain,
+        M,
+        N,
+        K,
+        False,
+        num_warps=4,
+        num_stages=3,
+    )
+    if is_compile_warmup():
+        return
+
+    assert "tt.gather" in kernel_ws.asm["ttgir"]
+    assert "ttg.warp_specialize" not in kernel_ws.asm["ttgir"]
+    expected = torch.zeros_like(out_ws)
+    for i in range(4):
+        selected = a[i, :, 1:2].float().expand(M, K)
+        expected += selected @ b[i].float()
+    torch.testing.assert_close(out_ws, expected, atol=5e-2, rtol=5e-2)
+    torch.testing.assert_close(out_ws, out_plain, atol=5e-2, rtol=5e-2)
+
+
+@pytest.mark.skipif(is_hip() or not is_hopper(), reason="Requires Hopper CUDA")
+def test_warp_specialize_gather_supported_partition_executes():
+    M, N, K = 64, 512, 32
+    torch.manual_seed(11988)
+    a = torch.randn((4, M, K), device="cuda", dtype=torch.float16)
+    b = torch.randn((4, K, N), device="cuda", dtype=torch.float16)
+    out_ws = torch.empty((M, N), device="cuda", dtype=torch.float16)
+    out_plain = torch.empty_like(out_ws)
+
+    def alloc_fn(size, align, stream):
+        return torch.empty(size, device="cuda", dtype=torch.uint8)
+
+    triton.set_allocator(alloc_fn)
+    kernel_ws = gather_ws_descriptor_kernel[(1, )](a, b, out_ws, M, N, K, True, num_warps=4, num_stages=3)
+    gather_ws_descriptor_kernel[(1, )](a, b, out_plain, M, N, K, False, num_warps=4, num_stages=3)
+    if is_compile_warmup():
+        return
+
+    assert "tt.gather" in kernel_ws.asm["ttgir"]
+    assert "ttg.warp_specialize" in kernel_ws.asm["ttgir"]
+    expected = sum(a[i, :, 1:2].float().expand(M, K) @ b[i].float() for i in range(4)).half()
+    torch.testing.assert_close(out_ws, expected, atol=5e-2, rtol=5e-2)
+    torch.testing.assert_close(out_ws, out_plain, atol=5e-2, rtol=5e-2)
+
+
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
 @pytest.mark.disable_warmup(reason="compiles an explicit IR fixture rather than a JIT launch")
