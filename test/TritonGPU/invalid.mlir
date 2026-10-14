@@ -1076,3 +1076,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @thread_predicate_out_of_range_cta() {
+    // expected-error @+1 {{thread domain exceeds the enclosing execution domain}}
+    %predicate = ttg.thread_predicate <31, 3, 2>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @thread_handoff_partial_cta(%value: i32) {
+    // expected-error @+1 {{cross-CTA handoff requires CTA zero as its source}}
+    %result = ttg.thread_handoff %value <31, 3, 1> -> <0, 0> : i32
+    tt.return
+  }
+}
