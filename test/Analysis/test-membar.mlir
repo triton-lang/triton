@@ -1738,7 +1738,7 @@ tt.func @disjoint_remsi(%cst: tensor<128x128xf16>, %phase: i32) {
   %c3_i32 = arith.constant 3 : i32
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
 
-  %w_off = arith.addi %phase, %c2_i32 : i32
+  %w_off = arith.addi %phase, %c2_i32 overflow<nsw> : i32
   %w_idx = arith.remsi %w_off, %c3_i32 : i32
   %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
   %r_idx = arith.remsi %phase, %c3_i32 : i32
@@ -1806,7 +1806,7 @@ tt.func @disjoint_remsi_through_memdesc_trans(%cst: tensor<128x128xf16>,
   %c3_i32 = arith.constant 3 : i32
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
 
-  %w_off = arith.addi %phase, %c2_i32 : i32
+  %w_off = arith.addi %phase, %c2_i32 overflow<nsw> : i32
   %w_idx = arith.remsi %w_off, %c3_i32 : i32
   %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
 
@@ -2245,7 +2245,7 @@ tt.func @shared_buffer_index_structured_backedge(%input: tensor<128xi32, #writer
   %allocation = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
   // CHECK: cf.cond_br
   scf.for %i = %c0 to %ub step %c1 : i32 {
-    %next = arith.addi %i, %c1 : i32
+    %next = arith.addi %i, %c1 overflow<nsw> : i32
     %read_index = arith.remsi %i, %c2 : i32
     %write_index = arith.remsi %next, %c2 : i32
     // CHECK: ttg.memdesc_index
