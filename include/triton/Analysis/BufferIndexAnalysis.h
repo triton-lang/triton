@@ -30,7 +30,9 @@ struct BufferIndexExpr;
 ///
 /// Recognized index shapes:
 ///   1. integer constants,
-///   2. `arith.addi` with one constant operand,
+///   2. `arith.addi` with one constant operand, only if it cannot overflow:
+///      the op is `nsw`, or the other operand's range proves it (constants,
+///      `remsi` by N, the wrap below, and loop arguments bounded by those),
 ///   3. `arith.remsi` with a positive constant modulus,
 ///   4. the pipeliner's select/cmpi one-step wrap:
 ///        select(cmpi sge(base + 1, N), 0, base + 1)
