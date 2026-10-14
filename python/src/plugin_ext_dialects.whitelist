@@ -1,0 +1,9 @@
+# Dialects whose TypeID must stay in libtriton.so for out-of-tree plugins
+# sharing the host MLIRContext. Edit this file only — CMake reads it and
+# writes python/src/plugin_ext_dialects.gen.cc in the build tree.
+#
+# format: cmake_target|include_header|TypeExpr
+MLIRLinalgDialect|mlir/Dialect/Linalg/IR/Linalg.h|mlir::linalg::LinalgDialect
+MLIRTensorDialect|mlir/Dialect/Tensor/IR/Tensor.h|mlir::tensor::TensorDialect
+MLIRComplexDialect|mlir/Dialect/Complex/IR/Complex.h|mlir::complex::ComplexDialect
+MLIRBufferizationDialect|mlir/Dialect/Bufferization/IR/Bufferization.h|mlir::bufferization::BufferizationDialect

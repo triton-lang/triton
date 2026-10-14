@@ -10,6 +10,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
+#include <map>
 #include <optional>
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
@@ -355,6 +356,30 @@ void init_triton_ir(py::module_ &m) {
       },
       "Given a path to a Triton extension, register any dialects to be loaded "
       "in `load_dialects`.");
+
+  // API v3 generalized IR extension (HostExtendCallback). Hold a raw borrowed
+  // PyObject* (not a static py::module_) so interpreter shutdown does not
+  // double-decref via C++ static destructors.
+  static PyObject *irModuleObj = m.ptr();
+  m.def(
+      "extend_module_with",
+      [](const std::string &libPath) {
+        auto pluginOrErr = mlir::triton::plugin::TritonPlugin::load(libPath);
+        if (!pluginOrErr) {
+          std::string errMsg = llvm::toString(pluginOrErr.takeError());
+          throw std::runtime_error(errMsg);
+        }
+        auto plugin = std::move(*pluginOrErr);
+        py::gil_scoped_acquire acquire;
+        py::module_ irMod = py::borrow<py::module_>(irModuleObj);
+        mlir::triton::plugin::HostExtensionArgs args{};
+        args.irModule = static_cast<void *>(&irMod);
+        plugin.extendHost(&args);
+        // Keep dialects available for load_dialects as well.
+        plugins.push_back(std::move(plugin));
+      },
+      "Load a Triton plugin and invoke its HostExtendCallback (API v3) to "
+      "register rich IR bindings on this module.");
 
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
@@ -1964,6 +1989,7 @@ void init_triton_ir(py::module_ &m) {
               "Triton builder type is no longer available");
         for (const auto &op : plugin.listOps()) {
           std::string wrapped = std::string("create_") + op.name;
+          // Table-driven OpInfo: create_<name>(list[Value]) -> Value
           builder.def(wrapped.c_str(),
                       [op](TritonOpBuilder &self, std::vector<Value> args) {
                         args.insert(args.begin(), Value());

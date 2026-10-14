@@ -341,11 +341,18 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
 
   find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
-  nanobind_build_library(nanobind-static)
-  if(TRITON_STABLE_ABI)
-    target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=0x030C0000)
+  # TRITON_EXT: shared libnanobind.so so plugins share host type casters.
+  if(TRITON_EXT_ENABLED)
+    nanobind_build_library(nanobind)
+    set(TRITON_NANOBIND_LIB nanobind)
+  else()
+    nanobind_build_library(nanobind-static)
+    set(TRITON_NANOBIND_LIB nanobind-static)
   endif()
-  target_link_libraries(nanobind-static PRIVATE Python3::Module)
+  if(TRITON_STABLE_ABI)
+    target_compile_definitions(${TRITON_NANOBIND_LIB} PUBLIC Py_LIMITED_API=0x030C0000)
+  endif()
+  target_link_libraries(${TRITON_NANOBIND_LIB} PRIVATE Python3::Module)
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
@@ -408,7 +415,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     LLVMAMDGPUAsmParser
 
     Python3::Module
-    nanobind-static
+    ${TRITON_NANOBIND_LIB}
   )
 
   # Define triton library
@@ -422,6 +429,47 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
+
+  # Plugin-ext dialect whitelist → link libs + generated TypeID force-refs.
+  set(_TRITON_EXT_WL "${PYTHON_SRC_PATH}/plugin_ext_dialects.whitelist")
+  set(_TRITON_EXT_GEN "${CMAKE_BINARY_DIR}/python/src/plugin_ext_dialects.gen.cc")
+  set(TRITON_PLUGIN_EXT_DIALECT_LIBS "")
+  set(_wl_includes "")
+  set(_wl_exprs "")
+  if(EXISTS "${_TRITON_EXT_WL}")
+    file(STRINGS "${_TRITON_EXT_WL}" _wl_lines)
+    foreach(_line IN LISTS _wl_lines)
+      # Skip comments / blanks; require tgt|hdr|TypeExpr
+      if(NOT _line MATCHES "^[A-Za-z0-9_]+\\|")
+        continue()
+      endif()
+      string(REPLACE "|" ";" _parts "${_line}")
+      list(LENGTH _parts _n)
+      if(NOT _n EQUAL 3)
+        message(FATAL_ERROR "Bad whitelist line in ${_TRITON_EXT_WL}: ${_line}")
+      endif()
+      list(GET _parts 0 _tgt)
+      list(GET _parts 1 _hdr)
+      list(GET _parts 2 _expr)
+      list(APPEND TRITON_PLUGIN_EXT_DIALECT_LIBS ${_tgt})
+      string(APPEND _wl_includes "#include \"${_hdr}\"\n")
+      string(APPEND _wl_exprs "  mix ^= reinterpret_cast<uintptr_t>(mlir::TypeID::get<${_expr}>().getAsOpaquePointer());\n")
+    endforeach()
+  endif()
+
+  file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/python/src")
+  file(WRITE "${_TRITON_EXT_GEN}"
+"#include \"mlir/Support/TypeID.h\"
+${_wl_includes}
+#include <cstdint>
+
+extern \"C\" __attribute__((used, visibility(\"default\"))) const void *
+tritonForceExtDialectTypeIDs() {
+  volatile uintptr_t mix = 0;
+${_wl_exprs}  return reinterpret_cast<const void *>(mix);
+}
+")
+
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
                   ${PYTHON_SRC_PATH}/ir.cc
                   ${PYTHON_SRC_PATH}/gluon_ir.cc
@@ -430,7 +478,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
                   ${PYTHON_SRC_PATH}/llvm.cc
-                  ${PYTHON_SRC_PATH}/specialize.cc)
+                  ${PYTHON_SRC_PATH}/specialize.cc
+                  ${_TRITON_EXT_GEN})
 
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(triton PRIVATE -Wno-array-bounds)
@@ -438,6 +487,18 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
+
+  # Whitelist dialects: whole-archive on GNU ld; live refs from generated .cc.
+  if(TRITON_PLUGIN_EXT_DIALECT_LIBS)
+    if(NOT APPLE AND NOT MSVC)
+      target_link_libraries(triton PRIVATE
+        "-Wl,--whole-archive"
+        ${TRITON_PLUGIN_EXT_DIALECT_LIBS}
+        "-Wl,--no-whole-archive")
+    else()
+      target_link_libraries(triton PRIVATE ${TRITON_PLUGIN_EXT_DIALECT_LIBS})
+    endif()
+  endif()
 
   # Do not propagate libraries that libtriton depends on. This ensures that
   # targets that link against libtriton do not accidentally link in their own
@@ -508,6 +569,18 @@ if(TRITON_BUILD_PYTHON_MODULE)
   # Build plugins when building libtriton since they depend on libtriton.
   if(TRITON_EXT_ENABLED)
     add_subdirectory(examples/plugins)
+    # Ship shared nanobind beside libtriton so plugins resolve NB_SHARED APIs.
+    if(TARGET nanobind)
+      set_target_properties(nanobind PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${TRITON_WHEEL_DIR}/_C"
+        RUNTIME_OUTPUT_DIRECTORY "${TRITON_WHEEL_DIR}/_C"
+        OUTPUT_NAME "nanobind")
+      # $ORIGIN so installed/copied wheels find libnanobind.so next to libtriton.
+      set_target_properties(triton PROPERTIES
+        BUILD_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN"
+        BUILD_WITH_INSTALL_RPATH TRUE)
+    endif()
   endif()
 endif()
 
