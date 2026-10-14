@@ -89,6 +89,8 @@ bool isPermutationMatrixLayout(const LinearLayout &ll) {
 }
 
 bool isGenericLinearEncoding(Attribute attr) {
+  if (auto partial = dyn_cast<PartialEncodingAttr>(attr))
+    return isGenericLinearEncoding(partial.getParent());
   if (isa<GenericLinearEncodingAttr>(attr))
     return true;
 
@@ -918,14 +920,18 @@ std::optional<LinearLayout> parseLinearLayout(const DictionaryAttr &dict,
     bases[inDimName] = std::move(inDimBases);
   }
   size_t rank = 0;
+  bool hasBasisVector = false;
   for (const auto &basesDim : llvm::make_second_range(bases)) {
     if (!basesDim.empty()) {
+      hasBasisVector = true;
       rank = basesDim[0].size();
       break;
     }
   }
 
-  if (rank == 0 && serializedRank == 0) {
+  // Empty vectors explicitly describe a rank-zero scalar layout. Only an
+  // entirely absent set of vectors leaves the logical rank unspecified.
+  if (rank == 0 && serializedRank == 0 && !hasBasisVector) {
     parser.emitError(parser.getCurrentLocation(), "Empty Layout not supported");
     return {};
   }
@@ -3680,6 +3686,13 @@ struct TritonGPUInferLayoutInterface
     }
     if (!expected || !got)
       return failure();
+    auto availability = [&](Attribute enc) {
+      if (auto partial = dyn_cast<PartialEncodingAttr>(enc))
+        return partial.getAvailability();
+      return ThreadAvailabilityAttr::get(getContext(), 0, 0, 0);
+    };
+    if (availability(expected) != availability(got))
+      return emitOptionalError(loc, "layout availability differs");
 
     auto expectedLL =
         toLinearLayout(shape, cast<LayoutEncodingTrait>(expected));
@@ -4032,6 +4045,7 @@ struct TritonGPUVerifyTensorLayoutInterface
                triton::DotOp, triton::DotScaledOp, triton::CallOp,
                triton::ReturnOp, triton::FuncOp, triton::AssertOp,
                triton::gpu::ConvertLayoutOp, triton::gpu::Fp4ToFpOp,
+               triton::gpu::ScalarSplatOp, triton::gpu::ExtractScalarOp,
                triton::gpu::LocalLoadOp, triton::gpu::LocalStoreOp>(op);
   }
 
@@ -4059,6 +4073,10 @@ struct TritonGPUVerifyTensorLayoutInterface
                        << rankedTy.getShape()
                        << " which is not a power of two.";
     }
+    if (auto partial = dyn_cast<PartialEncodingAttr>(layout))
+      if (failed(verifyThreadAvailability(op, rankedTy,
+                                          partial.getAvailability())))
+        return failure();
     auto ll = toLinearLayout(rankedTy);
     ModuleOp module = op->getParentOfType<ModuleOp>();
 
@@ -4494,8 +4512,31 @@ void TritonGPUDialect::initialize() {
   MemDescType::attachInterface<MemDescModel>(*getContext());
 }
 
+LogicalResult
+mlir::triton::gpu::verifyThreadAvailability(Operation *op, Type type,
+                                            ThreadAvailabilityAttr domain) {
+  uint32_t lane =
+      TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>()) - 1;
+  uint32_t warp = lookupNumWarps(op) - 1;
+  uint32_t block = lookupNumCTAs(op) - 1;
+  if (auto tensor = dyn_cast<RankedTensorType>(type)) {
+    auto masks = gpu::toLinearLayout(tensor).getFreeVariableMasks();
+    lane = masks.lookup(StringAttr::get(op->getContext(), "lane"));
+    warp = masks.lookup(StringAttr::get(op->getContext(), "warp"));
+    block = masks.lookup(StringAttr::get(op->getContext(), "block"));
+  }
+  if ((domain.getLane() & ~lane) || (domain.getWarp() & ~warp) ||
+      (domain.getBlock() & ~block))
+    return op->emitOpError("availability restriction removes logical "
+                           "elements or exceeds the execution domain");
+  return success();
+}
+
 LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
                                                          NamedAttribute attr) {
+  if (attr.getName() == "ttg.availability")
+    return op->emitOpError(
+        "availability must be represented by a partial layout type");
   // Verify that dialect attributes are attached to the right ops.
   if (llvm::is_contained(
           {AttrNumCTAsName, AttrTargetName, AttrNumThreadsPerWarp},
@@ -4806,4 +4847,50 @@ unsigned triton::gpu::getMinInterval(Attribute encoding) {
   auto padded = getPaddedEncoding(encoding);
   assert(padded && "expected padded encoding or partitioned wrapping padded");
   return padded.getMinInterval();
+}
+
+Attribute mlir::triton::gpu::getPlacementEncoding(Attribute encoding) {
+  if (auto partial = dyn_cast<PartialEncodingAttr>(encoding))
+    return partial.getParent();
+  return encoding;
+}
+
+ThreadAvailabilityAttr mlir::triton::gpu::getThreadAvailability(Type type) {
+  if (auto tensor = dyn_cast<RankedTensorType>(type))
+    if (auto partial =
+            dyn_cast_or_null<PartialEncodingAttr>(tensor.getEncoding()))
+      return partial.getAvailability();
+  return ThreadAvailabilityAttr::get(type.getContext(), 0, 0, 0);
+}
+
+bool mlir::triton::gpu::availabilityCovers(Type source, Type destination) {
+  auto src = getThreadAvailability(source);
+  auto dst = getThreadAvailability(destination);
+  return !(src.getLane() & ~dst.getLane()) &&
+         !(src.getWarp() & ~dst.getWarp()) &&
+         !(src.getBlock() & ~dst.getBlock());
+}
+
+unsigned PartialEncodingAttr::getRank() const {
+  return cast<LayoutEncodingTrait>(getParent()).getRank();
+}
+CGAEncodingAttr PartialEncodingAttr::getCGALayout() const {
+  return cast<LayoutEncodingTrait>(getParent()).getCGALayout();
+}
+SmallVector<unsigned> PartialEncodingAttr::getRepOrder() const {
+  return cast<DistributedEncodingTrait>(getParent()).getRepOrder();
+}
+LinearLayout
+PartialEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  return gpu::toLinearLayout(shape, getParent());
+}
+LogicalResult
+PartialEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                            Attribute parent,
+                            ThreadAvailabilityAttr availability) {
+  if (!isa<DistributedEncodingTrait>(parent) ||
+      isa<PartialEncodingAttr>(parent))
+    return emitError()
+           << "partial layout requires an ordinary distributed parent";
+  return success();
 }

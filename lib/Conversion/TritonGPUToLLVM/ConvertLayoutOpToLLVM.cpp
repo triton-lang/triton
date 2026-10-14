@@ -41,6 +41,24 @@ struct ConvertLayoutOpConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
+    if (isa<PartialEncodingAttr>(srcTy.getEncoding()) ||
+        isa<PartialEncodingAttr>(dstTy.getEncoding())) {
+      if (availabilityCovers(srcTy, dstTy)) {
+        rewriter.replaceOp(op, adaptor.getSrc());
+        return success();
+      }
+      auto loc = op.getLoc();
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      auto values = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+      auto masks = getFreeVariableMasks(dstTy);
+      Value pred =
+          emitRedundantThreadPredicate(masks, rewriter, loc, targetInfo);
+      Type elemTy = getTypeConverter()->convertType(dstTy.getElementType());
+      finalizeAtomicResults(op, rewriter, values, elemTy, b, pred, targetInfo,
+                            getTypeConverter());
+      return success();
+    }
+
     auto kRegister = str_attr("register");
 
     auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);

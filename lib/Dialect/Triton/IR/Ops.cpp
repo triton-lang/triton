@@ -640,6 +640,22 @@ ReduceOp::inferReturnTypes(MLIRContext *context, std::optional<Location> loc,
   return success();
 }
 
+bool ReduceOp::isCompatibleReturnTypes(TypeRange lhs, TypeRange rhs) {
+  if (lhs.size() != rhs.size())
+    return false;
+  // Late distributed scalars retain their layout on a rank-zero tensor. Their
+  // logical reduction shape and element type still match the inferred scalar.
+  auto scalarType = [](Type type) -> Type {
+    if (auto tensor = dyn_cast<RankedTensorType>(type);
+        tensor && tensor.getRank() == 0 && tensor.getEncoding())
+      return tensor.getElementType();
+    return type;
+  };
+  return llvm::all_of(llvm::zip(lhs, rhs), [&](auto pair) {
+    return scalarType(std::get<0>(pair)) == scalarType(std::get<1>(pair));
+  });
+}
+
 // Helpers for Reductions and Scans
 namespace {
 

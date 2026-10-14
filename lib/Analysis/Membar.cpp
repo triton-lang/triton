@@ -406,6 +406,9 @@ static bool scratchBufferUsesWarpSync(Operation *op) {
 
   auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
   auto dstTy = cast<RankedTensorType>(cvt.getType());
+  if (isa<triton::gpu::PartialEncodingAttr>(srcTy.getEncoding()) ||
+      isa<triton::gpu::PartialEncodingAttr>(dstTy.getEncoding()))
+    return !cvtNeedsSharedMemory(cvt);
   auto srcLayout = triton::gpu::toLinearLayout(srcTy);
   auto dstLayout = triton::gpu::toLinearLayout(dstTy);
   auto kWarp = StringAttr::get(op->getContext(), "warp");
@@ -442,6 +445,8 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
   }
 
   if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op)) {
+    if (op->hasAttr("ttg.thread_local"))
+      return stages;
     // Atomic result broadcast uses a scratch write, rendezvous, and read for
     // every memory semantic, including relaxed.
     return triton::getAtomicBarrierStages(atomic.getMemSemantic(),

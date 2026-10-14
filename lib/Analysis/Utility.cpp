@@ -7,6 +7,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -42,6 +43,36 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 
 bool ReduceOpHelper::isReduceWithinCTA() {
   return getCTASplitNum(srcEncoding)[axis] == 1;
+}
+
+bool ReduceOpHelper::supportsPartialScalarResult() {
+  if (srcTy.getRank() != 1 || triton::gpu::lookupNumCTAs(op) != 1 ||
+      !triton::gpu::isPermutationMatrixLayout(
+          triton::gpu::toLinearLayout(srcTy)) ||
+      !llvm::all_of(op.getElementTypes(),
+                    [](Type type) { return type.isIntOrFloat(); }))
+    return false;
+  // Inactive result copies may carry arbitrary values through the final
+  // in-thread combiner. It must not branch, trap or have observable effects.
+  if (!llvm::all_of(op.getCombineOp().front().without_terminator(),
+                    [](Operation &op) {
+                      return op.getNumRegions() == 0 &&
+                             isMemoryEffectFree(&op) && isSpeculatable(&op);
+                    }))
+    return false;
+  auto reduced = reducedRegLaneLayout(srcTy, axis);
+  return reduced.getTotalOutDimSize() <=
+         reduced.getInDimSize(StringAttr::get(op.getContext(), "lane"));
+}
+
+bool ReduceOpHelper::hasPartialScalarResult() {
+  return supportsPartialScalarResult() &&
+         llvm::all_of(op.getResultTypes(), [](Type type) {
+           auto tensor = dyn_cast<RankedTensorType>(type);
+           return tensor && tensor.getRank() == 0 &&
+                  isa_and_nonnull<triton::gpu::PartialEncodingAttr>(
+                      tensor.getEncoding());
+         });
 }
 
 bool ReduceOpHelper::isAssociative() {
@@ -144,7 +175,11 @@ ReduceOpHelper::getScratchConfig(const LinearLayout &src,
   config.offsets.resize(inputTypes.size());
   for (unsigned idx : indices) {
     unsigned bitwidth = getBitwidth(inputTypes[idx]);
-    unsigned elems = numScratchElemsGetter
+    // Partial scalar reductions store one contiguous value per contributing
+    // warp. Only the requested threads load these values for the final
+    // reduction.
+    unsigned elems = hasPartialScalarResult() ? src.getTotalOutDimSize()
+                     : numScratchElemsGetter
                          ? numScratchElemsGetter(src, dst, bitwidth)
                          : getNumScratchElemsSwizzledCvt(src, dst, bitwidth);
     config.offsets[idx] = config.sizeInBytes;
@@ -1115,6 +1150,8 @@ bool supportMMA(Value value, int version) {
 }
 
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
+  if (!triton::gpu::availabilityCovers(srcTy, dstTy))
+    return false;
   auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
   auto kRegister = StringAttr::get(ctx, "register");
@@ -1126,6 +1163,11 @@ bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
   bool forceWarpShuffle = op.getForceWarpShuffle();
   auto srcTy = op.getSrc().getType();
   auto dstTy = op.getType();
+  if (isa<triton::gpu::PartialEncodingAttr>(srcTy.getEncoding()) ||
+      isa<triton::gpu::PartialEncodingAttr>(dstTy.getEncoding())) {
+    auto mask = triton::getAtomicResultShuffleMask(op.getResult());
+    return !triton::gpu::availabilityCovers(srcTy, dstTy) && mask && *mask != 0;
+  }
   if (!forceWarpShuffle && cvtReordersRegisters(srcTy, dstTy))
     return false;
   MLIRContext *ctx = srcTy.getContext();
@@ -1152,6 +1194,12 @@ bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
 }
 
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op) {
+  if (isa<triton::gpu::PartialEncodingAttr>(
+          op.getSrc().getType().getEncoding()) ||
+      isa<triton::gpu::PartialEncodingAttr>(op.getType().getEncoding()))
+    return !triton::gpu::availabilityCovers(op.getSrc().getType(),
+                                            op.getType()) &&
+           !triton::getAtomicResultShuffleMask(op.getResult()).has_value();
   return !cvtReordersRegisters(op.getSrc().getType(), op.getType()) &&
          !cvtNeedsWarpShuffle(op);
 }
@@ -1203,13 +1251,38 @@ BarrierStages getAtomicBarrierStages(MemSemantic semantic,
   return stages;
 }
 
+gpu::ThreadAvailabilityAttr getOwnerAvailability(Type type,
+                                                 Operation *context) {
+  auto *ctx = context->getContext();
+  if (auto tensor = dyn_cast<RankedTensorType>(type)) {
+    auto masks = gpu::toLinearLayout(tensor).getFreeVariableMasks();
+    return gpu::ThreadAvailabilityAttr::get(
+        ctx, masks.lookup(StringAttr::get(ctx, "lane")),
+        masks.lookup(StringAttr::get(ctx, "warp")),
+        masks.lookup(StringAttr::get(ctx, "block")));
+  }
+  return gpu::ThreadAvailabilityAttr::get(
+      ctx,
+      gpu::TritonGPUDialect::getThreadsPerWarp(
+          context->getParentOfType<ModuleOp>()) -
+          1,
+      gpu::lookupNumWarps(context) - 1, gpu::lookupNumCTAs(context) - 1);
+}
+
+gpu::ThreadAvailabilityAttr getThreadAvailability(Value value) {
+  return gpu::getThreadAvailability(value.getType());
+}
+
 std::optional<int32_t> getAtomicResultShuffleMask(Value result) {
   if (result.use_empty())
     return 0;
 
   int32_t laneMask, warpMask, blockMask;
+  bool simpleShuffle = true;
   if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
-    auto masks = gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+    auto layout = gpu::toLinearLayout(tensorTy);
+    auto masks = layout.getFreeVariableMasks();
+    simpleShuffle = gpu::isPermutationMatrixLayout(layout);
     auto *ctx = result.getContext();
     laneMask = masks.lookup(StringAttr::get(ctx, "lane"));
     warpMask = masks.lookup(StringAttr::get(ctx, "warp"));
@@ -1222,7 +1295,14 @@ std::optional<int32_t> getAtomicResultShuffleMask(Value result) {
     warpMask = gpu::lookupNumWarps(op) - 1;
     blockMask = gpu::lookupNumCTAs(op) - 1;
   }
-  if (warpMask || blockMask)
+  auto available = getThreadAvailability(result);
+  laneMask &= ~available.getLane();
+  warpMask &= ~available.getWarp();
+  blockMask &= ~available.getBlock();
+  // Dependent nonzero bases require solving for the canonical source, not
+  // simply clearing lane bits. The shared-memory path uses the full layout
+  // inverse and remains correct for those generic encodings.
+  if (warpMask || blockMask || (laneMask && !simpleShuffle))
     return std::nullopt;
   return laneMask;
 }
@@ -1231,10 +1311,12 @@ bool atomicResultHasCTABroadcast(Operation *op) {
   if (op->getNumResults() != 1 || op->getResult(0).use_empty())
     return false;
   auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  auto available = getThreadAvailability(op->getResult(0));
   if (!tensorTy)
-    return gpu::lookupNumCTAs(op) > 1;
+    return ((gpu::lookupNumCTAs(op) - 1) & ~available.getBlock()) != 0;
   auto kBlock = StringAttr::get(op->getContext(), "block");
-  return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
+  return (gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock) &
+          ~available.getBlock()) != 0;
 }
 
 } // namespace triton

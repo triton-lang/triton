@@ -1052,3 +1052,57 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @availability_missing_elements(%ptr: tensor<32x!tt.ptr<i32>, #ttg.partial<#blocked, <31, 3, 0>>>) {
+    // expected-error@+1 {{availability restriction removes logical elements or exceeds the execution domain}}
+    %x = tt.load %ptr : tensor<32x!tt.ptr<i32>, #ttg.partial<#blocked, <31, 3, 0>>>
+    tt.return
+  }
+}
+
+// -----
+
+#scalar = #ttg.linear<{register = [], lane = [[], [], [], [], []], warp = [[], []], block = []}>
+#leader = #ttg.partial<#scalar, <31, 3, 0>>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @extract_unavailable_scalar(%value: tensor<i32, #leader>) {
+    // expected-error@+1 {{source is unavailable in the scalar execution domain}}
+    %x = ttg.extract_scalar %value <0, 0, 0> : tensor<i32, #leader> -> i32
+    tt.return
+  }
+}
+
+// -----
+
+#scalar = #ttg.linear<{register = [], lane = [[], [], [], [], []], warp = [[], []], block = []}>
+#leader = #ttg.partial<#scalar, <31, 3, 0>>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#warp = #ttg.partial<#blocked, <0, 3, 0>>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @splat_unavailable_scalar(%value: tensor<i32, #leader>) {
+    // expected-error@+1 {{source is unavailable on threads required by the result}}
+    %x = ttg.splat_scalar %value : tensor<i32, #leader> -> tensor<32xi32, #warp>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @reduce_wrong_result_shape(%x: tensor<128xf32, #blocked>) {
+    // expected-error@+2 {{inferred type(s) 'f32' are incompatible}}
+    // expected-error@+1 {{failed to infer returned types}}
+    %sum = "tt.reduce"(%x) ({
+    ^bb0(%a: f32, %b: f32):
+      %value = arith.addf %a, %b : f32
+      tt.reduce.return %value : f32
+    }) {axis = 0 : i32} : (tensor<128xf32, #blocked>) -> tensor<1xf32, #blocked>
+    tt.return
+  }
+}

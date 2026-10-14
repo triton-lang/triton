@@ -183,7 +183,7 @@ struct LoadStoreConversionBase {
 
   unsigned getVectorSize(Value ptr) const {
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-    if (!tensorTy)
+    if (!tensorTy || tensorTy.getRank() == 0)
       return 1;
     auto contiguity = getContiguity(ptr);
     auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
@@ -204,7 +204,7 @@ struct LoadStoreConversionBase {
 
   unsigned getScalarizedContiguousRun(Value ptr) const {
     auto type = dyn_cast<RankedTensorType>(ptr.getType());
-    if (!type)
+    if (!type || type.getRank() == 0)
       return 1;
 
     AxisInfo *ptrInfo = axisAnalysisPass.getAxisInfo(ptr);
@@ -344,6 +344,17 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       PTXBuilder ptxBuilder;
 
       Value pred = mask ? maskElems[vecStart] : Value{};
+      if (auto tensor = dyn_cast<RankedTensorType>(op.getType());
+          tensor && isa<ttg::PartialEncodingAttr>(tensor.getEncoding())) {
+        auto a = ttg::getThreadAvailability(tensor);
+        llvm::MapVector<StringAttr, int32_t> masks;
+        masks[str_attr("lane")] = a.getLane();
+        masks[str_attr("warp")] = a.getWarp();
+        masks[str_attr("block")] = a.getBlock();
+        Value domain =
+            ttg::emitRedundantThreadPredicate(masks, rewriter, loc, targetInfo);
+        pred = ttg::maybeAnd(rewriter, loc, pred, domain);
+      }
 
       const std::string readConstraint =
           (width == 64) ? "l" : ((width == 32) ? "r" : "c");
