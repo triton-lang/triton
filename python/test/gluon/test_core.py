@@ -7781,3 +7781,42 @@ def test_thread_regions_map_elementwise_callees(call_depth, device, fresh_knobs)
     assert compiled.asm["ttgir"].count("noinline = true") >= call_depth
     # The scalar atomic/store outside the map should still avoid a broadcast.
     assert compiled.metadata.shared == 0
+
+
+@pytest.mark.parametrize("num_ctas", [2, 4])
+@pytest.mark.parametrize("tile", [32, 128])
+@pytest.mark.parametrize("replicated", [False, True])
+@pytest.mark.parametrize("atomic", [False, True])
+def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, device, fresh_knobs):
+    if not is_cuda():
+        pytest.skip("requires NVIDIA thread region lowering")
+    skip_if_unsupported_cluster_size(num_ctas)
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @gluon.jit
+    def kernel(In, Out, iterations, WIDTH: ttgl.constexpr, LAYOUT: ttgl.constexpr, ATOMIC: ttgl.constexpr):
+        if ATOMIC:
+            value = ttgl.atomic_load(In, sem="relaxed")
+        else:
+            value = ttgl.load(In)
+        for i in range(iterations):
+            if ATOMIC:
+                value += ttgl.atomic_add(In, 1, sem="relaxed")
+            else:
+                value += ttgl.load(In + i)
+        offsets = ttgl.arange(0, WIDTH, layout=LAYOUT)
+        ttgl.store(Out + offsets, value)
+
+    width = tile if replicated else tile * num_ctas
+    cga = tuple((0 if replicated else 1 << bit, ) for bit in range(num_ctas.bit_length() - 1))
+    layout = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=cga)
+    values = torch.arange(7, 10, device=device, dtype=torch.int32)
+    out = torch.full((width, ), -1, device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](values, out, 3, width, layout, atomic, num_warps=4, num_ctas=num_ctas)
+    torch.testing.assert_close(out, torch.full_like(out, 31))
+    assert values[0].item() == (10 if atomic else 7)
+    assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
+    if tile == 128:
+        assert compiled.metadata.shared > 0
+    if not atomic:
+        assert "mapa.shared::cluster" not in compiled.asm["ptx"]

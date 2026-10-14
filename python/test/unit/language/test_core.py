@@ -32,6 +32,7 @@ from triton._internal_testing import (
     is_interpreter,
     is_hopper,
     is_sm12x,
+    skip_if_unsupported_cluster_size,
     is_hip,
     is_hip_cdna,
     is_hip_cdna2,
@@ -8655,7 +8656,9 @@ def test_thread_regions_pointer_handoff(width, device, fresh_knobs):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
-def test_thread_regions_scalar_shift(device, fresh_knobs):
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+def test_thread_regions_scalar_shift(num_ctas, device, fresh_knobs):
+    skip_if_unsupported_cluster_size(num_ctas)
     fresh_knobs.compilation.instrumentation_mode = ""
 
     @triton.jit
@@ -8667,15 +8670,18 @@ def test_thread_regions_scalar_shift(device, fresh_knobs):
 
     amount = torch.tensor([3], device=device, dtype=torch.int32)
     out = torch.empty(16, device=device, dtype=torch.int32)
-    compiled = kernel[(1, )](amount, out, num_warps=4)
+    compiled = kernel[(1, )](amount, out, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(out, torch.arange(16, device=device, dtype=torch.int32) + 4)
-    assert compiled.metadata.shared == 0
-    assert "shfl.sync" in compiled.asm["ptx"]
+    if num_ctas == 1:
+        assert compiled.metadata.shared == 0
+        assert "shfl.sync" in compiled.asm["ptx"]
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
 @pytest.mark.parametrize("enabled", [False, True])
-def test_thread_regions_explicit_scalar_mask(enabled, device, fresh_knobs):
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+def test_thread_regions_explicit_scalar_mask(enabled, num_ctas, device, fresh_knobs):
+    skip_if_unsupported_cluster_size(num_ctas)
     fresh_knobs.compilation.instrumentation_mode = ""
 
     @triton.jit
@@ -8689,14 +8695,16 @@ def test_thread_regions_explicit_scalar_mask(enabled, device, fresh_knobs):
     a = torch.tensor([7], device=device, dtype=torch.int32)
     b = torch.full_like(a, -1)
     c = torch.full_like(a, -1)
-    compiled = kernel[(1, )](flag, a, b, c, num_warps=4)
+    compiled = kernel[(1, )](flag, a, b, c, num_warps=4, num_ctas=num_ctas)
     assert (a.item(), b.item(), c.item()) == ((8, 7, 7) if enabled else (7, -1, -1))
     assert compiled.metadata.shared == 0
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
 @pytest.mark.parametrize("result_width", [0, 1, 32, 64, 128])
-def test_thread_regions_poll_acquire(result_width, device, fresh_knobs):
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_thread_regions_poll_acquire(result_width, num_ctas, device, fresh_knobs):
+    skip_if_unsupported_cluster_size(num_ctas)
     fresh_knobs.compilation.instrumentation_mode = ""
 
     @triton.jit
@@ -8720,8 +8728,9 @@ def test_thread_regions_poll_acquire(result_width, device, fresh_knobs):
     flag = torch.zeros((), device=device, dtype=torch.int32)
     payload = torch.zeros((128, ), device=device, dtype=torch.int32)
     out = torch.zeros((128 + max(result_width, 1), ), device=device, dtype=torch.int32)
-    compiled = kernel[(2, )](flag, payload, out, result_width, num_warps=4)
-    assert (compiled.metadata.shared > 0) == (result_width > 32)
+    compiled = kernel[(2, )](flag, payload, out, result_width, num_warps=4, num_ctas=num_ctas)
+    if num_ctas == 1:
+        assert (compiled.metadata.shared > 0) == (result_width > 32)
     assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
     torch.testing.assert_close(out[:128], torch.arange(128, device=device, dtype=torch.int32) + 17)
     if result_width:

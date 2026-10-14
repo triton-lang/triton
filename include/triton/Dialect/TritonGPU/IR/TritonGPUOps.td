@@ -79,7 +79,8 @@ def TTG_ThreadScopeOp : TTG_Op<"thread_scope", [
   let summary = "preserve a compiler-generated single-thread scope during lowering";
   let description = [{
     The body executes unconditionally within an enclosing guard that selects
-    the canonical thread. Entry/exit synchronization remains outside the guard.
+    the canonical thread of each participating CTA. Entry/exit synchronization
+    remains outside the guard.
     This wrapper survives control-flow lowering so memory operations can query
     their enclosing scope, and is inlined after memory operations are lowered.
   }];
@@ -100,10 +101,12 @@ def TTG_ThreadHandoffOp : TTG_Op<"thread_handoff", [SameOperandsAndResultType]> 
   let summary = "distribute a scalar at the boundary of a thread region";
   let description = [{
     The source scalar is available in `source` and is copied to `destination`.
-    Both domains are relative to the enclosing warp-specialized partition.
+    Lane and warp coordinates are relative to the enclosing warp-specialized
+    partition; CTA coordinates are relative to the cluster.
     The destination may only widen the source domain. Lane transfers execute
     with every lane of the destination warps participating. Cross-warp transfers
-    execute in the full enclosing domain and return a fully distributed scalar.
+    execute with all lanes and warps in each participating CTA. Cross-CTA
+    transfers broadcast from CTA zero to the full enclosing domain.
     This operation may synchronize and must not be speculated or eliminated.
   }];
   let arguments = (ins AnyTypeOf<[TT_Int, TT_Float, TT_Ptr]>:$src, ThreadDomainAttr:$source,
