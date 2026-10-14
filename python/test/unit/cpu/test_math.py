@@ -95,15 +95,18 @@ def test_tensor_math_fn(vec_lib, dtype_str, math_fn, size, device):
         check_num_vec_calls(meta, vec_lib, dtype_str, size)
 
 
-@pytest.mark.parametrize("vec_lib, size",
-                         chain(product(["libsleef", "libmvec"], vec_sizes), product([None], scalar_sizes)))
+@pytest.mark.parametrize(
+    "vec_lib, size, test_scalar",
+    [(vec_lib, size, test_scalar)
+     for vec_lib, size in chain(product(["libsleef", "libmvec"], vec_sizes), product([None], scalar_sizes))
+     for test_scalar in ([False, True] if size == 1 else [False])])
 @pytest.mark.parametrize("dtype_str", float_dtypes)
 @pytest.mark.parametrize("math_fn", [
     "acos", "acosh", "asin", "asinh", "atan", "atanh", "cbrt", "ceil", "cos", "cosh", "erf", "exp", "exp2", "expm1",
     "floor", "fmod", "isnan", "isinf", "log", "log1p", "log2", "log10", "pow", "rsqrt", "signbit", "sin", "sinh",
     "sqrt", "tan", "tanh", "trunc"
 ])
-def test_libdevice_math_fn(vec_lib, dtype_str, math_fn, size, device):
+def test_libdevice_math_fn(vec_lib, dtype_str, math_fn, size, test_scalar, device):
     if not is_cpu():
         pytest.skip("This test is CPU-specific")
     if vec_lib == "libmvec" and arch != "x86_64":
@@ -111,22 +114,27 @@ def test_libdevice_math_fn(vec_lib, dtype_str, math_fn, size, device):
     if math_fn in {"ceil", "fmod", "pow"}:
         if vec_lib != "libsleef":
             pytest.skip("extern_elementwise only supports libsleef")
-        if dtype_str not in {"float32", "torch.float64"}:
-            pytest.skip(f"{math_fn} only supports fp32, fp64")
 
     @triton.jit
-    def unary_kernel(src, dst, MATH_FN: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    def unary_kernel(src, dst, MATH_FN: tl.constexpr, BLOCK_SIZE: tl.constexpr, TEST_SCALAR: tl.constexpr):
         idxs = tl.arange(0, BLOCK_SIZE)
         x = tl.load(src + idxs)
-        y = getattr(libdevice, MATH_FN)(x)
+        if TEST_SCALAR:
+            y = getattr(libdevice, MATH_FN)(x.item())
+        else:
+            y = getattr(libdevice, MATH_FN)(x)
         tl.store(dst + idxs, y)
 
     @triton.jit
-    def binary_kernel(x_ptr, y_ptr, out_ptr, MATH_FN: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    def binary_kernel(x_ptr, y_ptr, out_ptr, MATH_FN: tl.constexpr, BLOCK_SIZE: tl.constexpr,
+                      TEST_SCALAR: tl.constexpr):
         idxs = tl.arange(0, BLOCK_SIZE)
         x = tl.load(x_ptr + idxs)
         y = tl.load(y_ptr + idxs)
-        result = getattr(libdevice, MATH_FN)(x, y)
+        if TEST_SCALAR:
+            result = getattr(libdevice, MATH_FN)(x.item(), y.item())
+        else:
+            result = getattr(libdevice, MATH_FN)(x, y)
         tl.store(out_ptr + idxs, result)
 
     signature = inspect.signature(getattr(libdevice, math_fn))
@@ -152,7 +160,7 @@ def test_libdevice_math_fn(vec_lib, dtype_str, math_fn, size, device):
 
     res = torch.empty(inputs[0].shape, dtype=ref.dtype, device=device)
     kernel = unary_kernel if num_params == 1 else binary_kernel
-    meta = kernel[(1, )](*inputs, res, MATH_FN=math_fn, BLOCK_SIZE=size, vec_lib=vec_lib)
+    meta = kernel[(1, )](*inputs, res, MATH_FN=math_fn, BLOCK_SIZE=size, TEST_SCALAR=test_scalar, vec_lib=vec_lib)
     torch.testing.assert_close(ref, res)
 
     if vec_lib is None:

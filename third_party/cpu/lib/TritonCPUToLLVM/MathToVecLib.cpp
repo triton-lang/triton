@@ -149,8 +149,8 @@ public:
 using ExternElementwiseOp = triton::cpu::ExternElementwiseOp;
 
 /*
- * libsleef does not contain implementations for 2-element vectors, so we pad
- * any such vectors to size 4 instead.
+ * libsleef does not contain implementations for 2-element f32 vectors, so we
+ * pad any such vectors to size 4 instead. For f64 the minimum vector size is 2.
  */
 struct PadSmallVecsForSleef : public OpRewritePattern<ExternElementwiseOp> {
 public:
@@ -171,8 +171,9 @@ public:
     if (!elemTy.isF32() && !elemTy.isF64())
       return failure();
 
+    int64_t minVecSize = elemTy.isF32() ? 4 : 2;
     int64_t numElems = vecTy.getNumElements();
-    if (numElems >= 4)
+    if (numElems >= minVecSize)
       return failure();
 
     // Create a single-element vector for shuffle to use
@@ -180,8 +181,8 @@ public:
         rewriter, loc, VectorType::get({1}, elemTy), b.undef(elemTy));
     // Assign indices such that shuffle will pad the original vector with
     // elements from the paddingVec
-    SmallVector<int64_t> indices(4);
-    for (int i = 0; i < 4; ++i) {
+    SmallVector<int64_t> indices(minVecSize);
+    for (int i = 0; i < minVecSize; ++i) {
       if (i < numElems)
         indices[i] = i;
       else
@@ -194,7 +195,7 @@ public:
       newOperands.push_back(shuf.getResult());
     }
     // Update return type of extern call
-    auto newVecTy = VectorType::get({4}, elemTy);
+    auto newVecTy = VectorType::get({minVecSize}, elemTy);
     auto extern_elem = ExternElementwiseOp::create(
         rewriter, loc, newVecTy, newOperands, op.getSymbol(), op.getPure());
     indices.resize(numElems);
@@ -288,25 +289,36 @@ public:
 
   virtual std::string getVecFnName(OpT op, unsigned bitwidth,
                                    unsigned numel) const = 0;
+  virtual std::string getScalarFnName(OpT op, unsigned bitwidth) const {
+    return {};
+  };
 
   LogicalResult matchAndRewrite(OpT op, PatternRewriter &rewriter) const {
-    VectorType vecTy = dyn_cast<VectorType>(op.getType());
-    if (!vecTy || vecTy.isScalable() || (!useSve && vecTy.getRank() > 1))
+    Type ty = op.getType();
+    std::string fnName;
+
+    bool lowerToSve;
+    VectorType vecTy = dyn_cast<VectorType>(ty);
+    if (vecTy && !vecTy.isScalable() && (useSve || vecTy.getRank() == 1)) {
+      fnName = getVecFnName(op, vecTy.getElementTypeBitWidth(),
+                            vecTy.getNumElements());
+      lowerToSve = useSve;
+    } else if (ty.isF32() || ty.isF64()) {
+      fnName = getScalarFnName(op, ty.getIntOrFloatBitWidth());
+      lowerToSve = false;
+    }
+
+    if (fnName.empty())
       return failure();
 
     auto func = op->template getParentOfType<FunctionOpInterface>();
-    if (useSve && !func)
-      return failure();
-
-    auto fnName = getVecFnName(op, vecTy.getElementTypeBitWidth(),
-                               vecTy.getNumElements());
-    if (fnName.empty())
+    if (lowerToSve && !func)
       return failure();
 
     // A SLEEF SVE function takes one full scalable register, regardless of the
     // fixed-width shape of the original Triton block.
-    Type callTy = vecTy;
-    if (useSve)
+    Type callTy = ty;
+    if (lowerToSve)
       callTy = VectorType::get({128 / vecTy.getElementTypeBitWidth()},
                                vecTy.getElementType(), {true});
 
@@ -318,7 +330,7 @@ public:
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(&module->getRegion(0).front());
       FunctionType fnTy;
-      if (useSve) {
+      if (lowerToSve) {
         SmallVector<Type> inputTypes(op->getNumOperands(), callTy);
         fnTy = FunctionType::get(rewriter.getContext(), inputTypes, {callTy});
       } else {
@@ -332,7 +344,7 @@ public:
                       UnitAttr::get(rewriter.getContext()));
     }
 
-    if (useSve) {
+    if (lowerToSve) {
       Location loc = op.getLoc();
       int64_t numElems = vecTy.getNumElements();
       auto flatTy = VectorType::get({numElems}, vecTy.getElementType());
@@ -392,7 +404,7 @@ public:
       return success();
     }
 
-    rewriter.replaceOpWithNewOp<func::CallOp>(op, fnName, op.getType(),
+    rewriter.replaceOpWithNewOp<func::CallOp>(op, fnName, ty,
                                               op->getOperands());
     return success();
   }
@@ -430,6 +442,19 @@ struct ExternElementwiseOpConversion
       return fnName.str();
     return (fnName.take_front(numelIdx) + Twine(numel) +
             fnName.drop_front(numelIdx + 8))
+        .str();
+  }
+
+  std::string getScalarFnName(triton::cpu::ExternElementwiseOp op,
+                              unsigned bitwidth) const override {
+    auto fnName = op.getSymbol();
+    auto numelIdx =
+        bitwidth == 64 ? fnName.find("d%(numel)") : fnName.find("f%(numel)");
+    if (numelIdx == StringRef::npos)
+      return fnName.str();
+    // Scalar 64-bit functions don't have a 'd' infix in their name.
+    return (fnName.take_front(numelIdx) + Twine(bitwidth == 64 ? "" : "f") +
+            fnName.drop_front(numelIdx + 9))
         .str();
   }
 };
