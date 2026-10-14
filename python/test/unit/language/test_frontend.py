@@ -1910,6 +1910,21 @@ def test_loop_carry_shared_initial_value():
 
 @filecheck_test
 @triton.jit
+def test_loop_carry_aliased_assignment():
+    # CHECK-LABEL: test_loop_carry_aliased_assignment
+    cur = 0
+    prev = cur
+    # CHECK: scf.for {{.*}} iter_args(%[[A:.*]] = {{.*}}, %[[B:.*]] = {{.*}})
+    for i in range(3):
+        prev = cur
+        cur = cur + 1
+        # CHECK: scf.yield
+    anchor(prev)
+    anchor(cur)
+
+
+@filecheck_test
+@triton.jit
 def test_loop_carry_while_shared_initial_value():
     # CHECK-LABEL: test_loop_carry_while_shared_initial_value
     # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
