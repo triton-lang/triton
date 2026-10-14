@@ -413,6 +413,21 @@ def test_annotation(device):
     assert len(kernel.device_caches[device][0]) == 3
 
 
+@pytest.mark.parametrize("a, b", [(1, 1.0), (1, True), (0.0, -0.0), ((1, ), (1.0, ))])
+def test_constexpr_cache_key_type(a, b, device):
+
+    @triton.jit
+    def kernel(X, C: tl.constexpr):
+        tl.store(X, 0)
+
+    x = torch.empty(1, dtype=torch.int32, device=device)
+
+    device = getattr(torch, device).current_device()
+    kernel[(1, )](x, a)
+    kernel[(1, )](x, b)
+    assert len(kernel.device_caches[device][0]) == 2
+
+
 GLOBAL_DEFAULT_ARG = 1
 
 
