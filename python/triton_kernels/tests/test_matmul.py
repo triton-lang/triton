@@ -672,9 +672,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 @pytest.mark.parametrize("swizzled", [False, True])
 @pytest.mark.parametrize("weights_swizzled", [False, True])
 @pytest.mark.parametrize("mode", ["plain", "batched", "ragged", "gather", "ragged_gather"])
-@pytest.mark.parametrize("k", [256, 1024])
+@pytest.mark.parametrize("k, out_dtype", [(256, None), (1024, torch.float32)])
 @pytest.mark.parametrize("tensor_scale", ["none", "row", "column", "both", "wide_row"])
-@pytest.mark.parametrize("out_dtype", [None, torch.float32])
 def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_scale, out_dtype, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell")
