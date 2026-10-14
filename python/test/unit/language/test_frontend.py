@@ -1935,6 +1935,33 @@ def test_dot_fp16_accumulator():
     run_parser(fp16_acc_kernel)
 
 
+@pytest.mark.parametrize("in_dtype, acc_dtype, out_dtype, expected", [
+    (tl.int8, tl.float32, None, f"expected accumulator dtype {tl.int32} for {tl.int8} operands"),
+    # The operand types fix the result type, so there is no out_dtype to suggest.
+    (tl.int8, tl.float32, tl.int32, f"expected accumulator dtype {tl.int32} for {tl.int8} operands"),
+    (tl.bfloat16, tl.float16, None, f"expected accumulator dtype {tl.float32} for {tl.bfloat16} operands"),
+    (tl.float32, tl.float16, None, f"expected accumulator dtype {tl.float32} for {tl.float32} operands"),
+    (tl.float64, tl.float32, None, f"expected accumulator dtype {tl.float64} for {tl.float64} operands"),
+    (tl.float16, tl.float32, tl.float16, f"expected accumulator dtype {tl.float16} for {tl.float16} operands"),
+    # The accumulator matches the result type, so passing a matching out_dtype is the fix.
+    (tl.int8, tl.int32, tl.float32, f"pass out_dtype={tl.int32}"),
+])
+def test_dot_acc_dtype_mismatch(in_dtype, acc_dtype, out_dtype, expected):
+
+    @triton.jit
+    def kernel(IN_DTYPE: tl.constexpr, ACC_DTYPE: tl.constexpr, OUT_DTYPE: tl.constexpr):
+        a = tl.full([32, 32], 1, dtype=IN_DTYPE)
+        acc = tl.zeros([32, 32], dtype=ACC_DTYPE)
+        tl.dot(a, a, acc, out_dtype=OUT_DTYPE)
+
+    with pytest.raises(CompilationError) as exc_info:
+        run_parser(kernel, args=(in_dtype, acc_dtype, out_dtype))
+    msg = str(exc_info.value.__cause__ or exc_info.value)
+    assert expected in msg
+    if "pass out_dtype" not in expected:
+        assert "pass out_dtype" not in msg
+
+
 # ===-----------------------------------------------------------------------===#
 # Loop-carried variable lowering
 # ===-----------------------------------------------------------------------===#

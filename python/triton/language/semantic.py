@@ -1631,6 +1631,12 @@ class TritonSemantic(Generic[TensorTy]):
             acc_handle = acc.handle
             assert acc.type.shape == ret_ty.shape, \
                 f"expected accumulator shape {ret_ty.shape}, got {acc.type.shape}"
+            # out_dtype defaults to the accumulator's dtype, so the out_dtype check below cannot catch operand types
+            # whose dot result type differs from it (e.g. int8 x int8 -> int32 with an fp32 accumulator).
+            # Check this first, as passing out_dtype does not help when the operand types fix the result type.
+            assert acc.type.element_ty == ret_ty.element_ty, \
+                f"expected accumulator dtype {ret_ty.element_ty} for {lhs.dtype} operands, got {acc.type.element_ty}; " \
+                f"use a {ret_ty.element_ty} accumulator, or accumulate with acc += tl.dot(a, b).to(acc.dtype)"
             assert acc.type.element_ty == out_dtype, \
                 f"expected accumulator dtype {out_dtype}, got {acc.type.element_ty}; " \
                 f"pass out_dtype={acc.type.element_ty} to use this accumulator dtype"
