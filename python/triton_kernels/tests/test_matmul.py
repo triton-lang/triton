@@ -23,7 +23,7 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
+from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna5
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
@@ -74,7 +74,7 @@ def make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swiz
     }
     if is_hip() and hbm_swizzling and "float4" in weight_dtype_str:
         # Minimum block size to satisfy scale preshuffling
-        if is_hip_gfx1250():
+        if is_hip_cdna5():
             constraints.update({
                 "block_m": 128,
                 "block_n": 128,
@@ -375,8 +375,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     elif is_hip():
         if a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4:
             pytest.skip("NVFP4 matmul not tested on AMD GPU")
-        if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (is_hip_cdna4() or is_hip_gfx1250()):
-            pytest.skip("float8 x mx only supported on CDNA4 and gfx1250")
+        if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (is_hip_cdna4() or is_hip_cdna5()):
+            pytest.skip("float8 x mx only supported on CDNA4 and CDNA5")
         if a_dtype.is_any_float8 and b_dtype.name == "mxfloat8_e4m3fn":
             pytest.skip("NYI: float8 x mxfloat8 not tested on AMD GPU")
         if a_dtype.has_mx_scale and b_dtype.has_mx_scale:
@@ -398,8 +398,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     if b_hbm_swizzling:
         if is_hip():
-            if not (is_hip_cdna4() or is_hip_gfx1250()):
-                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on archs other than CDNA4 and gfx1250 yet.")
+            if not (is_hip_cdna4() or is_hip_cdna5()):
+                pytest.skip("Scale preshuffling on AMD GPU has not been emulated on archs other than CDNA4 and CDNA5 yet.")
             if not b_dtype.has_mx_scale:
                 pytest.skip("Non-scale swizzling not supported on CDNA4 yet")
         if device_capability < 9:
@@ -785,7 +785,7 @@ def test_matmul_mixed_fp8_matches_upcast(fp8_lhs, dtype, out_dtype, b_transpose,
         pytest.skip("requires Hopper or newer")
     if is_hip() and constraints.get("is_persistent"):
         pytest.skip("Persistent kernel not supported on AMD GPU")
-    if use_fpsan and is_hip() and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx1250()):
+    if use_fpsan and is_hip() and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_cdna5()):
         pytest.skip("FPSan requires gfx942, gfx950, or gfx1250")
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan" if use_fpsan else ""

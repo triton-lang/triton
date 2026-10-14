@@ -12,7 +12,7 @@ from triton._internal_testing import (
     is_compile_warmup,
     is_cuda,
     is_hip,
-    is_hip_gfx1250,
+    is_hip_cdna5,
     is_hopper_or_newer,
     skip_if_unsupported_cluster_size,
 )
@@ -742,7 +742,7 @@ def test_local_load_store_generic_linear(src_layout, shared_kind, device):
     torch.testing.assert_close(y, x)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250 FP8 conversion")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5 FP8 conversion")
 def test_generic_linear_fp8_cast(device):
     shape = (128, 256)
     src_layout = ttgl.DistributedLinearLayout(

@@ -56,7 +56,7 @@ int getWmmaVersion(ISAFamily isaFamily) {
   case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
     return 2;
-  case ISAFamily::GFX1250:
+  case ISAFamily::CDNA5:
     return 3;
   default:
     break;
@@ -901,7 +901,7 @@ public:
 
     Value reshapeScale;
     if (targetFeatures.supportsCvtPkScalePk8()) {
-      // On architectures with CvtPkScalePk8 (e.g., GFX1250), the scale type
+      // On architectures with CvtPkScalePk8 (e.g., CDNA5), the scale type
       // is int8, required by hardware instruction so type should not be
       // converted.
       if (opIdx == 1) {
@@ -1174,7 +1174,7 @@ public:
 
     if (wmmaVersion != 3) {
       return rewriter.notifyMatchFailure(
-          dotOp, "F8F6F4 scaled dot is only natively supported on gfx1250");
+          dotOp, "F8F6F4 scaled dot is only natively supported on CDNA5");
     }
     if (llvm::is_contained(unsupportedFeatures, kWmmaRestrictedInstsFeature)) {
       return rewriter.notifyMatchFailure(
@@ -1803,7 +1803,7 @@ struct TritonAMDGPUAccelerateMatmulPass
     ArrayRef<StringRef> unsupportedWmmaFeatures =
         targetFeatures.getUnsupportedWmmaFeatures();
     switch (isaFamily) {
-    case ISAFamily::GFX1250:
+    case ISAFamily::CDNA5:
       mfmaPatterns.add<ScaledBlockedToScaledWMMAF8F6F4>(
           context, wmmaVersion, unsupportedWmmaFeatures, /*benefit=*/4);
       mfmaPatterns.add<::DecomposeAMDScaledBlocked>(context, targetFeatures,

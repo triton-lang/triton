@@ -110,7 +110,7 @@ import torch
 
 import triton
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_hip_gfx1250
+from triton._internal_testing import is_hip_cdna5
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
 
@@ -709,7 +709,7 @@ def test_compile_tdm_gather_shared_descriptor_sgprs():
 _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on CDNA5.")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="TDM is only tested on CDNA5.")
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
 @pytest.mark.parametrize(
     "HINT_A,HINT_B",
@@ -748,7 +748,7 @@ def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
     assert torch.equal(c.cpu(), expected)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on CDNA5.")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="TDM is only tested on CDNA5.")
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
 def test_runtime_vector_add_tdm_explicit_fused(BLOCK_M, BLOCK_N):
     """Runtime: explicit fused TDM API produces the same result as two loads."""
@@ -810,7 +810,7 @@ def update_clamp_bounds_kernel(a_ptr, c_ptr, LOG_M, N, OFF_M, BLOCK_M: ttgl.cons
     ttgl.store(c_ptr + offs, a)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on CDNA5.")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="TDM is only tested on CDNA5.")
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
 def test_runtime_update_clamp_bounds(BLOCK_M, BLOCK_N):
     """Runtime: update_tensor_descriptor(clamp_bounds=True) shrinks tensor_dim to

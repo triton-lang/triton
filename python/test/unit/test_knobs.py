@@ -209,7 +209,7 @@ def test_amd_llvm_options_concurrent():
 
     compiler.llvm.init_targets()
     source = _amd_scheduler_kernel()
-    # gfx950 codegen needs a process-wide LLVM option that gfx1250 codegen must
+    # gfx950 codegen needs a process-wide LLVM option that CDNA5 codegen must
     # not see, and every HSACO link resets all LLVM options.
     backends = {
         arch: compiler.HIPBackend(GPUTarget("hip", arch, warp_size))
