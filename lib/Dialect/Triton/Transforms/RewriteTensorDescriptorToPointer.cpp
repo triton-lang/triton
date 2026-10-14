@@ -289,6 +289,14 @@ SmallVector<mlir::Value> castToI64(OpBuilder &builder,
   });
 }
 
+SmallVector<mlir::Value> castUnsignedToI64(OpBuilder &builder,
+                                           mlir::ValueRange values) {
+  auto i64Type = builder.getI64Type();
+  return llvm::map_to_vector(values, [&](mlir::Value v) {
+    return builder.createOrFold<arith::ExtUIOp>(v.getLoc(), i64Type, v);
+  });
+}
+
 struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
   using OpConversionPattern<triton::MakeTensorDescOp>::OpConversionPattern;
 
@@ -298,7 +306,7 @@ struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
     SmallVector<mlir::Value> ptrShapeStridesPaddingOption;
     llvm::append_values(ptrShapeStridesPaddingOption, adaptor.getBase());
     llvm::append_range(ptrShapeStridesPaddingOption,
-                       castToI64(rewriter, adaptor.getShape()));
+                       castUnsignedToI64(rewriter, adaptor.getShape()));
     llvm::append_range(ptrShapeStridesPaddingOption, adaptor.getStrides());
     auto paddingOption = mlir::arith::ConstantOp::create(
         rewriter, op.getLoc(), rewriter.getI1Type(),
