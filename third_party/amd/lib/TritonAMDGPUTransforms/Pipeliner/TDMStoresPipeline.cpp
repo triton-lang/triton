@@ -1,4 +1,4 @@
-#include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
+#include "amd/lib/TritonAMDGPUTransforms/Pipeliner/PipelineUtility.h"
 
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
