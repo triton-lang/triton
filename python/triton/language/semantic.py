@@ -847,8 +847,7 @@ class TritonSemantic(Generic[TensorTy]):
         if src_ty.is_block():
             dst_ty = src_ty.with_element_ty(dst_sca_ty)
 
-        # For fp downcasting default rounding mode should be RTNE, for all other conversions it should
-        # not be set
+        # For fp downcasting default rounding mode should be RTNE.
         fp_downcast_rounding = self._str_to_rounding_mode(fp_downcast_rounding)
         use_custom_rounding = False
         if dst_sca_ty.is_floating() and src_sca_ty.is_floating(
@@ -860,6 +859,11 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
                                  "Source scalar type is " + str(src_sca_ty) + " and destination type is " +
                                  str(dst_sca_ty))
+
+        # E4M3 and E5M2 have no direct conversion. FP16 represents their finite
+        # values exactly, so use it as an intermediate before the rounded cast.
+        if src_sca_ty in (tl.float8e4nv, tl.float8e5) and dst_sca_ty in (tl.float8e4nv, tl.float8e5):
+            return self.cast(self.cast(input, tl.float16), dst_sca_ty)
 
         # Keep FP16 <-> BF16 intact so backends can select a native conversion.
         if (src_sca_ty.is_bf16() and dst_sca_ty.is_fp16()) or (src_sca_ty.is_fp16() and dst_sca_ty.is_bf16()):
