@@ -846,6 +846,9 @@ public:
     if (!oldRetType.getEncoding() ||
         mlir::isa<NvidiaMmaEncodingAttr>(oldRetType.getEncoding()))
       return failure();
+    // Batched dots are decomposed instead.
+    if (oldRetType.getRank() != 2)
+      return failure();
 
     if (dotOp.getAScale() == nullptr || dotOp.getBScale() == nullptr) {
       return failure();
@@ -1062,7 +1065,10 @@ static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
 static void transposeDotOp(DotScaledOp dotOp) {
   OpBuilder builder(dotOp);
   Value lhs = dotOp.getA();
-  std::array<int, 2> transOrder = {1, 0};
+  // Swap the two innermost dimensions; a leading batch dimension stays put.
+  SmallVector<int32_t> transOrder = {1, 0};
+  if (dotOp.getType().getRank() == 3)
+    transOrder = {0, 2, 1};
   Value lhsTransposed = TransOp::create(builder, lhs.getLoc(), lhs, transOrder);
   Value rhs = dotOp.getB();
   Value rhsTransposed = TransOp::create(builder, rhs.getLoc(), rhs, transOrder);

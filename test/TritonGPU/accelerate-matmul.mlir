@@ -1280,3 +1280,41 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 4 : i32, "ttg.num-
     tt.return %d : tensor<8x128x128xf32, #blocked>
   }
 }
+
+// -----
+
+// Batched dot_scaled with a scale on the rhs only: the transposes swap the two
+// innermost dimensions and keep the batch dimension in place.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 2, 2], order = [2, 1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 16, 2], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @batched_dot_scaled_rhs_scale_only
+  // CHECK: tt.trans %{{.*}} {order = array<i32: 0, 2, 1>} : tensor<2x16x64xf8E5M2, #{{.*}}> -> tensor<2x64x16xf8E5M2
+  // CHECK: tt.trans %{{.*}} {order = array<i32: 0, 2, 1>} : tensor<2x64x64xf8E5M2, #{{.*}}> -> tensor<2x64x64xf8E5M2
+  // CHECK: tt.dot {{.*}} -> tensor<2x64x16xf32, #mma>
+  // CHECK: tt.trans %{{.*}} {order = array<i32: 0, 2, 1>} : tensor<2x64x16xf32, #{{.*}}> -> tensor<2x16x64xf32
+  tt.func public @batched_dot_scaled_rhs_scale_only(%a: tensor<2x16x64xf8E5M2, #blocked>, %b: tensor<2x64x64xf8E5M2, #blocked>, %scale_b: tensor<2x64x2xi8, #blocked1>) -> tensor<2x16x64xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<2x16x64xf32, #blocked>
+    %d = tt.dot_scaled %a, %b scale %scale_b, %cst lhs = e5m2 rhs = e5m2 {fastMath = false} : tensor<2x16x64xf8E5M2, #blocked> * tensor<2x64x64xf8E5M2, #blocked>, tensor<2x64x2xi8, #blocked1> -> tensor<2x16x64xf32, #blocked>
+    tt.return %d : tensor<2x16x64xf32, #blocked>
+  }
+}
+
+// -----
+
+// Batched dot_scaled on sm_100 with a batch of 128 is decomposed, not matched
+// by the MMAv5 scaled pattern.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 2, 2], order = [2, 1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 16, 2], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @batched_dot_scaled_sm100
+  // CHECK-NOT: ttng.tc_gen5_mma
+  // CHECK: tt.dot {{.*}} -> tensor<128x16x64xf32, #mma>
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func public @batched_dot_scaled_sm100(%a: tensor<128x16x64xf8E4M3FN, #blocked>, %scale_a: tensor<128x16x2xi8, #blocked1>, %b: tensor<128x64x64xf8E4M3FN, #blocked>, %scale_b: tensor<128x64x2xi8, #blocked1>) -> tensor<128x16x64xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x16x64xf32, #blocked>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<128x16x64xf8E4M3FN, #blocked>, tensor<128x16x2xi8, #blocked1> * tensor<128x64x64xf8E4M3FN, #blocked>, tensor<128x64x2xi8, #blocked1> -> tensor<128x16x64xf32, #blocked>
+    tt.return %d : tensor<128x16x64xf32, #blocked>
+  }
+}

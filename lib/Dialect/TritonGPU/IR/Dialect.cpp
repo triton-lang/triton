@@ -3864,7 +3864,7 @@ struct TritonGPUInferLayoutInterface
     // fastest running dimension.
     // FIXME: We should make sure that there are enough elements along the axis
     // axis whenever fwdInference is false
-    if (getOrder(cast<DistributedEncodingTrait>(inEnc), shape)[axis] == 0) {
+    if (getOrder(cast<DistributedEncodingTrait>(inEnc), shape)[0] == axis) {
       // Dot operand: double kWidth if kDim == axis.
       if (auto dotEnc = mlir::dyn_cast<DotOperandEncodingAttr>(inEnc)) {
         auto kWidth = dotEnc.getKWidth();
