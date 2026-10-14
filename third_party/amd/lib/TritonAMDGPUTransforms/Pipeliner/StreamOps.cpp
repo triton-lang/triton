@@ -1,5 +1,5 @@
 #include "StreamOps.h"
-#include "Utility.h"
+#include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
