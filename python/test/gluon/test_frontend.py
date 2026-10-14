@@ -2123,10 +2123,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = tt.expand_dims %2 {axis = 1 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16x1xi32, #blocked>
     %c0_i32 = arith.constant 0 : i32
     %cst = arith.constant dense<0> : tensor<1x16xi32, #blocked>
-    %4 = arith.addi %cst, %1 : tensor<1x16xi32, #blocked>
+    %4 = arith.addi %cst, %1 overflow<nsw> : tensor<1x16xi32, #blocked>
     %5 = tt.broadcast %4 : tensor<1x16xi32, #blocked> -> tensor<16x16xi32, #blocked>
     %6 = tt.broadcast %3 : tensor<16x1xi32, #blocked> -> tensor<16x16xi32, #blocked>
-    %7 = arith.addi %5, %6 : tensor<16x16xi32, #blocked>
+    %7 = arith.addi %5, %6 overflow<nsw> : tensor<16x16xi32, #blocked>
     tt.return
   }
 }
@@ -3057,7 +3057,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = tt.join %outLHS, %outRHS : tensor<128x64xi32, #ttg.slice<{dim = 2, parent = #blocked2}>> -> tensor<128x64x2xi32, #blocked2>
     %3 = tt.trans %2 {order = array<i32: 0, 2, 1>} : tensor<128x64x2xi32, #blocked2> -> tensor<128x2x64xi32, #blocked1>
     %4 = tt.reshape %3 : tensor<128x2x64xi32, #blocked1> -> tensor<128x128xi32, #blocked>
-    %5 = arith.addi %cst, %4 : tensor<128x128xi32, #blocked>
+    %5 = arith.addi %cst, %4 overflow<nsw> : tensor<128x128xi32, #blocked>
     tt.return
   }
 }
@@ -3096,13 +3096,13 @@ def test_auto_layout_broadcast():
     # CHECK: [[XCVT:%.*]] = gluon.set_auto_layout [[X]] : tensor<16x1xi32, #gluon.auto_encoding> -> tensor<16x1xi32, [[BLOCKED]]>
     # CHECK: [[XBCAST:%.*]] = tt.broadcast [[XCVT]]
     # CHECK: [[YBCAST:%.*]] = tt.broadcast [[Y]]
-    # CHECK: arith.addi [[XBCAST]], [[YBCAST]] : tensor<16x16xi32, [[BLOCKED]]>
+    # CHECK: arith.addi [[XBCAST]], [[YBCAST]] overflow<nsw> : tensor<16x16xi32, [[BLOCKED]]>
     _ = x + y
 
     # CHECK: [[XCVT2:%.*]] = gluon.set_auto_layout [[X]] : tensor<16x1xi32, #gluon.auto_encoding> -> tensor<16x1xi32, [[BLOCKED]]>
     # CHECK: [[YBCAST2:%.*]] = tt.broadcast [[Y]]
     # CHECK: [[XBCAST2:%.*]] = tt.broadcast [[XCVT2]]
-    # CHECK: arith.muli [[YBCAST2]], [[XBCAST2]] : tensor<16x16xi32, [[BLOCKED]]>
+    # CHECK: arith.muli [[YBCAST2]], [[XBCAST2]] overflow<nsw> : tensor<16x16xi32, [[BLOCKED]]>
     _ = y * x
 
 
@@ -3290,7 +3290,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
   tt.func private @test_frontend.add_int__i32_i32(%arg0: i32, %arg1: i32) -> i32 attributes {noinline = false} {
-    %0 = arith.addi %arg0, %arg1 : i32
+    %0 = arith.addi %arg0, %arg1 overflow<nsw> : i32
     tt.return %0 : i32
   ^bb1:  // no predecessors
     %1 = ub.poison : i32
@@ -3496,11 +3496,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
     %c16_i32 = arith.constant 16 : i32
     %cst = arith.constant dense<16> : tensor<128x1xi32, #blocked>
-    %4 = arith.muli %3, %cst : tensor<128x1xi32, #blocked>
+    %4 = arith.muli %3, %cst overflow<nsw> : tensor<128x1xi32, #blocked>
     %5 = tt.expand_dims %2 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
     %6 = tt.broadcast %4 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
     %7 = tt.broadcast %5 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
-    %8 = arith.addi %6, %7 : tensor<128x16xi32, #blocked>
+    %8 = arith.addi %6, %7 overflow<nsw> : tensor<128x16xi32, #blocked>
     %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
     %10 = tt.addptr %9, %8 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
     %11 = ttg.async_copy_global_to_local %10, %0 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
@@ -3571,11 +3571,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
     %c16_i32 = arith.constant 16 : i32
     %cst = arith.constant dense<16> : tensor<128x1xi32, #blocked>
-    %4 = arith.muli %3, %cst : tensor<128x1xi32, #blocked>
+    %4 = arith.muli %3, %cst overflow<nsw> : tensor<128x1xi32, #blocked>
     %5 = tt.expand_dims %2 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
     %6 = tt.broadcast %4 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
     %7 = tt.broadcast %5 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
-    %8 = arith.addi %6, %7 : tensor<128x16xi32, #blocked>
+    %8 = arith.addi %6, %7 overflow<nsw> : tensor<128x16xi32, #blocked>
     %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
     %10 = tt.addptr %9, %8 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
     %11 = amdg.async_copy_local_to_global %0, %10 : !ttg.memdesc<128x16xf16, #shared, #smem, mutable> -> tensor<128x16x!tt.ptr<f16>, #blocked>
@@ -3737,11 +3737,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
     %c16_i32 = arith.constant 16 : i32
     %cst = arith.constant dense<16> : tensor<128x1xi32, #blocked>
-    %4 = arith.muli %3, %cst : tensor<128x1xi32, #blocked>
+    %4 = arith.muli %3, %cst overflow<nsw> : tensor<128x1xi32, #blocked>
     %5 = tt.expand_dims %2 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
     %6 = tt.broadcast %4 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
     %7 = tt.broadcast %5 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
-    %8 = arith.addi %6, %7 : tensor<128x16xi32, #blocked>
+    %8 = arith.addi %6, %7 overflow<nsw> : tensor<128x16xi32, #blocked>
     %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
     %10 = tt.addptr %9, %8 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
     %11 = ttg.async_copy_global_to_local %10, %0 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared, #smem, mutable>
@@ -3821,11 +3821,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
     %c16_i32 = arith.constant 16 : i32
     %cst = arith.constant dense<16> : tensor<128x1xi32, #blocked>
-    %4 = arith.muli %3, %cst : tensor<128x1xi32, #blocked>
+    %4 = arith.muli %3, %cst overflow<nsw> : tensor<128x1xi32, #blocked>
     %5 = tt.expand_dims %2 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
     %6 = tt.broadcast %4 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
     %7 = tt.broadcast %5 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
-    %8 = arith.addi %6, %7 : tensor<128x16xi32, #blocked>
+    %8 = arith.addi %6, %7 overflow<nsw> : tensor<128x16xi32, #blocked>
     %9 = amdg.buffer_load_to_local %arg0[%8] into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
     %10 = amdg.buffer_load_to_local %arg0[%8] cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal> into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
     %11 = amdg.buffer_load_to_local %arg0[%8] cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
@@ -5021,12 +5021,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %3 = ub.poison : i32
     scf.for %arg0 = %0 to %1 step %2  : i32 {
       %c1_i32_0 = arith.constant 1 : i32
-      %4 = arith.addi %arg0, %c1_i32_0 : i32
+      %4 = arith.addi %arg0, %c1_i32_0 overflow<nsw> : i32
       rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0"}
       %c1_i32_1 = arith.constant 1 : i32
-      %5 = arith.muli %4, %c1_i32_1 : i32
+      %5 = arith.muli %4, %c1_i32_1 overflow<nsw> : i32
       %c1_i32_2 = arith.constant 1 : i32
-      %6 = arith.addi %5, %c1_i32_2 : i32
+      %6 = arith.addi %5, %c1_i32_2 overflow<nsw> : i32
       rocdl.sched.barrier none {triton.warp_pipeline.border = "stage1"}
     }
     tt.return
@@ -5732,7 +5732,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = tt.expand_dims %1 {axis = 0 : i32} : tensor<256xi32, #gluon.auto_encoding> -> tensor<1x256xi32, #gluon.auto_encoding>
     %4 = tt.broadcast %2 : tensor<128x1xi32, #gluon.auto_encoding> -> tensor<128x256xi32, #gluon.auto_encoding>
     %5 = tt.broadcast %3 : tensor<1x256xi32, #gluon.auto_encoding> -> tensor<128x256xi32, #gluon.auto_encoding>
-    %6 = arith.addi %4, %5 : tensor<128x256xi32, #gluon.auto_encoding>
+    %6 = arith.addi %4, %5 overflow<nsw> : tensor<128x256xi32, #gluon.auto_encoding>
     %7 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #gluon.auto_encoding> -> tensor<128x1xi32, #gluon.auto_encoding>
     %c100_i32 = arith.constant 100 : i32
     %cst = arith.constant dense<100> : tensor<128x1xi32, #gluon.auto_encoding>
@@ -5786,7 +5786,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = tt.expand_dims %1 {axis = 0 : i32} : tensor<256xi32, #gluon.auto_encoding> -> tensor<1x256xi32, #gluon.auto_encoding>
     %4 = tt.broadcast %2 : tensor<128x1xi32, #gluon.auto_encoding> -> tensor<128x256xi32, #gluon.auto_encoding>
     %5 = tt.broadcast %3 : tensor<1x256xi32, #gluon.auto_encoding> -> tensor<128x256xi32, #gluon.auto_encoding>
-    %6 = arith.addi %4, %5 : tensor<128x256xi32, #gluon.auto_encoding>
+    %6 = arith.addi %4, %5 overflow<nsw> : tensor<128x256xi32, #gluon.auto_encoding>
     %7 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #gluon.auto_encoding> -> tensor<128x1xi32, #gluon.auto_encoding>
     %c100_i32 = arith.constant 100 : i32
     %cst = arith.constant dense<100> : tensor<128x1xi32, #gluon.auto_encoding>

@@ -95,34 +95,34 @@ def test_static_assert(cond):
     _kernel[(1, )](cond)
 
 
-def _run_overflow(x, y, x_dtype, y_dtype, debug, op, device):
+def _run_overflow(x, y, x_dtype, y_dtype, debug, op, device, sanitize_overflow=True):
     if op == "add":
 
         @triton.jit
-        def tri_func(X, Y, Z):
-            tl.store(Z, tl.load(X) + tl.load(Y))
+        def tri_func(X, Y, Z, SANITIZE_OVERFLOW: tl.constexpr):
+            tl.store(Z, tl.add(tl.load(X), tl.load(Y), sanitize_overflow=SANITIZE_OVERFLOW))
 
         ref_func = lambda lhs, rhs: lhs + rhs
     elif op == "mul":
 
         @triton.jit
-        def tri_func(X, Y, Z):
-            tl.store(Z, tl.load(X) * tl.load(Y))
+        def tri_func(X, Y, Z, SANITIZE_OVERFLOW: tl.constexpr):
+            tl.store(Z, tl.mul(tl.load(X), tl.load(Y), sanitize_overflow=SANITIZE_OVERFLOW))
 
         ref_func = lambda lhs, rhs: lhs * rhs
     else:
         assert op == "sub"
 
         @triton.jit
-        def tri_func(X, Y, Z):
-            tl.store(Z, tl.load(X) - tl.load(Y))
+        def tri_func(X, Y, Z, SANITIZE_OVERFLOW: tl.constexpr):
+            tl.store(Z, tl.sub(tl.load(X), tl.load(Y), sanitize_overflow=SANITIZE_OVERFLOW))
 
         ref_func = lambda lhs, rhs: lhs - rhs
 
     x = torch.tensor([x], dtype=getattr(torch, x_dtype), device=device)
     y = torch.tensor([y], dtype=getattr(torch, y_dtype), device=device)
     z = torch.empty_like(x)
-    tri_func[(1, )](x, y, z, debug=debug)
+    tri_func[(1, )](x, y, z, SANITIZE_OVERFLOW=sanitize_overflow, debug=debug)
     getattr(torch, device).synchronize()
     assert int(z) == int(ref_func(x, y))
 
@@ -144,7 +144,7 @@ def _assert_overflow_result(result, debug, should_overflow, dtype, op):
 
 
 @pytest.mark.parametrize("x, y, x_dtype, y_dtype, debug, should_overflow", [
-    (-2**31, -1, 'int32', 'int32', False, False),
+    (-2**31, 1, 'int32', 'int32', False, False),
     (-2**31, -1, 'int32', 'int32', True, True),
     (2**31 - 1, 1, 'int32', 'int32', True, True),
     (2**31 - 1, 100, 'int32', 'int32', True, True),
@@ -163,7 +163,7 @@ def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
 
 
 @pytest.mark.parametrize("x, y, x_dtype, y_dtype, debug, should_overflow", [
-    (2**30, 4, 'int32', 'int32', False, False),
+    (2**30, 1, 'int32', 'int32', False, False),
     (2**30, 4, 'int32', 'int32', True, True),
     (2**30, 2, 'int32', 'int32', True, True),
     (-2**30, -4, 'int32', 'int32', True, True),
@@ -173,6 +173,16 @@ def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
 def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
     result = run_in_process(_run_overflow, (x, y, x_dtype, y_dtype, debug, "mul", device))
     _assert_overflow_result(result, debug, should_overflow, x_dtype, "mul")
+
+
+@pytest.mark.parametrize("op", ["add", "mul"])
+@pytest.mark.parametrize("bits", [32, 64])
+@pytest.mark.parametrize("debug", [False, True])
+def test_sanitize_int_overflow_disabled(op, bits, debug, device):
+    x, y = (2**(bits - 1) - 1, 1) if op == "add" else (2**(bits - 2), 4)
+    dtype = f"int{bits}"
+    result = run_in_process(_run_overflow, (x, y, dtype, dtype, debug, op, device, False))
+    _assert_overflow_result(result, debug, False, dtype, op)
 
 
 # sub overflow

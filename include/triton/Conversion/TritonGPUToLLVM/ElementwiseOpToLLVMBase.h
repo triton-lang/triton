@@ -1,6 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 #define TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 
+#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Support/LLVM.h"
@@ -165,8 +166,20 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    auto result = DestOp::create(rewriter, loc, elemTy, operands[0],
-                                 adaptor.getAttributes().getValue());
+    DestOp result;
+    if constexpr (SourceOp::template hasTrait<
+                      arith::ArithIntegerOverflowFlagsInterface::Trait>() &&
+                  DestOp::template hasTrait<
+                      LLVM::IntegerOverflowFlagsInterface::Trait>()) {
+      arith::AttrConvertOverflowToLLVM<SourceOp, DestOp> attrConvert(op);
+      OperationState state(loc, DestOp::getOperationName(), operands[0], elemTy,
+                           attrConvert.getAttrs());
+      state.propertiesAttr = attrConvert.getPropAttr();
+      result = cast<DestOp>(rewriter.create(state));
+    } else {
+      result = DestOp::create(rewriter, loc, elemTy, operands[0],
+                              adaptor.getAttributes().getValue());
+    }
     Customize(result);
     return {result};
   }

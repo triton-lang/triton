@@ -1335,10 +1335,14 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &input) -> Value {
              return self.create<arith::NegFOp>(input);
            })
-      .def("create_mul",
-           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-             return self.create<arith::MulIOp>(lhs, rhs);
-           })
+      .def(
+          "create_mul",
+          [](TritonOpBuilder &self, Value &lhs, Value &rhs, bool nsw) -> Value {
+            auto flags = nsw ? arith::IntegerOverflowFlags::nsw
+                             : arith::IntegerOverflowFlags::none;
+            return self.create<arith::MulIOp>(lhs, rhs, flags);
+          },
+          py::arg("lhs"), py::arg("rhs"), py::arg("nsw") = false)
       .def("create_umulhi",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<triton::MulhiUIOp>(lhs, rhs);
@@ -1359,10 +1363,14 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::RemUIOp>(lhs, rhs);
            })
-      .def("create_add",
-           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-             return self.create<arith::AddIOp>(lhs, rhs);
-           })
+      .def(
+          "create_add",
+          [](TritonOpBuilder &self, Value &lhs, Value &rhs, bool nsw) -> Value {
+            auto flags = nsw ? arith::IntegerOverflowFlags::nsw
+                             : arith::IntegerOverflowFlags::none;
+            return self.create<arith::AddIOp>(lhs, rhs, flags);
+          },
+          py::arg("lhs"), py::arg("rhs"), py::arg("nsw") = false)
       .def("create_sub",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return Value(self.create<arith::SubIOp>(lhs, rhs));

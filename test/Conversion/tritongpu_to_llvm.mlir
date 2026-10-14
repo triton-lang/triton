@@ -18,6 +18,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @integer_overflow_flags
+  tt.func private @integer_overflow_flags(%a: i32, %b: i32) -> (i32, i32, i32, i32, i32, i32, i32, i32) {
+    // CHECK: llvm.add %arg0, %arg1 : i32
+    // CHECK: llvm.add %arg0, %arg1 overflow<nsw> : i32
+    // CHECK: llvm.add %arg0, %arg1 overflow<nuw> : i32
+    // CHECK: llvm.add %arg0, %arg1 overflow<nsw, nuw> : i32
+    // CHECK: llvm.mul %arg0, %arg1 : i32
+    // CHECK: llvm.mul %arg0, %arg1 overflow<nsw> : i32
+    // CHECK: llvm.mul %arg0, %arg1 overflow<nuw> : i32
+    // CHECK: llvm.mul %arg0, %arg1 overflow<nsw, nuw> : i32
+    %add = arith.addi %a, %b : i32
+    %add_nsw = arith.addi %a, %b overflow<nsw> : i32
+    %add_nuw = arith.addi %a, %b overflow<nuw> : i32
+    %add_both = arith.addi %a, %b overflow<nsw, nuw> : i32
+    %mul = arith.muli %a, %b : i32
+    %mul_nsw = arith.muli %a, %b overflow<nsw> : i32
+    %mul_nuw = arith.muli %a, %b overflow<nuw> : i32
+    %mul_both = arith.muli %a, %b overflow<nsw, nuw> : i32
+    tt.return %add, %add_nsw, %add_nuw, %add_both, %mul, %mul_nsw, %mul_nuw, %mul_both : i32, i32, i32, i32, i32, i32, i32, i32
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @tensor_integer_overflow_flags
+  tt.func private @tensor_integer_overflow_flags(%a: tensor<256xi32, #blocked>, %b: tensor<256xi32, #blocked>) -> tensor<256xi32, #blocked> {
+    // CHECK-COUNT-2: llvm.add {{.*}} overflow<nsw> : i32
+    // CHECK-COUNT-2: llvm.mul {{.*}} overflow<nsw> : i32
+    %add = arith.addi %a, %b overflow<nsw> : tensor<256xi32, #blocked>
+    %mul = arith.muli %add, %b overflow<nsw> : tensor<256xi32, #blocked>
+    tt.return %mul : tensor<256xi32, #blocked>
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: llvm.func @umulhi_truncated_input
   tt.func @umulhi_truncated_input(%seed: i64, %out: !tt.ptr<i32>) {

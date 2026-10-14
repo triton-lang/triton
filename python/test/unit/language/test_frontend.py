@@ -5,6 +5,7 @@ import re
 import triton
 import triton.language as tl
 from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
@@ -40,6 +41,111 @@ def doesnt_compile(kernel):
 @triton.jit
 def anchor(v):
     pass
+
+
+@pytest.mark.parametrize("is_gluon", [False, True])
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("op", ["add", "mul"])
+@pytest.mark.parametrize("mode", ["operator", "function", "wrapping"])
+@pytest.mark.parametrize("lhs_dtype, rhs_dtype, signed", [
+    (tl.int1, tl.int1, False),
+    (tl.int8, tl.int8, True),
+    (tl.int16, tl.int16, True),
+    (tl.int32, tl.int32, True),
+    (tl.int64, tl.int64, True),
+    (tl.uint8, tl.uint8, False),
+    (tl.uint16, tl.uint16, False),
+    (tl.uint32, tl.uint32, False),
+    (tl.uint64, tl.uint64, False),
+    (tl.int32, tl.uint32, False),
+    (tl.uint32, tl.int32, False),
+    (tl.int64, tl.uint32, True),
+    (tl.uint32, tl.int64, True),
+])
+def test_integer_add_mul_nsw(is_gluon, scalar, op, mode, lhs_dtype, rhs_dtype, signed):
+
+    @gluon.jit if is_gluon else triton.jit
+    def kernel(X, Y, Z, LANG: tl.constexpr, IS_GLUON: tl.constexpr, SCALAR: tl.constexpr, OP: tl.constexpr,
+               MODE: tl.constexpr):
+        if not SCALAR:
+            if IS_GLUON:
+                offsets = LANG.arange(0, 32, layout=LANG.BlockedLayout([1], [32], [4], [0]))
+            else:
+                offsets = LANG.arange(0, 32)
+            X += offsets
+            Y += offsets
+            Z += offsets
+        x = LANG.load(X)
+        y = LANG.load(Y)
+        if OP == "add":
+            if MODE == "operator":
+                result = x + y
+            else:
+                result = LANG.add(x, y, sanitize_overflow=MODE != "wrapping")
+        else:
+            if MODE == "operator":
+                result = x * y
+            else:
+                result = LANG.mul(x, y, sanitize_overflow=MODE != "wrapping")
+        LANG.store(Z, result)
+
+    module = run_parser(
+        kernel, args=(MockTensor(lhs_dtype), MockTensor(rhs_dtype), MockTensor(lhs_dtype), gl if is_gluon else tl,
+                      is_gluon, scalar, op, mode))
+    operations = re.findall(rf"arith\.{op}i [^\n]+", module.str_nodebug())
+    assert len(operations) == 1
+    assert ("overflow<nsw>" in operations[0]) == (signed and mode != "wrapping")
+    assert "nuw" not in operations[0]
+
+
+@pytest.mark.parametrize("op", ["add", "mul"])
+@pytest.mark.parametrize("dtype", [tl.int32, tl.uint32])
+def test_integer_add_mul_nsw_sanitizer(op, dtype):
+
+    @triton.jit
+    def kernel(X, Y, Z, OP: tl.constexpr):
+        x = tl.load(X)
+        y = tl.load(Y)
+        result = x + y if OP == "add" else x * y
+        tl.store(Z, result)
+
+    module = run_parser(kernel, args=(MockTensor(dtype), MockTensor(dtype), MockTensor(dtype), op),
+                        kwargs={"sanitize_overflow": True, "debug": True})
+    operations = re.findall(rf"arith\.{op}i [^\n]+", module.str_nodebug())
+    assert len(operations) == 2
+    assert operations[0].endswith(": i64")
+    assert "overflow" not in operations[0]
+    assert operations[1].endswith(": i32")
+    assert ("overflow<nsw>" in operations[1]) == dtype.is_int_signed()
+    assert "tt.assert" in module.str_nodebug()
+
+
+@pytest.mark.parametrize("is_gluon", [False, True])
+@pytest.mark.parametrize("op", ["sum", "cumsum", "cumprod"])
+@pytest.mark.parametrize("dtype", [tl.int8, tl.int32, tl.int64], ids=str)
+@pytest.mark.parametrize("sanitize_overflow", [False, True])
+def test_integer_reduction_scan_wrapping(is_gluon, op, dtype, sanitize_overflow):
+
+    @gluon.jit if is_gluon else triton.jit
+    def kernel(X, Z, LANG: tl.constexpr, IS_GLUON: tl.constexpr, OP: tl.constexpr, DTYPE: tl.constexpr):
+        if IS_GLUON:
+            offsets = LANG.arange(0, 32, layout=LANG.BlockedLayout([1], [32], [4], [0]))
+        else:
+            offsets = LANG.arange(0, 32)
+        x = LANG.load(X + offsets)
+        result = getattr(LANG, OP)(x, axis=0, dtype=DTYPE)
+        if OP != "sum":
+            Z += offsets
+        LANG.store(Z, result)
+
+    module = run_parser(kernel,
+                        args=(MockTensor(dtype), MockTensor(dtype), gl if is_gluon else tl, is_gluon, op, dtype),
+                        kwargs={"sanitize_overflow": sanitize_overflow, "debug": True})
+    operation = "mul" if op == "cumprod" else "add"
+    operations = re.findall(rf"arith\.{operation}i [^\n]+", module.str_nodebug())
+    assert len(operations) == 1
+    assert "overflow" not in operations[0]
+    assert "tt.assert" not in module.str_nodebug()
 
 
 @pytest.mark.parametrize("op", ["min", "max"])
@@ -769,7 +875,7 @@ def test_aggregate_with_constexpr():
 
     # CHECK: tt.func private @"test_frontend.add_rhs_constexpr__test_frontend.AggregateWithConstexpr<i32S4S, c42>
     # CHECK: %cst = arith.constant dense<42> : tensor<4xi32>
-    # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
+    # CHECK: arith.addi %arg0, %cst overflow<nsw> : tensor<4xi32>
 
 
 @triton.aggregate
@@ -1034,7 +1140,7 @@ def test_named_expr_without_prior_annotation_decays():
     # CHECK:   tt.call @{{.*}}anchor{{.*}}(%c11_i32) : (i32) -> ()
     # CHECK: } else {
     # CHECK:   [[ONE:%.*]] = arith.constant 1 : i32
-    # CHECK:   [[ADD:%.*]] = arith.addi %c11_i32, [[ONE]] : i32
+    # CHECK:   [[ADD:%.*]] = arith.addi %c11_i32, [[ONE]] overflow<nsw> : i32
     # CHECK:   tt.call @{{.*}}anchor{{.*}}([[ADD]]) : (i32) -> ()
     # CHECK: }
     if (x := constexpr_function(10)) != 10:
@@ -1319,7 +1425,7 @@ def test_for_loop_iv_modification():
     for i in range(4):
         # CHECK: anchor{{.*}}%[[I]]
         anchor(i)
-        # CHECK: %[[I2:.*]] = arith.addi %[[I]], %{{.*}} : i32
+        # CHECK: %[[I2:.*]] = arith.addi %[[I]], %{{.*}} overflow<nsw> : i32
         i += 1
         # CHECK: anchor{{.*}}%[[I2]]
         anchor(i)
@@ -1883,7 +1989,7 @@ def test_loop_carry_readonly_alias():
     acc = seed
     # CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = %[[SEED]]) -> (i32)
     for i in range(3):
-        # CHECK: %[[SUM:.*]] = arith.addi %[[ACC]], %[[SEED]] : i32
+        # CHECK: %[[SUM:.*]] = arith.addi %[[ACC]], %[[SEED]] overflow<nsw> : i32
         acc = acc + seed
         # CHECK: scf.yield %[[SUM]] : i32
     anchor(acc)
@@ -1920,7 +2026,7 @@ def test_loop_carry_while_shared_initial_value():
     while a < 4:
         # CHECK: } do {
         # CHECK-NEXT: ^bb0(%[[A:.*]]: i32, %[[B:.*]]: i32):
-        # CHECK: %[[NEXT_A:.*]] = arith.addi %[[A]], %[[SEED]] : i32
+        # CHECK: %[[NEXT_A:.*]] = arith.addi %[[A]], %[[SEED]] overflow<nsw> : i32
         a = a + seed
         # CHECK: %[[NEXT_B:.*]] = arith.addi %[[B]],
         b = b + 2
