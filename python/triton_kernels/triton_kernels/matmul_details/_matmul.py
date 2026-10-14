@@ -134,6 +134,7 @@ def _matmul(
     has_w_tensor_scale: tl.constexpr = WTensorScale is not None
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
+    has_x_epilogue_scale: tl.constexpr = has_x_tensor_scale and not REQUANTIZE_X
     X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
     if is_x_microscaled or is_w_microscaled:
@@ -366,6 +367,11 @@ def _matmul(
     else:
         XTensorScalePtrs = None
 
+    if REQUANTIZE_X and has_x_tensor_scale:
+        x_conversion_scale = tl.load(XTensorScalePtrs)
+    else:
+        x_conversion_scale: tl.constexpr = None
+
     offs_w_k = off_k_w + tl.arange(0, PACKED_BLOCK_K_W)
     W += expt_id * stride_w_e
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
@@ -453,7 +459,7 @@ def _matmul(
                 w_scales: tl.constexpr = None
 
             if REQUANTIZE_X:
-                x, x_scales = nvfp4_to_mxfp8_tile(x, x_scales)
+                x, x_scales = nvfp4_to_mxfp8_tile(x, x_scales, x_conversion_scale)
 
             if is_x_fp4 and not is_w_microscaled and not cuda_capability_geq(10, 0):
                 tl.static_assert(w_format == "fp16" or w_format == "bf16")
@@ -502,10 +508,10 @@ def _matmul(
         else:
             XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
-    if has_x_tensor_scale or has_w_tensor_scale:
+    if has_x_epilogue_scale or has_w_tensor_scale:
         x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
         w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
-        if has_x_tensor_scale:
+        if has_x_epilogue_scale:
             x_tensor_scales = tl.load(XTensorScalePtrs)
         if has_w_tensor_scale:
             w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0)

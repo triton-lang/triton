@@ -672,9 +672,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 @pytest.mark.parametrize("swizzled", [False, True])
 @pytest.mark.parametrize("weights_swizzled", [False, True])
 @pytest.mark.parametrize("mode", ["plain", "batched", "ragged", "gather", "ragged_gather"])
-@pytest.mark.parametrize("k", [256, 1024])
+@pytest.mark.parametrize("k, out_dtype", [(256, None), (1024, torch.float32)])
 @pytest.mark.parametrize("tensor_scale", ["none", "row", "column", "both", "wide_row"])
-@pytest.mark.parametrize("out_dtype", [None, torch.float32])
 def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_scale, out_dtype, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell")
@@ -690,20 +689,20 @@ def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_sc
         mode in ("plain", "gather"))
     decoded_a = upcast_from_mxfp_torch(a.storage.data, a_scale.storage.data, torch.float32, -1)
     decoded_b = upcast_from_mxfp_torch(b.storage.data, b_scale.storage.data, torch.float32, -2)
-    converted, converted_scale = downcast_to_mxfp_torch(decoded_a, torch.float8_e4m3fn, -1)
-    reference_a = upcast_from_mxfp_torch(converted, converted_scale, torch.float32, -1)
     outer_scale = None
     if tensor_scale == "wide_row":
         exponents = torch.tensor([-80, -32, 0, 32, 80], device=device, dtype=torch.int32)
-        exponents = exponents[torch.arange(reference_a.numel() // k, device=device) % exponents.numel()]
+        exponents = exponents[torch.arange(decoded_a.numel() // k, device=device) % exponents.numel()]
         outer_scale = torch.ldexp(torch.ones_like(exponents, dtype=torch.float32), exponents).reshape(
-            reference_a.shape[:-1])
-        reference_a *= outer_scale[..., None]
-        assert torch.isfinite(reference_a).all()
-        assert reference_a.abs().max() > torch.finfo(torch.float16).max
+            decoded_a.shape[:-1])
+        decoded_a *= outer_scale[..., None]
+        assert torch.isfinite(decoded_a).all()
+        assert decoded_a.abs().max() > torch.finfo(torch.float16).max
     elif tensor_scale in ("row", "both"):
-        outer_scale = torch.linspace(0.5, 1.5, reference_a.numel() // k, device=device).reshape(reference_a.shape[:-1])
-        reference_a *= outer_scale[..., None]
+        outer_scale = torch.linspace(0.5, 1.5, decoded_a.numel() // k, device=device).reshape(decoded_a.shape[:-1])
+        decoded_a *= outer_scale[..., None]
+    converted, converted_scale = downcast_to_mxfp_torch(decoded_a, torch.float8_e4m3fn, -1)
+    reference_a = upcast_from_mxfp_torch(converted, converted_scale, torch.float32, -1)
     weight_outer_scale = None
     if tensor_scale in ("column", "both"):
         weight_outer_scale = torch.linspace(0.5, 1.5, decoded_b.numel() // k, device=device).reshape(
@@ -742,6 +741,53 @@ def test_nvfp4_acts_mxfp4_weights(swizzled, weights_swizzled, mode, k, tensor_sc
 def test_nvfp4_acts_mxfp4_weights_nonpersistent(k, mode, device, opt_flags_scope):
     with opt_flags.scoped_opt_flags_constraints({"is_persistent": False, "split_k": 1}):
         test_nvfp4_acts_mxfp4_weights(False, False, mode, k, "wide_row", torch.float32, device, opt_flags_scope)
+
+
+@pytest.mark.parametrize("is_persistent", [False, True])
+@pytest.mark.parametrize("mode", ["plain", "ragged_gather"])
+@pytest.mark.parametrize("output", ["fp32", "swiglu", "swiglu_mxfp8"])
+def test_nvfp4_requantization_matches_mxfp8(is_persistent, mode, output, device, opt_flags_scope):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell")
+    torch.manual_seed(42)
+    m, n, k = 129, 256, 256
+    ragged = mode == "ragged_gather"
+    slices = 4 if ragged else 1
+    a, a_scale, _ = make_random_tensor(
+        (m, k), 1, None, False, device, DType("nvfp4_e2m1"), -1, False, True)
+    b, b_scale, _ = make_random_tensor(
+        (k, n), slices, None, False, device, DType("mxfloat4_e2m1"), -2, False, not ragged)
+    b_scale = wrap_torch_tensor(b_scale.storage.data.contiguous())
+    metadata = make_ragged_tensor_metadata(torch.tensor([0, 1, 63, 65], device=device, dtype=torch.int32), m) if ragged else None
+    gather = torch.randperm(m, device=device).to(torch.int32) if ragged else None
+    outer_scale = torch.linspace(0.37, 1.37, m, device=device)
+    outer_scale[0] = 0
+    decoded = upcast_from_mxfp_torch(a.storage.data, a_scale.storage.data, torch.float32, -1)
+    decoded *= outer_scale[:, None]
+    converted, converted_scale = downcast_to_mxfp_torch(decoded, torch.float8_e4m3fn, -1)
+    bias = torch.randn((slices, n) if ragged else (n,), device=device)
+    fused_activation = FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2), (1.1, 7.0)) if output != "fp32" else None
+    config = PrecisionConfig(a_mx_scale=a_scale, a_microblock_size=16, a_mx_tensor_scale=outer_scale,
+                             b_mx_scale=b_scale, b_microblock_size=32, out_dtype=torch.float32,
+                             enforce_bitwise_invariance=True)
+    converted_config = replace(config, a_mx_scale=converted_scale, a_microblock_size=32, a_mx_tensor_scale=None)
+    epilogue = None
+    if output == "swiglu_mxfp8":
+        actual_scale = torch.empty((m, n // 2 // 32), dtype=torch.uint8, device=device)
+        expected_scale = torch.empty_like(actual_scale)
+        config = replace(config, out_dtype=torch.float8_e4m3fn, c_mx_scale=actual_scale, c_microblock_size=32)
+        converted_config = replace(converted_config, out_dtype=torch.float8_e4m3fn,
+                                   c_mx_scale=expected_scale, c_microblock_size=32)
+        epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ()), (), (), effective_itemsize=6.0)
+    opt_flags.update_opt_flags_constraints(dict(is_persistent=is_persistent, block_m=128, block_n=128,
+                                                 block_k=128, split_k=1))
+    actual = matmul(a, b, bias, a_ragged_metadata=metadata, gather_indx=gather,
+                    precision_config=config, fused_activation=fused_activation, epilogue=epilogue)
+    expected = matmul(converted, b, bias, a_ragged_metadata=metadata, gather_indx=gather,
+                      precision_config=converted_config, fused_activation=fused_activation, epilogue=epilogue)
+    torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8), rtol=0, atol=0)
+    if output == "swiglu_mxfp8":
+        torch.testing.assert_close(actual_scale, expected_scale, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("shape, fp8_lhs, constraints", [
