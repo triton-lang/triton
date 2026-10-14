@@ -622,3 +622,142 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#sharded = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_loop(
+  // THREAD-REGIONS: %[[LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // THREAD-REGIONS: %[[VALUE:.*]] = scf.if %[[LEADER]] -> (i32)
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: scf.for
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS: ttg.barrier all
+  // THREAD-REGIONS: ttg.thread_handoff %[[VALUE]] <31, 3> -> <0, 0> : i32
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_multi_cta_loop(%ptr: !tt.ptr<i32>, %out: tensor<256x!tt.ptr<i32>, #sharded>, %iterations: i32) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %value = scf.for %i = %zero to %iterations step %one iter_args(%sum = %zero) -> (i32) : i32 {
+      %source = tt.addptr %ptr, %i : !tt.ptr<i32>, i32
+      %element = tt.load %source : !tt.ptr<i32>
+      %next = arith.addi %sum, %element : i32
+      scf.yield %next : i32
+    }
+    %values = tt.splat %value : i32 -> tensor<256xi32, #sharded>
+    tt.store %out, %values : tensor<256x!tt.ptr<i32>, #sharded>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_atomic_loop(
+  // THREAD-REGIONS: ttng.cluster_barrier
+  // THREAD-REGIONS: %[[LEADER:.*]] = ttg.thread_predicate <31, 3, 1>
+  // THREAD-REGIONS: %[[VALUE:.*]] = scf.if %[[LEADER]] -> (i32)
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: scf.for
+  // THREAD-REGIONS: tt.atomic_rmw add, acq_rel, gpu
+  // THREAD-REGIONS-NOT: ttng.cluster_barrier
+  // THREAD-REGIONS: ttg.thread_yield
+  // THREAD-REGIONS: ttg.execution_domain
+  // THREAD-REGIONS-NEXT: ttng.cluster_barrier
+  // THREAD-REGIONS-NEXT: ttg.thread_handoff %[[VALUE]] <31, 3, 1> -> <0, 0> : i32
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_multi_cta_atomic_loop(%ptr: !tt.ptr<i32>, %out: tensor<256x!tt.ptr<i32>, #sharded>, %iterations: i32) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %true = arith.constant true
+    %value = scf.for %i = %zero to %iterations step %one iter_args(%sum = %zero) -> (i32) : i32 {
+      %element = tt.atomic_rmw add, acq_rel, gpu, %ptr, %one, %true : (!tt.ptr<i32>, i32, i1) -> i32
+      %next = arith.addi %sum, %element : i32
+      scf.yield %next : i32
+    }
+    %values = tt.splat %value : i32 -> tensor<256xi32, #sharded>
+    tt.store %out, %values : tensor<256x!tt.ptr<i32>, #sharded>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_unrelated_loads(
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS: ttg.thread_predicate <31, 3, 1>
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS-NEXT: {{.*}}tt.atomic_rmw add, relaxed, gpu
+  // THREAD-REGIONS-NEXT: ttg.thread_yield
+  // THREAD-REGIONS: ttg.execution_domain
+  // THREAD-REGIONS-NOT: ttg.thread_handoff
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS-NOT: ttg.thread_predicate
+  // THREAD-REGIONS-NOT: ttg.thread_handoff
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_multi_cta_unrelated_loads(%counter: !tt.ptr<i32>, %ptr: !tt.ptr<i32>, %out: tensor<256x!tt.ptr<i32>, #sharded>) {
+    %one = arith.constant 1 : i32
+    %true = arith.constant true
+    %before = tt.load %ptr : !tt.ptr<i32>
+    %old = tt.atomic_rmw add, relaxed, gpu, %counter, %one, %true : (!tt.ptr<i32>, i32, i1) -> i32
+    %after = tt.load %ptr : !tt.ptr<i32>
+    %sum = arith.addi %before, %after : i32
+    %values = tt.splat %sum : i32 -> tensor<256xi32, #sharded>
+    tt.store %out, %values : tensor<256x!tt.ptr<i32>, #sharded>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_atomic_capture(
+  // THREAD-REGIONS: ttg.thread_predicate <31, 3, 1>
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.atomic_load relaxed, gpu
+  // THREAD-REGIONS: arith.addi
+  // THREAD-REGIONS: tt.addptr
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS: scf.if
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS: scf.yield
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS-NEXT: ttg.thread_yield
+  // THREAD-REGIONS-NOT: ttg.thread_handoff
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_multi_cta_atomic_capture(%index: !tt.ptr<i32>, %ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %condition: i1) {
+    %one = arith.constant 1 : i32
+    %old = tt.atomic_load relaxed, gpu, %index : (!tt.ptr<i32>) -> i32
+    %offset = arith.addi %old, %one : i32
+    %source = tt.addptr %ptr, %offset : !tt.ptr<i32>, i32
+    %value = tt.load %source : !tt.ptr<i32>
+    %result = scf.if %condition -> (i32) {
+      tt.store %out, %value : !tt.ptr<i32>
+      scf.yield %value : i32
+    } else {
+      scf.yield %one : i32
+    }
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_separated_dependents(
+  // THREAD-REGIONS: ttg.thread_predicate <31, 3, 1>
+  // THREAD-REGIONS: %[[RESULT:.*]] = scf.if
+  // THREAD-REGIONS: tt.atomic_load relaxed, gpu
+  // THREAD-REGIONS: ttg.thread_yield
+  // THREAD-REGIONS: ttg.execution_domain
+  // THREAD-REGIONS-NOT: ttg.thread_predicate
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS-NEXT: tt.store
+  // THREAD-REGIONS: ttg.thread_predicate <31, 3, 1>
+  // THREAD-REGIONS: ttg.thread_handoff %[[RESULT]] <31, 3, 1> -> <31, 3, 1> : i32
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS: ttg.thread_yield
+  // THREAD-REGIONS: ttg.execution_domain
+  // THREAD-REGIONS: tt.splat
+  // THREAD-REGIONS-NEXT: tt.store
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_multi_cta_separated_dependents(%index: !tt.ptr<i32>, %ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %out_atomic: !tt.ptr<i32>, %out_tensor: tensor<256x!tt.ptr<i32>, #sharded>) {
+    %old = tt.atomic_load relaxed, gpu, %index : (!tt.ptr<i32>) -> i32
+    %value = tt.load %ptr : !tt.ptr<i32>
+    tt.store %out, %value : !tt.ptr<i32>
+    tt.store %out_atomic, %old : !tt.ptr<i32>
+    %values = tt.splat %value : i32 -> tensor<256xi32, #sharded>
+    tt.store %out_tensor, %values : tensor<256x!tt.ptr<i32>, #sharded>
+    tt.return
+  }
+}

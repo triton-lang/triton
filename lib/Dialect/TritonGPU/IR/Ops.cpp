@@ -71,12 +71,10 @@ static LogicalResult verifyThreadDomain(Operation *op,
   auto module = op->getParentOfType<ModuleOp>();
   uint32_t laneMask = TritonGPUDialect::getThreadsPerWarp(module) - 1;
   uint32_t warpMask = lookupNumWarps(op) - 1;
-  if ((domain.getLane() & ~laneMask) || (domain.getWarp() & ~warpMask))
+  uint32_t blockMask = lookupNumCTAs(op) - 1;
+  if (!domain.hasMasksWithin(laneMask, warpMask, blockMask))
     return op->emitOpError(
         "thread domain exceeds the enclosing execution domain");
-  if (lookupNumCTAs(op) != 1)
-    return op->emitOpError(
-        "thread regions require a single-CTA execution domain");
   return success();
 }
 
@@ -103,16 +101,23 @@ LogicalResult ThreadHandoffOp::verify() {
   if (failed(verifyThreadDomain(*this, source)) ||
       failed(verifyThreadDomain(*this, destination)))
     return failure();
-  if ((destination.getLane() & ~source.getLane()) ||
-      (destination.getWarp() & ~source.getWarp()))
+  if (!destination.hasMasksWithin(source.getLane(), source.getWarp(),
+                                  source.getBlock()))
     return emitOpError("destination must widen the source thread domain");
-  if (source != destination && source.getWarp() == destination.getWarp() &&
+  if (source != destination && source.hasSameWarpAndBlock(destination) &&
       destination.getLane())
     return emitOpError("lane handoff requires every destination warp lane");
   if (source.getWarp() != destination.getWarp() &&
       (destination.getLane() || destination.getWarp()))
     return emitOpError(
         "cross-warp handoff requires the full destination domain");
+  if (source.getBlock() != destination.getBlock()) {
+    if (!destination.isFull())
+      return emitOpError(
+          "cross-CTA handoff requires the full destination domain");
+    if (source.getBlock() != lookupNumCTAs(*this) - 1)
+      return emitOpError("cross-CTA handoff requires CTA zero as its source");
+  }
   return success();
 }
 
