@@ -43,6 +43,11 @@ private:
                                       unsigned numCTAs);
 
 protected:
+  virtual Attribute
+  getDesiredDescriptorEncoding(TypedValue<triton::TensorDescType> descriptor) {
+    return {};
+  }
+
   virtual Attribute getCompatibleSharedEncoding(Attribute enc,
                                                 ArrayRef<int64_t> shape,
                                                 Type elementType) {
