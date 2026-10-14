@@ -94,7 +94,6 @@ bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
 
   return (isLDSMemoryBarrierOp(op1) && isLDSMemoryBarrierOp(op2));
 }
-
 } // namespace
 
 bool membarFilter(Operation *op1, Operation *op2, bool /*op1IsRead*/,

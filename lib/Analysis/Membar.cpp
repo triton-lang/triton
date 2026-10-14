@@ -266,11 +266,19 @@ bool hasOnlyGlobalReads(Operation *op) {
          });
 }
 
-// A result of a global read may require a memory wait when consumed.
-// Use memory effects so equivalent backend load operations are covered too.
+// Classify the immediate producer using direct effects. Shared writes exclude
+// async copies; nested global reads do not classify a region operation.
 bool isGlobalReadResult(Value value) {
-  Operation *producer = value.getDefiningOp();
-  return producer && hasOnlyGlobalReads(producer);
+  auto memoryEffects =
+      dyn_cast_or_null<MemoryEffectOpInterface>(value.getDefiningOp());
+  if (!memoryEffects)
+    return false;
+  SmallVector<MemoryEffects::EffectInstance> effects;
+  memoryEffects.getEffects(effects);
+  return !effects.empty() && llvm::all_of(effects, [](const auto &effect) {
+    return isa<MemoryEffects::Read>(effect.getEffect()) &&
+           isa<triton::GlobalMemory>(effect.getResource());
+  });
 }
 
 bool mayNeedGlobalLoadWait(Value value) {
@@ -281,6 +289,7 @@ bool mayNeedGlobalLoadWait(Value value) {
     return false;
 
   Block *block = arg.getOwner();
+  unsigned index = arg.getArgNumber();
   // Follow one incoming edge; do not recurse through forwarding arguments.
   for (Block *pred : block->getPredecessors()) {
     auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
@@ -290,7 +299,6 @@ bool mayNeedGlobalLoadWait(Value value) {
       if (branch->getSuccessor(i) != block)
         continue;
       auto operands = branch.getSuccessorOperands(i);
-      unsigned index = arg.getArgNumber();
       // Produced arguments have no incoming SSA value to inspect.
       if (index < operands.size() && !operands.isOperandProduced(index) &&
           isGlobalReadResult(operands[index]))
@@ -388,7 +396,6 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
 Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                                         MembarInfo *membarInfo,
                                         OpBuilder *builder, bool cluster) {
-  // A null builder only analyzes existing barriers.
   if (!builder)
     return nullptr;
   auto &pending = membarInfo->pending;
@@ -407,9 +414,8 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
   bool needsSync =
       requiresThreadSync(pending, effects) ||
       pending.isIntersected(effects, canSkip, &allocation, sliceFilter);
-  // Rendezvous before a potential global-memory wait, including register
-  // copies introduced by branch transfers. This only moves a pending barrier;
-  // it does not determine whether the global read has actually completed.
+  // Keep a pending rendezvous ahead of potential global-memory waits. Branch
+  // transfers count as uses because they can lower to register copies.
   if (!needsSync && !cluster &&
       pending.threadSync.completion == CompletionSync::Shared)
     needsSync = llvm::any_of(op->getOperands(), mayNeedGlobalLoadWait);

@@ -39,7 +39,6 @@ namespace mlir::triton::AMD {
 bool membarFilter(Operation *op1, Operation *op2, bool op1IsRead,
                   bool op2IsRead, Allocation *allocation,
                   const AllocationSlice &, const AllocationSlice &);
-
 } // namespace mlir::triton::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_
