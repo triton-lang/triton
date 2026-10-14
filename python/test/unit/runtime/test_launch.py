@@ -40,7 +40,7 @@ def test_metadata() -> None:
 
 
 @pytest.mark.skipif(not is_cuda(), reason="max_occupancy requires CUDA")
-@pytest.mark.parametrize("max_occupancy", [None, 1, 2, 4])
+@pytest.mark.parametrize("max_occupancy", [None, 1, 2, 4, 8])
 @pytest.mark.parametrize("num_ctas", [1, 2])
 def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fresh_triton_cache):
     import ctypes
@@ -74,7 +74,7 @@ def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fres
         assert launcher.shared == 0
     else:
         properties = utils.get_device_properties(triton.runtime.driver.active.get_current_device())
-        assert (max_occupancy + 1) * launcher.shared > properties["max_shared_mem_per_multiprocessor"]
+        assert (max_occupancy + 1) * launcher.shared > properties["max_shared_mem"]
         if num_ctas == 1:
             # Check CUDA's occupancy calculation, independently of the reservation formula.
             cuda = ctypes.CDLL(os.path.join(libcuda_dirs()[0], "libcuda.so.1"))
@@ -125,7 +125,8 @@ def test_max_occupancy_preserves_required_shared_memory(device):
 
     inp = torch.randn(16384, device=device)
     out = torch.empty_like(inp)
-    compiled = kernel[(1, )](inp, out, max_occupancy=4)
+    # Keep the occupancy reservation below 64 KiB even with oversized shared memory.
+    compiled = kernel[(1, )](inp, out, max_occupancy=8)
     assert compiled.metadata.shared == 65536
     assert compiled.run.shared == compiled.metadata.shared
     torch.testing.assert_close(out, inp)

@@ -1966,7 +1966,7 @@ def test_explicit_graph_fork_join_replay(with_gsan, pdl, change_stream):
             executable.add_kernel(compiled, arguments, n)
             # Graph nodes bypass the eager launcher but need the same reservation.
             assert executable.parameters[-1][0].shared == compiled.run.shared
-            assert 2 * compiled.run.shared > properties["max_shared_mem_per_multiprocessor"]
+            assert 2 * compiled.run.shared > properties["max_shared_mem"]
         executable.instantiate()
         # Consume an eager producer before replay and feed an eager consumer after.
         _write_blocks_kernel[(4, )](source, n, BLOCK_SIZE=128)
