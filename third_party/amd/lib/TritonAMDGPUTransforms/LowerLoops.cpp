@@ -393,9 +393,9 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
     return false;
 
   using tt::amdgpu::ISAFamily;
-  bool hasDirectToLdsPath = llvm::is_contained(
-      {ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::GFX1250},
-      targetInfo.getISAFamily());
+  bool hasDirectToLdsPath =
+      llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4, ISAFamily::CDNA5},
+                         targetInfo.getISAFamily());
 
   // On targets without scatter support, reject CTA tiles that are too small to
   // provide one 32-bit direct-to-LDS write per lane. Layout-specific coalescing
@@ -662,6 +662,16 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     localStoreCluster = 4;
   }
 
+  // TDM copy reordering to improve latency hiding.
+  bool tdmReorder = hasTDMLoad && hasScaledDot && !waitAtTail;
+  if (tdmReorder) {
+    globalLoadCluster = 0; // all TDM copies first
+    asyncWaitCluster = 1;  // single wait after the copies
+    localLoadCluster = 2;  // local_loads after the wait
+    computeCluster = 3;    // dot_scaled last
+    localStoreCluster = 4;
+  }
+
   // Create a hash map to associate cluster hash in old schedule with its
   // clusterID
   ClusterMap clusterMap = createClusterMap(schedule);
@@ -669,8 +679,8 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   // Make assignments
   Clusters clusterVec;
   schedule.clusters.clear();
-  std::generate(clusterVec.begin(), clusterVec.end(),
-                [&]() { return schedule.clusters.newAtBack(); });
+  std::ranges::generate(clusterVec,
+                        [&] { return schedule.clusters.newAtBack(); });
 
   clusters[SCHED_GLOBAL_LOAD] = clusterVec[globalLoadCluster];
   clusters[SCHED_LOCAL_STORE] = clusterVec[localStoreCluster];
@@ -701,7 +711,7 @@ void scheduleTDMOps(Operation *tdmOp, Operation *waitOp,
   // to ensure all warps are finished reading the shared buffer we will write
   // into. This is done by scheduling AsyncWait as the first cluster.
   // If AsyncCopy and LocalLoads are in the same stage we do not assign a
-  // schdule so they are placed before the LocalLoads
+  // schedule so they are placed before the LocalLoads
   if (loadStage != stages[SCHED_LOCAL_LOAD])
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);
@@ -726,7 +736,7 @@ void scheduleAsyncCopy(const AsyncCopyChainOps &asyncOps, tt::LoadOp loadOp,
   // to ensure all warps are finished reading the shared buffer we will write
   // into. This is done by scheduling AsyncWait as the first cluster.
   // If AsyncCopy and LocalLoads are in the same stage we do not assign a
-  // schdule so they are placed before the LocalLoads
+  // schedule so they are placed before the LocalLoads
   if (loadStage != stages[SCHED_LOCAL_LOAD])
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);

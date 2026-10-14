@@ -3,6 +3,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1204,6 +1205,17 @@ std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
   }
 }
 
+unsigned getAtomicLoadStoreVectorSize(Value ptr, Value mask,
+                                      ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                      const TargetInfoBase &targetInfo) {
+  unsigned vec = std::min(axisInfoAnalysis.getContiguity(ptr),
+                          targetInfo.getMaxAtomicLoadStoreVectorSize(
+                              getPointeeBitWidth(ptr.getType())));
+  if (mask)
+    vec = std::min(vec, axisInfoAnalysis.getMaskAlignment(mask));
+  return vec;
+}
+
 SmallVector<Value>
 emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
                ValueRange falseValues,
@@ -1258,7 +1270,7 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
 }
 
 bool atomicResultHasOrderingBarrier(Operation *op) {
-  if (!op->hasAttr("allocation.offset"))
+  if (triton::getAtomicResultShuffleMask(op->getResult(0)))
     return false;
   return triton::gpu::lookupNumCTAs(op) == 1 ||
          triton::atomicResultHasCTABroadcast(op);
@@ -1269,8 +1281,7 @@ Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
                                   ConversionPatternRewriter &rewriter,
                                   TritonLLVMOpBuilder &b, Value threadPred,
                                   const TargetInfoBase &targetInfo) {
-  if (!op->hasAttr("allocation.offset"))
-    return resultVal;
+  assert(op->hasAttr("allocation.offset"));
 
   auto loc = op->getLoc();
   Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
@@ -2232,13 +2243,24 @@ static Value synchronizeAtomicResults(Operation *op,
                                       const LLVMTypeConverter *typeConverter) {
   auto loc = op->getLoc();
   auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-  if (!tensorTy)
+  if (auto laneMask = triton::getAtomicResultShuffleMask(op->getResult(0))) {
+    if (*laneMask) {
+      Value srcLane = b.i32_val(0);
+      if (*laneMask != triton::gpu::lookupThreadsPerWarp(rewriter) - 1)
+        srcLane = b.and_(getLaneAndWarpId(rewriter, loc).first,
+                         b.i32_val(~*laneMask));
+      for (Value &value : resultVals)
+        value = targetInfo.shuffleIdx(rewriter, loc, value, srcLane);
+    }
+  } else if (!tensorTy) {
     return broadcastScalarAtomicResult(op, valueElemTy, resultVals[0], rewriter,
                                        b, threadPred, targetInfo);
-
-  if (op->hasAttr("allocation.offset"))
+  } else {
     resultVals = broadcastTensorResult(op, tensorTy, rewriter, resultVals,
                                        valueElemTy, b, threadPred, targetInfo);
+  }
+  if (!tensorTy)
+    return resultVals[0];
   return packUniqueTensorElements(loc, typeConverter, resultVals, rewriter,
                                   tensorTy);
 }

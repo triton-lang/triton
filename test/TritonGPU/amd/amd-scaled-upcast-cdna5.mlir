@@ -1,10 +1,15 @@
 // RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1250" --canonicalize --cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1250-strict" --canonicalize --cse | FileCheck %s --check-prefix=STRICT
 
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #mma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, isTranspose = true, instrShape = [16, 16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // STRICT-LABEL: llvm.func @wmma_dot_scaled_mxfp8_bf16
+  // STRICT-NOT: cvt.scale.pk8.bf16
+  // STRICT: llvm.fmul
+  // STRICT-NOT: cvt.scale.pk8.bf16
   tt.func public @wmma_dot_scaled_mxfp8_bf16(%arg0: tensor<32x128xf8E4M3FN, #blocked>, %arg1: tensor<32x128xi8, #blocked>, %arg2: tensor<32x128x!tt.ptr<bf16>, #blocked>) {
     // Non-broadcast scale layouts use FP8 Block16 mode (opSel=8): byte 0 feeds
     // lanes 0..15 and byte 1 feeds lanes 16..31. Byte 1 is lane (j^16)'s scale,
@@ -38,6 +43,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK-COUNT-4: rocdl.permlanex16 {{.*}}, true, false : i32, i32
     // CHECK-NOT: rocdl.permlanex16
     // CHECK: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}} : vector<8xbf16>
+    // STRICT-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4(
+    // STRICT-NOT: rocdl.permlanex16
+    // STRICT-NOT: cvt.scale.pk8
+    // STRICT: llvm.fmul
+    // STRICT-NOT: cvt.scale.pk8
+    // STRICT: llvm.return
 
     %28 = amdg.scaled_upcast_fp4 %15 scale %27 {axis = 1 : i32} : tensor<16x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> -> tensor<16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
     tt.store %output, %28 : tensor<16x64x!tt.ptr<bf16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
@@ -52,6 +63,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #unpacked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 #compact = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // STRICT-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4_compact
+  // STRICT-NOT: cvt.scale.pk8
+  // STRICT: llvm.fmul
+  // STRICT-NOT: cvt.scale.pk8
+  // STRICT: llvm.return
   tt.func public @cvt_scale_pk8_bf16_fp4_compact(%output: tensor<1x1024x!tt.ptr<bf16>, #unpacked>, %x: tensor<1x512xi8, #packed>, %scale: tensor<1x32xi8, #compact>) {
     // CHECK: rocdl.cvt.scale.pk8.bf16.fp4
     %up = amdg.scaled_upcast_fp4 %x scale %scale {axis = 1 : i32} : tensor<1x512xi8, #packed>, tensor<1x32xi8, #compact> -> tensor<1x1024xbf16, #unpacked>
@@ -95,6 +111,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     // CHECK: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}}, %[[SI1]][0] : vector<8xbf16>
     %up = amdg.scaled_upcast_fp4 %x scale %scale {axis = 1 : i32} : tensor<32x16xi8, #packed>, tensor<32x2xi8, #scale> -> tensor<32x32xbf16, #unpacked>
     tt.store %output, %up : tensor<32x32x!tt.ptr<bf16>, #unpacked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250-strict", "ttg.threads-per-warp" = 32 : i32} {
+  // STRICT-LABEL: llvm.func @scaled_upcast_fp8_per_element_scale
+  // STRICT-NOT: cvt.scale.pk8
+  // STRICT-COUNT-8: llvm.intr.umax
+  // STRICT-NOT: llvm.intr.umax
+  // STRICT: llvm.return
+  tt.func public @scaled_upcast_fp8_per_element_scale(%arg0: tensor<128x16xf8E5M2, #blocked>, %arg1: tensor<128x16xi8, #blocked>, %arg2: tensor<128x16x!tt.ptr<bf16>, #blocked>) {
+    %0 = amdg.scaled_upcast_fp8 %arg0 scale %arg1 : tensor<128x16xf8E5M2, #blocked>, tensor<128x16xi8, #blocked> -> tensor<128x16xbf16, #blocked>
+    tt.store %arg2, %0 : tensor<128x16x!tt.ptr<bf16>, #blocked>
     tt.return
   }
 }

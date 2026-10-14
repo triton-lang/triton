@@ -195,8 +195,8 @@ tt.func public @atomic_add_f16_cuda80(%arg0: !tt.ptr<f16> {tt.divisibility = 16 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 // CHECK: #[[$ATOMIC_F16_LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @atomic_add_f16_gfx1250
-  tt.func public @atomic_add_f16_gfx1250(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32) {
+  // CHECK-LABEL: @atomic_add_f16_cdna5
+  tt.func public @atomic_add_f16_cdna5(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32) {
     %c1024_i32 = arith.constant 1024 : i32
     %cst = arith.constant dense<1.000000e+00> : tensor<1024xf16, #blocked>
     %0 = tt.get_program_id x : i32
@@ -309,6 +309,91 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: %[[C:.+]] = ttg.convert_layout %{{.+}} : tensor<2x64xf16, #{{.+}}> -> tensor<2x64xf16, #[[$LAYOUT]]>
     // CHECK: tt.descriptor_store {{.*}}, %[[C]] : !tt.tensordesc<2x64xf16>, tensor<2x64xf16, #[[$LAYOUT]]>
     tt.descriptor_store %arg0[%c0_i32, %c0_i32], %cst : !tt.tensordesc<2x64xf16>, tensor<2x64xf16, #blocked>
+    tt.return
+  }
+}
+
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK-DAG: [[$ATOMIC_VEC16:#.*]] = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK-DAG: [[$ATOMIC_VEC8:#.*]] = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK-DAG: [[$ATOMIC_VEC4:#.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK-DAG: [[$ATOMIC_VEC2:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @atomic_load_store_i8
+  // CHECK: tt.atomic_load acquire, gpu, %{{.*}} : (tensor<2048x!tt.ptr<i8>, [[$ATOMIC_VEC16]]>) -> tensor<2048xi8, [[$ATOMIC_VEC16]]>
+  // CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}} : tensor<2048x!tt.ptr<i8>, [[$ATOMIC_VEC16]]>
+  tt.func @atomic_load_store_i8(%ptrs: tensor<2048x!tt.ptr<i8>, #blocked> {tt.contiguity = 2048 : i32, tt.divisibility = 16 : i32}) {
+    %loaded = tt.atomic_load acquire, gpu, %ptrs : (tensor<2048x!tt.ptr<i8>, #blocked>) -> tensor<2048xi8, #blocked>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<2048x!tt.ptr<i8>, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @atomic_load_store_f16
+  // CHECK: tt.atomic_load acquire, gpu, %{{.*}} : (tensor<2048x!tt.ptr<f16>, [[$ATOMIC_VEC8]]>) -> tensor<2048xf16, [[$ATOMIC_VEC8]]>
+  // CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}} : tensor<2048x!tt.ptr<f16>, [[$ATOMIC_VEC8]]>
+  tt.func @atomic_load_store_f16(%ptrs: tensor<2048x!tt.ptr<f16>, #blocked> {tt.contiguity = 2048 : i32, tt.divisibility = 16 : i32}) {
+    %loaded = tt.atomic_load acquire, gpu, %ptrs : (tensor<2048x!tt.ptr<f16>, #blocked>) -> tensor<2048xf16, #blocked>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<2048x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @atomic_load_store_i32
+  // CHECK: tt.atomic_load acquire, gpu, %{{.*}} : (tensor<2048x!tt.ptr<i32>, [[$ATOMIC_VEC4]]>) -> tensor<2048xi32, [[$ATOMIC_VEC4]]>
+  // CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}} : tensor<2048x!tt.ptr<i32>, [[$ATOMIC_VEC4]]>
+  tt.func @atomic_load_store_i32(%ptrs: tensor<2048x!tt.ptr<i32>, #blocked> {tt.contiguity = 2048 : i32, tt.divisibility = 16 : i32}) {
+    %loaded = tt.atomic_load acquire, gpu, %ptrs : (tensor<2048x!tt.ptr<i32>, #blocked>) -> tensor<2048xi32, #blocked>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<2048x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @atomic_load_store_i64
+  // CHECK: tt.atomic_load acquire, gpu, %{{.*}} : (tensor<2048x!tt.ptr<i64>, [[$ATOMIC_VEC2]]>) -> tensor<2048xi64, [[$ATOMIC_VEC2]]>
+  // CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}} : tensor<2048x!tt.ptr<i64>, [[$ATOMIC_VEC2]]>
+  tt.func @atomic_load_store_i64(%ptrs: tensor<2048x!tt.ptr<i64>, #blocked> {tt.contiguity = 2048 : i32, tt.divisibility = 16 : i32}) {
+    %loaded = tt.atomic_load acquire, gpu, %ptrs : (tensor<2048x!tt.ptr<i64>, #blocked>) -> tensor<2048xi64, #blocked>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<2048x!tt.ptr<i64>, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @atomic_load_store_alignment
+  // CHECK: tt.atomic_load relaxed, gpu, %{{.*}} : (tensor<2048x!tt.ptr<i32>, [[$ATOMIC_VEC2]]>) -> tensor<2048xi32, [[$ATOMIC_VEC2]]>
+  // CHECK: tt.atomic_store relaxed, gpu, %{{.*}}, %{{.*}} : tensor<2048x!tt.ptr<i32>, [[$ATOMIC_VEC2]]>
+  tt.func @atomic_load_store_alignment(%ptrs: tensor<2048x!tt.ptr<i32>, #blocked> {tt.contiguity = 2048 : i32, tt.divisibility = 8 : i32}) {
+    %loaded = tt.atomic_load relaxed, gpu, %ptrs : (tensor<2048x!tt.ptr<i32>, #blocked>) -> tensor<2048xi32, #blocked>
+    tt.atomic_store relaxed, gpu, %ptrs, %loaded : tensor<2048x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK: [[$ATOMIC_AMD:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @atomic_load_store_amd
+  // CHECK: tt.atomic_load acquire, gpu, %{{.*}} : (tensor<2048x!tt.ptr<i32>, [[$ATOMIC_AMD]]>) -> tensor<2048xi32, [[$ATOMIC_AMD]]>
+  // CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}} : tensor<2048x!tt.ptr<i32>, [[$ATOMIC_AMD]]>
+  tt.func @atomic_load_store_amd(%ptrs: tensor<2048x!tt.ptr<i32>, #blocked> {tt.contiguity = 2048 : i32, tt.divisibility = 16 : i32}) {
+    %loaded = tt.atomic_load acquire, gpu, %ptrs : (tensor<2048x!tt.ptr<i32>, #blocked>) -> tensor<2048xi32, #blocked>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<2048x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK: [[$ATOMIC_DEFAULT:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @atomic_load_store_without_target
+  // CHECK: tt.atomic_load relaxed, gpu, %{{.*}} : (tensor<2048x!tt.ptr<i32>, [[$ATOMIC_DEFAULT]]>) -> tensor<2048xi32, [[$ATOMIC_DEFAULT]]>
+  // CHECK: tt.atomic_store relaxed, gpu, %{{.*}}, %{{.*}} : tensor<2048x!tt.ptr<i32>, [[$ATOMIC_DEFAULT]]>
+  tt.func @atomic_load_store_without_target(%ptrs: tensor<2048x!tt.ptr<i32>, #blocked> {tt.contiguity = 2048 : i32, tt.divisibility = 16 : i32}) {
+    %loaded = tt.atomic_load relaxed, gpu, %ptrs : (tensor<2048x!tt.ptr<i32>, #blocked>) -> tensor<2048xi32, #blocked>
+    tt.atomic_store relaxed, gpu, %ptrs, %loaded : tensor<2048x!tt.ptr<i32>, #blocked>
     tt.return
   }
 }

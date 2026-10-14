@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 import re
-from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_gfx1250, is_rubin, is_blackwell
+from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_cdna5, is_rubin, is_blackwell
 
 pytestmark = pytest.mark.enable_warmup
 
@@ -384,7 +384,7 @@ def mxfp_matmul(  #
                                                        (128, 16, 64)] + ([(256, 256, 128)] if is_rubin() else []))
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
-@pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
+@pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_cdna5()) else [0]))
 def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     M = 1024
     N = 512
@@ -394,7 +394,7 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device)
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires compute capability >= 10")
     elif is_hip():
-        if not (is_hip_cdna4() or is_hip_gfx1250()):
+        if not (is_hip_cdna4() or is_hip_cdna5()):
             pytest.skip("Scaled mxfp8 matmul is only natively supported on CDNA4 or above")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
@@ -658,7 +658,7 @@ def _gemm_kernel_preshuffled_scales_cdna4(a_ptr, b_ptr, c_ptr, a_scales_ptr, b_s
 @pytest.mark.parametrize("preshuffle", [True, False])
 @pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11],
                     reason="Compilation bug for GB200.")
-@pytest.mark.skipif(is_hip() and not (is_hip_cdna4() or is_hip_gfx1250()),
+@pytest.mark.skipif(is_hip() and not (is_hip_cdna4() or is_hip_cdna5()),
                     reason="Scaled dot is not emulated on other archs yet.")
 def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B, FAST_MATH, mfma_nonkdim,
                                      preshuffle, device):
@@ -1027,7 +1027,7 @@ def block_scale_fp4_matmul(  #
     [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16), ("float8_e4m3fn", 32)],
     ids=["mxfp4", "nvfp4", "nvfp4_vec32_rubin"],
 )
-@pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
+@pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_cdna5()) else [0]))
 def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_scale, with_b_scale, pack_along_k,
                          scale_type, nonKDim, device):
     assert M % BLOCK_M == 0
@@ -1051,7 +1051,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
-        if not (is_hip_cdna4() or is_hip_gfx1250()):
+        if not (is_hip_cdna4() or is_hip_cdna5()):
             pytest.skip("Scaled fp4 matmul is only natively supported on CDNA4")
         if scale_type != 'float8_e8m0fnu':
             pytest.skip("CDNA4 only supports E8M0 scale")
@@ -1106,7 +1106,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
                                      **kernel_kwargs)
     if is_compile_warmup():
         return
-    if is_hip_gfx1250() and not pack_along_k:
+    if is_hip_cdna5() and not pack_along_k:
         assert "ds_load_tr4_b64" in k.asm["amdgcn"]
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
     sm12_mn_packed_fallback = (is_cuda() and torch.cuda.get_device_capability()[0] == 12 and not pack_along_k)
@@ -1233,7 +1233,7 @@ def mxfp8_mxfp4_matmul(  #
 @pytest.mark.parametrize("B_DATA_TYPE", ["float8e5", "float8e4nv", "float4"])
 @pytest.mark.parametrize("WITH_A_SCALE", [True, False])
 @pytest.mark.parametrize("WITH_B_SCALE", [True, False])
-@pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
+@pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_cdna5()) else [0]))
 def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PACK_B_ALONG_K, CONST_SCALE,
                             A_DATA_TYPE, B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device):
     if is_cuda():
@@ -1244,7 +1244,7 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
             pytest.skip(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on NV backend")
     elif is_hip():
-        if not (is_hip_cdna4() or is_hip_gfx1250()):
+        if not (is_hip_cdna4() or is_hip_cdna5()):
             pytest.skip("Scaled mxfp4 & mxfp8 matmul is only natively supported on CDNA4 and above")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
@@ -1327,7 +1327,7 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
                                    BLOCK_K, PACK_B_ALONG_K=PACK_B_ALONG_K, NUM_STAGES=NUM_STAGES, **kernel_kwargs)
     if is_compile_warmup():
         return
-    if is_hip_gfx1250() and B_DATA_TYPE == "float4" and not PACK_B_ALONG_K:
+    if is_hip_cdna5() and B_DATA_TYPE == "float4" and not PACK_B_ALONG_K:
         assert "ds_load_tr4_b64" in out.asm["amdgcn"]
     if is_blackwell() and not is_rubin():
         ttgir = out.asm["ttgir"]
@@ -1398,7 +1398,7 @@ def batched_mxfp_matmul(  #
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2 if is_hip() else 3])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
-@pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
+@pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_cdna5()) else [0]))
 def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     M, N, K = 1024, 512, 2048
 
@@ -1410,7 +1410,7 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
         if torch.cuda.get_device_capability()[0] == 12 and BLOCK_BATCH_SIZE > 1 and NUM_STAGES > 1:
             pytest.skip("Config requires too much shared memory")
     elif is_hip():
-        if not (is_hip_cdna4() or is_hip_gfx1250()):
+        if not (is_hip_cdna4() or is_hip_cdna5()):
             pytest.skip("Scaled mxfp8 matmul is only natively supported on CDNA4 and above")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
@@ -1589,3 +1589,43 @@ def test_nvfp4_ue5m3_matmul():
     torch.testing.assert_close(ref, out, atol=1e-3, rtol=1e-3)
     if not is_compile_warmup():
         assert "kind::mxf4nvf4.block_scale.block16" in kernel.asm["ptx"]
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_warp_specialized_matmul_auxiliary_output(device, fresh_compilation_knobs):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    fresh_compilation_knobs.compilation.instrumentation_mode = "consan"
+
+    @triton.jit
+    def kernel(A, B, C, X, Y, K: tl.constexpr):
+        rows = tl.arange(0, 128)[:, None]
+        cols = tl.arange(0, 64)[None, :]
+        acc = tl.full((128, 128), 0, tl.float32)
+        aux = tl.full((128, 64), 0, tl.float32)
+        for k in tl.range(K // 64, warp_specialize=True):
+            a = A.load([0, k * 64])
+            b = B.load([k * 64, 0])
+            aux += tl.load(X + rows * K + cols + k * 64).to(tl.float32)
+            acc = tl.dot(a, b, acc)
+        C.store([0, 0], acc.to(tl.float16))
+        # Its shared-memory staging store must follow the MMA completion wait.
+        Y.store([0, 0], aux)
+
+    torch.manual_seed(0)
+    a = torch.randn((128, 1024), device=device, dtype=torch.float16) * 0.1
+    b = torch.randn((1024, 128), device=device, dtype=torch.float16) * 0.1
+    x = torch.randn_like(a)
+    c = torch.empty((128, 128), device=device, dtype=torch.float16)
+    y = torch.empty((128, 64), device=device, dtype=torch.float32)
+    a_desc, b_desc, c_desc, y_desc = [
+        TensorDescriptor.from_tensor(tensor, block)
+        for tensor, block in [(a, [128, 64]), (b, [64, 128]), (c, [128, 128]), (y, [128, 64])]
+    ]
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, x, y_desc, 1024, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    torch.cuda.synchronize()
+    assert "ttg.warp_specialize" in compiled.asm["ttgir"]
+    torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
+    torch.testing.assert_close(y, x.float().reshape(128, 16, 64).sum(1), atol=0.001, rtol=0.001)

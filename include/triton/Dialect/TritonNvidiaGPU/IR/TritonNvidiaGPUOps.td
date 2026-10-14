@@ -320,7 +320,7 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
 }
 
 def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier", "isPerWarp"]>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Signal a barrier of an expected number of bytes to be copied.";
 
@@ -330,6 +330,12 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
     been copied. The optional `fromCTA` attribute is a CTA-ID
     basis-selection mask: set bits are preserved and unset bits are zeroed
     when selecting the CTA that routes the arrival to each per-CTA barrier.
+
+    The compiler-owned `per_warp` flag distributes each contributing CTA's
+    expectation across its execution region's warps. Each warp publishes its
+    prior effects and contributes one arrival and an equal share of the
+    expected bytes. The barrier's initialization count must be scaled to match;
+    `size` remains the byte count per contributing CTA and target barrier.
   }];
 
   let hasVerifier = 1;
@@ -338,13 +344,14 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$alloc,
     I32Attr:$size,
     I1:$pred,
-    OptionalAttr<I32Attr>:$fromCTA
+    OptionalAttr<I32Attr>:$fromCTA,
+    UnitAttr:$per_warp
   );
 
   let builders = [
     OpBuilder<(ins "Value":$alloc, "uint32_t":$size, "Value":$pred), [{
-      build($_builder, $_state, alloc, $_builder.getI32IntegerAttr(size), pred,
-            /*fromCTA=*/IntegerAttr());
+      build($_builder, $_state, alloc, size, pred, /*fromCTA=*/IntegerAttr(),
+            /*per_warp=*/false);
     }]>
   ];
 
@@ -403,7 +410,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
 }
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier", "isPerWarp"]>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "perform the arrive operation on an mbarrier";
   let description = [{
@@ -411,6 +418,13 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     mbarrier object in shared memory. The operation requires a `count` attribute
     of at least 1 and decreases the pending arrival count of the mbarrier by
     the specified count.
+
+    The compiler-owned `per_warp` flag selects an arrival from each of the
+    execution region's warps. The compiler may set this flag before final count
+    scaling. Before lowering, the count must be divisible by the warp count;
+    it remains the total decrement per source CTA and target barrier. Membar
+    inserts the required warp synchronization before each warp contributes its
+    equal share to every routed target.
 
     When `multicastCTA` is non-zero, the arrive is multicast across the cluster.
     Each bit set in the mask identifies a CTA ID dimension to multicast
@@ -440,7 +454,8 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     I32Attr:$count,
     Optional<I1>:$pred,
     OptionalAttr<I32Attr>:$fromCTA,
-    DefaultValuedOptionalAttr<I32Attr, "0">:$multicastCTA
+    DefaultValuedOptionalAttr<I32Attr, "0">:$multicastCTA,
+    UnitAttr:$per_warp
   );
 
   let assemblyFormat = [{
@@ -448,13 +463,10 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
   }];
 
   let builders = [
-    OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
-      build($_builder, $_state, alloc, count, /*pred=*/Value(),
-            /*fromCTA=*/IntegerAttr(), /*multicastCTA=*/0u);
-    }]>,
-    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "Value":$pred), [{
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count,
+                   CArg<"Value", "Value()">:$pred), [{
       build($_builder, $_state, alloc, count, pred, /*fromCTA=*/IntegerAttr(),
-            /*multicastCTA=*/0u);
+            /*multicastCTA=*/0u, /*per_warp=*/false);
     }]>
   ];
 
@@ -521,6 +533,14 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     tensor. The copied data depends on the global memory descriptor pointed to
     by `desc`.
 
+    The optional `cachePolicy` attribute accepts a generic `tt.cache_policy`
+    or an NVIDIA `ttng.cache_policy` with only an L2 eviction policy. Generic
+    first/last eviction policies apply to all lines (fraction 1.0). An absent
+    policy emits no cache hint. Explicit detailed L2 policies, including
+    `evict_normal`, are preserved. Cache modifiers, L1 policies, L2 prefetch
+    sizes, and volatile accesses are not supported. Hints do not change memory
+    effects or synchronization.
+
     The tensor mode is determined by the descriptor type:
     - tt.tensordesc: TILED mode - Regular tiled tensor memory access
       - See: https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-tiled-mode
@@ -545,8 +565,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     Arg<TTG_MemDescType, "", AsyncSharedWrite>:$result,
     I1:$pred,
     UnitAttr:$multicast,
-    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    OptionalAttr<AnyAttr>:$cachePolicy,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile
   );
 
@@ -555,20 +574,18 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     OpBuilder<(ins "Value":$desc, "ValueRange":$coord, "Value":$barrier,
                    "Value":$result, "Value":$pred,
                    CArg<"bool", "false">:$multicast,
-                   CArg<"triton::CacheModifier", "triton::CacheModifier::NONE">:$cache,
-                   CArg<"triton::EvictionPolicy", "triton::EvictionPolicy::NORMAL">:$evict,
+                   CArg<"Attribute", "{}">:$cachePolicy,
                    CArg<"bool", "false">:$isVolatile), [{
       multicast &= ::mlir::triton::nvidia_gpu::hasCGABroadcast(
                                    ::mlir::cast<::mlir::triton::gpu::MemDescType>(
                                        result.getType()));
       build($_builder, $_state, desc, coord, /*offsets=*/ValueRange{}, barrier,
-            result, pred, multicast, cache, evict, isVolatile);
+            result, pred, multicast, cachePolicy, isVolatile);
     }]>
   ];
 
   let assemblyFormat = [{
     $desc `[` $coord `]` (`offsets` `=` `[` $offsets^ `]`)? $result `,` $barrier `,` $pred
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     attr-dict `:` qualified(type($desc)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
 
@@ -584,13 +601,24 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
     local memory pointed to by the memory descriptor instead of from a
     distributed tensor. The copied data depends on the global memory descriptor
     pointed to by `desc`.
+
+    The optional `cachePolicy` attribute has the same L2-only policy contract
+    as `async_tma_copy_global_to_local`. An absent policy emits no hint;
+    explicit detailed policies, including `evict_normal`, are preserved.
   }];
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     Variadic<I32>:$coord,
-    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src
+    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src,
+    OptionalAttr<AnyAttr>:$cachePolicy
   );
+
+  let builders = [
+    OpBuilder<(ins "Value":$desc, "ValueRange":$coord, "Value":$src), [{
+      build($_builder, $_state, desc, coord, src, Attribute{});
+    }]>
+  ];
 
   let assemblyFormat = [{
     $desc `[` $coord `]` $src
@@ -637,6 +665,10 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
     This operation gathers multiple rows of data from a global memory matrix to
     local memory asynchronously. This is similar to
     async_tma_copy_global_to_local except that each row is indexed independently.
+
+    The optional `cachePolicy` attribute has the same L2-only policy contract
+    as `async_tma_copy_global_to_local`. An absent policy emits no hint;
+    explicit detailed policies, including `evict_normal`, are preserved.
   }];
 
   let arguments = (ins
@@ -646,8 +678,17 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
     Arg<TTG_MemDescType, "", AsyncSharedWrite>:$result,
     I1:$pred,
-    UnitAttr:$multicast
+    UnitAttr:$multicast,
+    OptionalAttr<AnyAttr>:$cachePolicy
   );
+
+  let builders = [
+    OpBuilder<(ins "Value":$desc, "Value":$xOffsets, "Value":$yOffset,
+                   "Value":$barrier, "Value":$result, "Value":$pred,
+                   CArg<"bool", "false">:$multicast), [{
+      build($_builder, $_state, desc, xOffsets, yOffset, barrier, result, pred, multicast, Attribute{});
+    }]>
+  ];
 
   let assemblyFormat = [{
     $desc `[` $x_offsets `,` $y_offset `]` $result `,` $barrier `,` $pred
@@ -667,14 +708,25 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [
     operation scatters a 2D tensor in shared memory, laid out using the core
     tensor tiles nvmma_shared layout, into separately indexed rows in global
     memory at a given `y` offset.
+
+    The optional `cachePolicy` attribute has the same L2-only policy contract
+    as `async_tma_copy_global_to_local`. An absent policy emits no hint;
+    explicit detailed policies, including `evict_normal`, are preserved.
   }];
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
     RankedTensorOf<[I32]>:$x_offsets,
     I32:$y_offset,
-    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src
+    Arg<TTG_MemDescType, "", AsyncSharedRead>:$src,
+    OptionalAttr<AnyAttr>:$cachePolicy
   );
+
+  let builders = [
+    OpBuilder<(ins "Value":$desc, "Value":$xOffsets, "Value":$yOffset, "Value":$src), [{
+      build($_builder, $_state, desc, xOffsets, yOffset, src, Attribute{});
+    }]>
+  ];
 
   let assemblyFormat = [{
     $desc `[` $x_offsets `,` $y_offset `]` $src
@@ -899,6 +951,7 @@ def TTNG_TMEMWaitOp : TTNG_Op<"tmem_wait"> {
   }];
   let arguments = (ins TTNG_TMEMWaitKindAttr:$kind);
   let assemblyFormat = "$kind attr-dict";
+  let hasVerifier = 1;
 }
 
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {

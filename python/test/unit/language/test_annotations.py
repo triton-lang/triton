@@ -29,7 +29,7 @@ def test_int_annotation(signed, width, device):
     def _kernel(X, v):
         tl.store(X + v, v)
 
-    h = _kernel[(1, )](torch.empty(1, device=device), 3)
+    h = _kernel[(1, )](torch.empty(4, device=device), 3)
     pfx = 'si' if signed else 'ui'
     if not signed and width < 64:
         assert "arith.extui %v" in h.asm["ttir"]

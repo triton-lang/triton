@@ -9,8 +9,9 @@ def globaltimer(_semantic=None):
 
 @core.extern
 def smid(_semantic=None):
-    return core.inline_asm_elementwise("mov.u32 $0, %smid;", "=r", [], dtype=core.int32, is_pure=True, pack=1,
-                                       _semantic=_semantic)
+    return core.extern_elementwise("", "", [], {
+        (): ("llvm.nvvm.read.ptx.sreg.smid", core.int32),
+    }, is_pure=True, _semantic=_semantic)
 
 
 @core.builtin
@@ -21,6 +22,63 @@ def num_threads(_semantic=None):
 @core.builtin
 def num_warps(_semantic=None):
     return core.constexpr(_semantic.builder.options.num_warps)
+
+
+@core.extern
+def round_f32_to_tf32(x, rounding: core.constexpr, _semantic=None):
+    """Round float32 to TF32, with ties to even (rn) or away from zero (rna)."""
+    rounding = core._unwrap_if_constexpr(rounding)
+    assert rounding in ("rn", "rna"), 'rounding must be "rn" or "rna"'
+    intrinsic = f"llvm.nvvm.f2tf32.{rounding}"
+    return core.extern_elementwise("", "", [x], {
+        (core.float32, ): (intrinsic, core.float32),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def min_xorsign_abs_f32(a, b, propagate_nan: core.constexpr = core.PropagateNan.NONE, _semantic=None):
+    """Minimum magnitude with XORed signs and optional NaN propagation."""
+    propagate_nan = core._unwrap_if_constexpr(propagate_nan)
+    if propagate_nan == core.PropagateNan.ALL:
+        symbol = "llvm.nvvm.fmin.nan.xorsign.abs.f"
+    elif propagate_nan == core.PropagateNan.NONE:
+        symbol = "llvm.nvvm.fmin.xorsign.abs.f"
+    else:
+        raise ValueError(f"Unexpected propagate_nan {propagate_nan}")
+    return core.extern_elementwise("", "", [a, b], {
+        (core.float32, core.float32): (symbol, core.float32),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def max_xorsign_abs_f32(a, b, propagate_nan: core.constexpr = core.PropagateNan.NONE, _semantic=None):
+    """Maximum magnitude with XORed signs and optional NaN propagation."""
+    propagate_nan = core._unwrap_if_constexpr(propagate_nan)
+    if propagate_nan == core.PropagateNan.ALL:
+        symbol = "llvm.nvvm.fmax.nan.xorsign.abs.f"
+    elif propagate_nan == core.PropagateNan.NONE:
+        symbol = "llvm.nvvm.fmax.xorsign.abs.f"
+    else:
+        raise ValueError(f"Unexpected propagate_nan {propagate_nan}")
+    return core.extern_elementwise("", "", [a, b], {
+        (core.float32, core.float32): (symbol, core.float32),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def f32_to_e2m1x2_satfinite(hi, lo, _semantic=None):
+    """Round two float32 values to finite E2M1, with hi in the high nibble."""
+    return core.extern_elementwise("", "", [hi, lo], {
+        (core.float32, core.float32): ("llvm.nvvm.ff.to.e2m1x2.rn.satfinite", core.uint16),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def exp2_ftz(x, _semantic=None):
+    """Approximate 2**x with flush-to-zero behavior."""
+    return core.extern_elementwise("", "", [x], {
+        (core.float32, ): ("llvm.nvvm.ex2.approx.ftz.f32", core.float32),
+    }, is_pure=True, _semantic=_semantic)
 
 
 # ----- FP8E4M3B15 ------

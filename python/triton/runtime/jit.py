@@ -1043,10 +1043,13 @@ class MockTensor:
         self.shape = shape
 
     def stride(self):
-        strides = [1]
-        for size in self.shape[1:]:
-            strides.append(strides[-1] * size)
-        return tuple(reversed(strides))
+        strides = []
+        value = 1
+        for size in reversed(self.shape):
+            strides.append(value)
+            value *= size
+        strides.reverse()
+        return tuple(strides)
 
     @staticmethod
     def data_ptr():

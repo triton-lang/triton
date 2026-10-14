@@ -1,12 +1,9 @@
-// RUN: triton-opt %s -split-input-file --set-minimum-shared-memory='minimum-size=123456' | FileCheck %s --check-prefix=CHECK-SHARED
-// RUN: triton-opt %s -split-input-file -tritoninstrument-global-sanitizer --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritoninstrument-global-sanitizer --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-SHARED: module attributes {
-  // CHECK-SHARED-DAG: ttg.shared = 123456 : i32
   // CHECK-LABEL: llvm.func @load_store
-  // CHECK: llvm.call @__triton_gsan_init({{.*}}) : (!llvm.ptr, !llvm.ptr, i64, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_init({{.*}}) : (!llvm.ptr, !llvm.ptr, i64, i32, i32, i32, !llvm.ptr, i32) -> ()
   // CHECK: nvvm.barrier
   // CHECK: llvm.store %{{.*}} : i64, !llvm.ptr
   // CHECK: llvm.store %{{.*}} : i8, !llvm.ptr
@@ -38,6 +35,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @unmasked_atomic_add
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(ptr, array<8 x ptr>, i8)>
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   tt.func @unmasked_atomic_add(%ptr: !tt.ptr<i32>, %val: i32) {
@@ -51,14 +49,14 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @atomic_load_store
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   // CHECK-NEXT: llvm.fence syncscope("device") acquire
   // CHECK: nvvm.barrier
   // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.fence release
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   tt.func @atomic_load_store(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %mask: i1) {
     %loaded = tt.atomic_load acquire, gpu, %ptr, %mask : (!tt.ptr<i32>, i1) -> i32
@@ -73,10 +71,10 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @tensor_atomic_load_store
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK: llvm.store %{{.*}}, %{{.*}} atomic syncscope("device") monotonic
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   tt.func @tensor_atomic_load_store(%ptrs: tensor<256x!tt.ptr<i32>, #blocked>,
                                     %mask: tensor<256xi1, #blocked>) {
@@ -92,25 +90,21 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @unpredicated_tensor_atomic_load_store
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: %{{.*}} = llvm.mlir.undef : i32
-  // CHECK-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-NEXT: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: %{{.*}} = llvm.mlir.undef : i32
-  // CHECK-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-NEXT: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: %{{.*}} = llvm.mlir.undef : i32
-  // CHECK-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-NEXT: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: %{{.*}} = llvm.mlir.undef : i32
-  // CHECK-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-NEXT: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK: llvm.return
   tt.func @unpredicated_tensor_atomic_load_store(
       %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>) {
@@ -125,7 +119,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 #blocked4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @sharded_atomic_load_acquire
-  // CHECK-COUNT-4: llvm.load %{{.*}} atomic monotonic
+  // CHECK-COUNT-4: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   // CHECK-NEXT: llvm.fence acquire
   // CHECK: nvvm.barrier
@@ -146,7 +140,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK-LABEL: llvm.func @sharded_atomic_store_release
   // CHECK: nvvm.barrier
   // CHECK: llvm.fence release
-  // CHECK-COUNT-4: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-COUNT-4: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   tt.func @sharded_atomic_store_release(
       %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>,
       %values: tensor<512xi32, #blocked4>,
@@ -160,7 +154,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @atomic_poll
-  // CHECK: llvm.load %{{.*}} atomic monotonic
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK: llvm.fence acquire
   // CHECK: nvvm.barrier
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
@@ -177,8 +171,8 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @atomic_poll_tensor
-  // CHECK: llvm.load %{{.*}} atomic monotonic
-  // CHECK: llvm.load %{{.*}} atomic monotonic
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK: nvvm.barrier
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
@@ -214,12 +208,34 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 #smem = #ttg.shared_memory
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @tma_i64_atomic_shadow_cells
-  // CHECK: %[[ATOMIC_ELEMENT_BYTES:.*]] = llvm.mlir.constant(8 : i32)
+  // CHECK-DAG: %[[ATOMIC_ELEMENT_BYTES:.*]] = llvm.mlir.constant(8 : i32)
   // CHECK: llvm.call @__triton_gsan_atomic_tensor_desc(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[ATOMIC_ELEMENT_BYTES]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
   tt.func @tma_i64_atomic_shadow_cells(%desc: !tt.tensordesc<8x16xi64, #shared_i64>) {
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x16xi64, #shared_i64, #smem, mutable>
     ttng.async_tma_reduce add, %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<8x16xi64, #shared_i64>, !ttg.memdesc<8x16xi64, #shared_i64, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#byte_vec = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: llvm.func @byte_access_preserves_mask_holes
+  // Each thread keeps all four byte pointers and masks, rather than replacing
+  // them with a single four-byte access enabled by the OR of the masks.
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
+  // CHECK: llvm.call @__triton_gsan_load_tensor
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
+  // CHECK: llvm.call @__triton_gsan_store_tensor
+  tt.func @byte_access_preserves_mask_holes(%ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32},
+                                          %mask: tensor<128xi1, #byte_vec>) {
+    %offsets = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #byte_vec>
+    %base = tt.splat %ptr : !tt.ptr<i8> -> tensor<128x!tt.ptr<i8>, #byte_vec>
+    %ptrs = tt.addptr %base, %offsets : tensor<128x!tt.ptr<i8>, #byte_vec>, tensor<128xi32, #byte_vec>
+    %values = tt.load %ptrs, %mask : tensor<128x!tt.ptr<i8>, #byte_vec>
+    tt.store %ptrs, %values, %mask : tensor<128x!tt.ptr<i8>, #byte_vec>
     tt.return
   }
 }
@@ -253,9 +269,10 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.profile_scratch_memory_size" = 128 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   // CHECK-LABEL: llvm.func @cluster_barrier
-  // CHECK: %[[NUM_CTAS:.*]] = llvm.mlir.constant(2 : i64) : i64
+  // CHECK-DAG: %[[NUM_CTAS:.*]] = llvm.mlir.constant(2 : i64) : i64
+  // CHECK-DAG: %[[PROFILE_BYTES:.*]] = llvm.mlir.constant(128 : i64) : i64
+  // CHECK-DAG: %[[TWO:.*]] = llvm.mlir.constant(2 : i32) : i32
   // CHECK: %[[CLUSTER_BASE:.*]] = llvm.mul %{{.*}}, %[[NUM_CTAS]] : i64
-  // CHECK: %[[PROFILE_BYTES:.*]] = llvm.mlir.constant(128 : i64) : i64
   // CHECK: %{{.*}} = llvm.mul %[[CLUSTER_BASE]], %[[PROFILE_BYTES]] : i64
   // CHECK: %[[SCRATCH:.*]] = llvm.getelementptr %{{.*}}[%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, i8
   // CHECK: %[[ELECT_INIT:.*]] = nvvm.elect.sync -> i1
@@ -265,7 +282,6 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
   // CHECK: %[[ELECT_SYNC:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[CTA_RANK_SYNC:.*]] = nvg.cluster_id
   // CHECK: %[[SYNC_SCRATCH:.*]] = llvm.addrspacecast %[[SCRATCH]] : !llvm.ptr<1> to !llvm.ptr
-  // CHECK: %[[TWO:.*]] = llvm.mlir.constant(2 : i32) : i32
   // CHECK: llvm.call @__triton_gsan_cluster_barrier_sync(%{{.*}}, %[[SYNC_SCRATCH]], %{{.*}}, %[[TWO]], %[[CTA_RANK_SYNC]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, !llvm.ptr, i32) -> ()
   tt.func @cluster_barrier() {
     %scratch = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 128 : i32, shared_cluster_state, third_party_allocation, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i8>
@@ -339,6 +355,10 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   // CHECK-LABEL: llvm.func @mbarrier_release_acquire
+  // CHECK-DAG: %[[OFFSET_MASK:.*]] = llvm.mlir.constant(16777215 : i32) : i32
+  // CHECK-DAG: %[[LEADER_MASK:.*]] = llvm.mlir.constant({{.*}} : i32) : i32
+  // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG: %[[WAIT_ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK: %[[TABLE_ELECT:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[TABLE_CTA:.*]] = nvg.cluster_id
   // CHECK: llvm.call @__triton_gsan_mbarrier_table_init(%[[TABLE:.*]], %{{.*}}, %{{.*}}) : (!llvm.ptr, i32, i32) -> ()
@@ -346,26 +366,19 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32
   // CHECK: %[[INIT_LEADER_CTA:.*]] = nvg.cluster_id
   // CHECK: %[[INIT_CTA:.*]] = nvg.cluster_id
   // CHECK: %[[INIT_ADDRESS:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<3> to i32
-  // CHECK: %[[OFFSET_MASK:.*]] = llvm.mlir.constant(16777215 : i32) : i32
   // CHECK: %[[INIT_OFFSET:.*]] = llvm.and %[[INIT_ADDRESS]], %[[OFFSET_MASK]] : i32
   // CHECK: %[[INIT_TABLE:.*]] = llvm.addrspacecast %{{.*}} : !llvm.ptr<1> to !llvm.ptr
   // CHECK: llvm.call @__triton_gsan_mbarrier_init(%[[INIT_TABLE]], %[[INIT_OFFSET]], %{{.*}}, %[[INIT_CTA]], %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
   // CHECK: %[[ARRIVE_CTA:.*]] = nvg.cluster_id
   // CHECK: %[[ARRIVE_ELECT:.*]] = nvvm.elect.sync -> i1
-  // CHECK: %[[LEADER_MASK:.*]] = llvm.mlir.constant({{.*}} : i32) : i32
   // CHECK: %[[LEADER_RANK:.*]] = llvm.and %[[ARRIVE_CTA]], %{{.*}} : i32
-  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: %[[RECIPIENTS:.*]] = llvm.shl %[[ONE]], %[[LEADER_RANK]] : i32
-  // CHECK: %[[ARRIVE_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT: %[[PUBLISH:.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT: llvm.call @__triton_gsan_mbarrier_arrive(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[RECIPIENTS]], %[[ARRIVE_COUNT]], %[[ARRIVE_CTA]], %[[PUBLISH]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_mbarrier_arrive(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[RECIPIENTS]], %[[ONE]], %[[ARRIVE_CTA]], %[[ONE]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
   // CHECK: %[[WAIT_ELECT:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[WAIT_WARP_ELECT:.*]] = llvm.and %{{.*}}, %[[WAIT_ELECT]] : i1
   // CHECK: %[[WAIT_OP_PRED:.*]] = llvm.and %[[WAIT_WARP_ELECT]], %{{.*}} : i1
   // CHECK: %[[WAIT_LEADER_CTA:.*]] = nvg.cluster_id
-  // CHECK: %[[WAIT_LEADER_MASK:.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: %[[WAIT_RANK_IN_GROUP:.*]] = llvm.and %[[WAIT_LEADER_CTA]], %[[WAIT_LEADER_MASK]] : i32
-  // CHECK: %[[WAIT_ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: %[[WAIT_RANK_IN_GROUP:.*]] = llvm.and %[[WAIT_LEADER_CTA]], %[[ONE]] : i32
   // CHECK: %[[WAIT_IS_LEADER:.*]] = llvm.icmp "eq" %[[WAIT_RANK_IN_GROUP]], %[[WAIT_ZERO]] : i32
   // CHECK: %[[WAIT_PRED:.*]] = llvm.and %[[WAIT_OP_PRED]], %[[WAIT_IS_LEADER]] : i1
   // CHECK: %[[WAIT_CTA:.*]] = nvg.cluster_id
@@ -387,20 +400,18 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 4 : i32
 
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.profile_scratch_memory_size" = 192 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
   // CHECK-LABEL: llvm.func @mbarrier_two_cta_source_predicate
+  // CHECK-DAG: %[[SOURCE_MASK:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG: %[[SOURCE_ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK: %[[ARRIVE_CTA:.*]] = nvg.cluster_id
   // CHECK: %[[SOURCE_ELECT:.*]] = nvvm.elect.sync -> i1
   // CHECK: %[[SOURCE_WARP_ELECT:.*]] = llvm.and %{{.*}}, %[[SOURCE_ELECT]] : i1
   // CHECK: %[[SOURCE_ELECT_PRED:.*]] = llvm.and %[[SOURCE_WARP_ELECT]], %{{.*}} : i1
   // CHECK: %[[SOURCE_PRED_CTA:.*]] = nvg.cluster_id
-  // CHECK: %[[SOURCE_MASK:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: %[[SOURCE_RANK:.*]] = llvm.and %[[SOURCE_PRED_CTA]], %[[SOURCE_MASK]] : i32
-  // CHECK: %[[SOURCE_ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK: %[[SOURCE_LEADER:.*]] = llvm.icmp "eq" %[[SOURCE_RANK]], %[[SOURCE_ZERO]] : i32
   // CHECK: %[[SOURCE_PRED:.*]] = llvm.and %[[SOURCE_ELECT_PRED]], %[[SOURCE_LEADER]] : i1
   // CHECK: %[[SOURCE_PRED_I32:.*]] = llvm.zext %[[SOURCE_PRED]] : i1 to i32
-  // CHECK: %[[SIGNAL_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT: %[[NO_PUBLISH:.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-NEXT: llvm.call @__triton_gsan_mbarrier_arrive(%{{.*}}, %{{.*}}, %{{.*}}, %[[SOURCE_PRED_I32]], %{{.*}}, %[[SIGNAL_COUNT]], %[[ARRIVE_CTA]], %[[NO_PUBLISH]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_mbarrier_arrive(%{{.*}}, %{{.*}}, %{{.*}}, %[[SOURCE_PRED_I32]], %{{.*}}, %[[SOURCE_MASK]], %[[ARRIVE_CTA]], %[[SOURCE_ZERO]], %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
   tt.func @mbarrier_two_cta_source_predicate(%pred: i1) {
     %scratch = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 192 : i32, shared_cluster_state, third_party_allocation, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i8>
     %barrier = ttg.local_alloc {allocation.offset = 64 : i32} : () -> !ttg.memdesc<1xi64, #mbarrier_local, #smem, mutable>
@@ -482,12 +493,11 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
 
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func @gsan_canonical_register_accesses
+  // CHECK-DAG: %[[LOAD_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<1 x i64>, array<1 x i8>)>
-  // CHECK: %[[LOAD_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[LOAD_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
   // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<1 x i64>, array<1 x i8>)>
-  // CHECK: %[[STORE_COUNT:.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %[[STORE_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
+  // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %[[LOAD_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
   tt.func @gsan_canonical_register_accesses(
       %ptrs: tensor<1x!tt.ptr<i32>, #broadcasted_registers>,
       %vals: tensor<1xi32, #broadcasted_registers>,
@@ -503,12 +513,11 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 #broadcasted_registers = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func @gsan_distinct_register_accesses
+  // CHECK-DAG: %[[DISTINCT_LOAD_COUNT:.*]] = llvm.mlir.constant(4 : i32) : i32
   // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
-  // CHECK: %[[DISTINCT_LOAD_COUNT:.*]] = llvm.mlir.constant(4 : i32) : i32
   // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[DISTINCT_LOAD_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
   // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
-  // CHECK: %[[DISTINCT_STORE_COUNT:.*]] = llvm.mlir.constant(4 : i32) : i32
-  // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %[[DISTINCT_STORE_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
+  // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %[[DISTINCT_LOAD_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
   tt.func @gsan_distinct_register_accesses(
       %ptrs: tensor<128x!tt.ptr<i32>, #broadcasted_registers>,
       %vals: tensor<128xi32, #broadcasted_registers>,
@@ -545,13 +554,14 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func @gsan_atomic_broadcast_one_cta
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
-  // CHECK: st.shared
-  // CHECK: nvvm.barrier
-  // CHECK: llvm.load {{.*}} : !llvm.ptr<3>
+  // CHECK-NOT: {{st.shared|nvvm.barrier}}
+  // CHECK: nvvm.shfl.sync idx
+  // CHECK-NOT: {{st.shared|nvvm.barrier}}
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
-  // CHECK: st.shared
-  // CHECK: nvvm.barrier
-  // CHECK: llvm.load {{.*}} : !llvm.ptr<3>
+  // CHECK-NOT: {{st.shared|nvvm.barrier}}
+  // CHECK: nvvm.shfl.sync idx
+  // CHECK-NOT: {{st.shared|nvvm.barrier}}
+  // CHECK: llvm.return
   tt.func @gsan_atomic_broadcast_one_cta(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %val: i32, %mask: i1) {
     %c0 = arith.constant 0 : i32
     %rmw = tt.atomic_rmw add, relaxed, gpu, %ptr, %val, %mask : (!tt.ptr<i32>, i32, i1) -> i32
@@ -630,6 +640,87 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
   tt.func @convert_layout_cluster_sync() {
     %value = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
     %converted = ttg.convert_layout %value : tensor<256x128xf16, #blockedSplitM> -> tensor<256x128xf16, #blockedSplitN>
+    tt.return
+  }
+}
+
+// -----
+
+#vec = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func @vector_atomic_load_store
+  // CHECK-DAG: %[[BYTES:.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK-DAG: %[[ELEM_BYTES:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar({{.*}}, %[[BYTES]], %[[ELEM_BYTES]],
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.fence syncscope("device") acquire
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.fence syncscope("device") release
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  tt.func @vector_atomic_load_store(
+      %ptrs: tensor<512x!tt.ptr<i32>, #vec> {tt.contiguity = 4 : i32, tt.divisibility = 16 : i32},
+      %mask: tensor<512xi1, #vec> {tt.constancy = 4 : i32}) {
+    %loaded = tt.atomic_load acquire, gpu, %ptrs, %mask : (tensor<512x!tt.ptr<i32>, #vec>, tensor<512xi1, #vec>) -> tensor<512xi32, #vec>
+    tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<512x!tt.ptr<i32>, #vec>
+    tt.return
+  }
+}
+
+// -----
+
+#packed = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func @packed_atomic_load_store
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.fence syncscope("device") release
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  tt.func @packed_atomic_load_store(
+      %ptrs: tensor<2048x!tt.ptr<i8>, #packed> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32},
+      %mask: tensor<2048xi1, #packed> {tt.constancy = 16 : i32}) {
+    %loaded = tt.atomic_load relaxed, gpu, %ptrs, %mask : (tensor<2048x!tt.ptr<i8>, #packed>, tensor<2048xi1, #packed>) -> tensor<2048xi8, #packed>
+    tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<2048x!tt.ptr<i8>, #packed>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Four consecutive bytes with independent masks must remain four one-byte
+  // accesses. Rounding their masks up to a shadow word touches inactive bytes.
+  // CHECK-LABEL: llvm.func @independently_masked_bytes
+  // CHECK-DAG: %[[FOUR:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-DAG: %[[ONE:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %[[FOUR]], %[[ONE]],
+  // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[FOUR]], %[[ONE]],
+  tt.func @independently_masked_bytes(%base: !tt.ptr<i8> {tt.divisibility = 16 : i32},
+                                      %mask: tensor<512xi1, #blocked>) {
+    %offsets = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #blocked>
+    %bases = tt.splat %base : !tt.ptr<i8> -> tensor<512x!tt.ptr<i8>, #blocked>
+    %ptrs = tt.addptr %bases, %offsets : tensor<512x!tt.ptr<i8>, #blocked>, tensor<512xi32, #blocked>
+    %values = arith.constant dense<1> : tensor<512xi8, #blocked>
+    tt.store %ptrs, %values, %mask : tensor<512x!tt.ptr<i8>, #blocked>
+    %loaded = tt.load %ptrs, %mask : tensor<512x!tt.ptr<i8>, #blocked>
     tt.return
   }
 }

@@ -659,6 +659,11 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
     state.pimpl.compare_exchange_strong(expected, nullptr);
   }
 
+  void releaseMetricBuffers() {
+    profiler.pendingGraphPool.reset();
+    profiler.metricBuffer.reset();
+  }
+
   void doStart() override;
   void doFlush() override;
   void doStop() override;
@@ -1384,8 +1389,10 @@ void protonToolFini(void *toolData) {
     }
   }
   rocprofiler::flushBuffer<false>(state->kernelBuffer);
-  if (auto *impl = state->pimpl.load())
+  if (auto *impl = state->pimpl.load()) {
     impl->pcSampling.flushBuffersNoThrow();
+    impl->releaseMetricBuffers();
+  }
 }
 
 rocprofiler_tool_configure_result_t *
@@ -1412,6 +1419,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
     // RocprofSDKProfiler static destruction, while callback destinations are
     // still alive.
     std::call_once(state.registerShutdownFlag, []() {
+      // Initialize HIP first so this handler also runs before HIP teardown
+      // when profiling starts before the application's first HIP API call.
+      std::ignore = hip::init<true>(0);
       if (std::atexit(&finalizeRocprofilerClient) != 0)
         throw makeRuntimeError(
             "Failed to register ROCprofiler shutdown handler");

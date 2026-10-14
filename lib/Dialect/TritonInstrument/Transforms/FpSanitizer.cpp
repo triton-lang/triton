@@ -3,6 +3,7 @@
 #include "mlir/IR/Types.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "mlir/Transforms/WalkPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -163,9 +164,11 @@ ttg::BlockedEncodingAttr getOptimizedBlockedEncoding(PatternRewriter &rewriter,
     sizePerThread[dim] =
         static_cast<unsigned>(std::min<int64_t>(shape[dim], maxElems));
   }
-  return ttg::BlockedEncodingAttr::get(
-      rewriter.getContext(), sizePerThread, base.getThreadsPerWarp(),
-      base.getWarpsPerCTA(), order, base.getCGALayout());
+  // Recompute lane and warp distribution after increasing vector width;
+  // retaining the scalar layout can duplicate a narrow row across many lanes.
+  return ttg::BlockedEncodingAttr::get(rewriter.getContext(), shape,
+                                       sizePerThread, order, numWarps,
+                                       threadsPerWarp, base.getCGALayout());
 }
 
 struct ScratchInfo {
@@ -1930,6 +1933,59 @@ struct ClampFOpPattern : public OpRewritePattern<tt::ClampFOp> {
   }
 };
 
+struct CmpFOpPattern : public OpRewritePattern<arith::CmpFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::CmpFOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    arith::CmpIPredicate pred;
+    // Every carrier, including NaNs and signed zeros, represents an integer
+    // payload. All payloads are ordered, using the same signed order as
+    // min/max.
+    switch (op.getPredicate()) {
+    case arith::CmpFPredicate::AlwaysFalse:
+    case arith::CmpFPredicate::UNO:
+      rewriter.replaceOp(op,
+                         getIntConstantLike(rewriter, loc, op.getType(), 0));
+      return success();
+    case arith::CmpFPredicate::AlwaysTrue:
+    case arith::CmpFPredicate::ORD:
+      rewriter.replaceOp(op,
+                         getIntConstantLike(rewriter, loc, op.getType(), 1));
+      return success();
+    case arith::CmpFPredicate::OEQ:
+    case arith::CmpFPredicate::UEQ:
+      pred = arith::CmpIPredicate::eq;
+      break;
+    case arith::CmpFPredicate::ONE:
+    case arith::CmpFPredicate::UNE:
+      pred = arith::CmpIPredicate::ne;
+      break;
+    case arith::CmpFPredicate::OLT:
+    case arith::CmpFPredicate::ULT:
+      pred = arith::CmpIPredicate::slt;
+      break;
+    case arith::CmpFPredicate::OLE:
+    case arith::CmpFPredicate::ULE:
+      pred = arith::CmpIPredicate::sle;
+      break;
+    case arith::CmpFPredicate::OGT:
+    case arith::CmpFPredicate::UGT:
+      pred = arith::CmpIPredicate::sgt;
+      break;
+    case arith::CmpFPredicate::OGE:
+    case arith::CmpFPredicate::UGE:
+      pred = arith::CmpIPredicate::sge;
+      break;
+    }
+    Value lhs = embedToInt(rewriter, loc, op.getLhs());
+    Value rhs = embedToInt(rewriter, loc, op.getRhs());
+    rewriter.replaceOpWithNewOp<arith::CmpIOp>(op, pred, lhs, rhs);
+    return success();
+  }
+};
+
 struct NegFOpPattern : public OpRewritePattern<arith::NegFOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -1948,6 +2004,26 @@ struct NegFOpPattern : public OpRewritePattern<arith::NegFOp> {
   }
 };
 
+struct AbsFOpPattern : public OpRewritePattern<math::AbsFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(math::AbsFOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto inputI = embedToInt(rewriter, loc, op.getOperand());
+    // Use integer abs to preserve NaN bits.
+    auto absI = math::AbsIOp::create(rewriter, loc, inputI);
+    unsigned width =
+        getElementTypeOrSelf(inputI.getType()).getIntOrFloatBitWidth();
+    auto mask = getIntConstantLike(rewriter, loc, inputI.getType(),
+                                   (uint64_t{1} << (width - 1)) - 1);
+    // Map INT_MIN (negative zero) to zero.
+    auto result = arith::AndIOp::create(rewriter, loc, absI, mask);
+    rewriter.replaceOp(op, unembedToFloat(rewriter, loc, result, op.getType()));
+    return success();
+  }
+};
+
 struct DivFOpPattern : public OpRewritePattern<arith::DivFOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(arith::DivFOp op,
@@ -1960,9 +2036,10 @@ struct DivFOpPattern : public OpRewritePattern<arith::DivFOp> {
   }
 };
 
-struct PreciseDivFOpPattern : public OpRewritePattern<tt::PreciseDivFOp> {
-  using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(tt::PreciseDivFOp op,
+template <typename OpTy>
+struct TritonDivFOpPattern : public OpRewritePattern<OpTy> {
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+  LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
     if (!isFloatLike(op.getType()))
       return failure();
@@ -3375,23 +3452,29 @@ public:
     getOperation()->setAttr(kHomomorphicCastsAttr,
                             BoolAttr::get(&getContext(), homomorphicCasts));
 
+    // Rewrite comparisons before constant folding to preserve NaN payloads.
+    RewritePatternSet comparisonPatterns(&getContext());
+    comparisonPatterns.add<CmpFOpPattern>(&getContext());
+    walkAndApplyPatterns(getOperation(), std::move(comparisonPatterns));
+
     // MMA emulation can redistribute accumulator elements across all CTAs.
     bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
     TmemScratchManager scratch(sharedClusterState);
     RewritePatternSet patterns(&getContext());
-    patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
-                 BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
-                 BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
-                 BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
-                 BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
-                 BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
-                 BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
-                 ClampFOpPattern, NegFOpPattern, DivFOpPattern,
-                 PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
-                 Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
-                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
-                 PackedArithPattern, DotPattern, DotScaledPattern>(
-        &getContext());
+    patterns
+        .add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
+             BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
+             BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
+             BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
+             BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
+             BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
+             BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
+             ClampFOpPattern, NegFOpPattern, AbsFOpPattern, DivFOpPattern,
+             TritonDivFOpPattern<tt::PreciseDivFOp>,
+             TritonDivFOpPattern<tt::ApproxDivFOp>, RemFOpPattern, FmaPattern,
+             ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
+             ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
+             PackedArithPattern, DotPattern, DotScaledPattern>(&getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);
