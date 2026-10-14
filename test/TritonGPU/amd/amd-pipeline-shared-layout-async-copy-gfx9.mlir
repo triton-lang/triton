@@ -118,3 +118,97 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return %result : tensor<16x16xf32, #mma>
   }
 }
+
+// -----
+
+// On GFX9 the swizzle is realized as a lane shuffle. Lanes are 4 vec blocks
+// apart here, so the maxPhase=8 XOR leaves the warp and must be clamped.
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+// CHECK: #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 1, order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: async_copy_swizzle_clamped_to_warp
+  tt.func @async_copy_swizzle_clamped_to_warp(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+              %arg1: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>,
+              %lb: i32, %ub: i32, %step: i32) -> tensor<128x16xf32, #mma> {
+    // CHECK: ttg.async_copy_global_to_local {{.*}} -> <64x16xf16, #shared, #smem, mutable>
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma>
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x16x!tt.ptr<f16>, #blocked>
+    %1 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %2 = tt.expand_dims %1 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
+    %3 = tt.broadcast %0 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
+    %4 = tt.broadcast %2 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
+    %5 = tt.addptr %3, %4 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<128x16xf32, #mma>) : i32 {
+      %b = tt.load %5 : tensor<64x16x!tt.ptr<f16>, #blocked>
+      %b_dot = ttg.convert_layout %b : tensor<64x16xf16, #blocked> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %c = tt.dot %arg1, %b_dot, %acc : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+      scf.yield %c : tensor<128x16xf32, #mma>
+    }
+    tt.return %result : tensor<128x16xf32, #mma>
+  }
+}
+
+// -----
+
+// The same unsafe swizzle candidate must remain unchanged when pointer
+// contiguity makes the load ineligible for async copy.
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+// CHECK: #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 8, order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: stream_copy_does_not_clamp_swizzle
+  tt.func @stream_copy_does_not_clamp_swizzle(
+              %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+              %arg1: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>,
+              %lb: i32, %ub: i32, %step: i32) -> tensor<128x16xf32, #mma> {
+    // CHECK-NOT: ttg.async_copy_global_to_local
+    // CHECK: ttg.local_store
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma>
+    %c2 = arith.constant dense<2> : tensor<64x16xi32, #blocked>
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x16x!tt.ptr<f16>, #blocked>
+    %1 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %2 = tt.expand_dims %1 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
+    %3 = tt.broadcast %0 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
+    %4 = tt.broadcast %2 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
+    %5 = arith.muli %4, %c2 : tensor<64x16xi32, #blocked>
+    %6 = tt.addptr %3, %5 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<128x16xf32, #mma>) : i32 {
+      %b = tt.load %6 : tensor<64x16x!tt.ptr<f16>, #blocked>
+      %b_dot = ttg.convert_layout %b : tensor<64x16xf16, #blocked> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %c = tt.dot %arg1, %b_dot, %acc : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+      scf.yield %c : tensor<128x16xf32, #mma>
+    }
+    tt.return %result : tensor<128x16xf32, #mma>
+  }
+}
+
+// -----
+
+// Same deduced swizzle as above, but each thread holds exactly one vec block
+// so the shuffle stays inside the warp and maxPhase must be preserved.
+#blocked = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [32, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
+// CHECK: #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 8, order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: async_copy_swizzle_stays_in_warp
+  tt.func @async_copy_swizzle_stays_in_warp(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+              %arg1: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>,
+              %lb: i32, %ub: i32, %step: i32) -> tensor<128x16xf32, #mma> {
+    // CHECK: ttg.async_copy_global_to_local {{.*}} -> <64x16xf16, #shared, #smem, mutable>
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma>
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x16x!tt.ptr<f16>, #blocked>
+    %1 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %2 = tt.expand_dims %1 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
+    %3 = tt.broadcast %0 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
+    %4 = tt.broadcast %2 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
+    %5 = tt.addptr %3, %4 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<128x16xf32, #mma>) : i32 {
+      %b = tt.load %5 : tensor<64x16x!tt.ptr<f16>, #blocked>
+      %b_dot = ttg.convert_layout %b : tensor<64x16xf16, #blocked> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %c = tt.dot %arg1, %b_dot, %acc : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+      scf.yield %c : tensor<128x16xf32, #mma>
+    }
+    tt.return %result : tensor<128x16xf32, #mma>
+  }
+}
