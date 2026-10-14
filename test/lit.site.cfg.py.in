@@ -12,6 +12,7 @@ config.llvm_shlib_ext = "@CMAKE_SHARED_LIBRARY_SUFFIX@"
 config.llvm_exe_ext = "@EXEEXT@"
 config.lit_tools_dir = "@LLVM_LIT_TOOLS_DIR@"
 config.mlir_binary_dir = "@MLIR_BINARY_DIR@"
+config.targets_to_build = "@TARGETS_TO_BUILD@"
 config.python_executable = "@Python3_EXECUTABLE@"
 config.enable_bindings_python = @MLIR_ENABLE_BINDINGS_PYTHON@
 config.triton_ext_enabled = @TRITON_EXT_ENABLED@
