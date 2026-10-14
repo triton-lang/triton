@@ -361,6 +361,10 @@ Value emitRedundantThreadPredicate(
     ConversionPatternRewriter &rewriter, Location loc,
     const TargetInfoBase &targetInfo);
 
+Value emitThreadPredicate(ThreadDomainAttr domain,
+                          ConversionPatternRewriter &rewriter, Location loc,
+                          const TargetInfoBase &targetInfo);
+
 // Thread-local memory operations already execute in their owner's branch.
 Value emitMemoryThreadPredicate(
     Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,

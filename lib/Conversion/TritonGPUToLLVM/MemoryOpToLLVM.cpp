@@ -263,14 +263,8 @@ struct ThreadPredicateOpConversion
   LogicalResult
   matchAndRewrite(ThreadPredicateOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto *ctx = op.getContext();
-    llvm::MapVector<StringAttr, int32_t> masks;
-    masks[StringAttr::get(ctx, "lane")] = op.getDomain().getLane();
-    masks[StringAttr::get(ctx, "warp")] = op.getDomain().getWarp();
     Value predicate =
-        emitRedundantThreadPredicate(masks, rewriter, op.getLoc(), targetInfo);
-    if (!predicate)
-      predicate = TritonLLVMOpBuilder(op.getLoc(), rewriter).true_val();
+        emitThreadPredicate(op.getDomain(), rewriter, op.getLoc(), targetInfo);
     rewriter.replaceOp(op, predicate);
     return success();
   }
@@ -298,18 +292,16 @@ struct ThreadHandoffOpConversion
     }
 
     auto loc = op.getLoc();
-    if (source.getWarp() == destination.getWarp()) {
+    if (source.hasSameWarpAndBlock(destination)) {
       shuffleFromCanonicalLane(loc, MutableArrayRef<Value>(result),
                                source.getLane(), rewriter, targetInfo);
     } else {
-      // Every source domain contains lane zero of warp zero. Publish just that
-      // copy even when other source threads also hold the scalar.
-      llvm::MapVector<StringAttr, int32_t> masks;
-      masks[StringAttr::get(op.getContext(), "lane")] =
-          lookupThreadsPerWarp(rewriter) - 1;
-      masks[StringAttr::get(op.getContext(), "warp")] = lookupNumWarps(op) - 1;
+      // Publish from lane zero of warp zero in each source CTA.
+      auto publisher = ThreadDomainAttr::get(
+          op.getContext(), lookupThreadsPerWarp(rewriter) - 1,
+          lookupNumWarps(op) - 1, source.getBlock());
       Value predicate =
-          emitRedundantThreadPredicate(masks, rewriter, loc, targetInfo);
+          emitThreadPredicate(publisher, rewriter, loc, targetInfo);
       result =
           broadcastScalarResult(op, result, rewriter, predicate, targetInfo);
     }

@@ -310,10 +310,27 @@ Value emitRedundantThreadPredicate(
 Value emitMemoryThreadPredicate(
     Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo) {
-  if (op->getParentOfType<ThreadScopeOp>())
-    return TritonLLVMOpBuilder(op->getLoc(), rewriter).true_val();
+  if (op->getParentOfType<ThreadScopeOp>()) {
+    auto block = StringAttr::get(op->getContext(), "block");
+    auto domain = ThreadDomainAttr::get(op->getContext(), 0, 0,
+                                        freeVarMasks.lookup(block) &
+                                            (lookupNumCTAs(op) - 1));
+    return emitThreadPredicate(domain, rewriter, op->getLoc(), targetInfo);
+  }
   return emitRedundantThreadPredicate(freeVarMasks, rewriter, op->getLoc(),
                                       targetInfo);
+}
+
+Value emitThreadPredicate(ThreadDomainAttr domain,
+                          ConversionPatternRewriter &rewriter, Location loc,
+                          const TargetInfoBase &targetInfo) {
+  auto *ctx = domain.getContext();
+  llvm::MapVector<StringAttr, int32_t> masks;
+  masks[StringAttr::get(ctx, "lane")] = domain.getLane();
+  masks[StringAttr::get(ctx, "warp")] = domain.getWarp();
+  masks[StringAttr::get(ctx, "block")] = domain.getBlock();
+  Value pred = emitRedundantThreadPredicate(masks, rewriter, loc, targetInfo);
+  return pred ? pred : TritonLLVMOpBuilder(loc, rewriter).true_val();
 }
 
 } // namespace triton::gpu
@@ -1314,7 +1331,7 @@ Value broadcastScalarResult(Operation *op, Value resultVal,
   Type valueElemTy = resultVal.getType();
   Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
   targetInfo.storeShared(rewriter, loc, smemBase, resultVal, threadPred);
-  if (triton::gpu::lookupNumCTAs(op) == 1) {
+  if (!triton::hasCrossCTAScratch(op)) {
     targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
     return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
                                  b.true_val());
