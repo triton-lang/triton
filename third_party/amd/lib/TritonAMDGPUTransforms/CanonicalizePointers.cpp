@@ -244,7 +244,7 @@ bool isTensorIntZero(Value v) {
     return false;
   if (auto splatOp = v.getDefiningOp<tt::SplatOp>())
     return isScalarIntZero(splatOp.getSrc());
-  return isZeroConst(v);
+  return isZeroFillConst(v);
 }
 
 bool isIntZero(Value v) { return isTensorIntZero(v) || isScalarIntZero(v); }

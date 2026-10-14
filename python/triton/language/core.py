@@ -3069,24 +3069,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     return ret
 
 
-@builtin
-def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=None):
-    axis = _unwrap_if_constexpr(axis)
-    n = input.shape[axis]
-    index = arange(0, n, _semantic=_semantic)
-
-    if len(input.shape) > 1:
-        # Broadcast index across the non-reduced axes
-        axes_to_expand = [constexpr(d) for d in builtins.range(len(input.shape))]
-        del axes_to_expand[axis]
-        index = expand_dims(index, axes_to_expand, _semantic=_semantic)
-        index = broadcast_to(index, input.shape, _semantic=_semantic)
-
-    rvalue, rindices = reduce((input, index), axis, combine_fn, keep_dims=keep_dims, _semantic=_semantic,
-                              _generator=_generator)
-    return rvalue, rindices
-
-
 # -----------------------
 # Scans
 # -----------------------
@@ -3770,7 +3752,7 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
     num_args = len(list(arg_type_symbol_dict.keys())[0])
     if len(args) != num_args:
         raise ValueError(f"length of input args does not match."
-                         f"Expect {len(args)}, got {num_args}")
+                         f"Expect {num_args}, got {len(args)}")
 
     arg_types = []
     arg_list = []

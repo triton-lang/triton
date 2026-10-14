@@ -150,7 +150,7 @@ def is_hip_rdna4():
     return target is not None and target.backend == 'hip' and 'gfx120' in target.arch
 
 
-def is_hip_gfx1250():
+def is_hip_cdna5():
     target = get_current_target()
     return target is not None and target.backend == 'hip' and 'gfx1250' in target.arch
 

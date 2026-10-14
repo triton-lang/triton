@@ -9,14 +9,14 @@ NON_K_PRESHUFFLE_BLOCK_SIZE = 128
 
 
 @dataclass(frozen=True)
-class GFX1250MXScaleLayout(Layout):
+class CDNA5MXScaleLayout(Layout):
 
     @property
     def name(self):
-        return "GFX1250_SCALE"
+        return "CDNA5_SCALE"
 
     def make_transformation(self, shape: list[int], is_fp4: bool) -> LayoutTransformation:
-        return GFX1250MXScaleLayoutTransformation(shape, is_fp4)
+        return CDNA5MXScaleLayoutTransformation(shape, is_fp4)
 
     def swizzle_block_shape(self, block_shape):
         SCALE_K = block_shape[-2]
@@ -25,7 +25,7 @@ class GFX1250MXScaleLayout(Layout):
 
 
 @dataclass(frozen=True)
-class GFX1250MXScaleLayoutTransformation(LayoutTransformation):
+class CDNA5MXScaleLayoutTransformation(LayoutTransformation):
 
     def __post_init__(self) -> None:
         *leading_shape, K_SCALE, N = self.shape
@@ -71,8 +71,8 @@ class GFX1250MXScaleLayoutTransformation(LayoutTransformation):
 
 
 @triton.jit
-def unswizzle_mx_scale_gfx1250(x, BLOCK_N: tl.constexpr, MX_SCALE_BLOCK_K: tl.constexpr,
-                               N_PRESHUFFLE_FACTOR: tl.constexpr = NON_K_PRESHUFFLE_BLOCK_SIZE):
+def unswizzle_mx_scale_cdna5(x, BLOCK_N: tl.constexpr, MX_SCALE_BLOCK_K: tl.constexpr,
+                             N_PRESHUFFLE_FACTOR: tl.constexpr = NON_K_PRESHUFFLE_BLOCK_SIZE):
     SCALE_KWIDTH: tl.constexpr = 4 if MX_SCALE_BLOCK_K >= 4 else MX_SCALE_BLOCK_K
     x = x.reshape(BLOCK_N // N_PRESHUFFLE_FACTOR, MX_SCALE_BLOCK_K // SCALE_KWIDTH, N_PRESHUFFLE_FACTOR // 4, 4,
                   SCALE_KWIDTH)

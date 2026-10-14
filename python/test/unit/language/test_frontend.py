@@ -8,7 +8,7 @@ from triton.experimental import gluon
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
-from triton.compiler.errors import CompilationError
+from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import pytest
 from typing import NamedTuple
 
@@ -40,6 +40,40 @@ def doesnt_compile(kernel):
 @triton.jit
 def anchor(v):
     pass
+
+
+@pytest.mark.parametrize("op", ["min", "max"])
+@pytest.mark.parametrize("return_indices", [False, True])
+@pytest.mark.parametrize("dtype", [tl.float32, tl.int32])
+@pytest.mark.parametrize("propagate_nan, valid", [
+    (tl.PropagateNan.NONE, True),
+    (tl.PropagateNan.ALL, True),
+    (None, False),
+    (False, False),
+    (True, False),
+    (0, False),
+    (1, False),
+    ("NONE", False),
+    (tl.PropagateNan, False),
+])
+def test_min_max_propagate_nan_type(op, return_indices, dtype, propagate_nan, valid):
+
+    @triton.jit
+    def kernel(OP: tl.constexpr, RETURN_INDICES: tl.constexpr, DTYPE: tl.constexpr, PROPAGATE_NAN: tl.constexpr):
+        x = tl.full((32, ), 1, DTYPE)
+        if OP == "min":
+            tl.min(x, 0, return_indices=RETURN_INDICES, propagate_nan=PROPAGATE_NAN)
+        else:
+            tl.max(x, 0, return_indices=RETURN_INDICES, propagate_nan=PROPAGATE_NAN)
+
+    args = (op, return_indices, dtype, propagate_nan)
+    if valid:
+        run_parser(kernel, args=args)
+    else:
+        with pytest.raises(CompilationError) as error:
+            run_parser(kernel, args=args)
+        assert isinstance(error.value.__cause__, CompileTimeAssertionFailure)
+        assert "propagate_nan must be a PropagateNan enum value" in str(error.value.__cause__)
 
 
 @pytest.mark.parametrize("scalar", [True, False])

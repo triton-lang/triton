@@ -181,7 +181,7 @@ def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
     else:
         # The AMD lowering emits llvm.readcyclecounter in LLIR. The backend
         # later selects s_memtime on gfx942/gfx950 or
-        # s_get_shader_cycles_u64 on gfx1250.
+        # s_get_shader_cycles_u64 on CDNA5.
         clock_instr = "readcyclecounter"
     clock_loc = None
     for line in llir_lines:

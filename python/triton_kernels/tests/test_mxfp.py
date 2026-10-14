@@ -27,14 +27,15 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
 
 
 @triton.jit
-def _nvfp4_to_mxfp8_tile_kernel(X, S, Y, YS, M: tl.constexpr, K: tl.constexpr, BLOCK_K: tl.constexpr):
+def _nvfp4_to_mxfp8_tile_kernel(X, S, Y, YS, M: tl.constexpr, K: tl.constexpr, BLOCK_K: tl.constexpr, T=None):
     rows = tl.program_id(0) * 16 + tl.arange(0, 16)
     cols = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K // 2) * 2
     x = tl.load(X + rows[:, None] * (K // 2) + cols[None, :] // 2, (rows[:, None] < M) & (cols[None, :] < K), other=0)
     sc = tl.program_id(1) * (BLOCK_K // 16) + tl.arange(0, BLOCK_K // 16)
     scales = tl.load(S + rows[:, None] * (K // 16) + sc[None, :], (rows[:, None] < M) & (sc[None, :] < K // 16),
                      other=0.0)
-    y, ys = nvfp4_to_mxfp8_tile(x, scales)
+    tensor_scale = tl.load(T + rows, rows < M, other=0.0) if T is not None else None
+    y, ys = nvfp4_to_mxfp8_tile(x, scales, tensor_scale)
     out_cols = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K)
     tl.store(Y + rows[:, None] * K + out_cols[None, :], y, (rows[:, None] < M) & (out_cols[None, :] < K))
     out_sc = tl.program_id(1) * (BLOCK_K // 32) + tl.arange(0, BLOCK_K // 32)
@@ -43,7 +44,8 @@ def _nvfp4_to_mxfp8_tile_kernel(X, S, Y, YS, M: tl.constexpr, K: tl.constexpr, B
 
 @pytest.mark.parametrize("block_k", [32, 128, 256])
 @pytest.mark.parametrize("k", [160, 256])
-def test_nvfp4_to_mxfp8_tile(block_k, k, device):
+@pytest.mark.parametrize("tensor_scale", [False, True])
+def test_nvfp4_to_mxfp8_tile(block_k, k, tensor_scale, device):
     if not is_cuda() or not cuda_capability_geq(10, 0):
         pytest.skip("requires Blackwell")
     torch.manual_seed(42)
@@ -51,11 +53,17 @@ def test_nvfp4_to_mxfp8_tile(block_k, k, device):
     values = torch.randint(0, 256, (m, k // 2), device=device, dtype=torch.uint8)
     scale_values = torch.tensor([0, 2**-9, 0.5, 1.125, 448], device=device)
     scales = scale_values[torch.arange(m * k // 16, device=device) % 5].reshape(m, k // 16).to(torch.float8_e4m3fn)
+    outer_scale = None
+    if tensor_scale:
+        row_scales = torch.tensor([0, 0.37, 0.5, 1.25, 2**-80, 2**80], device=device)
+        outer_scale = row_scales[torch.arange(m, device=device) % row_scales.numel()]
     actual = torch.empty((m, k), dtype=torch.float8_e4m3fn, device=device)
     actual_scale = torch.empty((m, k // 32), dtype=torch.uint8, device=device)
     _nvfp4_to_mxfp8_tile_kernel[(triton.cdiv(m, 16), triton.cdiv(k, block_k))](values, scales, actual, actual_scale, m,
-                                                                               k, block_k)
+                                                                               k, block_k, outer_scale)
     decoded = upcast_from_mxfp_torch(values, scales, torch.float32, axis=-1)
+    if outer_scale is not None:
+        decoded *= outer_scale[:, None]
     expected, expected_scale = downcast_to_mxfp_torch(decoded, torch.float8_e4m3fn, axis=-1)
     torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
     torch.testing.assert_close(actual_scale, expected_scale, rtol=0, atol=0)

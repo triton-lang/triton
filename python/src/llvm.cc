@@ -1,3 +1,4 @@
+#include "lib/Target/LLVMIR/LLVMPasses.h"
 #include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
@@ -24,6 +25,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/OptBisect.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
@@ -63,14 +65,6 @@
 #include <unordered_set>
 
 namespace py = nanobind;
-
-namespace llvm {
-struct BreakStructPhiNodesPass
-    : OptionalPassInfoMixin<BreakStructPhiNodesPass> {
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-  static StringRef name() { return "BreakStructPhiNodesPass"; }
-};
-} // namespace llvm
 
 using namespace llvm;
 
@@ -195,6 +189,31 @@ void installTritonDAGScheduler() {
   static_cast<SchedulerOption *>(option->second)
       ->setInitialValue(createTritonDAGScheduler);
 }
+
+class ScopedLSRPassGate : public llvm::OptPassGate {
+  llvm::LLVMContext &context;
+  llvm::OptPassGate &previousGate;
+
+public:
+  ScopedLSRPassGate(llvm::LLVMContext &context, bool disableLSR)
+      : context(context), previousGate(context.getOptPassGate()) {
+    // The gate belongs to this compilation's context, not LLVM's global
+    // command-line state, so concurrent compilations can choose independently.
+    if (disableLSR)
+      context.setOptPassGate(*this);
+  }
+
+  ~ScopedLSRPassGate() override { context.setOptPassGate(previousGate); }
+
+  bool isEnabled() const override { return true; }
+
+  bool shouldRunPass(llvm::StringRef passName,
+                     llvm::StringRef irDescription) const override {
+    return passName != "Loop Strength Reduction" &&
+           (!previousGate.isEnabled() ||
+            previousGate.shouldRunPass(passName, irDescription));
+  }
+};
 
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
@@ -704,7 +723,8 @@ void init_triton_llvm(py::module_ &m) {
       [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
          std::string arch, std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool disable_slp_vectorizer,
-         bool disable_vector_combine, bool expand_masked_div_rem) {
+         bool disable_vector_combine, bool expand_masked_div_rem,
+         unsigned nvptx_compute_capability) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Declare the same flags as codegen even though IR optimization does
@@ -755,12 +775,6 @@ void init_triton_llvm(py::module_ &m) {
         tuningOptions.LoopUnrolling = true;
         tuningOptions.LoopInterleaving = true;
         tuningOptions.LoopVectorization = true;
-        // TODO: currently we run SLP vectorizer with an empty target machine.
-        // This cause the vectorizer to create larger vector which could be bad.
-        // Disabling it would currently cause regressions as this pass also
-        // applies some scheduling that helps performance in some cases. We
-        // should work on using NVPTX target instead and address the performance
-        // regressions with some scheduling solution.
         tuningOptions.SLPVectorization = !disable_slp_vectorizer;
 
         std::string pluginFile =
@@ -803,6 +817,8 @@ void init_triton_llvm(py::module_ &m) {
               // sure all the struct are removed for the following passes.
               fpm.addPass(BreakStructPhiNodesPass());
               fpm.addPass(InstCombinePass());
+              if (nvptx_compute_capability != 0)
+                fpm.addPass(NVPTXVectorizerPass(nvptx_compute_capability));
             });
         bool enableAddressSanitizer =
             mlir::triton::tools::getBoolEnv("TRITON_ENABLE_ASAN");
@@ -825,6 +841,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("disable_slp_vectorizer") = false,
       py::arg("disable_vector_combine") = false,
       py::arg("expand_masked_div_rem") = false,
+      py::arg("nvptx_compute_capability") = 0,
       py::call_guard<py::gil_scoped_release>());
 
   m.def(
@@ -832,7 +849,7 @@ void init_triton_llvm(py::module_ &m) {
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
-         bool sched4reg, bool enableFpSan) -> py::object {
+         bool sched4reg, bool enableFpSan, bool disableLSR) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -841,6 +858,7 @@ void init_triton_llvm(py::module_ &m) {
                                                 sched4reg);
           // create LLVM module from C++
           llvm::LLVMContext context;
+          ScopedLSRPassGate lsrGate(context, disableLSR);
           std::unique_ptr<llvm::MemoryBuffer> buffer =
               llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
           llvm::SMDiagnostic error;
@@ -863,7 +881,8 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("llvm_ir"), py::arg("triple"), py::arg("proc"),
       py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
       py::arg("is_object"), py::arg("canonicalize_gep"),
-      py::arg("sched4reg") = false, py::arg("enable_fpsan") = false);
+      py::arg("sched4reg") = false, py::arg("enable_fpsan") = false,
+      py::arg("disable_lsr") = false);
 
   m.def("translate_to_mir",
         [](std::string llvmIR, std::string triple, std::string proc,
