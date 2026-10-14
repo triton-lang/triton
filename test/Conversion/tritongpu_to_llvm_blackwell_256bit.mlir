@@ -5,16 +5,20 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=91' -cse | FileCheck --check-prefixes=FP8,FP4,LEGACY,FP16-NATIVE %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=92' -cse | FileCheck --check-prefixes=FP8,FP4,PACKED,FP16-NATIVE %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=92' -cse | FileCheck --check-prefixes=SM103,FP8,FP4,PACKED,FP16-NATIVE %s
+// RUN: split-file %s %t
+// RUN: triton-opt %t/fp4-ptx.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple=nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck %s --check-prefix=FP4-PTX
+
+//--- lowerings.mlir
 
 // Test 256-bit global load with 8x f32 (v8.b32) on Blackwell
 #blocked_8xf32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_load_v8_b32
-  // BW256: ld.global.v8.b32
+  // BW256: llvm.load {{.*}} {alignment = 32 : i64} : !llvm.ptr<1> -> vector<8xf32>
   // PRE_BW-LABEL: global_load_v8_b32
-  // PRE_BW-NOT: ld.global.v8.b32
-  // PRE_BW: ld.global.v4.b32
-  tt.func @global_load_v8_b32(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
+  // PRE_BW-NOT: llvm.load {{.*}} -> vector<8xf32>
+  // PRE_BW-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xf32>
+  tt.func private @global_load_v8_b32(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}) -> tensor<256xf32, #blocked_8xf32> {
     %c256_i32 = arith.constant 256 : i32
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c256_i32 : i32
@@ -24,7 +28,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked_8xf32>
     %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked_8xf32>, tensor<256xi32, #blocked_8xf32>
     %7 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked_8xf32>
-    tt.return
+    tt.return %7 : tensor<256xf32, #blocked_8xf32>
   }
 }
 
@@ -34,10 +38,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked_8xf32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_store_v8_b32
-  // BW256: st.global.v8.b32
+  // BW256: llvm.store {{.*}} {alignment = 32 : i64} : vector<8xf32>, !llvm.ptr<1>
   // PRE_BW-LABEL: global_store_v8_b32
-  // PRE_BW-NOT: st.global.v8.b32
-  // PRE_BW: st.global.v4.b32
+  // PRE_BW-NOT: llvm.store {{.*}} : vector<8xf32>
+  // PRE_BW-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xf32>, !llvm.ptr<1>
   tt.func @global_store_v8_b32(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
     %c256_i32 = arith.constant 256 : i32
     %cst = arith.constant dense<1.0> : tensor<256xf32, #blocked_8xf32>
@@ -59,11 +63,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked_4xf64 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_load_v4_b64
-  // BW256: ld.global.v4.b64
+  // BW256: llvm.load {{.*}} {alignment = 32 : i64} : !llvm.ptr<1> -> vector<4xf64>
   // PRE_BW-LABEL: global_load_v4_b64
-  // PRE_BW-NOT: ld.global.v4.b64
-  // PRE_BW: ld.global.v2.b64
-  tt.func @global_load_v4_b64(%arg0: !tt.ptr<f64> {tt.divisibility = 32 : i32}) {
+  // PRE_BW-NOT: llvm.load {{.*}} -> vector<4xf64>
+  // PRE_BW-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<2xf64>
+  tt.func private @global_load_v4_b64(%arg0: !tt.ptr<f64> {tt.divisibility = 32 : i32}) -> tensor<128xf64, #blocked_4xf64> {
     %c128_i32 = arith.constant 128 : i32
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c128_i32 : i32
@@ -73,7 +77,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %5 = tt.splat %arg0 : !tt.ptr<f64> -> tensor<128x!tt.ptr<f64>, #blocked_4xf64>
     %6 = tt.addptr %5, %4 : tensor<128x!tt.ptr<f64>, #blocked_4xf64>, tensor<128xi32, #blocked_4xf64>
     %7 = tt.load %6 : tensor<128x!tt.ptr<f64>, #blocked_4xf64>
-    tt.return
+    tt.return %7 : tensor<128xf64, #blocked_4xf64>
   }
 }
 
@@ -116,18 +120,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   }
 
   // FP8-LABEL: @fp8e4_to_bf16
-  // PACKED: cvt.rn.bf16x2.e4m3x2 $0, $1;", "=r,h"
-  // LEGACY: cvt.rn.f16x2.e4m3x2
+  // PACKED: nvvm.convert.f8x2.to.bf16x2 {{.*}} : vector<2xi8>(f8E4M3FN) -> vector<2xbf16>
+  // LEGACY: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E4M3FN) -> vector<2xf16>
+  // LEGACY-COUNT-2: cvt.rn.bf16.f16
   tt.func private @fp8e4_to_bf16(%in: tensor<64xf8E4M3FN, #blocked_fp8>) -> tensor<64xbf16, #blocked_fp8> {
     %out = tt.fp_to_fp %in : tensor<64xf8E4M3FN, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
     tt.return %out : tensor<64xbf16, #blocked_fp8>
   }
 
   // FP8-LABEL: @fp8e5_to_bf16
-  // PACKED: cvt.rn.bf16x2.e5m2x2 $0, $1;", "=r,h"
-  // LEGACY: cvt.rn.f16x2.e5m2x2 a, $1;
-  // LEGACY-SAME: cvt.bf16.f16 b0, a0;
-  // LEGACY-SAME: cvt.bf16.f16 b1, a1;
+  // PACKED: nvvm.convert.f8x2.to.bf16x2 {{.*}} : vector<2xi8>(f8E5M2) -> vector<2xbf16>
+  // LEGACY: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E5M2) -> vector<2xf16>
+  // LEGACY-COUNT-2: cvt.rn.bf16.f16
   tt.func private @fp8e5_to_bf16(%in: tensor<64xf8E5M2, #blocked_fp8>) -> tensor<64xbf16, #blocked_fp8> {
     %out = tt.fp_to_fp %in : tensor<64xf8E5M2, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
     tt.return %out : tensor<64xbf16, #blocked_fp8>
@@ -200,6 +204,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   tt.func @atomic_add_bf16_128bit(%ptrs: tensor<512x!tt.ptr<bf16>, #atomic_f16> {tt.divisibility = 32 : i32, tt.contiguity = 16 : i32}, %values: tensor<512xbf16, #atomic_f16>) {
     %old = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %values : (tensor<512x!tt.ptr<bf16>, #atomic_f16>, tensor<512xbf16, #atomic_f16>) -> tensor<512xbf16, #atomic_f16>
     %unused = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %old : (tensor<512x!tt.ptr<bf16>, #atomic_f16>, tensor<512xbf16, #atomic_f16>) -> tensor<512xbf16, #atomic_f16>
+    tt.return
+  }
+}
+
+
+// -----
+//--- fp4-ptx.mlir
+
+#packed_fp4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#unpacked_fp4 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // FP4-PTX-LABEL: .entry fp4_to_fp16_codegen(
+  // FP4-PTX: prmt.b32
+  // FP4-PTX-COUNT-4: cvt.rn.f16x2.e4m3x2
+  // FP4-PTX: st.global
+  tt.func public @fp4_to_fp16_codegen(%ptr: tensor<256x!tt.ptr<f16>, #unpacked_fp4>, %in: tensor<128xi8, #packed_fp4>) {
+    %out = ttg.fp4_to_fp %in {axis = 0 : i32} : tensor<128xi8, #packed_fp4> -> tensor<256xf16, #unpacked_fp4>
+    tt.store %ptr, %out : tensor<256x!tt.ptr<f16>, #unpacked_fp4>
     tt.return
   }
 }

@@ -176,13 +176,7 @@ def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
 
     # check llir line info
     llir_lines = pgm.asm["llir"].splitlines()
-    if is_cuda():
-        clock_instr = "clock"
-    else:
-        # The AMD lowering emits llvm.readcyclecounter in LLIR. The backend
-        # later selects s_memtime on gfx942/gfx950 or
-        # s_get_shader_cycles_u64 on gfx1250.
-        clock_instr = "readcyclecounter"
+    clock_instr = "llvm.nvvm.read.ptx.sreg.clock" if is_cuda() else "llvm.readcyclecounter"
     clock_loc = None
     for line in llir_lines:
         if clock_instr not in line or "!dbg" not in line:
@@ -919,8 +913,21 @@ def test_globaltime(tmp_path: pathlib.Path):
     n_elements = output.numel()
     BLOCK_SIZE = 1024
     grid = lambda meta: (triton.cdiv(n_elements, BLOCK_SIZE), )
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE, num_warps=16)
+    pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE, num_warps=16)
     proton.finalize()
+
+    if is_cuda():
+        clock_calls = [
+            line for line in pgm.asm["llir"].splitlines()
+            if "call" in line and "@llvm.nvvm.read.ptx.sreg.clock(" in line
+        ]
+        assert clock_calls
+        assert all('"proton.clock"()' in line for line in clock_calls)
+        assert "%clock;" in pgm.asm["ptx"]
+        assert "%clock64" not in pgm.asm["ptx"]
+        clock_reads = [line for line in pgm.asm["sass"].splitlines() if "SR_CLOCKLO" in line]
+        assert clock_reads
+        assert all("CS2R.32" in line for line in clock_reads)
 
     with temp_file.open() as f:
         data = json.load(f)

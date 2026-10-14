@@ -1,5 +1,3 @@
-#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
-
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -10,6 +8,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Intrinsics.h"
+#include <map>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -336,17 +335,6 @@ static TensorCoreType getMmaTypeDot(DotOp op, RankedTensorType aTy,
   return TensorCoreType::NOT_APPLICABLE;
 }
 
-inline static const std::map<TensorCoreType, std::string> mmaInstrPtxTuring = {
-    {TensorCoreType::FP32_FP16_FP16_FP32,
-     "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32"},
-
-    {TensorCoreType::INT32_INT8_INT8_INT32,
-     "mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32"},
-
-    {TensorCoreType::FP16_FP16_FP16_FP16,
-     "mma.sync.aligned.m16n8k8.row.col.f16.f16.f16.f16"},
-};
-
 static NVVM::MMATypes getMmaPtxType(Type type) {
   if (type.isF16())
     return NVVM::MMATypes::f16;
@@ -363,82 +351,6 @@ static NVVM::MMATypes getMmaPtxType(Type type) {
   if (isa<Float8E4M3FNType>(type))
     return NVVM::MMATypes::e4m3;
   llvm_unreachable("unsupported MMA operand type");
-}
-
-static void callMmaTuringInt8(PTXBuilder &builder, int b,
-                              const BaseOffset &base,
-                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
-                              unsigned colsPerThread, int numCPackedElem,
-                              ValueTableV2 &ha, ValueTableV2 &hb,
-                              ArrayRef<Value> fc) {
-  auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=r");
-  auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=r");
-  auto cArgs1 = builder.newListOperand();
-  for (int i = 0; i < numMmaRets / 2; ++i) {
-    cArgs1->listAppend(builder.newOperand(
-        fc[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i],
-        std::to_string(i)));
-    // reuse the output registers
-  }
-  auto cArgs2 = builder.newListOperand();
-  for (int i = numMmaRets / 2; i < numMmaRets; ++i) {
-    cArgs2->listAppend(builder.newOperand(
-        fc[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i],
-        std::to_string(i)));
-    // reuse the output registers
-  }
-  auto aArgs1 = builder.newListOperand({
-      {ha[{b, base.m, base.k}], "r"},
-  });
-  auto bArgs1 = builder.newListOperand({
-      {hb[{b, base.n, base.k}], "r"},
-  });
-  auto aArgs2 = builder.newListOperand({
-      {ha[{b, base.m, base.k + 1}], "r"},
-  });
-  auto bArgs2 = builder.newListOperand({{hb[{b, base.n, base.k + 1}], "r"}});
-  auto aArgs3 = builder.newListOperand({
-      {ha[{b, base.m + 1, base.k}], "r"},
-  });
-  auto bArgs3 = builder.newListOperand({
-      {hb[{b, base.n, base.k}], "r"},
-  });
-  auto aArgs4 = builder.newListOperand({
-      {ha[{b, base.m + 1, base.k + 1}], "r"},
-  });
-  auto bArgs4 = builder.newListOperand({{hb[{b, base.n, base.k + 1}], "r"}});
-  mma(retArgs1, aArgs1, bArgs1, cArgs1);
-  mma(retArgs1, aArgs2, bArgs2, cArgs1);
-  mma(retArgs2, aArgs3, bArgs3, cArgs2);
-  mma(retArgs2, aArgs4, bArgs4, cArgs2);
-}
-
-static void callMmaTuringFp16(PTXBuilder &builder, int b,
-                              const BaseOffset &base,
-                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
-                              unsigned colsPerThread, int numCPackedElem,
-                              ValueTableV2 &ha, ValueTableV2 &hb,
-                              ArrayRef<Value> fc, bool isAccF16) {
-  auto retArgs = builder.newListOperand(numMmaRets, isAccF16 ? "=r" : "=f");
-  auto cArgs = builder.newListOperand();
-  for (int i = 0; i < numMmaRets; ++i) {
-    cArgs->listAppend(builder.newOperand(
-        fc[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i],
-        std::to_string(i)));
-    // reuse the output registers
-  }
-  auto aArgs1 = builder.newListOperand({
-      {ha[{b, base.m, base.k}], "r"},
-      {ha[{b, base.m + 1, base.k}], "r"},
-  });
-  auto bArgs1 = builder.newListOperand({{hb[{b, base.n, base.k}], "r"}});
-  auto aArgs2 = builder.newListOperand({
-      {ha[{b, base.m, base.k + 1}], "r"},
-      {ha[{b, base.m + 1, base.k + 1}], "r"},
-  });
-  auto bArgs2 = builder.newListOperand({{hb[{b, base.n, base.k + 1}], "r"}});
-  mma(retArgs, aArgs1, bArgs1, cArgs);
-  mma(retArgs, aArgs2, bArgs2, cArgs);
 }
 
 static std::array<SmallVector<Value>, 3>
@@ -594,7 +506,7 @@ LogicalResult convertMMAWithType(DotOpInterface op, Value llvmA, Value llvmB,
                                  Value llvmC,
                                  const LLVMTypeConverter *typeConverter,
                                  ConversionPatternRewriter &rewriter,
-                                 TensorCoreType mmaType, bool isTuring) {
+                                 TensorCoreType mmaType) {
   auto aElemTy = cast<RankedTensorType>(op.getA().getType()).getElementType();
   auto bElemTy = cast<RankedTensorType>(op.getB().getType()).getElementType();
   std::array<NVVM::MMATypes, 2> ptxTypes = {getMmaPtxType(aElemTy),
@@ -602,18 +514,10 @@ LogicalResult convertMMAWithType(DotOpInterface op, Value llvmA, Value llvmB,
   std::optional<NVVM::MMAIntOverflow> intOverflow;
   if (aElemTy.isInteger(8))
     intOverflow = NVVM::MMAIntOverflow::satfinite;
-  std::string mmaInstruction;
-  if (isTuring)
-    mmaInstruction = mmaInstrPtxTuring.at(mmaType);
   if (auto dotI8 = dyn_cast<triton::instrument::DotI8Op>(op.getOperation())) {
     ptxTypes = {dotI8.getASigned() ? NVVM::MMATypes::s8 : NVVM::MMATypes::u8,
                 dotI8.getBSigned() ? NVVM::MMATypes::s8 : NVVM::MMATypes::u8};
     intOverflow = NVVM::MMAIntOverflow::wrapped;
-    if (isTuring) {
-      mmaInstruction = "mma.sync.aligned.m8n8k16.row.col.s32.";
-      mmaInstruction += dotI8.getASigned() ? "s8." : "u8.";
-      mmaInstruction += dotI8.getBSigned() ? "s8.s32" : "u8.s32";
-    }
   }
   std::array<int64_t, 3> shape = {aElemTy.isF64() ? 8 : 16, 8,
                                   256 / aElemTy.getIntOrFloatBitWidth()};
@@ -626,24 +530,8 @@ LogicalResult convertMMAWithType(DotOpInterface op, Value llvmA, Value llvmB,
                              ValueTableV2 &ha, ValueTableV2 &hb,
                              ArrayRef<Value> fc, Type resultTy, int /*repK*/) {
     auto dTy = cast<RankedTensorType>(op.getD().getType());
-    bool isIntMMA = dTy.getElementType().isInteger(32);
-    bool isAccF16 = dTy.getElementType().isF16();
     bool isFp64MMA = dTy.getElementType().isF64();
-    const unsigned numCPackedElem = isFp64MMA ? 1u : 4u / numMmaRets;
     BaseOffset base{numRegisters.m * m, numRegisters.n * n, numRegisters.k * k};
-    if (isTuring) {
-      PTXBuilder builder;
-      auto &mma = *builder.create(mmaInstruction);
-      assert(b == 0 && "Turing only supports batch size 1");
-      if (isIntMMA)
-        callMmaTuringInt8(builder, b, base, mma, numMmaRets, colsPerThread,
-                          numCPackedElem, ha, hb, fc);
-      else
-        callMmaTuringFp16(builder, b, base, mma, numMmaRets, colsPerThread,
-                          numCPackedElem, ha, hb, fc, isAccF16);
-      return builder.launch(rewriter, op.getLoc(), resultTy);
-    }
-
     Type operandTy = rewriter.getI32Type();
     if (isFp64MMA)
       operandTy = rewriter.getF64Type();
@@ -673,28 +561,27 @@ LogicalResult convertMMAWithType(DotOpInterface op, Value llvmA, Value llvmB,
 
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
-                         ConversionPatternRewriter &rewriter, bool isTuring) {
+                         ConversionPatternRewriter &rewriter) {
   auto aTensorTy = op.getA().getType();
   auto bTensorTy = op.getB().getType();
   auto dTensorTy = op.getD().getType();
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
-  if (mmaType == TensorCoreType::NOT_APPLICABLE ||
-      (isTuring && !mmaInstrPtxTuring.contains(mmaType)))
+  if (mmaType == TensorCoreType::NOT_APPLICABLE)
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
 
   return convertMMAWithType(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                            typeConverter, rewriter, mmaType, isTuring);
+                            typeConverter, rewriter, mmaType);
 }
 
 LogicalResult convertMMA(triton::instrument::DotI8Op op,
                          triton::instrument::DotI8Op::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
-                         ConversionPatternRewriter &rewriter, bool isTuring) {
+                         ConversionPatternRewriter &rewriter) {
   return convertMMAWithType(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
                             typeConverter, rewriter,
-                            TensorCoreType::INT32_INT8_INT8_INT32, isTuring);
+                            TensorCoreType::INT32_INT8_INT8_INT32);
 }
 
 LogicalResult convertMMADotScaled(triton::DotScaledOp op,
