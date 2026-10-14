@@ -354,6 +354,7 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
 Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                                         MembarInfo *membarInfo,
                                         OpBuilder *builder, bool cluster) {
+  // A null builder only analyzes existing barriers.
   if (!builder)
     return nullptr;
   auto &pending = membarInfo->pending;
@@ -369,8 +370,15 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
            (filter && filter(before, after, beforeIsRead, afterIsRead,
                              allocation, beforeSlice, afterSlice));
   };
-  if (!requiresThreadSync(pending, effects) &&
-      !pending.isIntersected(effects, canSkip, &allocation, sliceFilter))
+  bool needsSync =
+      requiresThreadSync(pending, effects) ||
+      pending.isIntersected(effects, canSkip, &allocation, sliceFilter);
+  // Let the backend stop deferral of a pending shared-copy rendezvous.
+  // Memory conflicts still require synchronization regardless of this policy.
+  if (!needsSync && !cluster && deferralStopPolicy &&
+      pending.threadSync.completion == CompletionSync::Shared)
+    needsSync = deferralStopPolicy(op);
+  if (!needsSync)
     return nullptr;
   // The barrier clears incoming state. The operation's own effects still
   // follow it, including a scratch write that conflicts with a pending read.

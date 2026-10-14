@@ -38,7 +38,8 @@ struct TritonAMDGPUMembar
     if (targetInfo.requiresAliasInfoForAsyncOps())
       AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
 
-    ModuleMembarAnalysis membarPass(allocation, AMD::membarFilter);
+    ModuleMembarAnalysis membarPass(allocation, AMD::membarFilter,
+                                    AMD::stopMembarDeferral);
     membarPass.run();
   }
 };

@@ -672,6 +672,13 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     localStoreCluster = 4;
   }
 
+  // Place synchronous LDS writes after the tail wait so Membar can rendezvous
+  // before issuing them. Preserve same-stage store-to-load ordering.
+  if (waitAtTail && stages[SCHED_LOCAL_STORE] < stages[SCHED_LOCAL_LOAD]) {
+    asyncWaitCluster = 3;
+    localStoreCluster = 4;
+  }
+
   // Create a hash map to associate cluster hash in old schedule with its
   // clusterID
   ClusterMap clusterMap = createClusterMap(schedule);

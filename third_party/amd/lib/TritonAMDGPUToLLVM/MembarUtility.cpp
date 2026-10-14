@@ -1,6 +1,7 @@
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -94,7 +95,46 @@ bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
 
   return (isLDSMemoryBarrierOp(op1) && isLDSMemoryBarrierOp(op2));
 }
+
+bool isGlobalLoadResult(Value value) {
+  return isa_and_nonnull<triton::LoadOp, triton::amdgpu::BufferLoadOp>(
+      value.getDefiningOp());
+}
+
+bool mayNeedGlobalLoadWait(Value value) {
+  if (isGlobalLoadResult(value))
+    return true;
+  auto arg = dyn_cast<BlockArgument>(value);
+  if (!arg)
+    return false;
+
+  Block *block = arg.getOwner();
+  // Follow one incoming edge; do not recurse through forwarding arguments.
+  for (Block *pred : block->getPredecessors()) {
+    auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
+    if (!branch)
+      continue;
+    for (unsigned i = 0; i < branch->getNumSuccessors(); ++i) {
+      if (branch->getSuccessor(i) != block)
+        continue;
+      auto operands = branch.getSuccessorOperands(i);
+      unsigned index = arg.getArgNumber();
+      // Produced arguments have no incoming SSA value to inspect.
+      if (index < operands.size() && !operands.isOperandProduced(index) &&
+          isGlobalLoadResult(operands[index]))
+        return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
+
+bool stopMembarDeferral(Operation *op) {
+  // Include terminator operands: a CFG transfer can become a register copy
+  // even when the first arithmetic consumer appears after the rendezvous.
+  return llvm::any_of(op->getOperands(), mayNeedGlobalLoadWait);
+}
 
 bool membarFilter(Operation *op1, Operation *op2, bool /*op1IsRead*/,
                   bool /*op2IsRead*/, Allocation *allocation,

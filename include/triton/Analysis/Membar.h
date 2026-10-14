@@ -13,6 +13,7 @@
 #include <optional>
 #include <set>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 namespace mlir {
@@ -371,6 +372,11 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
+/// Target scheduling preference for an already-required shared-copy rendezvous.
+/// Return true to stop deferral before the operation. This callback does not
+/// exempt memory conflicts or add synchronization without a pending completion.
+using MembarDeferralStopFn = std::function<bool(Operation *)>;
+
 class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
 public:
   enum class AccessMode { AllSharedAccesses, AllocatorAliasesOnly };
@@ -391,8 +397,10 @@ public:
   MembarAnalysis(Allocation &allocation, MembarFilterFn filter,
                  triton::BufferRegionAnalysis &regions,
                  MembarSliceFilterFn sliceFilter = nullptr,
-                 AccessMode accessMode = AccessMode::AllSharedAccesses)
+                 AccessMode accessMode = AccessMode::AllSharedAccesses,
+                 MembarDeferralStopFn deferralStopPolicy = nullptr)
       : allocation(allocation), filter(std::move(filter)), regions(regions),
+        deferralStopPolicy(std::move(deferralStopPolicy)),
         sliceFilter(std::move(sliceFilter)), accessMode(accessMode),
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
@@ -439,6 +447,7 @@ private:
   BlockInfo getThreadEffects(Operation *op);
   void addThreadDemand(BlockInfo &effects, Operation *op);
 
+  MembarDeferralStopFn deferralStopPolicy;
   MembarSliceFilterFn sliceFilter;
   AccessMode accessMode;
   BufferIndexAnalysis bufferIndexAnalysis;
@@ -451,8 +460,10 @@ private:
 class ModuleMembarAnalysis {
 public:
   ModuleMembarAnalysis(ModuleAllocation &moduleAllocation,
-                       MembarFilterFn filter = nullptr)
-      : moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
+                       MembarFilterFn filter = nullptr,
+                       MembarDeferralStopFn deferralStopPolicy = nullptr)
+      : moduleAllocation(moduleAllocation), filter(std::move(filter)),
+        deferralStopPolicy(std::move(deferralStopPolicy)) {}
 
   void run();
 
@@ -472,13 +483,21 @@ public:
     AnalysisT::runModule(
         moduleAllocation.getModuleOp(), [&](FunctionOpInterface function) {
           auto &allocation = *moduleAllocation.getFuncData(function);
-          return AnalysisT(allocation, filter, regions);
+          // Only the base insertion analysis uses this performance policy.
+          // Specialized backend analyses retain their constructor contracts.
+          if constexpr (std::is_same_v<AnalysisT, MembarAnalysis>)
+            return AnalysisT(allocation, filter, regions, nullptr,
+                             MembarAnalysis::AccessMode::AllSharedAccesses,
+                             deferralStopPolicy);
+          else
+            return AnalysisT(allocation, filter, regions);
         });
   }
 
 private:
   ModuleAllocation &moduleAllocation;
   MembarFilterFn filter;
+  MembarDeferralStopFn deferralStopPolicy;
 };
 
 } // namespace mlir

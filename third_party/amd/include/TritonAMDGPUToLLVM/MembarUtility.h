@@ -39,6 +39,12 @@ namespace mlir::triton::AMD {
 bool membarFilter(Operation *op1, Operation *op2, bool op1IsRead,
                   bool op2IsRead, Allocation *allocation,
                   const AllocationSlice &, const AllocationSlice &);
+
+// Stop rendezvous deferral before a possible global-load wait. Check direct
+// load results and direct incoming loads for block arguments, including branch
+// transfers that may lower to register copies. This is a scheduling heuristic.
+bool stopMembarDeferral(Operation *op);
+
 } // namespace mlir::triton::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_

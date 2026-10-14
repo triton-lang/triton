@@ -1,3 +1,5 @@
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' | FileCheck %s --check-prefix=DEFERRAL
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx950' | FileCheck %s --check-prefix=DEFERRAL
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' | FileCheck %s
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -739,6 +741,140 @@ tt.func @no_barrier_tdm_mbarrier_in_loop(
     // CHECK-NOT: ttg.barrier local
   }
   // CHECK: tt.return
+  tt.return
+}
+}
+
+// -----
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// DEFERRAL-LABEL: @deferral_direct
+// DEFERRAL: ttg.async_wait
+// DEFERRAL-NEXT: ttg.barrier local
+// DEFERRAL-NEXT: arith.addf
+// DEFERRAL-NOT: ttg.barrier local
+// DEFERRAL: tt.return
+tt.func @deferral_direct(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
+  %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %copy = ttg.async_copy_global_to_local %ptrs, %alloc : tensor<128x!tt.ptr<f32>, #layout> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %wait = ttg.async_wait %copy {num = 0 : i32}
+  %sum = arith.addf %data, %data : tensor<128xf32, #layout>
+  %read = ttg.local_load %alloc token %wait : !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable> -> tensor<128xf32, #layout>
+  tt.return
+}
+}
+
+// -----
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// DEFERRAL-LABEL: @deferral_block_arg
+// DEFERRAL: ttg.async_wait
+// DEFERRAL-NEXT: ttg.barrier local
+// DEFERRAL-NEXT: arith.addf
+// DEFERRAL-NOT: ttg.barrier local
+// DEFERRAL: tt.return
+tt.func @deferral_block_arg(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
+  %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %copy = ttg.async_copy_global_to_local %ptrs, %alloc : tensor<128x!tt.ptr<f32>, #layout> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  cf.br ^use(%data : tensor<128xf32, #layout>)
+^use(%arg: tensor<128xf32, #layout>):
+  %wait = ttg.async_wait %copy {num = 0 : i32}
+  %sum = arith.addf %arg, %arg : tensor<128xf32, #layout>
+  %read = ttg.local_load %alloc token %wait : !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable> -> tensor<128xf32, #layout>
+  tt.return
+}
+}
+// -----
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// The branch itself is a potential register-copy use; do not wait until the
+// successor's arithmetic use to rendezvous.
+// DEFERRAL-LABEL: @deferral_branch_transfer
+// DEFERRAL: ttg.async_wait
+// DEFERRAL-NEXT: ttg.barrier local
+// DEFERRAL-NOT: ttg.barrier local
+// DEFERRAL: tt.return
+tt.func @deferral_branch_transfer(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
+  %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %copy = ttg.async_copy_global_to_local %ptrs, %alloc : tensor<128x!tt.ptr<f32>, #layout> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %wait = ttg.async_wait %copy {num = 0 : i32}
+  cf.br ^use(%data : tensor<128xf32, #layout>)
+^use(%arg: tensor<128xf32, #layout>):
+  %sum = arith.addf %arg, %arg : tensor<128xf32, #layout>
+  %read = ttg.local_load %alloc token %wait : !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable> -> tensor<128xf32, #layout>
+  tt.return
+}
+}
+// -----
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// Issuing an independent global load is allowed before the rendezvous.
+// DEFERRAL-LABEL: @deferral_independent_load
+// DEFERRAL: ttg.async_wait
+// DEFERRAL-NEXT: tt.load
+// DEFERRAL-NEXT: ttg.barrier local
+// DEFERRAL-NOT: ttg.barrier local
+// DEFERRAL: tt.return
+tt.func @deferral_independent_load(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
+  %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %copy = ttg.async_copy_global_to_local %ptrs, %alloc : tensor<128x!tt.ptr<f32>, #layout> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %wait = ttg.async_wait %copy {num = 0 : i32}
+  %independent = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
+  %read = ttg.local_load %alloc token %wait : !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable> -> tensor<128xf32, #layout>
+  tt.return
+}
+}
+
+// -----
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// No completion means the performance policy must not create a barrier.
+// DEFERRAL-LABEL: @deferral_without_completion
+// DEFERRAL-NOT: ttg.barrier
+// DEFERRAL: arith.addf
+// DEFERRAL-NOT: ttg.barrier
+// DEFERRAL: tt.return
+tt.func @deferral_without_completion(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
+  %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
+  %sum = arith.addf %data, %data : tensor<128xf32, #layout>
+  tt.return
+}
+}
+
+// -----
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// An explicit rendezvous satisfies completion without a policy-inserted copy.
+// DEFERRAL-LABEL: @deferral_explicit_barrier
+// DEFERRAL: ttg.async_wait
+// DEFERRAL-NEXT: ttg.barrier local
+// DEFERRAL-NEXT: arith.addf
+// DEFERRAL-NOT: ttg.barrier
+// DEFERRAL: tt.return
+tt.func @deferral_explicit_barrier(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #layout>
+  %data = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #layout>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %copy = ttg.async_copy_global_to_local %ptrs, %alloc : tensor<128x!tt.ptr<f32>, #layout> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  %wait = ttg.async_wait %copy {num = 0 : i32}
+  ttg.barrier local
+  %sum = arith.addf %data, %data : tensor<128xf32, #layout>
+  %read = ttg.local_load %alloc token %wait : !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable> -> tensor<128xf32, #layout>
   tt.return
 }
 }
