@@ -214,9 +214,8 @@ public:
     return interWarpScanLayout;
   }
 
-  // Maximum number of register-only totals scanned together. Zero selects the
-  // layout-conversion path.
-  unsigned getInterWarpScanGroupSize() const;
+  // Scan large register-only totals directly from shared memory.
+  bool useGroupedInterWarpScan() const;
   LayoutConversionScratchConfig getGroupedInterWarpScratchConfig() const;
 
   unsigned
