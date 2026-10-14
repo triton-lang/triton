@@ -127,8 +127,7 @@ def topk(
     n_rows: Optional[int] = None,
     all_gather: bool = False,
     symm_mem_pool: SymmetricMemoryPool | None = None,
-    *,
-    disable_lsr: bool | None = None,
+    disable_lsr: Optional[bool] = None,
 ):
     """
     Computes the top-k values and indices along a specified dimension of a tensor.
