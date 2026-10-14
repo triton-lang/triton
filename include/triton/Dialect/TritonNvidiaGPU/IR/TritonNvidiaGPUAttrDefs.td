@@ -72,6 +72,9 @@ def TTNG_TMEMLoadReduceModifierEnum : EnumAttr<TritonNvidiaGPU_Dialect, TTNG_TME
   let assemblyFormat = "`<` $value `>`";
 }
 
+def TTNG_TMEMRowOpEnum : EnumAttr<TritonNvidiaGPU_Dialect, TTNG_TMEMRowOpAttr, "rowOp"> {
+  let assemblyFormat = "`<` $value `>`";
+}
 def TTNG_TensorMemoryScalesBlockRepOrderEnum
     : EnumAttr<TritonNvidiaGPU_Dialect,
                TTNG_TensorMemoryScalesBlockRepOrderAttr, "blockRepOrder"> {

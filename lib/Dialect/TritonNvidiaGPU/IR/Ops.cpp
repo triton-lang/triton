@@ -1306,6 +1306,228 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
 
 bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
 
+// -- TCGen5MMASpOp --
+LogicalResult TCGen5MMASpOp::verify() {
+  if (getTwoCtas())
+    return emitOpError("tcgen05.mma.sp two_ctas mode not yet supported");
+  if (failed(verifyTcgen05Target(getOperation())))
+    return failure();
+  for (auto barrier : getBarriers()) {
+    if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
+      return failure();
+  }
+
+  Type atype = getA().getType().getElementType();
+  Type btype = getB().getType().getElementType();
+  Type dtype = getD().getType().getElementType();
+  auto isATypeSupported = [](Type type) {
+    return type.isF16() || type.isBF16() ||
+           isa<Float8E4M3FNType, Float8E5M2Type>(type);
+  };
+  if (!isATypeSupported(atype))
+    return emitOpError("unsupported LHS operand dtype: ") << atype;
+  if (!isATypeSupported(btype))
+    return emitOpError("unsupported RHS operand dtype: ") << btype;
+  if (failed(verifyMMADType(*this, atype, btype, dtype)))
+    return failure();
+
+  auto aEnc = getA().getType().getEncoding();
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
+           TensorMemoryEncodingAttr>(aEnc))
+    return emitOpError(
+        "LHS operand must have a NVMMAShared or TensorMemory encoding");
+  auto bEnc = getB().getType().getEncoding();
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(bEnc))
+    return emitOpError("RHS operand must have a NVMMAShared encoding");
+
+  auto dType = getD().getType();
+  auto dEnc = dyn_cast<TensorMemoryEncodingAttr>(dType.getEncoding());
+  if (!dEnc)
+    return emitOpError("Return operand must have a TensorMemory encoding");
+  if (dEnc.getFp4Padded())
+    return emitOpError("Accumulator must not be fp4_padded");
+  if (dEnc.getColStride() != 32 / dType.getElementTypeBitWidth())
+    return emitOpError("The col stride of the return operand must be 32 / ")
+           << dType.getElementTypeBitWidth() << " but got "
+           << dEnc.getColStride();
+  auto ctaShape =
+      getShapePerCTA(dEnc.getCGALayout().getCTASplitNum(), dType.getShape());
+  auto instrSizeN = std::min<unsigned>(dEnc.getBlockN(), ctaShape[1]);
+  if (instrSizeN > 256)
+    return emitOpError("The block size of the return operand must be less than "
+                       "or equal to 256");
+
+  auto spMetaType = getSpMeta().getType();
+  auto spMetaEnc = dyn_cast<TensorMemoryEncodingAttr>(spMetaType.getEncoding());
+  if (!spMetaEnc)
+    return emitOpError("sp_meta must have a TensorMemory encoding");
+  if (!spMetaType.getElementType().isInteger(32))
+    return emitOpError("sp_meta element type must be i32");
+  if (!(spMetaEnc.getColStride() == 1 || spMetaEnc.getColStride() == 2))
+    return emitOpError("The col stride of sp_meta must be 1 or 2");
+
+  if (auto tmem = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
+    if (tmem.getColStride() != 1)
+      return emitOpError("The col stride of the LHS operand must be 1");
+    if (tmem.getFp4Padded())
+      return emitOpError(
+          "fp4_padded tensor memory LHS is only supported by scaled MMA");
+  }
+
+  auto aShape = getA().getType().getShape();
+  auto bShape = getB().getType().getShape();
+  auto dShape = dType.getShape();
+  auto spMetaShape = spMetaType.getShape();
+  if (aShape.size() != 2 || bShape.size() != 2 || dShape.size() != 2 ||
+      spMetaShape.size() != 2)
+    return emitOpError("all operands must be rank-2 memdesc tensors");
+  if (ShapedType::isDynamic(aShape[0]) || ShapedType::isDynamic(aShape[1]) ||
+      ShapedType::isDynamic(bShape[0]) || ShapedType::isDynamic(bShape[1]) ||
+      ShapedType::isDynamic(dShape[0]) || ShapedType::isDynamic(dShape[1]) ||
+      ShapedType::isDynamic(spMetaShape[0]) ||
+      ShapedType::isDynamic(spMetaShape[1])) {
+    return emitOpError("all operand shapes must be static");
+  }
+
+  int64_t m = aShape[0];
+  int64_t packedK = aShape[1];
+  int64_t k = bShape[0];
+  int64_t n = bShape[1];
+  if (packedK * 2 != k)
+    return emitOpError("expected A.shape[1] * 2 to equal B.shape[0], got ")
+           << packedK << " * 2 vs " << k;
+  if (dShape[0] != m || dShape[1] != n)
+    return emitOpError("expected D shape [M, N] = [")
+           << m << ", " << n << "], got [" << dShape[0] << ", " << dShape[1]
+           << "]";
+  int64_t expectedMetaN = (k + 31) / 32;
+  if (spMetaShape[0] != m || spMetaShape[1] != expectedMetaN)
+    return emitOpError("expected sp_meta shape [M, ceil(K/32)] = [")
+           << m << ", " << expectedMetaN << "], got [" << spMetaShape[0] << ", "
+           << spMetaShape[1] << "]";
+
+  auto aSplit = getCTASplitNum(aEnc);
+  auto bSplit = getCTASplitNum(bEnc);
+  auto spMetaSplit = getCTASplitNum(spMetaEnc);
+  if (aSplit[1] != 1)
+    return emitOpError("LHS CTASplit along K should be 1, but got ")
+           << aSplit[1];
+  if (bSplit[0] != 1)
+    return emitOpError("RHS CTASplit along K should be 1, but got ")
+           << bSplit[0];
+  if (spMetaSplit[1] != 1)
+    return emitOpError("sp_meta CTASplit along K should be 1, but got ")
+           << spMetaSplit[1];
+
+  if (dEnc.getTwoCTAs() != getTwoCtas()) {
+    return emitOpError("The returned value's encoding must have twoCTA=")
+           << getTwoCtas() << " to be used in a "
+           << (getTwoCtas() ? "twoCTA" : "non-twoCTA") << " kernel";
+  }
+  if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
+    if (tmemEnc.getTwoCTAs() != getTwoCtas()) {
+      return emitOpError("The LHS operand's encoding must have twoCTA=")
+             << getTwoCtas() << " to be used in a "
+             << (getTwoCtas() ? "twoCTA" : "non-twoCTA") << " kernel";
+    }
+  }
+  if (spMetaEnc.getTwoCTAs() != getTwoCtas()) {
+    return emitOpError("sp_meta encoding must have twoCTA=")
+           << getTwoCtas() << " to be used in a "
+           << (getTwoCtas() ? "twoCTA" : "non-twoCTA") << " kernel";
+  }
+
+  return success();
+}
+
+void TCGen5MMASpOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  APInt useD;
+  if (!matchPattern(getUseD(), m_ConstantInt(&useD)) || !useD.isZero()) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getDMutable(),
+                         TensorMemory::get());
+  }
+  effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
+                       TensorMemory::get());
+
+  if (isa<SharedMemorySpaceAttr>(getA().getType().getMemorySpace())) {
+    effects.push_back(
+        makeShared<MemoryEffects::Read>(&getAMutable(), SharedKind::Async));
+  } else {
+    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
+                         TensorMemory::get());
+  }
+  effects.push_back(
+      makeShared<MemoryEffects::Read>(&getBMutable(), SharedKind::Async));
+  effects.emplace_back(MemoryEffects::Read::get(), &getSpMetaMutable(),
+                       TensorMemory::get());
+  for (auto &barrierMutable : getBarriersMutable())
+    effects.push_back(
+        makeShared<MemoryEffects::Write>(&barrierMutable, SharedKind::Barrier));
+}
+
+bool TCGen5MMASpOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+  int64_t aK = aShape[aShape.size() - 1];
+  int64_t bK = bShape[bShape.size() - 2];
+  if (ShapedType::isDynamic(aK) || ShapedType::isDynamic(bK))
+    return true;
+  return aK * 2 == bK;
+}
+
+Value TCGen5MMASpOp::useAccumulator() { return getUseD(); }
+
+void TCGen5MMASpOp::setUseAccumulator(Value flag) {
+  getUseDMutable().assign(flag);
+}
+
+ValueRange TCGen5MMASpOp::getCompletionBarriers() { return getBarriers(); }
+ValueRange TCGen5MMASpOp::getCompletionBarrierPreds() {
+  return getBarrierPreds();
+}
+
+SmallVector<Value> TCGen5MMASpOp::getCompletionDescs() { return {}; }
+
+bool TCGen5MMASpOp::getMulticast() { return false; }
+
+void TCGen5MMASpOp::addCompletionBarrier(Value barrier, Value pred) {
+  getBarrierPredsMutable().append(pred);
+  getBarriersMutable().append(barrier);
+}
+
+TypedValue<MemDescType> TCGen5MMASpOp::getAccumulator() { return getD(); }
+
+void TCGen5MMASpOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
+
+Value TCGen5MMASpOp::getPredicate() { return getPred(); }
+
+void TCGen5MMASpOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
+
+Value TCGen5MMASpOp::getPredicateOperand() { return getPredicate(); }
+
+void TCGen5MMASpOp::setPredicateOperand(Value pred) { setPredicate(pred); }
+
+Type TCGen5MMASpOp::getPredicateOperandTypeLike() {
+  return getPred().getType();
+}
+
+void TCGen5MMASpOp::build(OpBuilder &builder, OperationState &state, Type token,
+                          Value a, Value b, Value d, Value accDep, Value spMeta,
+                          Value useD, Value pred, bool twoCtas,
+                          ValueRange barriers, ValueRange barrierPreds,
+                          bool isAsync) {
+  if (!barriers.empty()) {
+    isAsync = true;
+  }
+  build(builder, state, token, a, b, d, accDep, spMeta, useD, pred, barriers,
+        barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
+        twoCtas ? builder.getUnitAttr() : UnitAttr());
+}
+
+bool TCGen5MMASpOp::isAsync() { return getIsAsync(); }
+
 // -- TCGen5CommitOp --
 LogicalResult TCGen5CommitOp::canonicalize(TCGen5CommitOp op,
                                            PatternRewriter &rewriter) {
@@ -1764,6 +1986,201 @@ LogicalResult TMEMLoadOp::verify() {
   }
 
   return triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(), getType());
+}
+
+RankedTensorType
+TMEMLoadSparsifyOp::inferMDataType(RankedTensorType cdataType) {
+  if (!cdataType || cdataType.getRank() != 2)
+    return RankedTensorType();
+
+  int64_t m = cdataType.getShape()[0];
+  int64_t cdataN = cdataType.getShape()[1];
+  int64_t mdataN =
+      ShapedType::isDynamic(cdataN) ? ShapedType::kDynamic : (cdataN + 15) / 16;
+  return RankedTensorType::get({m, mdataN},
+                               IntegerType::get(cdataType.getContext(), 32),
+                               cdataType.getEncoding());
+}
+
+RankedTensorType TMEMLoadSparsifyOp::inferRedType(RankedTensorType cdataType) {
+  if (!cdataType || cdataType.getRank() != 2)
+    return RankedTensorType();
+  auto parentEnc =
+      dyn_cast<triton::gpu::DistributedEncodingTrait>(cdataType.getEncoding());
+  if (!parentEnc)
+    return RankedTensorType();
+
+  auto sliceEnc =
+      triton::gpu::SliceEncodingAttr::get(cdataType.getContext(), 1, parentEnc);
+  return RankedTensorType::get({cdataType.getShape()[0]},
+                               cdataType.getElementType(), sliceEnc);
+}
+
+LogicalResult SpDecompressOp::verify() {
+  auto cdataTy = getCdata().getType();
+  auto mdataTy = getMdata().getType();
+  auto resultTy = getResult().getType();
+
+  if (cdataTy.getRank() != 2)
+    return emitOpError("cdata must be a 2D tensor");
+  if (mdataTy.getRank() != 2)
+    return emitOpError("mdata must be a 2D tensor");
+  if (resultTy.getRank() != 2)
+    return emitOpError("result must be a 2D tensor");
+
+  auto cdataElemTy = cdataTy.getElementType();
+  if (!cdataElemTy.isF16() && !cdataElemTy.isBF16() &&
+      !isa<Float8E5M2Type, Float8E4M3FNType>(cdataElemTy))
+    return emitOpError("cdata element type must be f16, bf16, float8_e5m2, or "
+                       "float8_e4m3fn");
+  if (resultTy.getElementType() != cdataElemTy)
+    return emitOpError("result element type must match cdata element type");
+  if (!mdataTy.getElementType().isInteger(32))
+    return emitOpError("mdata element type must be i32");
+
+  if (!isa<triton::gpu::DistributedEncodingTrait>(cdataTy.getEncoding()))
+    return emitOpError("cdata must use a distributed encoding");
+  if (!isa<triton::gpu::DistributedEncodingTrait>(mdataTy.getEncoding()))
+    return emitOpError("mdata must use a distributed encoding");
+  if (!isa<triton::gpu::DistributedEncodingTrait>(resultTy.getEncoding()))
+    return emitOpError("result must use a distributed encoding");
+
+  auto cdataShape = cdataTy.getShape();
+  auto mdataShape = mdataTy.getShape();
+  auto resultShape = resultTy.getShape();
+  if (ShapedType::isDynamic(cdataShape[0]) ||
+      ShapedType::isDynamic(cdataShape[1]) ||
+      ShapedType::isDynamic(mdataShape[0]) ||
+      ShapedType::isDynamic(mdataShape[1]) ||
+      ShapedType::isDynamic(resultShape[0]) ||
+      ShapedType::isDynamic(resultShape[1])) {
+    return emitOpError("cdata/mdata/result shapes must be static");
+  }
+
+  int64_t m = cdataShape[0];
+  int64_t cdataN = cdataShape[1];
+  if (cdataN < 2)
+    return emitOpError("compressed N dimension must be >= 2");
+  if (cdataN % 2 != 0)
+    return emitOpError("compressed N dimension must be divisible by 2");
+
+  int64_t resultN = cdataN * 2;
+  if (resultN < 4)
+    return emitOpError("result N dimension must be >= 4");
+  if (resultN % 4 != 0)
+    return emitOpError("result N dimension must be divisible by 4");
+
+  if (resultShape[0] != m || resultShape[1] != resultN)
+    return emitOpError("result shape must be [M, 2 * N_compressed]");
+
+  int64_t expectedMDataN = (resultN + 31) / 32;
+  if (mdataShape[0] != m || mdataShape[1] != expectedMDataN)
+    return emitOpError("mdata shape must be [M, ceil(N_dense/32)]");
+
+  auto verifyRegDistribution = [&](RankedTensorType ty,
+                                   StringRef name) -> LogicalResult {
+    auto kReg = StringAttr::get(ty.getContext(), "register");
+    int dimM = 0, dimN = 1;
+    auto regDims =
+        toLinearEncoding(ty).basesPerDim(kReg, /*skipBroadcast=*/true);
+    if (regDims[dimM] != 1 ||
+        regDims[dimN] != toLinearLayout(ty).getOutDimSizes().begin()[dimN]) {
+      return emitOpError() << name << " requires N dimension in registers and "
+                           << "M dimension not sharded across threads";
+    }
+    return success();
+  };
+
+  if (failed(verifyRegDistribution(cdataTy, "cdata")))
+    return failure();
+  if (failed(verifyRegDistribution(mdataTy, "mdata")))
+    return failure();
+  if (failed(verifyRegDistribution(resultTy, "result")))
+    return failure();
+
+  auto kReg = StringAttr::get(getContext(), "register");
+  int64_t cElemsPerThread =
+      toLinearEncoding(cdataTy).basesPerDim(kReg, /*skipBroadcast=*/true)[1];
+  int64_t elemBits = cdataElemTy.getIntOrFloatBitWidth();
+  int64_t elemsPerReg = 32 / elemBits;
+  if (cElemsPerThread % elemsPerReg != 0)
+    return emitOpError("cdata requires elements per thread divisible by "
+                       "elements per 32-bit register");
+  int64_t cRegsPerThread = cElemsPerThread / elemsPerReg;
+  int64_t rem = cRegsPerThread % 8;
+  if (!(rem == 0 || rem == 1 || rem == 2 || rem == 4))
+    return emitOpError("unsupported cdata registers per thread: expected "
+                       "num_cdata_regs % 8 in {0, 1, 2, 4}");
+
+  return success();
+}
+
+LogicalResult TMEMLoadSparsifyOp::verify() {
+  if (getDep() || getToken())
+    return emitOpError("tmem_load_sparsify does not support tokens yet; token "
+                       "support will be added when RemoveTMEMTokens pass is "
+                       "updated");
+
+  auto srcTy = getSrc().getType();
+  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(srcTy.getMemorySpace()))
+    return emitOpError("source must be a tensor memory buffer");
+
+  auto srcEnc = dyn_cast<TensorMemoryEncodingAttr>(srcTy.getEncoding());
+  if (!srcEnc)
+    return emitOpError("source must use tensor memory encoding");
+  if (srcEnc.getColStride() != 1)
+    return emitOpError("source encoding must be .32x32b compatible "
+                       "(colStride = 1)");
+
+  if (!srcTy.getElementType().isF32())
+    return emitOpError("source element type must be f32");
+
+  auto srcShape = srcTy.getShape();
+  if (srcShape.size() != 2)
+    return emitOpError("source must be a 2D tensor");
+  if (ShapedType::isDynamic(srcShape[0]) || ShapedType::isDynamic(srcShape[1]))
+    return emitOpError("source shape must be static");
+  int64_t m = srcShape[0];
+  int64_t n = srcShape[1];
+  if (n < 4)
+    return emitOpError("N must be >= 4");
+  if (n % 4 != 0)
+    return emitOpError("N must be divisible by 4");
+
+  auto cdataTy = getCDataType();
+  if (cdataTy.getRank() != 2)
+    return emitOpError("cdata must be a 2D tensor");
+  if (!cdataTy.getElementType().isF32())
+    return emitOpError("cdata element type must be f32");
+  if (cdataTy.getShape()[0] != m || cdataTy.getShape()[1] != n / 2)
+    return emitOpError("cdata shape must be [M, N/2]");
+  if (!isa<triton::gpu::DistributedEncodingTrait>(cdataTy.getEncoding()))
+    return emitOpError("cdata must use a distributed encoding");
+
+  auto mdataTy = getMDataType();
+  if (mdataTy.getRank() != 2)
+    return emitOpError("mdata must be a 2D tensor");
+  if (!mdataTy.getElementType().isInteger(32))
+    return emitOpError("mdata element type must be i32");
+  if (mdataTy.getShape()[0] != m || mdataTy.getShape()[1] != (n + 31) / 32)
+    return emitOpError("mdata shape must be [M, ceil(N/32)]");
+  if (!isa<triton::gpu::DistributedEncodingTrait>(mdataTy.getEncoding()))
+    return emitOpError("mdata must use a distributed encoding");
+
+  bool hasRed = getRed() != nullptr;
+  bool useNaN = getNaN().value_or(false);
+  if (useNaN && !hasRed)
+    return emitOpError("'NaN' requires reduction result");
+
+  if (hasRed) {
+    auto redTy = getRed().getType();
+    auto expectedRedTy = inferRedType(cdataTy);
+    if (!expectedRedTy || redTy != expectedRedTy)
+      return emitOpError("red type must be [M] with slice encoding derived "
+                         "from cdata");
+  }
+
+  return success();
 }
 
 // -- TMEMAllocOp --

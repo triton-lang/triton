@@ -142,9 +142,11 @@ static scaleKind getScaleKind(ttng::TCGen5MMAScaledOp op, int blockK) {
   return scaleKind::e8m0;
 }
 
-static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
-                                  ttng::TCGen5MMAOp op, int M, int N,
-                                  bool transposeA, bool transposeB, int kSize) {
+template <typename OpTy>
+static Value createInstDescriptor(ConversionPatternRewriter &rewriter, OpTy op,
+                                  int M, int N, bool transposeA,
+                                  bool transposeB, int kSize,
+                                  int sparsitySelector = -1) {
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // Name reserved fields so bit_cast never reads padding bits.
@@ -179,8 +181,11 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
       return 1;
     // For 8-bit integer types, signed arithmetic is 1, unsigned arithmetic is
     // 0.
-    if (type.isInteger(8))
-      return op.getIsUnsigned() ? 0 : 1;
+    if (type.isInteger(8)) {
+      auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op.getOperation());
+      assert(mmaOp && "integer operands are only supported by dense MMA");
+      return mmaOp.getIsUnsigned() ? 0 : 1;
+    }
     llvm_unreachable("Unsupported type.");
   };
   static_assert(sizeof(TCGen5InstructionDescriptor) == 4,
@@ -193,13 +198,26 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   desc.aType = getTypeEncoding(op.getA().getType().getElementType());
   desc.bType = getTypeEncoding(op.getB().getType().getElementType());
   Type dstElType = op.getD().getType().getElementType();
+  if (sparsitySelector >= 0) {
+    assert(dstElType.isF16() || dstElType.isF32());
+    desc.sparsitySelector = sparsitySelector;
+    desc.sparsity = 1;
+    // Per PTX spec: for sparse MMA, kSize must always be 0.
+    // The sparse K dimension is implicitly 2x the dense K for each kSize
+    // value:
+    //   kSize=0: f16 sparse K=32, f8f6f4 sparse K=64
+    // kSize=1 has NO sparse variant for any kind.
+    // So desc.kSize stays 0 (initialized to 0 by desc.descriptor = 0).
+  } else {
+    assert(dstElType.isF16() || dstElType.isF32() || dstElType.isInteger(32));
+    if (kSize == 64)
+      desc.kSize = 1;
+  }
   if (dstElType.isInteger(32)) {
     desc.dType = 2;
   } else {
     desc.dType = dstElType.isF16() ? 0 : 1;
   }
-  if (kSize == 64)
-    desc.kSize = 1;
 
   return b.int_val(32, std::bit_cast<uint32_t>(desc));
 }
@@ -363,6 +381,7 @@ struct MMAInstOperands {
   Value descriptor;
   Value scaleA;
   Value scaleB;
+  std::optional<MemDescOperand> sparseMeta = std::nullopt;
 };
 
 std::string getCollectorModifier(CollectorAction reuse, StringRef operand) {
@@ -388,17 +407,26 @@ void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
                    Value pred, const MMAInstOperands &inst, Value useInitAcc,
                    bool twoCTAs, OperandReuse reuse) {
   PTXBuilder ptxBuilder;
-  std::string opcode =
-      "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-      ".kind::" + kind.str() + getCollectorModifier(reuse.a, "a") +
-      getCollectorModifier(reuse.b, "b");
+  std::string opcode = "tcgen05.mma";
+  if (inst.sparseMeta)
+    opcode += ".sp";
+  opcode += ".cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
+            ".kind::" + kind.str() + getCollectorModifier(reuse.a, "a") +
+            getCollectorModifier(reuse.b, "b");
   auto *accOp = ptxBuilder.newAddrOperand(d.base, "r", *d.offset);
   auto *aOp = a.offset ? ptxBuilder.newAddrOperand(a.base, "r", *a.offset)
                        : ptxBuilder.newOperand(a.base, "l");
   auto *bOp = ptxBuilder.newOperand(b, "l");
   auto *instDescOp = ptxBuilder.newOperand(inst.descriptor, "r");
-  SmallVector<PTXBuilder::Operand *> operands{accOp, aOp, bOp, instDescOp};
+  SmallVector<PTXBuilder::Operand *> operands{accOp, aOp, bOp};
+  if (inst.sparseMeta) {
+    operands.push_back(ptxBuilder.newAddrOperand(inst.sparseMeta->base, "r",
+                                                 *inst.sparseMeta->offset));
+  }
+  operands.push_back(instDescOp);
   assert(bool(inst.scaleA) == bool(inst.scaleB));
+  assert((!inst.sparseMeta || !inst.scaleA) &&
+         "sparse MMA does not take scale operands");
   if (inst.scaleA) {
     operands.push_back(ptxBuilder.newAddrOperand(inst.scaleA, "r"));
     operands.push_back(ptxBuilder.newAddrOperand(inst.scaleB, "r"));
@@ -478,6 +506,7 @@ struct DotConversion {
 
   int getKSize(int k) const { return getKOffset(k + 1) - getKOffset(k); }
 
+  bool sparseA = false;
   int numBitsPerElementA;
   int numBitsPerElementB;
   StringRef kind;
@@ -551,7 +580,11 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   // In A * B = C
   // For M=64 twoCTAs, B and C have the same split and A has a split half of C
   // along M.
-  SmallVector<unsigned> aOperandShape = {mmaSizeM, mmaSizeK};
+  if (op.sparseA) {
+    assert(mmaSizeK % 2 == 0 && "sparse MMA expects even mmaSizeK");
+  }
+  SmallVector<unsigned> aOperandShape = {mmaSizeM,
+                                         op.sparseA ? mmaSizeK / 2 : mmaSizeK};
   // For M=128 twoCTAs, A and C have the same split and B has a split half of C
   // along N.
   SmallVector<unsigned> bOperandShape = {mmaSizeK,
@@ -607,8 +640,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   // path. The same lifetime rule applies to B when both collectors are used.
   // M=64 uses half the datapath and can interleave N tiles across TMEM lane
   // alignments 0 and 16. A collector cannot be reused across that change.
-  bool reuseA =
-      mmaSizeM == 128 && numRepN > 1 && targetFeatures.supportsReuseA();
+  bool reuseA = !op.sparseA && mmaSizeM == 128 && numRepN > 1 &&
+                targetFeatures.supportsReuseA();
   bool reuseBoth = reuseA && reuseB;
 
   // Dimensions are M, N, K. Keep the original traversal when neither
@@ -667,8 +700,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     auto [m, n, k] = indices;
     MemDescOperand accAddress =
         dLoader.tmemLoad(m * mmaSizeM, n * mmaSizeN, rewriter, loc);
-    MemDescOperand a = aLoader->memLoad(m * aOperandShape[0], op.getKOffset(k),
-                                        rewriter, loc, op.getKSize(k));
+    int aKOffset = op.getKOffset(k) / (op.sparseA ? 2 : 1);
+    int aKSize = op.getKSize(k) / (op.sparseA ? 2 : 1);
+    MemDescOperand a =
+        aLoader->memLoad(m * aOperandShape[0], aKOffset, rewriter, loc, aKSize);
     Value b = bLoader->smemLoad(op.getKOffset(k), n * bOperandShape[1],
                                 rewriter, loc, op.getKSize(k));
     Value useInitAcc = k == 0 ? useDFlag : tb.i1_val(1);
@@ -748,6 +783,85 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
                         adaptor.getD(), adaptor.getUseD(), adaptor.getPred(),
                         adaptor.getBarriers(), adaptor.getBarrierPreds(),
                         twoCTAs, commitDescs, targetFeatures, dot);
+}
+
+LogicalResult convertSparseDot(const LLVMTypeConverter &typeConverter,
+                               ConversionPatternRewriter &rewriter,
+                               Location loc, ttng::TCGen5MMASpOp op,
+                               ttng::TCGen5MMASpOpAdaptor &adaptor,
+                               const ttng::TargetFeatures &targetFeatures) {
+  MemDescType aTensorTy = op.getA().getType();
+  MemDescType bTensorTy = op.getB().getType();
+  MemDescType dTensorTy = op.getD().getType();
+  MemDescType spMetaTensorTy = op.getSpMeta().getType();
+  bool twoCTAs = ttng::getModuleTwoCTAs(op);
+  assert(twoCTAs == op.getTwoCtas());
+  if (twoCTAs)
+    return rewriter.notifyMatchFailure(op, "two-CTA sparse MMA is unsupported");
+
+  DotConversion dot;
+  Type srcElementTy = aTensorTy.getElementType();
+  if (srcElementTy.isF16() || srcElementTy.isBF16()) {
+    dot.kind = "f16";
+  } else if (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(srcElementTy)) {
+    dot.kind = "f8f6f4";
+  } else {
+    return rewriter.notifyMatchFailure(op, "unsupported sparse MMA type");
+  }
+
+  dot.blockK = bTensorTy.getDimSize(0);
+  // Sparse tcgen05.mma.sp: per PTX spec Table 51 (instruction descriptor),
+  // the kSize bit for sparse maps differently than dense:
+  //   .kind::f16:   kSize=0 → Dense K=16 / Sparse K=32
+  //   .kind::f8f6f4: kSize=0 → Dense K=32 / Sparse K=64
+  //                  kSize=1 → Dense K=64 (NO sparse variant!)
+  // So for sparse, kSize must always be 0, and mmaSizeK is the SPARSE K size:
+  //   f16/bf16: mmaSizeK = 32 (sparse K=32, kSize=0)
+  //   fp8:      mmaSizeK = 64 (sparse K=64, kSize=0)
+  dot.mmaSizeK = 512 / aTensorTy.getElementTypeBitWidth();
+  dot.sparseA = true;
+  dot.numBitsPerElementA = aTensorTy.getElementTypeBitWidth();
+  dot.numBitsPerElementB = bTensorTy.getElementTypeBitWidth();
+
+  DotOpMmaV5TmemLoader spMetaLoader = DotOpMmaV5TmemLoader::build(
+      loc, rewriter, spMetaTensorTy, adaptor.getSpMeta(),
+      spMetaTensorTy.getElementTypeBitWidth());
+  dot.getInstOperands = [&](const DotConversion::InstDesc &desc, int m, int,
+                            int k) -> MMAInstOperands {
+    // For 2:4 sparsity: metadata is organized in TMEM sub-columns.
+    // For .kind::f16 (16-bit): each selector covers 32 dense K columns.
+    //   Selectors 0 and 1 cycle within the first 2 metadata TMEM columns.
+    //   For K > 64, advance the metadata base by 2 columns per pair of tiles.
+    // For .kind::f8f6f4 (8-bit): selector must be 0, each TMEM column covers
+    //   64 dense K columns. Advance base by 1 column per tile.
+    int elemBits = aTensorTy.getElementTypeBitWidth();
+    int kTile = dot.getKOffset(k) / dot.mmaSizeK;
+    int sparsitySelector;
+    int metaColOffset;
+    if (elemBits <= 8) {
+      // fp8: selector always 0. Each tile covers mmaSizeK=64 dense elements
+      // which spans mmaSizeK/32 = 2 metadata columns. Advance by 2 per tile.
+      sparsitySelector = 0;
+      metaColOffset = kTile * (dot.mmaSizeK / 32);
+    } else {
+      // f16/bf16: selector alternates 0/1, advance base every 2 tiles
+      sparsitySelector = kTile & 1;
+      metaColOffset = (kTile / 2) * 2;
+    }
+    int row = m * desc.mmaSizeM;
+    MemDescOperand spMeta =
+        spMetaLoader.tmemLoad(row, metaColOffset, rewriter, loc);
+    Value instDescriptor = createInstDescriptor(
+        rewriter, op, desc.mmaSizeM, desc.mmaSizeN, desc.transA, desc.transB,
+        dot.mmaSizeK, sparsitySelector);
+    return {instDescriptor, {}, {}, spMeta};
+  };
+
+  return convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
+                        adaptor.getA(), adaptor.getB(), dTensorTy,
+                        adaptor.getD(), adaptor.getUseD(), adaptor.getPred(),
+                        adaptor.getBarriers(), adaptor.getBarrierPreds(),
+                        twoCTAs, ValueRange{}, targetFeatures, dot);
 }
 
 int64_t getFormatBitSize(ScaleDotElemType type) {
@@ -984,6 +1098,29 @@ private:
   ttng::TargetFeatures targetFeatures;
 };
 
+struct TCGen5MMASpOpConversion
+    : public ConvertOpToLLVMPattern<ttng::TCGen5MMASpOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  TCGen5MMASpOpConversion(LLVMTypeConverter &converter, PatternBenefit benefit,
+                          const ttng::TargetFeatures &targetFeatures)
+      : ConvertOpToLLVMPattern<ttng::TCGen5MMASpOp>(converter, benefit),
+        targetFeatures(targetFeatures) {}
+
+  LogicalResult
+  matchAndRewrite(ttng::TCGen5MMASpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (failed(convertSparseDot(*getTypeConverter(), rewriter, op.getLoc(), op,
+                                adaptor, targetFeatures)))
+      return failure();
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  ttng::TargetFeatures targetFeatures;
+};
+
 struct TCGen5CommitOpConversion
     : public ConvertOpToLLVMPattern<ttng::TCGen5CommitOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -1024,8 +1161,9 @@ void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit,
                                       const TargetInfo &targetInfo) {
-  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion>(
-      typeConverter, benefit, targetInfo.getTargetFeatures());
+  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion,
+               TCGen5MMASpOpConversion>(typeConverter, benefit,
+                                        targetInfo.getTargetFeatures());
   patterns.add<TCGen5CommitOpConversion>(typeConverter, benefit);
 }
 

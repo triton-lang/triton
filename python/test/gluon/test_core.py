@@ -3,6 +3,7 @@ import math
 import pytest
 import re
 from collections import Counter
+import itertools
 from itertools import product
 
 import triton
@@ -52,6 +53,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     clc,
 )
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+import triton._C.libtriton.gluon_ir as gluon_ir
 from triton._C.libtriton.gluon_ir import make_cga_layout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
@@ -6816,6 +6818,512 @@ def test_tmem_reduction(red_op, use_abs, propagate_nan, M, N, num_warps):
     # Verify reduction output
     # Use equal_nan=True when testing NaN propagation
     torch.testing.assert_close(expected_red, red_output, atol=1e-5, rtol=1e-5, equal_nan=use_nan)
+
+
+# --- TMEM Sparsify Tests ---
+
+
+def _rowop_to_is_max(row_op):
+    if row_op == gluon_ir.TMEM_ROWOP.MAX:
+        return True
+    if row_op == gluon_ir.TMEM_ROWOP.MIN:
+        return False
+    raise ValueError(f"Unsupported rowOp: {row_op}")
+
+
+def torch_reference_tmem_load_sparsify(x, row_op, use_abs=False):
+    """Build full reference ``(c_ref, m_ref)`` for ``tmem.load_sparsify``."""
+    is_max = _rowop_to_is_max(row_op)
+    x_cpu = x.cpu()
+    m, n = x_cpu.shape
+    c_ref = torch.empty((m, n // 2), dtype=x_cpu.dtype)
+    m_cols = (n + 31) // 32
+    m_ref = torch.zeros((m, m_cols), dtype=torch.int32)
+
+    def pick_extreme(indices, scores):
+        if is_max:
+            return max(indices, key=lambda i: (float(scores[i]), -i))
+        return min(indices, key=lambda i: (float(scores[i]), i))
+
+    for row in range(m):
+        m_row = [0] * m_cols
+        for group in range(n // 4):
+            values = x_cpu[row, group * 4:(group + 1) * 4]
+            scores = torch.abs(values) if use_abs else values
+            nan_indices = torch.nonzero(torch.isnan(values), as_tuple=False).flatten().tolist()
+
+            if len(nan_indices) >= 2:
+                selected = nan_indices[:2]
+            elif len(nan_indices) == 1:
+                finite_indices = [i for i in range(4) if i != nan_indices[0]]
+                selected = [nan_indices[0], pick_extreme(finite_indices, scores)]
+            else:
+                ranked = sorted(range(4), key=lambda i: (-float(scores[i]), i) if is_max else (float(scores[i]), i))
+                selected = ranked[:2]
+
+            idx0, idx1 = sorted(selected)
+            c_ref[row, group * 2] = values[idx0]
+            c_ref[row, group * 2 + 1] = values[idx1]
+
+            nibble = idx0 | (idx1 << 2)
+            m_col = group // 8
+            m_shift = (group % 8) * 4
+            m_row[m_col] |= nibble << m_shift
+
+        for col, packed in enumerate(m_row):
+            if packed >= (1 << 31):
+                packed -= 1 << 32
+            m_ref[row, col] = packed
+
+    return c_ref, m_ref
+
+
+def torch_validate_tmem_load_sparsify(x, cdata, mdata, row_op, use_abs=False):
+    c_ref, m_ref = torch_reference_tmem_load_sparsify(x, row_op, use_abs)
+    c_cpu = cdata.cpu()
+    m_cpu = mdata.cpu()
+    torch.testing.assert_close(c_cpu, c_ref, atol=0, rtol=0, equal_nan=True)
+    torch.testing.assert_close(m_cpu, m_ref, atol=0, rtol=0)
+
+
+def torch_reference_tmem_load_sparsify_red(x, row_op, use_abs=False):
+    is_max = _rowop_to_is_max(row_op)
+    red_input = torch.abs(x) if use_abs else x
+    return torch.max(red_input, dim=1).values if is_max else torch.min(red_input, dim=1).values
+
+
+def torch_reference_sp_decompress(c_sparse, mdata, dtype):
+    c_cpu = c_sparse.to(dtype).cpu()
+    m_cpu = mdata.cpu()
+    m, c_n = c_cpu.shape
+    n = c_n * 2
+    dense = torch.zeros((m, n), dtype=dtype)
+    for row in range(m):
+        for group in range(n // 4):
+            packed = int(m_cpu[row, group // 8].item()) & 0xFFFFFFFF
+            nibble = (packed >> ((group % 8) * 4)) & 0xF
+            idx0 = nibble & 0x3
+            idx1 = (nibble >> 2) & 0x3
+            base = group * 4
+            dense[row, base + idx0] = c_cpu[row, group * 2]
+            dense[row, base + idx1] = c_cpu[row, group * 2 + 1]
+    return dense
+
+
+def _decode_mdata_pair(mdata_row, group_idx):
+    packed = int(mdata_row[group_idx // 8].item()) & 0xFFFFFFFF
+    nibble = (packed >> ((group_idx % 8) * 4)) & 0xF
+    idx0 = nibble & 0x3
+    idx1 = (nibble >> 2) & 0x3
+    return tuple(sorted((idx0, idx1)))
+
+
+def _allowed_pairs_for_top2(values):
+    pairs = list(itertools.combinations(range(4), 2))
+    scores = {}
+    for pair in pairs:
+        pair_vals = sorted((float(values[pair[0]]), float(values[pair[1]])), reverse=True)
+        scores[pair] = tuple(pair_vals)
+    best = max(scores.values())
+    return {tuple(sorted(pair)) for pair, score in scores.items() if score == best}
+
+
+def _torch_to_gl_dtype(dtype):
+    if dtype == torch.float16:
+        return ttgl.float16
+    if dtype == torch.bfloat16:
+        return ttgl.bfloat16
+    if dtype == torch.float8_e5m2:
+        return ttgl.float8e5
+    if dtype == torch.float8_e4m3fn:
+        return ttgl.float8e4nv
+    raise ValueError(f"Unsupported dtype: {dtype}")
+
+
+@gluon.jit
+def tmem_load_sparsify_kernel(in_ptr, c_ptr, m_ptr, M: ttgl.constexpr, N: ttgl.constexpr, ROW_OP: ttgl.constexpr,
+                              USE_ABS: ttgl.constexpr, num_warps: ttgl.constexpr):
+    global_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+
+    offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, global_layout))
+    offs_n_in = ttgl.arange(0, N, ttgl.SliceLayout(0, global_layout))
+    offs_in = offs_m[:, None] * N + offs_n_in[None, :]
+    mask_in = offs_n_in[None, :] < N
+    inp = ttgl.load(in_ptr + offs_in, mask=mask_in, other=0.0)
+
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, N), col_stride=1)
+    tmem = allocate_tensor_memory(ttgl.float32, [M, N], tmem_layout)
+    in_layout: ttgl.constexpr = tmem.get_reg_layout(num_warps=num_warps)
+    tmem.store(ttgl.convert_layout(inp, in_layout))
+
+    c_tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, N // 2), col_stride=1)
+    c_tmem = tmem.reinterpret(shape=[M, N // 2], layout=c_tmem_layout)
+    c_layout: ttgl.constexpr = c_tmem.get_reg_layout(num_warps=num_warps)
+    cdata, mdata = tmem.load_sparsify(c_layout, ROW_OP, abs=USE_ABS)
+
+    offs_m_c = ttgl.arange(0, M, ttgl.SliceLayout(1, c_layout))
+    offs_n_c = ttgl.arange(0, N // 2, ttgl.SliceLayout(0, c_layout))
+    offs_m_m = ttgl.arange(0, M, ttgl.SliceLayout(1, c_layout))
+    offs_n_m = ttgl.arange(0, (N + 31) // 32, ttgl.SliceLayout(0, c_layout))
+    ttgl.store(c_ptr + offs_m_c[:, None] * (N // 2) + offs_n_c[None, :], cdata)
+    ttgl.store(m_ptr + offs_m_m[:, None] * ((N + 31) // 32) + offs_n_m[None, :], mdata)
+
+
+@gluon.jit
+def tmem_load_sparsify_red_kernel(in_ptr, c_ptr, m_ptr, red_ptr, M: ttgl.constexpr, N: ttgl.constexpr,
+                                  ROW_OP: ttgl.constexpr, USE_ABS: ttgl.constexpr, PROPAGATE_NAN: ttgl.constexpr,
+                                  num_warps: ttgl.constexpr):
+    global_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+    global_layout_1d: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [num_warps], [0])
+
+    offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, global_layout))
+    offs_n = ttgl.arange(0, N, ttgl.SliceLayout(0, global_layout))
+    offs_in = offs_m[:, None] * N + offs_n[None, :]
+    mask_in = offs_n[None, :] < N
+    inp = ttgl.load(in_ptr + offs_in, mask=mask_in, other=0.0)
+
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, N), col_stride=1)
+    tmem = allocate_tensor_memory(ttgl.float32, [M, N], tmem_layout)
+    in_layout: ttgl.constexpr = tmem.get_reg_layout(num_warps=num_warps)
+    tmem.store(ttgl.convert_layout(inp, in_layout))
+
+    c_tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, N // 2), col_stride=1)
+    c_tmem = tmem.reinterpret(shape=[M, N // 2], layout=c_tmem_layout)
+    c_layout: ttgl.constexpr = c_tmem.get_reg_layout(num_warps=num_warps)
+    cdata, mdata, red = tmem.load_sparsify_red(c_layout, ROW_OP, abs=USE_ABS, propagate_nan=PROPAGATE_NAN)
+
+    offs_m_c = ttgl.arange(0, M, ttgl.SliceLayout(1, c_layout))
+    offs_n_c = ttgl.arange(0, N // 2, ttgl.SliceLayout(0, c_layout))
+    offs_m_m = ttgl.arange(0, M, ttgl.SliceLayout(1, c_layout))
+    offs_n_m = ttgl.arange(0, (N + 31) // 32, ttgl.SliceLayout(0, c_layout))
+    ttgl.store(c_ptr + offs_m_c[:, None] * (N // 2) + offs_n_c[None, :], cdata)
+    ttgl.store(m_ptr + offs_m_m[:, None] * ((N + 31) // 32) + offs_n_m[None, :], mdata)
+
+    offs_1d = ttgl.arange(0, M, global_layout_1d)
+    red = ttgl.convert_layout(red, global_layout_1d)
+    ttgl.store(red_ptr + offs_1d, red)
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("row_op", [gluon_ir.TMEM_ROWOP.MAX, gluon_ir.TMEM_ROWOP.MIN])
+@pytest.mark.parametrize("use_abs", [False, True])
+@pytest.mark.parametrize("N", [32, 128, 256, 512])
+def test_tmem_load_sparsify(row_op, use_abs, N):
+    M = 128
+    num_warps = 4
+    x = torch.randn(M, N, dtype=torch.float32, device="cuda")
+    cdata = torch.empty(M, N // 2, dtype=torch.float32, device="cuda")
+    mdata = torch.empty(M, (N + 31) // 32, dtype=torch.int32, device="cuda")
+
+    tmem_load_sparsify_kernel[(1, )](x, cdata, mdata, M, N, row_op, use_abs, num_warps=num_warps)
+
+    assert cdata.shape == (M, N // 2)
+    assert mdata.shape == (M, (N + 31) // 32)
+    assert cdata.dtype == torch.float32
+    assert mdata.dtype == torch.int32
+    assert torch.isfinite(cdata).all().item()
+    torch_validate_tmem_load_sparsify(x, cdata, mdata, row_op, use_abs)
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+def test_tmem_load_sparsify_tie_behavior_max():
+    M = 128
+    N = 32
+    num_warps = 4
+
+    groups = torch.tensor([
+        [3.0, 2.0, 2.0, 1.0],
+        [3.0, 3.0, 3.0, 1.0],
+        [1.0, 1.0, 1.0, 1.0],
+        [4.0, 4.0, 2.0, 2.0],
+        [0.5, 0.2, 0.2, 0.2],
+        [7.0, 6.0, 6.0, 6.0],
+        [9.0, 8.0, 8.0, 7.0],
+        [5.0, 5.0, 4.0, 4.0],
+    ], dtype=torch.float32)
+    assert groups.shape == (N // 4, 4)
+    x_row = groups.reshape(N)
+    x = x_row.repeat(M, 1).to(device="cuda", dtype=torch.float32)
+
+    cdata_0 = torch.empty(M, N // 2, dtype=torch.float32, device="cuda")
+    mdata_0 = torch.empty(M, (N + 31) // 32, dtype=torch.int32, device="cuda")
+    cdata_1 = torch.empty(M, N // 2, dtype=torch.float32, device="cuda")
+    mdata_1 = torch.empty(M, (N + 31) // 32, dtype=torch.int32, device="cuda")
+
+    tmem_load_sparsify_kernel[(1, )](x, cdata_0, mdata_0, M, N, gluon_ir.TMEM_ROWOP.MAX, False, num_warps=num_warps)
+    tmem_load_sparsify_kernel[(1, )](x, cdata_1, mdata_1, M, N, gluon_ir.TMEM_ROWOP.MAX, False, num_warps=num_warps)
+
+    torch.testing.assert_close(cdata_0, cdata_1, atol=0, rtol=0, equal_nan=True)
+    torch.testing.assert_close(mdata_0, mdata_1, atol=0, rtol=0)
+
+    c_cpu = cdata_0.cpu()
+    m_cpu = mdata_0.cpu()
+    x_cpu = x.cpu()
+    allowed_pairs = [_allowed_pairs_for_top2(group.tolist()) for group in groups]
+
+    for row in range(M):
+        for group_idx in range(N // 4):
+            pair = _decode_mdata_pair(m_cpu[row], group_idx)
+            assert pair in allowed_pairs[group_idx], (f"row={row}, group={group_idx}, pair={pair}, "
+                                                      f"allowed={sorted(allowed_pairs[group_idx])}")
+
+            values = x_cpu[row, group_idx * 4:(group_idx + 1) * 4]
+            selected = torch.tensor([values[pair[0]], values[pair[1]]], dtype=torch.float32)
+            actual = c_cpu[row, group_idx * 2:group_idx * 2 + 2]
+            torch.testing.assert_close(
+                torch.sort(actual).values,
+                torch.sort(selected).values,
+                atol=0,
+                rtol=0,
+                equal_nan=True,
+            )
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("row_op", [gluon_ir.TMEM_ROWOP.MAX, gluon_ir.TMEM_ROWOP.MIN])
+@pytest.mark.parametrize("use_abs", [False, True])
+@pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
+def test_tmem_load_sparsify_red(row_op, use_abs, propagate_nan):
+    M = 128
+    N = 128
+    num_warps = 4
+    x = torch.randn(M, N, dtype=torch.float32, device="cuda")
+    if propagate_nan == tl.PropagateNan.ALL:
+        x[0, 3] = float("nan")
+        x[17, 11] = float("nan")
+    cdata = torch.empty(M, N // 2, dtype=torch.float32, device="cuda")
+    mdata = torch.empty(M, (N + 31) // 32, dtype=torch.int32, device="cuda")
+    red = torch.empty(M, dtype=torch.float32, device="cuda")
+
+    tmem_load_sparsify_red_kernel[(1, )](x, cdata, mdata, red, M, N, row_op, use_abs, propagate_nan,
+                                         num_warps=num_warps)
+    torch_validate_tmem_load_sparsify(x, cdata, mdata, row_op, use_abs)
+
+    expected = torch_reference_tmem_load_sparsify_red(x, row_op, use_abs)
+    torch.testing.assert_close(red, expected, atol=1e-5, rtol=1e-5, equal_nan=True)
+
+
+@gluon.jit
+def sp_decompress_kernel(in_ptr, out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, ROW_OP: ttgl.constexpr,
+                         USE_ABS: ttgl.constexpr, OUT_DTYPE: ttgl.constexpr, num_warps: ttgl.constexpr):
+    global_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+
+    offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, global_layout))
+    offs_n_in = ttgl.arange(0, N, ttgl.SliceLayout(0, global_layout))
+    offs_in = offs_m[:, None] * N + offs_n_in[None, :]
+    inp = ttgl.load(in_ptr + offs_in, mask=offs_n_in[None, :] < N, other=0.0)
+
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, N), col_stride=1)
+    tmem = allocate_tensor_memory(ttgl.float32, [M, N], tmem_layout)
+    in_layout: ttgl.constexpr = tmem.get_reg_layout(num_warps=num_warps)
+    tmem.store(ttgl.convert_layout(inp, in_layout))
+
+    c_tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, N // 2), col_stride=1)
+    c_tmem = tmem.reinterpret(shape=[M, N // 2], layout=c_tmem_layout)
+    c_layout: ttgl.constexpr = c_tmem.get_reg_layout(num_warps=num_warps)
+    cdata_f32, mdata = tmem.load_sparsify(c_layout, ROW_OP, abs=USE_ABS)
+
+    out_dtype: ttgl.constexpr = OUT_DTYPE
+    cdata = cdata_f32.to(out_dtype)
+    dense_tmem = tmem.reinterpret(dtype=out_dtype, shape=[M, N], layout=tmem_layout)
+    dense_layout: ttgl.constexpr = dense_tmem.get_reg_layout(num_warps=num_warps)
+    dense = blackwell.sp_decompress(cdata, mdata, dense_layout)
+
+    offs_m_out = ttgl.arange(0, M, ttgl.SliceLayout(1, dense_layout))
+    offs_n_out = ttgl.arange(0, N, ttgl.SliceLayout(0, dense_layout))
+    ttgl.store(out_ptr + offs_m_out[:, None] * N + offs_n_out[None, :], dense)
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("row_op", [gluon_ir.TMEM_ROWOP.MAX, gluon_ir.TMEM_ROWOP.MIN])
+@pytest.mark.parametrize("use_abs", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float8_e5m2])
+@pytest.mark.parametrize("N", [32, 128])
+def test_sp_decompress_roundtrip(row_op, use_abs, dtype, N):
+    M = 128
+    num_warps = 4
+    x = torch.randn(M, N, dtype=torch.float32, device="cuda")
+    dense = torch.empty(M, N, dtype=dtype, device="cuda")
+
+    sp_decompress_kernel[(1, )](x, dense, M, N, row_op, use_abs, _torch_to_gl_dtype(dtype), num_warps=num_warps)
+
+    c_ref, m_ref = torch_reference_tmem_load_sparsify(x, row_op, use_abs)
+    if dtype == torch.float8_e5m2:
+        c_ref_fp8 = c_ref.to(device="cuda", dtype=dtype).to(torch.float16)
+        dense_ref = torch_reference_sp_decompress(c_ref_fp8, m_ref, torch.float16)
+        torch.testing.assert_close(dense.to(torch.float16).cpu(), dense_ref, atol=0, rtol=0, equal_nan=True)
+    else:
+        dense_ref = torch_reference_sp_decompress(c_ref, m_ref, dtype)
+        torch.testing.assert_close(dense.cpu(), dense_ref, atol=0, rtol=0, equal_nan=True)
+
+
+@gluon.jit
+def mma_sp_kernel(a_ptr, b_ptr, out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
+                  A_DTYPE: ttgl.constexpr, ROW_OP: ttgl.constexpr, USE_ABS: ttgl.constexpr, ASYNC: ttgl.constexpr,
+                  num_warps: ttgl.constexpr):
+    global_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+
+    offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, global_layout))
+    offs_k = ttgl.arange(0, K, ttgl.SliceLayout(0, global_layout))
+    a_dense = ttgl.load(a_ptr + offs_m[:, None] * K + offs_k[None, :])
+
+    d_tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, N), col_stride=1)
+    d_tmem = allocate_tensor_memory(ttgl.float32, [M, N], d_tmem_layout)
+
+    a_dense_tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, K), col_stride=1)
+    a_dense_tmem = allocate_tensor_memory(ttgl.float32, [M, K], a_dense_tmem_layout)
+    a_dense_layout: ttgl.constexpr = a_dense_tmem.get_reg_layout(num_warps=num_warps)
+    a_dense_tmem.store(ttgl.convert_layout(a_dense, a_dense_layout))
+
+    a_sparse_tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, K // 2), col_stride=1)
+    a_sparse_f32_tmem = a_dense_tmem.reinterpret(shape=[M, K // 2], layout=a_sparse_tmem_layout)
+    a_sparse_layout_f32: ttgl.constexpr = a_sparse_f32_tmem.get_reg_layout(num_warps=num_warps)
+    cdata_f32, mdata = a_dense_tmem.load_sparsify(a_sparse_layout_f32, ROW_OP, abs=USE_ABS)
+    a_sparse_tmem = allocate_tensor_memory(A_DTYPE, [M, K // 2], a_sparse_tmem_layout)
+    a_sparse_layout: ttgl.constexpr = a_sparse_tmem.get_reg_layout(num_warps=num_warps)
+    a_sparse_tmem.store(ttgl.convert_layout(cdata_f32.to(A_DTYPE), a_sparse_layout))
+
+    mdata_repacked = blackwell.repack_mdata_for_tcgen05_mma_sp(mdata, A_DTYPE)
+
+    meta_tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=(128, (K + 31) // 32), col_stride=1)
+    meta_tmem = allocate_tensor_memory(ttgl.int32, [M, (K + 31) // 32], meta_tmem_layout)
+    meta_layout: ttgl.constexpr = meta_tmem.get_reg_layout(num_warps=num_warps)
+    meta_tmem.store(ttgl.convert_layout(mdata_repacked, meta_layout))
+
+    offs_bk = ttgl.arange(0, K, ttgl.SliceLayout(1, global_layout))
+    offs_bn = ttgl.arange(0, N, ttgl.SliceLayout(0, global_layout))
+    b = ttgl.load(b_ptr + offs_bk[:, None] * N + offs_bn[None, :])
+
+    b_swizzle: ttgl.constexpr = 64 if A_DTYPE.primitive_bitwidth == 8 else 32
+    b_shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=b_swizzle,
+        element_bitwidth=A_DTYPE.primitive_bitwidth,
+        rank=2,
+        transposed=True,
+    )
+    b_smem = ttgl.allocate_shared_memory(A_DTYPE, [K, N], b_shared_layout)
+    b_smem.store(b)
+
+    fence_async_shared()
+    a_swizzle: ttgl.constexpr = min(b_swizzle, (K // 2) * A_DTYPE.primitive_bitwidth // 8)
+    a_shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=a_swizzle,
+        element_bitwidth=A_DTYPE.primitive_bitwidth,
+        rank=2,
+        transposed=False,
+    )
+    a_smem = ttgl.allocate_shared_memory(A_DTYPE, [M, K // 2], a_shared_layout)
+    a_smem.store(cdata_f32.to(A_DTYPE))
+    mma_barrier = mbarrier.allocate_mbarrier()
+    mbarrier.init(mma_barrier, count=1)
+    if ASYNC:
+        blackwell.tcgen05_mma_sp(a_smem, b_smem, d_tmem, meta_tmem, use_acc=False, mbarriers=[mma_barrier])
+    else:
+        blackwell.tcgen05_mma_sp(a_smem, b_smem, d_tmem, meta_tmem, use_acc=False)
+        tcgen05_commit(mma_barrier)
+    mbarrier.wait(mma_barrier, phase=0)
+    mbarrier.invalidate(mma_barrier)
+
+    d_layout: ttgl.constexpr = d_tmem.get_reg_layout(num_warps=num_warps)
+    d = ttgl.convert_layout(d_tmem.load(d_layout), global_layout)
+    offs_m_out = ttgl.arange(0, M, ttgl.SliceLayout(1, global_layout))
+    offs_n_out = ttgl.arange(0, N, ttgl.SliceLayout(0, global_layout))
+    ttgl.store(out_ptr + offs_m_out[:, None] * N + offs_n_out[None, :], d)
+
+
+# f16/bf16: sparse mmaSizeK=32, so K must be multiple of 32.
+_f16_shapes = [
+    (128, 32, 32),
+    (128, 64, 32),
+    (128, 64, 64),
+    (128, 128, 32),
+    (128, 128, 64),
+    (128, 128, 128),
+    (128, 256, 64),
+    (128, 32, 128),
+    (128, 256, 256),
+    (128, 128, 256),
+]
+
+# fp8: sparse mmaSizeK=64, so K must be multiple of 64.
+_fp8_shapes = [
+    (128, 64, 64),
+    (128, 128, 64),
+    (128, 128, 128),
+    (128, 256, 64),
+    (128, 64, 128),
+    (128, 128, 256),
+    (128, 32, 512),
+]
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("M, N, K", _f16_shapes)
+@pytest.mark.parametrize("row_op", [gluon_ir.TMEM_ROWOP.MAX, gluon_ir.TMEM_ROWOP.MIN])
+@pytest.mark.parametrize("use_abs", [False, True])
+def test_mma_sp_f16(dtype, M, N, K, row_op, use_abs):
+    num_warps = 4
+    torch.manual_seed(42)
+    a = torch.randn(M, K, dtype=torch.float32, device="cuda")
+    b = torch.randn(K, N, dtype=torch.float32, device="cuda").to(dtype)
+    out = torch.empty(M, N, dtype=torch.float32, device="cuda")
+
+    mma_sp_kernel[(1, )](a, b, out, M, N, K, _torch_to_gl_dtype(dtype), row_op, use_abs, False, num_warps=num_warps)
+
+    c_ref, m_ref = torch_reference_tmem_load_sparsify(a, row_op, use_abs)
+    dense_ref = torch_reference_sp_decompress(c_ref.to(dtype), m_ref, dtype)
+    out_ref = torch.matmul(dense_ref.to(torch.float32), b.cpu().to(torch.float32))
+    torch.testing.assert_close(out.cpu(), out_ref, rtol=0.05, atol=0.05)
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("dtype", [torch.float8_e5m2, torch.float8_e4m3fn])
+@pytest.mark.parametrize("M, N, K", _fp8_shapes)
+@pytest.mark.parametrize("row_op", [gluon_ir.TMEM_ROWOP.MAX])
+@pytest.mark.parametrize("use_abs", [False, True])
+def test_mma_sp_fp8(dtype, M, N, K, row_op, use_abs):
+    num_warps = 4
+    torch.manual_seed(42)
+    a = torch.randn(M, K, dtype=torch.float32, device="cuda")
+    b = torch.randn(K, N, dtype=torch.float32, device="cuda").to(dtype)
+    out = torch.empty(M, N, dtype=torch.float32, device="cuda")
+
+    mma_sp_kernel[(1, )](a, b, out, M, N, K, _torch_to_gl_dtype(dtype), row_op, use_abs, False, num_warps=num_warps)
+
+    c_ref, m_ref = torch_reference_tmem_load_sparsify(a, row_op, use_abs)
+    c_ref_dtype = c_ref.to(device="cuda", dtype=dtype).to(torch.float16)
+    dense_ref = torch_reference_sp_decompress(c_ref_dtype, m_ref, torch.float16)
+    b_ref = b.to(torch.float16).cpu()
+    out_ref = torch.matmul(dense_ref.to(torch.float32), b_ref.to(torch.float32))
+    torch.testing.assert_close(out.cpu(), out_ref, rtol=0.15, atol=0.15)
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_mma_sp_f16_async(dtype):
+    M, N, K = 128, 128, 64
+    row_op = gluon_ir.TMEM_ROWOP.MAX
+    use_abs = False
+    num_warps = 4
+    torch.manual_seed(42)
+    a = torch.randn(M, K, dtype=torch.float32, device="cuda")
+    b = torch.randn(K, N, dtype=torch.float32, device="cuda").to(dtype)
+    out_sync = torch.empty(M, N, dtype=torch.float32, device="cuda")
+    out_async = torch.empty(M, N, dtype=torch.float32, device="cuda")
+
+    mma_sp_kernel[(1, )](a, b, out_sync, M, N, K, _torch_to_gl_dtype(dtype), row_op, use_abs, False,
+                         num_warps=num_warps)
+    mma_sp_kernel[(1, )](a, b, out_async, M, N, K, _torch_to_gl_dtype(dtype), row_op, use_abs, True,
+                         num_warps=num_warps)
+
+    c_ref, m_ref = torch_reference_tmem_load_sparsify(a, row_op, use_abs)
+    dense_ref = torch_reference_sp_decompress(c_ref.to(dtype), m_ref, dtype)
+    out_ref = torch.matmul(dense_ref.to(torch.float32), b.cpu().to(torch.float32))
+
+    torch.testing.assert_close(out_sync.cpu(), out_ref, rtol=0.05, atol=0.05)
+    torch.testing.assert_close(out_async.cpu(), out_ref, rtol=0.05, atol=0.05)
+    torch.testing.assert_close(out_async.cpu(), out_sync.cpu(), rtol=0.01, atol=0.01)
 
 
 @pytest.mark.parametrize("num_ctas", [1, 2])

@@ -170,6 +170,10 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
 gpu::DistributedEncodingTrait
 getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps);
 
+std::pair<RankedTensorType, RankedTensorType>
+getSparsifyOutputTypes(gpu::MemDescType srcTmemType, unsigned numWarps,
+                       gpu::CGAEncodingAttr cgaLayout);
+
 std::optional<LinearLayout>
 getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
                                 unsigned numWarps);

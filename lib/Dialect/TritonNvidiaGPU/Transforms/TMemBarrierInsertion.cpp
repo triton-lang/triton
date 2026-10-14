@@ -24,7 +24,7 @@ namespace {
 
 // TMEM loads and stores require completion through tmem_wait.
 static bool needsTMemWait(Operation *op) {
-  if (isa<TMEMLoadOp, TMEMStoreOp>(op))
+  if (isa<TMEMLoadOp, TMEMLoadSparsifyOp, TMEMStoreOp>(op))
     return true;
   auto alloc = dyn_cast<TMEMAllocOp>(op);
   return alloc && alloc.getSrc();

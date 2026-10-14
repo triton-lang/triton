@@ -482,6 +482,82 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
     return ProcessResult(exc, stderr)
 
 
+def sparse_attention_ref(q, k, v, sm_scale, causal=False, query_chunk_size=None, causal_block_size=256):
+
+    def sparsify_top2_in_place(s_grouped):
+        top2 = torch.topk(s_grouped, k=2, dim=-1)
+        s_grouped.fill_(float("-inf"))
+        s_grouped.scatter_(-1, top2.indices, top2.values.mul_(sm_scale))
+
+    def softmax_to_dtype(logits):
+        return torch.softmax(logits, dim=-1).to(out_dtype)
+
+    def default_query_chunk_size():
+        # Keep worst-case temporary usage bounded in large-N tests (e.g. pytest -n16).
+        if n_ctx >= 4096:
+            return 512
+        if n_ctx >= 1024:
+            return 128
+        return 256
+
+    # Compute reference attention row-chunked to reduce peak temporary storage.
+    # This keeps numerics while reducing logits/topk/softmax temporaries from O(N^2)
+    # to O(chunk_size * N) per iteration.
+    n_ctx = q.shape[-2]
+    if n_ctx % 4 != 0:
+        raise ValueError(f"sparse_attention_ref expects sequence length divisible by 4, got {n_ctx}")
+
+    block_m = default_query_chunk_size() if query_chunk_size is None else int(query_chunk_size)
+    block_m = max(1, min(block_m, n_ctx))
+
+    out_dtype = torch.float16 if q.dtype == torch.float8_e5m2 else q.dtype
+    out = torch.empty((*q.shape[:-1], v.shape[-1]), device=q.device, dtype=out_dtype)
+    v_cast = v.to(torch.float16) if q.dtype == torch.float8_e5m2 else v
+    k_t = k.float().transpose(-2, -1)
+
+    # Reference path does not need gradients; avoid autograd state growth.
+    with torch.no_grad():
+        for m_start in range(0, n_ctx, block_m):
+            m_end = min(m_start + block_m, n_ctx)
+
+            s = torch.matmul(q[..., m_start:m_end, :].float(), k_t)
+            if causal:
+                # Causal mask is applied before sparsify so top2 selection does not
+                # include future tokens.
+                q_idx = torch.arange(m_start, m_end, device=s.device)[:, None]
+                k_idx = torch.arange(n_ctx, device=s.device)[None, :]
+                causal_mask = k_idx > q_idx
+                s = s.masked_fill(causal_mask, float("-inf"))
+            s_grouped = s.view(*s.shape[:-1], n_ctx // 4, 4)
+            if causal:
+                # Match the kernel's causal scheduling: groups strictly to the
+                # left of a BLOCK_M-wide diagonal region are sparsified, while
+                # the diagonal region remains dense after causal masking.
+                top2 = torch.topk(s_grouped, k=2, dim=-1)
+                sparse_grouped = torch.full_like(s_grouped, float("-inf"))
+                sparse_grouped.scatter_(-1, top2.indices, top2.values.mul_(sm_scale))
+                dense_grouped = s_grouped.mul(sm_scale)
+
+                q_idx = torch.arange(m_start, m_end, device=s.device)
+                diagonal_start = (q_idx // causal_block_size) * causal_block_size
+                group_start = torch.arange(0, n_ctx, 4, device=s.device)
+                use_dense = group_start[None, :] >= diagonal_start[:, None]
+                use_dense = use_dense.reshape((1, ) * (s_grouped.ndim - 3) + use_dense.shape + (1, ))
+                s = torch.where(use_dense, dense_grouped, sparse_grouped).reshape_as(s)
+                del top2, sparse_grouped, dense_grouped
+            else:
+                sparsify_top2_in_place(s_grouped)
+            del s_grouped
+
+            probs = softmax_to_dtype(s)
+            del s
+
+            out[..., m_start:m_end, :] = torch.matmul(probs, v_cast)
+            del probs
+
+    return out
+
+
 def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
     from triton import knobs
 
