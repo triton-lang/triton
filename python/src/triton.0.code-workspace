@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"path": "../../../torch-nexus"
+		},
+		{
+			"path": "../../../text.0"
+		}
+	],
+	"settings": {}
+}
