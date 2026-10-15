@@ -429,47 +429,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   set(TRITON_BACKENDS_TUPLE "(${TRITON_BACKENDS_TUPLE})")
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
-
-  # Plugin-ext dialect whitelist → link libs + generated TypeID force-refs.
-  set(_TRITON_EXT_WL "${PYTHON_SRC_PATH}/plugin_ext_dialects.whitelist")
-  set(_TRITON_EXT_GEN "${CMAKE_BINARY_DIR}/python/src/plugin_ext_dialects.gen.cc")
-  set(TRITON_PLUGIN_EXT_DIALECT_LIBS "")
-  set(_wl_includes "")
-  set(_wl_exprs "")
-  if(EXISTS "${_TRITON_EXT_WL}")
-    file(STRINGS "${_TRITON_EXT_WL}" _wl_lines)
-    foreach(_line IN LISTS _wl_lines)
-      # Skip comments / blanks; require tgt|hdr|TypeExpr
-      if(NOT _line MATCHES "^[A-Za-z0-9_]+\\|")
-        continue()
-      endif()
-      string(REPLACE "|" ";" _parts "${_line}")
-      list(LENGTH _parts _n)
-      if(NOT _n EQUAL 3)
-        message(FATAL_ERROR "Bad whitelist line in ${_TRITON_EXT_WL}: ${_line}")
-      endif()
-      list(GET _parts 0 _tgt)
-      list(GET _parts 1 _hdr)
-      list(GET _parts 2 _expr)
-      list(APPEND TRITON_PLUGIN_EXT_DIALECT_LIBS ${_tgt})
-      string(APPEND _wl_includes "#include \"${_hdr}\"\n")
-      string(APPEND _wl_exprs "  mix ^= reinterpret_cast<uintptr_t>(mlir::TypeID::get<${_expr}>().getAsOpaquePointer());\n")
-    endforeach()
-  endif()
-
-  file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/python/src")
-  file(WRITE "${_TRITON_EXT_GEN}"
-"#include \"mlir/Support/TypeID.h\"
-${_wl_includes}
-#include <cstdint>
-
-extern \"C\" __attribute__((used, visibility(\"default\"))) const void *
-tritonForceExtDialectTypeIDs() {
-  volatile uintptr_t mix = 0;
-${_wl_exprs}  return reinterpret_cast<const void *>(mix);
-}
-")
-
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
                   ${PYTHON_SRC_PATH}/ir.cc
                   ${PYTHON_SRC_PATH}/gluon_ir.cc
@@ -478,8 +437,7 @@ ${_wl_exprs}  return reinterpret_cast<const void *>(mix);
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
                   ${PYTHON_SRC_PATH}/llvm.cc
-                  ${PYTHON_SRC_PATH}/specialize.cc
-                  ${_TRITON_EXT_GEN})
+                  ${PYTHON_SRC_PATH}/specialize.cc)
 
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(triton PRIVATE -Wno-array-bounds)
@@ -488,23 +446,10 @@ ${_wl_exprs}  return reinterpret_cast<const void *>(mix);
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
 
-  # Whitelist dialects: whole-archive on GNU ld; live refs from generated .cc.
-  if(TRITON_PLUGIN_EXT_DIALECT_LIBS)
-    if(NOT APPLE AND NOT MSVC)
-      target_link_libraries(triton PRIVATE
-        "-Wl,--whole-archive"
-        ${TRITON_PLUGIN_EXT_DIALECT_LIBS}
-        "-Wl,--no-whole-archive")
-    else()
-      target_link_libraries(triton PRIVATE ${TRITON_PLUGIN_EXT_DIALECT_LIBS})
-    endif()
-  endif()
-
   # Do not propagate libraries that libtriton depends on. This ensures that
   # targets that link against libtriton do not accidentally link in their own
   # copies of core Triton code and LLVM.
   set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
-
   if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
