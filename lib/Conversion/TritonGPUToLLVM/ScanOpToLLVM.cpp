@@ -162,6 +162,8 @@ private:
       }
   }
 
+  // Scan terminal totals across lanes, then apply each preceding lane's
+  // complete total to the remaining register prefixes once.
   void scanLaneTotals(triton::ScanOp op, ScanValues &values,
                       const LinearLayout &layout, unsigned numRegs,
                       unsigned numSegments, Value laneId,
@@ -210,13 +212,20 @@ private:
     }
     for (unsigned base = 0; base < values.size(); base += numRegs) {
       unsigned last = base + (reverse ? 0 : numRegs - 1);
+      auto acc = values[last];
       for (auto [lane, pred, shuffleDistance] : rounds) {
         auto incoming =
-            shuffleValues(loc, values[last], lane, rewriter, shuffleDistance);
-        for (unsigned r = base; r < base + numRegs; ++r)
-          values[r] =
-              combineWithPrefix(op, incoming, values[r], rewriter, pred);
+            shuffleValues(loc, acc, lane, rewriter, shuffleDistance);
+        acc = combineWithPrefix(op, incoming, acc, rewriter, pred);
       }
+      values[last] = acc;
+      if (numRegs == 1)
+        continue;
+      auto [lane, pred, shuffleDistance] = rounds.front();
+      auto prefix = shuffleValues(loc, acc, lane, rewriter, shuffleDistance);
+      for (unsigned r = base; r < base + numRegs; ++r)
+        if (r != last)
+          values[r] = combineWithPrefix(op, prefix, values[r], rewriter, pred);
     }
   }
 
@@ -291,16 +300,105 @@ private:
                       /*forceWarpShuffle=*/false, storePred);
 
     ScanLoweringHelper totalsHelper(totalsLayout, op.getAxis());
+    assert(!totalsHelper.getInterWarpTotalsLayout() &&
+           "the full totals sequence must be warp-local");
+    if (totalsLayout.sublayoutIsZero({kLane}, {axis})) {
+      permuteRegisters(totals, totalsHelper.getRegisterOrder());
+      return scanRegisterCarries(
+          op, totals, interWarpTotalsLayout, totalsHelper.getPermutedLayout(),
+          laneId, warpId, rewriter,
+          helper.getIntraWarpTotalsLayout() ? nullptr : &values);
+    }
     scanWithinCTA(op, totalsHelper, totals, laneId, warpId, rewriter);
     return getSegmentCarries(op, totals, interWarpTotalsLayout, totalsLayout,
                              interWarpTotalsLayout.getOutDimSize(axis), laneId,
                              warpId, rewriter);
   }
 
-  // The general conversion materializes the replicated totals in registers.
-  // For long, wide tuples this can keep many registers live at once. Grouped
-  // traversal loads one group at a time and maintains a running prefix and
-  // the carries.
+  // Scan register-resident warp totals in logical order. Thread-owned segments
+  // reuse inclusive totals for their terminal values and exclusive carries for
+  // their other prefixes. Other layouts receive exclusive carries.
+  SmallVector<ScanCarry>
+  scanRegisterCarries(triton::ScanOp op, const ScanValues &totals,
+                      const LinearLayout &consumers, const LinearLayout &scan,
+                      Value laneId, Value warpId,
+                      ConversionPatternRewriter &rewriter,
+                      ScanValues *consumerValues) const {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto *ctx = op.getContext();
+    auto kReg = StringAttr::get(ctx, "register");
+    auto kLane = StringAttr::get(ctx, "lane");
+    auto kWarp = StringAttr::get(ctx, "warp");
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
+    unsigned numSegments = scan.getOutDimSize(axis);
+    bool reverse = op.getReverse();
+    auto inverse = scan.pseudoinvert().sublayout(
+        llvm::to_vector(scan.getOutDimNames()), {kReg, kLane});
+    SmallVector<ScanCarry> carries;
+    SmallVector<Value> consumerRegs;
+    SmallVector<SmallVector<unsigned>> requested(totals.size());
+    SmallVector<unsigned> remaining(consumers.getInDimSize(kReg), 0);
+    unsigned segmentRegs =
+        consumerValues ? consumerValues->size() / remaining.size() : 0;
+    ScanValues inclusiveTotals(consumerValues ? remaining.size() : 0);
+    for (unsigned r = 0; r < consumers.getInDimSize(kReg); ++r) {
+      auto coords = applyLinearLayout(loc, rewriter, consumers,
+                                      {{kReg, b.i32_val(r)},
+                                       {kLane, laneId},
+                                       {kWarp, warpId},
+                                       {kBlock, b.i32_val(0)}});
+      Value index = coords[op.getAxis()].second;
+      Value pred = b.icmp_ne(index, b.i32_val(reverse ? numSegments - 1 : 0));
+      carries.push_back({{}, pred});
+      consumerRegs.push_back(
+          applyLinearLayout(loc, rewriter, inverse, coords).front().second);
+      for (unsigned candidate :
+           getScanRegisters(consumers, inverse, r, op.getAxis(), numSegments,
+                            consumerValues ? 0 : (reverse ? 1 : -1),
+                            /*excludeBoundary=*/!consumerValues)) {
+        requested[candidate].push_back(r);
+        ++remaining[r];
+      }
+    }
+    for (unsigned base = 0; base < totals.size(); base += numSegments) {
+      SmallVector<Value> acc;
+      for (unsigned i = 0; i < numSegments - (consumerValues ? 0 : 1); ++i) {
+        unsigned r = base + (reverse ? numSegments - 1 - i : i);
+        auto exclusive = acc;
+        acc = applyCombineOp(loc, rewriter, op.getCombineOp(), acc, totals[r]);
+        for (unsigned consumer : requested[r]) {
+          Value selected;
+          if (consumerValues)
+            selected = reverse
+                           ? b.icmp_uge(b.i32_val(r), consumerRegs[consumer])
+                           : b.icmp_ule(b.i32_val(r), consumerRegs[consumer]);
+          else
+            selected = reverse
+                           ? b.icmp_ugt(b.i32_val(r), consumerRegs[consumer])
+                           : b.icmp_ult(b.i32_val(r), consumerRegs[consumer]);
+          if (consumerValues) {
+            selectPrefix(acc, inclusiveTotals[consumer], selected, b);
+            if (segmentRegs > 1)
+              selectPrefix(exclusive, carries[consumer].values, selected, b);
+          } else {
+            selectPrefix(acc, carries[consumer].values, selected, b);
+          }
+          --remaining[consumer];
+          if (consumerValues && remaining[consumer] == 0)
+            completeThreadSegment(op, *consumerValues, consumer, segmentRegs,
+                                  inclusiveTotals[consumer], carries[consumer],
+                                  rewriter);
+        }
+      }
+    }
+    return consumerValues ? SmallVector<ScanCarry>{} : carries;
+  }
+
+  // Store the complete totals table once. Scan each independent sequence,
+  // selecting carries only at positions requested by their consumers.
+  // Complete each consumer's local prefixes as soon as its carry is available.
   void scanInterWarpGroups(triton::ScanOp op, const ScanLoweringHelper &helper,
                            const ScanValues &totals, ScanValues &values,
                            Value laneId, Value warpId,
@@ -365,14 +463,11 @@ private:
     auto inverse = scan.pseudoinvert().sublayout(
         llvm::to_vector(scan.getOutDimNames()), {kReg, kLane});
     unsigned segmentRegs = values.size() / totals.size();
-    // For one-value segments, the inclusive prefix is already the final
-    // output. Select it directly to avoid a carry combine and its boundary
-    // select.
-    bool inclusive = segmentRegs == 1;
     SmallVector<Value> consumerRegs;
     SmallVector<SmallVector<std::pair<unsigned, bool>>> consumers(
         scan.getInDimSize(kReg));
     SmallVector<ScanCarry> carries;
+    ScanValues inclusiveTotals(totals.size());
     for (unsigned r = 0; r < totals.size(); ++r) {
       auto coords = applyLinearLayout(loc, rewriter, source,
                                       {{kReg, b.i32_val(r)},
@@ -394,8 +489,7 @@ private:
       //       carry[r] = select(consumerRegs[r] == c + 1, Qc, carry[r]);
       auto candidates =
           getScanRegisters(source, inverse, r, op.getAxis(), numTotals,
-                           inclusive ? 0 : (reverse ? 1 : -1),
-                           /*excludeBoundary=*/!inclusive);
+                           /*distance=*/0);
       llvm::sort(candidates, [reverse](unsigned a, unsigned b) {
         return reverse ? a > b : a < b;
       });
@@ -419,6 +513,7 @@ private:
           current.push_back(targetInfo.loadDShared(rewriter, loc, ptr, Value(),
                                                    types[i], b.true_val()));
         }
+        auto exclusive = acc;
         acc = applyCombineOp(loc, rewriter, op.getCombineOp(), acc, current);
         // `complete` marks the last candidate producer for consumer r in scan
         // order.
@@ -428,31 +523,52 @@ private:
         //   consumers[2] = {{0, true}, {1, false}};
         //   consumers[3] = {{1, true}};
         for (auto [r, complete] : consumers[reg]) {
-          auto &carry = carries[r];
-          if (carry.values.empty()) {
-            carry.values = acc;
-          } else {
-            unsigned consumer = inclusive ? reg : (reverse ? reg - 1 : reg + 1);
-            Value selected = b.icmp_eq(consumerRegs[r], b.i32_val(consumer));
-            for (unsigned i = 0; i < types.size(); ++i)
-              carry.values[i] = b.select(selected, acc[i], carry.values[i]);
-          }
-          if (!complete)
-            continue;
-          if (inclusive) {
-            values[r] = carry.values;
-          } else {
-            for (unsigned i = 0; i < segmentRegs; ++i) {
-              auto &value = values[r * segmentRegs + i];
-              value = combineWithPrefix(op, carry.values, value, rewriter,
-                                        carry.pred);
-            }
-          }
+          Value selected = reverse
+                               ? b.icmp_uge(b.i32_val(reg), consumerRegs[r])
+                               : b.icmp_ule(b.i32_val(reg), consumerRegs[r]);
+          selectPrefix(acc, inclusiveTotals[r], selected, b);
+          if (segmentRegs > 1)
+            selectPrefix(exclusive, carries[r].values, selected, b);
+          if (complete)
+            completeThreadSegment(op, values, r, segmentRegs,
+                                  inclusiveTotals[r], carries[r], rewriter);
         }
       }
     }
   }
 
+  // The first candidate initializes a prefix without requiring an identity.
+  static void selectPrefix(ValueRange prefix, SmallVector<Value> &result,
+                           Value selected, TritonLLVMOpBuilder &b) {
+    if (prefix.empty())
+      return;
+    if (result.empty()) {
+      result.assign(prefix.begin(), prefix.end());
+      return;
+    }
+    for (auto [value, candidate] : llvm::zip(result, prefix))
+      value = b.select(selected, candidate, value);
+  }
+
+  // The inclusive total already contains the terminal result. Only earlier
+  // local prefixes need the exclusive carry; guard the scan boundary.
+  void completeThreadSegment(triton::ScanOp op, ScanValues &values,
+                             unsigned segment, unsigned segmentRegs,
+                             ValueRange total, const ScanCarry &carry,
+                             ConversionPatternRewriter &rewriter) const {
+    unsigned terminal = op.getReverse() ? 0 : segmentRegs - 1;
+    for (unsigned i = 0; i < segmentRegs; ++i) {
+      auto &value = values[segment * segmentRegs + i];
+      if (i == terminal)
+        value.assign(total.begin(), total.end());
+      else
+        value =
+            combineWithPrefix(op, carry.values, value, rewriter, carry.pred);
+    }
+  }
+
+  // Include inter-warp carries in the thread totals before fetching the
+  // preceding thread's total, so each local prefix receives one complete carry.
   void applyScanCarries(triton::ScanOp op, const ScanLoweringHelper &helper,
                         ScanValues &values, ScanValues &intraWarpTotals,
                         ArrayRef<ScanCarry> interWarpCarries, Value laneId,

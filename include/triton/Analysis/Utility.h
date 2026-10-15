@@ -165,12 +165,12 @@ private:
 //    producers; zero lane bases give their common segment address. Keep the
 //    Uj prefixes in intraWarpScanLayout for later use.
 //
-//    interWarpScanLayout: R=[], L=[1], W=[0].
-//    Broadcast the full sequence across participating warps. Store W0 and W1
-//    from their selected owners, synchronize, then load this layout:
-//      each warp, lane 0: W0; lane 1: W1
-//    Scan the totals, preserving their layout:
-//      each warp, lane 0: S0=W0; lane 1: S1=W0+W1
+//    interWarpScanLayout: R=[1], L=[0], W=[0].
+//    Short sequences are replicated in registers across lanes and warps.
+//    Store W0 and W1 from their selected owners, synchronize, then load:
+//      each warp, every lane: register 0 holds W0; register 1 holds W1
+//    Accumulate only the exclusive prefixes requested by consumers. Here the
+//    only requested prefix is S0=W0; the final total W0+W1 is unused.
 //
 // Carry propagation:
 //    Map each consumer's warp-segment index s to the preceding prefix S(s-1)

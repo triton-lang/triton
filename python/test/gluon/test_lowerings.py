@@ -145,6 +145,21 @@ def _scan_layouts():
         if _is_layout_applicable(layout)
     ]
     return cases + [
+        pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 32, 32, 0, torch.int32,
+                     id="interwarp_single_value_prefixes"),
+        # Reuse each segment's inclusive total while retaining exclusive carries
+        # for its earlier values, in both regular and grouped inter-warp scans.
+        *[
+            pytest.param(ttgl.BlockedLayout([size, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), M, 32, 0, torch.int32,
+                         id=f"interwarp_terminal_prefixes_{M}_{size}") for M, size in [(32, 2), (128, 2), (128, 4)]
+        ],
+        # Register-resident warp totals serve multiple independent register scans
+        # and two segments per warp. Boundary carries must not execute the combine.
+        pytest.param(
+            ttgl.DistributedLinearLayout(
+                [[1, 0], [8, 0], [32, 0], [0, 1]], [[2, 0], [4, 0], [0, 2], [0, 4], [0, 8]] + [[0, 0]] *
+                (THREADS_PER_WARP.bit_length() - 6), [[16, 0], [0, 0]], [], [64, 16]), 64, 16, 0, torch.int32,
+            id="register_warp_totals_independent_scans"),
         pytest.param(ordinary, 32, 32, 1, torch.int32, id="permuted_owners_axis1"),
         pytest.param(transpose, 32, 32, 0, torch.int8, id="mixed_width"),
         pytest.param(scattered_registers, 64, 32, 0, torch.bool, id="boolean_interwarp_carries"),

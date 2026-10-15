@@ -19,6 +19,11 @@
 // RUN: triton-opt %t/lane-local-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=LOCAL
 // RUN: triton-opt %t/lane-local-carries.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=LOCAL
 
+// RUN: triton-opt %t/terminal-prefixes.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=PREFIX
+// RUN: triton-opt %t/terminal-prefixes.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-PREFIX
+// RUN: triton-opt %t/parallel-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=COLUMNS
+// RUN: triton-opt %t/parallel-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=COLUMNS
+
 //--- scan.mlir
 
 #layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [2], order = [0]}>
@@ -230,6 +235,47 @@ tt.func private @test_scan_warp_transpose_forward(%a: tensor<16xi8, #transpose>,
     tt.scan.return %a12, %b_sum : i8, i64
   }) : (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>) -> (tensor<16xi8, #transpose>, tensor<16xi64, #transpose>)
   tt.return %a_out, %b_out : tensor<16xi8, #transpose>, tensor<16xi64, #transpose>
+}
+
+}
+
+//--- terminal-prefixes.mlir
+
+#transpose = #ttg.linear<{register = [[4], [8]], lane = [[1], [2], [0], [0], [0]], warp = [[0], [0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// After conversion, each of four logical lanes owns four consecutive values.
+// Two rounds scan the terminal totals; one shuffle supplies the carry for
+// the other register prefixes.
+// The register/lane conversions use butterfly shuffles.
+// PREFIX-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_forward
+// PREFIX-COUNT-3: nvvm.shfl.sync idx
+// PREFIX-NOT: nvvm.shfl.sync idx
+// PREFIX: llvm.return
+// AMD-PREFIX-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_forward
+// AMD-PREFIX: llvm.add
+// AMD-PREFIX: llvm.return
+tt.func private @test_scan_lane_prefixes_forward(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose>
+  tt.return %result : tensor<16xi32, #transpose>
+}
+// PREFIX-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_reverse
+// PREFIX-COUNT-3: nvvm.shfl.sync idx
+// PREFIX-NOT: nvvm.shfl.sync idx
+// PREFIX: llvm.return
+// AMD-PREFIX-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_reverse
+// AMD-PREFIX: llvm.add
+// AMD-PREFIX: llvm.return
+tt.func private @test_scan_lane_prefixes_reverse(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose>
+  tt.return %result : tensor<16xi32, #transpose>
 }
 
 }
@@ -497,6 +543,27 @@ tt.func private @test_scan_lane_local_carries_broadcast_lanes_reverse(%arg: tens
     tt.scan.return %sum : i32
   }) : (tensor<8x16xi32, #lane_local>) -> tensor<8x16xi32, #lane_local>
   tt.return %result : tensor<8x16xi32, #lane_local>
+}
+
+}
+
+//--- parallel-totals.mlir
+
+#parallel_totals = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Replicate four segment totals in each warp and scan them in registers.
+// Register scans and carry propagation require 26 adds in total.
+// COLUMNS-LABEL: llvm.func {{.*}}@test_scan_parallel_totals(
+// COLUMNS-COUNT-26: llvm.fadd
+// COLUMNS-NOT: llvm.fadd
+// COLUMNS: llvm.return
+tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: f32, %rhs: f32):
+    %sum = arith.addf %lhs, %rhs : f32
+    tt.scan.return %sum : f32
+  }) : (tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals>
+  tt.return %result : tensor<128x8xf32, #parallel_totals>
 }
 
 }
