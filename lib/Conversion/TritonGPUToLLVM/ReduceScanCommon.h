@@ -8,6 +8,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Tools/GenericSwizzling.h"
+#include "triton/Tools/LayoutUtils.h"
 
 //
 #include "mlir/IR/TypeUtilities.h"
@@ -108,6 +109,76 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   return SmallVector<Value>(thenBlock->getArguments());
 }
 
+// Operands have disjoint scratch regions. When each conversion fits in one
+// tile, store all operands before synchronizing and loading their results.
+inline std::optional<SmallVector<SmallVector<Value>>>
+convertLayoutValuesTogether(Location loc, ConversionPatternRewriter &rewriter,
+                            Operation *op, LinearLayout src, LinearLayout dst,
+                            const SmallVector<SmallVector<Value>> &inVals,
+                            const LayoutConversionScratchConfig &scratch,
+                            const TargetInfoBase &targetInfo) {
+  auto *ctx = rewriter.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto kReps = StringAttr::get(ctx, "reps");
+  auto kOffset = StringAttr::get(ctx, "offset");
+  if (inVals.size() < 2 || !scratch.sizeInBytes ||
+      !isCvtDimSync(src, dst, kBlock))
+    return std::nullopt;
+
+  src = src.removeZeroBasesAlongDim(kReg);
+  dst = dst.removeZeroBasesAlongDim(kReg);
+  SmallVector<LinearLayout> sharedLayouts;
+  for (const auto &values : inVals) {
+    auto type = values.front().getType();
+    if (!type.isIntOrFloat() || type.getIntOrFloatBitWidth() < 8)
+      return std::nullopt;
+    unsigned bitwidth = type.getIntOrFloatBitWidth();
+    auto vecBitwidth = triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
+    auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
+    auto shared = optimalSwizzlingLdSt(src, dst, bitwidth,
+                                       targetInfo.getSharedMemoryBanks(),
+                                       srcTile, dstTile);
+    if (shared.getInDimSize(kReps) != 1)
+      return std::nullopt;
+    sharedLayouts.push_back(std::move(shared));
+  }
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value smem = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  SmallVector<SmallVector<Value>> outVals(inVals.size());
+  for (bool store : {true, false}) {
+    for (unsigned i = 0; i < inVals.size(); ++i) {
+      auto cvt = store ? src.invertAndCompose(sharedLayouts[i])
+                       : invertAndComposeLocal(sharedLayouts[i], dst, {kBlock});
+      unsigned blocks = cvt.getOutDimSize(kBlock);
+      cvt = cvt.reshapeOuts(
+          {{kOffset, cvt.getTotalOutDimSize() / blocks}, {kBlock, blocks}});
+      Value base = b.gep(smem.getType(), IntegerType::get(ctx, 8), smem,
+                         b.i32_val(scratch.offsets[i]));
+      auto values = lowerLdSt(
+          loc, ctx, cvt, store ? ArrayRef<Value>(inVals[i]) : ArrayRef<Value>{},
+          inVals[i].front().getType(), base, /*paddingShifts=*/{}, b.i32_val(0),
+          /*maskSpanAffineOffset=*/0,
+          /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0, laneId,
+          warpId, rewriter, targetInfo, /*maybeMaxVecElems=*/{},
+          store ? makeSharedStoreEmitter(targetInfo, b.true_val())
+                : makeSharedLoadEmitter(targetInfo));
+      if (!store)
+        outVals[i] = std::move(values);
+    }
+    if (store) {
+      if (isCvtDimSync(src, dst, kWarp))
+        targetInfo.warpSync(loc, rewriter);
+      else
+        targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+    }
+  }
+  return outVals;
+}
+
 template <typename SourceOp>
 SmallVector<SmallVector<Value>> convertLayoutValues(
     Location loc, ConversionPatternRewriter &rewriter, SourceOp op,
@@ -147,6 +218,9 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
   assert((!scratch.sizeInBytes || baseOffsetAttr) &&
          "expected allocation.offset for shared-memory conversion");
   int64_t baseOffset = baseOffsetAttr ? baseOffsetAttr.getInt() : 0;
+  if (auto values = convertLayoutValuesTogether(
+          loc, rewriter, op, srcLayout, dstLayout, inVals, scratch, targetInfo))
+    return std::move(*values);
   auto offsetTy = IntegerType::get(ctx, 32);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
     auto elemTy = op.getElementTypes()[i];
