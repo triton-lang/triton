@@ -141,20 +141,32 @@ private:
     values = transposeValues(operands);
   }
 
-  // Scan each thread-local segment in traversal order, preserving combiner
-  // operand order for both forward and reverse scans.
+  // Load, accumulate, and consume each prefix in traversal order. The first
+  // value initializes the accumulator without requiring an identity value.
+  template <typename Load, typename Consume>
+  void scanThreadSegment(triton::ScanOp op, unsigned base, unsigned numRegs,
+                         Load load, Consume consume,
+                         ConversionPatternRewriter &rewriter) const {
+    SmallVector<Value> acc;
+    for (unsigned i = 0; i < numRegs; ++i) {
+      unsigned r = base + (op.getReverse() ? numRegs - 1 - i : i);
+      acc = applyCombineOp(op.getLoc(), rewriter, op.getCombineOp(), acc,
+                           load(r));
+      consume(r, acc);
+    }
+  }
+
+  // Scan each thread-local segment, preserving combiner operand order.
   void scanWithinThreads(triton::ScanOp op, ScanValues &values,
                          unsigned numRegs,
                          ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    bool reverse = op.getReverse();
     for (unsigned base = 0; base < values.size(); base += numRegs)
-      for (unsigned i = 1; i < numRegs; ++i) {
-        unsigned r = base + (reverse ? numRegs - 1 - i : i);
-        unsigned prev = reverse ? r + 1 : r - 1;
-        values[r] = applyCombineOp(loc, rewriter, op.getCombineOp(),
-                                   values[prev], values[r]);
-      }
+      scanThreadSegment(
+          op, base, numRegs, [&](unsigned r) { return values[r]; },
+          [&](unsigned r, const SmallVector<Value> &prefix) {
+            values[r] = prefix;
+          },
+          rewriter);
   }
 
   // Each round shuffles the preceding lanes' terminal total and combines it
@@ -401,61 +413,57 @@ private:
       carries.push_back({{}, pred});
     }
 
-    SmallVector<Value> acc;
-    for (unsigned g = 0; g < numGroups; ++g) {
-      unsigned group = reverse ? numGroups - 1 - g : g;
-      for (unsigned i = 0; i < groupSize; ++i) {
-        unsigned element = reverse ? groupSize - 1 - i : i;
-        unsigned reg = group * groupSize + element;
-        unsigned step = g * groupSize + i;
-        Value index = applyLinearLayout(loc, rewriter, loadLayout,
-                                        {{kReg, b.i32_val(element)},
-                                         {kGroup, b.i32_val(group)},
-                                         {kLane, laneId},
-                                         {kWarp, warpId},
-                                         {kBlock, b.i32_val(0)}})
-                          .front()
-                          .second;
-        SmallVector<Value> current;
-        for (unsigned i = 0; i < types.size(); ++i) {
-          Value ptr = b.gep(smem.getType(), types[i], bases[i], index);
-          current.push_back(targetInfo.loadDShared(rewriter, loc, ptr, Value(),
-                                                   types[i], b.true_val()));
-        }
-        acc = step % numSegments == 0
-                  ? current
-                  : applyCombineOp(loc, rewriter, op.getCombineOp(), acc,
-                                   current);
-        for (unsigned r : consumers[reg]) {
-          auto &carry = carries[r];
-          if (carry.values.empty()) {
-            carry.values = acc;
-          } else {
-            // One-value segments consume the inclusive prefix directly.
-            Value selected;
-            if (inclusive)
-              selected = reverse ? b.icmp_uge(b.i32_val(reg), consumerRegs[r])
-                                 : b.icmp_ule(b.i32_val(reg), consumerRegs[r]);
-            else
-              selected = reverse ? b.icmp_ugt(b.i32_val(reg), consumerRegs[r])
-                                 : b.icmp_ult(b.i32_val(reg), consumerRegs[r]);
-            for (unsigned i = 0; i < types.size(); ++i)
-              carry.values[i] = b.select(selected, acc[i], carry.values[i]);
-          }
-          if (--remaining[r])
-            continue;
-          if (inclusive) {
-            values[r] = carry.values;
-          } else {
-            for (unsigned i = 0; i < segmentRegs; ++i) {
-              auto &value = values[r * segmentRegs + i];
-              value = combineWithPrefix(op, carry.values, value, rewriter,
-                                        carry.pred);
-            }
-          }
-          carry.values.clear();
-        }
+    auto load = [&](unsigned reg) {
+      Value index = applyLinearLayout(loc, rewriter, loadLayout,
+                                      {{kReg, b.i32_val(reg % groupSize)},
+                                       {kGroup, b.i32_val(reg / groupSize)},
+                                       {kLane, laneId},
+                                       {kWarp, warpId},
+                                       {kBlock, b.i32_val(0)}})
+                        .front()
+                        .second;
+      SmallVector<Value> current;
+      for (unsigned i = 0; i < types.size(); ++i) {
+        Value ptr = b.gep(smem.getType(), types[i], bases[i], index);
+        current.push_back(targetInfo.loadDShared(rewriter, loc, ptr, Value(),
+                                                 types[i], b.true_val()));
       }
+      return current;
+    };
+    auto consume = [&](unsigned reg, const SmallVector<Value> &acc) {
+      for (unsigned r : consumers[reg]) {
+        auto &carry = carries[r];
+        if (carry.values.empty()) {
+          carry.values = acc;
+        } else {
+          // One-value segments consume the inclusive prefix directly.
+          Value selected;
+          if (inclusive)
+            selected = reverse ? b.icmp_uge(b.i32_val(reg), consumerRegs[r])
+                               : b.icmp_ule(b.i32_val(reg), consumerRegs[r]);
+          else
+            selected = reverse ? b.icmp_ugt(b.i32_val(reg), consumerRegs[r])
+                               : b.icmp_ult(b.i32_val(reg), consumerRegs[r]);
+          for (unsigned i = 0; i < types.size(); ++i)
+            carry.values[i] = b.select(selected, acc[i], carry.values[i]);
+        }
+        if (--remaining[r])
+          continue;
+        if (inclusive) {
+          values[r] = carry.values;
+        } else {
+          for (unsigned i = 0; i < segmentRegs; ++i) {
+            auto &value = values[r * segmentRegs + i];
+            value = combineWithPrefix(op, carry.values, value, rewriter,
+                                      carry.pred);
+          }
+        }
+        carry.values.clear();
+      }
+    };
+    for (unsigned offset = 0; offset < numRegs; offset += numSegments) {
+      unsigned base = reverse ? numRegs - numSegments - offset : offset;
+      scanThreadSegment(op, base, numSegments, load, consume, rewriter);
     }
   }
 
