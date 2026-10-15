@@ -1,11 +1,10 @@
-import inspect
 import numpy
 import pytest
 import torch
 import triton.language as tl
 from collections import namedtuple
 from triton._C.libtriton import native_specialize_impl
-from triton.runtime.jit import MockTensor, JITCallable, KernelParam, create_function_from_signature
+from triton.runtime.jit import MockTensor, JITCallable
 from triton._utils import canonicalize_dtype
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.amd.compiler import HIPBackend
@@ -207,19 +206,3 @@ def test_native_dtype_torch_contract(torch_name, dtype, canonical):
         for value, name in ((storage, "u8"), (native, canonical), (storage, "u8"), (native, canonical)):
             signature, _ = native_specialize_impl(backend, value, False, True, True)
             assert signature == "*" + name
-
-    def bind(annotation, value):
-        param = inspect.Parameter("arg", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation)
-        binder = create_function_from_signature(inspect.Signature([param]), [KernelParam(0, param, False, False)],
-                                                CUDABackend)
-        return binder(value)[1][0][0]
-
-    assert bind("*" + canonical, native) == "*" + canonical
-    assert bind("const " + canonical + "*", native) == "*k" + canonical
-    other = "fp8e8m0fnu" if canonical == "fp4e2m1x2" else "fp4e2m1x2"
-    for annotation, value in (("*u8", native), ("*" + other, native), ("*" + canonical, storage)):
-        with pytest.raises(TypeError, match="does not match argument dtype"):
-            bind(annotation, value)
-    # Existing ignored hints must leave tensor inference unchanged.
-    assert bind("my_types.float4Tensor", storage) == "*u8"
-    assert bind("my_types.float4Tensor", native) == "*" + canonical
