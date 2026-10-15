@@ -1,7 +1,7 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a -cse | FileCheck %s --check-prefix=GFX90A
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 -cse | FileCheck %s --check-prefix=GFX942
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 -cse | FileCheck %s --check-prefix=GFX950
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 -cse | FileCheck %s --check-prefix=GFX1250
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a -cse | FileCheck %s --check-prefixes=GFX90A,VOTE
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 -cse | FileCheck %s --check-prefixes=GFX942,VOTE
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 -cse | FileCheck %s --check-prefixes=GFX950,VOTE
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 -cse | FileCheck %s --check-prefixes=GFX1250,VOTE
 
 #blocked_reduce = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -113,5 +113,253 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %min : f32
     }) : (tensor<1x128xf32, #blocked_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
     tt.return
+  }
+}
+
+// -----
+
+#vote = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+#subgroup = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // VOTE-LABEL: @reduce_boolean_andi_wave64
+  // VOTE: llvm.xor {{.*}} : i1
+  // VOTE: rocdl.ballot {{.*}} : i64
+  // VOTE: llvm.icmp "eq" {{.*}} : i64
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_andi_wave64(%arg0: tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.andi %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_ori_wave64
+  // VOTE: rocdl.ballot {{.*}} : i64
+  // VOTE: llvm.icmp "ne" {{.*}} : i64
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_ori_wave64(%arg0: tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_minui_wave64
+  // VOTE: llvm.xor {{.*}} : i1
+  // VOTE: rocdl.ballot {{.*}} : i64
+  // VOTE: llvm.icmp "eq" {{.*}} : i64
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_minui_wave64(%arg0: tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.minui %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_maxui_wave64
+  // VOTE: rocdl.ballot {{.*}} : i64
+  // VOTE: llvm.icmp "ne" {{.*}} : i64
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_maxui_wave64(%arg0: tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.maxui %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_broadcast_wave64
+  // VOTE: llvm.xor {{.*}} : i1
+  // VOTE: rocdl.ballot {{.*}} : i64
+  // VOTE: llvm.icmp "eq" {{.*}} : i64
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_broadcast_wave64(%arg0: tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.andi %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_register_wave64
+  // VOTE: rocdl.ballot {{.*}} : i64
+  // VOTE: llvm.icmp "ne" {{.*}} : i64
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_register_wave64(%arg0: tensor<4x128xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x128xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_subgroup_wave64
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_subgroup_wave64(%arg0: tensor<8x32xi1, #subgroup>) -> tensor<8xi1, #ttg.slice<{dim = 1, parent = #subgroup}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<8x32xi1, #subgroup>) -> tensor<8xi1, #ttg.slice<{dim = 1, parent = #subgroup}>>
+    tt.return %0 : tensor<8xi1, #ttg.slice<{dim = 1, parent = #subgroup}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_print_wave64
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.call
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_print_wave64(%arg0: tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      tt.print "combine" {hex = false, isSigned = array<i32: 0>} : %a : i1
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_xor_wave64
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_xor_wave64(%arg0: tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.xori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+}
+
+// -----
+
+#vote = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#subgroup = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // VOTE-LABEL: @reduce_boolean_andi_wave32
+  // VOTE: llvm.xor {{.*}} : i1
+  // VOTE: rocdl.ballot {{.*}} : i32
+  // VOTE: llvm.icmp "eq" {{.*}} : i32
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_andi_wave32(%arg0: tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.andi %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_ori_wave32
+  // VOTE: rocdl.ballot {{.*}} : i32
+  // VOTE: llvm.icmp "ne" {{.*}} : i32
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_ori_wave32(%arg0: tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_minui_wave32
+  // VOTE: llvm.xor {{.*}} : i1
+  // VOTE: rocdl.ballot {{.*}} : i32
+  // VOTE: llvm.icmp "eq" {{.*}} : i32
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_minui_wave32(%arg0: tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.minui %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_maxui_wave32
+  // VOTE: rocdl.ballot {{.*}} : i32
+  // VOTE: llvm.icmp "ne" {{.*}} : i32
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_maxui_wave32(%arg0: tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.maxui %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_broadcast_wave32
+  // VOTE: llvm.xor {{.*}} : i1
+  // VOTE: rocdl.ballot {{.*}} : i32
+  // VOTE: llvm.icmp "eq" {{.*}} : i32
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_broadcast_wave32(%arg0: tensor<4x16xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.andi %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x16xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_register_wave32
+  // VOTE: rocdl.ballot {{.*}} : i32
+  // VOTE: llvm.icmp "ne" {{.*}} : i32
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_register_wave32(%arg0: tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x64xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_subgroup_wave32
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_subgroup_wave32(%arg0: tensor<8x16xi1, #subgroup>) -> tensor<8xi1, #ttg.slice<{dim = 1, parent = #subgroup}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<8x16xi1, #subgroup>) -> tensor<8xi1, #ttg.slice<{dim = 1, parent = #subgroup}>>
+    tt.return %0 : tensor<8xi1, #ttg.slice<{dim = 1, parent = #subgroup}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_print_wave32
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.call
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_print_wave32(%arg0: tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      tt.print "combine" {hex = false, isSigned = array<i32: 0>} : %a : i1
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+  }
+  // VOTE-LABEL: @reduce_boolean_xor_wave32
+  // VOTE-NOT: rocdl.ballot
+  // VOTE: llvm.return
+  tt.func private @reduce_boolean_xor_wave32(%arg0: tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.xori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #vote>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #vote}>>
   }
 }

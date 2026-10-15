@@ -838,4 +838,111 @@ tt.func private @reduce_broadcast_halves_minui_small(%arg0: tensor<8x4xi32, #hal
   tt.return %0 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
 }
 
+
+  // REDUX-LABEL: @reduce_boolean_andi
+  // REDUX: llvm.xor {{.*}} : i1
+  // REDUX: nvvm.vote.sync ballot {{.*}} -> i32
+  // REDUX: llvm.icmp "eq" {{.*}} : i32
+  // REDUX-NOT: nvvm.vote.sync
+  // REDUX: llvm.return
+  tt.func private @reduce_boolean_andi(%arg0: tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.andi %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  }
+  // REDUX-LABEL: @reduce_boolean_ori
+  // REDUX: nvvm.vote.sync ballot {{.*}} -> i32
+  // REDUX: llvm.icmp "ne" {{.*}} : i32
+  // REDUX-NOT: nvvm.vote.sync
+  // REDUX: llvm.return
+  tt.func private @reduce_boolean_ori(%arg0: tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  }
+  // REDUX-LABEL: @reduce_boolean_minui
+  // REDUX: llvm.xor {{.*}} : i1
+  // REDUX: nvvm.vote.sync ballot {{.*}} -> i32
+  // REDUX: llvm.icmp "eq" {{.*}} : i32
+  // REDUX-NOT: nvvm.vote.sync
+  // REDUX: llvm.return
+  tt.func private @reduce_boolean_minui(%arg0: tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.minui %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  }
+  // REDUX-LABEL: @reduce_boolean_maxui
+  // REDUX: nvvm.vote.sync ballot {{.*}} -> i32
+  // REDUX: llvm.icmp "ne" {{.*}} : i32
+  // REDUX-NOT: nvvm.vote.sync
+  // REDUX: llvm.return
+  tt.func private @reduce_boolean_maxui(%arg0: tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.maxui %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  }
+  // REDUX-LABEL: @reduce_boolean_broadcast
+  // REDUX: llvm.xor {{.*}} : i1
+  // REDUX: nvvm.vote.sync ballot {{.*}} -> i32
+  // REDUX: llvm.icmp "eq" {{.*}} : i32
+  // REDUX-NOT: nvvm.vote.sync
+  // REDUX: llvm.return
+  tt.func private @reduce_boolean_broadcast(%arg0: tensor<4x16xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.andi %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x16xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  }
+  // REDUX-LABEL: @reduce_boolean_register
+  // REDUX: nvvm.vote.sync ballot {{.*}} -> i32
+  // REDUX: llvm.icmp "ne" {{.*}} : i32
+  // REDUX-NOT: nvvm.vote.sync
+  // REDUX: llvm.return
+  tt.func private @reduce_boolean_register(%arg0: tensor<4x64xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x64xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  }
+  // REDUX-LABEL: @reduce_boolean_subgroup
+  // REDUX-NOT: nvvm.vote.sync
+  // REDUX: llvm.return
+  tt.func private @reduce_boolean_subgroup(%arg0: tensor<8x16xi1, #halves>) -> tensor<8xi1, #ttg.slice<{dim = 1, parent = #halves}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<8x16xi1, #halves>) -> tensor<8xi1, #ttg.slice<{dim = 1, parent = #halves}>>
+    tt.return %0 : tensor<8xi1, #ttg.slice<{dim = 1, parent = #halves}>>
+  }
+  // REDUX-LABEL: @reduce_boolean_print
+  // REDUX-NOT: nvvm.vote.sync
+  // REDUX: llvm.call
+  // REDUX-NOT: nvvm.vote.sync
+  // REDUX: llvm.return
+  tt.func private @reduce_boolean_print(%arg0: tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%a: i1, %b: i1):
+      tt.print "combine" {hex = false, isSigned = array<i32: 0>} : %a : i1
+      %c = arith.ori %a, %b : i1
+      tt.reduce.return %c : i1
+    }) : (tensor<4x32xi1, #blocked_warp_reduce>) -> tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+    tt.return %0 : tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  }
 }

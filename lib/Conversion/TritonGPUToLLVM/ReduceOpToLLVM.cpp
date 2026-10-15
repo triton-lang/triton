@@ -372,11 +372,55 @@ private:
       return {std::move(layout), std::move(accs)};
     }
 
-    warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, accs, rewriter);
+    if (!warpReduceWithBallot(op, layout, reduceLaneIdMask, broadcastLaneIdMask,
+                              accs, rewriter))
+      warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, accs, rewriter);
 
     layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, op.getAxis(),
                                                          kLane);
     return {std::move(layout), std::move(accs)};
+  }
+
+  bool warpReduceWithBallot(triton::ReduceOp op, const LinearLayout &layout,
+                            unsigned reduceLaneIdMask,
+                            unsigned broadcastLaneIdMask,
+                            SmallVector<SmallVector<Value>> &accs,
+                            ConversionPatternRewriter &rewriter) const {
+    auto *ctx = op.getContext();
+    if (accs.size() != 1 || !accs.front().front().getType().isInteger(1))
+      return false;
+    Operation *combiner = op.getSingleCombiner();
+    Block &combineBlock = op.getCombineOp().front();
+    if (!combiner ||
+        !isa<arith::AndIOp, arith::OrIOp, arith::MinUIOp, arith::MaxUIOp>(
+            combiner) ||
+        combineBlock.getOperations().size() != 2 ||
+        !isa<triton::ReduceReturnOp>(combineBlock.getTerminator()))
+      return false;
+
+    unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+    if ((warpSize != 32 && warpSize != 64) ||
+        (reduceLaneIdMask | broadcastLaneIdMask) != warpSize - 1)
+      return false;
+    for (const auto &basis : layout.getBases().lookup(str_attr("lane")))
+      for (auto [dim, value] : llvm::enumerate(basis))
+        if (dim != op.getAxis() && value != 0)
+          return false;
+
+    // Broadcast lanes contain duplicate values, so AND and OR can include them.
+    // Triton's block control flow makes all physical lanes execute this
+    // reduction.
+    auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+    bool isAnd = isa<arith::AndIOp, arith::MinUIOp>(combiner);
+    for (Value &acc : accs.front()) {
+      Value pred = isAnd ? b.xor_(acc, b.true_val()) : acc;
+      Value ballot =
+          targetInfo.ballot(rewriter, op.getLoc(), int_ty(warpSize), pred);
+      Value zero = b.int_val(warpSize, 0);
+      acc = isAnd ? b.icmp_eq(ballot, zero) : b.icmp_ne(ballot, zero);
+    }
+    return true;
   }
 
   void warpReduce(triton::ReduceOp op, unsigned reduceLaneIdMask,
@@ -384,15 +428,21 @@ private:
                   SmallVector<SmallVector<Value>> &accs,
                   ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
+    bool hasSingleCombiner =
+        op.getCombineOp().front().getOperations().size() == 2;
     auto vectorCombineRegion =
-        createVectorCombineRegion(op, /*supportBitwidth32Elementwise=*/false);
+        hasSingleCombiner
+            ? createVectorCombineRegion(op,
+                                        /*supportBitwidth32Elementwise=*/false)
+            : nullptr;
     unsigned regs = accs.front().size();
     for (unsigned reg = 0; reg < regs; ++reg) {
       SmallVector<Value> acc(op.getNumOperands());
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         acc[i] = accs[i][reg];
       }
-      if (!targetInfo.warpReduce(rewriter, loc, acc, op, reduceLaneIdMask,
+      if (!hasSingleCombiner ||
+          !targetInfo.warpReduce(rewriter, loc, acc, op, reduceLaneIdMask,
                                  broadcastLaneIdMask)) {
         // Shuffle pairs of independent outputs in one 32-bit register.
         if (vectorCombineRegion && reg + 1 < regs) {

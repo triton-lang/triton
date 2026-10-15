@@ -12,6 +12,7 @@ from triton._internal_testing import (
     is_compile_warmup,
     is_cuda,
     is_hip,
+    is_hip_cdna4,
     is_hip_cdna5,
     is_hopper_or_newer,
     skip_if_unsupported_cluster_size,
@@ -1084,6 +1085,217 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, saniti
     if epilogue_kind in ("expand_reduce2d", "reduce2d"):
         z_ref = reduce_fn(z_ref, dim=1 - axis, keepdim=True)
     torch.testing.assert_close(z, z_ref.to(torch_dtype))
+
+
+@pytest.mark.parametrize("op", ["all", "any"])
+@pytest.mark.parametrize("layout_kind", [
+    "full", "broadcast", "register", "subgroup", "cross_warp", "linear_permuted", "linear_broadcast", "linear_subgroup",
+    "linear_cross_warp"
+])
+@pytest.mark.parametrize("masked", [False, True])
+def test_reduce_boolean_warp_votes(op, layout_kind, masked, device):
+    width = THREADS_PER_WARP
+    rows = 8
+    columns = width
+    threads_per_warp = [1, width]
+    warps_per_cta = [4, 1]
+    if layout_kind == "broadcast":
+        columns //= 2
+    elif layout_kind == "register":
+        columns *= 2
+    elif layout_kind == "subgroup":
+        columns //= 2
+        threads_per_warp = [2, width // 2]
+    elif layout_kind == "cross_warp":
+        columns *= 4
+        warps_per_cta = [1, 4]
+    layout = ttgl.BlockedLayout([1, 1], threads_per_warp, warps_per_cta, [1, 0])
+    if layout_kind.startswith("linear_"):
+        if not is_hip_cdna4():
+            pytest.skip("Linear Boolean vote cases require gfx950")
+        layouts = {
+            "linear_permuted":
+            ttgl.DistributedLinearLayout(reg_bases=[[4, 0]], lane_bases=[[0, 8], [0, 1], [0, 32], [0, 2], [0, 16],
+                                                                         [0, 4]], warp_bases=[[1, 0], [2, 0]],
+                                         block_bases=[], shape=[8, 64]),
+            "linear_broadcast":
+            ttgl.DistributedLinearLayout(reg_bases=[[4, 0]], lane_bases=[[0, 4], [0, 0], [0, 1], [0, 0], [0, 8],
+                                                                         [0, 2]], warp_bases=[[1, 0], [2, 0]],
+                                         block_bases=[], shape=[8, 16]),
+            "linear_subgroup":
+            ttgl.DistributedLinearLayout(reg_bases=[], lane_bases=[[0, 4], [1, 0], [0, 1], [0, 0], [0, 8], [0, 2]],
+                                         warp_bases=[[2, 0], [4, 0]], block_bases=[], shape=[8, 16]),
+            "linear_cross_warp":
+            ttgl.DistributedLinearLayout(reg_bases=[[0, 16],
+                                                    [1, 0], [2, 0]], lane_bases=[[0, 0], [0, 1], [0, 2], [0, 4], [0, 8],
+                                                                                 [0, 64]], warp_bases=[[4, 0], [0, 32]],
+                                         block_bases=[], shape=[8, 128]),
+        }
+        layout = layouts[layout_kind]
+        rows, columns = layout.shape
+
+    @gluon.jit
+    def kernel(X, Y, ROWS: ttgl.constexpr, COLUMNS: ttgl.constexpr, LAYOUT: ttgl.constexpr, OP: ttgl.constexpr,
+               MASKED: ttgl.constexpr):
+        row = ttgl.arange(0, ROWS, layout=ttgl.SliceLayout(1, LAYOUT))
+        column = ttgl.arange(0, COLUMNS, layout=ttgl.SliceLayout(0, LAYOUT))
+        offsets = row[:, None] * COLUMNS + column[None, :]
+        if MASKED:
+            mask = (column[None, :] < COLUMNS - 3) & (row[:, None] != 0)
+            predicate = ttgl.load(X + offsets, mask=mask, other=OP == "all")
+        else:
+            predicate = ttgl.load(X + offsets)
+        if OP == "all":
+            result = ttgl.all(predicate, axis=1)
+        else:
+            result = ttgl.any(predicate, axis=1)
+        ttgl.store(Y + row, result)
+
+    # Adjacent rows and register outputs produce different vote results.
+    values = torch.zeros((rows, columns), dtype=torch.bool, device=device)
+    values[1::4] = True
+    values[2::4, -1] = True
+    values[3::4] = True
+    values[3::4, -1] = False
+    values[4] = True
+    values[5] = False
+    values[6] = True
+    values[6, -1] = False
+    values[7] = False
+    values[7, -1] = True
+    result = torch.empty((rows, ), dtype=torch.bool, device=device)
+    compiled = kernel[(1, )](values, result, rows, columns, layout, op, masked, num_warps=4)
+    logical_values = values
+    if masked:
+        mask = (torch.arange(columns, device=device)[None, :] < columns - 3)
+        mask = mask & (torch.arange(rows, device=device)[:, None] != 0)
+        logical_values = torch.where(mask, values, op == "all")
+    reference = getattr(torch, op)(logical_values, dim=1)
+    torch.testing.assert_close(result, reference)
+    ballot = "llvm.amdgcn.ballot" if is_hip() else "llvm.nvvm.vote.ballot.sync"
+    assert (ballot in compiled.asm["llir"]) == ("subgroup" not in layout_kind)
+    if layout_kind == "linear_cross_warp":
+        assert compiled.metadata.shared > 0
+
+
+@pytest.mark.parametrize("op", ["all", "any"])
+@pytest.mark.parametrize("replicate_warps", [False, True])
+def test_reduce_boolean_scalar_control_flow(op, replicate_warps, device):
+    width = THREADS_PER_WARP
+    size = width if replicate_warps else width * 4
+
+    @gluon.jit
+    def kernel(X, Y, SIZE: ttgl.constexpr, WIDTH: ttgl.constexpr, OP: ttgl.constexpr):
+        offsets = ttgl.arange(0, SIZE, layout=ttgl.BlockedLayout([1], [WIDTH], [4], [0]))
+        result = 0
+        for iteration in range(3):
+            predicate = ttgl.load(X + iteration * SIZE + offsets)
+            if OP == "all":
+                vote = ttgl.all(predicate, 0)
+            else:
+                vote = ttgl.any(predicate, 0)
+            if vote:
+                result += 1 << iteration
+        ttgl.store(Y, result)
+
+    values = torch.zeros((3, size), dtype=torch.bool, device=device)
+    values[1] = True
+    values[2, -1] = True
+    result = torch.empty((), dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](values, result, size, width, op, num_warps=4)
+    votes = getattr(torch, op)(values, dim=1).cpu().tolist()
+    assert result.item() == sum(int(vote) << iteration for iteration, vote in enumerate(votes))
+    ballot = "llvm.amdgcn.ballot" if is_hip() else "llvm.nvvm.vote.ballot.sync"
+    assert ballot in compiled.asm["llir"]
+
+
+@pytest.mark.parametrize("arch, width", [("gfx950", 64), ("gfx1250", 32)])
+def test_reduce_boolean_warp_votes_compile(arch, width):
+    import re
+
+    from triton.backends.compiler import GPUTarget
+    from triton.experimental.gluon import GluonASTSource
+
+    @gluon.jit
+    def kernel(X, All, Any, WIDTH: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, WIDTH], [4, 1], [1, 0])
+        row = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, layout))
+        column = ttgl.arange(0, WIDTH, layout=ttgl.SliceLayout(0, layout))
+        predicate = ttgl.load(X + row[:, None] * WIDTH + column[None, :])
+        ttgl.store(All + row, ttgl.all(predicate, 1))
+        ttgl.store(Any + row, ttgl.any(predicate, 1))
+
+    source = GluonASTSource(kernel, signature={"X": "*i1", "All": "*i1", "Any": "*i1", "WIDTH": "constexpr"},
+                            constexprs={"WIDTH": width})
+    compiled = triton.compile(source, target=GPUTarget("hip", arch, width), options={"num_warps": 4})
+    llir = compiled.asm["llir"]
+    declaration = re.search(rf"^declare i{width} @llvm\.amdgcn\.ballot\.i{width}\(i1\) #(\d+)\b", llir, re.MULTILINE)
+    assert declaration is not None
+    attribute_group = re.search(rf"^attributes #{declaration.group(1)} = \{{([^}}]*)\}}", llir, re.MULTILINE)
+    assert attribute_group is not None
+    assert "convergent" in attribute_group.group(1).split()
+    assert compiled.asm["amdgcn"]
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires gfx950")
+def test_reduce_boolean_warp_pipeline(device):
+
+    @gluon.jit
+    def kernel(X, All, Any, N):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [8, 1], [1, 0])
+        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, layout))
+        columns = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))
+        for iteration in range(N):
+            with ttgl.amd.warp_pipeline_stage("load", priority=1):
+                predicates = ttgl.load(X + iteration * 512 + rows[:, None] * 64 + columns[None, :])
+            with ttgl.amd.warp_pipeline_stage("vote", priority=0):
+                ttgl.store(All + iteration * 8 + rows, ttgl.all(predicates, axis=1))
+                ttgl.store(Any + iteration * 8 + rows, ttgl.any(predicates, axis=1))
+
+    iterations = 3
+    values = torch.zeros((iterations, 8, 64), dtype=torch.bool, device=device)
+    for iteration in range(iterations):
+        for group in range(2):
+            first_row = 4 * group
+            values[iteration, first_row + (1 + iteration + group) % 4] = True
+            values[iteration, first_row + (2 + iteration + group) % 4, -1] = True
+            mixed_row = first_row + (3 + iteration + group) % 4
+            values[iteration, mixed_row] = True
+            values[iteration, mixed_row, -1] = False
+    all_result = torch.empty((iterations, 8), dtype=torch.bool, device=device)
+    any_result = torch.empty_like(all_result)
+    compiled = kernel.warmup(values, all_result, any_result, iterations, grid=(1, ), num_warps=8)
+    assert 'triton.warp_pipeline.stage = "load"' in compiled.asm["ttgir"]
+    assert 'triton.warp_pipeline.stage = "vote"' in compiled.asm["ttgir"]
+    assert "llvm.amdgcn.ballot.i64" in compiled.asm["llir"]
+    assert "s_barrier" in compiled.asm["amdgcn"]
+    kernel[(1, )](values, all_result, any_result, iterations, num_warps=8)
+    torch.testing.assert_close(all_result, torch.all(values, dim=2))
+    torch.testing.assert_close(any_result, torch.any(values, dim=2))
+
+
+def test_reduce_boolean_warp_specialize_rejected_gfx950(capfd):
+    from triton.backends.compiler import GPUTarget
+    from triton.experimental.gluon import GluonASTSource
+
+    @gluon.jit
+    def worker(X, Y):
+        offsets = ttgl.arange(0, 64, layout=ttgl.BlockedLayout([1], [64], [4], [0]))
+        ttgl.store(Y, ttgl.any(ttgl.load(X + offsets), 0))
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(X, Y):
+        ttgl.warp_specialize([(idle, ()), (worker, (X, Y))], [4])
+
+    source = GluonASTSource(kernel, signature={"X": "*i1", "Y": "*i1"})
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        triton.compile(source, target=GPUTarget("hip", "gfx950", 64), options={"num_warps": 4})
+    captured = capfd.readouterr()
+    assert "Warp specialization is only supported on CDNA5, got gfx950" in captured.out + captured.err
 
 
 @pytest.mark.skipif(not is_cuda(), reason="NVIDIA redux instructions")
