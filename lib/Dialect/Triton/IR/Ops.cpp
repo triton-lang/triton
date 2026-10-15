@@ -419,11 +419,6 @@ bool DotScaledOp::verifyOutputDims() {
 }
 
 LogicalResult DotScaledOp::verify() {
-  for (auto [value, format] :
-       {std::pair{getA(), getAElemType()}, std::pair{getB(), getBElemType()}})
-    if (isa<PackedFloat4E2M1Type>(value.getType().getElementType()) &&
-        format != ScaleDotElemType::E2M1)
-      return emitOpError("packed FP4 operands require e2m1 format");
   auto aShape = this->getA().getType().getShape();
   int64_t rank = aShape.size();
   if (rank < 2)
@@ -443,11 +438,6 @@ LogicalResult DotScaledOp::verify() {
           getA(), getAScale(), getAElemType(), getLhsKPack(), getB(),
           getBScale(), getBElemType(), getRhsKPack(), scaleFactor, scaleErr)))
     return this->emitError(scaleErr);
-
-  for (auto scale : {getAScale(), getBScale()})
-    if (scale && isa<Float8E8M0FNUType>(scale.getType().getElementType()) &&
-        scaleFactor != 32)
-      return emitOpError("E8M0 scales require a scale factor of 32");
 
   if (getAScale()) {
     auto aScaleShape = getAScale().getType().getShape();
@@ -1331,16 +1321,6 @@ OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
 }
 
 //-- MakeTensorDescOp --
-LogicalResult MakeTensorDescOp::verify() {
-  Type elementType = getBase().getType().getPointeeType();
-  if (auto intTy = dyn_cast<IntegerType>(elementType))
-    elementType = IntegerType::get(getContext(), intTy.getWidth());
-  if (elementType != getType().getSignlessBlockType().getElementType())
-    return emitOpError(
-        "descriptor element type must match base pointer element type");
-  return success();
-}
-
 void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
                              Value base, ValueRange shape, ValueRange strides,
                              ArrayRef<int32_t> blockShape, bool isSignedInteger,

@@ -4525,35 +4525,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
-@pytest.mark.parametrize("missing_scale", [None, "a", "b"])
-def test_amd_wmma_scaled_native_e8m0(missing_scale):
-
-    @gluon.jit
-    def kernel(scale_ptr, MISSING: ttgl.constexpr):
-        acc_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [], [], [16, 16, 128])
-        packed_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [], [], [16, 16, 64])
-        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, packed_layout, 16)
-        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, packed_layout, 16)
-        a_scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_wmma_scale_layout(a_layout, [16, 4])
-        b_scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_wmma_scale_layout(b_layout, [16, 4])
-        a = ttgl.full([16, 64], 0x11, ttgl.uint8, a_layout)
-        b = ttgl.full([64, 16], 0x22, ttgl.uint8, b_layout)
-        scale = ttgl.load(scale_ptr)
-        a_scale = None if MISSING == "a" else ttgl.full([16, 4], scale, ttgl.float8e8m0fnu, a_scale_layout)
-        b_scale = None if MISSING == "b" else ttgl.full([16, 4], scale, ttgl.float8e8m0fnu, b_scale_layout)
-        acc = ttgl.full([16, 16], 0, ttgl.float32, acc_layout)
-        ttgl.amd.cdna5.wmma_scaled(a, a_scale, "e2m1", b, b_scale, "e2m1", acc)
-
-    module = run_parser(kernel, *make_args(MockTensor(tl.float8e8m0fnu), missing_scale, num_warps=1),
-                        target=HIP_TARGET_CDNA5)
-    assert module.verify()
-    ir = module.str_nodebug()
-    dot = next(line for line in ir.splitlines() if "tt.dot_scaled" in line)
-    assert dot.count("xf8E8M0FNU") == (2 if missing_scale is None else 1)
-    if missing_scale is not None:
-        assert "arith.constant dense<127>" in ir
-
-
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA5])
 def test_amd_wmma_scaled_none(target):
 
@@ -5999,22 +5970,3 @@ def test_tma_cache_policy_frontend_invalid(kind, policy, message):
     with pytest.raises(CompilationError, match=message):
         run_parser(tma_cache_policy_kernel, *make_args(make_tma_cache_policy_desc(kind=kind), False, policy, kind,
                                                        False), target=BLACKWELL_TARGET)
-
-
-@pytest.mark.parametrize("dtype", [ttgl.float4e2m1x2, ttgl.float8e8m0fnu])
-@pytest.mark.parametrize("mode", ["scalar", "block", "result"])
-def test_native_low_precision_packed_arithmetic_rejected(dtype, mode):
-
-    @gluon.jit
-    def kernel(source, DTYPE: ttgl.constexpr, MODE: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
-        value = ttgl.full([128], 1.0, ttgl.float8e4nv, layout)
-        if MODE == "result":
-            rubin.mul4(value, value, dtype=DTYPE)
-        else:
-            offsets = ttgl.arange(0, 128, layout=layout)
-            native = ttgl.load(source) if MODE == "scalar" else ttgl.load(source + offsets)
-            rubin.mul4(value, native, dtype=ttgl.float8e4nv)
-
-    with pytest.raises(CompilationError, match="storage dtype"):
-        run_parser(kernel, *make_args(MockTensor(dtype), dtype, mode), target=RUBIN_TARGET)

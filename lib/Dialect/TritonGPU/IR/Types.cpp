@@ -14,6 +14,10 @@ using namespace mlir::triton::gpu;
 
 static constexpr llvm::StringRef kMutableMemory = "mutable";
 
+unsigned MemDescType::getElementTypeBitWidth() const {
+  return getIntOrFloatOrPtrBitWidth(getElementType());
+}
+
 Type MemDescType::parse(AsmParser &parser) {
   Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
   if (failed(parser.parseLess()))

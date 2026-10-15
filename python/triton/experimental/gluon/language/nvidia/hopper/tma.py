@@ -500,7 +500,7 @@ def make_tensor_descriptor(
     strides_type = ttgl.tuple(strides).type
     ty = tensor_descriptor_type(block_type, shape_type, strides_type, layout)
 
-    if not base.type.element_ty.is_floating() and padding == ttgl.ir.PADDING_OPTION.PAD_NAN:
+    if base.type.element_ty.is_int() and padding == ttgl.ir.PADDING_OPTION.PAD_NAN:
         raise ValueError("Padding option `nan` is not supported for integer blocks")
     handle = _semantic.builder.create_make_tensor_descriptor(
         ty._to_ir(_semantic.builder),

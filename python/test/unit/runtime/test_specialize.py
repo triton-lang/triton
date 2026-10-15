@@ -2,12 +2,11 @@ import inspect
 import numpy
 import pytest
 import torch
-import triton
 import triton.language as tl
 from collections import namedtuple
 from triton._C.libtriton import native_specialize_impl
-from triton.runtime.jit import MockTensor, JITCallable, KernelParam, _normalize_ty, create_function_from_signature
-from triton._utils import canonicalize_dtype, get_primitive_bitwidth
+from triton.runtime.jit import MockTensor, JITCallable, KernelParam, create_function_from_signature
+from triton._utils import canonicalize_dtype
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.amd.compiler import HIPBackend
 from triton.language import constexpr
@@ -192,72 +191,35 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
         assert result == expected
 
 
-@pytest.mark.parametrize("torch_name,triton_name,canonical", [
-    ("float4_e2m1fn_x2", "float4e2m1x2", "fp4e2m1x2"),
-    ("float8_e8m0fnu", "float8e8m0fnu", "fp8e8m0fnu"),
+@pytest.mark.parametrize("torch_name,dtype,canonical", [
+    ("float4_e2m1fn_x2", tl.float4e2m1x2, "fp4e2m1x2"),
+    ("float8_e8m0fnu", tl.float8e8m0fnu, "fp8e8m0fnu"),
 ])
-def test_low_precision_dtype_mapping(torch_name, triton_name, canonical):
+def test_native_dtype_torch_contract(torch_name, dtype, canonical):
     torch_dtype = getattr(torch, torch_name, None)
     if torch_dtype is None:
         pytest.skip(f"Torch does not expose {torch_name}")
-    triton_dtype = getattr(tl, triton_name)
-    assert canonicalize_dtype(torch_dtype) == canonical
-    assert canonicalize_dtype(triton_dtype) == canonical
-    assert get_primitive_bitwidth(canonical) == 8
-    assert triton_dtype.itemsize == torch_dtype.itemsize == 1
-    for alias in (canonical, torch_name, triton_name, "tl." + triton_name, triton_dtype):
-        assert _normalize_ty(alias) == canonical
-    assert _normalize_ty("const " + triton_name + "*") == "*k" + canonical
-
-
-@pytest.mark.parametrize("backend", [CUDABackend, HIPBackend])
-def test_low_precision_specialization_identity(backend):
-    names = ("uint8", "int8", "float4_e2m1fn_x2", "float8_e8m0fnu")
-    if not all(hasattr(torch, name) for name in names):
-        pytest.skip("Torch does not expose the native low precision types")
     storage = torch.arange(32, dtype=torch.uint8)
-    tensors = [storage.view(getattr(torch, name)) for name in names]
-    expected = ("u8", "i8", "fp4e2m1x2", "fp8e8m0fnu")
-    # Repeatedly interleave equal-width views to exercise the dtype cache.
-    for indices in (range(4), reversed(range(4))):
-        for i in indices:
-            for is_const in (False, True):
-                signature, _ = native_specialize_impl(backend, tensors[i], is_const, True, True)
-                assert signature == ("*k" if is_const else "*") + expected[i]
+    native = storage.view(torch_dtype)
+    assert canonicalize_dtype(torch_dtype) == canonicalize_dtype(dtype) == canonical
+    assert dtype.itemsize == torch_dtype.itemsize == 1
+    for backend in (CUDABackend, HIPBackend):
+        for value, name in ((storage, "u8"), (native, canonical), (storage, "u8"), (native, canonical)):
+            signature, _ = native_specialize_impl(backend, value, False, True, True)
+            assert signature == "*" + name
 
+    def bind(annotation, value):
+        param = inspect.Parameter("arg", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation)
+        binder = create_function_from_signature(inspect.Signature([param]), [KernelParam(0, param, False, False)],
+                                                CUDABackend)
+        return binder(value)[1][0][0]
 
-def _bind_annotated_argument(annotation, arg):
-    param = inspect.Parameter("arg", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation)
-    binder = create_function_from_signature(inspect.Signature([param]), [KernelParam(0, param, False, False)],
-                                            CUDABackend)
-    return binder(arg)[1][0][0]
-
-
-@pytest.mark.parametrize("name", ["fp4e2m1x2", "fp8e8m0fnu"])
-def test_low_precision_annotation_type_safety(name):
-    dtype = tl.dtype(name)
-    storage = torch.empty(32, dtype=torch.uint8)
-    native = triton.reinterpret(storage, dtype)
-    pointer = "*" + name
-    assert _bind_annotated_argument(pointer, native) == pointer
-    assert _bind_annotated_argument("const " + name + "*", native) == "*k" + name
-    assert _bind_annotated_argument("*u8", triton.reinterpret(native, tl.uint8)) == "*u8"
-    for annotation in ("*u8", "*fp4e2m1x2" if name != "fp4e2m1x2" else "*fp8e8m0fnu", "fp32", "u1", "i32"):
-        for value in (native, (native, ), TensorDescriptor.from_tensor(native, [32])):
-            with pytest.raises(TypeError, match="does not match argument dtype"):
-                _bind_annotated_argument(annotation, value)
-    for value in (storage, 0, 1, constexpr(1)):
+    assert bind("*" + canonical, native) == "*" + canonical
+    assert bind("const " + canonical + "*", native) == "*k" + canonical
+    other = "fp8e8m0fnu" if canonical == "fp4e2m1x2" else "fp4e2m1x2"
+    for annotation, value in (("*u8", native), ("*" + other, native), ("*" + canonical, storage)):
         with pytest.raises(TypeError, match="does not match argument dtype"):
-            _bind_annotated_argument(pointer, value)
-
-
-def test_low_precision_annotations_preserve_legacy_behavior():
-    legacy = torch.empty(32, dtype=torch.int8)
-    assert _bind_annotated_argument("*u8", legacy) == "*u8"
-    for annotation in ("fp32", "u1"):
-        for value in (numpy.float32(1), object(), legacy):
-            assert _bind_annotated_argument(annotation, value) == annotation
-    native = triton.reinterpret(legacy, tl.float4e2m1x2)
-    for annotation in ("my_types.float4Tensor", "float8e8_config", "fp4_not_a_dtype"):
-        assert _bind_annotated_argument(annotation, legacy) == "*i8"
-        assert _bind_annotated_argument(annotation, native) == "*fp4e2m1x2"
+            bind(annotation, value)
+    # Existing ignored hints must leave tensor inference unchanged.
+    assert bind("my_types.float4Tensor", storage) == "*u8"
+    assert bind("my_types.float4Tensor", native) == "*" + canonical

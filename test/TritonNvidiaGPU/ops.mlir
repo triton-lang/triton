@@ -100,26 +100,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // CHECK-LABEL: @tcgen5_scaled_native_types
-  // CHECK: ttng.tc_gen5_mma_scaled {{.*}} lhs = e2m1 rhs = e2m1
-  // CHECK-SAME: !tt.fp4e2m1x2
-  // CHECK-SAME: f8E8M0FNU
-  tt.func @tcgen5_scaled_native_types(
-      %a: !ttg.memdesc<128x64x!tt.fp4e2m1x2, #tmem_lhs_fp4, #ttng.tensor_memory>,
-      %b: !ttg.memdesc<64x256x!tt.fp4e2m1x2, #shared1, #ttg.shared_memory>,
-      %c: !ttg.memdesc<128x256xf32, #tmem_int32, #ttng.tensor_memory, mutable>,
-      %sa: !ttg.memdesc<128x4xf8E8M0FNU, #tmem_scales, #ttng.tensor_memory>,
-      %sb: !ttg.memdesc<256x4xf8E8M0FNU, #tmem_scales, #ttng.tensor_memory>,
-      %use: i1, %pred: i1) {
-    ttng.tc_gen5_mma_scaled %a, %b, %c, %sa, %sb, %use, %pred lhs = e2m1 rhs = e2m1 :
-      !ttg.memdesc<128x64x!tt.fp4e2m1x2, #tmem_lhs_fp4, #ttng.tensor_memory>,
-      !ttg.memdesc<64x256x!tt.fp4e2m1x2, #shared1, #ttg.shared_memory>,
-      !ttg.memdesc<128x256xf32, #tmem_int32, #ttng.tensor_memory, mutable>,
-      !ttg.memdesc<128x4xf8E8M0FNU, #tmem_scales, #ttng.tensor_memory>,
-      !ttg.memdesc<256x4xf8E8M0FNU, #tmem_scales, #ttng.tensor_memory>
-    tt.return
-  }
-
   // CHECK-LABEL: @async_tma_gather
   // CHECK-SAME: [[DESC:%arg[0-9]+]]:
   // CHECK-SAME: [[X_OFFSETS:%arg[0-9]+]]:

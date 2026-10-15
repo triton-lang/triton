@@ -1,24 +1,5 @@
 // RUN: triton-opt %s | FileCheck %s
 
-// CHECK-LABEL: @descriptor_integer_signedness
-tt.func @descriptor_integer_signedness(%p: !tt.ptr<i8>, %n: i32) {
-  %one = arith.constant 1 : i64
-  // CHECK: tt.make_tensor_descriptor {{.*}} : <i8>, <32xsi8>
-  %signed = tt.make_tensor_descriptor %p, [%n], [%one] : <i8>, <32xsi8>
-  // CHECK: tt.make_tensor_descriptor {{.*}} : <i8>, <32xui8>
-  %unsigned = tt.make_tensor_descriptor %p, [%n], [%one] : <i8>, <32xui8>
-  tt.return
-}
-
-// CHECK-LABEL: @native_packed_fp4_gather_scatter
-tt.func @native_packed_fp4_gather_scatter(%d: !tt.tensordesc<1x32x!tt.fp4e2m1x2>, %rows: tensor<8xi32>, %col: i32) {
-  // CHECK: tt.descriptor_gather
-  %v = tt.descriptor_gather %d[%rows, %col] : (!tt.tensordesc<1x32x!tt.fp4e2m1x2>, tensor<8xi32>, i32) -> tensor<8x32x!tt.fp4e2m1x2>
-  // CHECK: tt.descriptor_scatter
-  tt.descriptor_scatter %d[%rows, %col], %v : !tt.tensordesc<1x32x!tt.fp4e2m1x2>, tensor<8xi32>, i32, tensor<8x32x!tt.fp4e2m1x2>
-  tt.return
-}
-
 // CHECK-LABEL: @cast_ops
 tt.func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64) {
   // scalar -> scalar

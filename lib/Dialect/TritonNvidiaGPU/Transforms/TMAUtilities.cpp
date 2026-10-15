@@ -103,14 +103,11 @@ enum TMA_ELEMENT_TYPES {
 FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
   auto encoding = ty.getSharedLayout();
   bool fp4Padded = isFp4Padded(encoding);
-  auto elemTy = ty.getElementType();
 
-  if (fp4Padded) {
-    if (isa<Float8E8M0FNUType>(elemTy))
-      return emitError(loc) << "E8M0 descriptors cannot use FP4 padding";
+  if (fp4Padded)
     return TMA_B4X16_P64;
-  }
 
+  auto elemTy = ty.getElementType();
   if (elemTy.isBF16()) {
     return TMA_BF16;
   } else if (elemTy.isF16()) {

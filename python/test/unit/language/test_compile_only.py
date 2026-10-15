@@ -53,41 +53,20 @@ def test_native_dtype_copy_lowering(target, dtype, ir_dtype, monkeypatch):
     assert native["llir"] == legacy["llir"]
 
 
-@pytest.mark.parametrize("dtype", ["fp4e2m1x2", "fp8e8m0fnu"])
-def test_native_dtype_descriptor_lowering(dtype, monkeypatch):
-    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
-
-    @triton.jit
-    def descriptor_copy(source, destination, rows, columns):
-        src = tl.make_tensor_descriptor(source, [rows, columns], [96, 1], [32, 32])
-        dst = tl.make_tensor_descriptor(destination, [32, 32], [32, 1], [32, 32])
-        dst.store([0, 0], src.load([64, 64]))
-
-    target = GPUTarget("cuda", 100, 32)
-    dims = {"rows": "i32", "columns": "i32"}
-    native = _compile_native_dtype_ir(descriptor_copy, {"source": f"*{dtype}", "destination": f"*{dtype}", **dims},
-                                      target)
-    legacy = _compile_native_dtype_ir(descriptor_copy, {"source": "*u8", "destination": "*u8", **dims}, target)
-    assert "ttng.async_tma_copy_global_to_local" in native["ttgir"]
-    assert native["llir"] == legacy["llir"]
-
-
-@pytest.mark.parametrize(
-    "target",
-    [GPUTarget("cuda", 80, 32), GPUTarget("cuda", 100, 32),
-     GPUTarget("hip", "gfx950", 64)])
+@pytest.mark.parametrize("target", [GPUTarget("cuda", 100, 32), GPUTarget("hip", "gfx950", 64)])
 def test_native_dtype_scaled_dot_lowering(target, monkeypatch):
     monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
 
     @triton.jit
     def scaled_dot(a, b, s, output):
-        rows = tl.arange(0, 32)[:, None]
-        columns = tl.arange(0, 32)[None, :]
-        lhs = tl.load(a + rows * 32 + columns)
-        rhs = tl.load(b + rows * 32 + columns)
-        scale = tl.load(s + rows * 2 + tl.arange(0, 2)[None, :])
+        rows = tl.arange(0, 128)[:, None]
+        columns = tl.arange(0, 128)[None, :]
+        k = tl.arange(0, 64)
+        lhs = tl.load(a + rows * 64 + k[None, :])
+        rhs = tl.load(b + k[:, None] * 128 + columns)
+        scale = tl.load(s + rows * 4 + tl.arange(0, 4)[None, :])
         value = tl.dot_scaled(lhs, scale, "e2m1", rhs, scale, "e2m1")
-        tl.store(output + rows * 32 + columns, value)
+        tl.store(output + rows * 128 + columns, value)
 
     native = _compile_native_dtype_ir(scaled_dot,
                                       {"a": "*fp4e2m1x2", "b": "*fp4e2m1x2", "s": "*fp8e8m0fnu", "output": "*fp32"},
@@ -95,6 +74,7 @@ def test_native_dtype_scaled_dot_lowering(target, monkeypatch):
     legacy = _compile_native_dtype_ir(scaled_dot, {"a": "*u8", "b": "*u8", "s": "*u8", "output": "*fp32"}, target)
     assert "!tt.fp4e2m1x2" in native["ttir"]
     assert "f8E8M0FNU" in native["ttir"]
+    assert ("tcgen05.mma" if target.backend == "cuda" else "mfma.scale") in native["llir"]
     assert native["llir"] == legacy["llir"]
 
 

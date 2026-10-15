@@ -455,13 +455,13 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
     let arguments = (ins
       TT_AtomicRMWAttr:$atomic_rmw_op,
       Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-      AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>:$val,
+      TT_Type:$val,
       Optional<TT_BoolLike>:$mask,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
     );
 
-    let results = (outs AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>:$result);
+    let results = (outs TT_Type:$result);
 
     // Explicitly list $atomic_rmw_op, $sem, and $scope rather than relying on
     // attr-dict so they're printed as strings rather than opaque integers.
@@ -495,13 +495,13 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [
 
     let arguments = (ins
       Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-      AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>:$cmp,
-      AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>:$val,
+      TT_Type:$cmp,
+      TT_Type:$val,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
     );
 
-    let results = (outs AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>:$result);
+    let results = (outs TT_Type:$result);
 
     // Explicitly list $sem and $scope rather than relying on attr-dict so
     // they're printed as strings rather than opaque integers.
@@ -801,8 +801,8 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$a,
       RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$b,
       TT_FloatTensor:$c,
-      Optional<RankedTensorOf<[TT_Float, I8, F8E8M0FNU]>>:$a_scale,
-      Optional<RankedTensorOf<[TT_Float, I8, F8E8M0FNU]>>:$b_scale,
+      Optional<RankedTensorOf<[TT_Float, I8]>>:$a_scale,
+      Optional<RankedTensorOf<[TT_Float, I8]>>:$b_scale,
       TT_ScaleDotElemTypeAttr:$a_elem_type,
       TT_ScaleDotElemTypeAttr:$b_elem_type,
       BoolAttr:$fastMath,
@@ -1125,7 +1125,6 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
     "triton::PaddingOption":$padding)>
   ];
 
-  let hasVerifier = 1;
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and modified from

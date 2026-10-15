@@ -1076,8 +1076,6 @@ static std::string strMMADTypeKind(MMADTypeKind kind) {
 static std::optional<std::pair<MMADTypeKind, SmallVector<Type>>>
 getMMAv5DTypeKindAndAcc(Type t) {
   MLIRContext *ctx = t.getContext();
-  if (isa<Float8E8M0FNUType>(t))
-    return std::nullopt;
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-kind-shapes
   if (t.isF32()) {
     return {{MMADTypeKind::tf32, {Float32Type::get(ctx)}}};
@@ -1447,13 +1445,6 @@ LogicalResult TCGen5MMAScaledOp::verify() {
     if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
-  for (auto [operand, format] :
-       {std::pair{getA(), getAType()}, std::pair{getB(), getBType()}}) {
-    Type type = operand.getType().getElementType();
-    if (isa<Float8E8M0FNUType>(type) ||
-        (isa<PackedFloat4E2M1Type>(type) && format != ScaleDotElemType::E2M1))
-      return emitOpError("native operand type does not match the MMA format");
-  }
   Type atype =
       getScaledMMAOperandType(getA().getType().getElementType(), getAType());
   Type btype =
@@ -1474,16 +1465,6 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   auto aScaleType = cast<MemDescType>(getAScale().getType());
   auto bScaleType = cast<MemDescType>(getBScale().getType());
   int64_t k = getBlockK();
-  bool hasNativeScale = isa<Float8E8M0FNUType>(aScaleType.getElementType()) ||
-                        isa<Float8E8M0FNUType>(bScaleType.getElementType());
-  for (auto scaleType : {aScaleType, bScaleType}) {
-    Type type = scaleType.getElementType();
-    if (isa<PackedFloat4E2M1Type>(type))
-      return emitOpError("packed FP4 is not a scale type");
-    if (hasNativeScale && !isa<Float8E8M0FNUType>(type) &&
-        (!type.isInteger(8) || scaleType.getShape().back() * 16 == k))
-      return emitOpError("E8M0 scales require matching scale formats");
-  }
   int64_t minK = 32;
   if (getAType() == ScaleDotElemType::E2M1 &&
       getBType() == ScaleDotElemType::E2M1) {

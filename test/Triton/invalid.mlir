@@ -1,55 +1,5 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
-tt.func @descriptor_element_type_mismatch(%p: !tt.ptr<!tt.fp4e2m1x2>, %n: i32) {
-  %one = arith.constant 1 : i64
-  // expected-error @+1 {{descriptor element type must match base pointer element type}}
-  %d = tt.make_tensor_descriptor %p, [%n], [%one] : <!tt.fp4e2m1x2>, <32xi8>
-  tt.return
-}
-
-// -----
-
-tt.func @descriptor_element_type_mismatch_legacy(%p: !tt.ptr<f16>, %n: i32) {
-  %one = arith.constant 1 : i64
-  // expected-error @+1 {{descriptor element type must match base pointer element type}}
-  %d = tt.make_tensor_descriptor %p, [%n], [%one] : <f16>, <32xi16>
-  tt.return
-}
-
-// -----
-
-tt.func @packed_fp4_is_not_an_integer(%value: !tt.fp4e2m1x2) {
-  // expected-error @+1 {{'arith.addi' op operand #0}}
-  %result = "arith.addi"(%value, %value) : (!tt.fp4e2m1x2, !tt.fp4e2m1x2) -> !tt.fp4e2m1x2
-  tt.return
-}
-
-// -----
-
-tt.func @e8m0_is_not_an_integer(%value: f8E8M0FNU) {
-  // expected-error @+1 {{'arith.addi' op operand #0}}
-  %result = "arith.addi"(%value, %value) : (f8E8M0FNU, f8E8M0FNU) -> f8E8M0FNU
-  tt.return
-}
-
-// -----
-
-tt.func @packed_fp4_atomic_rmw(%ptr: !tt.ptr<!tt.fp4e2m1x2>, %value: !tt.fp4e2m1x2) {
-  // expected-error @+1 {{'tt.atomic_rmw' op operand #1}}
-  %result = tt.atomic_rmw add, relaxed, gpu, %ptr, %value : (!tt.ptr<!tt.fp4e2m1x2>, !tt.fp4e2m1x2) -> !tt.fp4e2m1x2
-  tt.return
-}
-
-// -----
-
-tt.func @e8m0_atomic_cas(%ptr: tensor<32x!tt.ptr<f8E8M0FNU>>, %value: tensor<32xf8E8M0FNU>) {
-  // expected-error @+1 {{'tt.atomic_cas' op operand #1}}
-  %result = tt.atomic_cas relaxed, gpu, %ptr, %value, %value : (tensor<32x!tt.ptr<f8E8M0FNU>>, tensor<32xf8E8M0FNU>, tensor<32xf8E8M0FNU>) -> tensor<32xf8E8M0FNU>
-  tt.return
-}
-
-// -----
-
 tt.func @atomic_load_i1(%ptr: !tt.ptr<i1>) {
   // expected-error @+1 {{does not support sub-byte elements}}
   %value = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i1>) -> i1

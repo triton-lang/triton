@@ -2053,7 +2053,7 @@ class TritonSemantic(Generic[TensorTy]):
 
         padding = self._str_to_padding_option(padding_option)
 
-        if not base.type.element_ty.is_floating() and padding == ir.PADDING_OPTION.PAD_NAN:
+        if base.type.element_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
             raise ValueError("Padding option `nan` is not supported for integer blocks")
 
         handle = self.builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape],

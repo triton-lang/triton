@@ -457,9 +457,6 @@ struct AbsFOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (llvm::isa<IntegerType>(elemTy)) {
       // Mask out the sign bit
-      auto floatTy = cast<FloatType>(getElementTypeOrSelf(op.getType()));
-      if (!APFloat::hasSignBitInMSB(floatTy.getFloatSemantics()))
-        return {};
       auto num_bits =
           getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
       assert(num_bits <= 16);
