@@ -14,6 +14,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK:  llvm.return
     tt.return
   }
+
+  // CHECK-LABEL: @native_byte_copy
+  tt.func @native_byte_copy(%fp4: !tt.ptr<!tt.fp4e2m1x2>, %e8: !tt.ptr<f8E8M0FNU>, %out4: !tt.ptr<!tt.fp4e2m1x2>, %out8: !tt.ptr<f8E8M0FNU>) {
+    // CHECK: ld.global.b8
+    %a = tt.load %fp4 : !tt.ptr<!tt.fp4e2m1x2>
+    // CHECK: ld.global.b8
+    %b = tt.load %e8 : !tt.ptr<f8E8M0FNU>
+    // CHECK: st.global.b8
+    tt.store %out4, %a : !tt.ptr<!tt.fp4e2m1x2>
+    // CHECK: st.global.b8
+    tt.store %out8, %b : !tt.ptr<f8E8M0FNU>
+    tt.return
+  }
 } // end module
 
 // -----
