@@ -444,7 +444,7 @@ LinearLayout ScanLoweringHelper::buildInterWarpTotalsLayout() const {
 LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
   // Broadcast the full segment sequence across participating warps, with zero
   // scan-axis warp bases. Distribute the sequence over lanes and registers.
-  // Two free lane bits and eight segments give L=[1,2], R=[4], W=[0].
+  // Two free lane bits and sixteen segments give L=[1,2], R=[4,8], W=[0].
   // Independent scans and CTA ownership retain their original coordinates.
   auto *ctx = interWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
@@ -455,9 +455,11 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() const {
   for (auto &[dim, dimBases] : bases)
     for (auto &basis : dimBases)
       basis[axis] = 0;
+  // Up to four totals need at most two sequential combines for exclusive
+  // carries, matching the depth of a binary lane scan without its shuffles.
   unsigned next = 1;
   for (auto &basis : bases[kLane])
-    if (next < numSegments &&
+    if (numSegments > 4 && next < numSegments &&
         llvm::all_of(basis, [](int32_t x) { return x == 0; })) {
       basis[axis] = next;
       next *= 2;

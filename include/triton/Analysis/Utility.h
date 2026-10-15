@@ -164,21 +164,21 @@ private:
 //    the lanes represented by zero lane bases. Keep the Uj prefixes in
 //    intraWarpScanLayout for later use.
 //
-//    interWarpScanLayout: R=[], L=[1], W=[0].
-//    Broadcast the full sequence across participating warps. Store W0 and W1
-//    from their selected owners, synchronize, then load this layout:
-//      each warp, lane 0: W0; lane 1: W1
-//    Scan the totals, preserving their layout:
-//      each warp, lane 0: S0=W0; lane 1: S1=W0+W1
+//    interWarpScanLayout: R=[1], L=[0], W=[0].
+//    Short sequences are replicated in registers across lanes and warps.
+//    Store W0 and W1 from their selected owners, synchronize, then load:
+//      each warp, every lane: register 0 holds W0; register 1 holds W1
+//    Accumulate only the exclusive prefixes requested by consumers. Here the
+//    only requested prefix is S0=W0; the final total W0+W1 is unused.
 //
 // Carry propagation:
 //    Map the consumer's warp-segment index s to the preceding prefix S(s-1)
 //    using the inverse of interWarpScanLayout. Warp 0 has no carry; warp 1
-//    reads S0 from lane 0 of its own warp. Apply this carry to the saved Uj:
+//    retains S0 in each lane's registers. Apply this carry to the saved Uj:
 //      warp 0: Qj=Uj                for j=0..7
 //      warp 1: Qj=S0+Uj=T0+...+Tj  for j=8..15
 //    Qj is a prefix from the scan's start and retains intraWarpScanLayout.
-//    The Sj values remain broadcast across warps in interWarpScanLayout.
+//    The retained carries use their consumers' interWarpTotalsLayout.
 //    Convert Qj back to intraWarpTotalsLayout:
 //      warp 0, lane 0: Q0,Q2,Q4,Q6; lane 1: Q1,Q3,Q5,Q7
 //      warp 1, lane 0: Q8,Q10,Q12,Q14; lane 1: Q9,Q11,Q13,Q15

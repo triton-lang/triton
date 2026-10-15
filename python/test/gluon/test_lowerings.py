@@ -347,6 +347,14 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
     (ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 2048, 4),
     # The replicated total sequence must remain ordered even with no free lanes.
     (ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [1, 0]), 128, 32),
+    pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 32, 32,
+                 id="interwarp_single_value_prefixes"),
+    # Reuse each segment's inclusive total while retaining exclusive carries
+    # for its earlier values, in both regular and grouped inter-warp scans.
+    *[
+        pytest.param(ttgl.BlockedLayout([size, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), M, 32,
+                     id=f"interwarp_terminal_prefixes_{M}_{size}") for M, size in [(32, 2), (128, 2), (128, 4)]
+    ],
     # Grouped inter-warp totals cross register groups and independent scans.
     pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 64, 64,
                  id="interwarp_groups_independent_registers"),
@@ -386,6 +394,12 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
     # Five lane bits can move into registers without a fixed promotion cap.
     pytest.param(ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 32, 128,
                  id="register_axis_all_lane_bits"),
+    # Register-resident warp totals serve multiple independent register scans
+    # and two segments per warp. Boundary carries must not execute the combine.
+    pytest.param(
+        ttgl.DistributedLinearLayout([[1, 0], [8, 0], [32, 0], [0, 1]], [[2, 0], [4, 0], [0, 2], [0, 4], [0, 8]] +
+                                     [[0, 0]] * (THREADS_PER_WARP.bit_length() - 6), [[16, 0], [0, 0]], [], [64, 16]),
+        64, 16, id="register_warp_totals_independent_scans"),
     # A higher axis register bit separates warp-local segments before promotion.
     pytest.param(ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 2, 2], [2, 2], [0, 1]), 256, 32,
                  id="register_axis_interwarp_segments"),
