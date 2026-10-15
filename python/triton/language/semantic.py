@@ -860,10 +860,11 @@ class TritonSemantic(Generic[TensorTy]):
                                  "Source scalar type is " + str(src_sca_ty) + " and destination type is " +
                                  str(dst_sca_ty))
 
-        # E4M3 and E5M2 have no direct conversion. FP16 represents their finite
-        # values exactly, so use it as an intermediate before the rounded cast.
+        # E4M3 and E5M2 do not support a direct conversion. Do not insert an
+        # implicit intermediate cast; the caller must choose it explicitly.
         if src_sca_ty in (tl.float8e4nv, tl.float8e5) and dst_sca_ty in (tl.float8e4nv, tl.float8e5):
-            return self.cast(self.cast(input, tl.float16), dst_sca_ty)
+            raise ValueError(f"Direct casts between {src_sca_ty} and {dst_sca_ty} are not supported. "
+                             "Cast to float16 explicitly before converting to the destination type.")
 
         # Keep FP16 <-> BF16 intact so backends can select a native conversion.
         if (src_sca_ty.is_bf16() and dst_sca_ty.is_fp16()) or (src_sca_ty.is_fp16() and dst_sca_ty.is_bf16()):
