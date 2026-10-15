@@ -9,6 +9,7 @@ import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_cuda, is_hip, run_in_process
+from triton.runtime import jit as jit_runtime
 
 
 @triton.jit
@@ -38,6 +39,45 @@ def test_hip_prebound_launcher(device) -> None:
     torch.testing.assert_close(output, x * 3.0)
 
     _hip_prebound_scale_kernel[(0, )](x, output, n_elements, 4.0, BLOCK_SIZE=n_elements)
+
+
+@pytest.mark.skipif(not is_hip(), reason="HIP native JIT cache is AMD-specific")
+def test_hip_native_jit_cache_hit(device, monkeypatch) -> None:
+    n_elements = 256
+    x = torch.randn(n_elements, device=device)
+    output = torch.empty_like(x)
+    args = (x, output, n_elements, 2.0, n_elements)
+
+    compiled = _hip_prebound_scale_kernel.run(*args, grid=(1, ), warmup=False, num_warps=4, waves_per_eu=0)
+    assert compiled._prebound_launcher is not None
+
+    def fail_fallback(*args, **kwargs):
+        raise AssertionError("a compiled specialization should be dispatched from the native cache")
+
+    monkeypatch.setattr(_hip_prebound_scale_kernel, "run", fail_fallback)
+    monkeypatch.setattr(_hip_prebound_scale_kernel, "_native_jit_cache_proxy_key", None)
+    monkeypatch.setattr(_hip_prebound_scale_kernel, "_native_jit_cache_proxy", None)
+    launch = _hip_prebound_scale_kernel[(1, )]
+    launch(x, output, n_elements, 3.0, BLOCK_SIZE=n_elements, num_warps=4, waves_per_eu=0)
+    torch.testing.assert_close(output, x * 3.0)
+
+    device_id = getattr(torch, device).current_device()
+    _hip_prebound_scale_kernel.device_caches.clear()
+    replacement = _hip_prebound_scale_kernel[(1, )]
+    assert replacement is not launch
+    assert len(_hip_prebound_scale_kernel.device_caches[device_id][0]) == 0
+
+
+@pytest.mark.parametrize("knob", ["use_native_jit_cache", "use_prebound_launcher"])
+@pytest.mark.skipif(not is_hip(), reason="HIP native JIT cache is AMD-specific")
+def test_hip_native_jit_cache_escape_hatches(device, fresh_knobs, monkeypatch, knob) -> None:
+
+    def fail_proxy_creation(*args, **kwargs):
+        raise AssertionError("the native JIT cache must remain disabled")
+
+    setattr(fresh_knobs.runtime, knob, False)
+    monkeypatch.setattr(jit_runtime, "native_create_jit_cache_proxy", fail_proxy_creation)
+    _hip_prebound_scale_kernel[(1, )]
 
 
 @pytest.mark.skipif(not is_hip(), reason="HIP pre-bound launcher is AMD-specific")
