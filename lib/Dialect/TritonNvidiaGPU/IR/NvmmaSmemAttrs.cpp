@@ -88,7 +88,7 @@ std::optional<NvmmaSmemAttrs> getNvmmaSmemAttrs(ttg::MemDescType memTy) {
                           nvmma.getFp4Padded()};
 
   auto ll = ttg::toLinearLayout(memTy).pseudoinvert();
-  unsigned bitwidth = memTy.getElementType().getIntOrFloatBitWidth();
+  unsigned bitwidth = memTy.getElementTypeBitWidth();
   auto attrsAndCandidate = getNvmmaSmemAttrs(ll, bitwidth);
   if (!attrsAndCandidate)
     return std::nullopt;

@@ -797,13 +797,12 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let arguments = (
       ins
-      // inputs are floats if we have a type for them, otherwise (fp4),
-      // they are packed in pairs in an I8Tensor
-      RankedTensorOf<[TT_Float,I8]>:$a,
-      RankedTensorOf<[TT_Float,I8]>:$b,
+      // FP4 is packed in pairs, either explicitly typed or as legacy i8 bytes.
+      RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$a,
+      RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$b,
       TT_FloatTensor:$c,
-      Optional<RankedTensorOf<[TT_Float, I8]>>:$a_scale,
-      Optional<RankedTensorOf<[TT_Float, I8]>>:$b_scale,
+      Optional<RankedTensorOf<[TT_Float, I8, F8E8M0FNU]>>:$a_scale,
+      Optional<RankedTensorOf<[TT_Float, I8, F8E8M0FNU]>>:$b_scale,
       TT_ScaleDotElemTypeAttr:$a_elem_type,
       TT_ScaleDotElemTypeAttr:$b_elem_type,
       BoolAttr:$fastMath,
@@ -1126,6 +1125,7 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
     "triton::PaddingOption":$padding)>
   ];
 
+  let hasVerifier = 1;
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and modified from

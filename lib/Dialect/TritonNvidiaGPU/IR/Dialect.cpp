@@ -546,7 +546,8 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
            SwizzledSharedEncodingAttr>(bType.getEncoding()) ||
       cast<LayoutEncodingTrait>(aType.getEncoding()).getRank() != 2 ||
       cast<LayoutEncodingTrait>(bType.getEncoding()).getRank() != 2 ||
-      !bType.getElementType().isIntOrFloat())
+      !(bType.getElementType().isIntOrFloat() ||
+        isa<PackedFloat4E2M1Type>(bType.getElementType())))
     return op->emitOpError("expected rank-2 MMA operands, a shared-memory RHS, "
                            "and a tensor-memory accumulator");
   if (encoding.getFp4Padded())

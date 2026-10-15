@@ -560,8 +560,9 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, EfficientLayout
   let summary = "Upcast fp4 and then multiply scale";
 
   let description = [{
-    Upcast fp4 (e2m1) values packed as i8 values and multiply with the given
-    E8M0 scale encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
+    Upcast fp4 (e2m1) values packed as i8 or !tt.fp4e2m1x2 values and multiply
+    with the given E8M0 scale encoded as f8E8M0FNU, i8, or BF16.
+    This maps to `v_cvt_scalef32_*` intrinsics
     on the AMD CDNA4 architecture.
 
     The lower 4 bits of the i8s represent the first fp4 element, and the upper
@@ -576,8 +577,8 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, EfficientLayout
   }];
 
   let arguments = (ins
-    RankedTensorOf<[I8]>:$input,
-    RankedTensorOf<[BF16, I8]>:$scale,
+    RankedTensorOf<[I8, TT_FP4E2M1x2]>:$input,
+    RankedTensorOf<[BF16, I8, F8E8M0FNU]>:$scale,
     I32Attr:$axis);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16]>]>:$output);
 
@@ -622,7 +623,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
 
   let description = [{
     Upcast fp8 (e4m3/e5m2) values and multiply with the given E8M0 scale
-    encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
+    encoded as f8E8M0FNU, i8, or BF16. This maps to `v_cvt_scalef32_*` intrinsics
     on the AMD CDNA4 architecture.
 
     The result encoding is always a layout constraint: the conversion consumes
@@ -631,7 +632,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
 
   let arguments = (ins
     RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$input,
-    RankedTensorOf<[AnyTypeOf<[BF16, I8]>]>:$scale);
+    RankedTensorOf<[AnyTypeOf<[BF16, I8, F8E8M0FNU]>]>:$scale);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16]>]>:$output);
 
   let extraClassDeclaration = [{
@@ -675,9 +676,9 @@ def ScaledDowncastFp4Op : TT_AMDGPU_Op<"scaled_downcast_fp4", [
 
   let arguments = (ins
     RankedTensorOf<[F16, BF16, F32]>:$input,
-    RankedTensorOf<[I8]>:$scale,
+    RankedTensorOf<[I8, F8E8M0FNU]>:$scale,
     I32Attr:$axis);
-  let results = (outs RankedTensorOf<[I8]>:$output);
+  let results = (outs RankedTensorOf<[I8, TT_FP4E2M1x2]>:$output);
 
   let builders = [
       OpBuilder<(ins "Value":$input, "Value":$scale, "int32_t":$axis), [{
@@ -731,7 +732,7 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
 
   let arguments = (ins
     RankedTensorOf<[F16, BF16, F32]>:$input,
-    RankedTensorOf<[I8]>:$scale,
+    RankedTensorOf<[I8, F8E8M0FNU]>:$scale,
     I32Attr:$axis);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$output);
 

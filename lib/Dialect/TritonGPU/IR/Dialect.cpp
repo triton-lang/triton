@@ -4448,7 +4448,7 @@ struct TensorModel
     return cast<RankedTensorType>(pointer).getRank();
   }
   int64_t getElementTypeBitWidth(Type pointer) const {
-    return cast<RankedTensorType>(pointer).getElementTypeBitWidth();
+    return getStorageBitWidth(cast<RankedTensorType>(pointer).getElementType());
   }
 };
 
@@ -4468,7 +4468,7 @@ struct MemDescModel
     return cast<MemDescType>(pointer).getShape().size();
   }
   int64_t getElementTypeBitWidth(Type pointer) const {
-    return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
+    return getStorageBitWidth(cast<MemDescType>(pointer).getElementType());
   }
 };
 } // namespace

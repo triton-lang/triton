@@ -33,6 +33,8 @@ from triton.language.core import (
     uint16,
     uint32,
     uint64,
+    float4e2m1x2,
+    float8e8m0fnu,
     float8e5,
     float8e5b16,
     float8e4nv,
@@ -67,6 +69,8 @@ __all__ = [
     "uint16",
     "uint32",
     "uint64",
+    "float4e2m1x2",
+    "float8e8m0fnu",
     "float8e5",
     "float8e5b16",
     "float8e4nv",
@@ -727,7 +731,7 @@ def set_auto_layout(value, layout, _semantic=None):
 @builtin
 def fp4_to_fp(src, elem_type, axis, _semantic=None):
     """
-    Upcast a tensor from fp4 (e2m1) to another floating point type.
+    Upcast packed ``float4e2m1x2`` (or legacy ``int8``/``uint8``) E2M1 values to another floating point type.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _unwrap_if_constexpr(elem_type)

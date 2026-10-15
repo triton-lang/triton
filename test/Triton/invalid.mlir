@@ -767,3 +767,43 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     tt.return
   }
 }
+
+// -----
+
+tt.func @native_fp4_invalid_bitcast(%arg0: tensor<16x!tt.fp4e2m1x2>) {
+  // expected-error @+1 {{Cannot bitcast data-type of size 8 to data-type of size 4}}
+  %0 = tt.bitcast %arg0 : tensor<16x!tt.fp4e2m1x2> -> tensor<16xi4>
+  tt.return
+}
+
+// -----
+
+tt.func @native_fp4_wrong_dot_format(%a: tensor<16x16x!tt.fp4e2m1x2>, %b: tensor<16x8xf8E4M3FN>, %c: tensor<16x8xf32>) {
+  // expected-error @+1 {{native packed FP4 operand A requires e2m1 format}}
+  %0 = tt.dot_scaled %a, %b, %c lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<16x16x!tt.fp4e2m1x2> * tensor<16x8xf8E4M3FN> -> tensor<16x8xf32>
+  tt.return
+}
+
+// -----
+
+tt.func @native_e8m0_wrong_scale_factor(%a: tensor<16x16x!tt.fp4e2m1x2>, %b: tensor<16x8x!tt.fp4e2m1x2>, %a_scale: tensor<16x2xf8E8M0FNU>, %b_scale: tensor<8x2xf8E8M0FNU>, %c: tensor<16x8xf32>) {
+  // expected-error @+1 {{native E8M0 scales require a scale factor of 32}}
+  %0 = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %c lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x16x!tt.fp4e2m1x2>, tensor<16x2xf8E8M0FNU> * tensor<16x8x!tt.fp4e2m1x2>, tensor<8x2xf8E8M0FNU> -> tensor<16x8xf32>
+  tt.return
+}
+
+// -----
+
+tt.func @native_descriptor_wrong_element_type(%base: !tt.ptr<!tt.fp4e2m1x2>, %size: i32, %stride: i64) {
+  // expected-error @+1 {{native storage base and descriptor element types must match}}
+  %desc = tt.make_tensor_descriptor %base, [%size], [%stride] : <!tt.fp4e2m1x2>, <16xi8>
+  tt.return
+}
+
+// -----
+
+tt.func @native_descriptor_nan_padding(%base: !tt.ptr<f8E8M0FNU>, %size: i32, %stride: i64) {
+  // expected-error @+1 {{native storage descriptors do not support NaN padding}}
+  %desc = tt.make_tensor_descriptor %base, [%size], [%stride] {padding = 2 : i32} : <f8E8M0FNU>, <16xf8E8M0FNU>
+  tt.return
+}

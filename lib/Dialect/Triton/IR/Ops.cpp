@@ -419,6 +419,12 @@ bool DotScaledOp::verifyOutputDims() {
 }
 
 LogicalResult DotScaledOp::verify() {
+  if (isa<PackedFloat4E2M1Type>(getA().getType().getElementType()) &&
+      getAElemType() != ScaleDotElemType::E2M1)
+    return emitOpError("native packed FP4 operand A requires e2m1 format");
+  if (isa<PackedFloat4E2M1Type>(getB().getType().getElementType()) &&
+      getBElemType() != ScaleDotElemType::E2M1)
+    return emitOpError("native packed FP4 operand B requires e2m1 format");
   auto aShape = this->getA().getType().getShape();
   int64_t rank = aShape.size();
   if (rank < 2)
@@ -438,7 +444,11 @@ LogicalResult DotScaledOp::verify() {
           getA(), getAScale(), getAElemType(), getLhsKPack(), getB(),
           getBScale(), getBElemType(), getRhsKPack(), scaleFactor, scaleErr)))
     return this->emitError(scaleErr);
-
+  for (auto scale : {getAScale(), getBScale()}) {
+    if (scale && isa<Float8E8M0FNUType>(scale.getType().getElementType()) &&
+        scaleFactor != 32)
+      return emitOpError("native E8M0 scales require a scale factor of 32");
+  }
   if (getAScale()) {
     auto aScaleShape = getAScale().getType().getShape();
     if (aScaleShape[rank - 2] != mDim)
@@ -1250,8 +1260,8 @@ LogicalResult BitcastOp::verify() {
     }
     return emitError("Cannot bitcast pointer to non-pointer type");
   }
-  unsigned dstBits = dstType.getIntOrFloatBitWidth();
-  unsigned srcBits = srcType.getIntOrFloatBitWidth();
+  unsigned dstBits = getStorageBitWidth(dstType);
+  unsigned srcBits = getStorageBitWidth(srcType);
   if (dstBits != srcBits) {
     return emitError("Cannot bitcast data-type of size ")
            << srcBits << " to data-type of size " << dstBits;
@@ -1321,6 +1331,20 @@ OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
 }
 
 //-- MakeTensorDescOp --
+LogicalResult MakeTensorDescOp::verify() {
+  Type baseType = getBase().getType().getPointeeType();
+  Type elementType = getType().getElementType();
+  if ((isLowPrecisionStorageType(baseType) ||
+       isLowPrecisionStorageType(elementType)) &&
+      baseType != elementType)
+    return emitOpError(
+        "native storage base and descriptor element types must match");
+  if (isLowPrecisionStorageType(elementType) &&
+      getPadding() == PaddingOption::PAD_NAN)
+    return emitOpError("native storage descriptors do not support NaN padding");
+  return success();
+}
+
 void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
                              Value base, ValueRange shape, ValueRange strides,
                              ArrayRef<int32_t> blockShape, bool isSignedInteger,
@@ -1816,10 +1840,11 @@ LogicalResult verifyGatherScatterResultType(Operation *op,
   }
 
   Type dtype = resultType.getElementType();
-  if (dtype.getIntOrFloatBitWidth() > 32)
+  unsigned bitWidth = getStorageBitWidth(dtype);
+  if (bitWidth > 32)
     return op->emitOpError("TMA dtype cannot be greater than 32 bits");
 
-  unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
+  unsigned minCols = 32 / bitWidth * 8;
   if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
     return op->emitOpError("must have at least ")
            << minCols << " columns for " << dtype << ", but got " << cols;
@@ -1913,6 +1938,8 @@ LogicalResult DescriptorStoreOp::verify() {
 
 // -- DescriptorReduceOp --
 LogicalResult DescriptorReduceOp::verify() {
+  if (isLowPrecisionStorageType(getSrc().getType().getElementType()))
+    return emitOpError("does not support reduction of native storage types");
   return verifyDescriptorLoadStoreOp(*this, getDesc().getType(),
                                      getSrc().getType());
 }

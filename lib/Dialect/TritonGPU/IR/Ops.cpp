@@ -707,7 +707,7 @@ LogicalResult MemDescReinterpretOp::verify() {
 
     auto getPadPattern = [](MemDescType ty) {
       auto enc = getPaddedEncoding(ty.getEncoding());
-      auto elmtSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
+      auto elmtSize = getStorageBitWidth(ty.getElementType()) / 8;
       llvm::MapVector<int32_t, int32_t> pattern;
 
       for (auto [interval, padding] :
@@ -1144,6 +1144,13 @@ LogicalResult LocalAtomicScatterRMWOp::verify() {
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
+  Type srcElementType = getPointeeType(getSrc().getType().getElementType());
+  Type dstElementType = getResult().getType().getElementType();
+  if ((isLowPrecisionStorageType(srcElementType) ||
+       isLowPrecisionStorageType(dstElementType)) &&
+      srcElementType != dstElementType)
+    return emitOpError(
+        "native storage source and destination element types must match");
   return success();
 }
 
@@ -1623,8 +1630,8 @@ LogicalResult WarpYieldOp::verify() {
 // Get the size of a scalar type when stored in shared memory.
 // TODO: Generalize this as needed.
 size_t getSharedMemorySize(Type type) {
-  if (isa<IntegerType, FloatType>(type))
-    return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
+  if (isa<IntegerType, FloatType, PackedFloat4E2M1Type>(type))
+    return llvm::divideCeil(getStorageBitWidth(type), 8);
   if (isa<PointerType, TensorDescInterface>(type))
     return 8;
   if (auto desc = dyn_cast<MemDescType>(type)) {

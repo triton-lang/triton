@@ -49,7 +49,8 @@ bool tt::isHostSideDescriptor(Value v) {
 
 unsigned tt::getBitwidth(RankedTensorType ty) {
   auto isPtr = isa<PointerType>(ty.getElementType());
-  return isPtr ? kPtrBitWidth : std::max(ty.getElementTypeBitWidth(), 8u);
+  return isPtr ? kPtrBitWidth
+               : std::max(getStorageBitWidth(ty.getElementType()), 8u);
 }
 
 std::optional<ConstantIntRanges> tt::getBoundFromCmpOp(arith::CmpIOp cmpOp,

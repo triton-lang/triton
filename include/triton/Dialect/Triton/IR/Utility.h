@@ -13,11 +13,11 @@ namespace mlir {
 constexpr int kPtrBitWidth = 64;
 
 // Returns the bit width of a type, treating pointer-like types as 64-bit.
-// This handles LLVM dialect pointer types.
+// This handles LLVM dialect pointers and packed low-precision storage types.
 inline int getIntOrFloatOrPtrBitWidth(Type type) {
   if (isa<LLVM::LLVMPointerType, triton::PointerType>(type))
     return kPtrBitWidth;
-  return type.getIntOrFloatBitWidth();
+  return triton::getStorageBitWidth(type);
 }
 
 template <typename T, typename U> SmallVector<T> convertType(ArrayRef<U> in) {

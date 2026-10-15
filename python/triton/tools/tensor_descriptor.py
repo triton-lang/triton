@@ -30,6 +30,9 @@ class TensorDescriptor:
         assert self.strides[-1] == 1, "Last dimension must be contiguous"
         assert self.padding == "zero" or self.padding == "nan", "Illegal value for padding"
         if self.padding == "nan":
+            from triton.language import dtype
+            if canonicalize_dtype(self.base.dtype) in dtype.STORAGE_TYPES:
+                raise ValueError(f"Padding option `nan` is not supported for storage dtype {self.base.dtype}")
             assert self.base.dtype.is_floating_point, "Padding option `nan` is only supported for floating point tensors"
         if self.round_f32_to_tf32:
             dtype_name = canonicalize_dtype(self.base.dtype)

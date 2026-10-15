@@ -425,6 +425,7 @@ class HIPBackend(BaseBackend):
     def make_ttir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        passes.ttir.add_lower_storage_types(pm, f"hip:{options.arch}")
         passes.common.add_inliner(pm)
         if not amd.supports_tdm(options.arch):
             passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
@@ -511,6 +512,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
+        passes.ttir.add_lower_storage_types(pm, f"hip:{options.arch}")
         passes.gluon.add_inliner(pm)
         passes.gluon.add_infer_coalesced_encodings(pm)
         passes.gluon.add_resolve_auto_encodings(pm)

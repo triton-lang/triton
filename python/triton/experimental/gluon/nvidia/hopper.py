@@ -24,6 +24,8 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
     assert layout.rank == len(block_shape), "layout rank must match block shape rank"
     assert padding == "zero" or padding == "nan", "Illegal value for padding"
     if padding == "nan":
+        if tl.str_to_ty(dtype_str, None).is_low_precision_storage():
+            raise ValueError("Padding option `nan` is not supported for native packed E2M1 or E8M0 blocks")
         assert tensor.dtype.is_floating_point, "Padding option `nan` is only supported for floating point tensors"
     if round_f32_to_tf32:
         assert dtype_str == "fp32", "round_f32_to_tf32 is only supported for float32 tensors"

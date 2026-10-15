@@ -115,7 +115,7 @@ TensorDescType::verify(function_ref<InFlightDiagnostic()> emitError,
 
 LogicalResult PointerType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   Type pointeeType, PtrAddrSpace addressSpace) {
-  if (!pointeeType.isIntOrFloat())
+  if (!pointeeType.isIntOrFloat() && !isLowPrecisionStorageType(pointeeType))
     return emitError()
            << "pointer types must point to integer or floating-point types";
   return success();
@@ -125,11 +125,21 @@ namespace mlir {
 
 namespace triton {
 
+bool isLowPrecisionStorageType(Type type) {
+  return isa<PackedFloat4E2M1Type, Float8E8M0FNUType>(type);
+}
+
+unsigned getStorageBitWidth(Type type) {
+  if (auto packedTy = dyn_cast<PackedFloat4E2M1Type>(type))
+    return packedTy.getWidth();
+  return type.getIntOrFloatBitWidth();
+}
+
 unsigned getPointeeBitWidth(Type type) {
   auto pointeeType = getPointeeType(type);
   if (auto tensorTy = dyn_cast<RankedTensorType>(pointeeType))
-    return tensorTy.getElementType().getIntOrFloatBitWidth();
-  return pointeeType.getIntOrFloatBitWidth();
+    return getStorageBitWidth(tensorTy.getElementType());
+  return getStorageBitWidth(pointeeType);
 }
 
 Type getI1SameShape(Type type) {

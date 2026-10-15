@@ -539,3 +539,28 @@ module attributes {"ttg.target" = "hip:gfx1260", "ttg.num-ctas" = 1 : i32, "ttg.
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: @native_fp4_to_fp
+tt.func @native_fp4_to_fp(%arg0: tensor<16x16x!tt.fp4e2m1x2>) -> tensor<16x32xf16> {
+  // CHECK: ttg.fp4_to_fp {{.*}} : tensor<16x16x!tt.fp4e2m1x2> -> tensor<16x32xf16>
+  %0 = ttg.fp4_to_fp %arg0 {axis = 1 : i32} : tensor<16x16x!tt.fp4e2m1x2> -> tensor<16x32xf16>
+  tt.return %0 : tensor<16x32xf16>
+}
+
+// -----
+
+#native_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#native_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @native_fp4_shared_memory
+  tt.func @native_fp4_shared_memory(%arg0: tensor<16x16x!tt.fp4e2m1x2, #native_blocked>) -> tensor<16x16x!tt.fp4e2m1x2, #native_blocked> {
+    // CHECK: ttg.local_alloc {{.*}} !ttg.memdesc<16x16x!tt.fp4e2m1x2
+    %alloc = ttg.local_alloc %arg0 : (tensor<16x16x!tt.fp4e2m1x2, #native_blocked>) -> !ttg.memdesc<16x16x!tt.fp4e2m1x2, #native_shared, #ttg.shared_memory, mutable>
+    ttg.local_store %arg0, %alloc : tensor<16x16x!tt.fp4e2m1x2, #native_blocked> -> !ttg.memdesc<16x16x!tt.fp4e2m1x2, #native_shared, #ttg.shared_memory, mutable>
+    // CHECK: ttg.local_load {{.*}} tensor<16x16x!tt.fp4e2m1x2
+    %value = ttg.local_load %alloc : !ttg.memdesc<16x16x!tt.fp4e2m1x2, #native_shared, #ttg.shared_memory, mutable> -> tensor<16x16x!tt.fp4e2m1x2, #native_blocked>
+    tt.return %value : tensor<16x16x!tt.fp4e2m1x2, #native_blocked>
+  }
+}

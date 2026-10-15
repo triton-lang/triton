@@ -292,3 +292,44 @@ tt.func @ptr_addr_space(%arg0: !tt.ptr<i8, "descriptor">, %arg1: !tt.ptr<f32>) {
   // CHECK-SAME: %arg1: !tt.ptr<f32>
   tt.return
 }
+
+// CHECK-LABEL: @native_storage_copy
+tt.func @native_storage_copy(%fp4_ptr: !tt.ptr<!tt.fp4e2m1x2>, %scale_ptr: !tt.ptr<f8E8M0FNU>, %pred: i1) {
+  // CHECK: tt.load {{.*}} : !tt.ptr<!tt.fp4e2m1x2>
+  %fp4 = tt.load %fp4_ptr : !tt.ptr<!tt.fp4e2m1x2>
+  // CHECK: tt.bitcast {{.*}} : !tt.fp4e2m1x2 -> i8
+  %bytes = tt.bitcast %fp4 : !tt.fp4e2m1x2 -> i8
+  // CHECK: tt.bitcast {{.*}} : i8 -> !tt.fp4e2m1x2
+  %restored = tt.bitcast %bytes : i8 -> !tt.fp4e2m1x2
+  // CHECK: arith.select {{.*}} : !tt.fp4e2m1x2
+  %selected = arith.select %pred, %fp4, %restored : !tt.fp4e2m1x2
+  tt.store %fp4_ptr, %selected : !tt.ptr<!tt.fp4e2m1x2>
+  // CHECK: tt.load {{.*}} : !tt.ptr<f8E8M0FNU>
+  %scale = tt.load %scale_ptr : !tt.ptr<f8E8M0FNU>
+  %scale_bytes = tt.bitcast %scale : f8E8M0FNU -> i8
+  // CHECK: tt.bitcast {{.*}} : i8 -> f8E8M0FNU
+  %scale_restored = tt.bitcast %scale_bytes : i8 -> f8E8M0FNU
+  tt.store %scale_ptr, %scale_restored : !tt.ptr<f8E8M0FNU>
+  %block = tt.splat %selected : !tt.fp4e2m1x2 -> tensor<8x!tt.fp4e2m1x2>
+  %expanded = tt.expand_dims %block {axis = 0 : i32} : tensor<8x!tt.fp4e2m1x2> -> tensor<1x8x!tt.fp4e2m1x2>
+  // CHECK: tt.trans {{.*}} tensor<1x8x!tt.fp4e2m1x2> -> tensor<8x1x!tt.fp4e2m1x2>
+  %transposed = tt.trans %expanded {order = array<i32: 1, 0>} : tensor<1x8x!tt.fp4e2m1x2> -> tensor<8x1x!tt.fp4e2m1x2>
+  tt.return
+}
+
+// CHECK-LABEL: @native_storage_dot_scaled
+tt.func @native_storage_dot_scaled(%a: tensor<16x16x!tt.fp4e2m1x2>, %b: tensor<16x8x!tt.fp4e2m1x2>, %a_scale: tensor<16x1xf8E8M0FNU>, %b_scale: tensor<8x1xf8E8M0FNU>, %c: tensor<16x8xf32>) -> tensor<16x8xf32> {
+  // CHECK: tt.dot_scaled {{.*}} lhs = e2m1 rhs = e2m1
+  // CHECK-SAME: tensor<16x16x!tt.fp4e2m1x2>, tensor<16x1xf8E8M0FNU> * tensor<16x8x!tt.fp4e2m1x2>, tensor<8x1xf8E8M0FNU>
+  %d = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %c lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x16x!tt.fp4e2m1x2>, tensor<16x1xf8E8M0FNU> * tensor<16x8x!tt.fp4e2m1x2>, tensor<8x1xf8E8M0FNU> -> tensor<16x8xf32>
+  tt.return %d : tensor<16x8xf32>
+}
+
+// AMD WMMA has an independent scale format for each operand.
+// CHECK-LABEL: @native_e8m0_mixed_scale_type
+tt.func @native_e8m0_mixed_scale_type(%a: tensor<16x32xf8E4M3FN>, %b: tensor<16x8x!tt.fp4e2m1x2>, %a_scale: tensor<16x1xf8E8M0FNU>, %b_scale: tensor<8x1xf8E4M3FN>, %c: tensor<16x8xf32>) -> tensor<16x8xf32> {
+  // CHECK: tt.dot_scaled {{.*}} lhs = e4m3 rhs = e2m1
+  // CHECK-SAME: tensor<16x32xf8E4M3FN>, tensor<16x1xf8E8M0FNU> * tensor<16x8x!tt.fp4e2m1x2>, tensor<8x1xf8E4M3FN>
+  %d = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %c lhs = e4m3 rhs = e2m1 {fastMath = false} : tensor<16x32xf8E4M3FN>, tensor<16x1xf8E8M0FNU> * tensor<16x8x!tt.fp4e2m1x2>, tensor<8x1xf8E4M3FN> -> tensor<16x8xf32>
+  tt.return %d : tensor<16x8xf32>
+}

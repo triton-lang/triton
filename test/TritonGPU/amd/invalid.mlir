@@ -1,5 +1,94 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module {
+  tt.func @native_packed_load_requires_matching_type(%source: !ttg.memdesc<16x64x!tt.fp4e2m1x2, #shared, #smem>) {
+    // expected-error @+1 {{native storage element types must match}}
+    %result = amdg.local_load_packed_transposed %source : !ttg.memdesc<16x64x!tt.fp4e2m1x2, #shared, #smem> -> tensor<32x32xi8>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module {
+  tt.func @native_packed_load_rejects_e8m0(%source: !ttg.memdesc<16x64xf8E8M0FNU, #shared, #smem>) {
+    // expected-error @+1 {{native packed transposed loads require packed FP4}}
+    %result = amdg.local_load_packed_transposed %source : !ttg.memdesc<16x64xf8E8M0FNU, #shared, #smem> -> tensor<32x32xf8E8M0FNU>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module {
+  tt.func @native_tdm_copy_requires_matching_type(%desc: !tt.tensordesc<16x16x!tt.fp4e2m1x2>, %smem: !ttg.memdesc<16x16xi8, #shared, #smem, mutable>) {
+    // expected-error @+1 {{native storage element types must match}}
+    %token = amdg.async_tdm_copy_global_to_local %desc into %smem : !tt.tensordesc<16x16x!tt.fp4e2m1x2> -> !ttg.memdesc<16x16xi8, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#smem = #ttg.shared_memory
+module {
+  tt.func @native_async_store_requires_matching_type(%source: !ttg.memdesc<128xf8E8M0FNU, #shared, #smem>, %dest: tensor<128x!tt.ptr<i8>, #blocked>) {
+    // expected-error @+1 {{native storage element types must match}}
+    %token = amdg.async_copy_local_to_global %source, %dest : !ttg.memdesc<128xf8E8M0FNU, #shared, #smem> -> tensor<128x!tt.ptr<i8>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  tt.func @native_e8m0_is_not_fp4(%input: tensor<16x32xf8E8M0FNU>, %scale: tensor<16x64xi8>) {
+    // expected-error @+1 {{operand #0 must be}}
+    %result = amdg.scaled_upcast_fp4 %input scale %scale {axis = 1 : i32} : tensor<16x32xf8E8M0FNU>, tensor<16x64xi8> -> tensor<16x64xbf16>
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  tt.func @native_fp4_is_not_scale(%input: tensor<16x32xi8>, %scale: tensor<16x64x!tt.fp4e2m1x2>) {
+    // expected-error @+1 {{operand #1 must be}}
+    %result = amdg.scaled_upcast_fp4 %input scale %scale {axis = 1 : i32} : tensor<16x32xi8>, tensor<16x64x!tt.fp4e2m1x2> -> tensor<16x64xbf16>
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  tt.func @native_fp4_is_not_downcast_scale(%input: tensor<16x64xbf16>, %scale: tensor<16x8x!tt.fp4e2m1x2>) {
+    // expected-error @+1 {{operand #1 must be}}
+    %result = amdg.scaled_downcast_fp4 %input scale %scale {axis = 1 : i32} : tensor<16x64xbf16>, tensor<16x8x!tt.fp4e2m1x2> -> tensor<16x32xi8>
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  tt.func @native_e8m0_is_not_fp4_result(%input: tensor<16x64xbf16>, %scale: tensor<16x8xi8>) {
+    // expected-error @+1 {{result #0 must be}}
+    %result = amdg.scaled_downcast_fp4 %input scale %scale {axis = 1 : i32} : tensor<16x64xbf16>, tensor<16x8xi8> -> tensor<16x32xf8E8M0FNU>
+    tt.return
+  }
+}
+
+// -----
+
 // expected-error @+1 {{WMMA version must be in the [1, 3] range}}
 #wmma = #ttg.amd_wmma<{version = 0, isTranspose = false, ctaLayout = {warp = [[0, 1], [1, 0]]}}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {

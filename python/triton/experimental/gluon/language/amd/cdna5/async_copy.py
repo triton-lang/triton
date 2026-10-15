@@ -39,6 +39,7 @@ def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _s
     other_handle = other.handle if other is not None else ir.value()
     cache_policy = _normalize_cache_policy(None, cache_modifier, None)
     cache_policy = cache_policy._to_ir(_semantic.builder)
+    _semantic._check_storage_dtype_match(pointer.dtype.element_ty, smem.dtype)
     _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, other_handle,
                                                         cache_policy, False)
 
@@ -69,6 +70,7 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None
     mask_handle = mask.handle if mask is not None else ir.value()
     cache_policy = _normalize_cache_policy(None, cache_modifier, None)
     cache_policy = cache_policy._to_ir(_semantic.builder)
+    _semantic._check_storage_dtype_match(smem.dtype, pointer.dtype.element_ty)
     _semantic.builder.create_async_copy_local_to_global(smem.handle, pointer.handle, mask_handle, cache_policy)
 
 

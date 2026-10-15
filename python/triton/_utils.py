@@ -90,6 +90,12 @@ type_canonicalisation_dict = {
     "float8_e5m2": "fp8e5",
     "float8e5b16": "fp8e5b16",
     "float8_e5m2fnuz": "fp8e5b16",
+    # Packed FP4 and E8M0 have distinct byte-sized storage types. In particular,
+    # an FP4 element here is a pair of E2M1 values, not a single 4-bit value.
+    "float4e2m1x2": "fp4e2m1x2",
+    "float4_e2m1fn_x2": "fp4e2m1x2",
+    "float8e8m0fnu": "fp8e8m0fnu",
+    "float8_e8m0fnu": "fp8e8m0fnu",
     "half": "fp16",
     "float16": "fp16",
     "bfloat16": "bf16",
@@ -133,6 +139,8 @@ BITWIDTH_DICT: Dict[str, int] = {
        for n in (16, 32, 64)},
     **{f"fp8{suffix}": 8
        for suffix in ("e4nv", "e4b15", "e4b8", "e5", "e5b16")},
+    "fp4e2m1x2": 8,
+    "fp8e8m0fnu": 8,
     "bf16": 16,
     "void": 0,
 }

@@ -15,6 +15,30 @@ class TritonTypeDef<string name, string _mnemonic, list<Trait> traits = []>
     let mnemonic = _mnemonic;
 }
 
+// Low-precision storage types retain their interpretation until explicit
+// legalization to bytes. They are not ordinary integer or floating-point
+// arithmetic operands.
+def TT_FP4E2M1x2 : TritonTypeDef<"PackedFloat4E2M1", "fp4e2m1x2"> {
+    let summary = "Two packed E2M1 floating-point values in one byte";
+    let description = [{
+        Each element stores two finite E2M1 values. The first value occupies
+        the low nibble and the second the high nibble. Tensor dimensions and
+        pointer offsets count packed pairs, so each element occupies 8 bits.
+
+        This type preserves the distinction between packed E2M1 data and raw
+        integer bytes. It supports memory access, shape operations, explicit
+        bitcasts, and operations that explicitly consume packed E2M1 values.
+    }];
+    let assemblyFormat = "";
+    let extraClassDeclaration = [{
+        unsigned getWidth() const { return 8; }
+    }];
+}
+
+def TT_Storage : AnyTypeOf<[TT_FP4E2M1x2, F8E8M0FNU], "low-precision storage">;
+def TT_StorageTensor : RankedTensorOf<[TT_Storage]>;
+def TT_StorageLike : AnyTypeOf<[TT_Storage, TT_StorageTensor]>;
+
 // Floating-point Type
 def TT_Float : AnyTypeOf<[F8E4M3FN, F8E4M3FNUZ, F8E5M2, F8E5M2FNUZ, F16, BF16, F32, F64], "floating-point">;
 def TT_FloatTensor : RankedTensorOf<[TT_Float]>;
@@ -91,10 +115,10 @@ def TT_PtrLike : AnyTypeOf<[TT_Ptr, TT_PtrTensor]>;
 
 // Tensor Type
 def TT_FpIntTensor : RankedTensorOf<[TT_Float, TT_Int]>;
-def TT_Tensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr]>;
+def TT_Tensor : RankedTensorOf<[TT_Float, TT_Int, TT_Ptr, TT_Storage]>;
 
 // Any Type in Triton IR
-def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>;
+def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_StorageLike]>;
 
 // Type constraint for any type implementing TensorDescInterface
 def TT_AnyTensorDescType : Type<

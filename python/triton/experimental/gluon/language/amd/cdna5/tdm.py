@@ -290,6 +290,7 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
     if warp_used_hint is not None:
         warp_used_hint = int(warp_used_hint)
 
+    _semantic._check_storage_dtype_match(src.dtype, dest.dtype)
     _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, dest.handle, mbarrier_handle, cache_modifier,
                                                             warp_used_hint)
 
@@ -339,6 +340,7 @@ def async_load_fused(members: List[Tuple[tensor_descriptor, shared_memory_descri
         if warp_used_hint is None:
             raise ValueError(f"tdm.async_load_fused member {idx}: warp_used_hint is required")
 
+        _semantic._check_storage_dtype_match(desc.dtype, dest.dtype)
         desc_handles.append(desc.handle)
         dest_handles.append(dest.handle)
         warp_used_hints.append(int(warp_used_hint))
@@ -372,6 +374,7 @@ def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.ten
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
     cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
+    _semantic._check_storage_dtype_match(src.dtype, dest.dtype)
     _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, src.handle, mbarrier_handle, cache_modifier)
 
 
@@ -421,6 +424,7 @@ def async_scatter(desc: tensor_descriptor, dst_row_indices: ttgl.tensor, src: sh
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
 
+    _semantic._check_storage_dtype_match(src.dtype, desc.dtype)
     _semantic.builder.create_async_tdm_scatter(desc.handle, dst_row_indices.handle, src.handle, mbarrier_handle)
 
 
@@ -460,6 +464,7 @@ def async_gather(desc: tensor_descriptor, src_row_indices: ttgl.tensor, dst: sha
     mbarrier = _unwrap_if_constexpr(mbarrier)
     mbarrier_handle = mbarrier.handle if mbarrier is not None else ttgl.ir.value()
 
+    _semantic._check_storage_dtype_match(desc.dtype, dst.dtype)
     _semantic.builder.create_async_tdm_gather(desc.handle, src_row_indices.handle, dst.handle, mbarrier_handle)
 
 

@@ -5970,3 +5970,310 @@ def test_tma_cache_policy_frontend_invalid(kind, policy, message):
     with pytest.raises(CompilationError, match=message):
         run_parser(tma_cache_policy_kernel, *make_args(make_tma_cache_policy_desc(kind=kind), False, policy, kind,
                                                        False), target=BLACKWELL_TARGET)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
+@pytest.mark.parametrize("native_src,native_scale", [(True, False), (False, True), (True, True)])
+def test_native_low_precision_scaled_upcast(target, native_src, native_scale):
+    scaled_upcast = _get_amd_scaled_upcast(target)
+
+    @gluon.jit
+    def kernel(NATIVE_SRC: ttgl.constexpr, NATIVE_SCALE: ttgl.constexpr, WARP_SIZE: ttgl.constexpr):
+        src_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [WARP_SIZE // 4, 4], [4, 1], [1, 0])
+        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [WARP_SIZE // 4, 4], [4, 1], [1, 0])
+        src = ttgl.full([16, 32], 0x21, ttgl.uint8, src_layout)
+        scale = ttgl.full([16, 64], 127, ttgl.uint8, scale_layout)
+        if NATIVE_SRC:
+            src = src.to(ttgl.float4e2m1x2, bitcast=True)
+        if NATIVE_SCALE:
+            scale = scale.to(ttgl.float8e8m0fnu, bitcast=True)
+        result = scaled_upcast(src, scale, ttgl.bfloat16, axis=1)
+        ttgl.static_assert(result.dtype == ttgl.bfloat16)
+        ttgl.static_assert(result.shape == [16, 64])
+
+    module = run_parser(kernel, *make_args(native_src, native_scale, target.warp_size), target=target)
+    operation = next(line for line in module.str_nodebug().splitlines() if "amdg.scaled_upcast_fp4" in line)
+    if native_src:
+        assert "!tt.fp4e2m1x2" in operation
+    if native_scale:
+        assert "f8E8M0FNU" in operation
+
+
+@pytest.mark.parametrize("src_dtype", [ttgl.uint8, ttgl.float4e2m1x2])
+def test_native_low_precision_fp4_unpack(src_dtype):
+
+    @gluon.jit
+    def kernel(DTYPE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+        src = ttgl.full([128], 0x21, ttgl.uint8, layout).to(DTYPE, bitcast=True)
+        result = ttgl.fp4_to_fp(src, ttgl.float16, axis=0)
+        ttgl.static_assert(result.dtype == ttgl.float16)
+        ttgl.static_assert(result.shape == [256])
+
+    module = run_parser(kernel, *make_args(src_dtype), target=BLACKWELL_TARGET)
+    operation = next(line for line in module.str_nodebug().splitlines() if "ttg.fp4_to_fp" in line)
+    assert ("!tt.fp4e2m1x2" if src_dtype == ttgl.float4e2m1x2 else "xi8") in operation
+
+
+@pytest.mark.parametrize("dtype", [ttgl.float4e2m1x2, ttgl.float8e8m0fnu])
+@pytest.mark.parametrize("operation", ["allocate", "async_copy", "buffer_store"])
+def test_native_low_precision_memory_requires_matching_dtype(dtype, operation):
+    from triton.experimental.gluon.language.amd.cdna3 import buffer_store
+
+    @gluon.jit
+    def kernel(ptr, DTYPE: ttgl.constexpr, OPERATION: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        offsets = ttgl.arange(0, 128, layout=layout)
+        value = ttgl.full([128], 0, ttgl.uint8, layout).to(DTYPE, bitcast=True)
+        if OPERATION == "allocate":
+            ttgl.allocate_shared_memory(ttgl.uint8, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), value)
+        elif OPERATION == "async_copy":
+            shared = ttgl.allocate_shared_memory(DTYPE, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+            async_copy.async_load(shared, ptr + offsets)
+        else:
+            buffer_store(value, ptr, offsets)
+
+    with pytest.raises(CompilationError, match="source dtype .* and destination dtype .* must match"):
+        run_parser(kernel, *make_args(MockTensor(ttgl.uint8), dtype, operation), target=BLACKWELL_TARGET)
+
+
+@pytest.mark.parametrize("operation", ["fp4_to_fp", "packed_arith", "scaled_upcast"])
+def test_native_low_precision_rejects_wrong_operand_role(operation):
+    from triton.experimental.gluon.language.amd.cdna5 import scaled_upcast
+
+    @gluon.jit
+    def kernel(OPERATION: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+        scale = ttgl.full([128], 127, ttgl.uint8, layout).to(ttgl.float8e8m0fnu, bitcast=True)
+        if OPERATION == "fp4_to_fp":
+            ttgl.fp4_to_fp(scale, ttgl.float16, axis=0)
+        elif OPERATION == "packed_arith":
+            blackwell.add2(scale, scale, dtype=ttgl.float16)
+        else:
+            source = ttgl.full([128], 1.0, ttgl.float8e4nv, layout)
+            wrong_scale = scale.to(ttgl.float4e2m1x2, bitcast=True)
+            scaled_upcast(source, wrong_scale, ttgl.bfloat16)
+
+    message = "storage dtype" if operation == "packed_arith" else None
+    with pytest.raises(CompilationError, match=message):
+        run_parser(kernel, *make_args(operation), target=BLACKWELL_TARGET)
+
+
+@pytest.mark.parametrize("dtype", [ttgl.float4e2m1x2, ttgl.float8e8m0fnu])
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("operation,position", [("add2", 0), ("sub2", 1), ("mul2", 0), ("fma2", 2), ("min2", 0),
+                                                ("max2", 1), ("add4", 0), ("sub4", 1), ("mul4", 0), ("fma4", 2)])
+def test_native_low_precision_packed_arithmetic_rejects_operands(dtype, scalar, operation, position):
+    packed_op = getattr(blackwell if operation.endswith("2") else rubin, operation)
+    result_dtype = ttgl.float16 if operation.endswith("2") else ttgl.float8e4nv
+
+    @gluon.jit
+    def kernel(source, SCALAR: ttgl.constexpr, OPERATION: ttgl.constexpr, POSITION: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+        if SCALAR:
+            native = ttgl.load(source)
+        else:
+            offsets = ttgl.arange(0, 128, layout=layout)
+            native = ttgl.load(source + offsets)
+        value = ttgl.full([128], 1.0, result_dtype, layout)
+        lhs = native if POSITION == 0 else value
+        rhs = native if POSITION == 1 else value
+        if OPERATION == "fma2" or OPERATION == "fma4":
+            packed_op(lhs, rhs, native, dtype=result_dtype)
+        else:
+            packed_op(lhs, rhs, dtype=result_dtype)
+
+    with pytest.raises(CompilationError, match="storage dtype"):
+        run_parser(kernel, *make_args(MockTensor(dtype), scalar, operation, position), target=RUBIN_TARGET)
+
+
+@pytest.mark.parametrize("dtype", [ttgl.float4e2m1x2, ttgl.float8e8m0fnu])
+@pytest.mark.parametrize("operation", ["mul2", "mul4"])
+def test_native_low_precision_packed_arithmetic_rejects_result_dtype(dtype, operation):
+    packed_op = blackwell.mul2 if operation == "mul2" else rubin.mul4
+    operand_dtype = ttgl.float16 if operation == "mul2" else ttgl.float8e4nv
+
+    @gluon.jit
+    def kernel(DTYPE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+        value = ttgl.full([128], 1.0, operand_dtype, layout)
+        packed_op(value, value, dtype=DTYPE)
+
+    with pytest.raises(CompilationError, match="storage dtype"):
+        run_parser(kernel, *make_args(dtype), target=RUBIN_TARGET)
+
+
+@pytest.mark.parametrize("native_scales", [False, True])
+def test_native_low_precision_tcgen05_scales(native_scales):
+
+    @gluon.jit
+    def kernel(NATIVE_SCALES: ttgl.constexpr):
+        shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 8, 2)
+        a = ttgl.allocate_shared_memory(ttgl.float8e5, [128, 128], shared_layout)
+        b = ttgl.allocate_shared_memory(ttgl.float8e5, [128, 128], shared_layout)
+        scale_dtype: ttgl.constexpr = ttgl.float8e8m0fnu if NATIVE_SCALES else ttgl.uint8
+        scale_a = blackwell.allocate_tensor_memory(scale_dtype, [128, 32], TensorMemoryScalesLayout())
+        scale_b = blackwell.allocate_tensor_memory(scale_dtype, [128, 32], TensorMemoryScalesLayout())
+        acc = blackwell.allocate_tensor_memory(ttgl.float16, [128, 128], TensorMemoryLayout([128, 128], col_stride=2))
+        blackwell.tcgen05_mma_scaled(a, b, acc, scale_a, scale_b, "e5m2", "e5m2")
+
+    module = run_parser(kernel, *make_args(native_scales), target=BLACKWELL_TARGET)
+    operation = next(line for line in module.str_nodebug().splitlines() if "ttng.tc_gen5_mma_scaled" in line)
+    assert ("f8E8M0FNU" if native_scales else "xi8") in operation
+
+
+@pytest.mark.parametrize("operation", ["tcgen05_mma", "tcgen05_mma_scaled", "warpgroup_mma"])
+def test_native_low_precision_mma_rejects_wrong_operand(operation):
+
+    @gluon.jit
+    def kernel(OPERATION: ttgl.constexpr):
+        shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 8, 2)
+        a = ttgl.allocate_shared_memory(ttgl.float4e2m1x2, [128, 128], shared_layout)
+        b = ttgl.allocate_shared_memory(ttgl.float4e2m1x2, [128, 128], shared_layout)
+        if OPERATION == "warpgroup_mma":
+            layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
+                                                                 instr_shape=[16, 32, 16])
+            acc = ttgl.full([128, 128], 0, ttgl.int32, layout)
+            hopper.warpgroup_mma(a, b, acc)
+        else:
+            acc = blackwell.allocate_tensor_memory(ttgl.float16, [128, 128], TensorMemoryLayout([128, 128],
+                                                                                                col_stride=2))
+            if OPERATION == "tcgen05_mma":
+                blackwell.tcgen05_mma(a, b, acc)
+            else:
+                scale = blackwell.allocate_tensor_memory(ttgl.float8e8m0fnu, [128, 32], TensorMemoryScalesLayout())
+                blackwell.tcgen05_mma_scaled(a, b, acc, scale, scale, "e5m2", "e5m2")
+
+    with pytest.raises(CompilationError, match="does not support|incompatible with format"):
+        run_parser(kernel, *make_args(operation), target=BLACKWELL_TARGET)
+
+
+@pytest.mark.parametrize("dtype", [ttgl.float4e2m1x2, ttgl.float8e8m0fnu])
+@pytest.mark.parametrize("matching", [False, True])
+@pytest.mark.parametrize("operation", ["tma_store", "tmem_store"])
+def test_native_low_precision_descriptor_store(dtype, matching, operation):
+
+    @gluon.jit
+    def kernel(ptr, DTYPE: ttgl.constexpr, MATCHING: ttgl.constexpr, OPERATION: ttgl.constexpr):
+        source_dtype: ttgl.constexpr = DTYPE if MATCHING else ttgl.uint8
+        if OPERATION == "tma_store":
+            shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 8, 2)
+            desc = tma.make_tensor_descriptor(ptr, [128, 128], [128, 1], [128, 128], shared_layout)
+            source = ttgl.allocate_shared_memory(source_dtype, [128, 128], shared_layout)
+            tma.async_store(desc, [0, 0], source)
+        else:
+            dest = blackwell.allocate_tensor_memory(DTYPE, [128, 32], TensorMemoryLayout([128, 32], col_stride=4))
+            layout: ttgl.constexpr = dest.get_reg_layout()
+            source = ttgl.full([128, 32], 0, ttgl.uint8, layout).to(source_dtype, bitcast=True)
+            dest.store(source)
+
+    if matching:
+        run_parser(kernel, *make_args(MockTensor(dtype), dtype, matching, operation), target=BLACKWELL_TARGET)
+    else:
+        with pytest.raises(CompilationError, match="source dtype .*destination dtype"):
+            run_parser(kernel, *make_args(MockTensor(dtype), dtype, matching, operation), target=BLACKWELL_TARGET)
+
+
+@pytest.mark.parametrize("dtype", [ttgl.float4e2m1x2, ttgl.float8e8m0fnu])
+def test_native_low_precision_descriptor_rejects_nan_padding(dtype):
+
+    @gluon.jit
+    def kernel(ptr):
+        shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(128, 8, 2)
+        tma.make_tensor_descriptor(ptr, [128, 128], [128, 1], [128, 128], shared_layout, padding_option="nan")
+
+    with pytest.raises(CompilationError, match="Padding option `nan` is not supported"):
+        run_parser(kernel, *make_args(MockTensor(dtype)), target=BLACKWELL_TARGET)
+
+    with pytest.raises(ValueError, match="Padding option `nan` is not supported"):
+        TensorDescriptor(MockTensor(dtype), [128, 128], [128, 1], [128, 128], ttgl.NVMMASharedLayout(128, 8, 2),
+                         padding="nan")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
+def test_native_low_precision_scaled_downcast_preserves_legacy_result(target):
+    scaled_downcast = _get_amd_scaled_downcast(target)
+
+    @gluon.jit
+    def kernel(WARP_SIZE: ttgl.constexpr):
+        input_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [WARP_SIZE // 8, 8], [1, 1], [1, 0])
+        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [WARP_SIZE // 8, 8], [1, 1], [1, 0])
+        values = ttgl.full([16, 64], 1.0, ttgl.float16, input_layout)
+        scale = ttgl.full([16, 8], 127, ttgl.uint8, scale_layout).to(ttgl.float8e8m0fnu, bitcast=True)
+        result = scaled_downcast(values, scale, "e2m1", axis=1)
+        ttgl.static_assert(result.dtype == ttgl.uint8)
+        ttgl.static_assert(result.shape == [16, 32])
+
+    module = run_parser(kernel, *make_args(target.warp_size, num_warps=1), target=target)
+    operation = next(line for line in module.str_nodebug().splitlines() if "amdg.scaled_downcast_fp4" in line)
+    assert "f8E8M0FNU" in operation
+
+
+@pytest.mark.parametrize("dtype", [ttgl.float4e2m1x2, ttgl.float8e8m0fnu])
+@pytest.mark.parametrize("other_dtype", [ttgl.uint8, ttgl.float4e2m1x2, ttgl.float8e8m0fnu])
+def test_native_low_precision_join_requires_matching_dtype(dtype, other_dtype):
+
+    @gluon.jit
+    def kernel(DTYPE: ttgl.constexpr, OTHER_DTYPE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        bits = ttgl.full([128], 0, ttgl.uint8, layout)
+        a = bits.to(DTYPE, bitcast=True)
+        b = bits.to(OTHER_DTYPE, bitcast=True)
+        result = ttgl.join(a, b)
+        ttgl.static_assert(result.dtype == DTYPE)
+
+    if dtype == other_dtype:
+        run_parser(kernel, *make_args(dtype, other_dtype), target=BLACKWELL_TARGET)
+    else:
+        with pytest.raises(CompilationError, match="source dtype .* and destination dtype .* must match"):
+            run_parser(kernel, *make_args(dtype, other_dtype), target=BLACKWELL_TARGET)
+
+
+@pytest.mark.parametrize("fp8_format", ["e4m3", "e5m2"])
+@pytest.mark.parametrize("fp8_on_lhs", [False, True])
+def test_native_low_precision_cdna5_mixed_scales_preserve_legacy_lowering(fp8_format, fp8_on_lhs):
+    from triton._C.libtriton import ir, passes
+
+    @gluon.jit
+    def kernel(output, NATIVE_SCALE: ttgl.constexpr, FP8_FORMAT: ttgl.constexpr, FP8_ON_LHS: ttgl.constexpr):
+        accum_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
+                                                              instr_shape=[16, 16, 128])
+        packed_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
+                                                               instr_shape=[16, 16, 64])
+        fp8_layout: ttgl.constexpr = ttgl.DotOperandLayout(0 if FP8_ON_LHS else 1, accum_layout, 16)
+        fp4_layout: ttgl.constexpr = ttgl.DotOperandLayout(1 if FP8_ON_LHS else 0, packed_layout, 16)
+        e8_scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_wmma_scale_layout(fp8_layout, [32, 4])
+        e4_scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_wmma_scale_layout(fp4_layout, [32, 4])
+        fp8_dtype: ttgl.constexpr = ttgl.float8e4nv if FP8_FORMAT == "e4m3" else ttgl.float8e5
+        fp8 = ttgl.full([32, 128] if FP8_ON_LHS else [128, 32], 1.0, fp8_dtype, fp8_layout)
+        fp4 = ttgl.full([64, 32] if FP8_ON_LHS else [32, 64], 0x22, ttgl.uint8, fp4_layout)
+        e8_scale = ttgl.full([32, 4], 127, ttgl.uint8, e8_scale_layout)
+        e4_scale = ttgl.full([32, 4], 1.0, ttgl.float8e4nv, e4_scale_layout)
+        if NATIVE_SCALE:
+            e8_scale = e8_scale.to(ttgl.float8e8m0fnu, bitcast=True)
+        acc = ttgl.full([32, 32], 0.0, ttgl.float32, accum_layout)
+        if FP8_ON_LHS:
+            result = ttgl.amd.cdna5.wmma_scaled(fp8, e8_scale, FP8_FORMAT, fp4, e4_scale, "e2m1", acc)
+        else:
+            result = ttgl.amd.cdna5.wmma_scaled(fp4, e4_scale, "e2m1", fp8, e8_scale, FP8_FORMAT, acc)
+        rows = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, accum_layout))[:, None]
+        columns = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, accum_layout))[None, :]
+        ttgl.store(output + rows * 32 + columns, result)
+
+    lowered = []
+    for native in (False, True):
+        module = run_parser(kernel, *make_args(MockTensor(ttgl.float32), native, fp8_format, fp8_on_lhs, num_warps=4),
+                            target=HIP_TARGET_CDNA5)
+        operation = next(line for line in module.str_nodebug().splitlines() if "tt.dot_scaled" in line)
+        assert ("f8E8M0FNU" in operation) == native
+        assert "f8E4M3FN" in operation
+        pm = ir.pass_manager(module.context)
+        passes.ttir.add_lower_storage_types(pm, "hip:gfx1250")
+        passes.common.add_canonicalizer(pm)
+        pm.run(module, "lower_mixed_native_scales_test")
+        assert module.verify()
+        text = module.str_nodebug()
+        assert "tt.dot_scaled" in text
+        assert "f8E8M0FNU" not in text
+        lowered.append(text)
+    assert lowered[0] == lowered[1]

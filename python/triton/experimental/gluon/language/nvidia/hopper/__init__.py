@@ -123,6 +123,9 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
     Returns:
         tensor or warpgroup_mma_accumulator: Returns the result if synchronous, or a token to load the value once computed if asynchronous.
     """
+    accumulator_type = acc.type.tensor_type if isinstance(acc, warpgroup_mma_accumulator) else acc.type
+    for dtype in (a.dtype, b.dtype, accumulator_type.scalar):
+        _check(not dtype.is_low_precision_storage(), lambda dtype=dtype: f"warpgroup_mma does not support {dtype}")
     use_acc = _semantic.to_tensor(use_acc)
 
     if precision is None:

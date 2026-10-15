@@ -292,6 +292,9 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
 }
 
 LogicalResult WarpGroupDotOp::verify() {
+  if (isLowPrecisionStorageType(getA().getType().getElementType()) ||
+      isLowPrecisionStorageType(getB().getType().getElementType()))
+    return emitOpError("native storage operands require a scaled MMA");
   auto resTy = getD().getType();
   auto nvmmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(resTy.getEncoding());
   if (!nvmmaEnc || !nvmmaEnc.isHopper())
@@ -1127,6 +1130,9 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
 }
 
 LogicalResult TCGen5MMAOp::verify() {
+  if (isLowPrecisionStorageType(getA().getType().getElementType()) ||
+      isLowPrecisionStorageType(getB().getType().getElementType()))
+    return emitOpError("native storage operands require a scaled MMA");
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
   for (auto barrier : getBarriers()) {
@@ -1369,7 +1375,7 @@ static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
                                             ScaleDotElemType aType,
                                             ScaleDotElemType bType) {
   if (aType == ScaleDotElemType::E2M1) {
-    if (!elementType.isInteger(8))
+    if (!elementType.isInteger(8) && !isa<PackedFloat4E2M1Type>(elementType))
       return op->emitOpError("expected e2m1 LHS operand to have i8 storage");
     if (encoding.getFp4Padded() &&
         !llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
@@ -1439,6 +1445,37 @@ static LogicalResult verifyScaleEncoding(TCGen5MMAScaledOp op,
 }
 
 LogicalResult TCGen5MMAScaledOp::verify() {
+  auto verifyNativeOperand = [&](Type elementType,
+                                 ScaleDotElemType format) -> LogicalResult {
+    if (isa<Float8E8M0FNUType>(elementType))
+      return emitOpError("native E8M0 is a scale type, not an MMA operand");
+    if (isa<PackedFloat4E2M1Type>(elementType) &&
+        format != ScaleDotElemType::E2M1)
+      return emitOpError("native packed FP4 operands require e2m1 format");
+    return success();
+  };
+  if (failed(verifyNativeOperand(getA().getType().getElementType(), getAType())) ||
+      failed(verifyNativeOperand(getB().getType().getElementType(), getBType())))
+    return failure();
+  for (auto scale : {getAScale(), getBScale()}) {
+    Type elementType = scale.getType().getElementType();
+    if (isa<PackedFloat4E2M1Type>(elementType))
+      return emitOpError("native packed FP4 cannot be used as an MMA scale");
+  }
+  if (isa<Float8E8M0FNUType>(getAScale().getType().getElementType()) ||
+      isa<Float8E8M0FNUType>(getBScale().getType().getElementType())) {
+    for (auto scale : {getAScale(), getBScale()}) {
+      Type elementType = scale.getType().getElementType();
+      if (!elementType.isInteger(8) && !isa<Float8E8M0FNUType>(elementType))
+        return emitOpError("native E8M0 scales require E8M0 or i8 scales for "
+                           "both operands");
+    }
+    // Scales may reserve more storage than the instruction reads. Only the
+    // block16 shape of A selects a different scale format after byte lowering.
+    if (getAScale().getType().getShape().back() * 16 == getBlockK())
+      return emitOpError("native E8M0 scales cannot select the block16 scale "
+                         "format");
+  }
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
   for (auto barrier : getBarriers()) {
@@ -1757,6 +1794,8 @@ LogicalResult TMEMLoadOp::verify() {
 
   // Validate reduction conditions
   if (redOp) {
+    if (isLowPrecisionStorageType(elemTy))
+      return emitOpError("does not support reduction of native storage types");
     auto maxnreg = getContextualMaxNReg(*this);
     if (!supportsTMemLoadReduce(getType(), getSrc().getType(), maxnreg,
                                 [&]() { return emitOpError(); }))
@@ -1807,6 +1846,11 @@ LogicalResult TMEMCopyOp::verify() {
 
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto dstTy = cast<triton::gpu::MemDescType>(getDst().getType());
+  if ((isLowPrecisionStorageType(srcTy.getElementType()) ||
+       isLowPrecisionStorageType(dstTy.getElementType())) &&
+      srcTy.getElementType() != dstTy.getElementType())
+    return emitOpError(
+        "native storage source and destination element types must match");
   if (srcTy.getShape() != dstTy.getShape())
     return emitOpError("source shape ")
            << srcTy.getShape() << " must match destination shape "
@@ -1858,7 +1902,7 @@ LogicalResult TMEMCopyOp::verify() {
       return emitOpError("Source layout should be swizzled.");
     }
     // When we lift this, we should make sure we handle unpacked cleanly
-    if (srcTy.getElementType().getIntOrFloatBitWidth() != 32) {
+    if (getStorageBitWidth(srcTy.getElementType()) != 32) {
       return emitOpError("Source element type should be 32-bit.");
     }
     auto kCol = StringAttr::get(getContext(), "col");

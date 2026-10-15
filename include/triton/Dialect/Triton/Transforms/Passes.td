@@ -3,6 +3,19 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonLowerStorageTypes : Pass<"triton-lower-storage-types", "mlir::ModuleOp"> {
+  let summary = "Check native low-precision uses and lower their storage to bytes";
+  let description = [{
+    Preserve packed FP4 and E8M0 identities until every use has been verified.
+    Only bit-preserving operations and explicitly supported packed operations
+    may consume these types. Unsupported uses fail before any types change.
+    Legacy integer types and operations are unaffected.
+  }];
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+  let options = [Option<"target", "target", "std::string", "\"\"",
+                        "Compilation target; defaults to the module ttg.target attribute">];
+}
+
 def TritonCombineOps : Pass</*cli-arg*/"triton-combine", /*Op*/"mlir::ModuleOp"> {
   let summary = "combine ops";
   let description = [{
