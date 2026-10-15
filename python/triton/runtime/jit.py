@@ -276,41 +276,10 @@ class DependenciesFinder(ast.NodeVisitor):
 # -----------------------------------------------------------------------------
 
 
-def _is_low_precision_storage_annotation(ty: str) -> bool:
-    # Native annotations may have multiple layers of quoting after forwarding
-    # through code that postpones annotation evaluation.
-    ty = ty.strip()
-    while ty.startswith(("'", '"')):
-        try:
-            unquoted = ast.literal_eval(ty)
-        except (ValueError, SyntaxError):
-            break
-        if not isinstance(unquoted, str):
-            break
-        ty = unquoted.strip()
-    name = ty.strip().removeprefix("const ").strip()
-    name = name.removeprefix("*k").lstrip("*").rstrip("*").strip()
-    for prefix in ("tl.", "torch.", "gl.", "ttgl.", "triton.language."):
-        if name.startswith(prefix):
-            name = name.removeprefix(prefix)
-            break
-    return type_canonicalisation_dict.get(name.replace("_t", "")) in ("fp4e2m1x2", "fp8e8m0fnu")
-
-
 def _normalize_ty(ty) -> str:
     import triton.language.core as core
     if isinstance(ty, str):
         ty = ty.strip()
-        if ty.startswith(("'", '"')):
-            # A quoted forward annotation remains quoted when Python's
-            # postponed annotation evaluation is enabled.
-            try:
-                unquoted = ast.literal_eval(ty)
-            except (ValueError, SyntaxError):
-                pass
-            else:
-                if isinstance(unquoted, str) and _is_low_precision_storage_annotation(unquoted):
-                    return _normalize_ty(unquoted)
         if ty.startswith("const "):
             ty = ty.removeprefix("const")
             ty = _normalize_ty(ty)
@@ -318,35 +287,19 @@ def _normalize_ty(ty) -> str:
             return "*k" + ty[1:]
         if ty.endswith("*"):
             return "*" + _normalize_ty(ty[:-1])
-        if ty.startswith("*k") and _is_low_precision_storage_annotation(ty):
-            return "*k" + _normalize_ty(ty[2:])
         if ty.startswith("*"):
             return "*" + _normalize_ty(ty[1:])
         if ty.startswith("tl."):
             return _normalize_ty(ty.removeprefix("tl."))
-        if ty.startswith("torch.") and _is_low_precision_storage_annotation(ty):
-            return _normalize_ty(ty.removeprefix("torch."))
-        for prefix in ("gl.", "ttgl.", "triton.language."):
-            if ty.startswith(prefix) and _is_low_precision_storage_annotation(ty):
-                return _normalize_ty(ty[len(prefix):])
     elif isinstance(ty, core.pointer_type):
-        is_const_storage = ty.const and ty.element_ty.is_low_precision_storage()
-        return f"{'*k' if is_const_storage else '*'}{_normalize_ty(ty.element_ty)}"
+        return f"*{_normalize_ty(ty.element_ty)}"
     elif isinstance(ty, core.dtype):
         ty = ty.name
     elif isinstance(ty, type):
         ty = ty.__name__
     else:
         ty = str(ty)
-        if ty.startswith("torch.") and _is_low_precision_storage_annotation(ty):
-            return _normalize_ty(ty)
-    # Do not let the legacy C integer suffix normalization turn a misspelled
-    # storage type into a valid type. Other unknown annotations are ordinary
-    # Python type hints and must continue to leave dtype inference unchanged.
-    normalized = type_canonicalisation_dict.get(ty.replace("_t", ""), ty)
-    if normalized in core.dtype.STORAGE_TYPES and ty not in type_canonicalisation_dict:
-        raise ValueError(f"Unknown low-precision storage dtype: {ty}")
-    return normalized
+    return type_canonicalisation_dict.get(ty.replace("_t", ""), ty)
 
 
 class KernelParam:
@@ -442,43 +395,40 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     return serialized_obj
 
 
-def _contains_storage_dtype(signature):
-    from triton.language import dtype
+_STORAGE_DTYPES = ("fp4e2m1x2", "fp8e8m0fnu")
 
+
+def _contains_storage_dtype(signature):
     if isinstance(signature, tuple):
         return any(_contains_storage_dtype(element) for element in signature)
     if not isinstance(signature, str):
         return False
     if signature.startswith(("tensordesc<", "tensordesc_im2col<")):
-        return signature.split("<", 1)[1].split("[", 1)[0] in dtype.STORAGE_TYPES
-    return signature.lstrip("*k") in dtype.STORAGE_TYPES
+        return signature.split("<", 1)[1].split("[", 1)[0] in _STORAGE_DTYPES
+    return signature.lstrip("*k") in _STORAGE_DTYPES
 
 
 def _validate_storage_annotation(annotation, specialization):
-    """Annotations must not silently reinterpret a native storage dtype."""
     actual = specialization[0]
-    actual_element = actual.lstrip("*k") if isinstance(actual, str) else actual
-    expected_element = annotation.lstrip("*k")
     if _contains_storage_dtype(annotation) or _contains_storage_dtype(actual):
-        if actual_element != expected_element or actual.startswith("*") != annotation.startswith("*"):
+        # Const qualification can differ; the pointer/value distinction cannot.
+        if not isinstance(actual, str) or actual.replace("*k", "*") != annotation.replace("*k", "*"):
             raise TypeError(f"Annotation {annotation} does not match argument dtype {actual}; "
-                            "use triton.reinterpret to explicitly reinterpret storage.")
+                            "use triton.reinterpret to explicitly reinterpret storage")
     return (annotation, specialization[1])
 
 
 def _validate_storage_scalar_annotation(annotation, arg):
-    # Annotated floats and bools historically bypass specialization, including
-    # for scalar objects accepted by the launcher. Only inspect native storage
-    # tensor dtypes, leaving unrecognized legacy objects on the original path.
+    # Preserve the scalar annotation path: unknown scalar objects need not
+    # support dtype inference. Only inspect native tensors and their containers.
     if type(arg) in (bool, int, float) or arg is None:
         return (annotation, None)
     if isinstance(arg, tuple):
         for element in arg:
             _validate_storage_scalar_annotation(annotation, element)
     elif hasattr(arg, "data_ptr"):
-        from triton.language.core import dtype
         actual = type_canonicalisation_dict.get(str(getattr(arg, "dtype", None)).split(".")[-1])
-        if actual in dtype.STORAGE_TYPES:
+        if actual in _STORAGE_DTYPES:
             _validate_storage_annotation(annotation, ("*" + actual, None))
     else:
         from triton.tools.tensor_descriptor import TensorDescriptor
@@ -509,13 +459,16 @@ def create_function_from_signature(sig, kparams, backend):
             align = 'False' if kp.do_not_specialize_on_alignment else 'True'
             ret = f"specialize_impl(backend, {name}, {is_const}, {specialize}, {align})"
             if kp.annotation_type:
-                # Preserve annotated scalar specialization while checking the
-                # inferred type before replacing it with the annotation.
-                if ((kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"])
-                        and kp.annotation_type not in ("fp4e2m1x2", "fp8e8m0fnu")):
-                    specialization.append(f'_validate_storage_scalar_annotation("{kp.annotation_type}", {name})')
-                else:
+                if isinstance(kp.annotation_type, str):
+                    if (kp.annotation_type not in _STORAGE_DTYPES
+                            and (kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"])):
+                        # we do not specialize non-constexpr floats and bools:
+                        specialize = False
+                if specialize:
                     specialization.append(f'_validate_storage_annotation("{kp.annotation_type}", {ret})')
+                else:
+                    # skip runtime specialization:
+                    specialization.append(f'_validate_storage_scalar_annotation("{kp.annotation_type}", {name})')
             else:
                 specialization.append(f"{ret}")
 

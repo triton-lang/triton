@@ -363,3 +363,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#scale = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[0, 0], [16, 0]], block = []}>
+#scale_b = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[16, 0], [0, 0]], block = []}>
+#mma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, isTranspose = true, instrShape = [16, 16, 128]}>
+#packed = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, isTranspose = true, instrShape = [16, 16, 64]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: wmma_scaled_native_fp4_e8m0
+  // CHECK: llvm.call_intrinsic "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4"
+  tt.func @wmma_scaled_native_fp4_e8m0(
+      %a: tensor<32x64x!tt.fp4e2m1x2, #ttg.dot_op<{opIdx = 0, parent = #packed, kWidth = 16}>>,
+      %sa: tensor<32x4xf8E8M0FNU, #scale>,
+      %b: tensor<64x32x!tt.fp4e2m1x2, #ttg.dot_op<{opIdx = 1, parent = #packed, kWidth = 16}>>,
+      %sb: tensor<32x4xf8E8M0FNU, #scale_b>,
+      %acc: tensor<32x32xf32, #mma>) -> tensor<32x32xf32, #mma> {
+    // expected-error @+2 {{wmma scale intrinsic llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4 is not supported on gfx1250-strict}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %c = tt.dot_scaled %a scale %sa, %b scale %sb, %acc lhs = e2m1 rhs = e2m1 {fastMath = false} :
+      tensor<32x64x!tt.fp4e2m1x2, #ttg.dot_op<{opIdx = 0, parent = #packed, kWidth = 16}>>, tensor<32x4xf8E8M0FNU, #scale> *
+      tensor<64x32x!tt.fp4e2m1x2, #ttg.dot_op<{opIdx = 1, parent = #packed, kWidth = 16}>>, tensor<32x4xf8E8M0FNU, #scale_b> -> tensor<32x32xf32, #mma>
+    tt.return %c : tensor<32x32xf32, #mma>
+  }
+}

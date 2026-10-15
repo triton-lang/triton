@@ -20,13 +20,6 @@ namespace mlir {
 
 namespace triton {
 
-// Whether a scalar type has a distinct low-precision storage interpretation.
-bool isLowPrecisionStorageType(Type type);
-
-// Bit width of a scalar integer, floating-point, or packed storage type.
-// A packed E2M1 pair occupies one byte, not one 4-bit element.
-unsigned getStorageBitWidth(Type type);
-
 unsigned getPointeeBitWidth(Type type);
 
 Type getPointeeType(Type type);

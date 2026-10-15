@@ -292,9 +292,6 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
 }
 
 LogicalResult WarpGroupDotOp::verify() {
-  if (isLowPrecisionStorageType(getA().getType().getElementType()) ||
-      isLowPrecisionStorageType(getB().getType().getElementType()))
-    return emitOpError("native storage operands require a scaled MMA");
   auto resTy = getD().getType();
   auto nvmmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(resTy.getEncoding());
   if (!nvmmaEnc || !nvmmaEnc.isHopper())
@@ -1079,6 +1076,8 @@ static std::string strMMADTypeKind(MMADTypeKind kind) {
 static std::optional<std::pair<MMADTypeKind, SmallVector<Type>>>
 getMMAv5DTypeKindAndAcc(Type t) {
   MLIRContext *ctx = t.getContext();
+  if (isa<Float8E8M0FNUType>(t))
+    return std::nullopt;
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-kind-shapes
   if (t.isF32()) {
     return {{MMADTypeKind::tf32, {Float32Type::get(ctx)}}};
@@ -1130,9 +1129,6 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
 }
 
 LogicalResult TCGen5MMAOp::verify() {
-  if (isLowPrecisionStorageType(getA().getType().getElementType()) ||
-      isLowPrecisionStorageType(getB().getType().getElementType()))
-    return emitOpError("native storage operands require a scaled MMA");
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
   for (auto barrier : getBarriers()) {
@@ -1445,42 +1441,18 @@ static LogicalResult verifyScaleEncoding(TCGen5MMAScaledOp op,
 }
 
 LogicalResult TCGen5MMAScaledOp::verify() {
-  auto verifyNativeOperand = [&](Type elementType,
-                                 ScaleDotElemType format) -> LogicalResult {
-    if (isa<Float8E8M0FNUType>(elementType))
-      return emitOpError("native E8M0 is a scale type, not an MMA operand");
-    if (isa<PackedFloat4E2M1Type>(elementType) &&
-        format != ScaleDotElemType::E2M1)
-      return emitOpError("native packed FP4 operands require e2m1 format");
-    return success();
-  };
-  if (failed(verifyNativeOperand(getA().getType().getElementType(), getAType())) ||
-      failed(verifyNativeOperand(getB().getType().getElementType(), getBType())))
-    return failure();
-  for (auto scale : {getAScale(), getBScale()}) {
-    Type elementType = scale.getType().getElementType();
-    if (isa<PackedFloat4E2M1Type>(elementType))
-      return emitOpError("native packed FP4 cannot be used as an MMA scale");
-  }
-  if (isa<Float8E8M0FNUType>(getAScale().getType().getElementType()) ||
-      isa<Float8E8M0FNUType>(getBScale().getType().getElementType())) {
-    for (auto scale : {getAScale(), getBScale()}) {
-      Type elementType = scale.getType().getElementType();
-      if (!elementType.isInteger(8) && !isa<Float8E8M0FNUType>(elementType))
-        return emitOpError("native E8M0 scales require E8M0 or i8 scales for "
-                           "both operands");
-    }
-    // Scales may reserve more storage than the instruction reads. Only the
-    // block16 shape of A selects a different scale format after byte lowering.
-    if (getAScale().getType().getShape().back() * 16 == getBlockK())
-      return emitOpError("native E8M0 scales cannot select the block16 scale "
-                         "format");
-  }
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
   for (auto barrier : getBarriers()) {
     if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
+  }
+  for (auto [operand, format] :
+       {std::pair{getA(), getAType()}, std::pair{getB(), getBType()}}) {
+    Type type = operand.getType().getElementType();
+    if (isa<Float8E8M0FNUType>(type) ||
+        (isa<PackedFloat4E2M1Type>(type) && format != ScaleDotElemType::E2M1))
+      return emitOpError("native operand type does not match the MMA format");
   }
   Type atype =
       getScaledMMAOperandType(getA().getType().getElementType(), getAType());
@@ -1502,6 +1474,16 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   auto aScaleType = cast<MemDescType>(getAScale().getType());
   auto bScaleType = cast<MemDescType>(getBScale().getType());
   int64_t k = getBlockK();
+  bool hasNativeScale = isa<Float8E8M0FNUType>(aScaleType.getElementType()) ||
+                        isa<Float8E8M0FNUType>(bScaleType.getElementType());
+  for (auto scaleType : {aScaleType, bScaleType}) {
+    Type type = scaleType.getElementType();
+    if (isa<PackedFloat4E2M1Type>(type))
+      return emitOpError("packed FP4 is not a scale type");
+    if (hasNativeScale && !isa<Float8E8M0FNUType>(type) &&
+        (!type.isInteger(8) || scaleType.getShape().back() * 16 == k))
+      return emitOpError("E8M0 scales require matching scale formats");
+  }
   int64_t minK = 32;
   if (getAType() == ScaleDotElemType::E2M1 &&
       getBType() == ScaleDotElemType::E2M1) {
@@ -1794,8 +1776,6 @@ LogicalResult TMEMLoadOp::verify() {
 
   // Validate reduction conditions
   if (redOp) {
-    if (isLowPrecisionStorageType(elemTy))
-      return emitOpError("does not support reduction of native storage types");
     auto maxnreg = getContextualMaxNReg(*this);
     if (!supportsTMemLoadReduce(getType(), getSrc().getType(), maxnreg,
                                 [&]() { return emitOpError(); }))
@@ -1846,11 +1826,6 @@ LogicalResult TMEMCopyOp::verify() {
 
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto dstTy = cast<triton::gpu::MemDescType>(getDst().getType());
-  if ((isLowPrecisionStorageType(srcTy.getElementType()) ||
-       isLowPrecisionStorageType(dstTy.getElementType())) &&
-      srcTy.getElementType() != dstTy.getElementType())
-    return emitOpError(
-        "native storage source and destination element types must match");
   if (srcTy.getShape() != dstTy.getShape())
     return emitOpError("source shape ")
            << srcTy.getShape() << " must match destination shape "
@@ -1902,7 +1877,7 @@ LogicalResult TMEMCopyOp::verify() {
       return emitOpError("Source layout should be swizzled.");
     }
     // When we lift this, we should make sure we handle unpacked cleanly
-    if (getStorageBitWidth(srcTy.getElementType()) != 32) {
+    if (getIntOrFloatOrPtrBitWidth(srcTy.getElementType()) != 32) {
       return emitOpError("Source element type should be 32-bit.");
     }
     auto kCol = StringAttr::get(getContext(), "col");

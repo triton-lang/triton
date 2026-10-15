@@ -4,6 +4,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/TypeSwitch.h" // required by `Types.cpp.inc`
 
 using namespace mlir;
@@ -115,7 +116,7 @@ TensorDescType::verify(function_ref<InFlightDiagnostic()> emitError,
 
 LogicalResult PointerType::verify(function_ref<InFlightDiagnostic()> emitError,
                                   Type pointeeType, PtrAddrSpace addressSpace) {
-  if (!pointeeType.isIntOrFloat() && !isLowPrecisionStorageType(pointeeType))
+  if (!pointeeType.isIntOrFloat() && !isa<PackedFloat4E2M1Type>(pointeeType))
     return emitError()
            << "pointer types must point to integer or floating-point types";
   return success();
@@ -125,21 +126,11 @@ namespace mlir {
 
 namespace triton {
 
-bool isLowPrecisionStorageType(Type type) {
-  return isa<PackedFloat4E2M1Type, Float8E8M0FNUType>(type);
-}
-
-unsigned getStorageBitWidth(Type type) {
-  if (auto packedTy = dyn_cast<PackedFloat4E2M1Type>(type))
-    return packedTy.getWidth();
-  return type.getIntOrFloatBitWidth();
-}
-
 unsigned getPointeeBitWidth(Type type) {
   auto pointeeType = getPointeeType(type);
   if (auto tensorTy = dyn_cast<RankedTensorType>(pointeeType))
-    return getStorageBitWidth(tensorTy.getElementType());
-  return getStorageBitWidth(pointeeType);
+    return getIntOrFloatOrPtrBitWidth(tensorTy.getElementType());
+  return getIntOrFloatOrPtrBitWidth(pointeeType);
 }
 
 Type getI1SameShape(Type type) {

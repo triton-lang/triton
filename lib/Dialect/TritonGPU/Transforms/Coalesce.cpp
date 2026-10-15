@@ -34,7 +34,7 @@ static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
   int numThreads = numWarps * threadsPerWarp;
   int numElemsPerThread = std::max(numElems / numThreads, 1);
 
-  int maxVectorSize = 128 / type.getElementTypeBitWidth();
+  int maxVectorSize = 128 / getIntOrFloatOrPtrBitWidth(type.getElementType());
 
   int vectorSize = std::min(numElemsPerThread, maxVectorSize);
   SmallVector<unsigned> sizePerThread(type.getRank(), 1);

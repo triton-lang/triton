@@ -73,7 +73,6 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     other_handle = other.handle if other is not None else ir.value()
     cache_policy = _normalize_cache_policy(None, cache_modifier, None)
     cache_policy = cache_policy._to_ir(_semantic.builder)
-    _semantic._check_storage_dtype_match(ptr.dtype.element_ty, dest.dtype)
     _semantic.builder.create_async_copy_global_to_local(dest.handle, ptr.handle, mask_handle, other_handle,
                                                         cache_policy, False)
 
@@ -140,7 +139,6 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     stride = ir.value()
     cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
 
-    _semantic._check_storage_dtype_match(ptr.dtype.element_ty, dest.dtype)
     _semantic.builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle, mask, other, stride,
                                                   cache_modifier)
 

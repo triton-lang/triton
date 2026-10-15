@@ -315,7 +315,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                lambda: f"expected 'layout' to be a SharedLayout but got {layout}")
         ty = ttgl.shared_memory_descriptor_type(element_ty, shape, layout, shape)
         if value is not None:
-            self._check_storage_dtype_match(value.dtype, element_ty)
             handle = self.builder.create_local_alloc(ty.to_ir(self.builder), value.handle)
         else:
             handle = self.builder.create_local_alloc(ty.to_ir(self.builder))
@@ -632,10 +631,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape, index.type.layout)
 
     def fp4_to_fp(self, src: TensorTy, elem_type, axis) -> TensorTy:
-        _check(src.dtype in (ttgl.int8, ttgl.uint8, ttgl.float4e2m1x2),
-               lambda: f"fp4_to_fp requires packed E2M1 input, got {src.dtype}")
-        _check(not elem_type.is_low_precision_storage(),
-               lambda: f"fp4_to_fp requires a scalar floating-point result type, got {elem_type}")
         result = self.builder.create_fp4_to_fp(src.handle, elem_type.to_ir(self.builder), axis)
         shape = list(src.type.shape)
         shape[axis] *= 2

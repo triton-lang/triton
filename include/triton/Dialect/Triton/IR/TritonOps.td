@@ -455,13 +455,13 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
     let arguments = (ins
       TT_AtomicRMWAttr:$atomic_rmw_op,
       Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-      TT_Type:$val,
+      AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>:$val,
       Optional<TT_BoolLike>:$mask,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
     );
 
-    let results = (outs TT_Type:$result);
+    let results = (outs AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>:$result);
 
     // Explicitly list $atomic_rmw_op, $sem, and $scope rather than relying on
     // attr-dict so they're printed as strings rather than opaque integers.
@@ -495,13 +495,13 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [
 
     let arguments = (ins
       Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-      TT_Type:$cmp,
-      TT_Type:$val,
+      AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>:$cmp,
+      AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>:$val,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
     );
 
-    let results = (outs TT_Type:$result);
+    let results = (outs AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike]>:$result);
 
     // Explicitly list $sem and $scope rather than relying on attr-dict so
     // they're printed as strings rather than opaque integers.
@@ -797,7 +797,7 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let arguments = (
       ins
-      // FP4 is packed in pairs, either explicitly typed or as legacy i8 bytes.
+      // FP4 inputs are packed pairs, with I8Tensor retained for compatibility.
       RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$a,
       RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$b,
       TT_FloatTensor:$c,

@@ -66,7 +66,6 @@ def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, m
     y_offset = _semantic.to_tensor(y_offset)
     multicast = ttgl._unwrap_if_constexpr(multicast)
     cache_policy = _tma_cache_policy(cache_policy, _semantic.builder)
-    _semantic._check_storage_dtype_match(tensor_desc.dtype, result.dtype)
     _semantic.builder.create_async_tma_gather(tensor_desc.handle, x_offsets.handle, y_offset.handle, barrier.handle,
                                               result.handle, pred.handle, multicast, cache_policy)
 
@@ -102,6 +101,5 @@ def async_scatter(tensor_desc, x_offsets, y_offset, src, cache_policy=None, _sem
 
     y_offset = _semantic.to_tensor(y_offset)
     cache_policy = _tma_cache_policy(cache_policy, _semantic.builder)
-    _semantic._check_storage_dtype_match(src.dtype, tensor_desc.dtype)
     _semantic.builder.create_async_tma_scatter(tensor_desc.handle, x_offsets.handle, y_offset.handle, src.handle,
                                                cache_policy)

@@ -988,8 +988,8 @@ static int64_t getByteCount(Value result, int64_t minElementCount = 0,
   if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
     elementCount = tensorTy.getNumElements();
     auto elemType = tensorTy.getElementType();
-    if (elemType.isIntOrFloat()) {
-      dtypeBitWidth = elemType.getIntOrFloatBitWidth();
+    if (!isa<PointerType>(elemType)) {
+      dtypeBitWidth = getIntOrFloatOrPtrBitWidth(elemType);
     }
   }
   if (elementCount < minElementCount) {

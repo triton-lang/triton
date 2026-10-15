@@ -2200,64 +2200,50 @@ tt.func @tma_cache_invalid_store(%desc: !tma_cache_desc, %dst: !tma_cache_dst, %
 
 // -----
 
-#a = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
-#b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
-#d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 #scale = #ttng.tensor_memory_scales_encoding<>
-!a = !ttg.memdesc<128x64x!tt.fp4e2m1x2, #a, #ttng.tensor_memory>
-!b = !ttg.memdesc<64x256x!tt.fp4e2m1x2, #b, #ttg.shared_memory>
-!d = !ttg.memdesc<128x256xf32, #d, #ttng.tensor_memory, mutable>
-!sa = !ttg.memdesc<128x8xf8E8M0FNU, #scale, #ttng.tensor_memory>
-!sb = !ttg.memdesc<256x8xf8E8M0FNU, #scale, #ttng.tensor_memory>
-
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @native_e8m0_block16_scale(%a: !a, %b: !b, %d: !d, %sa: !sa, %sb: !sb, %p: i1) {
-    // expected-error @below {{native E8M0 scales cannot select the block16 scale format}}
-    ttng.tc_gen5_mma_scaled %a, %b, %d, %sa, %sb, %p, %p lhs = e2m1 rhs = e2m1 : !a, !b, !d, !sa, !sb
+  tt.func @tcgen5_rejects_native_fp4_with_fp8_format(
+      %a: !ttg.memdesc<128x64x!tt.fp4e2m1x2, #shared, #ttg.shared_memory>,
+      %b: !ttg.memdesc<64x256x!tt.fp4e2m1x2, #shared_b, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x256xf32, #acc, #ttng.tensor_memory, mutable>,
+      %sa: !ttg.memdesc<128x4xi8, #scale, #ttng.tensor_memory>,
+      %sb: !ttg.memdesc<256x4xi8, #scale, #ttng.tensor_memory>,
+      %use: i1, %pred: i1) {
+    // expected-error @+1 {{native operand type does not match the MMA format}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %sa, %sb, %use, %pred lhs = e4m3 rhs = e4m3 :
+      !ttg.memdesc<128x64x!tt.fp4e2m1x2, #shared, #ttg.shared_memory>,
+      !ttg.memdesc<64x256x!tt.fp4e2m1x2, #shared_b, #ttg.shared_memory>,
+      !ttg.memdesc<128x256xf32, #acc, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x4xi8, #scale, #ttng.tensor_memory>,
+      !ttg.memdesc<256x4xi8, #scale, #ttng.tensor_memory>
     tt.return
   }
 }
 
 // -----
 
-#a = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
-#b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
-#d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 #scale = #ttng.tensor_memory_scales_encoding<>
-!a = !ttg.memdesc<128x64x!tt.fp4e2m1x2, #a, #ttng.tensor_memory>
-!b = !ttg.memdesc<64x256x!tt.fp4e2m1x2, #b, #ttg.shared_memory>
-!d = !ttg.memdesc<128x256xf32, #d, #ttng.tensor_memory, mutable>
-!sa = !ttg.memdesc<128x4xf8E8M0FNU, #scale, #ttng.tensor_memory>
-!sb = !ttg.memdesc<256x4xf8E4M3FN, #scale, #ttng.tensor_memory>
-
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @native_e8m0_mixed_scale(%a: !a, %b: !b, %d: !d, %sa: !sa, %sb: !sb, %p: i1) {
-    // expected-error @below {{native E8M0 scales require E8M0 or i8 scales for both operands}}
-    ttng.tc_gen5_mma_scaled %a, %b, %d, %sa, %sb, %p, %p lhs = e2m1 rhs = e2m1 : !a, !b, !d, !sa, !sb
-    tt.return
-  }
-}
-
-// -----
-
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#scales = #ttng.tensor_memory_scales_encoding<>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @tmem_copy_native_storage_mismatch(%src: !ttg.memdesc<128x4x!tt.fp4e2m1x2, #shared, #ttg.shared_memory>, %dst: !ttg.memdesc<128x4xf8E8M0FNU, #scales, #ttng.tensor_memory, mutable>) {
-    // expected-error @+1 {{native storage source and destination element types must match}}
-    ttng.tmem_copy %src, %dst : !ttg.memdesc<128x4x!tt.fp4e2m1x2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x4xf8E8M0FNU, #scales, #ttng.tensor_memory, mutable>
-    tt.return
-  }
-}
-
-// -----
-
-#packed = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
-#unpacked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @packed_arith_rejects_native_fp4(%fp4: tensor<128x2x!tt.fp4e2m1x2, #packed>, %fp8: tensor<128x4xf8E4M3FN, #unpacked>) {
-    // expected-error @below {{'ttng.packed_arith' op operand #0 must be variadic of ranked tensor of packed arithmetic operand element values}}
-    %result = ttng.packed_arith mul %fp4, %fp8 : (tensor<128x2x!tt.fp4e2m1x2, #packed>, tensor<128x4xf8E4M3FN, #unpacked>) -> tensor<128x4xf8E4M3FN, #unpacked>
+  tt.func @tcgen5_rejects_mixed_native_scale_formats(
+      %a: !ttg.memdesc<128x64x!tt.fp4e2m1x2, #shared, #ttg.shared_memory>,
+      %b: !ttg.memdesc<64x256x!tt.fp4e2m1x2, #shared_b, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x256xf32, #acc, #ttng.tensor_memory, mutable>,
+      %sa: !ttg.memdesc<128x4xf8E8M0FNU, #scale, #ttng.tensor_memory>,
+      %sb: !ttg.memdesc<256x4xf8E4M3FN, #scale, #ttng.tensor_memory>,
+      %use: i1, %pred: i1) {
+    // expected-error @+1 {{E8M0 scales require matching scale formats}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %sa, %sb, %use, %pred lhs = e2m1 rhs = e2m1 :
+      !ttg.memdesc<128x64x!tt.fp4e2m1x2, #shared, #ttg.shared_memory>,
+      !ttg.memdesc<64x256x!tt.fp4e2m1x2, #shared_b, #ttg.shared_memory>,
+      !ttg.memdesc<128x256xf32, #acc, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x4xf8E8M0FNU, #scale, #ttng.tensor_memory>,
+      !ttg.memdesc<256x4xf8E4M3FN, #scale, #ttng.tensor_memory>
     tt.return
   }
 }

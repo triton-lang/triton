@@ -4,6 +4,7 @@
 #include <triton/Tools/LayoutUtils.h>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -102,11 +103,14 @@ enum TMA_ELEMENT_TYPES {
 FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
   auto encoding = ty.getSharedLayout();
   bool fp4Padded = isFp4Padded(encoding);
-
-  if (fp4Padded)
-    return TMA_B4X16_P64;
-
   auto elemTy = ty.getElementType();
+
+  if (fp4Padded) {
+    if (isa<Float8E8M0FNUType>(elemTy))
+      return emitError(loc) << "E8M0 descriptors cannot use FP4 padding";
+    return TMA_B4X16_P64;
+  }
+
   if (elemTy.isBF16()) {
     return TMA_BF16;
   } else if (elemTy.isF16()) {
@@ -117,7 +121,7 @@ FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
     return TMA_F64;
   }
 
-  auto elemSize = elemTy.getIntOrFloatBitWidth() / 8;
+  unsigned elemSize = getIntOrFloatOrPtrBitWidth(elemTy) / 8;
   switch (elemSize) {
   case 1:
     return TMA_U8;
@@ -145,7 +149,7 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
   };
 
   auto elemType = op.getBase().getType().getPointeeType();
-  auto elemSize = elemType.getIntOrFloatBitWidth() / 8;
+  unsigned elemSize = getIntOrFloatOrPtrBitWidth(elemType) / 8;
   auto encoding = op.getType().getSharedLayout();
   auto mmaEncoding =
       llvm::dyn_cast_or_null<gpu::NVMMASharedEncodingAttr>(encoding);

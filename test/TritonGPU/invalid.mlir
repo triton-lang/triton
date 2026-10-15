@@ -1052,15 +1052,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @async_copy_native_storage_mismatch(%input: tensor<64x64x!tt.ptr<!tt.fp4e2m1x2>, #blocked>, %view: !ttg.memdesc<64x64xi8, #shared, #ttg.shared_memory, mutable>) {
-    // expected-error @+1 {{native storage source and destination element types must match}}
-    %token = ttg.async_copy_global_to_local %input, %view : tensor<64x64x!tt.ptr<!tt.fp4e2m1x2>, #blocked> -> <64x64xi8, #shared, #ttg.shared_memory, mutable>
-    tt.return
-  }
-}

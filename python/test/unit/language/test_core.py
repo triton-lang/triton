@@ -533,44 +533,6 @@ def test_addptr(dtype, order, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("torch_name, triton_name", [("float4_e2m1fn_x2", "float4e2m1x2"),
-                                                     ("float8_e8m0fnu", "float8e8m0fnu")])
-def test_low_precision_native_roundtrip_strided(torch_name, triton_name, device):
-    if not hasattr(torch, torch_name):
-        pytest.skip(f"PyTorch does not provide {torch_name}")
-
-    @triton.jit
-    def copy_kernel(source, destination, source_stride, destination_stride, DTYPE: tl.constexpr):
-        tl.static_assert(source.dtype.element_ty == DTYPE)
-        tl.static_assert(destination.dtype.element_ty == DTYPE)
-        offsets = tl.arange(0, 256)
-        value = tl.load(source + offsets * source_stride)
-        tl.static_assert(value.dtype == DTYPE)
-        raw = value.to(tl.uint8, bitcast=True)
-        restored = raw.to(DTYPE, bitcast=True)
-        tl.static_assert(restored.dtype == DTYPE)
-        tl.store(destination + offsets * destination_stride, restored)
-
-    patterns = torch.arange(256, dtype=torch.int32, device=device).to(torch.uint8)
-    source_storage = torch.full((3 * 256 + 9, ), 0xA5, dtype=torch.uint8, device=device)
-    source_storage[3:3 + 3 * 256:3] = patterns
-    destination_storage = torch.empty(2 * 256 + 7, dtype=torch.uint8, device=device)
-    expected = torch.full_like(destination_storage, 0x5A)
-    expected[5:5 + 2 * 256:2] = patterns
-    native_type = (getattr(torch, torch_name), getattr(tl, triton_name))
-
-    # Reuse the same JIT function across legacy byte tensors and native tensors.
-    for torch_dtype, triton_dtype in [(torch.uint8, tl.uint8), native_type, (torch.uint8, tl.uint8), native_type]:
-        destination_storage.fill_(0x5A)
-        source = source_storage.view(torch_dtype)[3:3 + 3 * 256:3]
-        destination = destination_storage.view(torch_dtype)[5:5 + 2 * 256:2]
-        assert source.storage_offset() == 3 and source.stride() == (3, )
-        assert destination.storage_offset() == 5 and destination.stride() == (2, )
-        copy_kernel[(1, )](source, destination, source.stride(0), destination.stride(0), triton_dtype)
-        assert torch.equal(destination_storage, expected)
-
-
-@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y", [  #
     (dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes
 ] + [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes])

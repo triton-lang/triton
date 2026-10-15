@@ -178,9 +178,6 @@ def _get_np_dtype(tt_dtype):
         tl.float8e4nv: np.dtype(np.uint8),
         tl.float8e4b8: np.dtype(np.uint8),
         tl.float8e4b15: np.dtype(np.uint8),
-        # Packed FP4 and E8M0 retain their semantic dtype while storing bytes.
-        tl.float4e2m1x2: np.dtype(np.uint8),
-        tl.float8e8m0fnu: np.dtype(np.uint8),
     }
     if isinstance(tt_dtype, tl.block_type):
         if isinstance(tt_dtype.element_ty, tl.pointer_type):
@@ -190,8 +187,6 @@ def _get_np_dtype(tt_dtype):
 
 
 def _convert_float(input, input_dtype, output_dtype, rounding_mode):
-    if input_dtype.is_low_precision_storage() or output_dtype.is_low_precision_storage():
-        raise TypeError("Packed FP4 and E8M0 do not support generic numeric conversions; use an explicit bitcast")
     input_uint_dtype = getattr(np, f"uint{input_dtype.primitive_bitwidth}")
     output_unint_dtype = getattr(np, f"uint{output_dtype.primitive_bitwidth}")
     input_bin = np.frombuffer(input.tobytes(), dtype=input_uint_dtype).astype(np.int64)
@@ -283,12 +278,11 @@ def _dot_scaled_scale_to_f32(scale_handle, compute_type):
     scale = scale_handle.data
     assert scale.dtype in (np.uint8, np.int8)
     bits = scale.view(np.uint8).astype(np.int32) << 23
-    is_e8m0 = scale_handle.dtype.is_int() or scale_handle.dtype.is_fp8e8m0fnu()
-    if compute_type == tl.bfloat16 and is_e8m0:
+    if compute_type == tl.bfloat16 and scale_handle.dtype.is_int():
         # E8M0 byte zero is 2^-127, which rounds to zero in FP16.
         bits = np.maximum(bits, 0x00400000)
     scale = bits.view(np.float32)
-    if is_e8m0:
+    if scale_handle.dtype.is_int():
         # FMA turns byte 255's infinity into NaN while preserving finite scales.
         scale = _interpreter.fma_fp32(scale, np.zeros_like(scale), scale)
     return scale
@@ -313,7 +307,7 @@ def _e2m1_to_f32(value):
 
 
 def _mxfp_value_handle_to_float32(value_handle):
-    if value_handle.dtype in (tl.uint8, tl.float4e2m1x2):
+    if value_handle.dtype == tl.uint8:
         value_float = _e2m1_to_f32(value_handle.data)
     else:
         # Decode fp8 values through float16 first, then widen to float32.
@@ -569,10 +563,6 @@ class InterpreterBuilder:
     def cast_impl(self, src, dst_type, rounding_mode=None):
         src_element_type = src.dtype.scalar
         dst_element_type = dst_type.scalar
-        if src_element_type.is_low_precision_storage() or dst_element_type.is_low_precision_storage():
-            if src_element_type == dst_element_type:
-                return src
-            raise TypeError("Packed FP4 and E8M0 do not support generic numeric conversions; use an explicit bitcast")
         data = src.data
         dst_np_dtype = _get_np_dtype(dst_type)
         if src_element_type.is_floating() and np.issubdtype(data.dtype, np.integer) and dst_element_type.is_int():
@@ -1044,17 +1034,10 @@ def _patch_builtin(pkg, builder, scope: _LangPatchScope):
 def _patch_lang_tensor(tensor, scope: _LangPatchScope):
 
     def _get_bool(self):
-        if self.dtype.is_low_precision_storage():
-            raise TypeError("Packed FP4 and E8M0 cannot be used as conditions; use an explicit bitcast")
         data = self.handle.data
         # in triton, only scalars can be converted to booleans
         # here we need this hack because all scalars are tensors
         return bool(data) if data.size == 1 else True
-
-    def _get_index(self):
-        if self.dtype.is_low_precision_storage():
-            raise TypeError("Packed FP4 and E8M0 cannot be used as integer indices; use an explicit bitcast")
-        return int(self.handle.data.squeeze())
 
     def _get_transpose(self):
         handle = TensorHandle(np.transpose(self.handle.data), self.handle.dtype)
@@ -1063,7 +1046,7 @@ def _patch_lang_tensor(tensor, scope: _LangPatchScope):
         res_ty = tl.core.block_type(self.dtype, block_shape)
         return tl.core.tensor(handle, res_ty)
 
-    scope.set_attr(tensor, "__index__", _get_index)
+    scope.set_attr(tensor, "__index__", lambda self: int(self.handle.data.squeeze()))
     scope.set_attr(tensor, "__bool__", lambda self: _get_bool(self))
     scope.set_attr(tensor, "__repr__", lambda self: repr(self.handle.data))
     scope.set_attr(tensor, "__str__", lambda self: str(self.handle.data))
@@ -1085,19 +1068,6 @@ class ReduceScanOpInterface:
             if not isinstance(arg, tl.core.tensor):
                 raise ValueError(f"input must be a tensor, got {type(arg)}")
             self.check_axis(arg.shape, self.axis)
-
-    def check_combine_result(self, result, input):
-        for value, original in zip(result, input):
-            if isinstance(value, tl.core.tensor):
-                TritonSemantic._check_storage_dtype_match(value.dtype, original.dtype)
-            elif original.dtype.is_ptr():
-                # A Python constant cannot implicitly construct a native
-                # storage pointer when the result is repacked.
-                TritonSemantic._check_storage_dtype_match(tl.int32, original.dtype)
-            else:
-                # A numeric constant cannot implicitly construct a storage
-                # value when the result is packed back into the input dtype.
-                TritonSemantic._check_numeric_dtype(original.dtype)
 
     def to_tensor(self, ret, dtype):
         np_dtype = _get_np_dtype(dtype)
@@ -1158,7 +1128,6 @@ class ReduceOps(ReduceScanOpInterface):
                 acc_tuple = tuple(self.to_tensor(o[output_index], input[oi].dtype) for oi, o in enumerate(output_data))
                 combine_fn_ret = self.combine_fn.fn(*acc_tuple, *input_tuple)
                 acc_tuple = (combine_fn_ret, ) if not isinstance(combine_fn_ret, tuple) else combine_fn_ret
-                self.check_combine_result(acc_tuple, input)
                 for j in range(len(output_data)):
                     output_data[j][output_index] = acc_tuple[j].handle.data.item() if isinstance(
                         acc_tuple[j], tl.core.tensor) else acc_tuple[j]
@@ -1179,11 +1148,9 @@ class ReduceOps(ReduceScanOpInterface):
         return ret
 
     def min_max(self, input, reduce_op):
-        TritonSemantic._check_numeric_dtype(input.dtype)
         return self.to_tensor(reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
 
     def sum(self, input):
-        TritonSemantic._check_numeric_dtype(input.dtype)
         return self.to_tensor(np.sum(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
 
     def apply_impl(self, input):
@@ -1209,11 +1176,9 @@ class ScanOps(ReduceScanOpInterface):
         self.reverse = reverse
 
     def cumsum(self, input):
-        TritonSemantic._check_numeric_dtype(input.dtype)
         return [self.to_tensor(np.cumsum(input.handle.data, axis=self.axis), dtype=input.dtype)]
 
     def cumprod(self, input):
-        TritonSemantic._check_numeric_dtype(input.dtype)
         return [self.to_tensor(np.cumprod(input.handle.data, axis=self.axis), dtype=input.dtype)]
 
     def generic_scan(self, input):
@@ -1237,7 +1202,6 @@ class ScanOps(ReduceScanOpInterface):
                 acc_tuple = tuple(self.to_tensor(o[prev_index], input[oi].dtype) for oi, o in enumerate(output_data))
                 combine_fn_ret = self.combine_fn.fn(*acc_tuple, *data)
                 acc_tuple = (combine_fn_ret, ) if not isinstance(combine_fn_ret, tuple) else combine_fn_ret
-                self.check_combine_result(acc_tuple, input)
                 for j in range(len(output_data)):
                     output_data[j][index] = acc_tuple[j].handle.data.item() if isinstance(
                         acc_tuple[j], tl.core.tensor) else acc_tuple[j]
@@ -1288,9 +1252,7 @@ def _patch_lang_core(lang, scope: _LangPatchScope):
 
     def _new_to_ir(self, builder):
         # We need to specify signedness for integer types in the numpy mode
-        if self.is_low_precision_storage():
-            return self
-        elif self.name == 'void':
+        if self.name == 'void':
             return builder.get_void_ty()
         elif self.name == 'int1':
             return builder.get_int1_ty()
@@ -1439,7 +1401,6 @@ class GridExecutor:
 
     def __init__(self, fn, arg_names, grid, pre_run_hooks=[]):
         from .jit import _normalize_ty  # TODO: modularize
-        from .._utils import type_canonicalisation_dict
 
         self.fn = fn
         self.arg_names = arg_names
@@ -1447,13 +1408,6 @@ class GridExecutor:
         self.pre_run_hooks = pre_run_hooks
         __annotations__ = {name: _normalize_ty(ty) for name, ty in inspect.get_annotations(fn).items()}
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
-        original_annotations = getattr(fn, "__triton_original_annotations__", inspect.get_annotations(fn))
-        self.annotations = {
-            name: annotation
-            for name, ty in original_annotations.items()
-            for annotation in [_normalize_ty(ty)]
-            if name in arg_names and annotation.lstrip("*k") in type_canonicalisation_dict.values()
-        }
 
     def _init_args_hst(self, args_dev, kwargs):
         storages = {}
@@ -1518,20 +1472,11 @@ class GridExecutor:
             arg_dev.copy_(arg_hst)
 
     def __call__(self, *args_dev, **kwargs):
-        from .jit import _validate_storage_annotation, _validate_storage_scalar_annotation, mangle_type
-
         # Removes not used reserved keywords from kwargs
         # Triton doesn't support variable positional or variable keyword arguments
         # Keep both positional-or-keyword and keyword-only arguments.
         argspec = inspect.getfullargspec(self.fn)
         kwargs = {k: v for k, v in kwargs.items() if k in argspec.args or k in argspec.kwonlyargs}
-        if self.annotations:
-            args = inspect.getcallargs(self.fn, *args_dev, **kwargs)
-            for name, annotation in self.annotations.items():
-                if annotation.lstrip("*k") in tl.dtype.STORAGE_TYPES:
-                    _validate_storage_annotation(annotation, (mangle_type(args[name]), None))
-                else:
-                    _validate_storage_scalar_annotation(annotation, args[name])
         # copy arguments to the host
         args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
         # run pre-run hooks
@@ -1704,12 +1649,7 @@ class FunctionRewriter:
             if key not in fn_globals:
                 fn_globals[key] = value
         exec(compiled_code, fn_globals, local_namespace)
-        rewritten = local_namespace[self.fn.__name__]
-        # Keep the original annotations for native storage safety checks.
-        # Recompilation can quote literal annotations again; preserve that
-        # established behavior for legacy constexpr classification.
-        rewritten.__triton_original_annotations__ = inspect.get_annotations(self.fn)
-        return rewritten
+        return local_namespace[self.fn.__name__]
 
 
 class InterpretedFunction(KernelInterface[T]):

@@ -94,6 +94,79 @@ def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
     run_filecheck_test(kernel, args=(MockTensor(src_dtype), scalar, dst_dtype))
 
 
+@pytest.mark.parametrize("dtype, ir_type", [(tl.float4e2m1x2, "!tt.fp4e2m1x2"), (tl.float8e8m0fnu, "f8E8M0FNU")])
+def test_native_low_precision_storage(dtype, ir_type):
+    assert dtype.primitive_bitwidth == 8 and dtype.itemsize == 1
+    assert dtype != tl.uint8
+
+    @triton.jit
+    def kernel(source, output, DTYPE: tl.constexpr):
+        offsets = tl.arange(0, 32)
+        value = tl.load(source + offsets)
+        scalar = tl.load(source)
+        broadcast = tl.full([32], scalar, DTYPE)
+        bits = value.to(tl.uint8, bitcast=True)
+        restored = bits.to(DTYPE, bitcast=True)
+        selected = tl.where(offsets < 16, restored, broadcast)
+        left, right = tl.split(tl.join(selected, value))
+        tl.static_assert(left.dtype == DTYPE and right.dtype == DTYPE)
+        tl.store(output + offsets, left)
+
+    module = run_parser(kernel, args=(MockTensor(dtype), MockTensor(dtype), dtype))
+    assert module.verify()
+    text = module.str_nodebug()
+    assert ir_type in text
+    assert "tt.bitcast" in text and "tt.load" in text and "tt.store" in text
+
+
+@pytest.mark.parametrize("dtype", [tl.float4e2m1x2, tl.float8e8m0fnu])
+@pytest.mark.parametrize("operation", ["promote", "cast_from", "cast_to", "constant", "store"])
+def test_native_low_precision_rejects_implicit_conversions(dtype, operation):
+
+    @triton.jit
+    def kernel(source, output, DTYPE: tl.constexpr, OPERATION: tl.constexpr):
+        value = tl.load(source)
+        if OPERATION == "promote":
+            anchor(value + 1)
+        elif OPERATION == "cast_from":
+            anchor(value.to(tl.uint8))
+        elif OPERATION == "cast_to":
+            anchor(tl.full((), 0, tl.uint8).to(DTYPE))
+        elif OPERATION == "constant":
+            anchor(tl.full((), 0, DTYPE))
+        else:
+            tl.store(output, value)
+
+    with pytest.raises(CompilationError, match="storage dtype"):
+        run_parser(kernel, args=(MockTensor(dtype), MockTensor(tl.uint8), dtype, operation))
+
+
+@pytest.mark.parametrize("dtype", [tl.float4e2m1x2, tl.float8e8m0fnu])
+@pytest.mark.parametrize("bitcast", [False, True])
+def test_native_low_precision_pointer_cast(dtype, bitcast):
+
+    @triton.jit
+    def kernel(source, BITCAST: tl.constexpr):
+        anchor(source.to(tl.pointer_type(tl.uint8), bitcast=BITCAST))
+
+    if bitcast:
+        assert run_parser(kernel, args=(MockTensor(dtype), bitcast)).verify()
+    else:
+        with pytest.raises(CompilationError, match="storage dtype"):
+            run_parser(kernel, args=(MockTensor(dtype), bitcast))
+
+
+@pytest.mark.parametrize("dtype", [tl.float4e2m1x2, tl.float8e8m0fnu])
+def test_native_low_precision_descriptor_nan_padding(dtype):
+
+    @triton.jit
+    def kernel(source):
+        tl.make_tensor_descriptor(source, shape=[32], strides=[1], block_shape=[32], padding_option="nan")
+
+    with pytest.raises(CompilationError, match="Padding option `nan`"):
+        run_parser(kernel, args=(MockTensor(dtype), ))
+
+
 def test_store_int_to_bool():
 
     @triton.jit

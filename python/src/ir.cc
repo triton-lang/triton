@@ -204,7 +204,8 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       auto blockSize =
           ttng::getTMABlockShape(descTy, /*packedSize=*/false, tmaMode);
       metadata["swizzle"] = *swizzle;
-      metadata["elem_size"] = getStorageBitWidth(descTy.getElementType()) / 8;
+      metadata["elem_size"] =
+          getIntOrFloatOrPtrBitWidth(descTy.getElementType()) / 8;
       metadata["elem_type"] = *elemType;
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());
@@ -214,7 +215,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       auto blockShape = descTy.getShape();
       metadata["block_size"] =
           std::vector<int>(blockShape.begin(), blockShape.end());
-      metadata["elem_bits"] = getStorageBitWidth(descTy.getElementType());
+      metadata["elem_bits"] = getIntOrFloatOrPtrBitWidth(descTy.getElementType());
 
       if (auto paddedEnc =
               dyn_cast_if_present<ttg::PaddedSharedEncodingAttr>(encoding)) {

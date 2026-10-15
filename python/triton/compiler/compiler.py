@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
-from .._C.libtriton import get_cache_invalidating_env_vars, ir, passes
+from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
 from ..backends.compiler import Language
 from ..backends.compiler import BaseBackend, GPUTarget
@@ -116,8 +116,6 @@ class IRSource:
 
     def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
         self.module.context = context
-        if self.ext in ("ttir", "glir", "ttgir"):
-            _lower_storage_types(self.module, target)
         return self.module
 
     def parse_options(self):
@@ -137,20 +135,10 @@ def max_shared_mem(device):
     return driver.active.utils.get_device_properties(device)["max_shared_mem"]
 
 
-def _lower_storage_types(module, target=None):
-    # Textual IR can start after the backend's frontend stage, including when
-    # supplied as an IR override. Check native uses before any backend passes.
-    pm = ir.pass_manager(module.context)
-    target_name = "" if target is None else f"{target.backend}:{target.arch}"
-    passes.ttir.add_lower_storage_types(pm, target_name)
-    pm.run(module, "lower_storage_types")
-
-
-def parse(full_name, ext, context, target=None):
+def parse(full_name, ext, context):
     if ext in ("ttir", "glir", "ttgir"):
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
-        _lower_storage_types(module, target)
         return module
     if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
@@ -342,10 +330,10 @@ def compile(src, target=None, options=None, _env_vars=None):
             # Users can override kernels at scale by setting `ir_override` in autotune config
             # without TRITON_KERNEL_OVERRIDE
             if (ir_override := metadata.get("ir_override", None)) and ir_override.endswith(f".{ext}"):
-                next_module = parse(ir_override, ext, context, target)
+                next_module = parse(ir_override, ext, context)
         elif full_name := fn_override_manager.get_file(ir_filename):
             print(f"\nOverriding kernel with file {full_name}")
-            next_module = parse(full_name, ext, context, target)
+            next_module = parse(full_name, ext, context)
         # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
         if (not store_only_binary) or (ext in ("cubin", "hsaco", "json")):
             metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)

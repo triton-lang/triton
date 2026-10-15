@@ -49,7 +49,7 @@ def TTG_MemDescType : TTG_TypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> {
     bool hasRank() const { return true; }
 
     unsigned getElementTypeBitWidth() const {
-      return ::mlir::triton::getStorageBitWidth(getElementType());
+      return ::mlir::getIntOrFloatOrPtrBitWidth(getElementType());
     }
   }];
 

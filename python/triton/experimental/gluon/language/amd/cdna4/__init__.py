@@ -4,7 +4,7 @@ from triton._C.libtriton.gluon_ir import (
     compute_amd_efficient_padded_shared_layout as _compute_efficient_padded_shared_layout,
 )
 
-from ..._core import builtin, int8, uint8, float8e8m0fnu, _unwrap_if_constexpr
+from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
 from .._ops import _load_shared_fp4_repacked, _mma_scaled, _scaled_upcast, scaled_downcast
@@ -79,15 +79,15 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
     Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the
     CDNA4 scaled-upcast op.
 
-    The ``scale`` tensor must use ``float8e8m0fnu`` or raw E8M0 payload in ``int8``/``uint8``, and must
+    The ``scale`` tensor must use raw E8M0 payload in ``int8`` or ``uint8``, and must
     already have the expanded output shape and scaled-upcast result layout.
     For fp4 inputs, that is the canonical unpacked layout implied by ``src``
     and ``axis``. ``elem_type`` must be ``fp16`` or ``bf16``.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _unwrap_if_constexpr(elem_type)
-    assert scale.dtype in (int8, uint8, float8e8m0fnu), \
-        f"Expected scale to use raw E8M0 payload in int8/uint8 or float8e8m0fnu but got {scale.dtype}"
+    assert scale.dtype in (int8, uint8), \
+        f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
     return _scaled_upcast(src, scale, elem_type, axis, _semantic)
 
 
@@ -96,7 +96,7 @@ def load_shared_fp4_repacked(mem_desc, layout, _semantic=None):
     """
     Load M/N-packed fp4 bytes from shared memory into a K-packed MFMA dot operand layout.
 
-    The source shared memory descriptor must contain ``float4e2m1x2`` or ``int8``/``uint8`` packed fp4
+    The source shared memory descriptor must contain ``int8`` or ``uint8`` packed fp4
     values. The destination shape is inferred from the source shape and dot
     operand index in ``layout``.
     """

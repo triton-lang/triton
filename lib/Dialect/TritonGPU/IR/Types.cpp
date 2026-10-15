@@ -151,7 +151,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
       return emitError() << "memorySpace must be TensorMemorySpace";
     }
-    unsigned bitwidth = triton::getStorageBitWidth(elementType);
+    unsigned bitwidth = getIntOrFloatOrPtrBitWidth(elementType);
     if (bitwidth < 8)
       return emitError()
              << "tensor-memory element type bit width must be at least 8; got "
@@ -188,7 +188,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (allocShape.size() != 2) {
       return emitError() << "Scales don't currently support multibuffering";
     }
-    auto bitwidth = triton::getStorageBitWidth(elementType);
+    auto bitwidth = getIntOrFloatOrPtrBitWidth(elementType);
     if (bitwidth != 8) {
       return emitError() << "bitwidth must be 8";
     }

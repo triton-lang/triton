@@ -356,3 +356,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: mfma_dot_scaled_native_fp4_e8m0
+  // MFMA16-LABEL: mfma_dot_scaled_native_fp4_e8m0
+  tt.func @mfma_dot_scaled_native_fp4_e8m0(%a: tensor<128x64x!tt.fp4e2m1x2, #blocked>, %b: tensor<64x128x!tt.fp4e2m1x2, #blocked1>, %scale_a: tensor<128x4xf8E8M0FNU, #blocked2>, %scale_b: tensor<128x4xf8E8M0FNU, #blocked2>) -> tensor<128x128xf32, #blocked1> {
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32, #blocked1>
+    // CHECK: ttg.convert_layout {{.*}} : tensor<128x4xf8E8M0FNU, {{.*}}> -> tensor<128x4xf8E8M0FNU, {{.*}}>
+    // CHECK: ttg.convert_layout {{.*}} : tensor<128x4xf8E8M0FNU, {{.*}}> -> tensor<128x4xf8E8M0FNU, {{.*}}>
+    // CHECK: tt.dot_scaled {{.*}} : tensor<128x64x!tt.fp4e2m1x2, {{.*}}>, tensor<128x4xf8E8M0FNU, {{.*}}> * tensor<64x128x!tt.fp4e2m1x2, {{.*}}>, tensor<128x4xf8E8M0FNU, {{.*}}>
+    // MFMA16: ttg.convert_layout {{.*}} : tensor<128x4xf8E8M0FNU, {{.*}}> -> tensor<128x4xf8E8M0FNU, {{.*}}>
+    // MFMA16: ttg.convert_layout {{.*}} : tensor<128x4xf8E8M0FNU, {{.*}}> -> tensor<128x4xf8E8M0FNU, {{.*}}>
+    // MFMA16: tt.dot_scaled {{.*}} : tensor<128x64x!tt.fp4e2m1x2, {{.*}}>, tensor<128x4xf8E8M0FNU, {{.*}}> * tensor<64x128x!tt.fp4e2m1x2, {{.*}}>, tensor<128x4xf8E8M0FNU, {{.*}}>
+    %result = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %zero lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x64x!tt.fp4e2m1x2, #blocked>, tensor<128x4xf8E8M0FNU, #blocked2> * tensor<64x128x!tt.fp4e2m1x2, #blocked1>, tensor<128x4xf8E8M0FNU, #blocked2> -> tensor<128x128xf32, #blocked1>
+    tt.return %result : tensor<128x128xf32, #blocked1>
+  }
+}

@@ -401,8 +401,6 @@ class tensor_memory_descriptor(base_value):
         abs_flag = _unwrap_if_constexpr(abs)
         propagate_nan = _unwrap_if_constexpr(propagate_nan)
 
-        _check(not self.dtype.is_low_precision_storage(),
-               lambda: f"tensor memory reductions do not support {self.dtype}")
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
         builder = _semantic.builder
 
@@ -553,8 +551,6 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
     element_ty = _unwrap_if_constexpr(element_ty)
     shape = _unwrap_if_constexpr(shape)
     layout = _unwrap_if_constexpr(layout)
-    if value is not None:
-        _semantic._check_storage_dtype_match(value.dtype, element_ty)
     value = value.handle if value is not None else None
 
     ty = tensor_memory_descriptor_type(element_ty, shape, layout, shape)
@@ -574,7 +570,6 @@ def tcgen05_copy(src, dst, _semantic=None):
     """
     assert isinstance(src, ttgl.shared_memory_descriptor), "source must be a shared memory descriptor"
     assert isinstance(dst, tensor_memory_descriptor), "destination must be a tensor memory descriptor"
-    _semantic._check_storage_dtype_match(src.dtype, dst.dtype)
     _semantic.builder.create_tmem_copy(src.handle, dst.handle)
 
 
@@ -598,9 +593,6 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
-    for operand in (a, b, acc):
-        _check(not operand.dtype.is_low_precision_storage(),
-               lambda operand=operand: f"tcgen05_mma does not support {operand.dtype}; use tcgen05_mma_scaled")
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
 
@@ -658,15 +650,6 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
-    for operand, format in ((a, a_type.value), (b, b_type.value)):
-        if operand.dtype.is_low_precision_storage():
-            _check(
-                operand.dtype.is_fp4e2m1x2() and format == "e2m1", lambda operand=operand, format=format:
-                f"operand dtype {operand.dtype} is incompatible with format {format}")
-    for scale in (a_scale, b_scale):
-        _check(not scale.dtype.is_fp4e2m1x2(), lambda: "packed E2M1 data cannot be used as an MMA scale")
-    _check(not acc.dtype.is_low_precision_storage(),
-           lambda: f"tcgen05_mma_scaled does not support accumulator dtype {acc.dtype}")
     allowed_formats = {"e2m1", "e4m3", "e5m2"}
     assert a_type.value in allowed_formats, f"Unsupported lhs_format: {a_type.value}"
     assert b_type.value in allowed_formats, f"Unsupported rhs_format: {b_type.value}"

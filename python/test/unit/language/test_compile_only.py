@@ -9,6 +9,95 @@ from triton.compiler.errors import CompileTimeAssertionFailure
 from triton.runtime.driver import driver
 
 
+def _compile_native_dtype_ir(kernel, signature, target):
+    from triton._C.libtriton import ir
+    from triton.compiler.compiler import make_backend
+
+    backend = make_backend(target)
+    options = backend.parse_options({"ptx_version": 94} if target.backend == "cuda" else {})
+    source = ASTSource(kernel, signature)
+    context = ir.context()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
+    module = source.make_ir(target, options, backend.get_codegen_implementation(options), backend.get_module_map(),
+                            context)
+    result = {"source": str(module)}
+    metadata = {"target": target, **vars(options)}
+    stages = {}
+    backend.add_stages(stages, options, source.language)
+    for name, stage in stages.items():
+        module = stage(module, metadata)
+        result[name] = str(module)
+        if name == "llir":
+            return result
+    pytest.fail("LLVM IR stage not found")
+
+
+@pytest.mark.parametrize("target", [GPUTarget("cuda", 100, 32), GPUTarget("hip", "gfx950", 64)])
+@pytest.mark.parametrize("dtype, ir_dtype", [("fp4e2m1x2", "!tt.fp4e2m1x2"), ("fp8e8m0fnu", "f8E8M0FNU")])
+def test_native_dtype_copy_lowering(target, dtype, ir_dtype, monkeypatch):
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+
+    @triton.jit
+    def copy(source, destination):
+        offsets = tl.arange(0, 128)
+        value = tl.load(source + offsets)
+        tl.store(destination + offsets, value)
+
+    native = _compile_native_dtype_ir(copy, {"source": f"*{dtype}", "destination": f"*{dtype}"}, target)
+    legacy = _compile_native_dtype_ir(copy, {"source": "*u8", "destination": "*u8"}, target)
+    for stage in ("source", "ttir", "ttgir"):
+        assert ir_dtype in native[stage]
+        assert "tt.bitcast" not in native[stage]
+    # Type identity survives until LLVM conversion; byte copies generate the same code.
+    assert native["llir"] == legacy["llir"]
+
+
+@pytest.mark.parametrize("dtype", ["fp4e2m1x2", "fp8e8m0fnu"])
+def test_native_dtype_descriptor_lowering(dtype, monkeypatch):
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+
+    @triton.jit
+    def descriptor_copy(source, destination, rows, columns):
+        src = tl.make_tensor_descriptor(source, [rows, columns], [96, 1], [32, 32])
+        dst = tl.make_tensor_descriptor(destination, [32, 32], [32, 1], [32, 32])
+        dst.store([0, 0], src.load([64, 64]))
+
+    target = GPUTarget("cuda", 100, 32)
+    dims = {"rows": "i32", "columns": "i32"}
+    native = _compile_native_dtype_ir(descriptor_copy, {"source": f"*{dtype}", "destination": f"*{dtype}", **dims},
+                                      target)
+    legacy = _compile_native_dtype_ir(descriptor_copy, {"source": "*u8", "destination": "*u8", **dims}, target)
+    assert "ttng.async_tma_copy_global_to_local" in native["ttgir"]
+    assert native["llir"] == legacy["llir"]
+
+
+@pytest.mark.parametrize(
+    "target",
+    [GPUTarget("cuda", 80, 32), GPUTarget("cuda", 100, 32),
+     GPUTarget("hip", "gfx950", 64)])
+def test_native_dtype_scaled_dot_lowering(target, monkeypatch):
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+
+    @triton.jit
+    def scaled_dot(a, b, s, output):
+        rows = tl.arange(0, 32)[:, None]
+        columns = tl.arange(0, 32)[None, :]
+        lhs = tl.load(a + rows * 32 + columns)
+        rhs = tl.load(b + rows * 32 + columns)
+        scale = tl.load(s + rows * 2 + tl.arange(0, 2)[None, :])
+        value = tl.dot_scaled(lhs, scale, "e2m1", rhs, scale, "e2m1")
+        tl.store(output + rows * 32 + columns, value)
+
+    native = _compile_native_dtype_ir(scaled_dot,
+                                      {"a": "*fp4e2m1x2", "b": "*fp4e2m1x2", "s": "*fp8e8m0fnu", "output": "*fp32"},
+                                      target)
+    legacy = _compile_native_dtype_ir(scaled_dot, {"a": "*u8", "b": "*u8", "s": "*u8", "output": "*fp32"}, target)
+    assert "!tt.fp4e2m1x2" in native["ttir"]
+    assert "f8E8M0FNU" in native["ttir"]
+    assert native["llir"] == legacy["llir"]
+
+
 @triton.jit
 def topk_kernel(K: tl.constexpr):
     x = tl.arange(0, 8)
@@ -53,488 +142,6 @@ def test_compile_only_sort_keeps_comparisons_boolean() -> None:
     source = ASTSource(fn=sort_kernel, signature={"values": "*i32", "result": "*i32"})
     compiled = triton.compile(source, target=GPUTarget("cuda", 100, 32))
     assert "arith.extui" not in compiled.asm["ttgir"]
-
-
-def _make_low_precision_test_ir(source, target=None):
-    from triton._C.libtriton import ir
-    from triton.compiler.compiler import make_backend
-
-    target = target or GPUTarget("cuda", 100, 32)
-    backend = make_backend(target)
-    options = backend.parse_options({"num_warps": 1, "ptx_version": 94})
-    context = ir.context()
-    ir.load_dialects(context)
-    backend.load_dialects(context)
-    module = source.make_ir(target, options, backend.get_codegen_implementation(options), backend.get_module_map(),
-                            context)
-    return module, backend, options
-
-
-def _lower_low_precision_storage_types(module, context, target=None):
-    from triton._C.libtriton import ir, passes
-
-    pm = ir.pass_manager(context)
-    if target is None:
-        passes.ttir.add_lower_storage_types(pm)
-    else:
-        passes.ttir.add_lower_storage_types(pm, target)
-    pm.run(module, "lower_storage_types_test")
-
-
-def _low_precision_mixed_scale_ir(native_scale, module_target=None):
-    scale_dtype = "f8E8M0FNU" if native_scale else "i8"
-    attributes = f' attributes {{ttg.target = "{module_target}"}}' if module_target else ""
-    return f"""module{attributes} {{
-  tt.func public @mixed_scales(%a: tensor<16x32xf8E4M3FN>, %b: tensor<16x8xi8>,
-                              %a_scale: tensor<16x1x{scale_dtype}>, %b_scale: tensor<8x1xf8E4M3FN>,
-                              %c: tensor<16x8xf32>) -> tensor<16x8xf32> {{
-    %d = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %c lhs = e4m3 rhs = e2m1 {{fastMath = false}}
-      : tensor<16x32xf8E4M3FN>, tensor<16x1x{scale_dtype}> * tensor<16x8xi8>, tensor<8x1xf8E4M3FN> -> tensor<16x8xf32>
-    tt.return %d : tensor<16x8xf32>
-  }}
-}}"""
-
-
-@pytest.mark.parametrize("target, module_target, native_scale, allowed", [
-    ("cuda:100", None, True, False),
-    ("hip:gfx1250", None, True, True),
-    (None, None, True, False),
-    (None, "cuda:100", True, False),
-    (None, "hip:gfx1250", True, True),
-    ("cuda:100", "hip:gfx1250", True, False),
-    ("hip:gfx1250", "cuda:100", True, True),
-    ("cuda:100", None, False, True),
-    ("hip:gfx1250", None, False, True),
-])
-def test_low_precision_mixed_scales_storage_lowering_target(tmp_path, capfd, target, module_target, native_scale,
-                                                            allowed):
-    from triton._C.libtriton import ir
-
-    context = ir.context()
-    ir.load_dialects(context)
-    path = tmp_path / "mixed_scales.ttir"
-    path.write_text(_low_precision_mixed_scale_ir(native_scale, module_target))
-    module = ir.parse_mlir_module(str(path), context)
-    before = module.str_nodebug()
-    if not allowed:
-        with pytest.raises(RuntimeError):
-            _lower_low_precision_storage_types(module, context, target)
-        assert "native E8M0" in capfd.readouterr().err
-        assert module.str_nodebug() == before
-    else:
-        _lower_low_precision_storage_types(module, context, target)
-        expected = before.replace("f8E8M0FNU", "i8") if native_scale else before
-        assert module.str_nodebug() == expected
-
-
-@pytest.mark.parametrize("entrypoint", ["source", "override"])
-@pytest.mark.parametrize("target", [GPUTarget("cuda", 100, 32), GPUTarget("hip", "gfx1250", 32)])
-@pytest.mark.parametrize("native_scale", [False, True])
-def test_low_precision_textual_ir_mixed_scales_target(tmp_path, capfd, entrypoint, target, native_scale):
-    from triton._C.libtriton import ir
-    from triton.compiler.compiler import IRSource, make_backend, parse
-
-    context = ir.context()
-    ir.load_dialects(context)
-    path = tmp_path / "mixed_scales.ttir"
-    path.write_text(_low_precision_mixed_scale_ir(native_scale))
-    before = ir.parse_mlir_module(str(path), context).str_nodebug()
-
-    def import_ir():
-        if entrypoint == "source":
-            source = IRSource(str(path), context, make_backend(target))
-            return source.make_ir(target, None, None, None, context)
-        return parse(str(path), "ttir", context, target)
-
-    if native_scale and target.backend == "cuda":
-        with pytest.raises(RuntimeError):
-            import_ir()
-        assert "native E8M0" in capfd.readouterr().err
-    else:
-        module = import_ir()
-        expected = before.replace("f8E8M0FNU", "i8") if native_scale else before
-        assert module.str_nodebug() == expected
-
-
-@pytest.mark.parametrize("extension", ["ttir", "ttgir", "glir"])
-@pytest.mark.parametrize("entrypoint", ["source", "override"])
-def test_low_precision_textual_ir_rejects_numeric_e8m0(tmp_path, capfd, extension, entrypoint):
-    from triton._C.libtriton import ir
-    from triton.compiler.compiler import IRSource, make_backend, parse
-
-    context = ir.context()
-    ir.load_dialects(context)
-    path = tmp_path / f"unsupported.{extension}"
-    path.write_text("""module {
-  tt.func public @unsupported(%value: f8E8M0FNU) {
-    %result = arith.addf %value, %value : f8E8M0FNU
-    tt.return
-  }
-}""")
-    with pytest.raises(RuntimeError):
-        if entrypoint == "source":
-            target = GPUTarget("cuda", 100, 32)
-            source = IRSource(str(path), context, make_backend(target))
-            source.make_ir(target, None, None, None, context)
-        else:
-            parse(str(path), extension, context)
-    assert "does not support native low-precision storage types" in capfd.readouterr().err
-
-
-@pytest.mark.parametrize("literal, bits", [("1.0", 127), ("0x00", 0), ("0xFF", -1)])
-@pytest.mark.parametrize("tensor", [False, True])
-def test_low_precision_e8m0_constants_lower_encoded_bits(tmp_path, literal, bits, tensor):
-    from triton._C.libtriton import ir
-
-    context = ir.context()
-    ir.load_dialects(context)
-    dtype = "tensor<4xf8E8M0FNU>" if tensor else "f8E8M0FNU"
-    value = f"dense<{literal}>" if tensor else literal
-    path = tmp_path / "constant.mlir"
-    path.write_text(f"""module {{
-  tt.func @constant() -> {dtype} {{
-    %value = arith.constant {value} : {dtype}
-    tt.return %value : {dtype}
-  }}
-}}""")
-    module = ir.parse_mlir_module(str(path), context)
-    _lower_low_precision_storage_types(module, context)
-    expected_value = f"dense<{bits}>" if tensor else str(bits)
-    expected_dtype = "tensor<4xi8>" if tensor else "i8"
-    assert f"arith.constant {expected_value} : {expected_dtype}" in module.str_nodebug()
-
-
-def test_low_precision_e8m0_dense_constants_preserve_all_encodings(tmp_path):
-    from triton._C.libtriton import ir
-
-    context = ir.context()
-    ir.load_dialects(context)
-    values = ", ".join(f"0x{value:02X}" for value in range(256))
-    path = tmp_path / "all_encodings.mlir"
-    path.write_text(f"""module {{
-  tt.func @all_encodings() -> tensor<256xf8E8M0FNU> {{
-    %value = arith.constant dense<[{values}]> : tensor<256xf8E8M0FNU>
-    tt.return %value : tensor<256xf8E8M0FNU>
-  }}
-}}""")
-    module = ir.parse_mlir_module(str(path), context)
-    _lower_low_precision_storage_types(module, context)
-    expected = ", ".join(str(value if value < 128 else value - 256) for value in range(256))
-    expected_hex = "".join(f"{value:02x}" for value in range(256))
-    result = module.str_nodebug().lower()
-    assert (f"arith.constant dense<[{expected}]> : tensor<256xi8>" in result
-            or f' arith.constant dense<"0x{expected_hex}"> : tensor<256xi8>' in result)
-
-
-@pytest.mark.parametrize("dtype", ["i8", "!tt.fp4e2m1x2", "f8E8M0FNU"])
-def test_low_precision_storage_lowering_is_explicit(tmp_path, dtype):
-    from triton._C.libtriton import ir
-
-    context = ir.context()
-    ir.load_dialects(context)
-    path = tmp_path / "copy.mlir"
-    path.write_text(f"""module {{
-  tt.func @copy(%source: !tt.ptr<{dtype}>, %destination: !tt.ptr<{dtype}>) {{
-    %value = tt.load %source : !tt.ptr<{dtype}>
-    tt.store %destination, %value : !tt.ptr<{dtype}>
-    tt.return
-  }}
-}}""")
-    module = ir.parse_mlir_module(str(path), context)
-    before = module.str_nodebug()
-    assert f"!tt.ptr<{dtype}>" in before
-    _lower_low_precision_storage_types(module, context)
-    after = module.str_nodebug()
-    assert "!tt.ptr<i8>" in after
-    if dtype == "i8":
-        assert before == after
-    else:
-        assert dtype not in after
-
-
-@pytest.mark.parametrize("dtype, operation", [
-    ("f8E8M0FNU", "%result = arith.addf %arg, %arg : f8E8M0FNU"),
-    ("f8E8M0FNU", '"tt.print"(%arg) {prefix = "", hex = false, isSigned = array<i32: 0>} : (f8E8M0FNU) -> ()'),
-    ("!tt.fp4e2m1x2", '"tt.print"(%arg) {prefix = "", hex = false, isSigned = array<i32: 0>} : (!tt.fp4e2m1x2) -> ()'),
-])
-def test_low_precision_storage_lowering_rejects_unsupported_operations(tmp_path, capfd, dtype, operation):
-    from triton._C.libtriton import ir
-
-    context = ir.context()
-    ir.load_dialects(context)
-    path = tmp_path / "unsupported.mlir"
-    path.write_text(f"module {{ tt.func @unsupported(%arg: {dtype}) {{ {operation}\n tt.return }} }}")
-    module = ir.parse_mlir_module(str(path), context)
-    before = module.str_nodebug()
-    with pytest.raises(RuntimeError):
-        _lower_low_precision_storage_types(module, context)
-    assert "does not support native low-precision storage types" in capfd.readouterr().err
-    assert module.str_nodebug() == before
-
-
-@pytest.mark.parametrize("dtype", ["!tt.fp4e2m1x2", "f8E8M0FNU"])
-def test_low_precision_ir_rejects_implicit_byte_store(tmp_path, capfd, dtype):
-    from triton._C.libtriton import ir
-
-    context = ir.context()
-    ir.load_dialects(context)
-    path = tmp_path / "invalid_store.mlir"
-    path.write_text(f"""module {{
-  tt.func @invalid_store(%destination: !tt.ptr<{dtype}>, %value: i8) {{
-    "tt.store"(%destination, %value) : (!tt.ptr<{dtype}>, i8) -> ()
-    tt.return
-  }}
-}}""")
-    with pytest.raises(RuntimeError, match="Parse MLIR file failed"):
-        ir.parse_mlir_module(str(path), context)
-    assert "value type matches ptr type" in capfd.readouterr().err
-
-
-@pytest.mark.parametrize("dtype_name, canonical, ir_dtype", [("float4e2m1x2", "fp4e2m1x2", "!tt.fp4e2m1x2"),
-                                                             ("float8e8m0fnu", "fp8e8m0fnu", "f8E8M0FNU")])
-def test_low_precision_copy_preserves_native_ir_type(dtype_name, canonical, ir_dtype):
-
-    @triton.jit
-    def identity(value, DTYPE: tl.constexpr):
-        tl.static_assert(value.dtype == DTYPE)
-        return value
-
-    @triton.jit
-    def copy_kernel(source, destination, DTYPE: tl.constexpr):
-        offsets = tl.arange(0, 128)
-        value = tl.load(source + offsets)
-        tl.static_assert(value.dtype == DTYPE)
-        tl.static_assert(value.dtype != tl.uint8)
-        tl.static_assert(value.dtype.primitive_bitwidth == 8)
-        value = identity(value, DTYPE)
-        raw = value.to(tl.uint8, bitcast=True)
-        tl.static_assert(raw.dtype == tl.uint8)
-        value = raw.to(DTYPE, bitcast=True)
-        tl.store(destination + offsets, value)
-
-    source = ASTSource(copy_kernel, signature={"source": f"*{canonical}", "destination": f"*{canonical}"},
-                       constexprs={"DTYPE": getattr(tl, dtype_name)})
-    module, backend, options = _make_low_precision_test_ir(source)
-    frontend_ir = str(module)
-    assert f"!tt.ptr<{ir_dtype}>" in frontend_ir
-    assert f"tensor<128x{ir_dtype}>" in frontend_ir
-    assert "tt.bitcast" in frontend_ir
-    metadata = {"target": backend.target, **vars(options)}
-    stages = {}
-    backend.add_stages(stages, options, source.language)
-    for kind, stage in stages.items():
-        module = stage(module, metadata)
-        if kind == "ptx":
-            assert "ld.global" in module
-            assert "st.global" in module
-            break
-    else:
-        pytest.fail("PTX stage not found")
-
-
-@pytest.mark.parametrize("canonical", ["fp4e2m1x2", "fp8e8m0fnu"])
-@pytest.mark.parametrize(
-    "operation",
-    ["add", "multiply", "compare", "unary_minus", "invert", "cast_uint8", "cast_float32", "implicit_store"])
-def test_low_precision_numeric_operations_are_rejected(canonical, operation):
-
-    @triton.jit
-    def kernel(source, destination, OP: tl.constexpr):
-        offsets = tl.arange(0, 128)
-        value = tl.load(source + offsets)
-        if OP == "add":
-            value = value + value
-        elif OP == "multiply":
-            value = value * value
-        elif OP == "compare":
-            value = value == tl.load(source + offsets)
-        elif OP == "unary_minus":
-            value = -value
-        elif OP == "invert":
-            value = ~value
-        elif OP == "cast_uint8":
-            value = value.to(tl.uint8)
-        elif OP == "cast_float32":
-            value = value.to(tl.float32)
-        elif OP == "implicit_store":
-            value = tl.full((128, ), 1, tl.uint8)
-        tl.store(destination + offsets, value)
-
-    source = ASTSource(kernel, signature={"source": f"*{canonical}", "destination": f"*{canonical}"},
-                       constexprs={"OP": operation})
-    with pytest.raises(triton.CompilationError) as exc_info:
-        _make_low_precision_test_ir(source)
-    cause = exc_info.value
-    while cause.__cause__ is not None:
-        cause = cause.__cause__
-    assert isinstance(cause, (TypeError, ValueError))
-    assert canonical in str(cause)
-
-
-@triton.jit
-def _low_precision_scaled_dot(lhs_ptr, rhs_ptr, scale_ptr, output, LHS_FORMAT: tl.constexpr, RHS_FORMAT: tl.constexpr):
-    rows = tl.arange(0, 32)[:, None]
-    columns = tl.arange(0, 32)[None, :]
-    lhs = tl.load(lhs_ptr + rows * 32 + columns)
-    rhs = tl.load(rhs_ptr + rows * 32 + columns)
-    scales = tl.load(scale_ptr + rows * 2 + tl.arange(0, 2)[None, :])
-    result = tl.dot_scaled(lhs, scales, LHS_FORMAT, rhs, scales, RHS_FORMAT)
-    tl.store(output + rows * 32 + columns, result)
-
-
-def _make_low_precision_scaled_dot_ir(lhs_dtype, rhs_dtype, scale_dtype, lhs_format="e2m1", rhs_format="e2m1",
-                                      lower=True):
-    source = ASTSource(
-        _low_precision_scaled_dot, signature={
-            "lhs_ptr": f"*{lhs_dtype}", "rhs_ptr": f"*{rhs_dtype}", "scale_ptr": f"*{scale_dtype}", "output": "*fp32"
-        }, constexprs={"LHS_FORMAT": lhs_format, "RHS_FORMAT": rhs_format})
-    module, backend, options = _make_low_precision_test_ir(source)
-    if not lower:
-        return module
-    metadata = {"target": backend.target, **vars(options)}
-    stages = {}
-    backend.add_stages(stages, options, source.language)
-    return stages["ttir"](module, metadata)
-
-
-@pytest.mark.parametrize("operand_dtype", ["u8", "fp4e2m1x2"])
-@pytest.mark.parametrize("scale_dtype", ["u8", "fp8e8m0fnu"])
-def test_low_precision_scaled_dot_preserves_native_ir_type(operand_dtype, scale_dtype):
-    module = _make_low_precision_scaled_dot_ir(operand_dtype, operand_dtype, scale_dtype, lower=False)
-    dot = next(line for line in str(module).splitlines() if "tt.dot_scaled" in line)
-    operand_ir_dtype = "!tt.fp4e2m1x2" if operand_dtype == "fp4e2m1x2" else "i8"
-    scale_ir_dtype = "f8E8M0FNU" if scale_dtype == "fp8e8m0fnu" else "i8"
-    assert f"tensor<32x32x{operand_ir_dtype}>" in dot
-    assert f"tensor<32x2x{scale_ir_dtype}>" in dot
-
-
-@pytest.mark.parametrize("operand_dtype", ["u8", "fp4e2m1x2"])
-@pytest.mark.parametrize("scale_dtype", ["u8", "i8", "fp8e8m0fnu"])
-def test_low_precision_scaled_dot_preserves_legacy_lowering(operand_dtype, scale_dtype):
-    native = _make_low_precision_scaled_dot_ir(operand_dtype, operand_dtype, scale_dtype)
-    legacy = _make_low_precision_scaled_dot_ir("u8", "u8", "u8")
-    assert "tt.dot_scaled" in str(native)
-    assert str(native) == str(legacy)
-
-
-@pytest.mark.parametrize("operand_dtype, scale_dtype, operand_format, rejected_dtype", [
-    ("fp4e2m1x2", "fp8e8m0fnu", "e4m3", "fp4e2m1x2"),
-    ("fp4e2m1x2", "fp8e8m0fnu", "e5m2", "fp4e2m1x2"),
-    ("fp4e2m1x2", "fp8e8m0fnu", "bf16", "fp4e2m1x2"),
-    ("fp4e2m1x2", "fp8e8m0fnu", "fp16", "fp4e2m1x2"),
-    ("fp8e8m0fnu", "u8", "e2m1", "fp8e8m0fnu"),
-    ("u8", "fp4e2m1x2", "e2m1", "fp4e2m1x2"),
-])
-@pytest.mark.parametrize("rhs", [False, True])
-def test_low_precision_scaled_dot_rejects_incompatible_dtype(operand_dtype, scale_dtype, operand_format, rejected_dtype,
-                                                             rhs):
-    lhs_dtype, rhs_dtype = ("u8", operand_dtype) if rhs else (operand_dtype, "u8")
-    lhs_format, rhs_format = ("e2m1", operand_format) if rhs else (operand_format, "e2m1")
-    with pytest.raises(triton.CompilationError) as exc_info:
-        _make_low_precision_scaled_dot_ir(lhs_dtype, rhs_dtype, scale_dtype, lhs_format, rhs_format)
-    cause = exc_info.value
-    while cause.__cause__ is not None:
-        cause = cause.__cause__
-    assert isinstance(cause, ValueError)
-    assert rejected_dtype in str(cause)
-
-
-@pytest.mark.parametrize("dtype_name, canonical", [("float4e2m1x2", "fp4e2m1x2"), ("float8e8m0fnu", "fp8e8m0fnu")])
-@pytest.mark.parametrize("padding", ["zero", "nan"])
-def test_low_precision_descriptor_padding(dtype_name, canonical, padding):
-
-    @triton.jit
-    def kernel(source, output, DTYPE: tl.constexpr, PADDING: tl.constexpr):
-        descriptor = tl.make_tensor_descriptor(source, [16, 16], [16, 1], [16, 16], padding_option=PADDING)
-        value = descriptor.load([0, 0])
-        tl.static_assert(value.dtype == DTYPE)
-        offsets = tl.arange(0, 16)[:, None] * 16 + tl.arange(0, 16)[None, :]
-        tl.store(output + offsets, value)
-
-    source = ASTSource(kernel, signature={"source": f"*{canonical}", "output": f"*{canonical}"},
-                       constexprs={"DTYPE": getattr(tl, dtype_name), "PADDING": padding})
-    if padding == "zero":
-        module = _make_low_precision_test_ir(source)[0]
-        assert "tt.make_tensor_descriptor" in str(module)
-    else:
-        with pytest.raises(triton.CompilationError) as exc_info:
-            _make_low_precision_test_ir(source)
-        cause = exc_info.value
-        while cause.__cause__ is not None:
-            cause = cause.__cause__
-        assert isinstance(cause, ValueError)
-        assert "Padding option `nan` is not supported for storage dtype" in str(cause)
-
-
-@pytest.mark.parametrize("source_dtype, destination_dtype", [
-    ("fp4e2m1x2", "u8"),
-    ("u8", "fp4e2m1x2"),
-    ("fp8e8m0fnu", "u8"),
-    ("u8", "fp8e8m0fnu"),
-    ("fp4e2m1x2", "fp8e8m0fnu"),
-    ("fp8e8m0fnu", "fp4e2m1x2"),
-])
-def test_low_precision_descriptor_scatter_rejects_implicit_reinterpretation(source_dtype, destination_dtype):
-
-    @triton.jit
-    def kernel(source, output):
-        rows = tl.arange(0, 8)
-        offsets = rows[:, None] * 32 + tl.arange(0, 32)[None, :]
-        value = tl.load(source + offsets)
-        descriptor = tl.make_tensor_descriptor(output, [8, 32], [32, 1], [1, 32])
-        descriptor.scatter(value, rows, 0)
-
-    source = ASTSource(kernel, signature={"source": f"*{source_dtype}", "output": f"*{destination_dtype}"})
-    with pytest.raises(triton.CompilationError) as exc_info:
-        _make_low_precision_test_ir(source)
-    cause = exc_info.value
-    while cause.__cause__ is not None:
-        cause = cause.__cause__
-    assert isinstance(cause, TypeError)
-    assert "must match" in str(cause)
-
-
-@pytest.mark.parametrize("source_dtype, destination_dtype", [
-    ("fp4e2m1x2", "u8"),
-    ("u8", "fp4e2m1x2"),
-    ("fp8e8m0fnu", "u8"),
-    ("u8", "fp8e8m0fnu"),
-    ("fp4e2m1x2", "fp4e2m1x2"),
-    ("fp8e8m0fnu", "fp8e8m0fnu"),
-])
-@pytest.mark.parametrize("operation", ["reduce", "scan"])
-def test_low_precision_combine_preserves_dtype(source_dtype, destination_dtype, operation):
-    result_dtype = tl.str_to_ty(destination_dtype, None)
-
-    @triton.jit
-    def combine(lhs, rhs):
-        return lhs.to(result_dtype, bitcast=True)
-
-    @triton.jit
-    def kernel(source, output, OP: tl.constexpr):
-        offsets = tl.arange(0, 128)
-        value = tl.load(source + offsets)
-        if OP == "reduce":
-            result = tl.reduce(value, 0, combine)
-            tl.static_assert(result.dtype == source.dtype.element_ty)
-            tl.store(output, result)
-        else:
-            result = tl.associative_scan(value, 0, combine)
-            tl.static_assert(result.dtype == source.dtype.element_ty)
-            tl.store(output + offsets, result)
-
-    source = ASTSource(kernel, signature={"source": f"*{source_dtype}", "output": f"*{source_dtype}"},
-                       constexprs={"OP": operation})
-    if source_dtype == destination_dtype:
-        _make_low_precision_test_ir(source)
-    else:
-        with pytest.raises(triton.CompilationError) as exc_info:
-            _make_low_precision_test_ir(source)
-        cause = exc_info.value
-        while cause.__cause__ is not None:
-            cause = cause.__cause__
-        assert isinstance(cause, TypeError)
-        assert "must match" in str(cause)
 
 
 def test_compile_only_sm100() -> None:

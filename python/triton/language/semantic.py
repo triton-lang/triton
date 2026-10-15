@@ -42,21 +42,7 @@ class TritonSemantic(Generic[TensorTy]):
     def _check_numeric_dtype(*dtypes):
         for dtype in dtypes:
             if dtype.is_low_precision_storage():
-                raise TypeError(f"{dtype} is a storage dtype and does not support numerical operations or casts. "
-                                "Use an explicit bitcast to access its packed bits, or a scaled dot operation.")
-
-    @staticmethod
-    def _check_storage_dtype_match(src_dtype, dst_dtype):
-        # Storage types require an explicit bitcast to change interpretation.
-        def contains_storage(dtype):
-            while dtype.is_ptr():
-                dtype = dtype.element_ty
-            return dtype.is_low_precision_storage()
-
-        if contains_storage(src_dtype) or contains_storage(dst_dtype):
-            if src_dtype != dst_dtype:
-                raise TypeError(f"source dtype {src_dtype} and destination dtype {dst_dtype} must match; "
-                                "use an explicit bitcast or descriptor reinterpret to change the interpretation")
+                raise TypeError(f"{dtype} is a storage dtype; use an explicit bitcast to access its encoded bits")
 
 # ===----------------------------------------------------------------------===##
 # Programming Model
@@ -191,7 +177,7 @@ class TritonSemantic(Generic[TensorTy]):
             if type_b.is_ptr() and (type_a != type_b):
                 raise IncompatibleTypeErrorImpl(type_a, type_b)
             # T* + float
-            if type_b.is_floating() or type_b.is_low_precision_storage():
+            if type_b.is_floating():
                 raise IncompatibleTypeErrorImpl(type_a, type_b)
 
     def binary_op_type_checking_impl(self, lhs: TensorTy | numbers.Number, rhs: TensorTy | numbers.Number,
@@ -523,11 +509,9 @@ class TritonSemantic(Generic[TensorTy]):
 # ===----------------------------------------------------------------------===//
 
     def plus(self, input: TensorTy) -> TensorTy:
-        self._check_numeric_dtype(input.dtype)
         return input
 
     def minus(self, input: TensorTy) -> TensorTy:
-        self._check_numeric_dtype(input.dtype)
         input_sca_ty = input.type.scalar
         if input_sca_ty.is_ptr():
             raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
@@ -537,7 +521,6 @@ class TritonSemantic(Generic[TensorTy]):
         return self.sub(_0, input, True)
 
     def invert(self, input: TensorTy) -> TensorTy:
-        self._check_numeric_dtype(input.dtype)
         input_sca_ty = input.type.scalar
         if input_sca_ty.is_ptr() or input_sca_ty.is_floating():
             raise ValueError("wrong type argument to unary invert (" + input_sca_ty.__repr__() + ")")
@@ -717,7 +700,6 @@ class TritonSemantic(Generic[TensorTy]):
         return self.make_tensor(self.builder.create_expand_dims(input.handle, axis), ret_ty)
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
-        self._check_storage_dtype_match(a.dtype, b.dtype)
         a, b = self.broadcast_impl_value(a, b)
 
         # The IR can't handle joining two scalars, so upcast them to 1D tensors,
@@ -854,6 +836,8 @@ class TritonSemantic(Generic[TensorTy]):
             return input
         src_sca_ty = src_ty.scalar
         dst_sca_ty = dst_ty.scalar
+        if src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
+            return self.make_tensor(self.builder.create_bitcast(input.handle, dst_ty.to_ir(self.builder)), dst_ty)
         if src_sca_ty.is_ptr() or dst_sca_ty.is_ptr():
             return self.cast(input, dst_ty)
         # Bitcast
@@ -870,6 +854,11 @@ class TritonSemantic(Generic[TensorTy]):
         dst_sca_ty = dst_ty.scalar
         if src_sca_ty == dst_sca_ty:
             return input
+        if src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
+            for pointee in (src_sca_ty, dst_sca_ty):
+                while pointee.is_ptr():
+                    pointee = pointee.element_ty
+                self._check_numeric_dtype(pointee)
         self._check_numeric_dtype(src_sca_ty, dst_sca_ty)
         if src_ty.is_block():
             dst_ty = src_ty.with_element_ty(dst_sca_ty)
@@ -1071,14 +1060,12 @@ class TritonSemantic(Generic[TensorTy]):
         # Check `mask` and `other` arguments
         if mask is None and other is not None:
             raise ValueError("`other` cannot be provided without `mask`")
-        if mask is not None:
-            self._check_numeric_dtype(mask.dtype)
 
         # For a pointer of scalar, check the type of `mask` and `other`
         if not ptr.type.is_block():
-            if mask is not None and mask.type.is_block():
+            if mask and mask.type.is_block():
                 raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
-            if other is not None and other.type.is_block():
+            if other and other.type.is_block():
                 raise ValueError("Other argument cannot be block type if pointer argument is not a block")
 
         # Make `mask` and `other` into the same shape as `ptr`
@@ -1115,8 +1102,8 @@ class TritonSemantic(Generic[TensorTy]):
             ret = self.make_tensor(self.builder.create_load(ptr.handle, cache_policy, is_volatile), dst_ty)
         else:
             ret = self.make_tensor(
-                self.builder.create_masked_load(ptr.handle, mask.handle, other.handle if other is not None else None,
-                                                cache_policy, is_volatile), dst_ty)
+                self.builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache_policy,
+                                                is_volatile), dst_ty)
         if is_bool:
             ret = self.cast(ret, tl.int1)
         return ret
@@ -1233,7 +1220,6 @@ class TritonSemantic(Generic[TensorTy]):
     def descriptor_scatter(self, desc, value: TensorTy, x_offsets, y_offset) -> TensorTy:
         assert isinstance(desc, tl.tensor_descriptor_base), \
             f"expected a tensor descriptor, got {type(desc).__name__}"
-        self._check_storage_dtype_match(value.dtype, desc.dtype)
 
         # Validate descriptor.
         assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
@@ -1571,9 +1557,6 @@ class TritonSemantic(Generic[TensorTy]):
 
     def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
             max_num_imprecise_acc: int, out_dtype: tl.dtype | None) -> TensorTy:
-        self._check_numeric_dtype(lhs.dtype, rhs.dtype)
-        if out_dtype is not None:
-            self._check_numeric_dtype(out_dtype)
         assert lhs.type.is_block() and rhs.type.is_block(), "dot operands must be block tensors (not scalars)"
 
         if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
@@ -1680,18 +1663,14 @@ class TritonSemantic(Generic[TensorTy]):
 
     def _bitcast_to_fp_type(self, val: TensorTy, float_format: str):
         """
-        If float_format is subbyte, accept native packed values or legacy uint8.
+        If float_format is subbyte, make sure it's packed as uint8 and return it.
         Otherwise, return a tensor (perhaps bitcasting) of the specified float format.
         """
-        if val.dtype.is_low_precision_storage():
-            if val.dtype.is_fp4e2m1x2() and float_format == "e2m1":
-                return val
-            raise ValueError(f"{val.dtype} is incompatible with dot_scaled format {float_format}")
         triton_ty = {"e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16": tl.bfloat16, "fp16":
                      tl.float16}.get(float_format)
         if triton_ty is None:
             assert float_format == "e2m1", f"Internal Error: Unexpected float format: {float_format}"
-            assert val.dtype == tl.uint8, f"e2m1 format must be packed as uint8. Got {val.dtype}"
+            assert val.dtype in (tl.uint8, tl.float4e2m1x2), f"e2m1 format must be packed as uint8. Got {val.dtype}"
             return val
         if val.dtype == triton_ty:
             return val
@@ -1726,9 +1705,6 @@ class TritonSemantic(Generic[TensorTy]):
     def dot_scaled(self, lhs: TensorTy, lhs_scale: TensorTy, lhs_format: str, rhs: TensorTy,
                    rhs_scale: Optional[TensorTy], rhs_format: str, acc: TensorTy | None, fast_math: bool,
                    lhs_k_pack: bool, rhs_k_pack: bool, out_dtype: tl.dtype) -> TensorTy:
-        self._check_numeric_dtype(out_dtype)
-        if acc is not None:
-            self._check_numeric_dtype(acc.dtype)
         assert lhs.type.is_block() and rhs.type.is_block(), "dot_scaled operands must be block tensors (not scalars)"
         #TODO: validate types.
         lhs_rank = len(lhs.shape)
@@ -1743,10 +1719,6 @@ class TritonSemantic(Generic[TensorTy]):
         lhs_scale_is_none = lhs_scale is None or (isinstance(lhs_scale, tl.constexpr) and lhs_scale.value is None)
         lhs = self._bitcast_to_fp_type(lhs, lhs_format)
         rhs = self._bitcast_to_fp_type(rhs, rhs_format)
-        for scale in (lhs_scale, rhs_scale):
-            if isinstance(scale, self.tensor) and scale.dtype.is_low_precision_storage():
-                if not scale.dtype.is_fp8e8m0fnu():
-                    raise ValueError(f"dot_scaled scales cannot have dtype {scale.dtype}")
 
         assert lhs_k_pack or lhs_format == "e2m1", "only mxfp4 inputs can be packed along a dimension different than K"
         assert rhs_k_pack or rhs_format == "e2m1", "only mxfp4 inputs can be packed along a dimension different than K"
@@ -1782,14 +1754,6 @@ class TritonSemantic(Generic[TensorTy]):
 
         scale_factor = self.deduce_scale_factor(lhs, lhs_scale, lhs_format, lhs_k_pack, rhs, rhs_scale, rhs_format,
                                                 rhs_k_pack)
-        for scale in (lhs_scale, rhs_scale):
-            if isinstance(scale, self.tensor) and scale.dtype.is_fp8e8m0fnu() and scale_factor != 32:
-                raise ValueError("native E8M0 scales require a scale factor of 32")
-        if (any(isinstance(scale, self.tensor) and scale.dtype.is_fp8e8m0fnu() for scale in (lhs_scale, rhs_scale))
-                and getattr(self.builder.options, "backend_name", None) != "hip"):
-            for scale in (lhs_scale, rhs_scale):
-                if isinstance(scale, self.tensor) and scale.dtype not in (tl.float8e8m0fnu, tl.int8, tl.uint8):
-                    raise ValueError("native E8M0 scales cannot be paired with a different scale format")
         self.verify_scaled_shape(M, N, K, None if lhs_scale_is_none else lhs_scale,
                                  None if rhs_scale_is_none else rhs_scale, scale_factor)
         return self.make_tensor(
@@ -1806,10 +1770,9 @@ class TritonSemantic(Generic[TensorTy]):
                 f"tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got {condition.dtype}"
             )
         condition = self.cast(condition, tl.int1)
-        # Selection does not interpret the bits of identically typed storage values.
-        storage_selection = (isinstance(x, self.tensor) and isinstance(y, self.tensor) and x.dtype == y.dtype
-                             and x.dtype.is_low_precision_storage())
-        x, y = self.binary_op_type_checking_impl(x, y, True, True, arithmetic_check=not storage_selection)
+        same_storage = (isinstance(x, self.tensor) and isinstance(y, self.tensor) and x.dtype == y.dtype
+                        and x.dtype.is_low_precision_storage())
+        x, y = self.binary_op_type_checking_impl(x, y, True, True, arithmetic_check=not same_storage)
         # x, y are broadcasted
         if condition.type.is_block():
             condition, x = self.broadcast_impl_value(condition, x)
@@ -1969,7 +1932,6 @@ class TritonSemantic(Generic[TensorTy]):
         self.builder.create_grid_dependency_launch_dependents()
 
     def device_print(self, prefix: str, args: List[TensorTy], hex: bool) -> TensorTy:
-        self._check_numeric_dtype(*(arg.dtype for arg in args))
         # It makes sense visually for prefix to end in ": "; make it so.  Also,
         # non-empty prefixes should start with " ".
         if not prefix.endswith(" ") and args:
@@ -1986,13 +1948,11 @@ class TritonSemantic(Generic[TensorTy]):
     def device_assert(self, cond: TensorTy, msg: str, mask: Optional[TensorTy]) -> TensorTy:
         if not self.builder.options.debug:
             return
-        self._check_numeric_dtype(cond.dtype)
         if mask is not None:
             cond = self.or_(cond, self.not_(mask))
         return self.make_tensor(self.builder.create_assert(cond.handle, msg), tl.void)
 
     def assume(self, cond) -> TensorTy:
-        self._check_numeric_dtype(cond.dtype)
         return self.make_tensor(self.builder.create_assume(cond.handle), tl.void)
 
     def _convert_elem_to_ir_value(self, elem, require_i64):
@@ -2093,9 +2053,7 @@ class TritonSemantic(Generic[TensorTy]):
 
         padding = self._str_to_padding_option(padding_option)
 
-        if base.type.element_ty.is_low_precision_storage() and padding == ir.PADDING_OPTION.PAD_NAN:
-            raise ValueError(f"Padding option `nan` is not supported for storage dtype {base.type.element_ty}")
-        if base.type.element_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
+        if not base.type.element_ty.is_floating() and padding == ir.PADDING_OPTION.PAD_NAN:
             raise ValueError("Padding option `nan` is not supported for integer blocks")
 
         handle = self.builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape],

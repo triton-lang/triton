@@ -4,7 +4,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeSupport.h"
 #include "mlir/IR/Types.h"
-#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 #define GET_TYPEDEF_CLASSES

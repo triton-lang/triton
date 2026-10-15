@@ -239,7 +239,6 @@ def async_load(tensor_desc, coord, barrier, result, pred=True, multicast=False, 
     multicast = _unwrap_if_constexpr(multicast)
     cache_policy = _tma_cache_policy(cache_policy, _semantic.builder)
 
-    _semantic._check_storage_dtype_match(tensor_desc.dtype, result.dtype)
     _semantic.builder.create_async_tma_copy_global_to_local(
         tensor_desc.handle,
         coord,
@@ -284,7 +283,6 @@ def async_load_im2col(tensor_desc, coord, offsets, barrier, result, pred=True, m
     cache_policy = _tma_cache_policy(cache_policy, _semantic.builder)
     offsets_ir = _convert_im2col_offsets(offsets, _semantic)
 
-    _semantic._check_storage_dtype_match(tensor_desc.dtype, result.dtype)
     _semantic.builder.create_async_tma_copy_global_to_local(
         tensor_desc.handle,
         coord,
@@ -314,7 +312,6 @@ def async_store(tensor_desc, coord, src, cache_policy=None, _semantic=None):
         _emit_alignment_check(tensor_desc, coord, "async_store", "innermost coordinate", _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     cache_policy = _tma_cache_policy(cache_policy, _semantic.builder)
-    _semantic._check_storage_dtype_match(src.dtype, tensor_desc.dtype)
     _semantic.builder.create_async_tma_copy_local_to_global(tensor_desc.handle, coord, src.handle, cache_policy)
 
 
@@ -334,8 +331,6 @@ def async_copy_shared_to_global(*args, _semantic=None, **kwargs):
 
 
 def _async_atomic_shared_to_global(kind, tensor_desc, coord, src, fn_name: str, _semantic=None):
-    if tensor_desc.dtype.is_low_precision_storage() or src.dtype.is_low_precision_storage():
-        raise ValueError(f"{fn_name} does not support native packed E2M1 or E8M0 types")
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, coord, fn_name, "innermost coordinate", _semantic=_semantic)
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
@@ -505,9 +500,7 @@ def make_tensor_descriptor(
     strides_type = ttgl.tuple(strides).type
     ty = tensor_descriptor_type(block_type, shape_type, strides_type, layout)
 
-    if base.type.element_ty.is_low_precision_storage() and padding == ttgl.ir.PADDING_OPTION.PAD_NAN:
-        raise ValueError("Padding option `nan` is not supported for native packed E2M1 or E8M0 blocks")
-    if base.type.element_ty.is_int() and padding == ttgl.ir.PADDING_OPTION.PAD_NAN:
+    if not base.type.element_ty.is_floating() and padding == ttgl.ir.PADDING_OPTION.PAD_NAN:
         raise ValueError("Padding option `nan` is not supported for integer blocks")
     handle = _semantic.builder.create_make_tensor_descriptor(
         ty._to_ir(_semantic.builder),

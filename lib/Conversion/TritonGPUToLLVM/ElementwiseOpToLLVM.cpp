@@ -214,8 +214,7 @@ struct ElementwiseInlineAsmOpConversion
         continue;
       }
       Type elemTy = getElementTypeOrSelf(op.getOperand(i));
-      unsigned bitWidth =
-          elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
+      unsigned bitWidth = getIntOrFloatOrPtrBitWidth(elemTy);
       unsigned numElementPerReg = std::max(32 / bitWidth, 1u);
       numElementPerReg = std::min(numElementPerReg, numPackedElements);
       for (int j = 0; j < numPackedElements; j += numElementPerReg) {
@@ -458,6 +457,9 @@ struct AbsFOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (llvm::isa<IntegerType>(elemTy)) {
       // Mask out the sign bit
+      auto floatTy = cast<FloatType>(getElementTypeOrSelf(op.getType()));
+      if (!APFloat::hasSignBitInMSB(floatTy.getFloatSemantics()))
+        return {};
       auto num_bits =
           getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
       assert(num_bits <= 16);

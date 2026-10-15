@@ -29,45 +29,12 @@ When an operation involves a tensor and a scalar:
 2. If the scalar is of a higher kind, we choose the lowest dtype in which it fits among ``int32`` < ``uint32`` < ``int64`` < ``uint64`` for ints and ``float32`` < ``float64`` for floats. Then, both the tensor and the scalar are promoted to this dtype: ``(int16, 4.0) -> float32``
 
 
-Packed FP4 and E8M0 storage types
---------------------------------
-
-``tl.float4e2m1x2`` represents two E2M1 FP4 values packed into one byte, and
-``tl.float8e8m0fnu`` represents one unsigned E8M0 scale per byte. Both types
-have an item size of one byte. Tensor shapes and pointer offsets count bytes
-for packed FP4; the lower nibble holds the first value and the upper nibble
-holds the second value. PyTorch tensors with dtype ``torch.float4_e2m1fn_x2``
-or ``torch.float8_e8m0fnu`` map to these respective Triton types without
-changing their shapes, strides, or storage.
-
-These types retain their identity when loaded, stored, or passed between
-JIT functions. They are distinct from ``tl.uint8`` and from each other.
-In MLIR, packed FP4 uses ``!tt.fp4e2m1x2`` and E8M0 uses ``f8E8M0FNU``.
-An explicit storage-lowering pass checks every operation that uses these
-types before converting storage to bytes for the existing backend passes.
-Unsupported operations are rejected before that conversion.
-Existing kernels that use integer bytes for packed FP4 and E8M0 continue
-to work. An argument annotation cannot silently reinterpret a native storage
-type: use ``triton.reinterpret`` explicitly when changing a tensor's storage
-interpretation at a kernel boundary.
-
-Packed FP4 and E8M0 do not participate in arithmetic promotion and do not
-support ordinary arithmetic, comparisons, numeric casts, or numeric constant
-construction. Gluon packed arithmetic APIs also reject these storage types.
-Use an explicit same-width bitcast, such as
-``value.to(tl.uint8, bitcast=True)``, to inspect or construct their encoded
-bytes. A bitcast preserves the bits; it does not decode or encode the numeric
-values. Shape operations and selection between values of the same storage
-type preserve that type.
-
-Operations that consume packed values check their declared format. For
-example, ``tl.dot_scaled`` accepts native packed FP4 operands only with the
-``"e2m1"`` format, and native E8M0 scales cannot be used as E4M3 scales.
-E8M0 byte zero encodes :math:`2^{-127}`, not numeric zero; byte 255 encodes
-NaN. When scales are applied in FP16, :math:`2^{-127}` rounds to zero.
-Descriptor and asynchronous-copy zero padding fills zero storage bits; for
-E8M0 this encodes :math:`2^{-127}`. NaN descriptor padding is unsupported for
-these storage types and raises an error.
+``tl.float4e2m1x2`` and ``tl.float8e8m0fnu`` map to PyTorch's
+``float4_e2m1fn_x2`` and ``float8_e8m0fnu`` dtypes. Both occupy one byte;
+packed FP4 shapes and pointer offsets count pairs, with the first value in the
+low nibble. They support memory and shape operations, explicit bitcasts, and
+scaled dot operands, but do not participate in ordinary arithmetic or numeric
+casts. Existing integer-byte representations remain supported.
 
 
 Broadcasting

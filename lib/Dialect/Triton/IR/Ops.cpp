@@ -419,12 +419,11 @@ bool DotScaledOp::verifyOutputDims() {
 }
 
 LogicalResult DotScaledOp::verify() {
-  if (isa<PackedFloat4E2M1Type>(getA().getType().getElementType()) &&
-      getAElemType() != ScaleDotElemType::E2M1)
-    return emitOpError("native packed FP4 operand A requires e2m1 format");
-  if (isa<PackedFloat4E2M1Type>(getB().getType().getElementType()) &&
-      getBElemType() != ScaleDotElemType::E2M1)
-    return emitOpError("native packed FP4 operand B requires e2m1 format");
+  for (auto [value, format] :
+       {std::pair{getA(), getAElemType()}, std::pair{getB(), getBElemType()}})
+    if (isa<PackedFloat4E2M1Type>(value.getType().getElementType()) &&
+        format != ScaleDotElemType::E2M1)
+      return emitOpError("packed FP4 operands require e2m1 format");
   auto aShape = this->getA().getType().getShape();
   int64_t rank = aShape.size();
   if (rank < 2)
@@ -444,11 +443,12 @@ LogicalResult DotScaledOp::verify() {
           getA(), getAScale(), getAElemType(), getLhsKPack(), getB(),
           getBScale(), getBElemType(), getRhsKPack(), scaleFactor, scaleErr)))
     return this->emitError(scaleErr);
-  for (auto scale : {getAScale(), getBScale()}) {
+
+  for (auto scale : {getAScale(), getBScale()})
     if (scale && isa<Float8E8M0FNUType>(scale.getType().getElementType()) &&
         scaleFactor != 32)
-      return emitOpError("native E8M0 scales require a scale factor of 32");
-  }
+      return emitOpError("E8M0 scales require a scale factor of 32");
+
   if (getAScale()) {
     auto aScaleShape = getAScale().getType().getShape();
     if (aScaleShape[rank - 2] != mDim)
@@ -1260,8 +1260,8 @@ LogicalResult BitcastOp::verify() {
     }
     return emitError("Cannot bitcast pointer to non-pointer type");
   }
-  unsigned dstBits = getStorageBitWidth(dstType);
-  unsigned srcBits = getStorageBitWidth(srcType);
+  unsigned dstBits = getIntOrFloatOrPtrBitWidth(dstType);
+  unsigned srcBits = getIntOrFloatOrPtrBitWidth(srcType);
   if (dstBits != srcBits) {
     return emitError("Cannot bitcast data-type of size ")
            << srcBits << " to data-type of size " << dstBits;
@@ -1332,16 +1332,12 @@ OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
 
 //-- MakeTensorDescOp --
 LogicalResult MakeTensorDescOp::verify() {
-  Type baseType = getBase().getType().getPointeeType();
-  Type elementType = getType().getElementType();
-  if ((isLowPrecisionStorageType(baseType) ||
-       isLowPrecisionStorageType(elementType)) &&
-      baseType != elementType)
+  Type elementType = getBase().getType().getPointeeType();
+  if (auto intTy = dyn_cast<IntegerType>(elementType))
+    elementType = IntegerType::get(getContext(), intTy.getWidth());
+  if (elementType != getType().getSignlessBlockType().getElementType())
     return emitOpError(
-        "native storage base and descriptor element types must match");
-  if (isLowPrecisionStorageType(elementType) &&
-      getPadding() == PaddingOption::PAD_NAN)
-    return emitOpError("native storage descriptors do not support NaN padding");
+        "descriptor element type must match base pointer element type");
   return success();
 }
 
@@ -1840,7 +1836,7 @@ LogicalResult verifyGatherScatterResultType(Operation *op,
   }
 
   Type dtype = resultType.getElementType();
-  unsigned bitWidth = getStorageBitWidth(dtype);
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(dtype);
   if (bitWidth > 32)
     return op->emitOpError("TMA dtype cannot be greater than 32 bits");
 
@@ -1938,8 +1934,6 @@ LogicalResult DescriptorStoreOp::verify() {
 
 // -- DescriptorReduceOp --
 LogicalResult DescriptorReduceOp::verify() {
-  if (isLowPrecisionStorageType(getSrc().getType().getElementType()))
-    return emitOpError("does not support reduction of native storage types");
   return verifyDescriptorLoadStoreOp(*this, getDesc().getType(),
                                      getSrc().getType());
 }

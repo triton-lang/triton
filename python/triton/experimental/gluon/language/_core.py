@@ -731,7 +731,7 @@ def set_auto_layout(value, layout, _semantic=None):
 @builtin
 def fp4_to_fp(src, elem_type, axis, _semantic=None):
     """
-    Upcast packed ``float4e2m1x2`` (or legacy ``int8``/``uint8``) E2M1 values to another floating point type.
+    Upcast a tensor from fp4 (e2m1) to another floating point type.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _unwrap_if_constexpr(elem_type)

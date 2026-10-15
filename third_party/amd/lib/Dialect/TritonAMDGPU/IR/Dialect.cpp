@@ -28,6 +28,7 @@
 #include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -147,13 +148,6 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
 LogicalResult verifyTDMCommonLayout(Operation *op,
                                     triton::TensorDescType descTy,
                                     gpu::MemDescType smemTy) {
-  Type descElement = descTy.getElementType();
-  Type sharedElement = smemTy.getElementType();
-  if ((isLowPrecisionStorageType(descElement) ||
-       isLowPrecisionStorageType(sharedElement)) &&
-      descElement != sharedElement)
-    return op->emitOpError("native storage element types must match between "
-                           "the tensor descriptor and shared memory");
   if (failed(verifyTDMBlockSize(op, descTy.getShape())))
     return failure();
 
@@ -1147,16 +1141,6 @@ LogicalResult BufferAtomicCASOp::verify() {
 LogicalResult LocalLoadPackedTransposedOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
-  Type sourceElement = srcTy.getElementType();
-  Type resultElement = dstTy.getElementType();
-  if (isLowPrecisionStorageType(sourceElement) ||
-      isLowPrecisionStorageType(resultElement)) {
-    if (sourceElement != resultElement)
-      return emitOpError("native storage element types must match between "
-                         "the source and result");
-    if (!isa<PackedFloat4E2M1Type>(sourceElement))
-      return emitOpError("native packed transposed loads require packed FP4");
-  }
   auto srcShape = srcTy.getShape();
 
   auto dotEnc = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
@@ -1323,7 +1307,7 @@ LogicalResult verifyTDMSharedMemoryEncoding(Operation *op,
     return op->emitOpError("Invalid shared memory layout for TDM");
 
   Type elementType = smemTy.getElementType();
-  auto elementBitWidth = getStorageBitWidth(elementType);
+  unsigned elementBitWidth = getIntOrFloatOrPtrBitWidth(elementType);
   if (paddedEnc) {
     unsigned dwordSize = 32;
     for (auto [interval, padding] :
@@ -1401,15 +1385,6 @@ LogicalResult AsyncCopyLocalToGlobalOp::verify() {
   auto srcTy = getSrc().getType();
   if (!isa<gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()))
     return emitOpError("source must be in shared memory");
-
-  Type sourceElement = srcTy.getElementType();
-  Type destinationElement =
-      getElementTypeOrSelf(getPointeeType(getDst().getType()));
-  if ((isLowPrecisionStorageType(sourceElement) ||
-       isLowPrecisionStorageType(destinationElement)) &&
-      sourceElement != destinationElement)
-    return emitOpError("native storage element types must match between "
-                       "the source and destination");
 
   return triton::verifyCachePolicy(getOperation(), getCachePolicyAttr(),
                                    triton::CachePolicyOperation::Store);
@@ -1510,7 +1485,7 @@ LogicalResult AsyncTDMScatterOp::verify() {
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
 
-  if (smemTy.getElementTypeBitWidth() < 8)
+  if (getIntOrFloatOrPtrBitWidth(smemTy.getElementType()) < 8)
     return emitOpError("TDM scatter requires element types of at least 8 bits");
 
   auto dstRowIndicesType = cast<RankedTensorType>(getDstRowIndices().getType());
@@ -1562,7 +1537,7 @@ LogicalResult AsyncTDMGatherOp::verify() {
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
 
-  if (smemTy.getElementTypeBitWidth() < 8)
+  if (getIntOrFloatOrPtrBitWidth(smemTy.getElementType()) < 8)
     return emitOpError("TDM gather requires element types of at least 8 bits");
 
   auto srcRowIndicesType = cast<RankedTensorType>(getSrcRowIndices().getType());
@@ -1746,7 +1721,7 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
   // Prefetches 256 bytes into L2
   const int bytesPerPrefetch = 256;
   int elemPerPrefetch =
-      (bytesPerPrefetch * 8) / getStorageBitWidth(elementType);
+      (bytesPerPrefetch * 8) / getIntOrFloatOrPtrBitWidth(elementType);
 
   // Scale the block shape by the number of elements per prefetch
   SmallVector<int64_t> scaledBlockShape(blockShape.begin(), blockShape.end());

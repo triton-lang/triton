@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 from triton import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
-from ..._core import builtin, int8, uint8, float8e8m0fnu, _unwrap_if_constexpr
+from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from .._layouts import AMDMFMALayout
 from .._ops import _scaled_upcast, get_scaled_upcast_fp4_scale_layout
 from ..._semantic import _check
@@ -162,7 +162,6 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
     cache = _unwrap_if_constexpr(cache)
     cache_modifier = _semantic._str_to_store_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
-    _semantic._check_storage_dtype_match(stored_value.dtype, ptr.dtype.element_ty)
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
 
 
@@ -220,15 +219,15 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
     CDNA3 lowers this through the software-emulated scaled-upcast path; it
     does not use native hardware scaled-upcast instructions.
 
-    The ``scale`` tensor must use ``float8e8m0fnu`` or raw E8M0 payload in ``int8``/``uint8``, and must
+    The ``scale`` tensor must use raw E8M0 payload in ``int8`` or ``uint8``, and must
     already have the expanded output shape and scaled-upcast result layout.
     For fp4 inputs, that is the canonical unpacked layout implied by ``src``
     and ``axis``. ``elem_type`` must be ``fp16`` or ``bf16``.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _unwrap_if_constexpr(elem_type)
-    assert scale.dtype in (int8, uint8, float8e8m0fnu), \
-        f"Expected scale to use raw E8M0 payload in int8/uint8 or float8e8m0fnu but got {scale.dtype}"
+    assert scale.dtype in (int8, uint8), \
+        f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
     return _scaled_upcast(src, scale, elem_type, axis, _semantic)
 
 

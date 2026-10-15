@@ -1,5 +1,55 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+tt.func @descriptor_element_type_mismatch(%p: !tt.ptr<!tt.fp4e2m1x2>, %n: i32) {
+  %one = arith.constant 1 : i64
+  // expected-error @+1 {{descriptor element type must match base pointer element type}}
+  %d = tt.make_tensor_descriptor %p, [%n], [%one] : <!tt.fp4e2m1x2>, <32xi8>
+  tt.return
+}
+
+// -----
+
+tt.func @descriptor_element_type_mismatch_legacy(%p: !tt.ptr<f16>, %n: i32) {
+  %one = arith.constant 1 : i64
+  // expected-error @+1 {{descriptor element type must match base pointer element type}}
+  %d = tt.make_tensor_descriptor %p, [%n], [%one] : <f16>, <32xi16>
+  tt.return
+}
+
+// -----
+
+tt.func @packed_fp4_is_not_an_integer(%value: !tt.fp4e2m1x2) {
+  // expected-error @+1 {{'arith.addi' op operand #0}}
+  %result = "arith.addi"(%value, %value) : (!tt.fp4e2m1x2, !tt.fp4e2m1x2) -> !tt.fp4e2m1x2
+  tt.return
+}
+
+// -----
+
+tt.func @e8m0_is_not_an_integer(%value: f8E8M0FNU) {
+  // expected-error @+1 {{'arith.addi' op operand #0}}
+  %result = "arith.addi"(%value, %value) : (f8E8M0FNU, f8E8M0FNU) -> f8E8M0FNU
+  tt.return
+}
+
+// -----
+
+tt.func @packed_fp4_atomic_rmw(%ptr: !tt.ptr<!tt.fp4e2m1x2>, %value: !tt.fp4e2m1x2) {
+  // expected-error @+1 {{'tt.atomic_rmw' op operand #1}}
+  %result = tt.atomic_rmw add, relaxed, gpu, %ptr, %value : (!tt.ptr<!tt.fp4e2m1x2>, !tt.fp4e2m1x2) -> !tt.fp4e2m1x2
+  tt.return
+}
+
+// -----
+
+tt.func @e8m0_atomic_cas(%ptr: tensor<32x!tt.ptr<f8E8M0FNU>>, %value: tensor<32xf8E8M0FNU>) {
+  // expected-error @+1 {{'tt.atomic_cas' op operand #1}}
+  %result = tt.atomic_cas relaxed, gpu, %ptr, %value, %value : (tensor<32x!tt.ptr<f8E8M0FNU>>, tensor<32xf8E8M0FNU>, tensor<32xf8E8M0FNU>) -> tensor<32xf8E8M0FNU>
+  tt.return
+}
+
+// -----
+
 tt.func @atomic_load_i1(%ptr: !tt.ptr<i1>) {
   // expected-error @+1 {{does not support sub-byte elements}}
   %value = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i1>) -> i1
@@ -766,44 +816,4 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     %result = tt.dot %a, %b, %cst, inputPrecision = ieee : tensor<16x16xf32, #dot_operand_a> * tensor<16x16xf32, #dot_operand_b> -> tensor<16x16xf32, #mma>
     tt.return
   }
-}
-
-// -----
-
-tt.func @native_fp4_invalid_bitcast(%arg0: tensor<16x!tt.fp4e2m1x2>) {
-  // expected-error @+1 {{Cannot bitcast data-type of size 8 to data-type of size 4}}
-  %0 = tt.bitcast %arg0 : tensor<16x!tt.fp4e2m1x2> -> tensor<16xi4>
-  tt.return
-}
-
-// -----
-
-tt.func @native_fp4_wrong_dot_format(%a: tensor<16x16x!tt.fp4e2m1x2>, %b: tensor<16x8xf8E4M3FN>, %c: tensor<16x8xf32>) {
-  // expected-error @+1 {{native packed FP4 operand A requires e2m1 format}}
-  %0 = tt.dot_scaled %a, %b, %c lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<16x16x!tt.fp4e2m1x2> * tensor<16x8xf8E4M3FN> -> tensor<16x8xf32>
-  tt.return
-}
-
-// -----
-
-tt.func @native_e8m0_wrong_scale_factor(%a: tensor<16x16x!tt.fp4e2m1x2>, %b: tensor<16x8x!tt.fp4e2m1x2>, %a_scale: tensor<16x2xf8E8M0FNU>, %b_scale: tensor<8x2xf8E8M0FNU>, %c: tensor<16x8xf32>) {
-  // expected-error @+1 {{native E8M0 scales require a scale factor of 32}}
-  %0 = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %c lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x16x!tt.fp4e2m1x2>, tensor<16x2xf8E8M0FNU> * tensor<16x8x!tt.fp4e2m1x2>, tensor<8x2xf8E8M0FNU> -> tensor<16x8xf32>
-  tt.return
-}
-
-// -----
-
-tt.func @native_descriptor_wrong_element_type(%base: !tt.ptr<!tt.fp4e2m1x2>, %size: i32, %stride: i64) {
-  // expected-error @+1 {{native storage base and descriptor element types must match}}
-  %desc = tt.make_tensor_descriptor %base, [%size], [%stride] : <!tt.fp4e2m1x2>, <16xi8>
-  tt.return
-}
-
-// -----
-
-tt.func @native_descriptor_nan_padding(%base: !tt.ptr<f8E8M0FNU>, %size: i32, %stride: i64) {
-  // expected-error @+1 {{native storage descriptors do not support NaN padding}}
-  %desc = tt.make_tensor_descriptor %base, [%size], [%stride] {padding = 2 : i32} : <f8E8M0FNU>, <16xf8E8M0FNU>
-  tt.return
 }

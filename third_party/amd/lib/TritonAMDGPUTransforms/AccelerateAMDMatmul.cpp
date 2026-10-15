@@ -1051,8 +1051,9 @@ public:
 
       Attribute newScaleEncoding =
           ttg::LinearEncodingAttr::get(ctx, std::move(newLL));
-      // Scale's data type is always i8
-      auto newScaleType = RankedTensorType::get(shape, i8_ty, newScaleEncoding);
+      Type scaleElementType = scale ? scale.getType().getElementType() : i8_ty;
+      auto newScaleType =
+          RankedTensorType::get(shape, scaleElementType, newScaleEncoding);
 
       if (!scale) {
         // 0x7F is 1.0 in E8M0

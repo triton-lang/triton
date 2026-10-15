@@ -33,7 +33,7 @@ hasEnoughCTABytesForDirectToLds(tt::LoadOp loadOp,
     return true;
 
   int64_t ctaTileBits = mlir::product(ttg::getShapePerCTA(srcTy)) *
-                        srcTy.getElementTypeBitWidth();
+                        getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
   return ctaTileBits >= 32 * targetInfo.getWarpSize();
 }
 
@@ -147,7 +147,8 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
 
         auto regContig =
             triton::gpu::getContigPerThread(srcTensorTy)[regOrder[0]];
-        unsigned elemBitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+        unsigned elemBitWidth =
+            getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
         unsigned finalRegContig =
             fitToValidDirectToLdsVecSize(regContig, elemBitWidth, targetInfo);
         // We only apply the order change if we find a vector size which works
@@ -161,7 +162,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         }
       }
 
-      unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+      unsigned bitWidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
       // TODO rework this when shared -> dotOperand conversions support

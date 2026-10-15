@@ -559,7 +559,7 @@ def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
   let hasVerifier = 1;
 
   let description = [{
-    Upcast fp4 (e2m1) represented as native packed FP4 or legacy i8s to fp.
+    Upcast fp4 (e2m1) represented packed as i8s to fp.
 
     The lower 4 bits of the i8s represent the first fp4 element, and the upper 4 bits
     the second fp4 element.
