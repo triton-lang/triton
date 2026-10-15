@@ -452,6 +452,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE z)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+  if(TRITON_EXT_ENABLED AND UNIX AND NOT APPLE)
+    target_link_options(triton PRIVATE "LINKER:-Bsymbolic")
+  endif()
 
   if(NOT TRITON_EXT_ENABLED)
     # When extensions are disabled, only export the Python entrypoint.
