@@ -9,6 +9,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -69,10 +70,47 @@ static PyObject *layout_attr = nullptr;
 static PyObject *has_native_tensor_spec_attr = nullptr;
 static PyObject *get_tensor_spec_attr = nullptr;
 static PyObject *align_kwarg = nullptr;
+static PyObject *debug_str = nullptr;
+static PyObject *instrumentation_mode_str = nullptr;
+static PyObject *fpsan_homomorphic_casts_str = nullptr;
 
 static DtypePtr2Str dtype_ptr2str;
 static Dtype2Str dtype2str;
 static TypeHandlerCache type_handler_cache;
+
+struct JITParamMeta {
+  bool is_constexpr;
+  bool is_const;
+  bool specialize;
+  bool align;
+  PyObject *annotation_type;
+};
+
+// Cache-hit launcher for the common JIT path. It deliberately reuses the
+// Python-owned cache dictionaries and falls back for unsupported calls.
+typedef struct {
+  PyObject_HEAD vectorcallfunc vectorcall;
+  PyObject *jit_fn;
+  PyObject *fallback;
+  PyObject *backend;
+  PyObject *kernel_cache;
+  PyObject *kernel_key_cache;
+  PyObject *options_str;
+  PyObject *grid[3];
+  PyObject *stream_getter;
+  PyObject *device_getter;
+  PyObject *device;
+  PyObject *used_global_vals;
+  PyObject *pre_run_hooks;
+  PyObject *launch_enter_hooks;
+  PyObject *launch_exit_hooks;
+  PyObject *param_name_to_idx;
+  PyObject *default_options[3];
+  JITParamMeta *params;
+  Py_ssize_t num_params;
+} JITCacheProxy;
+
+static PyTypeObject JITCacheProxyType = {PyVarObject_HEAD_INIT(nullptr, 0)};
 
 // Wrappers to make steal and borrow slightly simpler. We use raw CPython API
 // with py::object to handle decref, as higher-level binding APIs add exception
@@ -142,6 +180,9 @@ void init_interned_strings() {
   get_tensor_spec_attr = intern_from_string("get_tensor_specialization");
 
   align_kwarg = py::make_tuple("align").release().ptr();
+  debug_str = intern_from_string("debug");
+  instrumentation_mode_str = intern_from_string("instrumentation_mode");
+  fpsan_homomorphic_casts_str = intern_from_string("fpsan_homomorphic_casts");
 }
 
 void init_type_handler_cache();
@@ -789,9 +830,433 @@ PyObject *make_tensordesc_args(PyObject *self, PyObject *const *args,
   return result.release().ptr();
 }
 
+py::object build_specialization(JITCacheProxy *proxy, PyObject *const *args) {
+  auto specialization = from_new_ref(PyTuple_New(proxy->num_params));
+  if (!specialization)
+    return {};
+
+  for (Py_ssize_t i = 0; i < proxy->num_params; ++i) {
+    JITParamMeta &meta = proxy->params[i];
+    PyObject *arg = args[i];
+    py::object item;
+
+    if (meta.is_constexpr) {
+      item = from_new_ref(PyTuple_Pack(2, constexpr_str, arg));
+    } else if (meta.annotation_type && !meta.specialize) {
+      item = from_new_ref(PyTuple_Pack(2, meta.annotation_type, Py_None));
+    } else {
+      auto [type, key] = specialize_arg(proxy->backend, arg, meta.is_const,
+                                        meta.specialize, meta.align);
+      if (!type || !key)
+        return {};
+      item = from_new_ref(PyTuple_Pack(
+          2, meta.annotation_type ? meta.annotation_type : type.ptr(),
+          key.ptr()));
+    }
+
+    if (!item)
+      return {};
+    PyTuple_SET_ITEM(specialization.ptr(), i, item.release().ptr());
+  }
+  return specialization;
+}
+
+PyObject *JITCacheProxy_vectorcall(PyObject *callable, PyObject *const *args,
+                                   size_t nargsf, PyObject *kwnames) {
+  JITCacheProxy *proxy = reinterpret_cast<JITCacheProxy *>(callable);
+  Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
+  PyObject *const *effective_args = args;
+  Py_ssize_t effective_nargs = nargs;
+  std::vector<PyObject *> merged_args;
+  std::vector<bool> filled;
+  py::object dynamic_options_str;
+  PyObject *effective_options_str = proxy->options_str;
+
+  if (nargs > proxy->num_params)
+    goto fallback;
+  if (kwnames && PyTuple_GET_SIZE(kwnames) > 0) {
+    merged_args.resize(proxy->num_params);
+    filled.resize(proxy->num_params);
+    for (Py_ssize_t i = 0; i < nargs; ++i) {
+      merged_args[i] = args[i];
+      filled[i] = true;
+    }
+
+    auto options = from_new_ref(PyDict_New());
+    if (!options)
+      return nullptr;
+    Py_ssize_t num_kwargs = PyTuple_GET_SIZE(kwnames);
+    for (Py_ssize_t i = 0; i < num_kwargs; ++i) {
+      PyObject *name = PyTuple_GET_ITEM(kwnames, i);
+      PyObject *value = args[nargs + i];
+      PyObject *idx_obj =
+          PyDict_GetItemWithError(proxy->param_name_to_idx, name);
+      if (idx_obj) {
+        Py_ssize_t idx = PyLong_AsSsize_t(idx_obj);
+        if (idx < 0 || idx >= proxy->num_params || filled[idx]) {
+          PyErr_Clear();
+          goto fallback;
+        }
+        merged_args[idx] = value;
+        filled[idx] = true;
+      } else {
+        if (PyErr_Occurred())
+          return nullptr;
+        if (PyDict_SetItem(options.ptr(), name, value) < 0)
+          return nullptr;
+      }
+    }
+    for (bool present : filled) {
+      if (!present)
+        goto fallback;
+    }
+    effective_args = merged_args.data();
+    effective_nargs = proxy->num_params;
+
+    if (PyDict_GET_SIZE(options.ptr()) > 0) {
+      // Match JITFunction.run's injected options and insertion order so the
+      // structural key is identical to compute_cache_key's Python key.
+      PyObject *debug = PyDict_GetItemWithError(options.ptr(), debug_str);
+      if (!debug && PyErr_Occurred())
+        return nullptr;
+      PyObject *effective_debug = proxy->default_options[0];
+      if (debug) {
+        int truth = PyObject_IsTrue(debug);
+        if (truth < 0)
+          return nullptr;
+        if (truth)
+          effective_debug = debug;
+      }
+      if (PyDict_SetItem(options.ptr(), debug_str, effective_debug) < 0 ||
+          PyDict_SetItem(options.ptr(), instrumentation_mode_str,
+                         proxy->default_options[1]) < 0 ||
+          PyDict_SetItem(options.ptr(), fpsan_homomorphic_casts_str,
+                         proxy->default_options[2]) < 0)
+        return nullptr;
+      dynamic_options_str = from_new_ref(PyObject_Str(options.ptr()));
+      if (!dynamic_options_str)
+        return nullptr;
+      effective_options_str = dynamic_options_str.ptr();
+    }
+  } else if (nargs != proxy->num_params) {
+    goto fallback;
+  }
+  if (PyDict_GET_SIZE(proxy->used_global_vals) != 0 ||
+      PyList_GET_SIZE(proxy->pre_run_hooks) != 0 ||
+      PyList_GET_SIZE(proxy->launch_enter_hooks) != 0 ||
+      PyList_GET_SIZE(proxy->launch_exit_hooks) != 0)
+    goto fallback;
+
+  {
+    auto current_device =
+        from_new_ref(PyObject_CallNoArgs(proxy->device_getter));
+    if (!current_device)
+      return nullptr;
+    int same_device =
+        PyObject_RichCompareBool(current_device.ptr(), proxy->device, Py_EQ);
+    if (same_device < 0)
+      return nullptr;
+    if (!same_device)
+      goto fallback;
+
+    auto specialization = build_specialization(proxy, effective_args);
+    if (!specialization) {
+      PyErr_Clear();
+      goto fallback;
+    }
+    auto key = from_new_ref(
+        PyTuple_Pack(2, specialization.ptr(), effective_options_str));
+    if (!key)
+      return nullptr;
+
+    PyObject *cache_key =
+        PyDict_GetItemWithError(proxy->kernel_key_cache, key.ptr());
+    if (!cache_key) {
+      if (PyErr_Occurred())
+        PyErr_Clear();
+      goto fallback;
+    }
+    PyObject *kernel = PyDict_GetItemWithError(proxy->kernel_cache, cache_key);
+    if (!kernel) {
+      if (PyErr_Occurred())
+        PyErr_Clear();
+      goto fallback;
+    }
+
+    auto launcher =
+        from_new_ref(PyObject_GetAttrString(kernel, "_prebound_launcher"));
+    if (!launcher) {
+      PyErr_Clear();
+      goto fallback;
+    }
+    if (launcher.ptr() == Py_None)
+      goto fallback;
+
+    auto stream = from_new_ref(
+        PyObject_CallOneArg(proxy->stream_getter, current_device.ptr()));
+    if (!stream)
+      return nullptr;
+
+    std::vector<PyObject *> launch_args(4 + effective_nargs);
+    launch_args[0] = proxy->grid[0];
+    launch_args[1] = proxy->grid[1];
+    launch_args[2] = proxy->grid[2];
+    launch_args[3] = stream.ptr();
+    for (Py_ssize_t i = 0; i < effective_nargs; ++i)
+      launch_args[4 + i] = effective_args[i];
+
+    auto result = from_new_ref(PyObject_Vectorcall(
+        launcher.ptr(), launch_args.data(), launch_args.size(), nullptr));
+    if (!result)
+      return nullptr;
+    Py_INCREF(kernel);
+    return kernel;
+  }
+
+fallback: {
+  PyObject *result =
+      PyObject_Vectorcall(proxy->fallback, args, nargsf, kwnames);
+  if (!result)
+    return nullptr;
+  auto used_global_vals =
+      from_new_ref(PyObject_GetAttrString(proxy->jit_fn, "used_global_vals"));
+  if (!used_global_vals) {
+    Py_DECREF(result);
+    return nullptr;
+  }
+  Py_SETREF(proxy->used_global_vals, used_global_vals.release().ptr());
+  return result;
+}
+}
+
+void JITCacheProxy_dealloc(PyObject *obj) {
+  PyObject_GC_UnTrack(obj);
+  JITCacheProxy *proxy = reinterpret_cast<JITCacheProxy *>(obj);
+  Py_CLEAR(proxy->jit_fn);
+  Py_CLEAR(proxy->fallback);
+  Py_CLEAR(proxy->backend);
+  Py_CLEAR(proxy->kernel_cache);
+  Py_CLEAR(proxy->kernel_key_cache);
+  Py_CLEAR(proxy->options_str);
+  for (PyObject *&value : proxy->grid)
+    Py_CLEAR(value);
+  Py_CLEAR(proxy->stream_getter);
+  Py_CLEAR(proxy->device_getter);
+  Py_CLEAR(proxy->device);
+  Py_CLEAR(proxy->used_global_vals);
+  Py_CLEAR(proxy->pre_run_hooks);
+  Py_CLEAR(proxy->launch_enter_hooks);
+  Py_CLEAR(proxy->launch_exit_hooks);
+  Py_CLEAR(proxy->param_name_to_idx);
+  for (PyObject *&value : proxy->default_options)
+    Py_CLEAR(value);
+  if (proxy->params) {
+    for (Py_ssize_t i = 0; i < proxy->num_params; ++i)
+      Py_XDECREF(proxy->params[i].annotation_type);
+    PyMem_Free(proxy->params);
+  }
+  Py_TYPE(obj)->tp_free(obj);
+}
+
+int JITCacheProxy_traverse(PyObject *obj, visitproc visit, void *arg) {
+  JITCacheProxy *proxy = reinterpret_cast<JITCacheProxy *>(obj);
+  Py_VISIT(proxy->jit_fn);
+  Py_VISIT(proxy->fallback);
+  Py_VISIT(proxy->backend);
+  Py_VISIT(proxy->kernel_cache);
+  Py_VISIT(proxy->kernel_key_cache);
+  Py_VISIT(proxy->options_str);
+  for (PyObject *value : proxy->grid)
+    Py_VISIT(value);
+  Py_VISIT(proxy->stream_getter);
+  Py_VISIT(proxy->device_getter);
+  Py_VISIT(proxy->device);
+  Py_VISIT(proxy->used_global_vals);
+  Py_VISIT(proxy->pre_run_hooks);
+  Py_VISIT(proxy->launch_enter_hooks);
+  Py_VISIT(proxy->launch_exit_hooks);
+  Py_VISIT(proxy->param_name_to_idx);
+  for (PyObject *value : proxy->default_options)
+    Py_VISIT(value);
+  for (Py_ssize_t i = 0; i < proxy->num_params; ++i)
+    Py_VISIT(proxy->params[i].annotation_type);
+  return 0;
+}
+
+int JITCacheProxy_clear(PyObject *obj) {
+  JITCacheProxy *proxy = reinterpret_cast<JITCacheProxy *>(obj);
+  Py_CLEAR(proxy->jit_fn);
+  Py_CLEAR(proxy->fallback);
+  Py_CLEAR(proxy->backend);
+  Py_CLEAR(proxy->kernel_cache);
+  Py_CLEAR(proxy->kernel_key_cache);
+  Py_CLEAR(proxy->options_str);
+  for (PyObject *&value : proxy->grid)
+    Py_CLEAR(value);
+  Py_CLEAR(proxy->stream_getter);
+  Py_CLEAR(proxy->device_getter);
+  Py_CLEAR(proxy->device);
+  Py_CLEAR(proxy->used_global_vals);
+  Py_CLEAR(proxy->pre_run_hooks);
+  Py_CLEAR(proxy->launch_enter_hooks);
+  Py_CLEAR(proxy->launch_exit_hooks);
+  Py_CLEAR(proxy->param_name_to_idx);
+  for (PyObject *&value : proxy->default_options)
+    Py_CLEAR(value);
+  for (Py_ssize_t i = 0; i < proxy->num_params; ++i)
+    Py_CLEAR(proxy->params[i].annotation_type);
+  return 0;
+}
+
+bool get_bool_attr(PyObject *obj, const char *name, bool *value) {
+  auto attr = from_new_ref(PyObject_GetAttrString(obj, name));
+  if (!attr)
+    return false;
+  int truth = PyObject_IsTrue(attr.ptr());
+  if (truth < 0)
+    return false;
+  *value = truth != 0;
+  return true;
+}
+
+PyObject *create_jit_cache_proxy(PyObject *, PyObject *const *args,
+                                 Py_ssize_t nargs) {
+  constexpr Py_ssize_t expected_nargs = 16;
+  if (nargs != expected_nargs) {
+    PyErr_Format(PyExc_TypeError,
+                 "native_create_jit_cache_proxy expected %zd arguments",
+                 expected_nargs);
+    return nullptr;
+  }
+  if (!init_called && !init_globals())
+    return nullptr;
+
+  PyObject *params = args[10];
+  if (!PyList_CheckExact(params) || !PyDict_CheckExact(args[2]) ||
+      !PyDict_CheckExact(args[3]) || !PyUnicode_CheckExact(args[4]) ||
+      !PyTuple_CheckExact(args[5]) || !PyDict_CheckExact(args[9]) ||
+      !PyList_CheckExact(args[11]) || !PyList_CheckExact(args[12]) ||
+      !PyList_CheckExact(args[13]) || !PyTuple_CheckExact(args[15]) ||
+      PyTuple_GET_SIZE(args[15]) != 3) {
+    PyErr_SetString(PyExc_TypeError,
+                    "invalid native JIT cache proxy arguments");
+    return nullptr;
+  }
+
+  Py_ssize_t num_params = PyList_GET_SIZE(params);
+  JITParamMeta *param_meta = static_cast<JITParamMeta *>(
+      PyMem_Calloc(num_params, sizeof(JITParamMeta)));
+  if (num_params && !param_meta)
+    return PyErr_NoMemory();
+  auto param_name_to_idx = from_new_ref(PyDict_New());
+  if (!param_name_to_idx)
+    goto error;
+
+  for (Py_ssize_t i = 0; i < num_params; ++i) {
+    PyObject *param = PyList_GET_ITEM(params, i);
+    auto name = from_new_ref(PyObject_GetAttrString(param, "name"));
+    auto idx = from_new_ref(PyLong_FromSsize_t(i));
+    if (!name || !idx ||
+        PyDict_SetItem(param_name_to_idx.ptr(), name.ptr(), idx.ptr()) < 0)
+      goto error;
+    bool do_not_specialize = false;
+    bool do_not_specialize_on_alignment = false;
+    if (!get_bool_attr(param, "is_constexpr", &param_meta[i].is_constexpr) ||
+        !get_bool_attr(param, "is_const", &param_meta[i].is_const) ||
+        !get_bool_attr(param, "do_not_specialize", &do_not_specialize) ||
+        !get_bool_attr(param, "do_not_specialize_on_alignment",
+                       &do_not_specialize_on_alignment)) {
+      goto error;
+    }
+    param_meta[i].specialize = !do_not_specialize;
+    param_meta[i].align = !do_not_specialize_on_alignment;
+
+    auto annotation =
+        from_new_ref(PyObject_GetAttrString(param, "annotation_type"));
+    if (!annotation)
+      goto error;
+    if (PyUnicode_GET_LENGTH(annotation.ptr()) != 0) {
+      const char *value = PyUnicode_AsUTF8(annotation.ptr());
+      if (!value)
+        goto error;
+      if (std::strcmp(value, "u1") == 0 || std::strncmp(value, "fp", 2) == 0 ||
+          std::strncmp(value, "bf", 2) == 0)
+        param_meta[i].specialize = false;
+      param_meta[i].annotation_type = annotation.release().ptr();
+    }
+  }
+
+  {
+    auto one = from_new_ref(PyLong_FromLong(1));
+    if (!one)
+      goto error;
+
+    JITCacheProxy *proxy = reinterpret_cast<JITCacheProxy *>(
+        PyObject_GC_New(JITCacheProxy, &JITCacheProxyType));
+    if (!proxy)
+      goto error;
+    proxy->vectorcall = JITCacheProxy_vectorcall;
+    proxy->params = param_meta;
+    proxy->num_params = num_params;
+    proxy->param_name_to_idx = param_name_to_idx.release().ptr();
+    for (Py_ssize_t i = 0; i < 3; ++i) {
+      proxy->default_options[i] = PyTuple_GET_ITEM(args[15], i);
+      Py_INCREF(proxy->default_options[i]);
+    }
+
+    PyObject **fields[] = {
+        &proxy->jit_fn,
+        &proxy->fallback,
+        &proxy->backend,
+        &proxy->kernel_cache,
+        &proxy->kernel_key_cache,
+        &proxy->options_str,
+        &proxy->stream_getter,
+        &proxy->device_getter,
+        &proxy->device,
+        &proxy->used_global_vals,
+        &proxy->pre_run_hooks,
+        &proxy->launch_enter_hooks,
+        &proxy->launch_exit_hooks,
+    };
+    int arg_indices[] = {14, 0, 1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13};
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+      *fields[i] = args[arg_indices[i]];
+      Py_INCREF(*fields[i]);
+    }
+    Py_ssize_t grid_size = PyTuple_GET_SIZE(args[5]);
+    for (Py_ssize_t i = 0; i < 3; ++i) {
+      proxy->grid[i] = i < grid_size ? PyTuple_GET_ITEM(args[5], i) : one.ptr();
+      Py_INCREF(proxy->grid[i]);
+    }
+    PyObject_GC_Track(proxy);
+    return reinterpret_cast<PyObject *>(proxy);
+  }
+
+error:
+  for (Py_ssize_t i = 0; i < num_params; ++i)
+    Py_XDECREF(param_meta[i].annotation_type);
+  PyMem_Free(param_meta);
+  return nullptr;
+}
+
+void init_jit_cache_proxy_type() {
+  JITCacheProxyType.tp_name = "triton._C.libtriton._JITCacheProxy";
+  JITCacheProxyType.tp_basicsize = sizeof(JITCacheProxy);
+  JITCacheProxyType.tp_flags =
+      Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_VECTORCALL | Py_TPFLAGS_HAVE_GC;
+  JITCacheProxyType.tp_vectorcall_offset = offsetof(JITCacheProxy, vectorcall);
+  JITCacheProxyType.tp_call = PyVectorcall_Call;
+  JITCacheProxyType.tp_dealloc = JITCacheProxy_dealloc;
+  JITCacheProxyType.tp_traverse = JITCacheProxy_traverse;
+  JITCacheProxyType.tp_clear = JITCacheProxy_clear;
+}
+
 static PyMethodDef module_methods[] = {
     {"native_specialize_impl", (PyCFunction)specialize_impl, METH_FASTCALL,
      nullptr},
+    {"native_create_jit_cache_proxy", (PyCFunction)create_jit_cache_proxy,
+     METH_FASTCALL, nullptr},
     {"make_tensordesc_args", (PyCFunction)make_tensordesc_args, METH_FASTCALL,
      "Helper to translate tensordesc args"},
     {nullptr, nullptr, 0, nullptr} // sentinel
@@ -800,6 +1265,9 @@ static PyMethodDef module_methods[] = {
 } // anonymous namespace
 
 void init_native_specialize(nanobind::module_ &m) {
+  init_jit_cache_proxy_type();
+  if (PyType_Ready(&JITCacheProxyType) < 0)
+    throw nanobind::python_error();
   // add functions to module
   PyModule_AddFunctions(m.ptr(), module_methods);
 }

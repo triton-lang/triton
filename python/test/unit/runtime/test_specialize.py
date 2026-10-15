@@ -1,17 +1,19 @@
+import inspect
+from collections import namedtuple
+from types import SimpleNamespace
+
 import numpy
 import pytest
 import torch
-from collections import namedtuple
-from triton._C.libtriton import native_specialize_impl
-from triton.runtime.jit import MockTensor, JITCallable
+from triton._C.libtriton import native_create_jit_cache_proxy, native_specialize_impl
 from triton._utils import canonicalize_dtype
-from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.amd.compiler import HIPBackend
-from triton.language import constexpr
-from triton.language import target_info
-from triton.tools.tensor_descriptor import TensorDescriptor
-from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
+from triton.backends.nvidia.compiler import CUDABackend
 from triton.experimental.gluon.language._layouts import NVMMASharedLayout
+from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
+from triton.language import constexpr, target_info
+from triton.runtime.jit import JITCallable, KernelParam, MockTensor, create_function_from_signature
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 
 def mock_tensor_from_tensor(tensor):
@@ -37,6 +39,128 @@ class MockInt(int):
 
     def __new__(cls, value):
         return super().__new__(cls, value)
+
+
+def test_jit_cache_proxy_matches_python_specialization_key():
+
+    def fn(ptr, size, block: constexpr):
+        pass
+
+    signature = inspect.signature(fn)
+    params = [KernelParam(i, param, False, False) for i, param in enumerate(signature.parameters.values())]
+    binder = create_function_from_signature(signature, params, HIPBackend)
+    call_args = (16, 7, 32)
+    _, specialization, options = binder(*call_args, debug=False)
+    cache_key = "compiled"
+
+    launches = []
+
+    def launcher(*args):
+        launches.append(args)
+
+    kernel = SimpleNamespace(_prebound_launcher=launcher)
+    fallback_calls = []
+
+    def fallback(*args, **kwargs):
+        fallback_calls.append((args, kwargs))
+        return "fallback"
+
+    jit_fn = SimpleNamespace(used_global_vals={})
+    kernel_key_cache = {(tuple(specialization), str(options)): cache_key}
+    compiler_options = {
+        "num_warps": 4,
+        "waves_per_eu": 0,
+        "debug": False,
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": False,
+    }
+    kernel_key_cache[(tuple(specialization), str(compiler_options))] = cache_key
+    proxy = native_create_jit_cache_proxy(
+        fallback,
+        HIPBackend,
+        {cache_key: kernel},
+        kernel_key_cache,
+        str(options),
+        (2, 3),
+        lambda device: "stream",
+        lambda: 0,
+        0,
+        jit_fn.used_global_vals,
+        params,
+        [],
+        [],
+        [],
+        jit_fn,
+        (False, "", False),
+    )
+
+    assert proxy(*call_args) is kernel
+    assert launches == [(2, 3, 1, "stream", *call_args)]
+    assert fallback_calls == []
+
+    assert proxy(ptr=16, size=7, block=32) is kernel
+    assert proxy(*call_args, num_warps=4, waves_per_eu=0) is kernel
+    assert len(launches) == 3
+
+    assert proxy(*call_args, num_stages=2) == "fallback"
+    assert fallback_calls == [(call_args, {"num_stages": 2})]
+
+    # A proxy created before compilation observes entries subsequently added
+    # to the Python-owned caches.
+    cold_kernel_cache = {}
+    cold_key_cache = {}
+    cold_fallback_calls = []
+
+    def compile_on_miss(*args, **kwargs):
+        cold_fallback_calls.append((args, kwargs))
+        cold_key_cache[(tuple(specialization), str(options))] = cache_key
+        cold_kernel_cache[cache_key] = kernel
+        return kernel
+
+    cold_proxy = native_create_jit_cache_proxy(
+        compile_on_miss,
+        HIPBackend,
+        cold_kernel_cache,
+        cold_key_cache,
+        str(options),
+        (2, 3),
+        lambda device: "stream",
+        lambda: 0,
+        0,
+        {},
+        params,
+        [],
+        [],
+        [],
+        SimpleNamespace(used_global_vals={}),
+        (False, "", False),
+    )
+    assert cold_proxy(*call_args) is kernel
+    assert cold_proxy(*call_args) is kernel
+    assert cold_fallback_calls == [(call_args, {})]
+
+    # Per-launch state that Python must validate always takes the fallback.
+    global_fallback_calls = []
+    global_proxy = native_create_jit_cache_proxy(
+        lambda *args, **kwargs: global_fallback_calls.append((args, kwargs)),
+        HIPBackend,
+        {cache_key: kernel},
+        kernel_key_cache,
+        str(options),
+        (2, 3),
+        lambda device: "stream",
+        lambda: 0,
+        0,
+        {"global": object()},
+        params,
+        [],
+        [],
+        [],
+        SimpleNamespace(used_global_vals={"global": object()}),
+        (False, "", False),
+    )
+    assert global_proxy(*call_args) is None
+    assert global_fallback_calls == [(call_args, {})]
 
 
 def reference_specialize_impl(backend, arg, is_const, specialize_value, align):

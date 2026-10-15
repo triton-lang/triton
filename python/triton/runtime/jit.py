@@ -19,7 +19,7 @@ from .driver import driver
 from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
-from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
+from triton._C.libtriton import get_cache_invalidating_env_vars, native_create_jit_cache_proxy, native_specialize_impl, ir
 
 TRITON_MODULE = "triton.language"
 GLUON_MODULE = "triton.experimental.gluon.language"
@@ -709,6 +709,59 @@ class JITFunction(JITCallable, KernelInterface[T]):
         binder = create_function_from_signature(self.signature, self.params, backend)
         return {}, {}, target, backend, binder
 
+    def __getitem__(self, grid) -> T:
+        if not knobs.runtime.use_native_jit_cache or not knobs.runtime.use_prebound_launcher \
+                or not isinstance(grid, tuple) or not 1 <= len(grid) <= 3:
+            return super().__getitem__(grid)
+        if not self._native_jit_cache_eligible:
+            return super().__getitem__(grid)
+        if knobs.runtime.add_stages_inspection_hook is not None:
+            return super().__getitem__(grid)
+
+        device = driver.active.get_current_device()
+        kernel_cache, kernel_key_cache, target, backend, _ = self.device_caches[device]
+        if target.backend != "hip":
+            return super().__getitem__(grid)
+
+        option_state = (
+            self.debug or knobs.runtime.debug,
+            knobs.compilation.instrumentation_mode,
+            knobs.compilation.fpsan_homomorphic_casts,
+        )
+        # Cache one proxy for the hot grid/options combination. Cache-dict
+        # identities ensure device_caches.clear() creates a replacement.
+        proxy_key = (device, grid, option_state, id(kernel_cache), id(kernel_key_cache))
+        if proxy_key == self._native_jit_cache_proxy_key:
+            return self._native_jit_cache_proxy
+
+        options = {
+            "debug": option_state[0],
+            "instrumentation_mode": option_state[1],
+            "fpsan_homomorphic_casts": option_state[2],
+        }
+        options_str = str(options)
+        proxy = native_create_jit_cache_proxy(
+            super().__getitem__(grid),
+            backend,
+            kernel_cache,
+            kernel_key_cache,
+            options_str,
+            grid,
+            driver.active.get_current_stream,
+            driver.active.get_current_device,
+            device,
+            self.used_global_vals,
+            self.params,
+            self.pre_run_hooks,
+            knobs.runtime.launch_enter_hook.calls,
+            knobs.runtime.launch_exit_hook.calls,
+            self,
+            option_state,
+        )
+        self._native_jit_cache_proxy_key = proxy_key
+        self._native_jit_cache_proxy = proxy
+        return proxy
+
     def _pack_args(self, backend, kwargs, bound_args, specialization, options):
         # options
         options = backend.parse_options(kwargs)
@@ -785,9 +838,13 @@ class JITFunction(JITCallable, KernelInterface[T]):
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
             # launch kernel
-            launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
-            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
-                       knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *bound_args.values())
+            if kernel._prebound_launcher is not None and not knobs.runtime.launch_enter_hook \
+                    and not knobs.runtime.launch_exit_hook:
+                kernel._prebound_launcher(grid_0, grid_1, grid_2, stream, *bound_args.values())
+            else:
+                launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
+                kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
+                           knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *bound_args.values())
         return kernel
 
     def repr(self, _):
@@ -819,6 +876,11 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
         # cache of just-in-time compiled kernels
         self.device_caches = defaultdict(self.create_binder)
+        self._native_jit_cache_eligible = all(
+            not param.has_default and param._param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+            for param in self.params)
+        self._native_jit_cache_proxy_key = None
+        self._native_jit_cache_proxy = None
 
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
