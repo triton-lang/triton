@@ -94,6 +94,29 @@ def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
     run_filecheck_test(kernel, args=(MockTensor(src_dtype), scalar, dst_dtype))
 
 
+@pytest.mark.parametrize("dtype, ir_type", [(tl.float4e2m1x2, "!tt.fp4e2m1x2"), (tl.float8e8m0fnu, "f8E8M0FNU")])
+def test_native_float_types(dtype, ir_type):
+    assert dtype.primitive_bitwidth == 8 and dtype.itemsize == 1 and dtype != tl.uint8
+    assert dtype.is_floating() and dtype.kind() == tl.dtype.KIND.FLOATING
+
+    @triton.jit
+    def kernel(source, output, DTYPE: tl.constexpr, MIXED: tl.constexpr = False):
+        offsets = tl.arange(0, 32)
+        value = tl.load(source + offsets)
+        value = value.to(tl.uint8, bitcast=True).to(DTYPE, bitcast=True)
+        value = tl.where(offsets < 16, value, 1.0 if MIXED else value)
+        tl.static_assert(value.dtype == DTYPE)
+        tl.store(output + offsets, value)
+
+    args = (MockTensor(dtype), MockTensor(dtype), dtype)
+    module = run_parser(kernel, args=args)
+    assert module.verify()
+    text = module.str_nodebug()
+    assert ir_type in text and all(op in text for op in ("tt.bitcast", "tt.load", "tt.store"))
+    with pytest.raises(CompilationError, match="Implicit promotion"):
+        run_parser(kernel, args=(*args, True))
+
+
 def test_store_int_to_bool():
 
     @triton.jit

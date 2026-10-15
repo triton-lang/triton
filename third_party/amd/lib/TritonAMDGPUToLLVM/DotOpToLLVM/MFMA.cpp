@@ -578,7 +578,7 @@ struct DotOpMFMAConversionHelper {
             Value vals;
             if (type.isF32() && allowXF32) {
               vals = prepareOperands(rawElems, kBase, f32_ty, preserveBF16);
-            } else if (type.getIntOrFloatBitWidth() == 8) {
+            } else if (elemTy.getIntOrFloatBitWidth() == 8) {
               vals = prepareOperands(rawElems, kBase, i8_ty, preserveBF16,
                                      isConstantScale);
             } else if (type.isBF16()) {

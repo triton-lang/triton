@@ -62,6 +62,11 @@ DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
                                   FloatType computeType, bool handleNan) const {
   auto loc = scale.getLoc();
   auto scaleTy = scale.getType();
+  if (isa<Float8E8M0FNUType>(scaleTy.getElementType())) {
+    scaleTy = scaleTy.clone(rewriter.getI8Type());
+    scale = cast<TypedValue<RankedTensorType>>(
+        BitcastOp::create(rewriter, loc, scaleTy, scale).getResult());
+  }
   assert(computeType == rewriter.getBF16Type() ||
          computeType == rewriter.getF16Type());
 

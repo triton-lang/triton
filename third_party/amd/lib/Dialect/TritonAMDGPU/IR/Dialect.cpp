@@ -28,6 +28,7 @@
 #include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -224,7 +225,8 @@ LogicalResult verifyScaledUpcastScaleType(Operation *op,
                                           RankedTensorType scaleTy,
                                           const TargetFeatures &features) {
   if (!features.supportsCvtPkScalePk8() ||
-      scaleTy.getElementType().isInteger(8))
+      scaleTy.getElementType().isInteger(8) ||
+      isa<Float8E8M0FNUType>(scaleTy.getElementType()))
     return success();
   return op->emitOpError()
          << "v_cvt_scale_pk8 requires a raw E8M0 scale in i8, but got "
@@ -1305,7 +1307,7 @@ LogicalResult verifyTDMSharedMemoryEncoding(Operation *op,
     return op->emitOpError("Invalid shared memory layout for TDM");
 
   Type elementType = smemTy.getElementType();
-  auto elementBitWidth = elementType.getIntOrFloatBitWidth();
+  unsigned elementBitWidth = getIntOrFloatOrPtrBitWidth(elementType);
   if (paddedEnc) {
     unsigned dwordSize = 32;
     for (auto [interval, padding] :
@@ -1483,7 +1485,7 @@ LogicalResult AsyncTDMScatterOp::verify() {
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
 
-  if (smemTy.getElementType().getIntOrFloatBitWidth() < 8)
+  if (getIntOrFloatOrPtrBitWidth(smemTy.getElementType()) < 8)
     return emitOpError("TDM scatter requires element types of at least 8 bits");
 
   auto dstRowIndicesType = cast<RankedTensorType>(getDstRowIndices().getType());
@@ -1535,7 +1537,7 @@ LogicalResult AsyncTDMGatherOp::verify() {
       !llvm::isa<gpu::SwizzledSharedEncodingAttr>(enc))
     return emitOpError("Invalid shared memory layout for TDM");
 
-  if (smemTy.getElementType().getIntOrFloatBitWidth() < 8)
+  if (getIntOrFloatOrPtrBitWidth(smemTy.getElementType()) < 8)
     return emitOpError("TDM gather requires element types of at least 8 bits");
 
   auto srcRowIndicesType = cast<RankedTensorType>(getSrcRowIndices().getType());
@@ -1719,7 +1721,7 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
   // Prefetches 256 bytes into L2
   const int bytesPerPrefetch = 256;
   int elemPerPrefetch =
-      (bytesPerPrefetch * 8) / elementType.getIntOrFloatBitWidth();
+      (bytesPerPrefetch * 8) / getIntOrFloatOrPtrBitWidth(elementType);
 
   // Scale the block shape by the number of elements per prefetch
   SmallVector<int64_t> scaledBlockShape(blockShape.begin(), blockShape.end());

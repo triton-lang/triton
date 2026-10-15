@@ -117,7 +117,7 @@ unsigned getElementBitWidth(RankedTensorType type) {
       isa<PointerType>(type.getElementType())
           ? cast<PointerType>(type.getElementType()).getPointeeType()
           : type.getElementType();
-  return typeForMem.getIntOrFloatBitWidth();
+  return getIntOrFloatOrPtrBitWidth(typeForMem);
 }
 
 static std::optional<unsigned>
@@ -1195,7 +1195,7 @@ swizzleDotOperandLike(RankedTensorType type, ttg::CGAEncodingAttr cgaLayout) {
   }
   return ttg::SwizzledSharedEncodingAttr::get(
       ctx, opIdx, kWidth, type.getShape(), order, cgaLayout,
-      type.getElementTypeBitWidth(), false);
+      getIntOrFloatOrPtrBitWidth(type.getElementType()), false);
 }
 
 // If all the transitive uses of the given value have are used by a convert to

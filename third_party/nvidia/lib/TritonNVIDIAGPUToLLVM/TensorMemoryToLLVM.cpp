@@ -582,7 +582,7 @@ static LogicalResult copySharedToTmem(ConversionPatternRewriter &rewriter,
   // This subtlely handles subviews
   auto cvt = tmemLl.invertAndCompose(shmemLl);
 
-  auto bitwidth = srcTy.getElementType().getIntOrFloatBitWidth();
+  unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
   uint64_t holeMask = 0;
   // Zero col bases are physical holes. Compact them for the SMEM descriptor,
   // then skip the corresponding physical TMEM ranges when issuing copies.

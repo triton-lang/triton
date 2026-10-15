@@ -48,8 +48,7 @@ public:
     auto cgaLayout = triton::gpu::getCGALayout(srcLayout);
     // TMem encoding for A operand is the same as for D (Acc), with colStride 1,
     // i.e. densely packed in TMEM.
-    unsigned elemBitWidth =
-        lhs.getType().getElementType().getIntOrFloatBitWidth();
+    unsigned elemBitWidth = lhs.getType().getElementTypeBitWidth();
     if (!llvm::is_contained({8, 16, 32}, elemBitWidth)) {
       return failure();
     }
