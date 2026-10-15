@@ -223,6 +223,28 @@ tt.func public @result_rank_too_large(%arg0: !ttg.memdesc<3x8x16xf32, #shared, #
 
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
+tt.func public @memdesc_index_constant_negative(%arg0: !ttg.memdesc<2x8x16xf32, #shared, #smem>) {
+    %index = arith.constant -1 : i32
+    // expected-error @+1 {{constant index -1 is out of bounds for dimension of size 2}}
+    %a = ttg.memdesc_index %arg0[%index] : !ttg.memdesc<2x8x16xf32, #shared, #smem> -> !ttg.memdesc<8x16xf32, #shared, #smem>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_index_constant_past_end(%arg0: !ttg.memdesc<2x8x16xf32, #shared, #smem>) {
+    %index = arith.constant 2 : i32
+    // expected-error @+1 {{constant index 2 is out of bounds for dimension of size 2}}
+    %a = ttg.memdesc_index %arg0[%index] : !ttg.memdesc<2x8x16xf32, #shared, #smem> -> !ttg.memdesc<8x16xf32, #shared, #smem>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
+#smem = #ttg.shared_memory
 tt.func public @memdesc_index_result_alloc_shape_mismatch(%arg0: !ttg.memdesc<3x8x16xf32, #shared, #smem>) {
     %zero = arith.constant 0 : i32
     // expected-error @+1 {{alloc shape must match shape for the result}}

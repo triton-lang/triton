@@ -572,6 +572,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def shared_memory_constant_index_kernel(index: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 128], smem_layout)
+    smem.index(index).load(layout)
+
+
+@pytest.mark.parametrize("index", [-1, 2])
+def test_shared_memory_constant_index_out_of_bounds(index, capfd):
+    with pytest.raises(RuntimeError, match="error encountered during parsing"):
+        run_parser(shared_memory_constant_index_kernel, *make_args(index), target=AMPERE_TARGET)
+    assert f"constant index {index} is out of bounds for dimension of size 2" in "".join(capfd.readouterr())
+
+
+@gluon.jit
+def tensor_memory_constant_index_kernel(index: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 64], [32, 1], [4, 1], [0, 1])
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout([128, 64], col_stride=1)
+    tmem = blackwell.allocate_tensor_memory(ttgl.float32, [2, 128, 64], tmem_layout)
+    tmem.index(index).load(layout)
+
+
+@pytest.mark.parametrize("index", [-1, 2])
+def test_tensor_memory_constant_index_out_of_bounds(index, capfd):
+    with pytest.raises(RuntimeError, match="error encountered during parsing"):
+        run_parser(tensor_memory_constant_index_kernel, *make_args(index), target=BLACKWELL_TARGET)
+    assert f"constant index {index} is out of bounds for dimension of size 2" in "".join(capfd.readouterr())
+
+
+@gluon.jit
 def shared_memory_permute_kernel():
     layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
     smem = ttgl.allocate_shared_memory(ttgl.float16, [4, 128], layout)

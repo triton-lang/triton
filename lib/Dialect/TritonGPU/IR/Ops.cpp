@@ -1161,6 +1161,18 @@ LogicalResult MemDescIndexOp::verify() {
   if (!correctRank) {
     return emitError("result rank must be input rank - 1");
   }
+
+  APInt index;
+  if (matchPattern(getIndex(), m_ConstantInt(&index))) {
+    int64_t indexValue = index.getSExtValue();
+    int64_t dimSize = srcTy.getShape()[0];
+    if (indexValue < 0 || indexValue >= dimSize) {
+      return emitOpError("constant index ")
+             << indexValue << " is out of bounds for dimension of size "
+             << dimSize;
+    }
+  }
+
   if (srcTy.getAllocShape().size() != srcTy.getRank()) {
     return emitError("We don't allow taking memdesc_index of a memdesc_index");
   }
