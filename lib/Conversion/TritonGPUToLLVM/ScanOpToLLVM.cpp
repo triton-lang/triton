@@ -342,6 +342,22 @@ private:
     bool reverse = op.getReverse();
     auto inverse = scan.pseudoinvert().sublayout(
         llvm::to_vector(scan.getOutDimNames()), {kReg, kLane});
+    // Candidates for one consumer share register-owned bits. Compare only
+    // lane and warp bits so segments reuse the same predicates.
+    auto consumerLayout = consumers.compose(inverse);
+    unsigned threadMask =
+        getOutputBasisMask(consumerLayout, {kLane, kWarp}, kReg);
+    unsigned registerMask = getOutputBasisMask(consumerLayout, {kReg}, kReg);
+    unsigned selectorMask =
+        consumerValues && !(threadMask & registerMask) ? threadMask : ~0u;
+    Value threadReg;
+    if (selectorMask != ~0u)
+      threadReg =
+          applyLinearLayout(loc, rewriter,
+                            consumerLayout.sublayout({kLane, kWarp}, {kReg}),
+                            {{kLane, laneId}, {kWarp, warpId}})
+              .front()
+              .second;
     SmallVector<ScanCarry> carries;
     SmallVector<Value> consumerRegs;
     SmallVector<SmallVector<unsigned>> requested(totals.size());
@@ -359,7 +375,10 @@ private:
       Value pred = b.icmp_ne(index, b.i32_val(reverse ? numSegments - 1 : 0));
       carries.push_back({{}, pred});
       consumerRegs.push_back(
-          applyLinearLayout(loc, rewriter, inverse, coords).front().second);
+          threadReg ? threadReg
+                    : applyLinearLayout(loc, rewriter, inverse, coords)
+                          .front()
+                          .second);
       for (unsigned candidate :
            getScanRegisters(consumers, inverse, r, op.getAxis(), numSegments,
                             consumerValues ? 0 : (reverse ? 1 : -1),
@@ -377,9 +396,10 @@ private:
         for (unsigned consumer : requested[r]) {
           Value selected;
           if (consumerValues)
-            selected = reverse
-                           ? b.icmp_uge(b.i32_val(r), consumerRegs[consumer])
-                           : b.icmp_ule(b.i32_val(r), consumerRegs[consumer]);
+            selected = reverse ? b.icmp_uge(b.i32_val(r & selectorMask),
+                                            consumerRegs[consumer])
+                               : b.icmp_ule(b.i32_val(r & selectorMask),
+                                            consumerRegs[consumer]);
           else
             selected = reverse
                            ? b.icmp_ugt(b.i32_val(r), consumerRegs[consumer])
