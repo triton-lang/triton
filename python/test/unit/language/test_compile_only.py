@@ -40,9 +40,11 @@ def test_native_dtype_copy_lowering(target, dtype, ir_dtype, monkeypatch):
 
     @triton.jit
     def copy(source, destination):
-        offsets = tl.arange(0, 128)
-        value = tl.load(source + offsets)
-        tl.store(destination + offsets, value)
+        offsets = tl.arange(0, 256)
+        for i in range(8):
+            value = tl.load(source + offsets)
+            tl.store(destination + offsets, value)
+            offsets += 256
 
     native = _compile_native_dtype_ir(copy, {"source": f"*{dtype}", "destination": f"*{dtype}"}, target)
     legacy = _compile_native_dtype_ir(copy, {"source": "*u8", "destination": "*u8"}, target)
@@ -50,6 +52,22 @@ def test_native_dtype_copy_lowering(target, dtype, ir_dtype, monkeypatch):
         assert ir_dtype in native[stage]
         assert "tt.bitcast" not in native[stage]
     # Type identity survives until LLVM conversion; byte copies generate the same code.
+    assert native["llir"] == legacy["llir"]
+
+
+def test_native_fp4_descriptor_copy_gfx1250(monkeypatch):
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "1")
+
+    @triton.jit
+    def copy(source, destination, rows, columns):
+        src = tl.make_tensor_descriptor(source, shape=[rows, columns], strides=[96, 1], block_shape=[32, 32])
+        dst = tl.make_tensor_descriptor(destination, shape=[rows, columns], strides=[96, 1], block_shape=[32, 32])
+        dst.store([32, 32], src.load([32, 32]))
+
+    target = GPUTarget("hip", "gfx1250", 32)
+    shape = {"rows": "i32", "columns": "i32"}
+    native = _compile_native_dtype_ir(copy, {"source": "*fp4e2m1x2", "destination": "*fp4e2m1x2", **shape}, target)
+    legacy = _compile_native_dtype_ir(copy, {"source": "*u8", "destination": "*u8", **shape}, target)
     assert native["llir"] == legacy["llir"]
 
 
