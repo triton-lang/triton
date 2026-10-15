@@ -23,6 +23,7 @@ option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
 option(TRITON_BUILD_NVIDIA_GSAN_RUNTIME
        "Build the CUDA/NVPTX GSan device runtime for the NVIDIA backend" ON)
 option(TRITON_STABLE_ABI "Build with Python Stable ABI (abi3) for Python 3.12+" OFF)
+option(TRITON_BUILD_TESTS "Build Triton test passes and lit tests" ON)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
@@ -533,7 +534,9 @@ find_package(Threads REQUIRED)
 
 add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)
-add_subdirectory(test)
+if(TRITON_BUILD_TESTS)
+  add_subdirectory(test)
+endif()
 
 if(TRITON_BUILD_UT)
   add_subdirectory(unittest)
