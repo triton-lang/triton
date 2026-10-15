@@ -91,6 +91,24 @@ tt.func @remat_fast_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   tt.return
 }
 
+// Do not duplicate a volatile load that is used in two layouts
+// CHECK-LABEL: no_remat_volatile_load
+tt.func @no_remat_volatile_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+  %0 = tt.splat %arg : !tt.ptr<i32> -> tensor<16x!tt.ptr<i32>, #layout1>
+  %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #layout1>
+  %2 = tt.addptr %0, %1 : tensor<16x!tt.ptr<i32>, #layout1>, tensor<16xi32, #layout1>
+  // CHECK: %[[LOAD:.+]] = tt.load {{.*}}{isVolatile = true}
+  // CHECK-NEXT: ttg.convert_layout %[[LOAD]]
+  // CHECK-NOT: tt.load
+  // CHECK: tt.return
+  %3 = tt.load %2 {isVolatile = true} : tensor<16x!tt.ptr<i32>, #layout1>
+  %4 = ttg.convert_layout %3 : tensor<16xi32, #layout1> -> tensor<16xi32, #layout0>
+  %5 = ttg.convert_layout %2 : tensor<16x!tt.ptr<i32>, #layout1> -> tensor<16x!tt.ptr<i32>, #layout0>
+  tt.store %5, %4 : tensor<16x!tt.ptr<i32>, #layout0>
+  tt.store %2, %3 : tensor<16x!tt.ptr<i32>, #layout1>
+  tt.return
+}
+
 // CHECK-LABEL: fp4_keep_convert
 tt.func @fp4_keep_convert() -> tensor<64x64xf16, #linear> {
   %0 = arith.constant dense<0> : tensor<64x32xi8, #layout4>
