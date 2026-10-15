@@ -44,7 +44,6 @@ def test_metadata() -> None:
 @pytest.mark.parametrize("num_ctas", [1, 2])
 def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fresh_triton_cache):
     import ctypes
-    from triton.backends.nvidia.driver import libcuda_dirs
 
     if num_ctas > 1 and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("CTA clusters require Hopper or newer")
@@ -77,7 +76,8 @@ def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fres
         assert (max_occupancy + 1) * launcher.shared > properties["max_shared_mem_per_multiprocessor"]
         if num_ctas == 1:
             # Check CUDA's occupancy calculation, independently of the reservation formula.
-            cuda = ctypes.CDLL(os.path.join(libcuda_dirs()[0], "libcuda.so.1"))
+            # Match the runtime loader's driver selection, including CUDA compatibility libraries.
+            cuda = ctypes.CDLL("libcuda.so.1")
             occupancy = cuda.cuOccupancyMaxActiveBlocksPerMultiprocessor
             occupancy.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t]
             occupancy.restype = ctypes.c_int
