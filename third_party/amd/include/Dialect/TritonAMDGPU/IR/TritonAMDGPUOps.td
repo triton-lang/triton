@@ -1037,6 +1037,14 @@ def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter", [
     The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
     (global offset / column via add_offsets, bounds); this op only supplies the
     per-instruction row slices (dst_row_indices) and the LDS source.
+
+    The dst_row_indices must be broadcast across the lanes of a warp (every lane holds
+    all indices of the warp), since the TDM instruction reads them from SGPRs. Different
+    warps may handle different rows. Each CTA only writes the part of the source held in
+    its own LDS, so the dst_row_indices must be distributed across CTAs the same way as
+    the source rows (the block bases of both layouts must have the same dim0 components).
+    If the source is split across CTAs along columns, those CTAs write to the same rows
+    and must hold the same indices.
   }];
 
   let arguments = (ins
