@@ -124,7 +124,8 @@ public:
     return rematMapping.lookup(value).lookup(encoding);
   }
 
-  bool backwardRematerialization(bool disableRematSplitting);
+  bool backwardRematerialization(bool disableRematSplitting,
+                                 DenseSet<Operation *> &candidates);
 
   /// Rematerialize the backward slice leading up to \p convertOp to produce the
   /// result layout directly if it is possible and profitable to do so.
@@ -920,14 +921,18 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
 }
 
 bool LayoutRematerialization::backwardRematerialization(
-    bool disableRematSplitting) {
+    bool disableRematSplitting, DenseSet<Operation *> &candidates) {
   bool changed = false;
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    if (!backwardRematerialization(convertOp, disableRematSplitting)) {
+    bool isCandidate = candidates.erase(convertOp);
+    if (!isCandidate ||
+        !backwardRematerialization(convertOp, disableRematSplitting)) {
+      if (isCandidate)
+        candidates.insert(convertOp);
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
@@ -1540,11 +1545,13 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
   return true;
 }
 
-bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
+bool backwardRematerialization(ModuleOp module, bool disableRematSplitting,
+                               DenseSet<Operation *> &candidates) {
   bool changed = false;
   module.walk([&](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
-    changed |= layoutRemat.backwardRematerialization(disableRematSplitting);
+    changed |= layoutRemat.backwardRematerialization(disableRematSplitting,
+                                                     candidates);
   });
   return changed;
 }
@@ -1560,6 +1567,13 @@ void hoistConvert(ModuleOp module, bool disableRematSplitting) {
     LayoutRematerialization(funcOp).hoistConvertDotOperand();
   });
 }
+struct RematCandidates : RewriterBase::Listener {
+  DenseSet<Operation *> ops;
+
+  void notifyOperationErased(Operation *op) override {
+    op->walk([&](Operation *nested) { ops.erase(nested); });
+  }
+};
 } // namespace
 
 class TritonGPURemoveLayoutConversionsPass
@@ -1571,12 +1585,14 @@ public:
       TritonGPURemoveLayoutConversionsBase;
 
   // Cleanup convert ops.
-  void cleanupConvertOps() {
+  void cleanupConvertOps(RewriterBase::Listener *listener = nullptr) {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     RewritePatternSet cleanUpPatterns(context);
     ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
-    if (applyPatternsGreedily(m, std::move(cleanUpPatterns)).failed()) {
+    GreedyRewriteConfig config;
+    config.setListener(listener);
+    if (applyPatternsGreedily(m, std::move(cleanUpPatterns), config).failed()) {
       signalPassFailure();
     }
 
@@ -1606,19 +1622,22 @@ public:
 
     cleanupConvertOps();
 
+    RematCandidates candidates;
+    m.walk([&](ConvertLayoutOp op) { candidates.ops.insert(op); });
     bool changed = false;
     do {
       changed = false;
       // 2. For remaining convert ops, try to rematerialize the slice of
       // producer operation to avoid having to convert.
-      changed = backwardRematerialization(m, disableRematSplitting);
+      changed =
+          backwardRematerialization(m, disableRematSplitting, candidates.ops);
       LLVM_DEBUG({
         DBGS() << "Module after backward remat:\n";
         m.dump();
       });
 
       // Cleanup dummy converts created during backward remat.
-      cleanupConvertOps();
+      cleanupConvertOps(&candidates);
     } while (changed);
 
     // 3. For remaining converts, try to hoist them above cast generating
