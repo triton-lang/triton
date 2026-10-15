@@ -301,8 +301,8 @@ private:
                              warpId, rewriter);
   }
 
-  // Store the complete totals table once. Scan register groups in traversal
-  // order, selecting carries only at positions requested by their consumers.
+  // Store the complete totals table once. Scan each independent sequence,
+  // selecting carries only at positions requested by their consumers.
   // Complete each consumer's local prefixes as soon as its carry is available.
   void scanInterWarpGroups(triton::ScanOp op, const ScanLoweringHelper &helper,
                            const ScanValues &totals, ScanValues &values,
@@ -312,7 +312,6 @@ private:
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto *ctx = op.getContext();
     auto kReg = StringAttr::get(ctx, "register");
-    auto kGroup = StringAttr::get(ctx, "group");
     auto kLane = StringAttr::get(ctx, "lane");
     auto kWarp = StringAttr::get(ctx, "warp");
     auto kBlock = StringAttr::get(ctx, "block");
@@ -330,17 +329,12 @@ private:
     llvm::erase(dims, axis);
     dims.push_back(axis);
     auto storeLayout = source.transposeOuts(dims).flattenOuts();
-    // The low warp-owned axis bits form a group of adjacent totals. Split
-    // the scan's register dimension into positions within a group and groups.
-    unsigned groupSize =
-        source.sublayout({kWarp}, {axis}).contiguousElemsAlongOutputDim(axis);
-    unsigned numGroups = numRegs / groupSize;
-    auto groupedLayout = scan.reshapeIns({{kReg, groupSize},
-                                          {kGroup, numGroups},
-                                          {kLane, scan.getInDimSize(kLane)},
-                                          {kWarp, scan.getInDimSize(kWarp)},
-                                          {kBlock, scan.getInDimSize(kBlock)}});
-    auto loadLayout = groupedLayout.transposeOuts(dims).flattenOuts();
+    // Factor the contiguous scan axis out of the register layout. The
+    // quotient maps each independent scan to its shared-memory base.
+    auto scanAxis = LinearLayout::identity1D(numSegments, kReg, axis);
+    auto independentScans = divideLeft(scan, scanAxis).value();
+    auto loadLayout = independentScans.transposeOuts(dims).flattenOuts();
+    unsigned rowStride = independentScans.getTotalOutDimSize();
     auto scratch = helper.getGroupedInterWarpScratchConfig();
     Value smem = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
     SmallVector<Value> bases;
@@ -378,8 +372,7 @@ private:
     unsigned segmentRegs = values.size() / totals.size();
     bool inclusive = segmentRegs == 1;
     SmallVector<Value> consumerRegs;
-    SmallVector<SmallVector<unsigned>> consumers(numRegs);
-    SmallVector<unsigned> remaining;
+    SmallVector<SmallVector<std::pair<unsigned, bool>>> consumers(numRegs);
     SmallVector<ScanCarry> carries;
     for (unsigned r = 0; r < totals.size(); ++r) {
       auto coords = applyLinearLayout(loc, rewriter, source,
@@ -395,38 +388,31 @@ private:
           getScanRegisters(source, inverse, r, op.getAxis(), numSegments,
                            inclusive ? 0 : (reverse ? 1 : -1),
                            /*excludeBoundary=*/!inclusive);
+      llvm::sort(candidates, [reverse](unsigned a, unsigned b) {
+        return reverse ? a > b : a < b;
+      });
       for (unsigned reg : candidates)
-        consumers[reg].push_back(r);
-      remaining.push_back(candidates.size());
+        consumers[reg].emplace_back(r, reg == candidates.back());
       carries.push_back({{}, pred});
     }
 
-    SmallVector<Value> acc;
-    for (unsigned g = 0; g < numGroups; ++g) {
-      unsigned group = reverse ? numGroups - 1 - g : g;
-      for (unsigned i = 0; i < groupSize; ++i) {
-        unsigned element = reverse ? groupSize - 1 - i : i;
-        unsigned reg = group * groupSize + element;
-        unsigned step = g * groupSize + i;
-        Value index = applyLinearLayout(loc, rewriter, loadLayout,
-                                        {{kReg, b.i32_val(element)},
-                                         {kGroup, b.i32_val(group)},
-                                         {kLane, laneId},
-                                         {kWarp, warpId},
-                                         {kBlock, b.i32_val(0)}})
-                          .front()
-                          .second;
+    unsigned numScans = independentScans.getInDimSize(kReg);
+    for (unsigned n = 0; n < numScans; ++n) {
+      unsigned scanIndex = reverse ? numScans - 1 - n : n;
+      Value base = offset(loadLayout, scanIndex);
+      SmallVector<Value> acc;
+      for (unsigned i = 0; i < numSegments; ++i) {
+        unsigned segment = reverse ? numSegments - 1 - i : i;
+        unsigned reg = scanIndex * numSegments + segment;
+        Value index = b.add(base, b.i32_val(segment * rowStride));
         SmallVector<Value> current;
         for (unsigned i = 0; i < types.size(); ++i) {
           Value ptr = b.gep(smem.getType(), types[i], bases[i], index);
           current.push_back(targetInfo.loadDShared(rewriter, loc, ptr, Value(),
                                                    types[i], b.true_val()));
         }
-        acc = step % numSegments == 0
-                  ? current
-                  : applyCombineOp(loc, rewriter, op.getCombineOp(), acc,
-                                   current);
-        for (unsigned r : consumers[reg]) {
+        acc = applyCombineOp(loc, rewriter, op.getCombineOp(), acc, current);
+        for (auto [r, complete] : consumers[reg]) {
           auto &carry = carries[r];
           if (carry.values.empty()) {
             carry.values = acc;
@@ -442,7 +428,7 @@ private:
             for (unsigned i = 0; i < types.size(); ++i)
               carry.values[i] = b.select(selected, acc[i], carry.values[i]);
           }
-          if (--remaining[r])
+          if (!complete)
             continue;
           if (inclusive) {
             values[r] = carry.values;
@@ -453,7 +439,6 @@ private:
                                         carry.pred);
             }
           }
-          carry.values.clear();
         }
       }
     }
