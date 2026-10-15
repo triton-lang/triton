@@ -4877,3 +4877,28 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return %r#0, %r#1, %converted : tensor<128xi32, #slice>, tensor<128xf32, #slice>, tensor<128xf32, #dst>
   }
 }
+
+// -----
+
+#a = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#b = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @remat_nonuniform_constant
+  // CHECK-SAME: -> tensor<2x2xf32, #[[DST:[[:alnum:]_]+]]>
+  // CHECK-NEXT: %[[CST:.*]] = arith.constant dense<{{\[}}[1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00]]> : tensor<2x2xf32, #[[DST]]>
+  // CHECK-NEXT: tt.return %[[CST]]
+  tt.func @remat_nonuniform_constant() -> tensor<2x2xf32, #b> {
+    %init = arith.constant dense<[[1.0, 2.0], [3.0, 4.0]]> : tensor<2x2xf32, #a>
+    %cvt = ttg.convert_layout %init : tensor<2x2xf32, #a> -> tensor<2x2xf32, #b>
+    tt.return %cvt : tensor<2x2xf32, #b>
+  }
+  // CHECK-LABEL: @remat_nonuniform_integer_constant
+  // CHECK-SAME: -> tensor<2x2xi8, #[[DST:[[:alnum:]_]+]]>
+  // CHECK-NEXT: %[[CST:.*]] = arith.constant dense<{{\[}}[1, -2], [3, -4]]> : tensor<2x2xi8, #[[DST]]>
+  // CHECK-NEXT: tt.return %[[CST]]
+  tt.func @remat_nonuniform_integer_constant() -> tensor<2x2xi8, #b> {
+    %init = arith.constant dense<[[1, -2], [3, -4]]> : tensor<2x2xi8, #a>
+    %cvt = ttg.convert_layout %init : tensor<2x2xi8, #a> -> tensor<2x2xi8, #b>
+    tt.return %cvt : tensor<2x2xi8, #b>
+  }
+}
