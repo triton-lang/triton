@@ -100,11 +100,11 @@ def test_native_float_types(dtype, ir_type):
     assert dtype.is_floating() and dtype.kind() == tl.dtype.KIND.FLOATING
 
     @triton.jit
-    def kernel(source, output, DTYPE: tl.constexpr):
+    def kernel(source, output, DTYPE: tl.constexpr, MIXED: tl.constexpr = False):
         offsets = tl.arange(0, 32)
         value = tl.load(source + offsets)
         value = value.to(tl.uint8, bitcast=True).to(DTYPE, bitcast=True)
-        value = tl.where(offsets < 16, value, value)
+        value = tl.where(offsets < 16, value, 1.0 if MIXED else value)
         tl.static_assert(value.dtype == DTYPE)
         tl.store(output + offsets, value)
 
@@ -113,6 +113,8 @@ def test_native_float_types(dtype, ir_type):
     assert module.verify()
     text = module.str_nodebug()
     assert ir_type in text and all(op in text for op in ("tt.bitcast", "tt.load", "tt.store"))
+    with pytest.raises(CompilationError, match="Implicit promotion"):
+        run_parser(kernel, args=(*args, True))
 
 
 def test_store_int_to_bool():

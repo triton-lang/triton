@@ -33,7 +33,7 @@ When an operation involves a tensor and a scalar:
 ``float4_e2m1fn_x2`` and ``float8_e8m0fnu`` dtypes. Both are floating-point types
 occupying one byte; packed FP4 shapes and pointer offsets count pairs, with the
 first value in the low nibble. Existing integer-byte representations remain
-supported.
+supported. These types do not participate in implicit type promotion.
 
 
 Broadcasting
