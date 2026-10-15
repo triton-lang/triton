@@ -533,6 +533,22 @@ def test_addptr(dtype, order, device):
 
 
 @pytest.mark.interpreter
+def test_ptr_sub_unsigned_offset():
+
+    @triton.jit
+    def kernel(X, Y):
+        i = tl.arange(0, 64)
+        tl.store(Y + i, tl.load(X + 300 - i.to(tl.uint8)))
+
+    x = torch.arange(1024, dtype=torch.float32)
+    y = torch.empty(64, dtype=torch.float32)
+    kernel[(1, )](x, y)
+
+    expected = torch.tensor([300., 299., 298., 297., 296.], dtype=torch.float32)
+    torch.testing.assert_close(y[:5], expected)
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y", [  #
     (dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes
 ] + [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes])
