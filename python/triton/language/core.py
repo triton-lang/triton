@@ -401,9 +401,11 @@ def check_bit_width(value, shift_value):
 class dtype(base_type):
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = [
+        'fp4e2m1x2', 'fp8e8m0fnu', 'fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64'
+    ]
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
-    OTHER_TYPES = ['void', 'fp4e2m1x2', 'fp8e8m0fnu']
+    OTHER_TYPES = ['void']
 
     class SIGNEDNESS(Enum):
         SIGNED = 0
@@ -427,7 +429,13 @@ class dtype(base_type):
             self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
             self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.FP_TYPES:
-            if name == 'fp8e4b15':
+            if name == 'fp4e2m1x2':
+                self.fp_mantissa_width = 1
+                self.exponent_bias = 1
+            elif name == 'fp8e8m0fnu':
+                self.fp_mantissa_width = 0
+                self.exponent_bias = 127
+            elif name == 'fp8e4b15':
                 self.fp_mantissa_width = 3
                 self.exponent_bias = 15
             elif name == 'fp8e4nv':
@@ -458,10 +466,7 @@ class dtype(base_type):
                 raise RuntimeError(f'Unsupported floating-point type {name}')
 
     def is_fp8(self):
-        return 'fp8' in self.name and not self.is_low_precision_storage()
-
-    def is_low_precision_storage(self):
-        return self.name in ('fp4e2m1x2', 'fp8e8m0fnu')
+        return 'fp8' in self.name
 
     def is_fp8e4nv(self):
         return self.name == 'fp8e4nv'
@@ -665,7 +670,7 @@ class dtype(base_type):
             SIGNED = dtype.SIGNEDNESS.SIGNED
             prefix = 'i' if self.int_signedness == SIGNED else 'u'
             return prefix + str(self.int_bitwidth)
-        if self.is_floating() or self.is_low_precision_storage():
+        if self.is_floating():
             return str(self)
         if self.is_void():
             return 'V'

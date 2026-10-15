@@ -30,11 +30,10 @@ When an operation involves a tensor and a scalar:
 
 
 ``tl.float4e2m1x2`` and ``tl.float8e8m0fnu`` map to PyTorch's
-``float4_e2m1fn_x2`` and ``float8_e8m0fnu`` dtypes. Both occupy one byte;
-packed FP4 shapes and pointer offsets count pairs, with the first value in the
-low nibble. They support memory and shape operations, explicit bitcasts, and
-scaled dot operands, but do not participate in ordinary arithmetic or numeric
-casts. Existing integer-byte representations remain supported.
+``float4_e2m1fn_x2`` and ``float8_e8m0fnu`` dtypes. Both are floating-point types
+occupying one byte; packed FP4 shapes and pointer offsets count pairs, with the
+first value in the low nibble. Existing integer-byte representations remain
+supported.
 
 
 Broadcasting

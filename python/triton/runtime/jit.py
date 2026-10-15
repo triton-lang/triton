@@ -395,47 +395,48 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     return serialized_obj
 
 
-_STORAGE_DTYPES = ("fp4e2m1x2", "fp8e8m0fnu")
+_NATIVE_DTYPES = ("fp4e2m1x2", "fp8e8m0fnu")
 
 
-def _contains_storage_dtype(signature):
+def _contains_native_dtype(signature):
     if isinstance(signature, tuple):
-        return any(_contains_storage_dtype(element) for element in signature)
+        return any(_contains_native_dtype(element) for element in signature)
     if not isinstance(signature, str):
         return False
     if signature.startswith(("tensordesc<", "tensordesc_im2col<")):
-        return signature.split("<", 1)[1].split("[", 1)[0] in _STORAGE_DTYPES
-    return signature.lstrip("*k") in _STORAGE_DTYPES
+        return signature.split("<", 1)[1].split("[", 1)[0] in _NATIVE_DTYPES
+    return signature.lstrip("*k") in _NATIVE_DTYPES
 
 
-def _validate_storage_annotation(annotation, specialization):
+def _validate_native_annotation(annotation, specialization):
     actual = specialization[0]
-    if _contains_storage_dtype(annotation) or _contains_storage_dtype(actual):
+    if _contains_native_dtype(annotation) or _contains_native_dtype(actual):
         # Const qualification can differ; the pointer/value distinction cannot.
         if not isinstance(actual, str) or actual.replace("*k", "*") != annotation.replace("*k", "*"):
             raise TypeError(f"Annotation {annotation} does not match argument dtype {actual}; "
-                            "use triton.reinterpret to explicitly reinterpret storage")
+                            "use triton.reinterpret to explicitly reinterpret the tensor")
     return (annotation, specialization[1])
 
 
-def _validate_storage_scalar_annotation(annotation, arg):
+def _validate_native_scalar_annotation(annotation, arg):
     # Preserve the scalar annotation path: unknown scalar objects need not
-    # support dtype inference. Only inspect native tensors and their containers.
+    # support dtype inference. Only inspect tensors and their containers.
     if type(arg) in (bool, int, float) or arg is None:
         return (annotation, None)
     if isinstance(arg, tuple):
         for element in arg:
-            _validate_storage_scalar_annotation(annotation, element)
+            _validate_native_scalar_annotation(annotation, element)
     elif hasattr(arg, "data_ptr"):
-        actual = type_canonicalisation_dict.get(str(getattr(arg, "dtype", None)).split(".")[-1])
-        if actual in _STORAGE_DTYPES:
-            _validate_storage_annotation(annotation, ("*" + actual, None))
+        actual = str(getattr(arg, "dtype", None)).split(".")[-1]
+        actual = type_canonicalisation_dict.get(actual, actual)
+        if actual in _NATIVE_DTYPES or annotation in _NATIVE_DTYPES:
+            _validate_native_annotation(annotation, ("*" + actual, None))
     else:
         from triton.tools.tensor_descriptor import TensorDescriptor
         from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as NvidiaTensorDescriptor, TensorDescriptorIm2Col
         from triton.experimental.gluon.amd.cdna5 import TensorDescriptor as AMDTensorDescriptor
         if isinstance(arg, (TensorDescriptor, NvidiaTensorDescriptor, TensorDescriptorIm2Col, AMDTensorDescriptor)):
-            _validate_storage_scalar_annotation(annotation, arg.base)
+            _validate_native_scalar_annotation(annotation, arg.base)
     return (annotation, None)
 
 
@@ -460,15 +461,14 @@ def create_function_from_signature(sig, kparams, backend):
             ret = f"specialize_impl(backend, {name}, {is_const}, {specialize}, {align})"
             if kp.annotation_type:
                 if isinstance(kp.annotation_type, str):
-                    if (kp.annotation_type not in _STORAGE_DTYPES
-                            and (kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"])):
+                    if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
                         # we do not specialize non-constexpr floats and bools:
                         specialize = False
                 if specialize:
-                    specialization.append(f'_validate_storage_annotation("{kp.annotation_type}", {ret})')
+                    specialization.append(f'_validate_native_annotation("{kp.annotation_type}", {ret})')
                 else:
                     # skip runtime specialization:
-                    specialization.append(f'_validate_storage_scalar_annotation("{kp.annotation_type}", {name})')
+                    specialization.append(f'_validate_native_scalar_annotation("{kp.annotation_type}", {name})')
             else:
                 specialization.append(f"{ret}")
 
@@ -501,8 +501,8 @@ def dynamic_func({", ".join(arg_list + ["**options"])}):
 
     specialize_impl = native_specialize_impl
     func_namespace["specialize_impl"] = specialize_impl
-    func_namespace["_validate_storage_annotation"] = _validate_storage_annotation
-    func_namespace["_validate_storage_scalar_annotation"] = _validate_storage_scalar_annotation
+    func_namespace["_validate_native_annotation"] = _validate_native_annotation
+    func_namespace["_validate_native_scalar_annotation"] = _validate_native_scalar_annotation
     func_namespace["backend"] = backend
     func_namespace["JITCallable"] = JITCallable
 

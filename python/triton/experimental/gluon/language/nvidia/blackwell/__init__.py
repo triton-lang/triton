@@ -49,7 +49,6 @@ def _packed_arith(operation, operands, dtype, semantic):
     operands = tuple(_unwrap_if_constexpr(operand) for operand in operands)
     operand_types = tuple(operand.type if isinstance(operand, ttgl.tensor) else semantic.to_tensor_type(operand)
                           for operand in operands)
-    semantic._check_numeric_dtype(*(ty.scalar for ty in operand_types))
     _check(any(isinstance(ty, ttgl.distributed_type) for ty in operand_types),
            lambda: "packed arithmetic requires at least one distributed tensor operand")
     floating = [
@@ -75,7 +74,6 @@ def _packed_arith(operation, operands, dtype, semantic):
                                                        False)
 
     _check(isinstance(dtype, ttgl.dtype), lambda: f"expected 'dtype' to be a dtype but got {dtype}")
-    semantic._check_numeric_dtype(dtype)
     normalized = []
     for operand in operands:
         if not isinstance(operand, ttgl.tensor):

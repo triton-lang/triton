@@ -38,12 +38,6 @@ class TritonSemantic(Generic[TensorTy]):
     def to_inline_asm_operand(self, arg):
         return self.to_tensor(arg)
 
-    @staticmethod
-    def _check_numeric_dtype(*dtypes):
-        for dtype in dtypes:
-            if dtype.is_low_precision_storage():
-                raise TypeError(f"{dtype} is a storage dtype; use an explicit bitcast to access its encoded bits")
-
 # ===----------------------------------------------------------------------===##
 # Programming Model
 # ===----------------------------------------------------------------------===##
@@ -79,7 +73,6 @@ class TritonSemantic(Generic[TensorTy]):
 
     def computation_type_impl(self, a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_is_scalar: bool,
                               div_or_mod: bool) -> tl.dtype:
-        self._check_numeric_dtype(a_ty, b_ty)
         # 0) For scalars we follow semantics similar to PyTorch, namely:
         # - If the scalar is of a lower or equal kind (bool < uint < int < fp),
         #   it doesn't participate in the promotion
@@ -110,8 +103,8 @@ class TritonSemantic(Generic[TensorTy]):
             return tl.bfloat16
         if a_ty.is_bf16() or b_ty.is_bf16():
             return tl.float32
-        # 6) return fp16 if operands are different fp8
-        if a_ty.is_fp8() and b_ty.is_fp8():
+        # 6) return fp16 if the remaining floating-point types differ
+        if a_ty.is_floating() and b_ty.is_floating():
             return a_ty if a_ty == b_ty else tl.float16
         if not a_ty.is_int() or not b_ty.is_int():
             raise TypeError(f"unexpected type {a_ty} and {b_ty}")
@@ -636,7 +629,6 @@ class TritonSemantic(Generic[TensorTy]):
         # scalar
         if dtype is None:
             raise ValueError("dtype must be specified when value is not a tensor")
-        self._check_numeric_dtype(dtype)
         if dtype.is_int() and value == 0:
             # For BC, we explicitly allow e.g. tl.full((), 0.0, tl.int32)
             # which raises a type error for non-zero values.
@@ -836,8 +828,6 @@ class TritonSemantic(Generic[TensorTy]):
             return input
         src_sca_ty = src_ty.scalar
         dst_sca_ty = dst_ty.scalar
-        if src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
-            return self.make_tensor(self.builder.create_bitcast(input.handle, dst_ty.to_ir(self.builder)), dst_ty)
         if src_sca_ty.is_ptr() or dst_sca_ty.is_ptr():
             return self.cast(input, dst_ty)
         # Bitcast
@@ -854,12 +844,6 @@ class TritonSemantic(Generic[TensorTy]):
         dst_sca_ty = dst_ty.scalar
         if src_sca_ty == dst_sca_ty:
             return input
-        if src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
-            for pointee in (src_sca_ty, dst_sca_ty):
-                while pointee.is_ptr():
-                    pointee = pointee.element_ty
-                self._check_numeric_dtype(pointee)
-        self._check_numeric_dtype(src_sca_ty, dst_sca_ty)
         if src_ty.is_block():
             dst_ty = src_ty.with_element_ty(dst_sca_ty)
 
@@ -1770,9 +1754,7 @@ class TritonSemantic(Generic[TensorTy]):
                 f"tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got {condition.dtype}"
             )
         condition = self.cast(condition, tl.int1)
-        same_storage = (isinstance(x, self.tensor) and isinstance(y, self.tensor) and x.dtype == y.dtype
-                        and x.dtype.is_low_precision_storage())
-        x, y = self.binary_op_type_checking_impl(x, y, True, True, arithmetic_check=not same_storage)
+        x, y = self.binary_op_type_checking_impl(x, y, True, True)
         # x, y are broadcasted
         if condition.type.is_block():
             condition, x = self.broadcast_impl_value(condition, x)
