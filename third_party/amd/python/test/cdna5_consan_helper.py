@@ -822,6 +822,20 @@ def async_copy_load_store():
             ttgl.amd.cdna5.async_copy.wait_group(0)
             source.store(zeros)
             ttgl.amd.cdna5.async_copy.wait_group(-1)
+        elif MODE == "mixed_partial_wait_after_arrive":
+            loaded = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK_C, XBLOCK_C], smem_layout)
+            bar = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+            ttgl.amd.cdna5.mbarrier.init(bar, count=num_warps * 32)
+            ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + offs, source)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.global_to_shared(loaded, input_ptr + offs)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.mbarrier_arrive(bar)
+            ttgl.amd.cdna5.mbarrier.wait(bar, phase=0)
+            loaded.store(zeros)
+            ttgl.amd.cdna5.async_copy.wait_group(1)
+            source.store(zeros)
+            ttgl.amd.cdna5.async_copy.wait_group(0)
         elif MODE == "mixed_older_store":
             loaded = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK_C, XBLOCK_C], smem_layout)
             ttgl.amd.cdna5.async_copy.shared_to_global(output_ptr + offs, source)
@@ -906,6 +920,298 @@ def async_copy_partition_isolation():
     output = torch.empty((2, XBLOCK, XBLOCK), dtype=torch.float16).cuda()
     kernel[(1, )](input_t, output, num_warps=4)
     torch.testing.assert_close(output, input_t.expand(2, XBLOCK, XBLOCK))
+
+
+@gluon.jit
+def tdm_load_tile(tile_source, mbarrier=None):
+    tile_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=tile_source, shape=(32, 32), strides=(32, 1),
+                                                     block_shape=(32, 32), layout=tile_layout)
+    tile = ttgl.allocate_shared_memory(ttgl.float16, [32, 32], tile_layout)
+    ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], tile, mbarrier=mbarrier)
+    return tile
+
+
+def async_copy_wait_pending_tdm():
+    wait_tdm = sys.argv[2] == "True"
+
+    @gluon.jit
+    def kernel(source, tile_source, output, tile_output, WAIT_TDM: ttgl.constexpr):
+        num_warps: ttgl.constexpr = ttgl.num_warps()
+        block: ttgl.constexpr = 32 * num_warps
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [num_warps], [0])
+        tile_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [num_warps, 1], [1, 0])
+        offsets = ttgl.arange(0, block, layout)
+        bars = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bars.index(0), count=num_warps)
+        ttgl.amd.cdna5.mbarrier.init(bars.index(1), count=block)
+        tile = tdm_load_tile(tile_source, mbarrier=bars.index(0))
+        copy = ttgl.allocate_shared_memory(ttgl.int32, [block], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        ttgl.amd.cdna5.async_copy.global_to_shared(copy, source + offsets)
+        ttgl.amd.cdna5.async_copy.commit_group()
+        ttgl.amd.cdna5.async_copy.mbarrier_arrive(bars.index(1))
+        ttgl.amd.cdna5.async_copy.wait_group(-1)
+        if WAIT_TDM:
+            ttgl.amd.cdna5.mbarrier.wait(bars.index(0), phase=0)
+        ttgl.store(output + offsets, copy.load(layout))
+        # Waiting for async copies does not complete the TDM load.
+        values = tile.load(tile_layout)
+        rows = ttgl.arange(0, 32, ttgl.SliceLayout(1, tile_layout))
+        cols = ttgl.arange(0, 32, ttgl.SliceLayout(0, tile_layout))
+        ttgl.store(tile_output + rows[:, None] * 32 + cols[None, :], values)
+        ttgl.amd.cdna5.mbarrier.wait(bars.index(1), phase=0)
+
+    source = torch.arange(128, dtype=torch.int32, device="cuda")
+    tile_source = torch.randn((32, 32), dtype=torch.float16, device="cuda")
+    output = torch.empty_like(source)
+    tile_output = torch.empty_like(tile_source)
+    kernel[(1, )](source, tile_source, output, tile_output, WAIT_TDM=wait_tdm, num_warps=4)
+    if wait_tdm:
+        torch.testing.assert_close(output, source)
+        torch.testing.assert_close(tile_output, tile_source)
+
+
+def async_copy_mbarrier_completion():
+    mode = sys.argv[2]
+    num_warps = int(sys.argv[3])
+
+    @gluon.jit
+    def kernel(source, output, tile_source, MODE: ttgl.constexpr):
+        num_warps: ttgl.constexpr = ttgl.num_warps()
+        block: ttgl.constexpr = 32 * num_warps
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [num_warps], [0])
+        offsets = ttgl.arange(0, block, layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [2, block], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        bars = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        if MODE != "uninitialized":
+            ttgl.amd.cdna5.mbarrier.init(bars.index(0), count=2 * block if MODE == "two_arrivals" else block)
+        ttgl.amd.cdna5.mbarrier.init(bars.index(1), count=block)
+        if MODE == "empty":
+            ttgl.amd.cdna5.async_copy.mbarrier_arrive(bars.index(0))
+            ttgl.amd.cdna5.mbarrier.wait(bars.index(0), phase=0)
+        elif MODE == "store_not_covered":
+            smem.index(0).store(ttgl.load(source + offsets))
+            ttgl.amd.cdna5.async_copy.shared_to_global(output + offsets, smem.index(0))
+            ttgl.amd.cdna5.async_copy.mbarrier_arrive(bars.index(0))
+            ttgl.amd.cdna5.mbarrier.wait(bars.index(0), phase=0)
+            smem.index(0).store(ttgl.full([block], 0, ttgl.int32, layout))
+        elif MODE == "tdm_not_covered":
+            tile = tdm_load_tile(tile_source)
+            ttgl.amd.cdna5.async_copy.mbarrier_arrive(bars.index(0))
+            ttgl.amd.cdna5.mbarrier.wait(bars.index(0), phase=0)
+            tile_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [num_warps, 1], [1, 0])
+            tile.store(ttgl.full([32, 32], 0, ttgl.float16, tile_layout))
+        else:
+            if MODE == "masked":
+                ttgl.amd.cdna5.async_copy.global_to_shared(smem.index(0), source + offsets, mask=offsets < block // 2)
+            else:
+                ttgl.amd.cdna5.async_copy.global_to_shared(smem.index(0), source + offsets)
+            if MODE == "committed":
+                ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.mbarrier_arrive(bars.index(0))
+            if MODE == "two_arrivals":
+                ttgl.amd.cdna5.mbarrier.arrive(bars.index(0), count=1)
+            elif MODE == "wrong_barrier":
+                ttgl.amd.cdna5.mbarrier.arrive(bars.index(1), count=1)
+            elif MODE == "after_arrive":
+                ttgl.amd.cdna5.async_copy.global_to_shared(smem.index(1), source + offsets)
+            elif MODE == "reused_buffer":
+                ttgl.amd.cdna5.mbarrier.wait(bars.index(0), phase=0)
+                ttgl.amd.cdna5.async_copy.global_to_shared(smem.index(0), source + offsets)
+            if MODE != "missing_wait":
+                ttgl.amd.cdna5.mbarrier.wait(bars.index(1 if MODE == "wrong_barrier" else 0), phase=0)
+            ttgl.store(output + offsets, smem.index(1 if MODE == "after_arrive" else 0).load(layout))
+
+    block = 32 * num_warps
+    source = torch.arange(block, dtype=torch.int32, device="cuda")
+    output = torch.empty_like(source)
+    tile_source = torch.randn((32, 32), dtype=torch.float16, device="cuda")
+    kernel[(1, )](source, output, tile_source, MODE=mode, num_warps=num_warps)
+    if mode in ("wait", "committed", "two_arrivals"):
+        torch.testing.assert_close(output, source)
+    elif mode == "masked":
+        torch.testing.assert_close(output[:block // 2], source[:block // 2])
+
+
+def async_copy_mbarrier_warp_specialized():
+    mode = sys.argv[2]
+    XBLOCK_C: ttgl.constexpr = ttgl.constexpr(XBLOCK)
+
+    @gluon.jit
+    def producer(source, output, smem, bars, layout: ttgl.constexpr, MODE: ttgl.constexpr):
+        offsets = ttgl.arange(0, XBLOCK_C, layout)
+        ttgl.amd.cdna5.async_copy.global_to_shared(smem, source + offsets)
+        ttgl.amd.cdna5.async_copy.commit_group()
+        if MODE == "group_before":
+            ttgl.amd.cdna5.async_copy.wait_group(0)
+        ttgl.amd.cdna5.async_copy.mbarrier_arrive(bars.index(0))
+        ttgl.amd.cdna5.mbarrier.wait(bars.index(1), phase=0)
+        if MODE == "group_after":
+            for _ in range(130):
+                ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.wait_group(0)
+        ttgl.store(output + XBLOCK_C + offsets, smem.load(layout))
+
+    @gluon.jit
+    def consumer(output, smem, bars, layout: ttgl.constexpr):
+        offsets = ttgl.arange(0, XBLOCK_C, layout)
+        ttgl.amd.cdna5.mbarrier.wait(bars.index(0), phase=0)
+        ttgl.store(output + offsets, smem.load(layout))
+        ttgl.amd.cdna5.async_copy.mbarrier_arrive(bars.index(1))
+
+    @gluon.jit
+    def handoff_producer(source, smem, bars):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [1], [0])
+        offsets = ttgl.arange(0, XBLOCK_C, layout)
+        for i in ttgl.static_range(2):
+            if i > 0:
+                ttgl.amd.cdna5.mbarrier.wait(bars.index(1), phase=i - 1)
+            ttgl.amd.cdna5.async_copy.global_to_shared(smem, source + i * XBLOCK_C + offsets)
+            ttgl.amd.cdna5.async_copy.mbarrier_arrive(bars.index(0))
+
+    @gluon.jit
+    def handoff_consumer(output, smem, bars, layout: ttgl.constexpr):
+        offsets = ttgl.arange(0, XBLOCK_C, layout)
+        for i in ttgl.static_range(2):
+            ttgl.amd.cdna5.mbarrier.wait(bars.index(0), phase=i)
+            ttgl.store(output + i * XBLOCK_C + offsets, smem.load(layout))
+            ttgl.amd.cdna5.mbarrier.arrive(bars.index(1), count=1)
+
+    @gluon.jit
+    def kernel(source, output, MODE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK_C], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        bars = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        if MODE == "handoff":
+            ttgl.amd.cdna5.mbarrier.init(bars.index(0), count=32)
+            ttgl.amd.cdna5.mbarrier.init(bars.index(1), count=XBLOCK_C)
+            ttgl.warp_specialize([
+                (handoff_consumer, (output, smem, bars, layout)),
+                (handoff_producer, (source, smem, bars)),
+            ], [1])
+        else:
+            for i in ttgl.static_range(2):
+                ttgl.amd.cdna5.mbarrier.init(bars.index(i), count=XBLOCK_C)
+            ttgl.warp_specialize([
+                (producer, (source, output, smem, bars, layout, MODE)),
+                (consumer, (output, smem, bars, layout)),
+            ], [4])
+
+    source = torch.arange(2 * XBLOCK, dtype=torch.int32, device="cuda")
+    output = torch.empty((2, XBLOCK), dtype=torch.int32, device="cuda")
+    kernel[(1, )](source, output, MODE=mode, num_warps=4)
+    if mode == "handoff":
+        torch.testing.assert_close(output, source.view(2, XBLOCK))
+    elif mode != "non_acquiring":
+        torch.testing.assert_close(output, source[:XBLOCK].expand(2, XBLOCK))
+
+
+def async_copy_mbarrier_storage():
+    mode = sys.argv[2]
+    num_warps = int(sys.argv[3])
+
+    @gluon.jit
+    def arriver(source, smem, bar, sync, layout: ttgl.constexpr, block: ttgl.constexpr):
+        ttgl.amd.cdna5.async_copy.global_to_shared(smem, source + ttgl.arange(0, block, layout))
+        ttgl.amd.cdna5.async_copy.mbarrier_arrive(bar)
+        ttgl.amd.cdna5.mbarrier.arrive(sync, count=1)
+
+    @gluon.jit
+    def reinitializer(bar, sync, block: ttgl.constexpr):
+        ttgl.amd.cdna5.mbarrier.wait(sync, phase=0)
+        ttgl.amd.cdna5.async_copy.wait_group(-1)
+        ttgl.amd.cdna5.mbarrier.init(bar, count=block)
+
+    @gluon.jit
+    def kernel(source, output, tile_source, MODE: ttgl.constexpr):
+        num_warps: ttgl.constexpr = ttgl.num_warps()
+        block: ttgl.constexpr = 32 * num_warps
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [num_warps], [0])
+        offsets = ttgl.arange(0, block, layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [block], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        bars = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        bar = bars.index(0)
+        ttgl.amd.cdna5.mbarrier.init(bar, count=block)
+        if MODE == "other_partition":
+            ttgl.amd.cdna5.mbarrier.init(bars.index(1), count=block)
+            ttgl.warp_specialize([
+                (arriver, (source, smem, bar, bars.index(1), layout, block)),
+                (reinitializer, (bar, bars.index(1), block)),
+            ], [num_warps])
+        else:
+            if MODE == "tdm_after_wait_group_all":
+                ttgl.amd.cdna5.mbarrier.init(bars.index(1), count=num_warps)
+                tdm_load_tile(tile_source, mbarrier=bars.index(1))
+            ttgl.amd.cdna5.async_copy.global_to_shared(smem, source + offsets)
+            if MODE == "after_wait_group_zero_committed":
+                ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.mbarrier_arrive(bar)
+            if MODE == "after_barrier_wait":
+                ttgl.amd.cdna5.mbarrier.wait(bar, phase=0)
+            elif MODE == "after_wait_group_zero_committed" or MODE == "after_wait_group_zero_uncommitted":
+                ttgl.amd.cdna5.async_copy.wait_group(0)
+            elif MODE != "pending":
+                ttgl.amd.cdna5.async_copy.wait_group(-1)
+            if MODE == "rearrive_after_wait_group_all":
+                ttgl.amd.cdna5.async_copy.mbarrier_arrive(bar)
+            ttgl.amd.cdna5.mbarrier.init(bars.index(1 if MODE == "tdm_after_wait_group_all" else 0), count=block)
+            ttgl.store(output + offsets, smem.load(layout))
+
+    block = 32 * num_warps
+    source = torch.arange(block, dtype=torch.int32, device="cuda")
+    output = torch.empty_like(source)
+    tile_source = torch.randn((32, 32), dtype=torch.float16, device="cuda")
+    kernel[(1, )](source, output, tile_source, MODE=mode, num_warps=num_warps)
+    if mode in ("after_barrier_wait", "after_wait_group_all", "after_wait_group_zero_committed"):
+        torch.testing.assert_close(output, source)
+
+
+def async_copy_mbarrier_pipeline_drain():
+    mode = sys.argv[2]
+
+    @gluon.jit
+    def kernel(source, output, BLOCK: ttgl.constexpr, NUM_TILES: ttgl.constexpr, MODE: ttgl.constexpr):
+        NUM_STAGES: ttgl.constexpr = 2
+        COMMIT: ttgl.constexpr = MODE == "drain_zero"
+        layout: ttgl.constexpr = ttgl.BlockedLayout([4], [32], [4], [0])
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        offsets = ttgl.arange(0, BLOCK, layout)
+        ring = ttgl.allocate_shared_memory(ttgl.int8, [NUM_STAGES, BLOCK], shared_layout)
+        bars = ttgl.allocate_shared_memory(ttgl.int64, [NUM_STAGES, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        for k in ttgl.static_range(NUM_STAGES):
+            ttgl.amd.cdna5.mbarrier.init(bars.index(k), count=128)
+        for k in ttgl.static_range(NUM_STAGES):
+            ttgl.amd.cdna5.async_copy.global_to_shared(ring.index(k), source + k * BLOCK + offsets)
+            if COMMIT:
+                ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.mbarrier_arrive(bars.index(k))
+        acc = ttgl.zeros([BLOCK], ttgl.int32, layout)
+        for i in range(NUM_TILES):
+            s = i % NUM_STAGES
+            ttgl.amd.cdna5.mbarrier.wait(bars.index(s), (i // NUM_STAGES) & 1)
+            acc += ring.index(s).load(layout).to(ttgl.int32)
+            nxt = i + NUM_STAGES
+            ttgl.amd.cdna5.async_copy.global_to_shared(ring.index(s), source + nxt * BLOCK + offsets, mask=offsets
+                                                       < (NUM_TILES - nxt) * BLOCK)
+            if COMMIT:
+                ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.async_copy.mbarrier_arrive(bars.index(s))
+        if MODE == "drain_all":
+            ttgl.amd.cdna5.async_copy.wait_group(-1)
+        elif MODE == "drain_zero":
+            ttgl.amd.cdna5.async_copy.wait_group(0)
+        # The ring buffer and its barriers are dead here, so the epilogue tile can be allocated over them.
+        # So the epilogue might reuse the barrier storage. ConSan must account for wait_group completing the async-copy barrier arrivals to avoid false reports.
+        epilogue = ttgl.allocate_shared_memory(ttgl.int32, [BLOCK], shared_layout)
+        epilogue.store(acc)
+        ttgl.store(output + offsets, epilogue.load(layout))
+
+    block, num_tiles = 512, 6
+    source = (torch.arange(num_tiles * block, dtype=torch.int32) % 7).to(torch.int8).cuda()
+    output = torch.empty(block, dtype=torch.int32, device="cuda")
+    kernel[(1, )](source, output, BLOCK=block, NUM_TILES=num_tiles, MODE=mode, num_warps=4)
+    if mode != "no_drain":
+        torch.testing.assert_close(output, source.view(num_tiles, block).sum(0, dtype=torch.int32))
 
 
 def tdm_store_kernel():
@@ -1227,6 +1533,11 @@ if __name__ == "__main__":
     tests["async_wait_uncommitted"] = async_wait_uncommitted
     tests["async_copy_load_store"] = async_copy_load_store
     tests["async_copy_partition_isolation"] = async_copy_partition_isolation
+    tests["async_copy_wait_pending_tdm"] = async_copy_wait_pending_tdm
+    tests["async_copy_mbarrier_completion"] = async_copy_mbarrier_completion
+    tests["async_copy_mbarrier_warp_specialized"] = async_copy_mbarrier_warp_specialized
+    tests["async_copy_mbarrier_storage"] = async_copy_mbarrier_storage
+    tests["async_copy_mbarrier_pipeline_drain"] = async_copy_mbarrier_pipeline_drain
     tests[sys.argv[1]]()
     torch.cuda.synchronize()
     print("ConSan helper completed", flush=True)

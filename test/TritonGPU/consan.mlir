@@ -1771,6 +1771,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     ttg.async_copy_global_to_local %ptr, %shmem : tensor<128x128x!tt.ptr<f16>, #blocked> -> <128x128xf16, #shared, #smem, mutable>
     // Async-copy arrivals keep narrow visibility masks and rank-three copy
     // tracking. A later overwrite clears the retained copy issuer.
+    // The arrive's barrier read is recorded on the TMA thread (bit 1).
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}(%{{[^,]+}}, %{{[^,]+}}, %c2_i64{{[_0-9]*}}, %c2_i64{{[_0-9]*}},
     // CHECK: ttng.async_copy_mbarrier_arrive
     ttng.async_copy_mbarrier_arrive %bar : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %c0 = arith.constant 0 : i32

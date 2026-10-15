@@ -128,6 +128,12 @@ public:
 
   virtual bool isCLCOp(Operation *op) const { return false; }
 
+  // Whether this operation uses the async-copy mbarrier arrival peer thread
+  // class.
+  virtual bool usesAsyncCopyMbarrierArriveThread(Operation *op) const {
+    return false;
+  }
+
   virtual std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const = 0;
 
@@ -145,6 +151,10 @@ public:
                                               const WaitOpInfo &info,
                                               int thread) const {
     return {};
+  }
+
+  virtual bool waitCompletesAsyncCopyMbarrierArrives(Operation *op) const {
+    return false;
   }
 
   virtual std::optional<AsyncProxyFenceInfo>

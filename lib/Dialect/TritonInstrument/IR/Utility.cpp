@@ -415,6 +415,7 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
   bool hasTMA = false;
   bool hasTC = false;
   bool hasCLC = false;
+  bool hasAsyncCopyMbarrierArrive = false;
 
   entryPoint.walk([&](Operation *op) {
     if (auto wsOp = dyn_cast<WarpSpecializeOp>(op))
@@ -426,6 +427,7 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
     hasTMA |= hooks.isTMAOp(op) || isa<AsyncCopyMbarrierArriveOp>(op);
     hasTC |= isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op);
     hasCLC |= hooks.isCLCOp(op);
+    hasAsyncCopyMbarrierArrive |= hooks.usesAsyncCopyMbarrierArriveThread(op);
   });
 
   assert(layout.numBaseThreads <= MAX_NUM_BASE_THREADS &&
@@ -442,6 +444,10 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
   }
   if (hasCLC) {
     layout.clcThreadOffset = nextThread;
+    nextThread += layout.numBaseThreads;
+  }
+  if (hasAsyncCopyMbarrierArrive) {
+    layout.asyncCopyMbarrierArriveThreadOffset = nextThread;
     nextThread += layout.numBaseThreads;
   }
   layout.totalNumThreads = nextThread;
@@ -498,8 +504,14 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(entryPoint, hooks);
-  entryPoint.walk(
-      [&](AsyncCopyMbarrierArriveOp) { hasAsyncCopyMbarriers = true; });
+  entryPoint.walk([&](Operation *op) {
+    std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
+    if (info && llvm::any_of(info->barriers, [](const auto &barrier) {
+          return barrier.trackingMode ==
+                 MemEffectsOpInfo::BarrierTrackingMode::AsyncCopies;
+        }))
+      hasAsyncCopyMbarriers = true;
+  });
   int frontierBitWidth = threadLayout.totalNumThreads <= 32 ? 32 : 64;
   hasAsyncProxyFenceTracking =
       hooks.needsAsyncProxyFenceTracking(module) &&

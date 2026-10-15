@@ -165,12 +165,16 @@ struct AuxDataMap {
     int tmaThreadOffset = -1;
     int tcThreadOffset = -1;
     int clcThreadOffset = -1;
+    int asyncCopyMbarrierArriveThreadOffset = -1;
     int totalNumThreads = 1;
     int numThreadSlots = 1;
 
     bool hasTMAThreads() const { return tmaThreadOffset >= 0; }
     bool hasTCThreads() const { return tcThreadOffset >= 0; }
     bool hasCLCThreads() const { return clcThreadOffset >= 0; }
+    bool hasAsyncCopyMbarrierArriveThreads() const {
+      return asyncCopyMbarrierArriveThreadOffset >= 0;
+    }
   };
 
   struct RegionToValueMap {

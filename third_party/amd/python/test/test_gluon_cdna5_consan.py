@@ -446,6 +446,8 @@ def test_async_wait_uncommitted(mode, message):
         ("mixed_uncommitted_load",
          "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"),
         ("mixed_older_store", None),
+        ("mixed_partial_wait_after_arrive",
+         "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"),
     ],
 )
 def test_async_copy_load_store(mode, message):
@@ -460,6 +462,100 @@ def test_async_copy_load_store(mode, message):
 def test_async_copy_partition_isolation():
     stderr = _run_consan_subprocess("async_copy_partition_isolation")
     assert not stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize(
+    ("mode", "num_warps", "message"),
+    [
+        ("wait", 4, None),
+        ("committed", 4, None),
+        ("masked", 4, None),
+        ("two_arrivals", 4, None),
+        ("empty", 4, None),
+        ("missing_wait", 4, "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared"),
+        ("wrong_barrier", 4, "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared"),
+        ("after_arrive", 4, "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared"),
+        ("reused_buffer", 4, "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared"),
+        ("uninitialized", 4, "Barrier used before initialization or after invalidation"),
+        ("store_not_covered", 4,
+         "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global"),
+        ("tdm_not_covered", 4, "Accessing buffer with pending access. Pending access type: async_tdm_global_to_shared"),
+    ],
+)
+def test_async_copy_mbarrier_completion(mode, num_warps, message):
+    stderr = _run_consan_subprocess("async_copy_mbarrier_completion", mode, num_warps)
+    if message is None:
+        assert not stderr, stderr
+    else:
+        assert message in stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize("wait_tdm", [False, True])
+def test_async_copy_wait_pending_tdm(wait_tdm):
+    stderr = _run_consan_subprocess("async_copy_wait_pending_tdm", wait_tdm)
+    if wait_tdm:
+        assert not stderr, stderr
+    else:
+        assert "Buffer being accessed has outstanding writes" in stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("group_before", None),
+        ("group_after", None),
+        ("handoff", None),
+        ("non_acquiring", "Buffer being accessed has outstanding writes"),
+    ],
+)
+def test_async_copy_mbarrier_warp_specialized(mode, message):
+    stderr = _run_consan_subprocess("async_copy_mbarrier_warp_specialized", mode)
+    if message is None:
+        assert not stderr, stderr
+    else:
+        assert message in stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize(
+    ("mode", "num_warps", "message"),
+    [
+        ("after_barrier_wait", 4, None),
+        ("after_wait_group_all", 4, None),
+        ("after_wait_group_zero_committed", 4, None),
+        ("pending", 4, "Buffer being accessed has outstanding reads"),
+        ("after_wait_group_zero_uncommitted", 4, "Buffer being accessed has outstanding reads"),
+        ("rearrive_after_wait_group_all", 4, "Buffer being accessed has outstanding reads"),
+        ("tdm_after_wait_group_all", 4, "Buffer being accessed has outstanding reads"),
+        ("other_partition", 4, "Buffer being accessed has outstanding reads"),
+    ],
+)
+def test_async_copy_mbarrier_storage_lifetime(mode, num_warps, message):
+    stderr = _run_consan_subprocess("async_copy_mbarrier_storage", mode, num_warps)
+    if message is None:
+        assert not stderr, stderr
+    else:
+        assert message in stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("drain_all", None),
+        ("drain_zero", None),
+        ("no_drain", "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared"),
+    ],
+)
+def test_async_copy_mbarrier_pipeline_drain(mode, message):
+    stderr = _run_consan_subprocess("async_copy_mbarrier_pipeline_drain", mode)
+    if message is None:
+        assert not stderr, stderr
+    else:
+        assert message in stderr, stderr
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")

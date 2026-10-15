@@ -50,9 +50,9 @@ entry point: one without warp specialization, and at most 16.
 
 - Base threads occupy `[0, N)`. The default region is thread 0;
   warp-specialize partition regions use `partition_index + 1`.
-- TMA, Tensor Core (`tcgen05`), and CLC peer classes are enabled only if used
-  by the entry point. Each gets `N` consecutive ids, appended after the base
-  threads in that order; absent classes reserve no ids.
+- TMA, Tensor Core (`tcgen05`), CLC, and AsyncCopyMbarrierArrive peer classes
+  are enabled only if used by the entry point. Each gets `N` consecutive ids,
+  appended after the base threads in that order; absent classes reserve no ids.
 - There are at most 64 logical threads per CTA. Base-thread and all-thread
   tensor axes are padded to powers of two.
 
@@ -414,6 +414,10 @@ AMD hooks additionally cover:
   completed. ConSan accounts for this by treating the older copies as incomplete
   while the wait leaves copies of the opposite direction outstanding, and
   reporting accesses that conflict with them.
+- `amdg.async_copy_mbarrier_arrive` arrives once per thread of the issuing
+  warp after that warp's earlier async loads have completed (doesn't track async stores).
+  ConSan uses the AsyncCopyMbarrierArrive peer class to track pending updates to the barrier. An `amdg.wait_barrier` completes those updates and publishes the covered loads.
+  An `amdg.async_wait` with `num_inst = 0` also completes the pending `amdg.async_copy_mbarrier_arrive` arrivals.
 - TDM wait variants for `TmaStore` commit counts.
 - Ordered TDM commit kinds, using the self-column exclusion described above.
 
