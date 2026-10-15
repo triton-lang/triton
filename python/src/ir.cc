@@ -215,7 +215,8 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       auto blockShape = descTy.getShape();
       metadata["block_size"] =
           std::vector<int>(blockShape.begin(), blockShape.end());
-      metadata["elem_bits"] = getIntOrFloatOrPtrBitWidth(descTy.getElementType());
+      metadata["elem_bits"] =
+          getIntOrFloatOrPtrBitWidth(descTy.getElementType());
 
       if (auto paddedEnc =
               dyn_cast_if_present<ttg::PaddedSharedEncodingAttr>(encoding)) {
