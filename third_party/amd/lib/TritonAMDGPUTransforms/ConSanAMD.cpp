@@ -28,11 +28,21 @@ static SmallVector<WaitOpInfo> getAsyncCopyWaitInfo(int pendingCount,
                      includeStaged}};
 }
 
+static int getNumPartitionThreads(Operation *op) {
+  auto mod = op->getParentOfType<ModuleOp>();
+  return ttg::lookupNumWarps(op) *
+         ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+}
+
 class AMDConSanHooks : public tti::ConSanTargetHooks {
 public:
   bool isTMAOp(Operation *op) const override {
     return isa<ttag::TDMOpInterface, ttag::AsyncTDMFusedCopyGlobalToLocalOp>(
         op);
+  }
+
+  bool usesAsyncCopyMbarrierArriveThread(Operation *op) const override {
+    return isa<ttag::AsyncCopyMbarrierArriveOp>(op);
   }
 
   // TDM ops from the same warp complete in issue order. ConSan's thread model
@@ -147,11 +157,19 @@ public:
     if (auto arriveOp = dyn_cast<ttag::ArriveBarrierOp>(op)) {
       MemEffectsOpInfo info;
       info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      int numWarps = ttg::lookupNumWarps(arriveOp);
-      auto mod = arriveOp->getParentOfType<ModuleOp>();
-      int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-      int totalCount = (int)arriveOp.getCount() * numWarps * threadsPerWarp;
+      int totalCount =
+          (int)arriveOp.getCount() * getNumPartitionThreads(arriveOp);
       info.barriers.push_back({arriveOp.getBarrier(), nullptr, totalCount});
+      return info;
+    }
+    // The arrive completes after the thread's earlier async loads, committed or
+    // not. Async stores are not covered.
+    if (auto arriveOp = dyn_cast<ttag::AsyncCopyMbarrierArriveOp>(op)) {
+      MemEffectsOpInfo info;
+      info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info.barriers.push_back(
+          {arriveOp.getBarrier(), nullptr, getNumPartitionThreads(arriveOp),
+           MemEffectsOpInfo::BarrierTrackingMode::AsyncCopies});
       return info;
     }
 
