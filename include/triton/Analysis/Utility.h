@@ -119,7 +119,10 @@ private:
 
 // Lower a scan in three phases: scan thread-local segments, scan their totals
 // within each warp-local segment, then exchange and scan warp-local totals.
-// Propagate exclusive carries back to the saved thread-local prefixes.
+// Complete the saved thread-local prefixes with the resulting carries. The
+// inter-warp phase either loads the full totals sequence into
+// interWarpScanLayout or traverses its shared-memory table incrementally to
+// limit live registers.
 //
 // Segment: a contiguous range along the scan axis owned by one thread or warp.
 // A totals layout maps physical owners to segment indices. A scan layout
@@ -184,6 +187,28 @@ private:
 //    uses its inter-warp carry S0=Q7. Invert the register permutation to return
 //    the completed element prefixes from permutedLayout to originalLayout.
 //
+// Grouped inter-warp traversal:
+//    This path applies when thread-local and warp-local segments coincide and
+//    the inter-warp scan axis lies entirely in registers. interWarpScanLayout
+//    describes the full sequence available to each participating warp. The
+//    lowering loads and accumulates totals in logical order, completing each
+//    consumer as soon as its last candidate prefix has been processed.
+//
+//    For an axis-0 scan of 128x32 (f32,i64) tuples, use four 32-lane warps.
+//    Lane l owns column l; warp w owns rows 4r+w. Both segment sizes are one.
+//    Let T(s,l) be the segment total for row s and column l. Scan-axis bases
+//    are R=[4,8,16,32,64], L=[0,0,0,0,0], W=[1,2]; lane bases index columns.
+//    interWarpTotalsLayout preserves this ownership. interWarpScanLayout has
+//    R=[1,2,4,8,16,32,64], the same column lane bases, and W=[0,0].
+//    Store T(s,l) at element offset 32*s+l in each operand's shared table and
+//    synchronize once after all operands are stored. Each warp's lane l reads
+//    T(0,l),...,T(127,l), maintaining one running tuple prefix. Layout division
+//    separates the scan axis from independent scans and gives their table
+//    bases. Warp w consumes the inclusive prefixes for s=4r+w directly. For
+//    segments with several elements, apply the exclusive prefix to their saved
+//    local prefixes, guarding the first segment. This completes the element
+//    values during the shared-memory traversal.
+//
 class ScanLoweringHelper {
 public:
   explicit ScanLoweringHelper(triton::ScanOp op);
@@ -214,7 +239,10 @@ public:
     return interWarpScanLayout;
   }
 
-  // Scan large register-only totals directly from shared memory.
+  // Select grouped traversal for register-only totals with no intra-warp phase:
+  // at least 32 totals along the axis, more than 128 logical 32-bit words per
+  // thread, and a complete shared table of at most 64 KiB. Operand types must
+  // be integers or floats of at least eight bits; block bases must be zero.
   bool useGroupedInterWarpScan() const;
   LayoutConversionScratchConfig getGroupedInterWarpScratchConfig() const;
 
@@ -241,6 +269,7 @@ private:
   std::optional<triton::LinearLayout> interWarpTotalsLayout;
   // Broadcast each scan's full segment sequence across participating warps;
   // distribute it over registers and lanes while preserving independent scans.
+  // Grouped traversal uses this mapping to address totals incrementally.
   std::optional<triton::LinearLayout> interWarpScanLayout;
 };
 
