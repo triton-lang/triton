@@ -3765,8 +3765,8 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
 
     num_args = len(list(arg_type_symbol_dict.keys())[0])
     if len(args) != num_args:
-        raise ValueError(f"length of input args does not match."
-                         f"Expect {num_args}, got {len(args)}")
+         raise ValueError(f"length of input args does not match."
+                          f"Expect {num_args}, got {len(args)}")
 
     arg_types = []
     arg_list = []
