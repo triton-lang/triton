@@ -361,22 +361,26 @@ tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tens
   }) : (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>) -> (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>)
   tt.return %a_out, %b_out : tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>
 }
-// Each operand conversion uses one store-to-load barrier.
+// Both operands are stored before a single store-to-load barrier.
 // TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_single_tile
 // TUPLE: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
-// TUPLE: nvvm.barrier
-// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i32
+// TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.store {{.*}} : vector<1xi64>, !llvm.ptr<3>
 // TUPLE: nvvm.barrier
+// TUPLE-NOT: nvvm.barrier
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i32
+// TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i64
 // TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.return
 // AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_single_tile
 // AMD-TUPLE: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
-// AMD-TUPLE: rocdl.s.barrier
-// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// AMD-TUPLE-NOT: rocdl.s.barrier
 // AMD-TUPLE: llvm.store {{.*}} : vector<1xi64>, !llvm.ptr<3>
 // AMD-TUPLE: rocdl.s.barrier
+// AMD-TUPLE-NOT: rocdl.s.barrier
+// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
+// AMD-TUPLE-NOT: rocdl.s.barrier
 // AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
 // AMD-TUPLE-NOT: rocdl.s.barrier
 // AMD-TUPLE: llvm.return
