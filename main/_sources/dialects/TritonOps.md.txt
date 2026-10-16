@@ -137,14 +137,14 @@ Interfaces: `AtomicOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `ptr` | ptr or ranked tensor of ptr values |
-| `cmp` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
-| `val` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `cmp` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
+| `val` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -182,7 +182,7 @@ Interfaces: `AtomicOpInterface`, `InferTypeOpInterface`, `PredicatedOpInterface`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -266,14 +266,14 @@ Interfaces: `AtomicOpInterface`, `PredicatedOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `ptr` | ptr or ranked tensor of ptr values |
-| `val` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `val` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -305,7 +305,7 @@ Interfaces: `AtomicOpInterface`, `PredicatedOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `ptr` | ptr or ranked tensor of ptr values |
-| `value` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `value` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 
@@ -330,13 +330,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `src` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -367,13 +367,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -502,7 +502,7 @@ Interfaces: `TT_DescriptorLoadLikeOpInterface`, `TT_DescriptorOpInterface`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -543,7 +543,7 @@ Interfaces: `TT_DescriptorLoadLikeOpInterface`, `TT_DescriptorOpInterface`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -578,7 +578,7 @@ Interfaces: `TT_DescriptorOpInterface`, `TT_DescriptorStoreLikeOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `indices` | variadic of 32-bit signless integer |
 
 
@@ -612,7 +612,7 @@ Interfaces: `TT_DescriptorOpInterface`, `TT_DescriptorStoreLikeOpInterface`
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
 | `x_offsets` | ranked tensor of 16-bit signless integer or 32-bit signless integer values |
 | `y_offset` | 32-bit signless integer |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -640,7 +640,7 @@ Interfaces: `TT_DescriptorOpInterface`, `TT_DescriptorStoreLikeOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `indices` | variadic of 32-bit signless integer |
 
 
@@ -731,8 +731,8 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `a` | ranked tensor of floating-point or 8-bit signless integer values |
-| `b` | ranked tensor of floating-point or 8-bit signless integer values |
+| `a` | ranked tensor of floating-point or 8-bit signless integer or Two E2M1 floating-point values packed in one byte values |
+| `b` | ranked tensor of floating-point or 8-bit signless integer or Two E2M1 floating-point values packed in one byte values |
 | `c` | ranked tensor of floating-point values |
 | `a_scale` | ranked tensor of floating-point or 8-bit signless integer values |
 | `b_scale` | ranked tensor of floating-point or 8-bit signless integer values |
@@ -784,7 +784,7 @@ Interfaces: `ConditionallySpeculatable`, `MemoryEffectOpInterface`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -815,13 +815,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -854,13 +854,13 @@ Interfaces: `ConditionallySpeculatable`, `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `srcs` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `srcs` | variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1002,14 +1002,14 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `indices` | ranked tensor of integer values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1198,14 +1198,14 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `lhs` | ranked tensor of floating-point or integer or ptr values |
-| `rhs` | ranked tensor of floating-point or integer or ptr values |
+| `lhs` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
+| `rhs` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1238,13 +1238,13 @@ Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`, `PredicatedOpInte
 | :-----: | ----------- |
 | `ptr` | ptr or ranked tensor of ptr values |
 | `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
-| `other` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `other` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1343,13 +1343,13 @@ Traits: `RecursiveMemoryEffects`, `SameOperandsAndResultEncoding`, `SameOperands
 
 | Operand | Description |
 | :-----: | ----------- |
-| `srcs` | variadic of ranked tensor of floating-point or integer or ptr values |
+| `srcs` | variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | variadic of ranked tensor of floating-point or integer or ptr values |
+| `result` | variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1507,7 +1507,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 
 | Operand | Description |
 | :-----: | ----------- |
-| `args` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `args` | variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1562,13 +1562,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `srcs` | variadic of ranked tensor of floating-point or integer or ptr values |
+| `srcs` | variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1632,13 +1632,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1702,13 +1702,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `srcs` | variadic of ranked tensor of floating-point or integer or ptr values |
+| `srcs` | variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | variadic of ranked tensor of floating-point or integer or ptr values |
+| `result` | variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1756,13 +1756,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `src` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1792,14 +1792,14 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `outLHS` | ranked tensor of floating-point or integer or ptr values |
-| `outRHS` | ranked tensor of floating-point or integer or ptr values |
+| `outLHS` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
+| `outRHS` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1831,7 +1831,7 @@ Interfaces: `PredicatedOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `ptr` | ptr or ranked tensor of ptr values |
-| `value` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `value` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 
@@ -1889,13 +1889,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1919,12 +1919,12 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 

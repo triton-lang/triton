@@ -366,7 +366,7 @@ completion of <code class="docutils literal notranslate"><span class="pre">async
 <td><p>tensor of 1-bit signless integer values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">other</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -505,7 +505,7 @@ ttg.barrier warp local
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -520,7 +520,7 @@ ttg.barrier warp local
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -557,7 +557,7 @@ the second fp4 element.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of 8-bit signless integer values</p></td>
+<td><p>ranked tensor of 8-bit signless integer or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -655,7 +655,7 @@ Scalar results must be uniform and replicated tensor elements must agree.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">args</span></code></p></td>
-<td><p>variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+<td><p>variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values or memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 </tbody>
 </table>
@@ -670,7 +670,7 @@ Scalar results must be uniform and replicated tensor elements must agree.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -708,7 +708,7 @@ returned buffer must be mutable.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -771,7 +771,7 @@ an undefined old value.</p>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">values</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">indices</span></code></p></td>
 <td><p>ranked tensor of integer values</p></td>
@@ -792,7 +792,7 @@ an undefined old value.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -884,7 +884,7 @@ where the axis dimension is replaced by the index value.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -927,7 +927,7 @@ where the axis dimension is replaced by the index value.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -968,7 +968,7 @@ where the axis dimension is replaced by the index value.</p>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">values</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">indices</span></code></p></td>
 <td><p>ranked tensor of integer values</p></td>
@@ -999,7 +999,7 @@ where the axis dimension is replaced by the index value.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dst</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>

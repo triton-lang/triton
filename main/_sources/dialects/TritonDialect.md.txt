@@ -25,6 +25,16 @@ Dependent Dialects:
 
 ## Types
 
+### PackedFloat4E2M1Type
+
+_Two E2M1 floating-point values packed in one byte_
+
+Syntax: `!tt.fp4e2m1x2`
+
+The low nibble holds the first value and the high nibble the second.
+Tensor dimensions and pointer offsets count packed pairs.
+
+
 ### PointerType
 
 _Pointer type (`::mlir::triton::PointerType`) in Triton IR type system_

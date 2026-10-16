@@ -16,12 +16,12 @@ Traits: `SameOperandsAndResultElementType`, `SameOperandsAndResultShape`, `Verif
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 

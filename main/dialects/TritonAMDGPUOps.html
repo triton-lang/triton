@@ -797,6 +797,13 @@ If more rows are needed, multiple TDM instructions will be issued.</p></li>
 <p>The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
 (global offset / column via add_offsets, bounds); this op only supplies the
 per-instruction row slices (dst_row_indices) and the LDS source.</p>
+<p>The dst_row_indices must be broadcast across the lanes of a warp (every lane holds
+all indices of the warp), since the TDM instruction reads them from SGPRs. Different
+warps may handle different rows. Each CTA only writes the part of the source held in
+its own LDS, so the dst_row_indices must be distributed across CTAs the same way as
+the source rows (the block bases of both layouts must have the same dim0 components).
+If the source is split across CTAs along columns, those CTAs write to the same rows
+and must hold the same indices.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MBarrierOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">TDMOpInterface</span></code></p>
 <section id="id19">
 <h3>Operands:<a class="headerlink" href="#id19" title="Link to this heading"></a></h3>
@@ -985,10 +992,10 @@ when it converts to the buffer ops because it is important for optimizing the ca
 <td><p>tensor of 32-bit signless integer values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">cmp</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">val</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">stride</span></code></p></td>
 <td><p>32-bit signless integer</p></td>
@@ -1006,7 +1013,7 @@ when it converts to the buffer ops because it is important for optimizing the ca
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1057,7 +1064,7 @@ when it converts to the buffer ops because it is important for optimizing the ca
 <td><p>tensor of 32-bit signless integer values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">value</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">stride</span></code></p></td>
 <td><p>32-bit signless integer</p></td>
@@ -1078,7 +1085,7 @@ when it converts to the buffer ops because it is important for optimizing the ca
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1139,7 +1146,7 @@ This allows to use buffer_load even if the alignment cannot be proven based on I
 <td><p>ranked tensor of 1-bit signless integer values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">other</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1154,7 +1161,7 @@ This allows to use buffer_load even if the alignment cannot be proven based on I
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1205,7 +1212,7 @@ This allows to use buffer_load_to_local even if the alignment cannot be proven b
 <td><p>ranked tensor of 1-bit signless integer values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">other</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">stride</span></code></p></td>
 <td><p>32-bit signless integer</p></td>
@@ -1272,7 +1279,7 @@ This allows to use buffer_store even if the alignment cannot be proven based on 
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">value</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">ptr</span></code></p></td>
 <td><p>ptr</p></td>
@@ -1378,7 +1385,7 @@ In contrast, this <code class="docutils literal notranslate"><span class="pre">c
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">sources</span></code></p></td>
-<td><p>variadic of ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1582,7 +1589,7 @@ to transpose within each thread after loading from HBM and before writing to sha
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1597,7 +1604,7 @@ to transpose within each thread after loading from HBM and before writing to sha
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1676,7 +1683,7 @@ For example if A is 16x64 in shared memory, the result of this operation will be
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1830,7 +1837,7 @@ with one scale per output element are not supported). Each scale block along
 <td><p>ranked tensor of 16-bit float or bfloat16 type or 32-bit float values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">scale</span></code></p></td>
-<td><p>ranked tensor of 8-bit signless integer values</p></td>
+<td><p>ranked tensor of 8-bit signless integer or f8E8M0FNU type values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1845,7 +1852,7 @@ with one scale per output element are not supported). Each scale block along
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">output</span></code></p></td>
-<td><p>ranked tensor of 8-bit signless integer values</p></td>
+<td><p>ranked tensor of 8-bit signless integer or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1894,7 +1901,7 @@ output elements.</p>
 <td><p>ranked tensor of 16-bit float or bfloat16 type or 32-bit float values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">scale</span></code></p></td>
-<td><p>ranked tensor of 8-bit signless integer values</p></td>
+<td><p>ranked tensor of 8-bit signless integer or f8E8M0FNU type values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1953,10 +1960,10 @@ rewrite this op.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">input</span></code></p></td>
-<td><p>ranked tensor of 8-bit signless integer values</p></td>
+<td><p>ranked tensor of 8-bit signless integer or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">scale</span></code></p></td>
-<td><p>ranked tensor of bfloat16 type or 8-bit signless integer values</p></td>
+<td><p>ranked tensor of bfloat16 type or 8-bit signless integer or f8E8M0FNU type values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2006,7 +2013,7 @@ register-consecutive groups, so layout conversion will not rewrite this op.</p>
 <td><p>ranked tensor of f8E4M3FN type or f8E5M2 type values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">scale</span></code></p></td>
-<td><p>ranked tensor of bfloat16 type or 8-bit signless integer values</p></td>
+<td><p>ranked tensor of bfloat16 type or 8-bit signless integer or f8E8M0FNU type values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2082,7 +2089,7 @@ However, they are dropped by the hardware in case the virtual address translatio
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">maybeOffsets</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>

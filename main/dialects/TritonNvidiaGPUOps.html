@@ -427,7 +427,7 @@ This op requires a CTA cluster with at least two CTAs.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dst</span></code></p></td>
 <td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
@@ -977,7 +977,7 @@ The mbarrier must be 8-byte aligned shared memory.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">response</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1524,7 +1524,7 @@ This is similar to ttg.local_alloc except the buffer is allocated in tensor memo
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1695,13 +1695,13 @@ tcgen05.ld.red instruction on supported architectures, e.g. Blackwell Ultra.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">token</span></code></p></td>
 <td><p>async token type</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">red</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1738,7 +1738,7 @@ be used to check aliasing and modref on the TMEM buffer.</p>
 <td><p>async token type</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
 <td><p>1-bit signless integer</p></td>

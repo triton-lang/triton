@@ -119,7 +119,7 @@ Interfaces: `MBarrierOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `mbarrier` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
@@ -579,7 +579,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 | Result | Description |
 | :----: | ----------- |
-| `response` | ranked tensor of floating-point or integer or ptr values |
+| `response` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1053,7 +1053,7 @@ Interfaces: `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
@@ -1205,9 +1205,9 @@ Traits: `AttrSizedResultSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLay
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `token` | async token type |
-| `red` | ranked tensor of floating-point or integer or ptr values |
+| `red` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1239,7 +1239,7 @@ Interfaces: `PredicatedOpInterface`
 | :-----: | ----------- |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `dep` | async token type |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `pred` | 1-bit signless integer |
 
 #### Results:

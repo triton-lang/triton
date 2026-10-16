@@ -109,7 +109,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -228,14 +228,14 @@ Interfaces: `AtomicOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `ptr` | ptr or ranked tensor of ptr values |
-| `cmp` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
-| `val` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `cmp` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
+| `val` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -273,7 +273,7 @@ Interfaces: `AtomicOpInterface`, `InferTypeOpInterface`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -338,14 +338,14 @@ Interfaces: `AtomicOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `ptr` | ptr or ranked tensor of ptr values |
-| `val` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `val` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -377,7 +377,7 @@ Interfaces: `AtomicOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `ptr` | ptr or ranked tensor of ptr values |
-| `value` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `value` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 
@@ -779,7 +779,7 @@ offsets. This is intentionally private to instrumentation passes.
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 

@@ -75,7 +75,7 @@ Interfaces: `InferTypeOpInterface`, `PredicatedOpInterface`
 | `src` | ranked tensor of ptr values |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `mask` | tensor of 1-bit signless integer values |
-| `other` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `other` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
@@ -204,13 +204,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -248,7 +248,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of 8-bit signless integer values |
+| `src` | ranked tensor of 8-bit signless integer or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
@@ -333,13 +333,13 @@ Interfaces: `ConditionallySpeculatable`, `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `args` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `args` | variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values or memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `result` | variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -377,7 +377,7 @@ Interfaces: `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
@@ -429,7 +429,7 @@ Interfaces: `InferTypeOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
-| `values` | ranked tensor of floating-point or integer or ptr values |
+| `values` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `indices` | ranked tensor of integer values |
 | `mask` | tensor of 1-bit signless integer values |
 
@@ -437,7 +437,7 @@ Interfaces: `InferTypeOpInterface`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -514,7 +514,7 @@ Traits: `LocalLoadTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -543,7 +543,7 @@ Traits: `LocalLoadTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -581,7 +581,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 | Operand | Description |
 | :-----: | ----------- |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
-| `values` | ranked tensor of floating-point or integer or ptr values |
+| `values` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `indices` | ranked tensor of integer values |
 | `token` | async token type |
 
@@ -605,7 +605,7 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 

@@ -390,7 +390,7 @@ the message.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -537,10 +537,10 @@ slabs. For single-CTA kernels this is always zero.</p>
 <td><p>ptr or ranked tensor of ptr values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">cmp</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">val</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -555,7 +555,7 @@ slabs. For single-CTA kernels this is always zero.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -607,7 +607,7 @@ slabs. For single-CTA kernels this is always zero.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -682,7 +682,7 @@ polling loop has completed.</p>
 <td><p>ptr or ranked tensor of ptr values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">val</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
 <td><p>1-bit signless integer or ranked tensor of 1-bit signless integer values</p></td>
@@ -700,7 +700,7 @@ polling loop has completed.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -737,7 +737,7 @@ polling loop has completed.</p>
 <td><p>ptr or ranked tensor of ptr values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">value</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
 <td><p>1-bit signless integer or ranked tensor of 1-bit signless integer values</p></td>
@@ -1195,7 +1195,7 @@ offsets. This is intentionally private to instrumentation passes.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>

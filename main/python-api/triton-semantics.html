@@ -133,6 +133,11 @@
 <li><p>If the scalar is of a kind lower or equal to the tensor, it does not participate in the promotion, and the remaining promotion rules are applied to the tensor’s dtype: <code class="docutils literal notranslate"><span class="pre">(uint8,</span> <span class="pre">int)</span> <span class="pre">-&gt;</span> <span class="pre">uint8</span></code></p></li>
 <li><p>If the scalar is of a higher kind, we choose the lowest dtype in which it fits among <code class="docutils literal notranslate"><span class="pre">int32</span></code> &lt; <code class="docutils literal notranslate"><span class="pre">uint32</span></code> &lt; <code class="docutils literal notranslate"><span class="pre">int64</span></code> &lt; <code class="docutils literal notranslate"><span class="pre">uint64</span></code> for ints and <code class="docutils literal notranslate"><span class="pre">float32</span></code> &lt; <code class="docutils literal notranslate"><span class="pre">float64</span></code> for floats. Then, both the tensor and the scalar are promoted to this dtype: <code class="docutils literal notranslate"><span class="pre">(int16,</span> <span class="pre">4.0)</span> <span class="pre">-&gt;</span> <span class="pre">float32</span></code></p></li>
 </ol>
+<p><code class="docutils literal notranslate"><span class="pre">tl.float4e2m1x2</span></code> and <code class="docutils literal notranslate"><span class="pre">tl.float8e8m0fnu</span></code> map to PyTorch’s
+<code class="docutils literal notranslate"><span class="pre">float4_e2m1fn_x2</span></code> and <code class="docutils literal notranslate"><span class="pre">float8_e8m0fnu</span></code> dtypes. Both are floating-point types
+occupying one byte; packed FP4 shapes and pointer offsets count pairs, with the
+first value in the low nibble. Existing integer-byte representations remain
+supported. These types do not participate in implicit type promotion.</p>
 </section>
 <section id="broadcasting">
 <h2>Broadcasting<a class="headerlink" href="#broadcasting" title="Link to this heading"></a></h2>

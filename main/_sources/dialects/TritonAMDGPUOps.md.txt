@@ -401,6 +401,14 @@ The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
 (global offset / column via add_offsets, bounds); this op only supplies the
 per-instruction row slices (dst_row_indices) and the LDS source.
 
+The dst_row_indices must be broadcast across the lanes of a warp (every lane holds
+all indices of the warp), since the TDM instruction reads them from SGPRs. Different
+warps may handle different rows. Each CTA only writes the part of the source held in
+its own LDS, so the dst_row_indices must be distributed across CTAs the same way as
+the source rows (the block bases of both layouts must have the same dim0 components).
+If the source is split across CTAs along columns, those CTAs write to the same rows
+and must hold the same indices.
+
 Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 
 #### Operands:
@@ -542,15 +550,15 @@ Interfaces: `BufferOpInterface`
 | :-----: | ----------- |
 | `ptr` | ptr |
 | `offsets` | tensor of 32-bit signless integer values |
-| `cmp` | ranked tensor of floating-point or integer or ptr values |
-| `val` | ranked tensor of floating-point or integer or ptr values |
+| `cmp` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
+| `val` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `stride` | 32-bit signless integer |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -595,7 +603,7 @@ Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 | :-----: | ----------- |
 | `ptr` | ptr |
 | `offsets` | tensor of 32-bit signless integer values |
-| `value` | ranked tensor of floating-point or integer or ptr values |
+| `value` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `stride` | 32-bit signless integer |
 | `mask` | ranked tensor of 1-bit signless integer values |
 
@@ -603,7 +611,7 @@ Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -654,13 +662,13 @@ Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 | `offsets` | tensor of 32-bit signless integer values |
 | `stride` | 32-bit signless integer |
 | `mask` | ranked tensor of 1-bit signless integer values |
-| `other` | ranked tensor of floating-point or integer or ptr values |
+| `other` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -701,7 +709,7 @@ Interfaces: `BufferOpInterface`, `InferTypeOpInterface`, `PredicatedOpInterface`
 | `ptr` | ptr |
 | `offsets` | tensor of 32-bit signless integer values |
 | `mask` | ranked tensor of 1-bit signless integer values |
-| `other` | ranked tensor of floating-point or integer or ptr values |
+| `other` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `stride` | 32-bit signless integer |
 
 #### Results:
@@ -755,7 +763,7 @@ Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `value` | ranked tensor of floating-point or integer or ptr values |
+| `value` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `ptr` | ptr |
 | `offsets` | tensor of 32-bit signless integer values |
 | `stride` | 32-bit signless integer |
@@ -871,7 +879,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `sources` | variadic of ranked tensor of floating-point or integer or ptr values |
+| `sources` | variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
@@ -1059,13 +1067,13 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values |
+| `src` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1127,7 +1135,7 @@ Traits: `LocalLoadTrait`
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values |
+| `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1253,13 +1261,13 @@ Effects: `MemoryEffects::Effect{}`
 | Operand | Description |
 | :-----: | ----------- |
 | `input` | ranked tensor of 16-bit float or bfloat16 type or 32-bit float values |
-| `scale` | ranked tensor of 8-bit signless integer values |
+| `scale` | ranked tensor of 8-bit signless integer or f8E8M0FNU type values |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `output` | ranked tensor of 8-bit signless integer values |
+| `output` | ranked tensor of 8-bit signless integer or Two E2M1 floating-point values packed in one byte values |
 
 
 
@@ -1307,7 +1315,7 @@ Effects: `MemoryEffects::Effect{}`
 | Operand | Description |
 | :-----: | ----------- |
 | `input` | ranked tensor of 16-bit float or bfloat16 type or 32-bit float values |
-| `scale` | ranked tensor of 8-bit signless integer values |
+| `scale` | ranked tensor of 8-bit signless integer or f8E8M0FNU type values |
 
 #### Results:
 
@@ -1359,8 +1367,8 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `input` | ranked tensor of 8-bit signless integer values |
-| `scale` | ranked tensor of bfloat16 type or 8-bit signless integer values |
+| `input` | ranked tensor of 8-bit signless integer or Two E2M1 floating-point values packed in one byte values |
+| `scale` | ranked tensor of bfloat16 type or 8-bit signless integer or f8E8M0FNU type values |
 
 #### Results:
 
@@ -1399,7 +1407,7 @@ Effects: `MemoryEffects::Effect{}`
 | Operand | Description |
 | :-----: | ----------- |
 | `input` | ranked tensor of f8E4M3FN type or f8E5M2 type values |
-| `scale` | ranked tensor of bfloat16 type or 8-bit signless integer values |
+| `scale` | ranked tensor of bfloat16 type or 8-bit signless integer or f8E8M0FNU type values |
 
 #### Results:
 
@@ -1451,7 +1459,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::amd::L2C
 
 | Result | Description |
 | :----: | ----------- |
-| `maybeOffsets` | ranked tensor of floating-point or integer or ptr values |
+| `maybeOffsets` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 
 
 

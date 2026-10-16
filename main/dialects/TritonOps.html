@@ -565,10 +565,10 @@ If the condition is false, the message is printed, and the program is aborted.</
 <td><p>ptr or ranked tensor of ptr values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">cmp</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">val</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -583,7 +583,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -635,7 +635,7 @@ If the condition is false, the message is printed, and the program is aborted.</
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -737,7 +737,7 @@ and each element is loaded at least once, even with a zero timeout.</p>
 <td><p>ptr or ranked tensor of ptr values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">val</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
 <td><p>1-bit signless integer or ranked tensor of 1-bit signless integer values</p></td>
@@ -755,7 +755,7 @@ and each element is loaded at least once, even with a zero timeout.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -792,7 +792,7 @@ and each element is loaded at least once, even with a zero timeout.</p>
 <td><p>ptr or ranked tensor of ptr values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">value</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
 <td><p>1-bit signless integer or ranked tensor of 1-bit signless integer values</p></td>
@@ -821,7 +821,7 @@ and each element is loaded at least once, even with a zero timeout.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -836,7 +836,7 @@ and each element is loaded at least once, even with a zero timeout.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -868,7 +868,7 @@ or move data between threads.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -883,7 +883,7 @@ or move data between threads.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1048,7 +1048,7 @@ Accordingly, the result is a 2D tensor multiple rows.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1102,7 +1102,7 @@ The destination tensor type and shape must match the descriptor otherwise the re
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1141,7 +1141,7 @@ The shape and types of <code class="docutils literal notranslate"><span class="p
 <td><p>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">indices</span></code></p></td>
 <td><p>variadic of 32-bit signless integer</p></td>
@@ -1184,7 +1184,7 @@ Accordingly, the result is a 2D tensor multiple rows.</p>
 <td><p>32-bit signless integer</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1216,7 +1216,7 @@ The shape and types of <code class="docutils literal notranslate"><span class="p
 <td><p>Tensor descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::TensorDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">indices</span></code></p></td>
 <td><p>variadic of 32-bit signless integer</p></td>
@@ -1324,10 +1324,10 @@ Where scale(x, s) is a function that applies the scale per block following micro
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">a</span></code></p></td>
-<td><p>ranked tensor of floating-point or 8-bit signless integer values</p></td>
+<td><p>ranked tensor of floating-point or 8-bit signless integer or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">b</span></code></p></td>
-<td><p>ranked tensor of floating-point or 8-bit signless integer values</p></td>
+<td><p>ranked tensor of floating-point or 8-bit signless integer or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">c</span></code></p></td>
 <td><p>ranked tensor of floating-point values</p></td>
@@ -1404,7 +1404,7 @@ elems it receives is unspecified.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1437,7 +1437,7 @@ elems it receives is unspecified.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1452,7 +1452,7 @@ elems it receives is unspecified.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1488,7 +1488,7 @@ return $libpath/$libname:$symbol($args…)</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">srcs</span></code></p></td>
-<td><p>variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1503,7 +1503,7 @@ return $libpath/$libname:$symbol($args…)</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1646,7 +1646,7 @@ changed.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">indices</span></code></p></td>
 <td><p>ranked tensor of integer values</p></td>
@@ -1664,7 +1664,7 @@ changed.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1868,10 +1868,10 @@ the two input tensors must have the same shape.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">lhs</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">rhs</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1886,7 +1886,7 @@ the two input tensors must have the same shape.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1926,7 +1926,7 @@ the two input tensors must have the same shape.</p>
 <td><p>1-bit signless integer or ranked tensor of 1-bit signless integer values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">other</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1941,7 +1941,7 @@ the two input tensors must have the same shape.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2060,7 +2060,7 @@ and returns a descriptor object which can be used to load/store from the tensor 
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">srcs</span></code></p></td>
-<td><p>variadic of ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2075,7 +2075,7 @@ and returns a descriptor object which can be used to load/store from the tensor 
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>variadic of ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2270,7 +2270,7 @@ format are generated automatically from the arguments.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">args</span></code></p></td>
-<td><p>variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2340,7 +2340,7 @@ format are generated automatically from the arguments.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">srcs</span></code></p></td>
-<td><p>variadic of ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2355,7 +2355,7 @@ format are generated automatically from the arguments.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>variadic of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2420,7 +2420,7 @@ The compiler is still free to change it for better performance.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2435,7 +2435,7 @@ The compiler is still free to change it for better performance.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2502,7 +2502,7 @@ that contains the operation.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">srcs</span></code></p></td>
-<td><p>variadic of ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2517,7 +2517,7 @@ that contains the operation.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>variadic of ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>variadic of ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2569,7 +2569,7 @@ that contains the operation.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2584,7 +2584,7 @@ that contains the operation.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2614,7 +2614,7 @@ shape 4x8xf32.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2629,10 +2629,10 @@ shape 4x8xf32.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">outLHS</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">outRHS</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2669,7 +2669,7 @@ shape 4x8xf32.</p>
 <td><p>ptr or ranked tensor of ptr values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">value</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
 <td><p>1-bit signless integer or ranked tensor of 1-bit signless integer values</p></td>
@@ -2726,7 +2726,7 @@ transpose+reshape+concat) without going to shared memory after each one.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2741,7 +2741,7 @@ transpose+reshape+concat) without going to shared memory after each one.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2766,7 +2766,7 @@ transpose+reshape+concat) without going to shared memory after each one.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+<td><p>ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>
@@ -2781,7 +2781,7 @@ transpose+reshape+concat) without going to shared memory after each one.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values</p></td>
 </tr>
 </tbody>
 </table>

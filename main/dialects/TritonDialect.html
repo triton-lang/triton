@@ -87,6 +87,7 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#types">Types</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#packedfloat4e2m1type">PackedFloat4E2M1Type</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#pointertype">PointerType</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#tensordesctype">TensorDescType</a></li>
 </ul>
@@ -178,6 +179,13 @@
 </section>
 <section id="types">
 <h2>Types<a class="headerlink" href="#types" title="Link to this heading"></a></h2>
+<section id="packedfloat4e2m1type">
+<h3>PackedFloat4E2M1Type<a class="headerlink" href="#packedfloat4e2m1type" title="Link to this heading"></a></h3>
+<p><em>Two E2M1 floating-point values packed in one byte</em></p>
+<p>Syntax: <code class="docutils literal notranslate"><span class="pre">!tt.fp4e2m1x2</span></code></p>
+<p>The low nibble holds the first value and the high nibble the second.
+Tensor dimensions and pointer offsets count packed pairs.</p>
+</section>
 <section id="pointertype">
 <h3>PointerType<a class="headerlink" href="#pointertype" title="Link to this heading"></a></h3>
 <p><em>Pointer type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::PointerType</span></code>) in Triton IR type system</em></p>
