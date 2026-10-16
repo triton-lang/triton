@@ -514,6 +514,7 @@ class CUDABackend(BaseBackend):
             disable_slp_vectorizer=not use_slp_vectorizer,
             expand_masked_div_rem=True,
             nvptx_compute_capability=0 if use_slp_vectorizer else capability,
+            enable_nvptx_tti=True,
         )
 
         # Get some metadata

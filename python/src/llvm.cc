@@ -724,7 +724,7 @@ void init_triton_llvm(py::module_ &m) {
          std::string arch, std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool disable_slp_vectorizer,
          bool disable_vector_combine, bool expand_masked_div_rem,
-         unsigned nvptx_compute_capability) {
+         unsigned nvptx_compute_capability, bool enable_nvptx_tti) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Declare the same flags as codegen even though IR optimization does
@@ -805,6 +805,16 @@ void init_triton_llvm(py::module_ &m) {
 
         pb.registerModuleAnalyses(mam);
         pb.registerCGSCCAnalyses(cgam);
+        // Register before PassBuilder installs its default TargetIRAnalysis:
+        // the first registration wins. Keep the target-machine pipeline and
+        // non-NVIDIA backends unchanged. The switch preserves the generic TTI
+        // baseline for differential testing of future overrides.
+        // NVIDIA normally leaves the module triple unset during optimization.
+        if (enable_nvptx_tti && !targetMachine &&
+            (mod->getTargetTriple().str().empty() ||
+             mod->getTargetTriple().isNVPTX())) {
+          fam.registerPass([] { return createTritonNVPTXTargetIRAnalysis(); });
+        }
         pb.registerFunctionAnalyses(fam);
         pb.registerLoopAnalyses(lam);
         pb.crossRegisterProxies(lam, fam, cgam, mam);
@@ -842,6 +852,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("disable_vector_combine") = false,
       py::arg("expand_masked_div_rem") = false,
       py::arg("nvptx_compute_capability") = 0,
+      py::arg("enable_nvptx_tti") = false,
       py::call_guard<py::gil_scoped_release>());
 
   m.def(
