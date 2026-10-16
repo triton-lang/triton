@@ -88,12 +88,63 @@ def convert_1d_to_2d_slice_cga_kernel(out, HEAD: ttgl.constexpr, NUM_CTAS: ttgl.
     ttgl.store(out + dd, y)
 
 
+def _scan_linear_layouts():
+    # Deliberately interleave logical axis bits across registers, lanes, and
+    # warps, and give each hardware dimension a different basis order.
+    bases = [[8, 0], [0, 2], [1, 0], [0, 8], [2, 0], [0, 1], [16, 0], [0, 16], [4, 0], [0, 4]]
+    lane_bits = THREADS_PER_WARP.bit_length() - 1
+    reg_bits = len(bases) - lane_bits - 2
+    ordinary = ttgl.DistributedLinearLayout(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
+    # Keep the same logical shape, with broadcasts in all three hardware dims.
+    reg_bits += 2
+    broadcast = ttgl.DistributedLinearLayout([[0, 0]] + bases[:reg_bits], [[0, 0]] + bases[reg_bits:-1],
+                                             [[0, 0], bases[-1]], [], [32, 32])
+    # Warp-owned low bits make each warp-local segment a single element.
+    bases = [[16, 0], [0, 16], [8, 0], [0, 8], [4, 0], [0, 4], [2, 0], [0, 2], [1, 0], [0, 1]]
+    reg_bits = len(bases) - lane_bits - 2
+    warp_minor = ttgl.DistributedLinearLayout(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
+    # A contiguous register prefix with a parallel bit between scan lane bits.
+    # Scanning the group endpoints must also handle nonconsecutive lane bits.
+    bases = [[1, 0], [2, 0], [0, 1], [4, 0], [8, 0], [0, 2], [16, 0], [0, 4], [0, 8], [0, 16]]
+    register_groups = ttgl.DistributedLinearLayout(bases[:reg_bits], bases[reg_bits:-2], bases[-2:], [], [32, 32])
+    # Local prefixes and warp-local segments both use scattered register
+    # indices. The high axis register bit selects another cross-warp segment,
+    # and a parallel register bit separates two independent scans.
+    scattered_registers = ttgl.DistributedLinearLayout(
+        [[32, 0], [1, 0], [0, 1], [2, 0]], [[4, 0], [8, 0], [0, 2], [0, 4], [0, 8]] + [[0, 0]] * (lane_bits - 5),
+        [[16, 0], [0, 16]], [], [64, 32])
+    # Alternate register and lane groups within one warp-local segment. The
+    # physical lane bits are permuted, and the warp owners are broadcast.
+    alternating = [
+        ttgl.DistributedLinearLayout([[r0, 0], [r1, 0], [0, 1], [0, 2], [0, 4]],
+                                     [[l0, 0], [l1, 0], [l2, 0], [0, 8], [0, 16]] + [[0, 0]] * (lane_bits - 5),
+                                     [[0, 0], [0, 0]], [], [32, 32])
+        for r0, r1, l0, l1, l2 in [(1, 4, 8, 2, 16), (2, 8, 16, 1, 4)]
+    ]
+    # Making these registers contiguous requires two register/lane bit swaps.
+    # Scan must use warp shuffles even when generic conversion prefers shared memory.
+    transpose = ttgl.DistributedLinearLayout([[4, 0], [8, 0], [16, 0], [0, 1], [0, 2]],
+                                             [[1, 0], [2, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] * (lane_bits - 5),
+                                             [[0, 0], [0, 0]], [], [32, 32])
+    return {
+        "permuted_owners": ordinary,
+        "broadcast_owners": broadcast,
+        "warp_minor": warp_minor,
+        "register_groups": register_groups,
+        "scattered_registers": scattered_registers,
+        "alternating_register_lane_bits": alternating[0],
+        "lane_minor": alternating[1],
+        "warp_transpose": transpose,
+    }
+
+
 @gluon.jit
-def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr):
+def scan_kernel(x_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
+                reverse: ttgl.constexpr = False):
     x_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
     x_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
     x = ttgl.load(x_ptr + x_offs_m * N + x_offs_n)
-    y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine)
+    y = ttgl.associative_scan(x, axis=axis, combine_fn=_combine, reverse=reverse)
     ttgl.store(z_ptr + x_offs_m * N + x_offs_n, y)
 
 
@@ -122,14 +173,218 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
     torch.manual_seed(0)
 
     x = torch.randint(-100, 100, (M, N), dtype=torch.int32, device=device)
-    z = torch.zeros((M, N), dtype=torch.int32, device=device)
-    z_tri = torch.empty_like(z)
+    z_tri = torch.empty_like(x)
 
     scan_kernel[(1, 1, 1)](x, z_tri, M, N, src_layout, axis, num_warps=4, sanitize_overflow=sanitize_overflow,
                            debug=sanitize_overflow)
 
     z_ref = torch.cumsum(x, dim=axis, dtype=torch.int32)
-    torch.testing.assert_close(z_tri, z_ref)
+    torch.testing.assert_close(z_tri, z_ref, rtol=0, atol=0)
+
+
+@gluon.jit
+def _scan_affine_combine(a1, b1, a2, b2):
+    return (a1 * a2).to(a1.dtype), b1 * a2 + b2
+
+
+@pytest.mark.parametrize("layout, M, axis", [
+    # Use each linear layout's natural shape to exercise its complete basis set.
+    *[pytest.param(layout, layout.shape[0], 0, id=name) for name, layout in _scan_linear_layouts().items()],
+    pytest.param(_scan_linear_layouts()["permuted_owners"], 32, 1, id="permuted_owners_axis1"),
+    # Non-blocked encodings must reach the same linear-layout scan lowering.
+    *[
+        pytest.param(layout, 32, axis, id=f"{name}_axis{axis}") for name, layout in [
+            ("slice",
+             ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 2, 2], [4, 1, THREADS_PER_WARP // 4], [2, 1, 2], [2, 0, 1]))),
+            ("mma_v2", ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], instr_shape=[16, 8])),
+            ("mma_v3", ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])),
+            ("dot_operand",
+             ttgl.DotOperandLayout(
+                 parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], instr_shape=[16, 8]),
+                 operand_index=0, k_width=2)),
+            ("mfma",
+             ttgl.amd.AMDMFMALayout(version=3, instr_shape=[16, 16, 16], transposed=False, warps_per_cta=[2, 2])),
+            ("wmma", ttgl.amd.AMDWMMALayout(version=1, transposed=False, warp_bases=[[1, 0], [0, 1]])),
+        ] if _is_layout_applicable(layout) for axis in [0, 1]
+    ],
+    pytest.param(
+        ttgl.DistributedLinearLayout([[1, 0], [2, 0], [16, 0], [0, 1], [0, 2]],
+                                     [[4, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[0, 0], [0, 0]], [], [32, 32]), 32, 0,
+        id="native_prefix_with_strided_registers"),
+    pytest.param(
+        ttgl.DistributedLinearLayout([[1, 0], [2, 0], [16, 0], [0, 1], [0, 2]],
+                                     [[4, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32]), 64, 0,
+        id="converted_totals_across_warps"),
+    pytest.param(
+        ttgl.DistributedLinearLayout([[8, 0], [16, 0], [0, 4], [0, 8], [0, 16]],
+                                     [[1, 0], [0, 1], [2, 0], [0, 2], [4, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32]), 64, 0,
+        id="inverse_lane_lookup_with_parallel_bits"),
+    *[
+        pytest.param(
+            ttgl.DistributedLinearLayout([[bit, 0] for bit in registers], [[0, 1 << i] for i in range(5)] + [[0, 0]] *
+                                         (THREADS_PER_WARP.bit_length() - 6), [[bit, 0] for bit in warps], [],
+                                         [32, 32]), 32, 0, id=name) for name, registers, warps in [
+                                             ("thread_only", [1, 2, 4, 8, 16], [0, 0]),
+                                             ("thread_and_interwarp", [1, 2, 8, 16], [4, 0]),
+                                             ("interwarp_only", [4, 8, 16], [1, 2]),
+                                         ]
+    ],
+    pytest.param(
+        ttgl.DistributedLinearLayout([[32, 0], [0, 1], [8, 0], [128, 0], [16, 0], [64, 0]],
+                                     [[0, 2], [0, 4], [0, 8], [0, 16], [1, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[4, 0], [2, 0]], [], [256, 32]), 256, 0,
+        id="permuted_warp_segments"),
+    pytest.param(
+        ttgl.DistributedLinearLayout([[16, 0], [0, 16], [64, 0], [4, 0], [8, 0], [32, 0], [0, 0]],
+                                     [[0, 1], [0, 2], [0, 4], [0, 8], [2, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [0, 0]], [], [128, 32]), 128, 0,
+        id="replicated_segment_totals"),
+    pytest.param(
+        ttgl.DistributedLinearLayout([[16, 0], [0, 1], [2, 0], [8, 0], [0, 2], [0, 16], [32, 0], [0, 0]],
+                                     [[64, 0], [0, 4], [4, 0], [0, 8], [0, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [0, 0]], [], [128, 32]), 128, 0,
+        id="interleaved_broadcast_carries"),
+    pytest.param(ttgl.BlockedLayout([1, 1], [2, THREADS_PER_WARP // 2], [4, 1], [1, 0]), 256, 0,
+                 id="register_spanning_totals"),
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_layouts_noncommutative(layout, axis, reverse, M, device, num_ctas=1, a_dtype=torch.int32):
+
+    @gluon.jit
+    def kernel(A, B, OutA, OutB, M: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
+               reverse: ttgl.constexpr):
+        m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
+        n = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))[None, :]
+        a = ttgl.load(A + m * 32 + n)
+        b = ttgl.load(B + m * 32 + n)
+        a, b = ttgl.associative_scan((a, b), axis, _scan_affine_combine, reverse=reverse)
+        ttgl.store(OutA + m * 32 + n, a)
+        ttgl.store(OutB + m * 32 + n, b)
+
+    torch.manual_seed(0)
+    a = torch.randint(0, 2, (M, 32), dtype=a_dtype) * 2 - 1
+    b = torch.randint(-100, 100, (M, 32), dtype=torch.int64)
+    expected_a, expected_b = a.clone(), b.clone()
+    order = list(range(a.shape[axis]))
+    if reverse:
+        order.reverse()
+    for prev, cur in zip(order, order[1:]):
+        expected_a.select(axis, cur).copy_(expected_a.select(axis, prev) * a.select(axis, cur))
+        expected_b.select(axis, cur).copy_(expected_b.select(axis, prev) * a.select(axis, cur) + b.select(axis, cur))
+    a, b = a.to(device), b.to(device)
+    out_a, out_b = torch.empty_like(a), torch.empty_like(b)
+    kernel[(1, )](a, b, out_a, out_b, M, layout, axis, reverse, num_warps=4, num_ctas=num_ctas)
+    torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
+    torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int16, torch.int64])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_warp_conversion_mixed_width(dtype, reverse, device):
+    # Interleaved register/lane bits require conversion of the thread totals.
+    # The tuple exercises narrow packing and 64-bit shuffles with a broadcast warp.
+    layout = ttgl.DistributedLinearLayout([[8, 0], [16, 0], [0, 4], [0, 8], [0, 16]],
+                                          [[1, 0], [0, 1], [2, 0], [0, 2], [4, 0]] + [[0, 0]] *
+                                          (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32])
+    test_scan_layouts_noncommutative(layout, axis=0, reverse=reverse, M=64, device=device, a_dtype=dtype)
+
+
+@gluon.jit
+def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
+    # Invalid boundary carries must not execute even a discarded combine.
+    ttgl.device_assert(hi1 + 1 == lo2, "scan combined nonadjacent intervals")
+    return lo1, hi2
+
+
+@pytest.mark.parametrize("layout, M, N", [
+    *[(ttgl.DistributedLinearLayout([[4, 0], [0, 1], [0, 2]], [[1, 0], [2, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
+                                    (THREADS_PER_WARP.bit_length() - 6), [[warp, 0], [0, 0]], [], [M, 32]), M, 32)
+      for warp, M in [(0, 8), (8, 16)]],
+    pytest.param(
+        ttgl.DistributedLinearLayout([[1, 0], [4, 0], [16, 0], [0, 1], [0, 2]],
+                                     [[2, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [64, 0]], [], [128, 32]), 256, 32,
+        id="converted_thread_totals"),
+    pytest.param(
+        ttgl.DistributedLinearLayout([[1, 0], [4, 0], [16, 0], [64, 0], [0, 0], [0, 1], [0, 2]],
+                                     [[2, 0], [8, 0], [0, 4], [0, 8], [0, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [128, 16]), 128, 16,
+        id="replicated_prefixes"),
+    # Grouped traversal: independent registers/warps and separated axis bits.
+    pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 64, 64,
+                 id="interwarp_groups_independent_registers"),
+    pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [2, 2], [0, 1]), 32, 128,
+                 id="interwarp_groups_independent_warps"),
+    pytest.param(
+        ttgl.DistributedLinearLayout([[2, 0], [4, 0], [8, 0], [32, 0], [64, 0]],
+                                     [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [16, 0]], [], [128, 32]), 128, 32,
+        id="interwarp_groups_separated_warp_bits"),
+    pytest.param(
+        ttgl.DistributedLinearLayout([[2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [128, 0]],
+                                     [[0, 1], [0, 2], [0, 4], [0, 8], [0, 0]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[1, 0], [64, 0]], [], [256, 16]), 256, 16,
+        id="interwarp_groups_carry_across_groups"),
+    pytest.param(
+        ttgl.DistributedLinearLayout([[0, 1], [2, 0], [4, 0], [8, 0], [32, 0]],
+                                     [[0, 2], [0, 4], [0, 8], [0, 16], [0, 32]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[16, 0], [1, 0]], [], [64, 64]), 64, 64,
+        id="interwarp_groups_interleaved_independent_registers"),
+    pytest.param(ttgl.BlockedLayout([2, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 256, 32,
+                 id="interwarp_groups_thread_prefixes"),
+    pytest.param(ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP // 2, 2], [2, 2], [0, 1]), 8 * THREADS_PER_WARP, 8,
+                 id="register_axis_boundary_carry_owners"),
+    pytest.param(ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), THREADS_PER_WARP,
+                 4 * THREADS_PER_WARP, id="register_axis_all_lane_bits"),
+    pytest.param(ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 2, 2], [2, 2], [0, 1]), 256, 32,
+                 id="register_axis_interwarp_segments"),
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_carry_predicates(layout, M, N, reverse, device):
+
+    @gluon.jit
+    def kernel(X, Lo, Hi, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, reverse: ttgl.constexpr):
+        m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
+        n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offset = m * N + n
+        index = ttgl.load(X + offset)
+        lo, hi = ttgl.associative_scan((index, index.to(ttgl.int64)), 0, _scan_combine_adjacent_intervals,
+                                       reverse=reverse)
+        ttgl.store(Lo + offset, lo)
+        ttgl.store(Hi + offset, hi)
+
+    index = torch.arange(M, dtype=torch.int32, device=device)
+    if reverse:
+        index = index.flip([0])
+    column_start = torch.arange(N, dtype=torch.int32, device=device) * M
+    x = index[:, None] + column_start[None, :]
+    lo, hi = torch.empty_like(x), torch.empty_like(x, dtype=torch.int64)
+    kernel[(1, )](x, lo, hi, M, N, layout, reverse, num_warps=4, debug=True)
+    torch.testing.assert_close(lo, column_start[None, :].expand(M, N), rtol=0, atol=0)
+    torch.testing.assert_close(hi, x.to(torch.int64), rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("num_ctas", [2])
+@pytest.mark.parametrize("replicate", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_cta_local(num_ctas, replicate, reverse, device):
+    cga = [[0, 0 if replicate else 1 << i] for i in range(num_ctas.bit_length() - 1)]
+    layout = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0], cga)
+    torch.manual_seed(0)
+    x = torch.randint(-100, 100, (32, 64), dtype=torch.int32, device=device)
+    out = torch.empty_like(x)
+    scan_kernel[(1, )](x, out, 32, 64, layout, 0, reverse, num_warps=4, num_ctas=num_ctas)
+    expected = torch.cumsum(x.flip([0]) if reverse else x, dim=0, dtype=torch.int32)
+    if reverse:
+        expected = expected.flip([0])
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    # The tuple conversion must preserve CTA ownership and mixed-width scratch
+    # offsets while scanning a register-spanning sequence of segment totals.
+    test_scan_layouts_noncommutative(layout, axis=0, reverse=reverse, M=64, device=device, num_ctas=num_ctas)
 
 
 @pytest.mark.parametrize("M, N, src_layout, axis, num_ctas", [
@@ -157,7 +412,35 @@ def test_scan_rejects_axis_split_across_ctas(device, capfd):
     with pytest.raises(RuntimeError, match="PassManager::run failed"):
         scan_kernel.warmup(x, y, 64, 1, src_layout, 0, grid=(1, ), num_warps=4, num_ctas=2)
     captured = capfd.readouterr()
-    assert "unsupported scan layout" in captured.out + captured.err
+    assert "scan axis distributed across CTAs is not supported" in captured.out + captured.err
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_boolean_terminal_store(reverse, device):
+    lane_bases = [[0] for _ in range(THREADS_PER_WARP.bit_length() - 1)]
+    lane_bases[0], lane_bases[2] = [1], [2]
+    layout = ttgl.DistributedLinearLayout([[4], [8]], lane_bases, [[16], [0]], [], [32])
+
+    @gluon.jit
+    def combine(lhs, rhs):
+        return lhs | rhs
+
+    @gluon.jit
+    def kernel(X, Y, layout: ttgl.constexpr, reverse: ttgl.constexpr):
+        offsets = ttgl.arange(0, 32, layout=layout)
+        x = ttgl.load(X + offsets)
+        y = ttgl.associative_scan(x, 0, combine, reverse=reverse)
+        ttgl.store(Y + offsets, y)
+
+    # The terminal lane must store each warp's complete total as an i8.
+    x = torch.zeros(32, dtype=torch.bool, device=device)
+    x[13], x[27] = True, True
+    y = torch.empty_like(x)
+    kernel[(1, )](x, y, layout, reverse, num_warps=4)
+    expected = (x.flip([0]) if reverse else x).cumsum(0).bool()
+    if reverse:
+        expected = expected.flip([0])
+    torch.testing.assert_close(y, expected, rtol=0, atol=0)
 
 
 def test_scan_blocked_broadcast_layout(device):
