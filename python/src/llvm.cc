@@ -7,6 +7,7 @@
 #include "triton/Tools/Sys/GetEnv.h"
 #include "triton/Version.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -77,6 +78,53 @@ void enableFPContraction(llvm::Module &module) {
           instruction.getOpcode() == llvm::Instruction::FSub ||
           instruction.getOpcode() == llvm::Instruction::FMul)
         instruction.setHasAllowContract(true);
+}
+
+// The independently pinned AMD code generator predates disjoint alias scopes.
+// Keep explicit alias/noalias relationships, but drop the additional disjoint
+// guarantee when serializing for that backend. Do this after optimization so
+// Triton's LLVM always sees its own metadata format.
+void downgradeAliasScopeDomains(llvm::Module &module) {
+  SmallPtrSet<MDNode *, 16> seen;
+  SmallVector<TrackingMDNodeRef> scopes;
+  auto collect = [&](MDNode *list) {
+    if (list)
+      for (const MDOperand &operand : list->operands()) {
+        auto *scope = cast<MDNode>(operand);
+        if (seen.insert(scope).second)
+          scopes.emplace_back(scope);
+      }
+  };
+  for (Function &function : module)
+    for (Instruction &instruction : instructions(function)) {
+      collect(instruction.getMetadata(LLVMContext::MD_alias_scope));
+      collect(instruction.getMetadata(LLVMContext::MD_noalias));
+      if (auto *decl = dyn_cast<NoAliasScopeDeclInst>(&instruction))
+        collect(decl->getScopeList());
+    }
+
+  DenseMap<MDNode *, MDNode *> domains;
+  for (const TrackingMDNodeRef &scope : scopes) {
+    auto *domain = cast<MDNode>(scope->getOperand(1));
+    if (domains.contains(domain))
+      continue;
+    SmallVector<Metadata *> operands{domain->getOperand(0)};
+    if (domain->getNumOperands() == 3)
+      operands.push_back(domain->getOperand(2));
+    bool selfReference = operands[0] == domain;
+    if (selfReference)
+      operands[0] = nullptr;
+    // Do not merge domains that only differ in the removed flag.
+    MDNode *replacement = MDNode::getDistinct(module.getContext(), operands);
+    if (selfReference)
+      replacement->replaceOperandWith(0, replacement);
+    domains[domain] = replacement;
+  }
+  SmallVector<MDNode *> replacements;
+  for (const TrackingMDNodeRef &scope : scopes)
+    replacements.push_back(domains.lookup(cast<MDNode>(scope->getOperand(1))));
+  for (auto [scope, replacement] : llvm::zip(scopes, replacements))
+    scope->replaceOperandWith(1, replacement);
 }
 
 struct ExpandMaskedDivRemPass : RequiredPassInfoMixin<ExpandMaskedDivRemPass> {
@@ -653,7 +701,8 @@ void init_triton_llvm(py::module_ &m) {
 
   m.def(
       "to_bitcode",
-      [](const std::string &llvmIR, bool enable_fp_fusion) {
+      [](const std::string &llvmIR, bool enable_fp_fusion,
+         bool legacy_alias_scopes) {
         std::string bitcode;
         {
           py::gil_scoped_release release;
@@ -669,12 +718,15 @@ void init_triton_llvm(py::module_ &m) {
                 " at line " + std::to_string(error.getLineNo()));
           if (enable_fp_fusion)
             enableFPContraction(*module);
+          if (legacy_alias_scopes)
+            downgradeAliasScopeDomains(*module);
           llvm::raw_string_ostream stream(bitcode);
           llvm::WriteBitcodeToFile(*module, stream);
         }
         return py::bytes(bitcode.data(), bitcode.size());
       },
-      py::arg("llvm_ir"), py::arg("enable_fp_fusion") = false);
+      py::arg("llvm_ir"), py::arg("enable_fp_fusion") = false,
+      py::arg("legacy_alias_scopes") = false);
 
   // Add Triton and LLVM versions to the module.
   m.def("add_version_info", [](llvm::Module *mod) {
