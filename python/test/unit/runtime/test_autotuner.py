@@ -14,6 +14,7 @@ def do_bench(kernel_call, quantiles, use_cuda_graph=False):
     return triton.testing.do_bench(kernel_call, quantiles=quantiles, warmup=1, rep=1)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize('use_cuda_graph', [False, True])
 def test_kwargs(use_cuda_graph: bool, device: str):
     if use_cuda_graph and not torch.cuda.is_available():
