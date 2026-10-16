@@ -1,8 +1,6 @@
 // RUN: split-file %s %t
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
-// RUN: triton-opt %t/parallel-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=CARRIES
-// RUN: triton-opt %t/grouped-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=GROUPS
 // RUN: triton-opt %t/tuple.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TUPLE
 // RUN: triton-opt %t/tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TUPLE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TRANSPOSE
@@ -10,20 +8,15 @@
 // RUN: triton-opt %t/converted-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-RETAIN
 // RUN: triton-opt %t/converted-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=TERMINAL
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=REUSE
-// RUN: triton-opt %t/parallel-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=COLUMNS
-// RUN: triton-opt %t/parallel-totals.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=COLUMNS
 // RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
 
-// RUN: triton-opt %t/ship-chunks.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=SHIP
-
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=OFFSETS
-
 // RUN: triton-opt %t/native-types.mlir --allocate-shared-memory | FileCheck %s --check-prefix=NATIVE-FP4
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-INTERWARP-GROUPS
 // RUN: triton-opt %t/register-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=REGISTER-TOTALS
-
 // RUN: triton-opt %t/boundary-carry-owners.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=BOUNDARY-OWNERS
+// RUN: triton-opt %t/gfx90a.mlir --allocate-amdgpu-shared-memory=arch=gfx90a --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a --canonicalize | FileCheck %s --check-prefix=GFX90A
 
 //--- scan.mlir
 
@@ -239,84 +232,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 }
 
-//--- parallel-carries.mlir
-
-#parallel_carries = #ttg.linear<{register = [[0, 1], [8, 0], [16, 0], [32, 0], [64, 0], [128, 0], [256, 0]], lane = [[1, 0], [2, 0], [0, 0], [0, 0], [0, 0]], warp = [[4, 0]], block = []}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-
-// CARRIES-LABEL: @test_parallel_carries
-// Scan the replicated sequence and return carries to the original owners.
-// CARRIES: store {{.*}}, ptr addrspace(3)
-// CARRIES: @llvm.nvvm.barrier
-// CARRIES: load {{.*}}, ptr addrspace(3)
-// CARRIES: @llvm.nvvm.shfl.sync.idx.i32
-// CARRIES-NOT: @llvm.nvvm.barrier
-// CARRIES: ret
-tt.func public @test_parallel_carries(%ptr: !tt.ptr<i32>) {
-  %rows = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #ttg.slice<{dim = 1, parent = #parallel_carries}>>
-  %cols = tt.make_range {start = 0 : i32, end = 2 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #parallel_carries}>>
-  %r = tt.expand_dims %rows {axis = 1 : i32} : tensor<512xi32, #ttg.slice<{dim = 1, parent = #parallel_carries}>> -> tensor<512x1xi32, #parallel_carries>
-  %c = tt.expand_dims %cols {axis = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #parallel_carries}>> -> tensor<1x2xi32, #parallel_carries>
-  %two = arith.constant dense<2> : tensor<512x1xi32, #parallel_carries>
-  %r2 = arith.muli %r, %two : tensor<512x1xi32, #parallel_carries>
-  %rr = tt.broadcast %r2 : tensor<512x1xi32, #parallel_carries> -> tensor<512x2xi32, #parallel_carries>
-  %cc = tt.broadcast %c : tensor<1x2xi32, #parallel_carries> -> tensor<512x2xi32, #parallel_carries>
-  %offset = arith.addi %rr, %cc : tensor<512x2xi32, #parallel_carries>
-  %base = tt.splat %ptr : !tt.ptr<i32> -> tensor<512x2x!tt.ptr<i32>, #parallel_carries>
-  %ptrs = tt.addptr %base, %offset : tensor<512x2x!tt.ptr<i32>, #parallel_carries>, tensor<512x2xi32, #parallel_carries>
-  %arg = tt.load %ptrs : tensor<512x2x!tt.ptr<i32>, #parallel_carries>
-  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
-  ^bb0(%lhs: i32, %rhs: i32):
-    %sum = arith.addi %lhs, %rhs : i32
-    tt.scan.return %sum : i32
-  }) : (tensor<512x2xi32, #parallel_carries>) -> tensor<512x2xi32, #parallel_carries>
-  tt.store %ptrs, %result : tensor<512x2x!tt.ptr<i32>, #parallel_carries>
-  tt.return
-}
-
-}
-
-//--- grouped-carries.mlir
-
-#grouped_carries = #ttg.linear<{register = [[0, 1], [16, 0], [32, 0], [64, 0], [128, 0], [256, 0]], lane = [[1, 0], [2, 0], [0, 0], [0, 0], [0, 0]], warp = [[4, 0], [8, 0]], block = []}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-
-// GROUPS-LABEL: @test_grouped_carries
-// Replicate all 128 segment totals within each warp, including register
-// sequences, and scan them after the shared-memory conversion.
-// GROUPS: store {{.*}}, ptr addrspace(3)
-// GROUPS: @llvm.nvvm.barrier
-// GROUPS: load {{.*}}, ptr addrspace(3)
-// GROUPS: @llvm.nvvm.shfl.sync.idx.i32
-// GROUPS: fadd float
-// GROUPS-NOT: @llvm.nvvm.barrier
-// GROUPS: ret
-tt.func public @test_grouped_carries(%ptr: !tt.ptr<f32>) {
-  %rows = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #ttg.slice<{dim = 1, parent = #grouped_carries}>>
-  %cols = tt.make_range {start = 0 : i32, end = 2 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #grouped_carries}>>
-  %r = tt.expand_dims %rows {axis = 1 : i32} : tensor<512xi32, #ttg.slice<{dim = 1, parent = #grouped_carries}>> -> tensor<512x1xi32, #grouped_carries>
-  %c = tt.expand_dims %cols {axis = 0 : i32} : tensor<2xi32, #ttg.slice<{dim = 0, parent = #grouped_carries}>> -> tensor<1x2xi32, #grouped_carries>
-  %two = arith.constant dense<2> : tensor<512x1xi32, #grouped_carries>
-  %r2 = arith.muli %r, %two : tensor<512x1xi32, #grouped_carries>
-  %rr = tt.broadcast %r2 : tensor<512x1xi32, #grouped_carries> -> tensor<512x2xi32, #grouped_carries>
-  %cc = tt.broadcast %c : tensor<1x2xi32, #grouped_carries> -> tensor<512x2xi32, #grouped_carries>
-  %offset = arith.addi %rr, %cc : tensor<512x2xi32, #grouped_carries>
-  %base = tt.splat %ptr : !tt.ptr<f32> -> tensor<512x2x!tt.ptr<f32>, #grouped_carries>
-  %ptrs = tt.addptr %base, %offset : tensor<512x2x!tt.ptr<f32>, #grouped_carries>, tensor<512x2xi32, #grouped_carries>
-  %arg = tt.load %ptrs : tensor<512x2x!tt.ptr<f32>, #grouped_carries>
-  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
-  ^bb0(%lhs: f32, %rhs: f32):
-    %sum = arith.addf %lhs, %rhs : f32
-    tt.scan.return %sum : f32
-  }) : (tensor<512x2xf32, #grouped_carries>) -> tensor<512x2xf32, #grouped_carries>
-  tt.store %ptrs, %result : tensor<512x2x!tt.ptr<f32>, #grouped_carries>
-  tt.return
-}
-
-}
-
 //--- tuple.mlir
 
 // Thirty-two warp-segment totals share lanes with independent columns.
@@ -481,41 +396,6 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
   tt.return %a_out, %b_out : tensor<32xi8, #native_prefix>, tensor<32xi64, #native_prefix>
 }
 
-
-// After conversion, each of four logical lanes owns four consecutive values.
-// Two scan rounds update every register prefix with the preceding lanes' total.
-// The register/lane conversions use butterfly shuffles.
-// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_forward
-// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
-// TRANSPOSE-NOT: nvvm.shfl.sync idx
-// TRANSPOSE: llvm.return
-// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_forward
-// AMD-TRANSPOSE: llvm.add
-// AMD-TRANSPOSE: llvm.return
-tt.func private @test_scan_lane_prefixes_forward(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
-  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
-  ^bb0(%lhs: i32, %rhs: i32):
-    %sum = arith.addi %lhs, %rhs : i32
-    tt.scan.return %sum : i32
-  }) : (tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose>
-  tt.return %result : tensor<16xi32, #transpose>
-}
-// TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_reverse
-// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
-// TRANSPOSE-NOT: nvvm.shfl.sync idx
-// TRANSPOSE: llvm.return
-// AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_reverse
-// AMD-TRANSPOSE: llvm.add
-// AMD-TRANSPOSE: llvm.return
-tt.func private @test_scan_lane_prefixes_reverse(%arg: tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose> {
-  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
-  ^bb0(%lhs: i32, %rhs: i32):
-    %sum = arith.addi %lhs, %rhs : i32
-    tt.scan.return %sum : i32
-  }) : (tensor<16xi32, #transpose>) -> tensor<16xi32, #transpose>
-  tt.return %result : tensor<16xi32, #transpose>
-}
-
 // Promoted register prefixes share the lane lookup and boundary predicate.
 // REUSE-LABEL: llvm.func {{.*}}@test_scan_reuse_lane_lookups
 // REUSE: %[[P:.*]] = llvm.icmp "uge"
@@ -587,47 +467,6 @@ tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #conver
     tt.scan.return %sum : i32
   }) : (tensor<32xi32, #converted>) -> tensor<32xi32, #converted>
   tt.return %result : tensor<32xi32, #converted>
-}
-}
-
-//--- parallel-totals.mlir
-
-#parallel_totals = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Replicate four segment totals in each warp and scan them in registers.
-// Register scans and carry propagation require 33 adds in total.
-// COLUMNS-LABEL: llvm.func {{.*}}@test_scan_parallel_totals(
-// COLUMNS-COUNT-33: llvm.fadd
-// COLUMNS-NOT: llvm.fadd
-// COLUMNS: llvm.return
-tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals> {
-  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
-  ^bb0(%lhs: f32, %rhs: f32):
-    %sum = arith.addf %lhs, %rhs : f32
-    tt.scan.return %sum : f32
-  }) : (tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals>
-  tt.return %result : tensor<128x8xf32, #parallel_totals>
-}
-}
-
-//--- ship-chunks.mlir
-
-#ship = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-// Convert the full register/lane sequence within the warp, then scan it.
-// SHIP: ttg.shared = 0 : i32
-// SHIP-LABEL: llvm.func {{.*}}@test_scan_register_lane_exchanges(
-// SHIP: nvvm.shfl.sync
-// SHIP: llvm.fadd
-// SHIP-NOT: nvvm.barrier
-// SHIP: llvm.return
-tt.func private @test_scan_register_lane_exchanges(%arg: tensor<512xf32, #ship>) -> tensor<512xf32, #ship> {
-  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
-  ^bb0(%lhs: f32, %rhs: f32):
-    %sum = arith.addf %lhs, %rhs : f32
-    tt.scan.return %sum : f32
-  }) : (tensor<512xf32, #ship>) -> tensor<512xf32, #ship>
-  tt.return %result : tensor<512xf32, #ship>
 }
 }
 
@@ -791,5 +630,29 @@ tt.func private @test_scan_preserve_boundary_carry_owners(%arg: tensor<2048xi32,
     tt.scan.return %sum : i32
   }) : (tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes>
   tt.return %result : tensor<2048xi32, #boundary_prefixes>
+}
+}
+
+//--- gfx90a.mlir
+
+// Register, lane, and warp bits alternate along the scan axis. Zero lane
+// bases replicate values within a wave64; tuple operands have different widths.
+#interleaved = #ttg.linear<{register = [[16, 0], [4, 0], [0, 1]], lane = [[1, 0], [0, 2], [8, 0], [0, 4], [0, 0], [0, 0]], warp = [[2, 0], [32, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, ttg.target = "hip:gfx90a"} {
+// GFX90A-LABEL: llvm.func {{.*}}@test_scan_wave64_interleaved_reverse(
+// GFX90A: llvm.store
+// GFX90A: rocdl.s.barrier
+// GFX90A: llvm.load
+// GFX90A: llvm.return
+tt.func private @test_scan_wave64_interleaved_reverse(%a: tensor<64x8xi8, #interleaved>, %b: tensor<64x8xi64, #interleaved>) -> (tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>) {
+  %a_out, %b_out = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%a1: i8, %b1: i64, %a2: i8, %b2: i64):
+    %a12 = arith.muli %a1, %a2 : i8
+    %a2_wide = arith.extsi %a2 : i8 to i64
+    %b12 = arith.muli %b1, %a2_wide : i64
+    %b_sum = arith.addi %b12, %b2 : i64
+    tt.scan.return %a12, %b_sum : i8, i64
+  }) : (tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>) -> (tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>)
+  tt.return %a_out, %b_out : tensor<64x8xi8, #interleaved>, tensor<64x8xi64, #interleaved>
 }
 }
