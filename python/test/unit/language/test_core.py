@@ -2791,6 +2791,7 @@ def test_cast_bf16_rounding(dtype_x, rounding, device):
     z = torch.empty_like(x, dtype=torch.bfloat16)
     kernel[(1, )](x, z, SIZE=x.numel(), ROUNDING=rounding)
     torch.testing.assert_close(z, expected, rtol=0, atol=0, equal_nan=True)
+    assert torch.equal(torch.signbit(z[~torch.isnan(z)]), torch.signbit(expected[~torch.isnan(expected)]))
     if dtype_x == "float64":
         y = torch.empty_like(x)
         kernel[(1, )](z, y, SIZE=z.numel(), ROUNDING=None)
