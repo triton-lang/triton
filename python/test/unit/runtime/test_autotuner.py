@@ -5,6 +5,8 @@ import triton.language as tl
 import pytest
 
 import pathlib
+from types import SimpleNamespace
+from triton.backends.compiler import GPUTarget
 from triton._internal_testing import is_cuda, is_hip_cdna2, is_rubin
 
 
@@ -375,6 +377,63 @@ def test_config_ir_override_changes_disk_cache_key():
     second = triton.Config(kwargs={"BLOCK_SIZE": 32}, ir_override="second.ttir")
 
     assert str(first) != str(second)
+
+
+@pytest.mark.parametrize("second_target", [GPUTarget("cuda", 75, 32), GPUTarget("hip", "gfx942", 64)])
+def test_cache_separates_targets(monkeypatch, fresh_knobs, second_target):
+    fresh_knobs.runtime.interpret = False
+    first_target = GPUTarget("cuda", 86, 32)
+    target = first_target
+    launched = []
+    benchmarked = []
+    monkeypatch.setattr("triton.runtime.autotuner.driver",
+                        SimpleNamespace(active=SimpleNamespace(get_current_target=lambda: target)))
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            launched.append(kwargs["BLOCK_SIZE"])
+
+    def benchmark(kernel_call, quantiles):
+        kernel_call()
+        benchmarked.append((target, launched[-1]))
+        best_block_size = 64 if target == first_target else 32
+        return [0.0 if launched[-1] == best_block_size else 1.0] * 3
+
+    tuner = triton.runtime.Autotuner(Kernel(), arg_names=["N"],
+                                     configs=[triton.Config({"BLOCK_SIZE": 32}),
+                                              triton.Config({"BLOCK_SIZE": 64})], key=["N"], reset_to_zero=None,
+                                     restore_value=None, do_bench=benchmark)
+
+    tuner.run(N=1024)
+    assert launched[-1] == 64
+    target = second_target
+    tuner.run(N=1024)
+    assert launched[-1] == 32
+    target = first_target
+    tuner.run(N=1024)
+    assert launched[-1] == 64
+    assert benchmarked == [(first_target, 32), (first_target, 64), (second_target, 32), (second_target, 64)]
+
+
+def test_interpreter_autotune_without_driver(monkeypatch, fresh_knobs):
+    fresh_knobs.runtime.interpret = True
+    monkeypatch.setattr("triton.runtime.autotuner.driver", None)
+
+    def benchmark(kernel_call, quantiles):
+        kernel_call()
+        return [1.0, 1.0, 1.0]
+
+    @triton.autotune(configs=[triton.Config({"BLOCK_SIZE": 32}),
+                              triton.Config({"BLOCK_SIZE": 64})], key=[], do_bench=benchmark)
+    @triton.jit
+    def _kernel(BLOCK_SIZE: tl.constexpr):
+        pass
+
+    _kernel[(1, )]()
 
 
 @pytest.mark.parametrize("prune_kind", ["early_config_prune", "perf_model"])
