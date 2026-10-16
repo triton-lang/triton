@@ -65,6 +65,7 @@ def test_compile_only_sm100() -> None:
     k = triton.compile(
         triton.compiler.ASTSource(fn=kernel_add, signature={"a": "*fp32", "b": "*fp32", "c": "*fp32"}, constexprs={}),
         target=GPUTarget("cuda", 100, 32))
+    assert 'target triple = "nvptx64-nvidia-cuda"' in k.asm["llir"]
     ptx = k.asm["ptx"]
     assert ".target sm_100a" in ptx
     assert ".address_size 64" in ptx

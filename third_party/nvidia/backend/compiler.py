@@ -495,6 +495,7 @@ class CUDABackend(BaseBackend):
         features = get_features(options, capability)
         triple = 'nvptx64-nvidia-cuda'
         flags = get_llvm_flags()
+        llvm.set_target_triple(llvm_mod, triple)
         llvm.attach_datalayout(llvm_mod, triple, proc, features, flags)
         if options.enable_reflect_ftz:
             nvidia.set_nvvm_reflect_ftz(llvm_mod)
@@ -508,9 +509,12 @@ class CUDABackend(BaseBackend):
         llvm.optimize_module(
             llvm_mod,
             llvm.OPTIMIZE_O3,
+            arch=proc,
+            features=features,
             # Same LLVM flags as make_ptx: compilations sharing a process only
             # run in parallel while their flag sets are identical.
             flags=flags,
+            enable_fp_fusion=options.enable_fp_fusion,
             disable_slp_vectorizer=not use_slp_vectorizer,
             expand_masked_div_rem=True,
             nvptx_compute_capability=0 if use_slp_vectorizer else capability,
