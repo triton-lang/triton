@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ctypes
 import os
+from contextlib import ExitStack
 
 import pytest
 import torch
@@ -788,3 +790,184 @@ def _run_write_once_live_allocation_check(shadow_granularity):
 def test_write_once_live_allocation_blocks_reset(shadow_granularity):
     result = run_in_process(_run_write_once_live_allocation_check, args=(shadow_granularity, ))
     assert result.exc is None, result.exc
+
+
+class _AllocationLocation(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("id", ctypes.c_int)]
+
+
+class _AllocationProperties(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("handle_types", ctypes.c_int), ("location", _AllocationLocation),
+                ("win32_metadata", ctypes.c_void_p), ("flags", ctypes.c_byte * 8)]
+
+
+def _allocation_device(ptr):
+    cuda = ctypes.CDLL("libcuda.so.1")
+    handle = ctypes.c_ulonglong()
+    assert cuda.cuMemRetainAllocationHandle(ctypes.byref(handle), ctypes.c_void_p(ptr)) == 0
+    with ExitStack() as cleanup:
+        cleanup.callback(cuda.cuMemRelease, handle)
+        properties = _AllocationProperties()
+        assert cuda.cuMemGetAllocationPropertiesFromHandle(ctypes.byref(properties), handle) == 0
+        assert properties.location.type == 1  # CU_MEM_LOCATION_TYPE_DEVICE
+        return properties.location.id
+
+
+def _require_peer_atomics():
+    cuda = ctypes.CDLL("libcuda.so.1")
+    supported = ctypes.c_int()
+    # CU_DEVICE_P2P_ATTRIBUTE_NATIVE_ATOMIC_SUPPORTED
+    assert cuda.cuDeviceGetP2PAttribute(ctypes.byref(supported), 3, 0, 1) == 0
+    if not supported.value:
+        pytest.skip("requires native peer atomics from CUDA device 0 to 1")
+
+
+@gluon.jit
+def _load_remote_shadow(ptr, out, WIDTH: gl.constexpr):
+    offsets = gl.arange(0, WIDTH, layout=gl.BlockedLayout([16], [32], [1], [0]))
+    gl.store(out + offsets, gl.load(ptr + offsets))
+
+
+def _run_remote_shadow_check(write_once, shadow_granularity):
+    torch.cuda.set_device(0)
+    configure(device_ranks={0: 0}, num_devices=1, shadow_device=1)
+    stream = torch.cuda.Stream()
+    with ExitStack() as cleanup, torch.cuda.stream(stream), triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "gsan"
+        ptr = gsan_malloc(_ODD_LARGE_ALLOCATION_SIZE, 0, stream.cuda_stream, write_once=write_once,
+                          shadow_granularity=shadow_granularity)
+        assert ptr != 0
+        cleanup.callback(gsan_free, ptr, 0, 0, stream.cuda_stream)
+        real, size, shadow, shadow_size = export_allocation_memhandle_regions(ptr)
+        assert _allocation_device(real) == 0
+        assert _allocation_device(shadow) == 1
+        state = global_state(device_index=0)
+        assert state.num_threads == state.num_sms
+        with pytest.raises(ValueError, match="no GSan device rank configured"):
+            get_device_rank(1)
+        target = uint8_cuda_tensor_from_ptr(ptr, size, 0)
+        assert torch.count_nonzero(shadow_tensor_for(target)).item() == 0
+        _store_reset_target[(1, )](target.view(torch.int32), WIDTH=4, num_warps=1)
+
+        real_fd, shadow_fd, size, granularity = export_allocation_handles(ptr,
+                                                                          ShareableHandleType.POSIX_FILE_DESCRIPTOR,
+                                                                          write_once=write_once,
+                                                                          include_granularity=True)
+        assert granularity == shadow_granularity
+        cleanup.callback(os.close, real_fd)
+        cleanup.callback(os.close, shadow_fd)
+        alias_ptr = import_allocation_handles(real_fd, shadow_fd, size, 0, ShareableHandleType.POSIX_FILE_DESCRIPTOR,
+                                              write_once=write_once, shadow_granularity=granularity)
+        cleanup.callback(free_allocation, alias_ptr, 0)
+        alias = uint8_cuda_tensor_from_ptr(alias_ptr, size, 0).view(torch.int32)
+        output = torch.empty(4, device="cuda", dtype=torch.int32)
+        _load_remote_shadow[(1, )](alias, output, WIDTH=4, num_warps=1)
+        assert torch.all(output == 1)
+        assert shadow_cell_from_address(alias_ptr) == shadow_cell_from_address(ptr)
+        stream.synchronize()
+    assert not has_live_allocations()
+
+
+@pytest.mark.xdist_group("gsan-multi-gpu")
+@pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires two CUDA devices")
+@pytest.mark.parametrize("write_once", [False, True])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
+def test_remote_shadow_placement_and_aliases(write_once, shadow_granularity):
+    _require_peer_atomics()
+    result = run_in_process(_run_remote_shadow_check, args=(write_once, shadow_granularity))
+    assert result.exc is None, (result.exc, result.driver_stderr_output)
+
+
+def _run_invalid_shadow_device_check():
+    with pytest.raises(ValueError, match="requires shadow_device"):
+        configure(shadow_local_reserve_bytes=0)
+    with pytest.raises(OverflowError):
+        configure(shadow_device=1, shadow_local_reserve_bytes=-1)
+    with pytest.raises(TypeError):
+        configure(shadow_device=1, shadow_local_reserve_bytes="1")
+    with pytest.raises(ValueError, match="shadow_device must be non-negative"):
+        configure(shadow_device=-1)
+    with pytest.raises(TypeError):
+        configure(shadow_device="1")
+    configure(shadow_device=0)
+    freeze_config()
+    with pytest.raises(RuntimeError, match="configuration is already frozen"):
+        configure(shadow_device=1)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_shadow_device_configuration_validation():
+    result = run_in_process(_run_invalid_shadow_device_check)
+    assert result.exc is None, result.exc
+
+
+def _run_shadow_spill_check(write_once, shadow_granularity):
+    torch.cuda.set_device(0)
+    cuda = ctypes.CDLL("libcuda.so.1")
+    # Leave room for two local shadows even at one-byte tracking granularity.
+    reserve = torch.cuda.mem_get_info()[0] - 1024**3
+    configure(device_ranks={0: 0}, num_devices=1, shadow_device=1, shadow_local_reserve_bytes=reserve)
+    stream = torch.cuda.Stream()
+    with ExitStack() as cleanup, torch.cuda.stream(stream), triton.knobs.compilation.scope():
+        triton.knobs.compilation.instrumentation_mode = "gsan"
+
+        def allocate():
+            ptr = gsan_malloc(8 * 1024**2, 0, stream.cuda_stream, write_once=write_once,
+                              shadow_granularity=shadow_granularity)
+            assert ptr != 0
+            cleanup.callback(gsan_free, ptr, 0, 0, stream.cuda_stream)
+            real, size, shadow, _ = export_allocation_memhandle_regions(ptr)
+            assert _allocation_device(real) == 0
+            return ptr, shadow, size
+
+        local = allocate()
+        assert _allocation_device(local[1]) == 0
+        # Apply real memory pressure, but use a high reserve to avoid consuming
+        # the GPU's full capacity. Leave enough for real storage, not its shadow.
+        free, _ = torch.cuda.mem_get_info()
+        pressure_bytes = free - reserve - 8 * 1024**2
+        assert pressure_bytes > 0
+        pressure_ptr = ctypes.c_ulonglong()
+        with ExitStack() as pressure:
+            assert cuda.cuMemAlloc_v2(ctypes.byref(pressure_ptr), ctypes.c_size_t(pressure_bytes)) == 0
+            pressure.callback(cuda.cuMemFree_v2, pressure_ptr)
+            spilled = allocate()
+            assert _allocation_device(spilled[1]) == 1
+            assert torch.cuda.mem_get_info()[0] >= reserve
+        local_again = allocate()
+        assert _allocation_device(local_again[1]) == 0
+        assert _allocation_device(spilled[1]) == 1
+        for ptr, shadow, size in (local, spilled, local_again):
+            target = uint8_cuda_tensor_from_ptr(ptr, size, 0).view(torch.int32)
+            output = torch.empty(4, device="cuda", dtype=torch.int32)
+            _store_reset_target[(1, )](target, WIDTH=4, num_warps=1)
+            _load_remote_shadow[(1, )](target, output, WIDTH=4, num_warps=1)
+            assert torch.all(output == 1)
+        stream.synchronize()
+    assert not has_live_allocations()
+
+
+@pytest.mark.xdist_group("gsan-multi-gpu")
+@pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires two CUDA devices")
+@pytest.mark.parametrize("write_once", [False, True])
+@pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
+def test_shadow_spill_prefers_local_and_recovers(write_once, shadow_granularity):
+    _require_peer_atomics()
+    if torch.cuda.mem_get_info(0)[0] < 2 * 1024**3:
+        pytest.skip("requires 2 GiB free on device 0")
+    result = run_in_process(_run_shadow_spill_check, args=(write_once, shadow_granularity))
+    assert result.exc is None, (result.exc, result.driver_stderr_output)
+
+
+def _run_shadow_spill_same_device_check():
+    device = torch.cuda.current_device()
+    configure(device_ranks={device: 0}, num_devices=1, shadow_device=device, shadow_local_reserve_bytes=0)
+    assert gsan_malloc(4, device) == 0
+    assert not has_live_allocations()
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_shadow_spill_rejects_same_device():
+    result = run_in_process(_run_shadow_spill_same_device_check)
+    assert result.exc is None, result.exc
+    assert "spill device must differ" in result.driver_stderr_output
