@@ -1266,3 +1266,48 @@ def test_module_load_unload(device, fresh_knobs):
     assert pre_compile.module is None
     # turn on garbage collector
     gc.enable()
+
+
+def test_store_binary_only(device, fresh_triton_cache, fresh_compilation_knobs):
+
+    @triton.jit
+    def kernel(out_ptr, val) -> None:
+        tl.store(out_ptr, val)
+
+    cache_hits = []
+    fresh_compilation_knobs.compilation.store_binary_only = True
+    fresh_compilation_knobs.compilation.listener = lambda **kwargs: cache_hits.append(kwargs["cache_hit"])
+    out = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel[(1, )](out, 2)
+    # Drop the in-memory kernel, so the second launch loads it from the stored binaries.
+    kernel.device_caches.clear()
+    kernel[(1, )](out, 3)
+    assert out.item() == 3
+    assert cache_hits == [False, True]
+
+
+def test_override_binary(device, fresh_knobs, tmp_path, capfd):
+
+    @triton.jit
+    def kernel(out_ptr, val) -> None:
+        tl.store(out_ptr, val)
+
+    fresh_knobs.cache.dir = str(tmp_path / "cache")
+    fresh_knobs.cache.dump_dir = str(tmp_path / "dump")
+    fresh_knobs.compilation.dump_ir = True
+    out = torch.zeros(1, dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](out, 2)
+    binary_ext = next(ext for ext, value in compiled.asm.items() if value is compiled.kernel)
+    dumped = next((tmp_path / "dump").rglob(f"*.{binary_ext}"))
+    override = tmp_path / "override" / dumped.relative_to(tmp_path / "dump")
+    override.parent.mkdir(parents=True)
+    shutil.copy(dumped, override)
+
+    fresh_knobs.compilation.dump_ir = False
+    fresh_knobs.compilation.override = True
+    fresh_knobs.compilation.always_compile = True
+    fresh_knobs.cache.override_dir = str(tmp_path / "override")
+    kernel.device_caches.clear()
+    kernel[(1, )](out, 3)
+    assert out.item() == 3
+    assert f"Overriding kernel with file {override}" in capfd.readouterr().out
