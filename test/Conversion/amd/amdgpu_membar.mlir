@@ -346,7 +346,7 @@ tt.func @disjoint_tdm_copy_remsi(%desc: !tt.tensordesc<128x128xf16, #shared>, %p
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable>
 
   // Write index: (phase + 2) % 3
-  %write_phase = arith.addi %phase, %c2_i32 : i32
+  %write_phase = arith.addi %phase, %c2_i32 overflow<nsw> : i32
   %write_idx = arith.remsi %write_phase, %c3_i32 : i32
   %write_view = ttg.memdesc_index %alloc[%write_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
 
@@ -417,7 +417,7 @@ tt.func @disjoint_remsi_loop_carried_cf(%cst: tensor<128x128xf16, #AL>, %ub: i32
     // CHECK-NEXT: ttg.local_load
     %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #AL>
 
-    %w_sum = arith.addi %phase, %c1_i32 : i32
+    %w_sum = arith.addi %phase, %c1_i32 overflow<nsw> : i32
     %w_idx = arith.remsi %w_sum, %c3_i32 : i32
     %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<3x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     // CHECK-NOT: ttg.barrier local
@@ -449,7 +449,7 @@ tt.func @must_barrier_remsi_loop_carried_future_disjoint_cf(%cst: tensor<128x128
     // CHECK-NEXT: ttg.local_load
     %load = ttg.local_load %r_view : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #AL>
 
-    %w_sum = arith.addi %phase, %c1_i32 : i32
+    %w_sum = arith.addi %phase, %c1_i32 overflow<nsw> : i32
     %w_idx = arith.remsi %w_sum, %c4_i32 : i32
     %w_view = ttg.memdesc_index %alloc[%w_idx] : !ttg.memdesc<4x128x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     // CHECK-NOT: ttg.barrier local
@@ -739,6 +739,173 @@ tt.func @no_barrier_tdm_mbarrier_in_loop(
     // CHECK-NOT: ttg.barrier local
   }
   // CHECK: tt.return
+  tt.return
+}
+}
+
+// -----
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// The pipeliner rotates the slot views of the stages in flight through iter_args:
+// the view read in an iteration was written two iterations earlier. With three
+// slots and a counter advancing by one slot per iteration, the read slot
+// (c - 1) mod 3 differs from the refilled slot (c + 1) mod 3, so the refill
+// needs no barrier after the synced local_load.
+// CHECK-LABEL: pipelined_loop_rotated_slot_views
+tt.func @pipelined_loop_rotated_slot_views(%A: !tt.ptr<f16>, %ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %offset = arith.constant dense<0> : tensor<128x32xi32, #AL>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+  %s0 = ttg.memdesc_index %alloc[%c0_i32] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %ld0 = amdg.buffer_load_to_local %A[%offset] into %s0 : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
+  %cg0 = ttg.async_commit_group tokens %ld0
+  %s1 = ttg.memdesc_index %alloc[%c1_i32] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %ld1 = amdg.buffer_load_to_local %A[%offset] into %s1 : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
+  %cg1 = ttg.async_commit_group tokens %ld1
+  %w0 = ttg.async_wait %cg0 {num = 1 : i32}
+  %res:5 = scf.for %iv = %c0_i32 to %ub step %c1_i32 iter_args(%c = %c1_i32, %r = %s0, %n = %s1, %tok = %w0, %cgp = %cg1) -> (i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>, !ttg.async.token, !ttg.async.token) : i32 {
+    %cp1 = arith.addi %c, %c1_i32 : i32
+    %lt = arith.cmpi slt, %cp1, %c3_i32 : i32
+    %cn = arith.select %lt, %cp1, %c0_i32 : i32
+    %sw = ttg.memdesc_index %alloc[%cn] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_load
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: amdg.buffer_load_to_local
+    %v = ttg.local_load %r token %tok : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+    %ld = amdg.buffer_load_to_local %A[%offset] into %sw : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
+    %cg = ttg.async_commit_group tokens %ld
+    %w = ttg.async_wait %cgp {num = 1 : i32}
+    scf.yield %cn, %n, %sw, %w, %cg : i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>, !ttg.async.token, !ttg.async.token
+  }
+  tt.return
+}
+}
+
+// -----
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// Same loop, but the entry views are swapped. In iteration 1 the read view is
+// slot 0, which the counter also refills, so the induction must fail and the
+// WAR barrier must stay.
+// CHECK-LABEL: pipelined_loop_rotated_slot_views_entry_mismatch
+tt.func @pipelined_loop_rotated_slot_views_entry_mismatch(%A: !tt.ptr<f16>, %ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %offset = arith.constant dense<0> : tensor<128x32xi32, #AL>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+  %s0 = ttg.memdesc_index %alloc[%c0_i32] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %ld0 = amdg.buffer_load_to_local %A[%offset] into %s0 : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
+  %cg0 = ttg.async_commit_group tokens %ld0
+  %s1 = ttg.memdesc_index %alloc[%c1_i32] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %ld1 = amdg.buffer_load_to_local %A[%offset] into %s1 : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
+  %cg1 = ttg.async_commit_group tokens %ld1
+  %w0 = ttg.async_wait %cg0 {num = 1 : i32}
+  %res:5 = scf.for %iv = %c0_i32 to %ub step %c1_i32 iter_args(%c = %c1_i32, %r = %s1, %n = %s0, %tok = %w0, %cgp = %cg1) -> (i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>, !ttg.async.token, !ttg.async.token) : i32 {
+    %cp1 = arith.addi %c, %c1_i32 : i32
+    %lt = arith.cmpi slt, %cp1, %c3_i32 : i32
+    %cn = arith.select %lt, %cp1, %c0_i32 : i32
+    %sw = ttg.memdesc_index %alloc[%cn] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_load
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: amdg.buffer_load_to_local
+    %v = ttg.local_load %r token %tok : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+    %ld = amdg.buffer_load_to_local %A[%offset] into %sw : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
+    %cg = ttg.async_commit_group tokens %ld
+    %w = ttg.async_wait %cgp {num = 1 : i32}
+    scf.yield %cn, %n, %sw, %w, %cg : i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>, !ttg.async.token, !ttg.async.token
+  }
+  tt.return
+}
+}
+
+// -----
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// x % 3 and (x + 4) % 3 have different symbolic offsets, but the addition may
+// wrap: at x = 2147483646 both are slot 0. The WAR barrier must stay.
+// CHECK-LABEL: slot_index_add_may_overflow
+tt.func @slot_index_add_may_overflow(%x: i32, %v: tensor<128x32xf16, #AL>) {
+  %c3_i32 = arith.constant 3 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+  %i = arith.remsi %x, %c3_i32 : i32
+  %x4 = arith.addi %x, %c4_i32 : i32
+  %j = arith.remsi %x4, %c3_i32 : i32
+  %si = ttg.memdesc_index %alloc[%i] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %sj = ttg.memdesc_index %alloc[%j] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_store
+  %r = ttg.local_load %si : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+  ttg.local_store %v, %sj : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  tt.return
+}
+
+// The same indices with an nsw addition: no wrap, so the slots differ.
+// CHECK-LABEL: slot_index_add_nsw
+tt.func @slot_index_add_nsw(%x: i32, %v: tensor<128x32xf16, #AL>) {
+  %c3_i32 = arith.constant 3 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+  %i = arith.remsi %x, %c3_i32 : i32
+  %x4 = arith.addi %x, %c4_i32 overflow<nsw> : i32
+  %j = arith.remsi %x4, %c3_i32 : i32
+  %si = ttg.memdesc_index %alloc[%i] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %sj = ttg.memdesc_index %alloc[%j] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  // CHECK: ttg.local_load
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_store
+  %r = ttg.local_load %si : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+  ttg.local_store %v, %sj : tensor<128x32xf16, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// A carried view whose counter advances by remsi(c + 2147483647, 3). Without
+// wrapping that is c + 1 (mod 3), but the addition overflows i32: with signed
+// remainder c runs 0, 1, -2, and the third iteration reads and refills slot 1.
+// The counter step must not be trusted, so the WAR barrier stays.
+// CHECK-LABEL: carried_view_counter_may_overflow
+tt.func @carried_view_counter_may_overflow(%A: !tt.ptr<f16>, %ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c_max = arith.constant 2147483647 : i32
+  %offset = arith.constant dense<0> : tensor<128x32xi32, #AL>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable>
+  %s2 = ttg.memdesc_index %alloc[%c2_i32] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %res:2 = scf.for %iv = %c0_i32 to %ub step %c1_i32 iter_args(%c = %c0_i32, %r = %s2) -> (i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>) : i32 {
+    %cw = arith.addi %c, %c3_i32 : i32
+    %wi = arith.remsi %cw, %c3_i32 : i32
+    %w = ttg.memdesc_index %alloc[%wi] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+    // CHECK: ttg.local_load
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: amdg.buffer_load_to_local
+    %v = ttg.local_load %r : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
+    %ld = amdg.buffer_load_to_local %A[%offset] into %w : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
+    %cn0 = arith.addi %c, %c_max : i32
+    %cn = arith.remsi %cn0, %c3_i32 : i32
+    scf.yield %cn, %w : i32, !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  }
   tt.return
 }
 }
