@@ -634,27 +634,6 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     }
   }
 
-  // Create lock variable allocation
-  Value lockVal = createLockVariable(b);
-  // Initialize the shared-cluster lock once, then synchronize before any CTA
-  // can enter the first instrumented critical section.
-  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-  Value zero = arith::ConstantIntOp::create(b, 0, 32);
-  Value isCTA0 =
-      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
-  ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
-  if (numCTAs > 1) {
-    SmallVector<Operation *> clusterBarriers =
-        hooks.createInitClusterBarrier(b);
-    assert(!clusterBarriers.empty() &&
-           "target must provide a cluster initialization barrier");
-    llvm::append_range(internalClusterBarriers, clusterBarriers);
-  } else {
-    BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
-  }
-  lock.insert(entryRegion, {lockVal, lockVal.getType()});
-  passValueToWarpSpecialize(lock.at(entryRegion), lock);
-
   auto createCommitTensor = [&](CommitKind::Kind commitKind) {
     unsigned numLanes = bufferStatePlans[(int)MemType::SHARED_MEM].numLanes;
     int numBufs = numLanes == 0 ? 0 : llvm::NextPowerOf2(numLanes - 1);
@@ -687,6 +666,28 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     passValueToWarpSpecialize(asyncCopyIssueAges.at(entryRegion),
                               asyncCopyIssueAges);
   }
+
+  // Create lock variable allocation
+  Value lockVal = createLockVariable(b);
+  // Initialize the shared-cluster lock once, then synchronize before any CTA
+  // can enter the first instrumented critical section. Other CTAs may use the
+  // state as soon as they pass the barrier, so CTA0 must fill all of it above.
+  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value zero = arith::ConstantIntOp::create(b, 0, 32);
+  Value isCTA0 =
+      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
+  ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
+  if (numCTAs > 1) {
+    SmallVector<Operation *> clusterBarriers =
+        hooks.createInitClusterBarrier(b);
+    assert(!clusterBarriers.empty() &&
+           "target must provide a cluster initialization barrier");
+    llvm::append_range(internalClusterBarriers, clusterBarriers);
+  } else {
+    BarrierOp::create(b, b.getLoc(), AddrSpace::Local);
+  }
+  lock.insert(entryRegion, {lockVal, lockVal.getType()});
+  passValueToWarpSpecialize(lock.at(entryRegion), lock);
 
   // Verify the actual capture count matches the expected one.
   if (captureCounter > 0) {

@@ -1758,3 +1758,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+// CTA0 must fill all shared-cluster state before it releases the startup lock.
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 4, maxPhase = 4, order = [1, 0], CGALayout = [[1, 0]]}>
+#smem = #ttg.shared_memory
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // CHECK-LABEL: tt.func public @multi_cta_state_before_startup_barrier
+  // CHECK-COUNT-3: call {{.*}}fill_global_tensor{{.*}}%c0_i8
+  // CHECK: %[[LOCK:.*]] = ttg.global_scratch_alloc {alignment = 4 : i32, nbytes = 4 : i32
+  // CHECK: tti.experimental_lock_release %[[LOCK]], %{{.*}} : !tt.ptr<i32>
+  // CHECK-NEXT: amdg.cluster_barrier_arrive
+  // CHECK-NEXT: amdg.cluster_barrier_wait
+  // CHECK-NOT: ttg.global_scratch_alloc
+  // CHECK-NOT: fill_global_tensor
+  // CHECK: tt.return
+  tt.func public @multi_cta_state_before_startup_barrier(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable>
+    %source = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable>
+    %ptrs = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #blocked>
+    %copy = ttg.async_copy_global_to_local %ptrs, %shmem : tensor<64x32x!tt.ptr<f16>, #blocked> -> <64x32xf16, #shared, #smem, mutable>
+    %store = amdg.async_copy_local_to_global %source, %ptrs : !ttg.memdesc<64x32xf16, #shared, #smem, mutable> -> tensor<64x32x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
