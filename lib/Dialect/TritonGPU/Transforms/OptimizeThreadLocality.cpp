@@ -199,11 +199,20 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
                                             warpsPerCTA, order, cgaLayout);
 
+  // Gather indices are converted to i32 during lowering. Do this before the
+  // layout conversion to avoid moving unnecessarily wide indices through
+  // shared memory.
+  Value indices = op.getIndices();
+  if (idxType.getElementTypeBitWidth() > 32) {
+    idxType = idxType.clone(b.getI32Type());
+    indices = arith::TruncIOp::create(b, op.getLoc(), idxType, indices);
+  }
+
   // Update the layout on the gather op and insert conversions.
   auto cvtSrc = ConvertLayoutOp::create(
       b, op.getLoc(), srcType.cloneWithEncoding(newLayout), op.getSrc());
   auto cvtIdx = ConvertLayoutOp::create(
-      b, op.getLoc(), idxType.cloneWithEncoding(newLayout), op.getIndices());
+      b, op.getLoc(), idxType.cloneWithEncoding(newLayout), indices);
 
   b.setInsertionPointAfter(op);
   auto cvtOut =
