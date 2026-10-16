@@ -3196,6 +3196,15 @@ makeBinaryExternTransform(BinaryExternTransform transform) {
   };
 }
 
+template <typename OpTy>
+KnownExternTransform makeBinaryArithmeticExternTransform() {
+  return makeBinaryExternTransform([](PatternRewriter &rewriter, Location loc,
+                                      Value lhs, Value rhs) -> Value {
+    // Reuse the native arithmetic patterns for the payload calculation.
+    return OpTy::create(rewriter, loc, lhs, rhs);
+  });
+}
+
 KnownExternTransform
 makeTernaryExternTransform(TernaryExternTransform transform) {
   return [transform](PatternRewriter &rewriter, tt::ExternElementwiseOp op) {
@@ -3222,6 +3231,10 @@ std::optional<KnownExternTransform> getKnownExtern(StringRef symbol) {
       .Case("__nv_fsqrt_rn",
             makeTaggedUnaryExternTransform(UnaryOpId::PreciseSqrt))
       .Case("__nv_fdiv_rn", makeBinaryExternTransform(fpsanFDiv))
+      .Case("__nv_fmul_rz",
+            makeBinaryArithmeticExternTransform<arith::MulFOp>())
+      .Case("__nv_fadd_rn",
+            makeBinaryArithmeticExternTransform<arith::AddFOp>())
       .Case("__nv_fmaf", makeTernaryExternTransform(fpsanFma))
       .Default(std::nullopt);
 }
@@ -3238,7 +3251,8 @@ struct ExternElementwisePattern
 
     Value result;
     // FPSan models the intended operation, so aliases may intentionally ignore
-    // backend details such as flushing subnormal inputs or outputs to zero.
+    // backend details such as rounding modes or flushing subnormal values to
+    // zero.
     if (auto transform = getKnownExtern(op.getSymbol()))
       result = (*transform)(rewriter, op);
     if (!result) {
