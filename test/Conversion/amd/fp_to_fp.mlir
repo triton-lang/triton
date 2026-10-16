@@ -282,3 +282,18 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return %rn, %rz : bf16, bf16
   }
 }
+
+// -----
+
+// f64 <-> fp8 goes through f32.
+// COMMON-LABEL: f64_fp8
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @f64_fp8(%arg0: tensor<128xf64, #blocked>, %arg1: tensor<128xf8E5M2, #blocked>) -> (tensor<128xf8E5M2, #blocked>, tensor<128xf64, #blocked>) {
+    // COMMON-COUNT-4: llvm.fptrunc %{{.+}} : f64 to f32
+    %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<128xf64, #blocked> -> tensor<128xf8E5M2, #blocked>
+    // COMMON-COUNT-4: llvm.fpext %{{.+}} : f32 to f64
+    %1 = tt.fp_to_fp %arg1 : tensor<128xf8E5M2, #blocked> -> tensor<128xf64, #blocked>
+    tt.return %0, %1 : tensor<128xf8E5M2, #blocked>, tensor<128xf64, #blocked>
+  }
+}
