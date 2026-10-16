@@ -365,13 +365,17 @@ tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tens
 // TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_single_tile
 // TUPLE: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
 // TUPLE-NOT: nvvm.barrier
+// TUPLE-NOT: nvvm.shfl.sync idx
 // TUPLE: llvm.store {{.*}} : vector<1xi64>, !llvm.ptr<3>
 // TUPLE: nvvm.barrier
 // TUPLE-NOT: nvvm.barrier
-// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i32
+// TUPLE-NOT: nvvm.shfl.sync idx
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xi32>
 // TUPLE-NOT: nvvm.barrier
-// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> i64
+// TUPLE-NOT: nvvm.shfl.sync idx
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<2xi64>
 // TUPLE-NOT: nvvm.barrier
+// TUPLE-NOT: nvvm.shfl.sync idx
 // TUPLE: llvm.return
 // AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_single_tile
 // AMD-TUPLE: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
@@ -488,10 +492,11 @@ tt.func private @test_scan_native_prefix_reverse(%a: tensor<32xi8, #native_prefi
 
 
 // After conversion, each of four logical lanes owns four consecutive values.
-// Two scan rounds update every register prefix with the preceding lanes' total.
+// Two rounds scan the terminal totals; one shuffle supplies the carry for
+// the other register prefixes.
 // The register/lane conversions use butterfly shuffles.
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_forward
-// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
+// TRANSPOSE-COUNT-3: nvvm.shfl.sync idx
 // TRANSPOSE-NOT: nvvm.shfl.sync idx
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_forward
@@ -506,7 +511,7 @@ tt.func private @test_scan_lane_prefixes_forward(%arg: tensor<16xi32, #transpose
   tt.return %result : tensor<16xi32, #transpose>
 }
 // TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_reverse
-// TRANSPOSE-COUNT-2: nvvm.shfl.sync idx
+// TRANSPOSE-COUNT-3: nvvm.shfl.sync idx
 // TRANSPOSE-NOT: nvvm.shfl.sync idx
 // TRANSPOSE: llvm.return
 // AMD-TRANSPOSE-LABEL: llvm.func {{.*}}@test_scan_lane_prefixes_reverse
@@ -551,12 +556,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // Broadcast terminal totals before converting their layout.
 // Apply the inter-warp carry to every scanned register prefix after the exchange.
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals(
-// TERMINAL-COUNT-3: nvvm.shfl.sync idx
+// TERMINAL-COUNT-4: nvvm.shfl.sync idx
 // TERMINAL-NOT: nvvm.shfl.sync
 // TERMINAL: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
 // TERMINAL-NEXT: nvvm.barrier
 // TERMINAL: llvm.load
-// TERMINAL: nvvm.shfl.sync idx
+// TERMINAL-NOT: nvvm.shfl.sync idx
 // TERMINAL: nvvm.shfl.sync bfly
 // TERMINAL: llvm.return
 // AMD-RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals
@@ -573,12 +578,12 @@ tt.func private @test_scan_converted_totals(%arg: tensor<32xi32, #converted>) ->
 }
 
 // TERMINAL-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse(
-// TERMINAL-COUNT-3: nvvm.shfl.sync idx
+// TERMINAL-COUNT-4: nvvm.shfl.sync idx
 // TERMINAL-NOT: nvvm.shfl.sync
 // TERMINAL: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
 // TERMINAL-NEXT: nvvm.barrier
 // TERMINAL: llvm.load
-// TERMINAL: nvvm.shfl.sync idx
+// TERMINAL-NOT: nvvm.shfl.sync idx
 // TERMINAL: nvvm.shfl.sync bfly
 // TERMINAL: llvm.return
 // AMD-RETAIN-LABEL: llvm.func {{.*}}@test_scan_converted_totals_reverse
@@ -601,9 +606,9 @@ tt.func private @test_scan_converted_totals_reverse(%arg: tensor<32xi32, #conver
 #parallel_totals = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
 // Replicate four segment totals in each warp and scan them in registers.
-// Register scans and carry propagation require 33 adds in total.
+// Register scans and carry propagation require 26 adds in total.
 // COLUMNS-LABEL: llvm.func {{.*}}@test_scan_parallel_totals(
-// COLUMNS-COUNT-33: llvm.fadd
+// COLUMNS-COUNT-26: llvm.fadd
 // COLUMNS-NOT: llvm.fadd
 // COLUMNS: llvm.return
 tt.func private @test_scan_parallel_totals(%arg: tensor<128x8xf32, #parallel_totals>) -> tensor<128x8xf32, #parallel_totals> {
@@ -853,9 +858,10 @@ tt.func private @test_scan_register_totals_all_lanes(%arg: tensor<128x32xi32, #p
 }
 
 // Three existing scan register bits and two promoted bits give 32 adjacent
-// totals per thread. Eight lanes require three scan rounds.
+// totals per thread. Eight lanes require three scan rounds and a final
+// shuffle for the exclusive carry into the saved register prefixes.
 // REGISTER-TOTALS-LABEL: llvm.func {{.*}}@test_scan_existing_register_totals(
-// REGISTER-TOTALS-COUNT-3: nvvm.shfl.sync up
+// REGISTER-TOTALS-COUNT-4: nvvm.shfl.sync up
 // REGISTER-TOTALS-NOT: nvvm.shfl.sync up
 // REGISTER-TOTALS: llvm.return
 tt.func private @test_scan_existing_register_totals(%arg: tensor<16x256xi32, #parallel_rows>) -> tensor<16x256xi32, #parallel_rows> {
