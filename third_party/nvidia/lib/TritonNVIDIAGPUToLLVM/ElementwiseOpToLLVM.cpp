@@ -434,6 +434,24 @@ struct FpToFpOpConversion
       }
     }
 
+    if (srcElementType.isF64() && roundingMode == RoundingMode::RTZ &&
+        (dstElementType.isF32() || dstElementType.isF16() ||
+         dstElementType.isBF16())) {
+      PTXBuilder builder;
+      auto *result = builder.newOperand("=f");
+      auto *input = builder.newOperand(operands[0][0], "d");
+      auto &cvt = *builder.create("cvt.rz.f32.f64");
+      cvt(result, input);
+      Value v = builder.launch(rewriter, loc, f32_ty, false);
+      if (!dstElementType.isF32()) {
+        // RTZ at both stages preserves the final RTZ result, including
+        // subnormals and finite overflow. An RTNE intermediate would not.
+        v = convertFp32To16BitFloat(loc, rewriter, v, dstElementType,
+                                    RoundingMode::RTZ);
+      }
+      return {v};
+    }
+
     if (srcElementType.isF16() && dstElementType.isF32()) {
       return llvm::to_vector(llvm::map_range(operands[0], [&](Value v) {
         return convertFp16ToFp32(loc, rewriter, v);
