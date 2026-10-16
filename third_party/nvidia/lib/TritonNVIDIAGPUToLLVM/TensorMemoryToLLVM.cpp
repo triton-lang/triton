@@ -240,6 +240,156 @@ createTensorMemoryLoad(Location loc, MLIRContext *ctx, Value address,
   return {result.getData(), result.getRedVal()};
 }
 
+struct TensorMemorySparsifyLoadResult {
+  SmallVector<Value> cdataVals;
+  SmallVector<Value> mdataVals;
+  Value redVal;
+};
+
+TensorMemorySparsifyLoadResult
+createTensorMemoryLoadSparsify(Location loc, Value address, int colOffset,
+                               int numTmemCols, TMEMRowOp rowOp, bool useAbs,
+                               bool useNaN, bool hasRed, Type elemTy,
+                               ConversionPatternRewriter &rewriter) {
+  auto *ctx = rewriter.getContext();
+  assert(numTmemCols >= 4 && numTmemCols % 4 == 0 &&
+         "spcompress requires a multiple of four TMEM columns");
+  int numCDataRegs = numTmemCols / 2;
+  int numMDataRegs = (numTmemCols + 31) / 32;
+
+  PTXBuilder ptxBuilder;
+  std::string opcode = std::string("tcgen05.ld.") + (hasRed ? "red." : "");
+  opcode += "spcompress.sync.aligned.32x32b.x" + std::to_string(numTmemCols);
+  opcode += rowOp == TMEMRowOp::MAX ? ".max" : ".min";
+  opcode += ".sp::2:4";
+  if (useAbs)
+    opcode += ".abs";
+  if (hasRed && useNaN)
+    opcode += ".NaN";
+  opcode += ".f32.b2 {";
+
+  SmallVector<PTXInstr::Operand *> operands;
+  for (int i = 0; i < numMDataRegs; ++i) {
+    if (i)
+      opcode += ", ";
+    opcode += "$" + std::to_string(operands.size());
+    operands.push_back(ptxBuilder.newOperand("=r"));
+  }
+  opcode += "}, {";
+  for (int i = 0; i < numCDataRegs; ++i) {
+    if (i)
+      opcode += ", ";
+    opcode += "$" + std::to_string(operands.size());
+    operands.push_back(ptxBuilder.newOperand("=r"));
+  }
+  opcode += "}";
+  if (hasRed) {
+    opcode += ", $" + std::to_string(operands.size());
+    operands.push_back(ptxBuilder.newOperand("=r"));
+  }
+  opcode += ", [$" + std::to_string(operands.size()) + " + " +
+            std::to_string(colOffset) + "];";
+  operands.push_back(ptxBuilder.newOperand(address, "r"));
+
+  auto &ld = *ptxBuilder.create(opcode);
+  ld(operands, /*onlyAttachMLIRArgs=*/true);
+
+  int totalResults = numMDataRegs + numCDataRegs + (hasRed ? 1 : 0);
+  Type retTy = i32_ty;
+  if (totalResults > 1)
+    retTy = struct_ty(SmallVector<Type>(totalResults, i32_ty));
+  Value ret = ptxBuilder.launch(rewriter, loc, retTy);
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto extractI32 = [&](int idx) {
+    return totalResults == 1 ? ret : b.extract_val(i32_ty, ret, idx);
+  };
+
+  TensorMemorySparsifyLoadResult result;
+  for (int i = 0; i < numMDataRegs; ++i)
+    result.mdataVals.push_back(extractI32(i));
+  for (int i = 0; i < numCDataRegs; ++i) {
+    Value raw = extractI32(numMDataRegs + i);
+    result.cdataVals.push_back(elemTy == i32_ty ? raw : b.bitcast(raw, elemTy));
+  }
+  if (hasRed) {
+    Value raw = extractI32(numMDataRegs + numCDataRegs);
+    result.redVal = elemTy == i32_ty ? raw : b.bitcast(raw, elemTy);
+  }
+  return result;
+}
+
+struct TMemSparsifyMessage {
+  int regBase;
+  int row;
+  int col;
+};
+
+struct TMemSparsifySchedule {
+  Value tmemBase;
+  SmallVector<TMemSparsifyMessage> messages;
+};
+
+static TMemSparsifySchedule
+getTMemSparsifySchedule(Location loc, ConversionPatternRewriter &rewriter,
+                        const LinearLayout &reps, int regsPerMessage,
+                        Value tmemBase) {
+  auto *ctx = rewriter.getContext();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto kReg = str_attr("register");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kRow = str_attr("row");
+  auto kCol = str_attr("col");
+
+  assert(to_vector(reps.getOutDimNames()) ==
+         SmallVector<StringAttr>({kRow, kCol}));
+  TMemSparsifySchedule schedule;
+  schedule.tmemBase = b.ptrtoint(i32_ty, tmemBase);
+
+  Value warpId = WarpIdOp::create(rewriter, loc);
+  Value warpIdInGroup = b.and_(warpId, b.i32_val(3));
+  schedule.tmemBase =
+      b.add(schedule.tmemBase, b.shl(warpIdInGroup, b.i32_val(5 + 16)));
+  if (reps.getInDimSize(kWarp) > 4) {
+    auto rowCol = applyLinearLayout(
+        loc, rewriter, reps,
+        {{kReg, b.i32_val(0)}, {kLane, b.i32_val(0)}, {kWarp, warpId}});
+    assert(rowCol.size() == 2 && rowCol[0].first == kRow &&
+           rowCol[1].first == kCol);
+    Value row = rowCol[0].second;
+    Value col = rowCol[1].second;
+    schedule.tmemBase =
+        b.add(schedule.tmemBase,
+              b.or_(b.shl(row, b.i32_val(16)), col, /*disjoint=*/true));
+  }
+
+  for (int i = 0; i < reps.getInDimSize(kReg); i += regsPerMessage) {
+    auto rowCol = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}});
+    assert(rowCol.size() == 2 && rowCol[0].first == kRow &&
+           rowCol[1].first == kCol);
+    schedule.messages.push_back({i, rowCol[0].second, rowCol[1].second});
+  }
+  return schedule;
+}
+
+static bool tmemSparsifyMessageHasSingleRow(const LinearLayout &reps,
+                                            int regBase, int regsPerMessage,
+                                            int expectedRow) {
+  auto *ctx = reps.getInDimNames().begin()->getContext();
+  auto kReg = str_attr("register");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kRow = str_attr("row");
+  for (int i = 0; i < regsPerMessage; ++i) {
+    auto rowCol = reps.apply({{kReg, regBase + i}, {kLane, 0}, {kWarp, 0}});
+    assert(rowCol.size() == 2 && rowCol[0].first == kRow);
+    if (rowCol[0].second != expectedRow)
+      return false;
+  }
+  return true;
+}
+
 // Returns {resultVals, redvalVals} where redvalVals is empty if no reduction.
 // Reduction produces exactly one value per thread; if multiple messages
 // contribute partial reductions, they are combined into one.
@@ -468,6 +618,167 @@ struct TensorMemoryLoadOpConversion
     }
 
     rewriter.replaceOp(op, results);
+    return success();
+  }
+};
+
+static void combineSparsifyReductions(Location loc,
+                                      ConversionPatternRewriter &rewriter,
+                                      SmallVector<Value> &values,
+                                      TMEMRowOp rowOp, bool useNaN) {
+  bool isMin = rowOp == TMEMRowOp::MIN;
+  auto combine = [&](Value lhs, Value rhs) {
+    return useNaN ? (isMin ? LLVM::MinimumOp::create(rewriter, loc, lhs, rhs)
+                           : LLVM::MaximumOp::create(rewriter, loc, lhs, rhs))
+                        ->getResult(0)
+                  : (isMin ? LLVM::MinNumOp::create(rewriter, loc, lhs, rhs)
+                           : LLVM::MaxNumOp::create(rewriter, loc, lhs, rhs))
+                        ->getResult(0);
+  };
+  while (values.size() > 1) {
+    SmallVector<Value> reduced;
+    reduced.reserve((values.size() + 1) / 2);
+    for (size_t i = 0; i + 1 < values.size(); i += 2)
+      reduced.push_back(combine(values[i], values[i + 1]));
+    if (values.size() % 2)
+      reduced.push_back(values.back());
+    values = std::move(reduced);
+  }
+}
+
+struct TensorMemoryLoadSparsifyOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMLoadSparsifyOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::TMEMLoadSparsifyOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (op.getDep() || op.getToken())
+      return rewriter.notifyMatchFailure(op, "token form is unsupported");
+
+    Location loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto srcTy = cast<MemDescType>(op.getSrc().getType());
+    auto cdataTy = cast<RankedTensorType>(op.getCdata().getType());
+    auto mdataTy = cast<RankedTensorType>(op.getMdata().getType());
+    auto srcEnc = cast<TensorMemoryEncodingAttr>(srcTy.getEncoding());
+    Type llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    int maxnreg = getContextualMaxNReg(op);
+    int sparsifyMaxnreg = std::min(maxnreg, 128);
+
+    int64_t srcM = srcTy.getShape()[0];
+    int64_t cdataN = cdataTy.getShape()[1];
+    unsigned cdataBlockN = std::max<unsigned>(
+        1,
+        std::min<unsigned>(srcEnc.getBlockN(), static_cast<unsigned>(cdataN)));
+    auto cdataMemEnc = TensorMemoryEncodingAttr::get(
+        ctx, srcEnc.getBlockM(), cdataBlockN, srcEnc.getColStride(),
+        srcEnc.getCGALayout(), srcEnc.getTwoCTAs());
+    auto cdataMemTy =
+        MemDescType::get({srcM, cdataN}, srcTy.getElementType(), cdataMemEnc,
+                         srcTy.getMemorySpace(), srcTy.getMutableMemory(),
+                         srcTy.getAllocShape());
+
+    auto diag = [loc]() { return emitError(loc); };
+    auto cdataInfoOr =
+        computeTMemLdStEncodingInfo(cdataTy, cdataMemTy, sparsifyMaxnreg, diag);
+    if (failed(cdataInfoOr))
+      return rewriter.notifyMatchFailure(
+          op, "failed to compute cdata TMEM encoding info");
+    TMemLdStEncodingInfo cdataInfo = *cdataInfoOr;
+    if (cdataInfo.unpacked || cdataInfo.secondHalfOffset ||
+        cdataInfo.atom != TMemAccessAtom::I32x32b) {
+      return rewriter.notifyMatchFailure(
+          op, "unsupported cdata layout for spcompress lowering");
+    }
+
+    int64_t mdataN = mdataTy.getShape()[1];
+    unsigned mdataBlockN = std::max<unsigned>(
+        1,
+        std::min<unsigned>(srcEnc.getBlockN(), static_cast<unsigned>(mdataN)));
+    auto mdataMemEnc = TensorMemoryEncodingAttr::get(
+        ctx, srcEnc.getBlockM(), mdataBlockN, srcEnc.getColStride(),
+        srcEnc.getCGALayout(), srcEnc.getTwoCTAs());
+    auto mdataMemTy =
+        MemDescType::get({srcM, mdataN}, rewriter.getI32Type(), mdataMemEnc,
+                         srcTy.getMemorySpace(), srcTy.getMutableMemory(),
+                         srcTy.getAllocShape());
+    auto mdataInfoOr =
+        computeTMemLdStEncodingInfo(mdataTy, mdataMemTy, maxnreg, diag);
+    if (failed(mdataInfoOr))
+      return rewriter.notifyMatchFailure(
+          op, "failed to compute mdata TMEM encoding info");
+    TMemLdStEncodingInfo mdataInfo = *mdataInfoOr;
+    if (mdataInfo.unpacked || mdataInfo.secondHalfOffset ||
+        mdataInfo.atom != TMemAccessAtom::I32x32b) {
+      return rewriter.notifyMatchFailure(
+          op, "unsupported mdata layout for spcompress lowering");
+    }
+
+    bool hasRed = static_cast<bool>(op.getRed());
+    bool useNaN = op.getNaN().value_or(false);
+    auto kReg = str_attr("register");
+    int expectedCDataRegs = cdataInfo.reps.getInDimSize(kReg);
+    int expectedMDataRegs = mdataInfo.reps.getInDimSize(kReg);
+    SmallVector<Value> cdataVals, mdataVals, redVals;
+    auto schedule =
+        getTMemSparsifySchedule(loc, rewriter, cdataInfo.reps,
+                                cdataInfo.numRegsPerMessage, adaptor.getSrc());
+
+    for (const TMemSparsifyMessage &message : schedule.messages) {
+      int srcCol = message.col * 2;
+      if (srcCol % 32)
+        return rewriter.notifyMatchFailure(
+            op, "unsupported sparsify source-column alignment");
+      if (!tmemSparsifyMessageHasSingleRow(cdataInfo.reps, message.regBase,
+                                           cdataInfo.numRegsPerMessage,
+                                           message.row)) {
+        return rewriter.notifyMatchFailure(
+            op, "unsupported mixed-row sparsify message");
+      }
+
+      int numTmemCols = cdataInfo.numRegsPerMessage * 2;
+      int staticOffset = srcCol | (message.row << 16);
+      auto loaded = createTensorMemoryLoadSparsify(
+          loc, schedule.tmemBase, staticOffset, numTmemCols, op.getRowOp(),
+          op.getAbs().value_or(false), useNaN, hasRed, llvmElemTy, rewriter);
+      if (loaded.cdataVals.size() !=
+              static_cast<size_t>(cdataInfo.numRegsPerMessage) ||
+          loaded.mdataVals.size() != static_cast<size_t>(numTmemCols / 32)) {
+        return rewriter.notifyMatchFailure(
+            op, "unexpected spcompress register count");
+      }
+      cdataVals.append(loaded.cdataVals.begin(), loaded.cdataVals.end());
+      mdataVals.append(loaded.mdataVals.begin(), loaded.mdataVals.end());
+      if (loaded.redVal)
+        redVals.push_back(loaded.redVal);
+    }
+
+    if (cdataVals.size() != static_cast<size_t>(expectedCDataRegs) ||
+        mdataVals.size() != static_cast<size_t>(expectedMDataRegs)) {
+      return rewriter.notifyMatchFailure(
+          op, "unexpected total spcompress register count");
+    }
+    if (!cdataInfo.perm.isIdentity())
+      cdataVals = cdataInfo.perm.inverse().apply(cdataVals);
+    if (!mdataInfo.perm.isIdentity())
+      mdataVals = mdataInfo.perm.inverse().apply(mdataVals);
+
+    SmallVector<Value> replacement;
+    replacement.push_back(packUniqueTensorElements(
+        loc, getTypeConverter(), cdataVals, rewriter, op.getCdata().getType()));
+    replacement.push_back(packUniqueTensorElements(
+        loc, getTypeConverter(), mdataVals, rewriter, op.getMdata().getType()));
+    if (hasRed) {
+      if (redVals.empty())
+        return rewriter.notifyMatchFailure(op, "missing reduction values");
+      combineSparsifyReductions(loc, rewriter, redVals, op.getRowOp(), useNaN);
+      replacement.push_back(packUniqueTensorElements(
+          loc, getTypeConverter(), redVals, rewriter, op.getRed().getType()));
+    }
+
+    // TMEM waits are inserted at TTGIR level for memory ordering.
+    rewriter.replaceOp(op, replacement);
     return success();
   }
 };
@@ -758,9 +1069,11 @@ struct TMEMSubSliceOpConversion
 void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<TensorMemoryCopyOpConversion, TensorMemoryLoadOpConversion,
-               TensorMemoryStoreOpConversion, TensorMemoryAllocOpConversion,
-               TensorMemoryWaitOpConversion>(typeConverter, benefit);
+  patterns
+      .add<TensorMemoryCopyOpConversion, TensorMemoryLoadOpConversion,
+           TensorMemoryLoadSparsifyOpConversion, TensorMemoryStoreOpConversion,
+           TensorMemoryAllocOpConversion, TensorMemoryWaitOpConversion>(
+          typeConverter, benefit);
 }
 
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(

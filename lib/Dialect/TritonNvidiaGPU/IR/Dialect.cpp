@@ -402,6 +402,44 @@ DistributedEncodingTrait getDefaultLayoutForTmemLdSt(gpu::MemDescType memType,
   return LinearEncodingAttr::get(ctx, std::move(*layout));
 }
 
+std::pair<RankedTensorType, RankedTensorType>
+getSparsifyOutputTypes(gpu::MemDescType srcTmemType, unsigned numWarps,
+                       gpu::CGAEncodingAttr cgaLayout) {
+  auto srcShape = srcTmemType.getShape();
+  assert(srcShape.size() == 2 &&
+         "sparsify source must be a 2D tensor memory descriptor");
+  int64_t m = srcShape[0];
+  int64_t n = srcShape[1];
+  assert(!ShapedType::isDynamic(m) && !ShapedType::isDynamic(n) &&
+         "dynamic sparsify shapes are unsupported");
+  assert((n % 2 == 0) && "sparsify src shape requires even N dimension");
+
+  auto srcEnc = cast<TensorMemoryEncodingAttr>(srcTmemType.getEncoding());
+  auto *ctx = srcTmemType.getContext();
+
+  int64_t cdataN = n / 2;
+  int64_t mdataN = llvm::divideCeilSigned(n, int64_t(32));
+  unsigned cdataBlockN =
+      std::max<unsigned>(1, std::min<unsigned>(srcEnc.getBlockN(), cdataN));
+
+  auto cdataMemEnc = TensorMemoryEncodingAttr::get(
+      ctx, srcEnc.getBlockM(), cdataBlockN, srcEnc.getColStride(),
+      srcEnc.getCGALayout(), srcEnc.getTwoCTAs());
+
+  auto cdataMemType = gpu::MemDescType::get(
+      {m, cdataN}, srcTmemType.getElementType(), cdataMemEnc,
+      srcTmemType.getMemorySpace(), srcTmemType.getMutableMemory(),
+      srcTmemType.getAllocShape());
+
+  auto cdataLayout = getDefaultLayoutForTmemLdSt(cdataMemType, numWarps);
+
+  auto cdataType = RankedTensorType::get(
+      {m, cdataN}, srcTmemType.getElementType(), cdataLayout);
+  auto mdataType = RankedTensorType::get({m, mdataN}, IntegerType::get(ctx, 32),
+                                         cdataLayout);
+  return std::make_pair(cdataType, mdataType);
+}
+
 std::optional<DistributedEncodingTrait>
 getTmemLoadLayoutSplitLongM(RankedTensorType tensorType, MemDescType memType,
                             int numWarps) {

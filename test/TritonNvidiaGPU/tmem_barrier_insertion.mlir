@@ -11,9 +11,12 @@
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked_broadcast_warps = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+#blocked_sparse = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#blocked_meta = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked_scales = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #linear64 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 64]], warp = [[16, 0], [32, 0]], block = []}>
 #tmem128 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_meta = #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>
 #tmem64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
 #tmem8 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 8, colStride = 1>
 #tmem32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
@@ -41,6 +44,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @alloc_then_ld(%arg0: tensor<128x128xf32, #blocked>) {
     %0 = ttng.tmem_alloc %arg0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
     %1 = ttng.tmem_load %0 : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: @alloc_then_sparsify
+  // CHECK: ttng.tmem_alloc
+  // CHECK-NEXT: ttng.tmem_wait store
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_load_sparsify
+  // CHECK-NEXT: ttng.tmem_wait load
+  // CHECK-NEXT: tt.return
+  tt.func @alloc_then_sparsify(%arg0: tensor<128x128xf32, #blocked>) {
+    %0 = ttng.tmem_alloc %arg0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %cdata, %mdata = ttng.tmem_load_sparsify %0 {rowOp = #ttng.rowOp<max>} :
+      !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> ->
+      tensor<128x64xf32, #blocked_sparse>, tensor<128x4xi32, #blocked_meta>
     tt.return
   }
 
@@ -90,6 +108,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.tc_gen5_mma %a, %b, %acc, %false, %true :
       !ttg.memdesc<128x128xf16, #shared_a, #ttg.shared_memory>,
       !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @alloc_then_mma_sp
+  // CHECK: ttng.tmem_alloc
+  // CHECK-NEXT: ttng.tmem_wait store
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tc_gen5_mma_sp
+  tt.func @alloc_then_mma_sp(
+      %arg0: tensor<128x128xf32, #blocked>,
+      %a: !ttg.memdesc<128x64xf16, #shared_a, #ttg.shared_memory>,
+      %b: !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>,
+      %sp: !ttg.memdesc<128x4xi32, #tmem_meta, #ttng.tensor_memory>) {
+    %false = arith.constant false
+    %true = arith.constant true
+    %d = ttng.tmem_alloc %arg0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_mma_sp %a, %b, %sp, %d, %false, %true :
+      !ttg.memdesc<128x64xf16, #shared_a, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>,
+      !ttg.memdesc<128x4xi32, #tmem_meta, #ttng.tensor_memory>,
       !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
     tt.return
   }
