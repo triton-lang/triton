@@ -990,3 +990,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @cooperative_atomic_load_release(%ptrs: tensor<512x!tt.ptr<f32>, #blocked>) {
+    // expected-error @+1 {{only supports relaxed and acquire semantics}}
+    %0 = amdg.cooperative_atomic_load release, gpu, %ptrs : tensor<512x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @cooperative_atomic_store_acquire(%ptrs: tensor<512x!tt.ptr<f32>, #blocked>, %value: tensor<512xf32, #blocked>) {
+    // expected-error @+1 {{only supports relaxed and release semantics}}
+    amdg.cooperative_atomic_store acquire, gpu, %ptrs, %value : tensor<512x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @cooperative_atomic_unsupported_target(%ptrs: tensor<1024x!tt.ptr<f32>, #blocked>) {
+    // expected-error @+1 {{is not supported on target architecture gfx942}}
+    %0 = amdg.cooperative_atomic_load acquire, gpu, %ptrs : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// 32 contiguous bytes per lane: neighboring lanes are not adjacent in memory.
+#blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @cooperative_atomic_bad_lane_groups(%ptrs: tensor<1024x!tt.ptr<f32>, #blocked>) {
+    // expected-error @+1 {{layout does not form cooperative atomic lane groups}}
+    %0 = amdg.cooperative_atomic_load relaxed, gpu, %ptrs : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// The tensor is smaller than the layout, so lanes hold duplicate elements.
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @cooperative_atomic_lane_replication(%ptrs: tensor<64x!tt.ptr<f32>, #blocked>, %value: tensor<64xf32, #blocked>) {
+    // expected-error @+1 {{the layout replicates along 'lane'}}
+    amdg.cooperative_atomic_store relaxed, gpu, %ptrs, %value : tensor<64x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

@@ -553,6 +553,76 @@ def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", []> {
 }
 
 //===----------------------------------------------------------------------===//
+// CooperativeAtomicLoadOp / CooperativeAtomicStoreOp
+//===----------------------------------------------------------------------===//
+
+def CooperativeAtomicLoadOp : TT_AMDGPU_Op<"cooperative_atomic_load", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsAndResultShape,
+  SameLoadStoreOperandsAndResultEncoding,
+  TypesMatchWith<"result matches ptr type", "ptr", "result",
+                 "getPointeeType($_self)">
+]> {
+  let summary = "Atomic load performed cooperatively by groups of lanes";
+  let description = [{
+    Lowers to `llvm.amdgcn.cooperative.atomic.load.<N>x<M>B` (gfx1250). Each
+    group of N consecutive lanes in a wave32 loads one naturally aligned,
+    contiguous 128-byte region as a single atomic access, with every lane
+    loading M contiguous bytes of it. The variant is chosen from the layout of
+    `ptr`: M is 4, 8 or 16 bytes per lane, and N = 128 / M.
+
+    The access synchronizes only with other cooperative atomics, and its
+    behavior is undefined on memory that is not device-local global memory
+    (e.g. host memory over PCIe). `sem` is `relaxed` or `acquire`; as for
+    `tt.atomic_load`, ordering applies to the whole program.
+  }];
+
+  let arguments = (ins
+    // Like tt.atomic_load: model the synchronization as a side effect so
+    // canonicalization and CSE cannot remove or merge polling loads.
+    Arg<TT_PtrTensor, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr attr-dict `:` type($ptr)
+  }];
+
+  let hasVerifier = 1;
+}
+
+def CooperativeAtomicStoreOp : TT_AMDGPU_Op<"cooperative_atomic_store", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsShape,
+  SameLoadStoreOperandsEncoding,
+  TypesMatchWith<"value type matches ptr type", "ptr", "value",
+                 "getPointeeType($_self)">
+]> {
+  let summary = "Atomic store performed cooperatively by groups of lanes";
+  let description = [{
+    Lowers to `llvm.amdgcn.cooperative.atomic.store.<N>x<M>B` (gfx1250). The
+    store counterpart of `amdg.cooperative_atomic_load`, with the same layout
+    and memory requirements. `sem` is `relaxed` or `release`.
+  }];
+
+  let arguments = (ins
+    Arg<TT_PtrTensor, "", [MemWrite<GlobalMemory>]>:$ptr,
+    TT_Tensor:$value,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `,` $value attr-dict `:` type($ptr)
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // ScaledUpcastFp4Op
 //===----------------------------------------------------------------------===//
 

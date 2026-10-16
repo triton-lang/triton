@@ -5261,3 +5261,160 @@ def test_runtime_gemm_3d_multi_cta(num_ctas):
                                     wmma_layout=wmma_layout, num_warps=num_warps, num_ctas=num_ctas)
 
     torch.testing.assert_close(c_device.cpu(), torch.bmm(a.float(), b.float()), rtol=2e-2, atol=2e-2)
+
+
+@gluon.jit
+def cooperative_atomic_copy_kernel(src, dst, BLOCK: ttgl.constexpr, LAYOUT: ttgl.constexpr, LOAD_SEM: ttgl.constexpr,
+                                   STORE_SEM: ttgl.constexpr, SCOPE: ttgl.constexpr, ALIGNED: ttgl.constexpr = True):
+    offs = ttgl.arange(0, BLOCK, layout=LAYOUT)
+    src_ptrs = src + offs
+    dst_ptrs = dst + offs
+    if ALIGNED:
+        # Pointer divisibility is in bytes: every 128-byte group starts aligned.
+        src_ptrs = ttgl.multiple_of(src_ptrs, 128)
+        dst_ptrs = ttgl.multiple_of(dst_ptrs, 128)
+    values = ttgl.amd.cdna5.cooperative_atomic_load(src_ptrs, sem=LOAD_SEM, scope=SCOPE)
+    ttgl.amd.cdna5.cooperative_atomic_store(dst_ptrs, values, sem=STORE_SEM, scope=SCOPE)
+
+
+def _compile_cooperative_atomic_copy(dtype, layout, block, load_sem="acquire", store_sem="release", scope="gpu",
+                                     aligned=True):
+    signature = {
+        "src": f"*{dtype}", "dst": f"*{dtype}", "BLOCK": "constexpr", "LAYOUT": "constexpr", "LOAD_SEM": "constexpr",
+        "STORE_SEM": "constexpr", "SCOPE": "constexpr", "ALIGNED": "constexpr"
+    }
+    constexprs = {
+        "BLOCK": block, "LAYOUT": layout, "LOAD_SEM": load_sem, "STORE_SEM": store_sem, "SCOPE": scope, "ALIGNED":
+        aligned
+    }
+    return triton.compile(src=gluon._runtime.GluonASTSource(cooperative_atomic_copy_kernel, signature, constexprs),
+                          target=GPUTarget("hip", 'gfx1250', 32))
+
+
+@pytest.mark.parametrize("dtype,size_per_thread,variant,bits", [
+    ("fp32", 1, "32x4B", 32),
+    ("fp32", 2, "16x8B", 64),
+    ("fp32", 4, "8x16B", 128),
+    ("fp16", 2, "32x4B", 32),
+    ("fp16", 8, "8x16B", 128),
+    ("fp64", 2, "8x16B", 128),
+])
+def test_compile_cooperative_atomics(dtype, size_per_thread, variant, bits):
+    num_warps = 4
+    layout = ttgl.BlockedLayout([size_per_thread], [32], [num_warps], [0])
+    k = _compile_cooperative_atomic_copy(dtype, layout, size_per_thread * 32 * num_warps)
+
+    llir = k.asm["llir"]
+    assert f"@llvm.amdgcn.cooperative.atomic.load.{variant}.p1" in llir
+    assert f"@llvm.amdgcn.cooperative.atomic.store.{variant}.p1" in llir
+
+    amdgcn = k.asm["amdgcn"]
+    # Acquire load at agent scope: the access is forced to device scope and
+    # followed by an invalidate; release store: a writeback first.
+    assert re.search(rf"global_load_b{bits} [^\n]*scope:SCOPE_DEV(.|\n)*global_inv scope:SCOPE_DEV", amdgcn)
+    assert re.search(rf"global_wb scope:SCOPE_DEV(.|\n)*global_store_b{bits} [^\n]*scope:SCOPE_DEV", amdgcn)
+
+
+def test_compile_cooperative_atomics_relaxed_cta():
+    layout = ttgl.BlockedLayout([4], [32], [4], [0])
+    k = _compile_cooperative_atomic_copy("fp32", layout, 512, load_sem="relaxed", store_sem="relaxed", scope="cta")
+    amdgcn = k.asm["amdgcn"]
+    # Cooperative atomics are at least device scope even for cta scope, but
+    # relaxed ones need no cache maintenance.
+    assert re.search(r"global_load_b128 [^\n]*scope:SCOPE_DEV", amdgcn)
+    assert re.search(r"global_store_b128 [^\n]*scope:SCOPE_DEV", amdgcn)
+    assert "global_inv" not in amdgcn and "global_wb" not in amdgcn
+
+
+@gluon.jit
+def cooperative_atomic_rows_kernel(src, dst, ROWS: ttgl.constexpr, COLS: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+    rows = ttgl.arange(0, ROWS, layout=ttgl.SliceLayout(1, LAYOUT))
+    cols = ttgl.arange(0, COLS, layout=ttgl.SliceLayout(0, LAYOUT))
+    offs = rows[:, None] * COLS + cols[None, :]
+    src_ptrs = ttgl.multiple_of(src + offs, [1, 128])
+    dst_ptrs = ttgl.multiple_of(dst + offs, [1, 128])
+    values = ttgl.amd.cdna5.cooperative_atomic_load(src_ptrs, sem="relaxed")
+    ttgl.amd.cdna5.cooperative_atomic_store(dst_ptrs, values, sem="relaxed")
+
+
+def test_compile_cooperative_atomics_2d():
+    # Each row of 32 x fp32 is one 128-byte group of 8 lanes; a wave covers four rows.
+    layout = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    signature = {"src": "*fp32", "dst": "*fp32", "ROWS": "constexpr", "COLS": "constexpr", "LAYOUT": "constexpr"}
+    constexprs = {"ROWS": 16, "COLS": 32, "LAYOUT": layout}
+    k = triton.compile(src=gluon._runtime.GluonASTSource(cooperative_atomic_rows_kernel, signature, constexprs),
+                       target=GPUTarget("hip", 'gfx1250', 32))
+    assert "@llvm.amdgcn.cooperative.atomic.load.8x16B.p1" in k.asm["llir"]
+    assert "@llvm.amdgcn.cooperative.atomic.store.8x16B.p1" in k.asm["llir"]
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("dtype,size_per_thread,scope", [
+    ("float32", 1, "gpu"),
+    ("float32", 2, "gpu"),
+    ("float32", 4, "gpu"),
+    ("float32", 4, "cta"),
+    ("float32", 4, "sys"),
+    ("float16", 2, "gpu"),
+    ("float16", 8, "gpu"),
+    ("float64", 2, "gpu"),
+])
+def test_runtime_cooperative_atomics(dtype, size_per_thread, scope):
+    num_warps = 4
+    block = size_per_thread * 32 * num_warps
+    layout = ttgl.BlockedLayout([size_per_thread], [32], [num_warps], [0])
+    src = torch.randn(block, dtype=getattr(torch, dtype), device="cuda")
+    dst = torch.zeros_like(src)
+    cooperative_atomic_copy_kernel[(1, )](src, dst, BLOCK=block, LAYOUT=layout, LOAD_SEM="acquire", STORE_SEM="release",
+                                          SCOPE=scope, num_warps=num_warps)
+    assert torch.equal(dst, src)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+def test_runtime_cooperative_atomics_2d():
+    layout = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    src = torch.randn((16, 32), dtype=torch.float32, device="cuda")
+    dst = torch.zeros_like(src)
+    cooperative_atomic_rows_kernel[(1, )](src, dst, ROWS=16, COLS=32, LAYOUT=layout, num_warps=4)
+    assert torch.equal(dst, src)
+
+
+@gluon.jit
+def cooperative_atomic_cond_copy_kernel(src, dst, flag, BLOCK: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+    offs = ttgl.arange(0, BLOCK, layout=LAYOUT)
+    # A scalar condition is uniform across the program, so every lane group
+    # either executes the cooperative accesses or skips them together.
+    if flag != 0:
+        values = ttgl.amd.cdna5.cooperative_atomic_load(ttgl.multiple_of(src + offs, 128))
+        ttgl.amd.cdna5.cooperative_atomic_store(ttgl.multiple_of(dst + offs, 128), values)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("flag", [0, 1])
+def test_runtime_cooperative_atomics_under_if(flag):
+    layout = ttgl.BlockedLayout([4], [32], [4], [0])
+    src = torch.randn(512, dtype=torch.float32, device="cuda")
+    dst = torch.zeros_like(src)
+    cooperative_atomic_cond_copy_kernel[(1, )](src, dst, flag, BLOCK=512, LAYOUT=layout, num_warps=4)
+    assert torch.equal(dst, src if flag else torch.zeros_like(src))
+
+
+def test_compile_cooperative_atomics_bad_layout(capfd):
+    # 32 contiguous bytes per lane: neighboring lanes are not adjacent in memory.
+    with pytest.raises(RuntimeError, match="error encountered during parsing"):
+        _compile_cooperative_atomic_copy("fp32", ttgl.BlockedLayout([8], [32], [4], [0]), 1024)
+    assert "layout does not form cooperative atomic lane groups" in "".join(capfd.readouterr())
+
+
+def test_compile_cooperative_atomics_unproven_alignment(capfd):
+    # Without hints, pointers are only known to be 16-byte aligned.
+    with pytest.raises(RuntimeError):
+        _compile_cooperative_atomic_copy("fp32", ttgl.BlockedLayout([4], [32], [4], [0]), 512, aligned=False)
+    assert "cannot prove that each lane group accesses a contiguous, 128-byte aligned region" in "".join(
+        capfd.readouterr())
+
+
+def test_compile_cooperative_atomics_bad_sem():
+    with pytest.raises(Exception) as e:
+        _compile_cooperative_atomic_copy("fp32", ttgl.BlockedLayout([4], [32], [4], [0]), 512, load_sem="release")
+    assert "only supports acquire and relaxed semantics" in str(e.value)

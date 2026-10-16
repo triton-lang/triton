@@ -1196,6 +1196,141 @@ LogicalResult BufferAtomicCASOp::verify() {
   return verifyBufferWriteBase(getOperation(), getPtr());
 }
 
+FailureOr<CooperativeAtomicLayout>
+getCooperativeAtomicLayout(RankedTensorType ptrTy,
+                           function_ref<InFlightDiagnostic()> emitError) {
+  auto fail = [&](const llvm::Twine &reason) {
+    if (emitError)
+      emitError() << reason;
+    return failure();
+  };
+
+  auto pointeeTy = cast<PointerType>(ptrTy.getElementType()).getPointeeType();
+  if (!pointeeTy.isIntOrFloat())
+    return fail("cooperative atomics require integer or floating-point "
+                "elements");
+  unsigned elemBits = pointeeTy.getIntOrFloatBitWidth();
+  if (elemBits < 8 || elemBits > 64 || !llvm::isPowerOf2_32(elemBits))
+    return fail("cooperative atomics require 8-, 16-, 32- or 64-bit elements");
+  unsigned elemBytes = elemBits / 8;
+
+  LinearLayout ll = gpu::toLinearLayout(ptrTy);
+  MLIRContext *ctx = ptrTy.getContext();
+  StringAttr kReg = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  if (ll.getInDimSize(kLane) != 32)
+    return fail("cooperative atomics require 32 lanes per warp");
+  for (auto [inDim, mask] : ll.getFreeVariableMasks())
+    if (mask != 0)
+      return fail("cooperative atomics require a layout that does not "
+                  "replicate data, but the layout replicates along '" +
+                  inDim.getValue() + "'");
+
+  // Express each basis as an offset in tensor-dimension order.
+  unsigned rank = ptrTy.getRank();
+  auto toOffsets = [&](StringAttr inDim) {
+    SmallVector<SmallVector<int32_t>> offsets;
+    for (int32_t i = 0, e = ll.getInDimSizeLog2(inDim); i < e; ++i) {
+      SmallVector<int32_t> offset(rank);
+      for (unsigned d = 0; d < rank; ++d)
+        offset[d] =
+            ll.getBasis(inDim, i, StringAttr::get(ctx, "dim" + llvm::Twine(d)));
+      offsets.push_back(std::move(offset));
+    }
+    return offsets;
+  };
+  auto regs = toOffsets(kReg);
+  auto lanes = toOffsets(kLane);
+  auto warps = toOffsets(kWarp);
+  auto blocks = toOffsets(kBlock);
+  auto isAlong = [&](ArrayRef<int32_t> offset, unsigned dim, int32_t value) {
+    for (unsigned d = 0; d < rank; ++d)
+      if (offset[d] != (d == dim ? value : 0))
+        return false;
+    return true;
+  };
+
+  // A group of N = 128 / M consecutive lanes covers one 128-byte run along
+  // `dim`, M contiguous bytes per lane: register bases 1, 2, .. walk the M
+  // bytes and the low lane bases continue in steps of M bytes. All other bases
+  // must keep group starts at multiples of 128 bytes along `dim`.
+  for (unsigned bytesPerLane : {16u, 8u, 4u}) {
+    if (bytesPerLane < elemBytes)
+      continue;
+    unsigned elemsPerLane = bytesPerLane / elemBytes;
+    unsigned lanesPerGroup = 128 / bytesPerLane;
+    unsigned elemsPerGroup = 128 / elemBytes;
+    unsigned regBits = llvm::Log2_32(elemsPerLane);
+    unsigned laneBits = llvm::Log2_32(lanesPerGroup);
+    if (regs.size() < regBits)
+      continue;
+    auto &first = regBits > 0 ? regs[0] : lanes[0];
+    auto dimIt = llvm::find_if(first, [](int32_t v) { return v != 0; });
+    if (dimIt == first.end())
+      continue;
+    unsigned dim = dimIt - first.begin();
+
+    bool ok = true;
+    for (unsigned i = 0; ok && i < regBits; ++i)
+      ok = isAlong(regs[i], dim, 1 << i);
+    for (unsigned i = 0; ok && i < laneBits; ++i)
+      ok = isAlong(lanes[i], dim, elemsPerLane << i);
+    auto groupAligned = [&](ArrayRef<SmallVector<int32_t>> offsets) {
+      return llvm::all_of(offsets, [&](ArrayRef<int32_t> offset) {
+        return offset[dim] % elemsPerGroup == 0;
+      });
+    };
+    ok = ok && groupAligned(ArrayRef(regs).drop_front(regBits)) &&
+         groupAligned(ArrayRef(lanes).drop_front(laneBits)) &&
+         groupAligned(warps) && groupAligned(blocks);
+    if (ok)
+      return CooperativeAtomicLayout{dim, bytesPerLane, elemsPerLane,
+                                     lanesPerGroup, elemsPerGroup};
+  }
+  return fail("layout does not form cooperative atomic lane groups: each "
+              "group of 32, 16 or 8 consecutive lanes must cover one "
+              "contiguous 128-byte run along a single dimension, with 4, 8 "
+              "or 16 contiguous bytes per lane");
+}
+
+static LogicalResult verifyCooperativeAtomic(Operation *op,
+                                             RankedTensorType ptrTy,
+                                             triton::MemSemantic sem) {
+  using triton::MemSemantic;
+  bool isLoad = isa<CooperativeAtomicLoadOp>(op);
+  if (isLoad && sem != MemSemantic::RELAXED && sem != MemSemantic::ACQUIRE)
+    return op->emitOpError("only supports relaxed and acquire semantics");
+  if (!isLoad && sem != MemSemantic::RELAXED && sem != MemSemantic::RELEASE)
+    return op->emitOpError("only supports relaxed and release semantics");
+  if (triton::getAddressSpace(ptrTy.getElementType()) !=
+      triton::PtrAddrSpace::Global)
+    return op->emitOpError("requires pointers to global memory");
+
+  if (auto mod = op->getParentOfType<ModuleOp>()) {
+    TargetFeatures features = TargetFeatures::fromModuleOp(mod);
+    if (!features.getArch().empty() && !features.supportsCooperativeAtomics())
+      return op->emitOpError("is not supported on target architecture ")
+             << features.getArch();
+  }
+
+  // Gluon's auto/coalesced encodings are resolved later; check the layout
+  // once it is concrete.
+  if (!isa_and_nonnull<triton::gpu::DistributedEncodingTrait>(
+          ptrTy.getEncoding()))
+    return success();
+  return getCooperativeAtomicLayout(ptrTy, [&]() { return op->emitOpError(); });
+}
+
+LogicalResult CooperativeAtomicLoadOp::verify() {
+  return verifyCooperativeAtomic(getOperation(), getPtr().getType(), getSem());
+}
+
+LogicalResult CooperativeAtomicStoreOp::verify() {
+  return verifyCooperativeAtomic(getOperation(), getPtr().getType(), getSem());
+}
+
 LogicalResult LocalLoadPackedTransposedOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();

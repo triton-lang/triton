@@ -19,6 +19,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/Support/FormatVariadic.h"
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -2580,6 +2581,170 @@ struct TDMPrefetchConversion
 private:
   const AMD::TargetInfo &targetInfo;
 };
+
+// Shared lowering state for amdg.cooperative_atomic_{load,store}: each lane
+// issues one llvm.amdgcn.cooperative.atomic.{load,store}.<N>x<M>B call per
+// M-byte chunk of its registers.
+struct CooperativeAtomicCall {
+  triton::amdgpu::CooperativeAtomicLayout layout;
+  std::string intrinsic;
+  Type dataTy; // i32, vector<2xi32> or vector<4xi32>.
+  Value ordering;
+  Value scope;
+};
+
+FailureOr<CooperativeAtomicCall> prepareCooperativeAtomic(
+    Operation *op, Value ptr, bool isLoad, triton::MemSemantic sem,
+    triton::MemSyncScope scope, const AMD::TargetInfo &targetInfo,
+    ModuleAxisInfoAnalysis &axisAnalysisPass, RewriterBase &rewriter) {
+  if (targetInfo.getISAFamily() != ISAFamily::CDNA5)
+    return op->emitOpError("is not supported on target architecture ")
+           << targetInfo.getArch();
+
+  auto ptrTy = cast<RankedTensorType>(ptr.getType());
+  auto layout = triton::amdgpu::getCooperativeAtomicLayout(
+      ptrTy, [&]() { return op->emitOpError(); });
+  if (failed(layout))
+    return failure();
+
+  // The layout fixes which tensor elements each lane group covers; the
+  // pointer values must also be contiguous and 128-byte aligned there.
+  auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
+  int64_t contiguity = axisInfo ? axisInfo->getContiguity(layout->dim) : 1;
+  int64_t divisibility = axisInfo ? axisInfo->getDivisibility(layout->dim) : 1;
+  if (contiguity < layout->elemsPerGroup || divisibility < 128)
+    return op->emitOpError("cannot prove that each lane group accesses a "
+                           "contiguous, 128-byte aligned region: along "
+                           "dimension ")
+           << layout->dim << " the pointers have contiguity " << contiguity
+           << " (need " << layout->elemsPerGroup << ") and divisibility "
+           << divisibility << " bytes (need 128); add multiple_of / "
+           << "max_contiguous hints";
+
+  MLIRContext *ctx = rewriter.getContext();
+  Location loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned dwords = layout->bytesPerLane / 4;
+  Type dataTy = dwords == 1 ? Type(i32_ty) : vec_ty(i32_ty, dwords);
+  std::string intrinsic = llvm::formatv(
+      "llvm.amdgcn.cooperative.atomic.{0}.{1}x{2}B.p1",
+      isLoad ? "load" : "store", layout->lanesPerGroup, layout->bytesPerLane);
+
+  // C ABI encoding of the memory order.
+  int32_t ordering = 0;
+  if (sem == triton::MemSemantic::ACQUIRE)
+    ordering = 2;
+  else if (sem == triton::MemSemantic::RELEASE)
+    ordering = 3;
+  StringRef scopeName = targetInfo.getAtomicSyncScope(scope);
+  Value scopeMD = LLVM::MetadataAsValueOp::create(
+      rewriter, loc,
+      LLVM::MDNodeAttr::get(ctx, {LLVM::MDStringAttr::get(
+                                     ctx, StringAttr::get(ctx, scopeName))}));
+  return CooperativeAtomicCall{*layout, std::move(intrinsic), dataTy,
+                               b.i32_val(ordering), scopeMD};
+}
+
+struct CooperativeAtomicLoadOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::CooperativeAtomicLoadOp>,
+      public LoadStoreConversionBase {
+  CooperativeAtomicLoadOpConversion(LLVMTypeConverter &converter,
+                                    const AMD::TargetInfo &targetInfo,
+                                    ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                    PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::CooperativeAtomicLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto call = prepareCooperativeAtomic(op, op.getPtr(), /*isLoad=*/true,
+                                         op.getSem(), op.getScope(), targetInfo,
+                                         axisAnalysisPass, rewriter);
+    if (failed(call))
+      return failure();
+    // Like tt.atomic_load, a CTA barrier after an acquire extends the
+    // ordering to the whole program.
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 !atomicResultHasOrderingBarrier(op), rewriter,
+                                 targetInfo);
+
+    Type elemTy = getTypeConverter()->convertType(
+        getElementTypeOrSelf(op.getResult().getType()));
+    unsigned vec = call->layout.elemsPerLane;
+    Type chunkTy = vec == 1 ? elemTy : vec_ty(elemTy, vec);
+    auto ptrElems = unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    SmallVector<Value> resultVals;
+    resultVals.reserve(ptrElems.size());
+    // No predicate around the call: it is convergent, and every lane of the
+    // group must execute it.
+    for (size_t i = 0; i < ptrElems.size(); i += vec) {
+      Value loaded = LLVM::createLLVMIntrinsicCallOp(
+                         rewriter, loc, call->intrinsic, call->dataTy,
+                         {ptrElems[i], call->ordering, call->scope})
+                         .getResult(0);
+      Value chunk =
+          chunkTy == call->dataTy ? loaded : b.bitcast(loaded, chunkTy);
+      if (vec == 1) {
+        resultVals.push_back(chunk);
+        continue;
+      }
+      auto values = unpackLLVector(loc, chunk, rewriter);
+      resultVals.append(values.begin(), values.end());
+    }
+    finalizeAtomicResults(op, rewriter, resultVals, elemTy, b,
+                          /*threadPred=*/Value(), targetInfo,
+                          getTypeConverter());
+    return success();
+  }
+};
+
+struct CooperativeAtomicStoreOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::CooperativeAtomicStoreOp>,
+      public LoadStoreConversionBase {
+  CooperativeAtomicStoreOpConversion(LLVMTypeConverter &converter,
+                                     const AMD::TargetInfo &targetInfo,
+                                     ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                     PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::CooperativeAtomicStoreOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto call = prepareCooperativeAtomic(op, op.getPtr(), /*isLoad=*/false,
+                                         op.getSem(), op.getScope(), targetInfo,
+                                         axisAnalysisPass, rewriter);
+    if (failed(call))
+      return failure();
+    // Like tt.atomic_store, a CTA barrier before a release extends the
+    // ordering to the whole program.
+    insertAtomicOrderingBarriers(op, op.getSem(), /*emitBarrierAfter=*/true,
+                                 rewriter, targetInfo);
+
+    unsigned vec = call->layout.elemsPerLane;
+    auto ptrElems = unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    auto valueElems = unpackLLElements(loc, adaptor.getValue(), rewriter);
+    for (size_t i = 0; i < ptrElems.size(); i += vec) {
+      Value chunk =
+          vec == 1
+              ? valueElems[i]
+              : packLLVector(loc, ArrayRef(valueElems).slice(i, vec), rewriter);
+      if (chunk.getType() != call->dataTy)
+        chunk = b.bitcast(chunk, call->dataTy);
+      LLVM::createLLVMIntrinsicCallOp(
+          rewriter, loc, call->intrinsic, {},
+          {ptrElems[i], chunk, call->ordering, call->scope});
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -2588,16 +2753,17 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
-  patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-               StoreOpConversion, BufferLoadOpConversion,
-               BufferLoadToLocalOpConversion, BufferStoreOpConversion,
-               BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
-               AsyncCopyLocalToGlobalOpConversion, BufferAtomicCASOpConversion,
-               AsyncTDMCopyGlobalToLocalOpConversion,
-               AsyncTDMFusedCopyGlobalToLocalOpConversion,
-               AsyncTDMCopyLocalToGlobalOpConversion,
-               AsyncTDMScatterOpConversion, AsyncTDMGatherOpConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit);
+  patterns.add<
+      AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
+      StoreOpConversion, BufferLoadOpConversion, BufferLoadToLocalOpConversion,
+      BufferStoreOpConversion, BufferAtomicRMWOpConversion,
+      AsyncCopyGlobalToLocalOpConversion, AsyncCopyLocalToGlobalOpConversion,
+      BufferAtomicCASOpConversion, AsyncTDMCopyGlobalToLocalOpConversion,
+      AsyncTDMFusedCopyGlobalToLocalOpConversion,
+      AsyncTDMCopyLocalToGlobalOpConversion, AsyncTDMScatterOpConversion,
+      AsyncTDMGatherOpConversion, CooperativeAtomicLoadOpConversion,
+      CooperativeAtomicStoreOpConversion>(typeConverter, targetInfo,
+                                          axisInfoAnalysis, benefit);
   patterns.add<TTGAsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<TDMPrefetchConversion>(typeConverter, targetInfo, benefit);

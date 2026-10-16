@@ -69,6 +69,7 @@ public:
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
   bool supportsDirectFromLdsStoreBitWidth(int bitWidth) const;
   bool supportsBufferLoadToLocal() const;
+  bool supportsCooperativeAtomics() const;
 
   bool requiresAliasInfoForAsyncOps() const;
   bool useAsyncMarks() const;

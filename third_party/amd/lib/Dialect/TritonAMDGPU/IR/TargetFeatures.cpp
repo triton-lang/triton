@@ -235,6 +235,10 @@ bool TargetFeatures::supportsBufferLoadToLocal() const {
                             getISAFamily());
 }
 
+bool TargetFeatures::supportsCooperativeAtomics() const {
+  return getISAFamily() == ISAFamily::CDNA5;
+}
+
 bool TargetFeatures::requiresAliasInfoForAsyncOps() const {
   return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
                             getISAFamily());

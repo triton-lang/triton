@@ -1240,6 +1240,18 @@ void init_gluon_ir(py::module_ &m) {
                  value.getType(), op, ptr, offsets, value, Value() /*stride*/,
                  sem, scope, mask);
            })
+      .def("create_cooperative_atomic_load",
+           [](GluonOpBuilder &self, Type resultType, Value ptr,
+              tt::MemSemantic sem, tt::MemSyncScope scope) -> Value {
+             return self.create<ttag::CooperativeAtomicLoadOp>(resultType, ptr,
+                                                               sem, scope);
+           })
+      .def("create_cooperative_atomic_store",
+           [](GluonOpBuilder &self, Value ptr, Value value, tt::MemSemantic sem,
+              tt::MemSyncScope scope) {
+             self.create<ttag::CooperativeAtomicStoreOp>(ptr, value, sem,
+                                                         scope);
+           })
       .def("create_buffer_load_to_local",
            [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
               Value mask, Value other, Value stride,

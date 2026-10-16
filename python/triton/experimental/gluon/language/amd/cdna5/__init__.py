@@ -1,4 +1,5 @@
 from triton.runtime.jit import constexpr_function
+from triton._C.libtriton import ir
 from triton._C.libtriton.gluon_ir import get_amd_wmma_scale_layout as _get_wmma_scale_layout
 
 from ..._core import builtin, int8, uint8, int32, float8e4nv, float8e8m0fnu, tensor, _unwrap_if_constexpr
@@ -15,7 +16,8 @@ from . import cluster
 __all__ = [
     "async_copy", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "scaled_upcast", "scaled_downcast",
     "buffer_load", "buffer_store", "get_wmma_scale_layout", "PartitionedSharedLayout", "make_partitioned_dot_layouts",
-    "load_shared_fp4_repacked", "get_scaled_upcast_fp4_scale_layout"
+    "load_shared_fp4_repacked", "get_scaled_upcast_fp4_scale_layout", "cooperative_atomic_load",
+    "cooperative_atomic_store"
 ]
 
 
@@ -155,6 +157,80 @@ def load_shared_fp4_repacked(mem_desc, layout, _semantic=None):
     """
     layout = _unwrap_if_constexpr(layout)
     return _load_shared_fp4_repacked(mem_desc, layout, _semantic, parent_type=AMDWMMALayout)
+
+
+def _verify_cooperative_atomic_ptr(pointer, fn_name):
+    if not isinstance(pointer, tensor) or not pointer.type.is_block() or not pointer.dtype.is_ptr():
+        raise ValueError(f"{fn_name} expects a tensor of pointers, but got {pointer.type}")
+
+
+_COOPERATIVE_ATOMIC_CONTRACT = """
+    Each group of 32, 16 or 8 consecutive lanes in a wave accesses one naturally
+    aligned, contiguous 128-byte region as a single atomic access, with every
+    lane accessing 4, 8 or 16 contiguous bytes of it. The variant is chosen from
+    the layout of ``pointer``; a layout that does not form such lane groups is a
+    compile error. The compiler must also be able to prove that each group's
+    addresses are contiguous and 128-byte aligned, which usually needs
+    ``multiple_of`` / ``max_contiguous`` hints.
+
+    Requirements (undefined behavior otherwise):
+
+    * the memory is device-local global memory, not e.g. host memory over PCIe;
+    * the access only synchronizes with other cooperative atomics of the same
+      128-byte size, so the accesses it pairs with must be cooperative too.
+
+    As with ``atomic_load`` / ``atomic_store``, acquire and release order the
+    whole program, so with those semantics every warp must reach the call.
+"""
+
+
+@builtin
+def cooperative_atomic_load(pointer, sem=None, scope=None, _semantic=None):
+    """
+    Atomically load from ``pointer`` using CDNA5 cooperative atomics.
+    """
+    _verify_cooperative_atomic_ptr(pointer, "cooperative_atomic_load")
+    sem = _semantic._str_to_sem(_unwrap_if_constexpr(sem), default=ir.MEM_SEMANTIC.ACQUIRE)
+    if sem not in (ir.MEM_SEMANTIC.ACQUIRE, ir.MEM_SEMANTIC.RELAXED):
+        raise ValueError("cooperative_atomic_load only supports acquire and relaxed semantics")
+    scope = _semantic._str_to_scope(_unwrap_if_constexpr(scope))
+    ret_ty = pointer.type.with_element_ty(pointer.dtype.element_ty)
+    builder = _semantic.builder
+    handle = builder.create_cooperative_atomic_load(ret_ty.to_ir(builder), pointer.handle, sem, scope)
+    return tensor(handle, ret_ty)
+
+
+@builtin
+def cooperative_atomic_store(pointer, value, sem=None, scope=None, _semantic=None):
+    """
+    Atomically store ``value`` to ``pointer`` using CDNA5 cooperative atomics.
+    """
+    _verify_cooperative_atomic_ptr(pointer, "cooperative_atomic_store")
+    sem = _semantic._str_to_sem(_unwrap_if_constexpr(sem), default=ir.MEM_SEMANTIC.RELEASE)
+    if sem not in (ir.MEM_SEMANTIC.RELEASE, ir.MEM_SEMANTIC.RELAXED):
+        raise ValueError("cooperative_atomic_store only supports release and relaxed semantics")
+    scope = _semantic._str_to_scope(_unwrap_if_constexpr(scope))
+    value = _semantic.cast(_semantic.to_tensor(value), pointer.dtype.element_ty)
+    pointer_shape = pointer.shape
+    pointer, value = _semantic.broadcast_tensors(pointer, value)
+    if pointer.shape != pointer_shape:
+        raise ValueError(f"Expected `value` to broadcast to shape {pointer_shape} but got {value.shape}")
+    _semantic.builder.create_cooperative_atomic_store(pointer.handle, value.handle, sem, scope)
+
+
+cooperative_atomic_load.__doc__ += _COOPERATIVE_ATOMIC_CONTRACT + """
+    Args:
+        pointer (tensor of pointers): The memory locations to load from.
+        sem (str, optional): ``"acquire"`` (default) or ``"relaxed"``.
+        scope (str, optional): ``"gpu"`` (default), ``"cta"`` or ``"sys"``.
+    """
+cooperative_atomic_store.__doc__ += _COOPERATIVE_ATOMIC_CONTRACT + """
+    Args:
+        pointer (tensor of pointers): The memory locations to store to.
+        value (tensor): The values to store.
+        sem (str, optional): ``"release"`` (default) or ``"relaxed"``.
+        scope (str, optional): ``"gpu"`` (default), ``"cta"`` or ``"sys"``.
+    """
 
 
 def _get_wmma_scale_layout_impl(*args, **kwargs):

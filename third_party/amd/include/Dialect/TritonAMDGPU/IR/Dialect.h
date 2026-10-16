@@ -56,6 +56,28 @@ inline int getTensorDescNumDwords(triton::TensorDescType type) {
 FailureOr<triton::LinearLayout> inferScaledUpcastFp4ScaleLayout(
     const triton::LinearLayout &outputLL, ArrayRef<int64_t> scaleShape,
     int64_t axis, function_ref<InFlightDiagnostic()> emitError = nullptr);
+
+/// How a pointer tensor's layout maps onto the lane groups of
+/// `llvm.amdgcn.cooperative.atomic.{load,store}.<lanesPerGroup>x<bytesPerLane>B`.
+/// Within a group, lane i accesses bytes [i * bytesPerLane, (i + 1) *
+/// bytesPerLane) of a 128-byte run along tensor dimension `dim`.
+struct CooperativeAtomicLayout {
+  unsigned dim;           // Tensor dimension each 128-byte group runs along.
+  unsigned bytesPerLane;  // 4, 8 or 16.
+  unsigned elemsPerLane;  // Contiguous registers per lane in one access.
+  unsigned lanesPerGroup; // 32, 16 or 8.
+  unsigned elemsPerGroup; // 128 bytes worth of elements.
+};
+
+/// Checks that the layout of `ptrTy` (a tensor of pointers with a distributed
+/// encoding) forms valid cooperative atomic lane groups, and returns how. The
+/// layout must not replicate data, and every group must start at a multiple of
+/// `elemsPerGroup` along `dim`. Whether the addresses themselves are contiguous
+/// and 128-byte aligned is a property of the pointer values, which the caller
+/// has to check separately.
+FailureOr<CooperativeAtomicLayout> getCooperativeAtomicLayout(
+    RankedTensorType ptrTy,
+    function_ref<InFlightDiagnostic()> emitError = nullptr);
 } // namespace mlir::triton::amdgpu
 
 // clang-format off
