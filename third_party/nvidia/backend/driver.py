@@ -272,7 +272,11 @@ class CudaLauncher(object):
             active_driver = triton.runtime.driver.active
             device = active_driver.get_current_device()
             properties = active_driver.utils.get_device_properties(device)
-            min_shared = properties["max_shared_mem_per_multiprocessor"] // (max_occupancy + 1) + 1
+            # Budget for max_occupancy CTAs, including the driver reservation.
+            # Ampere and newer allocate shared memory in 128-byte units. Round
+            # down before subtracting the reservation so all CTAs still fit.
+            shared_per_cta = properties["max_shared_mem_per_multiprocessor"] // max_occupancy
+            min_shared = shared_per_cta // 128 * 128 - properties["reserved_shared_mem_per_block"]
             self.shared = max(self.shared, min_shared)
         if self.gsan_enabled:
             signature["_gsan_globals_ptr"] = "*i8"
