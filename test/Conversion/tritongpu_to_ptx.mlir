@@ -180,6 +180,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     tt.return
   }
 
+  // CHECK-LABEL: .entry fp32_to_bf16_rounding(
+  // CHECK-DAG: cvt.rn.bf16.f32
+  // CHECK-DAG: cvt.rz.bf16.f32
+  tt.func public @fp32_to_bf16_rounding(%rn_out: !tt.ptr<bf16>, %rz_out: !tt.ptr<bf16>, %arg: f32) {
+    %rn = tt.fp_to_fp %arg, rounding = rtne : f32 -> bf16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : f32 -> bf16
+    tt.store %rn_out, %rn : !tt.ptr<bf16>
+    tt.store %rz_out, %rz : !tt.ptr<bf16>
+    tt.return
+  }
+
+  // CHECK-LABEL: .entry fp32_to_fp16_rounding(
+  // CHECK-DAG: cvt.rn.f16.f32
+  // CHECK-DAG: cvt.rz.f16.f32
+  tt.func public @fp32_to_fp16_rounding(%rn_out: !tt.ptr<f16>, %rz_out: !tt.ptr<f16>, %arg: f32) {
+    %rn = tt.fp_to_fp %arg, rounding = rtne : f32 -> f16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : f32 -> f16
+    tt.store %rn_out, %rn : !tt.ptr<f16>
+    tt.store %rz_out, %rz : !tt.ptr<f16>
+    tt.return
+  }
+
   // CHECK-LABEL: .entry precise_divf(
   // CHECK-DAG: div.rn.f32
   // CHECK-DAG: rcp.rn.f32
