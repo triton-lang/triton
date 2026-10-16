@@ -335,7 +335,9 @@ struct FpToFpOpConversion
           " conversion: " + stringifyRoundingMode(rounding) + "\n");
     }
     auto name = ("llvm.nvvm.f2" + dstName + "." + suffix).str();
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, dstTy, {v})
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, dstTy,
+                                           {v, /*pzo=*/b.false_val()})
         .getResult(0);
   }
 
