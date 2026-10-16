@@ -88,6 +88,36 @@ def make_args(*args, **kwargs):
     return args, kwargs
 
 
+@pytest.mark.parametrize("nounroll", [False, True])
+@pytest.mark.parametrize("step", [1, -1])
+def test_range_nounroll_annotation(nounroll, step):
+
+    @gluon.jit
+    def kernel(NOUNROLL: ttgl.constexpr, STEP: ttgl.constexpr):
+        value = 0
+        for i in ttgl.range(0, 8, STEP, nounroll=NOUNROLL):
+            for j in range(4):
+                value += i + j
+        return value
+
+    text = run_parser(kernel, (nounroll, step)).str_nodebug()
+    assert text.count("scf.for") == 2
+    assert text.count("llvm.loop_annotation =") == int(nounroll)
+    assert ("#llvm.loop_unroll<disable = true>" in text) == nounroll
+
+
+@pytest.mark.parametrize("nounroll", [1, None, "true"])
+def test_range_nounroll_invalid(nounroll):
+
+    @gluon.jit
+    def kernel(NOUNROLL: ttgl.constexpr):
+        for i in ttgl.range(8, nounroll=NOUNROLL):
+            pass
+
+    with pytest.raises(CompilationError, match="nounroll must be a compile-time boolean"):
+        run_parser(kernel, (nounroll, ))
+
+
 @gluon.constexpr_function
 def _inline_asm_frontend_generator(outputs, inputs):
     values, scalar = outputs
