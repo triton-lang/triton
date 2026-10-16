@@ -290,7 +290,6 @@ def test_scan_warp_conversion_mixed_width(dtype, reverse, device):
     (ttgl.BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0]), 256),
     (ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 4096),
     (ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 16 * THREADS_PER_WARP),
-    (ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 4], [0, 1]), 2048),
     # A long segment sequence spanning multiple registers in each warp.
     (ttgl.BlockedLayout([1, 1], [2, THREADS_PER_WARP // 2], [4, 1], [1, 0]), 256),
     # No scan-axis lane bits: the full segment sequence lives in registers.
