@@ -5,7 +5,7 @@
 // RUN: triton-opt %t/common.mlir --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' -cse | FileCheck --check-prefix=VEC80 --dump-input-context=20 %s
 // RUN: triton-opt %t/common.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -cse | FileCheck --check-prefix=VEC90 --dump-input-context=20 %s
 // RUN: triton-opt %t/common.mlir --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' -cse | FileCheck --check-prefix=VEC100 --dump-input-context=20 %s
-// RUN: triton-opt %t/fp4.mlir --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100 -mattr=+ptx87 | FileCheck %s --check-prefix=FP4
+// RUN: triton-opt %t/fp4.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100a -mattr=+ptx87 | FileCheck %s --check-prefix=FP4
 
 //--- common.mlir
 
