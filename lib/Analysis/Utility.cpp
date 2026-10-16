@@ -133,9 +133,7 @@ LayoutConversionScratchConfig getLayoutConversionScratchConfig(
   if (!cvtNeedsSharedMemory(src, dst))
     return config;
   auto bitwidthOf = [](Type type) {
-    return isa<triton::PointerType>(type)
-               ? kPtrBitWidth
-               : std::max(8u, type.getIntOrFloatBitWidth());
+    return std::max(8, getIntOrFloatOrPtrBitWidth(type));
   };
   auto indices = llvm::to_vector(llvm::seq<unsigned>(elementTypes.size()));
   llvm::stable_sort(indices, [&](unsigned i, unsigned j) {

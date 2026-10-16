@@ -18,6 +18,8 @@
 
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=OFFSETS
 
+// RUN: triton-opt %t/native-types.mlir --allocate-shared-memory | FileCheck %s --check-prefix=NATIVE-FP4
+
 //--- scan.mlir
 
 #layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [2], order = [0]}>
@@ -685,4 +687,21 @@ tt.func private @test_scan_shuffle_up_gapped(%arg: tensor<4x8xi32, #gapped>) -> 
   }) : (tensor<4x8xi32, #gapped>) -> tensor<4x8xi32, #gapped>
   tt.return %result : tensor<4x8xi32, #gapped>
 }
+}
+
+//--- native-types.mlir
+
+#layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+// Packed FP4 pairs occupy one byte per warp total.
+// NATIVE-FP4: ttg.shared = 2 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+  // NATIVE-FP4-LABEL: tt.func private @test_scan_packed_fp4
+  // NATIVE-FP4: allocation.offset = 0 : i32, allocation.size = 2 : i32
+  tt.func private @test_scan_packed_fp4(%arg: tensor<64x!tt.fp4e2m1x2, #layout>) -> tensor<64x!tt.fp4e2m1x2, #layout> {
+    %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+    ^bb0(%lhs: !tt.fp4e2m1x2, %rhs: !tt.fp4e2m1x2):
+      tt.scan.return %lhs : !tt.fp4e2m1x2
+    }) : (tensor<64x!tt.fp4e2m1x2, #layout>) -> tensor<64x!tt.fp4e2m1x2, #layout>
+    tt.return %result : tensor<64x!tt.fp4e2m1x2, #layout>
+  }
 }
