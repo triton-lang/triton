@@ -341,11 +341,18 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
 
   find_package(nanobind CONFIG REQUIRED HINTS "${Python3_SITELIB}")
-  nanobind_build_library(nanobind-static)
-  if(TRITON_STABLE_ABI)
-    target_compile_definitions(nanobind-static PUBLIC Py_LIMITED_API=0x030C0000)
+  # TRITON_EXT: shared libnanobind.so so plugins share host type casters.
+  if(TRITON_EXT_ENABLED)
+    nanobind_build_library(nanobind)
+    set(TRITON_NANOBIND_LIB nanobind)
+  else()
+    nanobind_build_library(nanobind-static)
+    set(TRITON_NANOBIND_LIB nanobind-static)
   endif()
-  target_link_libraries(nanobind-static PRIVATE Python3::Module)
+  if(TRITON_STABLE_ABI)
+    target_compile_definitions(${TRITON_NANOBIND_LIB} PUBLIC Py_LIMITED_API=0x030C0000)
+  endif()
+  target_link_libraries(${TRITON_NANOBIND_LIB} PRIVATE Python3::Module)
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
@@ -408,7 +415,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     LLVMAMDGPUAsmParser
 
     Python3::Module
-    nanobind-static
+    ${TRITON_NANOBIND_LIB}
   )
 
   # Define triton library
@@ -443,7 +450,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   # targets that link against libtriton do not accidentally link in their own
   # copies of core Triton code and LLVM.
   set_target_properties(triton PROPERTIES INTERFACE_LINK_LIBRARIES "")
-
   if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
@@ -508,6 +514,18 @@ if(TRITON_BUILD_PYTHON_MODULE)
   # Build plugins when building libtriton since they depend on libtriton.
   if(TRITON_EXT_ENABLED)
     add_subdirectory(examples/plugins)
+    # Ship shared nanobind beside libtriton so plugins resolve NB_SHARED APIs.
+    if(TARGET nanobind)
+      set_target_properties(nanobind PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${TRITON_WHEEL_DIR}/_C"
+        RUNTIME_OUTPUT_DIRECTORY "${TRITON_WHEEL_DIR}/_C"
+        OUTPUT_NAME "nanobind")
+      # $ORIGIN so installed/copied wheels find libnanobind.so next to libtriton.
+      set_target_properties(triton PROPERTIES
+        BUILD_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN"
+        BUILD_WITH_INSTALL_RPATH TRUE)
+    endif()
   endif()
 endif()
 
