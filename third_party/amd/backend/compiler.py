@@ -100,11 +100,11 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
                    disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
                    enable_timing: bool) -> str:
     library = _load_amd_codegen(get_amd_codegen_path())
-    # Serialize with Triton's LLVM: newer backends support older bitcode,
-    # whereas textual IR has no backwards-compatibility guarantee.
+    # Serialize with Triton's LLVM, adapting alias-scope domains to the format
+    # supported by the independently pinned AMD code generator.
     # Express fusion permission in the IR because newer LLVM versions no
     # longer honor TargetOptions::AllowFPOpFusion during code generation.
-    llvm_ir = llvm.to_bitcode(src, enable_fp_fusion)
+    llvm_ir = llvm.to_bitcode(src, enable_fp_fusion, legacy_alias_scopes=True)
     options = _AMDGPUCodegenOptions(
         1,
         triple.encode("utf-8"),
