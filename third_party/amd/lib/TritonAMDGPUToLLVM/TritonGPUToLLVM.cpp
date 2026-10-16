@@ -224,7 +224,9 @@ struct ConvertTritonAMDGPUToLLVM
 
     mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter, patterns,
                                                         targetInfo);
-    mlir::triton::populateFpSanToLLVMPatterns(typeConverter, patterns);
+    // Prioritize FpSan over native atomic lowering.
+    mlir::triton::populateFpSanToLLVMPatterns(typeConverter, patterns,
+                                              targetInfo, AMDBenefit + 1);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();

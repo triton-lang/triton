@@ -734,6 +734,12 @@ std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
 
+/// Apply an FpSan payload operation to carrier storage with a CAS loop and
+/// return the old carrier.
+Value emitFpSanAtomicRMW(ConversionPatternRewriter &rewriter, Location loc,
+                         Value ptr, Value value, Value pred, FloatType floatTy,
+                         RMWOp rmwOp, MemSemantic sem, StringRef scope);
+
 /// Choose a legal atomic load/store width using pointer alignment/contiguity
 /// and mask constancy.
 unsigned getAtomicLoadStoreVectorSize(Value ptr, Value mask,

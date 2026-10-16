@@ -597,8 +597,17 @@ struct LocalAtomicScatterRMWOpConversion
       if (!rmwMask)
         rmwMask = b.true_val();
 
-      Value old = emitter.emitAtomicRMW(rewriter, addr.ptr, value, rmwMask,
-                                        /*enableIntraWaveReduce=*/false);
+      Value old;
+      if (op->hasAttr("tti.fpsan")) {
+        // FpSan atomics must update payloads, so use CAS on the carrier bits.
+        auto floatTy = cast<FloatType>(info.valuesTy.getElementType());
+        old = emitFpSanAtomicRMW(rewriter, loc, addr.ptr, value, rmwMask,
+                                 floatTy, op.getAtomicRmwOp(),
+                                 MemSemantic::RELAXED, scope);
+      } else {
+        old = emitter.emitAtomicRMW(rewriter, addr.ptr, value, rmwMask,
+                                    /*enableIntraWaveReduce=*/false);
+      }
       if (returnOld)
         results.push_back(old);
     }

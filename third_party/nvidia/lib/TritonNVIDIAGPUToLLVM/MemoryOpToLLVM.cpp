@@ -376,6 +376,16 @@ public:
       bool isCluster = bool(addr.ctaId);
       Value ptr =
           targetInfo.mapDShared(rewriter, loc, addr.ptr, addr.ctaId, pred);
+      if (op->hasAttr("tti.fpsan")) {
+        // FpSan atomics must update payloads, so use CAS on the carrier bits.
+        auto floatTy = cast<FloatType>(info.valuesTy.getElementType());
+        StringRef scope = isCluster ? "cluster" : "block";
+        Value old = emitFpSanAtomicRMW(rewriter, loc, ptr, value, pred, floatTy,
+                                       rmwOp, MemSemantic::RELAXED, scope);
+        if (returnOld)
+          results.push_back(old);
+        continue;
+      }
       if (isI32Inc) {
         Value result =
             emitSharedInc(rewriter, loc, ptr, returnOld, isCluster, pred);

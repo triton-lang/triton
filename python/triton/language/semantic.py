@@ -6,6 +6,7 @@ from typing import List, Optional, Sequence, Tuple, TypeVar, Generic, Type
 import numbers
 
 from triton.runtime import driver
+from triton._instrumentation import is_enabled
 
 from .._C.libtriton import ir
 from . import core as tl
@@ -1433,6 +1434,11 @@ class TritonSemantic(Generic[TensorTy]):
         # return atomic_umin(i_ptr, i_val) if val < 0
         if sca_ty not in {tl.float32, tl.float64}:
             raise TypeError(f"atomic_max not supported for dtype {sca_ty}")
+        # Preserve float intent for FpSan before the integer decomposition.
+        if is_enabled(self.builder.options, "fpsan"):
+            return self.make_tensor(
+                self.builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, ptr.handle, val.handle, mask.handle, sem, scope),
+                val.type)
 
         i_type = tl.int32 if sca_ty == tl.float32 else tl.int64
         i_val = self.bitcast(val, i_type)
@@ -1471,6 +1477,11 @@ class TritonSemantic(Generic[TensorTy]):
         # return atomic_umax(i_ptr, i_val) if val < 0
         if sca_ty not in {tl.float32, tl.float64}:
             raise TypeError(f"atomic_min not supported for dtype {sca_ty}")
+        # Preserve float intent for FpSan before the integer decomposition.
+        if is_enabled(self.builder.options, "fpsan"):
+            return self.make_tensor(
+                self.builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, ptr.handle, val.handle, mask.handle, sem, scope),
+                val.type)
 
         i_type = tl.int32 if sca_ty == tl.float32 else tl.int64
         i_val = self.bitcast(val, i_type)
