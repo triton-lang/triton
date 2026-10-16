@@ -266,6 +266,48 @@ bool hasOnlyGlobalReads(Operation *op) {
          });
 }
 
+// Classify the immediate producer using direct effects. Shared writes exclude
+// async copies; nested global reads do not classify a region operation.
+bool isGlobalReadResult(Value value) {
+  auto memoryEffects =
+      dyn_cast_or_null<MemoryEffectOpInterface>(value.getDefiningOp());
+  if (!memoryEffects)
+    return false;
+  SmallVector<MemoryEffects::EffectInstance> effects;
+  memoryEffects.getEffects(effects);
+  return !effects.empty() && llvm::all_of(effects, [](const auto &effect) {
+    return isa<MemoryEffects::Read>(effect.getEffect()) &&
+           isa<triton::GlobalMemory>(effect.getResource());
+  });
+}
+
+bool mayNeedGlobalLoadWait(Value value) {
+  if (isGlobalReadResult(value))
+    return true;
+  auto arg = dyn_cast<BlockArgument>(value);
+  if (!arg)
+    return false;
+
+  Block *block = arg.getOwner();
+  unsigned index = arg.getArgNumber();
+  // Follow one incoming edge; do not recurse through forwarding arguments.
+  for (Block *pred : block->getPredecessors()) {
+    auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
+    if (!branch)
+      continue;
+    for (unsigned i = 0; i < branch->getNumSuccessors(); ++i) {
+      if (branch->getSuccessor(i) != block)
+        continue;
+      auto operands = branch.getSuccessorOperands(i);
+      // Produced arguments have no incoming SSA value to inspect.
+      if (index < operands.size() && !operands.isOperandProduced(index) &&
+          isGlobalReadResult(operands[index]))
+        return true;
+    }
+  }
+  return false;
+}
+
 ThreadIssuer getThreadIssuer(Operation *op) {
   auto kind = getThreadSyncInfo(op).issuer;
   return kind == ThreadIssuer::Unknown
@@ -369,8 +411,15 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
            (filter && filter(before, after, beforeIsRead, afterIsRead,
                              allocation, beforeSlice, afterSlice));
   };
-  if (!requiresThreadSync(pending, effects) &&
-      !pending.isIntersected(effects, canSkip, &allocation, sliceFilter))
+  bool needsSync =
+      requiresThreadSync(pending, effects) ||
+      pending.isIntersected(effects, canSkip, &allocation, sliceFilter);
+  // Keep a pending rendezvous ahead of potential global-memory waits. Branch
+  // transfers count as uses because they can lower to register copies.
+  if (!needsSync && !cluster &&
+      pending.threadSync.completion == CompletionSync::Shared)
+    needsSync = llvm::any_of(op->getOperands(), mayNeedGlobalLoadWait);
+  if (!needsSync)
     return nullptr;
   // The barrier clears incoming state. The operation's own effects still
   // follow it, including a scratch write that conflicts with a pending read.

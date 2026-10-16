@@ -761,8 +761,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return %sum : i32
   }
 
-  // Shared-copy completion can overlap independent global reads in a loop.
-  // Keep its rendezvous at the later publication.
+  // Shared-copy completion can overlap issuing independent global reads.
+  // Stop deferral before consuming their results, which may require a wait.
+  // The zero-trip path still needs a rendezvous before publication.
   // CHECK-LABEL: @shared_completion_before_global_loop
   tt.func private @shared_completion_before_global_loop(%src: !tt.ptr<i32>, %count: i32, %done: !barrier) -> i32 {
     %zero = arith.constant 0 : i32
@@ -771,7 +772,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     // CHECK-NEXT: cf.br
     // CHECK-NOT: ttg.barrier
     // CHECK: tt.load
-    // CHECK-NOT: ttg.barrier
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = arith.addi
     // CHECK: cf.br
     // CHECK: ttg.barrier local
     // CHECK-NEXT: ttng.arrive_barrier

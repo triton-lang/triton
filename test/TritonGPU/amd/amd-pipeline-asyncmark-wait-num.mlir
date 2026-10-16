@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=3" -tritonamdgpu-pipeline="use_async_copy=1" -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=3" -tritonamdgpu-pipeline="use_async_copy=1 use_pingpong=1" -canonicalize | FileCheck %s
 
 // On asyncmark targets (CDNA3/CDNA4) ttg.async_wait's `num` lowers straight to
 // wait.asyncmark(N), so the pipeliner-authored num=0 ("wait for all") would
@@ -53,6 +53,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %a_dot = ttg.convert_layout %a : tensor<16x32xf32, #blockedA> -> tensor<16x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %b_dot = ttg.convert_layout %b : tensor<32x32xf32, #blockedB> -> tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>
       %c = tt.dot %a_dot, %b_dot, %acc : tensor<16x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<16x32xf32, #mma>
+      scf.yield %c : tensor<16x32xf32, #mma>
+    }
+    tt.return %result : tensor<16x32xf32, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blockedB = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16, 4], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tail_wait_before_synchronous_store
+  // A uses a contiguous 32-bit async copy; B uses scalar 16-bit loads and
+  // synchronous LDS staging. Keep B's store after the tail wait.
+  // CHECK: scf.for
+  // CHECK-NOT: ttg.local_store
+  // CHECK:   ttg.async_wait %{{.*}} {num = 1 : i32}
+  // CHECK:   ttg.local_store
+  // CHECK:   scf.yield
+  tt.func @tail_wait_before_synchronous_store(
+      %arg0: tensor<16x32x!tt.ptr<f16>, #blocked> {tt.contiguity = dense<[1, 2]> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>},
+      %arg1: tensor<32x32x!tt.ptr<f16>, #blockedB> {tt.contiguity = dense<1> : tensor<2xi32>, tt.divisibility = dense<1> : tensor<2xi32>},
+      %lb: i32, %ub: i32, %step: i32) -> tensor<16x32xf32, #mma> {
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<16x32xf32, #mma>
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<16x32xf32, #mma>) : i32 {
+      %a = tt.load %arg0 : tensor<16x32x!tt.ptr<f16>, #blocked>
+      %a_dot = ttg.convert_layout %a : tensor<16x32xf16, #blocked> -> tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+      %mask = arith.constant dense<true> : tensor<32x32xi1, #blockedB>
+      %other = arith.constant dense<1.0> : tensor<32x32xf16, #blockedB>
+      %b = tt.load %arg1, %mask, %other : tensor<32x32x!tt.ptr<f16>, #blockedB>
+      %b_dot = ttg.convert_layout %b : tensor<32x32xf16, #blockedB> -> tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %c = tt.dot %a_dot, %b_dot, %acc : tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<16x32xf32, #mma>
       scf.yield %c : tensor<16x32xf32, #mma>
     }
     tt.return %result : tensor<16x32xf32, #mma>
