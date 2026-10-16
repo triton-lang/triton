@@ -287,7 +287,9 @@ Value emitRedundantThreadPredicate(
   auto kBlock = str_attr("block");
 
   Value zero = b.i32_val(0);
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  Value laneId = zero, warpId = zero;
+  if (freeVarMasks.lookup(kLane) || freeVarMasks.lookup(kWarp))
+    std::tie(laneId, warpId) = getLaneAndWarpId(rewriter, loc);
   Value blockId = freeVarMasks.lookup(kBlock) == 0
                       ? zero
                       : targetInfo.getClusterCTAId(rewriter, loc);
@@ -303,6 +305,32 @@ Value emitRedundantThreadPredicate(
     }
   }
   return pred;
+}
+
+Value emitMemoryThreadPredicate(
+    Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo) {
+  if (op->getParentOfType<ThreadScopeOp>()) {
+    auto block = StringAttr::get(op->getContext(), "block");
+    auto domain = ThreadDomainAttr::get(op->getContext(), 0, 0,
+                                        freeVarMasks.lookup(block) &
+                                            (lookupNumCTAs(op) - 1));
+    return emitThreadPredicate(domain, rewriter, op->getLoc(), targetInfo);
+  }
+  return emitRedundantThreadPredicate(freeVarMasks, rewriter, op->getLoc(),
+                                      targetInfo);
+}
+
+Value emitThreadPredicate(ThreadDomainAttr domain,
+                          ConversionPatternRewriter &rewriter, Location loc,
+                          const TargetInfoBase &targetInfo) {
+  auto *ctx = domain.getContext();
+  llvm::MapVector<StringAttr, int32_t> masks;
+  masks[StringAttr::get(ctx, "lane")] = domain.getLane();
+  masks[StringAttr::get(ctx, "warp")] = domain.getWarp();
+  masks[StringAttr::get(ctx, "block")] = domain.getBlock();
+  Value pred = emitRedundantThreadPredicate(masks, rewriter, loc, targetInfo);
+  return pred ? pred : TritonLLVMOpBuilder(loc, rewriter).true_val();
 }
 
 } // namespace triton::gpu
@@ -1245,9 +1273,19 @@ emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
   return results;
 }
 
+static bool atomicResultHasOrderingBarrier(Operation *op) {
+  if (triton::gpu::lookupNumCTAs(op) != 1)
+    return triton::atomicResultHasCTABroadcast(op);
+  return op->getNumResults() != 0 &&
+         !triton::getAtomicResultShuffleMask(op->getResult(0));
+}
+
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
-                                  bool emitBarrierAfter, RewriterBase &rewriter,
+                                  RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo) {
+  // The region's entry/exit barriers already provide this ordering.
+  if (op->getParentOfType<triton::gpu::ThreadScopeOp>())
+    return;
   auto emitBarrier = [&] {
     if (triton::gpu::lookupNumCTAs(op) == 1)
       targetInfo.barrier(op->getLoc(), rewriter, triton::gpu::AddrSpace::Local);
@@ -1255,38 +1293,45 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
       targetInfo.clusterBarrier(op->getLoc(), rewriter, op);
   };
 
-  if (memOrdering == MemSemantic::RELEASE ||
-      memOrdering == MemSemantic::ACQUIRE_RELEASE) {
-    OpBuilder::InsertionGuard guard(rewriter);
+  auto stages = triton::getAtomicBarrierStages(
+      memOrdering, atomicResultHasOrderingBarrier(op));
+  OpBuilder::InsertionGuard guard(rewriter);
+  if (stages.beforeMemoryEffects) {
     rewriter.setInsertionPoint(op);
     emitBarrier();
   }
-  if (emitBarrierAfter && (memOrdering == MemSemantic::ACQUIRE ||
-                           memOrdering == MemSemantic::ACQUIRE_RELEASE)) {
-    OpBuilder::InsertionGuard guard(rewriter);
+  if (stages.afterMemoryEffects) {
     rewriter.setInsertionPointAfter(op);
     emitBarrier();
   }
 }
 
-bool atomicResultHasOrderingBarrier(Operation *op) {
-  if (triton::getAtomicResultShuffleMask(op->getResult(0)))
-    return false;
-  return triton::gpu::lookupNumCTAs(op) == 1 ||
-         triton::atomicResultHasCTABroadcast(op);
+void shuffleFromCanonicalLane(Location loc, MutableArrayRef<Value> values,
+                              uint32_t laneMask,
+                              ConversionPatternRewriter &rewriter,
+                              const TargetInfoBase &targetInfo) {
+  if (!laneMask)
+    return;
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value sourceLane = b.i32_val(0);
+  if (laneMask != triton::gpu::lookupThreadsPerWarp(rewriter) - 1)
+    sourceLane = b.and_(getLaneId(rewriter, loc), b.i32_val(~laneMask));
+  for (Value &value : values)
+    value = targetInfo.shuffleIdx(rewriter, loc, value, sourceLane);
 }
 
-Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
-                                  Value resultVal,
-                                  ConversionPatternRewriter &rewriter,
-                                  TritonLLVMOpBuilder &b, Value threadPred,
-                                  const TargetInfoBase &targetInfo) {
+Value broadcastScalarResult(Operation *op, Value resultVal,
+                            ConversionPatternRewriter &rewriter,
+                            Value threadPred,
+                            const TargetInfoBase &targetInfo) {
   assert(op->hasAttr("allocation.offset"));
 
   auto loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type valueElemTy = resultVal.getType();
   Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
   targetInfo.storeShared(rewriter, loc, smemBase, resultVal, threadPred);
-  if (triton::gpu::lookupNumCTAs(op) == 1) {
+  if (!triton::hasCrossCTAScratch(op)) {
     targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
     return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
                                  b.true_val());
@@ -2174,22 +2219,25 @@ std::tuple<Block *, Block *, Block *> createIfBlock(RewriterBase &b,
   return {prevBlock, ifBlock, thenBlock};
 }
 
-SmallVector<Value>
-broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
-                      ConversionPatternRewriter &rewriter,
-                      ArrayRef<Value> uniqueResultVals, Type valueElemTy,
-                      TritonLLVMOpBuilder &b, Value threadPred,
-                      const TargetInfoBase &targetInfo) {
+SmallVector<Value> broadcastTensorResult(Operation *op,
+                                         ConversionPatternRewriter &rewriter,
+                                         ArrayRef<Value> uniqueResultVals,
+                                         Value threadPred,
+                                         const TargetInfoBase &targetInfo) {
   assert(op->hasAttr("allocation.offset"));
   auto *ctx = rewriter.getContext();
   auto loc = op->getLoc();
+  assert(!uniqueResultVals.empty());
+  auto tensorTy = cast<RankedTensorType>(op->getResult(0).getType());
+  Type valueElemTy = uniqueResultVals.front().getType();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   auto kOffset = str_attr("offset");
   auto kBlock = str_attr("block");
   auto kOwnerBlock = str_attr("owner_block");
-  auto regLayout = triton::gpu::toLinearLayout(tensorTy);
-  auto removeRegBroadcast = actionRemoveBroadcastedRegs(regLayout);
-  auto uniqueRegLayout = removeRegBroadcast.apply(regLayout);
+  auto uniqueRegLayout =
+      triton::gpu::toLinearLayout(tensorTy).removeZeroBasesAlongDim(
+          str_attr("register"));
 
   auto shapePerCTA =
       convertType<unsigned>(triton::gpu::getShapePerCTA(tensorTy));
@@ -2198,18 +2246,14 @@ broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
   auto sharedLayout = triton::gpu::combineCtaCgaWithShape(
       ctaShared, triton::gpu::getCGALayout(tensorTy.getEncoding()),
       tensorTy.getShape());
-  auto dimOffset = sharedLayout.getInDimSize(kOffset);
-  auto dimBlock = sharedLayout.getInDimSize(kBlock);
-
   // Preserve CTA identity for stores so producers write to their local
   // allocation. Rename the shared block dimension for loads so the inverse
   // maps broadcast CTA bits to the canonical owner CTA instead.
   auto storeCvt = uniqueRegLayout.invertAndCompose(sharedLayout);
   assert(storeCvt.isTrivialOver({kBlock}));
-  auto ownerShared =
-      sharedLayout.reshapeIns({{kOffset, dimOffset}, {kOwnerBlock, dimBlock}});
+  auto ownerShared = sharedLayout.renameInDim(kBlock, kOwnerBlock);
   auto loadCvt = uniqueRegLayout.invertAndCompose(ownerShared);
-  loadCvt = loadCvt.reshapeOuts({{kOffset, dimOffset}, {kBlock, dimBlock}});
+  loadCvt = renameLinearLayoutDims(loadCvt, {}, {{kOwnerBlock, kBlock}});
   bool crossCTA = !loadCvt.isTrivialOver({kBlock});
   auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
@@ -2234,46 +2278,24 @@ broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
                    /*maybeMaxVecElems=*/{}, makeSharedLoadEmitter(targetInfo));
 }
 
-static Value synchronizeAtomicResults(Operation *op,
-                                      ConversionPatternRewriter &rewriter,
-                                      SmallVector<Value> &resultVals,
-                                      Type valueElemTy, TritonLLVMOpBuilder &b,
-                                      Value threadPred,
-                                      const TargetInfoBase &targetInfo,
-                                      const LLVMTypeConverter *typeConverter) {
+void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,
+                           SmallVector<Value> &resultVals, Value threadPred,
+                           const TargetInfoBase &targetInfo,
+                           const LLVMTypeConverter *typeConverter) {
   auto loc = op->getLoc();
   auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
   if (auto laneMask = triton::getAtomicResultShuffleMask(op->getResult(0))) {
-    if (*laneMask) {
-      Value srcLane = b.i32_val(0);
-      if (*laneMask != triton::gpu::lookupThreadsPerWarp(rewriter) - 1)
-        srcLane = b.and_(getLaneAndWarpId(rewriter, loc).first,
-                         b.i32_val(~*laneMask));
-      for (Value &value : resultVals)
-        value = targetInfo.shuffleIdx(rewriter, loc, value, srcLane);
-    }
+    shuffleFromCanonicalLane(loc, resultVals, *laneMask, rewriter, targetInfo);
   } else if (!tensorTy) {
-    return broadcastScalarAtomicResult(op, valueElemTy, resultVals[0], rewriter,
-                                       b, threadPred, targetInfo);
+    resultVals.front() = broadcastScalarResult(op, resultVals.front(), rewriter,
+                                               threadPred, targetInfo);
   } else {
-    resultVals = broadcastTensorResult(op, tensorTy, rewriter, resultVals,
-                                       valueElemTy, b, threadPred, targetInfo);
+    resultVals =
+        broadcastTensorResult(op, rewriter, resultVals, threadPred, targetInfo);
   }
-  if (!tensorTy)
-    return resultVals[0];
-  return packUniqueTensorElements(loc, typeConverter, resultVals, rewriter,
-                                  tensorTy);
-}
-
-void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,
-                           SmallVector<Value> &resultVals, Type valueElemTy,
-                           TritonLLVMOpBuilder &b, Value threadPred,
-                           const TargetInfoBase &targetInfo,
-                           const LLVMTypeConverter *typeConverter) {
-  Value result =
-      synchronizeAtomicResults(op, rewriter, resultVals, valueElemTy, b,
-                               threadPred, targetInfo, typeConverter);
-  rewriter.replaceOp(op, result);
+  rewriter.replaceOp(op, packUniqueTensorElements(loc, typeConverter,
+                                                  resultVals, rewriter,
+                                                  op->getResult(0).getType()));
 }
 
 // Only retain those attributes that are not constructed by
