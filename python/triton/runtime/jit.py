@@ -4,6 +4,7 @@ import copy
 import hashlib
 import inspect
 import itertools
+import struct
 import threading
 import re
 import textwrap
@@ -611,8 +612,21 @@ def _replace_jit_callables(obj):
     return obj
 
 
+def _constexpr_specialization_key(entry):
+    # The in-memory launch-key shortcut must stay as exact as the string cache
+    # key it fronts: tuple equality conflates 1 with 1.0 and 0.0 with -0.0, so
+    # constexpr scalars key on their type, and floats on their bit pattern
+    # (which also lets repeated NaN launches hit instead of growing the cache).
+    if len(entry) == 2 and entry[0] == "constexpr":
+        value = entry[1]
+        if isinstance(value, float):
+            return ("constexpr", float, struct.pack(">d", value))
+        return ("constexpr", type(value), value)
+    return entry
+
+
 def compute_cache_key(kernel_key_cache, specialization, options):
-    key = (tuple(specialization), str(options))
+    key = (tuple(_constexpr_specialization_key(entry) for entry in specialization), str(options))
     cache_key = kernel_key_cache.get(key, None)
     if cache_key is not None:
         return cache_key
