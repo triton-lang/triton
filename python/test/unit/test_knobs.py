@@ -311,12 +311,12 @@ def test_amd_codegen_revision_invalidates_backend_hash(fresh_knobs, monkeypatch)
     from triton.backends.compiler import GPUTarget
     from triton.backends.amd import compiler
 
-    monkeypatch.setattr(compiler, "get_amd_codegen_revision", lambda: "first-revision-1")
+    identity = dict(compiler.get_amd_codegen_identity(), revision="first-revision-1")
+    monkeypatch.setattr(compiler, "get_amd_codegen_identity", lambda: identity)
     backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
     first_hash = backend.hash()
 
-    monkeypatch.setattr(compiler, "get_amd_codegen_revision", lambda: "second-revision-1")
-    backend.hash.cache_clear()
+    identity["revision"] = "second-revision-1"
     second_hash = backend.hash()
 
     assert first_hash != second_hash
@@ -746,3 +746,46 @@ def test_opt_bool(fresh_knobs_including_libraries, monkeypatch):
     assert fresh_knobs.amd.use_block_pingpong
     monkeypatch.delenv("TRITON_HIP_USE_BLOCK_PINGPONG")
     assert fresh_knobs.amd.use_block_pingpong is None
+
+
+def test_amd_codegen_content_invalidates_backend_hash(tmp_path):
+    import subprocess
+    import sys
+    from triton.backends.amd import compiler
+
+    library = tmp_path / Path(compiler.get_amd_codegen_path()).name
+    shutil.copyfile(compiler.get_amd_codegen_path(), library)
+    env = dict(os.environ, TRITON_AMD_CODEGEN_PATH=str(library))
+    command = [
+        sys.executable, "-c", "from triton.backends.amd.compiler import HIPBackend; "
+        "from triton.backends.compiler import GPUTarget; "
+        "print(HIPBackend(GPUTarget('hip', 'gfx942', 64)).hash())"
+    ]
+    first = subprocess.check_output(command, env=env)
+    # A changed build can retain the same manually supplied revision label.
+    with library.open("ab") as stream:
+        stream.write(b"changed-build")
+    second = subprocess.check_output(command, env=env)
+    assert first != second
+
+
+@pytest.mark.parametrize("alias", ["same", "dot", "symlink"])
+def test_amd_codegen_replacement_requires_restart(alias, fresh_knobs, monkeypatch, tmp_path):
+    from triton.backends.amd import compiler
+
+    library = tmp_path / Path(compiler.get_amd_codegen_path()).name
+    shutil.copyfile(compiler.get_amd_codegen_path(), library)
+    monkeypatch.setenv("TRITON_AMD_CODEGEN_PATH", str(library))
+    identity = compiler.get_amd_codegen_identity()
+    assert identity["path"] == str(library.resolve())
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(library.read_bytes() + b"new-build")
+    replacement.replace(library)
+    if alias == "dot":
+        monkeypatch.setenv("TRITON_AMD_CODEGEN_PATH", f"{tmp_path}/./{library.name}")
+    elif alias == "symlink":
+        link = tmp_path / "alias.so"
+        link.symlink_to(library)
+        monkeypatch.setenv("TRITON_AMD_CODEGEN_PATH", str(link))
+    with pytest.raises(RuntimeError, match="restart Python"):
+        compiler.get_amd_codegen_identity()
