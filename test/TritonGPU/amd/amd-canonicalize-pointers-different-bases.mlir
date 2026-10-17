@@ -157,3 +157,81 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return %9 : tensor<512xf16>
   }
 }
+
+// -----
+
+// A tensor-condition select between different bases materializes a full
+// tensor of pointers, so the then yield carries a plain pointer while the
+// else yield still carries a (base, offset) pair. The scf.if conversion must
+// materialize the fat side instead of asserting on the missing yield
+// metadata (issue #12137).
+// CHECK-LABEL: tt.func @scf_if_mixed_pointer_representations
+// CHECK: %[[IF:.*]] = scf.if %arg2 -> (tensor<4x!tt.ptr<f32>>) {
+// CHECK:   %[[SEL:.*]] = arith.select {{.*}} : tensor<4xi1>, tensor<4x!tt.ptr<f32>>
+// CHECK:   scf.yield %[[SEL]] : tensor<4x!tt.ptr<f32>>
+// CHECK: } else {
+// CHECK:   %[[ELSEBASE:.*]] = tt.splat {{.*}} : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+// CHECK:   %[[ELSEPTR:.*]] = tt.addptr %[[ELSEBASE]], {{.*}} : tensor<4x!tt.ptr<f32>>, tensor<4xi32>
+// CHECK:   scf.yield %[[ELSEPTR]] : tensor<4x!tt.ptr<f32>>
+// CHECK: }
+// CHECK: tt.load %[[IF]] : tensor<4x!tt.ptr<f32>>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @scf_if_mixed_pointer_representations(
+      %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %arg2: i1, %arg3: i32) -> tensor<4xf32> {
+    %range = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
+    %scalar = tt.splat %arg3 : i32 -> tensor<4xi32>
+    %cmp = arith.cmpi eq, %range, %scalar : tensor<4xi32>
+    %base0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+    %base1 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+    %ptr0 = tt.addptr %base0, %range : tensor<4x!tt.ptr<f32>>, tensor<4xi32>
+    %ptr1 = tt.addptr %base1, %range : tensor<4x!tt.ptr<f32>>, tensor<4xi32>
+    %ptr = scf.if %arg2 -> (tensor<4x!tt.ptr<f32>>) {
+      %sel = arith.select %cmp, %ptr0, %ptr1 : tensor<4xi1>, tensor<4x!tt.ptr<f32>>
+      scf.yield %sel : tensor<4x!tt.ptr<f32>>
+    } else {
+      scf.yield %ptr1 : tensor<4x!tt.ptr<f32>>
+    }
+    %value = tt.load %ptr : tensor<4x!tt.ptr<f32>>
+    tt.return %value : tensor<4xf32>
+  }
+}
+
+// -----
+
+// Same materialization, but on both arms: neither yield reports fat pointer
+// offsets, and the scf.if conversion must still produce a plain pointer
+// result instead of asserting.
+// CHECK-LABEL: tt.func @scf_if_both_arms_materialized
+// CHECK: %[[IF:.*]] = scf.if %arg2 -> (tensor<4x!tt.ptr<f32>>) {
+// CHECK:   %[[SELT:.*]] = arith.select {{.*}} : tensor<4xi1>, tensor<4x!tt.ptr<f32>>
+// CHECK:   scf.yield %[[SELT]] : tensor<4x!tt.ptr<f32>>
+// CHECK: } else {
+// CHECK:   %[[SELE:.*]] = arith.select {{.*}} : tensor<4xi1>, tensor<4x!tt.ptr<f32>>
+// CHECK:   scf.yield %[[SELE]] : tensor<4x!tt.ptr<f32>>
+// CHECK: }
+// CHECK: tt.load %[[IF]] : tensor<4x!tt.ptr<f32>>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @scf_if_both_arms_materialized(
+      %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+      %arg2: i1, %arg3: i32) -> tensor<4xf32> {
+    %range = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
+    %scalar = tt.splat %arg3 : i32 -> tensor<4xi32>
+    %cmp = arith.cmpi eq, %range, %scalar : tensor<4xi32>
+    %base0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+    %base1 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+    %ptr0 = tt.addptr %base0, %range : tensor<4x!tt.ptr<f32>>, tensor<4xi32>
+    %ptr1 = tt.addptr %base1, %range : tensor<4x!tt.ptr<f32>>, tensor<4xi32>
+    %ptr = scf.if %arg2 -> (tensor<4x!tt.ptr<f32>>) {
+      %sel_t = arith.select %cmp, %ptr0, %ptr1 : tensor<4xi1>, tensor<4x!tt.ptr<f32>>
+      scf.yield %sel_t : tensor<4x!tt.ptr<f32>>
+    } else {
+      %sel_e = arith.select %cmp, %ptr1, %ptr0 : tensor<4xi1>, tensor<4x!tt.ptr<f32>>
+      scf.yield %sel_e : tensor<4x!tt.ptr<f32>>
+    }
+    %value = tt.load %ptr : tensor<4x!tt.ptr<f32>>
+    tt.return %value : tensor<4xf32>
+  }
+}
