@@ -396,3 +396,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// Layout picked by CoalesceAsyncCopy when the src order cannot be lowered to a
+// direct-to-LDS copy: the lanes follow the shared order so the writes coalesce.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 2], order = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.target" = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: async_copy_shared_order
+  // GFX950-LABEL: async_copy_shared_order
+  tt.func public @async_copy_shared_order(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %arg2: !ttg.memdesc<16x4xf32, #shared, #smem, mutable>) {
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<16x4x!tt.ptr<f32>, #blocked>
+    // CHECK: rocdl.global.load.async.lds
+    // GFX950: rocdl.global.load.async.lds
+    %2 = ttg.async_copy_global_to_local %1, %arg2 : tensor<16x4x!tt.ptr<f32>, #blocked> -> <16x4xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
