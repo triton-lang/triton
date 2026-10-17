@@ -357,11 +357,10 @@ def test_gsan_profile_pool_is_ignored_by_race_checker(operation, fresh_knobs, wi
     elif operation == "atomic":
         _atomic[(1, )](output)
     elif operation == "tma":
-        _tma_copy[(1, )](TensorDescriptor.from_tensor(source, [8, 32]),
-                        TensorDescriptor.from_tensor(output, [8, 32]))
+        _tma_copy[(1, )](TensorDescriptor.from_tensor(source, [8, 32]), TensorDescriptor.from_tensor(output, [8, 32]))
     elif operation == "tma_indexed":
         _tma_indexed[(1, )](TensorDescriptor.from_tensor(source, [1, 32]),
-                           TensorDescriptor.from_tensor(output, [1, 32]))
+                            TensorDescriptor.from_tensor(output, [1, 32]))
     else:
         _tma_reduce[(1, )](TensorDescriptor.from_tensor(output, [8, 32]))
     torch.cuda.synchronize()
@@ -736,6 +735,7 @@ def test_gsan_profile_retirement_follows_actual_owner(owner_kind, fresh_knobs):
 
 
 def test_gsan_profile_retirement_failure_is_reported(monkeypatch, fresh_knobs):
+
     def fail(*args):
         raise RuntimeError("simulated summary failure")
 
@@ -784,6 +784,7 @@ def test_gsan_profile_atomic_object_width(dtype, fresh_knobs):
 @pytest.mark.parametrize("operation", ["load", "store"])
 @pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.int32, torch.float64])
 def test_gsan_profile_vectorized_atomic_object_width(operation, dtype, fresh_knobs):
+
     @gluon.jit
     def kernel(source, output, STORE: gl.constexpr):
         offsets = gl.arange(0, 256, layout=gl.BlockedLayout([8], [32], [1], [0]))
@@ -794,12 +795,12 @@ def test_gsan_profile_vectorized_atomic_object_width(operation, dtype, fresh_kno
             values = gl.atomic_load(source + offsets, sem="relaxed")
             gl.store(output + offsets, values)
 
-    ordinary = torch.full((256,), 17 if operation == "store" else 0, dtype=dtype, device="cuda")
+    ordinary = torch.full((256, ), 17 if operation == "store" else 0, dtype=dtype, device="cuda")
     with AllocationProfile() as profile:
         target = torch.full_like(ordinary, 0 if operation == "store" else 17)
         profile.track(target, name="atomic")
         source, output = (ordinary, target) if operation == "store" else (target, ordinary)
-        compiled = kernel[(1,)](source, output, operation == "store", num_warps=1)
+        compiled = kernel[(1, )](source, output, operation == "store", num_warps=1)
     row = _allocation(profile, "atomic")
     assert row["max_granularity"] == target.element_size()
     assert not row["write_once_candidate"]
@@ -916,8 +917,8 @@ def test_gsan_profile_peer_writes_share_shadow(overlap, fresh_knobs):
     with ExitStack() as stack:
         ptr = _allocator.malloc(4096, 0)
         stack.callback(_allocator.free_allocation, ptr, 0)
-        real, shadow, size = _allocator.export_allocation_handles(
-            ptr, _allocator.ShareableHandleType.POSIX_FILE_DESCRIPTOR)
+        real, shadow, size = _allocator.export_allocation_handles(ptr,
+                                                                  _allocator.ShareableHandleType.POSIX_FILE_DESCRIPTOR)
         stack.callback(os.close, real)
         stack.callback(os.close, shadow)
         with torch.cuda.device(1):
@@ -969,8 +970,8 @@ def _distributed_checks(rank, world_size, init_method, backend, *, shared=False)
     from triton.experimental.gsan import _profile_allocator as _allocator
     hosts = [None] * world_size
     dist.all_gather_object(hosts, socket.gethostname())
-    handle_type = (_allocator.ShareableHandleType.POSIX_FILE_DESCRIPTOR if len(set(hosts)) == 1
-                   else _allocator.ShareableHandleType.FABRIC)
+    handle_type = (_allocator.ShareableHandleType.POSIX_FILE_DESCRIPTOR
+                   if len(set(hosts)) == 1 else _allocator.ShareableHandleType.FABRIC)
     _configure_profile_test_allocator(handle_type)
     try:
         if shared:
@@ -1125,8 +1126,8 @@ def _shared_profile_buffers(rank, world_size, *, cached=False):
                 pointer = allocator.import_allocation_handles(real, shadow, size, device, kind)
                 stack.callback(allocator.free_allocation, pointer, device)
                 pointer += offsets[peer]
-            buffers.append(own_tensor if cached and peer == rank else
-                           uint8_cuda_tensor_from_ptr(pointer, 4096, device).view(torch.int32))
+            buffers.append(own_tensor if cached and peer == rank else uint8_cuda_tensor_from_ptr(pointer, 4096, device).
+                           view(torch.int32))
         own_tensor = None
         try:
             yield buffers
@@ -1215,8 +1216,7 @@ def _distributed_shared_checks(rank, world_size):
         local_rows = [row for row in rows if row["allocation_id"] is None]
         assert len(shared_rows) == len(local_rows) == world_size
         assert all(row["write_once_candidate"] and row["bytes_written"] == 4096 for row in shared_rows)
-        assert all(not row["write_once_candidate"] and row["cells_with_repeated_writes"] == 256
-                   for row in local_rows)
+        assert all(not row["write_once_candidate"] and row["cells_with_repeated_writes"] == 256 for row in local_rows)
 
 
 @pytest.mark.parametrize("backend", ["gloo", "nccl"])
@@ -1299,8 +1299,8 @@ def test_gsan_profile_direct_allocator_scope_and_operation_outputs(fresh_knobs):
         assert allocator.get_allocation_profile_layout(other_thread.data_ptr()) is None
         profile.track(source, name="source")
         profile.track(output, name="output")
-        _fill[(1,)](source, 32)
-        _copy[(1,)](source, output, 32)
+        _fill[(1, )](source, 32)
+        _copy[(1, )](source, output, 32)
     after = torch.empty_like(ordinary)
     assert allocator.get_allocation_profile_layout(after.data_ptr()) is None
     assert _allocation(profile, "output")["write_once_candidate"]
@@ -1325,9 +1325,9 @@ def test_gsan_profile_raw_allocations_use_original_allocator(explicit_stream, fr
             profile.track(raw, name="raw")
             profile.track_pointer(pointer, 1024, owner=raw, name="raw-pointer")
             profile.track(output, name="tensor")
-            _fill[(1,)](raw, 256)
-            _fill[(1,)](raw, 256)
-            _copy[(1,)](raw, output, 256)
+            _fill[(1, )](raw, 256)
+            _fill[(1, )](raw, 256)
+            _copy[(1, )](raw, output, 256)
             if free_inside:
                 raw_lifetime.close()
         rows = profile.report()["allocations"]
@@ -1350,9 +1350,9 @@ def _check_import_does_not_install_allocator(cuda_initialized):
         torch.cuda.init()
     original = torch._C._cuda_getAllocator()
     with (
-        patch.object(torch._C, "_cuda_changeCurrentAllocator", side_effect=AssertionError("allocator installed")),
-        patch.object(torch._C, "_cuda_init", side_effect=AssertionError("CUDA initialized")),
-        patch("triton.runtime.build.compile_module_from_file", side_effect=AssertionError("native module loaded")),
+            patch.object(torch._C, "_cuda_changeCurrentAllocator", side_effect=AssertionError("allocator installed")),
+            patch.object(torch._C, "_cuda_init", side_effect=AssertionError("CUDA initialized")),
+            patch("triton.runtime.build.compile_module_from_file", side_effect=AssertionError("native module loaded")),
     ):
         from triton.experimental.gsan import profile
         # Multiprocessing already imported this test module and its dependencies.
@@ -1371,7 +1371,7 @@ def _check_import_does_not_install_allocator(cuda_initialized):
 
 @pytest.mark.parametrize("cuda_initialized", [False, True])
 def test_gsan_profile_import_does_not_install_allocator(cuda_initialized):
-    result = run_in_process(_check_import_does_not_install_allocator, args=(cuda_initialized,))
+    result = run_in_process(_check_import_does_not_install_allocator, args=(cuda_initialized, ))
     assert result.exc is None, result
 
 
@@ -1436,13 +1436,13 @@ def test_gsan_profile_direct_allocator_explicit_pool_and_coalescing(fresh_knobs)
         address = first.data_ptr()
         profile.track(first, name="first")
         profile.track(second, name="second")
-        _fill[(1,)](first, 1024)
-        _fill[(1,)](second, 1024)
+        _fill[(1, )](first, 1024)
+        _fill[(1, )](second, 1024)
         del first, second
         combined = torch.empty(2048, dtype=torch.int32, device="cuda")
         assert combined.data_ptr() == address
         profile.track(combined, name="combined")
-        _fill[(2,)](combined, 2048)
+        _fill[(2, )](combined, 2048)
         del combined
     rows = profile.report()["allocations"]
     assert len(rows) == 3
@@ -1478,9 +1478,9 @@ def test_gsan_profile_direct_allocator_cross_device_copy(fresh_knobs):
 def test_gsan_profile_direct_allocator_late_registration_in_new_context(fresh_knobs):
     with AllocationProfile():
         output = torch.empty(1024, dtype=torch.int32, device="cuda")
-        _fill[(1,)](output, 1024)
+        _fill[(1, )](output, 1024)
     with AllocationProfile() as profile:
         profile.prepare()
         profile.track(output, name="output")
-        _fill[(1,)](output, 1024)
+        _fill[(1, )](output, 1024)
     assert _allocation(profile, "output")["write_once_candidate"]

@@ -173,11 +173,9 @@ extern "C" GSAN_DEVICE void __triton_gsan_atomic_tensor_desc(
   gsan_profile::descriptor(state, desc, coords, rank, shape, bytes, warp, warps,
                            gsan_profile::kAtomic);
 }
-extern "C" GSAN_DEVICE void
-__triton_gsan_atomic_begin_scalar(void *state, void *, int pred,
-                                  gsan::uintptr_t address, int bytes,
-                                  int bytesPerElem, int, int, int,
-                                  const char *, unsigned) {
+extern "C" GSAN_DEVICE void __triton_gsan_atomic_begin_scalar(
+    void *state, void *, int pred, gsan::uintptr_t address, int bytes,
+    int bytesPerElem, int, int, int, const char *, unsigned) {
   // A vectorized atomic load/store spans multiple atomic objects. Limit the
   // recommendation by the element width, independently of the access width.
   if (pred)
@@ -191,18 +189,17 @@ extern "C" GSAN_DEVICE void __triton_gsan_atomic_end_scalar(void *, int, int,
 
 // The original hardware synchronization is retained by the compiler. Only the
 // race detector's additional clock bookkeeping becomes a no-op in this mode.
-extern "C" GSAN_DEVICE void
-__triton_gsan_init(void *, const void *, gsan::uint64_t, unsigned,
-                   unsigned, unsigned, const char *, unsigned) {}
-extern "C" GSAN_DEVICE void __triton_gsan_kernel_exit(void *,
-                                                      const void *,
+extern "C" GSAN_DEVICE void __triton_gsan_init(void *, const void *,
+                                               gsan::uint64_t, unsigned,
+                                               unsigned, unsigned, const char *,
+                                               unsigned) {}
+extern "C" GSAN_DEVICE void __triton_gsan_kernel_exit(void *, const void *,
                                                       gsan::uint64_t, unsigned,
                                                       unsigned, unsigned,
                                                       const char *, unsigned) {}
 extern "C" GSAN_DEVICE void
-__triton_gsan_grid_dependency_wait(void *, const void *,
-                                   gsan::uint64_t, unsigned, unsigned,
-                                   unsigned) {}
+__triton_gsan_grid_dependency_wait(void *, const void *, gsan::uint64_t,
+                                   unsigned, unsigned, unsigned) {}
 extern "C" GSAN_DEVICE void __triton_gsan_cluster_barrier_init(void *, int) {}
 extern "C" GSAN_DEVICE void __triton_gsan_cluster_barrier_sync(void *, void *,
                                                                int, int, int,

@@ -22,8 +22,11 @@ from ._profile_allocator import (ShareableHandleType, configure, install_allocat
                                  free_allocation, export_allocation_handles, import_allocation_handles,
                                  has_live_allocations, reset)
 
-__all__ = ["AllocationProfile", "ShareableHandleType", "configure", "install_allocator", "is_installed", "get_allocator", "malloc",
-           "free_allocation", "export_allocation_handles", "import_allocation_handles", "has_live_allocations", "reset"]
+__all__ = [
+    "AllocationProfile", "ShareableHandleType", "configure", "install_allocator", "is_installed", "get_allocator",
+    "malloc", "free_allocation", "export_allocation_handles", "import_allocation_handles", "has_live_allocations",
+    "reset"
+]
 
 if TYPE_CHECKING:
     import torch
@@ -90,13 +93,14 @@ def _add_stats(total, part):
 def _allocation_report(entry, stats, warnings):
     flags, written, repeated, uninitialized, read = stats
     observed = bool(flags & (_layout.READ | _layout.WRITE | _layout.ATOMIC))
-    candidates = [1 << i for i in range(_layout.NUM_GRANULARITIES)
-                  if not flags & (1 << (_layout.GRANULARITY_SHIFT + i))]
+    candidates = [
+        1 << i for i in range(_layout.NUM_GRANULARITIES) if not flags & (1 << (_layout.GRANULARITY_SHIFT + i))
+    ]
     granularity = max(candidates) if observed and candidates and not warnings else None
     reasons = list(warnings)
     for bit, reason in ((_layout.REPEATED_WRITE, "repeated writes"),
-                        (_layout.READ_BEFORE_WRITE, "reads before an observed write"),
-                        (_layout.ATOMIC, "atomic accesses")):
+                        (_layout.READ_BEFORE_WRITE, "reads before an observed write"), (_layout.ATOMIC,
+                                                                                        "atomic accesses")):
         if flags & bit:
             reasons.append(reason)
     if not observed:
@@ -282,8 +286,9 @@ class AllocationProfile:
             raise ValueError("register the launch device in AllocationProfile(devices=...)")
         if type(address) is not int or type(nbytes) is not int or nbytes < 0 or address < 0 or \
                 address + nbytes > (1 << 63) - 1 or (nbytes and (not address or address % _layout.GRANULARITY)):
-            raise ValueError(f"profiled storage must have a nonnegative size and a {_layout.GRANULARITY}-byte-aligned base "
-                             "within the CUDA address space")
+            raise ValueError(
+                f"profiled storage must have a nonnegative size and a {_layout.GRANULARITY}-byte-aligned base "
+                "within the CUDA address space")
         if not nbytes:
             return
         layout = _allocator.get_allocation_profile_layout(address)
@@ -332,16 +337,16 @@ class AllocationProfile:
         if observer not in allocation.cells:
             with torch.cuda.device(observer):
                 count = triton.cdiv(nbytes, _layout.GRANULARITY)
-                allocation.cells[observer] = uint8_cuda_tensor_from_ptr(
-                    shadow, count * _layout.CELL_SIZE_BYTES, observer.index).view(torch.int32)
+                allocation.cells[observer] = uint8_cuda_tensor_from_ptr(shadow, count * _layout.CELL_SIZE_BYTES,
+                                                                        observer.index).view(torch.int32)
         mapping = {"device": observer.index, "address": address}
         if mapping not in allocation.mappings:
             allocation.mappings.append(mapping)
         lifetime_storage = storage
         if lifetime_storage is None and isinstance(owner, torch.Tensor):
             lifetime_storage = owner.untyped_storage()
-            if not (lifetime_storage.data_ptr() <= address and
-                    address + nbytes <= lifetime_storage.data_ptr() + lifetime_storage.nbytes()):
+            if not (lifetime_storage.data_ptr() <= address
+                    and address + nbytes <= lifetime_storage.data_ptr() + lifetime_storage.nbytes()):
                 raise ValueError("the tensor owner must contain the tracked range")
         if lifetime_storage is not None and lifetime_storage._cdata not in allocation.storages:
             # Native profiling storages carry their own retirement deleter.
@@ -361,16 +366,15 @@ class AllocationProfile:
             device = lifetime_storage.device
             if device not in allocation.cells:
                 allocation.cells[device] = uint8_cuda_tensor_from_ptr(
-                    shadow, triton.cdiv(nbytes, _layout.GRANULARITY) * _layout.CELL_SIZE_BYTES,
-                    device.index).view(torch.int32)
+                    shadow,
+                    triton.cdiv(nbytes, _layout.GRANULARITY) * _layout.CELL_SIZE_BYTES, device.index).view(torch.int32)
             self._prepare_summary(allocation, device)
             summary, kernel = allocation.summaries[device]
             with torch.cuda.device(device):
-                allocation.lifetime = self._hooks.watch(
-                    lifetime_storage.data_ptr(), shadow, device.index, kernel.function,
-                    summary.data_ptr(), summary.shape[0],
-                    kernel.metadata.num_warps * 32, kernel.metadata.shared,
-                    (allocation.cells[device], summary, kernel))
+                allocation.lifetime = self._hooks.watch(lifetime_storage.data_ptr(), shadow, device.index,
+                                                        kernel.function, summary.data_ptr(), summary.shape[0],
+                                                        kernel.metadata.num_warps * 32, kernel.metadata.shared,
+                                                        (allocation.cells[device], summary, kernel))
             allocation.lifetime_device = device
             if self._prepared:
                 allocation.lifetime_enabled = self._hooks.enable(allocation.lifetime)
@@ -378,8 +382,8 @@ class AllocationProfile:
         # reset without a host-side synchronization.
 
     def _is_retired(self, allocation):
-        return allocation.stats is not None or (allocation.lifetime is not None and
-                                               self._hooks.released(allocation.lifetime))
+        return allocation.stats is not None or (allocation.lifetime is not None
+                                                and self._hooks.released(allocation.lifetime))
 
     def _prepare_summary(self, allocation, device):
         import torch
@@ -389,7 +393,7 @@ class AllocationProfile:
         with torch.cuda.device(device), triton.knobs.compilation.scope():
             triton.knobs.compilation.instrumentation_mode = ""
             summary = torch.empty((triton.cdiv(cells.numel(), 1024), 5), dtype=torch.int64, device=device)
-            kernel = _summarize.warmup(cells, summary, cells.numel(), BLOCK=1024, grid=(summary.shape[0],))
+            kernel = _summarize.warmup(cells, summary, cells.numel(), BLOCK=1024, grid=(summary.shape[0], ))
             kernel._init_handles()
         allocation.summaries[device] = (summary, kernel)
 
@@ -433,10 +437,11 @@ class AllocationProfile:
             key = ("shared", allocation.allocation_id) if allocation.allocation_id is not None else ("local", rank, i)
             local[key] = allocation
         manifest = [{
-            "key": key, "allocation_id": a.allocation_id, "nbytes": a.nbytes, "names": list(a.names),
-            "mappings": [dict(m, rank=rank) for m in a.mappings], "owner_rank": rank,
-            "owns_storage": a.owns_storage, "errors": list(a.errors)
-        } for key, a in local.items()]
+            "key": key, "allocation_id": a.allocation_id, "nbytes": a.nbytes, "names": list(a.names), "mappings":
+            [dict(m, rank=rank)
+             for m in a.mappings], "owner_rank": rank, "owns_storage": a.owns_storage, "errors": list(a.errors)
+        }
+                    for key, a in local.items()]
         return rank, local, manifest
 
     @staticmethod
@@ -614,13 +619,17 @@ class AllocationProfile:
         # This collective must precede shadow reads: another rank may still be
         # writing the same physical cells after this rank's local synchronization.
         failures = self._gather(self._failed)
-        warnings = [(f"rank {rank}: " if self.group is not None else "") +
-                    "profile context exited with an exception" for rank, failed in enumerate(failures) if failed]
+        warnings = [(f"rank {rank}: " if self.group is not None else "") + "profile context exited with an exception"
+                    for rank, failed in enumerate(failures)
+                    if failed]
         rank, local, manifest = self._manifest()
         # Local lifetimes may have been registered or retired since prepare().
         self._entries = self._combine_manifests(self._gather(manifest))
-        stats = {key: self._finalize(allocation)
-                 for key, allocation in local.items() if self._entries[key]["owner_rank"] == rank}
+        stats = {
+            key: self._finalize(allocation)
+            for key, allocation in local.items()
+            if self._entries[key]["owner_rank"] == rank
+        }
         for key, allocation in local.items():
             if key in stats:
                 allocation.stats = stats[key]
@@ -632,8 +641,13 @@ class AllocationProfile:
             for key, values in errors.items():
                 self._entries[key]["errors"] = list(dict.fromkeys(self._entries[key]["errors"] + values))
         return {
-            "schema_version": 1, "mode": "gsan-profile", "scope": "observed execution only; not a race check",
-            "world_size": len(failures), "warnings": warnings,
-            "allocations": [_allocation_report(entry, combined[key], warnings + entry["errors"])
-                            for key, entry in self._entries.items()]
+            "schema_version":
+            1, "mode":
+            "gsan-profile", "scope":
+            "observed execution only; not a race check", "world_size":
+            len(failures), "warnings":
+            warnings, "allocations": [
+                _allocation_report(entry, combined[key], warnings + entry["errors"])
+                for key, entry in self._entries.items()
+            ]
         }

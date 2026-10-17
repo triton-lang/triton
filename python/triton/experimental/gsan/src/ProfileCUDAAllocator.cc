@@ -291,9 +291,7 @@ public:
   }
   // Raw-pointer clients keep the original allocator's ownership and stream
   // semantics. Profiling is confined to the DataPtr allocation path above.
-  void *raw_alloc(size_t bytes) override {
-    return fallback_->raw_alloc(bytes);
-  }
+  void *raw_alloc(size_t bytes) override { return fallback_->raw_alloc(bytes); }
   void *raw_alloc_with_stream(size_t bytes, cudaStream_t stream) override {
     return fallback_->raw_alloc_with_stream(bytes, stream);
   }

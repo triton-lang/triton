@@ -39,8 +39,7 @@ def load_allocator(source: str, name: str, *, torch_integration: bool = False, e
         includes.append(str(torch_path / "include"))
         library_paths = [*library_paths, torch_lib]
         libraries.extend(["c10_cuda", "c10"])
-        flags.extend([f"-D_GLIBCXX_USE_CXX11_ABI={int(torch._C._GLIBCXX_USE_CXX11_ABI)}",
-                      f"-Wl,-rpath,{torch_lib}"])
+        flags.extend([f"-D_GLIBCXX_USE_CXX11_ABI={int(torch._C._GLIBCXX_USE_CXX11_ABI)}", f"-Wl,-rpath,{torch_lib}"])
         # Some PyTorch distributions extend the virtual allocator interface.
         # Detect those declarations when compiling against their own headers.
         interface = (torch_path / "include/c10/cuda/CUDACachingAllocator.h").read_text()
@@ -58,7 +57,10 @@ def load_allocator(source: str, name: str, *, torch_integration: bool = False, e
         digest.update(str(torch.__version__).encode())
         digest.update(str(torch.version.git_version).encode())
     return compile_module_from_file(
-        src_path=str(directory / source), name=name,
-        library_dirs=library_paths, include_dirs=includes, libraries=libraries,
+        src_path=str(directory / source),
+        name=name,
+        library_dirs=library_paths,
+        include_dirs=includes,
+        libraries=libraries,
         ccflags=[*flags, f"-DTRITON_ALLOCATOR_HEADERS_HASH={digest.hexdigest()}"],
     )

@@ -6,14 +6,13 @@ from contextlib import contextmanager
 
 from ._allocator_common import ShareableHandleType, load_allocator
 
-
 _installed = None
 
 
 @functools.lru_cache()
 def _load_module():
     return load_allocator("ProfileCUDAAllocator.cc", "gsan_profile_allocator", torch_integration=True,
-                          extra_sources=("ProfileAllocator.cc",))
+                          extra_sources=("ProfileAllocator.cc", ))
 
 
 def install_allocator() -> None:
@@ -101,8 +100,8 @@ def export_allocation_handles(ptr: int, handle_type: ShareableHandleType) -> tup
     return _load_module().export_allocation_handles(ptr, handle_type)
 
 
-def import_allocation_handles(real_handle: int | bytes, shadow_handle: int | bytes, alloc_size: int,
-                              device: int, handle_type: ShareableHandleType) -> int:
+def import_allocation_handles(real_handle: int | bytes, shadow_handle: int | bytes, alloc_size: int, device: int,
+                              handle_type: ShareableHandleType) -> int:
     """Map shared data and observations on a launch device, without race clocks.
 
     Handles must come from the profiling allocator. Keep the mapping alive until
