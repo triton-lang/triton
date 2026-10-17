@@ -70,6 +70,38 @@ define amdgpu_kernel void @alias_scope_kernel(ptr addrspace(1) %a, ptr addrspace
     assert "alias_scope_kernel:" in assembly
 
 
+@pytest.mark.parametrize("arch", ["gfx90a", "gfx942", "gfx950", "gfx1250"])
+@pytest.mark.parametrize("enable_misched", [False, True])
+def test_mir_roundtrip(arch, enable_misched, tmp_path, monkeypatch):
+    from triton._C.libtriton import llvm
+
+    triple = compiler.amd.get_target_triple(arch)
+    source = f'''
+target triple = "{triple}"
+
+declare void @llvm.amdgcn.s.barrier()
+
+define amdgpu_kernel void @mir_kernel(ptr addrspace(1) %out, i32 %a, i32 %b) {{
+  %sum = add i32 %a, %b
+  call void @llvm.amdgcn.s.barrier()
+  store volatile i32 %sum, ptr addrspace(1) %out
+  ret void
+}}
+'''
+    llvm.init_targets()
+    monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
+    mir = llvm.translate_to_mir(source, triple, arch, "", [], False, "mir_kernel")
+    assert mir.startswith("---")
+    assert "S_BARRIER" in mir
+    assert "S_WAIT" not in mir
+    path = tmp_path / "mir_kernel.txt"
+    assert "========== SCHEDULING DAG ==========" in path.read_text()
+    path.write_text(mir)
+    assembly = llvm.translate_mir_to_asm(str(path), triple, arch, "", [], False, False, enable_misched)
+    assert "mir_kernel:" in assembly
+    assert "s_barrier" in assembly
+
+
 def test_named_barrier_address_space():
     arch = "gfx1250"
     triple = compiler.amd.get_target_triple(arch)
