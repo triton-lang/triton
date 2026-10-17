@@ -1,3 +1,5 @@
+#include <utility>
+
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
@@ -161,6 +163,9 @@ public:
     auto broadcastRhsOp = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
     if (!broadcastRhsOp)
       return failure();
+    if (isBroadcastAlongAxis(broadcastLhsOp, 0) &&
+        isBroadcastAlongAxis(broadcastRhsOp, 2))
+      std::swap(broadcastLhsOp, broadcastRhsOp);
     // The first operand must be broadcasted from (M, K, 1) to (M, K, N), and
     // the second operand must go from (1, K, N) to (M, K, N).
     if (!isBroadcastAlongAxis(broadcastLhsOp, 2) ||
