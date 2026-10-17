@@ -429,16 +429,25 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
         else:
             filter_y = None
 
-        if op == "%" and dtype_x in integral_dtypes and dtype_y in float_dtypes_with_bfloat16:
+        x_low = x_high = y_low = y_high = None
+        if op in ('+', '*') and dtype_x in integral_dtypes and dtype_y in integral_dtypes:
+            signed_dtypes = [dtype for dtype in (dtype_x, dtype_y) if dtype in int_dtypes]
+            if signed_dtypes:
+                # Signed + and * must not overflow, including scalar variants
+                # where the tensor's dtype determines the computation type.
+                bits = min(_bitwidth(dtype) for dtype in signed_dtypes)
+                bound = 1 << (bits - 2 if op == '+' else (bits - 1) // 2)
+                x_low = y_low = -bound
+                x_high = y_high = bound
+        elif op == "%" and dtype_x in integral_dtypes and dtype_y in float_dtypes_with_bfloat16:
             x_low, x_high = _min_max_integral_mod_value(dtype_x, dtype_y)
-        else:
-            x_low, x_high = None, None
 
         _test_binary(
             dtype_x, dtype_y, expr, numpy_expr, device=device, num_ctas=num_ctas,
             # fails with values where fmod(x, y) is roughly zero, but happens to
             # pass with the random values chosen for non-broadcast tests
-            test_broadcast=(op != "%"), x_low=x_low, x_high=x_high, filter_y=filter_y, test_scalar=not skip_scalar_test)
+            test_broadcast=(op != "%"), x_low=x_low, x_high=x_high, y_low=y_low, y_high=y_high, filter_y=filter_y,
+            test_scalar=not skip_scalar_test)
 
 
 def test_bfloat16_mul_rounds_to_nearest_even(device):
@@ -3515,8 +3524,8 @@ def test_reduce64_integer(op, dtype_str, num_warps, device):
     def combine(a, b):
         return a & b
 
-    operator = {"add": "+", "and": "&", "or": "|", "xor": "^"}[op]
-    combine = patch_kernel(combine, {"a & b": f"a {operator} b"})
+    expression = {"add": "tl.add(a, b, sanitize_overflow=False)", "and": "a & b", "or": "a | b", "xor": "a ^ b"}[op]
+    combine = patch_kernel(combine, {"a & b": expression})
 
     @triton.jit
     def kernel(X, Z):

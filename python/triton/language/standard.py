@@ -326,7 +326,8 @@ def any(input, axis=None, keep_dims=False):
 
 @jit
 def _sum_combine(a, b):
-    return a + b
+    # Integer reductions and scans use wrapping arithmetic.
+    return core.add(a, b, sanitize_overflow=False)
 
 
 # sum
@@ -405,7 +406,8 @@ def cumsum(input, axis=0, reverse=False, dtype: core.constexpr = None):
 
 @jit
 def _prod_combine(a, b):
-    return a * b
+    # Integer scans use wrapping arithmetic.
+    return core.mul(a, b, sanitize_overflow=False)
 
 
 @core._tensor_member_fn

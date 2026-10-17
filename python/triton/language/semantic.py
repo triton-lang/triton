@@ -282,7 +282,8 @@ class TritonSemantic(Generic[TensorTy]):
         elif input_scalar_ty.is_int():
             if sanitize_overflow:
                 self.binary_op_sanitize_overflow_impl(input, other, self.add)
-            return self.make_tensor(self.builder.create_add(input.handle, other.handle), input.type)
+            nsw = bool(sanitize_overflow) and input_scalar_ty.is_int_signed()
+            return self.make_tensor(self.builder.create_add(input.handle, other.handle, nsw), input.type)
         raise TypeError(f"unexpected type {input_scalar_ty}")
 
     def sub(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number,
@@ -313,7 +314,8 @@ class TritonSemantic(Generic[TensorTy]):
         elif scalar_ty.is_int():
             if sanitize_overflow:
                 self.binary_op_sanitize_overflow_impl(input, other, self.mul)
-            return self.make_tensor(self.builder.create_mul(input.handle, other.handle), input.type)
+            nsw = bool(sanitize_overflow) and scalar_ty.is_int_signed()
+            return self.make_tensor(self.builder.create_mul(input.handle, other.handle, nsw), input.type)
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def truediv(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number) -> TensorTy:

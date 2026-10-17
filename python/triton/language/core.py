@@ -2873,14 +2873,19 @@ def expect_zero(x, mask, _semantic=None):
 # -----------------------
 
 
-def _add_binary_op_docstr(name: str, op: str) -> Callable[[T], T]:
+def _add_binary_op_docstr(name: str, op: str, no_signed_wrap: bool = False) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
+        overflow_note = """
+    Signed integer overflow is undefined when :code:`sanitize_overflow=True`,
+    even if overflow sanitization is disabled at compile time. Set
+    :code:`sanitize_overflow=False` to request wrapping arithmetic.
+    """ if no_signed_wrap else ""
         func.__doc__ = f"""
     Computes the element-wise {name} of :code:`x` and :code:`y`.
 
     This is the function form of the :code:`{op}` operator.
-
+    {overflow_note}
     :param x: the first input tensor
     :type x: Block
     :param y: the second input tensor
@@ -2896,7 +2901,7 @@ def _add_binary_op_docstr(name: str, op: str) -> Callable[[T], T]:
 
 
 @builtin
-@_add_binary_op_docstr("sum", "+")
+@_add_binary_op_docstr("sum", "+", no_signed_wrap=True)
 def add(x, y, sanitize_overflow: constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
@@ -2912,7 +2917,7 @@ def sub(x, y, sanitize_overflow: constexpr = True, _semantic=None):
 
 
 @builtin
-@_add_binary_op_docstr("product", "*")
+@_add_binary_op_docstr("product", "*", no_signed_wrap=True)
 def mul(x, y, sanitize_overflow: constexpr = True, _semantic=None):
     x = _unwrap_if_constexpr(x)
     y = _unwrap_if_constexpr(y)
