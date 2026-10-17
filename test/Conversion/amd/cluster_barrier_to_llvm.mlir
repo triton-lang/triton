@@ -3,17 +3,24 @@
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: cluster_barrier_arrive
   tt.func @cluster_barrier_arrive() {
+    // CHECK: rocdl.s.barrier{{$}}
+    // CHECK-NOT: rocdl.s.barrier{{$}}
+    // CHECK: llvm.cond_br
     // CHECK: rocdl.s.barrier.signal id = -3
+    // CHECK-NOT: rocdl.s.barrier
     amdg.cluster_barrier_arrive
     tt.return
   }
 }
+
 // -----
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: cluster_barrier_wait
   tt.func @cluster_barrier_wait() {
+    // CHECK-NOT: rocdl.s.barrier
     // CHECK: rocdl.s.barrier.wait id = -3
+    // CHECK-NOT: rocdl.s.barrier
     amdg.cluster_barrier_wait
     tt.return
   }
@@ -26,6 +33,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @atomic_cluster_barrier(%ptr: !tt.ptr<i32>, %cmp: i32, %val: i32) {
     // CHECK-NOT: rocdl.s.barrier
     // CHECK: llvm.cmpxchg {{.*}} syncscope("agent") acquire monotonic
+    // CHECK: rocdl.s.barrier{{$}}
+    // CHECK-NOT: rocdl.s.barrier{{$}}
     // CHECK: rocdl.s.barrier.signal id = -3
     // CHECK: rocdl.s.barrier.wait id = -3
     // CHECK-NOT: rocdl.s.barrier
