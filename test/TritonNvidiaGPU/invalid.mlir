@@ -1,5 +1,90 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+module attributes {"ttg.num-ctas" = 2 : i32} {
+  tt.func @comm_multi_cta(%aborted: !tt.ptr<i64>) {
+    // expected-error @below {{requires ttg.num-ctas = 1}}
+    %0 = ttng.comm_is_aborted %aborted {aborted_value = 1 : i64} : (!tt.ptr<i64>) -> i1
+    tt.return
+  }
+}
+
+// -----
+
+tt.func @comm_non_global_pointer(%aborted: !tt.ptr<i64, "constant">) {
+  // expected-error @below {{requires global memory pointers}}
+  %0 = ttng.comm_is_aborted %aborted {aborted_value = 1 : i64} : (!tt.ptr<i64, "constant">) -> i1
+  tt.return
+}
+
+// -----
+
+tt.func @comm_invalid_wait_kind(%p: !tt.ptr<i64>, %count: i64) {
+  // expected-error @below {{attribute 'kind' failed to satisfy constraint: communication wait kind}}
+  %0 = "ttng.comm_wait"(%p, %p, %p, %p, %count) {kind = 3 : i32, consume = false, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  tt.return
+}
+
+// -----
+
+tt.func @comm_send_cannot_consume(%p: !tt.ptr<i64>) {
+  %zero = arith.constant 0 : i64
+  // expected-error @below {{send wait requires count = 0 and consume = false}}
+  %0 = ttng.comm_wait send %p, %p, %p, %p, %zero {consume = true, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  tt.return
+}
+
+// -----
+
+tt.func @comm_negative_count(%p: !tt.ptr<i64>) {
+  %negative = arith.constant -1 : i64
+  // expected-error @below {{requires nonnegative count}}
+  %0 = ttng.comm_wait recv %p, %p, %p, %p, %negative {consume = true, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  tt.return
+}
+
+// -----
+
+tt.func @comm_invalid_capacity(%p: !tt.ptr<i64>, %buffer: !tt.ptr<i8>, %handle: i32, %offset: i64) {
+  // expected-error @below {{requires capacity >= 2}}
+  %0 = ttng.comm_submit %p, %p, %p, %buffer, %handle, %offset, %offset, %offset, %p, %p
+      {capacity = 1 : i64, is_send = true, request_layout = #ttng.request_layout<stride = 56, ready_offset = 48, type_offset = 0, handle_offset = 8, src_offset = 16, dst_offset = 24, length_offset = 32, bypass_ar_offset = 40>, request_type = 0 : i32,
+       bypass_value = 0 : i32, ready_value = -9223372036854775808 : i64, aborted_value = 1 : i64}
+      : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i8>, i32, i64, i64, i64, !tt.ptr<i64>, !tt.ptr<i64>) -> i1
+  tt.return
+}
+
+// -----
+
+// expected-error @below {{request fields must not overlap}}
+#overlap = #ttng.request_layout<stride = 56, ready_offset = 48, type_offset = 8, handle_offset = 8, src_offset = 16, dst_offset = 24, length_offset = 32, bypass_ar_offset = 40>
+
+// -----
+
+// expected-error @below {{request field must be aligned and fit within stride}}
+#bounds = #ttng.request_layout<stride = 56, ready_offset = 56, type_offset = 0, handle_offset = 8, src_offset = 16, dst_offset = 24, length_offset = 32, bypass_ar_offset = 40>
+
+// -----
+
+// expected-error @below {{request stride must be a positive multiple of 8}}
+#stride_zero = #ttng.request_layout<stride = 0, ready_offset = 48, type_offset = 0, handle_offset = 8, src_offset = 16, dst_offset = 24, length_offset = 32, bypass_ar_offset = 40>
+
+// -----
+
+// expected-error @below {{request stride must be a positive multiple of 8}}
+#stride_alignment = #ttng.request_layout<stride = 57, ready_offset = 48, type_offset = 0, handle_offset = 8, src_offset = 16, dst_offset = 24, length_offset = 32, bypass_ar_offset = 40>
+
+// -----
+
+// expected-error @below {{request field must be aligned and fit within stride}}
+#negative_offset = #ttng.request_layout<stride = 56, ready_offset = -8, type_offset = 0, handle_offset = 8, src_offset = 16, dst_offset = 24, length_offset = 32, bypass_ar_offset = 40>
+
+// -----
+
+// expected-error @below {{request field must be aligned and fit within stride}}
+#offset_alignment = #ttng.request_layout<stride = 56, ready_offset = 44, type_offset = 0, handle_offset = 8, src_offset = 16, dst_offset = 24, length_offset = 32, bypass_ar_offset = 40>
+
+// -----
+
 // expected-error @below {{twoCTAs layout requires the first CGALayout block basis to be [1, 0]}}
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1, twoCTAs = true>
 

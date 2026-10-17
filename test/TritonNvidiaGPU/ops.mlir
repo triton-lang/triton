@@ -1,5 +1,28 @@
 // RUN: triton-opt %s | FileCheck %s
 
+module attributes {"ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @communication
+  tt.func @communication(%p: !tt.ptr<i64>, %buffer: !tt.ptr<i8>, %handle: i32, %offset: i64, %count: i64) {
+    %zero = arith.constant 0 : i64
+    // CHECK: ttng.comm_wait recv
+    %recv = ttng.comm_wait recv %p, %p, %p, %p, %count {consume = true, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    // CHECK: ttng.comm_wait ack
+    %ack = ttng.comm_wait ack %p, %p, %p, %p, %zero {consume = false, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    // CHECK: ttng.comm_wait send
+    %send = ttng.comm_wait send %p, %p, %p, %p, %zero {consume = false, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    // CHECK: ttng.comm_submit {{.*}}capacity = 7 : i64
+    // CHECK-SAME: ready_value = -9223372036854775808 : i64
+    // CHECK-SAME: request_layout = #ttng.request_layout<stride = 56, ready_offset = 48, type_offset = 0, handle_offset = 8, src_offset = 16, dst_offset = 24, length_offset = 32, bypass_ar_offset = 40>
+    %submitted = ttng.comm_submit %p, %p, %p, %buffer, %handle, %offset, %offset, %offset, %p, %p
+        {capacity = 7 : i64, is_send = true, request_layout = #ttng.request_layout<stride = 56, ready_offset = 48, type_offset = 0, handle_offset = 8, src_offset = 16, dst_offset = 24, length_offset = 32, bypass_ar_offset = 40>, request_type = 0 : i32,
+         bypass_value = 0 : i32, ready_value = -9223372036854775808 : i64, aborted_value = 1 : i64}
+        : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i8>, i32, i64, i64, i64, !tt.ptr<i64>, !tt.ptr<i64>) -> i1
+    // CHECK: ttng.comm_is_aborted
+    %aborted = ttng.comm_is_aborted %p {aborted_value = 1 : i64} : (!tt.ptr<i64>) -> i1
+    tt.return
+  }
+}
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

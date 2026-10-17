@@ -137,6 +137,9 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
       return 0;
     return getResultBroadcastScratchSize(poll.getResult());
   }
+  if (isa<ttng::CommunicationWaitOp, ttng::CommunicationSubmitOp,
+          ttng::CommunicationIsAbortedOp>(op))
+    return getResultBroadcastScratchSize(op->getResult(0));
   if (isa<gpu::LocalAtomicScatterRMWOp>(op) || isa<AtomicOpInterface>(op)) {
     if (op->getNumResults() == 0)
       return 0;

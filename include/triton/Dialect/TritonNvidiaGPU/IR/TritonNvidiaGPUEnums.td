@@ -17,6 +17,16 @@ def TTNG_CacheEvictionPriorityAttr : I32EnumAttr<
   let genSpecializedAttr = 0;
 }
 
+def TTNG_CommunicationWaitKindAttr : I32EnumAttr<
+    "CommunicationWaitKind", "communication wait kind",
+    [
+        I32EnumAttrCase<"Recv", 0, "recv">,
+        I32EnumAttrCase<"Ack", 1, "ack">,
+        I32EnumAttrCase<"Send", 2, "send">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
 def TTNG_TMEMWaitKindAttr : I32EnumAttr<
     "TMEMWaitKind", "tensor memory wait kind",
     [
