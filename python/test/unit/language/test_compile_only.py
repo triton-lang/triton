@@ -99,8 +99,7 @@ def test_umulhi_truncated_input(seed_type, dtype):
     for kind, stage in stages.items():
         module = stage(module, metadata)
         if kind == "llir":
-            intrinsic = "ui" if bits == 32 else "ull"
-            assert f"@llvm.nvvm.mulhi.{intrinsic}" in str(module)
+            assert f"@llvm.umulh.i{bits}" in str(module)
         if kind == "ptx":
             assert f"mul.hi.u{bits}" in module
             assert "mul.lo." not in module

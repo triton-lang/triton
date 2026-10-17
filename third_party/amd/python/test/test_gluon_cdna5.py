@@ -3988,7 +3988,7 @@ def ws_noinline_barrier_kernel():
 def test_compile_warp_specialize_noinline_barrier():
     k = triton.compile(src=gluon._runtime.GluonASTSource(ws_noinline_barrier_kernel, {}, {}),
                        target=GPUTarget("hip", 'gfx1250', 32))
-    assert re.search(r"call .*@\S+_ws\(.*ptr addrspace\(3\) @nbar", k.asm["llir"])
+    assert re.search(r"call .*@\S+_ws\(.*ptr addrspace\(15\) @nbar", k.asm["llir"])
     amdgcn = k.asm["amdgcn"]
     assert "s_barrier_join m0" in amdgcn
     assert "s_barrier_signal m0" in amdgcn

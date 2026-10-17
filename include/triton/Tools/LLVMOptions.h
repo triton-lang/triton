@@ -8,8 +8,9 @@
 
 namespace mlir::triton::tools {
 
-// LLVM command line options (cl::opt) are process-wide globals with no
-// internal locking. Codegen reads them at unpredictable points:
+// LLVM command line options (cl::opt and TableGen library options) are
+// process-wide globals with no internal locking. Codegen reads them at
+// unpredictable points:
 // TargetPassConfig snapshots the start/stop passes when it is built, and the
 // AMDGPU schedulers query occurrence counts once per function. LLD goes further
 // and rewrites every registered option through cl::ResetAllOptionOccurrences()
