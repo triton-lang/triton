@@ -732,11 +732,6 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
     auto info = getConSanMemEffectsOpInfo(hooks, op);
     if (!info)
       return;
-    if (info->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount &&
-        info->commitKind == CommitKind::AsyncCp)
-      hasAsyncCopyReads |= llvm::any_of(
-          info->operandEffects,
-          [](const MemEffectsOpInfo::Effects &e) { return e.rw == RW::Read; });
     for (const auto &barrier : info->barriers)
       collectCandidates(barrier.barrier);
     for (const auto &effect : info->operandEffects)
