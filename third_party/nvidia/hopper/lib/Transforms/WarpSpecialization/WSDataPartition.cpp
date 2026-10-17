@@ -284,6 +284,15 @@ static bool getBackwardSliceToPartition(Value v,
       for (Value operand : op->getOperands())
         if (!getBackwardSliceToPartition(operand, partitionScheme, currentDim))
           return false;
+    } else if (auto gatherOp = dyn_cast<GatherOp>(op)) {
+      // The indices address the full gather axis, so slicing along it would
+      // strand them; partitioning along any other dim gathers within each
+      // slice and is safe.
+      if (gatherOp.getAxis() == currentDim)
+        return false;
+      for (Value operand : op->getOperands())
+        if (!getBackwardSliceToPartition(operand, partitionScheme, currentDim))
+          return false;
     } else if (auto dotOp = dyn_cast<nvidia_gpu::WarpGroupDotOp>(op)) {
       if (!getBackwardSliceToPartition(currentDim == 0 ? Value(dotOp.getA())
                                                        : dotOp.getB(),
@@ -1205,6 +1214,12 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     // recursively set async task ids for child ops
     newOp->walk(
         [&](Operation *childOp) { setAsyncTaskIds(childOp, sliceTaskIds); });
+  } else if (auto gatherOp = dyn_cast<GatherOp>(op)) {
+    assert(gatherOp.getAxis() != dim &&
+           "gather should not happen on the partitioned dimension");
+    for (Value operand : op->getOperands())
+      sliceOp(operand, offset, mappings, reverseMappings, partitionScheme);
+    newOp = cloneAndSetResultType(op);
   } else {
     llvm_unreachable("unsupported op type");
   }

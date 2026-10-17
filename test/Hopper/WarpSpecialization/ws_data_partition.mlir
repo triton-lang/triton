@@ -206,3 +206,79 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// A gather feeding the A operand of a dot is partitioned along dim 0 when its
+// axis is 1: each slice gathers within its own rows. Regression test for the
+// llvm_unreachable in getBackwardSliceToPartition.
+// CHECK-LABEL: @gather_into_dot_dim0
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 256, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @gather_into_dot_dim0(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
+    %cst = arith.constant {async_task_id = array<i32: 1, 2>} dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %0 = tt.splat %arg0 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+    // CHECK: tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>, #blocked>
+    // CHECK: tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>, #blocked>
+    %a = tt.load %0 {async_task_id = array<i32: 0>} : tensor<128x64x!tt.ptr<f16>, #blocked>
+    %idx = arith.constant {async_task_id = array<i32: 0>} dense<1> : tensor<128x64xi32, #blocked>
+    // CHECK: tt.gather {{.*}} -> tensor<64x64xf16, #blocked>
+    // CHECK: tt.gather {{.*}} -> tensor<64x64xf16, #blocked>
+    %g = tt.gather %a[%idx] {async_task_id = array<i32: 0>, axis = 1 : i32} : (tensor<128x64xf16, #blocked>, tensor<128x64xi32, #blocked>) -> tensor<128x64xf16, #blocked>
+    // CHECK: ttg.local_alloc {{.*}} : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
+    // CHECK: ttg.local_alloc {{.*}} : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
+    %lhs = ttg.local_alloc %g {async_task_id = array<i32: 1, 2>} : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %1 = tt.splat %arg1 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<64x256x!tt.ptr<f16>, #blocked>
+    %b = tt.load %1 {async_task_id = array<i32: 0>} : tensor<64x256x!tt.ptr<f16>, #blocked>
+    %rhs = ttg.local_alloc %b {async_task_id = array<i32: 1, 2>} : (tensor<64x256xf16, #blocked>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+    // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<64x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<64x256xf32, #mma>
+    // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<64x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<64x256xf32, #mma>
+    %dot = ttng.warp_group_dot %lhs, %rhs, %cst {async_task_id = array<i32: 1, 2>, inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+    %trunc = arith.truncf %dot {async_task_id = array<i32: 1, 2>} : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
+    %cvt = ttg.convert_layout %trunc {async_task_id = array<i32: 1, 2>} : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
+    %2 = tt.splat %arg2 {async_task_id = array<i32: 1, 2>} : !tt.ptr<f16> -> tensor<128x256x!tt.ptr<f16>, #blocked>
+    tt.store %2, %cvt {async_task_id = array<i32: 1, 2>} : tensor<128x256x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// The same gather with axis = 0 cannot be partitioned along dim 0 (the
+// indices address the full axis), so the scheme falls back to dim 1 instead
+// of aborting: the gather and A stay whole, B and the accumulator split.
+// CHECK-LABEL: @gather_into_dot_axis0_falls_back_to_dim1
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 256, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @gather_into_dot_axis0_falls_back_to_dim1(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
+    %cst = arith.constant {async_task_id = array<i32: 1, 2>} dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %0 = tt.splat %arg0 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+    %a = tt.load %0 {async_task_id = array<i32: 0>} : tensor<128x64x!tt.ptr<f16>, #blocked>
+    %idx = arith.constant {async_task_id = array<i32: 0>} dense<1> : tensor<128x64xi32, #blocked>
+    // The gather axis matches the M dim, so dim-0 partitioning must not touch
+    // it. Exactly one gather, at full shape, survives.
+    // CHECK: tt.gather {{.*}} -> tensor<128x64xf16, #blocked>
+    // CHECK-NOT: tt.gather {{.*}} -> tensor<64x64xf16, #blocked>
+    %g = tt.gather %a[%idx] {async_task_id = array<i32: 0>, axis = 0 : i32} : (tensor<128x64xf16, #blocked>, tensor<128x64xi32, #blocked>) -> tensor<128x64xf16, #blocked>
+    %lhs = ttg.local_alloc %g {async_task_id = array<i32: 1, 2>} : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    // CHECK: tt.load {{.*}} : tensor<64x128x!tt.ptr<f16>, #blocked>
+    // CHECK: tt.load {{.*}} : tensor<64x128x!tt.ptr<f16>, #blocked>
+    %1 = tt.splat %arg1 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<64x256x!tt.ptr<f16>, #blocked>
+    %b = tt.load %1 {async_task_id = array<i32: 0>} : tensor<64x256x!tt.ptr<f16>, #blocked>
+    %rhs = ttg.local_alloc %b {async_task_id = array<i32: 1, 2>} : (tensor<64x256xf16, #blocked>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+    // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x128xf16, #shared, #smem> -> tensor<128x128xf32, #mma>
+    // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x128xf16, #shared, #smem> -> tensor<128x128xf32, #mma>
+    %dot = ttng.warp_group_dot %lhs, %rhs, %cst {async_task_id = array<i32: 1, 2>, inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+    %trunc = arith.truncf %dot {async_task_id = array<i32: 1, 2>} : tensor<128x256xf32, #mma> to tensor<128x256xf16, #mma>
+    %cvt = ttg.convert_layout %trunc {async_task_id = array<i32: 1, 2>} : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
+    %2 = tt.splat %arg2 {async_task_id = array<i32: 1, 2>} : !tt.ptr<f16> -> tensor<128x256x!tt.ptr<f16>, #blocked>
+    tt.store %2, %cvt {async_task_id = array<i32: 1, 2>} : tensor<128x256x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
