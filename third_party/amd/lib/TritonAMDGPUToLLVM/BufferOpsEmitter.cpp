@@ -28,13 +28,32 @@ bool isZero(Value v) {
   }
   return false;
 }
+
+// Bit 31 of a buffer intrinsic's cachepolicy operand marks it volatile.
+bool isVolatileAux(int32_t aux) { return (static_cast<uint32_t>(aux) >> 31); }
+
+// LLVM IR passes model buffer intrinsics as plain argmem reads/writes and
+// ignore the volatile bit, which only the backend reads. An empty asm that may
+// write any memory keeps a volatile access from being hoisted, merged or
+// removed, without emitting an instruction.
+void emitVolatileAccessBarrier(RewriterBase &rewriter, Location loc) {
+  auto *ctx = rewriter.getContext();
+  LLVM::InlineAsmOp::create(
+      rewriter, loc, LLVM::LLVMVoidType::get(ctx), /*operands=*/ValueRange{},
+      /*asm_string=*/"", /*constraints=*/"~{memory}",
+      /*has_side_effects=*/true, /*is_align_stack=*/false,
+      LLVM::TailCallKind::None,
+      LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+      /*operand_attrs=*/ArrayAttr::get(ctx, {}));
+}
 } // namespace
 
 namespace mlir::LLVM::AMD {
 BufferEmitter::BufferEmitter(RewriterBase &rw, Location loc, TargetInfo ti)
     : rewriter(rw), loc(loc), targetInfo(ti) {}
 
-Value BufferEmitter::createResourceDescriptor(Value basePtr) {
+Value BufferEmitter::createResourceDescriptor(Value basePtr, Value numRecords,
+                                              Value stride) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // 1. Create the resource descriptor
   // bits 0-11: dst sel, ignored by these intrinsics
@@ -75,29 +94,56 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr) {
     flags |= (oob << 28);
   }
 
-  Value stride = b.int_val(16, 0);
+  Value stride16 = b.int_val(16, 0);
+  if (stride) {
+    stride16 = b.trunc(i16_ty, stride);
+    // The stride field is 14 bits below GFX12; keep the value from spilling
+    // into the swizzle bits next to it.
+    if (targetInfo.getISAFamily() != ISAFamily::CDNA5)
+      stride16 = b.and_(stride16, b.int_val(16, 0x3FFF));
+  }
   Value flagsConst = b.int_val(32, flags);
   Type rsrcType = LLVM::LLVMPointerType::get(rewriter.getContext(), 8);
-  Value numRecordsByte = b.int_val(64, std::numeric_limits<int>::max() - 1);
+  Value numRecords64 = numRecords
+                           ? b.zext(i64_ty, numRecords)
+                           : b.int_val(64, std::numeric_limits<int>::max() - 1);
 
   Value resource = rewriter.createOrFold<ROCDL::MakeBufferRsrcOp>(
-      loc, rsrcType, basePtr, stride, numRecordsByte, flagsConst);
+      loc, rsrcType, basePtr, stride16, numRecords64, flagsConst);
   return resource;
 }
 
+Value BufferEmitter::getScalarOffsetBytes(Type elemTy, Value soffset) {
+  if (!soffset)
+    return {};
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  const int elemBytes = std::max(8u, elemTy.getIntOrFloatBitWidth()) / 8;
+  return b.mul(b.i32_val(elemBytes), soffset);
+}
+
 Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
-                              Value pred, Value falseVal,
-                              triton::CacheModifier cm) {
+                              Value index, Value soffsetBytes, Value pred,
+                              Value falseVal, int32_t aux) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> args;
-  int32_t aux = 0;
-  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args,
-                 aux);
+  fillCommonArgs(type, rsrcDesc, offset, index, soffsetBytes, pred, args);
   Type bufferType = getBufferOpType(type, false);
-  Value data = ROCDL::RawPtrBufferLoadOp::create(
-      rewriter, loc, bufferType, args[0], args[1], args[2],
-      rewriter.getI32IntegerAttr(aux), /*alias_scopes=*/nullptr,
-      /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
+  if (isVolatileAux(aux))
+    emitVolatileAccessBarrier(rewriter, loc);
+  Value data;
+  if (index) {
+    // ROCDL has no struct (indexed) buffer ops; call the intrinsic directly.
+    args.push_back(b.i32_val(aux));
+    data = LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                           "llvm.amdgcn.struct.ptr.buffer.load",
+                                           bufferType, args)
+               .getResult(0);
+  } else {
+    data = ROCDL::RawPtrBufferLoadOp::create(
+        rewriter, loc, bufferType, args[0], args[1], args[2],
+        rewriter.getI32IntegerAttr(aux), /*alias_scopes=*/nullptr,
+        /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
+  }
   data = b.bitcast(data, type);
   if (!isZero(falseVal))
     data = b.select(pred, data, falseVal);
@@ -106,13 +152,12 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
 
 ROCDL::RawPtrBufferLoadAsyncLdsOp
 BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
-                             Value offset, Value dst, Value pred,
-                             triton::CacheModifier cm) {
+                             Value offset, Value soffsetBytes, Value dst,
+                             Value pred, int32_t aux) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
-  int32_t aux = 0;
-  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
-                 commonArgs, aux);
+  fillCommonArgs(type, rsrcDesc, offset, /*index=*/Value(), soffsetBytes, pred,
+                 commonArgs);
 
   // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
   // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
@@ -123,7 +168,7 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
       dst,           // ArgIndex 1: LDS base ptr
       byteWidth,     // ArgIndex 2: data byte size (immarg)
       commonArgs[1], // ArgIndex 3: voffset (per-lane VGPR)
-      commonArgs[2], // ArgIndex 4: soffset (always 0 here)
+      commonArgs[2], // ArgIndex 4: soffset
       b.i32_val(0),  // ArgIndex 5: imm offset (immarg, always 0 here)
       rewriter.getI32IntegerAttr(aux), /*alias_scopes=*/nullptr,
       /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
@@ -145,8 +190,9 @@ Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
   // the opposite of the order in tl.atomic_cmpxchg
   // and amdg.buffer_atomic_cas
   SmallVector<Value, 6> args{casStoreVal, casCmpVal};
-  int32_t aux = 0;
-  fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, aux, args);
+  fillCommonArgs(type, rsrcDesc, offset, /*index=*/Value(),
+                 /*soffsetBytes=*/Value(), pred, args);
+  int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
 
   Value data = ROCDL::RawPtrBufferAtomicCmpSwap::create(
       rewriter, loc, bufferType, args[0], args[1], args[2], args[3], args[4],
@@ -172,8 +218,9 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
     data = b.bitcast(data, bufferType);
 
   SmallVector<Value, 6> args{data};
-  int32_t aux = 0;
-  fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, aux, args);
+  fillCommonArgs(type, rsrcDesc, offset, /*index=*/Value(),
+                 /*soffsetBytes=*/Value(), pred, args);
+  int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
 
   // TODO:
   //   The ops in ROCDL (e.g., RawPtrBufferAtomicFaddOp) have no return value,
@@ -202,17 +249,25 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
   return b.bitcast(bufferAtomicRMW.getResult(0), type);
 }
 
-void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
-                              Value pred, triton::CacheModifier cm) {
+void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value index,
+                              Value soffsetBytes, Value data, Value pred,
+                              int32_t aux) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(vecTy, false);
   if (vecTy != bufferType)
     data = b.bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
-  int32_t aux = 0;
-  fillCommonArgs(vecTy, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/false,
-                 args, aux);
+  fillCommonArgs(vecTy, rsrcDesc, offset, index, soffsetBytes, pred, args);
+  if (isVolatileAux(aux))
+    emitVolatileAccessBarrier(rewriter, loc);
+  if (index) {
+    args.push_back(b.i32_val(aux));
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                    "llvm.amdgcn.struct.ptr.buffer.store",
+                                    TypeRange{}, args);
+    return;
+  }
   ROCDL::RawPtrBufferStoreOp::create(
       rewriter, loc, TypeRange{}, args[0], args[1], args[2], args[3],
       rewriter.getI32IntegerAttr(aux), /*alias_scopes=*/nullptr,
@@ -266,59 +321,33 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
 }
 
 void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
-                                   Value vOffsetElems, Value pred,
-                                   triton::CacheModifier cm, bool isBufferLoad,
-                                   SmallVector<Value> &args, int32_t &aux) {
+                                   Value vOffsetElems, Value index,
+                                   Value soffsetBytes, Value pred,
+                                   SmallVector<Value> &args) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // 1. Create the (masked) offset
+  // 1. Create the per-lane byte offset
   Type elementType = getElementTypeOrSelf(type);
   const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
   const int elementByteWidth = valueElemNBits / 8;
   // Please note: the index passed is not in bytes, but in number of elements
   // In order to pass the index to the buffer operation, we need to convert in
   // bytes (i.e., we need to multiply by `elementByteWidth`)
-  Value vOffsetOutOfBunds = b.int_val(
-      32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
   Value vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
-  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
 
-  // 2. Set the sgprOffset to 0
-  Value sgprOffset = b.int_val(32, 0);
-
-  aux = getCtrlBitsForCacheModifierOnTarget(cm, isBufferLoad, targetInfo);
-
-  // 4. Add the arguments
+  // 2. Mask through the range check: a raw access checks its offset, an
+  // indexed access checks its record index (num_records is at most 2^31 - 1).
   args.push_back(rsrcDesc);
-  args.push_back(maskedOffsetBytes);
-  args.push_back(sgprOffset);
-}
+  if (index) {
+    args.push_back(b.select(pred, index, b.i32_val(-1)));
+    args.push_back(vOffsetBytes);
+  } else {
+    Value vOffsetOutOfBounds = b.int_val(
+        32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
+    args.push_back(b.select(pred, vOffsetBytes, vOffsetOutOfBounds));
+  }
 
-void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
-                                          Value vOffsetElems, Value pred,
-                                          bool hasUsers, int32_t &aux,
-                                          SmallVector<Value> &args) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // 1. Create the (masked) offset
-  Type elementType = getElementTypeOrSelf(type);
-  const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
-  const int elementByteWidth = valueElemNBits / 8;
-  // Please note: the index passed is not in bytes, but in number of elements
-  // In order to pass the index to the buffer operation, we need to convert in
-  // bytes (i.e., we need to multiply by `elementByteWidth`)
-  Value vOffsetOutOfBunds = b.int_val(
-      32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
-  Value vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
-  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
-
-  // 2. Set the sgprOffset to 0
-  Value sgprOffset = b.int_val(32, 0);
-
-  aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
-
-  // 4. Add the arguments
-  args.push_back(rsrcDesc);
-  args.push_back(maskedOffsetBytes);
-  args.push_back(sgprOffset);
+  // 3. The scalar offset, 0 if absent
+  args.push_back(soffsetBytes ? soffsetBytes : b.int_val(32, 0));
 }
 
 } // namespace mlir::LLVM::AMD

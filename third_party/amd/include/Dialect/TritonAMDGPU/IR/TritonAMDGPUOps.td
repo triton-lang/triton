@@ -42,6 +42,7 @@ include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "TritonAMDGPUDialect.td"
 include "TritonAMDGPUAttrDefs.td"
+include "TritonAMDGPUTypes.td"
 include "TritonAMDGPUOpInterfaces.td"
 
 
@@ -256,6 +257,58 @@ def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier"> {
   let assemblyFormat = "$pred attr-dict";
 }
 
+// The base of a buffer load or store: a scalar global pointer, from which the
+// compiler builds a default descriptor, or an explicit buffer descriptor.
+def TTAMDG_BufferBase : AnyTypeOf<[TT_Ptr, TritonAMDGPU_BufferDescType]>;
+
+//===----------------------------------------------------------------------===//
+// MakeBufferDescOp
+//===----------------------------------------------------------------------===//
+
+def MakeBufferDescOp : TT_AMDGPU_Op<"make_buffer_desc", [
+  Pure,
+  TypesMatchWith<"result element type matches the pointee type of base", "base", "result",
+                 "::mlir::triton::amdgpu::BufferDescType::get($_self.getContext(), "
+                 "::mlir::cast<::mlir::triton::PointerType>($_self).getPointeeType())">,
+]> {
+  let summary = "Build a buffer resource descriptor";
+  let description = [{
+    Builds a buffer resource descriptor (V#) from the hardware fields the
+    program controls. All operands are scalars, so the descriptor is uniform
+    and lives in SGPRs.
+
+    - `base`: the global base address.
+    - `num_records`: the bound. Raw accesses (buffer ops without `indices`)
+      treat it as a byte count; indexed accesses treat it as a record count.
+    - `stride`: the record size in bytes, used by indexed accesses. The
+      hardware field is 14 bits on gfx9, so the value must be in [0, 16383].
+
+    With `stride == 0`, a raw access is out of bounds when its byte address
+    relative to `base`, including `soffset`, is at least `num_records`. With
+    `stride != 0`, a raw access is out of bounds when its per-lane byte offset
+    (excluding `soffset`) is at least `num_records`, and an indexed access is
+    out of bounds when its record index is at least `num_records`, whatever
+    its offsets. Out-of-bounds loads return zero and stores are dropped.
+
+    The remaining descriptor bits (data format, swizzling, thread-ID
+    addressing, out-of-bounds mode) are set by the compiler for the target:
+    swizzling and thread-ID addressing would make the address depend on the
+    hardware lane, which the block programming model does not expose.
+  }];
+  let arguments = (ins
+    TT_Ptr:$base,
+    I32:$num_records,
+    I32:$stride
+  );
+  let results = (outs TritonAMDGPU_BufferDescType:$result);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $base `,` $num_records `,` $stride attr-dict `:` qualified(type($base)) `->` qualified(type($result))
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // BufferLoadOp
 //===----------------------------------------------------------------------===//
@@ -265,8 +318,11 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   AttrSizedOperandSegments,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  TypesMatchWith<"result element type matches the element type of ptr", "result", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"result and indices have the same shape", "result", "indices", "getI32SameShape($_self)",
+                 "(cast<BufferLoadOp>($_op).getIndices() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
                  "(cast<BufferLoadOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"result and other have the same type", "result", "other", "$_self",
@@ -288,21 +344,32 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       Contiguity is the maximum number of elements that can be loaded in a single vector
       with the given layout and mask.
       This allows to use buffer_load even if the alignment cannot be proven based on IR.
+
+      `ptr`, `soffset` and `indices` are described in BufferOpInterface.
+      `scope` makes the loaded data visible at that scope (it is not atomic
+      and orders nothing). `isVolatile` keeps every access: the op may be
+      neither removed, merged nor hoisted.
     }];
     let arguments = (ins
-      Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
+      TTAMDG_BufferBase:$ptr,
       I32Tensor:$offsets,
       Optional<I32>:$stride,
       OptionalAttr<AnyAttr>:$cachePolicy,
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other,
-      DefaultValuedAttr<I32Attr, "1">:$contiguity
+      DefaultValuedAttr<I32Attr, "1">:$contiguity,
+      Optional<I32>:$soffset,
+      Optional<I32Tensor>:$indices,
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope,
+      UnitAttr:$isVolatile
     );
     let results = (outs TT_Tensor:$result);
 
+    let hasVerifier = 1;
+
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
-      (`stride` `=` $stride^)?
+      (`stride` `=` $stride^)? (`soffset` `=` $soffset^)? (`indices` `=` $indices^)?
       attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
@@ -316,12 +383,12 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
   AttrSizedOperandSegments,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
+  TypesMatchWith<"dest element type matches the element type of ptr", "dest", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
   TypesMatchWith<"infer mask shape from offsets",
                  "offsets", "mask", "getI1SameShape($_self)",
                  "(cast<BufferLoadToLocalOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
-  TypesMatchWith<"other matches shape and layout of offsets and the element type matches the pointee type of ptr",
-                 "offsets", "other", "cast<TensorType>($_self).clone(getPointeeType($ptr.getType()))",
+  TypesMatchWith<"other matches shape and layout of offsets and the element type matches the element type of ptr",
+                 "offsets", "other", "cast<TensorType>($_self).clone(::mlir::triton::amdgpu::getBufferElementType($ptr.getType()))",
                  "(cast<BufferLoadToLocalOp>($_op).getOther() == nullptr) || std::equal_to<>()">,
 ]>{
     let summary = "Load from a scalar base pointer and a tensor offset to shared memory";
@@ -330,16 +397,26 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       writes to shared memory instead of into registers.
       Contiguity is the maximum number of elements that can be loaded in a single vector with the given layout and mask.
       This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.
+
+      `ptr` and `soffset` are described in BufferOpInterface; an
+      out-of-bounds element writes zero to `dest`. Indexed (`indices`)
+      accesses are not supported here yet. `scope` makes the loaded
+      data visible at that scope. Masked-off elements write `other`, or zero
+      without `other`; with `skipMasked` they leave `dest` unchanged instead
+      (`skipMasked` excludes `other`).
     }];
     let arguments = (ins
       Arg<TTG_MemDescType, "Shared memory slice to write to", GenericSharedWrite>:$dest,
-      Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
+      Arg<TTAMDG_BufferBase, "Global memory scalar base pointer or buffer descriptor to load from", [MemRead<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other,
       Optional<I32>:$stride,
       OptionalAttr<AnyAttr>:$cachePolicy,
-      DefaultValuedAttr<I32Attr, "1">:$contiguity
+      DefaultValuedAttr<I32Attr, "1">:$contiguity,
+      Optional<I32>:$soffset,
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope,
+      UnitAttr:$skipMasked
     );
     let results = (outs TTG_AsyncToken:$token);
 
@@ -347,6 +424,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
+      (`soffset` `=` $soffset^)?
       oilist(`cachePolicy` `=` $cachePolicy) `into` $dest
       attr-dict `:` qualified(type($ptr)) `[` type($offsets) `]` type($other) `->` type($dest)
     }];
@@ -456,8 +534,10 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   SameLoadStoreOperandsEncoding,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
+  TypesMatchWith<"value element type matches the element type of ptr", "value", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"value and indices have the same shape", "value", "indices", "getI32SameShape($_self)",
+                 "(cast<BufferStoreOp>($_op).getIndices() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "(cast<BufferStoreOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
 ]>{
@@ -477,22 +557,31 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       Contiguity is the maximum number of elements that can be loaded in a single vector
       with the given layout and mask.
       This allows to use buffer_store even if the alignment cannot be proven based on IR.
+
+      `ptr`, `soffset` and `indices` are described in BufferOpInterface; an
+      out-of-bounds element is dropped. `scope` makes the stored data available at
+      that scope (it is not atomic and orders nothing). `isVolatile` keeps
+      every access.
     }];
     let arguments = (ins
       TT_Tensor:$value,
-      Arg<TT_Ptr, "Global memory scalar base pointer to write to", [MemWrite<GlobalMemory>]>:$ptr,
+      Arg<TTAMDG_BufferBase, "Global memory scalar base pointer or buffer descriptor to write to", [MemWrite<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<I32>:$stride,
       OptionalAttr<AnyAttr>:$cachePolicy,
       Optional<TT_BoolTensor>:$mask,
-      DefaultValuedAttr<I32Attr, "1">:$contiguity
+      DefaultValuedAttr<I32Attr, "1">:$contiguity,
+      Optional<I32>:$soffset,
+      Optional<I32Tensor>:$indices,
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope,
+      UnitAttr:$isVolatile
     );
 
     let hasVerifier = 1;
 
     let assemblyFormat = [{
       $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
-      (`stride` `=` $stride^)?
+      (`stride` `=` $stride^)? (`soffset` `=` $soffset^)? (`indices` `=` $indices^)?
       attr-dict `:` qualified(type($ptr)) `->` type($value)
     }];
 }

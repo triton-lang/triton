@@ -990,3 +990,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_load_cache_modifier_and_scope(%arg0: !tt.ptr<f32>, %offsets: tensor<64xi32, #blocked>) {
+    // expected-error @+1 {{a cache modifier can't be combined with scope}}
+    %0 = amdg.buffer_load %arg0[%offsets] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>, scope = 1 : i32} : !tt.ptr<f32> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_load_to_local_skip_masked_with_other(%arg0: !tt.ptr<i32>, %offsets: tensor<64xi32, #blocked>, %mask: tensor<64xi1, #blocked>, %other: tensor<64xi32, #blocked>, %dst: !ttg.memdesc<64xi32, #shared, #smem, mutable>) {
+    // expected-error @+1 {{skipMasked can't be combined with other}}
+    %0 = amdg.buffer_load_to_local %arg0[%offsets] mask = %mask other = %other into %dst {skipMasked} : !tt.ptr<i32>[tensor<64xi32, #blocked>] tensor<64xi32, #blocked> -> <64xi32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_load_indices_without_descriptor(%arg0: !tt.ptr<f32>, %offsets: tensor<64xi32, #blocked>) {
+    // expected-error @+1 {{indices require a buffer descriptor base}}
+    %0 = amdg.buffer_load %arg0[%offsets] indices = %offsets : !tt.ptr<f32> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @make_buffer_desc_non_global_base(%arg0: !tt.ptr<f32, "descriptor">, %n: i32) {
+    // expected-error @+1 {{requires a global address space base}}
+    %0 = amdg.make_buffer_desc %arg0, %n, %n : !tt.ptr<f32, "descriptor"> -> !amdg.buffer_desc<f32>
+    tt.return
+  }
+}

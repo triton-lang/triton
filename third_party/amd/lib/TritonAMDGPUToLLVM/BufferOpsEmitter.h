@@ -61,21 +61,28 @@ struct BufferEmitter {
   BufferEmitter(RewriterBase &rw, Location loc,
                 mlir::triton::AMD::TargetInfo ti);
 
-  // Create a resource descriptor that points to the area of memory we want to
-  // load from
-  Value createResourceDescriptor(Value basePtr);
+  // Create a resource descriptor (V#) for `basePtr`. `numRecords` and
+  // `stride` are i32 descriptor fields; null means the defaults, a 2^31 - 2
+  // byte bound and no stride.
+  Value createResourceDescriptor(Value basePtr, Value numRecords, Value stride);
 
-  // Emit a predicated rocdl.raw.ptr.buffer.load
-  Value emitLoad(Type type, Value rsrcDesc, Value offset, Value pred,
-                 Value falseVal, CacheModifier cm);
+  // Convert the op's optional `soffset`, which counts elements of `elemTy`,
+  // to the i32 byte value the instruction takes. Null stays null.
+  Value getScalarOffsetBytes(Type elemTy, Value soffset);
+
+  // Emit a predicated buffer load. With a record `index` (may be null) it is
+  // an indexed (struct) access. `soffsetBytes` may be null. `aux` is the
+  // instruction's cache-policy operand.
+  Value emitLoad(Type type, Value rsrcDesc, Value offset, Value index,
+                 Value soffsetBytes, Value pred, Value falseVal, int32_t aux);
 
   // Emit a rocdl.raw.ptr.buffer.load.async.lds for direct-to-LDS loads.
   // Always emits the async variant since buffer_load_to_lds is only supported
   // on gfx942/gfx950 which use asyncmark-based synchronization.
   ROCDL::RawPtrBufferLoadAsyncLdsOp emitLoadToLds(Type type, Value byteWidth,
                                                   Value rsrcDesc, Value offset,
-                                                  Value dst, Value pred,
-                                                  CacheModifier cm);
+                                                  Value soffsetBytes, Value dst,
+                                                  Value pred, int32_t aux);
 
   // Emit a predicated rocdl.raw.ptr.buffer.atomic.* RMWOp
   Value emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
@@ -85,20 +92,17 @@ struct BufferEmitter {
   Value emitAtomicCAS(Type type, Value rsrcDesc, Value offset, Value casCmpVal,
                       Value casStoreVal, Value pred, bool hasUsers);
 
-  // Emit a predicated rocdl.raw.ptr.buffer.store
-  void emitStore(Value rsrcDesc, Value offset, Value data, Value pred,
-                 CacheModifier cm);
+  // Emit a predicated buffer store, indexed when `index` is not null.
+  void emitStore(Value rsrcDesc, Value offset, Value index, Value soffsetBytes,
+                 Value data, Value pred, int32_t aux);
 
 private:
-  // Fill common buffer operation arguments.
-  void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems, Value pred,
-                      CacheModifier cm, bool isBufferLoad,
-                      SmallVector<Value> &args, int32_t &aux);
-
-  // Fill buffer atomics arguments
-  void fillCommonArgsAtomics(Type type, Value rsrcDesc, Value vOffsetElems,
-                             Value pred, bool hasUsers, int32_t &aux,
-                             SmallVector<Value> &args);
+  // Fill the descriptor, the record index (when not null), the per-lane byte
+  // offset and the scalar byte offset arguments, masking off lanes where
+  // `pred` is false through the hardware range check.
+  void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems,
+                      Value index, Value soffsetBytes, Value pred,
+                      SmallVector<Value> &args);
 
   // Given a type, the buffer type can be either the same type
   // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to

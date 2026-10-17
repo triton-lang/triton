@@ -1,7 +1,8 @@
 from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
 from ..._semantic import _check
 from ..._layouts import DistributedLayout
-from ..cdna3 import _verify_buffer_ops
+from ..cdna3 import (_BUFFER_OFFSET_ARGS_DOC, _buffer_cache_policy, _buffer_element_type, _buffer_scalar_operand,
+                     _verify_buffer_ops)
 
 __all__ = [
     "global_load_to_shared",
@@ -78,13 +79,14 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
 
 
 @builtin
-def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", _semantic=None):
+def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", *, cache_policy=None,
+                          scope=None, soffset=None, skip_masked=False, _semantic=None):
     """
     AMD buffer load to shared operation.
 
     Buffer load is similar to :func:`global_load_to_shared`, but it accesses
-    global memory through a scalar base pointer and a tensor of 32-bit offsets
-    rather than a tensor of pointers. This operation loads data directly from
+    global memory through a scalar base pointer or a buffer descriptor and a
+    tensor of 32-bit offsets rather than a tensor of pointers. This operation loads data directly from
     global memory to shared memory without going through registers. It happens
     asynchronously; call :func:`wait_group` before accessing ``dest``. The
     operation still completes in order with
@@ -113,17 +115,29 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
       whose true/false boundary cannot be proven vector-aligned forces
       per-element vectorization and fails to lower.
 
+    Element ``i`` is read from ``base + soffset + offsets[i]``. A masked-off
+    element writes ``other`` to ``dest``, or zero without ``other``; with
+    ``skip_masked=True`` it leaves ``dest`` unchanged. An element out of the
+    descriptor's bounds (see
+    :func:`~triton.experimental.gluon.language.amd.cdna4.make_buffer_descriptor`)
+    always writes zero. Indexed (``indices``) accesses are not supported here.
+
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
-        ptr (pointer to scalar): Global memory scalar base pointer to load from.
-        offsets (tensor): Offsets tensor for the load operation.
+        ptr (pointer to scalar or buffer_descriptor): Global memory base to load from.
+        offsets (tensor): Offsets tensor for the load operation, in elements.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
-        cache_modifier (str): Cache modifier specifier. Defaults to "".
+        cache_modifier (str): Legacy cache modifier specifier. Excludes ``cache_policy`` and ``scope``. Defaults to "".
+        cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``: the load reads data visible at
+            that scope. It is not atomic and orders nothing. Defaults to None.""" + _BUFFER_OFFSET_ARGS_DOC + """
+        skip_masked (bool): Masked-off elements leave ``dest`` unchanged instead of writing
+            zero. Excludes ``other``. Costs a branch around the load. Defaults to False.
     """
     _check(isinstance(offsets.type.layout, DistributedLayout),
            lambda: "expected offsets type layout to be a DistributedLayout")
-    _verify_buffer_ops(ptr, offsets, mask, other)
+    _verify_buffer_ops(ptr, offsets, mask, other, allow_descriptor=True)
 
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
@@ -131,16 +145,21 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     other = _unwrap_if_constexpr(other)
     if other is not None:
         other = _semantic.to_tensor(other)
-        other = _semantic.cast(other, ptr.type.scalar.element_ty)
+        other = _semantic.cast(other, _buffer_element_type(ptr))
         offsets, other = _semantic.broadcast_impl_value(offsets, other)
+
+    skip_masked = _unwrap_if_constexpr(skip_masked)
+    _check(isinstance(skip_masked, bool), lambda: f"skip_masked must be a bool, got {skip_masked!r}")
+    _check(not (skip_masked and other is not None), lambda: "skip_masked and other are mutually exclusive")
 
     mask = mask.handle if mask is not None else ir.value()
     other = other.handle if other is not None else ir.value()
     stride = ir.value()
-    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
+    policy, scope = _buffer_cache_policy(cache_modifier, cache_policy, scope, True, _semantic)
 
-    _semantic.builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle, mask, other, stride,
-                                                  cache_modifier)
+    _semantic.builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle, mask, other, stride, policy,
+                                                  _buffer_scalar_operand(soffset, "soffset", _semantic), scope,
+                                                  skip_masked)
 
 
 @builtin

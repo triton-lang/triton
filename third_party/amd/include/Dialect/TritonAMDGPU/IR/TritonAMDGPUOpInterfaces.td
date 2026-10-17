@@ -22,14 +22,28 @@ def BufferOpInterface : OpInterface<"BufferOpInterface"> {
   let description = [{
     This interface is implemented by buffer load/store operations.
     It provides methods to access common properties such base pointer, offset, mask and others.
+
+    `ptr` is a scalar global pointer or, for loads and stores, a buffer
+    descriptor (`amdg.make_buffer_desc`). A pointer gets a default descriptor
+    with a 2^31 - 2 byte bound and no stride. `offsets` and `soffset` count
+    elements of the accessed type; `indices` count records of the
+    descriptor's stride.
+
+    Element `i` accesses `base + soffset + offsets[i]`, plus
+    `indices[i] * stride` with `indices`. `soffset` is a scalar held in the
+    instruction's scalar offset register, so a uniform advance costs no
+    per-lane arithmetic. `indices` require a descriptor. Bounds are those of
+    the descriptor (see `amdg.make_buffer_desc`). Atomics don't take
+    `soffset` or `indices` yet, nor does buffer_load_to_local take
+    `indices`; they report them as null.
   }];
 
   let cppNamespace = "::mlir::triton::amdgpu";
 
   let methods = [
     InterfaceMethod<
-      /*desc=*/"Get operation base ptr.",
-      /*retType=*/"::mlir::TypedValue<::mlir::triton::PointerType>",
+      /*desc=*/"Get operation base: a scalar pointer or a buffer descriptor.",
+      /*retType=*/"::mlir::Value",
       /*methodName=*/"getPtr">,
     InterfaceMethod<
       /*desc=*/"Get mutable operation base ptr.",
@@ -50,7 +64,21 @@ def BufferOpInterface : OpInterface<"BufferOpInterface"> {
     InterfaceMethod<
       /*desc=*/"Get mutable operation stride.",
       /*retType=*/"::mlir::MutableOperandRange ",
-      /*methodName=*/"getStrideMutable">
+      /*methodName=*/"getStrideMutable">,
+    InterfaceMethod<
+      /*desc=*/"Get the scalar offset, in elements, or null.",
+      /*retType=*/"::mlir::TypedValue<::mlir::IntegerType>",
+      /*methodName=*/"getSoffset",
+      /*args=*/(ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/"return {};">,
+    InterfaceMethod<
+      /*desc=*/"Get the per-element record indices, or null.",
+      /*retType=*/"::mlir::TypedValue<::mlir::TensorType>",
+      /*methodName=*/"getIndices",
+      /*args=*/(ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/"return {};">
   ];
 }
 

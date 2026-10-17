@@ -4228,6 +4228,219 @@ def test_buffer_atomic_rmw_add_bf16():
     assert llir.count("tail call <2 x bfloat> @llvm.amdgcn.raw.ptr.buffer.atomic.fadd.v2bf16") == SIZE_PER_THREAD // 2
 
 
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("soffset, num_elements", [(0, 40), (10, 40), (30, 60), (10, 5), (5, 0)])
+def test_buffer_descriptor_soffset_bounds(soffset, num_elements):
+
+    @gluon.jit
+    def kernel(src, dst, soffset, num_elements):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        # Without a stride, num_records counts bytes and bounds soffset + offsets.
+        src_desc = ttgl.amd.cdna4.make_buffer_descriptor(src, num_elements * 4)
+        x = ttgl.amd.cdna4.buffer_load(src_desc, offsets, soffset=soffset)
+        ttgl.amd.cdna4.buffer_store(x, dst, offsets)
+        dst_desc = ttgl.amd.cdna4.make_buffer_descriptor(dst + 64, num_elements * 4)
+        ttgl.amd.cdna4.buffer_store(x + 1, dst_desc, offsets, soffset=soffset)
+
+    src = torch.arange(1000, 1128, dtype=torch.int32, device="cuda")
+    dst = torch.full((192, ), -1, dtype=torch.int32, device="cuda")
+    compiled = kernel[(1, )](src, dst, soffset, num_elements, num_warps=1)
+
+    index = torch.arange(64, device="cuda")
+    in_bounds = soffset + index < num_elements
+    torch.testing.assert_close(dst[:64], torch.where(in_bounds, src[soffset + index], 0).int(), atol=0, rtol=0)
+    stored = torch.full((128, ), -1, dtype=torch.int32, device="cuda")
+    loaded = dst[:64]
+    stored[(soffset + index)[in_bounds]] = loaded[in_bounds] + 1
+    torch.testing.assert_close(dst[64:], stored, atol=0, rtol=0)
+    # soffset stays in a scalar register.
+    assert re.search(r"buffer_load_dword v\d+, v\d+, s\[\d+:\d+\], s\d+ offen", compiled.asm["amdgcn"])
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("num_rows", [8, 3, 0])
+def test_buffer_descriptor_indices(num_rows):
+
+    @gluon.jit
+    def kernel(src, dst, num_rows, ROW_BYTES: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 8], [1, 1], [1, 0])
+        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, layout))[:, None]
+        cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))[None, :]
+        rows, cols = ttgl.broadcast(rows, cols)
+        # With a stride, num_records counts records and bounds the row index;
+        # the column offsets are not checked.
+        src_desc = ttgl.amd.cdna4.make_buffer_descriptor(src, num_rows, ROW_BYTES)
+        x = ttgl.amd.cdna4.buffer_load(src_desc, cols, indices=rows)
+        dst_desc = ttgl.amd.cdna4.make_buffer_descriptor(dst, num_rows, ROW_BYTES)
+        ttgl.amd.cdna4.buffer_store(x + 1, dst_desc, cols, indices=rows)
+
+    # Rows of 32 used elements, 64 elements apart.
+    src = torch.arange(1, 8 * 64 + 1, dtype=torch.int32, device="cuda")
+    dst = torch.full((8 * 64, ), -1, dtype=torch.int32, device="cuda")
+    compiled = kernel[(1, )](src, dst, num_rows, 64 * 4, num_warps=1)
+
+    expected = torch.full((8, 64), -1, dtype=torch.int32, device="cuda")
+    expected[:num_rows, :32] = src.view(8, 64)[:num_rows, :32] + 1
+    torch.testing.assert_close(dst.view(8, 64), expected, atol=0, rtol=0)
+    # One record index per lane vector keeps the access 16 bytes wide.
+    amdgcn = compiled.asm["amdgcn"]
+    assert re.search(r"buffer_load_dwordx4 v\[\d+:\d+\], v\[\d+:\d+\], s\[\d+:\d+\], 0 idxen offen", amdgcn)
+    assert re.search(r"buffer_store_dwordx4 v\[\d+:\d+\], v\[\d+:\d+\], s\[\d+:\d+\], 0 idxen offen", amdgcn)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+def test_buffer_descriptor_in_loop():
+
+    @gluon.jit
+    def kernel(src, dst, num_elements, STEPS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        desc = ttgl.amd.cdna4.make_buffer_descriptor(src, num_elements * 4)
+        acc = ttgl.zeros([64], ttgl.int32, layout)
+        for step in range(STEPS):
+            acc += ttgl.amd.cdna4.buffer_load(desc, offsets)
+            # A loop-carried descriptor: each step reads the next 64 elements
+            # of what remains.
+            num_elements -= 64
+            desc = ttgl.amd.cdna4.make_buffer_descriptor(src + (step + 1) * 64, num_elements * 4)
+        ttgl.amd.cdna4.buffer_store(acc, dst, offsets)
+
+    src = torch.arange(1, 257, dtype=torch.int32, device="cuda")
+    dst = torch.zeros(64, dtype=torch.int32, device="cuda")
+    kernel[(1, )](src, dst, 160, 3, num_warps=1)
+    # The third step reads 32 in-bounds elements and 32 zeros.
+    expected = src[:64] + src[64:128] + torch.cat([src[128:160], torch.zeros(32, dtype=torch.int32, device="cuda")])
+    torch.testing.assert_close(dst, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("scope, scope_bits", [(None, ""), ("cta", " sc0"), ("gpu", " sc1"), ("sys", " sc0 sc1")])
+@pytest.mark.parametrize("nontemporal", [False, True])
+def test_buffer_load_store_scope_cache_policy(scope, scope_bits, nontemporal):
+
+    @gluon.jit
+    def kernel(src, dst, scope: ttgl.constexpr, nontemporal: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        policy: ttgl.constexpr = ttgl.amd.cdna4.CachePolicy(nontemporal=nontemporal)
+        x = ttgl.amd.cdna4.buffer_load(src, offsets, scope=scope, cache_policy=policy)
+        ttgl.amd.cdna4.buffer_store(x, dst, offsets, scope=scope, cache_policy=policy)
+
+    src = torch.arange(64, dtype=torch.int32, device="cuda")
+    dst = torch.empty_like(src)
+    compiled = kernel[(1, )](src, dst, scope, nontemporal, num_warps=1)
+    torch.testing.assert_close(dst, src, atol=0, rtol=0)
+
+    def bits(instruction):
+        match = re.search(rf"^\s*{instruction} v\d+, v\d+, s\[\d+:\d+\], 0 offen(.*)$", compiled.asm["amdgcn"],
+                          re.MULTILINE)
+        assert match, instruction
+        return set(match.group(1).split())
+
+    expected = set(scope_bits.split()) | ({"nt"} if nontemporal else set())
+    assert bits("buffer_load_dword") == expected
+    assert bits("buffer_store_dword") == expected
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+def test_buffer_cache_and_scope_are_exclusive():
+
+    @gluon.jit
+    def kernel(src):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        ttgl.amd.cdna4.buffer_load(src, ttgl.arange(0, 64, layout=layout), cache=".cg", scope="gpu")
+
+    src = torch.zeros(64, dtype=torch.int32, device="cuda")
+    with pytest.raises(CompilationError, match="cache and scope are mutually exclusive"):
+        kernel[(1, )](src, num_warps=1)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("volatile", [False, True])
+def test_buffer_load_volatile_stays_in_loop(volatile):
+
+    @gluon.jit
+    def kernel(flag, out, volatile: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        offsets = ttgl.zeros([64], ttgl.int32, layout)
+        value = ttgl.amd.cdna4.buffer_load(flag, offsets, scope="gpu", volatile=volatile)
+        while ttgl.max(value, axis=0) == 0:
+            value = ttgl.amd.cdna4.buffer_load(flag, offsets, scope="gpu", volatile=volatile)
+        ttgl.amd.cdna4.buffer_store(value, out, ttgl.arange(0, 64, layout=layout))
+
+    flag = torch.ones(1, dtype=torch.int32, device="cuda")
+    out = torch.zeros(64, dtype=torch.int32, device="cuda")
+    compiled = kernel[(1, )](flag, out, volatile, num_warps=1)
+    assert torch.all(out == 1)
+    # Without volatile LLVM hoists the loop-invariant load out of the polling
+    # loop; a volatile load is reissued on every iteration. A load is in the
+    # loop when a block defined before it is branched to after it.
+    llir = compiled.asm["llir"]
+    load = llir.index("call i32 @llvm.amdgcn.raw.ptr.buffer.load.i32(")
+    labels_before = re.findall(r"^(\d+):", llir[:load], re.MULTILINE)
+    in_loop = any(re.search(rf"label %{label}\b", llir[load:]) for label in labels_before)
+    assert in_loop == volatile
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("skip_masked", [False, True])
+def test_buffer_load_to_shared_skip_masked(skip_masked):
+
+    @gluon.jit
+    def kernel(src, dst, soffset, num_elements, skip_masked: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        offsets = ttgl.arange(0, 256, layout=layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], shared)
+        smem.store(ttgl.full([256], -7, ttgl.int32, layout))
+        ttgl.barrier()
+        desc = ttgl.amd.cdna4.make_buffer_descriptor(src, num_elements * 4)
+        cdna4_async_copy.buffer_load_to_shared(smem, desc, offsets, mask=(offsets % 3) != 0, soffset=soffset,
+                                               skip_masked=skip_masked)
+        cdna4_async_copy.commit_group()
+        cdna4_async_copy.wait_group(0)
+        ttgl.barrier()
+        ttgl.store(dst + offsets, smem.load(layout))
+
+    src = torch.arange(1000, 1300, dtype=torch.int32, device="cuda")
+    dst = torch.empty(256, dtype=torch.int32, device="cuda")
+    kernel[(1, )](src, dst, 10, 200, skip_masked, num_warps=4)
+
+    index = torch.arange(256, device="cuda")
+    loaded = torch.where(10 + index < 200, src[(10 + index).clamp(max=299)], 0)
+    # Masked-off elements keep the old contents only with skip_masked;
+    # out-of-bounds elements always read zero.
+    expected = torch.where(index % 3 == 0, -7 if skip_masked else 0, loaded).int()
+    torch.testing.assert_close(dst, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("hint", [False, True])
+def test_buffer_descriptor_alignment_hint(hint):
+
+    @gluon.jit
+    def kernel(src, dst, base_ptr, hint: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([4], [64], [1], [0])
+        offsets = ttgl.arange(0, 256, layout=layout)
+        # A base loaded from memory has no provable alignment.
+        base = ttgl.load(base_ptr)
+        if hint:
+            base = ttgl.multiple_of(base, 4)
+        # The descriptor is as aligned as its base pointer.
+        desc = ttgl.amd.cdna4.make_buffer_descriptor(src + base, 2**31 - 1)
+        x = ttgl.amd.cdna4.buffer_load(desc, offsets)
+        ttgl.amd.cdna4.buffer_store(x, dst + base, offsets)
+
+    src = torch.arange(512, dtype=torch.int32, device="cuda")
+    dst = torch.zeros_like(src)
+    base = torch.tensor([4], dtype=torch.int32, device="cuda")
+    compiled = kernel[(1, )](src, dst, base, hint, num_warps=1)
+    torch.testing.assert_close(dst[4:260], src[4:260], atol=0, rtol=0)
+    load = "v4i32" if hint else "i32"
+    assert f"@llvm.amdgcn.raw.ptr.buffer.load.{load}(" in compiled.asm["llir"]
+
+
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_mma_v2(dtype):

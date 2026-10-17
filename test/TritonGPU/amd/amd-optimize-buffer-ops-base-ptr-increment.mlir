@@ -610,3 +610,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// A buffer descriptor's bounds are relative to its base, so a buffer op
+// through a descriptor keeps its base and its advancing offsets.
+
+// CHECK-LABEL: buffer_descriptor_negative
+// CHECK: [[DESC:%.*]] = amdg.make_buffer_desc
+// CHECK: scf.for {{.*}} iter_args([[X_OFFSET:%.*]] = {{.*}}) -> (tensor<16x64xi32, #blocked>)
+// CHECK:   amdg.buffer_load [[DESC]]{{\[}}[[X_OFFSET]]{{\]}}
+// CHECK-NOT: tt.addptr
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @buffer_descriptor_negative(%X: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %num_records: i32) attributes {noinline = false} {
+    %cst = arith.constant dense<64> : tensor<16x64xi32, #blocked>
+    %c0 = arith.constant 0 : index
+    %c32 = arith.constant 32 : index
+    %c1 = arith.constant 1 : index
+
+    %Xoffset_init = arith.constant dense<123> : tensor<16x64xi32, #blocked>
+    %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
+    %c0_i32 = arith.constant 0 : i32
+    %desc = amdg.make_buffer_desc %X, %num_records, %c0_i32 : !tt.ptr<f16> -> !amdg.buffer_desc<f16>
+    %for = scf.for %idx = %c0 to %c32 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) {
+      %x = amdg.buffer_load %desc[%Xoffset] : !amdg.buffer_desc<f16> -> tensor<16x64xf16, #blocked>
+      ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
+      %Xoffset_next = arith.addi %Xoffset, %cst : tensor<16x64xi32, #blocked>
+      scf.yield %Xoffset_next : tensor<16x64xi32, #blocked>
+    }
+    tt.return
+  }
+}
