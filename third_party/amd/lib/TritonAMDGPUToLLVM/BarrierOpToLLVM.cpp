@@ -126,6 +126,8 @@ struct ClusterBarrierArriveOpConversion
     Location loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
+    ROCDL::SBarrierOp::create(rewriter, loc);
+
     // Only one warp per CTA should signal the cluster barrier
     auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
     Value isFirstWarp = b.icmp_eq(warpId, b.i32_val(0));
