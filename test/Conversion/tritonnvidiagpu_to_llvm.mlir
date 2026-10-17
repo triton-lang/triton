@@ -531,7 +531,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_tma_store_wait_read_only
-  // CHECK: nvvm.cp.async.bulk.wait_group 0 {read}
+  // CHECK: nvvm.cp.async.bulk.wait_group 0 read
   tt.func @async_tma_store_wait_read_only() {
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     tt.return
@@ -697,7 +697,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @async_copy_mbarrier_arrive(%arg0: !ttg.memdesc<1xi64, #shared, #ttg.shared_memory>)  attributes { noinline = false } {
     // CHECK: nvvm.cp.async.mbarrier.arrive %{{.*}} : !llvm.ptr<3>
     ttng.async_copy_mbarrier_arrive %arg0 : !ttg.memdesc<1xi64, #shared, #ttg.shared_memory>
-    // CHECK: nvvm.cp.async.mbarrier.arrive %{{.*}} {noinc = true} : !llvm.ptr<3>
+    // CHECK: nvvm.cp.async.mbarrier.arrive %{{.*}} noinc = true : !llvm.ptr<3>
     ttng.async_copy_mbarrier_arrive %arg0 { noIncrement } : !ttg.memdesc<1xi64, #shared, #ttg.shared_memory>
     tt.return
   }
@@ -1195,7 +1195,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CANONICALIZE-SM100-LABEL: @redux_max_abs(
   // CANONICALIZE-SM100-NOT: llvm.intr.fabs
-  // CANONICALIZE-SM100: nvvm.redux.sync fmax {{.*}} {abs = true} : f32 -> f32
+  // CANONICALIZE-SM100: nvvm.redux.sync fmax {{.*}} abs = true : f32 -> f32
   // CANONICALIZE-SM100-NEXT: llvm.return
   tt.func private @redux_max_abs(%x: tensor<32xf32, #blocked>) -> f32 {
     %abs = math.absf %x : tensor<32xf32, #blocked>
@@ -1209,7 +1209,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
   // CANONICALIZE-SM100-LABEL: @redux_max_abs_nan(
   // CANONICALIZE-SM100-NOT: llvm.intr.fabs
-  // CANONICALIZE-SM100: nvvm.redux.sync fmax {{.*}} {abs = true, nan = true} : f32 -> f32
+  // CANONICALIZE-SM100: nvvm.redux.sync fmax {{.*}} abs = true nan = true : f32 -> f32
   // CANONICALIZE-SM100-NEXT: llvm.return
   tt.func private @redux_max_abs_nan(%x: tensor<32xf32, #blocked>) -> f32 {
     %abs = math.absf %x : tensor<32xf32, #blocked>
@@ -1223,7 +1223,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
   // CANONICALIZE-SM100-LABEL: @redux_min_abs(
   // CANONICALIZE-SM100-NOT: llvm.intr.fabs
-  // CANONICALIZE-SM100: nvvm.redux.sync fmin {{.*}} {abs = true} : f32 -> f32
+  // CANONICALIZE-SM100: nvvm.redux.sync fmin {{.*}} abs = true : f32 -> f32
   // CANONICALIZE-SM100-NEXT: llvm.return
   tt.func private @redux_min_abs(%x: tensor<32xf32, #blocked>) -> f32 {
     %abs = math.absf %x : tensor<32xf32, #blocked>
