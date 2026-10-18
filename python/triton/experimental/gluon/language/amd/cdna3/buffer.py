@@ -14,7 +14,10 @@ from .. import _buffer
 from .._buffer import buffer_descriptor, buffer_descriptor_type
 from ._cache_policy import CachePolicy
 
-__all__ = ["CachePolicy", "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store"]
+__all__ = [
+    "CachePolicy", "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store",
+    "atomic_load", "atomic_store"
+]
 
 
 @builtin
@@ -101,3 +104,50 @@ def store(value, desc, offsets, mask=None, *, soffset=None, scope=None, cache_po
             to publish. Defaults to None.""" + _ACCESS_ARGS_DOC + """
     """
     _buffer.store(value, desc, offsets, mask, soffset, scope, cache_policy, CachePolicy, _semantic)
+
+
+@builtin
+def atomic_load(desc, offsets, mask=None, sem=None, scope=None, *, soffset=None, _semantic=None):
+    """
+    Atomically load from global memory through a buffer descriptor.
+
+    The buffer counterpart of :func:`~triton.experimental.gluon.language.atomic_load`: each element is
+    loaded atomically and the load is never removed, merged or hoisted, so it can poll a flag written by
+    another program. Element ``i`` is read from ``base + soffset + offsets[i]``; masked-off and
+    out-of-bounds elements read zero. See :func:`make_buffer_descriptor` for the bounds.
+
+    Args:
+        desc (buffer_descriptor): Descriptor of the global memory to load from.
+        offsets (tensor): Offsets of the elements to load, in elements.
+        mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
+        sem (str, optional): ``"acquire"`` or ``"relaxed"``. Defaults to ``"acquire"``.
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. Defaults to ``"gpu"``.
+        soffset (int32 scalar, optional): Scalar offset, in elements, added to every element's offset and
+            counted by the bounds check. Defaults to None (0).
+
+    Returns:
+        tensor: The loaded values, with the shape and layout of ``offsets``.
+    """
+    return _buffer.atomic_load(desc, offsets, mask, sem, scope, soffset, _semantic)
+
+
+@builtin
+def atomic_store(value, desc, offsets, mask=None, sem=None, scope=None, *, soffset=None, _semantic=None):
+    """
+    Atomically store to global memory through a buffer descriptor.
+
+    The buffer counterpart of :func:`~triton.experimental.gluon.language.atomic_store`: each element is
+    stored atomically. Element ``i`` is written to ``base + soffset + offsets[i]``; masked-off and
+    out-of-bounds elements are dropped. See :func:`make_buffer_descriptor` for the bounds.
+
+    Args:
+        value (tensor): The values to store.
+        desc (buffer_descriptor): Descriptor of the global memory to store to.
+        offsets (tensor): Offsets of the elements to store, in elements.
+        mask (tensor, optional): Mask tensor for predicated stores. Defaults to None.
+        sem (str, optional): ``"release"`` or ``"relaxed"``. Defaults to ``"release"``.
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. Defaults to ``"gpu"``.
+        soffset (int32 scalar, optional): Scalar offset, in elements, added to every element's offset and
+            counted by the bounds check. Defaults to None (0).
+    """
+    _buffer.atomic_store(value, desc, offsets, mask, sem, scope, soffset, _semantic)

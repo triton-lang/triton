@@ -1285,6 +1285,33 @@ LogicalResult BufferStoreOp::verify() {
   return verifyBufferWriteBase(getOperation(), getPtr());
 }
 
+// Atomic buffer loads and stores access whole elements of 8 to 64 bits.
+static LogicalResult verifyBufferAtomicLoadStoreType(Operation *op, Type ptr) {
+  Type elementTy = getBufferElementType(ptr);
+  if (!elementTy.isIntOrFloat())
+    return op->emitOpError("only supports integer and floating-point elements");
+  unsigned bitWidth = elementTy.getIntOrFloatBitWidth();
+  if (bitWidth < 8 || bitWidth > 64)
+    return op->emitOpError("only supports elements of 8 to 64 bits");
+  return success();
+}
+
+LogicalResult BufferAtomicLoadOp::verify() {
+  if (getSem() != triton::MemSemantic::ACQUIRE &&
+      getSem() != triton::MemSemantic::RELAXED)
+    return emitOpError("only supports acquire and relaxed semantics");
+  return verifyBufferAtomicLoadStoreType(getOperation(), getPtr().getType());
+}
+
+LogicalResult BufferAtomicStoreOp::verify() {
+  if (getSem() != triton::MemSemantic::RELEASE &&
+      getSem() != triton::MemSemantic::RELAXED)
+    return emitOpError("only supports release and relaxed semantics");
+  if (failed(verifyBufferWriteBase(getOperation(), getPtr())))
+    return failure();
+  return verifyBufferAtomicLoadStoreType(getOperation(), getPtr().getType());
+}
+
 LogicalResult BufferAtomicRMWOp::verify() {
   return verifyBufferWriteBase(getOperation(), getPtr());
 }

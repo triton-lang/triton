@@ -570,6 +570,88 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
 }
 
 //===----------------------------------------------------------------------===//
+// BufferAtomicLoadOp
+//===----------------------------------------------------------------------===//
+
+def BufferAtomicLoadOp : TT_AMDGPU_Op<"buffer_atomic_load", [
+  AttrSizedOperandSegments,
+  SameLoadStoreOperandsAndResultEncoding,
+  AtomicOpInterface,
+  TypesMatchWith<"result element type matches the element type of ptr", "result", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
+  TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
+                 "(cast<BufferAtomicLoadOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
+]>{
+    let summary = "Atomically load from a buffer";
+    let description = [{
+      The buffer counterpart of `tt.atomic_load`: each element is loaded
+      atomically, as a relaxed or acquire load at `scope`. Addressing and
+      bounds follow `amdg.buffer_load` (`ptr` is a scalar pointer or a buffer
+      descriptor; `offsets` and `soffset` count elements). Masked-off and
+      out-of-bounds elements read zero. The load is never removed, merged or
+      hoisted, so it can poll a flag.
+    }];
+    let arguments = (ins
+      // Like tt.atomic_load, model the load as also writing so that
+      // canonicalization and LICM keep polling loads.
+      Arg<TTAMDG_BufferBase, "Global memory scalar base pointer or buffer descriptor to load from",
+          [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      I32Tensor:$offsets,
+      Optional<TT_BoolTensor>:$mask,
+      Optional<I32>:$soffset,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope
+    );
+    let results = (outs TT_Tensor:$result);
+
+    let hasVerifier = 1;
+
+    let assemblyFormat = [{
+      $sem `,` $scope `,` $ptr `[` $offsets `]` (`,` $mask^)? (`soffset` `=` $soffset^)?
+      attr-dict `:` qualified(type($ptr)) `->` type($result)
+    }];
+}
+
+//===----------------------------------------------------------------------===//
+// BufferAtomicStoreOp
+//===----------------------------------------------------------------------===//
+
+def BufferAtomicStoreOp : TT_AMDGPU_Op<"buffer_atomic_store", [
+  AttrSizedOperandSegments,
+  SameLoadStoreOperandsEncoding,
+  AtomicOpInterface,
+  TypesMatchWith<"value element type matches the element type of ptr", "value", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
+  TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
+                 "(cast<BufferAtomicStoreOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
+]>{
+    let summary = "Atomically store to a buffer";
+    let description = [{
+      The buffer counterpart of `tt.atomic_store`: each element is stored
+      atomically, as a relaxed or release store at `scope`. Addressing and
+      bounds follow `amdg.buffer_store`; masked-off and out-of-bounds elements
+      are dropped.
+    }];
+    let arguments = (ins
+      TT_Tensor:$value,
+      Arg<TTAMDG_BufferBase, "Global memory scalar base pointer or buffer descriptor to store to",
+          [MemWrite<GlobalMemory>]>:$ptr,
+      I32Tensor:$offsets,
+      Optional<TT_BoolTensor>:$mask,
+      Optional<I32>:$soffset,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope
+    );
+
+    let hasVerifier = 1;
+
+    let assemblyFormat = [{
+      $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)? (`soffset` `=` $soffset^)?
+      attr-dict `:` qualified(type($ptr)) `->` type($value)
+    }];
+}
+
+//===----------------------------------------------------------------------===//
 // MaskedLoadOp
 //===----------------------------------------------------------------------===//
 def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {

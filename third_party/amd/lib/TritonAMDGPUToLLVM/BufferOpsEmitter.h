@@ -74,6 +74,11 @@ struct BufferEmitter {
   Value emitLoad(Type type, Value rsrcDesc, Value offset, Value soffsetBytes,
                  Value pred, Value falseVal, int32_t aux);
 
+  // Emit a predicated llvm.amdgcn.raw.ptr.atomic.buffer.load: a load that
+  // LLVM keeps in order with other memory operations and never removes.
+  Value emitAtomicLoad(Type type, Value rsrcDesc, Value offset,
+                       Value soffsetBytes, Value pred, int32_t aux);
+
   // Emit a rocdl.raw.ptr.buffer.load.async.lds for direct-to-LDS loads.
   // Always emits the async variant since buffer_load_to_lds is only supported
   // on gfx942/gfx950 which use asyncmark-based synchronization.

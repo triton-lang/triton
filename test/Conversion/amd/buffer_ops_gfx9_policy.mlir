@@ -67,3 +67,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// Atomic buffer loads use the atomic buffer-load intrinsic, coherent at their
+// scope, with an acquire fence after them; atomic stores are scoped stores
+// after a release fence.
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: buffer_atomic_load_store
+  tt.func @buffer_atomic_load_store(%arg0: !tt.ptr<i32>, %offsets: tensor<64xi32, #blocked>, %mask: tensor<64xi1, #blocked>, %s: i32, %n: i32) {
+    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<i32> -> !amdg.buffer_desc<i32>
+    // CHECK: %[[AUX:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.atomic.buffer.load"(%{{.*}}, %{{.*}}, %{{.*}}, %[[AUX]]) : (!llvm.ptr<8>, i32, i32, i32) -> i32
+    // CHECK: llvm.fence syncscope("agent") acquire
+    %0 = amdg.buffer_atomic_load acquire, gpu, %desc[%offsets], %mask soffset = %s : !amdg.buffer_desc<i32> -> tensor<64xi32, #blocked>
+    // CHECK: llvm.fence release
+    // CHECK: rocdl.raw.ptr.buffer.store %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, 17 : i32
+    amdg.buffer_atomic_store release, sys, %0, %desc[%offsets], %mask soffset = %s : !amdg.buffer_desc<i32> -> tensor<64xi32, #blocked>
+    tt.return
+  }
+}
