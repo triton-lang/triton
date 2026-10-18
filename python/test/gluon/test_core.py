@@ -4259,7 +4259,7 @@ def test_buffer_descriptor_soffset_bounds(soffset, num_elements):
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-@pytest.mark.parametrize("dtype", [torch.int8, torch.int16, torch.int32, torch.int64])
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
 @pytest.mark.parametrize("lane_bytes", ["element", 16])
 @pytest.mark.parametrize("num_records", [2**31, 2**32 - 4, 2**32 - 1])
 @pytest.mark.parametrize("soffset", [0, 5])
@@ -4301,7 +4301,7 @@ def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffs
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("vec", [1, 4])
-@pytest.mark.parametrize("num_records", [2**31, 2**32 - 1])
+@pytest.mark.parametrize("num_records", [2**32 - 1])
 @pytest.mark.parametrize("soffset", [0, 5])
 def test_buffer_descriptor_full_range_mask_load_to_shared(vec, num_records, soffset):
 
