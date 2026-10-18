@@ -634,8 +634,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
     %Xoffset_init = arith.constant dense<123> : tensor<16x64xi32, #blocked>
     %x_dummy_buffer = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
-    %c0_i32 = arith.constant 0 : i32
-    %desc = amdg.make_buffer_desc %X, %num_records, %c0_i32 : !tt.ptr<f16> -> !amdg.buffer_desc<f16>
+    %desc = amdg.make_buffer_desc %X, %num_records : !tt.ptr<f16> -> !amdg.buffer_desc<f16>
     %for = scf.for %idx = %c0 to %c32 step %c1 iter_args(%Xoffset = %Xoffset_init) -> (tensor<16x64xi32, #blocked>) {
       %x = amdg.buffer_load %desc[%Xoffset] : !amdg.buffer_desc<f16> -> tensor<16x64xf16, #blocked>
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>

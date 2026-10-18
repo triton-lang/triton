@@ -31,7 +31,6 @@ def load_to_shared(dest, desc, offsets, mask=None, other=None, *, soffset=None, 
 
     Element ``i`` is read from ``base + soffset + offsets[i]``. A masked-off element writes
     ``other`` to ``dest``, or zero without ``other``; an out-of-bounds element writes zero.
-    Indexed (``indices``) accesses are not supported here yet.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.

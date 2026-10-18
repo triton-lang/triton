@@ -108,41 +108,27 @@ def _broadcast_mask_other(offsets, mask, other, elem_ty, semantic):
     return offsets, mask, other
 
 
-def _indices(indices, offsets, semantic):
-    """Broadcast optional record indices to the shape of the offsets."""
-    indices = _unwrap_if_constexpr(indices)
-    if indices is None:
-        return offsets, ir.value()
-    indices = semantic.to_tensor(indices)
-    _check(indices.dtype.is_int32() or indices.dtype.is_uint32(),
-           lambda: f"indices element type must be int32 or uint32, got {indices.dtype}")
-    offsets, indices = semantic.broadcast_impl_value(offsets, indices)
-    return offsets, indices.handle
-
-
-def make_buffer_descriptor(base, num_records, stride, semantic):
+def make_buffer_descriptor(base, num_records, semantic):
     _check(base.type.is_ptr() and not base.type.is_block(), lambda: f"base must be a scalar pointer, got {base.type}")
     num_records = _scalar_operand(num_records, "num_records", semantic)
-    stride = _scalar_operand(stride, "stride", semantic)
-    handle = semantic.builder.create_make_buffer_desc(base.handle, num_records, stride)
+    handle = semantic.builder.create_make_buffer_desc(base.handle, num_records)
     return buffer_descriptor(handle, buffer_descriptor_type(base.type.element_ty))
 
 
-def load(desc, offsets, mask, other, soffset, indices, scope, cache_policy, cache_policy_type, semantic):
+def load(desc, offsets, mask, other, soffset, scope, cache_policy, cache_policy_type, semantic):
     _verify(desc, offsets)
     offsets, mask, other = _broadcast_mask_other(offsets, mask, other, desc.dtype, semantic)
-    offsets, indices = _indices(indices, offsets, semantic)
     policy, scope = _cache_policy(cache_policy, cache_policy_type, scope, semantic)
     ret_ty = offsets.type.with_element_ty(desc.dtype)
     builder = semantic.builder
     handle = builder.create_buffer_desc_load(ret_ty.to_ir(builder), desc.handle, offsets.handle,
                                              mask.handle if mask is not None else ir.value(),
                                              other.handle if other is not None else ir.value(), policy,
-                                             _scalar_operand(soffset, "soffset", semantic), indices, scope)
+                                             _scalar_operand(soffset, "soffset", semantic), scope)
     return ttgl.tensor(handle, ret_ty)
 
 
-def store(value, desc, offsets, mask, soffset, indices, scope, cache_policy, cache_policy_type, semantic):
+def store(value, desc, offsets, mask, soffset, scope, cache_policy, cache_policy_type, semantic):
     _verify(desc, offsets)
     offsets_shape = offsets.shape
     mask = _unwrap_if_constexpr(mask)
@@ -153,11 +139,10 @@ def store(value, desc, offsets, mask, soffset, indices, scope, cache_policy, cac
     _check(offsets_shape == offsets.shape,
            lambda: f"Expected `offsets` argument to have shape {offsets.shape} but got {offsets_shape}")
     value = semantic.cast(value, desc.dtype)
-    offsets, indices = _indices(indices, offsets, semantic)
     policy, scope = _cache_policy(cache_policy, cache_policy_type, scope, semantic)
     semantic.builder.create_buffer_desc_store(value.handle, desc.handle, offsets.handle,
                                               mask.handle if mask is not None else ir.value(), policy,
-                                              _scalar_operand(soffset, "soffset", semantic), indices, scope)
+                                              _scalar_operand(soffset, "soffset", semantic), scope)
 
 
 def load_to_shared(dest, desc, offsets, mask, other, soffset, scope, cache_policy, cache_policy_type, semantic):

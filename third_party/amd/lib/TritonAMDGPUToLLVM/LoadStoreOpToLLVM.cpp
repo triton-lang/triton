@@ -229,8 +229,8 @@ Value getResourceDescriptor(LLVM::AMD::BufferEmitter &bufferEmitter, Value base,
                             Value llBase) {
   if (isa<triton::amdgpu::BufferDescType>(base.getType()))
     return llBase;
-  return bufferEmitter.createResourceDescriptor(llBase, /*numRecords=*/Value(),
-                                                /*stride=*/Value());
+  return bufferEmitter.createResourceDescriptor(llBase,
+                                                /*numRecords=*/Value());
 }
 
 struct LoadStoreConversionBase {
@@ -729,15 +729,6 @@ struct BufferLoadOpConversion
         unpackTensorElements(loc, llOffset, rewriter, offset.getType());
     assert(offsetElems.size() == numElems);
 
-    // An indexed access shares one record index per vector.
-    Value indices = op.getIndices();
-    SmallVector<Value> indexElems;
-    if (indices) {
-      vec = std::min<unsigned>(vec, axisAnalysisPass.getMaskAlignment(indices));
-      indexElems = unpackTensorElements(loc, adaptor.getIndices(), rewriter,
-                                        indices.getType());
-    }
-
     // Get the mask
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
@@ -763,7 +754,6 @@ struct BufferLoadOpConversion
             otherElems, vecStart);
       Value loadVal =
           bufferEmitter.emitLoad(vecTy, rsrcDesc, offsetElems[vecStart],
-                                 indices ? indexElems[vecStart] : Value(),
                                  soffsetBytes, pred, falseVal, *aux);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
@@ -1886,8 +1876,8 @@ struct BufferAtomicRMWOpConversion
       maskElems = unpackUniqueTensorElements(loc, llMask, rewriter);
     }
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(
-        llPtr, /*numRecords=*/Value(), /*stride=*/Value());
+    Value rsrcDesc =
+        bufferEmitter.createResourceDescriptor(llPtr, /*numRecords=*/Value());
     SmallVector<Value> loadedVals;
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
@@ -1998,8 +1988,8 @@ struct BufferAtomicCASOpConversion
     SmallVector<Value> cmpElems =
         unpackUniqueTensorElements(loc, llCmp, rewriter);
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(
-        llPtr, /*numRecords=*/Value(), /*stride=*/Value());
+    Value rsrcDesc =
+        bufferEmitter.createResourceDescriptor(llPtr, /*numRecords=*/Value());
     SmallVector<Value> loadedVals;
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
@@ -2108,15 +2098,6 @@ struct BufferStoreOpConversion
     SmallVector<Value> valueElems =
         unpackTensorElements(loc, llData, rewriter, data.getType());
 
-    // An indexed access shares one record index per vector.
-    Value indices = op.getIndices();
-    SmallVector<Value> indexElems;
-    if (indices) {
-      vec = std::min<unsigned>(vec, axisAnalysisPass.getMaskAlignment(indices));
-      indexElems = unpackTensorElements(loc, adaptor.getIndices(), rewriter,
-                                        indices.getType());
-    }
-
     // Get the mask
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
@@ -2143,9 +2124,8 @@ struct BufferStoreOpConversion
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           valueElems, vecStart);
-      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart],
-                              indices ? indexElems[vecStart] : Value(),
-                              soffsetBytes, storeVal, pred, *aux);
+      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], soffsetBytes,
+                              storeVal, pred, *aux);
     } // end vec
 
     rewriter.eraseOp(op);
@@ -2626,8 +2606,7 @@ struct MakeBufferDescOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, op.getLoc(), targetInfo);
     rewriter.replaceOp(op, bufferEmitter.createResourceDescriptor(
-                               adaptor.getBase(), adaptor.getNumRecords(),
-                               adaptor.getStride()));
+                               adaptor.getBase(), adaptor.getNumRecords()));
     return success();
   }
 

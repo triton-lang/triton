@@ -4259,37 +4259,6 @@ def test_buffer_descriptor_soffset_bounds(soffset, num_elements):
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-@pytest.mark.parametrize("num_rows", [8, 3, 0])
-def test_buffer_descriptor_indices(num_rows):
-
-    @gluon.jit
-    def kernel(src, dst, num_rows, ROW_BYTES: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 8], [1, 1], [1, 0])
-        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, layout))[:, None]
-        cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))[None, :]
-        rows, cols = ttgl.broadcast(rows, cols)
-        # With a stride, num_records counts records and bounds the row index;
-        # the column offsets are not checked.
-        src_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, num_rows, ROW_BYTES)
-        x = ttgl.amd.cdna4.buffer.load(src_desc, cols, indices=rows)
-        dst_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(dst, num_rows, ROW_BYTES)
-        ttgl.amd.cdna4.buffer.store(x + 1, dst_desc, cols, indices=rows)
-
-    # Rows of 32 used elements, 64 elements apart.
-    src = torch.arange(1, 8 * 64 + 1, dtype=torch.int32, device="cuda")
-    dst = torch.full((8 * 64, ), -1, dtype=torch.int32, device="cuda")
-    compiled = kernel[(1, )](src, dst, num_rows, 64 * 4, num_warps=1)
-
-    expected = torch.full((8, 64), -1, dtype=torch.int32, device="cuda")
-    expected[:num_rows, :32] = src.view(8, 64)[:num_rows, :32] + 1
-    torch.testing.assert_close(dst.view(8, 64), expected, atol=0, rtol=0)
-    # One record index per lane vector keeps the access 16 bytes wide.
-    amdgcn = compiled.asm["amdgcn"]
-    assert re.search(r"buffer_load_dwordx4 v\[\d+:\d+\], v\[\d+:\d+\], s\[\d+:\d+\], 0 idxen offen", amdgcn)
-    assert re.search(r"buffer_store_dwordx4 v\[\d+:\d+\], v\[\d+:\d+\], s\[\d+:\d+\], 0 idxen offen", amdgcn)
-
-
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 def test_buffer_descriptor_in_loop():
 
     @gluon.jit

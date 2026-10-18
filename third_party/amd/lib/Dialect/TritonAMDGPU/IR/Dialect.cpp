@@ -1221,15 +1221,6 @@ verifyBufferAccessPolicy(Operation *op, Attribute cachePolicy,
   return success();
 }
 
-// Record indices address through a descriptor's stride, so they need an
-// explicit descriptor.
-static LogicalResult verifyBufferIndices(Operation *op, Value base,
-                                         Value indices) {
-  if (indices && !isa<BufferDescType>(base.getType()))
-    return op->emitOpError("indices require a buffer descriptor base");
-  return success();
-}
-
 LogicalResult MakeBufferDescOp::verify() {
   if (triton::getAddressSpace(getBase().getType()) !=
       triton::PtrAddrSpace::Global)
@@ -1238,8 +1229,6 @@ LogicalResult MakeBufferDescOp::verify() {
 }
 
 LogicalResult BufferLoadOp::verify() {
-  if (failed(verifyBufferIndices(getOperation(), getPtr(), getIndices())))
-    return failure();
   return verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
                                   getScope(),
                                   triton::CachePolicyOperation::Load);
@@ -1275,8 +1264,6 @@ LogicalResult BufferStoreOp::verify() {
   if (failed(verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
                                       getScope(),
                                       triton::CachePolicyOperation::Store)))
-    return failure();
-  if (failed(verifyBufferIndices(getOperation(), getPtr(), getIndices())))
     return failure();
   return verifyBufferWriteBase(getOperation(), getPtr());
 }

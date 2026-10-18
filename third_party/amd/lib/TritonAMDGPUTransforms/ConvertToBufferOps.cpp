@@ -551,7 +551,7 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
           return triton::amdgpu::BufferLoadOp::create(
               rewriter, op->getLoc(), op.getType(), basePtr, tensorOffset,
               blockStride, op.getCachePolicyAttr(), maybeMask, maybeOther,
-              contig, /*soffset=*/Value(), /*indices=*/Value(),
+              contig, /*soffset=*/Value(),
               /*scope=*/triton::MemSyncScopeAttr());
         } else {
           return triton::amdgpu::BufferLoadToLocalOp::create(
@@ -622,7 +622,7 @@ struct ConvertTritonStoreToBufferStore
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
           op, op.getValue(), basePtr, tensorOffset, blockStride,
           op.getCachePolicyAttr(), maybeMask, contig, /*soffset=*/Value(),
-          /*indices=*/Value(), /*scope=*/triton::MemSyncScopeAttr());
+          /*scope=*/triton::MemSyncScopeAttr());
       return success();
     }
     LDBG("Failed to convert: " << op);

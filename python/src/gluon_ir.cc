@@ -1220,40 +1220,39 @@ void init_gluon_ir(py::module_ &m) {
           "create_buffer_desc_load",
           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
              Value mask, Value other, Attribute cachePolicy, Value soffset,
-             Value indices, std::optional<tt::MemSyncScope> scope) -> Value {
+             std::optional<tt::MemSyncScope> scope) -> Value {
             auto scopeAttr =
                 scope ? tt::MemSyncScopeAttr::get(self.getContext(), *scope)
                       : tt::MemSyncScopeAttr();
             return self.create<ttag::BufferLoadOp>(
                 resultType, ptr, offsets, Value() /*stride*/, cachePolicy, mask,
-                other, /*contiguity=*/1, soffset, indices, scopeAttr);
+                other, /*contiguity=*/1, soffset, scopeAttr);
           },
           py::arg("resultType"), py::arg("ptr"), py::arg("offsets"),
           py::arg("mask"), py::arg("other"), py::arg("cachePolicy"),
-          py::arg("soffset"), py::arg("indices"), py::arg("scope").none())
+          py::arg("soffset"), py::arg("scope").none())
       .def(
           "create_buffer_desc_store",
           [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
-             Value mask, Attribute cachePolicy, Value soffset, Value indices,
+             Value mask, Attribute cachePolicy, Value soffset,
              std::optional<tt::MemSyncScope> scope) {
             auto scopeAttr =
                 scope ? tt::MemSyncScopeAttr::get(self.getContext(), *scope)
                       : tt::MemSyncScopeAttr();
             self.create<ttag::BufferStoreOp>(
                 storedValue, ptr, offsets, Value() /*stride*/, cachePolicy,
-                mask, /*contiguity=*/1, soffset, indices, scopeAttr);
+                mask, /*contiguity=*/1, soffset, scopeAttr);
           },
           py::arg("storedValue"), py::arg("ptr"), py::arg("offsets"),
           py::arg("mask"), py::arg("cachePolicy"), py::arg("soffset"),
-          py::arg("indices"), py::arg("scope").none())
+          py::arg("scope").none())
       .def("create_make_buffer_desc",
-           [](GluonOpBuilder &self, Value base, Value numRecords,
-              Value stride) -> Value {
+           [](GluonOpBuilder &self, Value base, Value numRecords) -> Value {
              auto ptrType = cast<tt::PointerType>(base.getType());
              auto descType = ttag::BufferDescType::get(
                  self.getContext(), ptrType.getPointeeType());
              return self.create<ttag::MakeBufferDescOp>(descType, base,
-                                                        numRecords, stride);
+                                                        numRecords);
            })
       .def("get_buffer_desc_type",
            [](GluonOpBuilder &self, Type elementType) -> Type {
@@ -1267,7 +1266,7 @@ void init_gluon_ir(py::module_ &m) {
                  resultType, ptr, offsets, Value() /*stride*/,
                  buildCachePolicy(self.getBuilder(), cacheModifier), mask,
                  other, /*contiguity=*/1, /*soffset=*/Value(),
-                 /*indices=*/Value(), /*scope=*/tt::MemSyncScopeAttr());
+                 /*scope=*/tt::MemSyncScopeAttr());
            })
       .def("create_buffer_store",
            [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
@@ -1275,7 +1274,7 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttag::BufferStoreOp>(
                  storedValue, ptr, offsets, Value() /*stride*/,
                  buildCachePolicy(self.getBuilder(), cacheModifier), mask,
-                 /*contiguity=*/1, /*soffset=*/Value(), /*indices=*/Value(),
+                 /*contiguity=*/1, /*soffset=*/Value(),
                  /*scope=*/tt::MemSyncScopeAttr());
            })
       .def("create_buffer_load_to_local",

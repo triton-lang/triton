@@ -278,34 +278,26 @@ def MakeBufferDescOp : TT_AMDGPU_Op<"make_buffer_desc", [
     and lives in SGPRs.
 
     - `base`: the global base address.
-    - `num_records`: the bound. Raw accesses (buffer ops without `indices`)
-      treat it as a byte count; indexed accesses treat it as a record count.
-    - `stride`: the record size in bytes, used by indexed accesses. The
-      hardware field is 14 bits on gfx9, so the value must be in [0, 16383].
+    - `num_records`: the number of bytes accessible from `base`.
 
-    With `stride == 0`, a raw access is out of bounds when its byte address
-    relative to `base`, including `soffset`, is at least `num_records`. With
-    `stride != 0`, a raw access is out of bounds when its per-lane byte offset
-    (excluding `soffset`) is at least `num_records`, and an indexed access is
-    out of bounds when its record index is at least `num_records`, whatever
-    its offsets. Out-of-bounds loads return zero and stores are dropped.
+    An access is out of bounds when its byte address relative to `base`,
+    including `soffset`, is at least `num_records`. Out-of-bounds loads return
+    zero and stores are dropped.
 
-    The remaining descriptor bits (data format, swizzling, thread-ID
-    addressing, out-of-bounds mode) are set by the compiler for the target:
-    swizzling and thread-ID addressing would make the address depend on the
-    hardware lane, which the block programming model does not expose.
+    The remaining descriptor bits (stride, data format, swizzling, thread-ID
+    addressing, out-of-bounds mode) are set by the compiler for the target;
+    the stride is zero, so accesses are raw (unstructured).
   }];
   let arguments = (ins
     TT_Ptr:$base,
-    I32:$num_records,
-    I32:$stride
+    I32:$num_records
   );
   let results = (outs TritonAMDGPU_BufferDescType:$result);
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    $base `,` $num_records `,` $stride attr-dict `:` qualified(type($base)) `->` qualified(type($result))
+    $base `,` $num_records attr-dict `:` qualified(type($base)) `->` qualified(type($result))
   }];
 }
 
@@ -320,8 +312,6 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"result element type matches the element type of ptr", "result", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
-  TypesMatchWith<"result and indices have the same shape", "result", "indices", "getI32SameShape($_self)",
-                 "(cast<BufferLoadOp>($_op).getIndices() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
                  "(cast<BufferLoadOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"result and other have the same type", "result", "other", "$_self",
@@ -344,7 +334,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       with the given layout and mask.
       This allows to use buffer_load even if the alignment cannot be proven based on IR.
 
-      `ptr`, `soffset` and `indices` are described in BufferOpInterface.
+      `ptr` and `soffset` are described in BufferOpInterface.
       `scope` makes the loaded data visible at that scope (it is not atomic
       and orders nothing).
     }];
@@ -357,7 +347,6 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       Optional<TT_Tensor>:$other,
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
       Optional<I32>:$soffset,
-      Optional<I32Tensor>:$indices,
       OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
     let results = (outs TT_Tensor:$result);
@@ -366,7 +355,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
-      (`stride` `=` $stride^)? (`soffset` `=` $soffset^)? (`indices` `=` $indices^)?
+      (`stride` `=` $stride^)? (`soffset` `=` $soffset^)?
       attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
@@ -396,8 +385,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.
 
       `ptr` and `soffset` are described in BufferOpInterface; an
-      out-of-bounds element writes zero to `dest`. Indexed (`indices`)
-      accesses are not supported here yet. `scope` makes the loaded
+      out-of-bounds element writes zero to `dest`. `scope` makes the loaded
       data visible at that scope.
     }];
     let arguments = (ins
@@ -530,8 +518,6 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"value element type matches the element type of ptr", "value", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
-  TypesMatchWith<"value and indices have the same shape", "value", "indices", "getI32SameShape($_self)",
-                 "(cast<BufferStoreOp>($_op).getIndices() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "(cast<BufferStoreOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
 ]>{
@@ -552,7 +538,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       with the given layout and mask.
       This allows to use buffer_store even if the alignment cannot be proven based on IR.
 
-      `ptr`, `soffset` and `indices` are described in BufferOpInterface; an
+      `ptr` and `soffset` are described in BufferOpInterface; an
       out-of-bounds element is dropped. `scope` makes the stored data available at
       that scope (it is not atomic and orders nothing).
     }];
@@ -565,7 +551,6 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       Optional<TT_BoolTensor>:$mask,
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
       Optional<I32>:$soffset,
-      Optional<I32Tensor>:$indices,
       OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
 
@@ -573,7 +558,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
 
     let assemblyFormat = [{
       $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
-      (`stride` `=` $stride^)? (`soffset` `=` $soffset^)? (`indices` `=` $indices^)?
+      (`stride` `=` $stride^)? (`soffset` `=` $soffset^)?
       attr-dict `:` qualified(type($ptr)) `->` type($value)
     }];
 }

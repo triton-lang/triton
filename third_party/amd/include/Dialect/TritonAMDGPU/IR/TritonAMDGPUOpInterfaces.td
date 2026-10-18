@@ -25,17 +25,14 @@ def BufferOpInterface : OpInterface<"BufferOpInterface"> {
 
     `ptr` is a scalar global pointer or, for loads and stores, a buffer
     descriptor (`amdg.make_buffer_desc`). A pointer gets a default descriptor
-    with a 2^31 - 2 byte bound and no stride. `offsets` and `soffset` count
-    elements of the accessed type; `indices` count records of the
-    descriptor's stride.
+    with a 2^31 - 2 byte bound. `offsets` and `soffset` count elements of the
+    accessed type.
 
-    Element `i` accesses `base + soffset + offsets[i]`, plus
-    `indices[i] * stride` with `indices`. `soffset` is a scalar held in the
-    instruction's scalar offset register, so a uniform advance costs no
-    per-lane arithmetic. `indices` require a descriptor. Bounds are those of
-    the descriptor (see `amdg.make_buffer_desc`). Atomics don't take
-    `soffset` or `indices` yet, nor does buffer_load_to_local take
-    `indices`; they report them as null.
+    Element `i` accesses `base + soffset + offsets[i]`. `soffset` is a scalar
+    held in the instruction's scalar offset register, so a uniform advance
+    costs no per-lane arithmetic. Bounds are those of the descriptor (see
+    `amdg.make_buffer_desc`). Atomics don't take `soffset` yet and report it
+    as null.
   }];
 
   let cppNamespace = "::mlir::triton::amdgpu";
@@ -69,13 +66,6 @@ def BufferOpInterface : OpInterface<"BufferOpInterface"> {
       /*desc=*/"Get the scalar offset, in elements, or null.",
       /*retType=*/"::mlir::TypedValue<::mlir::IntegerType>",
       /*methodName=*/"getSoffset",
-      /*args=*/(ins),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/"return {};">,
-    InterfaceMethod<
-      /*desc=*/"Get the per-element record indices, or null.",
-      /*retType=*/"::mlir::TypedValue<::mlir::TensorType>",
-      /*methodName=*/"getIndices",
       /*args=*/(ins),
       /*methodBody=*/"",
       /*defaultImplementation=*/"return {};">
