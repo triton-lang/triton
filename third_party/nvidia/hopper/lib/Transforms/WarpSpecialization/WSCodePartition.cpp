@@ -1,5 +1,6 @@
 #include "CodePartitionUtility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
@@ -478,6 +479,8 @@ void reorderProducerOps(SmallVector<Channel *> &channels) {
       }
     }
   }
+  // The slice moves above can put an op after a user outside of the slice.
+  mlir::sortTopologically(block);
 
   LLVM_DEBUG({
     LDBG("\n");
