@@ -17,8 +17,7 @@ __all__ = [
 
 
 @builtin
-def load_to_shared(dest, desc, offsets, mask=None, other=None, *, soffset=None, scope=None, cache_policy=None,
-                   _semantic=None):
+def load_to_shared(dest, desc, offsets, mask=None, *, soffset=None, scope=None, cache_policy=None, _semantic=None):
     """
     Load from global memory through a buffer descriptor directly into shared memory.
 
@@ -27,8 +26,8 @@ def load_to_shared(dest, desc, offsets, mask=None, other=None, *, soffset=None, 
     and wait with :func:`~triton.experimental.gluon.language.amd.cdna4.async_copy.wait_group` before
     reading ``dest``. The same layout requirements apply to ``offsets``, ``mask`` and ``dest``.
 
-    Element ``i`` is read from ``base + soffset + offsets[i]``. A masked-off element writes ``other`` to
-    ``dest``, or zero without ``other``; an out-of-bounds element writes zero. See
+    Element ``i`` is read from ``base + soffset + offsets[i]``. Masked-off and out-of-bounds elements write
+    zero, at no extra cost; apply any other fill value after loading from ``dest``. See
     :func:`~triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor` for the bounds.
 
     Args:
@@ -36,11 +35,10 @@ def load_to_shared(dest, desc, offsets, mask=None, other=None, *, soffset=None, 
         desc (buffer_descriptor): Descriptor of the global memory to load from.
         offsets (tensor): Offsets of the elements to load, in elements.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        other (tensor or scalar, optional): Values for masked-off elements. Defaults to None.
         soffset (int32 scalar, optional): Scalar offset, in elements, added to every element's offset and
             counted by the bounds check. Defaults to None (0).
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that
             scope. It is not atomic and orders nothing. Defaults to None.
         cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
     """
-    _buffer.load_to_shared(dest, desc, offsets, mask, other, soffset, scope, cache_policy, CachePolicy, _semantic)
+    _buffer.load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, CachePolicy, _semantic)

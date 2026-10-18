@@ -145,13 +145,15 @@ def store(value, desc, offsets, mask, soffset, scope, cache_policy, cache_policy
                                               _scalar_operand(soffset, "soffset", semantic), scope)
 
 
-def load_to_shared(dest, desc, offsets, mask, other, soffset, scope, cache_policy, cache_policy_type, semantic):
+def load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, cache_policy_type, semantic):
     _verify(desc, offsets)
     _check(isinstance(offsets.type.layout, DistributedLayout),
            lambda: "expected offsets type layout to be a DistributedLayout")
-    offsets, mask, other = _broadcast_mask_other(offsets, mask, other, desc.dtype, semantic)
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        offsets, mask = semantic.broadcast_impl_value(offsets, mask)
     policy, scope = _cache_policy(cache_policy, cache_policy_type, scope, semantic)
-    semantic.builder.create_buffer_desc_load_to_local(dest.handle, desc.handle, offsets.handle,
-                                                      mask.handle if mask is not None else ir.value(),
-                                                      other.handle if other is not None else ir.value(), ir.value(),
-                                                      policy, _scalar_operand(soffset, "soffset", semantic), scope)
+    semantic.builder.create_buffer_desc_load_to_local(dest.handle, desc.handle,
+                                                      offsets.handle, mask.handle if mask is not None else ir.value(),
+                                                      ir.value(), ir.value(), policy,
+                                                      _scalar_operand(soffset, "soffset", semantic), scope)
