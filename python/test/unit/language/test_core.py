@@ -3474,6 +3474,43 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
             np.testing.assert_equal(z_ref, z_tri)
 
 
+@triton.jit
+def _argmax_pairing_combine(v1, i1, v2, i2):
+    gt = (v1 > v2) | ((v1 == v2) & (i1 < i2))
+    return tl.where(gt, v1, v2), tl.where(gt, i1, i2)
+
+
+@triton.jit
+def _argmax_pairing_kernel(X, O, N: tl.constexpr, AXIS_NONE: tl.constexpr):
+    off = tl.arange(0, N)
+    x = tl.load(X + off)
+    if AXIS_NONE:
+        v, i = tl.reduce((x, off), None, _argmax_pairing_combine)
+    else:
+        v, i = tl.reduce((x, off), 0, _argmax_pairing_combine)
+    tl.store(O, i)
+    tl.store(O + 1, v)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("axis_none", [False, True])
+def test_reduce_axis_none_multi_operand_pairing(axis_none, device):
+    """axis=None flattening must keep multi-operand pairs elementwise aligned.
+
+    End-to-end form of the argmax case from #12254: with two operands the
+    flattened reshape must stay ordered, otherwise x[p] pairs with idx[q]
+    and the returned index is wrong.
+    """
+    N = 1024
+    torch.manual_seed(0)
+    x = torch.randperm(N, device=device, dtype=torch.int32)
+    o = torch.zeros(2, dtype=torch.int32, device=device)
+    _argmax_pairing_kernel[(1,)](x, o, N, axis_none, num_warps=4)
+    expected = int(x.argmax().item())
+    assert int(o[0].item()) == expected
+    assert int(o[1].item()) == int(x[expected].item())
+
+
 @pytest.mark.parametrize("op", ["add", "and", "or", "xor"])
 @pytest.mark.parametrize("dtype_str", ["int64", "uint64"])
 @pytest.mark.parametrize("num_warps", [4, 32])
