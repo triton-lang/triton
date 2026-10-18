@@ -284,8 +284,8 @@ _BUFFER_OFFSET_ARGS_DOC = """
 
 
 @builtin
-def buffer_load(ptr, offsets, mask=None, other=None, cache=None, *, cache_policy=None, scope=None, volatile=False,
-                soffset=None, indices=None, _semantic=None):
+def buffer_load(ptr, offsets, mask=None, other=None, cache=None, *, cache_policy=None, scope=None, soffset=None,
+                indices=None, _semantic=None):
     """
     AMD buffer load from global memory via a scalar base pointer or a buffer
     descriptor and a tensor of offsets instead of a tensor of pointers. This
@@ -310,9 +310,9 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, *, cache_policy
         cache_policy (CachePolicy, optional): Cache hints (CDNA3/CDNA4). Defaults to None.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"`` (CDNA3/CDNA4). The load reads data
             visible at that scope. It is not atomic and orders no other memory operation; pair it
-            with an acquire to consume a payload. Defaults to None (no coherence beyond the wave).
-        volatile (bool): Keep every access: the load is never removed, merged or hoisted, e.g.
-            when polling a flag. Defaults to False.""" + _BUFFER_OFFSET_ARGS_DOC + """
+            with an acquire to consume a payload. To poll a flag, use
+            :func:`~triton.experimental.gluon.language.atomic_load` instead, which the compiler
+            never hoists. Defaults to None (no coherence beyond the wave).""" + _BUFFER_OFFSET_ARGS_DOC + """
         indices (tensor, optional): Record index of each element, for a descriptor with a
             stride. Defaults to None.
     """
@@ -333,19 +333,17 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, *, cache_policy
     other = other.handle if other is not None else ir.value()
     mask = mask.handle if mask is not None else ir.value()
     policy, scope = _buffer_cache_policy(cache, cache_policy, scope, True, _semantic)
-    volatile = _unwrap_if_constexpr(volatile)
-    _check(isinstance(volatile, bool), lambda: f"volatile must be a bool, got {volatile!r}")
 
     ret_ty = offsets.type.with_element_ty(elem_ty)
     builder = _semantic.builder
     handle = builder.create_buffer_load(ret_ty.to_ir(builder), ptr.handle, offsets.handle, mask, other, policy,
-                                        _buffer_scalar_operand(soffset, "soffset", _semantic), indices, scope, volatile)
+                                        _buffer_scalar_operand(soffset, "soffset", _semantic), indices, scope)
     return ttgl.tensor(handle, ret_ty)
 
 
 @builtin
-def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, *, cache_policy=None, scope=None, volatile=False,
-                 soffset=None, indices=None, _semantic: GluonSemantic = None):
+def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, *, cache_policy=None, scope=None, soffset=None,
+                 indices=None, _semantic: GluonSemantic = None):
     """
     AMD buffer store a tensor directly to global memory via a scalar base pointer
     or a buffer descriptor and a tensor of offsets instead of a tensor of pointers.
@@ -363,8 +361,7 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, *, cache_pol
         cache_policy (CachePolicy, optional): Cache hints (CDNA3/CDNA4). Defaults to None.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"`` (CDNA3/CDNA4). The store makes its
             data available at that scope. It is not atomic and orders no other memory operation;
-            follow it with a release to publish. Defaults to None.
-        volatile (bool): Keep every access: the store is never removed or merged. Defaults to False.""" + _BUFFER_OFFSET_ARGS_DOC + """
+            follow it with a release to publish. Defaults to None.""" + _BUFFER_OFFSET_ARGS_DOC + """
         indices (tensor, optional): Record index of each element, for a descriptor with a
             stride. Defaults to None.
     """
@@ -382,12 +379,9 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, *, cache_pol
     offsets, indices = _buffer_indices(indices, offsets, ptr, _semantic)
     mask = mask.handle if mask is not None else ir.value()
     policy, scope = _buffer_cache_policy(cache, cache_policy, scope, False, _semantic)
-    volatile = _unwrap_if_constexpr(volatile)
-    _check(isinstance(volatile, bool), lambda: f"volatile must be a bool, got {volatile!r}")
 
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, policy,
-                                          _buffer_scalar_operand(soffset, "soffset", _semantic), indices, scope,
-                                          volatile)
+                                          _buffer_scalar_operand(soffset, "soffset", _semantic), indices, scope)
 
 
 # Attribute that carries `cd_regclass` on the dot op; read by the MFMA lowering.

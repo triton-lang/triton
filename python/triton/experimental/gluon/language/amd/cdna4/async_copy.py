@@ -80,7 +80,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
 
 @builtin
 def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", *, cache_policy=None,
-                          scope=None, soffset=None, skip_masked=False, _semantic=None):
+                          scope=None, soffset=None, _semantic=None):
     """
     AMD buffer load to shared operation.
 
@@ -116,9 +116,8 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
       per-element vectorization and fails to lower.
 
     Element ``i`` is read from ``base + soffset + offsets[i]``. A masked-off
-    element writes ``other`` to ``dest``, or zero without ``other``; with
-    ``skip_masked=True`` it leaves ``dest`` unchanged. An element out of the
-    descriptor's bounds (see
+    element writes ``other`` to ``dest``, or zero without ``other``. An
+    element out of the descriptor's bounds (see
     :func:`~triton.experimental.gluon.language.amd.cdna4.make_buffer_descriptor`)
     always writes zero. Indexed (``indices``) accesses are not supported here.
 
@@ -132,8 +131,6 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
         cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``: the load reads data visible at
             that scope. It is not atomic and orders nothing. Defaults to None.""" + _BUFFER_OFFSET_ARGS_DOC + """
-        skip_masked (bool): Masked-off elements leave ``dest`` unchanged instead of writing
-            zero. Excludes ``other``. Costs a branch around the load. Defaults to False.
     """
     _check(isinstance(offsets.type.layout, DistributedLayout),
            lambda: "expected offsets type layout to be a DistributedLayout")
@@ -148,18 +145,13 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
         other = _semantic.cast(other, _buffer_element_type(ptr))
         offsets, other = _semantic.broadcast_impl_value(offsets, other)
 
-    skip_masked = _unwrap_if_constexpr(skip_masked)
-    _check(isinstance(skip_masked, bool), lambda: f"skip_masked must be a bool, got {skip_masked!r}")
-    _check(not (skip_masked and other is not None), lambda: "skip_masked and other are mutually exclusive")
-
     mask = mask.handle if mask is not None else ir.value()
     other = other.handle if other is not None else ir.value()
     stride = ir.value()
     policy, scope = _buffer_cache_policy(cache_modifier, cache_policy, scope, True, _semantic)
 
     _semantic.builder.create_buffer_load_to_local(dest.handle, ptr.handle, offsets.handle, mask, other, stride, policy,
-                                                  _buffer_scalar_operand(soffset, "soffset", _semantic), scope,
-                                                  skip_masked)
+                                                  _buffer_scalar_operand(soffset, "soffset", _semantic), scope)
 
 
 @builtin

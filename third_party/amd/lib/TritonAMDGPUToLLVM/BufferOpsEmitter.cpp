@@ -28,24 +28,6 @@ bool isZero(Value v) {
   }
   return false;
 }
-
-// Bit 31 of a buffer intrinsic's cachepolicy operand marks it volatile.
-bool isVolatileAux(int32_t aux) { return (static_cast<uint32_t>(aux) >> 31); }
-
-// LLVM IR passes model buffer intrinsics as plain argmem reads/writes and
-// ignore the volatile bit, which only the backend reads. An empty asm that may
-// write any memory keeps a volatile access from being hoisted, merged or
-// removed, without emitting an instruction.
-void emitVolatileAccessBarrier(RewriterBase &rewriter, Location loc) {
-  auto *ctx = rewriter.getContext();
-  LLVM::InlineAsmOp::create(
-      rewriter, loc, LLVM::LLVMVoidType::get(ctx), /*operands=*/ValueRange{},
-      /*asm_string=*/"", /*constraints=*/"~{memory}",
-      /*has_side_effects=*/true, /*is_align_stack=*/false,
-      LLVM::TailCallKind::None,
-      LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
-      /*operand_attrs=*/ArrayAttr::get(ctx, {}));
-}
 } // namespace
 
 namespace mlir::LLVM::AMD {
@@ -128,8 +110,6 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   SmallVector<Value, 6> args;
   fillCommonArgs(type, rsrcDesc, offset, index, soffsetBytes, pred, args);
   Type bufferType = getBufferOpType(type, false);
-  if (isVolatileAux(aux))
-    emitVolatileAccessBarrier(rewriter, loc);
   Value data;
   if (index) {
     // ROCDL has no struct (indexed) buffer ops; call the intrinsic directly.
@@ -259,8 +239,6 @@ void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value index,
     data = b.bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
   fillCommonArgs(vecTy, rsrcDesc, offset, index, soffsetBytes, pred, args);
-  if (isVolatileAux(aux))
-    emitVolatileAccessBarrier(rewriter, loc);
   if (index) {
     args.push_back(b.i32_val(aux));
     LLVM::createLLVMIntrinsicCallOp(rewriter, loc,

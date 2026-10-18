@@ -1221,17 +1221,6 @@ verifyBufferAccessPolicy(Operation *op, Attribute cachePolicy,
   return success();
 }
 
-void BufferLoadOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getPtrMutable(),
-                       triton::GlobalMemory::get());
-  // Like a volatile tt.load: a write effect keeps the op from being removed,
-  // merged or hoisted.
-  if (getIsVolatile())
-    effects.emplace_back(MemoryEffects::Write::get());
-}
-
 // Record indices address through a descriptor's stride, so they need an
 // explicit descriptor.
 static LogicalResult verifyBufferIndices(Operation *op, Value base,
@@ -1257,8 +1246,6 @@ LogicalResult BufferLoadOp::verify() {
 }
 
 LogicalResult BufferLoadToLocalOp::verify() {
-  if (getSkipMasked() && getOther())
-    return emitOpError("skipMasked can't be combined with other");
   if (failed(verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
                                       getScope(),
                                       triton::CachePolicyOperation::Load)))

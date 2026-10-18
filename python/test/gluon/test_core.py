@@ -4357,47 +4357,16 @@ def test_buffer_cache_and_scope_are_exclusive():
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-@pytest.mark.parametrize("volatile", [False, True])
-def test_buffer_load_volatile_stays_in_loop(volatile):
+def test_buffer_load_to_shared_descriptor():
 
     @gluon.jit
-    def kernel(flag, out, volatile: ttgl.constexpr):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
-        offsets = ttgl.zeros([64], ttgl.int32, layout)
-        value = ttgl.amd.cdna4.buffer_load(flag, offsets, scope="gpu", volatile=volatile)
-        while ttgl.max(value, axis=0) == 0:
-            value = ttgl.amd.cdna4.buffer_load(flag, offsets, scope="gpu", volatile=volatile)
-        ttgl.amd.cdna4.buffer_store(value, out, ttgl.arange(0, 64, layout=layout))
-
-    flag = torch.ones(1, dtype=torch.int32, device="cuda")
-    out = torch.zeros(64, dtype=torch.int32, device="cuda")
-    compiled = kernel[(1, )](flag, out, volatile, num_warps=1)
-    assert torch.all(out == 1)
-    # Without volatile LLVM hoists the loop-invariant load out of the polling
-    # loop; a volatile load is reissued on every iteration. A load is in the
-    # loop when a block defined before it is branched to after it.
-    llir = compiled.asm["llir"]
-    load = llir.index("call i32 @llvm.amdgcn.raw.ptr.buffer.load.i32(")
-    labels_before = re.findall(r"^(\d+):", llir[:load], re.MULTILINE)
-    in_loop = any(re.search(rf"label %{label}\b", llir[load:]) for label in labels_before)
-    assert in_loop == volatile
-
-
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-@pytest.mark.parametrize("skip_masked", [False, True])
-def test_buffer_load_to_shared_skip_masked(skip_masked):
-
-    @gluon.jit
-    def kernel(src, dst, soffset, num_elements, skip_masked: ttgl.constexpr):
+    def kernel(src, dst, soffset, num_elements):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
         shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
         offsets = ttgl.arange(0, 256, layout=layout)
         smem = ttgl.allocate_shared_memory(ttgl.int32, [256], shared)
-        smem.store(ttgl.full([256], -7, ttgl.int32, layout))
-        ttgl.barrier()
         desc = ttgl.amd.cdna4.make_buffer_descriptor(src, num_elements * 4)
-        cdna4_async_copy.buffer_load_to_shared(smem, desc, offsets, mask=(offsets % 3) != 0, soffset=soffset,
-                                               skip_masked=skip_masked)
+        cdna4_async_copy.buffer_load_to_shared(smem, desc, offsets, mask=(offsets % 3) != 0, soffset=soffset)
         cdna4_async_copy.commit_group()
         cdna4_async_copy.wait_group(0)
         ttgl.barrier()
@@ -4405,13 +4374,12 @@ def test_buffer_load_to_shared_skip_masked(skip_masked):
 
     src = torch.arange(1000, 1300, dtype=torch.int32, device="cuda")
     dst = torch.empty(256, dtype=torch.int32, device="cuda")
-    kernel[(1, )](src, dst, 10, 200, skip_masked, num_warps=4)
+    kernel[(1, )](src, dst, 10, 200, num_warps=4)
 
     index = torch.arange(256, device="cuda")
     loaded = torch.where(10 + index < 200, src[(10 + index).clamp(max=299)], 0)
-    # Masked-off elements keep the old contents only with skip_masked;
-    # out-of-bounds elements always read zero.
-    expected = torch.where(index % 3 == 0, -7 if skip_masked else 0, loaded).int()
+    # Masked-off and out-of-bounds elements both write zero.
+    expected = torch.where(index % 3 == 0, 0, loaded).int()
     torch.testing.assert_close(dst, expected, atol=0, rtol=0)
 
 

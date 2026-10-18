@@ -695,8 +695,8 @@ struct BufferLoadOpConversion
   matchAndRewrite(triton::amdgpu::BufferLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
-        op, op.getCachePolicyAttr(), op.getScope(), op.getIsVolatile(),
-        /*isLoad=*/true, targetInfo);
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/true,
+        targetInfo);
     if (failed(aux))
       return failure();
     auto loc = op->getLoc();
@@ -795,8 +795,8 @@ struct BufferLoadToLocalOpConversion
   matchAndRewrite(triton::amdgpu::BufferLoadToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
-        op, op.getCachePolicyAttr(), op.getScope(), /*isVolatile=*/false,
-        /*isLoad=*/true, targetInfo);
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/true,
+        targetInfo);
     if (failed(aux))
       return failure();
     auto loc = op->getLoc();
@@ -882,7 +882,6 @@ struct BufferLoadToLocalOpConversion
     Value soffsetBytes =
         bufferEmitter.getScalarOffsetBytes(resElemTy, adaptor.getSoffset());
     Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
-    bool skipMasked = op.getSkipMasked();
 
     auto freeVarMasks = getFreeVariableMasks(ptrType);
     Value threadPred = emitRedundantThreadPredicateNonNull(
@@ -916,10 +915,7 @@ struct BufferLoadToLocalOpConversion
       // HW will drop the load before fetching the data from global memory so we
       // will not overwrite values. This LDS address is scalar for the whole
       // instruction, so it can only mask threads uniformly across the warp.
-      // With skipMasked, masked-off lanes must not write LDS at all, so they
-      // are branched around like `other` lanes instead of zero-filling.
-      bool branchOnMask = hasOther || skipMasked;
-      if (isThreadPredWarpUniform && !branchOnMask) {
+      if (isThreadPredWarpUniform && !hasOther) {
         Value predicatedAddress =
             selectLdsAddressForPredicate(b, threadPred, shmemAddr);
         auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
@@ -928,13 +924,13 @@ struct BufferLoadToLocalOpConversion
         if (targetInfo.requiresAliasInfoForAsyncOps())
           AMD::addAsyncCopyAliasScope(bufferLoadToLds);
       } else {
-        Value pred = branchOnMask ? b.and_(threadPred, maybeSwizzledMaskElem)
-                                  : threadPred;
+        Value pred =
+            hasOther ? b.and_(threadPred, maybeSwizzledMaskElem) : threadPred;
         auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, pred);
 
         auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
             vecTy, vecBytesVal, rsrcDesc, offsetElem, soffsetBytes, shmemAddr,
-            branchOnMask ? b.true_val() : maybeSwizzledMaskElem, *aux);
+            hasOther ? b.true_val() : maybeSwizzledMaskElem, *aux);
         if (targetInfo.requiresAliasInfoForAsyncOps())
           AMD::addAsyncCopyAliasScope(bufferLoadToLds);
 
@@ -2076,8 +2072,8 @@ struct BufferStoreOpConversion
   matchAndRewrite(triton::amdgpu::BufferStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
-        op, op.getCachePolicyAttr(), op.getScope(), op.getIsVolatile(),
-        /*isLoad=*/false, targetInfo);
+        op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/false,
+        targetInfo);
     if (failed(aux))
       return failure();
     auto loc = op->getLoc();

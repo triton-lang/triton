@@ -742,11 +742,8 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
 FailureOr<int32_t>
 getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
                            std::optional<triton::MemSyncScope> scope,
-                           bool isVolatile, bool isLoad,
+                           bool isLoad,
                            const mlir::triton::AMD::TargetInfo &targetInfo) {
-  // LLVM's buffer intrinsics take volatility as bit 31 of the cachepolicy
-  // operand and strip it during instruction selection.
-  const int32_t volatileBit = static_cast<int32_t>(1u << 31);
   int32_t aux = 0;
   if (auto gfx9Policy =
           dyn_cast_if_present<triton::amdgpu::CachePolicyGfx9Attr>(
@@ -788,8 +785,6 @@ getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
       return op->emitOpError("unsupported scope on a buffer load or store");
     }
   }
-  if (isVolatile)
-    aux |= volatileBit;
   return aux;
 }
 

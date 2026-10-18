@@ -318,7 +318,6 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   AttrSizedOperandSegments,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   TypesMatchWith<"result element type matches the element type of ptr", "result", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and indices have the same shape", "result", "indices", "getI32SameShape($_self)",
@@ -347,11 +346,10 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 
       `ptr`, `soffset` and `indices` are described in BufferOpInterface.
       `scope` makes the loaded data visible at that scope (it is not atomic
-      and orders nothing). `isVolatile` keeps every access: the op may be
-      neither removed, merged nor hoisted.
+      and orders nothing).
     }];
     let arguments = (ins
-      TTAMDG_BufferBase:$ptr,
+      Arg<TTAMDG_BufferBase, "Global memory scalar base pointer or buffer descriptor to load from", [MemRead<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<I32>:$stride,
       OptionalAttr<AnyAttr>:$cachePolicy,
@@ -360,8 +358,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
       Optional<I32>:$soffset,
       Optional<I32Tensor>:$indices,
-      OptionalAttr<TT_MemSyncScopeAttr>:$scope,
-      UnitAttr:$isVolatile
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
     let results = (outs TT_Tensor:$result);
 
@@ -401,9 +398,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       `ptr` and `soffset` are described in BufferOpInterface; an
       out-of-bounds element writes zero to `dest`. Indexed (`indices`)
       accesses are not supported here yet. `scope` makes the loaded
-      data visible at that scope. Masked-off elements write `other`, or zero
-      without `other`; with `skipMasked` they leave `dest` unchanged instead
-      (`skipMasked` excludes `other`).
+      data visible at that scope.
     }];
     let arguments = (ins
       Arg<TTG_MemDescType, "Shared memory slice to write to", GenericSharedWrite>:$dest,
@@ -415,8 +410,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       OptionalAttr<AnyAttr>:$cachePolicy,
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
       Optional<I32>:$soffset,
-      OptionalAttr<TT_MemSyncScopeAttr>:$scope,
-      UnitAttr:$skipMasked
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
     let results = (outs TTG_AsyncToken:$token);
 
@@ -560,8 +554,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
 
       `ptr`, `soffset` and `indices` are described in BufferOpInterface; an
       out-of-bounds element is dropped. `scope` makes the stored data available at
-      that scope (it is not atomic and orders nothing). `isVolatile` keeps
-      every access.
+      that scope (it is not atomic and orders nothing).
     }];
     let arguments = (ins
       TT_Tensor:$value,
@@ -573,8 +566,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
       Optional<I32>:$soffset,
       Optional<I32Tensor>:$indices,
-      OptionalAttr<TT_MemSyncScopeAttr>:$scope,
-      UnitAttr:$isVolatile
+      OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
 
     let hasVerifier = 1;
