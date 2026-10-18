@@ -191,10 +191,16 @@ private:
   bool entered = false;
 };
 
-// HIP has no "no current context" state and every VMM call above names its
-// device explicitly, so only make sure the runtime is initialized. Unlike
-// hipSetDevice, this leaves the caller's current device alone.
-inline Result ensureCurrentDevice(int /*device*/) { return hipInit(0); }
+// Makes `device` current for the scope's lifetime. memsetD8, memcpyHtoD, and
+// operations on the null stream do not name a device, so HIP runs them on the
+// current device, which faults on memory that only `device` may access.
+class CurrentDeviceScope {
+public:
+  Result enter(int device) { return guard.enter(device); }
+
+private:
+  DeviceGuard guard;
+};
 
 #else // CUDA
 
@@ -333,16 +339,19 @@ private:
 
 // Malloc may be called before anything has made a context current; adopt the
 // primary context in that case and leave an existing context alone.
-inline Result ensureCurrentDevice(int device) {
-  CUcontext ctx = nullptr;
-  Result err = cuCtxGetCurrent(&ctx);
-  if (err != kSuccess || ctx)
-    return err;
-  err = cuDevicePrimaryCtxRetain(&ctx, device);
-  if (err != kSuccess)
-    return err;
-  return cuCtxSetCurrent(ctx);
-}
+class CurrentDeviceScope {
+public:
+  Result enter(int device) {
+    CUcontext ctx = nullptr;
+    Result err = cuCtxGetCurrent(&ctx);
+    if (err != kSuccess || ctx)
+      return err;
+    err = cuDevicePrimaryCtxRetain(&ctx, device);
+    if (err != kSuccess)
+      return err;
+    return cuCtxSetCurrent(ctx);
+  }
+};
 
 #endif
 

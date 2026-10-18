@@ -67,6 +67,26 @@ def _run_configure_runtime_fields_check(shadow_granularity: int) -> None:
         gsan_free(ptr, device, 0, 0)
 
 
+def _run_malloc_non_current_device_check() -> None:
+    # The first allocation on a device initializes its runtime state and
+    # zeroes its shadow on the null stream, which must target that device.
+    torch.cuda.set_device(0)
+    device = 1
+    configure(rng_seed=12345)
+
+    ptr = gsan_malloc(4096, device)
+    assert ptr != 0
+    try:
+        assert torch.cuda.current_device() == 0
+        torch.cuda.synchronize(device)
+        assert global_state(device_index=device).rng_seed == 12345
+        shadow = uint8_cuda_tensor_from_ptr(shadow_cell_address(ptr), 64, device)
+        assert int(shadow.sum().item()) == 0
+    finally:
+        gsan_free(ptr, device)
+    assert torch.cuda.current_device() == 0
+
+
 def _run_default_clock_buffer_fits_check() -> None:
     device = torch.cuda.current_device()
     ptr = gsan_malloc(1, device)
@@ -485,6 +505,13 @@ def test_launch_stream_clocks_use_private_pool(shadow_granularity):
 def test_default_topology_uses_cuda_device_indices():
     assert get_device_rank(0) == 0
     assert get_device_rank(1) == 1
+
+
+@pytest.mark.xdist_group("gsan-multi-gpu")
+@pytest.mark.skipif(not has_gsan_allocator() or torch.cuda.device_count() < 2, reason="requires at least two GPUs")
+def test_malloc_non_current_device():
+    result = run_in_process(_run_malloc_non_current_device_check)
+    assert result.exc is None
 
 
 @pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)

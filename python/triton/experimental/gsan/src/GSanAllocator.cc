@@ -644,7 +644,8 @@ void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
   if (gsanEnsureInit() != 0)
     return nullptr;
 
-  drv::Result err = drv::ensureCurrentDevice(device);
+  drv::CurrentDeviceScope deviceScope;
+  drv::Result err = deviceScope.enter(device);
   if (err != drv::kSuccess) {
     printDriverError(err);
     return nullptr;
@@ -755,7 +756,7 @@ extern "C" void *gsanMalloc16(ssize_t size, int device, void *stream) {
 }
 
 extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
-                         [[maybe_unused]] int device, void *stream) {
+                         int device, void *stream) {
   LOGF("gsanFree: %p, 0x%zx", void_ptr, size);
   auto ptr = reinterpret_cast<uintptr_t>(void_ptr);
   if (!ptr)
@@ -773,9 +774,12 @@ extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
   }
 
   // Wait for outstanding work on the deallocation stream, including the
-  // allocator's own async shadow memset from gsanMalloc, before unmapping.
-  auto drvStream = reinterpret_cast<drv::Stream>(stream);
-  drv::Result err = drv::streamSynchronize(drvStream);
+  // allocator's own async shadow memset from gsanMalloc, before unmapping. A
+  // null stream belongs to the current device, so make `device` current.
+  drv::CurrentDeviceScope deviceScope;
+  drv::Result err = deviceScope.enter(device);
+  if (err == drv::kSuccess)
+    err = drv::streamSynchronize(reinterpret_cast<drv::Stream>(stream));
   if (err != drv::kSuccess)
     printDriverError(err);
 
@@ -918,7 +922,8 @@ int gsanExportRuntimeStateHandle(int device,
   std::lock_guard lg(mut);
   if (gsanEnsureInit() != 0)
     return -1;
-  drv::Result err = drv::ensureCurrentDevice(device);
+  drv::CurrentDeviceScope deviceScope;
+  drv::Result err = deviceScope.enter(device);
   if (err != drv::kSuccess) {
     printDriverError(err);
     return -1;
@@ -965,7 +970,8 @@ gsanImportAllocationHandles(const GSanShareableHandle *realShareableHandle,
   std::lock_guard lg(mut);
   if (gsanEnsureInit() != 0)
     return nullptr;
-  drv::Result err = drv::ensureCurrentDevice(device);
+  drv::CurrentDeviceScope deviceScope;
+  drv::Result err = deviceScope.enter(device);
   if (err != drv::kSuccess) {
     printDriverError(err);
     return nullptr;
@@ -1033,7 +1039,8 @@ int gsanImportRuntimeStateHandle(const GSanShareableHandle *shareableHandle,
   std::lock_guard lg(mut);
   if (gsanEnsureInit() != 0)
     return -1;
-  drv::Result err = drv::ensureCurrentDevice(device);
+  drv::CurrentDeviceScope deviceScope;
+  drv::Result err = deviceScope.enter(device);
   if (err != drv::kSuccess) {
     printDriverError(err);
     return -1;
