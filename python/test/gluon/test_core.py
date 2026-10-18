@@ -4301,9 +4301,9 @@ def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffs
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("vec", [1, 4])
-@pytest.mark.parametrize("num_records", [2**32 - 1])
+@pytest.mark.parametrize("bound", ["partial", "full"])
 @pytest.mark.parametrize("soffset", [0, 5])
-def test_buffer_descriptor_full_range_mask_load_to_shared(vec, num_records, soffset):
+def test_buffer_load_to_shared_bounds_mask(vec, bound, soffset):
 
     @gluon.jit
     def kernel(src, dst, num_records, soffset, VEC: ttgl.constexpr):
@@ -4312,7 +4312,8 @@ def test_buffer_descriptor_full_range_mask_load_to_shared(vec, num_records, soff
         offsets = ttgl.arange(0, 256 * VEC, layout=layout)
         smem = ttgl.allocate_shared_memory(ttgl.int32, [256 * VEC], shared)
         desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, num_records.to(ttgl.uint32))
-        # Without `other`, masked-off lanes zero-fill through the out-of-bounds offset.
+        # Masked-off lanes zero-fill through the out-of-bounds offset, also with
+        # a bound above 2**31; lanes past a smaller bound zero-fill too.
         ttgl.amd.cdna4.buffer.load_to_shared(smem, desc, offsets, mask=(offsets // VEC) % 2 == 0, soffset=soffset)
         cdna4_async_copy.commit_group()
         cdna4_async_copy.wait_group(0)
@@ -4320,12 +4321,14 @@ def test_buffer_descriptor_full_range_mask_load_to_shared(vec, num_records, soff
         ttgl.store(dst + offsets, smem.load(layout))
 
     n = 256 * vec
+    num_records = (n // 2 + 3) * 4 if bound == "partial" else 2**32 - 1
     src = torch.arange(1, soffset + n + 1, dtype=torch.int32, device="cuda")
     dst = torch.empty(n, dtype=torch.int32, device="cuda")
     kernel[(1, )](src, dst, num_records, soffset, vec, num_warps=4)
 
-    active = (torch.arange(n, device="cuda") // vec) % 2 == 0
-    torch.testing.assert_close(dst, torch.where(active, src[soffset:], 0).int(), atol=0, rtol=0)
+    index = torch.arange(n, device="cuda")
+    loaded = ((index // vec) % 2 == 0) & ((soffset + index + 1) * 4 <= num_records)
+    torch.testing.assert_close(dst, torch.where(loaded, src[soffset:], 0).int(), atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
@@ -4395,33 +4398,6 @@ def test_buffer_ops_require_descriptor():
     src = torch.zeros(64, dtype=torch.int32, device="cuda")
     with pytest.raises(CompilationError, match="expected a buffer descriptor"):
         kernel[(1, )](src, num_warps=1)
-
-
-@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-def test_buffer_load_to_shared_descriptor():
-
-    @gluon.jit
-    def kernel(src, dst, soffset, num_elements):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
-        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
-        offsets = ttgl.arange(0, 256, layout=layout)
-        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], shared)
-        desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, num_elements * 4)
-        ttgl.amd.cdna4.buffer.load_to_shared(smem, desc, offsets, mask=(offsets % 3) != 0, soffset=soffset)
-        cdna4_async_copy.commit_group()
-        cdna4_async_copy.wait_group(0)
-        ttgl.barrier()
-        ttgl.store(dst + offsets, smem.load(layout))
-
-    src = torch.arange(1000, 1300, dtype=torch.int32, device="cuda")
-    dst = torch.empty(256, dtype=torch.int32, device="cuda")
-    kernel[(1, )](src, dst, 10, 200, num_warps=4)
-
-    index = torch.arange(256, device="cuda")
-    loaded = torch.where(10 + index < 200, src[(10 + index).clamp(max=299)], 0)
-    # Masked-off and out-of-bounds elements both write zero.
-    expected = torch.where(index % 3 == 0, 0, loaded).int()
-    torch.testing.assert_close(dst, expected, atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
