@@ -4237,11 +4237,11 @@ def test_buffer_descriptor_soffset_bounds(soffset, num_elements):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
         offsets = ttgl.arange(0, 64, layout=layout)
         # Without a stride, num_records counts bytes and bounds soffset + offsets.
-        src_desc = ttgl.amd.cdna4.make_buffer_descriptor(src, num_elements * 4)
-        x = ttgl.amd.cdna4.buffer_load(src_desc, offsets, soffset=soffset)
+        src_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, num_elements * 4)
+        x = ttgl.amd.cdna4.buffer.load(src_desc, offsets, soffset=soffset)
         ttgl.amd.cdna4.buffer_store(x, dst, offsets)
-        dst_desc = ttgl.amd.cdna4.make_buffer_descriptor(dst + 64, num_elements * 4)
-        ttgl.amd.cdna4.buffer_store(x + 1, dst_desc, offsets, soffset=soffset)
+        dst_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(dst + 64, num_elements * 4)
+        ttgl.amd.cdna4.buffer.store(x + 1, dst_desc, offsets, soffset=soffset)
 
     src = torch.arange(1000, 1128, dtype=torch.int32, device="cuda")
     dst = torch.full((192, ), -1, dtype=torch.int32, device="cuda")
@@ -4270,10 +4270,10 @@ def test_buffer_descriptor_indices(num_rows):
         rows, cols = ttgl.broadcast(rows, cols)
         # With a stride, num_records counts records and bounds the row index;
         # the column offsets are not checked.
-        src_desc = ttgl.amd.cdna4.make_buffer_descriptor(src, num_rows, ROW_BYTES)
-        x = ttgl.amd.cdna4.buffer_load(src_desc, cols, indices=rows)
-        dst_desc = ttgl.amd.cdna4.make_buffer_descriptor(dst, num_rows, ROW_BYTES)
-        ttgl.amd.cdna4.buffer_store(x + 1, dst_desc, cols, indices=rows)
+        src_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, num_rows, ROW_BYTES)
+        x = ttgl.amd.cdna4.buffer.load(src_desc, cols, indices=rows)
+        dst_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(dst, num_rows, ROW_BYTES)
+        ttgl.amd.cdna4.buffer.store(x + 1, dst_desc, cols, indices=rows)
 
     # Rows of 32 used elements, 64 elements apart.
     src = torch.arange(1, 8 * 64 + 1, dtype=torch.int32, device="cuda")
@@ -4296,14 +4296,14 @@ def test_buffer_descriptor_in_loop():
     def kernel(src, dst, num_elements, STEPS: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
         offsets = ttgl.arange(0, 64, layout=layout)
-        desc = ttgl.amd.cdna4.make_buffer_descriptor(src, num_elements * 4)
+        desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, num_elements * 4)
         acc = ttgl.zeros([64], ttgl.int32, layout)
         for step in range(STEPS):
-            acc += ttgl.amd.cdna4.buffer_load(desc, offsets)
+            acc += ttgl.amd.cdna4.buffer.load(desc, offsets)
             # A loop-carried descriptor: each step reads the next 64 elements
             # of what remains.
             num_elements -= 64
-            desc = ttgl.amd.cdna4.make_buffer_descriptor(src + (step + 1) * 64, num_elements * 4)
+            desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src + (step + 1) * 64, num_elements * 4)
         ttgl.amd.cdna4.buffer_store(acc, dst, offsets)
 
     src = torch.arange(1, 257, dtype=torch.int32, device="cuda")
@@ -4323,9 +4323,11 @@ def test_buffer_load_store_scope_cache_policy(scope, scope_bits, nontemporal):
     def kernel(src, dst, scope: ttgl.constexpr, nontemporal: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
         offsets = ttgl.arange(0, 64, layout=layout)
-        policy: ttgl.constexpr = ttgl.amd.cdna4.CachePolicy(nontemporal=nontemporal)
-        x = ttgl.amd.cdna4.buffer_load(src, offsets, scope=scope, cache_policy=policy)
-        ttgl.amd.cdna4.buffer_store(x, dst, offsets, scope=scope, cache_policy=policy)
+        policy: ttgl.constexpr = ttgl.amd.cdna4.buffer.CachePolicy(nontemporal=nontemporal)
+        src_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, 64 * 4)
+        dst_desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(dst, 64 * 4)
+        x = ttgl.amd.cdna4.buffer.load(src_desc, offsets, scope=scope, cache_policy=policy)
+        ttgl.amd.cdna4.buffer.store(x, dst_desc, offsets, scope=scope, cache_policy=policy)
 
     src = torch.arange(64, dtype=torch.int32, device="cuda")
     dst = torch.empty_like(src)
@@ -4344,15 +4346,15 @@ def test_buffer_load_store_scope_cache_policy(scope, scope_bits, nontemporal):
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-def test_buffer_cache_and_scope_are_exclusive():
+def test_buffer_ops_require_descriptor():
 
     @gluon.jit
     def kernel(src):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
-        ttgl.amd.cdna4.buffer_load(src, ttgl.arange(0, 64, layout=layout), cache=".cg", scope="gpu")
+        ttgl.amd.cdna4.buffer.load(src, ttgl.arange(0, 64, layout=layout))
 
     src = torch.zeros(64, dtype=torch.int32, device="cuda")
-    with pytest.raises(CompilationError, match="cache and scope are mutually exclusive"):
+    with pytest.raises(CompilationError, match="expected a buffer descriptor"):
         kernel[(1, )](src, num_warps=1)
 
 
@@ -4365,8 +4367,8 @@ def test_buffer_load_to_shared_descriptor():
         shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
         offsets = ttgl.arange(0, 256, layout=layout)
         smem = ttgl.allocate_shared_memory(ttgl.int32, [256], shared)
-        desc = ttgl.amd.cdna4.make_buffer_descriptor(src, num_elements * 4)
-        cdna4_async_copy.buffer_load_to_shared(smem, desc, offsets, mask=(offsets % 3) != 0, soffset=soffset)
+        desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, num_elements * 4)
+        ttgl.amd.cdna4.buffer.load_to_shared(smem, desc, offsets, mask=(offsets % 3) != 0, soffset=soffset)
         cdna4_async_copy.commit_group()
         cdna4_async_copy.wait_group(0)
         ttgl.barrier()
@@ -4396,8 +4398,8 @@ def test_buffer_descriptor_alignment_hint(hint):
         if hint:
             base = ttgl.multiple_of(base, 4)
         # The descriptor is as aligned as its base pointer.
-        desc = ttgl.amd.cdna4.make_buffer_descriptor(src + base, 2**31 - 1)
-        x = ttgl.amd.cdna4.buffer_load(desc, offsets)
+        desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src + base, 2**31 - 1)
+        x = ttgl.amd.cdna4.buffer.load(desc, offsets)
         ttgl.amd.cdna4.buffer_store(x, dst + base, offsets)
 
     src = torch.arange(512, dtype=torch.int32, device="cuda")

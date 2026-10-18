@@ -1,9 +1,7 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import List, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from triton import knobs
-from triton.language.core import constexpr_type
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
 from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
@@ -14,10 +12,14 @@ from ..._semantic import _check
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
+# `buffer` stays out of __all__: cdna4 star-imports this module and defines
+# its own `buffer` submodule.
+from . import buffer
+
 __all__ = [
-    "CachePolicy", "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "buffer_atomic_add",
-    "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or", "buffer_atomic_xor",
-    "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast", "get_scaled_upcast_fp4_scale_layout"
+    "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or",
+    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast",
+    "get_scaled_upcast_fp4_scale_layout"
 ]
 
 _atomic_op_str_to_op = {
@@ -27,186 +29,8 @@ _atomic_op_str_to_op = {
 }
 
 
-@dataclass(eq=True)
-class buffer_descriptor_type(ttgl.base_type):
-    """The type of a buffer resource descriptor accessing ``element_ty`` elements."""
-
-    element_ty: ttgl.dtype
-
-    def __str__(self) -> str:
-        return f"buffer_descriptor<{self.element_ty}>"
-
-    def _to_ir(self, builder: ir.builder) -> ir.type:
-        return builder.get_buffer_desc_type(self.element_ty.to_ir(builder))
-
-    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[buffer_descriptor, int]:
-        return buffer_descriptor(handles[cursor], self), cursor + 1
-
-    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        out.append(self._to_ir(builder))
-
-    def mangle(self) -> str:
-        return f"BD{self.element_ty.mangle()}BD"
-
-
-@dataclass
-class buffer_descriptor(ttgl.base_value):
-    """
-    A buffer resource descriptor (V#), made by :func:`make_buffer_descriptor`.
-
-    It is a scalar, program-uniform value held in SGPRs. Pass it as ``ptr`` to
-    :func:`buffer_load`, :func:`buffer_store` and
-    :func:`~triton.experimental.gluon.language.amd.cdna4.async_copy.buffer_load_to_shared`.
-    """
-
-    handle: ir.value
-    type: buffer_descriptor_type
-
-    def _set_name(self, builder: ir.builder, name: str) -> None:
-        self.handle.set_loc(builder.create_name_loc(name, self.handle.get_loc()))
-
-    def _flatten_ir(self, handles: List[ir.value]) -> None:
-        handles.append(self.handle)
-
-    @property
-    def dtype(self):
-        return self.type.element_ty
-
-
-@builtin
-def make_buffer_descriptor(base, num_records, stride=0, _semantic=None) -> buffer_descriptor:
-    """
-    Make a buffer resource descriptor from the hardware fields the program controls.
-
-    Buffer loads and stores through the descriptor address
-    ``base + soffset + offsets[i]`` (plus ``indices[i] * stride`` when they take
-    ``indices``), and the hardware checks bounds from ``num_records``:
-
-    * ``stride == 0``: an access is out of bounds when its byte offset from
-      ``base``, including ``soffset``, is at least ``num_records``.
-    * ``stride != 0``: an access without ``indices`` is out of bounds when its
-      per-lane byte offset (excluding ``soffset``) is at least ``num_records``;
-      an access with ``indices`` is out of bounds when its record index is at
-      least ``num_records``, whatever its offsets.
-
-    Out-of-bounds loads return zero and out-of-bounds stores are dropped, so a
-    descriptor with ``num_records=0`` disables every access. Swizzling,
-    thread-ID addressing, data formats and the out-of-bounds mode are chosen by
-    the compiler and not exposed.
-
-    Args:
-        base (pointer to scalar): Global memory base pointer. Its pointee type is
-            the element type of the descriptor; offsets count these elements.
-        num_records (int32 scalar): Bytes accessible from ``base`` (``stride == 0``),
-            or the number of records (``stride != 0``). At most 2**31 - 1.
-        stride (int32 scalar): Record size in bytes for indexed accesses, in
-            [0, 16383] on CDNA3/CDNA4. Defaults to 0.
-
-    Returns:
-        buffer_descriptor: the descriptor.
-    """
-    _check(base.type.is_ptr() and not base.type.is_block(), lambda: f"base must be a scalar pointer, got {base.type}")
-    num_records = _buffer_scalar_operand(num_records, "num_records", _semantic)
-    stride = _buffer_scalar_operand(stride, "stride", _semantic)
-    handle = _semantic.builder.create_make_buffer_desc(base.handle, num_records, stride)
-    return buffer_descriptor(handle, buffer_descriptor_type(base.type.element_ty))
-
-
-@dataclass(frozen=True)
-class CachePolicy:
-    """
-    Cache hints for gfx9 (CDNA3/CDNA4) buffer loads and stores.
-
-    The hints are performance-only and never affect coherence. The coherence
-    scope of an access comes from the op's ``scope=`` argument instead.
-
-    Args:
-        nontemporal (bool): Set NT: the data is not expected to be reused.
-    """
-
-    nontemporal: bool = False
-
-    def __post_init__(self):
-        nontemporal = _unwrap_if_constexpr(self.nontemporal)
-        if not isinstance(nontemporal, bool):
-            raise TypeError("nontemporal must be a bool")
-        object.__setattr__(self, "nontemporal", nontemporal)
-
-    @property
-    def type(self):
-        return constexpr_type(self)
-
-    def mangle(self) -> str:
-        return f"AMDCP_gfx9_{int(self.nontemporal)}_AMDCP"
-
-    def _to_ir(self, builder):
-        return builder.get_amd_cache_policy_gfx9(self.nontemporal)
-
-
-def _buffer_cache_policy(cache, cache_policy, scope, is_load, _semantic):
-    """Return the `cachePolicy` attribute and the optional scope of a buffer load/store."""
-    cache = _unwrap_if_constexpr(cache)
-    cache_policy = _unwrap_if_constexpr(cache_policy)
-    scope = _unwrap_if_constexpr(scope)
-    if cache:
-        _check(cache_policy is None, lambda: "cache and cache_policy are mutually exclusive")
-        # The legacy cache modifiers imply an architecture-specific scope.
-        _check(scope is None, lambda: "cache and scope are mutually exclusive")
-        # Validate the modifier for the direction of the access.
-        if is_load:
-            _semantic._str_to_load_cache_modifier(cache)
-        else:
-            _semantic._str_to_store_cache_modifier(cache)
-        policy = _semantic.builder.get_cache_policy(cache.removeprefix("."), "evict_normal")
-    elif cache_policy is not None:
-        _check(isinstance(cache_policy, CachePolicy),
-               lambda: f"cache_policy must be an amd.cdna3/cdna4 CachePolicy, got {cache_policy!r}")
-        policy = cache_policy._to_ir(_semantic.builder)
-    else:
-        policy = _semantic.builder.get_cache_policy("none", "evict_normal")
-    if scope is not None:
-        _check(scope in ("cta", "gpu", "sys"), lambda: f"scope must be 'cta', 'gpu' or 'sys', got {scope!r}")
-        scope = _semantic._str_to_scope(scope)
-    return policy, scope
-
-
-def _buffer_scalar_operand(value, name, _semantic):
-    """Convert an optional scalar integer operand to an i32 handle."""
-    value = _unwrap_if_constexpr(value)
-    if value is None:
-        return ir.value()
-    value = _semantic.to_tensor(value)
-    _check(not value.type.is_block(), lambda: f"{name} must be a scalar, got {value.type}")
-    _check(value.dtype.is_int() and value.dtype.primitive_bitwidth <= 32,
-           lambda: f"{name} must be an integer of at most 32 bits, got {value.dtype}")
-    return _semantic.cast(value, ttgl.int32).handle
-
-
-def _buffer_element_type(ptr):
-    """The element type accessed through a buffer op's scalar pointer or descriptor."""
-    if isinstance(ptr, buffer_descriptor):
-        return ptr.dtype
-    return ptr.type.scalar.element_ty
-
-
-def _buffer_indices(indices, offsets, ptr, _semantic):
-    """Broadcast optional record indices to the shape of the offsets."""
-    indices = _unwrap_if_constexpr(indices)
-    if indices is None:
-        return offsets, ir.value()
-    _check(isinstance(ptr, buffer_descriptor), lambda: "indices require a buffer descriptor as ptr")
-    indices = _semantic.to_tensor(indices)
-    _check(indices.dtype.is_int32() or indices.dtype.is_uint32(),
-           lambda: f"indices element type must be int32 or uint32, got {indices.dtype}")
-    offsets, indices = _semantic.broadcast_impl_value(offsets, indices)
-    return offsets, indices.handle
-
-
-def _verify_buffer_ops(ptr, offsets, mask=None, other=None, allow_descriptor=False):
-    if allow_descriptor and isinstance(ptr, buffer_descriptor):
-        pass
-    else:
-        assert ptr.type.is_ptr(), "ptr must be a scalar pointer type"
+def _verify_buffer_ops(ptr, offsets, mask=None, other=None):
+    assert ptr.type.is_ptr(), "ptr must be a scalar pointer type"
 
     assert isinstance(offsets.type, ttgl.distributed_type), "expected offsets type to be a distributed_type"
     assert offsets.dtype.is_int32() or offsets.dtype.is_uint32(), "offsets element type must be int32 or uint32"
@@ -277,47 +101,21 @@ def _buffer_atomic_rmw_impl(op, ptr, offsets, value, arch, mask, sem, scope, _se
         value.type)
 
 
-_BUFFER_OFFSET_ARGS_DOC = """
-        soffset (int32 scalar, optional): Scalar offset, in elements, added to every
-            element's offset. It is held in the instruction's scalar offset register, so a
-            uniform advance costs no per-lane arithmetic. Defaults to None (0)."""
-
-
 @builtin
-def buffer_load(ptr, offsets, mask=None, other=None, cache=None, *, cache_policy=None, scope=None, soffset=None,
-                indices=None, _semantic=None):
+def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None):
     """
-    AMD buffer load from global memory via a scalar base pointer or a buffer
-    descriptor and a tensor of offsets instead of a tensor of pointers. This
-    operation will load data directly into registers.
-
-    Element ``i`` is read from ``base + soffset + offsets[i]``, plus
-    ``indices[i] * stride`` with ``indices``. A scalar pointer gets a default
-    descriptor with a 2**31 - 2 byte bound; use :func:`make_buffer_descriptor` for
-    explicit bounds or a stride. Out-of-bounds elements read zero.
-
-    To vectorize accesses whose alignment the compiler can't prove, use
-    :func:`~triton.experimental.gluon.language.multiple_of` on the base pointer,
-    :func:`~triton.experimental.gluon.language.max_contiguous` on the offsets and
-    :func:`~triton.experimental.gluon.language.max_constancy` on the mask.
+    AMD buffer load from global memory via a scalar base pointer and a tensor of
+    offsets instead of a tensor of pointers. This operation will load data
+    directly into registers.
 
     Args:
-        ptr (pointer to scalar or buffer_descriptor): Global memory base to load from.
-        offsets (tensor): Offsets tensor for the load operation, in elements.
+        ptr (pointer to scalar): Global memory scalar base pointer to load from.
+        offsets (tensor): Offsets tensor for the load operation.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
-        cache (str, optional): Legacy cache modifier specifier. Excludes ``cache_policy`` and ``scope``. Defaults to ``None``.
-        cache_policy (CachePolicy, optional): Cache hints (CDNA3/CDNA4). Defaults to None.
-        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"`` (CDNA3/CDNA4). The load reads data
-            visible at that scope. It is not atomic and orders no other memory operation; pair it
-            with an acquire to consume a payload. To poll a flag, use
-            :func:`~triton.experimental.gluon.language.atomic_load` instead, which the compiler
-            never hoists. Defaults to None (no coherence beyond the wave).""" + _BUFFER_OFFSET_ARGS_DOC + """
-        indices (tensor, optional): Record index of each element, for a descriptor with a
-            stride. Defaults to None.
+        cache (str, optional): Cache modifier specifier. Defaults to ``None``.
     """
-    _verify_buffer_ops(ptr, offsets, mask, other, allow_descriptor=True)
-    elem_ty = _buffer_element_type(ptr)
+    _verify_buffer_ops(ptr, offsets, mask, other)
 
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
@@ -326,46 +124,34 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, *, cache_policy
     other = _unwrap_if_constexpr(other)
     if other is not None:
         other = _semantic.to_tensor(other)
-        other = _semantic.cast(other, elem_ty)
+        other = _semantic.cast(other, ptr.dtype.element_ty)
         offsets, other = _semantic.broadcast_impl_value(offsets, other)
 
-    offsets, indices = _buffer_indices(indices, offsets, ptr, _semantic)
     other = other.handle if other is not None else ir.value()
     mask = mask.handle if mask is not None else ir.value()
-    policy, scope = _buffer_cache_policy(cache, cache_policy, scope, True, _semantic)
+    cache = _unwrap_if_constexpr(cache)
+    cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
-    ret_ty = offsets.type.with_element_ty(elem_ty)
+    ret_ty = offsets.type.with_element_ty(ptr.type.scalar.element_ty)
     builder = _semantic.builder
-    handle = builder.create_buffer_load(ret_ty.to_ir(builder), ptr.handle, offsets.handle, mask, other, policy,
-                                        _buffer_scalar_operand(soffset, "soffset", _semantic), indices, scope)
+    handle = builder.create_buffer_load(ret_ty.to_ir(builder), ptr.handle, offsets.handle, mask, other, cache_modifier)
     return ttgl.tensor(handle, ret_ty)
 
 
 @builtin
-def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, *, cache_policy=None, scope=None, soffset=None,
-                 indices=None, _semantic: GluonSemantic = None):
+def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: GluonSemantic = None):
     """
-    AMD buffer store a tensor directly to global memory via a scalar base pointer
-    or a buffer descriptor and a tensor of offsets instead of a tensor of pointers.
-
-    Element ``i`` is written to ``base + soffset + offsets[i]``, plus
-    ``indices[i] * stride`` with ``indices``. Out-of-bounds elements are dropped;
-    see :func:`buffer_load` and :func:`make_buffer_descriptor`.
+    AMD buffer store a tensor directly to global memory via a scalar base pointer and a tensor of
+    offsets instead of a tensor of pointers.
 
     Args:
         stored_value (tensor to be stored): The tensor to be stored to global memory.
-        ptr (pointer to scalar or buffer_descriptor): Global memory base to store to.
-        offsets (tensor): Offsets tensor for the store operation, in elements.
+        ptr (pointer to scalar): Global memory scalar base pointer to store to.
+        offsets (tensor): Offsets tensor for the store operation.
         mask (tensor, optional): Mask tensor for predicated store. Defaults to None.
-        cache (str, optional): Legacy cache modifier specifier. Excludes ``cache_policy`` and ``scope``. Defaults to ``None``.
-        cache_policy (CachePolicy, optional): Cache hints (CDNA3/CDNA4). Defaults to None.
-        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"`` (CDNA3/CDNA4). The store makes its
-            data available at that scope. It is not atomic and orders no other memory operation;
-            follow it with a release to publish. Defaults to None.""" + _BUFFER_OFFSET_ARGS_DOC + """
-        indices (tensor, optional): Record index of each element, for a descriptor with a
-            stride. Defaults to None.
+        cache (str, optional): Cache modifier specifier. Defaults to ``None``.
     """
-    _verify_buffer_ops(ptr, offsets, mask, allow_descriptor=True)
+    _verify_buffer_ops(ptr, offsets, mask)
 
     offsets_shape = offsets.shape
     mask = _unwrap_if_constexpr(mask)
@@ -376,12 +162,11 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, *, cache_pol
     if offsets_shape != offsets.shape:
         raise ValueError(f"Expected `offsets` argument to have shape {offsets.shape} but got {offsets_shape}")
 
-    offsets, indices = _buffer_indices(indices, offsets, ptr, _semantic)
     mask = mask.handle if mask is not None else ir.value()
-    policy, scope = _buffer_cache_policy(cache, cache_policy, scope, False, _semantic)
+    cache = _unwrap_if_constexpr(cache)
+    cache_modifier = _semantic._str_to_store_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
-    _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, policy,
-                                          _buffer_scalar_operand(soffset, "soffset", _semantic), indices, scope)
+    _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
 
 
 # Attribute that carries `cd_regclass` on the dot op; read by the MFMA lowering.

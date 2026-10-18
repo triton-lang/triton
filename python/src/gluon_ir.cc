@@ -1217,7 +1217,7 @@ void init_gluon_ir(py::module_ &m) {
                                                        partitionNumWarps);
            })
       .def(
-          "create_buffer_load",
+          "create_buffer_desc_load",
           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
              Value mask, Value other, Attribute cachePolicy, Value soffset,
              Value indices, std::optional<tt::MemSyncScope> scope) -> Value {
@@ -1232,7 +1232,7 @@ void init_gluon_ir(py::module_ &m) {
           py::arg("mask"), py::arg("other"), py::arg("cachePolicy"),
           py::arg("soffset"), py::arg("indices"), py::arg("scope").none())
       .def(
-          "create_buffer_store",
+          "create_buffer_desc_store",
           [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
              Value mask, Attribute cachePolicy, Value soffset, Value indices,
              std::optional<tt::MemSyncScope> scope) {
@@ -1259,6 +1259,35 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Type elementType) -> Type {
              return ttag::BufferDescType::get(self.getContext(), elementType);
            })
+      .def("create_buffer_load",
+           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
+              Value mask, Value other,
+              tt::CacheModifier cacheModifier) -> Value {
+             return self.create<ttag::BufferLoadOp>(
+                 resultType, ptr, offsets, Value() /*stride*/,
+                 buildCachePolicy(self.getBuilder(), cacheModifier), mask,
+                 other, /*contiguity=*/1, /*soffset=*/Value(),
+                 /*indices=*/Value(), /*scope=*/tt::MemSyncScopeAttr());
+           })
+      .def("create_buffer_store",
+           [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
+              Value mask, tt::CacheModifier cacheModifier) {
+             self.create<ttag::BufferStoreOp>(
+                 storedValue, ptr, offsets, Value() /*stride*/,
+                 buildCachePolicy(self.getBuilder(), cacheModifier), mask,
+                 /*contiguity=*/1, /*soffset=*/Value(), /*indices=*/Value(),
+                 /*scope=*/tt::MemSyncScopeAttr());
+           })
+      .def("create_buffer_load_to_local",
+           [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
+              Value mask, Value other, Value stride,
+              tt::CacheModifier cacheModifier) {
+             self.create<ttag::BufferLoadToLocalOp>(
+                 dest, ptr, offsets, mask, other, stride,
+                 buildCachePolicy(self.getBuilder(), cacheModifier),
+                 /*contiguity=*/1, /*soffset=*/Value(),
+                 /*scope=*/tt::MemSyncScopeAttr());
+           })
       .def("create_buffer_atomic_rmw",
            [](GluonOpBuilder &self, tt::RMWOp op, Value ptr, Value offsets,
               Value value, tt::MemSemantic sem, tt::MemSyncScope scope,
@@ -1268,7 +1297,7 @@ void init_gluon_ir(py::module_ &m) {
                  sem, scope, mask);
            })
       .def(
-          "create_buffer_load_to_local",
+          "create_buffer_desc_load_to_local",
           [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
              Value mask, Value other, Value stride, Attribute cachePolicy,
              Value soffset, std::optional<tt::MemSyncScope> scope) {
