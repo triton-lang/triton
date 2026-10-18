@@ -4259,6 +4259,25 @@ def test_buffer_descriptor_soffset_bounds(soffset, num_elements):
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+def test_buffer_descriptor_full_range_mask():
+
+    @gluon.jit
+    def kernel(src, dst, num_records):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        # With a bound above 2**31, masked-off lanes must still be dropped.
+        desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, num_records.to(ttgl.uint32))
+        x = ttgl.amd.cdna4.buffer.load(desc, offsets, mask=offsets % 2 == 0, other=-5)
+        ttgl.store(dst + offsets, x)
+
+    src = torch.arange(1, 65, dtype=torch.int32, device="cuda")
+    dst = torch.empty(64, dtype=torch.int32, device="cuda")
+    kernel[(1, )](src, dst, 2**32 - 1, num_warps=1)
+    expected = torch.where(torch.arange(64, device="cuda") % 2 == 0, src, -5)
+    torch.testing.assert_close(dst, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 def test_buffer_descriptor_in_loop():
 
     @gluon.jit

@@ -38,7 +38,8 @@ def make_buffer_descriptor(base, num_records, _semantic=None) -> buffer_descript
     Args:
         base (pointer to scalar): Global memory base pointer. Its pointee type is the element type of
             the descriptor; offsets count these elements.
-        num_records (int32 scalar): Bytes accessible from ``base``. At most 2**31 - 1.
+        num_records (int32 or uint32 scalar): Bytes accessible from ``base``, read as an unsigned 32-bit
+            value: up to 2**32 - 1.
 
     Returns:
         buffer_descriptor: the descriptor.

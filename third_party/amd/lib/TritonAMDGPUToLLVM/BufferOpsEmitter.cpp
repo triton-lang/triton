@@ -100,7 +100,8 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
                               int32_t aux) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> args;
-  fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred, args);
+  fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred,
+                 /*isAtomic=*/false, args);
   Type bufferType = getBufferOpType(type, false);
   Value data = ROCDL::RawPtrBufferLoadOp::create(
       rewriter, loc, bufferType, args[0], args[1], args[2],
@@ -118,7 +119,8 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
                              Value pred, int32_t aux) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
-  fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred, commonArgs);
+  fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred,
+                 /*isAtomic=*/false, commonArgs);
 
   // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
   // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
@@ -151,7 +153,8 @@ Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
   // the opposite of the order in tl.atomic_cmpxchg
   // and amdg.buffer_atomic_cas
   SmallVector<Value, 6> args{casStoreVal, casCmpVal};
-  fillCommonArgs(type, rsrcDesc, offset, /*soffsetBytes=*/Value(), pred, args);
+  fillCommonArgs(type, rsrcDesc, offset, /*soffsetBytes=*/Value(), pred,
+                 /*isAtomic=*/true, args);
   int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
 
   Value data = ROCDL::RawPtrBufferAtomicCmpSwap::create(
@@ -178,7 +181,8 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
     data = b.bitcast(data, bufferType);
 
   SmallVector<Value, 6> args{data};
-  fillCommonArgs(type, rsrcDesc, offset, /*soffsetBytes=*/Value(), pred, args);
+  fillCommonArgs(type, rsrcDesc, offset, /*soffsetBytes=*/Value(), pred,
+                 /*isAtomic=*/true, args);
   int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
 
   // TODO:
@@ -216,7 +220,8 @@ void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value soffsetBytes,
   if (vecTy != bufferType)
     data = b.bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
-  fillCommonArgs(vecTy, rsrcDesc, offset, soffsetBytes, pred, args);
+  fillCommonArgs(vecTy, rsrcDesc, offset, soffsetBytes, pred,
+                 /*isAtomic=*/false, args);
   ROCDL::RawPtrBufferStoreOp::create(
       rewriter, loc, TypeRange{}, args[0], args[1], args[2], args[3],
       rewriter.getI32IntegerAttr(aux), /*alias_scopes=*/nullptr,
@@ -271,19 +276,27 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
 
 void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
                                    Value vOffsetElems, Value soffsetBytes,
-                                   Value pred, SmallVector<Value> &args) {
+                                   Value pred, bool isAtomic,
+                                   SmallVector<Value> &args) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // 1. Create the (masked) offset
   Type elementType = getElementTypeOrSelf(type);
   const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
   const int elementByteWidth = valueElemNBits / 8;
+  // The range check adds `soffset + voffset + size` without wrapping, so an
+  // access at voffset 0xFFFFFFFF ends past 2^32 and is out of bounds for any
+  // 32-bit num_records. Atomics fault on a misaligned address even out of
+  // bounds, so they use the offset aligned to their size that ends at 2^32.
+  int64_t accessBytes = elementByteWidth;
+  if (auto vecTy = dyn_cast<VectorType>(type))
+    accessBytes *= vecTy.getNumElements();
+  Value vOffsetOutOfBounds =
+      b.int_val(32, isAtomic ? static_cast<int32_t>(-accessBytes) : -1);
   // Please note: the index passed is not in bytes, but in number of elements
   // In order to pass the index to the buffer operation, we need to convert in
   // bytes (i.e., we need to multiply by `elementByteWidth`)
-  Value vOffsetOutOfBunds = b.int_val(
-      32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
   Value vOffsetBytes = b.mul(b.int_val(32, elementByteWidth), vOffsetElems);
-  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBunds);
+  Value maskedOffsetBytes = b.select(pred, vOffsetBytes, vOffsetOutOfBounds);
 
   // 2. The scalar offset, 0 if absent
   Value sgprOffset = soffsetBytes ? soffsetBytes : b.int_val(32, 0);

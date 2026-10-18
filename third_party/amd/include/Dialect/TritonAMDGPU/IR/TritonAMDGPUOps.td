@@ -278,7 +278,8 @@ def MakeBufferDescOp : TT_AMDGPU_Op<"make_buffer_desc", [
     and lives in SGPRs.
 
     - `base`: the global base address.
-    - `num_records`: the number of bytes accessible from `base`.
+    - `num_records`: the number of bytes accessible from `base`, read as an
+      unsigned 32-bit value.
 
     The hardware checks each access, or each 4-byte piece of an access wider
     than 4 bytes, against `num_records`: in bytes from `base`, it is in bounds

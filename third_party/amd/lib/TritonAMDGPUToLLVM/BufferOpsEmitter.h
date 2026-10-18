@@ -44,7 +44,7 @@ namespace mlir::LLVM::AMD {
 // def masked_op(base_ptr, offset, pred)
 //     mem_desc.base_ptr = base_ptr
 //     mem_desc.num_records = max_int_32
-//     oob_offset = max_int_32+1
+//     oob_offset = 0xFFFFFFFF  // out of bounds for any 32-bit num_records
 //     masked_offset = (pred ? offset : oob_offset)
 //     buffer_op(mem_desc, masked_offset)
 // ```
@@ -99,7 +99,8 @@ private:
   // arguments, masking off lanes where `pred` is false through the hardware
   // range check.
   void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems,
-                      Value soffsetBytes, Value pred, SmallVector<Value> &args);
+                      Value soffsetBytes, Value pred, bool isAtomic,
+                      SmallVector<Value> &args);
 
   // Given a type, the buffer type can be either the same type
   // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to
