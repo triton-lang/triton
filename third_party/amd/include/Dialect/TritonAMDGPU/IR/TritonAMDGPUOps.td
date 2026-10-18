@@ -280,9 +280,10 @@ def MakeBufferDescOp : TT_AMDGPU_Op<"make_buffer_desc", [
     - `base`: the global base address.
     - `num_records`: the number of bytes accessible from `base`.
 
-    An access is out of bounds when its byte address relative to `base`,
-    including `soffset`, is at least `num_records`. Out-of-bounds loads return
-    zero and stores are dropped.
+    The hardware checks each access, or each 4-byte piece of an access wider
+    than 4 bytes, against `num_records`: in bytes from `base`, it is in bounds
+    only if `soffset + offset + size <= num_records`.
+    Out-of-bounds loads return zero and stores are dropped.
 
     The remaining descriptor bits (stride, data format, swizzling, thread-ID
     addressing, out-of-bounds mode) are set by the compiler for the target;

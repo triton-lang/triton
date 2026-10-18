@@ -1,8 +1,7 @@
 """
 Descriptor-based buffer memory ops for CDNA4.
 
-The same ops as :mod:`~triton.experimental.gluon.language.amd.cdna3.buffer`,
-plus :func:`load_to_shared`.
+The same ops as :mod:`~triton.experimental.gluon.language.amd.cdna3.buffer`, plus :func:`load_to_shared`.
 """
 
 from __future__ import annotations
@@ -23,14 +22,14 @@ def load_to_shared(dest, desc, offsets, mask=None, other=None, *, soffset=None, 
     """
     Load from global memory through a buffer descriptor directly into shared memory.
 
-    Like :func:`~triton.experimental.gluon.language.amd.cdna4.async_copy.buffer_load_to_shared`,
-    the copy is asynchronous: commit it with
-    :func:`~triton.experimental.gluon.language.amd.cdna4.async_copy.commit_group` and wait
-    with :func:`~triton.experimental.gluon.language.amd.cdna4.async_copy.wait_group` before
+    Like :func:`~triton.experimental.gluon.language.amd.cdna4.async_copy.buffer_load_to_shared`, the copy
+    is asynchronous: commit it with :func:`~triton.experimental.gluon.language.amd.cdna4.async_copy.commit_group`
+    and wait with :func:`~triton.experimental.gluon.language.amd.cdna4.async_copy.wait_group` before
     reading ``dest``. The same layout requirements apply to ``offsets``, ``mask`` and ``dest``.
 
-    Element ``i`` is read from ``base + soffset + offsets[i]``. A masked-off element writes
-    ``other`` to ``dest``, or zero without ``other``; an out-of-bounds element writes zero.
+    Element ``i`` is read from ``base + soffset + offsets[i]``. A masked-off element writes ``other`` to
+    ``dest``, or zero without ``other``; an out-of-bounds element writes zero. See
+    :func:`~triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor` for the bounds.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
@@ -38,10 +37,10 @@ def load_to_shared(dest, desc, offsets, mask=None, other=None, *, soffset=None, 
         offsets (tensor): Offsets of the elements to load, in elements.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Values for masked-off elements. Defaults to None.
-        soffset (int32 scalar, optional): Scalar offset, in elements, added to every
-            element's offset. Defaults to None (0).
-        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``: the load reads data visible at
-            that scope. It is not atomic and orders nothing. Defaults to None.
+        soffset (int32 scalar, optional): Scalar offset, in elements, added to every element's offset and
+            counted by the bounds check. Defaults to None (0).
+        scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that
+            scope. It is not atomic and orders nothing. Defaults to None.
         cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
     """
     _buffer.load_to_shared(dest, desc, offsets, mask, other, soffset, scope, cache_policy, CachePolicy, _semantic)
