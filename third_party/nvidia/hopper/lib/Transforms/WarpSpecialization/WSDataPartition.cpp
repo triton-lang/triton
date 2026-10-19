@@ -1235,11 +1235,9 @@ static Operation *sliceOp(Value v, int offset, IRMapping &mappings,
 static bool doDeepCleanup(triton::FuncOp &funcOp,
                           DataPartitionScheme &partitionScheme) {
   SmallVector<Operation *> opsToDelete;
-  DenseSet<Operation *> opsCanBeTriviallyDead;
 
   do {
     opsToDelete.clear();
-    opsCanBeTriviallyDead.clear();
 
     // Identify root ops that are not used so to be deleted.
     funcOp.walk([&](Operation *op) {
@@ -1248,11 +1246,6 @@ static bool doDeepCleanup(triton::FuncOp &funcOp,
       if (!partitionScheme.ops.contains(op))
         return;
 
-      // Ignore the side effect of ops that are already sliced. The
-      // resulting ops preserve the side effect.
-      if (!isMemoryEffectFree(op))
-        opsCanBeTriviallyDead.insert(op);
-
       bool notUsed = true;
       for (auto result : op->getResults()) {
         if (!result.getUsers().empty()) {
@@ -1260,7 +1253,13 @@ static bool doDeepCleanup(triton::FuncOp &funcOp,
           break;
         }
       }
-      if (notUsed)
+      // Side-effecting leaf ops (e.g. descriptor stores) are safe to delete
+      // here: their sliced copies preserve the side effects. A region-holding
+      // op such as a rebuilt scf.for is different: its results may be unused
+      // while its body still performs the sliced side effects, and erasing it
+      // would silently drop them. Keep any region op that is not
+      // memory-effect free.
+      if (notUsed && (op->getNumRegions() == 0 || isMemoryEffectFree(op)))
         opsToDelete.push_back(op);
     });
 
