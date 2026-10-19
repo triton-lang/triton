@@ -337,20 +337,58 @@ private:
   int retainedDevice = -1;
 };
 
-// Malloc may be called before anything has made a context current; adopt the
-// primary context in that case and leave an existing context alone.
+// Makes a context of `device` current for the scope's lifetime. memsetD8,
+// memcpyHtoD, and null-stream operations run in the current context, which
+// fails on memory that only `device` may access. Malloc may be called before
+// anything has made a context current; adopt the primary context in that case
+// and leave it current. A context of another device is restored on exit.
+// Primary contexts are retained once and never released, so a context outlives
+// the asynchronous shadow memset queued on it.
 class CurrentDeviceScope {
 public:
   Result enter(int device) {
-    CUcontext ctx = nullptr;
-    Result err = cuCtxGetCurrent(&ctx);
-    if (err != kSuccess || ctx)
-      return err;
-    err = cuDevicePrimaryCtxRetain(&ctx, device);
+    CUcontext current = nullptr;
+    Result err = cuCtxGetCurrent(&current);
     if (err != kSuccess)
       return err;
-    return cuCtxSetCurrent(ctx);
+    if (current) {
+      CUdevice currentDevice = 0;
+      err = cuCtxGetDevice(&currentDevice);
+      if (err != kSuccess || currentDevice == device)
+        return err;
+    }
+    CUcontext primary = nullptr;
+    err = getPrimaryContext(device, &primary);
+    if (err != kSuccess)
+      return err;
+    err = cuCtxSetCurrent(primary);
+    if (err == kSuccess)
+      previous = current;
+    return err;
   }
+  ~CurrentDeviceScope() {
+    if (previous)
+      (void)cuCtxSetCurrent(previous);
+  }
+
+private:
+  static constexpr int kMaxDevices = 64;
+
+  static Result getPrimaryContext(int device, CUcontext *ctx) {
+    // Callers hold the allocator mutex, so the cache needs no lock.
+    static CUcontext retained[kMaxDevices] = {};
+    if (device < 0 || device >= kMaxDevices)
+      return kErrorInvalidDevice;
+    if (retained[device] == nullptr) {
+      Result err = cuDevicePrimaryCtxRetain(&retained[device], device);
+      if (err != kSuccess)
+        return err;
+    }
+    *ctx = retained[device];
+    return kSuccess;
+  }
+
+  CUcontext previous = nullptr;
 };
 
 #endif
