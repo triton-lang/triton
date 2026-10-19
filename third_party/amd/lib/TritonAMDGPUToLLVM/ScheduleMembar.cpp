@@ -72,21 +72,23 @@ bool isLocalBarrier(Operation *op) {
          barrier.getAddrSpace() == gpu::AddrSpace::Local;
 }
 
-struct WaitPlan {
+// For one wait, record where to insert a barrier and which existing barriers
+// it could replace.
+struct BarrierMoveCandidate {
   gpu::AsyncWaitOp wait;
-  Operation *insertionPoint;
-  llvm::SetVector<Operation *> barriers;
+  Operation *insertBefore;
+  llvm::SetVector<Operation *> barriersToReplace;
 };
 
 // Find the first full local barrier on every path. Crossing shared effects
 // could invalidate synchronization that Membar relied on for other accesses.
-bool findBarriers(Operation *op, WaitPlan &plan,
-                  llvm::SmallPtrSetImpl<Operation *> &active) {
+bool findBarriersToReplace(Operation *op, BarrierMoveCandidate &candidate,
+                           llvm::SmallPtrSetImpl<Operation *> &active) {
   if (!op || !active.insert(op).second)
     return false;
   bool found = false;
   if (isLocalBarrier(op)) {
-    plan.barriers.insert(op);
+    candidate.barriersToReplace.insert(op);
     found = true;
   } else if (isa<gpu::BarrierOp>(op) || isCompletionBoundary(op)) {
     found = false;
@@ -94,13 +96,13 @@ bool findBarriers(Operation *op, WaitPlan &plan,
     found = branch->getNumSuccessors() != 0;
     for (Block *successor : branch->getSuccessors()) {
       if (successor->empty() ||
-          !findBarriers(&successor->front(), plan, active)) {
+          !findBarriersToReplace(&successor->front(), candidate, active)) {
         found = false;
         break;
       }
     }
   } else if (!op->hasTrait<OpTrait::IsTerminator>() && canCross(op)) {
-    found = findBarriers(op->getNextNode(), plan, active);
+    found = findBarriersToReplace(op->getNextNode(), candidate, active);
   }
   active.erase(op);
   return found;
@@ -151,7 +153,7 @@ bool coveredByWaits(Operation *op,
 // This is a scheduling heuristic: TTGIR does not show where LLVM will place
 // its memory waits.
 void scheduleMembarBarriers(ModuleOp module) {
-  SmallVector<WaitPlan> plans;
+  SmallVector<BarrierMoveCandidate> candidates;
   module.walk([&](gpu::AsyncWaitOp wait) {
     // Consider only same-block uses; branch transfers may lower to register
     // copies that use the loaded result.
@@ -168,44 +170,45 @@ void scheduleMembarBarriers(ModuleOp module) {
     }
     if (!point)
       return;
-    WaitPlan plan{wait, point, {}};
+    BarrierMoveCandidate candidate{wait, point, {}};
     llvm::SmallPtrSet<Operation *, 32> active;
-    if (findBarriers(wait->getNextNode(), plan, active))
-      plans.push_back(std::move(plan));
+    if (findBarriersToReplace(wait->getNextNode(), candidate, active))
+      candidates.push_back(std::move(candidate));
   });
 
-  // A loop or join barrier can serve multiple waits. Group all plans that
-  // share a destination, then check coverage before removing any barrier.
-  llvm::DenseMap<Operation *, SmallVector<unsigned>> barrierUsers;
-  for (unsigned i = 0; i < plans.size(); ++i)
-    for (Operation *barrier : plans[i].barriers)
-      barrierUsers[barrier].push_back(i);
+  // A loop or join barrier may serve several waits. Group every candidate
+  // that would replace the same existing barrier, then check all incoming
+  // paths.
+  llvm::DenseMap<Operation *, SmallVector<unsigned>> candidatesByBarrier;
+  for (unsigned i = 0; i < candidates.size(); ++i)
+    for (Operation *barrier : candidates[i].barriersToReplace)
+      candidatesByBarrier[barrier].push_back(i);
 
-  SmallVector<bool> processed(plans.size(), false);
-  for (unsigned seed = 0; seed < plans.size(); ++seed) {
-    if (processed[seed])
+  SmallVector<bool> grouped(candidates.size(), false);
+  for (unsigned seed = 0; seed < candidates.size(); ++seed) {
+    if (grouped[seed])
       continue;
     SmallVector<unsigned> group{seed};
-    llvm::SetVector<Operation *> barriers;
-    processed[seed] = true;
+    llvm::SetVector<Operation *> barriersToReplace;
+    grouped[seed] = true;
     for (unsigned cursor = 0; cursor < group.size(); ++cursor) {
-      for (Operation *barrier : plans[group[cursor]].barriers) {
-        if (!barriers.insert(barrier))
+      for (Operation *barrier : candidates[group[cursor]].barriersToReplace) {
+        if (!barriersToReplace.insert(barrier))
           continue;
-        for (unsigned index : barrierUsers.find(barrier)->second) {
-          if (processed[index])
+        for (unsigned index : candidatesByBarrier.find(barrier)->second) {
+          if (grouped[index])
             continue;
-          processed[index] = true;
+          grouped[index] = true;
           group.push_back(index);
         }
       }
     }
     llvm::SmallPtrSet<Operation *, 16> waits;
     for (unsigned index : group) {
-      waits.insert(plans[index].wait);
+      waits.insert(candidates[index].wait);
     }
     bool covered = true;
-    for (Operation *barrier : barriers) {
+    for (Operation *barrier : barriersToReplace) {
       llvm::SmallPtrSet<Operation *, 32> active;
       if (!predecessorsCovered(barrier, waits, active)) {
         covered = false;
@@ -214,13 +217,14 @@ void scheduleMembarBarriers(ModuleOp module) {
     }
     if (!covered)
       continue;
-    // A group may replace barriers on several paths with one per wait.
+    // Put one new barrier at each wait's selected use, then remove the old
+    // ones.
     for (unsigned index : group) {
-      OpBuilder builder(plans[index].insertionPoint);
-      gpu::BarrierOp::create(builder, plans[index].wait.getLoc(),
+      OpBuilder builder(candidates[index].insertBefore);
+      gpu::BarrierOp::create(builder, candidates[index].wait.getLoc(),
                              gpu::AddrSpace::Local);
     }
-    for (Operation *barrier : barriers)
+    for (Operation *barrier : barriersToReplace)
       barrier->erase();
   }
 }
