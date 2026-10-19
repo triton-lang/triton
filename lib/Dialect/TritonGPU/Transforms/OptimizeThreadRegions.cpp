@@ -1,10 +1,8 @@
-#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/Dominance.h"
+#include "mlir/IR/Iterators.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
-#include "mlir/Transforms/ControlFlowSinkUtils.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -13,6 +11,7 @@
 #include "llvm/ADT/SetVector.h"
 
 #include <array>
+#include <optional>
 
 namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUOPTIMIZETHREADREGIONS
@@ -30,17 +29,25 @@ Domain ownerDomain(Operation *op, bool atomicDependent = false) {
       lookupNumWarps(op) - 1, atomicDependent ? lookupNumCTAs(op) - 1 : 0);
 }
 
+Domain guardDomain(Operation *op) {
+  if (auto guard = dyn_cast<scf::IfOp>(op))
+    if (auto predicate =
+            guard.getCondition().getDefiningOp<ThreadPredicateOp>())
+      return predicate.getDomain();
+  return {};
+}
+
 scf::IfOp physicalGuard(Operation *op) {
   for (Operation *parent = op->getParentOp(); parent;
        parent = parent->getParentOp())
-    if (parent->getAttrOfType<Domain>("ttg.execution_domain"))
+    if (guardDomain(parent))
       return cast<scf::IfOp>(parent);
   return {};
 }
 
 Domain executionDomain(Operation *op) {
   if (auto guard = physicalGuard(op))
-    return guard->getAttrOfType<Domain>("ttg.execution_domain");
+    return guardDomain(guard);
   return fullDomain(op->getContext());
 }
 
@@ -58,17 +65,25 @@ bool isMovableArithmetic(Operation *op) {
 }
 
 struct RegionEffects {
-  bool hasMemory = false;
-  bool hasAtomic = false;
-  bool hasProtocol = false;
-  bool before = false;
-  bool after = false;
+  bool hasMemory = false; // contains loads/stores/atomics
+  bool hasAtomic = false; // contains an atomic
+  bool hasSCF = false;    // contains ifs/loops
+  bool needsBarrierBefore = false;
+  bool needsBarrierAfter = false;
+
+  void merge(const RegionEffects &other) {
+    hasMemory |= other.hasMemory;
+    hasAtomic |= other.hasAtomic;
+    hasSCF |= other.hasSCF;
+    needsBarrierBefore |= other.needsBarrierBefore;
+    needsBarrierAfter |= other.needsBarrierAfter;
+  }
 };
 
-// Keep scalar control flow intact, including arithmetic that cannot speculate.
-// A rejected subtree must not contribute effects to the preceding region.
-bool analyzeScalarOperation(Operation *root, RegionEffects &effects) {
-  RegionEffects candidate = effects;
+// Get memory and synchronization requirements for the entire scalar subtree.
+// Return std::nullopt if any operation is unsupported.
+std::optional<RegionEffects> getScalarRegionEffects(Operation *root) {
+  RegionEffects effects;
   auto result = root->walk<WalkOrder::PreOrder>([&](Operation *op) {
     if (!llvm::all_of(
             llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes()),
@@ -86,77 +101,70 @@ bool analyzeScalarOperation(Operation *root, RegionEffects &effects) {
         !isa<scf::ConditionOp, scf::YieldOp>(op) && !isArithmetic(op))
       return WalkResult::interrupt();
 
-    candidate.hasMemory |= memory;
-    candidate.hasProtocol |= controlFlow || barrier || bool(atomic);
+    effects.hasMemory |= memory;
+    effects.hasSCF |= controlFlow;
     // Other threads must observe completion even if no value leaves a loop.
-    candidate.after |= loop || barrier;
-    candidate.before |= barrier;
+    effects.needsBarrierAfter |= loop || barrier;
+    effects.needsBarrierBefore |= barrier;
     if (atomic) {
-      candidate.hasAtomic = true;
+      effects.hasAtomic = true;
       auto stages = getAtomicBarrierStages(atomic.getMemSemantic(),
                                            /*hasResultBarrier=*/false);
-      candidate.before |= stages.beforeMemoryEffects;
-      candidate.after |= stages.afterMemoryEffects;
+      effects.needsBarrierBefore |= stages.beforeMemoryEffects;
+      effects.needsBarrierAfter |= stages.afterMemoryEffects;
     }
     return WalkResult::advance();
   });
   if (result.wasInterrupted())
-    return false;
-  effects = candidate;
-  return true;
+    return std::nullopt;
+  return effects;
 }
 
-llvm::SetVector<Operation *> getAtomicDependencies(Block *block) {
-  llvm::SetVector<Operation *> slice;
+// Find scalar atomics and their transitive scalar users so dependent regions
+// run on CTA 0 in multi-CTA blocks, while unrelated regions stay per CTA.
+DenseSet<Operation *> getAtomicDependencies(Block *block) {
+  DenseSet<Operation *> slice;
+  // This is a heuristic for `num_ctas > 1`
   if (lookupNumCTAs(block->getParentOp()) == 1)
     return slice;
-  ForwardSliceOptions options;
-  options.inclusive = true;
-  options.filter = [&](Operation *op) {
-    Operation *root = block->findAncestorOpInBlock(*op);
-    RegionEffects effects;
-    if (!root ||
-        (!slice.contains(root) && !analyzeScalarOperation(root, effects)))
-      return false;
-    slice.insert(root);
-    return true;
-  };
-  // In SSA order, revisit marked region ops to propagate captured uses through
-  // their results.
   for (Operation &op : *block) {
-    bool reached = slice.contains(&op);
-    if (reached && op.getNumRegions() == 0)
+    auto effects = getScalarRegionEffects(&op);
+    if (!effects)
       continue;
-    RegionEffects effects;
-    if (reached ||
-        (analyzeScalarOperation(&op, effects) && effects.hasAtomic)) {
-      slice.insert(&op);
-      getForwardSlice(&op, &slice, options);
+
+    // Only earlier ops in this block enter slice; nested matches are captures.
+    bool dependent = effects->hasAtomic;
+    if (!dependent && !slice.empty()) {
+      auto result = op.walk<WalkOrder::PreOrder>([&](Operation *nested) {
+        for (Value operand : nested->getOperands())
+          if (slice.contains(operand.getDefiningOp()))
+            return WalkResult::interrupt();
+        return WalkResult::advance();
+      });
+      dependent = result.wasInterrupted();
     }
+    if (dependent)
+      slice.insert(&op);
   }
   return slice;
 }
 
-void hoistUniformArithmetic(SmallVectorImpl<Operation *> &ops) {
-  DenseSet<Operation *> retainedOps;
-  unsigned retained = 0;
+void hoistMovableArithmetic(SmallVectorImpl<Operation *> &ops) {
+  llvm::SetVector<Operation *> retainedOps;
   for (Operation *op : ops) {
     bool uniform = isMovableArithmetic(op) &&
                    llvm::all_of(op->getOperands(), [&](Value operand) {
                      return !retainedOps.contains(operand.getDefiningOp()) &&
                             !operand.getDefiningOp<ThreadHandoffOp>();
                    });
-    if (!uniform) {
-      retainedOps.insert(op);
-      ops[retained++] = op;
-      continue;
-    }
     // Leading uniform operations already precede the first retained operation.
-    if (retained)
-      op->moveBefore(ops.front());
+    if (!uniform)
+      retainedOps.insert(op);
+    else if (!retainedOps.empty())
+      op->moveBefore(retainedOps.front());
   }
-  assert(retained);
-  ops.resize(retained);
+  assert(!retainedOps.empty());
+  ops = retainedOps.takeVector();
 }
 
 bool isTensorTailOperation(Operation *op) {
@@ -168,11 +176,6 @@ struct TensorTail {
   Domain domain;
 };
 
-struct RegionOutputs {
-  SmallVector<Value> values;
-  SmallVector<Domain> destinations;
-};
-
 std::array<uint32_t, 3> getTensorThreadMasks(RankedTensorType type) {
   auto masks = toLinearLayout(type).getFreeVariableMasks();
   auto *ctx = type.getContext();
@@ -181,31 +184,32 @@ std::array<uint32_t, 3> getTensorThreadMasks(RankedTensorType type) {
           uint32_t(masks.lookup(StringAttr::get(ctx, "block")))};
 }
 
-RegionOutputs getRegionOutputs(ArrayRef<Operation *> ops,
-                               const TensorTail &tail, Domain owner) {
-  RegionOutputs outputs;
+// Collect escaping values, rejecting full-domain handoffs when disallowed.
+std::optional<SmallVector<Value>>
+getRegionOutputs(ArrayRef<Operation *> ops, const TensorTail &tail,
+                 Domain owner, bool allowFullDomainHandoff) {
+  SmallVector<Value> outputs;
   Block *block = ops.front()->getBlock();
   assert(llvm::all_of(ops,
                       [&](Operation *op) { return op->getBlock() == block; }));
   DenseSet<Operation *> roots(ops.begin(), ops.end());
-  bool fullDestination =
-      tail.ops.empty() || !tail.domain.hasSameWarpAndBlock(owner);
+  auto isExternalUser = [&](Operation *user) {
+    return !roots.contains(block->findAncestorOpInBlock(*user));
+  };
+  bool canUseTail = !tail.ops.empty() && tail.domain.hasSameWarpAndBlock(owner);
   for (Operation *op : ops)
     for (Value result : op->getResults()) {
-      Domain destination;
-      for (Operation *user : result.getUsers()) {
-        if (roots.contains(block->findAncestorOpInBlock(*user)))
-          continue;
-        destination = !fullDestination && tail.ops.contains(user)
-                          ? tail.domain
-                          : fullDomain(owner.getContext());
-        if (destination.isFull())
-          break;
-      }
-      if (destination) {
-        outputs.values.push_back(result);
-        outputs.destinations.push_back(destination);
-      }
+      auto externalUsers =
+          llvm::make_filter_range(result.getUsers(), isExternalUser);
+      if (externalUsers.empty())
+        continue;
+
+      if (!allowFullDomainHandoff &&
+          (!canUseTail || !llvm::all_of(externalUsers, [&](Operation *user) {
+            return tail.ops.contains(user);
+          })))
+        return std::nullopt;
+      outputs.push_back(result);
     }
   return outputs;
 }
@@ -217,15 +221,12 @@ TensorTail findTensorTail(Operation *first, Domain owner) {
   TensorTail tail;
   uint32_t lane = owner.getLane(), warp = owner.getWarp();
   uint32_t block = owner.getBlock();
-  bool hasStore = false, hasTensor = false;
   for (Operation *op = first; isTensorTailOperation(op);
        op = op->getNextNode()) {
     tail.ops.insert(op);
-    hasStore |= isa<StoreOp>(op);
     for (Type type :
          llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes())) {
       if (auto tensor = dyn_cast<RankedTensorType>(type)) {
-        hasTensor = true;
         auto [laneMask, warpMask, blockMask] = getTensorThreadMasks(tensor);
         lane &= laneMask;
         warp &= warpMask;
@@ -237,13 +238,13 @@ TensorTail findTensorTail(Operation *first, Domain owner) {
   // participating even when the tensor needs fewer than 32.
   if (lane != owner.getLane())
     lane = 0;
-  if (!hasStore || !hasTensor || !(lane | warp | block))
+  tail.domain = Domain::get(owner.getContext(), lane, warp, block);
+  if (tail.domain.isFull())
     return {};
   for (Operation *op : tail.ops)
     for (Operation *user : op->getUsers())
       if (!tail.ops.contains(user))
         return {};
-  tail.domain = Domain::get(owner.getContext(), lane, warp, block);
   return tail;
 }
 
@@ -261,7 +262,6 @@ scf::IfOp wrapThreadRegion(ArrayRef<Operation *> ops, ValueRange outputs,
   Location loc = ops.front()->getLoc();
   Value pred = ThreadPredicateOp::create(b, loc, b.getI1Type(), domain);
   auto guard = scf::IfOp::create(b, loc, outputs.getTypes(), pred);
-  guard->setAttr("ttg.execution_domain", domain);
   Block *body = b.createBlock(&guard.getThenRegion());
   for (Operation *op : ops)
     op->moveBefore(body, body->end());
@@ -277,10 +277,8 @@ scf::IfOp wrapThreadRegion(ArrayRef<Operation *> ops, ValueRange outputs,
 }
 
 void wrapScalarRegion(ArrayRef<Operation *> ops, const RegionEffects &effects,
-                      const TensorTail &tail, const RegionOutputs &results,
+                      const TensorTail &tail, ValueRange outputs,
                       Domain owner) {
-  ValueRange outputs = results.values;
-
   OpBuilder b(ops.front());
   Location loc = ops.front()->getLoc();
   auto emitBarrier = [&] {
@@ -289,7 +287,7 @@ void wrapScalarRegion(ArrayRef<Operation *> ops, const RegionEffects &effects,
     else
       BarrierOp::create(b, loc, AddrSpace::All);
   };
-  if (effects.before)
+  if (effects.needsBarrierBefore)
     emitBarrier();
   auto scope = ThreadScopeOp::create(b, loc, outputs.getTypes());
   Block *body = b.createBlock(&scope.getBody());
@@ -298,21 +296,16 @@ void wrapScalarRegion(ArrayRef<Operation *> ops, const RegionEffects &effects,
   ThreadYieldOp::create(b, loc, outputs);
   scope.walk([](BarrierOp barrier) { barrier.erase(); });
   auto guard = wrapThreadRegion({scope}, scope.getResults(), owner);
-  // Cross-warp and cross-CTA handoffs require the full region's participants.
-  // A single-warp tail in the source CTA needs only its own shuffle.
-  OpBuilder tailBuilder(b.getContext());
-  if (!tail.ops.empty()) {
-    auto consumer = wrapThreadRegion(tail.ops.getArrayRef(), {}, tail.domain);
-    tailBuilder.setInsertionPointToStart(consumer.thenBlock());
-  }
+  if (!tail.ops.empty())
+    wrapThreadRegion(tail.ops.getArrayRef(), {}, tail.domain);
   b.setInsertionPointAfter(guard);
-  if (effects.after)
+  if (effects.needsBarrierAfter)
     emitBarrier();
-  for (auto [output, destination, result] :
-       llvm::zip_equal(outputs, results.destinations, guard.getResults())) {
-    Value value =
-        ThreadHandoffOp::create(destination.isFull() ? b : tailBuilder, loc,
-                                result, owner, destination);
+  // Cross-warp and cross-CTA handoffs require the full region's participants.
+  // Sinking narrows handoffs whose users share a compatible guard.
+  for (auto [output, result] : llvm::zip_equal(outputs, guard.getResults())) {
+    Value value = ThreadHandoffOp::create(b, loc, result, owner,
+                                          fullDomain(owner.getContext()));
     output.replaceUsesWithIf(value, [&](OpOperand &use) {
       return !guard->isProperAncestor(use.getOwner());
     });
@@ -321,8 +314,8 @@ void wrapScalarRegion(ArrayRef<Operation *> ops, const RegionEffects &effects,
 
 void restrictHandoffConsumers(ArrayRef<ThreadHandoffOp> handoffs) {
   for (ThreadHandoffOp handoff : handoffs) {
-    if (!handoff.getDestination().isFull())
-      continue;
+    assert(handoff.getDestination().isFull() &&
+           "only handoffs outside physical guards are collected");
     for (Operation *consumer : handoff.getResult().getUsers()) {
       if (!executionDomain(consumer).isFull())
         continue;
@@ -333,77 +326,90 @@ void restrictHandoffConsumers(ArrayRef<ThreadHandoffOp> handoffs) {
   }
 }
 
-// A loop's completion rendezvous remains at its exit. Only its data handoff
-// moves to a later consumer, after any unrelated full-block work.
-void sinkHandoffs(ArrayRef<ThreadHandoffOp> handoffs) {
-  for (ThreadHandoffOp handoff : handoffs) {
-    assert(!handoff.getResult().use_empty() && "handoffs have escaping users");
+Region *findSinkRegion(Operation *op) {
+  if (op->use_empty())
+    return nullptr;
+  Operation *firstUser = *op->getUsers().begin();
+  scf::IfOp branch;
+  auto handoff = dyn_cast<ThreadHandoffOp>(op);
+  if (handoff) {
     if (!handoff.getDestination().isFull())
-      continue;
-    auto users = handoff.getResult().getUsers();
-    auto consumer = physicalGuard(*users.begin());
-    if (!consumer ||
-        !llvm::all_of(llvm::drop_begin(users), [&](Operation *user) {
-          return physicalGuard(user) == consumer;
-        }))
-      continue;
-    auto destination = consumer->getAttrOfType<Domain>("ttg.execution_domain");
-    auto source = handoff.getSource();
-    if (!destination.hasSameWarpAndBlock(source))
-      continue;
-    assert((destination == source || !destination.getLane()) &&
-           "generated regions use either the owner lane or every lane");
-    handoff.setDestinationAttr(destination);
-    Block *body = consumer.thenBlock();
-    handoff->moveBefore(body, body->begin());
+      return nullptr;
+    branch = physicalGuard(firstUser);
+    if (!branch ||
+        !guardDomain(branch).hasSameWarpAndBlock(handoff.getSource()))
+      return nullptr;
+  } else {
+    if (!isMovableArithmetic(op))
+      return nullptr;
+    // Keep arithmetic in its current loop and physical execution domain.
+    branch = dyn_cast_or_null<scf::IfOp>(
+        op->getBlock()->findAncestorOpInBlock(*firstUser));
+    if (!branch || executionDomain(branch).isFull())
+      return nullptr;
   }
+  for (Region &region : branch->getRegions()) {
+    if (llvm::all_of(op->getUsers(), [&](Operation *user) {
+          return region.isAncestor(user->getParentRegion());
+        }))
+      return &region;
+  }
+  return nullptr;
 }
 
-void sinkConditionalArithmetic(ModuleOp module) {
-  DominanceInfo dominance(module);
-  module.walk<WalkOrder::PreOrder>([&](scf::IfOp branch) {
-    if (executionDomain(branch).isFull())
-      return;
-    controlFlowSink(
-        branch->getRegions(), dominance,
-        [&](Operation *op, Region *region) {
-          // Keep loop-invariant work outside loops by sinking only from the
-          // branch's block.
-          return op->getBlock() == region->getParentOp()->getBlock() &&
-                 isMovableArithmetic(op);
-        },
-        [](Operation *op, Region *region) {
-          op->moveBefore(&region->front(), region->front().begin());
-        });
+// Sink movable arithmetic into inner conditionals containing all its uses.
+//
+// a = x + 1
+// if ready:
+//     use(a)
+// ===>
+// if ready:
+//     a = x + 1
+//     use(a)
+//
+// Sink handoffs into compatible thread guards and narrow their destinations.
+//
+// value = handoff(thread_0_result, destination=all_128_threads)
+// if warp_id == 0:
+//     consume(value)
+// ===>
+// if warp_id == 0:
+//     value = handoff(thread_0_result, destination=warp_0)
+//     consume(value)
+void sinkRegionInputs(ModuleOp mod) {
+  // Process users before producers to propagate sinking without a worklist.
+  mod.walk<WalkOrder::PostOrder, ReverseIterator>([&](Operation *op) {
+    while (Region *region = findSinkRegion(op)) {
+      if (auto handoff = dyn_cast<ThreadHandoffOp>(op)) {
+        Domain destination = guardDomain(region->getParentOp());
+        assert((destination == handoff.getSource() || !destination.getLane()) &&
+               "generated regions use either the owner lane or every lane");
+        handoff.setDestinationAttr(destination);
+      }
+      op->moveBefore(&region->front(), region->front().begin());
+    }
   });
 }
 
 #ifndef NDEBUG
-void assertValidRegions(ModuleOp module) {
-  module.walk([&](Operation *op) {
-    if (auto domain = op->getAttrOfType<Domain>("ttg.execution_domain")) {
-      auto guard = cast<scf::IfOp>(op);
-      auto predicate = guard.getCondition().getDefiningOp<ThreadPredicateOp>();
-      assert(predicate && predicate.getDomain() == domain &&
-             "physical region requires its declared thread predicate");
-      assert(executionDomain(op).isFull() &&
+void assertValidRegions(ModuleOp mod) {
+  mod.walk([&](Operation *op) {
+    Domain domain = executionDomain(op);
+    if (guardDomain(op)) {
+      assert(domain.isFull() &&
              "physical regions are inserted in full execution domains");
-      for (Operation *user : guard->getUsers()) {
-        auto handoff = dyn_cast<ThreadHandoffOp>(user);
-        assert(handoff && handoff.getSource() == domain &&
-               "physical region results require a matching handoff");
-      }
+      assert(llvm::all_of(
+                 op->getUsers(),
+                 [](Operation *user) { return isa<ThreadHandoffOp>(user); }) &&
+             "physical region results require a handoff");
     }
     if (auto handoff = dyn_cast<ThreadHandoffOp>(op)) {
       auto source = handoff.getSrc().getDefiningOp<scf::IfOp>();
-      assert(source &&
-             source->getAttrOfType<Domain>("ttg.execution_domain") ==
-                 handoff.getSource() &&
+      assert(source && guardDomain(source) == handoff.getSource() &&
              "handoff source must belong to its declared physical region");
-      assert(handoff.getDestination() == executionDomain(op) &&
+      assert(handoff.getDestination() == domain &&
              "handoff must execute in its destination domain");
     }
-    Domain domain = executionDomain(op);
     assert((!isa<ThreadScopeOp>(op) ||
             domain == ownerDomain(op, domain.getBlock() != 0)) &&
            "thread scope requires the canonical thread region");
@@ -428,19 +434,26 @@ void assertValidRegions(ModuleOp module) {
 
 void optimizeBlock(Block *block) {
   assert(!block->empty() && "frontend and generated blocks are nonempty");
-  if (!executionDomain(&block->front()).isFull())
-    return;
-  // Classify before wrapping replaces operands with handoff results.
+  // For num_ctas > 1 find the ops that depend on atomics
+  // For num_ctas == 1 it's the empty set
   auto atomicDependencies = getAtomicDependencies(block);
   Operation *next = &block->front();
   while (next) {
     SmallVector<Operation *> ops;
     RegionEffects effects;
+    // This is always false for num_ctas == 1
     bool atomicDependent = atomicDependencies.contains(next);
+    // Collect consecutive scalar ops until a terminator or unsupported op.
+    // for num_ctas > 1:
+    //   keep atomic-dependent (CTA 0) and per-CTA regions separate,
+    //   allowing movable arithmetic between atomic-dependent ops.
     while (!next->hasTrait<OpTrait::IsTerminator>() &&
            (atomicDependencies.contains(next) == atomicDependent ||
-            (atomicDependent && isMovableArithmetic(next))) &&
-           analyzeScalarOperation(next, effects)) {
+            (atomicDependent && isMovableArithmetic(next)))) {
+      auto opEffects = getScalarRegionEffects(next);
+      if (!opEffects)
+        break;
+      effects.merge(*opEffects);
       ops.push_back(next);
       next = next->getNextNode();
       assert(next && "scalar operations must precede a block terminator");
@@ -449,42 +462,54 @@ void optimizeBlock(Block *block) {
       next = next->getNextNode();
       continue;
     }
+    // Keep regions with memory accesses or atomic-dependent work.
     if (!effects.hasMemory && !atomicDependent)
       continue;
-    hoistUniformArithmetic(ops);
+    hoistMovableArithmetic(ops);
     Domain owner = ownerDomain(ops.front(), atomicDependent);
+    // Keep CTA-0 atomic-dependent work out of a preceding per-CTA region.
     auto tail = !atomicDependent && atomicDependencies.contains(next)
                     ? TensorTail{}
                     : findTensorTail(next, owner);
     Operation *resume =
         tail.ops.empty() ? next : tail.ops.back()->getNextNode();
-    if (!tail.ops.empty() && tail.domain == owner && !effects.after) {
-      // Tail results cannot escape, so fusion preserves the profitability
-      // check: only scalar uses outside the tail still require a handoff.
+    // Fuse tail
+    if (!tail.ops.empty() && tail.domain == owner &&
+        !effects.needsBarrierAfter) {
       llvm::append_range(ops, tail.ops);
       tail = {};
     }
-    auto outputs = getRegionOutputs(ops, tail, owner);
+    // Heuristic: atomic/barrier sequences and executing control flow on fewer
+    // threads may avoid intermediate broadcasts and justify a full-domain
+    // handoff.
+    bool allowFullDomainHandoff = atomicDependent || effects.hasSCF ||
+                                  effects.hasAtomic ||
+                                  effects.needsBarrierBefore;
     // Ordinary scalar loads already produce full copies without shared
     // memory. Restrict them only when all consumers stay in one warp.
-    if (!effects.hasProtocol && !atomicDependent &&
-        llvm::any_of(outputs.destinations,
-                     [](Domain domain) { return domain.isFull(); }))
+    auto outputs = getRegionOutputs(ops, tail, owner, allowFullDomainHandoff);
+    if (!outputs)
       continue;
     next = resume;
-    wrapScalarRegion(ops, effects, tail, outputs, owner);
+    wrapScalarRegion(ops, effects, tail, *outputs, owner);
   }
 }
 
-llvm::SetVector<Operation *> getPerElementRoots(ModuleOp module) {
+// Return outermost map_elementwise ops and their transitive noinline callees.
+// Scalar values in these bodies may differ across tensor elements.
+llvm::SetVector<Operation *> getMapElementwiseOps(ModuleOp mod) {
   llvm::SetVector<Operation *> roots;
-  module.walk([&](MapElementwiseOp op) { roots.insert(op); });
+  mod.walk<WalkOrder::PreOrder>([&](MapElementwiseOp op) {
+    roots.insert(op);
+    return WalkResult::skip();
+  });
   SymbolTableCollection symbolTable;
   for (unsigned i = 0; i < roots.size(); ++i) {
     Operation *root = roots[i];
     root->walk([&](CallOpInterface call) {
-      if (Operation *callee = call.resolveCallableInTable(&symbolTable))
-        roots.insert(callee);
+      Operation *callee = call.resolveCallableInTable(&symbolTable);
+      assert(callee && "verified Gluon calls must resolve to a function");
+      roots.insert(callee);
     });
   }
   return roots;
@@ -494,12 +519,12 @@ class OptimizeThreadRegions
     : public impl::TritonGPUOptimizeThreadRegionsBase<OptimizeThreadRegions> {
 public:
   void runOnOperation() override {
-    ModuleOp module = getOperation();
+    ModuleOp mod = getOperation();
     // Map callback scalars vary per element, including in their callees.
-    auto perElementRoots = getPerElementRoots(module);
+    auto mapElementwiseOps = getMapElementwiseOps(mod);
     SmallVector<ThreadHandoffOp> handoffs;
-    module.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
-      if (perElementRoots.contains(op))
+    mod.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
+      if (mapElementwiseOps.contains(op) || guardDomain(op))
         return WalkResult::skip();
       for (Region &region : op->getRegions())
         for (Block &block : region)
@@ -508,11 +533,11 @@ public:
         handoffs.push_back(handoff);
       return WalkResult::advance();
     });
+    // Make eligible consumers of handoffs execute on fewer threads.
     restrictHandoffConsumers(handoffs);
-    sinkHandoffs(handoffs);
-    sinkConditionalArithmetic(module);
+    sinkRegionInputs(mod);
 #ifndef NDEBUG
-    assertValidRegions(module);
+    assertValidRegions(mod);
 #endif
   }
 };
