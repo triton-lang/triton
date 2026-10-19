@@ -341,6 +341,21 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       assert(movWidth <= 64 && "load words must be at most 64 bits");
       assert(wordNElems * nWords * numVecs == numElems);
 
+      Type unpackedTy = wordNElems == 1
+                            ? valueElemTy
+                            : LLVM::getVectorType(valueElemTy, wordNElems);
+      // Preserve floating-point types across the inline assembly boundary,
+      // including packed FP16/BF16 pairs. Returning integer bits introduces
+      // bitcasts that can turn floating-point zero comparisons into integer
+      // masks and comparisons in InstCombine.
+      // B32 also supports v2i16 and v4i8 (including lowered FP8). B16 does not
+      // support v2i8, so keep using a scalar i16 for two-byte words.
+      bool nativePackedInteger = width == 32 && (valueElemTy.isInteger(16) ||
+                                                 valueElemTy.isInteger(8));
+      Type wordTy = isa<FloatType>(valueElemTy) || nativePackedInteger
+                        ? unpackedTy
+                        : IntegerType::get(getContext(), width);
+
       PTXBuilder ptxBuilder;
 
       Value pred = mask ? maskElems[vecStart] : Value{};
@@ -372,8 +387,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           } else {
             auto elems = ArrayRef<Value>(otherElems)
                              .slice(vecStart + ii * wordNElems, wordNElems);
-            Value v = b.bitcast(packLLVector(loc, elems, rewriter),
-                                IntegerType::get(getContext(), width));
+            Value v = wordNElems == 1 ? elems.front()
+                                      : packLLVector(loc, elems, rewriter);
+            if (v.getType() != wordTy)
+              v = b.bitcast(v, wordTy);
             auto tensorType = dyn_cast<RankedTensorType>(op.getType());
             if (tensorType &&
                 ((valueElemNBits == 16 && nWords > 1) ||
@@ -430,7 +447,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         ld(dstsOpr, addrOpr, evictOpr).maybePredicate(pred, "b");
 
       // Create inline ASM signature
-      SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
+      SmallVector<Type> retTys(nWords, wordTy);
       Type retTy = retTys.size() > 1
                        ? LLVM::LLVMStructType::getLiteral(getContext(), retTys)
                        : retTys[0];
@@ -438,24 +455,16 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret = ptxBuilder.launch(rewriter, loc, retTy);
 
       // Extract and store return values
-      SmallVector<Value> rets;
       for (unsigned int ii = 0; ii < nWords; ++ii) {
         Value curr;
         if (isa<LLVM::LLVMStructType>(retTy)) {
-          curr = b.extract_val(IntegerType::get(getContext(), width), ret, ii);
+          curr = b.extract_val(wordTy, ret, ii);
         } else {
           curr = ret;
         }
-        curr = b.bitcast(
-            curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
-        rets.push_back(curr);
-      }
-      int tmp = width / valueElemNBits;
-      for (size_t ii = 0; ii < vec; ++ii) {
-        Value vecIdx = createIndexAttrConstant(
-            rewriter, loc, typeConverter->getIndexType(), ii % tmp);
-        Value loaded = b.extract_element(valueElemTy, rets[ii / tmp], vecIdx);
-        loadedVals.push_back(loaded);
+        if (curr.getType() != unpackedTy)
+          curr = b.bitcast(curr, unpackedTy);
+        llvm::append_range(loadedVals, unpackLLVector(loc, curr, rewriter));
       }
     } // end vec
 

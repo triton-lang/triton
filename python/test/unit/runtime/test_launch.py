@@ -40,9 +40,10 @@ def test_metadata() -> None:
 
 
 @pytest.mark.skipif(not is_cuda(), reason="max_occupancy requires CUDA")
-@pytest.mark.parametrize("max_occupancy", [None, 1, 2, 4])
+@pytest.mark.parametrize("max_occupancy", [None, *range(1, 33), 1024])
+@pytest.mark.parametrize("num_warps", [1, 4])
 @pytest.mark.parametrize("num_ctas", [1, 2])
-def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fresh_triton_cache):
+def test_max_occupancy_launch(max_occupancy, num_warps, num_ctas, device, monkeypatch, fresh_triton_cache):
     import ctypes
 
     if num_ctas > 1 and torch.cuda.get_device_capability()[0] < 9:
@@ -54,7 +55,7 @@ def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fres
         tl.store(ptr, tl.load(ptr) + 1)
 
     out = torch.zeros(16, device=device, dtype=torch.int32)
-    compiled = kernel.warmup(out, grid=(16, ), num_warps=4, num_ctas=num_ctas, max_occupancy=max_occupancy)
+    compiled = kernel.warmup(out, grid=(16, ), num_warps=num_warps, num_ctas=num_ctas, max_occupancy=max_occupancy)
     assert compiled.metadata.shared == 0
     assert compiled.packed_metadata[2] == 0
 
@@ -73,7 +74,7 @@ def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fres
         assert launcher.shared == 0
     else:
         properties = utils.get_device_properties(triton.runtime.driver.active.get_current_device())
-        assert (max_occupancy + 1) * launcher.shared > properties["max_shared_mem_per_multiprocessor"]
+        assert 0 <= launcher.shared <= properties["max_shared_mem"]
         if num_ctas == 1:
             # Check CUDA's occupancy calculation, independently of the reservation formula.
             # Match the runtime loader's driver selection, including CUDA compatibility libraries.
@@ -81,10 +82,11 @@ def test_max_occupancy_launch(max_occupancy, num_ctas, device, monkeypatch, fres
             occupancy = cuda.cuOccupancyMaxActiveBlocksPerMultiprocessor
             occupancy.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t]
             occupancy.restype = ctypes.c_int
+            unlimited_blocks = ctypes.c_int()
+            assert occupancy(ctypes.byref(unlimited_blocks), compiled.function, num_warps * 32, 0) == 0
             blocks = ctypes.c_int()
-            assert occupancy(ctypes.byref(blocks), compiled.function, compiled.metadata.num_warps * 32,
-                             launcher.shared) == 0
-            assert 0 < blocks.value <= max_occupancy
+            assert occupancy(ctypes.byref(blocks), compiled.function, num_warps * 32, launcher.shared) == 0
+            assert blocks.value == min(max_occupancy, unlimited_blocks.value)
 
     shared_sizes = []
     original_launch = launcher.launch
@@ -125,7 +127,7 @@ def test_max_occupancy_preserves_required_shared_memory(device):
 
     inp = torch.randn(16384, device=device)
     out = torch.empty_like(inp)
-    compiled = kernel[(1, )](inp, out, max_occupancy=4)
+    compiled = kernel[(1, )](inp, out, max_occupancy=8)
     assert compiled.metadata.shared == 65536
     assert compiled.run.shared == compiled.metadata.shared
     torch.testing.assert_close(out, inp)

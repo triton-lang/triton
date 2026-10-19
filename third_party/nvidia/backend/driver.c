@@ -143,6 +143,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   // create a struct to hold device properties
   int max_shared_mem;
   int max_shared_mem_per_multiprocessor;
+  int reserved_shared_mem_per_block;
   int max_num_regs;
   int multiprocessor_count;
   int warp_size;
@@ -173,6 +174,9 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
       &max_shared_mem_per_multiprocessor,
       CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device));
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+      &reserved_shared_mem_per_block,
+      CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK, device));
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &max_num_regs, CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, device));
   CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
       &multiprocessor_count, CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device));
@@ -186,9 +190,10 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
       &mem_bus_width, CU_DEVICE_ATTRIBUTE_GLOBAL_MEMORY_BUS_WIDTH, device));
 
   return Py_BuildValue(
-      "{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
+      "{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i}", "max_shared_mem",
       max_shared_mem, "max_shared_mem_per_multiprocessor",
-      max_shared_mem_per_multiprocessor, "max_num_regs", max_num_regs,
+      max_shared_mem_per_multiprocessor, "reserved_shared_mem_per_block",
+      reserved_shared_mem_per_block, "max_num_regs", max_num_regs,
       "multiprocessor_count", multiprocessor_count, "warpSize", warp_size,
       "sm_clock_rate", sm_clock_rate, "mem_clock_rate", mem_clock_rate,
       "mem_bus_width", mem_bus_width);
