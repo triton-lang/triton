@@ -1,6 +1,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "AsyncUtility.h"
+#include "ScheduleMembar.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "third_party/amd/include/Analysis/AMDGPUAllocation.h"
@@ -40,6 +41,7 @@ struct TritonAMDGPUMembar
 
     ModuleMembarAnalysis membarPass(allocation, AMD::membarFilter);
     membarPass.run();
+    AMD::scheduleMembarBarriers(mod);
   }
 };
 
