@@ -146,28 +146,24 @@ bool coveredByWaits(Operation *op,
   return covered;
 }
 
-} // namespace
+// Consider only same-block uses; branch transfers may lower to register
+// copies that use the loaded result.
+Operation *findFirstGlobalReadUse(gpu::AsyncWaitOp wait) {
+  for (Operation *op = wait->getNextNode(); op; op = op->getNextNode()) {
+    if (isa<gpu::BarrierOp>(op) || isCompletionBoundary(op))
+      break;
+    if (consumesGlobalRead(op))
+      return op;
+    if (!isa<BranchOpInterface>(op) && !canCross(op))
+      break;
+  }
+  return nullptr;
+}
 
-// A use of a global-load result may trigger a long hardware memory wait. Move
-// an eligible rendezvous before that use so other warps can reach it sooner.
-// This is a scheduling heuristic: TTGIR does not show where LLVM will place
-// its memory waits.
-void scheduleMembarBarriers(ModuleOp module) {
+SmallVector<BarrierMoveCandidate> collectCandidates(ModuleOp module) {
   SmallVector<BarrierMoveCandidate> candidates;
   module.walk([&](gpu::AsyncWaitOp wait) {
-    // Consider only same-block uses; branch transfers may lower to register
-    // copies that use the loaded result.
-    Operation *firstUse = nullptr;
-    for (Operation *op = wait->getNextNode(); op; op = op->getNextNode()) {
-      if (isa<gpu::BarrierOp>(op) || isCompletionBoundary(op))
-        break;
-      if (consumesGlobalRead(op)) {
-        firstUse = op;
-        break;
-      }
-      if (!isa<BranchOpInterface>(op) && !canCross(op))
-        break;
-    }
+    Operation *firstUse = findFirstGlobalReadUse(wait);
     if (!firstUse)
       return;
     BarrierMoveCandidate candidate{wait, firstUse, {}};
@@ -175,9 +171,79 @@ void scheduleMembarBarriers(ModuleOp module) {
     if (findBarriersToReplace(wait->getNextNode(), candidate, activePath))
       candidates.push_back(std::move(candidate));
   });
+  return candidates;
+}
 
-  // Candidates are connected when they would replace the same barrier.
-  // Process each connected group together so no path loses a shared barrier.
+struct BarrierMoveGroup {
+  SmallVector<unsigned> candidates;
+  llvm::SetVector<Operation *> barriersToReplace;
+};
+
+// Candidates are connected when they would replace the same barrier.
+// Process each connected group together so no path loses a shared barrier.
+BarrierMoveGroup
+collectConnectedGroup(unsigned seed, ArrayRef<BarrierMoveCandidate> candidates,
+                      const llvm::DenseMap<Operation *, SmallVector<unsigned>>
+                          &candidatesByBarrier,
+                      SmallVector<bool> &grouped) {
+  BarrierMoveGroup group;
+  group.candidates.push_back(seed);
+  grouped[seed] = true;
+
+  // Visit candidates appended to the group as well as the first one.
+  for (unsigned cursor = 0; cursor < group.candidates.size(); ++cursor) {
+    for (Operation *barrier :
+         candidates[group.candidates[cursor]].barriersToReplace) {
+      // We have already found the candidates for this barrier.
+      if (!group.barriersToReplace.insert(barrier))
+        continue;
+
+      // All candidates using this barrier must move together.
+      for (unsigned index : candidatesByBarrier.find(barrier)->second) {
+        if (grouped[index])
+          continue;
+        grouped[index] = true;
+        group.candidates.push_back(index);
+      }
+    }
+  }
+  return group;
+}
+
+bool canReplaceBarriers(const BarrierMoveGroup &group,
+                        ArrayRef<BarrierMoveCandidate> candidates) {
+  llvm::SmallPtrSet<Operation *, 16> waits;
+  for (unsigned index : group.candidates)
+    waits.insert(candidates[index].wait);
+  for (Operation *barrier : group.barriersToReplace) {
+    llvm::SmallPtrSet<Operation *, 32> activePath;
+    if (!predecessorsCovered(barrier, waits, activePath))
+      return false;
+  }
+  return true;
+}
+
+void moveBarriers(const BarrierMoveGroup &group,
+                  ArrayRef<BarrierMoveCandidate> candidates) {
+  // Put one new barrier at each wait's selected use, then remove the old
+  // ones.
+  for (unsigned index : group.candidates) {
+    OpBuilder builder(candidates[index].insertBefore);
+    gpu::BarrierOp::create(builder, candidates[index].wait->getLoc(),
+                           gpu::AddrSpace::Local);
+  }
+  for (Operation *barrier : group.barriersToReplace)
+    barrier->erase();
+}
+
+} // namespace
+
+// A use of a global-load result may trigger a long hardware memory wait. Move
+// an eligible rendezvous before that use so other warps can reach it sooner.
+// This is a scheduling heuristic: TTGIR does not show where LLVM will place
+// its memory waits.
+void scheduleMembarBarriers(ModuleOp module) {
+  SmallVector<BarrierMoveCandidate> candidates = collectCandidates(module);
   llvm::DenseMap<Operation *, SmallVector<unsigned>> candidatesByBarrier;
   for (unsigned i = 0; i < candidates.size(); ++i)
     for (Operation *barrier : candidates[i].barriersToReplace)
@@ -187,48 +253,10 @@ void scheduleMembarBarriers(ModuleOp module) {
   for (unsigned seed = 0; seed < candidates.size(); ++seed) {
     if (grouped[seed])
       continue;
-    SmallVector<unsigned> group{seed};
-    llvm::SetVector<Operation *> barriersToReplace;
-    grouped[seed] = true;
-
-    // Visit candidates added to `group` as well as the first one.
-    for (unsigned cursor = 0; cursor < group.size(); ++cursor) {
-      for (Operation *barrier : candidates[group[cursor]].barriersToReplace) {
-        // We have already found the candidates for this barrier.
-        if (!barriersToReplace.insert(barrier))
-          continue;
-
-        // All candidates using this barrier must move together.
-        for (unsigned index : candidatesByBarrier.find(barrier)->second) {
-          if (grouped[index])
-            continue;
-          grouped[index] = true;
-          group.push_back(index);
-        }
-      }
-    }
-    llvm::SmallPtrSet<Operation *, 16> waits;
-    for (unsigned index : group)
-      waits.insert(candidates[index].wait);
-    bool covered = true;
-    for (Operation *barrier : barriersToReplace) {
-      llvm::SmallPtrSet<Operation *, 32> activePath;
-      if (!predecessorsCovered(barrier, waits, activePath)) {
-        covered = false;
-        break;
-      }
-    }
-    if (!covered)
-      continue;
-    // Put one new barrier at each wait's selected use, then remove the old
-    // ones.
-    for (unsigned index : group) {
-      OpBuilder builder(candidates[index].insertBefore);
-      gpu::BarrierOp::create(builder, candidates[index].wait.getLoc(),
-                             gpu::AddrSpace::Local);
-    }
-    for (Operation *barrier : barriersToReplace)
-      barrier->erase();
+    BarrierMoveGroup group =
+        collectConnectedGroup(seed, candidates, candidatesByBarrier, grouped);
+    if (canReplaceBarriers(group, candidates))
+      moveBarriers(group, candidates);
   }
 }
 
