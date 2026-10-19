@@ -6732,6 +6732,50 @@ def test_for_iv(lo, hi, iv, device):
     assert out[0] == sum(range(lo, hi, iv))
 
 
+@pytest.mark.parametrize("use_tl_range", [False, True], ids=["range", "tl_range"])
+@pytest.mark.parametrize("lower, upper, step", [
+    pytest.param(("int32", 0), ("uint8", 127), ("int32", 1), id="uint8_upper_control"),
+    pytest.param(("int32", 0), ("uint8", 128), ("int32", 1), id="uint8_upper_boundary"),
+    pytest.param(("int32", 0), ("uint8", 255), ("int32", 1), id="uint8_upper"),
+    pytest.param(("int32", 0), ("uint16", 40000), ("int32", 1), id="uint16_upper"),
+    pytest.param(("int32", 0), ("bool", True), ("int32", 1), id="bool_upper"),
+    pytest.param(("uint8", 200), ("int32", 205), ("int32", 1), id="uint8_lower"),
+    pytest.param(("uint16", 40000), ("int32", 40005), ("int32", 1), id="uint16_lower"),
+    pytest.param(("bool", True), ("int32", 4), ("int32", 1), id="bool_lower"),
+    pytest.param(("uint8", 133), ("uint8", 138), ("int32", 1), id="uint8_both"),
+    pytest.param(("int32", 0), ("int32", 256), ("uint8", 128), id="uint8_step"),
+    pytest.param(("int32", 0), ("int32", 65536), ("uint16", 32768), id="uint16_step"),
+    pytest.param(("int32", 0), ("int32", 5), ("bool", True), id="bool_step"),
+    pytest.param(("int8", -5), ("int32", 5), ("int32", 1), id="signed_control"),
+    pytest.param(("uint32", 0), ("uint8", 200), ("int32", 1), id="unsigned_control"),
+])
+def test_for_loop_operand_signedness(lower, upper, step, use_tl_range, device):
+
+    @triton.jit
+    def kernel(Lower, Upper, Step, Out, USE_TL_RANGE: tl.constexpr):
+        lower = tl.load(Lower)
+        upper = tl.load(Upper)
+        step = tl.load(Step)
+        count = tl.full((), 0, tl.int64)
+        total = tl.full((), 0, tl.int64)
+        if USE_TL_RANGE:
+            for i in tl.range(lower, upper, step, num_stages=3):
+                count += 1
+                total += i.to(tl.int64)
+        else:
+            for i in range(lower, upper, step):
+                count += 1
+                total += i.to(tl.int64)
+        tl.store(Out, count)
+        tl.store(Out + 1, total)
+
+    operands = [to_triton(np.array([value], dtype=dtype), device=device) for dtype, value in (lower, upper, step)]
+    out = torch.empty(2, dtype=torch.int64, device=device)
+    kernel[(1, )](*operands, out, use_tl_range)
+    expected = range(lower[1], upper[1], step[1])
+    assert out.tolist() == [len(expected), sum(expected)]
+
+
 @pytest.mark.interpreter
 def test_if_else(device):
 

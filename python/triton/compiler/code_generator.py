@@ -1349,15 +1349,10 @@ class CodeGenerator(ast.NodeVisitor):
         iv_type = self.semantic.integer_promote_impl(lb.dtype, ub.dtype)
         iv_type = self.semantic.integer_promote_impl(iv_type, step.dtype)
         iv_ir_type = iv_type.to_ir(self.builder)
-        iv_is_signed = iv_type.int_signedness == language.core.dtype.SIGNEDNESS.SIGNED
-        # lb/ub/step might be constexpr, we need to cast them to tensor
-        lb = lb.handle
-        ub = ub.handle
-        step = step.handle
-        # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
-        lb = self.builder.create_int_cast(lb, iv_ir_type, iv_is_signed)
-        ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
-        step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
+        # Preserve each operand's signedness when widening to the induction type.
+        lb = self.builder.create_int_cast(lb.handle, iv_ir_type, lb.dtype.is_int_signed())
+        ub = self.builder.create_int_cast(ub.handle, iv_ir_type, ub.dtype.is_int_signed())
+        step = self.builder.create_int_cast(step.handle, iv_ir_type, step.dtype.is_int_signed())
         # Create placeholder for the loop induction variable
         iv_placeholder = self.builder.create_poison(iv_ir_type)
         self.set_value(node.target.id, language.core.tensor(iv_placeholder, iv_type))
