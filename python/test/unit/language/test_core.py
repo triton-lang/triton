@@ -8617,6 +8617,30 @@ def test_thread_regions_scalar_consumers(width, atomic, dtype, device, fresh_kno
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
+@pytest.mark.parametrize("num_warps", [1, 4])
+def test_thread_regions_atomic_loop_handoff(num_warps, device, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @triton.jit
+    def kernel(Flag, Out, Limit):
+        one = tl.full((), 1, tl.int64)
+        seen = tl.atomic_cas(Flag, one, one)
+        iteration = 0
+        # A volatile load keeps the scalar CAS inside a block-wide loop.
+        while (seen == 0) & (iteration < tl.load(Limit, volatile=True)):
+            seen = tl.atomic_cas(Flag, one, one)
+            iteration += 1
+        tl.store(Out + tl.arange(0, 1), seen)
+        tl.store(Out + tl.arange(0, 1) + 1, iteration)
+
+    flag = torch.zeros((), device=device, dtype=torch.int64)
+    limit = torch.full((), 16, device=device, dtype=torch.int32)
+    out = torch.full((2, ), -1, device=device, dtype=torch.int64)
+    kernel[(1, )](flag, out, limit, num_warps=num_warps)
+    assert out.tolist() == [0, 16]
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA thread region lowering")
 @pytest.mark.parametrize("width", [32, 128])
 def test_thread_regions_pointer_handoff(width, device, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = ""

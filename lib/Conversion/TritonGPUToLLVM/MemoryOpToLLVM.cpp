@@ -292,6 +292,17 @@ struct ThreadHandoffOpConversion
     }
 
     auto loc = op.getLoc();
+    // Work around https://github.com/llvm/llvm-project/issues/224146:
+    // peeling can split convergent handoffs into owner/non-owner loops.
+    // noduplicate also blocks valid unrolling. Revisit this workaround once
+    // LLVM preserves convergence through peeling.
+    auto boundary = appendOrGetExternFuncOp(
+        rewriter, op, "llvm.sideeffect",
+        LLVM::LLVMFunctionType::get(LLVM::LLVMVoidType::get(op.getContext()),
+                                    {}));
+    auto call = LLVM::CallOp::create(rewriter, loc, boundary, ValueRange{});
+    call.setNoduplicate(true);
+    call.setConvergent(true);
     if (source.hasSameWarpAndBlock(destination)) {
       shuffleFromCanonicalLane(loc, MutableArrayRef<Value>(result),
                                source.getLane(), rewriter, targetInfo);
