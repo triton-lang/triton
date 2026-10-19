@@ -179,28 +179,43 @@ private:
 //    Apply this carry to the saved Uj:
 //      warp 0: Qj=Uj                for j=0..7
 //      warp 1: Qj=S0+Uj=T0+...+Tj  for j=8..15
-//    Qj=T0+...+Tj=x0+...+x(2j+1): j indexes thread-local segments. In
-//    particular, Q7 ends at x15. These prefixes retain intraWarpScanLayout.
-//    Convert them back to intraWarpTotalsLayout to restore the ownership of
-//    each Tj:
-//      warp 0, lane 0: Q0,Q2,Q4,Q6;     lane 1: Q1,Q3,Q5,Q7
-//      warp 1, lane 0: Q8,Q10,Q12,Q14;  lane 1: Q9,Q11,Q13,Q15
-//    Replace each saved pair's terminal value Tj with Qj. Its first element
-//    becomes Q(j-1)+x(2j), except that x0 remains unchanged. The return
-//    conversion provides the inclusive Qj; fetching Q(j-1) is a separate step.
-//    Map j-1 through the inverse of intraWarpTotalsLayout to obtain its source
-//    register and lane. In warp 1, the required sources are:
-//      destination total slot | lane 0 needs    | lane 1 needs
-//      r0                     | retained Q7     | r0/lane 0 (Q8)
-//      r1                     | r0/lane 1 (Q9)  | r1/lane 0 (Q10)
-//      r2                     | r1/lane 1 (Q11) | r2/lane 0 (Q12)
-//      r3                     | r2/lane 1 (Q13) | r3/lane 0 (Q14)
-//    Each total slot r supplies the carry for saved element registers 2r,2r+1.
-//    For each destination slot, enumerate candidate source registers across
-//    lanes. Shuffle each candidate from the computed source lane, then select
-//    the candidate matching the computed source register. For r1, the
-//    candidates are r0 and r1: lane 0 selects r0 from lane 1 (Q9), while lane 1
-//    selects r1 from lane 0 (Q10).
+//    Qj is a prefix from the scan's start and retains intraWarpScanLayout.
+//    The retained carries use their consumers' interWarpTotalsLayout.
+//    Route terminal results Qj and exclusive carries Q(j-1) together when
+//    their requests can share fewer shuffle exchanges. In this example:
+//      warp 1, lane 0: terminals Q8,Q10,Q12,Q14; carries Q7,Q9,Q11,Q13
+//      warp 1, lane 1: terminals Q9,Q11,Q13,Q15; carries Q8,Q10,Q12,Q14
+//    Q7 comes from the retained inter-warp carry. Other requests reuse local
+//    values or share four lane exchanges directly from intraWarpScanLayout.
+//    Otherwise, convert Qj back to intraWarpTotalsLayout and fetch carries:
+//      warp 0, lane 0: Q0,Q2,Q4,Q6; lane 1: Q1,Q3,Q5,Q7
+//      warp 1, lane 0: Q8,Q10,Q12,Q14; lane 1: Q9,Q11,Q13,Q15
+//    Replace each saved pair's terminal value with Qj. Complete its first
+//    value with Q(j-1)+x(2j), leaving x0 unchanged. The first pair in warp 1
+//    uses its inter-warp carry S0=Q7. Invert the register permutation to return
+//    the completed element prefixes from permutedLayout to originalLayout.
+//
+// Grouped inter-warp traversal:
+//    This path applies when thread-local and warp-local segments coincide and
+//    the inter-warp scan axis lies entirely in registers. interWarpScanLayout
+//    describes the full sequence available to each participating warp. The
+//    lowering loads and accumulates totals in logical order, completing each
+//    consumer as soon as its last candidate prefix has been processed.
+//
+//    For an axis-0 scan of 128x32 (f32,i64) tuples, use four 32-lane warps.
+//    Lane l owns column l; warp w owns rows 4r+w. Both segment sizes are one.
+//    Let T(s,l) be the segment total for row s and column l. Scan-axis bases
+//    are R=[4,8,16,32,64], L=[0,0,0,0,0], W=[1,2]; lane bases index columns.
+//    interWarpTotalsLayout preserves this ownership. interWarpScanLayout has
+//    R=[1,2,4,8,16,32,64], the same column lane bases, and W=[0,0].
+//    Store T(s,l) at element offset 32*s+l in each operand's shared table and
+//    synchronize once after all operands are stored. Each warp's lane l reads
+//    T(0,l),...,T(127,l), maintaining one running tuple prefix. Layout division
+//    separates the scan axis from independent scans and gives their table
+//    bases. Warp w consumes the inclusive prefixes for s=4r+w directly. For
+//    segments with several elements, apply the exclusive prefix to their saved
+//    local prefixes, guarding the first segment. This completes the element
+//    values during the shared-memory traversal.
 //
 class ScanLoweringHelper {
 public:
