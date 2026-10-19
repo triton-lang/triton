@@ -277,6 +277,23 @@ def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags
     assert "s_endpgm" in assembly
 
 
+def test_amd_bitcode_path_override(fresh_knobs, monkeypatch, tmp_path):
+    from triton.backends.amd import compiler
+
+    monkeypatch.delenv("TRITON_AMD_BITCODE_PATH", raising=False)
+    options = compiler.HIPOptions(arch="gfx942")
+    default_dir = Path(compiler.__file__).parent / "lib"
+    libs = dict(options.extern_libs)
+    assert Path(libs["ockl"]) == default_dir / "ockl.bc"
+    assert Path(libs["ocml"]) == default_dir / "ocml.bc"
+
+    monkeypatch.setenv("TRITON_AMD_BITCODE_PATH", str(tmp_path))
+    options = compiler.HIPOptions(arch="gfx942")
+    libs = dict(options.extern_libs)
+    assert Path(libs["ockl"]) == tmp_path / "ockl.bc"
+    assert Path(libs["ocml"]) == tmp_path / "ocml.bc"
+
+
 def test_amd_codegen_path_override(fresh_knobs, monkeypatch):
     from triton.backends.amd import compiler
 

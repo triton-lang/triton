@@ -518,6 +518,7 @@ class nvidia_knobs(base_knobs):
 
 class amd_knobs(base_knobs):
     codegen_path: env_opt_str = env_opt_str("TRITON_AMD_CODEGEN_PATH")
+    bitcode_path: env_opt_str = env_opt_str("TRITON_AMD_BITCODE_PATH")
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)

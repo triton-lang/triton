@@ -335,6 +335,11 @@ jobs:
             config="${ROCM_ROOT}/share/rocjitsu/configs/gfx1250.json"
           fi
           test -f "${config}"
+          bitcode="${ROCM_ROOT}/lib/llvm/amdgcn/bitcode"
+          for name in asanrtl ockl ocml; do
+            test -f "${bitcode}/${name}.bc"
+          done
+          echo "TRITON_AMD_BITCODE_PATH=${bitcode}" >> "$GITHUB_ENV"
           echo "ROCJITSU_CONFIG=${config}" >> "$GITHUB_ENV"
           echo "ROCJITSU=${ROCM_ROOT}/bin/mirage run --in-process --config ${config} --" >> "$GITHUB_ENV"
       - name: Install Triton
