@@ -2283,10 +2283,9 @@ void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,
                            const TargetInfoBase &targetInfo,
                            const LLVMTypeConverter *typeConverter) {
   auto loc = op->getLoc();
-  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
   if (auto laneMask = triton::getAtomicResultShuffleMask(op->getResult(0))) {
     shuffleFromCanonicalLane(loc, resultVals, *laneMask, rewriter, targetInfo);
-  } else if (!tensorTy) {
+  } else if (!isa<RankedTensorType>(op->getResult(0).getType())) {
     resultVals.front() = broadcastScalarResult(op, resultVals.front(), rewriter,
                                                threadPred, targetInfo);
   } else {

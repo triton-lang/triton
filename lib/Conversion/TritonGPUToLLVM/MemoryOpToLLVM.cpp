@@ -588,7 +588,6 @@ struct AtomicLoadOpConversion
   matchAndRewrite(triton::AtomicLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto sem = op.getSem();
     insertAtomicOrderingBarriers(op, sem, rewriter, targetInfo);
 

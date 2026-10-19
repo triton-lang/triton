@@ -521,7 +521,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS-NEXT: %[[C_RESULT:.*]] = scf.if %[[C_LEADER]] -> (i32)
   // THREAD-REGIONS: ttg.thread_scope
   // THREAD-REGIONS: tt.atomic_load relaxed, gpu,
-  // THREAD-REGIONS: ttg.execution_domain
+  // THREAD-REGIONS: } else {
+  // THREAD-REGIONS: scf.yield
+  // THREAD-REGIONS-NEXT: }
   // THREAD-REGIONS-NEXT: %[[C_BROADCAST:.*]] = ttg.thread_handoff %[[C_RESULT]] <31, 3> -> <0, 0> : i32
   // THREAD-REGIONS-NEXT: tt.splat %[[C_BROADCAST]]
   // THREAD-REGIONS: tt.store
@@ -541,7 +543,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS-NEXT: scf.if %[[A_LEADER]]
   // THREAD-REGIONS: ttg.thread_scope
   // THREAD-REGIONS: tt.atomic_load acquire, gpu,
-  // THREAD-REGIONS: ttg.execution_domain
+  // THREAD-REGIONS-NEXT: ttg.thread_yield
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NEXT: }
   // THREAD-REGIONS-NEXT: ttg.barrier all
   // THREAD-REGIONS-NEXT: tt.return
   tt.func @thread_regions_acquire_without_value(%ptr: !tt.ptr<i32>) {
@@ -660,7 +664,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS: tt.atomic_rmw add, acq_rel, gpu
   // THREAD-REGIONS-NOT: ttng.cluster_barrier
   // THREAD-REGIONS: ttg.thread_yield
-  // THREAD-REGIONS: ttg.execution_domain
+  // THREAD-REGIONS: } else {
+  // THREAD-REGIONS: scf.yield
+  // THREAD-REGIONS-NEXT: }
   // THREAD-REGIONS-NEXT: ttng.cluster_barrier
   // THREAD-REGIONS-NEXT: ttg.thread_handoff %[[VALUE]] <31, 3, 1> -> <0, 0> : i32
   // THREAD-REGIONS: tt.store
@@ -685,7 +691,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS: ttg.thread_scope
   // THREAD-REGIONS-NEXT: {{.*}}tt.atomic_rmw add, relaxed, gpu
   // THREAD-REGIONS-NEXT: ttg.thread_yield
-  // THREAD-REGIONS: ttg.execution_domain
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NEXT: }
   // THREAD-REGIONS-NOT: ttg.thread_handoff
   // THREAD-REGIONS: tt.load
   // THREAD-REGIONS-NOT: ttg.thread_predicate
@@ -738,7 +745,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS: %[[RESULT:.*]] = scf.if
   // THREAD-REGIONS: tt.atomic_load relaxed, gpu
   // THREAD-REGIONS: ttg.thread_yield
-  // THREAD-REGIONS: ttg.execution_domain
+  // THREAD-REGIONS: } else {
+  // THREAD-REGIONS: scf.yield
+  // THREAD-REGIONS-NEXT: }
   // THREAD-REGIONS-NOT: ttg.thread_predicate
   // THREAD-REGIONS: tt.load
   // THREAD-REGIONS-NEXT: tt.store
@@ -747,7 +756,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS: ttg.thread_scope
   // THREAD-REGIONS: tt.store
   // THREAD-REGIONS: ttg.thread_yield
-  // THREAD-REGIONS: ttg.execution_domain
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NEXT: }
   // THREAD-REGIONS: tt.splat
   // THREAD-REGIONS-NEXT: tt.store
   // THREAD-REGIONS: tt.return
