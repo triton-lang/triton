@@ -104,16 +104,26 @@ inline Result allocationGranularity(int device, HandleType type,
                                         hipMemAllocationGranularityMinimum);
 }
 
-// ROCm accepts but ignores the alignment argument, while GSan's address math
-// relies on size-aligned reservations. Over-reserve and return the aligned
-// subrange; reservations are never freed, so the slack is harmless.
+// Two ROCm 7.1 quirks shape the HIP reservation scheme:
+//  * hipMemAddressReserve ignores `alignment`, but GSan's address math relies
+//    on size-aligned reservations.
+//  * hipMemSetAccess validates `size` against the first mapping in the
+//    reservation, so it fails with hipErrorInvalidValue once a reservation
+//    holds a mapping larger than its first one (e.g. a shadow region after
+//    its real allocation).
+// So addressReserve only picks an aligned free range (over-reserve, align,
+// release), and memMap reserves exactly its own range at that address.
+// Another VA allocation could land in the released range in the meantime;
+// memMap then fails with hipErrorOutOfMemory.
 inline Result addressReserve(uintptr_t *addr, size_t size, size_t alignment) {
   void *base = nullptr;
   Result err =
       hipMemAddressReserve(&base, size + alignment, alignment, nullptr, 0);
+  if (err != kSuccess)
+    return err;
   auto raw = reinterpret_cast<uintptr_t>(base);
   *addr = alignment ? (raw + alignment - 1) & ~(uintptr_t(alignment) - 1) : raw;
-  return err;
+  return hipMemAddressFree(base, size + alignment);
 }
 
 inline Result memCreate(Handle *handle, size_t size, int device,
@@ -123,7 +133,18 @@ inline Result memCreate(Handle *handle, size_t size, int device,
 }
 
 inline Result memMap(uintptr_t addr, size_t size, Handle handle) {
-  return hipMemMap(ptr(addr), size, /*offset*/ 0, handle, /*flags*/ 0);
+  void *got = nullptr;
+  Result err = hipMemAddressReserve(&got, size, 0, ptr(addr), 0);
+  if (err != kSuccess)
+    return err;
+  if (got != ptr(addr)) {
+    (void)hipMemAddressFree(got, size);
+    return hipErrorOutOfMemory;
+  }
+  err = hipMemMap(ptr(addr), size, /*offset*/ 0, handle, /*flags*/ 0);
+  if (err != kSuccess)
+    (void)hipMemAddressFree(ptr(addr), size);
+  return err;
 }
 
 inline Result memSetAccess(uintptr_t addr, size_t size, int device) {
@@ -135,7 +156,9 @@ inline Result memSetAccess(uintptr_t addr, size_t size, int device) {
 }
 
 inline Result memUnmap(uintptr_t addr, size_t size) {
-  return hipMemUnmap(ptr(addr), size);
+  Result err = hipMemUnmap(ptr(addr), size);
+  Result freeErr = hipMemAddressFree(ptr(addr), size);
+  return err != kSuccess ? err : freeErr;
 }
 
 inline Result memRelease(Handle handle) { return hipMemRelease(handle); }
