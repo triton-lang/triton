@@ -83,8 +83,8 @@ struct BarrierMoveCandidate {
 // Find the first full local barrier on every path. Crossing shared effects
 // could invalidate synchronization that Membar relied on for other accesses.
 bool findBarriersToReplace(Operation *op, BarrierMoveCandidate &candidate,
-                           llvm::SmallPtrSetImpl<Operation *> &active) {
-  if (!op || !active.insert(op).second)
+                           llvm::SmallPtrSetImpl<Operation *> &activePath) {
+  if (!op || !activePath.insert(op).second)
     return false;
   bool found = false;
   if (isLocalBarrier(op)) {
@@ -96,33 +96,33 @@ bool findBarriersToReplace(Operation *op, BarrierMoveCandidate &candidate,
     found = branch->getNumSuccessors() != 0;
     for (Block *successor : branch->getSuccessors()) {
       if (successor->empty() ||
-          !findBarriersToReplace(&successor->front(), candidate, active)) {
+          !findBarriersToReplace(&successor->front(), candidate, activePath)) {
         found = false;
         break;
       }
     }
   } else if (!op->hasTrait<OpTrait::IsTerminator>() && canCross(op)) {
-    found = findBarriersToReplace(op->getNextNode(), candidate, active);
+    found = findBarriersToReplace(op->getNextNode(), candidate, activePath);
   }
-  active.erase(op);
+  activePath.erase(op);
   return found;
 }
 
 bool coveredByWaits(Operation *op,
                     const llvm::SmallPtrSetImpl<Operation *> &waits,
-                    llvm::SmallPtrSetImpl<Operation *> &active);
+                    llvm::SmallPtrSetImpl<Operation *> &activePath);
 
 // At a block boundary, check every predecessor, including loop entry.
 bool predecessorsCovered(Operation *op,
                          const llvm::SmallPtrSetImpl<Operation *> &waits,
-                         llvm::SmallPtrSetImpl<Operation *> &active) {
+                         llvm::SmallPtrSetImpl<Operation *> &activePath) {
   if (Operation *previous = op->getPrevNode())
-    return coveredByWaits(previous, waits, active);
+    return coveredByWaits(previous, waits, activePath);
   Block *block = op->getBlock();
   if (block->hasNoPredecessors())
     return false;
   return llvm::all_of(block->getPredecessors(), [&](Block *pred) {
-    return coveredByWaits(pred->getTerminator(), waits, active);
+    return coveredByWaits(pred->getTerminator(), waits, activePath);
   });
 }
 
@@ -130,19 +130,19 @@ bool predecessorsCovered(Operation *op,
 // Other effects or synchronization between them may still need that barrier.
 bool coveredByWaits(Operation *op,
                     const llvm::SmallPtrSetImpl<Operation *> &waits,
-                    llvm::SmallPtrSetImpl<Operation *> &active) {
-  if (!op || !active.insert(op).second)
+                    llvm::SmallPtrSetImpl<Operation *> &activePath) {
+  if (!op || !activePath.insert(op).second)
     return false;
   if (waits.contains(op)) {
-    active.erase(op);
+    activePath.erase(op);
     return true;
   }
   bool covered = false;
   if (!(isa<gpu::BarrierOp>(op) || isCompletionBoundary(op)) &&
       (isa<BranchOpInterface>(op) || canCross(op))) {
-    covered = predecessorsCovered(op, waits, active);
+    covered = predecessorsCovered(op, waits, activePath);
   }
-  active.erase(op);
+  activePath.erase(op);
   return covered;
 }
 
@@ -157,28 +157,27 @@ void scheduleMembarBarriers(ModuleOp module) {
   module.walk([&](gpu::AsyncWaitOp wait) {
     // Consider only same-block uses; branch transfers may lower to register
     // copies that use the loaded result.
-    Operation *point = nullptr;
+    Operation *firstUse = nullptr;
     for (Operation *op = wait->getNextNode(); op; op = op->getNextNode()) {
       if (isa<gpu::BarrierOp>(op) || isCompletionBoundary(op))
         break;
       if (consumesGlobalRead(op)) {
-        point = op;
+        firstUse = op;
         break;
       }
       if (!isa<BranchOpInterface>(op) && !canCross(op))
         break;
     }
-    if (!point)
+    if (!firstUse)
       return;
-    BarrierMoveCandidate candidate{wait, point, {}};
-    llvm::SmallPtrSet<Operation *, 32> active;
-    if (findBarriersToReplace(wait->getNextNode(), candidate, active))
+    BarrierMoveCandidate candidate{wait, firstUse, {}};
+    llvm::SmallPtrSet<Operation *, 32> activePath;
+    if (findBarriersToReplace(wait->getNextNode(), candidate, activePath))
       candidates.push_back(std::move(candidate));
   });
 
-  // A loop or join barrier may serve several waits. Group every candidate
-  // that would replace the same existing barrier, then check all incoming
-  // paths.
+  // Candidates are connected when they would replace the same barrier.
+  // Process each connected group together so no path loses a shared barrier.
   llvm::DenseMap<Operation *, SmallVector<unsigned>> candidatesByBarrier;
   for (unsigned i = 0; i < candidates.size(); ++i)
     for (Operation *barrier : candidates[i].barriersToReplace)
@@ -191,10 +190,15 @@ void scheduleMembarBarriers(ModuleOp module) {
     SmallVector<unsigned> group{seed};
     llvm::SetVector<Operation *> barriersToReplace;
     grouped[seed] = true;
+
+    // Visit candidates added to `group` as well as the first one.
     for (unsigned cursor = 0; cursor < group.size(); ++cursor) {
       for (Operation *barrier : candidates[group[cursor]].barriersToReplace) {
+        // We have already found the candidates for this barrier.
         if (!barriersToReplace.insert(barrier))
           continue;
+
+        // All candidates using this barrier must move together.
         for (unsigned index : candidatesByBarrier.find(barrier)->second) {
           if (grouped[index])
             continue;
@@ -204,13 +208,12 @@ void scheduleMembarBarriers(ModuleOp module) {
       }
     }
     llvm::SmallPtrSet<Operation *, 16> waits;
-    for (unsigned index : group) {
+    for (unsigned index : group)
       waits.insert(candidates[index].wait);
-    }
     bool covered = true;
     for (Operation *barrier : barriersToReplace) {
-      llvm::SmallPtrSet<Operation *, 32> active;
-      if (!predecessorsCovered(barrier, waits, active)) {
+      llvm::SmallPtrSet<Operation *, 32> activePath;
+      if (!predecessorsCovered(barrier, waits, activePath)) {
         covered = false;
         break;
       }
