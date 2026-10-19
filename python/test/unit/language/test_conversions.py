@@ -277,7 +277,7 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 ])
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
-    # On HIP, fp8e4nv upcasting is only supported on CDNA3, CDNA4, RDNA4m, and RDNA4.
+    # On HIP, fp8e4nv upcasting is only supported on CDNA3, CDNA4, RDNA3, RDNA4m, and RDNA4.
     if is_cuda():
         if ((src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9))
             or src_dtype in ('float8e4b8', 'float8e5b16')):
@@ -286,9 +286,10 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
     elif is_hip():
-        if src_dtype in FP8_DTYPES and is_hip_rdna3():
+        if src_dtype in FP8_DTYPES and src_dtype != 'float8e4nv' and is_hip_rdna3():
             pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
-        if src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna4m() or is_hip_rdna4()):
+        if src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4m()
+                                               or is_hip_rdna4()):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
         if  src_dtype == 'float8e4b15':
             # If the dtype should error out in the given device, we assert that and return

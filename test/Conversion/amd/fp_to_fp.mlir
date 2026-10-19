@@ -1,5 +1,6 @@
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck --check-prefixes=COMMON,GFX942 %s
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck --check-prefixes=COMMON,GFX950 %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1100 | FileCheck --check-prefixes=RDNA3 %s
 
 //  CHECK-LABEL: f16_to_f32
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -280,5 +281,42 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     %rn = tt.fp_to_fp %arg : f16 -> bf16
     %rz = tt.fp_to_fp %arg, rounding = rtz : f16 -> bf16
     tt.return %rn, %rz : bf16, bf16
+  }
+}
+
+// -----
+
+//  RDNA3-LABEL: upcast_fp8e4m3fn_to_fp16_rdna3
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @upcast_fp8e4m3fn_to_fp16_rdna3(%arg0: tensor<1x64xf8E4M3FN, #blocked2>) {
+    // Exponent re-bias + subnormal normalization via one ×2^8 multiply,
+    // plus a single NaN compare-and-select per element.
+    // RDNA3: llvm.lshr
+    // RDNA3-NEXT: llvm.bitcast %{{.+}} : i16 to f16
+    // RDNA3-NEXT: llvm.mlir.constant(2.560000e+02 : f16) : f16
+    // RDNA3-NEXT: llvm.fmul %{{.+}}, %{{.+}} : f16
+    // RDNA3: llvm.icmp "eq"
+    // RDNA3-NEXT: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3: llvm.lshr
+    // RDNA3-NEXT: llvm.bitcast %{{.+}} : i16 to f16
+    // RDNA3-NEXT: llvm.mlir.constant(2.560000e+02 : f16) : f16
+    // RDNA3-NEXT: llvm.fmul %{{.+}}, %{{.+}} : f16
+    // RDNA3: llvm.icmp "eq"
+    // RDNA3-NEXT: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3: llvm.lshr
+    // RDNA3-NEXT: llvm.bitcast %{{.+}} : i16 to f16
+    // RDNA3-NEXT: llvm.mlir.constant(2.560000e+02 : f16) : f16
+    // RDNA3-NEXT: llvm.fmul %{{.+}}, %{{.+}} : f16
+    // RDNA3: llvm.icmp "eq"
+    // RDNA3-NEXT: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3: llvm.lshr
+    // RDNA3-NEXT: llvm.bitcast %{{.+}} : i16 to f16
+    // RDNA3-NEXT: llvm.mlir.constant(2.560000e+02 : f16) : f16
+    // RDNA3-NEXT: llvm.fmul %{{.+}}, %{{.+}} : f16
+    // RDNA3: llvm.icmp "eq"
+    // RDNA3-NEXT: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    %0 = tt.fp_to_fp %arg0 : tensor<1x64xf8E4M3FN, #blocked2> -> tensor<1x64xf16, #blocked2>
+    tt.return
   }
 }

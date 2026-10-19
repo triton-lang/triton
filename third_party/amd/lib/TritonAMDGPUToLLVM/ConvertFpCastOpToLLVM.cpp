@@ -1050,25 +1050,15 @@ public:
 
     // Right shift 1 bit to adjust the positions of exponent and mantissa
     a = b.lshr(a, b.i16_val(1));
+    a = b.bitcast(a, f16_ty);
 
-    // Adjust exponent, (15 - 7) << 10 === 0x2000
-    a = b.add(a, b.i16_val(0x2000));
+    // Multiplying by 2^(15-7) rebiases the exponent and normalizes subnormals
+    a = b.fmul(f16_ty, a, b.f16_val(0x1p+8));
+    a = b.bitcast(a, i16_ty);
 
     // Check NaN
     Value vAbs = b.and_(b.bitcast(v, i8_ty), b.i8_val(0x7F));
     a = b.select(b.icmp_eq(vAbs, b.i8_val(0x7F)), b.i16_val(0x7E00), a);
-
-    // Check denorms and zero
-    // Here we use a LUT to map S.0000.000 ~ S.0000.111 to its corresponding
-    // fp16 value
-    constexpr size_t lutSize = 8;
-    static constexpr int denormsAndZeroLut[lutSize] = {
-        0x0000, 0x1800, 0x1C00, 0x1E00, 0x2000, 0x2100, 0x2200, 0x2300};
-
-    for (int i = 0; i < lutSize; i++) {
-      a = b.select(b.icmp_eq(vAbs, b.i8_val(i)),
-                   b.i16_val(denormsAndZeroLut[i]), a);
-    }
 
     // Set sign
     a = b.or_(a, sign);
