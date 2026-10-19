@@ -286,6 +286,12 @@ class TritonGPUOptimizeThreadLocalityPass
       Operation *user = *(reduce->getUsers().begin());
       if (user->getNumOperands() != 2 || !user->hasOneUse())
         return;
+      // The rewrite reuses a copy of the update to merge per-thread partials
+      // and folds the initial value in with one more application of it, so it
+      // is only semantics-preserving when the update is the reduction's own
+      // combiner (#12348).
+      if (user->getName() != reductionOp.value()->getName())
+        return;
       OpOperand &yieldOpOperand = *(user->getUses().begin());
       auto yieldOp = dyn_cast<scf::YieldOp>(yieldOpOperand.getOwner());
       if (!yieldOp)
@@ -307,6 +313,15 @@ class TritonGPUOptimizeThreadLocalityPass
       // accumulator other than the update would observe the partial state
       // instead of the running value.
       if (!forOp.getRegionIterArgs()[argNum].hasOneUse())
+        return;
+      // The update must combine the reduce result with the bare loop-carried
+      // accumulator for this slot. Any other non-reduce operand (a computed
+      // value like acc * 0.5, or a different loop-carried argument) would
+      // observe re-homed partial state, and the rewrite's accumulator lookup
+      // assumes a block argument (#12348).
+      auto reduceUseOperandNum = reduce->getUses().begin()->getOperandNumber();
+      auto accOperandNum = reduceUseOperandNum == 0 ? 1 : 0;
+      if (user->getOperand(accOperandNum) != forOp.getRegionIterArgs()[argNum])
         return;
       reduceOps.insert(reduce);
     });
