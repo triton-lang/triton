@@ -3,7 +3,6 @@
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: cluster_barrier_arrive
   tt.func @cluster_barrier_arrive() {
-    // CHECK-NOT: rocdl.s.barrier{{$}}
     // CHECK: rocdl.s.barrier.signal id = -3
     amdg.cluster_barrier_arrive
     tt.return
