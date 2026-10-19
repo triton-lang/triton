@@ -187,7 +187,12 @@ jobs:
           pytest --capture=tee-sys -rfs -n 8 python/test/backend/
           # Only the GSan allocator supports HIP; the other GSan tests need
           # instrumented kernels. Run serially so multi-GPU tests do not overlap.
-          pytest --capture=tee-sys -rfs python/test/gsan/test_allocator.py
+          # ROCm 7.0-7.2.x reject hipMemSetAccess when one reservation holds
+          # mappings of different sizes (SWDEV-568260), as GSan's data and
+          # shadow mappings always do, so only the rocm10.1 image can run it.
+          if ${{ matrix.image_variant == 'rocm10.1' }}; then
+            pytest --capture=tee-sys -rfs python/test/gsan/test_allocator.py
+          fi
           cd python/test/unit
           TRITON_CI_CACHE_PHASE=unit pytest --capture=tee-sys -rfs -n 12 \
                  --ignore=blackwell \
