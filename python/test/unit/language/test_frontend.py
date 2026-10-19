@@ -874,6 +874,29 @@ def test_call_function_with_same_qualname_aggregate_args():
     # CHECK: arith.constant dense<100> : tensor<4xi32>
 
 
+@triton.jit
+def add_by_name(x, NAME: tl.constexpr):
+    if NAME == "a[":
+        return x + 1
+    return x + 100
+
+
+@filecheck_test
+@triton.jit
+def test_call_function_with_colliding_mangled_constexpr_args():
+    # CHECK-LABEL: test_call_function_with_colliding_mangled_constexpr_args
+    # CHECK: call @test_frontend.add_by_name__i32S4S_c_sq_a__sq_(
+    # CHECK: call @test_frontend.add_by_name__i32S4S_c_sq_a__sq__1(
+    x = tl.arange(0, 4)
+    add_by_name(x, "a[")
+    add_by_name(x, "a_")
+
+    # CHECK: tt.func private @test_frontend.add_by_name__i32S4S_c_sq_a__sq_(
+    # CHECK: arith.constant dense<1> : tensor<4xi32>
+    # CHECK: tt.func private @test_frontend.add_by_name__i32S4S_c_sq_a__sq__1(
+    # CHECK: arith.constant dense<100> : tensor<4xi32>
+
+
 @triton.aggregate
 class AggregateWithConstexpr:
     a: tl.tensor

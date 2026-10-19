@@ -1457,8 +1457,8 @@ class CodeGenerator(ast.NodeVisitor):
         caller_context = caller_context or self.caller_context
         arg_types = [arg.type for arg in args]
         base_name = mangle_fn(get_full_name(fn), arg_types, caller_context)
-        # Closures from one factory share a qualname, so distinct (fn, arg_types) can mangle alike: suffix _1, _2, ...
-        # Claim the name before generating the body so nested calls see it.
+        # Distinct (fn, arg_types) can mangle alike (factory closures share a qualname; mangling is lossy, e.g. '['
+        # becomes '_'), so suffix _1, _2, ... Claim the name before generating the body so nested calls see it.
         fn_name, suffix, owner = base_name, 0, (fn, arg_types)
         while self.function_owners.setdefault(fn_name, owner) != owner:
             suffix += 1
