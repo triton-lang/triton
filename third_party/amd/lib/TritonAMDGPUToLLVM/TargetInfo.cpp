@@ -228,6 +228,7 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
 
 void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
                                 Operation * /*sourceOp*/) const {
+  barrier(loc, rewriter, triton::gpu::AddrSpace::None);
   triton::amdgpu::ClusterBarrierArriveOp::create(rewriter, loc);
   triton::amdgpu::ClusterBarrierWaitOp::create(rewriter, loc);
 }
