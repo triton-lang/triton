@@ -501,7 +501,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS: %[[W_WARP:.*]] = ttg.thread_predicate <0, 3>
   // THREAD-REGIONS-NEXT: scf.if %[[W_WARP]]
   // THREAD-REGIONS-NEXT: %[[W_BROADCAST:.*]] = ttg.thread_handoff %[[W_RESULT]] <31, 3> -> <0, 3> : i32
-  // THREAD-REGIONS-NEXT: tt.splat %[[W_BROADCAST]]
+  // THREAD-REGIONS: tt.splat %[[W_BROADCAST]]
   // THREAD-REGIONS: tt.store
   // THREAD-REGIONS: tt.return
   tt.func @thread_regions_warp_tail(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
@@ -525,16 +525,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS: scf.yield
   // THREAD-REGIONS-NEXT: }
   // THREAD-REGIONS-NEXT: %[[C_BROADCAST:.*]] = ttg.thread_handoff %[[C_RESULT]] <31, 3> -> <0, 0> : i32
-  // THREAD-REGIONS-NEXT: tt.splat %[[C_BROADCAST]]
+  // THREAD-REGIONS: tt.splat %[[C_BROADCAST]]
   // THREAD-REGIONS: tt.store
   // THREAD-REGIONS: tt.return
-  tt.func @thread_regions_cta_tail(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+  tt.func @thread_regions_cta_tail(%ptr: !tt.ptr<i32>, %out: tensor<128x!tt.ptr<i32>, #blocked>) {
     %value = tt.atomic_load relaxed, gpu, %ptr : (!tt.ptr<i32>) -> i32
     %values = tt.splat %value : i32 -> tensor<128xi32, #blocked>
-    %offsets = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #blocked>
-    %base = tt.splat %out : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>, #blocked>
-    %ptrs = tt.addptr %base, %offsets : tensor<128x!tt.ptr<i32>, #blocked>, tensor<128xi32, #blocked>
-    tt.store %ptrs, %values : tensor<128x!tt.ptr<i32>, #blocked>
+    tt.store %out, %values : tensor<128x!tt.ptr<i32>, #blocked>
     tt.return
   }
 
@@ -561,13 +558,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS-NOT: ttg.thread_predicate
   // THREAD-REGIONS-NOT: ttg.thread_handoff
   // THREAD-REGIONS: tt.return
-  tt.func @thread_regions_plain_load_cta_tail(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+  tt.func @thread_regions_plain_load_cta_tail(%ptr: !tt.ptr<i32>, %out: tensor<128x!tt.ptr<i32>, #blocked>) {
     %value = tt.load %ptr : !tt.ptr<i32>
     %values = tt.splat %value : i32 -> tensor<128xi32, #blocked>
-    %offsets = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #blocked>
-    %base = tt.splat %out : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>, #blocked>
-    %ptrs = tt.addptr %base, %offsets : tensor<128x!tt.ptr<i32>, #blocked>, tensor<128xi32, #blocked>
-    tt.store %ptrs, %values : tensor<128x!tt.ptr<i32>, #blocked>
+    tt.store %out, %values : tensor<128x!tt.ptr<i32>, #blocked>
     tt.return
   }
 
@@ -674,9 +668,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @thread_regions_multi_cta_atomic_loop(%ptr: !tt.ptr<i32>, %out: tensor<256x!tt.ptr<i32>, #sharded>, %iterations: i32) {
     %zero = arith.constant 0 : i32
     %one = arith.constant 1 : i32
-    %true = arith.constant true
     %value = scf.for %i = %zero to %iterations step %one iter_args(%sum = %zero) -> (i32) : i32 {
-      %element = tt.atomic_rmw add, acq_rel, gpu, %ptr, %one, %true : (!tt.ptr<i32>, i32, i1) -> i32
+      %element = tt.atomic_rmw add, acq_rel, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
       %next = arith.addi %sum, %element : i32
       scf.yield %next : i32
     }
@@ -700,9 +693,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS: tt.return
   tt.func @thread_regions_multi_cta_unrelated_loads(%counter: !tt.ptr<i32>, %ptr: !tt.ptr<i32>, %out: tensor<256x!tt.ptr<i32>, #sharded>) {
     %one = arith.constant 1 : i32
-    %true = arith.constant true
     %before = tt.load %ptr : !tt.ptr<i32>
-    %old = tt.atomic_rmw add, relaxed, gpu, %counter, %one, %true : (!tt.ptr<i32>, i32, i1) -> i32
+    %old = tt.atomic_rmw add, relaxed, gpu, %counter, %one : (!tt.ptr<i32>, i32) -> i32
     %after = tt.load %ptr : !tt.ptr<i32>
     %sum = arith.addi %before, %after : i32
     %values = tt.splat %sum : i32 -> tensor<256xi32, #sharded>

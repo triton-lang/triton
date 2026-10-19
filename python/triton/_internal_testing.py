@@ -559,6 +559,6 @@ def assert_no_collectives_in_ptx_loop(ptx):
 
     assert any(on_cycle(branch) for branch in branches), "Expected a polling loop"
     for i, line in enumerate(lines):
-        if any(op in line for op in ("bar.sync", "barrier.sync", "bar.warp.sync", "bar.red", "barrier.red", "shfl.sync",
-                                     "vote.sync")):
+        if any(op in line for op in ("bar.sync", "barrier.sync", "barrier.cluster", "bar.warp.sync", "bar.red",
+                                     "barrier.red", "shfl.sync", "vote.sync")):
             assert not on_cycle(i), "Collective instruction inside a polling loop"
