@@ -508,3 +508,23 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
+
+
+@pytest.mark.parametrize("arch,ptx,valid", [
+    (100, 86, False),
+    (100, 87, True),
+    (120, 85, False),
+    (120, 87, True),
+    (107, 93, False),
+    (107, 94, True),
+])
+def test_ptx_version_arch_requirements(arch, ptx, valid):
+    from triton.backends.nvidia.compiler import get_ptx_version_from_options, CUDAOptions
+
+    options = CUDAOptions(ptx_version=ptx)
+    if valid:
+        assert get_ptx_version_from_options(options, arch) == ptx
+    else:
+        with pytest.raises(ValueError, match=f"SM{arch} requires PTX"):
+            get_ptx_version_from_options(options, arch)
+

@@ -79,6 +79,8 @@ def get_ptx_version_from_options(options, arch: int):
     if ptx_version is None:
         cuda_version = get_ptxas(arch).version
         ptx_version = ptx_get_version(cuda_version)
+    if arch in (100, 101, 120, 121) and ptx_version < 87:
+        raise ValueError(f"SM{arch} requires PTX 8.7 or later")
     if arch == 107 and ptx_version < 94:
         raise ValueError("SM107 requires PTX 9.4 or later")
     return ptx_version
