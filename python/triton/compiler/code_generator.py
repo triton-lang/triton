@@ -1457,14 +1457,12 @@ class CodeGenerator(ast.NodeVisitor):
         caller_context = caller_context or self.caller_context
         arg_types = [arg.type for arg in args]
         base_name = mangle_fn(get_full_name(fn), arg_types, caller_context)
-        # Distinct JITFunctions (e.g. closures made by one factory) or arg types can mangle alike; give each its own
-        # symbol by appending _1, _2, ... to the name. Owners are equal only for the same JITFunction (compared by
-        # identity) and equal arg types (compared with __eq__). The name is claimed before the body is generated so
-        # nested calls see it.
-        fn_name, i, owner = base_name, 0, (fn, arg_types)
+        # Closures from one factory share a qualname, so distinct (fn, arg_types) can mangle alike: suffix _1, _2, ...
+        # Claim the name before generating the body so nested calls see it.
+        fn_name, suffix, owner = base_name, 0, (fn, arg_types)
         while self.function_owners.setdefault(fn_name, owner) != owner:
-            i += 1
-            fn_name = f"{base_name}_{i}"
+            suffix += 1
+            fn_name = f"{base_name}_{suffix}"
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             # If the callee is not set, we use the same debug setting as the caller

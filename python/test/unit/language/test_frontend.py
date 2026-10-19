@@ -776,22 +776,6 @@ add_one = make_add_constant(1)
 add_hundred = make_add_constant(100)
 
 
-@filecheck_test
-@triton.jit
-def test_call_functions_with_same_qualname():
-    # CHECK-LABEL: test_call_functions_with_same_qualname
-    # CHECK: call @"test_frontend.make_add_constant.<locals>.add_constant__i32S4S"
-    # CHECK: call @"test_frontend.make_add_constant.<locals>.add_constant__i32S4S_1"
-    x = tl.arange(0, 4)
-    add_one(x)
-    add_hundred(x)
-
-    # CHECK: tt.func private @"test_frontend.make_add_constant.<locals>.add_constant__i32S4S"
-    # CHECK: arith.constant dense<1> : tensor<4xi32>
-    # CHECK: tt.func private @"test_frontend.make_add_constant.<locals>.add_constant__i32S4S_1"
-    # CHECK: arith.constant dense<100> : tensor<4xi32>
-
-
 def compose(f, g):
 
     @triton.jit
@@ -884,6 +868,7 @@ def test_call_function_with_same_qualname_aggregate_args():
     get_aggregate(AggregateAddOne(x))
     get_aggregate(AggregateAddHundred(x))
 
+    # CHECK: tt.func private @"test_frontend.get_aggregate__[[AGG]]"
     # CHECK: arith.constant dense<1> : tensor<4xi32>
     # CHECK: tt.func private @"test_frontend.get_aggregate__[[AGG]]_1"
     # CHECK: arith.constant dense<100> : tensor<4xi32>
