@@ -22,8 +22,8 @@ bool isGlobalRead(Operation *op) {
   });
 }
 
-// Follow only direct producers and one incoming CFG edge; this is a latency
-// heuristic, not an analysis of outstanding hardware memory requests.
+// Follow only direct producers and at most one incoming CFG edge; this is a
+// latency heuristic, not an analysis of outstanding hardware memory requests.
 bool isGlobalReadResult(Value value) {
   if (Operation *producer = value.getDefiningOp())
     return isGlobalRead(producer);
@@ -60,6 +60,8 @@ bool canCross(Operation *op) {
 }
 
 bool isCompletionBoundary(Operation *op) {
+  // Crossing a TDM or non-TDM wait could change which completion a later
+  // barrier synchronizes.
   return isa<gpu::AsyncWaitOp, gpu::AsyncCommitGroupOp>(op) ||
          op->hasTrait<OpTrait::MemWaitOpTrait>();
 }
@@ -76,8 +78,8 @@ struct WaitPlan {
   llvm::SetVector<Operation *> barriers;
 };
 
-// Collect the first full local barrier on every path. Crossing shared effects
-// could remove synchronization that Membar relied on for unrelated accesses.
+// Find the first full local barrier on every path. Crossing shared effects
+// could invalidate synchronization that Membar relied on for other accesses.
 bool findBarriers(Operation *op, WaitPlan &plan,
                   llvm::SmallPtrSetImpl<Operation *> &active) {
   if (!op || !active.insert(op).second)
@@ -108,7 +110,7 @@ bool coveredByWaits(Operation *op,
                     const llvm::SmallPtrSetImpl<Operation *> &waits,
                     llvm::SmallPtrSetImpl<Operation *> &active);
 
-// At a block boundary, every predecessor must be covered, including loop entry.
+// At a block boundary, check every predecessor, including loop entry.
 bool predecessorsCovered(Operation *op,
                          const llvm::SmallPtrSetImpl<Operation *> &waits,
                          llvm::SmallPtrSetImpl<Operation *> &active) {
@@ -122,7 +124,8 @@ bool predecessorsCovered(Operation *op,
   });
 }
 
-// Reject paths whose original barrier might cover effects before a group wait.
+// A removed barrier must be preceded by a group wait on every incoming path.
+// Other effects or synchronization between them may still need that barrier.
 bool coveredByWaits(Operation *op,
                     const llvm::SmallPtrSetImpl<Operation *> &waits,
                     llvm::SmallPtrSetImpl<Operation *> &active) {
@@ -141,10 +144,17 @@ bool coveredByWaits(Operation *op,
   return covered;
 }
 
-void scheduleBarriers(ModuleOp module) {
+} // namespace
+
+// A use of a global-load result may trigger a long hardware memory wait. Move
+// an eligible rendezvous before that use so other warps can reach it sooner.
+// This is a scheduling heuristic: TTGIR does not show where LLVM will place
+// its memory waits.
+void scheduleMembarBarriers(ModuleOp module) {
   SmallVector<WaitPlan> plans;
   module.walk([&](gpu::AsyncWaitOp wait) {
-    // Branch operands count as uses: transfers may lower to register copies.
+    // Consider only same-block uses; branch transfers may lower to register
+    // copies that use the loaded result.
     Operation *point = nullptr;
     for (Operation *op = wait->getNextNode(); op; op = op->getNextNode()) {
       if (isa<gpu::BarrierOp>(op) || isCompletionBoundary(op))
@@ -164,10 +174,8 @@ void scheduleBarriers(ModuleOp module) {
       plans.push_back(std::move(plan));
   });
 
-  // Plans sharing a destination barrier must move together. Otherwise moving
-  // one path would leave the original barrier required by another path.
-  // Treat plans and barriers as a bipartite graph. Index each edge once and
-  // visit each barrier once per component instead of rescanning all plans.
+  // A loop or join barrier can serve multiple waits. Group all plans that
+  // share a destination, then check coverage before removing any barrier.
   llvm::DenseMap<Operation *, SmallVector<unsigned>> barrierUsers;
   for (unsigned i = 0; i < plans.size(); ++i)
     for (Operation *barrier : plans[i].barriers)
@@ -206,6 +214,7 @@ void scheduleBarriers(ModuleOp module) {
     }
     if (!covered)
       continue;
+    // A group may replace barriers on several paths with one per wait.
     for (unsigned index : group) {
       OpBuilder builder(plans[index].insertionPoint);
       gpu::BarrierOp::create(builder, plans[index].wait.getLoc(),
@@ -216,7 +225,4 @@ void scheduleBarriers(ModuleOp module) {
   }
 }
 
-} // namespace
-
-void scheduleMembarBarriers(ModuleOp module) { scheduleBarriers(module); }
 } // namespace mlir::triton::AMD

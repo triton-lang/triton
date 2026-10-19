@@ -41,6 +41,8 @@ struct TritonAMDGPUMembar
 
     ModuleMembarAnalysis membarPass(allocation, AMD::membarFilter);
     membarPass.run();
+    // Reschedule local rendezvous while waits and memory effects are explicit,
+    // before ConSan and LLVM lowering.
     AMD::scheduleMembarBarriers(mod);
   }
 };

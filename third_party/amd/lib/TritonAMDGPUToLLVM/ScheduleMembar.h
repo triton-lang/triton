@@ -5,7 +5,7 @@
 
 namespace mlir::triton::AMD {
 
-// Schedule local barriers after AMD Membar inserts them.
+// Move eligible local barriers before uses of global-load results.
 void scheduleMembarBarriers(ModuleOp module);
 
 } // namespace mlir::triton::AMD
