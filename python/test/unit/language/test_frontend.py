@@ -762,6 +762,84 @@ def test_function_name_mangling():
     FunctionParent.function_with_name()
 
 
+def make_add_constant(c):
+    C = tl.constexpr(c)
+
+    @triton.jit
+    def add_constant(x):
+        return x + C
+
+    return add_constant
+
+
+add_one = make_add_constant(1)
+add_hundred = make_add_constant(100)
+
+
+@filecheck_test
+@triton.jit
+def test_call_functions_with_same_qualname():
+    # CHECK-LABEL: test_call_functions_with_same_qualname
+    # CHECK: call @"test_frontend.make_add_constant.<locals>.add_constant__i32S4S"
+    # CHECK: call @"test_frontend.make_add_constant.<locals>.add_constant__i32S4S_1"
+    x = tl.arange(0, 4)
+    add_one(x)
+    add_hundred(x)
+
+    # CHECK: tt.func private @"test_frontend.make_add_constant.<locals>.add_constant__i32S4S"
+    # CHECK: arith.constant dense<1> : tensor<4xi32>
+    # CHECK: tt.func private @"test_frontend.make_add_constant.<locals>.add_constant__i32S4S_1"
+    # CHECK: arith.constant dense<100> : tensor<4xi32>
+
+
+def compose(f, g):
+
+    @triton.jit
+    def composed(x):
+        return f(g(x))
+
+    return composed
+
+
+@triton.jit
+def increment(x):
+    return x + 1
+
+
+@triton.jit
+def double(x):
+    return x * 2
+
+
+increment_double_double = compose(compose(increment, double), double)
+
+
+@filecheck_test
+@triton.jit
+def test_call_nested_functions_with_same_qualname():
+    # CHECK-LABEL: test_call_nested_functions_with_same_qualname
+    # CHECK: call @"test_frontend.compose.<locals>.composed__i32S4S"
+    increment_double_double(tl.arange(0, 4))
+    # CHECK: tt.func private @"test_frontend.compose.<locals>.composed__i32S4S"
+    # CHECK: call @"test_frontend.compose.<locals>.composed__i32S4S_1"
+
+
+@triton.jit
+def apply_fn(x, FN: tl.constexpr):
+    return FN(x)
+
+
+@filecheck_test
+@triton.jit
+def test_call_function_with_same_qualname_constexpr_args():
+    # CHECK-LABEL: test_call_function_with_same_qualname_constexpr_args
+    # CHECK: call @"test_frontend.apply_fn__i32S4S_[[FN:.*add_constant\)]]"
+    # CHECK: call @"test_frontend.apply_fn__i32S4S_[[FN]]_1"
+    x = tl.arange(0, 4)
+    apply_fn(x, add_one)
+    apply_fn(x, add_hundred)
+
+
 @triton.aggregate
 class AggregateWithConstexpr:
     a: tl.tensor

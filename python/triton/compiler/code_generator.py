@@ -295,7 +295,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, *, options, codegen_fns,
                  module_map, is_gluon, module=None, is_kernel=False, function_types: Optional[Dict] = None,
-                 noinline=False, caller_context=None, file_name: Optional[str] = None, begin_line=0, begin_col=1):
+                 function_owners: Optional[Dict] = None, noinline=False, caller_context=None,
+                 file_name: Optional[str] = None, begin_line=0, begin_col=1):
         self.context = context
         self.is_gluon = is_gluon
         if is_gluon:
@@ -321,6 +322,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.module_map = {} if module_map is None else module_map
         self.module = self.builder.create_module() if module is None else module
         self.function_ret_types = {} if function_types is None else function_types
+        self.function_owners = {} if function_owners is None else function_owners
         self.prototype = prototype
 
         self.return_vals: List[base_value | None] = []
@@ -1454,14 +1456,21 @@ class CodeGenerator(ast.NodeVisitor):
         # mangle
         caller_context = caller_context or self.caller_context
         arg_types = [arg.type for arg in args]
-        fn_name = mangle_fn(get_full_name(fn), arg_types, caller_context)
+        base_name = mangle_fn(get_full_name(fn), arg_types, caller_context)
+        # Distinct JITFunctions (e.g. closures made by one factory) or arg types can mangle alike; give each its own
+        # symbol. The name is claimed before the body is generated so nested calls see it.
+        fn_name, i, owner = base_name, 0, (fn, arg_types)
+        while self.function_owners.setdefault(fn_name, owner) != owner:
+            i += 1
+            fn_name = f"{base_name}_{i}"
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             # If the callee is not set, we use the same debug setting as the caller
             prototype = ASTFunction([], arg_types, dict())
             generator = CodeGenerator(self.context, prototype, fn.get_capture_scope(), module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
-                                      noinline=fn.noinline, file_name=fn.file_name, begin_line=fn.def_file_line_number,
+                                      function_owners=self.function_owners, noinline=fn.noinline,
+                                      file_name=fn.file_name, begin_line=fn.def_file_line_number,
                                       begin_col=fn.def_file_col_number, options=self.builder.options,
                                       codegen_fns=self.builder.codegen_fns, module_map=self.builder.module_map,
                                       caller_context=caller_context, is_gluon=self.is_gluon)
