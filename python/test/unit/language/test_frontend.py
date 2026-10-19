@@ -821,7 +821,11 @@ def test_call_nested_functions_with_same_qualname():
     # CHECK: call @"test_frontend.compose.<locals>.composed__i32S4S"
     increment_double_double(tl.arange(0, 4))
     # CHECK: tt.func private @"test_frontend.compose.<locals>.composed__i32S4S"
+    # CHECK: call @test_frontend.double__i32S4S(
     # CHECK: call @"test_frontend.compose.<locals>.composed__i32S4S_1"
+    # CHECK: tt.func private @"test_frontend.compose.<locals>.composed__i32S4S_1"
+    # CHECK: call @test_frontend.double__i32S4S(
+    # CHECK: call @test_frontend.increment__i32S4S(
 
 
 @triton.jit
@@ -838,6 +842,51 @@ def test_call_function_with_same_qualname_constexpr_args():
     x = tl.arange(0, 4)
     apply_fn(x, add_one)
     apply_fn(x, add_hundred)
+
+    # CHECK: tt.func private @"test_frontend.apply_fn__i32S4S_[[FN]]"
+    # CHECK: call @"test_frontend.make_add_constant.<locals>.add_constant__i32S4S"
+    # CHECK: arith.constant dense<1> : tensor<4xi32>
+    # CHECK: tt.func private @"test_frontend.apply_fn__i32S4S_[[FN]]_1"
+    # CHECK: call @"test_frontend.make_add_constant.<locals>.add_constant__i32S4S_1"
+    # CHECK: arith.constant dense<100> : tensor<4xi32>
+
+
+def make_aggregate_add_constant(c):
+    C = tl.constexpr(c)
+
+    @triton.aggregate
+    class AggregateAddConstant:
+        x: tl.tensor
+
+        @triton.jit
+        def get(self):
+            return self.x + C
+
+    return AggregateAddConstant
+
+
+AggregateAddOne = make_aggregate_add_constant(1)
+AggregateAddHundred = make_aggregate_add_constant(100)
+
+
+@triton.jit
+def get_aggregate(agg):
+    return agg.get()
+
+
+@filecheck_test
+@triton.jit
+def test_call_function_with_same_qualname_aggregate_args():
+    # CHECK-LABEL: test_call_function_with_same_qualname_aggregate_args
+    # CHECK: call @"test_frontend.get_aggregate__[[AGG:.*AggregateAddConstant<i32S4S>]]"
+    # CHECK: call @"test_frontend.get_aggregate__[[AGG]]_1"
+    x = tl.arange(0, 4)
+    get_aggregate(AggregateAddOne(x))
+    get_aggregate(AggregateAddHundred(x))
+
+    # CHECK: arith.constant dense<1> : tensor<4xi32>
+    # CHECK: tt.func private @"test_frontend.get_aggregate__[[AGG]]_1"
+    # CHECK: arith.constant dense<100> : tensor<4xi32>
 
 
 @triton.aggregate

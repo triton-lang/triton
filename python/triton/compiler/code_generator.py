@@ -1458,7 +1458,9 @@ class CodeGenerator(ast.NodeVisitor):
         arg_types = [arg.type for arg in args]
         base_name = mangle_fn(get_full_name(fn), arg_types, caller_context)
         # Distinct JITFunctions (e.g. closures made by one factory) or arg types can mangle alike; give each its own
-        # symbol. The name is claimed before the body is generated so nested calls see it.
+        # symbol by appending _1, _2, ... to the name. Owners are equal only for the same JITFunction (compared by
+        # identity) and equal arg types (compared with __eq__). The name is claimed before the body is generated so
+        # nested calls see it.
         fn_name, i, owner = base_name, 0, (fn, arg_types)
         while self.function_owners.setdefault(fn_name, owner) != owner:
             i += 1
