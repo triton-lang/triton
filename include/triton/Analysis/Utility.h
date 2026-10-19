@@ -179,7 +179,13 @@ private:
 //      warp 1: Qj=S0+Uj=T0+...+Tj  for j=8..15
 //    Qj is a prefix from the scan's start and retains intraWarpScanLayout.
 //    The retained carries use their consumers' interWarpTotalsLayout.
-//    Convert Qj back to intraWarpTotalsLayout:
+//    Route terminal results Qj and exclusive carries Q(j-1) together when
+//    their requests can share fewer shuffle exchanges. In this example:
+//      warp 1, lane 0: terminals Q8,Q10,Q12,Q14; carries Q7,Q9,Q11,Q13
+//      warp 1, lane 1: terminals Q9,Q11,Q13,Q15; carries Q8,Q10,Q12,Q14
+//    Q7 comes from the retained inter-warp carry. Other requests reuse local
+//    values or share four lane exchanges directly from intraWarpScanLayout.
+//    Otherwise, convert Qj back to intraWarpTotalsLayout and fetch carries:
 //      warp 0, lane 0: Q0,Q2,Q4,Q6; lane 1: Q1,Q3,Q5,Q7
 //      warp 1, lane 0: Q8,Q10,Q12,Q14; lane 1: Q9,Q11,Q13,Q15
 //    Replace each saved pair's terminal value with Qj. Complete its first

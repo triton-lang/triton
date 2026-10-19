@@ -1,4 +1,5 @@
 // RUN: split-file %s %t
+// RUN: triton-opt %t/shared-carry-routing.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=JOINT
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
 // RUN: triton-opt %t/parallel-carries.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=CARRIES
@@ -928,5 +929,41 @@ tt.func private @test_scan_preserve_boundary_carry_owners(%arg: tensor<2048xi32,
     tt.scan.return %sum : i32
   }) : (tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes>
   tt.return %result : tensor<2048xi32, #boundary_prefixes>
+}
+}
+
+//--- shared-carry-routing.mlir
+
+#pairs = #ttg.linear<{register = [[1], [4], [8]], lane = [[2], [0], [0], [0], [0]], warp = [[16], [0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Each lane owns four two-element segments. Four exchanges deliver both
+// inclusive terminals and exclusive carries directly from the scan layout.
+// JOINT-LABEL: llvm.func {{.*}}@test_shared_terminal_carry_forward(
+// JOINT: nvvm.barrier
+// JOINT: llvm.load
+// JOINT-COUNT-4: nvvm.shfl.sync bfly
+// JOINT-NOT: nvvm.shfl.sync
+// JOINT: llvm.return
+tt.func private @test_shared_terminal_carry_forward(%arg: tensor<32xi32, #pairs>) -> tensor<32xi32, #pairs> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<32xi32, #pairs>) -> tensor<32xi32, #pairs>
+  tt.return %result : tensor<32xi32, #pairs>
+}
+// JOINT-LABEL: llvm.func {{.*}}@test_shared_terminal_carry_reverse(
+// JOINT: nvvm.barrier
+// JOINT: llvm.load
+// JOINT-COUNT-4: nvvm.shfl.sync bfly
+// JOINT-NOT: nvvm.shfl.sync
+// JOINT: llvm.return
+tt.func private @test_shared_terminal_carry_reverse(%arg: tensor<32xi32, #pairs>) -> tensor<32xi32, #pairs> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %sum = arith.addi %lhs, %rhs : i32
+    tt.scan.return %sum : i32
+  }) : (tensor<32xi32, #pairs>) -> tensor<32xi32, #pairs>
+  tt.return %result : tensor<32xi32, #pairs>
 }
 }

@@ -578,6 +578,193 @@ private:
     }
   }
 
+  // Route inclusive terminals and exclusive carries together. Requests sharing
+  // an XOR exchange can select different outgoing registers in different lanes.
+  // Local requests reuse SSA values, and each exchange serves every consumer
+  // that needs its result. Retain the existing conversion when this plan does
+  // not reduce the number of candidate carry shuffles.
+  bool routeScanPrefixes(triton::ScanOp op, const ScanValues &prefixes,
+                         const LinearLayout &source,
+                         const LinearLayout &consumers, unsigned numSegments,
+                         Value laneId, ConversionPatternRewriter &rewriter,
+                         ScanValues &terminals,
+                         SmallVector<ScanCarry> &carries) const {
+    if (source == consumers)
+      return false;
+    auto *ctx = op.getContext();
+    auto kReg = StringAttr::get(ctx, "register");
+    auto kLane = StringAttr::get(ctx, "lane");
+    auto kWarp = StringAttr::get(ctx, "warp");
+    auto kBlock = StringAttr::get(ctx, "block");
+    unsigned numLanes = consumers.getInDimSize(kLane);
+    unsigned numRegs = consumers.getInDimSize(kReg);
+    if (numLanes > 64)
+      return false;
+    auto dims = llvm::to_vector(source.getOutDimNames());
+    auto inverse = source.pseudoinvert().sublayout(dims, {kReg, kLane});
+    auto consumerInverse =
+        consumers.pseudoinvert().sublayout(dims, {kReg, kLane});
+    unsigned oldShuffles = 0;
+    for (unsigned r = 0; r < numRegs; ++r)
+      oldShuffles +=
+          getScanRegisters(consumers, consumerInverse, r, op.getAxis(),
+                           numSegments, op.getReverse() ? 1 : -1)
+              .size();
+
+    struct Transfer {
+      unsigned reg, mask;
+      uint64_t lanes;
+      unsigned exchange = 0;
+    };
+    struct Exchange {
+      unsigned mask;
+      SmallVector<int> registers;
+    };
+    SmallVector<SmallVector<Transfer>> requests(2 * numRegs);
+    SmallVector<uint64_t> validLanes(2 * numRegs, 0);
+    unsigned freeLanes = source.getFreeVariableMasks().lookup(kLane);
+    // Even request indices are inclusive terminals; odd indices are carries.
+    for (unsigned request = 0; request < requests.size(); ++request) {
+      for (unsigned lane = 0; lane < numLanes; ++lane) {
+        std::pair<unsigned, unsigned> owner;
+        bool valid = true;
+        for (unsigned warp = 0; warp < consumers.getInDimSize(kWarp); ++warp) {
+          auto coords = consumers.apply(
+              {{kReg, request / 2}, {kLane, lane}, {kWarp, warp}, {kBlock, 0}});
+          auto &index = coords[op.getAxis()].second;
+          if (request % 2) {
+            unsigned localIndex = index & (numSegments - 1);
+            if (localIndex == (op.getReverse() ? numSegments - 1 : 0)) {
+              valid = false;
+              break;
+            }
+            index += op.getReverse() ? 1 : -1;
+          }
+          auto src = inverse.apply(coords);
+          unsigned reg = src[0].second;
+          unsigned sourceLane = src[1].second | (lane & freeLanes);
+          std::pair<unsigned, unsigned> current{reg, sourceLane ^ lane};
+          if (warp && current != owner)
+            return false;
+          owner = current;
+        }
+        if (!valid)
+          continue;
+        uint64_t bit = uint64_t(1) << lane;
+        validLanes[request] |= bit;
+        auto &transfers = requests[request];
+        auto existing = llvm::find_if(transfers, [&](const Transfer &t) {
+          return t.reg == owner.first && t.mask == owner.second;
+        });
+        if (existing == transfers.end())
+          transfers.push_back({owner.first, owner.second, bit});
+        else
+          existing->lanes |= bit;
+      }
+    }
+
+    SmallVector<Exchange> exchanges;
+    for (auto &transfers : requests) {
+      for (auto &transfer : transfers) {
+        if (!transfer.mask)
+          continue;
+        auto compatible = [&](const Exchange &exchange) {
+          if (exchange.mask != transfer.mask)
+            return false;
+          for (unsigned lane = 0; lane < numLanes; ++lane) {
+            if (!(transfer.lanes & (uint64_t(1) << lane)))
+              continue;
+            int reg = exchange.registers[lane ^ transfer.mask];
+            if (reg >= 0 && unsigned(reg) != transfer.reg)
+              return false;
+          }
+          return true;
+        };
+        auto exchange = llvm::find_if(exchanges, compatible);
+        if (exchange == exchanges.end()) {
+          if (exchanges.size() + 1 >= oldShuffles)
+            return false;
+          exchanges.push_back({transfer.mask, SmallVector<int>(numLanes, -1)});
+          exchange = std::prev(exchanges.end());
+        }
+        transfer.exchange = exchange - exchanges.begin();
+        for (unsigned lane = 0; lane < numLanes; ++lane)
+          if (transfer.lanes & (uint64_t(1) << lane))
+            exchange->registers[lane ^ transfer.mask] = transfer.reg;
+      }
+    }
+
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    uint64_t allLanes = ~uint64_t(0) >> (64 - numLanes);
+    llvm::DenseMap<uint64_t, Value> predicates;
+    auto lanePredicate = [&](uint64_t mask) -> Value {
+      if (auto it = predicates.find(mask); it != predicates.end())
+        return it->second;
+      Value pred;
+      if (mask == 0 || mask == allLanes) {
+        pred = mask ? b.true_val() : b.false_val();
+      } else {
+        unsigned first = llvm::countr_zero(mask);
+        unsigned varying = 0;
+        for (unsigned lane = 0; lane < numLanes; ++lane)
+          if (mask & (uint64_t(1) << lane))
+            varying |= first ^ lane;
+        if (llvm::popcount(mask) == (1u << llvm::popcount(varying))) {
+          unsigned fixed = (numLanes - 1) & ~varying;
+          pred = b.icmp_eq(b.and_(laneId, b.i32_val(fixed)),
+                           b.i32_val(first & fixed));
+        } else {
+          Value digit = b.lshr(b.i64_val(mask), b.zext(i64_ty, laneId));
+          pred = b.icmp_ne(b.and_(digit, b.i64_val(1)), b.i64_val(0));
+        }
+      }
+      predicates[mask] = pred;
+      return pred;
+    };
+    auto selectValues = [&](SmallVector<Value> &result, ValueRange incoming,
+                            uint64_t mask) {
+      if (result.empty()) {
+        result.assign(incoming.begin(), incoming.end());
+        return;
+      }
+      Value pred = lanePredicate(mask);
+      for (auto [value, next] : llvm::zip(result, incoming))
+        value = b.select(pred, next, value);
+    };
+    ScanValues received;
+    for (const auto &exchange : exchanges) {
+      llvm::MapVector<unsigned, uint64_t> senders;
+      for (unsigned lane = 0; lane < numLanes; ++lane)
+        if (int reg = exchange.registers[lane]; reg >= 0)
+          senders[reg] |= uint64_t(1) << lane;
+      SmallVector<Value> outgoing;
+      for (auto [reg, lanes] : senders)
+        selectValues(outgoing, prefixes[reg], lanes);
+      for (Value &value : outgoing)
+        value = targetInfo.shuffleXor(rewriter, loc, value, exchange.mask);
+      received.push_back(std::move(outgoing));
+    }
+    terminals.resize(numRegs);
+    for (unsigned request = 0; request < requests.size(); ++request) {
+      SmallVector<Value> result;
+      for (const auto &transfer : requests[request]) {
+        const auto &value = transfer.mask ? received[transfer.exchange]
+                                          : prefixes[transfer.reg];
+        selectValues(result, value, transfer.lanes);
+      }
+      if (result.empty())
+        result =
+            prefixes.front(); // The boundary predicate excludes this value.
+      if (request % 2)
+        carries.push_back(
+            {std::move(result), lanePredicate(validLanes[request])});
+      else
+        terminals[request / 2] = std::move(result);
+    }
+    return true;
+  }
+
   // Include inter-warp carries in the thread totals before fetching the
   // preceding thread's total, so each local prefix receives one complete carry.
   void applyScanCarries(triton::ScanOp op, const ScanLoweringHelper &helper,
@@ -598,8 +785,17 @@ private:
     const auto &scanLayout = *helper.getIntraWarpScanLayout();
     if (!interWarpCarries.empty())
       applySegmentCarries(op, intraWarpTotals, interWarpCarries, rewriter);
-    convertScanValues(op, intraWarpTotals, scanLayout, intraWarpTotalsLayout,
-                      rewriter);
+    ScanValues terminals;
+    SmallVector<ScanCarry> carries;
+    bool routed = segmentRegs > 1 &&
+                  routeScanPrefixes(op, intraWarpTotals, scanLayout,
+                                    intraWarpTotalsLayout, numSegments, laneId,
+                                    rewriter, terminals, carries);
+    if (routed)
+      intraWarpTotals = std::move(terminals);
+    else
+      convertScanValues(op, intraWarpTotals, scanLayout, intraWarpTotalsLayout,
+                        rewriter);
 
     // Terminal prefixes are complete; only the other registers need carries.
     for (unsigned r = 0; r < intraWarpTotals.size(); ++r)
@@ -608,9 +804,10 @@ private:
     if (segmentRegs == 1)
       return;
 
-    auto carries = getSegmentCarries(op, intraWarpTotals, intraWarpTotalsLayout,
-                                     intraWarpTotalsLayout, numSegments, laneId,
-                                     warpId, rewriter);
+    if (!routed)
+      carries = getSegmentCarries(op, intraWarpTotals, intraWarpTotalsLayout,
+                                  intraWarpTotalsLayout, numSegments, laneId,
+                                  warpId, rewriter);
     if (!interWarpCarries.empty()) {
       unsigned segmentsPerWarp = carries.size() / interWarpCarries.size();
       for (auto [r, carry] : llvm::enumerate(carries)) {
