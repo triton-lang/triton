@@ -214,6 +214,15 @@ def _scan_affine_combine(a1, b1, a2, b2):
                                      [[1, 0], [0, 1], [2, 0], [0, 2], [4, 0]] + [[0, 0]] *
                                      (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32]),
         id="inverse_lane_lookup_with_parallel_bits"),
+    # Joint routing shares exchanges between terminal results and carries.
+    pytest.param(
+        ttgl.DistributedLinearLayout([[1, 0], [4, 0], [8, 0]], [[2, 0], [0, 1], [0, 2], [0, 4], [0, 8]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[16, 0], [0, 16]], [], [32, 32]),
+        id="shared_terminal_carry_exchanges"),
+    pytest.param(
+        ttgl.DistributedLinearLayout(
+            [[1, 0], [8, 0], [16, 0], [0, 16]], [[2, 0], [4, 0], [0, 1], [0, 2], [0, 4]] + [[0, 0]] *
+            (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 8]], [], [64, 32]), id="shared_carry_four_lanes"),
     # On axis 0, skip the lane scan independently of the inter-warp exchange.
     # Parallel columns occupy all NVIDIA lanes, so exchanged totals must also
     # scan entirely in registers. Axis 1 exercises a lane scan without exchange.
@@ -274,6 +283,12 @@ def test_scan_warp_conversion_mixed_width(dtype, reverse, device):
                                           [[1, 0], [0, 1], [2, 0], [0, 2], [4, 0]] + [[0, 0]] *
                                           (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [0, 0]], [], [64, 32])
     test_scan_layouts_noncommutative(layout, axis=0, reverse=reverse, M=64, device=device, a_dtype=dtype)
+
+    # Multi-element segments exercise joint routing of narrow and wide operands.
+    pair_layout = ttgl.DistributedLinearLayout([[1, 0], [4, 0], [8, 0]], [[2, 0], [0, 1], [0, 2], [0, 4], [0, 8]] +
+                                               [[0, 0]] * (THREADS_PER_WARP.bit_length() - 6), [[16, 0], [0, 16]], [],
+                                               [32, 32])
+    test_scan_layouts_noncommutative(pair_layout, axis=0, reverse=reverse, M=32, device=device, a_dtype=dtype)
 
 
 @pytest.mark.parametrize("layout, M", [
