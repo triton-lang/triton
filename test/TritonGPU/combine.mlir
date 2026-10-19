@@ -91,6 +91,24 @@ tt.func @remat_fast_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   tt.return
 }
 
+// Do not duplicate a volatile load that is used in two layouts
+// CHECK-LABEL: no_remat_volatile_load
+tt.func @no_remat_volatile_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+  %0 = tt.splat %arg : !tt.ptr<i32> -> tensor<16x!tt.ptr<i32>, #layout1>
+  %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #layout1>
+  %2 = tt.addptr %0, %1 : tensor<16x!tt.ptr<i32>, #layout1>, tensor<16xi32, #layout1>
+  // CHECK: %[[LOAD:.+]] = tt.load {{.*}}{isVolatile = true}
+  // CHECK-NEXT: ttg.convert_layout %[[LOAD]]
+  // CHECK-NOT: tt.load
+  // CHECK: tt.return
+  %3 = tt.load %2 {isVolatile = true} : tensor<16x!tt.ptr<i32>, #layout1>
+  %4 = ttg.convert_layout %3 : tensor<16xi32, #layout1> -> tensor<16xi32, #layout0>
+  %5 = ttg.convert_layout %2 : tensor<16x!tt.ptr<i32>, #layout1> -> tensor<16x!tt.ptr<i32>, #layout0>
+  tt.store %5, %4 : tensor<16x!tt.ptr<i32>, #layout0>
+  tt.store %2, %3 : tensor<16x!tt.ptr<i32>, #layout1>
+  tt.return
+}
+
 // CHECK-LABEL: fp4_keep_convert
 tt.func @fp4_keep_convert() -> tensor<64x64xf16, #linear> {
   %0 = arith.constant dense<0> : tensor<64x32xi8, #layout4>
@@ -4857,5 +4875,30 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     }) : (tensor<128x32xi32, #src>, tensor<128x32xf32, #src>) -> (tensor<128xi32, #slice>, tensor<128xf32, #slice>)
     %converted = ttg.convert_layout %r#1 : tensor<128xf32, #slice> -> tensor<128xf32, #dst>
     tt.return %r#0, %r#1, %converted : tensor<128xi32, #slice>, tensor<128xf32, #slice>, tensor<128xf32, #dst>
+  }
+}
+
+// -----
+
+#a = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#b = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @remat_nonuniform_constant
+  // CHECK-SAME: -> tensor<2x2xf32, #[[DST:[[:alnum:]_]+]]>
+  // CHECK-NEXT: %[[CST:.*]] = arith.constant dense<{{\[}}[1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00]]> : tensor<2x2xf32, #[[DST]]>
+  // CHECK-NEXT: tt.return %[[CST]]
+  tt.func @remat_nonuniform_constant() -> tensor<2x2xf32, #b> {
+    %init = arith.constant dense<[[1.0, 2.0], [3.0, 4.0]]> : tensor<2x2xf32, #a>
+    %cvt = ttg.convert_layout %init : tensor<2x2xf32, #a> -> tensor<2x2xf32, #b>
+    tt.return %cvt : tensor<2x2xf32, #b>
+  }
+  // CHECK-LABEL: @remat_nonuniform_integer_constant
+  // CHECK-SAME: -> tensor<2x2xi8, #[[DST:[[:alnum:]_]+]]>
+  // CHECK-NEXT: %[[CST:.*]] = arith.constant dense<{{\[}}[1, -2], [3, -4]]> : tensor<2x2xi8, #[[DST]]>
+  // CHECK-NEXT: tt.return %[[CST]]
+  tt.func @remat_nonuniform_integer_constant() -> tensor<2x2xi8, #b> {
+    %init = arith.constant dense<[[1, -2], [3, -4]]> : tensor<2x2xi8, #a>
+    %cvt = ttg.convert_layout %init : tensor<2x2xi8, #a> -> tensor<2x2xi8, #b>
+    tt.return %cvt : tensor<2x2xi8, #b>
   }
 }

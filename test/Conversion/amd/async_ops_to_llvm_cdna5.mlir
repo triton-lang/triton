@@ -329,7 +329,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 // Test async_copy_local_to_global with 16-bit data type.
-// On gfx1250, 16-bit stores are not directly supported, so they should be split into two 8-bit stores.
+// On CDNA5, 16-bit stores are not directly supported, so they should be split into two 8-bit stores.
 // sizePerThread = [1] with f16 (16-bit) should generate two b8 stores per element.
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

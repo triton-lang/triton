@@ -1,4 +1,5 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -88,7 +89,7 @@ std::optional<NvmmaSmemAttrs> getNvmmaSmemAttrs(ttg::MemDescType memTy) {
                           nvmma.getFp4Padded()};
 
   auto ll = ttg::toLinearLayout(memTy).pseudoinvert();
-  unsigned bitwidth = memTy.getElementType().getIntOrFloatBitWidth();
+  unsigned bitwidth = getIntOrFloatOrPtrBitWidth(memTy.getElementType());
   auto attrsAndCandidate = getNvmmaSmemAttrs(ll, bitwidth);
   if (!attrsAndCandidate)
     return std::nullopt;

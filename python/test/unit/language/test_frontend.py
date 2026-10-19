@@ -8,7 +8,7 @@ from triton.experimental import gluon
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
-from triton.compiler.errors import CompilationError
+from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import pytest
 from typing import NamedTuple
 
@@ -42,6 +42,40 @@ def anchor(v):
     pass
 
 
+@pytest.mark.parametrize("op", ["min", "max"])
+@pytest.mark.parametrize("return_indices", [False, True])
+@pytest.mark.parametrize("dtype", [tl.float32, tl.int32])
+@pytest.mark.parametrize("propagate_nan, valid", [
+    (tl.PropagateNan.NONE, True),
+    (tl.PropagateNan.ALL, True),
+    (None, False),
+    (False, False),
+    (True, False),
+    (0, False),
+    (1, False),
+    ("NONE", False),
+    (tl.PropagateNan, False),
+])
+def test_min_max_propagate_nan_type(op, return_indices, dtype, propagate_nan, valid):
+
+    @triton.jit
+    def kernel(OP: tl.constexpr, RETURN_INDICES: tl.constexpr, DTYPE: tl.constexpr, PROPAGATE_NAN: tl.constexpr):
+        x = tl.full((32, ), 1, DTYPE)
+        if OP == "min":
+            tl.min(x, 0, return_indices=RETURN_INDICES, propagate_nan=PROPAGATE_NAN)
+        else:
+            tl.max(x, 0, return_indices=RETURN_INDICES, propagate_nan=PROPAGATE_NAN)
+
+    args = (op, return_indices, dtype, propagate_nan)
+    if valid:
+        run_parser(kernel, args=args)
+    else:
+        with pytest.raises(CompilationError) as error:
+            run_parser(kernel, args=args)
+        assert isinstance(error.value.__cause__, CompileTimeAssertionFailure)
+        assert "propagate_nan must be a PropagateNan enum value" in str(error.value.__cause__)
+
+
 @pytest.mark.parametrize("scalar", [True, False])
 @pytest.mark.parametrize("src_dtype, dst_dtype", [(tl.bfloat16, tl.float16), (tl.float16, tl.bfloat16)])
 def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
@@ -58,6 +92,29 @@ def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
         anchor(y)
 
     run_filecheck_test(kernel, args=(MockTensor(src_dtype), scalar, dst_dtype))
+
+
+@pytest.mark.parametrize("dtype, ir_type", [(tl.float4e2m1x2, "!tt.fp4e2m1x2"), (tl.float8e8m0fnu, "f8E8M0FNU")])
+def test_native_float_types(dtype, ir_type):
+    assert dtype.primitive_bitwidth == 8 and dtype.itemsize == 1 and dtype != tl.uint8
+    assert dtype.is_floating() and dtype.kind() == tl.dtype.KIND.FLOATING
+
+    @triton.jit
+    def kernel(source, output, DTYPE: tl.constexpr, MIXED: tl.constexpr = False):
+        offsets = tl.arange(0, 32)
+        value = tl.load(source + offsets)
+        value = value.to(tl.uint8, bitcast=True).to(DTYPE, bitcast=True)
+        value = tl.where(offsets < 16, value, 1.0 if MIXED else value)
+        tl.static_assert(value.dtype == DTYPE)
+        tl.store(output + offsets, value)
+
+    args = (MockTensor(dtype), MockTensor(dtype), dtype)
+    module = run_parser(kernel, args=args)
+    assert module.verify()
+    text = module.str_nodebug()
+    assert ir_type in text and all(op in text for op in ("tt.bitcast", "tt.load", "tt.store"))
+    with pytest.raises(CompilationError, match="Implicit promotion"):
+        run_parser(kernel, args=(*args, True))
 
 
 def test_store_int_to_bool():

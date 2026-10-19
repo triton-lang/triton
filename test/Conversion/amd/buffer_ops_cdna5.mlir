@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s
 
-// Test buffer atomic RMW fadd with f32 on gfx1250
+// Test buffer atomic RMW fadd with f32 on CDNA5
 // Verifies correct cache policy with SCOPE_DEV and fence generation
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
@@ -28,7 +28,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// Test buffer atomic CAS with i32 on gfx1250
+// Test buffer atomic CAS with i32 on CDNA5
 // Verifies correct resource descriptor creation, fence generation,
 // and cache policy with SCOPE_DEV
 
@@ -60,8 +60,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// Test buffer atomic RMW fadd with bf16 on gfx1250
-// gfx1250 supports BUFFER_ATOMIC_PK_ADD_BF16 (packed bf16 fadd)
+// Test buffer atomic RMW fadd with bf16 on CDNA5
+// CDNA5 supports BUFFER_ATOMIC_PK_ADD_BF16 (packed bf16 fadd)
 // Offsets must be contiguous (via tt.make_range) so axis analysis
 // computes vec >= 2, which is required for packed v2bf16 atomics.
 

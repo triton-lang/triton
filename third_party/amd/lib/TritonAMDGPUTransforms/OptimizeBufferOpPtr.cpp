@@ -13,6 +13,7 @@
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
@@ -395,7 +396,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     }
 
     auto ptrType = cast<PointerType>(op.getPtr().getType());
-    auto elemBitwidth = ptrType.getPointeeType().getIntOrFloatBitWidth();
+    auto elemBitwidth = getIntOrFloatOrPtrBitWidth(ptrType.getPointeeType());
     auto dtypeByteWidth = elemBitwidth / 8;
     assert(dtypeByteWidth > 0);
     if (!isTransformationEquivalent(dtypeByteWidth, offsetLoopArgument,

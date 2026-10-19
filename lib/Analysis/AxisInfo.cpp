@@ -1456,7 +1456,7 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
     elemTy = ptrTy.getPointeeType();
   }
-  return getContiguity(value, elemTy.getIntOrFloatBitWidth());
+  return getContiguity(value, getIntOrFloatOrPtrBitWidth(elemTy));
 }
 
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
@@ -1488,7 +1488,7 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
     elemTy = ptrTy.getPointeeType();
   }
-  return getAlignment(value, elemTy.getIntOrFloatBitWidth());
+  return getAlignment(value, getIntOrFloatOrPtrBitWidth(elemTy));
 }
 
 unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,

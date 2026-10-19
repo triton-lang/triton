@@ -54,7 +54,7 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr) {
   //              3 = either swizzles or testing against offset field)
   // bits 30-31: Type (must be 0)
   //
-  // For GFX12+ (RDNA4, GFX1250): LLVM's lowerPointerAsRsrcIntrin()
+  // For GFX12+ (RDNA4, CDNA5): LLVM's lowerPointerAsRsrcIntrin()
   // (SIISelLowering.cpp) rebuilds the descriptor in v2i64 format (57-bit
   // base, 45-bit num_records) and shifts the flags operand left by 28 bits
   // into bits [127:124] of the descriptor. Therefore only flags bits [3:0]
@@ -65,10 +65,10 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr) {
   // OOB_select=0 is correct for raw buffer ops with stride=0
   // (structured and unstructured modes are equivalent in this case).
   // The RDNA-style flags below have bits [3:0]=0, so they are effectively
-  // ignored on GFX12+ but we include GFX1250 in the check for consistency.
+  // ignored on GFX12+ but we include CDNA5 in the check for consistency.
   uint32_t flags = (7 << 12) | (4 << 15);
   if (llvm::is_contained({ISAFamily::RDNA3, ISAFamily::RDNA4m, ISAFamily::RDNA4,
-                          ISAFamily::GFX1250},
+                          ISAFamily::CDNA5},
                          targetInfo.getISAFamily())) {
     flags |= (1 << 24);
     uint32_t oob = 3;
@@ -162,6 +162,12 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(type, true);
+  // A swap only moves bits, so exchange an integer of the same total width.
+  // The AMDGPU backend only selects i32, i64 and f32 buffer swaps; it has no
+  // f64 or packed 16-bit (v2f16, v2bf16) patterns.
+  if (rmwType == RMWOp::XCHG)
+    bufferType = rewriter.getIntegerType(vecTy.getNumElements() *
+                                         vecTy.getElementTypeBitWidth());
   if (vecTy != bufferType)
     data = b.bitcast(data, bufferType);
 

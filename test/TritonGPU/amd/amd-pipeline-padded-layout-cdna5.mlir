@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=2" -tritonamdgpu-pipeline -canonicalize | FileCheck %s
 
-// Verify that the gfx1250 pipeline pass produces padded shared encodings
+// Verify that the CDNA5 pipeline pass produces padded shared encodings
 // for dot-operand loads, with correct padding values per dtype and access
 // pattern (transposed vs non-transposed).
 

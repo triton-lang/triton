@@ -571,7 +571,7 @@ def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
       OpBuilder<(ins "TypedValue<RankedTensorType>":$src, "Type":$elemType, "int32_t":$axis)>
     ];
 
-  let arguments = (ins RankedTensorOf<[I8]>:$src, I32Attr:$axis);
+  let arguments = (ins RankedTensorOf<[I8, TT_FP4E2M1x2]>:$src, I32Attr:$axis);
   let results = (outs TT_FloatTensor:$result);
 
   let extraClassDeclaration = [{

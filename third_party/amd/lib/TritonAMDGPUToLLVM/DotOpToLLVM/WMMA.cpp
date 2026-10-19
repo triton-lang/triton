@@ -22,6 +22,7 @@
  */
 
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 
 #include "../PatternTritonGPUOpToLLVM.h"
 #include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
@@ -55,8 +56,8 @@ Value prepareOperands(ConversionPatternRewriter &rewriter, Value rawElems,
     // When scaleFactor == 16, scales are stored in i64
     // This only applies to scale operands, not regular dot operands
     Type targetTy = (isScale && kBase == 8) ? i64_ty : i32_ty;
-    auto elems =
-        kBase * type.getIntOrFloatBitWidth() / targetTy.getIntOrFloatBitWidth();
+    auto elems = kBase * getIntOrFloatOrPtrBitWidth(type) /
+                 targetTy.getIntOrFloatBitWidth();
     assert(elems >= 1 && "unexpected number of elements");
     if (elems == 1)
       convertedElems = tb.bitcast(rawElems, targetTy);
@@ -284,7 +285,7 @@ static inline int32_t getWmmaScaleDataType(Type scaleElemType) {
   // 1: E5M3
   // 2: E4M3
   return llvm::TypeSwitch<Type, int32_t>(scaleElemType)
-      .Case<IntegerType>([](Type) { return 0; })
+      .Case<IntegerType, Float8E8M0FNUType>([](Type) { return 0; })
       .Case<Float8E4M3FNType>([](Type) { return 2; })
       .Default([](Type) { return -1; });
 }

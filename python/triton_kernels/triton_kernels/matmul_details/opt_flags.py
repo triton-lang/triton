@@ -440,6 +440,10 @@ def make_default_opt_flags_nvidia(
         subtiles_to_check = [2]
     else:
         subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
+        if precision_config.c_mx_scale is not None and split_k == 1:
+            # Each output subtile must contain a complete quantization group.
+            subtiles_to_check = [ep for ep in subtiles_to_check
+                                if block_n // ep // epilogue_reduction_n >= precision_config.c_microblock_size]
     num_stages = -1
     for ep in subtiles_to_check:
         ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
