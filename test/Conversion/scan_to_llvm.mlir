@@ -1,4 +1,5 @@
 // RUN: split-file %s %t
+// RUN: triton-opt %t/interwarp-lane-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=LANE-GROUPS
 // RUN: triton-opt %t/shared-carry-routing.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=JOINT
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %t/scan.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s --check-prefix=WARP
@@ -966,4 +967,27 @@ tt.func private @test_shared_terminal_carry_reverse(%arg: tensor<32xi32, #pairs>
   }) : (tensor<32xi32, #pairs>) -> tensor<32xi32, #pairs>
   tt.return %result : tensor<32xi32, #pairs>
 }
+}
+
+//--- interwarp-lane-groups.mlir
+
+#columns = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+// Keep one axis lane bit and scan register groups from a single shared table.
+// LANE-GROUPS: ttg.shared = 98304 : i32
+// LANE-GROUPS-LABEL: llvm.func {{.*}}@test_scan_interwarp_lane_groups(
+// LANE-GROUPS: nvvm.barrier
+// LANE-GROUPS: nvvm.shfl.sync
+// LANE-GROUPS-NOT: nvvm.barrier
+// LANE-GROUPS: llvm.return
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+  tt.func private @test_scan_interwarp_lane_groups(%values: tensor<512x16xf32, #columns>, %keys: tensor<512x16xi64, #columns>) -> (tensor<512x16xf32, #columns>, tensor<512x16xi64, #columns>) {
+    %result:2 = "tt.scan"(%values, %keys) <{axis = 0 : i32, reverse = false}> ({
+    ^bb0(%a: f32, %ka: i64, %b: f32, %kb: i64):
+      %same = arith.cmpi eq, %ka, %kb : i64
+      %sum = arith.addf %a, %b : f32
+      %value = arith.select %same, %sum, %b : f32
+      tt.scan.return %value, %kb : f32, i64
+    }) : (tensor<512x16xf32, #columns>, tensor<512x16xi64, #columns>) -> (tensor<512x16xf32, #columns>, tensor<512x16xi64, #columns>)
+    tt.return %result#0, %result#1 : tensor<512x16xf32, #columns>, tensor<512x16xi64, #columns>
+  }
 }

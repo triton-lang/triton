@@ -398,6 +398,11 @@ def _scan_combine_adjacent_intervals(lo1, hi1, lo2, hi2):
     # No intra-warp carry in the original layout; totals span registers.
     pytest.param(ttgl.BlockedLayout([2, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 256, 32,
                  id="interwarp_groups_thread_prefixes"),
+    pytest.param(
+        ttgl.DistributedLinearLayout([[1, 0], [0, 1], [8, 0], [16, 0], [32, 0], [64, 0], [128, 0], [256, 0]],
+                                     [[0, 2], [0, 0], [0, 4], [0, 0], [0, 8]] + [[0, 0]] *
+                                     (THREADS_PER_WARP.bit_length() - 6), [[2, 0], [4, 0]], [], [512, 16]), 512, 16,
+        id="interwarp_groups_lane_ownership"),
     (ttgl.BlockedLayout([2, 1], [1, THREADS_PER_WARP], [4, 1], [0, 1]), 512, 32),
     # Independent scans provide register bits for the totals layout to exchange.
     pytest.param(ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP // 2, 2], [1, 4], [0, 1]), 64, 128,

@@ -491,12 +491,10 @@ bool ScanLoweringHelper::useGroupedInterWarpScan() const {
   auto scanOp = op;
   auto *ctx = scanOp.getContext();
   auto kReg = StringAttr::get(ctx, "register");
-  auto kLane = StringAttr::get(ctx, "lane");
   auto kBlock = StringAttr::get(ctx, "block");
   auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
   const auto &layout = *interWarpScanLayout;
-  if (!layout.sublayoutIsZero({kLane}, {axisDim}) ||
-      !layout.sublayoutIsZero({kBlock},
+  if (!layout.sublayoutIsZero({kBlock},
                               llvm::to_vector(layout.getOutDimNames())))
     return false;
   unsigned words = 0;
@@ -505,11 +503,10 @@ bool ScanLoweringHelper::useGroupedInterWarpScan() const {
       return false;
     words += llvm::divideCeil(type.getIntOrFloatBitWidth(), 32u);
   }
-  // Group long register-only scans when their replicated totals exceed 128
-  // logical 32-bit words per thread. Keep the full shared table within 64 KiB.
+  // Group long scans when their replicated totals exceed 128
+  // logical 32-bit words per thread.
   if (layout.getOutDimSize(axisDim) < 32 ||
-      layout.getInDimSize(kReg) * words <= 128 ||
-      getGroupedInterWarpScratchConfig().sizeInBytes > 64 * 1024)
+      layout.getInDimSize(kReg) * words <= 128)
     return false;
   return true;
 }

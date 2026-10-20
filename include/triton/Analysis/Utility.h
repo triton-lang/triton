@@ -245,10 +245,10 @@ public:
     return interWarpScanLayout;
   }
 
-  // Select grouped traversal for register-only totals with no intra-warp phase:
+  // Select grouped traversal for totals with no preceding intra-warp phase:
   // at least 32 totals along the axis, more than 128 logical 32-bit words per
-  // thread, and a complete shared table of at most 64 KiB. Operand types must
-  // be integers or floats of at least eight bits; block bases must be zero.
+  // thread. Operand types must be integers or floats of at least eight bits;
+  // block bases must be zero.
   bool useGroupedInterWarpScan() const;
   LayoutConversionScratchConfig getGroupedInterWarpScratchConfig() const;
 
