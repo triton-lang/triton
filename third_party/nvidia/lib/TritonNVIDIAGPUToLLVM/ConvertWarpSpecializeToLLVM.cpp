@@ -187,6 +187,16 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   TritonLLVMIRRewriter b(func.getLoc(), ctx);
   Builder rewriter(ctx);
 
+  // Lower the worker-state switch to conditional branches. A PTX jump table
+  // introduces a dependent constant-memory load on every worker dispatch.
+  SmallVector<Attribute> passthrough;
+  if (auto attrs = func->getAttrOfType<ArrayAttr>("passthrough"))
+    llvm::append_range(passthrough, attrs);
+  passthrough.push_back(
+      rewriter.getArrayAttr({rewriter.getStringAttr("no-jump-tables"),
+                             rewriter.getStringAttr("true")}));
+  func->setAttr("passthrough", rewriter.getArrayAttr(passthrough));
+
   // Generate the function header.
   Block *entry = &func.getBody().front();
   SmallVector<Location> argLocs = llvm::to_vector(llvm::map_range(

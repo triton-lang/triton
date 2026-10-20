@@ -5,8 +5,14 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32} 
 
 llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
+// CHECK-LABEL: llvm.func @not_warp_specialized() {
+llvm.func @not_warp_specialized() {
+  llvm.return
+}
+
 // CHECK-LABEL: @rewrite_barriers
-llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
+// CHECK-SAME: passthrough = ["noinline", ["no-jump-tables", "true"]]
+llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32, passthrough = ["noinline"]} {
   // CHECK-DAG: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK-DAG: [[C1:%.*]] = llvm.mlir.constant(1 : i32)
   // CHECK-DAG: [[C2:%.*]] = llvm.mlir.constant(2 : i32)
