@@ -4,12 +4,14 @@
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' -cse | FileCheck --check-prefix=VEC80 --dump-input-context=20 %s
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -cse | FileCheck --check-prefix=VEC90 --dump-input-context=20 %s
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' -cse | FileCheck --check-prefix=VEC100 --dump-input-context=20 %s
+// RUN: triton-opt %s --allocate-shared-memory-nv='compute-capability=107 ptx-version=94' --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_107a -mattr=+ptx94 | FileCheck --check-prefix=SM107 --dump-input-context=20 %s
 
 
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
 #blocked_reduce = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 2], order = [1, 0]}>
 #narrow_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
 #narrow_dst = #ttg.linear<{register = [], lane = [[2], [1], [4], [8], [16]], warp = [[32]], block = []}>
+#blocked_mixed_reduce = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [1, 32], warpsPerCTA = [1, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @reciprocal_f32(%ptr: !tt.ptr<f32>, %arg: f32) {
     // CHECK-LABEL: reciprocal_f32(
@@ -309,4 +311,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     tt.store %out, %1 : tensor<64x!tt.ptr<i32>, #narrow_dst>
     tt.return
   }
+
+  // SM107-LABEL: reduce_f16_to_f32_store
+  // SM107-COUNT-15: add.rn.f32x2.f16x2.f32x2
+  tt.func public @reduce_f16_to_f32_store(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xf16, #blocked_mixed_reduce>) {
+    %wide = arith.extf %arg0 : tensor<1x2048xf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {allocation.offset = 0 : i32} : (tensor<1x2048xf32, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    %ptr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.store %ptr, %r : tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.return
+  }
+
 }

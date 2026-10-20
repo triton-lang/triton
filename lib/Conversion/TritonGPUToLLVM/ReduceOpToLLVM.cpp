@@ -10,6 +10,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/ReduceOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -22,19 +23,15 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-namespace {
-struct ReduceOpConversion
-    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
+namespace mlir::triton {
+class ReduceOpConversionBase::Impl {
 public:
-  ReduceOpConversion(LLVMTypeConverter &typeConverter,
-                     const TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(typeConverter,
-                                                                  benefit),
-        targetInfo(targetInfo) {}
+  explicit Impl(const ReduceOpConversionBase &conversion)
+      : conversion(conversion), targetInfo(conversion.targetInfo) {}
 
-  LogicalResult
-  matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(triton::ReduceOp op,
+                                triton::ReduceOp::Adaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
     ReduceOpHelper helper(op);
     Location loc = op->getLoc();
     auto accs = unpackInputs(loc, op, adaptor, rewriter);
@@ -107,35 +104,8 @@ public:
   }
 
 private:
+  const ReduceOpConversionBase &conversion;
   const TargetInfoBase &targetInfo;
-
-  // Reduce values using a tree of the given arity. Arity=3 generates
-  // combine(combine(a, b), c) groups that LLVM folds into ternary
-  // instructions (e.g. v_maximum3_f32 on AMD).
-  SmallVector<Value> treeReduce(Location loc,
-                                ConversionPatternRewriter &rewriter,
-                                Region &combineOp,
-                                SmallVector<SmallVector<Value>> values,
-                                unsigned arity) const {
-    assert(!values.empty() && arity >= 2);
-    while (values.size() > 1) {
-      SmallVector<SmallVector<Value>> next;
-      for (size_t i = 0; i < values.size(); i += arity) {
-        size_t remaining = values.size() - i;
-        size_t groupSize = std::min(static_cast<size_t>(arity), remaining);
-        if (groupSize == 1) {
-          next.push_back(std::move(values[i]));
-        } else {
-          SmallVector<Value> acc = std::move(values[i]);
-          for (size_t j = 1; j < groupSize; ++j)
-            accumulate(loc, rewriter, combineOp, acc, values[i + j]);
-          next.push_back(std::move(acc));
-        }
-      }
-      values = std::move(next);
-    }
-    return values.front();
-  }
 
   void accumulate(Location loc, ConversionPatternRewriter &rewriter,
                   Region &combineOp, SmallVector<Value> &acc, ValueRange cur,
@@ -150,7 +120,8 @@ private:
   }
 
   SmallVector<SmallVector<Value>>
-  unpackInputs(Location loc, triton::ReduceOp op, OpAdaptor adaptor,
+  unpackInputs(Location loc, triton::ReduceOp op,
+               triton::ReduceOp::Adaptor adaptor,
                ConversionPatternRewriter &rewriter) const {
     auto operands = adaptor.getOperands();
     SmallVector<SmallVector<Value>> srcValues(op.getNumOperands());
@@ -313,7 +284,7 @@ private:
     unsigned arity =
         combinerOp ? targetInfo.getReductionTreeArity(combinerOp) : 2;
 
-    // Perform a tree reduction
+    // Perform an in-thread reduction.
     unsigned numOperands = accs.size();
     SmallVector<SmallVector<Value>> reduced(numOperands);
     unsigned regs = accs.front().size();
@@ -327,8 +298,8 @@ private:
         }
         vals.push_back(std::move(cur));
       }
-      auto acc =
-          treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
+      auto acc = conversion.reduceInThreadValues(loc, rewriter, combineRegion,
+                                                 std::move(vals), arity);
       for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }
@@ -467,8 +438,8 @@ private:
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       results[i] =
-          packUniqueTensorElements(loc, getTypeConverter(), accs[i], rewriter,
-                                   op.getResult()[i].getType());
+          packUniqueTensorElements(loc, conversion.getTypeConverter(), accs[i],
+                                   rewriter, op.getResult()[i].getType());
     }
     rewriter.replaceOp(op, results);
   }
@@ -509,8 +480,8 @@ private:
       auto elemTy = op.getElementTypes()[i];
       auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
       auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
-      Value packed = packUniqueTensorElements(loc, getTypeConverter(),
-                                              inVals[i], rewriter, srcTy);
+      Value packed = packUniqueTensorElements(
+          loc, conversion.getTypeConverter(), inVals[i], rewriter, srcTy);
       auto srcTensor =
           UnrealizedConversionCastOp::create(rewriter, loc, srcTy, packed)
               .getResult(0);
@@ -519,7 +490,7 @@ private:
       triton::nvidia_gpu::copyClusterBarrierMbarOffset(op, cvt);
       cvt->setAttr("allocation.offset",
                    IntegerAttr::get(offsetTy, baseOffset + scratch.offsets[i]));
-      Type packedDstTy = getTypeConverter()->convertType(dstTy);
+      Type packedDstTy = conversion.getTypeConverter()->convertType(dstTy);
       auto packedDst = UnrealizedConversionCastOp::create(
                            rewriter, loc, packedDstTy, cvt.getResult())
                            .getResult(0);
@@ -528,10 +499,59 @@ private:
     return outVals;
   }
 };
-} // namespace
+} // namespace mlir::triton
+
+ReduceOpConversionBase::ReduceOpConversionBase(LLVMTypeConverter &typeConverter,
+                                               const TargetInfoBase &targetInfo,
+                                               PatternBenefit benefit)
+    : Base(typeConverter, benefit), targetInfo(targetInfo) {}
+
+LogicalResult ReduceOpConversionBase::matchAndRewrite(
+    ReduceOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
+  return Impl(*this).matchAndRewrite(op, adaptor, rewriter);
+}
+
+SmallVector<Value> ReduceOpConversionBase::combineValues(
+    Location loc, ConversionPatternRewriter &rewriter, Region &combineOp,
+    ValueRange lhs, ValueRange rhs) const {
+  return applyCombineOp(loc, rewriter, combineOp, lhs, rhs);
+}
+
+SmallVector<Value> ReduceOpConversionBase::reduceInThreadValues(
+    Location loc, ConversionPatternRewriter &rewriter, Region &combineOp,
+    SmallVector<SmallVector<Value>> values, unsigned arity) const {
+  return treeReduce(loc, rewriter, combineOp, std::move(values), arity);
+}
+
+// Reduce values using a tree of the given arity. Arity=3 generates
+// combine(combine(a, b), c) groups that LLVM folds into ternary instructions
+// (e.g. v_maximum3_f32 on AMD).
+SmallVector<Value> ReduceOpConversionBase::treeReduce(
+    Location loc, ConversionPatternRewriter &rewriter, Region &combineOp,
+    SmallVector<SmallVector<Value>> values, unsigned arity) const {
+  assert(!values.empty() && arity >= 2);
+  while (values.size() > 1) {
+    SmallVector<SmallVector<Value>> next;
+    for (size_t i = 0; i < values.size(); i += arity) {
+      size_t remaining = values.size() - i;
+      size_t groupSize = std::min(static_cast<size_t>(arity), remaining);
+      if (groupSize == 1) {
+        next.push_back(std::move(values[i]));
+        continue;
+      }
+
+      SmallVector<Value> acc = std::move(values[i]);
+      for (size_t j = 1; j < groupSize; ++j)
+        acc = combineValues(loc, rewriter, combineOp, acc, values[i + j]);
+      next.push_back(std::move(acc));
+    }
+    values = std::move(next);
+  }
+  return values.front();
+}
 
 void mlir::triton::populateReduceOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
-  patterns.add<ReduceOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<ReduceOpConversionBase>(typeConverter, targetInfo, benefit);
 }
