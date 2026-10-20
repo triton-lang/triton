@@ -217,6 +217,7 @@ Iterators
     :nosignatures:
 
     static_range
+    range
 
 
 Inline Assembly
