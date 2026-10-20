@@ -1,5 +1,4 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/Iterators.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -35,20 +34,6 @@ Domain guardDomain(Operation *op) {
             guard.getCondition().getDefiningOp<ThreadPredicateOp>())
       return predicate.getDomain();
   return {};
-}
-
-scf::IfOp physicalGuard(Operation *op) {
-  for (Operation *parent = op->getParentOp(); parent;
-       parent = parent->getParentOp())
-    if (guardDomain(parent))
-      return cast<scf::IfOp>(parent);
-  return {};
-}
-
-Domain executionDomain(Operation *op) {
-  if (auto guard = physicalGuard(op))
-    return guardDomain(guard);
-  return fullDomain(op->getContext());
 }
 
 bool isScalar(Type type) {
@@ -147,24 +132,6 @@ DenseSet<Operation *> getAtomicDependencies(Block *block) {
       slice.insert(&op);
   }
   return slice;
-}
-
-void hoistMovableArithmetic(SmallVectorImpl<Operation *> &ops) {
-  llvm::SetVector<Operation *> retainedOps;
-  for (Operation *op : ops) {
-    bool uniform = isMovableArithmetic(op) &&
-                   llvm::all_of(op->getOperands(), [&](Value operand) {
-                     return !retainedOps.contains(operand.getDefiningOp()) &&
-                            !operand.getDefiningOp<ThreadHandoffOp>();
-                   });
-    // Leading uniform operations already precede the first retained operation.
-    if (!uniform)
-      retainedOps.insert(op);
-    else if (!retainedOps.empty())
-      op->moveBefore(retainedOps.front());
-  }
-  assert(!retainedOps.empty());
-  ops = retainedOps.takeVector();
 }
 
 bool isTensorTailOperation(Operation *op) {
@@ -302,7 +269,6 @@ void wrapScalarRegion(ArrayRef<Operation *> ops, const RegionEffects &effects,
   if (effects.needsBarrierAfter)
     emitBarrier();
   // Cross-warp and cross-CTA handoffs require the full region's participants.
-  // Sinking narrows handoffs whose users share a compatible guard.
   for (auto [output, result] : llvm::zip_equal(outputs, guard.getResults())) {
     Value value = ThreadHandoffOp::create(b, loc, result, owner,
                                           fullDomain(owner.getContext()));
@@ -310,85 +276,6 @@ void wrapScalarRegion(ArrayRef<Operation *> ops, const RegionEffects &effects,
       return !guard->isProperAncestor(use.getOwner());
     });
   }
-}
-
-void restrictHandoffConsumers(ArrayRef<ThreadHandoffOp> handoffs) {
-  for (ThreadHandoffOp handoff : handoffs) {
-    assert(handoff.getDestination().isFull() &&
-           "only handoffs outside physical guards are collected");
-    for (Operation *consumer : handoff.getResult().getUsers()) {
-      if (!executionDomain(consumer).isFull())
-        continue;
-      auto tail = findTensorTail(consumer, ownerDomain(consumer));
-      if (!tail.ops.empty())
-        wrapThreadRegion(tail.ops.getArrayRef(), {}, tail.domain);
-    }
-  }
-}
-
-Region *findSinkRegion(Operation *op) {
-  if (op->use_empty())
-    return nullptr;
-  Operation *firstUser = *op->getUsers().begin();
-  scf::IfOp branch;
-  auto handoff = dyn_cast<ThreadHandoffOp>(op);
-  if (handoff) {
-    if (!handoff.getDestination().isFull())
-      return nullptr;
-    branch = physicalGuard(firstUser);
-    if (!branch ||
-        !guardDomain(branch).hasSameWarpAndBlock(handoff.getSource()))
-      return nullptr;
-  } else {
-    if (!isMovableArithmetic(op))
-      return nullptr;
-    // Keep arithmetic in its current loop and physical execution domain.
-    branch = dyn_cast_or_null<scf::IfOp>(
-        op->getBlock()->findAncestorOpInBlock(*firstUser));
-    if (!branch || executionDomain(branch).isFull())
-      return nullptr;
-  }
-  for (Region &region : branch->getRegions()) {
-    if (llvm::all_of(op->getUsers(), [&](Operation *user) {
-          return region.isAncestor(user->getParentRegion());
-        }))
-      return &region;
-  }
-  return nullptr;
-}
-
-// Sink movable arithmetic into inner conditionals containing all its uses.
-//
-// a = x + 1
-// if ready:
-//     use(a)
-// ===>
-// if ready:
-//     a = x + 1
-//     use(a)
-//
-// Sink handoffs into compatible thread guards and narrow their destinations.
-//
-// value = handoff(thread_0_result, destination=all_128_threads)
-// if warp_id == 0:
-//     consume(value)
-// ===>
-// if warp_id == 0:
-//     value = handoff(thread_0_result, destination=warp_0)
-//     consume(value)
-void sinkRegionInputs(ModuleOp mod) {
-  // Process users before producers to propagate sinking without a worklist.
-  mod.walk<WalkOrder::PostOrder, ReverseIterator>([&](Operation *op) {
-    while (Region *region = findSinkRegion(op)) {
-      if (auto handoff = dyn_cast<ThreadHandoffOp>(op)) {
-        Domain destination = guardDomain(region->getParentOp());
-        assert((destination == handoff.getSource() || !destination.getLane()) &&
-               "generated regions use either the owner lane or every lane");
-        handoff.setDestinationAttr(destination);
-      }
-      op->moveBefore(&region->front(), region->front().begin());
-    }
-  });
 }
 
 void optimizeBlock(Block *block) {
@@ -424,7 +311,6 @@ void optimizeBlock(Block *block) {
     // Keep regions with memory accesses or atomic-dependent work.
     if (!effects.hasMemory && !atomicDependent)
       continue;
-    hoistMovableArithmetic(ops);
     Domain owner = ownerDomain(ops.front(), atomicDependent);
     // Keep CTA-0 atomic-dependent work out of a preceding per-CTA region.
     auto tail = !atomicDependent && atomicDependencies.contains(next)
@@ -483,20 +369,14 @@ public:
     ModuleOp mod = getOperation();
     // Callback scalars vary per element, including in their callees.
     auto tensorCallbackOps = getTensorCallbackOps(mod);
-    SmallVector<ThreadHandoffOp> handoffs;
     mod.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
       if (tensorCallbackOps.contains(op) || guardDomain(op))
         return WalkResult::skip();
       for (Region &region : op->getRegions())
         for (Block &block : region)
           optimizeBlock(&block);
-      if (auto handoff = dyn_cast<ThreadHandoffOp>(op))
-        handoffs.push_back(handoff);
       return WalkResult::advance();
     });
-    // Make eligible consumers of handoffs execute on fewer threads.
-    restrictHandoffConsumers(handoffs);
-    sinkRegionInputs(mod);
   }
 };
 } // namespace
