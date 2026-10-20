@@ -27,11 +27,11 @@ unsigned getAtomicResultScratchSize(Value result);
 /// Returns whether an operation uses scratch memory across CTAs.
 bool hasCrossCTAScratch(Operation *op);
 
-/// For atomic-result scratch, returns the CTA bits broadcast from
+/// For result-broadcast scratch, returns the CTA bits broadcast from
 /// each group leader. Physical scratch owners have these bits clear.
-/// Scalar results are broadcast from CTA0 across all CTAs.
+/// Scalar atomic results are broadcast from CTA0 across all CTAs.
 /// Callers check whether scratch has been allocated.
-std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op);
+std::optional<uint16_t> getResultScratchBroadcastMask(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,

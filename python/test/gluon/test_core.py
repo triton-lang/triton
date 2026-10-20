@@ -11,6 +11,7 @@ import triton.language as tl
 from triton import CompilationError
 
 from triton._internal_testing import (
+    assert_no_collectives_in_ptx_loop,
     is_compile_warmup,
     is_cuda,
     is_ampere_or_newer,
@@ -7930,3 +7931,164 @@ def test_fabric_submit_one_request_per_region(op, aborted, worker_warps, capacit
     if op != "ack":
         assert sorted(records) == [(4 * (index + 2), 4 * (index + 1), 0 if op == "zero_send" else 28)
                                    for index in range(nrequests)]
+
+
+@pytest.mark.parametrize("atomic", [False, True])
+def test_thread_regions_async_wait_scalar_store(atomic, device):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+
+    @gluon.jit
+    def kernel(In, Out, Flag, ATOMIC: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        offsets = ttgl.arange(0, 128, layout=layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        async_copy.async_load(smem, In + offsets)
+        async_copy.commit_group()
+        async_copy.wait_group(0)
+        if ATOMIC:
+            ttgl.atomic_store(Flag, 1, sem="relaxed")
+        else:
+            ttgl.store(Flag, 1)
+        values = smem.load(layout)
+        ttgl.store(Out + offsets, values)
+
+    data = torch.arange(128, device=device, dtype=torch.int32)
+    out = torch.empty_like(data)
+    flag = torch.zeros((), device=device, dtype=torch.int32)
+    kernel[(1, )](data, out, flag, atomic, num_warps=4)
+    torch.testing.assert_close(out, data)
+    assert flag.item() == 1
+
+
+@pytest.mark.parametrize("call_depth", [0, 1, 2], ids=["inline", "noinline", "transitive"])
+def test_thread_regions_map_elementwise_callees(call_depth, device, fresh_knobs):
+    if not is_ampere_or_newer():
+        pytest.skip("requires Ampere or newer")
+    fresh_knobs.compilation.instrumentation_mode = ""
+    # Map calls currently lack the debug locations required for noinline callees.
+    fresh_knobs.compilation.disable_line_info = call_depth > 0
+
+    @gluon.jit
+    def conditional_load(pointer, enabled):
+        if enabled:
+            value = ttgl.load(pointer)
+        else:
+            value = 0
+        return value
+
+    @gluon.jit(noinline=True)
+    def noinline_load(pointer, enabled):
+        return conditional_load(pointer, enabled)
+
+    @gluon.jit(noinline=True)
+    def forward_load(pointer, enabled):
+        return noinline_load(pointer, enabled)
+
+    callback = (conditional_load, noinline_load, forward_load)[call_depth]
+
+    @gluon.jit
+    def kernel(In, Out):
+        value = ttgl.atomic_load(In, sem="relaxed")
+        ttgl.store(Out + 128, value)
+        offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        values = ttgl.map_elementwise(callback, In + offsets, offsets % 2 == 0)
+        ttgl.store(Out + offsets, values)
+
+    offsets = torch.arange(128, device=device, dtype=torch.int32)
+    values = offsets * 3 + 7
+    output = torch.empty(129, device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](values, output, num_warps=4)
+
+    torch.testing.assert_close(output[:128], torch.where(offsets % 2 == 0, values, 0))
+    assert output[128].item() == values[0].item()
+    assert compiled.asm["ttgir"].count("noinline = true") >= call_depth
+    # The scalar atomic/store outside the map should still avoid a broadcast.
+    assert compiled.metadata.shared == 0
+
+
+@pytest.mark.parametrize("kind", ["reduce", "scan"])
+@pytest.mark.parametrize("indirect", [False, True])
+def test_thread_regions_combiner_callees(kind, indirect, device, fresh_knobs):
+    if not is_cuda():
+        pytest.skip("requires NVIDIA thread region lowering")
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    # Immutable loads make address selection an associative combiner.
+    @gluon.jit
+    def choose_max(a, b):
+        if a == b:
+            selected = a
+        else:
+            av = ttgl.load(a.to(ttgl.pointer_type(ttgl.int32)))
+            bv = ttgl.load(b.to(ttgl.pointer_type(ttgl.int32)))
+            selected = ttgl.where(av >= bv, a, b)
+        return selected
+
+    @gluon.jit(noinline=True)
+    def noinline_choose(a, b):
+        return choose_max(a, b)
+
+    @gluon.jit(noinline=True)
+    def forward_choose(a, b):
+        return noinline_choose(a, b)
+
+    callback = forward_choose if indirect else choose_max
+
+    @gluon.jit
+    def kernel(In, Out, KIND: ttgl.constexpr):
+        offsets = ttgl.arange(0, 32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        addresses = (In + offsets).to(ttgl.uint64)
+        if KIND == "reduce":
+            selected = ttgl.reduce(addresses, 0, callback)
+            ttgl.store(Out, ttgl.load(selected.to(ttgl.pointer_type(ttgl.int32))))
+        else:
+            selected = ttgl.associative_scan(addresses, 0, callback)
+            ttgl.store(Out + offsets, ttgl.load(selected.to(ttgl.pointer_type(ttgl.int32))))
+
+    values = torch.arange(32, device=device, dtype=torch.int32) * 7 % 32
+    output = torch.empty(1 if kind == "reduce" else 32, device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](values, output, kind, num_warps=4)
+    expected = values.max().reshape(1) if kind == "reduce" else values.cummax(0).values
+    torch.testing.assert_close(output, expected)
+    if indirect:
+        assert compiled.asm["ttgir"].count("noinline = true") >= 2
+
+
+@pytest.mark.parametrize("num_ctas", [2, 4])
+@pytest.mark.parametrize("tile", [32, 128])
+@pytest.mark.parametrize("replicated", [False, True])
+@pytest.mark.parametrize("atomic", [False, True])
+def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, device, fresh_knobs):
+    if not is_cuda():
+        pytest.skip("requires NVIDIA thread region lowering")
+    skip_if_unsupported_cluster_size(num_ctas)
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @gluon.jit
+    def kernel(In, Out, iterations, WIDTH: ttgl.constexpr, LAYOUT: ttgl.constexpr, ATOMIC: ttgl.constexpr):
+        if ATOMIC:
+            value = ttgl.atomic_load(In, sem="relaxed")
+        else:
+            value = ttgl.load(In)
+        for i in range(iterations):
+            if ATOMIC:
+                value += ttgl.atomic_add(In, 1, sem="relaxed")
+            else:
+                value += ttgl.load(In + i)
+        offsets = ttgl.arange(0, WIDTH, layout=LAYOUT)
+        ttgl.store(Out + offsets, value)
+
+    width = tile if replicated else tile * num_ctas
+    cga = tuple((0 if replicated else 1 << bit, ) for bit in range(num_ctas.bit_length() - 1))
+    layout = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=cga)
+    values = torch.arange(7, 10, device=device, dtype=torch.int32)
+    out = torch.full((width, ), -1, device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](values, out, 3, width, layout, atomic, num_warps=4, num_ctas=num_ctas)
+    torch.testing.assert_close(out, torch.full_like(out, 31))
+    assert values[0].item() == (10 if atomic else 7)
+    assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
+    if tile == 128:
+        assert compiled.metadata.shared > 0
+    if not atomic:
+        assert "mapa.shared::cluster" not in compiled.asm["ptx"]
