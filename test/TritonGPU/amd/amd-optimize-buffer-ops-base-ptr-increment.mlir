@@ -587,3 +587,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %for#1 : tensor<256xi32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: native_fp4_base_increment
+  tt.func @native_fp4_base_increment(%src: !tt.ptr<!tt.fp4e2m1x2>, %dst: !tt.ptr<!tt.fp4e2m1x2>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c8 = arith.constant 8 : i32
+    %step = arith.constant dense<64> : tensor<64xi32, #blocked>
+    %offsets = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32, #blocked>
+    scf.for %i = %c0 to %c8 step %c1 iter_args(%offset = %offsets) -> (tensor<64xi32, #blocked>) : i32 {
+      // CHECK: amdg.buffer_load {{.*}} : !tt.ptr<!tt.fp4e2m1x2> -> tensor<64x!tt.fp4e2m1x2, #blocked>
+      %value = amdg.buffer_load %src[%offset] : !tt.ptr<!tt.fp4e2m1x2> -> tensor<64x!tt.fp4e2m1x2, #blocked>
+      amdg.buffer_store %value, %dst[%offset] : !tt.ptr<!tt.fp4e2m1x2> -> tensor<64x!tt.fp4e2m1x2, #blocked>
+      // CHECK-COUNT-2: tt.addptr {{.*}} : !tt.ptr<!tt.fp4e2m1x2>, i32
+      %next = arith.addi %offset, %step : tensor<64xi32, #blocked>
+      scf.yield %next : tensor<64xi32, #blocked>
+    }
+    tt.return
+  }
+}

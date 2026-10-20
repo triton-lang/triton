@@ -1,4 +1,5 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Support/LLVM.h"
@@ -507,7 +508,7 @@ LogicalResult convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB,
   auto bShapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
   auto dShapePerCTA = triton::gpu::getShapePerCTA(dTensorTy);
 
-  int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
+  int bitwidth = getIntOrFloatOrPtrBitWidth(aTensorTy.getElementType());
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   int kWidth = dotOpA.getKWidth();
   auto repA =

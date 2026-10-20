@@ -17,6 +17,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -813,15 +814,15 @@ void LayoutRematerialization::rewriteSlice(
       op->erase();
       continue;
     }
-    if (isa<arith::ConstantOp>(op)) {
-      Operation *newOp = builder.clone(*op);
-      auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
-      auto newType = tensorType.cloneWithEncoding(layout[op->getResult(0)]);
-      auto cvt = ConvertLayoutOp::create(builder, op->getLoc(), newType,
-                                         newOp->getResult(0));
-      mapping.map(op->getResult(0), cvt.getResult());
-      addRematValue(op->getResult(0), layout[op->getResult(0)],
-                    cvt.getResult());
+    if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
+      auto tensorType = cast<RankedTensorType>(constant.getType());
+      auto newType = tensorType.cloneWithEncoding(layout[constant.getResult()]);
+      auto value =
+          cast<DenseElementsAttr>(constant.getValue()).reshape(newType);
+      auto newOp = arith::ConstantOp::create(builder, op->getLoc(), value);
+      mapping.map(constant.getResult(), newOp.getResult());
+      addRematValue(constant.getResult(), layout[constant.getResult()],
+                    newOp.getResult());
       continue;
     }
     Operation *newOp = builder.clone(*op, mapping);
@@ -988,8 +989,8 @@ static int64_t getByteCount(Value result, int64_t minElementCount = 0,
   if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
     elementCount = tensorTy.getNumElements();
     auto elemType = tensorTy.getElementType();
-    if (elemType.isIntOrFloat()) {
-      dtypeBitWidth = elemType.getIntOrFloatBitWidth();
+    if (!isa<PointerType>(elemType)) {
+      dtypeBitWidth = getIntOrFloatOrPtrBitWidth(elemType);
     }
   }
   if (elementCount < minElementCount) {
