@@ -485,7 +485,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     fresh_knobs = fresh_knobs_including_libraries
     # bool defaulting to False
     assert not fresh_knobs.runtime.debug
-    assert not fresh_knobs.language.default_fp_fusion
+    assert fresh_knobs.language.default_fp_fusion
     assert not fresh_knobs.language.force_disable_fp_fusion
     # str defaulting to None
     assert fresh_knobs.compilation.use_ir_loc is None
