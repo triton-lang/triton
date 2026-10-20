@@ -16,14 +16,18 @@ from triton._internal_testing import run_in_process as _run_in_process
 
 
 def run_in_process(client_fn, args=(), kwargs=None, env=None):
-    # Silence the branch-specific TRITON_DEFAULT_FP_FUSION deprecation warning
-    # in the child process: the success cases below assert on empty
+    result = _run_in_process(client_fn, args, kwargs, env)
+    # Strip the branch-specific TRITON_DEFAULT_FP_FUSION deprecation warning
+    # from captured stderr: the success cases below assert on empty
     # driver_stderr_output, and the warning is unrelated to the consan checks.
-    # =1 matches the branch default, so numerics are unchanged.
-    merged_env = {"TRITON_DEFAULT_FP_FUSION": "1"}
-    if env:
-        merged_env.update(env)
-    return _run_in_process(client_fn, args, kwargs, merged_env)
+    # The env var itself is deliberately not set: it is part of the
+    # compilation cache key, and warmup compiles without it, so setting it
+    # here would break compile-warmup cache hits.
+    stderr = getattr(result, "driver_stderr_output", None)
+    if stderr:
+        result.driver_stderr_output = "".join(
+            line for line in stderr.splitlines(keepends=True) if "TRITON_DEFAULT_FP_FUSION" not in line)
+    return result
 
 
 pytestmark = [pytest.mark.enable_warmup(min_capability=9), pytest.mark.usefixtures("process_pool")]
