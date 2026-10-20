@@ -465,8 +465,13 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   ScanLoweringHelper helper(op);
   auto loc = helper.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (!helper.isSupported())
-    return op.emitError("TODO: unsupported scan layout");
+  if (!helper.isSupported()) {
+    if (!helper.hasBlockedEncoding())
+      return op.emitError("scan currently supports only blocked encodings");
+    return op.emitError("scan axis is split across CTAs, but scans are "
+                        "currently lowered within a single CTA; use num_ctas "
+                        "= 1 or split a non-scan axis instead");
+  }
 
   Value threadId = getThreadId(rewriter, loc);
   auto mod = op->getParentOfType<ModuleOp>();

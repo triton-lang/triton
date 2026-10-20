@@ -120,6 +120,11 @@ public:
   explicit ScanLoweringHelper(triton::ScanOp op);
   // Return true if the lowering of the scan op is supported.
   bool isSupported();
+  // true if the encoding is blocked, thats the only kind we lower right now
+  bool hasBlockedEncoding();
+  // true if the scan axis isnt split across CTAs. partial results only get
+  // combined inside a single CTA
+  bool isScanWithinCTA();
   // Return the number of elements per thread along axis dim.
   unsigned getAxisNumElementsPerThread();
   // Return the number of elements per thread along non-axis dims.
