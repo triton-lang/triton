@@ -278,7 +278,7 @@ class HIPOptions:
     # Experimental: intended for development and debugging; may change or be removed without notice.
     # Comma-separated LLVM command line options applied to every LLVM pipeline run of this kernel;
     # bare names are set to true. Option names omit the leading dash.
-    # Example: llvm_cl_opts="enable-gvn-hoist,unroll-threshold=150"
+    # Example: llvm_cl_opts="amdgpu-use-amdgpu-trackers,unroll-threshold=150"
     llvm_cl_opts: str | Tuple[Tuple[str, str], ...] = ""
 
     def __post_init__(self):
