@@ -11,6 +11,17 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
+struct AnnotateOpConversion : public ConvertOpToLLVMPattern<AnnotateOp> {
+  using ConvertOpToLLVMPattern<AnnotateOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(AnnotateOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, adaptor.getSrc());
+    return success();
+  }
+};
+
 struct AddPtrOpConversion : public ConvertOpToLLVMPattern<AddPtrOp> {
   using ConvertOpToLLVMPattern<AddPtrOp>::ConvertOpToLLVMPattern;
 
@@ -755,6 +766,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
+  patterns.add<AnnotateOpConversion>(typeConverter, benefit);
   patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
   patterns.add<InlineAsmOpConversion>(typeConverter, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
