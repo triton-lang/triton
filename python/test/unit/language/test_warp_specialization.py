@@ -358,7 +358,7 @@ def test_warp_specialize_atomic_rmw_fallback_preserves_effects():
 
 
 @pytest.mark.skipif(is_hip() or not is_hopper(), reason="Requires Hopper CUDA")
-def test_warp_specialize_atomic_producer_preserves_returned_value():
+def test_warp_specialize_atomic_producer_preserves_returned_value(with_allocator):
     torch.manual_seed(11989)
     a = torch.randn((128, 256), device="cuda", dtype=torch.float16)
     b = torch.randn((256, 256), device="cuda", dtype=torch.float16)
@@ -368,10 +368,6 @@ def test_warp_specialize_atomic_producer_preserves_returned_value():
     counter_plain = torch.zeros_like(counter_ws)
     offset = torch.zeros_like(counter_ws)
 
-    def alloc_fn(size, align, stream):
-        return torch.empty(size, device="cuda", dtype=torch.uint8)
-
-    triton.set_allocator(alloc_fn)
     kernel_ws = atomic_producer_ws_kernel[(1, )](a, b, out_ws, counter_ws, offset, True, num_warps=4, num_stages=3)
     atomic_producer_ws_kernel[(1, )](a, b, out_plain, counter_plain, offset, False, num_warps=4, num_stages=3)
     if is_compile_warmup():
