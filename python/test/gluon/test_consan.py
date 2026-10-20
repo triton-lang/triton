@@ -11,7 +11,20 @@ from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
 from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
-from triton._internal_testing import is_compile_warmup, is_cuda, is_rubin, run_in_process
+from triton._internal_testing import is_compile_warmup, is_cuda, is_rubin
+from triton._internal_testing import run_in_process as _run_in_process
+
+
+def run_in_process(client_fn, args=(), kwargs=None, env=None):
+    # Silence the branch-specific TRITON_DEFAULT_FP_FUSION deprecation warning
+    # in the child process: the success cases below assert on empty
+    # driver_stderr_output, and the warning is unrelated to the consan checks.
+    # =1 matches the branch default, so numerics are unchanged.
+    merged_env = {"TRITON_DEFAULT_FP_FUSION": "1"}
+    if env:
+        merged_env.update(env)
+    return _run_in_process(client_fn, args, kwargs, merged_env)
+
 
 pytestmark = [pytest.mark.enable_warmup(min_capability=9), pytest.mark.usefixtures("process_pool")]
 
