@@ -30,10 +30,6 @@ config.substitutions.append(("%shlibext", config.llvm_shlib_ext))
 
 llvm_config.with_system_environment(['HOME', 'INCLUDE', 'LIB', 'TMP', 'TEMP'])
 
-llvm_config.feature_config([
-    ('--assertion-mode', {'ON': 'asserts'}),
-])
-
 # llvm_config.use_default_substitutions()
 
 # excludes: A list of directories to exclude from the testsuite. The 'Inputs'
