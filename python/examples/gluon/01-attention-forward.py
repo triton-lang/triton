@@ -1,10 +1,13 @@
 import copy
 import math
+import sys
 import torch
 import triton
 import pytest
 import itertools
 from dataclasses import dataclass, fields, replace
+
+from triton._internal_testing import sparse_attention_ref
 
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
@@ -19,9 +22,12 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tma,
     mbarrier,
     tcgen05_mma,
+    tcgen05_mma_sp,
     tcgen05_mma_barrier_count,
     tcgen05_commit,
+    repack_mdata_for_tcgen05_mma_sp,
 )
+import triton._C.libtriton.gluon_ir as gluon_ir
 
 # ===-----------------------------------------------------------------------===#
 # Layout Utilities
@@ -231,8 +237,13 @@ class AttentionConfig:
     qk_tmem_layout: gl.constexpr
     o_tmem_layout: gl.constexpr
     p_tmem_layout: gl.constexpr
+    p_sparse_tmem_layout: gl.constexpr
+    p_mdata_tmem_layout: gl.constexpr
 
     qk_layout: gl.constexpr
+    qk_sparse_subtile_layout: gl.constexpr
+    p_sparse_subtile_layout: gl.constexpr
+    p_mdata_subtile_layout: gl.constexpr
     o_splitn_layout: gl.constexpr
     alpha_2d_layout: gl.constexpr
 
@@ -284,11 +295,32 @@ class AttentionConfig:
         self.p_tmem_layout = gl.constexpr(
             TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), col_stride=1, cga_layout=self.CGA_LAYOUT,
                                two_ctas=self.TWO_CTAS))
+        self.p_sparse_tmem_layout = gl.constexpr(
+            TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1] // 2), col_stride=1))
+        self.p_mdata_tmem_layout = gl.constexpr(
+            TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1] // 32), col_stride=1))
+        sparse_subtile_n: gl.constexpr = (self.BLOCK_N // 2) // self.SPLIT_QK_LOAD_FACTOR
+        sparse_subtile_tmem_layout: gl.constexpr = TensorMemoryLayout((self.SPLIT_M_PER_CTA, sparse_subtile_n),
+                                                                      col_stride=1)
+        mdata_subtile_n: gl.constexpr = (self.BLOCK_N // 32) // self.SPLIT_QK_LOAD_FACTOR
+        mdata_subtile_tmem_layout: gl.constexpr = TensorMemoryLayout((self.SPLIT_M_PER_CTA, mdata_subtile_n),
+                                                                     col_stride=1)
         o_splitn_tmem_layout: gl.constexpr = TensorMemoryLayout(
             (o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR), col_stride=1, cga_layout=self.CGA_LAYOUT,
             two_ctas=self.TWO_CTAS)
         qk_tmem_ty: gl.constexpr = tensor_memory_descriptor_type(gl.float32, self.qk_shape, self.qk_tmem_layout,
                                                                  self.qk_shape)
+        qk_sparse_subtile_tmem_ty: gl.constexpr = tensor_memory_descriptor_type(gl.float32,
+                                                                                (self.SPLIT_M, sparse_subtile_n),
+                                                                                sparse_subtile_tmem_layout,
+                                                                                (self.SPLIT_M, sparse_subtile_n))
+        p_sparse_subtile_tmem_ty: gl.constexpr = tensor_memory_descriptor_type(self.dtype,
+                                                                               (self.SPLIT_M, sparse_subtile_n),
+                                                                               sparse_subtile_tmem_layout,
+                                                                               (self.SPLIT_M, sparse_subtile_n))
+        p_mdata_subtile_tmem_ty: gl.constexpr = tensor_memory_descriptor_type(gl.int32, (self.SPLIT_M, mdata_subtile_n),
+                                                                              mdata_subtile_tmem_layout,
+                                                                              (self.SPLIT_M, mdata_subtile_n))
         o_splitn_tmem_ty: gl.constexpr = tensor_memory_descriptor_type(
             gl.float32,
             [self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR],
@@ -298,6 +330,9 @@ class AttentionConfig:
 
         self.qk_layout = gl.constexpr(qk_tmem_ty.get_reg_layout(num_warps=self.num_warps,
                                                                 instr_variant="32x32b_splitn"))
+        self.qk_sparse_subtile_layout = gl.constexpr(qk_sparse_subtile_tmem_ty.get_reg_layout(num_warps=self.num_warps))
+        self.p_sparse_subtile_layout = gl.constexpr(p_sparse_subtile_tmem_ty.get_reg_layout(num_warps=self.num_warps))
+        self.p_mdata_subtile_layout = gl.constexpr(p_mdata_subtile_tmem_ty.get_reg_layout(num_warps=self.num_warps))
         self.o_splitn_layout = gl.constexpr(o_splitn_tmem_ty.get_reg_layout(num_warps=self.num_warps))
         self.alpha_2d_layout = gl.constexpr(
             gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1], cga_layout=self.CGA_LAYOUT))
@@ -390,21 +425,66 @@ def _borrow_s_as_p(config, s_tmem):
 
 
 @gluon.jit
-def _borrow_s_as_alpha(config, s_tmem):
-    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1,
-                                                    cga_layout=config.CGA_LAYOUT, two_ctas=config.TWO_CTAS)
-    alpha_tmem = s_tmem.reinterpret(layout=alpha_layout)
-    return alpha_tmem.slice(config.BLOCK_N // 2, 1)
+def _borrow_s_as_p_sparse(config, s_tmem):
+    p_sparse_tmem = s_tmem.slice(0, config.BLOCK_N // 2)
+    return p_sparse_tmem.reinterpret(config.dtype, [config.SPLIT_M, config.BLOCK_N // 2], config.p_sparse_tmem_layout)
 
 
 @gluon.jit
-def _borrow_s_for_epilogue(config, s_tmem):
+def _borrow_s_as_p_mdata(config, s_tmem):
+    p_mdata_tmem = s_tmem.slice(config.BLOCK_N // 2, config.BLOCK_N // 32)
+    return p_mdata_tmem.reinterpret(gl.int32, [config.SPLIT_M, config.BLOCK_N // 32], config.p_mdata_tmem_layout)
+
+
+@gluon.constexpr_function
+def _s_epilogue_offset(config, use_sparse: gl.constexpr):
+    if use_sparse:
+        return config.BLOCK_N // 2 + config.BLOCK_N // 32
+    return config.BLOCK_N // 2
+
+
+@gluon.jit
+def _borrow_s_as_alpha(config, s_tmem, use_sparse: gl.constexpr):
+    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1,
+                                                    cga_layout=config.CGA_LAYOUT, two_ctas=config.TWO_CTAS)
+    alpha_tmem = s_tmem.reinterpret(layout=alpha_layout)
+    return alpha_tmem.slice(_s_epilogue_offset(config, use_sparse), 1)
+
+
+@gluon.jit
+def _borrow_s_for_epilogue(config, s_tmem, use_sparse: gl.constexpr):
+    epilogue_offset: gl.constexpr = _s_epilogue_offset(config, use_sparse)
     layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M_PER_CTA, 1], col_stride=1, cga_layout=config.CGA_LAYOUT,
                                               two_ctas=config.TWO_CTAS)
     s_tmem = s_tmem.reinterpret(layout=layout)
-    m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
-    l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
+    m_i_tmem = s_tmem.slice(epilogue_offset + 1, 1)
+    l_i_tmem = s_tmem.slice(epilogue_offset + 2, 1)
     return m_i_tmem, l_i_tmem
+
+
+@gluon.jit
+def _issue_pv_mma(config, s_tmem, v_smem, o_tmem, use_acc, mbarriers, use_sparse: gl.constexpr):
+    if use_sparse:
+        p_tmem = _borrow_s_as_p_sparse(config, s_tmem)
+        p_mdata_tmem = _borrow_s_as_p_mdata(config, s_tmem)
+        tcgen05_mma_sp(p_tmem, v_smem, o_tmem, p_mdata_tmem, use_acc=use_acc, mbarriers=mbarriers)
+    else:
+        p_tmem = _borrow_s_as_p(config, s_tmem)
+        tcgen05_mma(p_tmem, v_smem, o_tmem, use_acc=use_acc, multicast=True, mbarriers=mbarriers)
+
+
+@gluon.jit
+def _issue_pv_mma_for_tile(config, s_tmem, v_smem, o_tmem, use_acc, mbarriers, use_sparse: gl.constexpr,
+                           causal: gl.constexpr, is_diagonal):
+    if use_sparse and causal:
+        # is_diagonal is block-uniform: it is derived only from the program's
+        # logical query tile and the loop's key tile.
+        if is_diagonal:
+            _issue_pv_mma(config, s_tmem, v_smem, o_tmem, use_acc, mbarriers, False)
+        else:
+            _issue_pv_mma(config, s_tmem, v_smem, o_tmem, use_acc, mbarriers, True)
+    else:
+        _issue_pv_mma(config, s_tmem, v_smem, o_tmem, use_acc, mbarriers, use_sparse)
 
 
 @gluon.constexpr_function
@@ -510,7 +590,7 @@ def _attn_fwd_load(config, chnls, descs, M, STAGE: gl.constexpr):
 
 
 @gluon.jit
-def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
+def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr, use_sparse: gl.constexpr):
     q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
 
@@ -526,6 +606,8 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
         prog = scheduler.get_program(pid)
         lo, hi = prog.get_fused_loop_bounds(STAGE)
         num_mmas = (hi - lo) // config.BLOCK_N
+        pv_start_n = lo
+        diagonal_start = prog.start_m * config.BLOCK_M
 
         q0_smem, q0_bar, q_consumer = q_consumer.acquire()
         k_smem, k_bar, kv_consumer = kv_consumer.acquire()
@@ -540,8 +622,8 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
         v_smem = _reinterpret_kv_as_v(kv_smem, desc_v)
         o0_tmem, o0_bar, o_producer = o_producer.acquire()
         s0_tmem, s0_bar, s0_producer = s0_producer.acquire()
-        p0_tmem = _borrow_s_as_p(config, s0_tmem)
-        tcgen05_mma(p0_tmem, v_smem, o0_tmem, use_acc=False, multicast=True, mbarriers=[o0_bar])
+        _issue_pv_mma_for_tile(config, s0_tmem, v_smem, o0_tmem, False, (o0_bar, ), use_sparse, STAGE == 3, pv_start_n
+                               >= diagonal_start)
         o1_init = False
 
         for _ in range(num_mmas - 1):
@@ -550,9 +632,10 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
 
             o1_tmem, o1_bar, o_producer = o_producer.acquire()
             s1_tmem, s1_bar, s1_producer = s1_producer.acquire()
-            p1_tmem = _borrow_s_as_p(config, s1_tmem)
-            tcgen05_mma(p1_tmem, v_smem, o1_tmem, use_acc=o1_init, multicast=True, mbarriers=[o1_bar, v_bar])
+            _issue_pv_mma_for_tile(config, s1_tmem, v_smem, o1_tmem, o1_init, (o1_bar, v_bar), use_sparse, STAGE == 3,
+                                   pv_start_n >= diagonal_start)
             o1_init = True
+            pv_start_n += config.BLOCK_N
 
             tcgen05_mma(q1_smem, k_smem.permute((1, 0)), s1_tmem, use_acc=False, multicast=True,
                         mbarriers=[s1_bar, k_bar])
@@ -561,17 +644,16 @@ def _attn_fwd_mma(config, chnls, descs, M, STAGE: gl.constexpr):
             v_smem = _reinterpret_kv_as_v(kv_smem, desc_v)
             o0_tmem, o0_bar, o_producer = o_producer.acquire()
             s0_tmem, s0_bar, s0_producer = s0_producer.acquire()
-            p0_tmem = _borrow_s_as_p(config, s0_tmem)
-            tcgen05_mma(p0_tmem, v_smem, o0_tmem, multicast=True, mbarriers=[o0_bar])
+            _issue_pv_mma_for_tile(config, s0_tmem, v_smem, o0_tmem, True, (o0_bar, ), use_sparse, STAGE == 3,
+                                   pv_start_n >= diagonal_start)
 
         tcgen05_commit(q0_bar, descs=[q0_smem, k_smem.permute((1, 0))])
         tcgen05_commit(q1_bar, descs=[q1_smem, k_smem.permute((1, 0))])
 
         o1_tmem, o1_bar, o_producer = o_producer.acquire()
         s1_tmem, s1_bar, s1_producer = s1_producer.acquire()
-        p1_tmem = _borrow_s_as_p(config, s1_tmem)
-        tcgen05_mma(p1_tmem, v_smem, o1_tmem, use_acc=o1_init, multicast=True,
-                    mbarriers=[o1_bar, v_bar, s0_bar, s1_bar])
+        _issue_pv_mma_for_tile(config, s1_tmem, v_smem, o1_tmem, o1_init, (o1_bar, v_bar, s0_bar, s1_bar), use_sparse,
+                               STAGE == 3, pv_start_n >= diagonal_start)
 
 
 @gluon.jit
@@ -611,6 +693,27 @@ def _compute_and_store_exp2(config, qk, p_tmem):
 
 
 @gluon.jit
+def _compute_and_store_exp2_sparsify(config, qk_compressed, mdatas, p_sparse_tmem, p_mdata_tmem):
+    qks = _split_n(qk_compressed, config.SPLIT_EXP_FACTOR)
+    ps_compressed = ()
+    for i in gl.static_range(config.SPLIT_EXP_FACTOR):
+        ps_compressed = ps_compressed + (gl.exp2(qks[i]), )
+    p_compressed = _join_n(ps_compressed)
+    p_compressed_typed = p_compressed.to(config.dtype)
+
+    p_halves = _split_n(p_compressed_typed, config.SPLIT_QK_LOAD_FACTOR)
+    SIZE_SPARSE: gl.constexpr = p_sparse_tmem.shape[1] // config.SPLIT_QK_LOAD_FACTOR
+    SIZE_MDATA: gl.constexpr = p_mdata_tmem.shape[1] // config.SPLIT_QK_LOAD_FACTOR
+    for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
+        mdata = mdatas[i]
+        mdata = repack_mdata_for_tcgen05_mma_sp(mdata, config.dtype)
+        p_sparse_tmem.slice(i * SIZE_SPARSE,
+                            SIZE_SPARSE).store(gl.convert_layout(p_halves[i], config.p_sparse_subtile_layout))
+        p_mdata_tmem.slice(i * SIZE_MDATA, SIZE_MDATA).store(gl.convert_layout(mdata, config.p_mdata_subtile_layout))
+    return p_compressed
+
+
+@gluon.jit
 def _subtiled_qk_load(config, s_tmem, use_tmem_red: gl.constexpr):
     SIZE: gl.constexpr = s_tmem.shape[1] // config.SPLIT_QK_LOAD_FACTOR
     qks = ()
@@ -639,35 +742,82 @@ def _combine_add2(a, b, c, d):
 
 
 @gluon.jit
+def _subtiled_qk_load_dense(config, s_tmem):
+    SIZE: gl.constexpr = config.BLOCK_N // config.SPLIT_QK_LOAD_FACTOR
+    qks = ()
+    for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
+        qks = qks + (s_tmem.slice(i * SIZE, SIZE).load(), )
+    return _join_n(qks)
+
+
+@gluon.jit
+def _subtiled_qk_store_dense(config, s_tmem, qk):
+    SIZE: gl.constexpr = config.BLOCK_N // config.SPLIT_QK_LOAD_FACTOR
+    qks = _split_n(qk, config.SPLIT_QK_LOAD_FACTOR)
+    for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
+        s_tmem.slice(i * SIZE, SIZE).store(qks[i])
+
+
+@gluon.jit
+def _subtiled_qk_load_sparsify(config, s_tmem):
+    SIZE: gl.constexpr = config.BLOCK_N // config.SPLIT_QK_LOAD_FACTOR
+    qks = ()
+    mdatas = ()
+    red_total = None
+    for i in gl.static_range(config.SPLIT_QK_LOAD_FACTOR):
+        cdata, mdata, reds = s_tmem.slice(i * SIZE, SIZE).load_sparsify_red(config.qk_sparse_subtile_layout,
+                                                                            gluon_ir.TMEM_ROWOP.MAX)
+        red_total = reds if red_total is None else gl.maximum(red_total, reds)
+        qks = qks + (cdata, )
+        mdatas = mdatas + (mdata, )
+    return _join_n(qks), red_total, mdatas
+
+
+@gluon.jit
 def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
                         s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                        offs_m, m_i, l_i, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
+                        offs_m, m_i, l_i, STAGE: gl.constexpr, use_tmem_red: gl.constexpr, use_sparse: gl.constexpr):
     lo, hi = prog.get_loop_bounds(STAGE)
     # A TMEM reduction on the causal diagonal would see scores before the
     # causal mask is applied. Load that tile without a reduction and compute
     # its maximum from the masked register values instead.
     use_tmem_red_for_tile: gl.constexpr = use_tmem_red and STAGE != 2
+    sparsify_tile: gl.constexpr = use_sparse and STAGE != 2
 
     for start_n in range(lo, hi, config.BLOCK_N):
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
-        qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red_for_tile)
-
-        if STAGE == 2:
-            col_limit_right = (offs_m - start_n + 1)[:, None]
-            qk = _apply_causal_mask(qk, col_limit_right)
-
-        if use_tmem_red_for_tile:
+        if sparsify_tile:
+            if STAGE == 2:
+                qk_dense = _subtiled_qk_load_dense(config, s_tmem)
+                col_limit_right = (offs_m - start_n + 1)[:, None]
+                qk_dense = _apply_causal_mask(qk_dense, col_limit_right)
+                _subtiled_qk_store_dense(config, s_tmem, qk_dense)
+            qk, qk_max, mdatas = _subtiled_qk_load_sparsify(config, s_tmem)
             qk_max = gl.convert_layout(qk_max, m_i.type.layout)
-            m_ij = gl.maximum(m_i, qk_max * config.qk_scale)
         else:
-            m_ij = gl.maximum(m_i, gl.max(qk, 1) * config.qk_scale)
+            qk, qk_max = _subtiled_qk_load(config, s_tmem, use_tmem_red_for_tile)
+
+            if STAGE == 2:
+                col_limit_right = (offs_m - start_n + 1)[:, None]
+                qk = _apply_causal_mask(qk, col_limit_right)
+
+            if use_tmem_red_for_tile:
+                qk_max = gl.convert_layout(qk_max, m_i.type.layout)
+            else:
+                qk_max = gl.max(qk, 1)
+        m_ij = gl.maximum(m_i, qk_max * config.qk_scale)
         alpha = gl.exp2(m_i - m_ij)
 
-        alpha_tmem = _borrow_s_as_alpha(config, s_tmem)
+        alpha_tmem = _borrow_s_as_alpha(config, s_tmem, use_sparse)
         alpha_tmem.store(gl.convert_layout(alpha.expand_dims(1), config.alpha_2d_layout))
         mbarrier.arrive(corr_bar, count=1)
 
-        qk = bw.fma2(qk, config.qk_scale, -m_ij[:, None])
+        if sparsify_tile:
+            rowmax = (-m_ij[:, None]).broadcast_to(qk.shape)
+            rowmax = gl.convert_layout(rowmax, qk.type.layout)
+            qk = bw.fma2(qk, config.qk_scale, rowmax)
+        else:
+            qk = bw.fma2(qk, config.qk_scale, -m_ij[:, None])
 
         # Force the softmax partitions to take turns in the EX2 section. This
         # prevents contention for the EX2 unit and improves utilization.
@@ -677,8 +827,13 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
         # FIXME: When using FADD2 reductions, ptxas misbehaves and spills far
         # below the register limit in the FADD2, FMUL2, EX2 section. Subtile by
         # 4 to minimize the spilling.
-        p_tmem = _borrow_s_as_p(config, s_tmem)
-        p = _compute_and_store_exp2(config, qk, p_tmem)
+        if sparsify_tile:
+            p_sparse_tmem = _borrow_s_as_p_sparse(config, s_tmem)
+            p_mdata_tmem = _borrow_s_as_p_mdata(config, s_tmem)
+            p = _compute_and_store_exp2_sparsify(config, qk, mdatas, p_sparse_tmem, p_mdata_tmem)
+        else:
+            p_tmem = _borrow_s_as_p(config, s_tmem)
+            p = _compute_and_store_exp2(config, qk, p_tmem)
 
         mbarrier.arrive(s_bar, count=1)
         _, corr_bar, corr_producer = corr_producer.acquire()
@@ -698,7 +853,7 @@ def _softmax_inner_loop(tile_id: gl.constexpr, config, prog,  #
 
 @gluon.jit
 def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,  #
-                  s_chnl, corr_chnl, exp_turnstile, use_tmem_red: gl.constexpr):
+                  s_chnl, corr_chnl, exp_turnstile, use_tmem_red: gl.constexpr, use_sparse: gl.constexpr):
     qk_slice_dim1: gl.constexpr = gl.SliceLayout(1, config.qk_layout)
     sum_layout: gl.constexpr = _get_split_n_layout(config.qk_layout)
 
@@ -721,16 +876,16 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
         if STAGE & 1:
             m_i, l_i, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
                 tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                offs_m, m_i, l_i, STAGE=4 - STAGE, use_tmem_red=use_tmem_red)
+                offs_m, m_i, l_i, STAGE=4 - STAGE, use_tmem_red=use_tmem_red, use_sparse=use_sparse)
         if STAGE & 2:
             m_i, l_i, corr_bar, s_consumer, corr_producer, exp_turnstile = _softmax_inner_loop(  #
                 tile_id, config, prog, s_consumer, corr_producer, exp_turnstile, corr_bar,  #
-                offs_m, m_i, l_i, STAGE=2, use_tmem_red=use_tmem_red)
+                offs_m, m_i, l_i, STAGE=2, use_tmem_red=use_tmem_red, use_sparse=use_sparse)
         l_i0, l_i1 = gl.split(l_i)
         l_i = l_i0 + l_i1
 
         s_tmem, s_bar, s_consumer = s_consumer.acquire()
-        m_i_tmem, l_i_tmem = _borrow_s_for_epilogue(config, s_tmem)
+        m_i_tmem, l_i_tmem = _borrow_s_for_epilogue(config, s_tmem, use_sparse)
         m_i_tmem.store(gl.convert_layout(m_i.expand_dims(1), config.alpha_2d_layout))
         l_i_tmem.store(gl.convert_layout(l_i.expand_dims(1), config.alpha_2d_layout))
 
@@ -741,17 +896,21 @@ def _softmax_tile(tile_id: gl.constexpr, config, M, desc_o, STAGE: gl.constexpr,
 
 
 @gluon.jit
-def _attn_fwd_softmax0(config, chnls, descs, M, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
+def _attn_fwd_softmax0(config, chnls, descs, M, STAGE: gl.constexpr, use_tmem_red: gl.constexpr,
+                       use_sparse: gl.constexpr):
     q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
-    _softmax_tile(0, config, M, desc_o, STAGE, s0_chnl, c0_chnl, exp_turnstile.create_producer(), use_tmem_red)
+    _softmax_tile(0, config, M, desc_o, STAGE, s0_chnl, c0_chnl, exp_turnstile.create_producer(), use_tmem_red,
+                  use_sparse)
 
 
 @gluon.jit
-def _attn_fwd_softmax1(config, chnls, descs, M, STAGE: gl.constexpr, use_tmem_red: gl.constexpr):
+def _attn_fwd_softmax1(config, chnls, descs, M, STAGE: gl.constexpr, use_tmem_red: gl.constexpr,
+                       use_sparse: gl.constexpr):
     q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
     desc_q, desc_k, desc_v, desc_o = descs
-    _softmax_tile(1, config, M, desc_o, STAGE, s1_chnl, c1_chnl, exp_turnstile.create_consumer(), use_tmem_red)
+    _softmax_tile(1, config, M, desc_o, STAGE, s1_chnl, c1_chnl, exp_turnstile.create_consumer(), use_tmem_red,
+                  use_sparse)
 
 
 @gluon.jit
@@ -777,13 +936,13 @@ def _attn_fwd_epilogue(config, chnls, descs, M, STAGE: gl.constexpr):
 
 
 @gluon.jit
-def _attn_fwd_correction_rescale(config, s_tmem, corr_consumer, o_consumer):
+def _attn_fwd_correction_rescale(config, s_tmem, corr_consumer, o_consumer, use_sparse: gl.constexpr):
     alpha_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
 
     o_tmem, o_bar, o_consumer = o_consumer.acquire()
 
     _, corr_bar, corr_consumer = corr_consumer.acquire()
-    alpha = _borrow_s_as_alpha(config, s_tmem).load(config.alpha_2d_layout)
+    alpha = _borrow_s_as_alpha(config, s_tmem, use_sparse).load(config.alpha_2d_layout)
     mbarrier.arrive(corr_bar, count=1)
     alpha = gl.convert_layout(alpha.reshape([config.SPLIT_M]), alpha_layout)
 
@@ -797,11 +956,12 @@ def _attn_fwd_correction_rescale(config, s_tmem, corr_consumer, o_consumer):
 
 
 @gluon.jit
-def _attn_fwd_correction_epilogue(config, prog, s_tmem, M, corr_consumer, epi_producer, o_consumer):
+def _attn_fwd_correction_epilogue(config, prog, s_tmem, M, corr_consumer, epi_producer, o_consumer,
+                                  use_sparse: gl.constexpr):
     alpha_layout: gl.constexpr = gl.SliceLayout(1, config.o_splitn_layout)
 
     _, corr_bar, corr_consumer = corr_consumer.acquire()
-    m_i_tmem, l_i_tmem = _borrow_s_for_epilogue(config, s_tmem)
+    m_i_tmem, l_i_tmem = _borrow_s_for_epilogue(config, s_tmem, use_sparse)
     m_i = m_i_tmem.load(config.alpha_2d_layout).reshape([config.SPLIT_M])
     m_i = gl.convert_layout(m_i, alpha_layout)
     l_i = l_i_tmem.load(config.alpha_2d_layout).reshape([config.SPLIT_M])
@@ -842,7 +1002,7 @@ def _attn_fwd_correction_epilogue(config, prog, s_tmem, M, corr_consumer, epi_pr
 
 
 @gluon.jit
-def _attn_fwd_correction(config, chnls, descs, M, STAGE: gl.constexpr):
+def _attn_fwd_correction(config, chnls, descs, M, STAGE: gl.constexpr, use_sparse: gl.constexpr):
     q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile = chnls
 
     s0_tmem = s0_chnl.mem.index(0)
@@ -865,17 +1025,21 @@ def _attn_fwd_correction(config, chnls, descs, M, STAGE: gl.constexpr):
         mbarrier.arrive(corr1_bar, count=1)
 
         for i in range(num_corrections - 1):
-            corr0_consumer, o_consumer = _attn_fwd_correction_rescale(config, s0_tmem, corr0_consumer, o_consumer)
-            corr1_consumer, o_consumer = _attn_fwd_correction_rescale(config, s1_tmem, corr1_consumer, o_consumer)
+            corr0_consumer, o_consumer = _attn_fwd_correction_rescale(config, s0_tmem, corr0_consumer, o_consumer,
+                                                                      use_sparse)
+            corr1_consumer, o_consumer = _attn_fwd_correction_rescale(config, s1_tmem, corr1_consumer, o_consumer,
+                                                                      use_sparse)
 
         corr0_consumer, epi_producer, o_consumer = _attn_fwd_correction_epilogue(  #
-            config, prog, s0_tmem, M, corr0_consumer, epi_producer, o_consumer)
+            config, prog, s0_tmem, M, corr0_consumer, epi_producer, o_consumer, use_sparse)
         corr1_consumer, epi_producer, o_consumer = _attn_fwd_correction_epilogue(  #
-            config, prog, s1_tmem, M + config.SPLIT_M, corr1_consumer, epi_producer, o_consumer)
+            config, prog, s1_tmem, M + config.SPLIT_M, corr1_consumer, epi_producer, o_consumer, use_sparse)
 
 
 def attention_repr(specialization):
     name = "gluon_attention"
+    if specialization.constants["use_sparse"]:
+        name += "_sparse"
     # Up to 150 TFLOPS faster for fp8!
     if specialization.constants["dtype"] == gl.float8e5:
         name = "cutlass_" + name
@@ -893,7 +1057,7 @@ def attention_kernel(  #
         BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, HEAD_DIM: gl.constexpr,  #
         GROUP_SIZE_N: gl.constexpr, NUM_SMS: gl.constexpr, STAGE: gl.constexpr, SPLIT_EXP_FACTOR: gl.constexpr,  #
         dtype: gl.constexpr, num_warps: gl.constexpr, use_tmem_red: gl.constexpr, NUM_KV_BUFFERS: gl.constexpr,
-        USE_EXP2_TURNSTILE: gl.constexpr, CGA_LAYOUT: gl.constexpr):
+        USE_EXP2_TURNSTILE: gl.constexpr, CGA_LAYOUT: gl.constexpr, use_sparse: gl.constexpr):
     qk_scale = sm_scale * 1.44269504
     config = AttentionConfig(qk_scale, Z, H, N_CTX, CGA_LAYOUT, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS,
                              STAGE, SPLIT_EXP_FACTOR,  #
@@ -949,10 +1113,10 @@ def attention_kernel(  #
     chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
     descs = (desc_q, desc_k, desc_v, desc_o)
     gl.warp_specialize([
-        (_attn_fwd_correction, (config, chnls, descs, M, STAGE)),
-        (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE, use_tmem_red)),
-        (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE, use_tmem_red)),
-        (_attn_fwd_mma, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_correction, (config, chnls, descs, M, STAGE, use_sparse)),
+        (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE, use_tmem_red, use_sparse)),
+        (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE, use_tmem_red, use_sparse)),
+        (_attn_fwd_mma, (config, chnls, descs, M, STAGE, use_sparse)),
         (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
         (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
     ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
@@ -1022,6 +1186,8 @@ def select_kernel_config(
     causal: bool,
     use_tmem_red: bool,
     override: KernelConfig | None = None,
+    *,
+    use_sparse: bool = False,
 ) -> KernelConfig:
     is_fp8 = dtype == torch.float8_e5m2
     is_bf16 = dtype == torch.bfloat16
@@ -1122,6 +1288,30 @@ def select_kernel_config(
                 use_exp2_turnstile = False
                 cga_layout = () if n_ctx <= 1024 else ((1, 0), )
 
+    # Sparse attention changes the balance between softmax and P x V. Keep
+    # D128 on the current Rubin policy, but use the D64 choices that remain
+    # beneficial after the dense-causal-diagonal change.
+    if is_rubin() and use_sparse:
+        use_selected_tmem_red = True
+        cga_layout = ()
+        maxnreg = 128
+        if head_dim == 64 and dtype == torch.float16:
+            if causal and n_ctx >= 2048:
+                group_size_n = 8
+                split_exp_factor = 4
+                num_kv_buffers = 6
+                use_exp2_turnstile = True
+            elif not causal and n_ctx <= 2048:
+                group_size_n = 1
+                split_exp_factor = 1
+                num_kv_buffers = 6
+                use_exp2_turnstile = False
+        elif head_dim == 64 and is_fp8:
+            group_size_n = 8 if causal else 1
+            split_exp_factor = 2
+            num_kv_buffers = 6
+            use_exp2_turnstile = False
+
     config = KernelConfig(
         BLOCK_M=block_m,
         BLOCK_N=block_n,
@@ -1150,8 +1340,10 @@ def select_benchmark_kernel_config(
     causal: bool,
     use_tmem_red: bool,
     override: KernelConfig | None = None,
+    *,
+    use_sparse: bool = False,
 ) -> KernelConfig:
-    config = select_kernel_config(head_dim, n_ctx, dtype, causal, use_tmem_red, override)
+    config = select_kernel_config(head_dim, n_ctx, dtype, causal, use_tmem_red, override, use_sparse=use_sparse)
     return replace(config, USE_TMEM_RED=use_tmem_red)
 
 
@@ -1166,8 +1358,8 @@ def make_tensor_desc(x, shape, strides, block_shape, cga_layout=()):
     return TensorDescriptor(x, shape=shape, strides=strides, block_shape=block_shape, layout=layout)
 
 
-def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red=False, p: KernelConfig | None = None,
-                      cga_layout=None, config_selector=select_kernel_config):
+def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red=False, use_sparse=False,
+                      p: KernelConfig | None = None, cga_layout=None, config_selector=select_kernel_config):
     if isinstance(o, bool) and M is None and use_tmem_red is False:
         use_tmem_red = o
         o = None
@@ -1176,10 +1368,15 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
     HEAD_DIM_V = v.shape[-1]
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
     assert HEAD_DIM_K in {16, 32, 64, 128, 256}
-
+    if use_sparse:
+        use_tmem_red = True
+        if not is_rubin():
+            raise RuntimeError("Sparse attention requires Rubin GPU (sm_107a)")
     stage = 3 if causal else 1
-    p = config_selector(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red, override=p)
-    if cga_layout is None:
+    p = config_selector(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red, override=p, use_sparse=use_sparse)
+    if use_sparse:
+        cga_layout = ()
+    elif cga_layout is None:
         cga_layout = p.CGA_LAYOUT
 
     if o is None:
@@ -1221,7 +1418,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
         BLOCK_M, BLOCK_N, HEAD_DIM_K, GROUP_SIZE_N, NUM_SMS,  #
         SPLIT_EXP_FACTOR=p.SPLIT_EXP_FACTOR, STAGE=stage, dtype=torch_dtype_to_triton(q.dtype),  #
         num_warps=p.NUM_WARPS, maxnreg=p.MAXNREG, use_tmem_red=p.USE_TMEM_RED, NUM_KV_BUFFERS=p.NUM_KV_BUFFERS,
-        USE_EXP2_TURNSTILE=p.USE_EXP2_TURNSTILE, CGA_LAYOUT=cga_layout, num_ctas=num_ctas)
+        USE_EXP2_TURNSTILE=p.USE_EXP2_TURNSTILE, CGA_LAYOUT=cga_layout, use_sparse=use_sparse, num_ctas=num_ctas)
 
     return o, M
 
@@ -1242,13 +1439,17 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
 @pytest.mark.parametrize("cga_layout", [(), ((1, 0), ), ((1, 0), (2, 0))], ids=["1cta", "2ctas", "4ctas"])
 @pytest.mark.skipif(not is_blackwell(), reason="Gluon attention is only supported on Blackwell GPUs")
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, profile=False,
-            p: KernelConfig | None = None, config_selector=select_kernel_config):
+            p: KernelConfig | None = None, use_sparse=False, config_selector=select_kernel_config):
     device = "cuda"
 
     def alloc_fn(size: int, alignment: int, stream):
         return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
+
+    if use_sparse:
+        use_tmem_red = True
+        cga_layout = ()
 
     if use_tmem_red and not (is_blackwell_ultra() or is_rubin()):
         pytest.skip("TMEM reduction requires Blackwell Ultra or Rubin")
@@ -1261,8 +1462,19 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
 
     tri_m = torch.full(q.shape[:-1], float("nan"), device=device, dtype=torch.float32)
     tri_out, tri_m = attention_forward(q, k, v, causal, sm_scale, M=tri_m, use_tmem_red=use_tmem_red, p=p,
-                                       cga_layout=cga_layout, config_selector=config_selector)
-    if dtype == torch.float8_e5m2:
+                                       cga_layout=cga_layout, use_sparse=use_sparse, config_selector=config_selector)
+    if use_sparse:
+        ref_out = sparse_attention_ref(q, k, v, sm_scale, causal=causal)
+        if dtype == torch.float8_e5m2:
+            ref_out = ref_out.to(torch.float16)
+            tri_out = tri_out.to(torch.float16)
+        atol = 1e-2
+        if dtype == torch.float8_e5m2:
+            atol = 1.8e-1 if causal else 1.2e-1
+        elif dtype == torch.bfloat16 and causal:
+            atol = 3e-2
+        torch.testing.assert_close(ref_out, tri_out, atol=atol, rtol=0)
+    elif dtype == torch.float8_e5m2:
         ref_out = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=sm_scale,
                                                                    is_causal=causal)
         torch.testing.assert_close(ref_out.to(dtype).float(), tri_out.float(), atol=0.25, rtol=0.25)
@@ -1270,14 +1482,15 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
         ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
 
-    # Sample rows from both subtiles without materializing full attention scores.
-    with torch.no_grad():
-        rows = torch.arange(0, N_CTX, 128, device=device)
-        scores = torch.matmul(q[..., rows, :].float(), k.float().transpose(-1, -2)) * sm_scale
-        if causal:
-            scores.masked_fill_(rows[:, None] < torch.arange(N_CTX, device=device)[None, :], float("-inf"))
-        ref_m = torch.logsumexp(scores, dim=-1) / math.log(2)
-        torch.testing.assert_close(tri_m[..., rows], ref_m, atol=1e-2, rtol=0)
+    if not use_sparse:
+        # Sample rows from both subtiles without materializing full attention scores.
+        with torch.no_grad():
+            rows = torch.arange(0, N_CTX, 128, device=device)
+            scores = torch.matmul(q[..., rows, :].float(), k.float().transpose(-1, -2)) * sm_scale
+            if causal:
+                scores.masked_fill_(rows[:, None] < torch.arange(N_CTX, device=device)[None, :], float("-inf"))
+            ref_m = torch.logsumexp(scores, dim=-1) / math.log(2)
+            torch.testing.assert_close(tri_m[..., rows], ref_m, atol=1e-2, rtol=0)
 
 
 @pytest.mark.enable_warmup(min_capability=10, priority=3)
@@ -1299,6 +1512,17 @@ def test_causal_tmem_red(dtype):
             config_selector=select_benchmark_kernel_config)
 
 
+@pytest.mark.parametrize("Z", [1, 4])
+@pytest.mark.parametrize("H", [2, 48])
+@pytest.mark.parametrize("N_CTX", [256, 1024, 4 * 1024])
+@pytest.mark.parametrize("HEAD_DIM", [64, 128])
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float8_e5m2])
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin GPU (sm_107a)")
+def test_sparsify_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, profile=False):
+    test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, True, cga_layout=(), profile=profile, use_sparse=True)
+
+
 # ===-----------------------------------------------------------------------===#
 # Benchmarking
 # ===-----------------------------------------------------------------------===#
@@ -1309,10 +1533,16 @@ HEAD_DIM = [64, 128]
 causal = [False, True]
 providers = ["triton-fp16", "triton-fp8"]
 N_CTX = [2**i for i in range(10, 17)]
-use_tmem_reds = [False, True] if is_blackwell_ultra() or is_rubin() else [False]
+BENCH_USE_SPARSIFY = "--sparsify" in sys.argv
+use_tmem_reds = [True] if BENCH_USE_SPARSIFY else ([False, True] if (is_blackwell_ultra() or is_rubin()) else [False])
 
 bench_configs = []
 for Z, H, D, is_causal, use_tmem_red in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal, use_tmem_reds):
+    plot_name = f"Attention Z={Z} H={H} D={D} causal={is_causal}"
+    if BENCH_USE_SPARSIFY:
+        plot_name += " sparsify=True"
+    else:
+        plot_name += f" use_tmem_red={use_tmem_red}"
     config = triton.testing.Benchmark(
         x_names=["N_CTX"],
         x_vals=N_CTX,
@@ -1321,7 +1551,7 @@ for Z, H, D, is_causal, use_tmem_red in itertools.product(BATCH, N_HEADS, HEAD_D
         line_names=providers,
         styles=[("red", "-"), ("blue", "-"), ("green", "-"), ("yellow", "-")],
         ylabel="TFLOPS",
-        plot_name=f"Attention Z={Z} H={H} D={D} causal={is_causal} use_tmem_red={use_tmem_red}",
+        plot_name=plot_name,
         args={
             "Z": Z,
             "H": H,
@@ -1334,7 +1564,7 @@ for Z, H, D, is_causal, use_tmem_red in itertools.product(BATCH, N_HEADS, HEAD_D
 
 
 @triton.testing.perf_report(bench_configs)
-def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
+def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider, useSparsify=False):
     provider, dtype = provider.split("-")
     if dtype == "fp16":
         dtype = torch.float16
@@ -1357,8 +1587,8 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
 
     with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
         if provider == "triton":
-            fn = lambda: attention_forward(q, k, v, causal, sm_scale, o, M, use_tmem_red=use_tmem_red, config_selector=
-                                           select_benchmark_kernel_config)
+            fn = lambda: attention_forward(q, k, v, causal, sm_scale, o, M, use_tmem_red=use_tmem_red or useSparsify,
+                                           use_sparse=useSparsify, config_selector=select_benchmark_kernel_config)
         elif provider == "cudnn":
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         else:
@@ -1379,4 +1609,10 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
 
 
 if __name__ == "__main__":
-    bench.run(save_path=".", print_data=True)
+    if BENCH_USE_SPARSIFY:
+        if not is_rubin():
+            print("Skipping sparse benchmark: requires Rubin GPU (sm_107a)")
+            raise SystemExit(0)
+        bench.run(save_path=".", print_data=True, useSparsify=True)
+    else:
+        bench.run(save_path=".", print_data=True)

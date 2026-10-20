@@ -83,6 +83,10 @@ void populateTensorMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                          RewritePatternSet &patterns,
                                          PatternBenefit benefit);
 
+void populateSparseOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                    RewritePatternSet &patterns,
+                                    PatternBenefit benefit);
+
 void populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit);

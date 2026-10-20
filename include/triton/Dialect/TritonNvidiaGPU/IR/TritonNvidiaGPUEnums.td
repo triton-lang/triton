@@ -36,6 +36,16 @@ def TTNG_TMEMLoadReduceModifierAttr : I32EnumAttr<
   let genSpecializedAttr = 0;
 }
 
+def TTNG_TMEMRowOpAttr : I32EnumAttr<
+    "TMEMRowOp", "",
+    [
+        I32EnumAttrCase<"MIN", 1, "min">,
+        I32EnumAttrCase<"MAX", 2, "max">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+  let genSpecializedAttr = 0;
+}
+
 def TTNG_PackedArithOpKindAttr : I32EnumAttr<
     "PackedArithOpKind", "packed arithmetic operation",
     [

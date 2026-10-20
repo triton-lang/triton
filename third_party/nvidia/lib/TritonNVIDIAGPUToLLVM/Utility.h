@@ -15,6 +15,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/ArrayRef.h"
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
@@ -81,6 +82,15 @@ Value getLeaderAddress(Location loc, ConversionPatternRewriter &rewriter,
 
 /// Create a predicate where only the lead CTA is active for two CTA mode.
 Value createLeadCTAPredicate(Location loc, RewriterBase &rewriter);
+
+SmallVector<Value> packValues(ArrayRef<Value> values, Type outType,
+                              Location loc, ConversionPatternRewriter &rewriter,
+                              bool pad = false);
+
+SmallVector<Value> unpackValues(ArrayRef<Value> packedValues, Type outType,
+                                Location loc,
+                                ConversionPatternRewriter &rewriter,
+                                bool pad = false);
 } // namespace NVIDIA
 } // namespace LLVM
 

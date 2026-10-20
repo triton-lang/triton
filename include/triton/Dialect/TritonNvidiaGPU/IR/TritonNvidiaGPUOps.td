@@ -812,6 +812,73 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
   let hasVerifier = 1;
 }
 
+def TTNG_TCGen5MMASpOp : TTNG_Op<"tc_gen5_mma_sp", [
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+    DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims"]>,
+    DeclareOpInterfaceMethods<MMAv5OpInterface>,
+    DeclareOpInterfaceMethods<PredicatedOpInterface>,
+    DeclareOpInterfaceMethods<MBarrierOpInterface>,
+    AttrSizedOperandSegments
+]> {
+  let summary = "block level op mapping to tensorcore gen5 sparse mma";
+
+  let description = [{
+    Sparse variant of tc_gen5_mma.
+    Matrix A is structured sparse (50% zeros, packed as K/2), matrix B is
+    dense, and the sparsity metadata is provided through `sp_meta`.
+
+    $d += sparse_matrix_multiply($a, $b, $sp_meta).
+    if is_async is false, the op executes synchronously. The barrier operands
+    must not be present in that case.
+    Otherwise, if a barrier is given, the op will trigger a commit/arrive on
+    it. The result will be safe to read after a barrier wait.
+
+    Currently unsupported:
+      If $two_ctas is set the op will execute a matmul across two contiguous
+      CTAs, it will read the data distributed across the two CTAs.
+      and syncronize both CTAs if the op is synchronous.
+
+    This operation takes and produces an optional token to indicate TMEM read
+    and write on its accumulator operand. When the tokens are present, they can
+    be used to check aliasing and modref on the accumulator memory.
+  }];
+
+  let arguments = (ins
+    TTG_MemDescType:$a,
+    TTG_MemDescType:$b,
+    TTG_MemDescType:$d,
+    Optional<TTG_AsyncToken>:$acc_dep,
+    TTG_MemDescType:$sp_meta,
+    I1:$useD,
+    I1:$pred,
+    Variadic<TTG_MemDescType>:$barriers,
+    Variadic<I1>:$barrier_preds,
+    UnitAttr:$is_async,
+    UnitAttr:$two_ctas
+  );
+  let results = (outs Optional<TTG_AsyncToken>:$token);
+
+  let builders = [
+    OpBuilder<(ins "Type":$token,
+      "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep,
+      "Value":$sp_meta, "Value":$useD, "Value":$pred,
+      CArg<"bool", "false">:$two_ctas,
+      CArg<"ValueRange", "{}">:$barriers,
+      CArg<"ValueRange", "{}">:$barrier_preds,
+      CArg<"bool", "false">:$is_async)>
+  ];
+
+  let assemblyFormat = [{
+    $a `,` $b `,` $sp_meta `,` $d `` custom<Token>($acc_dep, type($token))
+    `,` $useD`,` $pred `` custom<BarriersAndPreds>($barriers, $barrier_preds)
+    attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
+    qualified(type($sp_meta)) `,` qualified(type($d))
+    (`,` qualified(type($barriers))^)?
+  }];
+
+  let hasVerifier = 1;
+}
+
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,
@@ -1053,6 +1120,96 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
     RankedTensorType getType() { return getResult().getType(); }
     operator TypedValue<RankedTensorType>() { return getResult(); }
   }];
+}
+
+def TTNG_TMEMLoadSparsifyOp : TTNG_Op<"tmem_load_sparsify", [AttrSizedResultSegments]> {
+  let summary = "Load from tensor memory with 2:4 sparsification into registers";
+
+  let description = [{
+    Loads data from tensor memory and performs inline 2:4 structured
+    sparsification.
+
+    For an input TMEM buffer of shape [M, N], produces:
+    - `cdata`: compressed data tensor of shape [M, N/2]
+    - `mdata`: metadata tensor of shape [M, ceil(N/32)] with 2-bit indices.
+      Each 2-bit index is the `0..3` position of one kept element within a
+      4-element 2:4 group.
+    - `red`: optional per-row reduction of shape [M]
+
+    - rowOp: Specifies whether each 2:4 group keeps the MIN or MAX pair.
+    - abs:   When true, selection and optional reduction use absolute values.
+    - NaN:   When true, the optional reduction propagates NaN values.
+             Only valid when the `red` result is present.
+
+    This operation also supports optional TMEM dependency token syntax in the IR
+    (`%src[%dep]`), but verifier currently rejects token usage for this op until
+    pass integration is added.
+  }];
+
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemRead<TensorMemory>]>:$src,
+    Optional<TTG_AsyncToken>:$dep,
+    TTNG_TMEMRowOpEnum:$rowOp,
+    OptionalAttr<BoolAttr>:$abs,
+    OptionalAttr<BoolAttr>:$NaN
+  );
+
+  let results = (outs
+    TT_Tensor:$cdata,
+    TT_Tensor:$mdata,
+    Optional<TTG_AsyncToken>:$token,
+    Optional<TT_Tensor>:$red
+  );
+
+  let assemblyFormat = [{
+    $src `` custom<Token>($dep, type($token))
+    attr-dict `:` qualified(type($src)) `->` type($cdata) `,` type($mdata) (`,` type($red)^)?
+  }];
+
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    RankedTensorType getCDataType() { return getCdata().getType(); }
+    RankedTensorType getMDataType() { return getMdata().getType(); }
+    static RankedTensorType inferMDataType(RankedTensorType cdataType);
+    static RankedTensorType inferRedType(RankedTensorType cdataType);
+  }];
+}
+
+def TTNG_SpDecompressOp : TTNG_Op<"sp_decompress", [Pure]> {
+  let summary = "Decompress structured sparse vector to dense vector";
+
+  let description = [{
+    Decompresses a structured sparse compressed tensor `cdata` using metadata
+    tensor `mdata` and produces dense tensor `result`.
+
+    Currently supported PTX form:
+      spdecompress.b16.b2.sp::2:4
+      spdecompress.b8.b2.sp::2:4
+
+    Constraints:
+    - cdata/result element type: f16, bf16, f8E5M2, or f8E4M3FN
+    - mdata element type: i32
+    - cdata shape: [M, N/2]
+    - mdata shape: [M, ceil(N/32)]
+    - result shape: [M, N]
+    - N must be divisible by 4
+  }];
+
+  let arguments = (ins
+    TT_Tensor:$cdata,
+    TT_Tensor:$mdata
+  );
+
+  let results = (outs
+    TT_Tensor:$result
+  );
+
+  let assemblyFormat = [{
+    $cdata `,` $mdata attr-dict `:` type($cdata) `,` type($mdata) `->` type($result)
+  }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [

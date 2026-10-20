@@ -3,9 +3,12 @@ from typing import Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass, field
 from triton.runtime.jit import constexpr_function
+from triton.experimental.gluon._runtime import jit
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
+from triton.experimental.gluon.language._layouts import AutoLayout
 from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
+from triton.experimental.gluon.language._standard import xor_sum
 
 from . import tma
 from . import clc
@@ -34,6 +37,7 @@ __all__ = [
     "min2",
     "mma_v2",
     "mul2",
+    "sp_decompress",
     "sub2",
     "tensor_memory_descriptor",
     "tensor_memory_descriptor_type",
@@ -449,6 +453,61 @@ class tensor_memory_descriptor(base_value):
         return self._load_red(layout, gluon_ir.TMEM_LOAD_REDUCE_MODIFIER.MAX, abs, propagate_nan, _semantic, _generator)
 
     @builtin
+    def load_sparsify(self, layout, row_op, abs=False, _semantic: GluonSemantic = None):
+        """
+        Load from tensor memory with 2:4 sparsification.
+
+        Args:
+            layout (DistributedLayout): Destination layout of compressed output.
+            row_op (TMEM_ROWOP): MIN or MAX.
+            abs (bool): If True, select the two kept elements using absolute values.
+
+        Returns:
+            tuple: A tuple containing (cdata, mdata).
+        """
+        layout = _unwrap_if_constexpr(layout)
+        row_op = _unwrap_if_constexpr(row_op)
+        abs_flag = _unwrap_if_constexpr(abs)
+        _check(self.shape[1] % 2 == 0, lambda: "N dimension must be divisible by 2")
+        cdata_shape = [self.shape[0], self.shape[1] // 2]
+        cdata_ty = ttgl.distributed_type(self.dtype, cdata_shape, layout)
+        mdata_shape = [self.shape[0], (cdata_shape[1] + 15) // 16]
+        mdata_ty = ttgl.distributed_type(ttgl.int32, mdata_shape, layout)
+        builder = _semantic.builder
+        cdata, mdata = builder.create_tmem_load_sparsify(cdata_ty.to_ir(builder), self.handle, row_op, abs_flag)
+        return ttgl.tensor(cdata, cdata_ty), ttgl.tensor(mdata, mdata_ty)
+
+    @builtin
+    def load_sparsify_red(self, layout, row_op, abs=False, propagate_nan=ir.PROPAGATE_NAN.NONE,
+                          _semantic: GluonSemantic = None):
+        """
+        Load from tensor memory with 2:4 sparsification and per-row reduction.
+
+        Args:
+            layout (DistributedLayout): Destination layout of compressed output.
+            row_op (TMEM_ROWOP): MIN or MAX.
+            abs (bool): If True, select kept elements and reduce using absolute values.
+            propagate_nan (PROPAGATE_NAN): If ALL, propagate NaN in reduction.
+
+        Returns:
+            tuple: A tuple containing (cdata, mdata, red).
+        """
+        layout = _unwrap_if_constexpr(layout)
+        row_op = _unwrap_if_constexpr(row_op)
+        abs_flag = _unwrap_if_constexpr(abs)
+        propagate_nan = _unwrap_if_constexpr(propagate_nan)
+        _check(self.shape[1] % 2 == 0, lambda: "N dimension must be divisible by 2")
+        cdata_shape = [self.shape[0], self.shape[1] // 2]
+        cdata_ty = ttgl.distributed_type(self.dtype, cdata_shape, layout)
+        mdata_shape = [self.shape[0], (cdata_shape[1] + 15) // 16]
+        mdata_ty = ttgl.distributed_type(ttgl.int32, mdata_shape, layout)
+        builder = _semantic.builder
+        cdata, mdata, red, red_layout = builder.create_tmem_load_sparsify(cdata_ty.to_ir(builder), self.handle, row_op,
+                                                                          abs_flag, propagate_nan)
+        red_ty = ttgl.distributed_type(self.dtype, [self.shape[0]], red_layout)
+        return ttgl.tensor(cdata, cdata_ty), ttgl.tensor(mdata, mdata_ty), ttgl.tensor(red, red_ty)
+
+    @builtin
     def store(self, value, pred=True, _semantic: GluonSemantic = None) -> None:
         """
         Store a tensor into tensor memory.
@@ -558,6 +617,69 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
 
 
 @builtin
+def sp_decompress(cdata, mdata, layout=None, _semantic=None):
+    """
+    Decompress structured sparse data produced by ``load_sparsify``.
+
+    Args:
+        cdata (tensor): Compressed tensor of shape ``[M, N/2]`` with ``f16``, ``bf16``, ``float8_e5m2``, or ``float8_e4m3fn`` dtype.
+        mdata (tensor): Metadata tensor of shape ``[M, ceil(N/32)]`` with ``i32`` dtype.
+        layout (DistributedLayout, optional): Output layout for dense tensor ``[M, N]``.
+            Defaults to ``cdata`` layout.
+
+    Returns:
+        tensor: Dense tensor of shape ``[M, N]`` and same dtype as ``cdata``.
+    """
+    layout = cdata.type.layout if layout is None else _unwrap_if_constexpr(layout)
+    _check(len(cdata.shape) == 2 and len(mdata.shape) == 2, lambda: "sp_decompress expects 2D cdata and mdata tensors")
+    _check(cdata.shape[0] == mdata.shape[0], lambda: "cdata and mdata must have the same M dimension")
+    _check(cdata.dtype in (ttgl.float16, ttgl.bfloat16, ttgl.float8e5, ttgl.float8e4nv),
+           lambda: "cdata dtype must be float16, bfloat16, float8_e5m2, or float8_e4m3fn")
+    _check(mdata.dtype == ttgl.int32, lambda: "mdata dtype must be int32")
+    dense_shape = [cdata.shape[0], cdata.shape[1] * 2]
+    _check(dense_shape[1] % 4 == 0, lambda: "dense N dimension must be divisible by 4")
+    expected_mdata_n = (dense_shape[1] + 31) // 32
+    _check(mdata.shape[1] == expected_mdata_n,
+           lambda: f"mdata shape mismatch: expected second dim {expected_mdata_n}, got {mdata.shape[1]}")
+
+    result_ty = ttgl.distributed_type(cdata.dtype, dense_shape, layout)
+    builder = _semantic.builder
+    result = builder.create_sp_decompress(result_ty.to_ir(builder), cdata.handle, mdata.handle)
+    return ttgl.tensor(result, result_ty)
+
+
+@jit
+def _repack_mdata_kind_f16_for_tcgen05_mma_sp(mdata):
+    ttgl.static_assert(len(mdata.shape) == 2, "mdata must be a 2D tensor")
+    ttgl.static_assert(mdata.shape[0] % 16 == 0, "mdata M dimension must be divisible by 16")
+    paired = mdata.reshape([mdata.shape[0] // 16, 2, 8, mdata.shape[1]])
+    partner = paired ^ xor_sum(paired, axis=1, keep_dims=True)
+    half = ttgl.arange(0, 2, layout=AutoLayout())[None, :, None, None]
+    shift = half * 16
+    mine = (paired >> shift) & 0xffff
+    theirs = (partner >> shift) & 0xffff
+    packed = ttgl.where(half == 0, mine | (theirs << 16), theirs | (mine << 16))
+    return packed.reshape(mdata.shape)
+
+
+@jit
+def repack_mdata_for_tcgen05_mma_sp(mdata, a_dtype: ttgl.constexpr):
+    """
+    Repack ``load_sparsify`` metadata into the selector TMEM layout expected by
+    ``tcgen05_mma_sp``.
+
+    For ``f16``/``bf16``, rows ``t`` and ``t+8`` are interleaved in each 32-bit
+    word. For fp8 types, the input metadata already matches the hardware
+    layout and is returned unchanged.
+    """
+    ttgl.static_assert(mdata.dtype == ttgl.int32, "mdata must be int32")
+    mdata = mdata.reshape(mdata.shape)
+    if a_dtype.primitive_bitwidth != 16:
+        return mdata
+    return _repack_mdata_kind_f16_for_tcgen05_mma_sp(mdata)
+
+
+@builtin
 def tcgen05_copy(src, dst, _semantic=None):
     """
     Start an asynchronous copy from shared memory to tensor memory.
@@ -609,6 +731,41 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     multicast = _unwrap_if_constexpr(multicast)
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
                                          mbarrier_preds, acc.layout.two_ctas, multicast)
+
+
+@builtin
+def tcgen05_mma_sp(a, b, acc, sp_meta, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
+    """
+    Emit a 5th generation TensorCore sparse MMA instruction.
+    acc = sparse_matmul(a, b, sp_meta) + (acc if use_acc else 0)
+
+    Args:
+        a (shared_memory_descriptor or tensor_memory_descriptor): Sparse packed left hand side operand.
+        b (shared_memory_descriptor): Dense right hand side operand in shared memory.
+        acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        sp_meta (tensor_memory_descriptor): Sparsity metadata in tensor memory.
+        use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when operation completes.
+        mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+    """
+    use_acc = _semantic.to_tensor(use_acc)
+    pred = _semantic.to_tensor(pred)
+
+    if mbarriers is None:
+        assert mbarrier_preds is None
+        mbarriers = []
+        mbarrier_preds = []
+    else:
+        mbarriers = [bar.handle for bar in mbarriers]
+        if mbarrier_preds is None:
+            true = _semantic.to_tensor(True)
+            mbarrier_preds = [true.handle] * len(mbarriers)
+        else:
+            mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
+
+    _semantic.builder.create_tcgen05_mma_sp(a.handle, b.handle, acc.handle, sp_meta.handle, use_acc.handle, pred.handle,
+                                            mbarriers, mbarrier_preds, acc.layout.two_ctas)
 
 
 @builtin

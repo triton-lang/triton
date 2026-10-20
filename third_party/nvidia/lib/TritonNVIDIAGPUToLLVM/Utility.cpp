@@ -273,6 +273,76 @@ static ColumnAction getLdStMatrixRowPermutation(const LinearLayout &quot,
   return ColumnAction(order, kReg, numRegBits);
 }
 
+SmallVector<Value> packValues(ArrayRef<Value> values, Type outType,
+                              Location loc, ConversionPatternRewriter &rewriter,
+                              bool pad) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type inType = values[0].getType();
+  if (inType == outType) {
+    return to_vector(values);
+  }
+
+  auto inbitwidth = inType.getIntOrFloatBitWidth();
+  auto outbitwidth = outType.getIntOrFloatBitWidth();
+  assert(inbitwidth <= outbitwidth);
+  SmallVector<Value> packedValues;
+  if (inbitwidth == outbitwidth) {
+    for (auto &val : values) {
+      packedValues.push_back(b.bitcast(val, outType));
+    }
+    return packedValues;
+  }
+
+  auto vecSize = outbitwidth / inbitwidth;
+  auto vecTy = vec_ty(inType, vecSize);
+
+  auto elemsPerVec = pad ? 1 : vecSize;
+  assert(values.size() % elemsPerVec == 0);
+  for (int i = 0; i < values.size(); i += elemsPerVec) {
+    Value packed = b.undef(vecTy);
+    for (int j = 0; j < elemsPerVec; j++) {
+      Value val = values[i + j];
+      packed = b.insert_element(vecTy, packed, val, b.i32_val(j));
+    }
+    packed = b.bitcast(packed, outType);
+    packedValues.emplace_back(std::move(packed));
+  }
+  return packedValues;
+}
+
+SmallVector<Value> unpackValues(ArrayRef<Value> packedValues, Type outType,
+                                Location loc,
+                                ConversionPatternRewriter &rewriter, bool pad) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type inType = packedValues[0].getType();
+  if (inType == outType) {
+    return to_vector(packedValues);
+  }
+
+  auto inbitwidth = inType.getIntOrFloatBitWidth();
+  auto outbitwidth = outType.getIntOrFloatBitWidth();
+  assert(inbitwidth >= outbitwidth);
+  SmallVector<Value> unpackedValues;
+  if (inbitwidth == outbitwidth) {
+    for (auto val : packedValues) {
+      unpackedValues.push_back(b.bitcast(val, outType));
+    }
+    return unpackedValues;
+  }
+  auto vecSize = inbitwidth / outbitwidth;
+  auto vecTy = vec_ty(outType, vecSize);
+
+  auto elemsPerVec = pad ? 1 : vecSize;
+  for (auto val : packedValues) {
+    Value packed = b.bitcast(val, vecTy);
+    for (int j = 0; j < elemsPerVec; j++) {
+      unpackedValues.push_back(
+          b.extract_element(outType, packed, b.i32_val(j)));
+    }
+  }
+  return unpackedValues;
+}
+
 LogicalResult lowerLdStMatrix(
     Location loc, LinearLayout cvt, bool transpose,
     SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix

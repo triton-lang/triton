@@ -344,6 +344,10 @@ void init_gluon_ir(py::module_ &m) {
       .value("MAX", ttng::TMEMLoadReduceModifier::MAX)
       .export_values();
 
+  py::enum_<ttng::TMEMRowOp>(m, "TMEM_ROWOP")
+      .value("MIN", ttng::TMEMRowOp::MIN)
+      .value("MAX", ttng::TMEMRowOp::MAX);
+
   py::class_<GluonOpBuilder, TritonOpBuilder>(m, "GluonOpBuilder",
                                               py::dynamic_attr())
       .def(py::init<MLIRContext *, std::string>(), py::arg("context"),
@@ -1024,6 +1028,51 @@ void init_gluon_ir(py::module_ &m) {
           py::arg("resultTy"), py::arg("memDesc"),
           (py::arg("redOp").none() = py::none()), py::arg("useAbs") = false,
           py::arg("propagateNan") = tt::PropagateNan::NONE)
+      .def(
+          "create_tmem_load_sparsify",
+          [](GluonOpBuilder &self, Type cdataTy, Value memDesc,
+             ttng::TMEMRowOp rowOp, bool useAbs,
+             std::optional<tt::PropagateNan> propagateNan) -> py::object {
+            auto cdataTensorTy = cast<RankedTensorType>(cdataTy);
+            auto mdataTy =
+                ttng::TMEMLoadSparsifyOp::inferMDataType(cdataTensorTy);
+            Type redTy;
+            BoolAttr absAttr = nullptr;
+            BoolAttr nanAttr = nullptr;
+            if (useAbs)
+              absAttr = self.getBuilder().getBoolAttr(true);
+            if (propagateNan) {
+              redTy = ttng::TMEMLoadSparsifyOp::inferRedType(cdataTensorTy);
+              if (propagateNan.value() != tt::PropagateNan::NONE)
+                nanAttr = self.getBuilder().getBoolAttr(true);
+            }
+
+            auto rowOpAttr = ttng::TMEMRowOpAttr::get(self.getContext(), rowOp);
+            auto op = self.create<ttng::TMEMLoadSparsifyOp>(
+                cdataTy, mdataTy, /*token=*/Type(), redTy, memDesc,
+                /*dep=*/Value(), rowOpAttr, absAttr, nanAttr);
+
+            Value cdata = op.getCdata();
+            Value mdata = op.getMdata();
+            if (propagateNan) {
+              Value red = op.getRed();
+              auto redTensorTy = cast<RankedTensorType>(red.getType());
+              py::object redLayout =
+                  layoutToGluon(redTensorTy.getEncoding(), self.isRubin());
+              return py::make_tuple(cdata, mdata, red, redLayout);
+            }
+            return py::make_tuple(cdata, mdata);
+          },
+          py::arg("cdataTy"), py::arg("memDesc"), py::arg("rowOp"),
+          py::arg("useAbs") = false, py::arg("propagateNan") = py::none())
+      .def(
+          "create_sp_decompress",
+          [](GluonOpBuilder &self, Type resultTy, Value cdata,
+             Value mdata) -> Value {
+            auto op = self.create<ttng::SpDecompressOp>(resultTy, cdata, mdata);
+            return op.getResult();
+          },
+          py::arg("resultTy"), py::arg("cdata"), py::arg("mdata"))
       .def("create_tmem_copy",
            [](GluonOpBuilder &self, Value src, Value dst) {
              self.create<ttng::TMEMCopyOp>(src, dst);
@@ -1105,6 +1154,16 @@ void init_gluon_ir(py::module_ &m) {
                                             pred, two_ctas, multicast,
                                             mbarriers, mbarrier_preds,
                                             /*isAsync=*/true);
+           })
+      .def("create_tcgen05_mma_sp",
+           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value spMeta,
+              Value useAcc, Value pred, std::vector<Value> &mbarriers,
+              std::vector<Value> &mbarrier_preds, bool two_ctas) {
+             Value accDep;
+             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+             self.create<ttng::TCGen5MMASpOp>(tokType, a, b, acc, accDep,
+                                              spMeta, useAcc, pred, two_ctas,
+                                              mbarriers, mbarrier_preds);
            })
       .def("create_tcgen05_mma_scaled",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
