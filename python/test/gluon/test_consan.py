@@ -25,8 +25,8 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
     # here would break compile-warmup cache hits.
     stderr = getattr(result, "driver_stderr_output", None)
     if stderr:
-        result.driver_stderr_output = "".join(
-            line for line in stderr.splitlines(keepends=True) if "TRITON_DEFAULT_FP_FUSION" not in line)
+        result.driver_stderr_output = "".join(line for line in stderr.splitlines(keepends=True)
+                                              if "TRITON_DEFAULT_FP_FUSION" not in line)
     return result
 
 
