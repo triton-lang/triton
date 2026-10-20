@@ -11,12 +11,22 @@
 
 namespace mlir {
 
-inline bool isZeroConst(Value v) {
+// Match zero-filled storage: negative floating-point zero must be preserved.
+inline bool isZeroFillConst(Value v) {
+  if (auto splat = v.getDefiningOp<triton::SplatOp>())
+    return isZeroFillConst(splat.getSrc());
+  if (auto bitcast = v.getDefiningOp<triton::BitcastOp>())
+    return isZeroFillConst(bitcast.getSrc());
   auto constantOp = v.getDefiningOp<arith::ConstantOp>();
   if (!constantOp)
     return false;
+  if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
+    return attr.getValue().isZero();
+  if (auto attr = dyn_cast<FloatAttr>(constantOp.getValueAttr()))
+    return attr.getValue().bitcastToAPInt().isZero();
   if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APFloat>().isZero();
+    return denseAttr.isSplat() &&
+           denseAttr.getSplatValue<APFloat>().bitcastToAPInt().isZero();
   if (auto denseAttr =
           dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
     return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();

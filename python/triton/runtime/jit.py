@@ -48,10 +48,11 @@ class DependenciesFinder(ast.NodeVisitor):
     otherwise we could recompile).
     """
 
-    def __init__(self, name, globals, nonlocals, src) -> None:
+    def __init__(self, name, globals, nonlocals, src, source_location) -> None:
         super().__init__()
         self.name = name
         self.hasher = hashlib.sha256(src.encode("utf-8"))
+        self.hasher.update(str(source_location).encode("utf-8"))
 
         # This function's __globals__ dict.
         self.globals = globals
@@ -529,10 +530,12 @@ class JITCallable:
             # transitively calls itself. The full hash is set after.
             self.hash = f"recursion:{self._fn_name}"
             nonlocals = inspect.getclosurevars(self.fn).nonlocals
-            dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals,
-                                                     src=self.src)
+            dependencies_finder = DependenciesFinder(
+                name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals, src=self.src,
+                source_location=(self.file_name, self.starting_line_number, self.def_file_line_number,
+                                 self.def_file_col_number))
             dependencies_finder.visit(self.parse())
-            self.hash = dependencies_finder.ret + str(self.starting_line_number)
+            self.hash = dependencies_finder.ret
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
             from triton.language.core import constexpr
@@ -1043,10 +1046,13 @@ class MockTensor:
         self.shape = shape
 
     def stride(self):
-        strides = [1]
-        for size in self.shape[1:]:
-            strides.append(strides[-1] * size)
-        return tuple(reversed(strides))
+        strides = []
+        value = 1
+        for size in reversed(self.shape):
+            strides.append(value)
+            value *= size
+        strides.reverse()
+        return tuple(strides)
 
     @staticmethod
     def data_ptr():

@@ -214,8 +214,7 @@ struct ElementwiseInlineAsmOpConversion
         continue;
       }
       Type elemTy = getElementTypeOrSelf(op.getOperand(i));
-      unsigned bitWidth =
-          elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
+      unsigned bitWidth = getIntOrFloatOrPtrBitWidth(elemTy);
       unsigned numElementPerReg = std::max(32 / bitWidth, 1u);
       numElementPerReg = std::min(numElementPerReg, numPackedElements);
       for (int j = 0; j < numPackedElements; j += numElementPerReg) {

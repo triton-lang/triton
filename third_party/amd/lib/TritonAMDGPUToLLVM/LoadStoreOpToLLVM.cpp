@@ -1113,7 +1113,7 @@ struct AsyncCopyGlobalToLocalOpConversion
           nullptr, nullptr, nullptr);
       if (targetInfo.requiresAliasInfoForAsyncOps())
         AMD::addAsyncCopyAliasScope(asyncLoadOp);
-    } else if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
+    } else if (targetInfo.getISAFamily() == ISAFamily::CDNA5) {
       switch (vecBits) {
       case 32:
         if (multicastMask)
@@ -1172,10 +1172,10 @@ struct AsyncCopyLocalToGlobalOpConversion
       return failure();
     }
 
-    // Only supported on GFX1250
-    if (targetInfo.getISAFamily() != ISAFamily::GFX1250) {
+    // Only supported on CDNA5
+    if (targetInfo.getISAFamily() != ISAFamily::CDNA5) {
       return rewriter.notifyMatchFailure(
-          op, "async_copy_local_to_global only supported on GFX1250");
+          op, "async_copy_local_to_global only supported on CDNA5");
     }
 
     auto loc = op.getLoc();
@@ -1546,11 +1546,6 @@ struct AsyncTDMScatterOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-    // Multi-CTA not supported for scatter
-    if (lookupNumCTAs(op) > 1) {
-      return op.emitError("TDM scatter does not support multi-CTA");
-    }
 
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getSrc().getType();
@@ -2452,7 +2447,7 @@ struct AsyncWaitOpConversion
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    if (targetInfo.getISAFamily() == ISAFamily::GFX1250) {
+    if (targetInfo.getISAFamily() == ISAFamily::CDNA5) {
       // Clamp asyncCnt to 6bits(hw limit); lower means conservative
       unsigned asyncCnt = std::min(63u, op.getNumInst());
       ROCDL::WaitAsynccntOp::create(rewriter, loc, asyncCnt);

@@ -341,6 +341,7 @@ def test_invalid_constexpr_fn():
 
 
 def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
+    temp_file.parent.mkdir(parents=True, exist_ok=True)
     temp_file.write_text(('# extra line\n' * num_extra_lines) + code)
     spec = importlib.util.spec_from_file_location("module.name", str(temp_file))
     module = importlib.util.module_from_spec(spec)
@@ -348,22 +349,51 @@ def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     return module
 
 
-def test_changed_line_numbers_invalidate_cache(tmp_path: pathlib.Path):
-    from textwrap import dedent
-    code = dedent("""
-        import triton
-        @triton.jit
-        def test_kernel(i):
-            i = i + 1
-    """)
-    temp_file0 = tmp_path / "test_changed_line_numbers_invalidate_cache0.py"
-    orig_mod = write_and_load_module(temp_file0, code, 0)
-    orig_cache_key = orig_mod.test_kernel.cache_key
+@pytest.mark.parametrize("change_line_info", [False, True])
+@pytest.mark.parametrize("filename, extra_lines, decorators, indentation", [
+    ("kernel.py", 0, 1, 4),
+    ("other.py", 0, 1, 4),
+    ("kernel.py", 1, 1, 4),
+    ("kernel.py", 0, 2, 4),
+    ("kernel.py", 0, 1, 8),
+], ids=["unchanged", "file", "line", "decorator", "column"])
+def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, fresh_triton_cache, change_line_info,
+                                           filename, extra_lines, decorators, indentation):
+    from textwrap import dedent, indent
 
-    temp_file1 = tmp_path / "test_changed_line_numbers_invalidate_cache1.py"
-    updated_mod = write_and_load_module(temp_file1, code, 1)
-    updated_cache_key = updated_mod.test_kernel.cache_key
-    assert orig_cache_key != updated_cache_key
+    fresh_knobs.compilation.disable_line_info = False
+
+    def load_kernel(filename="kernel.py", extra_lines=0, decorators=1, indentation=4):
+        code = dedent("""\
+            import triton
+            import triton.language as tl
+            def identity(fn):
+                return fn
+            def make_kernel():
+        """)
+        body = "@identity\n" * decorators + dedent("""\
+            @triton.jit
+            def test_kernel(X):
+                tl.store(X, 1)
+            return test_kernel
+        """)
+        code += indent(body, " " * indentation) + "test_kernel = make_kernel()\n"
+        return write_and_load_module(tmp_path / filename, code, extra_lines).test_kernel
+
+    original = load_kernel()
+    original_key = original.cache_key
+    original_compiled = triton.compile(triton.compiler.ASTSource(original, {"X": "*i32"}))
+
+    fresh_knobs.compilation.disable_line_info = change_line_info
+    updated = load_kernel(filename, extra_lines, decorators, indentation)
+    updated_compiled = triton.compile(triton.compiler.ASTSource(updated, {"X": "*i32"}))
+    source_changed = (filename, extra_lines, decorators, indentation) != ("kernel.py", 0, 1, 4)
+    assert original.src == updated.src
+    assert (original_key != updated.cache_key) == source_changed
+    # Column-only changes may produce identical binary bytes.
+    assert (original_compiled.hash != updated_compiled.hash) == (source_changed or change_line_info)
+    if change_line_info:
+        assert original_compiled.kernel != updated_compiled.kernel
 
 
 def test_reuse(device, fresh_triton_cache):

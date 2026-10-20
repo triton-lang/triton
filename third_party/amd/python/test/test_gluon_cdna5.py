@@ -9,7 +9,7 @@ from itertools import product
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import get_current_target, is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes
+from triton._internal_testing import get_current_target, is_hip_cdna5, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, float_dtypes, int_dtypes, uint_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
@@ -142,7 +142,7 @@ def test_compile_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K):
     assert re.search(wmma_pattern, amdgcn)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("compact_scale", [
     False,
     True,
@@ -201,7 +201,7 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
     # Test packed / compact-scale DistributedLinearLayouts used when upcasting an fp4 weight tile to bf16 for a WMMA GEMM.
     @gluon.jit
@@ -262,7 +262,7 @@ def test_runtime_scaled_upcast_fp4_bf16_gemm_layouts():
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("fp8_dtype", ["e4m3", "e5m2"])
 @pytest.mark.parametrize("out_dtype", ["bf16", "f16"], ids=lambda v: f"out_{v}")
 def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
@@ -317,7 +317,7 @@ def test_runtime_scaled_upcast_fp8(fp8_dtype, out_dtype):
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
 
     @gluon.jit
@@ -363,7 +363,7 @@ def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("dtype,ttgl_dtype,in_suffix", [
     (torch.float16, ttgl.float16, "f16"),
     (torch.bfloat16, ttgl.bfloat16, "bf16"),
@@ -372,7 +372,7 @@ def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
 @pytest.mark.parametrize("BLOCK_K", [64, 128, 256], ids=lambda v: f"BLOCK_K{v}")
 def test_runtime_scaled_downcast_fp4(dtype, ttgl_dtype, in_suffix, BLOCK_K):
     # Inverse of test_runtime_scaled_upcast_fp4 (compact scale): pack unpacked
-    # high-precision values back to fp4 through the gfx1250 pk8 instruction.
+    # high-precision values back to fp4 through the CDNA5 pk8 instruction.
 
     @gluon.jit
     def scaled_downcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
@@ -413,7 +413,7 @@ def test_runtime_scaled_downcast_fp4(dtype, ttgl_dtype, in_suffix, BLOCK_K):
     torch.testing.assert_close(y.cpu(), packed, atol=0, rtol=0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("fp8_dtype", ["e4m3", "e5m2"])
 @pytest.mark.parametrize("dtype,ttgl_dtype,in_suffix", [
     (torch.float16, ttgl.float16, "f16"),
@@ -1179,7 +1179,7 @@ def get_test_mxfp_variants():
     return [(a_type, b_type) for a_type in types for b_type in types]
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("wmma_shape", [(16, 16), (32, 16)])
 @pytest.mark.parametrize("transposed", [False, True])
 @pytest.mark.parametrize(
@@ -1301,7 +1301,7 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
 @pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
@@ -1392,7 +1392,7 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
@@ -1482,7 +1482,7 @@ def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type, a_scale_type, b_sca
     torch.testing.assert_close(c.cpu(), c_torch, atol=1e-5, rtol=2e-5)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("M, N, K", [(16, 16, 128), (32, 32, 128), (32, 32, 256), (32, 32, 512), (64, 64, 128),
                                      (128, 128, 256)])
 @pytest.mark.parametrize("mxfp_type", ["e2m1"])
@@ -1951,7 +1951,7 @@ _PARTITIONED_TDM_DTYPE_CONFIG = {
 }
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("DTYPE", list(_PARTITIONED_TDM_DTYPE_CONFIG.keys()))
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,NUM_PARTITIONS,NUM_GROUPS,PARTITION_DIM", _PARTITIONED_TDM_PARAMS)
 def test_runtime_partitioned_tdm_load(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GROUPS, PARTITION_DIM, DTYPE):
@@ -2013,7 +2013,7 @@ _LOAD_SHARED_FP4_REPACKED_CASES = [
 ]
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("src_shape,src_layout,shared_layout,wmma_layout,op_idx", _LOAD_SHARED_FP4_REPACKED_CASES)
 def test_load_shared_fp4_repacked(src_shape, src_layout, shared_layout, wmma_layout, op_idx):
 
@@ -3071,7 +3071,7 @@ def test_compile_wmma_scale_preshuffle(M, N, K, type_a, type_b, TRANSPOSED_WMMA)
         assert re.search(pattern, amdgcn), f"Can't find pattern {pattern} in AMDGCN assembly"
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 64), (128, 128, 128), (256, 256, 256)])
 @pytest.mark.parametrize("type_a", ["e5m2", "e2m1", "e4m3"])
 @pytest.mark.parametrize("type_b", ["e5m2", "e2m1", "e4m3"])
@@ -3289,7 +3289,7 @@ def test_runtime_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_W
     assert torch.equal(b_triton, a)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 def test_tdm_load_pred():
 
     @gluon.jit
@@ -3326,7 +3326,7 @@ def test_tdm_load_pred():
 
 
 # Check that negative TDM offsets are treated as unsigned so they will mask (zero-fill) out the whole tile.
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 def test_tdm_load_negative_offset():
 
     @gluon.jit
@@ -3354,11 +3354,11 @@ def test_tdm_load_negative_offset():
     assert torch.all(b_device.cpu() == 0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("XBLOCK", [128])
 def test_ws_store_wait_load(XBLOCK):
     """
-    Tests warp specialization with mbarrier synchronization on GFX1250.
+    Tests warp specialization with mbarrier synchronization on CDNA5.
 
     This test validates the mbarrier wait/arrive mechanism for synchronizing data flow
     between two specialized warp groups using helper variables ready_bar and done_bar:
@@ -3422,12 +3422,12 @@ def test_ws_store_wait_load(XBLOCK):
     assert torch.equal(output_ref, torch_output)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("XBLOCK", [128])
 @pytest.mark.parametrize("NUM_ITERS", [10])
 def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
     """
-    Tests warp specialization with mbarrier synchronization in a loop and phase tracking on GFX1250.
+    Tests warp specialization with mbarrier synchronization in a loop and phase tracking on CDNA5.
 
     This test validates iterative producer-consumer synchronization using three mbarriers:
     - ready_bar: Signals that the producer has written data to shared memory
@@ -3516,7 +3516,7 @@ def test_ws_store_wait_load_loop(XBLOCK, NUM_ITERS):
 @pytest.mark.parametrize("M,N", [(32, 32), (1024, 1024), (1008, 1008), (1000, 1000)])
 def test_runtime_ws_tensor_async_load_store_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_TOTAL_WARPS):
     """
-    Tests warp specialization with tensor descriptor async load/store operations coordinated by mbarriers on GFX1250.
+    Tests warp specialization with tensor descriptor async load/store operations coordinated by mbarriers on CDNA5.
 
     This test validates the producer-consumer pattern using TDM async operations
     with multiple buffers, where each buffer has its own dedicated mbarrier for synchronization:
@@ -3605,7 +3605,7 @@ def test_runtime_ws_tensor_async_load_store_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM
 @pytest.mark.parametrize("M,N", [(32, 32), (1024, 1024), (1008, 1008), (1000, 1000)])
 def test_runtime_ws_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_TOTAL_WARPS):
     """
-    Tests warp specialization with mixed async/sync operations coordinated by mbarriers on GFX1250.
+    Tests warp specialization with mixed async/sync operations coordinated by mbarriers on CDNA5.
 
     This test validates the producer-consumer pattern using a combination of TDM async loads and
     synchronous stores with multiple buffers, where each buffer has its own dedicated mbarrier:
@@ -3707,7 +3707,7 @@ def test_runtime_ws_tensor_copy_mbarrier(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NU
 @pytest.mark.parametrize("NUM_TOTAL_WARPS", [8])
 def test_runtime_ws_async_copy_mbarrier(M, N, shared_layout, dtype, NUM_TOTAL_WARPS):
     """
-    Tests warp specialization with async_copy operations and mbarrier synchronization on GFX1250.
+    Tests warp specialization with async_copy operations and mbarrier synchronization on CDNA5.
 
     This test validates the producer-consumer pattern using async_copy with two mbarriers:
     - ready_bar: Signals that ws_producer has completed copying data to the input buffer
@@ -3867,7 +3867,7 @@ def async_copy_shared_to_global_multi_cta_kernel(a_ptr, out_ptr, M, N, BLOCK_M: 
     ttgl.amd.cdna5.async_copy.wait_group(0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @ASYNC_COPY_TEST_PARAM_SIZE
 @ASYNC_COPY_TEST_PARAM_SHARED_LAYOUT
 @ASYNC_COPY_TEST_PARAM_DTYPE
@@ -4045,6 +4045,42 @@ def tdm_scatter_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stri
     ttgl.amd.cdna5.tdm.async_wait(0)
 
 
+@gluon.jit
+def tdm_scatter_multi_cta_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stride_m, BLOCK_M: ttgl.constexpr,
+                                 BLOCK_N: ttgl.constexpr, SHARED_LAYOUT: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_load(inp_desc, [0, 0], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
+    dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
+    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
+
+
+def _tdm_scatter_multi_cta_layouts(block_n, cga_layout):
+    block_m = 256
+    num_warps = 8 if block_n == 512 else 4
+    cta_split_m = 2**sum(basis[0] != 0 for basis in cga_layout)
+    cta_split_n = 2**sum(basis[1] != 0 for basis in cga_layout)
+    rows_per_cta = block_m // cta_split_m
+    cols_per_cta = block_n // cta_split_n
+    if block_n == 512:
+        shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout)
+    else:
+        shared_layout = ttgl.PaddedSharedLayout.with_identity_for([[cols_per_cta, 16]], [block_m, block_n], [1, 0],
+                                                                  cga_layout)
+    idx_cga_layout = [[0, basis[0]] for basis in cga_layout]
+    idx_parent_layout = ttgl.BlockedLayout([1, rows_per_cta // num_warps], [32, 1], [1, num_warps], [0, 1],
+                                           idx_cga_layout)
+    return block_m, num_warps, 2**len(cga_layout), shared_layout, ttgl.SliceLayout(0, idx_parent_layout)
+
+
 @pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("BLOCK_M", [16, 32])
 @pytest.mark.parametrize("BLOCK_N", [64, 128])
@@ -4100,7 +4136,46 @@ def _create_scatter_test_data(shape, dtype):
         return torch.randn(shape, dtype=dtype)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("CGA_LAYOUT", [[[1, 0]], [[0, 1]], [[1, 0], [0, 1]]], ids=["2x1", "1x2", "2x2"])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+@pytest.mark.parametrize("BLOCK_N", [128, 512])
+def test_runtime_tdm_scatter_multi_cta(BLOCK_N, index_dtype, CGA_LAYOUT):
+    torch.manual_seed(42)
+    BLOCK_M, NUM_WARPS, NUM_CTAS, SHARED_LAYOUT, IDX_LAYOUT = _tdm_scatter_multi_cta_layouts(BLOCK_N, CGA_LAYOUT)
+    M_out = 512
+    N_out = BLOCK_N * 3 // 4
+    inp = _create_scatter_test_data((BLOCK_M, BLOCK_N), torch.float8_e4m3fn)
+    out = torch.zeros((M_out, BLOCK_N), dtype=inp.dtype)
+    dst_row_indices = torch.randperm(M_out, dtype=torch.int32)[:BLOCK_M].to(index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = dst_row_indices.cuda()
+    tdm_scatter_multi_cta_kernel[(1, )](
+        inp_d,
+        out_d,
+        indices_d,
+        M_out=M_out,
+        N_out=N_out,
+        stride_m=out_d.stride(0),
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        SHARED_LAYOUT=SHARED_LAYOUT,
+        IDX_LAYOUT=IDX_LAYOUT,
+        num_warps=NUM_WARPS,
+        num_ctas=NUM_CTAS,
+    )
+
+    ref = torch.zeros_like(out)
+    elem_size = ref.element_size()
+    ref_bytes = ref.view(torch.uint8).reshape(M_out, -1)
+    inp_bytes = inp.view(torch.uint8).reshape(BLOCK_M, -1)
+    ref_bytes[dst_row_indices.long(), :N_out * elem_size] = inp_bytes[:, :N_out * elem_size]
+    torch.testing.assert_close(out_d.cpu().view(torch.uint8), ref.view(torch.uint8))
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
@@ -4207,7 +4282,7 @@ def test_compile_tdm_scatter_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype
         f"with {index_dtype} indices, but found {actual_count}"
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("dst_col_offset", [0, 16])
@@ -4291,7 +4366,7 @@ def tdm_scatter_multi_col_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M, N, st
     ttgl.amd.cdna5.tdm.async_wait(0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("N", [16, 32, 64, 100, 128, 140, 200, 250, 256, 300, 384, 400, 500])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
@@ -4352,7 +4427,7 @@ def _tdm_scatter_padded_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_o
     ttgl.amd.cdna5.tdm.async_wait(0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("NUM_INDICES", [4, 8, 16])
 @pytest.mark.parametrize("BLOCK_N", [16, 64, 128])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
@@ -4553,7 +4628,7 @@ def test_compile_tdm_gather_multi_cta(CGALayout):
     assert re.search("tensor_load_to_lds", k.asm["amdgcn"])
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
@@ -4614,7 +4689,7 @@ def test_runtime_tdm_gather(NUM_INDICES, BLOCK_M, BLOCK_N, src_col_offset, dtype
     torch.testing.assert_close(gathered_out.view(torch.uint8), ref_bytes)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("CGALayout", [[[0, 0]],  # 1x1 cluster (single-cta)
                                        [[0, 1]],  # 1x2 cluster
                                        [[1, 0], [2, 0]],  # 4x1 cluster
@@ -4713,7 +4788,7 @@ def test_compile_tdm_gather_multiple_instructions(BLOCK_M, BLOCK_N, index_dtype,
         f"with {index_dtype} indices, but found {actual_count}"
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("BLOCK_M", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("BLOCK_N", [16, 32, 64, 128, 256])
 @pytest.mark.parametrize("src_col_offset", [0, 16])
@@ -4881,7 +4956,7 @@ def _tdm_gather_scatter_index_layouts():
     return cases
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("num_indices, num_warps, idx_layout", _tdm_gather_scatter_index_layouts())
 @pytest.mark.parametrize("BLOCK_N", [64, 128])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -4950,7 +5025,7 @@ def _tdm_scatter_layout_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_o
     ttgl.amd.cdna5.tdm.async_wait(0)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("num_indices, num_warps, idx_layout", _tdm_gather_scatter_index_layouts())
 @pytest.mark.parametrize("BLOCK_N", [64, 128])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
@@ -4993,7 +5068,7 @@ def test_runtime_tdm_scatter_layouts(num_indices, num_warps, idx_layout, BLOCK_N
     torch.testing.assert_close(out_result, ref_out)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("N", [16, 32, 64, 100, 128, 140, 200, 250, 256, 300, 384, 400, 500])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
@@ -5153,7 +5228,7 @@ def gemm_3d_cga_split_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
     ttgl.store(c_ptr + offs_c, acc)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("num_ctas", [2, 4])
 def test_runtime_gemm_3d_multi_cta(num_ctas):
     skip_if_gfx1250_strict_wmma()

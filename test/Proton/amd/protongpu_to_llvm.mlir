@@ -130,7 +130,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: llvm.return
 
   // GFX1250-LABEL: convert_smem_initialize
-  // gfx1250 remapped the hwreg id space, so processorId reads wave placement
+  // CDNA5 remapped the hwreg id space, so processorId reads wave placement
   // from WAVE_HW_ID1 (hwreg 23) for WGP/SA and from
   // s_sendmsg_rtn(MSG_RTN_GET_SE_AID_ID == 135) for SE/XCC, instead of the CDNA
   // HW_REG_XCC_ID / HW_REG_HW_ID registers.
@@ -184,7 +184,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-DAG: %[[CYCLE64:.*]] = llvm.bitcast %[[CYCLE]] : i64 to vector<2xi32>
     // CHECK-DAG: llvm.extractelement %[[CYCLE64]]
     // CHECK-DAG: llvm.extractelement %[[CYCLE64]]
-    // gfx1250: llvm.readcyclecounter lowers to s_get_shader_cycles_u64.
+    // On CDNA5, llvm.readcyclecounter lowers to s_get_shader_cycles_u64.
     // GFX1250-DAG: %[[CYCLE:.*]] = llvm.call_intrinsic "llvm.readcyclecounter"() : () -> i64
     // GFX1250-DAG: %[[CYCLE64:.*]] = llvm.bitcast %[[CYCLE]] : i64 to vector<2xi32>
     // GFX1250-DAG: llvm.extractelement %[[CYCLE64]]

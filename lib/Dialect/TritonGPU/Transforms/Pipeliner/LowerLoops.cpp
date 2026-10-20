@@ -50,10 +50,10 @@ int getSelfLatencyFromAttr(Operation *op) {
 // or if we need to load to registers.
 bool mustLoadToRegisters(Operation *op) {
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-    // AsyncCopyGlobalToLocalOp does not support the non-zero "other" value.
+    // AsyncCopyGlobalToLocalOp only supports zero-fill for masked elements.
     // With consumer consuming directly the shared memory, there would be no way
     // to replace masked values with the "other" value.
-    if (loadOp.getOther() && !isZeroConst(loadOp.getOther()))
+    if (loadOp.getOther() && !isZeroFillConst(loadOp.getOther()))
       return true;
   }
 
@@ -181,13 +181,13 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   auto wait = ttg::AsyncWaitOp::create(builder, commit->getResult(0), 0);
   auto viewLoad = createSingleBufferView(builder, alloc, extractIdx);
 
-  if (!loadOp.getOther() || isZeroConst(loadOp.getOther())) {
+  if (!loadOp.getOther() || isZeroFillConst(loadOp.getOther())) {
     // If masking isn't required, load directly from shared
     replaceUsesWithLocalLoad(builder, loadOp->getResult(0), viewLoad,
                              wait.getResult());
   } else if (loadOp->use_begin() != loadOp->use_end()) {
-    // Otherwise, create a select for non-zero other values as they are not
-    // handled by AsyncCopyGlobalToLocalOp for now.
+    // Otherwise, restore other values (including -0.0) with a select, since
+    // AsyncCopyGlobalToLocalOp only supports zero-fill for now.
     auto sharedLoad = ttg::LocalLoadOp::create(builder, loadOp.getType(),
                                                viewLoad, wait.getResult());
     auto select = arith::SelectOp::create(
@@ -382,7 +382,8 @@ void createTMABarrierAndWait(
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
-      sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
+      sizeInBytes +=
+          loadSize * getIntOrFloatOrPtrBitWidth(tensorTy.getElementType()) / 8;
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(forOp, numBuffers);

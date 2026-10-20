@@ -1,9 +1,9 @@
 #include "Dialect/TritonAMDGPU/IR/TargetFeatures.h"
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "Utility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
+#include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
-#include "third_party/amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
+#include "third_party/amd/lib/TritonAMDGPUTransforms/Pipeliner/PipelineUtility.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -94,7 +94,7 @@ getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
 
   bool filterSmallVectors = !targetFeatures.isCDNA4() &&
                             !targetFeatures.isRDNA() &&
-                            !targetFeatures.isGFX1250();
+                            !targetFeatures.isCDNA5();
 
   bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
