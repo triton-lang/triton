@@ -120,7 +120,6 @@ class _Buffer:
     def is_aborted(self):
         aborted = gl.atomic_load(self._state.aborted, sem="acquire", scope="sys")
         result = aborted == self._registration.protocol.aborted_value
-        gl.barrier()
         return result
 
 
@@ -209,7 +208,6 @@ def _wait(bar, count, consume: gl.constexpr, blocking: gl.constexpr, monitor: gl
                     ready = True
     # Publish completion and acquired payload visibility to the entire region,
     # even when the caller discards the Boolean result.
-    gl.barrier()
     return ready
 
 
@@ -220,7 +218,6 @@ def _submit(registration, src_offset, dst_offset, nbytes, is_send: gl.constexpr,
     protocol: gl.constexpr = registration.protocol
     layout: gl.constexpr = protocol.request_layout
     # Prior payload writes and acknowledgement reads belong to all participants.
-    gl.barrier()
     claimed = False
     aborted = False
     tail = gl.to_tensor(0).to(gl.uint64)
@@ -255,7 +252,6 @@ def _submit(registration, src_offset, dst_offset, nbytes, is_send: gl.constexpr,
                         sem="release", scope="sys")
         if is_send:
             gl.atomic_add(state.send_count, 1, sem="relaxed", scope="gpu")
-    gl.barrier()
     return claimed
 
 
