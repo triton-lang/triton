@@ -73,6 +73,9 @@ getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
     if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtOp.getSrc().getType();
       auto dstTy = cvtOp.getType();
+      if (isa<gpu::PartialEncodingAttr>(srcTy.getEncoding()) ||
+          isa<gpu::PartialEncodingAttr>(dstTy.getEncoding()))
+        return defaultAllocationAnalysisScratchSizeFn(op);
       if (!cvtNeedsSharedMemory(cvtOp))
         return 0;
       // In cuda we always swizzle

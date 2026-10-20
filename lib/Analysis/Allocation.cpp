@@ -73,7 +73,8 @@ static unsigned getResultBroadcastScratchSize(Value result) {
     return 0;
 
   SmallVector<unsigned> smemShape;
-  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType());
+      tensorTy && tensorTy.getRank() != 0) {
     auto freeVariableMasks =
         gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
     auto *ctx = tensorTy.getContext();
@@ -124,6 +125,11 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
+    if (isa<gpu::PartialEncodingAttr>(srcTy.getEncoding()) ||
+        isa<gpu::PartialEncodingAttr>(dstTy.getEncoding()))
+      return gpu::availabilityCovers(srcTy, dstTy)
+                 ? 0
+                 : getAtomicResultScratchSize(cvtLayout.getResult());
     if (!cvtNeedsSharedMemory(cvtLayout))
       return 0;
     // The generic pass uses swizzling

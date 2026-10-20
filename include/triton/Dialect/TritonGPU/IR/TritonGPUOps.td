@@ -56,6 +56,33 @@ def TTG_InlineAsmOp : TTG_Op<"inline_asm", [
   let hasVerifier = 1;
 }
 
+// Compiler-internal physical predicate. It is introduced only after logical
+// block control flow has been assigned an execution domain.
+def TTG_ThreadPredicateOp : TTG_Op<"thread_predicate", [Pure]> {
+  let arguments = (ins ThreadAvailabilityAttr:$domain);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$domain attr-dict";
+  let hasVerifier = 1;
+}
+
+// Bridge a distributed scalar to block-uniform scalar control flow in the
+// explicitly declared execution domain. This never communicates values.
+def TTG_ExtractScalarOp : TTG_Op<"extract_scalar", [Pure]> {
+  let arguments = (ins TT_Tensor:$src, ThreadAvailabilityAttr:$domain);
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = "$src $domain attr-dict `:` type($src) `->` type($result)";
+  let hasVerifier = 1;
+}
+
+// Broadcast the logical coordinates of a rank-zero tensor. The source must
+// already be available on every thread required by the result layout.
+def TTG_ScalarSplatOp : TTG_Op<"splat_scalar", [Pure]> {
+  let arguments = (ins TT_Tensor:$src);
+  let results = (outs TT_Tensor:$result);
+  let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+  let hasVerifier = 1;
+}
+
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
                                   SameOperandsAndResultElementType,

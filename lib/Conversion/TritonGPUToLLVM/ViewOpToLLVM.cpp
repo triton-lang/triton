@@ -89,6 +89,35 @@ struct UnsplatOpConversion : public ConvertOpToLLVMPattern<triton::UnsplatOp> {
 // This pattern helps to convert arith::ConstantOp(with SplatElementsAttr),
 // the logic is the same as triton::SplatOp, so the underlying implementation
 // is reused.
+struct ScalarSplatOpConversion
+    : ConvertOpToLLVMPattern<triton::gpu::ScalarSplatOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(triton::gpu::ScalarSplatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto values =
+        unpackUniqueTensorElements(op.getLoc(), adaptor.getSrc(), rewriter);
+    auto result = SplatOpConversion::convertSplatLikeOp(
+        op.getSrc().getType().getElementType(), op.getType(), values.front(),
+        getTypeConverter(), rewriter, op.getLoc());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct ExtractScalarOpConversion
+    : ConvertOpToLLVMPattern<triton::gpu::ExtractScalarOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(triton::gpu::ExtractScalarOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto values =
+        unpackUniqueTensorElements(op.getLoc(), adaptor.getSrc(), rewriter);
+    rewriter.replaceOp(op, values.front());
+    return success();
+  }
+};
+
 struct ArithConstantSplatOpConversion
     : public ConvertOpToLLVMPattern<arith::ConstantOp> {
   using ConvertOpToLLVMPattern<arith::ConstantOp>::ConvertOpToLLVMPattern;
@@ -540,7 +569,8 @@ void mlir::triton::populateViewOpToLLVMPatterns(
     PatternBenefit benefit) {
   patterns.add<ReshapeOpConversion>(typeConverter, benefit);
   patterns.add<ExpandDimsOpConversion>(typeConverter, benefit);
-  patterns.add<SplatOpConversion>(typeConverter, benefit);
+  patterns.add<SplatOpConversion, ScalarSplatOpConversion,
+               ExtractScalarOpConversion>(typeConverter, benefit);
   patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
