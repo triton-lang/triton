@@ -2,6 +2,7 @@ import os
 import pytest
 import shutil
 import triton
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from triton._internal_testing import is_hip
 
@@ -521,6 +522,35 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     assert fresh_knobs.cache.manager_class == FileCacheManager
 
     assert fresh_knobs.build.backend_dirs == {"/tmp/cuda/crt", "/tmp/cuda/rt"}
+
+
+def test_fp_fusion_enabled_warning(fresh_knobs, monkeypatch):
+    language = fresh_knobs.language
+    # TRITON_DEFAULT_FP_FUSION is unset by the fresh_knobs fixture: fusion stays
+    # enabled for backward compatibility, with a deprecation warning.
+    assert os.environ.get("TRITON_DEFAULT_FP_FUSION") is None
+    with pytest.warns(UserWarning, match="TRITON_DEFAULT_FP_FUSION is unset"):
+        assert language.fp_fusion_enabled(None)
+    # An explicit per-kernel request overrides the default without warning.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert language.fp_fusion_enabled(True)
+        assert not language.fp_fusion_enabled(False)
+    # Setting the env var silences the warning.
+    monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", "0")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert not language.fp_fusion_enabled(None)
+    monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", "1")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert language.fp_fusion_enabled(None)
+    # Force-disable wins without warning even when the default is unset.
+    monkeypatch.delenv("TRITON_DEFAULT_FP_FUSION")
+    monkeypatch.setenv("TRITON_FORCE_DISABLE_FP_FUSION", "1")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert not language.fp_fusion_enabled(None)
 
 
 def test_triton_home(fresh_knobs, monkeypatch):
