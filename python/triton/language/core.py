@@ -2011,14 +2011,19 @@ def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     :type input: Tensor
     :param other: The second input tensor.
     :type other: Tensor
-    :param can_reorder: Compiler hint. If true, the compiler is
+    :param can_reorder: Deprecated compiler hint. If true, the compiler is
         allowed to reorder elements while concatenating inputs.  Only use if the
         order does not matter (e.g., result is only used in reduction ops).
+        Will be removed in Triton 3.10, when concatenation will always be
+        deterministic; pass False to adopt the new behavior early.
     :type can_reorder: bool
     :param dim: The dimension to concatenate along (used when can_reorder is False).
     :type dim: int
     """
     if can_reorder:
+        warn("tl.cat(can_reorder=True) is deprecated and will be removed in Triton 3.10, "
+             "when concatenation will always be deterministic. Pass can_reorder=False "
+             "(the default) to adopt the new behavior.")
         return _semantic.cat(input, other, can_reorder)
 
     rank = len(input.shape)

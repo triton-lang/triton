@@ -2,6 +2,7 @@
 import contextlib
 import itertools
 import re
+import warnings
 from typing import Optional
 import math
 import textwrap
@@ -2659,6 +2660,27 @@ def test_cat(dtype_str, num_warps, can_reorder, device):
         torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
     # check if there's no duplicate value in z
     assert z.unique().size(0) == z.size(0)
+
+
+def test_cat_can_reorder_deprecated(device, fresh_triton_cache):
+
+    @triton.jit
+    def kernel(X, Y, Z, N: tl.constexpr, CAN_REORDER: tl.constexpr):
+        offs = tl.arange(0, N)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        z = tl.cat(x, y, can_reorder=CAN_REORDER)
+        tl.store(Z + tl.arange(0, 2 * N), z)
+
+    x = torch.arange(0, 128, device=device)
+    y = torch.arange(-128, 0, device=device)
+    z = torch.zeros((256, ), dtype=torch.int64, device=device)
+    with pytest.warns(UserWarning, match="can_reorder=True.*deprecated"):
+        kernel[(1, )](x, y, z, N=128, CAN_REORDER=True)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        kernel[(1, )](x, y, z, N=128, CAN_REORDER=False)
+    assert not [w for w in caught if "can_reorder" in str(w.message)]
 
 
 CAT_ND_SHAPES = ((128, ), (16, 32), (8, 16, 4), (2, 4, 8, 16))
