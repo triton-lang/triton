@@ -165,6 +165,7 @@ def _p_matmul(
     is_w_mxfp4: tl.constexpr = w_type == tl.uint8 and is_w_microscaled
     tl.static_assert(not is_w_mxfp4 or (W_TRANSPOSE or W_SHUFFLED), "NYI. Non-transposed mxfp4 weights")
     REQUANTIZE_X: tl.constexpr = X_MX_BLOCK_SIZE != MX_BLOCK_SIZE
+    HAS_X_EPILOGUE_SCALE: tl.constexpr = XTensorScale is not None and not REQUANTIZE_X
     X_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // X_MX_BLOCK_SIZE
     MX_PACK_DIVISOR: tl.constexpr = MX_BLOCK_SIZE
     if is_x_microscaled or is_w_microscaled:
@@ -255,7 +256,7 @@ def _p_matmul(
     FUSE_ALPHA: tl.constexpr = OutAcc is not None and Gammas is None and ACTIVATION_FN is None and out_alpha is not None
     # Preserve separate scale/bias rounding for dense sub-tiles.
     FUSE_TENSOR_SCALE: tl.constexpr = (
-        (XTensorScale is not None or WTensorScale is not None)
+        (HAS_X_EPILOGUE_SCALE or WTensorScale is not None)
         and XScale is None and WScale is None and B is not None and Betas is None
         and (is_out_microscaled or SUBTILE_FACTOR == 1)
     )
@@ -369,6 +370,11 @@ def _p_matmul(
             if GatherIndx is None:
                 XTensorScalePtrs += slice_off_m * stride_x_tensor_scale_m
             XTensorScalePtrs += scale_offs_m.to(index_type) * stride_x_tensor_scale_m
+
+        if REQUANTIZE_X and XTensorScale is not None:
+            x_conversion_scale = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0)
+        else:
+            x_conversion_scale: tl.constexpr = None
 
         acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
         acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=acc_dtype)
@@ -499,7 +505,7 @@ def _p_matmul(
                 w_scales: tl.constexpr = None
 
             if REQUANTIZE_X:
-                x, x_scales = nvfp4_to_mxfp8_tile(x, x_scales)
+                x, x_scales = nvfp4_to_mxfp8_tile(x, x_scales, x_conversion_scale)
 
             # --- update accumulator ---
             if is_x_microscaled or is_w_microscaled:
@@ -540,10 +546,10 @@ def _p_matmul(
             if is_x_microscaled and XMxScalePtrs is not None:
                 XMxScalePtrs += (X_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
 
-        if XTensorScale is not None or WTensorScale is not None:
+        if HAS_X_EPILOGUE_SCALE or WTensorScale is not None:
             x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
             w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
-            if XTensorScale is not None:
+            if HAS_X_EPILOGUE_SCALE:
                 x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0)
             if WTensorScale is not None:
                 offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)

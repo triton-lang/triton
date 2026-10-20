@@ -1,5 +1,5 @@
 """
-Regression test for the gfx1250 tensor atomic RMW MachineSink miscompile.
+Regression test for the CDNA5 tensor atomic RMW MachineSink miscompile.
 
 Background: When buffer atomics are not enabled, AtomicRMWOp lowering creates
 a condBr (s_cbranch) to mask which threads execute the atomic. LLVM's
@@ -20,7 +20,7 @@ and checks the AMDGCN assembly to verify that the last ds_load (LDS load from
 the reduce) appears BEFORE the s_cbranch (condBr from emitAtomicRMW), not
 after it. If the load were sunk, it would appear after the branch.
 
-When running on a gfx1250 GPU, it also verifies correctness of the result.
+When running on a CDNA5 GPU, it also verifies correctness of the result.
 
 See https://github.com/llvm/llvm-project/issues/181708 and its fix
 https://github.com/llvm/llvm-project/pull/182000.
@@ -36,7 +36,7 @@ import triton.knobs as knobs
 import triton.language as tl
 from triton.compiler import ASTSource, compile as triton_compile
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_hip_gfx1250
+from triton._internal_testing import is_hip_cdna5
 
 SHAPE0, SHAPE1 = 4, 64
 TARGET = GPUTarget("hip", "gfx1250", 32)
@@ -131,7 +131,7 @@ def test_ds_load_not_sunk_past_cbranch():
         f"global_atomic (line {first_global_atomic})")
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 def test_gpu_correctness_buffer_atomic():
     """Run the kernel on GPU and verify results with buffer atomics enabled."""
     x = torch.randn((SHAPE0, SHAPE1), device="cuda", dtype=torch.float64)
@@ -143,7 +143,7 @@ def test_gpu_correctness_buffer_atomic():
     np.testing.assert_allclose(z.cpu().numpy(), z_ref.cpu().numpy(), rtol=1e-5)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 def test_gpu_correctness():
     """Run the kernel on GPU and verify results with buffer atomics disabled."""
     x = torch.randn((SHAPE0, SHAPE1), device="cuda", dtype=torch.float64)

@@ -145,6 +145,9 @@ def test_module_walk(device):
     ttir_module = src.make_ir(target, options, codegen_fns, module_map, context)
     ttir_module.walk(walk_fn)
 
+    k = ttir_module.get_function("add_kernel")
+    k.get_arg_int_attr(0, "tt.divisibility")
+
 
 def test_python_func_in_visit_call(device):
 

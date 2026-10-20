@@ -401,7 +401,9 @@ def check_bit_width(value, shift_value):
 class dtype(base_type):
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = [
+        'fp4e2m1x2', 'fp8e8m0fnu', 'fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64'
+    ]
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -427,7 +429,13 @@ class dtype(base_type):
             self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
             self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.FP_TYPES:
-            if name == 'fp8e4b15':
+            if name == 'fp4e2m1x2':
+                self.fp_mantissa_width = 1
+                self.exponent_bias = 1
+            elif name == 'fp8e8m0fnu':
+                self.fp_mantissa_width = 0
+                self.exponent_bias = 127
+            elif name == 'fp8e4b15':
                 self.fp_mantissa_width = 3
                 self.exponent_bias = 15
             elif name == 'fp8e4nv':
@@ -593,6 +601,10 @@ class dtype(base_type):
         out.append(self.to_ir(builder))
 
     def to_ir(self, builder: ir.builder) -> ir.type:
+        if self.name == 'fp4e2m1x2':
+            return builder.get_fp4e2m1x2_ty()
+        if self.name == 'fp8e8m0fnu':
+            return builder.get_fp8e8m0fnu_ty()
         if self.name.startswith("fp8"):
             if hasattr(builder, "options") and self.name not in builder.options.supported_fp8_dtypes:
                 raise ValueError(f'type {self} not supported in this architecture. '
@@ -832,6 +844,8 @@ float8e5b16 = dtype('fp8e5b16')
 float8e4nv = dtype('fp8e4nv')
 float8e4b8 = dtype('fp8e4b8')
 float8e4b15 = dtype('fp8e4b15')
+float4e2m1x2 = dtype('fp4e2m1x2')
+float8e8m0fnu = dtype('fp8e8m0fnu')
 float16 = dtype('fp16')
 bfloat16 = dtype('bf16')
 float32 = dtype('fp32')
@@ -3069,24 +3083,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     return ret
 
 
-@builtin
-def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=None):
-    axis = _unwrap_if_constexpr(axis)
-    n = input.shape[axis]
-    index = arange(0, n, _semantic=_semantic)
-
-    if len(input.shape) > 1:
-        # Broadcast index across the non-reduced axes
-        axes_to_expand = [constexpr(d) for d in builtins.range(len(input.shape))]
-        del axes_to_expand[axis]
-        index = expand_dims(index, axes_to_expand, _semantic=_semantic)
-        index = broadcast_to(index, input.shape, _semantic=_semantic)
-
-    rvalue, rindices = reduce((input, index), axis, combine_fn, keep_dims=keep_dims, _semantic=_semantic,
-                              _generator=_generator)
-    return rvalue, rindices
-
-
 # -----------------------
 # Scans
 # -----------------------
@@ -3770,7 +3766,7 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
     num_args = len(list(arg_type_symbol_dict.keys())[0])
     if len(args) != num_args:
         raise ValueError(f"length of input args does not match."
-                         f"Expect {len(args)}, got {num_args}")
+                         f"Expect {num_args}, got {len(args)}")
 
     arg_types = []
     arg_list = []

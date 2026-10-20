@@ -359,7 +359,7 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
 
 // LDS padding strategy for TDM (descriptor) loads.
 //
-// Currently only invoked for gfx1250 TDM loads (via
+// Currently only invoked for CDNA5 TDM loads (via
 // getSharedEncIfAllUsersAreDotEncPadded in LowerLoops.cpp when useTDM is
 // true).
 //
@@ -416,7 +416,7 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
   bool loadTransposed = (order[0] != (1 - opIdx));
 
   // Fallback: assume padding to match widest load width
-  unsigned typeWidthInBit = srcTy.getElementType().getIntOrFloatBitWidth();
+  unsigned typeWidthInBit = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
   unsigned padAmount = 128 / typeWidthInBit;
   if (loadTransposed) {
     // Transposed path: pad by twice the elements-per-lane of the transposed
@@ -442,7 +442,7 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
     //   MFMA 32x32x2 f32 (kWidth=2): pad=2 → conflict-free
     //
     // For sub-dword elements (fp16/fp8): keep pad = 128/elemBits (4 dwords).
-    // On architectures with dual-address LDS loads (e.g. gfx1250
+    // On architectures with dual-address LDS loads (e.g. CDNA5
     // ds_load_2addr_b64 for fp8), two addresses are served simultaneously,
     // requiring the full 4-dword stride separation to avoid cross-address
     // bank conflicts.
@@ -523,7 +523,7 @@ composePaddedLayout(const TargetFeatures &targetFeatures, int opIdx,
                                                 targetFeatures.getWarpSize());
   }
 
-  if (targetFeatures.isGFX1250()) {
+  if (targetFeatures.isCDNA5()) {
     if (!srcTy.getElementType().isIntOrFloat())
       return {};
     return composePaddedLayoutWMMA(opIdx, vecWidth, srcTy, sharedOrder,

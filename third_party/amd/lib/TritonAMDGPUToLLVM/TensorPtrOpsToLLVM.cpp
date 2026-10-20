@@ -53,7 +53,7 @@ struct MakeTensorDescOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     if (op.getPadding() != PaddingOption::PAD_ZERO) {
       return op.emitError()
-             << "Padding with non-zero in TDM is not supported on GFX1250.";
+             << "Padding with non-zero in TDM is not supported on CDNA5.";
     }
 
     auto loc = op.getLoc();

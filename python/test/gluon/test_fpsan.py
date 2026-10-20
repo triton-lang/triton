@@ -8,7 +8,7 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton import language as tl
-from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_hopper, is_interpreter
+from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna5, is_hopper, is_interpreter
 from triton._internal_testing import is_blackwell_ultra
 from triton.experimental.gluon.language.nvidia.ampere import mma_v2
 from triton.experimental.gluon.language.nvidia import hopper
@@ -27,7 +27,7 @@ THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
 
 def _hip_device_supports_fpsan():
-    return is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx1250()
+    return is_hip_cdna3() or is_hip_cdna4() or is_hip_cdna5()
 
 
 def _require_cuda_backend(device: str):
@@ -1028,6 +1028,36 @@ def test_unary_math_identity(device, op, fresh_knobs):
     else:
         exp_bits = _expected_unary_tag_i32(x_bits, op)
     _assert_payload_equal(out, exp_bits)
+
+
+def test_absf_payload_semantics(device, fresh_knobs):
+    _require_cuda_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+    rs = np.random.RandomState(0)
+    x_bits = rs.randint(-(2**31), 2**31 - 1, n_elements, dtype=np.int32)
+    # Zero, a subnormal, one, infinity, and signaling/quiet NaNs.
+    edges = np.array([0, 1, 0x3F800000, 0x7F800000, 0x7F800001, 0x7FC00001], dtype=np.uint32)
+    # Set the sign bit to add negative versions. The int32 view preserves the bits.
+    x_bits[:2 * len(edges)] = np.concatenate([edges, edges | np.uint32(0x80000000)]).view(np.int32)
+    x = torch.tensor(x_bits, dtype=torch.int32, device=device)
+    out = torch.empty_like(x)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _unary_math_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        OP="abs",
+        BLOCK=BLOCK,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    # Clear only the sign bit, including for NaNs and negative zero.
+    _assert_payload_equal(out, x_bits & np.int32(0x7FFFFFFF))
 
 
 def test_exp2_payload_f64(device, fresh_knobs):
@@ -2318,7 +2348,7 @@ def test_warpgroup_mma(device, use_acc, is_async, type_a, type_b, acc_type, m, n
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.skipif(not (is_hip_cdna4() or is_hip_gfx1250()), reason="Requires DotScaledOp support (CDNA4, or CDNA5)")
+@pytest.mark.skipif(not (is_hip_cdna4() or is_hip_cdna5()), reason="Requires DotScaledOp support (CDNA4, or CDNA5)")
 @pytest.mark.parametrize("type_a", ["e2m1", "e4m3", "e5m2", "bf16", "fp16"])
 @pytest.mark.parametrize("type_b", ["e2m1", "e4m3", "e5m2", "bf16", "fp16"])
 def test_dot_scaled(device, type_a, type_b, fresh_knobs):
@@ -3398,7 +3428,7 @@ def test_mfma_dot(device, type_a, type_b, acc_type, m, n, k, instr_m, instr_n, i
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_k", "k_width"), _WMMA_DOT_CASES)
 def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, fresh_knobs):
     _require_cuda_backend(device)
@@ -3452,7 +3482,7 @@ def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, f
 def test_scaled_upcast_fp4_compact_scales(device, dtype, scale_factor, fresh_knobs):
     _require_cuda_backend(device)
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
-    amd = gl.amd.cdna5 if is_hip_gfx1250() else gl.amd.cdna4 if is_hip_cdna4() else gl.amd.cdna3
+    amd = gl.amd.cdna5 if is_hip_cdna5() else gl.amd.cdna4 if is_hip_cdna4() else gl.amd.cdna3
 
     @gluon.jit
     def kernel(src_ptr, scale_ptr, out_ptr, SCALE_FACTOR: gl.constexpr, THREADS_PER_WARP: gl.constexpr):

@@ -160,10 +160,11 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "double",
-        "bf16": "double",
-        "fp32": "double",
-        "f32": "double",
+        # Pass 16-bit floating-point scalars as raw bit patterns.
+        "fp16": "uint16_t",
+        "bf16": "uint16_t",
+        "fp32": "float",
+        "f32": "float",
         "fp64": "double",
         "nvTmaDesc": "CUtensorMap",
     }[ty]
@@ -271,7 +272,11 @@ class CudaLauncher(object):
             active_driver = triton.runtime.driver.active
             device = active_driver.get_current_device()
             properties = active_driver.utils.get_device_properties(device)
-            min_shared = properties["max_shared_mem_per_multiprocessor"] // (max_occupancy + 1) + 1
+            # Budget for max_occupancy CTAs, including the driver reservation.
+            # Ampere and newer allocate shared memory in 128-byte units. Round
+            # down before subtracting the reservation so all CTAs still fit.
+            shared_per_cta = properties["max_shared_mem_per_multiprocessor"] // max_occupancy
+            min_shared = shared_per_cta // 128 * 128 - properties["reserved_shared_mem_per_block"]
             self.shared = max(self.shared, min_shared)
         if self.gsan_enabled:
             signature["_gsan_globals_ptr"] = "*i8"

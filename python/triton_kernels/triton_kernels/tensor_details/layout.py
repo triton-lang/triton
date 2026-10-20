@@ -6,10 +6,10 @@ from .layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLa
 from .layout_details.hopper_scale import HopperMXScaleLayout
 from .layout_details.hopper_value import HopperMXValueLayout
 from .layout_details.cdna4_scale import CDNA4MXScaleLayout
-from .layout_details.gfx1250_scale import GFX1250MXScaleLayout
+from .layout_details.cdna5_scale import CDNA5MXScaleLayout
 from .layout_details.strided import StridedLayout
 from .layout_details.tiled import TiledLayout
-from ..target_info import cuda_capability_geq, is_hip_cdna4, is_hip_gfx1250
+from ..target_info import cuda_capability_geq, is_hip_cdna4, is_hip_cdna5
 
 __all__ = [
     "Layout",
@@ -19,7 +19,7 @@ __all__ = [
     "HopperMXScaleLayout",
     "HopperMXValueLayout",
     "CDNA4MXScaleLayout",
-    "GFX1250MXScaleLayout",
+    "CDNA5MXScaleLayout",
     "StridedLayout",
     "TiledLayout",
     "BlackwellActMXScaleLayout",
@@ -45,8 +45,8 @@ def make_default_matmul_mxfp4_w_layout(
 def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
     if is_hip_cdna4():
         return CDNA4MXScaleLayout()
-    elif is_hip_gfx1250():
-        return GFX1250MXScaleLayout()
+    elif is_hip_cdna5():
+        return CDNA5MXScaleLayout()
     else:
         if cuda_capability_geq(10):
             return BlackwellMXScaleLayout()
