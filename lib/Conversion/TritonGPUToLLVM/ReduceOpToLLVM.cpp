@@ -525,8 +525,11 @@ private:
     SmallVector<SmallVector<Value>> partials(numPartials);
     for (unsigned i = 0; i < accs.size(); ++i) {
       Type type = accs[i][0].getType();
+      Type loadType = type.getIntOrFloatBitWidth() < 8 ? i8_ty : type;
       Value loaded = targetInfo.loadShared(rewriter, loc, bases[i],
-                                           vec_ty(type, numPartials), pred);
+                                           vec_ty(loadType, numPartials), pred);
+      if (loadType != type)
+        loaded = b.trunc(vec_ty(type, numPartials), loaded);
       auto elements = unpackLLVector(loc, loaded, rewriter);
       for (unsigned j = 0; j < numPartials; ++j)
         partials[j].push_back(elements[j]);
