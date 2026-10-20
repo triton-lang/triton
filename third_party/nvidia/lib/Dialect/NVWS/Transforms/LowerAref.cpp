@@ -182,7 +182,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
       assert(partitionIds.size() == 1 &&
              "aref producer must have exactly one partition");
-      if (producerGroups.count(partitionIds.front())) {
+      if (producerGroups.contains(partitionIds.front())) {
         continue;
       }
       producerGroups.insert(partitionIds.front());
@@ -292,7 +292,7 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
                    Value barrierAlloc, Value pred) {
   auto newLoadOp = triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
       rewriter, op.getLoc(), op.getDesc(), op.getIndices(), barrierAlloc,
-      op.getResult(), pred);
+      op.getResult(), pred, /*multicast=*/false, op.getCachePolicyAttr());
   assignStageCluster(newLoadOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 };

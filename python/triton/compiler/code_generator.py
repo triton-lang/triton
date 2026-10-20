@@ -593,7 +593,7 @@ class CodeGenerator(ast.NodeVisitor):
         def common_type(a, b):
             if isinstance(a, tl.tuple_type):
                 _check(isinstance(b, tl.tuple_type), lambda: error_msg(a, b))
-                _check(a.fields == b.fields, lambda: error_msg(a, b))
+                _check(len(a.types) == len(b.types) and a.fields == b.fields, lambda: error_msg(a, b))
                 return tl.tuple_type([common_type(ai, bi) for ai, bi in zip(a, b)], fields=a.fields)
             if isinstance(a, tl.constexpr_type):
                 if a == b:
@@ -1151,18 +1151,25 @@ class CodeGenerator(ast.NodeVisitor):
         pass
 
     def visit_Compare(self, node):
-        if not (len(node.comparators) == 1 and len(node.ops) == 1):
-            raise self._unsupported(node, "simultaneous multiple comparison is not supported")
-        lhs = self.visit(node.left)
-        rhs = self.visit(node.comparators[0])
-        lhs_value = _unwrap_if_constexpr(lhs)
-        rhs_value = _unwrap_if_constexpr(rhs)
-        if type(node.ops[0]) is ast.Is:
-            return constexpr(lhs_value is rhs_value)
-        if type(node.ops[0]) is ast.IsNot:
-            return constexpr(lhs_value is not rhs_value)
-        operator = self._get_operator(node, node.ops[0], "comparison")
-        return self._apply_binary_method(node, operator, lhs, rhs)
+
+        def comparisons():
+            lhs = self.visit(node.left)
+            for op, comparator in zip(node.ops, node.comparators):
+                rhs = self.visit(comparator)
+                if isinstance(op, ast.Is):
+                    yield constexpr(_unwrap_if_constexpr(lhs) is _unwrap_if_constexpr(rhs))
+                elif isinstance(op, ast.IsNot):
+                    yield constexpr(_unwrap_if_constexpr(lhs) is not _unwrap_if_constexpr(rhs))
+                else:
+                    operator = self._get_operator(node, op, "comparison")
+                    yield self._apply_binary_method(node, operator, lhs, rhs)
+                # Reuse the middle operand without evaluating its side effects again.
+                lhs = rhs
+
+        values = comparisons()
+        if len(node.ops) == 1:
+            return next(values)
+        return self._apply_boolean_values(node, self._operators[ast.And], values)
 
     def visit_UnaryOp(self, node):
         operand = self.visit(node.operand)
@@ -1342,15 +1349,10 @@ class CodeGenerator(ast.NodeVisitor):
         iv_type = self.semantic.integer_promote_impl(lb.dtype, ub.dtype)
         iv_type = self.semantic.integer_promote_impl(iv_type, step.dtype)
         iv_ir_type = iv_type.to_ir(self.builder)
-        iv_is_signed = iv_type.int_signedness == language.core.dtype.SIGNEDNESS.SIGNED
-        # lb/ub/step might be constexpr, we need to cast them to tensor
-        lb = lb.handle
-        ub = ub.handle
-        step = step.handle
-        # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
-        lb = self.builder.create_int_cast(lb, iv_ir_type, iv_is_signed)
-        ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
-        step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
+        # Preserve each operand's signedness when widening to the induction type.
+        lb = self.builder.create_int_cast(lb.handle, iv_ir_type, lb.dtype.is_int_signed())
+        ub = self.builder.create_int_cast(ub.handle, iv_ir_type, ub.dtype.is_int_signed())
+        step = self.builder.create_int_cast(step.handle, iv_ir_type, step.dtype.is_int_signed())
         # Create placeholder for the loop induction variable
         iv_placeholder = self.builder.create_poison(iv_ir_type)
         self.set_value(node.target.id, language.core.tensor(iv_placeholder, iv_type))
@@ -1561,14 +1563,15 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_BoolOp(self, node: ast.BoolOp):
         operator = self._get_operator(node, node.op, "boolean")
-        method_name = operator[0]
+        values = (self.visit(subnode) for subnode in node.values)
+        return self._apply_boolean_values(node, operator, values, warn_non_scalar=True)
 
+    def _apply_boolean_values(self, node, operator, values, warn_non_scalar=False):
+        method_name = operator[0]
         nontrivial_values = []
 
-        for subnode in node.values:
-            # we visit the values in order, executing their side-effects
-            # and possibly early-exiting:
-            value = self.visit(subnode)
+        # Consume values lazily so compile-time short-circuiting skips side effects.
+        for value in values:
             if not _is_dynamic_boolean_operand(value):
                 # this is a constexpr, so we might be able to short-circuit:
                 bv = bool(value)
@@ -1581,7 +1584,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # otherwise, our constexpr has no effect on the output of the
                 # expression so we do not append it to nontrivial_values.
             else:
-                if _is_triton_tensor(value) and value.type.is_block():
+                if warn_non_scalar and _is_triton_tensor(value) and value.type.is_block():
                     lineno = getattr(node, "lineno", None)
                     if lineno is not None:
                         lineno += self.begin_line

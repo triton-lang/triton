@@ -10,7 +10,7 @@ __all__ = [
     "reset",
 ]
 
-_LAZY_LOAD_MODULES = {"symmetric_memory"}
+_LAZY_LOAD_MODULES = {"symmetric_memory", "graph"}
 
 
 def __getattr__(name):

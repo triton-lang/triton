@@ -129,6 +129,15 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
+  // Returns true if the target does not abort the kernel in |assertFail| and
+  // requires |assertTrap| to be emitted instead. The trap is emitted after a
+  // block-wide barrier so that all failing threads finish reporting first.
+  virtual bool requiresAssertTrap() const { return false; }
+
+  // Emits LLVM code with |rewriter| to abort the kernel after a failed
+  // assertion. Only called if |requiresAssertTrap| returns true.
+  virtual void assertTrap(RewriterBase &rewriter, Location loc) const = 0;
+
   virtual int getSharedMemoryBanks() const { return 32; }
 
   virtual int getSharedAddressSpace() const = 0;
@@ -142,6 +151,7 @@ public:
   virtual bool supportLdStMatrixB8() const { return false; }
   virtual bool supportBitwidth16Elementwise() const { return false; }
   virtual bool supportBitwidth32Elementwise() const { return false; }
+  virtual bool supportsTcgen05() const { return false; }
 
   // Returns the preferred arity of the in-thread reduction tree for the given
   // combiner operation. The default is 2 (binary tree). Targets that have
@@ -155,11 +165,6 @@ public:
   // Returns the shared memory partition size in bytes. A value of 0 means
   // shared memory is not partitioned.
   virtual size_t getSharedMemoryPartitionSize() const { return 0; }
-
-  // Annotate target specific information to local load operations during
-  // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
-  virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
-                                     Operation *llLoadOp) const {}
 
   // Returns bases of lanes {LoadBases, StoreBases} that are active in a
   // single hardware cycle for shared memory loads and stores.

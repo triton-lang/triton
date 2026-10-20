@@ -197,10 +197,8 @@ public:
     auto threadsPerWarp = getThreadsPerWarp(srcType);
     auto warpsPerCTA =
         getWarpsPerCTA(srcType.getEncoding(), srcType.getShape());
-    replicationFactor /= std::accumulate(
-        threadsPerWarp.begin(), threadsPerWarp.end(), 1, std::multiplies<>());
-    replicationFactor /= std::accumulate(warpsPerCTA.begin(), warpsPerCTA.end(),
-                                         1, std::multiplies<>());
+    replicationFactor /= product(threadsPerWarp);
+    replicationFactor /= product(warpsPerCTA);
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     for (auto i = 0; i < histogramValue.size(); ++i) {

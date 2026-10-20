@@ -707,7 +707,7 @@ LogicalResult MemDescReinterpretOp::verify() {
 
     auto getPadPattern = [](MemDescType ty) {
       auto enc = getPaddedEncoding(ty.getEncoding());
-      auto elmtSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
+      auto elmtSize = ty.getElementTypeBitWidth() / 8;
       llvm::MapVector<int32_t, int32_t> pattern;
 
       for (auto [interval, padding] :
@@ -1623,8 +1623,8 @@ LogicalResult WarpYieldOp::verify() {
 // Get the size of a scalar type when stored in shared memory.
 // TODO: Generalize this as needed.
 size_t getSharedMemorySize(Type type) {
-  if (isa<IntegerType, FloatType>(type))
-    return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
+  if (isa<IntegerType, FloatType, PackedFloat4E2M1Type>(type))
+    return llvm::divideCeil(getIntOrFloatOrPtrBitWidth(type), 8);
   if (isa<PointerType, TensorDescInterface>(type))
     return 8;
   if (auto desc = dyn_cast<MemDescType>(type)) {
@@ -1661,6 +1661,8 @@ unsigned WarpSpecializeOp::getTotalPartitionWarps() {
 //===----------------------------------------------------------------------===//
 
 void BarrierOp::print(OpAsmPrinter &p) {
+  if (isWarp())
+    p << " warp";
   // print "all" instead of  "local|global_read|global_write|tensor|all"
   if (getAddrSpace() == AddrSpace::All) {
     p << " all";
@@ -1670,6 +1672,9 @@ void BarrierOp::print(OpAsmPrinter &p) {
 }
 
 ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto scope = succeeded(parser.parseOptionalKeyword("warp"))
+                   ? BarrierScope::Warp
+                   : BarrierScope::CTA;
   auto parseAddrSpace = [&]() -> FailureOr<AddrSpace> {
     std::string keyword;
     if (parser.parseKeywordOrString(&keyword))
@@ -1699,7 +1704,15 @@ ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
 
   result.addAttribute("addrSpace",
                       AddrSpaceAttr::get(parser.getContext(), addrSpaceRet));
+  result.addAttribute("scope",
+                      BarrierScopeAttr::get(parser.getContext(), scope));
 
+  return success();
+}
+
+LogicalResult BarrierOp::verify() {
+  if (isWarp() && getAddrSpace() != AddrSpace::Local)
+    return emitOpError("warp scope supports only the local address space");
   return success();
 }
 

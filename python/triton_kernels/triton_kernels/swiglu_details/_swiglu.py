@@ -40,14 +40,7 @@ def exp_ftz(x):
     if tl.target_info.is_cuda():
         log2_e: tl.constexpr = 1.4426950408889634
         x *= log2_e
-        return tl.inline_asm_elementwise(
-            "ex2.approx.ftz.f32 $0, $1;",
-            "=r, r",
-            [x],
-            dtype=tl.float32,
-            is_pure=True,
-            pack=1,
-        )
+        return tl.extra.cuda.exp2_ftz(x)
     else:
         return tl.exp(x)
 

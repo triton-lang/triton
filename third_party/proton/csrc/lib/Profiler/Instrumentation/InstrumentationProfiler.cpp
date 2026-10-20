@@ -90,7 +90,7 @@ std::vector<uint32_t>
 getUnitIdVector(const std::map<std::string, std::string> &modeOptions,
                 size_t totalUnits) {
   std::vector<uint32_t> unitIdVector;
-  if (modeOptions.count("sampling_options") != 0) {
+  if (modeOptions.contains("sampling_options")) {
     auto &samplingOption = modeOptions.at("sampling_options");
     auto unitIds = proton::split(samplingOption, ",");
     for (auto uintId : unitIds) {
@@ -118,8 +118,8 @@ InstrumentationProfiler::getParserConfig(uint64_t functionId,
   auto config = std::make_shared<CircularLayoutParserConfig>();
   config->scratchMemSize =
       functionMetadata.at(functionId).getScratchMemorySize();
-  if (!(modeOptions.count("granularity") == 0 ||
-        modeOptions.at("granularity") == "GRANULARITY.WARP")) {
+  if (modeOptions.contains("granularity") &&
+      modeOptions.at("granularity") != "GRANULARITY.WARP") {
     throw makeInvalidArgument("Only warp granularity is supported for now");
   }
   config->totalUnits = functionMetadata.at(functionId).getNumWarps();
@@ -146,7 +146,7 @@ void InstrumentationProfiler::initFunctionMetadata(
     const std::vector<std::pair<size_t, std::string>> &scopeIdPairs,
     const std::vector<std::pair<size_t, size_t>> &scopeIdParentPairs,
     const std::string &metadataPath) {
-  if (functionScopeIdNames.count(functionId)) {
+  if (functionScopeIdNames.contains(functionId)) {
     throw makeInvalidArgument(
         "Duplicate function id: " + std::to_string(functionId) +
         " for function " + functionName);
@@ -155,7 +155,7 @@ void InstrumentationProfiler::initFunctionMetadata(
   for (auto &pair : scopeIdPairs) {
     auto scopeId = pair.first;
     auto scopeName = pair.second;
-    if (functionScopeIdNames[functionId].count(scopeId)) {
+    if (functionScopeIdNames[functionId].contains(scopeId)) {
       throw makeInvalidArgument(
           "Duplicate scope id: " + std::to_string(scopeId) + " for function " +
           functionName);
@@ -173,7 +173,7 @@ void InstrumentationProfiler::initFunctionMetadata(
     std::vector<Context> reversedContexts;
     reversedContexts.emplace_back(name);
     auto currentId = scopeId;
-    while (scopeIdParentMap.count(currentId) > 0) {
+    while (scopeIdParentMap.contains(currentId)) {
       auto parentId = scopeIdParentMap[currentId];
       auto parentName = functionScopeIdNames[functionId].at(parentId);
       reversedContexts.emplace_back(parentName);
@@ -239,7 +239,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
   }
 
   int64_t timeShiftCost = 0;
-  if (modeOptions.count("optimizations")) {
+  if (modeOptions.contains("optimizations")) {
     auto optimizations = proton::split(modeOptions.at("optimizations"), ",");
     if (std::find(optimizations.begin(), optimizations.end(), "time_shift") !=
         optimizations.end())
