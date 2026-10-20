@@ -4964,3 +4964,58 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return %out : tensor<32x128xf32, #dst>
   }
 }
+
+// -----
+
+#a = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#b = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @remat_transpose_backedge
+  // CHECK: %[[LOOP:.*]]:21 = scf.for
+  // CHECK: tt.trans
+  // CHECK: scf.yield
+  // CHECK: tt.return %[[LOOP]]#0
+  tt.func @remat_transpose_backedge(%upper: i32) -> tensor<2x2xf32, #a> {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %init = arith.constant dense<1.0> : tensor<2x2xf32, #a>
+    %out = scf.for %iv = %zero to %upper step %one iter_args(%iter = %init) -> (tensor<2x2xf32, #a>) : i32 {
+      %trans = tt.trans %iter {order = array<i32: 1, 0>} : tensor<2x2xf32, #a> -> tensor<2x2xf32, #b>
+      %cvt = ttg.convert_layout %trans : tensor<2x2xf32, #b> -> tensor<2x2xf32, #a>
+      scf.yield %cvt : tensor<2x2xf32, #a>
+    }
+    tt.return %out : tensor<2x2xf32, #a>
+  }
+}
+
+// -----
+
+#b = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#c = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#d = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @remat_mutual_convert_cycle
+  // CHECK: scf.for
+  // CHECK: arith.addf
+  // CHECK: arith.mulf
+  // CHECK: tt.store
+  // CHECK: scf.yield
+  // CHECK: tt.return
+  tt.func @remat_mutual_convert_cycle(%upper: i32, %ptr: tensor<2x2x!tt.ptr<f32>, #b>) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %init = arith.constant dense<1.0> : tensor<2x2xf32, #d>
+    %loop:2 = scf.for %iv = %zero to %upper step %one iter_args(%x = %init, %y = %init) -> (tensor<2x2xf32, #d>, tensor<2x2xf32, #d>) : i32 {
+      %sum = arith.addf %x, %y : tensor<2x2xf32, #d>
+      %product = arith.mulf %x, %y : tensor<2x2xf32, #d>
+      %sum_t = tt.trans %sum {order = array<i32: 1, 0>} : tensor<2x2xf32, #d> -> tensor<2x2xf32, #c>
+      %product_t = tt.trans %product {order = array<i32: 1, 0>} : tensor<2x2xf32, #d> -> tensor<2x2xf32, #c>
+      %observe = ttg.convert_layout %sum_t : tensor<2x2xf32, #c> -> tensor<2x2xf32, #b>
+      %next_x = ttg.convert_layout %sum_t : tensor<2x2xf32, #c> -> tensor<2x2xf32, #d>
+      %next_y = ttg.convert_layout %product_t : tensor<2x2xf32, #c> -> tensor<2x2xf32, #d>
+      tt.store %ptr, %observe : tensor<2x2x!tt.ptr<f32>, #b>
+      scf.yield %next_x, %next_y : tensor<2x2xf32, #d>, tensor<2x2xf32, #d>
+    }
+    tt.return
+  }
+}
