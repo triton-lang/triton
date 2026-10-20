@@ -30,6 +30,11 @@ def get_amd_codegen_path() -> str:
     return str(Path(__file__).parent / "lib" / library)
 
 
+def get_amd_bitcode_path(name: str) -> str:
+    libdir = Path(knobs.amd.bitcode_path) if knobs.amd.bitcode_path else Path(__file__).parent / "lib"
+    return str(libdir / f"{name}.bc")
+
+
 class _AMDGPUCodegenOptions(ctypes.Structure):
     _fields_ = [
         ("abi_version", ctypes.c_uint32),
@@ -306,10 +311,9 @@ class HIPOptions:
         object.__setattr__(self, 'llvm_fn_attrs', _parse_llvm_key_values(self.llvm_fn_attrs))
         object.__setattr__(self, 'llvm_cl_opts', _parse_llvm_key_values(self.llvm_cl_opts, bare_value="true"))
 
-        default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         for lib in ["ocml", "ockl"]:
-            extern_libs[lib] = str(default_libdir / f'{lib}.bc')
+            extern_libs[lib] = get_amd_bitcode_path(lib)
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
 
     def hash(self):
@@ -691,12 +695,7 @@ class HIPBackend(BaseBackend):
             amd.set_all_fn_arg_inreg(kernel_fn)
 
         if knobs.compilation.enable_asan:
-            default_libdir = Path(__file__).parent / 'lib'
-            paths = [
-                str(default_libdir / 'asanrtl.bc'),
-                str(default_libdir / "ocml.bc"),
-                str(default_libdir / "ockl.bc")
-            ]
+            paths = [get_amd_bitcode_path(name) for name in ("asanrtl", "ocml", "ockl")]
             llvm.link_extern_libs(llvm_mod, paths)
         elif options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
