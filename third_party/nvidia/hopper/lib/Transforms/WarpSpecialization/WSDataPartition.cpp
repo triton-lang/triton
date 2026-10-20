@@ -1007,11 +1007,20 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
           op->getLoc(), offset * shape[dim] / numOfPartitions, 32);
       newCoordVal = builder.createWithAsyncTaskIds<arith::AddIOp>(
           op->getLoc(), coordVal, offsetVal);
-      mappings.map(coordVal, newCoordVal);
-      reverseMappings.map(newCoordVal, coordVal);
+      // Do not record the adjusted coordinate in the shared mappings: the
+      // adjustment is this descriptor's block-start coordinate. Other cloned
+      // consumers of the same value must keep the original, e.g. pointer
+      // arithmetic whose per-row offsets were already sliced separately
+      // would otherwise get the offset twice (#12369).
     }
 
     newOp = cloneAndSetResultType(op);
+    if (newCoordVal != coordVal) {
+      // The clone above kept the original coordinate operand (nothing was
+      // mapped); rewrite only this descriptor's coordinate.
+      unsigned firstIndexOperand = isa<DescriptorStoreOp>(op) ? 2 : 1;
+      newOp->setOperand(firstIndexOperand + dim, newCoordVal);
+    }
     if (isa<DescriptorLoadOp>(op)) {
       // map load result
       auto v = op->getResult(0);

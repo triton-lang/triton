@@ -206,3 +206,65 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: @ws_descriptor_coord_kept_local
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @ws_descriptor_coord_kept_local(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
+    %c1_i64 = arith.constant {async_task_id = array<i32: 0>} 1 : i64
+    %c128_i64 = arith.constant {async_task_id = array<i32: 0>} 128 : i64
+    %c128_i32 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 128 : i32
+    %c0_i32 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 0 : i32
+    %cst = arith.constant {async_task_id = array<i32: 1, 2>} dense<128> : tensor<128x1xi32, #blocked>
+    %c64_i32 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 64 : i32
+    %cst_0 = arith.constant {async_task_id = array<i32: 1, 2>} dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %a_desc = tt.make_tensor_descriptor %arg0, [%c128_i32, %c128_i32], [%c128_i64, %c1_i64] {async_task_id = array<i32: 0>} : <f16>, <128x64xf16, #shared>
+    %b_desc = tt.make_tensor_descriptor %arg1, [%c128_i32, %c128_i32], [%c128_i64, %c1_i64] {async_task_id = array<i32: 0>} : <f16>, <64x128xf16, #shared>
+    %pid = tt.get_program_id x {async_task_id = array<i32: 0, 1, 2>} : i32
+    // CHECK: %[[OFFM:.*]] = arith.muli {{.*}}, %c128_i32
+    %off_m = arith.muli %pid, %c128_i32 {async_task_id = array<i32: 0, 1, 2>} : i32
+    // The block-start offset of the second half-tile is computed once and is
+    // used only by the producer's second descriptor load.
+    // CHECK: %[[ADJ:.*]] = arith.addi %[[OFFM]], %c64_i32 {async_task_id = array<i32: 0>} : i32
+    // CHECK: tt.descriptor_load %{{.*}}[%[[OFFM]], {{.*}}] {async_task_id = array<i32: 0>} : !tt.tensordesc<64x64xf16
+    // CHECK: tt.descriptor_load %{{.*}}[%[[ADJ]], {{.*}}] {async_task_id = array<i32: 0>} : !tt.tensordesc<64x64xf16
+    %acc = scf.for %k = %c0_i32 to %c128_i32 step %c64_i32 iter_args(%arg4 = %cst_0) -> (tensor<128x128xf32, #mma>) : i32 {
+      %a = tt.descriptor_load %a_desc[%off_m, %k] {async_task_id = array<i32: 0>} : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked1>
+      %a_smem = ttg.local_alloc %a {async_task_id = array<i32: 1, 2>} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+      %b = tt.descriptor_load %b_desc[%k, %c0_i32] {async_task_id = array<i32: 0>} : !tt.tensordesc<64x128xf16, #shared> -> tensor<64x128xf16, #blocked2>
+      %b_smem = ttg.local_alloc %b {async_task_id = array<i32: 1, 2>} : (tensor<64x128xf16, #blocked2>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
+      %dot = ttng.warp_group_dot %a_smem, %b_smem, %arg4 {async_task_id = array<i32: 1, 2>, inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x128xf16, #shared, #smem> -> tensor<128x128xf32, #mma>
+      scf.yield {async_task_id = array<i32: 1, 2>} %dot : tensor<128x128xf32, #mma>
+    } {async_task_id = array<i32: 1, 2>, tt.warp_specialize}
+    // off_m is shared with the pointer-store epilogue. Each consumer's row
+    // offsets must start from the unadjusted off_m; only the sliced aranges
+    // carry the per-partition offset (#12369).
+    // CHECK: tt.make_range {async_task_id = array<i32: 1>, end = 64 : i32, start = 0 : i32}
+    // CHECK: tt.make_range {async_task_id = array<i32: 2>, end = 128 : i32, start = 64 : i32}
+    // CHECK: tt.splat %[[OFFM]] {async_task_id = array<i32: 1>}
+    // CHECK: tt.splat %[[OFFM]] {async_task_id = array<i32: 2>}
+    %rm = tt.make_range {async_task_id = array<i32: 1, 2>, end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %off_m_vec = tt.splat %off_m {async_task_id = array<i32: 1, 2>} : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %rows = arith.addi %off_m_vec, %rm {async_task_id = array<i32: 1, 2>} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %rows_2d = tt.expand_dims %rows {async_task_id = array<i32: 1, 2>, axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %row_off = arith.muli %rows_2d, %cst {async_task_id = array<i32: 1, 2>} : tensor<128x1xi32, #blocked>
+    %c_base = tt.splat %arg2 {async_task_id = array<i32: 1, 2>} : !tt.ptr<f16> -> tensor<128x1x!tt.ptr<f16>, #blocked>
+    %c_rows = tt.addptr %c_base, %row_off {async_task_id = array<i32: 1, 2>} : tensor<128x1x!tt.ptr<f16>, #blocked>, tensor<128x1xi32, #blocked>
+    %rn = tt.make_range {async_task_id = array<i32: 1, 2>, end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %rn_2d = tt.expand_dims %rn {async_task_id = array<i32: 1, 2>, axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
+    %c_rows_2d = tt.broadcast %c_rows {async_task_id = array<i32: 1, 2>} : tensor<128x1x!tt.ptr<f16>, #blocked> -> tensor<128x128x!tt.ptr<f16>, #blocked>
+    %rn_bcast = tt.broadcast %rn_2d {async_task_id = array<i32: 1, 2>} : tensor<1x128xi32, #blocked> -> tensor<128x128xi32, #blocked>
+    %c_ptrs = tt.addptr %c_rows_2d, %rn_bcast {async_task_id = array<i32: 1, 2>} : tensor<128x128x!tt.ptr<f16>, #blocked>, tensor<128x128xi32, #blocked>
+    %out = arith.truncf %acc {async_task_id = array<i32: 1, 2>} : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
+    %out_cvt = ttg.convert_layout %out {async_task_id = array<i32: 1, 2>} : tensor<128x128xf16, #mma> -> tensor<128x128xf16, #blocked>
+    tt.store %c_ptrs, %out_cvt {async_task_id = array<i32: 1, 2>} : tensor<128x128x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
