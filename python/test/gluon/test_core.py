@@ -7532,17 +7532,18 @@ def test_thread_regions_combiner_callees(kind, indirect, device, fresh_knobs):
     # Immutable loads make address selection an associative combiner.
     @gluon.jit
     def choose_max(a, b):
-        if a == b:
-            selected = a
-        else:
-            av = ttgl.load(a.to(ttgl.pointer_type(ttgl.int32)))
-            bv = ttgl.load(b.to(ttgl.pointer_type(ttgl.int32)))
-            selected = ttgl.where(av >= bv, a, b)
-        return selected
+        av = ttgl.load(a.to(ttgl.pointer_type(ttgl.int32)))
+        bv = ttgl.load(b.to(ttgl.pointer_type(ttgl.int32)))
+        return ttgl.where(av >= bv, a, b)
 
     @gluon.jit(noinline=True)
     def noinline_choose(a, b):
-        return choose_max(a, b)
+        # Keep control flow outside the single-block combiner region.
+        if a == b:
+            selected = a
+        else:
+            selected = choose_max(a, b)
+        return selected
 
     @gluon.jit(noinline=True)
     def forward_choose(a, b):
