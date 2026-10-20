@@ -967,3 +967,41 @@ def test_grouped_gemm(M, N, K, group_size):
     tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
     for i in range(group_size):
         assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)
+
+
+@triton.jit
+def _ws_dot_kernel(a_desc, b_desc, c_desc, K: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                   BLOCK_K: tl.constexpr):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in tl.range(0, K // BLOCK_K, warp_specialize=True):
+        a = a_desc.load([pid_m * BLOCK_M, k * BLOCK_K])
+        b = b_desc.load([pid_n * BLOCK_N, k * BLOCK_K])
+        acc = tl.dot(a, b.T, acc)
+    c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], acc.to(tl.float16))
+
+
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.disable_warmup(reason="compiles for explicit targets without a launch")
+@pytest.mark.parametrize("capability, expect_ws", [(100, True), (120, False)])
+def test_warp_specialize_target_gating(capability, expect_ws):
+    # sm_12x has no tensor memory and its dots lower to mma.sync, so the automatic
+    # warp specialization pass must not partition loops there.
+    from triton.backends.compiler import GPUTarget
+    from triton.compiler import ASTSource
+    src = ASTSource(
+        fn=_ws_dot_kernel,
+        signature={
+            "a_desc": "tensordesc<fp16[128, 64]>",
+            "b_desc": "tensordesc<fp16[128, 64]>",
+            "c_desc": "tensordesc<fp16[128, 128]>",
+            "K": "constexpr",
+            "BLOCK_M": "constexpr",
+            "BLOCK_N": "constexpr",
+            "BLOCK_K": "constexpr",
+        },
+        constexprs={"K": 1024, "BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64},
+    )
+    ttgir = triton.compile(src, target=GPUTarget("cuda", capability, 32)).asm["ttgir"]
+    assert ("ttg.warp_specialize" in ttgir) == expect_ws

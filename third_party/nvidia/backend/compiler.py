@@ -344,7 +344,10 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-            passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
+            # sm_12x has no tensor memory and lowers dots to mma.sync; automatic warp
+            # specialization targets the tcgen05/TMEM pipeline of sm_10x/sm_11x.
+            if capability // 10 in [10, 11]:
+                passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_optimize_partition_warps(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
