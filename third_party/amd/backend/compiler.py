@@ -347,6 +347,11 @@ class HIPBackend(BaseBackend):
         return f"hip:{options.arch}"
 
     def parse_options(self, opts) -> Any:
+        # The GSan allocator supports HIP, but the device runtime and
+        # instrumentation enablement are WIP.
+        if is_enabled(opts, "gsan"):
+            raise ValueError("GSan instrumentation support on the AMD backend is WIP")
+
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
         if is_enabled(opts, "consan"):
             opts["debug"] = True

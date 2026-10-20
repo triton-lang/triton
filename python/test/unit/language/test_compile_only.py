@@ -491,6 +491,19 @@ def test_fp8_compiles_for_multiple_architectures_hip():
     triton.compile(src, target=GPUTarget("hip", "gfx942", 64))
 
 
+@pytest.mark.parametrize("instrumentation_mode", ["gsan", "fpsan,gsan"])
+def test_gsan_unsupported_on_hip(instrumentation_mode):
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    src = ASTSource(fn=kernel, signature={"out": "*i32"})
+    with pytest.raises(ValueError, match="GSan instrumentation support on the AMD backend is WIP"):
+        triton.compile(src, target=GPUTarget("hip", "gfx950", 64),
+                       options={"instrumentation_mode": instrumentation_mode})
+
+
 def test_fp8_compiles_for_multiple_architectures_cuda():
     """
     Validate FP8 compilation succeeds for architectures with different
