@@ -1945,10 +1945,12 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["local_store", "tmem_load"])
-def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch, num_ctas):
+@pytest.mark.parametrize("PRED", [True, False])
+def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, PRED, device, run_wrapper, monkeypatch, num_ctas):
     if run_wrapper:
-        result = run_in_process(test_tcgen5_copy, (FAILURE, MEM_ACCESS_KIND, device, False, monkeypatch, num_ctas))
-        if FAILURE:
+        result = run_in_process(test_tcgen5_copy,
+                                (FAILURE, MEM_ACCESS_KIND, PRED, device, False, monkeypatch, num_ctas))
+        if FAILURE and PRED:
             assert_expected_cuda_failure(result.exc)
             if MEM_ACCESS_KIND == "local_store":
                 assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
@@ -1963,8 +1965,8 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch,
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
     knobs.refresh_knobs()
 
-    @gluon.jit
-    def kernel(input, output, FAILURE: ttgl.constexpr, MEM_ACCESS_KIND: ttgl.constexpr):
+    @gluon.jit(do_not_specialize=["pred"])
+    def kernel(input, output, pred, FAILURE: ttgl.constexpr, MEM_ACCESS_KIND: ttgl.constexpr):
         block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
         cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
         tmem_layout: ttgl.constexpr = blackwell.TensorMemoryLayout((128, XBLOCK), col_stride=1, cga_layout=cga_layout)
@@ -1982,7 +1984,7 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch,
         mbarrier.init(bar, count=1)
         # An earlier synchronous reader must not impersonate the tensor core.
         ttgl.store(output + offs, smem.load(reg_layout))
-        blackwell.tcgen05_copy(smem, tmem)
+        blackwell.tcgen05_copy(smem, tmem, pred=pred)
         blackwell.tcgen05_commit(bar)
         if not FAILURE:
             mbarrier.wait(bar, 0)
@@ -1998,7 +2000,7 @@ def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch,
     input = torch.arange(XBLOCK.value * XBLOCK.value * num_ctas, device=device,
                          dtype=torch.int32).reshape(XBLOCK.value * num_ctas, XBLOCK.value)
     output = torch.empty_like(input)
-    kernel[(1, )](input, output, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4, num_ctas=num_ctas)
+    kernel[(1, )](input, output, PRED, FAILURE=FAILURE, MEM_ACCESS_KIND=MEM_ACCESS_KIND, num_warps=4, num_ctas=num_ctas)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")

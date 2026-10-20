@@ -1798,6 +1798,16 @@ void TMEMAllocOp::getEffects(
 }
 
 // -- TMEMCopyOp --
+Value TMEMCopyOp::getPredicateOperand() { return getPred(); }
+
+void TMEMCopyOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type TMEMCopyOp::getPredicateOperandTypeLike() {
+  return IntegerType::get(getContext(), 1);
+}
+
 LogicalResult TMEMCopyOp::verify() {
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();

@@ -669,6 +669,9 @@ struct TensorMemoryCopyOpConversion
       pred = TritonLLVMOpBuilder(loc, rewriter).and_(pred, cluster0);
     }
 
+    if (adaptor.getPred())
+      pred = TritonLLVMOpBuilder(loc, rewriter).and_(pred, adaptor.getPred());
+
     if (failed(copySharedToTmem(rewriter, loc, typeConverter, op,
                                 adaptor.getSrc(), adaptor.getDst(), pred)))
       return failure();

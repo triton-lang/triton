@@ -481,13 +481,14 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 // CHECK-LABEL: @tmem_copy_2d
 // CHECK-DAG: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32)
 tt.func public @tmem_copy_2d(%src: !ttg.memdesc<128x32xi8, #shared, #ttg.shared_memory>,
-                             %dst: !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>) {
+                             %dst: !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>, %pred: i1) {
   // CHECK: [[IS_WARP_0:%.*]] = llvm.icmp "eq" {{.*}}, [[ZERO]] : i32
   // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
   // CHECK: [[WARP_PRED:%.*]] = llvm.and [[IS_WARP_0]], [[ELECT]]
-  // CHECK-COUNT-8: tcgen05.cp.cta_group::1.warpx4.32x128b
+  // CHECK: [[COPY_PRED:%.*]] = llvm.and [[WARP_PRED]], %arg2
+  // CHECK-COUNT-8: tcgen05.cp.cta_group::1.warpx4.32x128b {{.*}} "r,l,b" {{.*}}, {{.*}}, [[COPY_PRED]]
   // CHECK-NOT: tcgen05.commit
-  ttng.tmem_copy %src, %dst : !ttg.memdesc<128x32xi8, #shared, #ttg.shared_memory>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+  ttng.tmem_copy %src, %dst, %pred : !ttg.memdesc<128x32xi8, #shared, #ttg.shared_memory>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
   tt.return
 }
 
@@ -532,7 +533,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.thr
 // CHECK-LABEL: @tmem_copy_2d_2cta
 // CHECK-DAG: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32)
 tt.func public @tmem_copy_2d_2cta(%src: !ttg.memdesc<128x32xi8, #shared, #ttg.shared_memory>,
-                             %dst: !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>) {
+                             %dst: !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>, %pred: i1) {
   // CHECK: [[IS_WARP_0:%.*]] = llvm.icmp "eq" {{.*}}, [[ZERO]] : i32
   // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
   // CHECK: [[WARP_PRED:%.*]] = llvm.and [[IS_WARP_0]], [[ELECT]]
@@ -540,9 +541,10 @@ tt.func public @tmem_copy_2d_2cta(%src: !ttg.memdesc<128x32xi8, #shared, #ttg.sh
   // CHECK: llvm.and {{.*}}, {{.*}} : i32
   // CHECK: [[IS_CLUSTER_0:%.*]] = llvm.icmp "eq" {{.*}}, [[ZERO]]
   // CHECK: [[LEAD_PRED:%.*]] = llvm.and [[WARP_PRED]], [[IS_CLUSTER_0]]
-  // CHECK-COUNT-8: tcgen05.cp.cta_group::2.warpx4.32x128b
+  // CHECK: [[COPY_PRED:%.*]] = llvm.and [[LEAD_PRED]], %arg2
+  // CHECK-COUNT-8: tcgen05.cp.cta_group::2.warpx4.32x128b {{.*}} "r,l,b" {{.*}}, {{.*}}, [[COPY_PRED]]
   // CHECK-NOT: tcgen05.commit
-  ttng.tmem_copy %src, %dst : !ttg.memdesc<128x32xi8, #shared, #ttg.shared_memory>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+  ttng.tmem_copy %src, %dst, %pred : !ttg.memdesc<128x32xi8, #shared, #ttg.shared_memory>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
   tt.return
   }
 }
