@@ -102,7 +102,7 @@ def test_warp_specialize_gather_fallback_matches_plain_pipeline():
 
 
 @pytest.mark.skipif(is_hip() or not is_hopper(), reason="Requires Hopper CUDA")
-def test_warp_specialize_gather_supported_partition_executes():
+def test_warp_specialize_gather_supported_partition_executes(with_allocator):
     M, N, K = 64, 512, 32
     torch.manual_seed(11988)
     a = torch.randn((4, M, K), device="cuda", dtype=torch.float16)
@@ -110,10 +110,6 @@ def test_warp_specialize_gather_supported_partition_executes():
     out_ws = torch.empty((M, N), device="cuda", dtype=torch.float16)
     out_plain = torch.empty_like(out_ws)
 
-    def alloc_fn(size, align, stream):
-        return torch.empty(size, device="cuda", dtype=torch.uint8)
-
-    triton.set_allocator(alloc_fn)
     kernel_ws = gather_ws_descriptor_kernel[(1, )](a, b, out_ws, M, N, K, True, num_warps=4, num_stages=3)
     gather_ws_descriptor_kernel[(1, )](a, b, out_plain, M, N, K, False, num_warps=4, num_stages=3)
     if is_compile_warmup():
