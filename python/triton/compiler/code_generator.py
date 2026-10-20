@@ -593,7 +593,7 @@ class CodeGenerator(ast.NodeVisitor):
         def common_type(a, b):
             if isinstance(a, tl.tuple_type):
                 _check(isinstance(b, tl.tuple_type), lambda: error_msg(a, b))
-                _check(a.fields == b.fields, lambda: error_msg(a, b))
+                _check(len(a.types) == len(b.types) and a.fields == b.fields, lambda: error_msg(a, b))
                 return tl.tuple_type([common_type(ai, bi) for ai, bi in zip(a, b)], fields=a.fields)
             if isinstance(a, tl.constexpr_type):
                 if a == b:
