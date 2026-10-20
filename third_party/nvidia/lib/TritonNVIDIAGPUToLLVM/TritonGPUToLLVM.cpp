@@ -22,6 +22,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Value.h"
 
 namespace mlir::triton {
@@ -75,8 +76,13 @@ public:
 // Memory lowering no longer needs scope ownership. Inline the CFG directly,
 // forwarding yields through continuation block arguments.
 void inlineThreadScopes(ModuleOp mod) {
+  llvm::SmallVector<triton::gpu::ThreadScopeOp> scopes;
+  mod.walk<WalkOrder::PostOrder>(
+      [&](triton::gpu::ThreadScopeOp scope) { scopes.push_back(scope); });
+
+  // Splitting blocks invalidates the walk's sibling iterators.
   IRRewriter rewriter(mod.getContext());
-  mod.walk<WalkOrder::PostOrder>([&](triton::gpu::ThreadScopeOp scope) {
+  for (auto scope : scopes) {
     Block *before = scope->getBlock();
     Block *after = rewriter.splitBlock(before, Block::iterator(scope));
     for (Type type : scope.getResultTypes())
@@ -93,7 +99,7 @@ void inlineThreadScopes(ModuleOp mod) {
     rewriter.mergeBlocks(&scope.getBody().front(), before);
     rewriter.inlineRegionBefore(scope.getBody(), after);
     rewriter.replaceOp(scope, after->getArguments());
-  });
+  }
 }
 
 void createSharedMemoryGlobal(ModuleOp mod, LLVMTypeConverter &typeConverter) {
