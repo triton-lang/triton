@@ -346,6 +346,14 @@ Value createPoisonTensor(ImplicitLocOpBuilder &b,
         RankedTensorType::get(memDescType.getShape(), elementType, encoding);
   }
 
+  if (isa<tt::PointerType>(elementType)) {
+    auto bitsType = poisonType.clone(b.getI64Type());
+    Value bits = arith::ConstantOp::create(
+        b, b.getLoc(), bitsType,
+        DenseElementsAttr::get(bitsType, getIntegerNaNPattern(64)));
+    return tt::IntToPtrOp::create(b, b.getLoc(), poisonType, bits);
+  }
+
   DenseElementsAttr poison;
   if (auto floatType = dyn_cast<FloatType>(elementType)) {
     poison = DenseElementsAttr::get(
@@ -354,8 +362,8 @@ Value createPoisonTensor(ImplicitLocOpBuilder &b,
     poison = DenseElementsAttr::get(
         poisonType, getIntegerNaNPattern(integerType.getWidth()));
   } else {
-    llvm::report_fatal_error(
-        "ConSan allocation initialization expects integer or float elements");
+    llvm::report_fatal_error("ConSan allocation initialization expects "
+                             "integer, float, or pointer elements");
   }
   return arith::ConstantOp::create(b, b.getLoc(), poisonType, poison);
 }
