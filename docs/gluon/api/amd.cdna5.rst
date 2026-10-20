@@ -9,6 +9,7 @@ AMD CDNA 5
     :template: autosummary/gluon-module.rst
 
     async_copy
+    buffer
     cluster
     mbarrier
     tdm

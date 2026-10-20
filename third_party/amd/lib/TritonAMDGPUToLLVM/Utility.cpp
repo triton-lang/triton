@@ -744,17 +744,27 @@ getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
                            std::optional<triton::MemSyncScope> scope,
                            bool isLoad,
                            const mlir::triton::AMD::TargetInfo &targetInfo) {
+  const bool isGfx9 = llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                                         targetInfo.getISAFamily());
+  const bool isGfx1250 = targetInfo.getISAFamily() == ISAFamily::CDNA5;
   int32_t aux = 0;
   if (auto gfx9Policy =
           dyn_cast_if_present<triton::amdgpu::CachePolicyGfx9Attr>(
               cachePolicy)) {
-    if (!llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
-                            targetInfo.getISAFamily()))
+    if (!isGfx9)
       return op->emitOpError(
           "the gfx9 cache policy is only supported on CDNA3 and CDNA4");
     const int ntBit = 0b10;
     if (gfx9Policy.getNontemporal())
       aux |= ntBit;
+  } else if (auto gfx1250Policy =
+                 dyn_cast_if_present<triton::amdgpu::CachePolicyGfx1250Attr>(
+                     cachePolicy)) {
+    if (!isGfx1250)
+      return op->emitOpError(
+          "the gfx1250 cache policy is only supported on gfx1250");
+    // TH[2:0] holds the temporal hint, whose values match the enum's.
+    aux |= static_cast<int32_t>(gfx1250Policy.getTemporalHint());
   } else {
     auto cm = getCacheModifier(cachePolicy);
     if (failed(cm))
@@ -762,30 +772,38 @@ getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
           "target cache policy is not supported on AMD targets");
     aux = getCtrlBitsForCacheModifierOnTarget(*cm, isLoad, targetInfo);
   }
-  if (scope) {
+  if (!scope)
+    return aux;
+  if (isGfx9) {
     // gfx9 encodes the scope of a non-atomic access in SC[1:0]: none = wave,
     // SC0 = workgroup, SC1 = agent, SC0|SC1 = system.
-    if (!llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
-                            targetInfo.getISAFamily()))
-      return op->emitOpError(
-          "scope on buffer loads and stores is only supported on CDNA3 and "
-          "CDNA4");
     const int sc0Bit = 0b1, sc1Bit = 0b10000;
     switch (*scope) {
     case triton::MemSyncScope::CTA:
-      aux |= sc0Bit;
-      break;
+      return aux | sc0Bit;
     case triton::MemSyncScope::GPU:
-      aux |= sc1Bit;
-      break;
+      return aux | sc1Bit;
     case triton::MemSyncScope::SYSTEM:
-      aux |= sc0Bit | sc1Bit;
-      break;
-    default:
-      return op->emitOpError("unsupported scope on a buffer load or store");
+      return aux | sc0Bit | sc1Bit;
     }
+  } else if (isGfx1250) {
+    // gfx1250 encodes it in SCOPE[4:3]: CU, SE, device or system. A workgroup
+    // runs on one WGP, so the CU scope, the default, already covers it.
+    const int scopeShift = 3;
+    const int scopeDev = 2 << scopeShift, scopeSys = 3 << scopeShift;
+    switch (*scope) {
+    case triton::MemSyncScope::CTA:
+      return aux;
+    case triton::MemSyncScope::GPU:
+      return aux | scopeDev;
+    case triton::MemSyncScope::SYSTEM:
+      return aux | scopeSys;
+    }
+  } else {
+    return op->emitOpError("scope on buffer loads and stores is only "
+                           "supported on CDNA3, CDNA4 and gfx1250");
   }
-  return aux;
+  return op->emitOpError("unsupported scope on a buffer load or store");
 }
 
 Type getPointerTypeWithShape(Value basePtr, Value offset) {

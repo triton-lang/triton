@@ -287,7 +287,9 @@ def MakeBufferDescOp : TT_AMDGPU_Op<"make_buffer_desc", [
 
     The hardware checks each access, or each 4-byte piece of an access wider
     than 4 bytes, against `num_records`: in bytes from `base`, it is in bounds
-    only if `soffset + offset + size <= num_records`.
+    only if `soffset + offset + size <= num_records`. On gfx1250, an access
+    that fits is in bounds as a whole, and a 4-byte piece of one that doesn't
+    is in bounds only if it ends at least 4 bytes before `num_records`.
     Out-of-bounds loads return zero and stores are dropped.
 
     The remaining descriptor bits (stride, data format, swizzling, thread-ID
