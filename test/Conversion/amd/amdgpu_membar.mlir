@@ -809,27 +809,29 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 
 // -----
 
-// The entry and latch waits must move together when they share loop barriers.
+// Forwarded global-load results do not stop deferral at loop branches.
 // CHECK-LABEL: @schedule_loop_paths
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
   tt.func @schedule_loop_paths(%ptr: !tt.ptr<i32>, %condition: i1) -> i32 {
     %first = tt.load %ptr : !tt.ptr<i32>
     ttg.async_wait {num = 2 : i32}
     // CHECK: ttg.async_wait
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: cf.br
     cf.br ^header(%first : i32)
   ^header(%value: i32):
     cf.cond_br %condition, ^body, ^exit
   ^body:
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = tt.load
     ttg.barrier local
     %next = tt.load %ptr : !tt.ptr<i32>
     ttg.async_wait {num = 2 : i32}
     // CHECK: ttg.async_wait
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: cf.br
     cf.br ^header(%next : i32)
   ^exit:
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: tt.return
     ttg.barrier local
     tt.return %value : i32
   }
@@ -856,5 +858,108 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     // CHECK-NEXT: tt.return
     ttg.barrier local
     tt.return %value : i32
+  }
+}
+
+// -----
+
+// A loaded branch condition is still a use, even when also forwarded.
+// CHECK-LABEL: @schedule_branch_condition
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  tt.func @schedule_branch_condition(%ptr: !tt.ptr<i1>) -> i1 {
+    %condition = tt.load %ptr : !tt.ptr<i1>
+    ttg.async_wait {num = 0 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: cf.cond_br
+    cf.cond_br %condition, ^left(%condition : i1), ^right(%condition : i1)
+  ^left(%lhs: i1):
+    // CHECK-NOT: ttg.barrier local
+    ttg.barrier local
+    tt.return %lhs : i1
+  ^right(%rhs: i1):
+    // CHECK-NOT: ttg.barrier local
+    ttg.barrier local
+    tt.return %rhs : i1
+  }
+}
+
+// -----
+
+// Follow a forwarded load to its actual use in a successor block.
+// CHECK-LABEL: @schedule_successor_use
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  tt.func @schedule_successor_use(%ptr: !tt.ptr<i32>) -> i32 {
+    %loaded = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 0 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: cf.br
+    cf.br ^next(%loaded : i32)
+  ^next(%value: i32):
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = arith.addi
+    %sum = arith.addi %value, %value : i32
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: tt.return
+    ttg.barrier local
+    tt.return %sum : i32
+  }
+}
+
+// -----
+
+// Do not replace barriers when paths have different first uses.
+// CHECK-LABEL: @schedule_different_successor_uses
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  tt.func @schedule_different_successor_uses(%ptr: !tt.ptr<i32>, %condition: i1) -> i32 {
+    %loaded = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 0 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: cf.cond_br
+    cf.cond_br %condition, ^left(%loaded : i32), ^right(%loaded : i32)
+  ^left(%lhs: i32):
+    // CHECK: arith.addi
+    // CHECK-NEXT: ttg.barrier local
+    %sum = arith.addi %lhs, %lhs : i32
+    ttg.barrier local
+    tt.return %sum : i32
+  ^right(%rhs: i32):
+    // CHECK: arith.subi
+    // CHECK-NEXT: ttg.barrier local
+    %difference = arith.subi %rhs, %rhs : i32
+    ttg.barrier local
+    tt.return %difference : i32
+  }
+}
+
+// -----
+
+// Preserve an older scale while advancing a new load into its loop argument.
+// Both entry and latch rendezvous must precede the possible register copies.
+// CHECK-LABEL: @schedule_scale_rotation
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  tt.func @schedule_scale_rotation(%ptr: !tt.ptr<i32>, %condition: i1) -> i32 {
+    %first = tt.load %ptr : !tt.ptr<i32>
+    %second = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 2 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: cf.br
+    cf.br ^header(%first, %second : i32, i32)
+  ^header(%older: i32, %newer: i32):
+    cf.cond_br %condition, ^body, ^exit
+  ^body:
+    // CHECK-NOT: ttg.barrier local
+    ttg.barrier local
+    %next = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 2 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: cf.br
+    cf.br ^header(%newer, %next : i32, i32)
+  ^exit:
+    // CHECK-NOT: ttg.barrier local
+    ttg.barrier local
+    tt.return %older : i32
   }
 }

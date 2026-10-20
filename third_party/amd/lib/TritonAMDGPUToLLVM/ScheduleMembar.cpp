@@ -50,8 +50,67 @@ bool isGlobalReadResult(Value value) {
   return false;
 }
 
+// Advancing a loaded value while preserving the previous value in another
+// loop argument may require a copy before reusing its register. Recognize the
+// argument rotation, not physical registers, which are assigned later.
+bool rotatesGlobalRead(BranchOpInterface branch) {
+  for (unsigned edge = 0; edge < branch->getNumSuccessors(); ++edge) {
+    Block *header = branch->getSuccessor(edge);
+    auto incoming = branch.getSuccessorOperands(edge);
+    for (Block *pred : header->getPredecessors()) {
+      auto backedge = dyn_cast<BranchOpInterface>(pred->getTerminator());
+      if (!backedge)
+        continue;
+      for (unsigned i = 0; i < backedge->getNumSuccessors(); ++i) {
+        if (backedge->getSuccessor(i) != header)
+          continue;
+        auto operands = backedge.getSuccessorOperands(i);
+        for (unsigned dest = 0; dest < operands.size(); ++dest) {
+          if (operands.isOperandProduced(dest))
+            continue;
+          auto previous = dyn_cast<BlockArgument>(operands[dest]);
+          if (!previous || previous.getOwner() != header ||
+              previous.getArgNumber() == dest)
+            continue;
+          unsigned source = previous.getArgNumber();
+          if (source < incoming.size() &&
+              !incoming.isOperandProduced(source) &&
+              isGlobalReadResult(incoming[source]))
+            return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 bool consumesGlobalRead(Operation *op) {
-  return llvm::any_of(op->getOperands(), isGlobalReadResult);
+  auto branch = dyn_cast<BranchOpInterface>(op);
+  if (branch && rotatesGlobalRead(branch))
+    return true;
+  for (OpOperand &operand : op->getOpOperands()) {
+    // Forwarding a value does not necessarily emit a register copy. Count
+    // only actual uses, including a branch condition.
+    bool forwarded = false;
+    if (branch) {
+      for (unsigned i = 0; i < branch->getNumSuccessors(); ++i) {
+        OperandRange operands =
+            branch.getSuccessorOperands(i).getForwardedOperands();
+        if (!operands.empty() &&
+            operand.getOperandNumber() >= operands.getBeginOperandIndex() &&
+            operand.getOperandNumber() <
+                operands.getBeginOperandIndex() + operands.size()) {
+          forwarded = true;
+          break;
+        }
+      }
+    }
+    if (forwarded)
+      continue;
+    if (isGlobalReadResult(operand.get()))
+      return true;
+  }
+  return false;
 }
 
 bool canCross(Operation *op) {
@@ -146,28 +205,51 @@ bool coveredByWaits(Operation *op,
   return covered;
 }
 
-// Consider only same-block uses; branch transfers may lower to register
-// copies that use the loaded result.
-Operation *findFirstGlobalReadUse(gpu::AsyncWaitOp wait) {
-  for (Operation *op = wait->getNextNode(); op; op = op->getNextNode()) {
+// Follow branch transfers without treating them as uses. All paths must reach
+// the same first use so one new barrier can replace the deferred barriers.
+// Stop at cycles rather than scheduling across another loop iteration.
+Operation *findFirstGlobalReadUse(
+    Operation *start, llvm::SmallPtrSetImpl<Operation *> &activePath) {
+  if (!start || !activePath.insert(start).second)
+    return nullptr;
+  Operation *firstUse = nullptr;
+  for (Operation *op = start; op; op = op->getNextNode()) {
     if (isa<gpu::BarrierOp>(op) || isCompletionBoundary(op))
       break;
-    if (consumesGlobalRead(op))
-      return op;
-    if (!isa<BranchOpInterface>(op) && !canCross(op))
+    if (consumesGlobalRead(op)) {
+      firstUse = op;
+      break;
+    }
+    if (auto branch = dyn_cast<BranchOpInterface>(op)) {
+      for (Block *successor : branch->getSuccessors()) {
+        Operation *use =
+            successor->empty()
+                ? nullptr
+                : findFirstGlobalReadUse(&successor->front(), activePath);
+        if (!use || (firstUse && firstUse != use)) {
+          firstUse = nullptr;
+          break;
+        }
+        firstUse = use;
+      }
+      break;
+    }
+    if (op->hasTrait<OpTrait::IsTerminator>() || !canCross(op))
       break;
   }
-  return nullptr;
+  activePath.erase(start);
+  return firstUse;
 }
 
 SmallVector<BarrierMoveCandidate> collectCandidates(ModuleOp module) {
   SmallVector<BarrierMoveCandidate> candidates;
   module.walk([&](gpu::AsyncWaitOp wait) {
-    Operation *firstUse = findFirstGlobalReadUse(wait);
+    llvm::SmallPtrSet<Operation *, 32> activePath;
+    Operation *firstUse =
+        findFirstGlobalReadUse(wait->getNextNode(), activePath);
     if (!firstUse)
       return;
     BarrierMoveCandidate candidate{wait, firstUse, {}};
-    llvm::SmallPtrSet<Operation *, 32> activePath;
     if (findBarriersToReplace(wait->getNextNode(), candidate, activePath))
       candidates.push_back(std::move(candidate));
   });
