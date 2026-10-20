@@ -133,7 +133,7 @@ void isolateScalarProtocols(ModuleOp module, AvailabilityMap &availability,
       if (group.empty())
         continue;
       bool hasAtomic = false, hasAtomicWrite = false, hasBarrier = false;
-      bool hasControl = false;
+      bool hasControl = false, hasCountedLoop = false;
       DenseSet<Operation *> members;
       SmallVector<Operation *> barriers;
       for (Operation *root : group)
@@ -143,14 +143,17 @@ void isolateScalarProtocols(ModuleOp module, AvailabilityMap &availability,
               isa<AtomicLoadOp, AtomicStoreOp, AtomicCASOp, AtomicRMWOp>(op);
           hasAtomicWrite |= isa<AtomicStoreOp, AtomicCASOp, AtomicRMWOp>(op);
           hasControl |= isa<scf::WhileOp, scf::ForOp, scf::IfOp>(op);
+          hasCountedLoop |= isa<scf::ForOp>(op);
           if (isa<BarrierOp>(op)) {
             hasBarrier = true;
             barriers.push_back(op);
           }
         });
       // Keep simple scalar load/arithmetic/store sequences on the cheaper
-      // predicated path. Read-only polls are handled separately below.
-      if (!hasAtomic || !(hasBarrier || (hasAtomicWrite && hasControl)))
+      // predicated path. Counted polls stay in one region; read-only while
+      // loops are handled separately below.
+      if (!hasAtomic ||
+          !(hasBarrier || hasCountedLoop || (hasAtomicWrite && hasControl)))
         continue;
 
       SmallVector<Value> outputs;

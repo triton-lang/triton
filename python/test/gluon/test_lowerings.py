@@ -1278,13 +1278,12 @@ def test_reduce_broadcast_across_warps(op, dtype_str, device):
     compiled = kernel[(1, )](x, y, op, num_warps=4)
     reduce_fn = {"add": np.add, "xor": np.bitwise_xor, "max": np.maximum}[op]
     assert y.item() == reduce_fn.reduce(values, dtype=values.dtype)
-    # One full-warp reduction, then one over four broadcast warp results.
-    expected_count = 2
+    # Each warp reduces once; the scalar store's thread combines the subtotals.
+    expected_count = 1
     if values.dtype.itemsize == 8:
-        expected_count = 3 if op == "add" else 4
+        expected_count = 3 if op == "add" else 2
     assert compiled.asm["ptx"].count("redux.sync.") == expected_count
-    # Four broadcast values use shuffles for 64-bit addition.
-    assert ("shfl.sync.bfly" in compiled.asm["ptx"]) == (values.dtype.itemsize == 8 and op == "add")
+    assert "shfl.sync.bfly" not in compiled.asm["ptx"]
 
 
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
