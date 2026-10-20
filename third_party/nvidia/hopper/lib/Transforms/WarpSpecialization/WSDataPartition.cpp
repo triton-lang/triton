@@ -1304,12 +1304,8 @@ static bool doDeepCleanup(triton::FuncOp &funcOp,
 }
 
 static bool hasUnsupportedAtomicRMW(triton::FuncOp &funcOp,
-                                    DataPartitionScheme &partitionScheme,
-                                    unsigned numConsumerGroups) {
+                                    DataPartitionScheme &partitionScheme) {
   SmallVector<AsyncTaskId, 1> producerTaskIds{0};
-  SmallVector<AsyncTaskId, 2> consumerTaskIds;
-  for (unsigned taskId = 1; taskId <= numConsumerGroups; ++taskId)
-    consumerTaskIds.push_back(static_cast<AsyncTaskId>(taskId));
 
   bool unsupported = false;
   funcOp.walk([&](AtomicRMWOp atomicOp) {
@@ -1328,7 +1324,6 @@ static bool hasUnsupportedAtomicRMW(triton::FuncOp &funcOp,
       return;
 
     bool isProducer = taskIds == producerTaskIds;
-    bool isConsumer = taskIds == consumerTaskIds;
     if (inPartitionScheme) {
       // The partitioner cannot prove that rewriting preserves the atomic
       // effect: a no-op dimension can duplicate it, while slicing can change
@@ -1337,7 +1332,7 @@ static bool hasUnsupportedAtomicRMW(triton::FuncOp &funcOp,
       return;
     }
 
-    unsupported = !isProducer && !(numConsumerGroups == 1 && isConsumer);
+    unsupported = !isProducer;
   });
   return unsupported;
 }
@@ -1346,7 +1341,7 @@ DataPartitionResult doDataPartition(triton::FuncOp &funcOp,
                                     unsigned numConsumerGroups) {
   DataPartitionScheme partitionScheme;
   if (!computePartitionScheme(funcOp, partitionScheme)) {
-    if (hasUnsupportedAtomicRMW(funcOp, partitionScheme, numConsumerGroups))
+    if (hasUnsupportedAtomicRMW(funcOp, partitionScheme))
       return DataPartitionResult::Unsupported;
     if (numConsumerGroups > 1) {
       LDBG("computePartitionScheme failed when requested");
@@ -1354,7 +1349,7 @@ DataPartitionResult doDataPartition(triton::FuncOp &funcOp,
     }
     return DataPartitionResult::Success;
   }
-  if (hasUnsupportedAtomicRMW(funcOp, partitionScheme, numConsumerGroups))
+  if (hasUnsupportedAtomicRMW(funcOp, partitionScheme))
     return DataPartitionResult::Unsupported;
 
   // Rewrite the rematerialized ops.
