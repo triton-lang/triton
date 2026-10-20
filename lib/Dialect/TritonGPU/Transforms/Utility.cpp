@@ -669,7 +669,12 @@ canUseResultEncoding(Operation *op, Attribute targetEncoding) {
       return std::nullopt;
     return SmallVector<OpOperand *>{&broadcast.getSrcMutable()};
   }
-
+  if (isa<triton::CatOp>(op)) {
+    if (triton::gpu::isLegalCatEncoding(cast<triton::CatOp>(op),
+                                        targetEncoding))
+      return SmallVector<OpOperand *>{};
+    return std::nullopt;
+  }
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -1004,6 +1009,8 @@ LogicalResult getConvertBackwardSlice(
       }
       if (stopPropagation && stopPropagation(definingOp))
         continue;
+      if (isa<triton::CatOp>(definingOp))
+        return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
         // Specially handle gather since its transfer function only applies
         // between its index operand and result.

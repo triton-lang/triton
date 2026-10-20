@@ -599,7 +599,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
 
   // Ops with actually changing/variable input/output ranges.
   if (llvm::isa<TransOp, SplitOp, BroadcastOp, ReshapeOp, gpu::ConvertLayoutOp,
-                SplatOp, ExpandDimsOp, JoinOp, GatherOp>(op)) {
+                SplatOp, ExpandDimsOp, JoinOp, CatOp, GatherOp>(op)) {
     SmallVector<ConstantIntRanges> argConstIntRanges;
     for (const auto &r : argIntValueRanges) {
       if (r.isUninitialized()) {
@@ -614,7 +614,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
           return inferResultRangesUnaryOpForwardArgRange(op, argConstIntRanges,
                                                          joinCallback);
         })
-        .Case<JoinOp>([&](auto joinOp) {
+        .Case<JoinOp, CatOp>([&](auto joinOp) {
           return inferResultRangesBinaryOpUnionArgRanges(
               joinOp, argConstIntRanges, joinCallback);
         })
