@@ -648,7 +648,8 @@ bool hasProducerConsumerPartitioning(TmemAccessDag &accessDag) {
   return valid;
 }
 
-int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
+int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks,
+                   bool samePartitionScale) {
   auto rootNode = accessDag.getRootNode();
   auto allocOp = cast<TMEMAllocOp>(rootNode->op);
 
@@ -728,9 +729,24 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
     // partitionId = accessDag.getRootNode()->user->partitionId;
   }
 
+  Operation *consumerScope = nullptr;
+  if (samePartitionScale) {
+    // An MMA in the same partition still reads asynchronously. Keep one
+    // consumer phase around all reads from this scale initialization.
+    consumerScope =
+        allocOp->getBlock()->findAncestorOpInBlock(*rootNode->user->op);
+    state.release(b, allocOp.getLoc());
+    b.setInsertionPoint(consumerScope);
+    state.acquire(b, consumerScope->getLoc(),
+                  {partitionId, getStageCluster(consumerScope)});
+  }
+
   auto node = insertTmemArefImpl(rootNode->user.get(), partitionId, state);
 
-  if (outerWsLoop) {
+  if (samePartitionScale) {
+    b.setInsertionPointAfter(consumerScope);
+    state.stageClusters[*partitionId] = getStageCluster(consumerScope);
+  } else if (outerWsLoop) {
     // aref is only used inside ws-loop, so we use the last op to insert
     // matching exit
     b.setInsertionPointAfter(node->op);
@@ -743,6 +759,13 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
     b.setInsertionPointAfter(op1);
   }
   state.release(b, node->op->getLoc());
+
+  if (samePartitionScale) {
+    // The last GET has no next PUT to observe its completion before teardown.
+    // A terminal enter lowers to the missing wait; its results are unused.
+    b.setInsertionPointAfter(outerWsLoop);
+    state.acquire(b, node->op->getLoc(), {partitionId, {}});
+  }
 
   if (state.kind == TMEMAref::GET) {
     // When the state ends up in a GET operation, we need to acquire and release
@@ -908,8 +931,16 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
     auto [hasRootPartition, partitions] = accessDag.collectPartitionsSet();
     assert(partitions.size() <= 2 && "expecting at most 2 partitions");
     auto totalOwners = hasRootPartition + partitions.size();
-    if (totalOwners > 1) {
-      numTmemBlocks = insertTmemAref(accessDag, numTmemBlocks);
+    auto allocOp = accessDag.getAllocOp();
+    auto *rootNode = accessDag.getRootNode();
+    bool samePartitionScale =
+        allocOp.getSrc() && !allocOp.getToken() &&
+        isa<TensorMemoryScalesEncodingAttr>(allocOp.getType().getEncoding()) &&
+        rootNode->partitionId &&
+        rootNode->user->partitionId == rootNode->partitionId;
+    if (totalOwners > 1 || samePartitionScale) {
+      numTmemBlocks =
+          insertTmemAref(accessDag, numTmemBlocks, samePartitionScale);
     }
   }
 
