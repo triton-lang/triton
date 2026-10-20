@@ -262,6 +262,8 @@ class HIPOptions:
     backend_name: str = 'hip'
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
+    # WGP/CU execution mode for gfx11 and gfx120x; ignored on other targets.
+    wgp_cu_mode: str = "wgp"
 
     # Experimental hint for how the AMD backend schedules a kernel's instructions. The only
     # recognized value is "mfma-schedule" (gfx942 and gfx950): run the MFMA scheduler on the optimized
@@ -282,9 +284,6 @@ class HIPOptions:
     # bare names are set to true. Option names omit the leading dash.
     # Example: llvm_cl_opts="enable-gvn-hoist,unroll-threshold=150"
     llvm_cl_opts: str | Tuple[Tuple[str, str], ...] = ""
-
-    # WGP/CU execution mode for gfx11 and gfx120x; ignored on other targets.
-    wgp_cu_mode: str = "wgp"
 
     def __post_init__(self):
         if self.wgp_cu_mode not in ("wgp", "cu"):
@@ -675,9 +674,6 @@ class HIPBackend(BaseBackend):
         if knobs.compilation.enable_asan:
             kernel_fn.add_fn_target_feature("+xnack")
             kernel_fn.add_fn_asan_attr()
-        for name, value in options.llvm_fn_attrs:
-            kernel_fn.remove_fn_attr(name)
-            kernel_fn.add_fn_attr(name, value)
         if options.wgp_cu_mode == "cu":
             if knobs.compilation.enable_asan:
                 raise ValueError("wgp_cu_mode='cu' is not supported together with TRITON_ENABLE_ASAN")
@@ -714,6 +710,12 @@ class HIPBackend(BaseBackend):
                 if not fn.is_declaration():
                     fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
 
+        # Apply user-provided attributes after every attribute managed above so
+        # that they take precedence.
+        for name, value in options.llvm_fn_attrs:
+            kernel_fn.remove_fn_attr(name)
+            kernel_fn.add_fn_attr(name, value)
+
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, core_llvm_arch, '', get_llvm_flags(options),
                              options.enable_fp_fusion, disable_vector_combine=True)
         if target_triple != layout_triple:
@@ -723,10 +725,13 @@ class HIPBackend(BaseBackend):
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
         # optimize_module from calls to @llvm.amdgcn.workgroup.id.x/y/z(). We cannot rely on this because a
         # dispatch dimensions might be used even if there is no program_id() call for it.
+        # Attributes provided through llvm_fn_attrs are kept.
         if amd.has_architected_sgprs(layout_triple, core_llvm_arch):
-            kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-x")
-            kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-y")
-            kernel_fn.remove_fn_attr("amdgpu-no-workgroup-id-z")
+            user_attrs = {name for name, _ in options.llvm_fn_attrs}
+            for dim in "xyz":
+                attr = f"amdgpu-no-workgroup-id-{dim}"
+                if attr not in user_attrs:
+                    kernel_fn.remove_fn_attr(attr)
 
         # Opt-in MFMA scheduler, see the schedule_hint option (validated in parse_options).
         if options.schedule_hint == "mfma-schedule" and options.arch in ("gfx942", "gfx950"):
