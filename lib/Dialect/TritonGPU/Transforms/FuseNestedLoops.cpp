@@ -282,22 +282,6 @@ static unsigned getIntTypeWidth(Type type) {
   return cast<IntegerType>(type).getWidth();
 }
 
-// Generate IR to compute the number of iterations of a loop.
-static Value computeNumIters(ImplicitLocOpBuilder &b, Value lowerBound,
-                             Value upperBound, Value step) {
-  // len(range(lb, ub, step)) = ceildiv(ub - lb, step)
-  // This works even if step is negative.
-  Value diff = arith::SubIOp::create(b, upperBound, lowerBound);
-  // Let someone else prove it can be unsigned.
-  return arith::CeilDivSIOp::create(b, diff, step);
-}
-
-// Generate IR to compute the number of iterations of a loop.
-static Value computeNumIters(ImplicitLocOpBuilder &b, scf::ForOp loop) {
-  return computeNumIters(b, loop.getLowerBound(), loop.getUpperBound(),
-                         loop.getStep());
-}
-
 // Cast an integer or index value to an integer or index `type`, if necessary.
 static Value castIntIfNecessary(ImplicitLocOpBuilder &b, Value value,
                                 Type type) {
@@ -309,6 +293,31 @@ static Value castIntIfNecessary(ImplicitLocOpBuilder &b, Value value,
       cast<IntegerType>(type).getWidth())
     return arith::TruncIOp::create(b, type, value);
   return arith::ExtSIOp::create(b, type, value);
+}
+
+// Generate IR to compute the number of iterations of a loop.
+static Value computeNumIters(ImplicitLocOpBuilder &b, Value lowerBound,
+                             Value upperBound, Value step) {
+  // `ub - lb` can overflow the loop's integer type even if the loop itself does
+  // not, so compute the length in an integer type twice as wide, up to 64 bits.
+  unsigned width = getIntTypeWidth(lowerBound.getType());
+  if (width < 64) {
+    Type wideTy = b.getIntegerType(std::min(2 * width, 64u));
+    lowerBound = castIntIfNecessary(b, lowerBound, wideTy);
+    upperBound = castIntIfNecessary(b, upperBound, wideTy);
+    step = castIntIfNecessary(b, step, wideTy);
+  }
+  // len(range(lb, ub, step)) = ceildiv(ub - lb, step)
+  // This works even if step is negative.
+  Value diff = arith::SubIOp::create(b, upperBound, lowerBound);
+  // Let someone else prove it can be unsigned.
+  return arith::CeilDivSIOp::create(b, diff, step);
+}
+
+// Generate IR to compute the number of iterations of a loop.
+static Value computeNumIters(ImplicitLocOpBuilder &b, scf::ForOp loop) {
+  return computeNumIters(b, loop.getLowerBound(), loop.getUpperBound(),
+                         loop.getStep());
 }
 
 // To model an "undef" value, i.e. a value that is known to never be read on
@@ -555,9 +564,8 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   // be fusible.
   hoistOpsBefore(outer, toHoist);
 
-  // Determine the integer type to use for the length computations. Use an
-  // integer bitwidth twice the size of the largest integer, up to 64 bits, to
-  // avoid overflow.
+  // Determine the integer type to use for the fused loop. Use the bitwidth of
+  // the largest induction variable.
   unsigned intTyWidth = getIntTypeWidth(outer.getInductionVar().getType());
 
   // Generate the computations of the fused loop bounds.
