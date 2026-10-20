@@ -395,13 +395,19 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
   return numBlocks;
 }
 
+bool ScanLoweringHelper::hasBlockedEncoding() {
+  return isa<BlockedEncodingAttr>(legacyEncoding);
+}
+
+// Partial results are only combined within each CTA.
+bool ScanLoweringHelper::isScanWithinCTA() {
+  return getCTASplitNum(srcEncoding)[getAxis()] == 1;
+}
+
 bool ScanLoweringHelper::isSupported() {
   // TODO: Support the following cases:
   // 1. Scan on non-blocking encodings
-  if (!isa<BlockedEncodingAttr>(legacyEncoding))
-    return false;
-  // Partial results are only combined within each CTA.
-  return getCTASplitNum(srcEncoding)[getAxis()] == 1;
+  return hasBlockedEncoding() && isScanWithinCTA();
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInElems() {
