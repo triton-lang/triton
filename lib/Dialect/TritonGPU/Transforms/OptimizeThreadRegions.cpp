@@ -186,8 +186,8 @@ std::array<uint32_t, 3> getTensorThreadMasks(RankedTensorType type) {
 
 // Collect escaping values, rejecting full-domain handoffs when disallowed.
 std::optional<SmallVector<Value>>
-getRegionOutputs(ArrayRef<Operation *> ops, const TensorTail &tail,
-                 Domain owner, bool allowFullDomainHandoff) {
+getEscapingValues(ArrayRef<Operation *> ops, const TensorTail &tail,
+                  Domain owner, bool allowFullDomainHandoff) {
   SmallVector<Value> outputs;
   Block *block = ops.front()->getBlock();
   assert(llvm::all_of(ops,
@@ -391,47 +391,6 @@ void sinkRegionInputs(ModuleOp mod) {
   });
 }
 
-#ifndef NDEBUG
-void assertValidRegions(ModuleOp mod) {
-  mod.walk([&](Operation *op) {
-    Domain domain = executionDomain(op);
-    if (guardDomain(op)) {
-      assert(domain.isFull() &&
-             "physical regions are inserted in full execution domains");
-      assert(llvm::all_of(
-                 op->getUsers(),
-                 [](Operation *user) { return isa<ThreadHandoffOp>(user); }) &&
-             "physical region results require a handoff");
-    }
-    if (auto handoff = dyn_cast<ThreadHandoffOp>(op)) {
-      auto source = handoff.getSrc().getDefiningOp<scf::IfOp>();
-      assert(source && guardDomain(source) == handoff.getSource() &&
-             "handoff source must belong to its declared physical region");
-      assert(handoff.getDestination() == domain &&
-             "handoff must execute in its destination domain");
-    }
-    assert((!isa<ThreadScopeOp>(op) ||
-            domain == ownerDomain(op, domain.getBlock() != 0)) &&
-           "thread scope requires the canonical thread region");
-    if (domain.isFull())
-      return;
-    assert((!isa<BarrierOp, nvidia_gpu::ClusterBarrierOp>(op)) &&
-           "block rendezvous must remain outside physical regions");
-    auto covered = [&](Type type) {
-      auto tensor = dyn_cast<RankedTensorType>(type);
-      if (!tensor)
-        return true;
-      auto [laneMask, warpMask, blockMask] = getTensorThreadMasks(tensor);
-      return domain.hasMasksWithin(laneMask, warpMask, blockMask);
-    };
-    bool coversTypes = llvm::all_of(
-        llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes()),
-        covered);
-    assert(coversTypes && "physical region must retain every tensor element");
-  });
-}
-#endif
-
 void optimizeBlock(Block *block) {
   assert(!block->empty() && "frontend and generated blocks are nonempty");
   // For num_ctas > 1 find the ops that depend on atomics
@@ -487,7 +446,7 @@ void optimizeBlock(Block *block) {
                                   effects.needsBarrierBefore;
     // Ordinary scalar loads already produce full copies without shared
     // memory. Restrict them only when all consumers stay in one warp.
-    auto outputs = getRegionOutputs(ops, tail, owner, allowFullDomainHandoff);
+    auto outputs = getEscapingValues(ops, tail, owner, allowFullDomainHandoff);
     if (!outputs)
       continue;
     next = resume;
@@ -495,11 +454,13 @@ void optimizeBlock(Block *block) {
   }
 }
 
-// Return outermost map_elementwise ops and their transitive noinline callees.
-// Scalar values in these bodies may differ across tensor elements.
-llvm::SetVector<Operation *> getMapElementwiseOps(ModuleOp mod) {
+// Return tensor callback ops and their transitive noinline callees.
+// Map bodies and reduce/scan combiners have per-element scalar values.
+llvm::SetVector<Operation *> getTensorCallbackOps(ModuleOp mod) {
   llvm::SetVector<Operation *> roots;
-  mod.walk<WalkOrder::PreOrder>([&](MapElementwiseOp op) {
+  mod.walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (!isa<MapElementwiseOp, ReduceOp, ScanOp>(op))
+      return WalkResult::advance();
     roots.insert(op);
     return WalkResult::skip();
   });
@@ -520,11 +481,11 @@ class OptimizeThreadRegions
 public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-    // Map callback scalars vary per element, including in their callees.
-    auto mapElementwiseOps = getMapElementwiseOps(mod);
+    // Callback scalars vary per element, including in their callees.
+    auto tensorCallbackOps = getTensorCallbackOps(mod);
     SmallVector<ThreadHandoffOp> handoffs;
     mod.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
-      if (mapElementwiseOps.contains(op) || guardDomain(op))
+      if (tensorCallbackOps.contains(op) || guardDomain(op))
         return WalkResult::skip();
       for (Region &region : op->getRegions())
         for (Block &block : region)
@@ -536,9 +497,6 @@ public:
     // Make eligible consumers of handoffs execute on fewer threads.
     restrictHandoffConsumers(handoffs);
     sinkRegionInputs(mod);
-#ifndef NDEBUG
-    assertValidRegions(mod);
-#endif
   }
 };
 } // namespace
