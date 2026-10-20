@@ -5856,6 +5856,42 @@ def test_vectorization_hints(has_hints, device):
         assert "ld.global.v4.b32" not in ptx
 
 
+@pytest.mark.parametrize("reverse_results", [False, True])
+@pytest.mark.parametrize("pass_through", [False, True])
+@pytest.mark.parametrize("num_warps", [1, 4])
+def test_vectorization_hints_multi_result_call(reverse_results, pass_through, num_warps, device):
+
+    @triton.jit
+    def get_offsets(indices, REVERSE: tl.constexpr, PASS_THROUGH: tl.constexpr):
+        offsets = tl.arange(0, 256)
+        if not PASS_THROUGH:
+            indices = (offsets * 7) % 256
+        if REVERSE:
+            return indices, offsets
+        return offsets, indices
+
+    @triton.jit
+    def kernel(src, dst, HINT: tl.constexpr, REVERSE: tl.constexpr, PASS_THROUGH: tl.constexpr):
+        original_indices = (tl.arange(0, 256) * 7) % 256
+        a, b = get_offsets(original_indices, REVERSE, PASS_THROUGH)
+        if REVERSE:
+            indices, offsets = a, b
+        else:
+            offsets, indices = a, b
+        if HINT:
+            offsets = tl.max_contiguous(tl.multiple_of(offsets, 256), 256)
+        if PASS_THROUGH:
+            indices = original_indices
+        tl.store(dst + offsets, tl.load(src + indices))
+
+    src = torch.arange(256, dtype=torch.int32, device=device)
+    expected = src[(torch.arange(256, device=device) * 7) % 256]
+    for has_hints in (False, True):
+        dst = torch.empty_like(src)
+        kernel[(1, )](src, dst, has_hints, reverse_results, pass_through, num_warps=num_warps)
+        torch.testing.assert_close(dst, expected, rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 def test_assume(device):
 

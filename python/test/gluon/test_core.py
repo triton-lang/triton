@@ -421,6 +421,38 @@ def _noinline_convert_layout_scratch(input, output, THREADS_PER_WARP: ttgl.const
     ttgl.store(output + dst_offsets, ttgl.convert_layout(values, dst_layout))
 
 
+@pytest.mark.parametrize("reverse_results", [False, True])
+@pytest.mark.parametrize("num_warps", [1, 4])
+def test_vectorization_hints_multi_result_call(reverse_results, num_warps, device):
+
+    @gluon.jit
+    def get_offsets(REVERSE: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+        offsets = ttgl.arange(0, 256, layout=LAYOUT)
+        indices = (offsets * 7) % 256
+        if REVERSE:
+            return indices, offsets
+        return offsets, indices
+
+    @gluon.jit
+    def kernel(src, dst, HINT: ttgl.constexpr, REVERSE: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+        a, b = get_offsets(REVERSE, LAYOUT)
+        if REVERSE:
+            indices, offsets = a, b
+        else:
+            offsets, indices = a, b
+        if HINT:
+            offsets = ttgl.max_contiguous(ttgl.multiple_of(offsets, 256), 256)
+        ttgl.store(dst + offsets, ttgl.load(src + indices))
+
+    src = torch.arange(256, dtype=torch.int32, device=device)
+    expected = src[(torch.arange(256, device=device) * 7) % 256]
+    layout = ttgl.BlockedLayout([4], [THREADS_PER_WARP], [num_warps], [0])
+    for has_hints in (False, True):
+        dst = torch.empty_like(src)
+        kernel[(1, )](src, dst, has_hints, reverse_results, layout, num_warps=num_warps)
+        torch.testing.assert_close(dst, expected, rtol=0, atol=0)
+
+
 @gluon.jit(noinline=True)
 def _noinline_forward_convert_layout_scratch(input, output, THREADS_PER_WARP: ttgl.constexpr):
     _noinline_convert_layout_scratch(input, output, THREADS_PER_WARP)

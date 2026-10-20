@@ -84,7 +84,9 @@ Value TritonInlinerInterface::handleResult(OpBuilder &, Operation *call,
                                            Operation *, Value result,
                                            DictionaryAttr) const {
   Operation *definingOp = result.getDefiningOp();
-  if (!definingOp)
+  // Call-wide hints do not identify which result of a multi-result call they
+  // describe. Transferring them to every result can miscompile unrelated uses.
+  if (!definingOp || call->getNumResults() != 1)
     return result;
 
   static constexpr llvm::StringLiteral hintAttrs[] = {
