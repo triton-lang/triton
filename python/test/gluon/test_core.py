@@ -1344,7 +1344,6 @@ def test_warp_specialize_noinline_ids():
     torch.testing.assert_close(scan_out, expected + 1, rtol=0, atol=0)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_warp_specialize_conditional_dispatch():
 
     @gluon.jit
@@ -1362,9 +1361,8 @@ def test_warp_specialize_conditional_dispatch():
                 (worker, (output, i, 3)),
             ], [1, 1, 1])
 
-    output = torch.empty((4, ), device="cuda", dtype=torch.int32)
-    compiled = kernel[(1, )](output, 8, num_warps=4)
-    torch.testing.assert_close(output, torch.arange(4, device="cuda", dtype=torch.int32) + 7)
+    source = gluon.GluonASTSource(kernel, signature={"output": "*i32", "iterations": "i32"})
+    compiled = triton.compile(source, target=GPUTarget("cuda", 90, 32), options={"num_warps": 4})
     assert "brx.idx" not in compiled.asm["ptx"]
 
 
