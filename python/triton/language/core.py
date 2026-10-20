@@ -2162,9 +2162,16 @@ def reshape(input, *shape, can_reorder=False, _semantic=None, _generator=None):
         # These are equivalent
         reshape(x, (32, 32))
         reshape(x, 32, 32)
+
+    :param can_reorder: Deprecated. If true, the compiler is allowed to
+        reorder elements. Will be removed in Triton 3.10; pass False
+        (the default) to adopt the new behavior early.
     """
     shape = _shape_check_impl(_unwrap_iterable(shape))
     can_reorder = _unwrap_if_constexpr(can_reorder)
+    if can_reorder:
+        warn("tl.reshape(can_reorder=True) is deprecated and will be removed in Triton 3.10. "
+             "Pass can_reorder=False (the default) to adopt the new behavior.")
     if len(shape) == 0:
         return _unsplat(input, _semantic=_semantic, _generator=_generator)
     return _semantic.reshape(input, shape, can_reorder)

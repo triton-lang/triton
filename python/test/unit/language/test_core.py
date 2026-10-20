@@ -6050,6 +6050,24 @@ def test_reshape_err(device):
     assert "reshape" in str(exc_info.value)
 
 
+def test_reshape_can_reorder_deprecated(device, fresh_triton_cache):
+
+    @triton.jit
+    def kernel(X, Z, CAN_REORDER: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 64))
+        z = tl.reshape(x, (8, 8), can_reorder=CAN_REORDER)
+        tl.store(Z + tl.arange(0, 64), z.reshape(64))
+
+    x_tri = to_triton(np.arange(64, dtype=np.int32), device=device)
+    z_tri = to_triton(np.empty((8, 8), dtype=np.int32), device=device)
+    with pytest.warns(UserWarning, match="can_reorder=True.*deprecated"):
+        kernel[(1, )](x_tri, z_tri, CAN_REORDER=True)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        kernel[(1, )](x_tri, z_tri, CAN_REORDER=False)
+    assert not [w for w in caught if "can_reorder" in str(w.message)]
+
+
 @pytest.mark.interpreter
 def test_tma_load_block_shape_err(device):
 
