@@ -1104,8 +1104,8 @@ struct AsyncCopyGlobalToLocalOpConversion
         // When 'other != 0' is supported, we will need to fold the
         // op.getMask() and redundantDataMask() into the same predicate, the
         // way it is done for LoadOp.
-        auto ignoreSrc = b.xor_(maskElem, b.true_val());
-        srcSize = ptxBuilder.newOperand(ignoreSrc, "b");
+        auto selectOp = b.select(maskElem, b.i32_val(nBytes), b.i32_val(0));
+        srcSize = ptxBuilder.newOperand(selectOp, "r");
       }
       if (l2PolicyReg) {
         auto *policyOperand = ptxBuilder.newOperand(l2PolicyReg, "l");

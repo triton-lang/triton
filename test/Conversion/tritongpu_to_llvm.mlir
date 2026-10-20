@@ -1165,11 +1165,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @async_cp_evict_first_masked_8_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>, %valid: i1) {
     // OLD-PTX-NOT: createpolicy
     // PTX94: createpolicy.fractional.L2::evict_first.b64 $0, 1.0;
-    // CHECK: llvm.xor
+    // CHECK: llvm.select
     // OLD-PTX: cp.async.ca.shared.global {{.*}}, 0x8, ${{[0-9]+}};
-    // OLD-PTX-SAME: "r,l,b
+    // OLD-PTX-SAME: "r,l,r
     // PTX94: cp.async.ca.shared.global.L2::cache_hint {{.*}}, 0x8, ${{[0-9]+}}, ${{[0-9]+}};
-    // PTX94-SAME: "r,l,b,l
+    // PTX94-SAME: "r,l,r,l
     %mask = tt.splat %valid : i1 -> tensor<256xi1, #blocked>
     %0 = ttg.async_copy_global_to_local %src, %dst mask %mask {cachePolicy = #evict_first, contiguity = 2 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
     tt.return
