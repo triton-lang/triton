@@ -422,6 +422,157 @@ private:
     return consumerValues ? SmallVector<ScanCarry>{} : carries;
   }
 
+  // Divide the replicated totals into register groups while preserving every
+  // lane basis. For R=[32,64], L=[1,2,4,8,16], a group has R=[32] and the same
+  // L; the quotient has R=[1], L=[]. Group g loads totals 64*g+32*r+lane.
+  // Scan each group within its warp, add the preceding group's terminal prefix,
+  // and complete each consumer after its last candidate prefix is available.
+  // Retain its selected carry only across the groups containing its candidates.
+  void scanInterWarpLaneGroups(triton::ScanOp op, const LinearLayout &source,
+                               LinearLayout scan, ValueRange bases,
+                               ArrayRef<Type> types, ScanValues &values,
+                               Value laneId, Value warpId,
+                               ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto *ctx = op.getContext();
+    auto kReg = StringAttr::get(ctx, "register");
+    auto kLane = StringAttr::get(ctx, "lane");
+    auto kWarp = StringAttr::get(ctx, "warp");
+    auto kBlock = StringAttr::get(ctx, "block");
+    auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
+    bool reverse = op.getReverse();
+    unsigned numSegments = scan.getOutDimSize(axis);
+
+    // Keep at most two scan-axis registers in a group. Independent register
+    // bases belong to every group; move the remaining axis bases after them so
+    // division factors out a complete tile without changing lane ownership.
+    const auto &regBases = scan.getBases().lookup(kReg);
+    SmallVector<size_t> permutation, remaining;
+    unsigned axisRegBits = 0;
+    for (auto [i, basis] : llvm::enumerate(regBases)) {
+      if (!basis[op.getAxis()] || axisRegBits++ == 0)
+        permutation.push_back(i);
+      else
+        remaining.push_back(i);
+    }
+    unsigned groupRegBits = permutation.size();
+    llvm::append_range(permutation, remaining);
+    scan = ColumnAction(permutation, kReg, regBases.size()).apply(scan);
+    auto groupBases = scan.getBases();
+    groupBases[kReg].resize(groupRegBits);
+    LinearLayout groupLayout(groupBases,
+                             llvm::to_vector(scan.getOutDimNames()));
+    auto groups = divideLeft(scan, groupLayout).value();
+    unsigned groupRegs = groupLayout.getInDimSize(kReg);
+    unsigned numGroups = groups.getInDimSize(kReg);
+    unsigned axisRegs = 1u << std::min(axisRegBits, 1u);
+    ScanLoweringHelper groupHelper(groupLayout, op.getAxis());
+
+    auto dims = llvm::to_vector(scan.getOutDimNames());
+    llvm::erase(dims, axis);
+    dims.push_back(axis);
+    auto loadLayout = scan.transposeOuts(dims).flattenOuts();
+    auto inverse = scan.pseudoinvert().sublayout(
+        llvm::to_vector(scan.getOutDimNames()), {kReg, kLane});
+    unsigned numConsumers = source.getInDimSize(kReg);
+    unsigned segmentRegs = values.size() / numConsumers;
+    bool inclusive = segmentRegs == 1;
+    SmallVector<Value> consumerRegs, consumerLanes;
+    SmallVector<ScanCarry> carries;
+    SmallVector<SmallVector<std::pair<unsigned, bool>>> consumers(
+        scan.getInDimSize(kReg));
+    for (unsigned r = 0; r < numConsumers; ++r) {
+      auto coords = applyLinearLayout(loc, rewriter, source,
+                                      {{kReg, b.i32_val(r)},
+                                       {kLane, laneId},
+                                       {kWarp, warpId},
+                                       {kBlock, b.i32_val(0)}});
+      Value index = coords[op.getAxis()].second;
+      Value pred = b.icmp_ne(index, b.i32_val(reverse ? numSegments - 1 : 0));
+      if (!inclusive)
+        coords[op.getAxis()].second = shiftWithinSegment(
+            b, index, reverse ? -1 : 1, numSegments, numSegments);
+      auto owner = applyLinearLayout(loc, rewriter, inverse, coords);
+      consumerRegs.push_back(owner[0].second);
+      consumerLanes.push_back(owner[1].second);
+      auto candidates = getScanRegisters(
+          source, inverse, r, op.getAxis(), numSegments,
+          inclusive ? 0 : (reverse ? 1 : -1), /*excludeBoundary=*/!inclusive);
+      llvm::sort(candidates, [reverse](unsigned a, unsigned b) {
+        return reverse ? a > b : a < b;
+      });
+      for (unsigned reg : candidates)
+        consumers[reg].emplace_back(r, reg == candidates.back());
+      carries.push_back({{}, pred});
+    }
+
+    unsigned laneMask = getInputBasisMask(groupLayout, kLane, {axis});
+    Value terminalLane;
+    if (reverse)
+      terminalLane = b.and_(laneId, b.i32_val(~laneMask));
+    else
+      terminalLane = b.or_(laneId, b.i32_val(laneMask));
+    SmallVector<ScanCarry> precedingGroup;
+    for (unsigned n = 0; n < numGroups; ++n) {
+      unsigned group = reverse ? numGroups - 1 - n : n;
+      ScanValues prefixes(groupRegs);
+      for (unsigned r = 0; r < groupRegs; ++r) {
+        Value index =
+            applyLinearLayout(loc, rewriter, loadLayout,
+                              {{kReg, b.i32_val(group * groupRegs + r)},
+                               {kLane, laneId},
+                               {kWarp, warpId},
+                               {kBlock, b.i32_val(0)}})
+                .front()
+                .second;
+        for (auto [base, type] : llvm::zip(bases, types)) {
+          Value ptr = b.gep(base.getType(), type, base, index);
+          prefixes[r].push_back(targetInfo.loadDShared(
+              rewriter, loc, ptr, Value(), type, b.true_val()));
+        }
+      }
+      scanWithinCTA(op, groupHelper, prefixes, laneId, warpId, rewriter);
+      if (!precedingGroup.empty())
+        applySegmentCarries(op, prefixes, precedingGroup, rewriter);
+
+      for (unsigned i = 0; i < groupRegs; ++i) {
+        unsigned reg = reverse ? groupRegs - 1 - i : i;
+        unsigned fullReg = group * groupRegs + reg;
+        for (auto [r, complete] : consumers[fullReg]) {
+          auto incoming =
+              shuffleValues(loc, prefixes[reg], consumerLanes[r], rewriter);
+          auto &carry = carries[r];
+          if (carry.values.empty()) {
+            carry.values = std::move(incoming);
+          } else {
+            Value selected = b.icmp_eq(consumerRegs[r], b.i32_val(fullReg));
+            for (unsigned j = 0; j < types.size(); ++j)
+              carry.values[j] =
+                  b.select(selected, incoming[j], carry.values[j]);
+          }
+          if (!complete)
+            continue;
+          if (inclusive) {
+            values[r] = carry.values;
+          } else {
+            for (unsigned j = 0; j < segmentRegs; ++j) {
+              auto &value = values[r * segmentRegs + j];
+              value = combineWithPrefix(op, carry.values, value, rewriter,
+                                        carry.pred);
+            }
+          }
+        }
+      }
+      if (n + 1 == numGroups)
+        continue;
+      precedingGroup.clear();
+      for (auto total : extractSegmentTotals(prefixes, axisRegs, reverse))
+        precedingGroup.push_back(
+            {shuffleValues(loc, total, terminalLane, rewriter), b.true_val()});
+    }
+  }
+
   // Store the complete totals table once. Scan each independent sequence,
   // selecting carries only at positions requested by their consumers.
   // Complete each consumer's local prefixes as soon as its carry is available.
@@ -450,12 +601,6 @@ private:
     llvm::erase(dims, axis);
     dims.push_back(axis);
     auto storeLayout = source.transposeOuts(dims).flattenOuts();
-    // Factor the contiguous scan axis out of the register layout. The
-    // quotient maps each independent scan to its shared-memory base.
-    auto scanAxis = LinearLayout::identity1D(numSegments, kReg, axis);
-    auto independentScans = divideLeft(scan, scanAxis).value();
-    auto loadLayout = independentScans.transposeOuts(dims).flattenOuts();
-    unsigned rowStride = independentScans.getTotalOutDimSize();
     auto scratch = helper.getGroupedInterWarpScratchConfig();
     Value smem = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
     SmallVector<Value> bases;
@@ -487,6 +632,19 @@ private:
       }
     }
     targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+
+    if (!scan.sublayoutIsZero({kLane}, {axis})) {
+      scanInterWarpLaneGroups(op, source, scan, bases, types, values, laneId,
+                              warpId, rewriter);
+      return;
+    }
+
+    // Factor the contiguous scan axis out of the register layout. The
+    // quotient maps each independent scan to its shared-memory base.
+    auto scanAxis = LinearLayout::identity1D(numSegments, kReg, axis);
+    auto independentScans = divideLeft(scan, scanAxis).value();
+    auto loadLayout = independentScans.transposeOuts(dims).flattenOuts();
+    unsigned rowStride = independentScans.getTotalOutDimSize();
 
     auto inverse = scan.pseudoinvert().sublayout(
         llvm::to_vector(scan.getOutDimNames()), {kReg, kLane});
