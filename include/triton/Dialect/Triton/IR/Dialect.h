@@ -145,6 +145,11 @@ public:
     return success();
   }
 
+  // Verify that the encodings are compatible to be used together in a cat
+  // operation.
+  virtual LogicalResult
+  verifyCatOpEncodingCompatibility(Operation *op) const = 0;
+
   virtual LogicalResult
   inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,
                          Attribute &outEnc, bool fwdInference,

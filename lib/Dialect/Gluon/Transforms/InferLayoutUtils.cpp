@@ -83,7 +83,7 @@ LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op,
 
 bool encodingsMayVary(Operation *op) {
   return isa<triton::BroadcastOp, triton::JoinOp, triton::SplitOp,
-             triton::ReshapeOp, triton::TransOp>(op);
+             triton::ReshapeOp, triton::TransOp, triton::CatOp>(op);
 }
 
 bool hasSameOperandsAndResultEncoding(Operation *op) {
