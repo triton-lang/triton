@@ -97,7 +97,7 @@ GSAN_DEVICE inline uintptr_t roundUp(uintptr_t ptr, uintptr_t align) {
 GSAN_DEVICE uint32_t getSmId() { return __nvvm_read_ptx_sreg_smid(); }
 
 GSAN_DEVICE void syncThreads(uint32_t barrierId, uint32_t numThreads) {
-  asm volatile("bar.sync %0, %1;"
+  asm volatile("barrier.sync %0, %1;"
                :
                : "r"(barrierId), "r"(numThreads)
                : "memory");
