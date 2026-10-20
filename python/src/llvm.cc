@@ -142,8 +142,13 @@ struct LLVMOptionSettings {
   }
 
   void enable(const std::vector<std::string> &flags) {
-    for (const std::string &flag : flags)
-      setFlag(flag, true);
+    for (const std::string &flag : flags) {
+      auto [name, value] = StringRef(flag).split('=');
+      if (name.size() == flag.size())
+        setFlag(flag, true);
+      else
+        set(name.str(), value.str());
+    }
   }
 
   // DISABLE_LLVM_OPT may hold a comma separated list of LLVM flags to turn on,

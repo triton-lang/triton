@@ -191,18 +191,21 @@ def is_expert_scheduling_enabled(base_arch):
     return base_arch == "gfx1250"
 
 
-def get_llvm_flags(arch):
+def get_llvm_flags(options):
     """LLVM command line flags for every LLVM pipeline run of a compilation.
 
-    These are process-wide LLVM options: compilations sharing a process can only
-    run in parallel while they use identical flags. Prefer per-function LLVM
-    attributes (see make_llir) whenever LLVM offers one.
+    Each flag is either a bare option name, which is set to true, or
+    "name=value". These are process-wide LLVM options: compilations sharing a
+    process can only run in parallel while they use identical flags. Prefer
+    per-function LLVM attributes (see make_llir) whenever LLVM offers one.
     """
     flags = []
     # Discourage VGPR reuse that creates VALU-to-DS WAR hazards and requires
     # s_wait_alu va_vdst waits in expert scheduling mode.
-    if arch == "gfx1250" and is_expert_scheduling_enabled(arch):
+    if options.arch == "gfx1250" and is_expert_scheduling_enabled(options.arch):
         flags.append("amdgpu-anti-hints-for-va-vdst")
+    # User-requested options come last so they override the defaults above.
+    flags.extend(f"{name}={value}" for name, value in options.llvm_cl_opts)
     return flags
 
 
@@ -214,7 +217,7 @@ def is_consan_supported(base_arch):
     return base_arch == "gfx1250"
 
 
-def _parse_llvm_fn_attrs(attrs):
+def _parse_llvm_key_values(attrs, bare_value=""):
     if not isinstance(attrs, str):
         return tuple(attrs)
     parsed = []
@@ -222,7 +225,7 @@ def _parse_llvm_fn_attrs(attrs):
         name, sep, value = attr.partition("=")
         name = name.strip()
         if name:
-            parsed.append((name, value.strip() if sep else ""))
+            parsed.append((name, value.strip() if sep else bare_value))
     return tuple(parsed)
 
 
@@ -274,6 +277,12 @@ class HIPOptions:
     # Example: llvm_fn_attrs="amdgpu-sched-strategy=iterative-ilp,noinline"
     llvm_fn_attrs: str | Tuple[Tuple[str, str], ...] = ""
 
+    # Experimental: intended for development and debugging; may change or be removed without notice.
+    # Comma-separated LLVM command line options applied to every LLVM pipeline run of this kernel;
+    # bare names are set to true. Option names omit the leading dash.
+    # Example: llvm_cl_opts="enable-gvn-hoist,unroll-threshold=150"
+    llvm_cl_opts: str | Tuple[Tuple[str, str], ...] = ""
+
     # WGP/CU execution mode for gfx11 and gfx120x; ignored on other targets.
     wgp_cu_mode: str = "wgp"
 
@@ -295,7 +304,8 @@ class HIPOptions:
             )
             object.__setattr__(self, 'kpack', 1)
 
-        object.__setattr__(self, 'llvm_fn_attrs', _parse_llvm_fn_attrs(self.llvm_fn_attrs))
+        object.__setattr__(self, 'llvm_fn_attrs', _parse_llvm_key_values(self.llvm_fn_attrs))
+        object.__setattr__(self, 'llvm_cl_opts', _parse_llvm_key_values(self.llvm_cl_opts, bare_value="true"))
 
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
@@ -619,7 +629,7 @@ class HIPBackend(BaseBackend):
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
-        llvm.attach_datalayout(llvm_mod, layout_triple, core_llvm_arch, target_features, get_llvm_flags(options.arch))
+        llvm.attach_datalayout(llvm_mod, layout_triple, core_llvm_arch, target_features, get_llvm_flags(options))
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -704,7 +714,7 @@ class HIPBackend(BaseBackend):
                 if not fn.is_declaration():
                     fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, core_llvm_arch, '', get_llvm_flags(options.arch),
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, core_llvm_arch, '', get_llvm_flags(options),
                              options.enable_fp_fusion, disable_vector_combine=True)
         if target_triple != layout_triple:
             amd.set_target_triple(llvm_mod, target_triple)
@@ -748,7 +758,7 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        flags = get_llvm_flags(options.arch)
+        flags = get_llvm_flags(options)
         features = ''
         target_triple = get_amd_codegen_target_triple(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()

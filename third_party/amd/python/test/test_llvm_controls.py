@@ -56,3 +56,28 @@ def test_llvm_fn_attrs_change_amdgcn():
     )
 
     assert baseline.asm["amdgcn"] != with_sched_attr.asm["amdgcn"]
+
+
+def test_llvm_cl_opts_set_option_value():
+    target = triton.runtime.driver.active.get_current_target()
+
+    baseline = triton.compile(ATTN_FWD_TTIR, target=target)
+    disabled = triton.compile(
+        ATTN_FWD_TTIR,
+        target=target,
+        options={"llvm_cl_opts": "enable-gvn-hoist=false"},
+    )
+    enabled = triton.compile(
+        ATTN_FWD_TTIR,
+        target=target,
+        options={"llvm_cl_opts": "enable-gvn-hoist=true"},
+    )
+    bare = triton.compile(
+        ATTN_FWD_TTIR,
+        target=target,
+        options={"llvm_cl_opts": "enable-gvn-hoist"},
+    )
+
+    assert baseline.asm["llir"] == disabled.asm["llir"]
+    assert baseline.asm["llir"] != enabled.asm["llir"]
+    assert bare.asm["llir"] == enabled.asm["llir"]
