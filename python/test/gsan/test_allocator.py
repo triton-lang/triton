@@ -8,10 +8,11 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
-from triton._internal_testing import is_cuda, run_in_process
+from triton._internal_testing import is_cuda, is_hip, run_in_process
 from triton.experimental.gsan import ShareableHandleType, configure, create_mem_pool, freeze_config, get_allocator, has_live_allocations, reset
 from triton.experimental.gsan import _stream_sync
-from triton._C.libtriton.gsan_testing import shadow_granularity as get_shadow_granularity, shadow_cell_address
+from triton._C.libtriton.gsan_testing import (PER_DEVICE_STATE_STRIDE_BYTES, shadow_cell_address, shadow_granularity as
+                                              get_shadow_granularity)
 from triton.experimental.gsan._allocator import (
     export_allocation_handles,
     export_allocation_memhandle_regions,
@@ -21,6 +22,7 @@ from triton.experimental.gsan._allocator import (
     get_global_state_pointer,
     get_reserve_pointer,
     get_reserve_size,
+    get_runtime_state_layout,
     gsan_free,
     gsan_malloc,
     import_allocation_handles,
@@ -31,6 +33,15 @@ from triton.experimental.gsan._allocator import (
 from triton.experimental.gsan._testing_utils import (global_state, shadow_cell_from_address, shadow_tensor_for,
                                                      thread_state_from_smid)
 from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
+
+
+def has_gsan_allocator():
+    return is_cuda() or is_hip()
+
+
+# Allocator-only tests also run on HIP. Tests that launch GSan-instrumented
+# kernels or use fabric handles require CUDA.
+requires_gsan_allocator = pytest.mark.skipif(not has_gsan_allocator(), reason="requires CUDA or HIP backend")
 
 # With 2 MiB pages, this rounds to a 6 MiB allocation inside an 8 MiB tree node.
 # This tests cases where AllocNode.size != AllocNode.allocSize
@@ -54,6 +65,32 @@ def _run_configure_runtime_fields_check(shadow_granularity: int) -> None:
         assert state.clock_buffer_size == 17
     finally:
         gsan_free(ptr, device, 0, 0)
+
+
+def _run_default_clock_buffer_fits_check() -> None:
+    device = torch.cuda.current_device()
+    ptr = gsan_malloc(1, device)
+    assert ptr != 0
+    try:
+        layout = get_runtime_state_layout(get_device_rank(device))
+    finally:
+        gsan_free(ptr, device)
+    size = layout["clock_buffer_size"]
+    num_sms, num_threads = layout["num_sms"], layout["num_threads"]
+    state_end = layout["thread_state_base_ptr"] + layout["thread_state_stride_bytes"] * num_sms
+    used = state_end - layout["global_state_ptr"]
+    assert 0 < size <= 1024
+    assert used <= PER_DEVICE_STATE_STRIDE_BYTES
+    if size < 1024:
+        # Only shrunk because one more entry per SM (plus alignment) would not fit.
+        assert used + num_sms * (2 * num_threads + 16) > PER_DEVICE_STATE_STRIDE_BYTES
+
+
+def _run_clock_buffer_size_must_fit_check() -> None:
+    with pytest.raises(ValueError, match=r"clock_buffer_size must be in \[1, 65535\]"):
+        configure(clock_buffer_size=65536)
+    configure(clock_buffer_size=65535)
+    assert gsan_malloc(1, torch.cuda.current_device()) == 0
 
 
 def _run_freeze_config_check() -> None:
@@ -315,8 +352,8 @@ def _run_export_import_fabric_handles_check(explicit_config: bool, shadow_granul
 
 @pytest.fixture
 def _direct_allocator(shadow_granularity):
-    if not is_cuda():
-        pytest.skip("requires CUDA backend")
+    if not has_gsan_allocator():
+        pytest.skip("requires CUDA or HIP backend")
     device = torch.cuda.current_device()
     stream = 0
     reserve_ptr = get_reserve_pointer()
@@ -342,7 +379,7 @@ def _direct_allocator(shadow_granularity):
             gsan_free(ptr, device, 0, stream)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_malloc_edge_cases(_direct_allocator):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
 
@@ -356,7 +393,7 @@ def test_malloc_edge_cases(_direct_allocator):
 
 
 @pytest.mark.xdist_group("gsan-multi-gpu")
-@pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires at least two CUDA devices")
+@pytest.mark.skipif(not has_gsan_allocator() or torch.cuda.device_count() < 2, reason="requires at least two GPUs")
 def test_configure_supports_swapped_cuda_device_ids():
     device_ranks = {0: 1, 1: 0}
     result = run_in_process(_run_configure_check, args=(device_ranks, 2))
@@ -364,32 +401,49 @@ def test_configure_supports_swapped_cuda_device_ids():
 
 
 @pytest.mark.xdist_group("gsan-multi-gpu")
-@pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires at least two CUDA devices")
+@pytest.mark.skipif(not has_gsan_allocator() or torch.cuda.device_count() < 2, reason="requires at least two GPUs")
 def test_configure_supports_sparse_global_device_ids():
     device_ranks = {0: 2, 1: 3}
     result = run_in_process(_run_configure_check, args=(device_ranks, 4))
     assert result.exc is None
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_configure_exposes_runtime_fields(shadow_granularity):
     result = run_in_process(_run_configure_runtime_fields_check, args=(shadow_granularity, ))
     assert result.exc is None
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
+def test_default_clock_buffer_fits_runtime_state():
+    result = run_in_process(_run_default_clock_buffer_fits_check)
+    assert result.exc is None
+
+
+@requires_gsan_allocator
+def test_clock_buffer_size_must_fit_runtime_state():
+    num_sms = torch.cuda.get_device_properties(0).multi_processor_count
+    num_threads = num_sms * torch.cuda.device_count()
+    if num_sms * num_threads * 2 * 65536 <= PER_DEVICE_STATE_STRIDE_BYTES:
+        pytest.skip("a 65535-entry clock buffer fits on this topology")
+    result = run_in_process(_run_clock_buffer_size_must_fit_check)
+    assert result.exc is None
+    assert "does not fit" in result.driver_stderr_output
+
+
+@requires_gsan_allocator
 def test_freeze_config_rejects_later_changes():
     result = run_in_process(_run_freeze_config_check)
     assert result.exc is None
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_allocator_initialization_rejects_later_config(shadow_granularity):
     result = run_in_process(_run_allocator_freezes_config_check, args=(shadow_granularity, ))
     assert result.exc is None
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_has_live_allocations(shadow_granularity):
     result = run_in_process(_run_has_live_allocations_check, args=(shadow_granularity, ))
     assert result.exc is None
@@ -401,7 +455,7 @@ def test_reset_rejects_live_allocations(shadow_granularity):
     assert result.exc is None
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_reset_collects_unreachable_allocations(shadow_granularity):
     result = run_in_process(_run_reset_collects_unreachable_allocations_check, args=(shadow_granularity, ))
     assert result.exc is None
@@ -420,14 +474,14 @@ def test_reset_releases_cached_pool_clocks(num_pools, shadow_granularity):
     assert result.exc is None
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_launch_stream_clocks_use_private_pool(shadow_granularity):
     result = run_in_process(_run_launch_stream_clocks_use_private_pool_check, args=(shadow_granularity, ))
     assert result.exc is None
 
 
 @pytest.mark.xdist_group("gsan-multi-gpu")
-@pytest.mark.skipif(not is_cuda() or torch.cuda.device_count() < 2, reason="requires at least two CUDA devices")
+@pytest.mark.skipif(not has_gsan_allocator() or torch.cuda.device_count() < 2, reason="requires at least two GPUs")
 def test_default_topology_uses_cuda_device_indices():
     assert get_device_rank(0) == 0
     assert get_device_rank(1) == 1
@@ -453,7 +507,7 @@ def test_malloc_free(_direct_allocator, shadow_granularity):
     assert p3 == p1
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_malloc_fragmentation_reuse_and_coalesce(_direct_allocator):
     malloc, free, _, _ = _direct_allocator
 
@@ -480,7 +534,7 @@ def test_malloc_fragmentation_reuse_and_coalesce(_direct_allocator):
     torch.cuda.synchronize()
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_malloc_free_large_odd_size(_direct_allocator):
     malloc, free, _, _ = _direct_allocator
 
@@ -491,7 +545,7 @@ def test_malloc_free_large_odd_size(_direct_allocator):
     torch.cuda.synchronize()
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_free_invalid_pointer_and_double_free(_direct_allocator):
     malloc, free, _, _ = _direct_allocator
 
@@ -511,7 +565,7 @@ def test_free_invalid_pointer_and_double_free(_direct_allocator):
     torch.cuda.synchronize()
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 @pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_mem_pool(shadow_granularity):
     pool = create_mem_pool(shadow_granularity=shadow_granularity)
@@ -546,7 +600,7 @@ def test_mem_pool(shadow_granularity):
     torch.cuda.synchronize()
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_export_allocation_memhandle_regions_identifies_real_and_shadow(_direct_allocator):
     malloc, free, _, _ = _direct_allocator
     device = torch.cuda.current_device()
@@ -569,7 +623,7 @@ def test_export_allocation_memhandle_regions_identifies_real_and_shadow(_direct_
         free(real_ptr)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_export_allocation_memhandle_regions_accepts_interior_pointer(_direct_allocator):
     malloc, free, _, _ = _direct_allocator
     device = torch.cuda.current_device()
@@ -594,7 +648,7 @@ def test_export_allocation_memhandle_regions_accepts_interior_pointer(_direct_al
 
 
 # Check each granularity, and allocation-size handling independently at the default.
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 @pytest.mark.parametrize("shadow_granularity,size",
                          [(g, 4096) for g in (1, 2, 4, 8, 16)] + [(4, _ODD_LARGE_ALLOCATION_SIZE)],
                          indirect=["shadow_granularity"])
@@ -663,7 +717,7 @@ def test_mem_pool_rejects_invalid_granularity(factory, granularity):
         factory(shadow_granularity=granularity)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@requires_gsan_allocator
 def test_mem_pools_have_distinct_regions():
     tensors = []
     combinations = [(g, w) for g in (1, 2, 4, 8, 16) for w in (False, True)]
@@ -700,6 +754,7 @@ def test_export_import_fabric_handles(explicit_config, allocator_config, write_o
     assert result.exc is None
 
 
+@requires_gsan_allocator
 @pytest.mark.parametrize("write_once", [False, True])
 @pytest.mark.parametrize("shadow_granularity,size",
                          [(g, 513) for g in (1, 2, 4, 8, 16)] + [(4, _ODD_LARGE_ALLOCATION_SIZE)],
@@ -738,6 +793,7 @@ def _store_write_once_cell(ptr, WIDTH: gl.constexpr):
     gl.store(ptr + offsets, 1)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 @pytest.mark.parametrize("shadow_granularity", [1, 2, 4, 8, 16], indirect=True)
 def test_write_once_export_import_preserves_shadow(fresh_knobs, shadow_granularity):
     triton.knobs.compilation.instrumentation_mode = "gsan"
@@ -785,6 +841,7 @@ def _run_write_once_live_allocation_check(shadow_granularity):
     reset()
 
 
+@requires_gsan_allocator
 def test_write_once_live_allocation_blocks_reset(shadow_granularity):
     result = run_in_process(_run_write_once_live_allocation_check, args=(shadow_granularity, ))
     assert result.exc is None, result.exc
