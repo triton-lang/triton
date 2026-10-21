@@ -645,6 +645,30 @@ static void splitConsumerGroupsByFill(
   orderedChannels = std::move(newOrder);
 }
 
+// insertAsyncComm lowers a TMA-filled channel by turning its descriptor load
+// into an async TMA copy and erasing the load, once per channel. A load whose
+// result feeds more than one channel is therefore lowered more than once: a
+// later communication group finds the load already erased, and a group holding
+// two of its channels erases it twice and counts its bytes twice in the barrier
+// expectation. Sharing one TMA copy between several channels is not supported,
+// so reject such a load before synchronization is inserted and before
+// optimizeTMALoads erases it.
+static LogicalResult verifyTMALoadHasSingleChannel(
+    ArrayRef<Channel *> channels,
+    const DenseMap<Channel *, std::pair<Operation *, Operation *>> &copyOpMap) {
+  DenseSet<Operation *> tmaLoads;
+  for (Channel *c : channels) {
+    if (!isChannelFilledByTMA(c, copyOpMap))
+      continue;
+    Operation *tmaLoad = copyOpMap.find(c)->second.first;
+    if (!tmaLoads.insert(tmaLoad).second)
+      return tmaLoad->emitOpError()
+             << "warp specialization cannot lower a TMA load whose result "
+                "feeds more than one communication channel";
+  }
+  return success();
+}
+
 // channelsGroupedByConsumers: channels are grouped together.
 // Go through each group, check the first channel in the group, create a token
 // for each consumer taskId. Return a map that maps each channel + consumer
@@ -1437,6 +1461,8 @@ LogicalResult doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
   // sure no communication group mixes TMA-filled and register-staged channels.
   splitConsumerGroupsByFill(channelsGroupedByConsumers, orderedChannels,
                             copyOpMap);
+  if (failed(verifyTMALoadHasSingleChannel(channels, copyOpMap)))
+    return failure();
 
   // Step 7: Create tokens. A set of tokens for each group of channels for
   // each channel.
