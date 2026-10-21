@@ -1608,6 +1608,7 @@ public:
     cleanupConvertOps();
 
     bool changed = false;
+    int numIterations = 0;
     do {
       changed = false;
       // 2. For remaining convert ops, try to rematerialize the slice of
@@ -1620,7 +1621,7 @@ public:
 
       // Cleanup dummy converts created during backward remat.
       cleanupConvertOps();
-    } while (changed);
+    } while (changed && ++numIterations < 20);
 
     // 3. For remaining converts, try to hoist them above cast generating
     // larger size types in order to reduce the cost of the convert op.
