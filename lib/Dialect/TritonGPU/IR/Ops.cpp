@@ -1144,13 +1144,6 @@ LogicalResult LocalAtomicScatterRMWOp::verify() {
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
-  Type srcElemTy =
-      cast<triton::PointerType>(getSrc().getType().getElementType())
-          .getPointeeType();
-  Type dstElemTy = getResult().getType().getElementType();
-  if (srcElemTy != dstElemTy)
-    return emitOpError("source pointee type ")
-           << srcElemTy << " must match the result element type " << dstElemTy;
   return success();
 }
 
