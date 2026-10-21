@@ -344,13 +344,12 @@ void lowerNVPTXFCopySign(llvm::Module &module) {
   // from recognizing the integer sign-bit operations as copysign again.
   Type *bitsType = Type::getInt16Ty(module.getContext());
   auto *asmType = FunctionType::get(bitsType, {bitsType, bitsType}, false);
-  auto *mergeSign = InlineAsm::get(
-      asmType,
-      "{ .reg .b16 magnitude, sign; "
-      "and.b16 magnitude, $1, 0x7fff; "
-      "and.b16 sign, $2, 0x8000; "
-      "or.b16 $0, magnitude, sign; }",
-      "=h,h,h", false);
+  auto *mergeSign = InlineAsm::get(asmType,
+                                   "{ .reg .b16 magnitude, sign; "
+                                   "and.b16 magnitude, $1, 0x7fff; "
+                                   "and.b16 sign, $2, 0x8000; "
+                                   "or.b16 $0, magnitude, sign; }",
+                                   "=h,h,h", false);
   for (IntrinsicInst *call : calls) {
     IRBuilder<> builder(call);
     auto lowerScalar = [&](Value *magnitude, Value *sign) {
@@ -366,8 +365,10 @@ void lowerNVPTXFCopySign(llvm::Module &module) {
       result = PoisonValue::get(vectorType);
       for (unsigned i = 0; i < vectorType->getNumElements(); ++i)
         result = builder.CreateInsertElement(
-            result, lowerScalar(builder.CreateExtractElement(magnitude, i),
-                                builder.CreateExtractElement(sign, i)), i);
+            result,
+            lowerScalar(builder.CreateExtractElement(magnitude, i),
+                        builder.CreateExtractElement(sign, i)),
+            i);
     } else {
       result = lowerScalar(magnitude, sign);
     }
