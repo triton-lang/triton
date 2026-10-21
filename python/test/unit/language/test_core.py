@@ -3505,7 +3505,7 @@ def test_reduce_axis_none_multi_operand_pairing(axis_none, device):
     torch.manual_seed(0)
     x = torch.randperm(N, device=device, dtype=torch.int32)
     o = torch.zeros(2, dtype=torch.int32, device=device)
-    _argmax_pairing_kernel[(1,)](x, o, N, axis_none, num_warps=4)
+    _argmax_pairing_kernel[(1, )](x, o, N, axis_none, num_warps=4)
     expected = int(x.argmax().item())
     assert int(o[0].item()) == expected
     assert int(o[1].item()) == int(x[expected].item())

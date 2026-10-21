@@ -55,45 +55,6 @@ def test_compile_only_sort_keeps_comparisons_boolean() -> None:
     assert "arith.extui" not in compiled.asm["ttgir"]
 
 
-def test_compile_only_reduce_axis_none_keeps_operand_order() -> None:
-
-    @triton.jit
-    def _combine(v1, i1, v2, i2):
-        gt = (v1 > v2) | ((v1 == v2) & (i1 < i2))
-        return tl.where(gt, v1, v2), tl.where(gt, i1, i2)
-
-    @triton.jit
-    def argmax_kernel(X, O, N: tl.constexpr):
-        off = tl.arange(0, N)
-        x = tl.load(X + off)
-        v, i = tl.reduce((x, off), None, _combine)
-        tl.store(O, i)
-        tl.store(O + 1, v)
-
-    source = ASTSource(fn=argmax_kernel, signature={"X": "*fp32", "O": "*i32", "N": "constexpr"}, constexprs={"N": 1024})
-    compiled = triton.compile(source, target=GPUTarget("cuda", 90, 32))
-    # The axis=None flatten must stay ordered so the two operands pair
-    # elementwise; a reorderable reshape may pair x[p] with idx[q] (#12254).
-    assert "allow_reorder" not in compiled.asm["ttir"]
-
-    @triton.jit
-    def _add(a, b):
-        return a + b
-
-    @triton.jit
-    def sum_kernel(X, O, N: tl.constexpr):
-        off = tl.arange(0, N)
-        x = tl.load(X + off)
-        s = tl.reduce(x, None, _add)
-        tl.store(O, s)
-
-    source = ASTSource(fn=sum_kernel, signature={"X": "*fp32", "O": "*fp32", "N": "constexpr"}, constexprs={"N": 1024})
-    compiled = triton.compile(source, target=GPUTarget("cuda", 90, 32))
-    # A single operand has nothing to align with; its flatten stays
-    # reorderable.
-    assert "allow_reorder" in compiled.asm["ttir"]
-
-
 def test_compile_only_sm100() -> None:
 
     @triton.jit

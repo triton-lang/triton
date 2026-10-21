@@ -1777,8 +1777,7 @@ class TritonSemantic(Generic[TensorTy]):
     def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn) -> Tuple[TensorTy, ...]:
         if axis is None:
             # Multi-operand reductions must keep the operands elementwise
-            # aligned; reordering each flatten independently can pair x[p]
-            # with idx[q] (#12254). A single operand has nothing to align
+            # aligned. A single operand has nothing to align
             # with, so it keeps the reorderable flatten.
             inputs = tuple(self.reshape(t, [t.numel.value], can_reorder=len(inputs) == 1) for t in inputs)
             axis = 0
