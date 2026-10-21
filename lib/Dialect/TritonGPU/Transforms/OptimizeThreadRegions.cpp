@@ -4,6 +4,7 @@
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -299,7 +300,10 @@ void wrapScalarRegion(ArrayRef<Operation *> ops, const RegionEffects &effects,
   if (!tail.ops.empty())
     wrapThreadRegion(tail.ops.getArrayRef(), {}, tail.domain);
   b.setInsertionPointAfter(guard);
-  if (effects.needsBarrierAfter)
+  // Kernel completion joins all threads, so no exit barrier is needed.
+  auto ret = dyn_cast<ReturnOp>(guard->getNextNode());
+  bool exitsKernel = ret && isKernel(ret->getParentOfType<FuncOp>());
+  if (effects.needsBarrierAfter && !exitsKernel)
     emitBarrier();
   // Cross-warp and cross-CTA handoffs require the full region's participants.
   // Sinking narrows handoffs whose users share a compatible guard.
