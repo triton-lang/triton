@@ -36,15 +36,17 @@ def test_nvptx_tti_vector_load_scalarization(dtype, num_elements, enable_nvptx_t
     from triton._C.libtriton import ir, llvm
 
     vector_type = f"vector<{num_elements}x{dtype}>"
-    instructions = [f"%v = llvm.load %p {{alignment = 32 : i64}} : !llvm.ptr<1> -> {vector_type}"]
+    instructions = [f"%v = llvm.load %p <alignment = 32> : !llvm.ptr<1> -> {vector_type}"]
+    # Use pointer-width indices so widening costs do not mask the TTI's
+    # extractelement cost when deciding whether to scalarize the load.
     if dynamic_indices:
-        instructions.append(f"%mask = llvm.mlir.constant({num_elements - 1} : i32) : i32")
+        instructions.append(f"%mask = llvm.mlir.constant({num_elements - 1} : i64) : i64")
     for index in range(num_elements):
         if dynamic_indices:
-            instructions.append(f"%i{index} = llvm.and %arg{index}, %mask : i32")
+            instructions.append(f"%i{index} = llvm.and %arg{index}, %mask : i64")
         else:
-            instructions.append(f"%i{index} = llvm.mlir.constant({index} : i32) : i32")
-        instructions.append(f"%v{index} = llvm.extractelement %v[%i{index} : i32] : {vector_type}")
+            instructions.append(f"%i{index} = llvm.mlir.constant({index} : i64) : i64")
+        instructions.append(f"%v{index} = llvm.extractelement %v[%i{index} : i64] : {vector_type}")
     value = "%v0"
     opcode = "add" if dtype.startswith("i") else "fadd"
     for index in range(1, num_elements):
@@ -53,7 +55,7 @@ def test_nvptx_tti_vector_load_scalarization(dtype, num_elements, enable_nvptx_t
     instructions.append(f"llvm.return {value} : {dtype}")
     arguments = ["%p: !llvm.ptr<1>"]
     if dynamic_indices:
-        arguments.extend(f"%arg{index}: i32" for index in range(num_elements))
+        arguments.extend(f"%arg{index}: i64" for index in range(num_elements))
     body = "\n".join(instructions)
     source = tmp_path / "vector_load.mlir"
     source.write_text(f'''module attributes {{llvm.target_triple = "{triple}"}} {{
