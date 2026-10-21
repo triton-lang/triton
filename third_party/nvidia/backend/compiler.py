@@ -325,16 +325,12 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        # sm_12x has no tensor memory and lowers dots to mma.sync, so it takes the
-        # sm_80/sm_90 pipeline rather than the tcgen05/TMEM one of sm_10x/sm_11x.
         if capability // 10 in [8, 9, 12]:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttir.add_triton_licm(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-            # The Hopper warp specialization partitions around wgmma, which sm_12x does not have;
-            # on sm_12x it would partition nothing and still disable software pipelining.
             if capability // 10 != 12:
                 nvidia.passes.hopper.add_hopper_warpspec(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
