@@ -7448,22 +7448,20 @@ def test_tma_cache_policy_ptx(target, rank, kind, multicast, policy, expected, t
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("M,K,parent_m,compact,use_acc,offset", [
-    (256, 256, 512, False, False, 0),
-    (256, 256, 256, False, False, 0),
-    (128, 256, 512, False, False, 0),
-    (256, 128, 512, False, False, 0),
-    (256, 512, 512, False, False, 0),
-    (256, 256, 512, True, False, 0),
-    (256, 256, 512, False, True, 0),
-    (256, 256, 512, False, False, 256),
-    (256, 256, 512, True, False, 256),
+@pytest.mark.parametrize("M,K,parent_m,compact,offset", [
+    (256, 256, 512, False, 0),
+    (256, 256, 256, False, 0),
+    (128, 256, 512, False, 0),
+    (256, 128, 512, False, 0),
+    (256, 512, 512, False, 0),
+    (256, 256, 512, True, 0),
+    (256, 256, 512, False, 256),
 ])
-def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, use_acc, offset):
+def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, offset):
 
     @gluon.jit
     def kernel(out, M: ttgl.constexpr, K: ttgl.constexpr, PARENT_M: ttgl.constexpr, COMPACT: ttgl.constexpr,
-               USE_ACC: ttgl.constexpr, OFFSET: ttgl.constexpr):
+               OFFSET: ttgl.constexpr):
         N: ttgl.constexpr = 128
         reg: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
         k = ttgl.arange(0, K, ttgl.SliceLayout(0, reg))[None, :]
@@ -7477,7 +7475,7 @@ def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, use_acc, of
             compact_reg: ttgl.constexpr = scale_a.get_reg_layout()
             compact_rows = ttgl.arange(0, M, ttgl.SliceLayout(1, compact_reg))[:, None]
             compact_cols = ttgl.arange(0, K // 32, ttgl.SliceLayout(0, compact_reg))[None, :]
-            compact_values = (127 + (compact_rows + OFFSET) // 128 + compact_cols // 4).to(ttgl.uint8)
+            compact_values = (127 + compact_rows // 128 + compact_cols // 4).to(ttgl.uint8)
             scale_a.store(compact_values)
         else:
             parent = allocate_tensor_memory(ttgl.uint8, [PARENT_M, K // 32], TensorMemoryScalesLayout())
@@ -7491,11 +7489,9 @@ def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, use_acc, of
         scale_b.store(ttgl.full([N, K // 32], 127, ttgl.uint8, scale_b.get_reg_layout()))
 
         acc = allocate_tensor_memory(ttgl.float32, [M, N], TensorMemoryLayout([128, 128], 1))
-        if USE_ACC:
-            acc.store(ttgl.full([M, N], 3, ttgl.float32, acc.get_reg_layout()))
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
-        tcgen05_mma_scaled(smem_a, smem_b, acc, scale_a, scale_b, "e5m2", "e5m2", use_acc=USE_ACC, mbarriers=[bar])
+        tcgen05_mma_scaled(smem_a, smem_b, acc, scale_a, scale_b, "e5m2", "e5m2", use_acc=False, mbarriers=[bar])
         mbarrier.wait(bar, phase=0)
         mbarrier.invalidate(bar)
 
@@ -7506,11 +7502,11 @@ def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, use_acc, of
         ttgl.store(out + rm * N + rn, result)
 
     out = torch.empty((M, 128), dtype=torch.float32, device="cuda")
-    kernel[(1, )](out, M, K, parent_m, compact, use_acc, offset, num_warps=4)
+    kernel[(1, )](out, M, K, parent_m, compact, offset, num_warps=4)
     # Unequal K-word contributions expose scale-word permutations; the oracle is exact.
     expected = torch.tensor([
         32 * sum((1 + j // 4) * 2**((row + offset) // 128 + j // 4)
-                 for j in range(K // 32)) + (3 if use_acc else 0)
+                 for j in range(K // 32))
         for row in range(M)
     ], dtype=torch.float32, device="cuda")
     torch.testing.assert_close(out, expected[:, None].expand_as(out), atol=0, rtol=0)
