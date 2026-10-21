@@ -137,6 +137,41 @@ define ptx_kernel void @abs_kernel(ptr addrspace(1) %input, ptr addrspace(1) %ou
         assert "and.b32" not in ptx
 
 
+@pytest.mark.parametrize("dtype, suffix", [("half", "f16"), ("bfloat", "bf16")])
+@pytest.mark.parametrize("lanes", [1, 4])
+@pytest.mark.parametrize("instrumentation_mode", ["", "fpsan"])
+def test_compile_only_nvptx_copysign_preserves_nan_payload(dtype, suffix, lanes, instrumentation_mode):
+    from triton._C.libtriton import llvm
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    llvm.init_targets()
+    backend = CUDABackend(GPUTarget("cuda", 100, 32))
+    options = backend.parse_options({"ptx_version": 93, "instrumentation_mode": instrumentation_mode})
+    ty = dtype if lanes == 1 else f"<{lanes} x {dtype}>"
+    intrinsic = suffix if lanes == 1 else f"v{lanes}{suffix}"
+    source = f'''
+target triple = "nvptx64-nvidia-cuda"
+declare {ty} @llvm.copysign.{intrinsic}({ty}, {ty})
+define ptx_kernel void @copysign_kernel(ptr addrspace(1) %input,
+                                      ptr addrspace(1) %signs,
+                                      ptr addrspace(1) %output) {{
+  %value = load {ty}, ptr addrspace(1) %input, align 8
+  %sign = load {ty}, ptr addrspace(1) %signs, align 8
+  %signed = call {ty} @llvm.copysign.{intrinsic}({ty} %value, {ty} %sign)
+  store {ty} %signed, ptr addrspace(1) %output, align 8
+  ret void
+}}
+'''
+    ptx = backend.make_ptx(source, {}, options, 100)
+    if instrumentation_mode == "fpsan":
+        assert not re.search(r"\b(?:abs|neg)\.(?:f16|bf16)(?:x2)?\b", ptx)
+        assert ptx.count("and.b16 magnitude,") == lanes
+        assert ptx.count("and.b16 sign,") == lanes
+        assert ptx.count("or.b16") == lanes
+    else:
+        assert "and.b16 magnitude," not in ptx
+
+
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
 def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
     packed_type = f"{element_type}x2"
