@@ -23,7 +23,7 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna5
+from triton_kernels.target_info import cuda_capability_geq, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna5
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
@@ -1306,3 +1306,25 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     matmul(a, b, None, c=actual, c_acc_in=actual if accumulate else None,
            precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_matmul_ragged_k_unpadded_slices(device, opt_flags_scope):
+    # Unpadded ragged-K must not use the persistent kernel: its last K tile is
+    # not masked at the slice end. This is the shape where default flags on
+    # sm90+ select that kernel (issue #12368).
+    if not is_cuda() or not cuda_capability_geq(9):
+        pytest.skip("requires CUDA capability >= 9")
+
+    slice_sizes = [100, 100, 100]
+    k = sum(slice_sizes)
+    metadata = make_ragged_tensor_metadata(torch.tensor(slice_sizes, dtype=torch.int32, device=device), k)
+    assert metadata.slice_sizes_divisibility is None
+    a = torch.ones((k, 1024), device=device, dtype=torch.bfloat16).T
+    b = torch.ones((k, 4096), device=device, dtype=torch.bfloat16)
+
+    y = matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+    torch.testing.assert_close(y, torch.full_like(y, 100), rtol=0, atol=0)
+
+    with opt_flags.scoped_opt_flags_constraints(make_constraints(None, None, True, None, False, "bfloat16", None)):
+        with pytest.raises(opt_flags.InapplicableConstraint, match="is_persistent"):
+            matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)

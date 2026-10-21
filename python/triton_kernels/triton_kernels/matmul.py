@@ -434,7 +434,10 @@ def matmul(a, b, bias,
         (c is None or c.stride(-1) == 1) and
         (c_acc_in is None or c_acc_is_c) and
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
-        (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
+        (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None) and
+        # if ragged dimension is K, the last K tile of a slice is not masked at the slice end, so x or w must be padded
+        (ragged_dimension != "K" or a_ragged_metadata.slice_sizes_divisibility is not None
+         or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
     if b_scale is not None and isinstance(b_scale.storage.layout, StridedLayout) and b_scale.storage.data.stride()[-1] != 1:
         # In this case, we need to transpose b_scale. Then the reduction dim
