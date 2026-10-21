@@ -26,11 +26,15 @@ struct BufferIndexExpr {
   int64_t constantOffset = 0;
   std::optional<int64_t> modulus;
   Value indexedSource;
+  // The slot of a view carried around a loop, derived by induction over the
+  // loop header (see analyzeLoopCarriedSlot).
+  bool loopCarried = false;
 
   bool operator==(const BufferIndexExpr &other) const {
     return baseValue == other.baseValue &&
            constantOffset == other.constantOffset && modulus == other.modulus &&
-           indexedSource == other.indexedSource;
+           indexedSource == other.indexedSource &&
+           loopCarried == other.loopCarried;
   }
 
   bool isProvablyDifferentFrom(const BufferIndexExpr &other) const {
@@ -419,6 +423,7 @@ analyzeLoopCarriedSlot(BlockArgument arg, DominanceInfo &dominanceInfo,
     if (!previous)
       return std::nullopt;
     shifted.constantOffset = normalizeModuloOffset(*previous, *next->modulus);
+    shifted.loopCarried = true;
     if (carried && !(*carried == shifted))
       return std::nullopt;
     carried = shifted;
@@ -487,6 +492,11 @@ bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
   if (!aExpr || !bExpr)
     return false;
   return aExpr->isProvablyDifferentFrom(*bExpr);
+}
+
+bool usesLoopCarriedSlot(const AllocationSlice &a, const AllocationSlice &b) {
+  return (a.bufferIndexExpr && a.bufferIndexExpr->loopCarried) ||
+         (b.bufferIndexExpr && b.bufferIndexExpr->loopCarried);
 }
 
 const BufferIndexExpr *BufferIndexAnalysis::intern(BufferIndexExpr expr) {

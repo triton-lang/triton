@@ -3,6 +3,7 @@
 
 #include "mlir/IR/Operation.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/Membar.h"
 
 namespace mlir {
 struct AllocationSlice;
@@ -39,6 +40,22 @@ namespace mlir::triton::AMD {
 bool membarFilter(Operation *op1, Operation *op2, bool op1IsRead,
                   bool op2IsRead, Allocation *allocation,
                   const AllocationSlice &, const AllocationSlice &);
+// Membar analysis for the AMDGPU backend. Where a loop-carried slot proof
+// removes a barrier, it emits `rocdl.sched.barrier 0` instead. The barrier was
+// also a point the machine scheduler could not cross; without it, LLVM can
+// hoist the users of a just-issued global load above the MFMAs that followed
+// the barrier, which pulls in-order vmcnt waits (and the wait for every
+// earlier global load, e.g. the next stage's prefetch) in front of them. The
+// fence keeps the previous instruction order at no runtime cost.
+class AMDMembarAnalysis : public MembarAnalysis {
+public:
+  using MembarAnalysis::MembarAnalysis;
+
+protected:
+  void insertSchedulingFence(Operation *operation, OpBuilder *builder) override;
+  bool isSchedulingFence(Operation *operation) const override;
+};
+
 } // namespace mlir::triton::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_
