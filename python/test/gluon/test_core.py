@@ -7504,9 +7504,53 @@ def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, offset):
     out = torch.empty((M, 128), dtype=torch.float32, device="cuda")
     kernel[(1, )](out, M, K, parent_m, compact, offset, num_warps=4)
     # Unequal K-word contributions expose scale-word permutations; the oracle is exact.
-    expected = torch.tensor([
-        32 * sum((1 + j // 4) * 2**((row + offset) // 128 + j // 4)
-                 for j in range(K // 32))
-        for row in range(M)
-    ], dtype=torch.float32, device="cuda")
+    expected = torch.tensor(
+        [32 * sum((1 + j // 4) * 2**((row + offset) // 128 + j // 4) for j in range(K // 32)) for row in range(M)],
+        dtype=torch.float32, device="cuda")
+    torch.testing.assert_close(out, expected[:, None].expand_as(out), atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tcgen05_mma_scaled_two_ctas_repeated_m():
+    skip_if_unsupported_cluster_size(2)
+
+    @gluon.jit
+    def kernel(out):
+        cga_a: ttgl.constexpr = ((1, 0), )
+        cga_b: ttgl.constexpr = ((0, 1), )
+        reg_a: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=cga_a)
+        reg_b: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=cga_b)
+        smem_a = ttgl.allocate_shared_memory(ttgl.float8e5, [512, 128],
+                                             ttgl.NVMMASharedLayout(128, 8, transposed=False, cga_layout=cga_a),
+                                             ttgl.full([512, 128], 1, ttgl.float8e5, reg_a))
+        smem_b = ttgl.allocate_shared_memory(ttgl.float8e5, [128, 128],
+                                             ttgl.NVMMASharedLayout(128, 8, transposed=True, cga_layout=cga_b),
+                                             ttgl.full([128, 128], 1, ttgl.float8e5, reg_b))
+
+        scale_a = allocate_tensor_memory(ttgl.uint8, [512, 4], TensorMemoryScalesLayout(cga_layout=cga_a))
+        scale_reg: ttgl.constexpr = scale_a.get_reg_layout()
+        rows = ttgl.arange(0, 512, ttgl.SliceLayout(1, scale_reg))[:, None]
+        scale_a.store((127 + rows // 128 + ttgl.zeros([512, 4], ttgl.int32, scale_reg)).to(ttgl.uint8))
+        scale_b = allocate_tensor_memory(ttgl.uint8, [128, 4], TensorMemoryScalesLayout(cga_layout=((0, 0), )))
+        scale_b.store(ttgl.full([128, 4], 127, ttgl.uint8, scale_b.get_reg_layout()))
+        acc = allocate_tensor_memory(ttgl.float32, [512, 128],
+                                     TensorMemoryLayout([128, 128], 1, two_ctas=True, cga_layout=cga_a))
+
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        fence_async_shared(cluster=True)
+        ttgl.barrier(cluster=True)
+        tcgen05_mma_scaled(smem_a, smem_b, acc, scale_a, scale_b, "e5m2", "e5m2", use_acc=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(bar)
+
+        result = acc.load()
+        result_reg: ttgl.constexpr = result.type.layout
+        rm = ttgl.arange(0, 512, ttgl.SliceLayout(1, result_reg))[:, None]
+        rn = ttgl.arange(0, 128, ttgl.SliceLayout(0, result_reg))[None, :]
+        ttgl.store(out + rm * 128 + rn, result)
+
+    out = torch.empty((512, 128), dtype=torch.float32, device="cuda")
+    kernel[(1, )](out, num_warps=4, num_ctas=2)
+    expected = torch.tensor([128 * 2**(row // 128) for row in range(512)], dtype=torch.float32, device="cuda")
     torch.testing.assert_close(out, expected[:, None].expand_as(out), atol=0, rtol=0)

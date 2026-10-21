@@ -892,10 +892,15 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     int offsetA;
     int offsetB = scaleIdxB * numColPerScaleBlockB;
     if (mxfpInstKind == mxfpKind::mxf8f6f4 || useK96) {
-      // Sliced scales retain the parent layout's physical repetition strides.
+      // Scale coordinates use per-CTA M for mxf8f6f4, retaining slice strides.
+      unsigned scaleBlockM =
+          mxfpInstKind == mxfpKind::mxf8f6f4
+              ? cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding())
+                    .getBlockM()
+              : desc.mmaSizeM;
       offsetA =
-          ttng::getTMemSubSliceOffset(op.getAScale().getType(),
-                                      m * desc.mmaSizeM, 0) +
+          ttng::getTMemSubSliceOffset(op.getAScale().getType(), m * scaleBlockM,
+                                      0) +
           ttng::getTMemSubSliceOffset(op.getAScale().getType(), wordIdx * 4, 1);
     } else {
       int numColPerScaleBlockA = ceil<int>(
