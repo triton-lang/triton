@@ -7,9 +7,12 @@ import re
 import gc
 import shutil
 import pathlib
+from collections import namedtuple
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from contextlib import ExitStack
+from typing import NamedTuple
 
+import numpy as np
 import pytest
 import torch
 
@@ -441,6 +444,70 @@ def test_annotation(device):
     kernel[(1, )](x, 16)
     kernel[(1, )](x, 17)
     assert len(kernel.device_caches[device][0]) == 3
+
+
+class Wrapped(NamedTuple):
+    value: object
+
+
+@pytest.mark.parametrize("a, b", [(1, 1.0), (1, True), (0.0, -0.0), ((1, ), (1.0, )),
+                                  (np.float64(0.0), np.float64(-0.0)), (Wrapped(1), Wrapped(1.0)),
+                                  (tl.constexpr(1), tl.constexpr(1.0))])
+def test_constexpr_cache_key_type(a, b, device):
+
+    @triton.jit
+    def kernel(X, F, Y, Z, C: tl.constexpr, IS_TUPLE: tl.constexpr):
+        if IS_TUPLE:
+            c = C[0]
+        else:
+            c = C
+        tl.store(Y, tl.load(X) * c)
+        tl.store(Z, 1.0 / (tl.load(F) * c))
+
+    # x * 1 is exact in int32, x * 1.0 rounds to 2**30 in fp32; 1 / (1.0 * c) keeps the sign of zero
+    x = torch.tensor([2**30 + 1], dtype=torch.int32, device=device)
+    f = torch.ones(1, dtype=torch.float32, device=device)
+
+    def run(c):
+        y = torch.empty_like(x)
+        z = torch.empty_like(f)
+        kernel[(1, )](x, f, y, z, c, isinstance(c, tuple))
+        return y.item(), z.item()
+
+    device = getattr(torch, device).current_device()
+    for first, second in [(a, b), (b, a)]:
+        kernel.device_caches.clear()
+        expected = run(second)
+        kernel.device_caches.clear()
+        run(first)
+        assert run(second) == expected
+        assert len(kernel.device_caches[device][0]) == 2
+
+
+class OtherWrapped(NamedTuple):
+    other: object
+
+
+ConfigA = namedtuple("Config", ["value"])
+ConfigB = namedtuple("Config", ["other"])
+
+
+@triton.constexpr_function
+def wrapped_value(c):
+    return getattr(c, "value", 2)
+
+
+@pytest.mark.parametrize("cls_a, cls_b", [(Wrapped, OtherWrapped), (ConfigA, ConfigB)])
+def test_constexpr_cache_key_namedtuple_class(cls_a, cls_b, device):
+
+    @triton.jit
+    def kernel(X, C: tl.constexpr):
+        tl.store(X, wrapped_value(C))
+
+    x = torch.empty(1, dtype=torch.int32, device=device)
+    for c, expected in [(cls_a(1), 1), (cls_b(1), 2), (cls_a(1), 1)]:
+        kernel[(1, )](x, c)
+        assert x.item() == expected
 
 
 GLOBAL_DEFAULT_ARG = 1

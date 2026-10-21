@@ -4,6 +4,7 @@ import copy
 import hashlib
 import inspect
 import itertools
+import math
 import threading
 import re
 import textwrap
@@ -405,10 +406,17 @@ def create_function_from_signature(sig, kparams, backend):
     assert len(sig.parameters) == len(kparams)
     # Create the function argument list and the dict entries for the return statement
     specialization = []
+    constexpr_tags = []
+    # helper names must not clash with argument names
+    prefix = "_triton"
+    while any(name.startswith(prefix) for name in sig.parameters):
+        prefix += "_"
     # signature
     for name, kp in zip(sig.parameters.keys(), kparams):
         if kp.is_constexpr:
             specialization.append(f'("constexpr", {name})')
+            constexpr_tags.append(f"{name}.__class__ if {name}.__class__ in {prefix}_untagged_types else "
+                                  f"{prefix}_constexpr_tag({name}, {prefix}_constexpr)")
         else:
             is_const = 'True' if kp.is_const else 'False'
             specialize = 'False' if kp.do_not_specialize else 'True'
@@ -444,7 +452,7 @@ def create_function_from_signature(sig, kparams, backend):
 def dynamic_func({", ".join(arg_list + ["**options"])}):
     params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
     specialization = [{','.join(specialization)}]
-    return params, specialization, options
+    return params, specialization, options, ({''.join(tag + ', ' for tag in constexpr_tags)})
 """
 
     # Prepare defaults to be inserted into function namespace
@@ -454,10 +462,14 @@ def dynamic_func({", ".join(arg_list + ["**options"])}):
         if param.default is not inspect.Parameter.empty
     }
 
+    from ..language.core import constexpr, dtype
     specialize_impl = native_specialize_impl
     func_namespace["specialize_impl"] = specialize_impl
     func_namespace["backend"] = backend
     func_namespace["JITCallable"] = JITCallable
+    func_namespace[f"{prefix}_constexpr_tag"] = _constexpr_tag
+    func_namespace[f"{prefix}_constexpr"] = constexpr
+    func_namespace[f"{prefix}_untagged_types"] = frozenset((int, bool, str, type(None), dtype, JITFunction))
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
@@ -601,7 +613,7 @@ class JitFunctionInfo:
 def _replace_jit_callables(obj):
     if isinstance(obj, list):
         return [_replace_jit_callables(arg) for arg in obj]
-    elif is_namedtuple(obj):
+    elif is_namedtuple(type(obj)):
         results = [_replace_jit_callables(arg) for arg in obj]
         return obj.__class__(*results)
     elif isinstance(obj, tuple):
@@ -611,8 +623,19 @@ def _replace_jit_callables(obj):
     return obj
 
 
-def compute_cache_key(kernel_key_cache, specialization, options):
-    key = (tuple(specialization), str(options))
+def _constexpr_tag(value, constexpr):
+    # == does not separate 1, 1.0 and True, or 0.0 and -0.0
+    if isinstance(value, float):
+        return value.__class__, math.copysign(1.0, value)
+    if isinstance(value, tuple):
+        return value.__class__, tuple([_constexpr_tag(v, constexpr) for v in value])
+    if isinstance(value, constexpr):
+        return constexpr, _constexpr_tag(value.value, constexpr)
+    return value.__class__
+
+
+def compute_cache_key(kernel_key_cache, specialization, options, constexpr_tags):
+    key = (tuple(specialization), str(options), constexpr_tags)
     cache_key = kernel_key_cache.get(key, None)
     if cache_key is not None:
         return cache_key
@@ -749,7 +772,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         kernel_cache, kernel_key_cache, target, backend, binder = self.device_caches[device]
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
-        bound_args, specialization, options = binder(*args, **kwargs)
+        bound_args, specialization, options, constexpr_tags = binder(*args, **kwargs)
 
         # add a cache field to the kernel specializations for kernel specific
         # pass pipelines
@@ -757,7 +780,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
             inspect_stages_key, inspect_stages_hash = knobs.runtime.add_stages_inspection_hook()
             specialization.append(f'("custom_pipeline", {inspect_stages_hash})')
 
-        key = compute_cache_key(kernel_key_cache, specialization, options)
+        key = compute_cache_key(kernel_key_cache, specialization, options, constexpr_tags)
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
