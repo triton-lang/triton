@@ -1060,8 +1060,16 @@ class ReduceScanOpInterface:
         self.combine_fn = combine_fn
 
     def check_axis(self, shape, axis):
-        if axis is not None and axis >= len(shape):
+        if axis is None:
+            return
+        axis = tl.core._unwrap_if_constexpr(axis)
+        if axis >= len(shape):
             raise ValueError(f"axis {axis} out of bounds for shape {shape}")
+        # Normalize a negative axis to the positive dimension it names, as
+        # the compiled frontend does with _wrap_axis, so that generic_reduce
+        # and generic_scan operate on that dimension instead of keeping -1.
+        # _wrap_axis also rejects axes below -len(shape) with a clear error.
+        self.axis = tl.core._wrap_axis(axis, len(shape))
 
     def check_tensor(self, input):
         for arg in input:
