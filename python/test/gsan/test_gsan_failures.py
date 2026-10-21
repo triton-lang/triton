@@ -1095,3 +1095,24 @@ def test_transitive_cta_scope_read_after_write(shadow_granularity, release_sem, 
                       source_function=_transitive_atomic_sync_kernel.fn,
                       marker="ready = tl.atomic_add(flag0_ptr, 0, sem=relay_sem, scope=scope)",
                       error="Read after write race detected")
+
+
+def _run_remote_shadow_race_case(case):
+    from triton.experimental.gsan import configure
+    torch.cuda.set_device(0)
+    configure(device_ranks={0: 0}, num_devices=1, shadow_device=1)
+    {"raw": _run_raw_case, "war": _run_war_case, "waw": _run_waw_case}[case]()
+
+
+@pytest.mark.xdist_group("gsan-multi-gpu")
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason="requires two CUDA devices")
+@pytest.mark.parametrize("case,source,marker,error", [
+    ("raw", _raw_kernel, "value = gl.load(ptr + offsets)", "Read after write race detected"),
+    ("war", _war_kernel, "gl.store(ptr + offsets, 1)", "Write after read race detected"),
+    ("waw", _waw_kernel, "gl.store(ptr + offsets, 2)", "Write after write race detected"),
+])
+def test_remote_shadow_reports_race(case, source, marker, error):
+    from test_allocator import _require_peer_atomics
+    _require_peer_atomics()
+    _run_failure_case(case, runner=_run_remote_shadow_race_case, runner_args=(case, ), source_function=source.fn,
+                      marker=marker, error=error)

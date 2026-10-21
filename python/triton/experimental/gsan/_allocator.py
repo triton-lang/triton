@@ -81,6 +81,8 @@ def configure(
     rng_seed: int | None = None,
     clock_buffer_size: int | None = None,
     handle_type: ShareableHandleType | None = None,
+    shadow_device: int | None = None,
+    shadow_local_reserve_bytes: int | None = None,
 ) -> None:
     """Configures the process-local GSan state.
 
@@ -108,8 +110,25 @@ def configure(
         handle_type (ShareableHandleType, optional): Type of shareable handle requested for GSan
             allocations. If omitted, GSan uses fabric handles when ``PYTORCH_CUDA_ALLOC_CONF``
             contains ``fabric_handles:True`` and otherwise uses POSIX file descriptors.
+        shadow_device (int, optional): Local CUDA device ordinal on which to allocate shadow
+            memory for this process. Real allocations and per-SM runtime state remain on the
+            requesting device. The requesting GPU must support native peer atomics to the
+            shadow device. The shadow device must be visible to this process; it need not be
+            a logical GSan device. Configure device_ranks and num_devices explicitly to exclude
+            memory-only GPUs from the compute topology. Omitted values leave the configuration
+            unchanged; the default places shadow memory beside each real allocation.
+        shadow_local_reserve_bytes (int, optional): Enable local-first shadow allocation,
+            using shadow_device as the fallback. A new shadow allocation stays local if the
+            free memory remaining after both its real and shadow storage would be at least
+            this many bytes. Otherwise its entire shadow is allocated on the peer. A local
+            shadow allocation that fails with out-of-memory is also retried on the peer.
+            This is a best-effort reserve, not a limit on other allocations. Existing and
+            cached allocations do not migrate. Zero prefers local memory without a reserve;
+            omitted values preserve the configuration (by default, force shadow_device).
+            Requires a shadow_device distinct from the allocation device.
     """
-    _load_gsan_module().configure(device_ranks, num_devices, rng_seed, clock_buffer_size, handle_type)
+    _load_gsan_module().configure(device_ranks, num_devices, rng_seed, clock_buffer_size, handle_type, shadow_device,
+                                  shadow_local_reserve_bytes)
 
 
 def freeze_config() -> None:

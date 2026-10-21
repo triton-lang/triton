@@ -94,6 +94,9 @@ struct GSanConfig {
   int numSMs = 0;
   int numThreads = 0;
   int clockBufferSize = 0;
+  int shadowDevice = -1;
+  size_t shadowLocalReserveBytes = 0;
+  bool shadowLocalReserveConfigured = false;
   uint32_t rngSeed = 0;
   CUmemAllocationHandleType shareableHandleType =
       CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
@@ -664,6 +667,45 @@ void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
     printCUDAError(err);
     return nullptr;
   }
+  if (config.shadowLocalReserveConfigured && config.shadowDevice == device) {
+    fprintf(stderr,
+            "GSan shadow spill device must differ from allocation "
+            "device %d\n",
+            device);
+    return nullptr;
+  }
+  // The shadow can live on a memory-only peer, outside the logical GSan
+  // topology. Its virtual address and the real allocation stay unchanged.
+  CUmemAllocationProp shadowProp = prop;
+  if (config.shadowDevice >= 0 && config.shadowDevice != device) {
+    CUdevice peer;
+    err = cuDeviceGet(&peer, config.shadowDevice);
+    if (err != CUDA_SUCCESS) {
+      printCUDAError(err);
+      return nullptr;
+    }
+    int peerAtomics = 0;
+    err = cuDeviceGetP2PAttribute(
+        &peerAtomics, CU_DEVICE_P2P_ATTRIBUTE_NATIVE_ATOMIC_SUPPORTED, device,
+        peer);
+    if (err != CUDA_SUCCESS || !peerAtomics) {
+      fprintf(stderr,
+              "GSan shadow device %d requires native peer atomics from device "
+              "%d\n",
+              config.shadowDevice, device);
+      return nullptr;
+    }
+    shadowProp.location.id = config.shadowDevice;
+    size_t shadowAllocationGranularity = 0;
+    err =
+        cuMemGetAllocationGranularity(&shadowAllocationGranularity, &shadowProp,
+                                      CU_MEM_ALLOC_GRANULARITY_MINIMUM);
+    if (err != CUDA_SUCCESS) {
+      printCUDAError(err);
+      return nullptr;
+    }
+    granularity = std::max(granularity, shadowAllocationGranularity);
+  }
   // Scale real allocation alignment so fractional shadow-to-real ratios
   // still produce page-aligned shadow addresses and sizes.
   size_t alignment =
@@ -687,7 +729,26 @@ void *gsanMallocWithGranularity(ssize_t size, int device, void *stream,
   if (err != CUDA_SUCCESS)
     goto error;
 
-  err = cuMemCreate(&shadowHandle, shadowSize, &prop, 0);
+  if (config.shadowLocalReserveConfigured) {
+    // Query after allocating real storage so it counts against the headroom.
+    // Other allocators can race this estimate; retry an actual local OOM below.
+    size_t freeBytes = 0, totalBytes = 0;
+    err = cuMemGetInfo(&freeBytes, &totalBytes);
+    if (err != CUDA_SUCCESS)
+      goto error;
+    const bool fitsLocally =
+        shadowSize <= freeBytes &&
+        freeBytes - shadowSize >= config.shadowLocalReserveBytes;
+    if (fitsLocally) {
+      err = cuMemCreate(&shadowHandle, shadowSize, &prop, 0);
+      if (err == CUDA_ERROR_OUT_OF_MEMORY)
+        err = cuMemCreate(&shadowHandle, shadowSize, &shadowProp, 0);
+    } else {
+      err = cuMemCreate(&shadowHandle, shadowSize, &shadowProp, 0);
+    }
+  } else {
+    err = cuMemCreate(&shadowHandle, shadowSize, &shadowProp, 0);
+  }
   if (err != CUDA_SUCCESS)
     goto error;
 
@@ -1249,9 +1310,9 @@ PyObject *pyFree([[maybe_unused]] PyObject *self, PyObject *const *args,
 
 PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
                       Py_ssize_t nargs) {
-  if (nargs != 5) {
+  if (nargs < 5 || nargs > 7) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.configure expected 5 positional arguments, got %zd",
+                 "%s.configure expected 5 to 7 positional arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
   }
@@ -1352,11 +1413,37 @@ PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
     return nullptr;
   }
 
+  const bool shadowDeviceRequested = nargs >= 6 && args[5] != Py_None;
+  int requestedShadowDevice = -1;
+  if (shadowDeviceRequested) {
+    if (!parseIntArg(args[5], "shadow_device", &requestedShadowDevice))
+      return nullptr;
+    if (requestedShadowDevice < 0) {
+      PyErr_SetString(PyExc_ValueError, "shadow_device must be non-negative");
+      return nullptr;
+    }
+  }
+
+  const bool shadowReserveRequested = nargs == 7 && args[6] != Py_None;
+  size_t requestedShadowReserve = 0;
+  if (shadowReserveRequested) {
+    requestedShadowReserve = PyLong_AsSize_t(args[6]);
+    if (PyErr_Occurred())
+      return nullptr;
+  }
+
   std::lock_guard lg(mut);
   if (config.topologyFrozen) {
     PyErr_SetString(PyExc_RuntimeError,
                     "GSan allocator configuration is already frozen and "
                     "cannot be changed");
+    return nullptr;
+  }
+
+  if (shadowReserveRequested && !shadowDeviceRequested &&
+      config.shadowDevice < 0) {
+    PyErr_SetString(PyExc_ValueError,
+                    "shadow_local_reserve_bytes requires shadow_device");
     return nullptr;
   }
 
@@ -1379,6 +1466,12 @@ PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
   if (shareableHandleTypeRequested) {
     config.shareableHandleType = requestedShareableHandleType;
     config.shareableHandleTypeConfigured = true;
+  }
+  if (shadowDeviceRequested)
+    config.shadowDevice = requestedShadowDevice;
+  if (shadowReserveRequested) {
+    config.shadowLocalReserveBytes = requestedShadowReserve;
+    config.shadowLocalReserveConfigured = true;
   }
   Py_RETURN_NONE;
 }
