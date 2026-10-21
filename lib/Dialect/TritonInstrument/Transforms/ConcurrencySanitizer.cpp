@@ -554,18 +554,6 @@ SmallVector<uint16_t> getTensorCoreBarrierBroadcastMasks(Operation *op) {
   return ttng::getCTABroadcastMasks(twoCTAs, commitDescs);
 }
 
-void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
-  uint32_t oldSpan = span;
-  for (int value = 0; value < numCTAs; ++value) {
-    if (!(oldSpan & (1u << value)))
-      continue;
-    uint32_t extended = value ^ basis;
-    assert(extended < static_cast<uint32_t>(numCTAs) &&
-           "CTA basis exceeds the cluster size");
-    span |= 1u << extended;
-  }
-}
-
 LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
                                          RankedTensorType regTy) {
   auto kBlock = StringAttr::get(memDescTy.getContext(), "block");
@@ -594,16 +582,6 @@ LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
   return invertAndComposeLocal(sharedLayout, indexedLayout, {kBlock});
 }
 
-uint32_t getXorImageMask(const LinearLayout &layout, StringAttr outDim,
-                         int numCTAs) {
-  uint32_t image = 1;
-  for (StringAttr inDim : layout.getInDimNames()) {
-    for (int bit = 0; bit < layout.getInDimSizeLog2(inDim); ++bit)
-      extendXorSpan(image, layout.getBasis(inDim, bit, outDim), numCTAs);
-  }
-  return image;
-}
-
 uint32_t translateXorMask(uint32_t mask, uint32_t translation, int numCTAs) {
   uint32_t translated = 0;
   for (int value = 0; value < numCTAs; ++value) {
@@ -615,6 +593,10 @@ uint32_t translateXorMask(uint32_t mask, uint32_t translation, int numCTAs) {
     translated |= 1u << target;
   }
   return translated;
+}
+
+void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
+  span |= translateXorMask(span, basis, numCTAs);
 }
 
 Value getLocalMemoryRecipientCTAs(ImplicitLocOpBuilder &b,
@@ -632,12 +614,13 @@ Value getLocalMemoryRecipientCTAs(ImplicitLocOpBuilder &b,
   // output. For gather/scatter this includes the independent runtime-index
   // input, whose value is unavailable to this pass. The resulting image is a
   // conservative recipient set for the full BufferRegion effect.
-  SmallVector<StringAttr> varyingInputs =
-      llvm::to_vector(conversion.getInDimNames());
-  llvm::erase(varyingInputs, kBlock);
-  LinearLayout varyingInputsToTarget =
-      conversion.sublayout(varyingInputs, {kBlock});
-  uint32_t targetSpan = getXorImageMask(varyingInputsToTarget, kBlock, numCTAs);
+  uint32_t targetSpan = 1;
+  for (StringAttr dim : conversion.getInDimNames()) {
+    if (dim == kBlock)
+      continue;
+    for (int bit = 0; bit < conversion.getInDimSizeLog2(dim); ++bit)
+      extendXorSpan(targetSpan, conversion.getBasis(dim, bit, kBlock), numCTAs);
+  }
 
   LinearLayout issuerToTarget = conversion.sublayout({kBlock}, {kBlock});
 
