@@ -1308,12 +1308,21 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-def test_matmul_ragged_k_unpadded_slices(device, opt_flags_scope):
-    # Unpadded ragged-K must not use the persistent kernel: its last K tile is
-    # not masked at the slice end. This is the shape where default flags on
-    # sm90+ select that kernel (issue #12368).
+def test_matmul_ragged_k_unpadded_slices(device, opt_flags_scope, monkeypatch):
+    # The persistent ragged-K kernel does not mask the last K tile of a slice, so
+    # unpadded ragged-K must never reach it (issue #12368).
     if not is_cuda() or not cuda_capability_geq(9):
         pytest.skip("requires CUDA capability >= 9")
+
+    import triton_kernels.matmul as tk_matmul
+    picked = {}
+    real_make_opt_flags = tk_matmul.make_opt_flags
+
+    def spy(*args, **kwargs):
+        picked["flags"] = real_make_opt_flags(*args, **kwargs)
+        return picked["flags"]
+
+    monkeypatch.setattr(tk_matmul, "make_opt_flags", spy)
 
     slice_sizes = [100, 100, 100]
     k = sum(slice_sizes)
@@ -1322,9 +1331,34 @@ def test_matmul_ragged_k_unpadded_slices(device, opt_flags_scope):
     a = torch.ones((k, 1024), device=device, dtype=torch.bfloat16).T
     b = torch.ones((k, 4096), device=device, dtype=torch.bfloat16)
 
+    # default flags: the non-persistent kernel is chosen and the result is exact
     y = matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+    default_flags = picked["flags"]
+    assert not default_flags.is_persistent
     torch.testing.assert_close(y, torch.full_like(y, 100), rtol=0, atol=0)
 
-    with opt_flags.scoped_opt_flags_constraints(make_constraints(None, None, True, None, False, "bfloat16", None)):
+    # constraint: forcing the persistent kernel is rejected
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True}):
         with pytest.raises(opt_flags.InapplicableConstraint, match="is_persistent"):
             matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+
+    # manual flags bypass the constraint check and must still be rejected
+    with opt_flags.scoped_opt_flags(replace(default_flags, is_persistent=True)):
+        with pytest.raises(opt_flags.InapplicableConstraint, match="padded"):
+            matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+
+
+def test_matmul_ragged_k_padded_slices_still_persistent(device, opt_flags_scope):
+    # Padded ragged-K must stay eligible for the persistent kernel.
+    if not is_cuda() or not cuda_capability_geq(9):
+        pytest.skip("requires CUDA capability >= 9")
+
+    slice_sizes = [128, 128, 128]
+    k = sum(slice_sizes)
+    metadata = make_ragged_tensor_metadata(torch.tensor(slice_sizes, dtype=torch.int32, device=device), k)
+    metadata = replace(metadata, slice_sizes_divisibility=128)
+    a = torch.ones((k, 1024), device=device, dtype=torch.bfloat16).T
+    b = torch.ones((k, 4096), device=device, dtype=torch.bfloat16)
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True}):
+        y = matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+    torch.testing.assert_close(y, torch.full_like(y, 128), rtol=0, atol=0)

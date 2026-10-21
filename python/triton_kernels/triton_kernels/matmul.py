@@ -468,6 +468,12 @@ def matmul(a, b, bias,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
+    # Manually set flags (set_opt_flags / scoped_opt_flags) skip the constraint checks in make_opt_flags.
+    # The persistent ragged-K kernel does not mask the last K tile of a slice, so x or w must be padded.
+    if (ragged_dimension == "K" and opt_flags.is_persistent and batch_size * M * N > 0
+            and a_ragged_metadata.slice_sizes_divisibility is None
+            and b_ragged_metadata.slice_sizes_divisibility is None):
+        raise InapplicableConstraint("persistent ragged-K matmul requires x or w to be padded")
     if any(isinstance(t.storage.layout, TiledLayout) for t in (a, b)):
         if not opt_flags.is_persistent or not can_use_tma or ragged_dimension != "K":
             raise InapplicableConstraint("Tiled operands require a persistent ragged-K TMA matmul")
