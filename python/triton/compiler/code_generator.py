@@ -365,7 +365,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     builtin_namespace: Dict[str, Any] = {
         _.__name__: _
-        for _ in (len, list, range, float, int, isinstance, getattr, hasattr)
+        for _ in (len, list, range, float, int, bool, isinstance, getattr, hasattr)
     }
     builtin_namespace.update((
         ('print', language.core.device_print),
@@ -1523,6 +1523,9 @@ class CodeGenerator(ast.NodeVisitor):
                 # preserve the traceback of the original error, which may e.g.
                 # be in core.py.
                 raise CompilationError(self.jit_fn.src, node, str(e)) from e
+
+        if fn is bool and any(isinstance(_unwrap_if_constexpr(arg), tensor) for arg in args):
+            raise TypeError("bool() is not supported for tensors")
 
         if fn in self.builtin_namespace.values() or (hasattr(fn, '__self__') and not _is_triton_value(fn.__self__)):
             args = map(_unwrap_if_constexpr, args)
