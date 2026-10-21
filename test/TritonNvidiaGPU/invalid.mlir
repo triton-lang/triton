@@ -1937,6 +1937,90 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tma_load_rejects_row_subview_smaller_than_cta_split(%desc: !tt.tensordesc<1x64xf16, #shared>, %alloc: !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, %bar: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %x: i32, %pred: i1) {
+    %view = ttg.memdesc_subslice %alloc [0, 0] : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<1x64xf16, #shared, #smem, mutable, 128x64>
+    // expected-error @below {{TMA shared-memory shape must cover every CTA split: dimension 0 has size 1 but 2 CTA splits}}
+    ttng.async_tma_copy_global_to_local %desc[%x, %x] %view, %bar, %pred : !tt.tensordesc<1x64xf16, #shared>, !ttg.memdesc<2xi64, #barrier, #smem, mutable> -> !ttg.memdesc<1x64xf16, #shared, #smem, mutable, 128x64>
+    tt.return
+  }
+
+  tt.func @tma_load_rejects_allocation_smaller_than_cta_split(%desc: !tt.tensordesc<1x64xf16, #shared>, %dst: !ttg.memdesc<1x64xf16, #shared, #smem, mutable>, %bar: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %x: i32, %pred: i1) {
+    // expected-error @below {{TMA shared-memory shape must cover every CTA split: dimension 0 has size 1 but 2 CTA splits}}
+    ttng.async_tma_copy_global_to_local %desc[%x, %x] %dst, %bar, %pred : !tt.tensordesc<1x64xf16, #shared>, !ttg.memdesc<2xi64, #barrier, #smem, mutable> -> !ttg.memdesc<1x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  tt.func @tma_im2col_rejects_rows_smaller_than_cta_split(%desc: !ttng.tensordesc_im2col<1x64xf16, #shared>, %dst: !ttg.memdesc<1x64xf16, #shared, #smem, mutable>, %bar: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %x: i32, %offset: i16, %pred: i1) {
+    // expected-error @below {{TMA shared-memory shape must cover every CTA split: dimension 0 has size 1 but 2 CTA splits}}
+    ttng.async_tma_copy_global_to_local %desc[%x, %x, %x] offsets = [%offset] %dst, %bar, %pred : !ttng.tensordesc_im2col<1x64xf16, #shared>, !ttg.memdesc<2xi64, #barrier, #smem, mutable> -> !ttg.memdesc<1x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  tt.func @tma_store_rejects_rows_smaller_than_cta_split(%desc: !tt.tensordesc<1x64xf16, #shared>, %src: !ttg.memdesc<1x64xf16, #shared, #smem, mutable>, %x: i32) {
+    // expected-error @below {{TMA shared-memory shape must cover every CTA split: dimension 0 has size 1 but 2 CTA splits}}
+    ttng.async_tma_copy_local_to_global %desc[%x, %x] %src : !tt.tensordesc<1x64xf16, #shared>, !ttg.memdesc<1x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+
+  tt.func @tma_reduce_rejects_rows_smaller_than_cta_split(%desc: !tt.tensordesc<1x64xf16, #shared>, %src: !ttg.memdesc<1x64xf16, #shared, #smem, mutable>, %x: i32) {
+    // expected-error @below {{TMA shared-memory shape must cover every CTA split: dimension 0 has size 1 but 2 CTA splits}}
+    ttng.async_tma_reduce add, %desc[%x, %x] %src : !tt.tensordesc<1x64xf16, #shared>, !ttg.memdesc<1x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, CGALayout = [[0, 1], [0, 2], [0, 4], [0, 8]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2], [4], [8]]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0], [0, 0], [0, 0], [0, 0]]}>
+#offsets = #ttg.slice<{dim = 0, parent = #blocked}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tma_gather_rejects_columns_smaller_than_cta_split(%desc: !tt.tensordesc<1x8xf32, #shared>, %dst: !ttg.memdesc<8x8xf32, #shared, #smem, mutable>, %bar: !ttg.memdesc<16xi64, #barrier, #smem, mutable>, %indices: tensor<8xi32, #offsets>, %y: i32, %pred: i1) {
+    // expected-error @below {{TMA shared-memory shape must cover every CTA split: dimension 1 has size 8 but 16 CTA splits}}
+    ttng.async_tma_gather %desc[%indices, %y] %dst, %bar, %pred : !tt.tensordesc<1x8xf32, #shared>, tensor<8xi32, #offsets>, i32, !ttg.memdesc<16xi64, #barrier, #smem, mutable>, !ttg.memdesc<8x8xf32, #shared, #smem, mutable>, i1
+    tt.return
+  }
+
+  tt.func @tma_scatter_rejects_columns_smaller_than_cta_split(%desc: !tt.tensordesc<1x8xf32, #shared>, %src: !ttg.memdesc<8x8xf32, #shared, #smem, mutable>, %indices: tensor<8xi32, #offsets>, %y: i32) {
+    // expected-error @below {{TMA shared-memory shape must cover every CTA split: dimension 1 has size 8 but 16 CTA splits}}
+    ttng.async_tma_scatter %desc[%indices, %y] %src : !tt.tensordesc<1x8xf32, #shared>, tensor<8xi32, #offsets>, i32, !ttg.memdesc<8x8xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tma_split_rows = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#tma_broadcast = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#tma_offsets_parent = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+#tma_offsets = #ttg.slice<{dim = 1, parent = #tma_offsets_parent}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tma_load_subview_covers_cta_split(%desc: !tt.tensordesc<2x64xf16, #tma_split_rows>, %alloc: !ttg.memdesc<128x64xf16, #tma_split_rows, #ttg.shared_memory, mutable>, %bar: !ttg.memdesc<2xi64, #barrier, #ttg.shared_memory, mutable>, %x: i32, %pred: i1) {
+    %view = ttg.memdesc_subslice %alloc [0, 0] : !ttg.memdesc<128x64xf16, #tma_split_rows, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x64xf16, #tma_split_rows, #ttg.shared_memory, mutable, 128x64>
+    ttng.async_tma_copy_global_to_local %desc[%x, %x] %view, %bar, %pred : !tt.tensordesc<2x64xf16, #tma_split_rows>, !ttg.memdesc<2xi64, #barrier, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x64xf16, #tma_split_rows, #ttg.shared_memory, mutable, 128x64>
+    tt.return
+  }
+
+  tt.func @tma_load_broadcast_single_row(%desc: !tt.tensordesc<1x64xf16, #tma_broadcast>, %dst: !ttg.memdesc<1x64xf16, #tma_broadcast, #ttg.shared_memory, mutable>, %bar: !ttg.memdesc<2xi64, #barrier, #ttg.shared_memory, mutable>, %x: i32, %pred: i1) {
+    ttng.async_tma_copy_global_to_local %desc[%x, %x] %dst, %bar, %pred : !tt.tensordesc<1x64xf16, #tma_broadcast>, !ttg.memdesc<2xi64, #barrier, #ttg.shared_memory, mutable> -> !ttg.memdesc<1x64xf16, #tma_broadcast, #ttg.shared_memory, mutable>
+    tt.return
+  }
+
+  tt.func @tma_gather_single_row_descriptor(%desc: !tt.tensordesc<1x64xf16, #tma_split_rows>, %mem: !ttg.memdesc<32x64xf16, #tma_split_rows, #ttg.shared_memory, mutable>, %bar: !ttg.memdesc<2xi64, #barrier, #ttg.shared_memory, mutable>, %indices: tensor<32xi32, #tma_offsets>, %y: i32, %pred: i1) {
+    ttng.async_tma_gather %desc[%indices, %y] %mem, %bar, %pred : !tt.tensordesc<1x64xf16, #tma_split_rows>, tensor<32xi32, #tma_offsets>, i32, !ttg.memdesc<2xi64, #barrier, #ttg.shared_memory, mutable>, !ttg.memdesc<32x64xf16, #tma_split_rows, #ttg.shared_memory, mutable>, i1
+    tt.return
+  }
+}
+
+// -----
+
 #padded = #ttg.padded_shared<[1:+1] {order = [0], shape = [2]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
