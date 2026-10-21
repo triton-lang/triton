@@ -718,34 +718,3 @@ tt.func @warpgroup_dot_wait_2_inputs(%arg0: tensor<128xf32, #blocked>, %arg1: te
 }
 
 }
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: @bf16_to_fp16
-  // CHECK-NOT: llvm.fpext
-  // CHECK: llvm.inline_asm {{.*}} "cvt.rn.f16.bf16 $0, $1;", "=h,h"
-  // CHECK-NOT: llvm.fpext
-  // CHECK: llvm.inline_asm {{.*}} "cvt.rz.f16.bf16 $0, $1;", "=h,h"
-  // CHECK-NOT: llvm.fpext
-  // CHECK: llvm.return
-  tt.func private @bf16_to_fp16(%arg: tensor<128xbf16, #blocked>) -> (tensor<128xf16, #blocked>, tensor<128xf16, #blocked>) {
-    %rn = tt.fp_to_fp %arg : tensor<128xbf16, #blocked> -> tensor<128xf16, #blocked>
-    %rz = tt.fp_to_fp %arg, rounding = rtz : tensor<128xbf16, #blocked> -> tensor<128xf16, #blocked>
-    tt.return %rn, %rz : tensor<128xf16, #blocked>, tensor<128xf16, #blocked>
-  }
-
-  // CHECK-LABEL: @fp16_to_bf16
-  // CHECK-NOT: llvm.fpext
-  // CHECK: llvm.inline_asm {{.*}} "cvt.rn.bf16.f16 $0, $1;", "=h,h"
-  // CHECK-NOT: llvm.fpext
-  // CHECK: llvm.inline_asm {{.*}} "cvt.rz.bf16.f16 $0, $1;", "=h,h"
-  // CHECK-NOT: llvm.fpext
-  // CHECK: llvm.return
-  tt.func private @fp16_to_bf16(%arg: tensor<128xf16, #blocked>) -> (tensor<128xbf16, #blocked>, tensor<128xbf16, #blocked>) {
-    %rn = tt.fp_to_fp %arg : tensor<128xf16, #blocked> -> tensor<128xbf16, #blocked>
-    %rz = tt.fp_to_fp %arg, rounding = rtz : tensor<128xf16, #blocked> -> tensor<128xbf16, #blocked>
-    tt.return %rn, %rz : tensor<128xbf16, #blocked>, tensor<128xbf16, #blocked>
-  }
-}

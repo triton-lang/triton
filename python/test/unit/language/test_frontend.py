@@ -128,6 +128,18 @@ def test_store_int_to_bool():
     run_filecheck_test(kernel, args=(MockTensor(tl.int1), 256))
 
 
+@pytest.mark.parametrize("flag", [False, True])
+def test_bool_parameter_annotation(flag):
+
+    @triton.jit
+    def kernel(out, flag: bool):
+        # CHECK: arith.select %arg1,
+        tl.store(out, tl.where(flag, 7.0, 9.0))
+        tl.static_assert(flag.dtype == tl.int1)
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), flag))
+
+
 @pytest.mark.parametrize("dtype",
                          [tl.float16, tl.bfloat16, tl.float32, tl.float64, tl.float8e4nv, tl.float8e5, tl.float8e4b15],
                          ids=str)

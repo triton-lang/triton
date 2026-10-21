@@ -87,15 +87,6 @@ def get_amd_codegen_revision() -> str:
     return _load_amd_codegen(get_amd_codegen_path()).triton_amdgpu_revision().decode("utf-8")
 
 
-def get_amd_codegen_target_triple(arch: str) -> str:
-    # TODO: Triton's core LLVM does not know gfx1250-strict, so it cannot derive
-    # the triple that the code generator requires for it. Remove this special
-    # case once core LLVM is bumped.
-    if arch == "gfx1250-strict":
-        return "amdgpu12.50s-amd-amdhsa"
-    return amd.get_target_triple(arch)
-
-
 def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
                    disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
                    enable_timing: bool) -> str:
@@ -145,7 +136,7 @@ def assemble_amdgcn(assembly: str, processor: str, features: str) -> bytes:
     status = library.triton_amdgpu_assemble(
         source,
         len(source),
-        get_amd_codegen_target_triple(processor).encode("utf-8"),
+        amd.get_target_triple(processor).encode("utf-8"),
         processor.encode("utf-8"),
         features.encode("utf-8"),
         ctypes.byref(object_file),
@@ -287,7 +278,7 @@ class HIPOptions:
     # Experimental: intended for development and debugging; may change or be removed without notice.
     # Comma-separated LLVM command line options applied to every LLVM pipeline run of this kernel;
     # bare names are set to true. Option names omit the leading dash.
-    # Example: llvm_cl_opts="enable-gvn-hoist,unroll-threshold=150"
+    # Example: llvm_cl_opts="amdgpu-use-amdgpu-trackers,unroll-threshold=150"
     llvm_cl_opts: str | Tuple[Tuple[str, str], ...] = ""
 
     def __post_init__(self):
@@ -620,23 +611,16 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        core_llvm_arch = options.base_arch
-        # target_triple is the code generator's triple, including gfx1250-strict.
-        # Core LLVM aborts if a target machine is built for amdgpu12.50s, so
-        # every core-LLVM target machine (the module triple during
-        # optimize_module, the data layout, and the architected-SGPR check)
-        # uses layout_triple. The strict triple is stamped on afterwards.
-        target_triple = get_amd_codegen_target_triple(options.arch)
-        layout_triple = amd.get_target_triple(core_llvm_arch)
-        amd.set_target_triple(llvm_mod, layout_triple)
+        target_triple = amd.get_target_triple(options.arch)
+        amd.attach_target_triple(llvm_mod, options.arch)
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
-        llvm.attach_datalayout(llvm_mod, layout_triple, core_llvm_arch, target_features, get_llvm_flags(options))
+        llvm.attach_datalayout(llvm_mod, target_triple, options.arch, target_features, get_llvm_flags(options))
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
-        amd.set_isa_version(llvm_mod, core_llvm_arch)
+        amd.set_isa_version(llvm_mod, options.arch)
         amd.set_abi_version(llvm_mod, 500)
         amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
@@ -715,17 +699,15 @@ class HIPBackend(BaseBackend):
             kernel_fn.remove_fn_attr(name)
             kernel_fn.add_fn_attr(name, value)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, core_llvm_arch, '', get_llvm_flags(options),
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options),
                              options.enable_fp_fusion, disable_vector_combine=True)
-        if target_triple != layout_triple:
-            amd.set_target_triple(llvm_mod, target_triple)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
         # optimize_module from calls to @llvm.amdgcn.workgroup.id.x/y/z(). We cannot rely on this because a
         # dispatch dimensions might be used even if there is no program_id() call for it.
         # Attributes provided through llvm_fn_attrs are kept.
-        if amd.has_architected_sgprs(layout_triple, core_llvm_arch):
+        if amd.has_architected_sgprs(options.arch):
             user_attrs = {name for name, _ in options.llvm_fn_attrs}
             for dim in "xyz":
                 attr = f"amdgpu-no-workgroup-id-{dim}"
@@ -764,12 +746,9 @@ class HIPBackend(BaseBackend):
         # llvm -> hsaco
         flags = get_llvm_flags(options)
         features = ''
-        target_triple = get_amd_codegen_target_triple(options.arch)
+        target_triple = amd.get_target_triple(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
-        # MIR dump and swap run Triton's core LLVM, which does not know gfx1250-strict.
-        if options.arch == "gfx1250-strict" and (knobs.amd.dump_mir or knobs.amd.swap_mir):
-            raise ValueError("TRITON_DUMP_MIR and TRITON_SWAP_MIR are not supported for gfx1250-strict")
         if knobs.amd.dump_mir:
             # translate_to_mir dumps both the pre-machine-scheduler MIR and, built
             # from that same MachineFunction, the scheduling DAG (a (bb, position)

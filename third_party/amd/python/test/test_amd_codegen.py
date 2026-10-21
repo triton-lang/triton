@@ -65,7 +65,7 @@ define amdgpu_kernel void @alias_scope_kernel(ptr addrspace(1) %a, ptr addrspace
     assert "alias_scope_kernel:" in assembly
 
 
-@pytest.mark.parametrize("arch", ["gfx90a", "gfx942", "gfx950", "gfx1250"])
+@pytest.mark.parametrize("arch", ["gfx90a", "gfx942", "gfx950", "gfx1250", "gfx1250-strict"])
 @pytest.mark.parametrize("enable_misched", [False, True])
 def test_mir_roundtrip(arch, enable_misched, tmp_path, monkeypatch):
     from triton._C.libtriton import llvm
@@ -95,6 +95,12 @@ define amdgpu_kernel void @mir_kernel(ptr addrspace(1) %out, i32 %a, i32 %b) {{
     assembly = llvm.translate_mir_to_asm(str(path), triple, arch, "", [], False, False, enable_misched)
     assert "mir_kernel:" in assembly
     assert "s_barrier" in assembly
+
+
+def test_strict_target_triple():
+    assert compiler.amd.get_target_triple("gfx1250-strict") == "amdgpu12.50s-amd-amdhsa"
+    assert not compiler.amd.has_architected_sgprs("gfx942")
+    assert compiler.amd.has_architected_sgprs("gfx1250-strict")
 
 
 def test_named_barrier_address_space():
