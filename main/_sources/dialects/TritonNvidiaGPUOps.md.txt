@@ -1071,12 +1071,15 @@ _Initiate an asynchronous copy operation from shared memory to tensor memory._
 Syntax:
 
 ```
-operation ::= `ttng.tmem_copy` $src `,` $dst attr-dict `:` qualified(type(operands))
+operation ::= `ttng.tmem_copy` $src `,` $dst (`,` $pred^)? attr-dict `:`
+              qualified(type($src)) `,` qualified(type($dst))
 ```
 
 2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
 This op lowers to the PTX instruction tcgen05.cp. This supports writing to
 the scales TMEM layout as well as the default TMEM layout.
+The copy is skipped when the optional predicate is false. An omitted
+predicate is equivalent to true.
 For the default layout, each contiguous TMEM row segment must contain at
 least 128 bits, the minimum width supported by tcgen05.cp.
 Currently, the semantics are different when writing to the TMEM scale layout.
@@ -1121,12 +1124,15 @@ In the absence of such operations on memdesc, we resort to implicitly encoding t
 
 Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
+Interfaces: `PredicatedOpInterface`
+
 #### Operands:
 
 | Operand | Description |
 | :-----: | ----------- |
 | `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `dst` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `pred` | 1-bit signless integer |
 
 
 

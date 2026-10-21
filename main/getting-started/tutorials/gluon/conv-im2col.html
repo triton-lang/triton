@@ -1145,6 +1145,9 @@ tensor memory) without any code changes.</p>
         <span class="c1">#   offsets = [r, s]</span>
         <span class="c1"># TMA applies offsets to the spatial coords, so start is:</span>
         <span class="c1">#   [batch_id, out_y*stride_h-pad_h+r, out_x*stride_w-pad_w+s, ci_block*BLOCK_K]</span>
+        <span class="c1"># The input tiles are single-buffered. Wait for the previous MMA to</span>
+        <span class="c1"># finish reading them before overwriting them with the next TMA loads.</span>
+        <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         <span class="n">mbarrier</span><span class="o">.</span><span class="n">expect</span><span class="p">(</span><span class="n">tma_bar</span><span class="p">,</span> <span class="n">in_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span> <span class="o">+</span> <span class="n">weight_desc</span><span class="o">.</span><span class="n">block_type</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
         <span class="n">tma</span><span class="o">.</span><span class="n">async_load_im2col</span><span class="p">(</span>
             <span class="n">in_desc</span><span class="p">,</span>
@@ -1163,7 +1166,6 @@ tensor memory) without any code changes.</p>
         <span class="n">mbarrier</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">tma_bar</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="n">phase</span><span class="p">)</span>
 
         <span class="c1"># acc += A @ B^T</span>
-        <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">wait_num_outstanding</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         <span class="n">mma</span> <span class="o">=</span> <span class="n">mma</span><span class="o">.</span><span class="n">issue_async_mma</span><span class="p">(</span><span class="n">a_smem</span><span class="p">,</span> <span class="n">b_smem</span><span class="o">.</span><span class="n">permute</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">)))</span>
 
         <span class="n">phase</span> <span class="o">^=</span> <span class="mi">1</span>

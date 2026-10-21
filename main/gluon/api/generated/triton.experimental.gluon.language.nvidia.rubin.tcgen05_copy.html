@@ -156,13 +156,14 @@
 <h1>triton.experimental.gluon.language.nvidia.rubin.tcgen05_copy<a class="headerlink" href="#triton-experimental-gluon-language-nvidia-rubin-tcgen05-copy" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.nvidia.rubin.tcgen05_copy">
-<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.rubin.</span></span><span class="sig-name descname"><span class="pre">tcgen05_copy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dst</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.rubin.tcgen05_copy" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.nvidia.rubin.</span></span><span class="sig-name descname"><span class="pre">tcgen05_copy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dst</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pred</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.nvidia.rubin.tcgen05_copy" title="Link to this definition"></a></dt>
 <dd><p>Start an asynchronous copy from shared memory to tensor memory.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>src</strong> (<a class="reference internal" href="triton.experimental.gluon.language.shared_memory_descriptor.html#triton.experimental.gluon.language.shared_memory_descriptor" title="triton.experimental.gluon.language.shared_memory_descriptor"><em>shared_memory_descriptor</em></a>) – Shared memory to copy from.</p></li>
 <li><p><strong>dst</strong> (<a class="reference internal" href="triton.experimental.gluon.language.nvidia.rubin.tensor_memory_descriptor.html#triton.experimental.gluon.language.nvidia.rubin.tensor_memory_descriptor" title="triton.experimental.gluon.language.nvidia.rubin.tensor_memory_descriptor"><em>tensor_memory_descriptor</em></a>) – Tensor memory to copy to.</p></li>
+<li><p><strong>pred</strong> (<em>bool</em>) – Scalar predicate. The copy is skipped if False. Defaults to True.</p></li>
 </ul>
 </dd>
 </dl>

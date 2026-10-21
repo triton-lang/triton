@@ -29,6 +29,43 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `tt.annotate` (triton::AnnotateOp)
+
+_Attach compiler hints to a single value_
+
+Syntax:
+
+```
+operation ::= `tt.annotate` $src attr-dict `:` type($result)
+```
+
+Returns its operand unchanged. Attributes on this operation describe
+only its result, allowing compiler hints to be attached independently
+to each result of a multi-result operation, such as a function call.
+When the operand has a single-result defining operation, the hints can
+be folded into that operation. Otherwise, the annotation is preserved
+until lowering to LLVM.
+
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte or ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
+
+
+
 ### `tt.approx_divf` (triton::ApproxDivFOp)
 
 _Approximate division for 32-bit floating point types_
@@ -945,7 +982,7 @@ tt.func @example_fn_result() -> (f64 {dialectName.attrName = 0 : i64})
 tt.func @example_fn_attr() attributes {dialectName.attrName = false}
 ```
 
-Traits: `AffineScope`, `AutomaticAllocationScope`, `HasParent<ModuleOp>`, `IsolatedFromAbove`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AffineScope`, `AutomaticAllocationScope`, `HasParent<ModuleOp>`, `IsolatedFromAbove`, `SymbolName`, `SymbolVisibility`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ArgAndResultAttrsOpInterface`, `CallableOpInterface`, `FunctionOpInterface`, `OpAsmOpInterface`, `Symbol`
 

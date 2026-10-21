@@ -1305,6 +1305,11 @@
     <span class="k">if</span> <span class="n">cga_layout</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">cga_layout</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">CGA_LAYOUT</span>
 
+    <span class="c1"># The kernel will split the cluster tile into two subtiles. Keep the</span>
+    <span class="c1"># configured M tile per CTA and grow the cluster tile with the CTA layout.</span>
+    <span class="n">BLOCK_M</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_M</span> <span class="o">*</span> <span class="n">get_split_dim</span><span class="p">(</span><span class="n">cga_layout</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">%</span> <span class="n">BLOCK_M</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"Sequence length must be divisible by BLOCK_M (</span><span class="si">{</span><span class="n">BLOCK_M</span><span class="si">}</span><span class="s2">)"</span>
+
     <span class="k">if</span> <span class="n">o</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">o</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">q</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">M</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -1312,9 +1317,6 @@
 
     <span class="n">y_dim</span> <span class="o">=</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
 
-    <span class="c1"># The kernel will split the cluster tile into two subtiles. Keep the</span>
-    <span class="c1"># configured M tile per CTA and grow the cluster tile with the CTA layout.</span>
-    <span class="n">BLOCK_M</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_M</span> <span class="o">*</span> <span class="n">get_split_dim</span><span class="p">(</span><span class="n">cga_layout</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
     <span class="n">BLOCK_N</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">BLOCK_N</span>
     <span class="n">SPLIT_M</span> <span class="o">=</span> <span class="n">BLOCK_M</span> <span class="o">//</span> <span class="mi">2</span>
     <span class="n">GROUP_SIZE_N</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">GROUP_SIZE_N</span>
