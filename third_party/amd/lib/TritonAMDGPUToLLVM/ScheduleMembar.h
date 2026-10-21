@@ -5,7 +5,8 @@
 
 namespace mlir::triton::AMD {
 
-// Move eligible local barriers before uses of global-load results.
+// Move eligible local barriers before global-load uses or loop-argument
+// rotations that may require register copies.
 void scheduleMembarBarriers(ModuleOp module);
 
 } // namespace mlir::triton::AMD
