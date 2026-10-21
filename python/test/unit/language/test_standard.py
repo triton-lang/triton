@@ -121,6 +121,50 @@ def test_sort(M, N, k, descending, dtype_str, device):
     assert (y == z).all(), (y, z)
 
 
+@pytest.mark.interpreter
+def test_sort_nan_signed_zero_is_permutation(device):
+    # tl.sort / tl.topk / tl.bitonic_merge must return a (sub-)permutation of
+    # the input even when a pair compares unordered: NaN pairs and -0.0/+0.0
+    # pairs used to make the two sides of a compare-and-swap disagree,
+    # duplicating one element and dropping its partner (#12397).
+
+    @triton.jit
+    def sort_kernel(X, Z, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        tl.store(Z + offs, tl.sort(tl.load(X + offs)))
+
+    @triton.jit
+    def topk_kernel(X, Z, N: tl.constexpr, K: tl.constexpr):
+        offs = tl.arange(0, N)
+        tl.store(Z + tl.arange(0, K), tl.topk(tl.load(X + offs), K))
+
+    @triton.jit
+    def bitonic_merge_kernel(X, Z, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        tl.store(Z + offs, tl.bitonic_merge(tl.load(X + offs)))
+
+    def bits(t):
+        # compare bit patterns: NaN != NaN and -0.0 == +0.0 as values
+        return sorted(t.view(torch.int32).tolist())
+
+    for row in ([1.0, float("nan"), 3.0, 2.0, 5.0, 4.0, 7.0,
+                 6.0], [1.0, -0.0, 0.0, -2.0, 5.0, 4.0, 7.0, 6.0], [9.0,
+                                                                    float("nan"), 3.0, 2.0, 5.0, 4.0, 7.0, 6.0]):
+        x = torch.tensor(row, dtype=torch.float32, device=device)
+        z = torch.full_like(x, float("inf"))
+        sort_kernel[(1, )](x, z, 8)
+        assert bits(z) == bits(x)
+        z4 = torch.full((4, ), float("inf"), dtype=torch.float32, device=device)
+        topk_kernel[(1, )](x, z4, 8, 4)
+        assert all(bits(z4).count(b) <= bits(x).count(b) for b in set(bits(z4)))
+
+    # a bitonic input (descending half, then ascending half) holding both zeros
+    x = torch.tensor([7.0, 5.0, 3.0, 1.0, -0.0, 0.0, 4.0, 6.0], dtype=torch.float32, device=device)
+    z = torch.full_like(x, float("inf"))
+    bitonic_merge_kernel[(1, )](x, z, 8)
+    assert bits(z) == bits(x)
+
+
 # ---------------
 # test flip op
 # ---------------

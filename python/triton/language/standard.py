@@ -441,8 +441,14 @@ def _compare_and_swap(x, flip, i: core.constexpr):
     # determines whether we are in the right (rather than left) position along the axis:
     is_right = _indicator(n_dims, i)
 
-    # conditional swap:
-    ret = core.where((x > y) != (flip ^ is_right).to(core.int1), y, x)
+    # conditional swap: the two positions of a pair must never disagree. With
+    # the left testing x > y and the right testing not (x > y), a pair that
+    # compares unordered (a NaN, or -0.0 versus +0.0) makes both sides keep or
+    # both take the same element, duplicating it and dropping the partner.
+    # Compare strictly from each side instead, left on x > y and right on
+    # y > x, so the two decisions always complement.
+    take_partner = core.where(is_right.to(core.int1), y > x, x > y) != flip.to(core.int1)
+    ret = core.where(take_partner, y, x)
     return ret
 
 
