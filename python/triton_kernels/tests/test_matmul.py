@@ -1342,8 +1342,18 @@ def test_matmul_ragged_k_unpadded_slices(device, opt_flags_scope, monkeypatch):
         with pytest.raises(opt_flags.InapplicableConstraint, match="is_persistent"):
             matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
 
-    # manual flags bypass the constraint check and must still be rejected
-    with opt_flags.scoped_opt_flags(replace(default_flags, is_persistent=True)):
+    # manual flags bypass the constraint check and must still be rejected; use the flags the
+    # heuristics pick for the persistent kernel on a padded call of the same M and N
+    padded_sizes = [128, 128, 128]
+    padded = replace(make_ragged_tensor_metadata(torch.tensor(padded_sizes, dtype=torch.int32, device=device),
+                                                 sum(padded_sizes)), slice_sizes_divisibility=128)
+    a_p = torch.ones((sum(padded_sizes), 1024), device=device, dtype=torch.bfloat16).T
+    b_p = torch.ones((sum(padded_sizes), 4096), device=device, dtype=torch.bfloat16)
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True}):
+        matmul(a_p, b_p, None, a_ragged_metadata=padded, b_ragged_metadata=padded)
+    persistent_flags = picked["flags"]
+    assert persistent_flags.is_persistent
+    with opt_flags.scoped_opt_flags(persistent_flags):
         with pytest.raises(opt_flags.InapplicableConstraint, match="padded"):
             matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
 
