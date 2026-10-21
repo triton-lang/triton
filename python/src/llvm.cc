@@ -20,6 +20,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
@@ -321,6 +322,63 @@ void lowerNVPTXFAbs(llvm::Module &module) {
   }
 }
 
+void lowerNVPTXFCopySign(llvm::Module &module) {
+  if (!module.getTargetTriple().isNVPTX())
+    return;
+
+  SmallVector<IntrinsicInst *> calls;
+  for (Function &function : module) {
+    Type *scalarType = function.getReturnType()->getScalarType();
+    if (function.getIntrinsicID() != Intrinsic::copysign ||
+        !(scalarType->isHalfTy() || scalarType->isBFloatTy()))
+      continue;
+    for (User *user : function.users())
+      if (auto *call = dyn_cast<IntrinsicInst>(user))
+        if (!call->hasNoNaNs())
+          calls.push_back(call);
+  }
+
+  // NVPTX can implement 16-bit copysign with neg.f16/neg.bf16, which
+  // canonicalize NaNs. FPSan stores integer payloads in floating-point values,
+  // so preserve every magnitude bit. Inline assembly prevents SelectionDAG
+  // from recognizing the integer sign-bit operations as copysign again.
+  Type *bitsType = Type::getInt16Ty(module.getContext());
+  auto *asmType = FunctionType::get(bitsType, {bitsType, bitsType}, false);
+  // Mag ^ ((Mag ^ Sign) & SignMask) has only three inputs, allowing ptxas
+  // to fuse it into one LOP3 instruction.
+  auto *mergeSign = InlineAsm::get(asmType,
+                                   "{ .reg .b16 diff; "
+                                   "xor.b16 diff, $1, $2; "
+                                   "and.b16 diff, diff, 0x8000; "
+                                   "xor.b16 $0, $1, diff; }",
+                                   "=h,h,h", false);
+  for (IntrinsicInst *call : calls) {
+    IRBuilder<> builder(call);
+    auto lowerScalar = [&](Value *magnitude, Value *sign) {
+      Value *bits = builder.CreateCall(
+          mergeSign, {builder.CreateBitCast(magnitude, bitsType),
+                      builder.CreateBitCast(sign, bitsType)});
+      return builder.CreateBitCast(bits, magnitude->getType());
+    };
+    Value *magnitude = call->getArgOperand(0);
+    Value *sign = call->getArgOperand(1);
+    Value *result;
+    if (auto *vectorType = dyn_cast<FixedVectorType>(call->getType())) {
+      result = PoisonValue::get(vectorType);
+      for (unsigned i = 0; i < vectorType->getNumElements(); ++i)
+        result = builder.CreateInsertElement(
+            result,
+            lowerScalar(builder.CreateExtractElement(magnitude, i),
+                        builder.CreateExtractElement(sign, i)),
+            i);
+    } else {
+      result = lowerScalar(magnitude, sign);
+    }
+    call->replaceAllUsesWith(result);
+    call->eraseFromParent();
+  }
+}
+
 std::string
 translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
                      const std::string &proc, const std::string &features,
@@ -464,8 +522,10 @@ translateLLVMIRToASM(llvm::Module &module, const std::string &triple,
     cleanup.add(llvm::createEarlyCSEPass());
     cleanup.run(module);
   }
-  if (enableFpSan)
+  if (enableFpSan) {
     lowerNVPTXFAbs(module);
+    lowerNVPTXFCopySign(module);
+  }
   // emit machine code
   std::string result;
   {
