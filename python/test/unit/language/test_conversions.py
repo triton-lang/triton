@@ -1,6 +1,7 @@
 # fmt: off
 
 
+import math
 import numpy as np
 import torch
 import pytest
@@ -508,3 +509,95 @@ def test_typeconvert_upcast_fnuz_nan(src_dtype, dst_dtype, device):
                  tl.float32: torch.float32}[tl_dst]
     assert torch.all(torch.isnan(dst.view(torch_dst))), \
         f"fnuz {src_dtype} NaN byte 0x80 -> {dst_dtype} should be NaN, got {dst[0].item():#x}"
+
+
+@pytest.mark.parametrize("src_dtype, dst_dtype", [
+    ("float32", "float16"), ("float32", "bfloat16"),
+    ("float64", "float16"), ("float64", "bfloat16"), ("float64", "float32"),
+])
+@pytest.mark.parametrize("rounding", ["rtne", "rtz"])
+def test_typeconvert_rounding_edges(src_dtype, dst_dtype, rounding, device):
+    if not is_cuda():
+        pytest.skip("Tests NVIDIA explicit-rounding conversion lowering")
+    if dst_dtype == "bfloat16":
+        min_capability = 9 if src_dtype == "float64" else 8
+        if torch.cuda.get_device_capability()[0] < min_capability:
+            pytest.skip(f"Native {src_dtype} -> bf16 conversions require SM{min_capability}0")
+    src_ty = getattr(torch, src_dtype)
+    dst_ty = getattr(torch, dst_dtype)
+    info = torch.finfo(dst_ty)
+    # Values on and adjacent to rounding boundaries, including subnormals,
+    # signed zero, overflow, infinities, and NaNs.
+    positive = torch.tensor([
+        0.0, info.tiny * info.eps / 2, info.tiny * info.eps,
+        info.tiny * (1 - info.eps / 2), info.tiny,
+        1.0, 1 + info.eps / 2, 1 + 3 * info.eps / 2,
+        info.max, info.max * (1 + info.eps / 4), info.max * 2,
+        float("inf"), float("nan"),
+    ], dtype=src_ty)
+    values = torch.cat((positive, -positive))
+    values = torch.cat((values, torch.nextafter(values, torch.zeros_like(values)),
+                        torch.nextafter(values, torch.full_like(values, float("inf")))))
+    values = values.repeat((128 + values.numel() - 1) // values.numel())[:128]
+    # Scale by powers of two and round the significand directly. In particular,
+    # do not use a torch f64 -> bf16 cast, which may round through f32 first.
+    mantissa_bits = {"float16": 10, "bfloat16": 7, "float32": 23}[dst_dtype]
+    min_exponent = -14 if dst_dtype == "float16" else -126
+    max_exponent = 15 if dst_dtype == "float16" else 127
+    reference = []
+    for value in values.tolist():
+        magnitude = abs(value)
+        if not math.isfinite(value) or value == 0:
+            reference.append(value)
+            continue
+        exponent = max(math.frexp(magnitude)[1] - 1, min_exponent)
+        if exponent > max_exponent:
+            result = float("inf") if rounding == "rtne" else info.max
+            reference.append(math.copysign(result, value))
+            continue
+        significand = math.ldexp(magnitude, mantissa_bits - exponent)
+        significand = round(significand) if rounding == "rtne" else math.floor(significand)
+        result = math.ldexp(significand, exponent - mantissa_bits)
+        if result > info.max:
+            result = float("inf") if rounding == "rtne" else info.max
+        reference.append(math.copysign(result, value))
+    expected = torch.tensor(reference, dtype=dst_ty)
+    int_ty = torch.int32 if dst_dtype == "float32" else torch.int16
+    src = values.to(device)
+    dst = torch.empty(src.shape, dtype=dst_ty, device=device)
+    kernel = type_convert_triton[(1,)](src, dst, rounding, 128)
+    actual = dst.cpu()
+    finite_or_inf = ~torch.isnan(expected)
+    torch.testing.assert_close(actual.view(int_ty)[finite_or_inf],
+                               expected.view(int_ty)[finite_or_inf], rtol=0, atol=0)
+    assert torch.equal(torch.isnan(actual), torch.isnan(expected))
+    ptx_src = {"float32": "f32", "float64": "f64"}[src_dtype]
+    ptx_dst = {"float16": "f16", "bfloat16": "bf16", "float32": "f32"}[dst_dtype]
+    ptx_round = "rn" if rounding == "rtne" else "rz"
+    assert f"cvt.{ptx_round}.{ptx_dst}.{ptx_src}" in kernel.asm["ptx"]
+    if rounding == "rtz":
+        assert "llvm.fptrunc.round" in kernel.asm["llir"]
+
+
+@pytest.mark.parametrize("src_dtype, dst_dtype", [
+    ("float16", "bfloat16"), ("bfloat16", "float16"),
+])
+def test_typeconvert_fp16_bf16_direct(src_dtype, dst_dtype, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("Direct f16/bf16 conversions require SM90")
+    # Cover every 16-bit input, including signed zero, subnormals and NaNs.
+    values = torch.arange(65536, dtype=torch.int32).to(torch.int16)
+    values = values.view(getattr(torch, src_dtype))
+    expected = values.to(getattr(torch, dst_dtype))
+    src = values.to(device)
+    dst = torch.empty_like(src, dtype=getattr(torch, dst_dtype))
+    # One element per thread keeps this a scalar conversion.
+    kernel = type_convert_triton[(512,)](src, dst, None, 128)
+    actual = dst.cpu()
+    non_nan = ~torch.isnan(expected)
+    torch.testing.assert_close(actual.view(torch.int16)[non_nan],
+                               expected.view(torch.int16)[non_nan], rtol=0, atol=0)
+    assert torch.equal(torch.isnan(actual), torch.isnan(expected))
+    ptx_src = "f16" if src_dtype == "float16" else "bf16"
+    ptx_dst = "f16" if dst_dtype == "float16" else "bf16"
+    assert f"cvt.rn.{ptx_dst}.{ptx_src}" in kernel.asm["ptx"]
