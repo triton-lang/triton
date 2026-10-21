@@ -173,6 +173,19 @@ LogicalResult verifyConSanCaptureReservation(FuncOp func, int captureCounter,
 
 namespace mlir::triton::instrument {
 
+uint32_t translateXorMask(uint32_t mask, uint32_t translation, int numCTAs) {
+  uint32_t translated = 0;
+  for (int value = 0; value < numCTAs; ++value) {
+    if (!(mask & (1u << value)))
+      continue;
+    uint32_t target = value ^ translation;
+    assert(target < static_cast<uint32_t>(numCTAs) &&
+           "target CTA exceeds the cluster size");
+    translated |= 1u << target;
+  }
+  return translated;
+}
+
 static Value createCurrentCTAMask(OpBuilder &b, Location loc,
                                   RankedTensorType tensorType);
 
@@ -685,6 +698,24 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
                                             captureBytes)))
     return failure();
   return success();
+}
+
+std::pair<unsigned, const llvm::SmallBitVector &>
+AuxDataMap::getBufferAccessState(
+    const BufferAccessRegion &access,
+    const BufferStateCandidates &candidates) const {
+  auto candidate = llvm::find_if(candidates.cases, [&](const auto &entry) {
+    return entry.baseOffset == access.region.baseOffset &&
+           entry.ctaMask == access.candidateCTAs;
+  });
+  assert(candidate != candidates.cases.end());
+  int index = static_cast<int>(MemType::SHARED_MEM);
+  const auto &regions = bufferRegions[index];
+  auto region = llvm::lower_bound(regions, access.region);
+  assert(region != regions.end() && *region == access.region);
+  return {std::distance(candidates.cases.begin(), candidate),
+          bufferStatePlans[index]
+              .regionMasks[std::distance(regions.begin(), region)]};
 }
 
 LogicalResult

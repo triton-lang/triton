@@ -2599,19 +2599,16 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
                                                                             acc.type.layout.two_ctas)
         mbarrier.init(mma_bar, count=mma_bar_count)
 
-        phase_tma = 0
-        phase_mma = 0
         for k in range(num_k_tiles):
             offs_k = k * XBLOCK
+            phase = k % 2
             mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
             tma.async_load(a_desc, [0, offs_k], tma_bar, smemA, multicast=True)
             tma.async_load(b_desc, [offs_k, 0], tma_bar, smemB, multicast=True)
             if not FAILURE:
-                mbarrier.wait(tma_bar, phase_tma, deps=[smemA, smemB])
+                mbarrier.wait(tma_bar, phase, deps=[smemA, smemB])
             blackwell.tcgen05_mma(smemA, smemB, acc, use_acc=k != 0, multicast=True, mbarriers=[mma_bar])
-            mbarrier.wait(mma_bar, phase_mma, deps=[smemA, smemB])
-            phase_tma = (phase_tma + 1) % 2
-            phase_mma = (phase_mma + 1) % 2
+            mbarrier.wait(mma_bar, phase, deps=[smemA, smemB])
 
         mbarrier.invalidate(tma_bar)
         mbarrier.invalidate(mma_bar)
