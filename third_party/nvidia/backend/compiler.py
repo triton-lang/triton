@@ -325,13 +325,18 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        if capability // 10 in [8, 9]:
+        # sm_12x has no tensor memory and lowers dots to mma.sync, so it takes the
+        # sm_80/sm_90 pipeline rather than the tcgen05/TMEM one of sm_10x/sm_11x.
+        if capability // 10 in [8, 9, 12]:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttir.add_triton_licm(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-            nvidia.passes.hopper.add_hopper_warpspec(pm, opt.num_stages, dump_enabled)
+            # The Hopper warp specialization partitions around wgmma, which sm_12x does not have;
+            # on sm_12x it would partition nothing and still disable software pipelining.
+            if capability // 10 != 12:
+                nvidia.passes.hopper.add_hopper_warpspec(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
@@ -344,10 +349,7 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-            # sm_12x has no tensor memory and lowers dots to mma.sync; automatic warp
-            # specialization targets the tcgen05/TMEM pipeline of sm_10x/sm_11x.
-            if capability // 10 in [10, 11]:
-                passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
+            passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_optimize_partition_warps(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
