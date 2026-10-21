@@ -335,7 +335,9 @@ struct FpToFpOpConversion
           " conversion: " + stringifyRoundingMode(rounding) + "\n");
     }
     auto name = ("llvm.nvvm.f2" + dstName + "." + suffix).str();
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, dstTy, {v})
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, dstTy,
+                                           {v, /*pzo=*/b.false_val()})
         .getResult(0);
   }
 
@@ -857,27 +859,6 @@ private:
   StringRef funcName;
 };
 
-struct MulhiUIOpConversion
-    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
-  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
-    assert(bitWidth == 32 || bitWidth == 64);
-    StringRef intrinsic =
-        bitWidth == 32 ? "llvm.nvvm.mulhi.ui" : "llvm.nvvm.mulhi.ull";
-    // A widened multiply/shift relies on LLVM recognizing explicit extensions.
-    // InstCombine can replace those extensions with masks, losing mul.hi.
-    return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, elemTy,
-                                            operands[0])
-                .getResult(0)};
-  }
-};
 } // namespace
 } // namespace gpu
 
@@ -892,8 +873,10 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
 
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis,
-                                    benefit.getBenefit() + 1);
+  // Preserve mul.hi selection when InstCombine turns input extensions into
+  // masks.
+  patterns.add<ElementwiseOpConversion<MulhiUIOp, LLVM::UMulHOp>>(
+      typeConverter, axisInfoAnalysis, benefit.getBenefit() + 1);
 
 #define POPULATE_OP(SRC_OP, DST_OP, ...)                                       \
   patterns.add<                                                                \

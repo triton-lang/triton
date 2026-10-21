@@ -1141,8 +1141,8 @@ def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, 
     scale_layout: gl.constexpr = TensorMemoryScalesLayout()
     a_scale_tmem = allocate_tensor_memory(a_scale.dtype, a_scale.type.shape, scale_layout)
     b_scale_tmem = allocate_tensor_memory(b_scale.dtype, b_scale.type.shape, scale_layout)
-    tcgen05_copy(a_scale, a_scale_tmem)
-    tcgen05_copy(b_scale, b_scale_tmem)
+    tcgen05_copy(a_scale, a_scale_tmem, pred=pred)
+    tcgen05_copy(b_scale, b_scale_tmem, pred=pred)
 
     a_format: gl.constexpr = "e2m1" if a_smem.dtype == gl.uint8 else "e4m3"
     b_format: gl.constexpr = "e2m1" if b_smem.dtype == gl.uint8 else "e4m3"

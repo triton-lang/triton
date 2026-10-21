@@ -30,6 +30,28 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
 }
 
 //
+// Value annotations
+//
+def TT_AnnotateOp : TT_Op<"annotate", [Pure, Elementwise,
+                                      SameOperandsAndResultType]> {
+    let summary = "Attach compiler hints to a single value";
+    let description = [{
+        Returns its operand unchanged. Attributes on this operation describe
+        only its result, allowing compiler hints to be attached independently
+        to each result of a multi-result operation, such as a function call.
+        When the operand has a single-result defining operation, the hints can
+        be folded into that operation. Otherwise, the annotation is preserved
+        until lowering to LLVM.
+    }];
+
+    let arguments = (ins TT_Type:$src);
+    let results = (outs TT_Type:$result);
+    let assemblyFormat = "$src attr-dict `:` type($result)";
+    let hasFolder = 1;
+    let hasCanonicalizer = 1;
+}
+
+//
 // Cast Ops
 //
 // Use cast ops in arith:
@@ -1213,8 +1235,8 @@ def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpI
 
 def FuncOp : TT_Op<"func", [
     AffineScope, AutomaticAllocationScope, CallableOpInterface,
-    FunctionOpInterface, IsolatedFromAbove, OpAsmOpInterface,
-    HasParent<"ModuleOp">
+    SymbolName, SymbolVisibility, FunctionOpInterface, IsolatedFromAbove,
+    OpAsmOpInterface, HasParent<"ModuleOp">
 ]> {
   let summary = "An operation with a name containing a single `SSACFG` region";
   let description = [{

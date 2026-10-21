@@ -228,6 +228,13 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
 
 void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
                                 Operation * /*sourceOp*/) const {
+  // Always insert a workgroup barrier before each cluster barrier. In the case
+  // when there are multiple cluster barriers, a faster warp can pass more
+  // than one cluster signal, while the slower warps have not reached the first
+  // cluster barrier, which leads to a hang. The workgroup barrier ensures
+  // warps stay in sync across cluster barriers.
+  barrier(loc, rewriter, triton::gpu::AddrSpace::None);
+
   triton::amdgpu::ClusterBarrierArriveOp::create(rewriter, loc);
   triton::amdgpu::ClusterBarrierWaitOp::create(rewriter, loc);
 }
@@ -725,7 +732,7 @@ void TargetInfo::assertTrap(RewriterBase &rewriter, Location loc) const {
       rewriter, loc, LLVM::LLVMVoidType::get(ctx), /*operands=*/ValueRange{},
       "s_trap 2", /*constraints=*/"",
       /*has_side_effects=*/true, /*is_align_stack=*/false,
-      LLVM::TailCallKind::None,
+      LLVM::TailCallKind::None, /*convergent=*/false,
       LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
       /*operand_attrs=*/ArrayAttr::get(ctx, {}));
 }

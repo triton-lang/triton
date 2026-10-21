@@ -286,9 +286,13 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
   if (options->flags && options->flags[0]) {
     llvm::SmallVector<llvm::StringRef, 4> flags;
     llvm::StringRef(options->flags).split(flags, ',');
-    for (llvm::StringRef flag : flags)
-      if (!flag.empty())
-        settings.emplace_back(flag.str(), "true");
+    for (llvm::StringRef flag : flags) {
+      if (flag.empty())
+        continue;
+      auto [name, value] = flag.split('=');
+      settings.emplace_back(name.str(),
+                            name.size() == flag.size() ? "true" : value.str());
+    }
   }
 
   if (options->disabledPasses && options->disabledPasses[0]) {

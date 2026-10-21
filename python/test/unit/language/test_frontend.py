@@ -5,6 +5,7 @@ import re
 import triton
 import triton.language as tl
 from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
@@ -1481,6 +1482,36 @@ def test_for_loop_iv_modification():
         i += 1
         # CHECK: anchor{{.*}}%[[I2]]
         anchor(i)
+
+
+@pytest.mark.parametrize("jit", [triton.jit, gluon.jit])
+@pytest.mark.parametrize("operand", ["lower", "upper", "step"])
+@pytest.mark.parametrize("src_dtype", [tl.int1, tl.int8, tl.uint8, tl.int16, tl.uint16], ids=str)
+@pytest.mark.parametrize("iv_dtype", [tl.int32, tl.uint32, tl.int64, tl.uint64], ids=str)
+def test_for_loop_operand_extension(jit, operand, src_dtype, iv_dtype):
+    language = tl if jit is triton.jit else gl
+
+    @jit
+    def kernel(X, IV_DTYPE: tl.constexpr, OPERAND: tl.constexpr):
+        value = language.load(X)
+        lower = language.full((), 0, IV_DTYPE)
+        upper = language.full((), 10, IV_DTYPE)
+        step = language.full((), 1, IV_DTYPE)
+        if OPERAND == "lower":
+            lower = value
+        elif OPERAND == "upper":
+            upper = value
+        else:
+            step = value
+        for i in range(lower, upper, step):
+            language.store(X, i)
+
+    module = run_parser(kernel, args=(MockTensor(src_dtype), iv_dtype, operand))
+    widths = f"i{src_dtype.int_bitwidth} to i{iv_dtype.int_bitwidth}"
+    extensions = [line for line in module.str_nodebug().splitlines() if "arith.ext" in line and widths in line]
+    assert len(extensions) == 1
+    expected_op = "arith.extsi" if src_dtype in (tl.int8, tl.int16) else "arith.extui"
+    assert expected_op in extensions[0]
 
 
 @pytest.mark.interpreter
