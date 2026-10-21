@@ -1,6 +1,7 @@
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -102,4 +103,18 @@ bool membarFilter(Operation *op1, Operation *op2, bool /*op1IsRead*/,
   return (filterAsyncLocalLoadsDependencies(op1, op2, allocation) ||
           filterLDSMemoryBarriersDependencies(op1, op2));
 }
+
+void AMDMembarAnalysis::insertSchedulingFence(Operation *operation,
+                                              OpBuilder *builder) {
+  ROCDL::SchedBarrier::create(*builder, operation->getLoc(),
+                              ROCDL::SchedGroupMask::none);
+}
+
+bool AMDMembarAnalysis::isSchedulingFence(Operation *operation) const {
+  // Only a full fence keeps every instruction on its side; a partial mask
+  // still lets some instruction classes cross.
+  auto fence = dyn_cast<ROCDL::SchedBarrier>(operation);
+  return fence && fence.getMask() == ROCDL::SchedGroupMask::none;
+}
+
 } // namespace mlir::triton::AMD

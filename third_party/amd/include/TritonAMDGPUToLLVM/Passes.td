@@ -7,7 +7,8 @@ def TritonAMDGPUMembar : Pass<"triton-amdgpu-membar", "mlir::ModuleOp"> {
     let summary = "Insert AMD shared-memory synchronization before lowering";
 
     let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                             "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect",
+                             "mlir::ROCDL::ROCDLDialect"];
 
     let options = [
         Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",

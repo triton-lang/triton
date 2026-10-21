@@ -100,6 +100,11 @@ private:
 bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
                                        const AllocationSlice &b);
 
+/// Returns true if the slot of `a` or `b` was derived for a view carried
+/// around a loop. Membar keeps a scheduling-only fence where such a proof
+/// removes a barrier (see MembarAnalysis::insertSchedulingFence).
+bool usesLoopCarriedSlot(const AllocationSlice &a, const AllocationSlice &b);
+
 } // namespace mlir
 
 #endif // TRITON_ANALYSIS_BUFFER_INDEX_ANALYSIS_H

@@ -60,7 +60,10 @@ public:
   // Check if a AllocationSlice intersects with another other.
   // This happens if their subslice regions intersect in all dimensions.
   // Returns true if it can't prove the AllocationSlices are disjoint.
-  bool intersects(const AllocationSlice &other) const;
+  // With `trustLoopCarriedSlots` false, slot proofs that rely on a view
+  // carried around a loop are ignored.
+  bool intersects(const AllocationSlice &other,
+                  bool trustLoopCarriedSlots = true) const;
 
   Allocation::BufferId getBufferId() const { return bufferId; }
 
@@ -253,18 +256,20 @@ struct BlockInfo {
   /// Returns true if Slices in two BlockInfo objects are intersected.
   bool isIntersected(const BlockInfo &other, MembarFilterFn filter,
                      Allocation *allocation,
-                     MembarSliceFilterFn sliceFilter = nullptr) const {
+                     MembarSliceFilterFn sliceFilter = nullptr,
+                     bool trustLoopCarriedSlots = true) const {
     return /*RAW*/ isIntersected(syncWriteSlices, other.syncReadSlices,
                                  /*lhsIsRead=*/false, /*rhsIsRead=*/true,
-                                 filter, sliceFilter, allocation) ||
+                                 filter, sliceFilter, allocation,
+                                 trustLoopCarriedSlots) ||
            /*WAR*/
            isIntersected(syncReadSlices, other.syncWriteSlices,
                          /*lhsIsRead=*/true, /*rhsIsRead=*/false, filter,
-                         sliceFilter, allocation) ||
+                         sliceFilter, allocation, trustLoopCarriedSlots) ||
            /*WAW*/
            isIntersected(syncWriteSlices, other.syncWriteSlices,
                          /*lhsIsRead=*/false, /*rhsIsRead=*/false, filter,
-                         sliceFilter, allocation);
+                         sliceFilter, allocation, trustLoopCarriedSlots);
   }
 
   /// Clears the effects because a barrier is inserted.
@@ -282,10 +287,11 @@ struct BlockInfo {
                             const SliceMapT &rhsSlices, bool lhsIsRead,
                             bool rhsIsRead, MembarFilterFn filter,
                             MembarSliceFilterFn sliceFilter,
-                            Allocation *allocation) {
+                            Allocation *allocation,
+                            bool trustLoopCarriedSlots = true) {
     for (auto &lhs : lhsSlices)
       for (auto &rhs : rhsSlices)
-        if (lhs.first.intersects(rhs.first))
+        if (lhs.first.intersects(rhs.first, trustLoopCarriedSlots))
           if (!sliceFilter || !sliceFilter(lhs.first, rhs.first, lhsIsRead,
                                            rhsIsRead, allocation))
             for (auto lhsOp : lhs.second)
@@ -306,6 +312,12 @@ struct MembarInfo {
   /// Effects since the most recent whole-region synchronization.
   BlockInfo pending;
 
+  /// Effects since the most recent synchronization or scheduling fence. A
+  /// fence goes where these conflict with an access only when loop-carried
+  /// slot proofs are ignored, i.e. where a barrier was dropped because of such
+  /// a proof (see MembarAnalysis::insertSchedulingFence).
+  BlockInfo fencePending;
+
   /// Effects reachable from the function entry block before the first
   /// whole-region synchronization.
   /// It keeps incrementing during the iterative algorithm until
@@ -322,6 +334,7 @@ struct MembarInfo {
 
   MembarInfo &join(const MembarInfo &other) {
     pending.join(other.pending);
+    fencePending.join(other.fencePending);
     entryBlockInfo.join(other.entryBlockInfo);
     allPathsFromEntrySynced &= other.allPathsFromEntrySynced;
     warpsSynced &= other.warpsSynced;
@@ -332,6 +345,7 @@ struct MembarInfo {
     if (!allPathsFromEntrySynced)
       entryBlockInfo.join(blockInfo);
     pending.join(blockInfo);
+    fencePending.join(blockInfo);
     if (blockInfo.hasEffects())
       warpsSynced = false;
   }
@@ -340,6 +354,7 @@ struct MembarInfo {
 
   void sync() {
     pending.sync();
+    fencePending.sync();
     allPathsFromEntrySynced = true;
     syncWarps();
   }
@@ -350,12 +365,14 @@ struct MembarInfo {
     if (callee.allPathsFromEntrySynced)
       sync();
     pending.join(callee.pending);
+    fencePending.join(callee.pending);
     // Keep warp coverage local to the current execution region.
     warpsSynced = false;
   }
 
   template <typename Transform> void transformSlices(Transform transform) {
     pending.transformSlices(transform);
+    fencePending.transformSlices(transform);
     entryBlockInfo.transformSlices(transform);
   }
 
@@ -420,6 +437,16 @@ protected:
                           bool cluster = false);
   Operation *insertBarrier(Operation *operation, OpBuilder *builder,
                            bool cluster = false);
+  /// Called before `operation` where a barrier would have gone if loop-carried
+  /// slot proofs were not trusted. The removed barrier was also a point the
+  /// instruction scheduler could not cross; a backend can keep that point
+  /// without the runtime cost of a barrier. The default does nothing.
+  virtual void insertSchedulingFence(Operation *operation, OpBuilder *builder) {
+  }
+  /// Whether `operation` is a scheduling fence as inserted above. It resets
+  /// MembarInfo::fencePending, which also keeps reanalysis from adding a
+  /// second fence at the same point.
+  virtual bool isSchedulingFence(Operation *operation) const { return false; }
   virtual triton::BarrierStages getBarrierStages(Operation *operation);
 
   /// Whether pending thread effects must rendezvous before upcoming demands.
