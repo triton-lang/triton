@@ -613,13 +613,16 @@ def _replace_jit_callables(obj):
 
 
 def _constexpr_specialization_key(entry):
-    # The in-memory launch-key shortcut must stay as exact as the string cache
-    # key it fronts: tuple equality conflates 1 with 1.0 and 0.0 with -0.0, so
-    # constexpr scalars key on their type, and floats on their bit pattern
-    # (which also lets repeated NaN launches hit instead of growing the cache).
+    # Keep the in-memory launch key as exact as the string cache key it
+    # fronts: str() keeps 1 apart from 1.0, but tuple equality would conflate
+    # them, so every constexpr scalar keys on its type alongside the value.
     if len(entry) == 2 and entry[0] == "constexpr":
         value = entry[1]
         if isinstance(value, float):
+            # Even with the type pinned, tuple equality conflates 0.0 with
+            # -0.0, and NaN never compares equal, so NaN constexprs would miss
+            # on every launch and keep growing the cache. Key floats on their
+            # bit pattern instead.
             return ("constexpr", float, struct.pack(">d", value))
         return ("constexpr", type(value), value)
     return entry
