@@ -543,7 +543,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // THREAD-REGIONS-NEXT: ttg.thread_yield
   // THREAD-REGIONS-NEXT: }
   // THREAD-REGIONS-NEXT: }
-  // THREAD-REGIONS-NEXT: ttg.barrier all
   // THREAD-REGIONS-NEXT: tt.return
   tt.func @thread_regions_acquire_without_value(%ptr: !tt.ptr<i32>) {
     %value = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i32>) -> i32
