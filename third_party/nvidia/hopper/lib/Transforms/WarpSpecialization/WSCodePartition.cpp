@@ -912,6 +912,7 @@ void insertAsyncComm(
     triton::FuncOp funcOp,
     const DenseMap<Channel *, SmallVector<Channel *>>
         &channelsGroupedByConsumers,
+    const SmallVector<Channel *> &orderedChannels,
     const DenseMap<Channel *, CommChannel> &tokenMap,
     const DenseMap<Channel *, DenseMap<int, Value>> &barrierAllocMap,
     const DenseMap<Channel *, Value> &bufferMap,
@@ -990,14 +991,19 @@ void insertAsyncComm(
   // dependent before using it.
   SmallVector<std::pair<Channel *, SmallVector<Channel *>>>
       orderedChannelsGroupedByConsumers;
-  for (auto kv : channelsGroupedByConsumers) {
-    if (kv.first->channelKind == DataChannelKind::SMEM) {
-      orderedChannelsGroupedByConsumers.push_back({kv.first, kv.second});
+  // Iterate in orderedChannels order: channelsGroupedByConsumers is keyed by
+  // Channel pointers, so iterating it directly makes the order (and the
+  // generated barrier/arrive order) depend on allocation addresses.
+  for (auto *key : orderedChannels) {
+    auto it = channelsGroupedByConsumers.find(key);
+    if (it->first->channelKind == DataChannelKind::SMEM) {
+      orderedChannelsGroupedByConsumers.push_back({it->first, it->second});
     }
   }
-  for (auto kv : channelsGroupedByConsumers) {
-    if (kv.first->channelKind == DataChannelKind::TMEM) {
-      orderedChannelsGroupedByConsumers.push_back({kv.first, kv.second});
+  for (auto *key : orderedChannels) {
+    auto it = channelsGroupedByConsumers.find(key);
+    if (it->first->channelKind == DataChannelKind::TMEM) {
+      orderedChannelsGroupedByConsumers.push_back({it->first, it->second});
     }
   }
 
@@ -1299,8 +1305,8 @@ void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
 
   // Step 8: add async communication ops (ProducerAcquire etc). Also lower
   // TMA loads.
-  insertAsyncComm(funcOp, channelsGroupedByConsumers, tokenMap, barrierAllocMap,
-                  bufferMap, copyOpMap, regionsWithChannels);
+  insertAsyncComm(funcOp, channelsGroupedByConsumers, orderedChannels, tokenMap,
+                  barrierAllocMap, bufferMap, copyOpMap, regionsWithChannels);
   LLVM_DEBUG({
     LDBG("\n\nwith SyncOps");
     funcOp.dump();
