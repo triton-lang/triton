@@ -344,11 +344,13 @@ void lowerNVPTXFCopySign(llvm::Module &module) {
   // from recognizing the integer sign-bit operations as copysign again.
   Type *bitsType = Type::getInt16Ty(module.getContext());
   auto *asmType = FunctionType::get(bitsType, {bitsType, bitsType}, false);
+  // Mag ^ ((Mag ^ Sign) & SignMask) has only three inputs, allowing ptxas
+  // to fuse it into one LOP3 instruction.
   auto *mergeSign = InlineAsm::get(asmType,
-                                   "{ .reg .b16 magnitude, sign; "
-                                   "and.b16 magnitude, $1, 0x7fff; "
-                                   "and.b16 sign, $2, 0x8000; "
-                                   "or.b16 $0, magnitude, sign; }",
+                                   "{ .reg .b16 diff; "
+                                   "xor.b16 diff, $1, $2; "
+                                   "and.b16 diff, diff, 0x8000; "
+                                   "xor.b16 $0, $1, diff; }",
                                    "=h,h,h", false);
   for (IntrinsicInst *call : calls) {
     IRBuilder<> builder(call);

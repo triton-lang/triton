@@ -165,11 +165,11 @@ define ptx_kernel void @copysign_kernel(ptr addrspace(1) %input,
     ptx = backend.make_ptx(source, {}, options, 100)
     if instrumentation_mode == "fpsan":
         assert not re.search(r"\b(?:abs|neg)\.(?:f16|bf16)(?:x2)?\b", ptx)
-        assert ptx.count("and.b16 magnitude,") == lanes
-        assert ptx.count("and.b16 sign,") == lanes
-        assert ptx.count("or.b16") == lanes
+        assert ptx.count("xor.b16 diff,") == lanes
+        assert ptx.count("and.b16 diff, diff, 0x8000;") == lanes
+        assert len(re.findall(r"xor\.b16 [^,]+, [^,]+, diff;", ptx)) == lanes
     else:
-        assert "and.b16 magnitude," not in ptx
+        assert "xor.b16 diff," not in ptx
 
 
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
