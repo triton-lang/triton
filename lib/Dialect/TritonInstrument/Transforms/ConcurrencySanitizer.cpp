@@ -1246,7 +1246,7 @@ private:
     Value pred = opInfo->pred;
     Value issuerCTAPred = hooks.getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
-    Value defaultEffectCTAs = getMemEffectCTAs(b, op);
+    Value defaultEffectCTAs;
     struct MaterializedEffect {
       Value bufferMask;
       Value bufferIndex;
@@ -1293,6 +1293,11 @@ private:
     auto materializeBuffer = [&](Value buf, Value recipients,
                                  bool selectBarrierStorage)
         -> FailureOr<SmallVector<MaterializedEffect>> {
+      auto accesses = auxData.bufferAccessRegions.find({op, buf});
+      if (!recipients && accesses == auxData.bufferAccessRegions.end()) {
+        defaultEffectCTAs = getMemEffectCTAs(b, op);
+        recipients = defaultEffectCTAs;
+      }
       MaterializedEffect materialized;
       auto bufType = cast<ttg::MemDescType>(buf.getType());
       materialized.memType = MemType::TENSOR_MEM;
@@ -1316,6 +1321,66 @@ private:
       if (failed(stateMask))
         return failure();
       materialized.bufferMask = *stateMask;
+      if (accesses != auxData.bufferAccessRegions.end()) {
+        auto maskType = cast<RankedTensorType>(stateMask->getType());
+        Value issuer = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+        SmallVector<SmallVector<const BufferAccessRegion *>> targetAccesses(
+            ttg::lookupNumCTAs(op));
+        for (const auto &access : accesses->second)
+          targetAccesses[access.region.ctaAddresses.front().first].push_back(
+              &access);
+        auto sameAccess = [&](const auto *lhs, const auto *rhs) {
+          return lhs->issuer == rhs->issuer &&
+                 auxData.getBufferAccessState(*lhs, candidates) ==
+                     auxData.getBufferAccessState(*rhs, candidates);
+        };
+        SmallVector<MaterializedEffect> effects;
+        for (unsigned target = 0; target < targetAccesses.size(); ++target) {
+          const auto &group = targetAccesses[target];
+          if (group.empty())
+            continue;
+          uint32_t targetMask = 1u << target;
+          // The collector orders each target's candidate/issuer masks alike.
+          // Combine recipients only when their entire conditional masks match.
+          for (unsigned other = target + 1; other < targetAccesses.size();
+               ++other) {
+            if (llvm::equal(group, targetAccesses[other], sameAccess)) {
+              targetMask |= 1u << other;
+              targetAccesses[other].clear();
+            }
+          }
+          MaterializedEffect effect;
+          for (const auto *access : group) {
+            auto [candidateIndex, accessMask] =
+                auxData.getBufferAccessState(*access, candidates);
+            Value selected = arith::CmpIOp::create(
+                b, arith::CmpIPredicate::eq, issuer,
+                arith::ConstantIntOp::create(b, access->issuer, 32));
+            if (!predicates.empty())
+              selected = arith::AndIOp::create(b, selected,
+                                               predicates[candidateIndex]);
+            if (!effect.bufferMask) {
+              effect.memType = materialized.memType;
+              effect.effectCTAs =
+                  arith::ConstantIntOp::create(b, targetMask, 32);
+            }
+            Value mask = createStateMaskConstant(b, maskType, accessMask);
+            Value active = tt::SplatOp::create(b, maskType, selected);
+            mask = arith::AndIOp::create(b, mask, active);
+            effect.bufferMask =
+                effect.bufferMask
+                    ? arith::OrIOp::create(b, effect.bufferMask, mask)
+                    : mask;
+            Value owners =
+                arith::SelectOp::create(b, selected, effect.effectCTAs,
+                                        arith::ConstantIntOp::create(b, 0, 32));
+            addBarrierOwners(effect, accessMask, owners, selectBarrierStorage);
+          }
+          effects.push_back(effect);
+        }
+        return effects;
+      }
+
       materialized.bufferIndex =
           createSingleBufferStateIndex(b, candidates, predicates);
       if (candidates.unknown) {

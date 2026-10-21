@@ -18,6 +18,9 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVectorExtras.h"
+
+#include <set>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -700,6 +703,100 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   return success();
 }
 
+namespace {
+
+SmallVector<BufferAccessRegion>
+getTMAAccessRegions(TMALoadLikeOpInterface load,
+                    BufferRegionAnalysis &analysis) {
+  Operation *op = load.getOperation();
+  auto type = cast<MemDescType>(load.getResult().getType());
+  auto gather = dyn_cast<AsyncTMAGatherOp>(op);
+  // Tiled and im2col copies of a full allocation cover the whole local
+  // footprint. Gather can assign those addresses to different issuers.
+  if (!gather && type.getShape() == type.getAllocShape())
+    return {};
+  auto *ctx = op->getContext();
+  auto block = StringAttr::get(ctx, "block");
+  auto dims = standardOutDimNames(ctx, type.getRank());
+  auto shapePerCTA = getShapePerCTA(type);
+  // origins: block -> (rowOrigin, columnOrigin)
+  auto origins = LinearLayout(LinearLayout::BasesT{},
+                              standardOutDimPairs(ctx, shapePerCTA),
+                              /*requireSurjective=*/false) *
+                 getCGALayout(type.getEncoding()).getLinearLayout();
+  auto accessType = type.cloneWith(shapePerCTA, type.getElementType());
+  // Express each issuer's gather rows as a contiguous logical range so
+  // getSubView can compute its footprint.
+  if (gather) {
+    // We have xOffsets and the shared layout
+    // rows: (register, lane, warp, issuerCTA) -> destination row
+    // shared: (shared offset, targetCTA)       -> (destination row, column)
+    //
+    auto rows = toLinearLayout(gather.getXOffsets().getType());
+    // Get the block from offset along X and the block from shared along Y
+    origins = rows.sublayout({block}, {dims[0]})
+                  .concatOuts(origins.sublayout({block}, {dims[1]}));
+    int64_t localRows = rows.getTotalOutDimSize() /
+                        rows.removeZeroBasesAlongDim(block).getInDimSize(block);
+    // {registers=[1, 2, 8, 0, 0], lanes= [0, 0, 0, 0, 0], warps=[0], block=[4]}
+    // transform into a permutation on dim0 that keeps block's bases at the end
+    // {dim0=[1, 2, 8, 4]}
+    rows = rows.reshapeIns({{dims[0], rows.getTotalInDimSize()}})
+               .removeZeroBasesAlongDim(dims[0]);
+    auto allocShape =
+        dropPipeliningDim(type.getAllocShape(), type.getEncoding());
+    // Pad the permutation to the full alloc shape
+    rows =
+        ensureLayoutNotSmallerThan(rows, {dims[0]}, {allocShape[0]}, dims[0]);
+    // Extend to two dimensions, leaving columns unchanged.
+    auto coordinates =
+        rows * LinearLayout::identity1D(allocShape[1], dims[1], dims[1]);
+    // Express shared memory in coordinates where each issuer's rows are
+    // contiguous
+    auto layout = toLinearLayout(type).invertAndCompose(coordinates);
+    auto encoding = SharedLinearEncodingAttr::get(
+        ctx, std::move(layout),
+        cast<SharedEncodingTrait>(type.getEncoding()).getAlignment());
+    accessType = MemDescType::get(
+        {localRows, shapePerCTA[1]}, type.getElementType(), encoding,
+        type.getMemorySpace(), type.getMutableMemory(), allocShape);
+  }
+
+  unsigned numCTAs = lookupNumCTAs(op);
+  uint32_t broadcastMask =
+      toLinearLayout(type).getFreeVariableMasks().lookup(block);
+  // For each issuer, a valid TMA view's base and CTA determine its footprint.
+  std::set<BufferAccessRegion> regions;
+  for (unsigned issuer = 0; issuer < numCTAs; ++issuer) {
+    if (load.getMulticast() && (issuer & broadcastMask))
+      continue;
+    auto coordinates = origins.apply({{block, issuer}});
+    auto origin =
+        llvm::to_vector_of<int64_t>(llvm::make_second_range(coordinates));
+    auto offsets = getMemDescSubsliceUnpaddedOffsets(type, origin);
+    for (const BufferRegionView &view :
+         analysis.getRegionInfo(load.getResult()).views) {
+      auto subview = analysis.getSubView(
+          accessType, view, offsets.storageOffset, offsets.byteOffset,
+          offsets.partitionOffset, offsets.ctaOffset);
+      for (const auto &[target, addresses] : subview.region.ctaAddresses) {
+        // Subviews include every replica; unicast selects the issuer's replica.
+        if (!load.getMulticast() &&
+            ((target ^ view.affineCTAOffset ^ issuer) & broadcastMask))
+          continue;
+        regions.insert({1u << view.affineCTAOffset,
+                        issuer,
+                        {view.region.baseOffset,
+                         view.region.length,
+                         {{target, addresses}}}});
+      }
+    }
+  }
+  return llvm::to_vector(regions);
+}
+
+} // namespace
+
 std::pair<unsigned, const llvm::SmallBitVector &>
 AuxDataMap::getBufferAccessState(
     const BufferAccessRegion &access,
@@ -760,6 +857,14 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
     for (const MemoryAccess &access : getMemoryAccesses(op))
       collectCandidates(access.value);
 
+    if (numCTAs > 1) {
+      if (auto load = dyn_cast<TMALoadLikeOpInterface>(op)) {
+        auto accesses = getTMAAccessRegions(load, *analysis);
+        if (!accesses.empty())
+          bufferAccessRegions[{op, load.getResult()}] = std::move(accesses);
+      }
+    }
+
     auto info = getConSanMemEffectsOpInfo(hooks, op);
     if (!info)
       return;
@@ -788,8 +893,12 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
                           : BufferRegionAnalysis::TENSOR_MEMORY;
     SmallVector<BufferRegion> regions =
         analysis->getAllUsedBufferRegions(regionType);
-    if (memType == MemType::SHARED_MEM)
+    if (memType == MemType::SHARED_MEM) {
       llvm::append_range(regions, staticSharedRegions);
+      for (const auto &[key, accesses] : bufferAccessRegions)
+        for (const auto &access : accesses)
+          regions.push_back(access.region);
+    }
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
     bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
@@ -848,6 +957,16 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
       bufferCandidates[iMemType].try_emplace(value, std::move(stateCandidates));
     }
   }
+  // Keep descriptor tracking when every issuer covers its full footprint.
+  bufferAccessRegions.remove_if([&](const auto &entry) {
+    const auto &candidates =
+        bufferCandidates[static_cast<int>(MemType::SHARED_MEM)].at(
+            entry.first.second);
+    return llvm::all_of(entry.second, [&](const auto &access) {
+      auto [candidateIndex, mask] = getBufferAccessState(access, candidates);
+      return mask == candidates.cases[candidateIndex].mask;
+    });
+  });
   return success();
 }
 
