@@ -1,3 +1,6 @@
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+
 #include "cuda.h"
 #include <dlfcn.h>
 #include <stdalign.h>
@@ -5,8 +8,6 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
 
 #ifndef CU_FUNC_ATTRIBUTE_SHARED_MEMORY_MODE
 #define CU_FUNC_ATTRIBUTE_SHARED_MEMORY_MODE 17

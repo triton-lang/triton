@@ -1,9 +1,10 @@
 #define __HIP_PLATFORM_AMD__
-#include <hip/hip_runtime.h>
-#include <hip/hip_runtime_api.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+
 #include <dlfcn.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
