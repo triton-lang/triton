@@ -7,13 +7,13 @@ import re
 import subprocess
 import sysconfig
 import pathlib
-import warnings
 
 from dataclasses import dataclass
 from contextlib import contextmanager
 from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
 from triton._C.libtriton import getenv, getenv_bool  # type: ignore
+from triton._utils import FP_FUSION_DEFAULT_WARNING, warn_once
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -501,10 +501,7 @@ class language_knobs(base_knobs):
 
     def fp_fusion_enabled(self, requested: Optional[bool]) -> bool:
         if requested is None and not self.force_disable_fp_fusion and getenv("TRITON_DEFAULT_FP_FUSION") is None:
-            warnings.warn("TRITON_DEFAULT_FP_FUSION is unset: defaulting to FP fusion ENABLED for "
-                          "backward compatibility in Triton 3.9. The default will change to DISABLED "
-                          "in Triton 3.10; set TRITON_DEFAULT_FP_FUSION=1 to keep fusion enabled or "
-                          "=0 to adopt the new default early and silence this warning.")
+            warn_once(FP_FUSION_DEFAULT_WARNING)
         return not self.force_disable_fp_fusion and (self.default_fp_fusion if requested is None else requested)
 
 

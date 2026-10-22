@@ -8,6 +8,13 @@ def pytest_addoption(parser):
     parser.addoption("--device", action="store", default="cuda")
 
 
+def pytest_configure(config):
+    # Pre-fire the 3.9 deprecation warnings with output silenced so the
+    # warn-once cache is warm: no test below should observe these warnings.
+    from triton._utils import prewarm_deprecation_warnings
+    prewarm_deprecation_warnings()
+
+
 @pytest.fixture
 def device(request):
     return request.config.getoption("--device")

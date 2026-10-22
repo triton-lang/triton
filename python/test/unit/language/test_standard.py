@@ -202,11 +202,7 @@ def test_softmax_rejects_positional_keep_dims(member):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("keep_dims", [None, False, True])
 @pytest.mark.parametrize("member", [False, True])
-def test_softmax_keep_dims_deprecated(keep_dims, member, device, fresh_triton_cache, monkeypatch):
-    # Silence the unrelated TRITON_DEFAULT_FP_FUSION deprecation warning so the
-    # assertions below only observe keep_dims warnings. The branch default is
-    # fusion-enabled, so =1 preserves the behavior under test.
-    monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", "1")
+def test_softmax_keep_dims_deprecated(keep_dims, member, device, fresh_triton_cache):
 
     @triton.jit
     def kernel(X, Z, keep_dims: tl.constexpr, member: tl.constexpr):

@@ -1,7 +1,10 @@
+import uuid
+import warnings
+
 import pytest
 
 import triton
-from triton._utils import is_power_of_two, validate_block_shape
+from triton._utils import is_power_of_two, validate_block_shape, warn_once
 
 
 @pytest.mark.parametrize("y", [1, 32])
@@ -58,3 +61,18 @@ def test_validate_block_shape_rejects_zero():
 
 def test_validate_block_shape_accepts_powers_of_two():
     assert validate_block_shape([8, 16]) == 128
+
+
+def test_warn_once_fires_once_per_message():
+    # Unique messages: the warn-once cache is process-wide, so the test must
+    # not reuse a message any other test (or prewarm step) may have fired.
+    first = f"test warn-once sentinel A {uuid.uuid4()}"
+    second = f"test warn-once sentinel B {uuid.uuid4()}"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        warn_once(first)
+        warn_once(second)
+        warn_once(first)
+        warn_once(second)
+    assert [str(w.message) for w in caught] == [first, second]
+    assert all(w.category is UserWarning for w in caught)
