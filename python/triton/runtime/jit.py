@@ -37,6 +37,32 @@ U = TypeVar("U")
 # -----------------------------------------------------------------------------
 
 
+def _value_key(val) -> str:
+    """
+    The cache key of a value that reaches the compiler (a constexpr argument, a
+    global, a default value). It holds the type and the value unambiguously, uses
+    the own key of functions and aggregate classes, and is the same in every process.
+    """
+    from ..language.core import constexpr
+    if isinstance(val, JITCallable):
+        return val.cache_key
+    if isinstance(val, constexpr):
+        return repr(("constexpr", _value_key(val.value)))
+    if isinstance(val, (tuple, list)):
+        return repr((get_full_name(type(val)), getattr(val, "_fields", None), [_value_key(x) for x in val]))
+    if not hasattr(val, "__qualname__"):
+        return f"{get_full_name(type(val))}:{val}"
+    # A function, builtin or class: key it by name, not by its repr, which may hold an address.
+    name = f"{getattr(val, '__module__', None)}.{val.__qualname__}"
+    if isinstance(val, type) and getattr(val, "__triton_aggregate__", False):
+        finder = DependenciesFinder(name, {}, {}, "", None)
+        finder.record_reference(val)
+        return repr((name, finder.ret))
+    if is_namedtuple(val):
+        return repr((name, val._fields, _value_key(tuple(val._field_defaults.items()))))
+    return name
+
+
 class DependenciesFinder(ast.NodeVisitor):
     """
     This AST visitor is used to find dependencies of a JITFunction. This can
@@ -124,11 +150,14 @@ class DependenciesFinder(ast.NodeVisitor):
 
         if getattr(val, "__triton_aggregate__", False):
             self.hasher.update(str(val.__annotations__).encode("utf-8"))
+            self.hasher.update(_value_key(tuple(val.__aggregate_defaults__.items())).encode("utf-8"))
             for attr in val.hash_attrs:
                 self.record_reference(attr)
             return
 
         if getattr(val, "__triton_builtin__", False):
+            # Which builtin a name refers to (e.g. `act = tl.exp`) changes the kernel.
+            self.hasher.update(_value_key(val).encode("utf-8"))
             return
 
         # Stubs that aren't real functions
@@ -189,7 +218,9 @@ class DependenciesFinder(ast.NodeVisitor):
         if lhs is None or lhs_name in self.supported_modules:
             return None
         ret = getattr(lhs, node.attr, None)
-        self.record_reference(ret)
+        # A module attribute (`cfg.K`) is a global of that module: record it like a name.
+        var_dict = vars(lhs) if type(lhs) is ModuleType else None
+        self.record_reference(ret, var_dict, node.attr)
         return ret
 
     def visit_FunctionDef(self, node):
@@ -546,12 +577,10 @@ class JITCallable:
             self.hash = dependencies_finder.ret
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
-            from triton.language.core import constexpr
-            constexpr_globals = [(name, val)
-                                 for (name, _), (val, _) in self.used_global_vals.items()
-                                 if isinstance(val, constexpr)]
-            constexpr_globals.sort(key=lambda item: (item[0], repr(item[1])))
-            self.hash += str(constexpr_globals)
+            # The values of the globals and the default values are part of the code.
+            global_keys = sorted((name, _value_key(val)) for (name, _), (val, _) in self.used_global_vals.items())
+            self.hash += str(global_keys)
+            self.hash += _value_key([param.default for param in self.signature.parameters.values()])
             self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
 
@@ -616,6 +645,9 @@ def _replace_jit_callables(obj):
         return tuple(_replace_jit_callables(arg) for arg in obj)
     elif isinstance(obj, JITCallable):
         return obj.cache_key
+    elif isinstance(obj, type):
+        # Classes of the same name can differ (e.g. aggregate methods, namedtuple defaults).
+        return _value_key(obj)
     return obj
 
 

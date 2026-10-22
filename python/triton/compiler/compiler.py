@@ -8,6 +8,7 @@ from ..backends.compiler import BaseBackend, GPUTarget
 from .. import __version__, knobs
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager, get_cache_key
+from ..runtime.jit import _value_key
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
 from pathlib import Path
@@ -70,8 +71,7 @@ class ASTSource:
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
-        get_key = lambda x: x.cache_key if hasattr(x, 'cache_key') else str(x)
-        constants_key = '-'.join([get_key(v) for k, v in sorted(self.constants.items())])
+        constants_key = repr([(k, _value_key(v)) for k, v in sorted(self.constants.items())])
         key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
@@ -247,11 +247,14 @@ def compile(src, target=None, options=None, _env_vars=None):
     if knobs.runtime.add_stages_inspection_hook is not None:
         inspect_stages_key, inspect_stages_hash = knobs.runtime.add_stages_inspection_hook()
         key += inspect_stages_key
+    enable_override = knobs.compilation.override
+    if enable_override:
+        # Override files are not in the key: keep these kernels apart from the others and always recompile them.
+        key += "-override"
     hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
     fn_cache_manager = get_cache_manager(hash)
     # For dumping/overriding only hash the source as we want it to be independent of triton
     # core changes to make it easier to track kernels by hash.
-    enable_override = knobs.compilation.override
     enable_ir_dump = knobs.compilation.dump_ir
     store_only_binary = knobs.compilation.store_binary_only
     fn_override_manager = get_override_manager(src.hash()) if enable_override else None
@@ -264,7 +267,7 @@ def compile(src, target=None, options=None, _env_vars=None):
     metadata_filename = f"{file_name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
-    always_compile = knobs.compilation.always_compile
+    always_compile = knobs.compilation.always_compile or enable_override
     if not always_compile and metadata_path is not None:
         # cache hit!
         res = CompiledKernel(src, metadata_group, hash)

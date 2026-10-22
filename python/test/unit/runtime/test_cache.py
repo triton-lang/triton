@@ -10,9 +10,10 @@ import shutil
 import pathlib
 import subprocess
 import sys
+from collections import namedtuple
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from contextlib import ExitStack
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -675,6 +676,179 @@ def test_cache_closure_shadows_global():
     assert tracked_values(first)["CLOSURE_SHADOW_GLOBAL"].value == 7
     assert tracked_values(second)["CLOSURE_SHADOW_GLOBAL"].value == 9
     assert "CLOSURE_SHADOW_GLOBAL" not in tracked_values(captures_none)
+
+
+# Each factory builds a kernel that differs from the others made by it only in one value the kernel reads.
+def _module_attribute_kernel(v):
+    cfg = ModuleType("cfg")
+    cfg.K = tl.constexpr(v)
+
+    @triton.jit
+    def kernel(o):
+        tl.store(o, cfg.K)
+
+    return kernel
+
+
+def _dtype_kernel(v):
+    DT = [tl.float16, tl.float32][v]
+
+    @triton.jit
+    def kernel(o):
+        tl.store(o, tl.zeros((), DT).to(tl.float32))
+
+    return kernel
+
+
+def _builtin_kernel(v):
+    act = [tl.exp, tl.sqrt][v]
+
+    @triton.jit
+    def kernel(o):
+        tl.store(o, act(tl.full((), 4.0, tl.float32)))
+
+    return kernel
+
+
+def _helper_default_kernel(v):
+
+    @triton.jit
+    def helper(k=v):
+        return k
+
+    @triton.jit
+    def kernel(o):
+        tl.store(o, helper())
+
+    return kernel
+
+
+def _aggregate_default_kernel(v):
+
+    @triton.aggregate
+    class Config:
+        scale: tl.constexpr = v
+
+    @triton.jit
+    def kernel(o):
+        tl.store(o, Config().scale)
+
+    return kernel
+
+
+def _namedtuple_default_kernel(v):
+    Config = namedtuple("Config", ["scale"], defaults=[tl.constexpr(v)])
+
+    @triton.jit
+    def kernel(o):
+        tl.store(o, Config().scale)
+
+    return kernel
+
+
+_KERNEL_FACTORIES = [
+    _module_attribute_kernel, _dtype_kernel, _builtin_kernel, _helper_default_kernel, _aggregate_default_kernel,
+    _namedtuple_default_kernel
+]
+
+
+@pytest.mark.parametrize("make_kernel", _KERNEL_FACTORIES)
+def test_cache_key_includes_referenced_values(make_kernel):
+    assert make_kernel(0).cache_key != make_kernel(1).cache_key
+    assert make_kernel(0).cache_key == make_kernel(0).cache_key
+
+
+def _scale_aggregate(v):
+    F = tl.constexpr(v)
+
+    @triton.aggregate
+    class Scale:
+        x: tl.tensor
+
+        @triton.jit
+        def apply(self):
+            return self.x * F
+
+    return Scale
+
+
+def _add_function(v):
+    C = tl.constexpr(v)
+
+    @triton.jit
+    def add(x):
+        return x + C
+
+    return add
+
+
+@triton.jit
+def constexpr_args_kernel(o, A: tl.constexpr, B: tl.constexpr):
+    pass
+
+
+def _constexpr_args_hash(a, b):
+    signature = {"o": "*fp32", "A": "constexpr", "B": "constexpr"}
+    return triton.compiler.ASTSource(constexpr_args_kernel, signature, {(1, ): a, (2, ): b}).hash()
+
+
+_CONSTEXPR_ARG_PAIRS = [
+    (("x-y", "z"), ("x", "y-z")),
+    (("1", None), (1, None)),
+    (("fp32", None), (tl.float32, None)),
+    (((_add_function(0), ), None), ((_add_function(1), ), None)),
+    ((_scale_aggregate(0), None), (_scale_aggregate(1), None)),
+]
+
+
+@pytest.mark.parametrize("first, second", _CONSTEXPR_ARG_PAIRS)
+def test_cache_key_constexpr_arguments(first, second):
+    assert _constexpr_args_hash(*first) != _constexpr_args_hash(*second)
+    assert _constexpr_args_hash(*first) == _constexpr_args_hash(*first)
+
+
+def test_cache_key_stable_across_processes():
+    code = """
+from test_cache import _KERNEL_FACTORIES, _CONSTEXPR_ARG_PAIRS, _constexpr_args_hash
+print([f(0).cache_key for f in _KERNEL_FACTORIES], [_constexpr_args_hash(*p[0]) for p in _CONSTEXPR_ARG_PAIRS])
+"""
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(pathlib.Path(__file__).parent), *sys.path]))
+    keys = [
+        subprocess.run([sys.executable, "-c", code], env=dict(env, PYTHONHASHSEED=seed), capture_output=True, text=True,
+                       check=True, timeout=120).stdout for seed in ["1", "2"]
+    ]
+    assert keys[0] == keys[1]
+
+
+@triton.jit
+def class_arg_kernel(o, OP: tl.constexpr):
+    tl.store(o, OP(tl.full((), 1.0, tl.float32)).apply())
+
+
+def test_cache_key_aggregate_class_argument(device, fresh_triton_cache):
+    out = torch.zeros(1, device=device)
+    for v in [2, 3]:
+        class_arg_kernel[(1, )](out, _scale_aggregate(v))
+        assert out.item() == v
+
+
+def test_kernel_override_bypasses_cache(device, fresh_knobs, tmp_path):
+    cache_hits = []
+    fresh_knobs.compilation.listener = lambda cache_hit, **kwargs: cache_hits.append(cache_hit)
+    # fresh_knobs resets the cache dir to its default, so set a fresh one after it.
+    fresh_knobs.cache.dir = str(tmp_path / "cache")
+    fresh_knobs.cache.override_dir = str(tmp_path / "override")
+
+    @triton.jit
+    def kernel(o):
+        tl.store(o, 1.0)
+
+    for override in [True, False, True, False]:
+        fresh_knobs.compilation.override = override
+        kernel.device_caches.clear()
+        kernel[(1, )](torch.zeros(1, device=device))
+    # A run with the override neither reads nor leaves the binary of a run without it.
+    assert cache_hits == [False, False, False, True]
 
 
 @triton.jit
