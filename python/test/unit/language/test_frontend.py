@@ -2125,3 +2125,20 @@ def test_cache_policy_ir_attrs():
         tl.store(Out + offsets, value, cache_modifier=".wt", eviction_policy="evict_last")
 
     run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 128))
+
+
+@pytest.mark.parametrize("operation", ["view", "reduce"])
+def test_implicit_reshape_preserves_order(operation):
+
+    @triton.jit
+    def kernel(OPERATION: tl.constexpr):
+        x = tl.arange(0, 32).reshape((4, 8))
+        if OPERATION == "view":
+            anchor(tl.view(x, (32, )))
+        else:
+            anchor(tl.sum(x))
+
+    module = run_parser(kernel, args=(operation,))
+    text = module.str_nodebug()
+    assert "tt.reshape" in text
+    assert "allow_reorder" not in text
