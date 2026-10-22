@@ -125,3 +125,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// Getting the order from a layout with unit dimension might place unit dimensions at the back
+// Check the we do not error out for such cases since they do not affect the physical layout anways
+#shared = #ttg.padded_shared<[64:+8] {order = [3, 1, 2, 0], shape = [1, 16, 1, 64]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_unit_block_dims
+  tt.func public @tdm_unit_block_dims(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 128 : i32
+    %c_stride = arith.constant 128 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape, %c_shape, %c_shape], [%c_stride, %c_stride, %c_stride, %c_stride1] : <bf16>, <1x16x1x64xbf16, #shared>
+    tt.return
+  }
+}
