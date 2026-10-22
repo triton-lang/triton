@@ -542,3 +542,35 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
+
+
+@pytest.mark.parametrize("arch", [86, 87, 89, 90, 100, 103, 110, 120, 121])
+@pytest.mark.parametrize("dtype", ["fp8e5", "fp8e4nv", "fp16", "bf16"])
+@pytest.mark.parametrize("form", ["add", "radd", "chained"])
+@pytest.mark.parametrize("max_num_imprecise_acc", [None, 0])
+def test_dot_fp32_add_fusion(arch, dtype, form, max_num_imprecise_acc):
+    if dtype == "fp8e4nv" and arch < 89:
+        pytest.skip("Native E4M3 dot requires SM89 or newer")
+
+    @triton.jit
+    def kernel(A, B, C, FORM: tl.constexpr, MNIA: tl.constexpr):
+        m = tl.arange(0, 64)
+        k = tl.arange(0, 32)
+        a = tl.load(A + m[:, None] * 32 + k[None, :])
+        b = tl.load(B + k[:, None] * 64 + m[None, :])
+        if FORM == "add":
+            c = tl.dot(a, b, max_num_imprecise_acc=MNIA) + 1048576.0
+        elif FORM == "radd":
+            c = 1048576.0 + tl.dot(a, b, max_num_imprecise_acc=MNIA)
+        else:
+            c = tl.dot(a, b, tl.full((64, 64), 1048576.0, tl.float32), max_num_imprecise_acc=MNIA)
+        tl.store(C + m[:, None] * 64 + m[None, :], c)
+
+    src = ASTSource(
+        kernel, signature={"A": f"*{dtype}", "B": f"*{dtype}", "C": "*fp32", "FORM": "constexpr", "MNIA": "constexpr"},
+        constexprs={"FORM": form, "MNIA": max_num_imprecise_acc})
+    h = triton.compile(src, target=GPUTarget("cuda", arch, 32), options={"num_warps": 4, "num_stages": 2})
+    preserve_add = (arch in (89, 90) and dtype.startswith("fp8") and form != "chained"
+                    and max_num_imprecise_acc is None)
+    assert ("arith.addf" in h.asm["ttir"]) == preserve_add
+    assert h.asm["cubin"]

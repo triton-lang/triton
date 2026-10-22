@@ -7375,6 +7375,41 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
                               h.asm["ptx"])) == (BLOCK_M * BLOCK_N) // (32 * num_warps) * (BLOCK_K // low_precision_acc)
 
 
+@pytest.mark.parametrize("dtype", ["float8_e5m2", "float8_e4m3fn", "float16", "bfloat16"])
+@pytest.mark.parametrize("M", [16, 64])
+@pytest.mark.parametrize("BLOCK_K", [32, 64])
+@pytest.mark.parametrize("form", ["loop", "add", "radd"])
+def test_dot_preserves_fp32_add(dtype, M, BLOCK_K, form, device):
+    if not is_cuda() or torch.cuda.get_device_capability() < (8, 0):
+        pytest.skip("Requires CUDA SM80 or newer")
+    if dtype == "float8_e4m3fn" and torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("Native E4M3 dot requires SM89 or newer")
+
+    @triton.jit
+    def kernel(A, B, C, M: tl.constexpr, BLOCK_K: tl.constexpr, FORM: tl.constexpr):
+        m = tl.arange(0, M)
+        k = tl.arange(0, BLOCK_K)
+        a = tl.load(A + m[:, None] * BLOCK_K + k[None, :])
+        b = tl.load(B + k[:, None] * M + m[None, :])
+        if FORM == "loop":
+            acc = tl.zeros((M, M), tl.float32)
+            for _ in range(625):
+                acc += tl.dot(a, b)
+        elif FORM == "add":
+            acc = tl.dot(a, b) + 1048576.0
+        else:
+            acc = 1048576.0 + tl.dot(a, b)
+        tl.store(C + m[:, None] * M + m[None, :], acc)
+
+    # Convert on the CPU so the test does not need device-side FP8 conversion.
+    a = torch.ones((M, BLOCK_K)).to(getattr(torch, dtype)).to(device)
+    b = torch.ones((BLOCK_K, M)).to(getattr(torch, dtype)).to(device)
+    c = torch.empty((M, M), device=device, dtype=torch.float32)
+    kernel[(1, )](a, b, c, M, BLOCK_K, form, num_warps=4, num_stages=2)
+    expected = 625 * BLOCK_K if form == "loop" else 1048576 + BLOCK_K
+    torch.testing.assert_close(c, torch.full_like(c, expected), rtol=0, atol=0)
+
+
 # -----------------------
 # test enable_fp_fusion
 # -----------------------
