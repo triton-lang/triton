@@ -580,19 +580,6 @@ LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
   return invertAndComposeLocal(sharedLayout, indexedLayout, {kBlock});
 }
 
-uint32_t translateXorMask(uint32_t mask, uint32_t translation, int numCTAs) {
-  uint32_t translated = 0;
-  for (int value = 0; value < numCTAs; ++value) {
-    if (!(mask & (1u << value)))
-      continue;
-    uint32_t target = value ^ translation;
-    assert(target < static_cast<uint32_t>(numCTAs) &&
-           "target CTA exceeds the cluster size");
-    translated |= 1u << target;
-  }
-  return translated;
-}
-
 void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
   span |= translateXorMask(span, basis, numCTAs);
 }
@@ -1267,7 +1254,7 @@ private:
     Value pred = opInfo->pred;
     Value issuerCTAPred = hooks.getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
-    Value defaultEffectCTAs = getMemEffectCTAs(b, op);
+    Value defaultEffectCTAs;
     struct MaterializedEffect {
       Value bufferMask;
       Value bufferIndex;
@@ -1275,8 +1262,8 @@ private:
       Value barrierCTAs;
       MemType memType;
     };
-    SmallVector<MaterializedEffect> materializedEffects;
-    materializedEffects.reserve(opInfo->operandEffects.size());
+    SmallVector<MaterializedEffect> materializedWrites;
+    materializedWrites.reserve(opInfo->operandEffects.size());
 
     auto addBarrierOwners = [&](MaterializedEffect &materialized,
                                 const llvm::SmallBitVector &bufferMask,
@@ -1311,9 +1298,14 @@ private:
               : owners;
     };
 
-    auto materializeBuffer =
-        [&](Value buf, Value recipients,
-            bool selectBarrierStorage) -> FailureOr<MaterializedEffect> {
+    auto materializeBuffer = [&](Value buf, Value recipients,
+                                 bool selectBarrierStorage)
+        -> FailureOr<SmallVector<MaterializedEffect>> {
+      auto accesses = auxData.bufferAccessRegions.find({op, buf});
+      if (!recipients && accesses == auxData.bufferAccessRegions.end()) {
+        defaultEffectCTAs = getMemEffectCTAs(b, op);
+        recipients = defaultEffectCTAs;
+      }
       MaterializedEffect materialized;
       auto bufType = cast<ttg::MemDescType>(buf.getType());
       materialized.memType = MemType::TENSOR_MEM;
@@ -1337,16 +1329,75 @@ private:
       if (failed(stateMask))
         return failure();
       materialized.bufferMask = *stateMask;
+      if (accesses != auxData.bufferAccessRegions.end()) {
+        auto maskType = cast<RankedTensorType>(stateMask->getType());
+        Value issuer = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+        SmallVector<SmallVector<const BufferAccessRegion *>> targetAccesses(
+            ttg::lookupNumCTAs(op));
+        for (const auto &access : accesses->second)
+          targetAccesses[access.region.ctaAddresses.front().first].push_back(
+              &access);
+        auto sameAccess = [&](const auto *lhs, const auto *rhs) {
+          return lhs->issuer == rhs->issuer &&
+                 auxData.getBufferAccessState(*lhs, candidates) ==
+                     auxData.getBufferAccessState(*rhs, candidates);
+        };
+        SmallVector<MaterializedEffect> effects;
+        for (unsigned target = 0; target < targetAccesses.size(); ++target) {
+          const auto &group = targetAccesses[target];
+          if (group.empty())
+            continue;
+          uint32_t targetMask = 1u << target;
+          // The collector orders each target's candidate/issuer masks alike.
+          // Combine recipients only when their entire conditional masks match.
+          for (unsigned other = target + 1; other < targetAccesses.size();
+               ++other) {
+            if (llvm::equal(group, targetAccesses[other], sameAccess)) {
+              targetMask |= 1u << other;
+              targetAccesses[other].clear();
+            }
+          }
+          MaterializedEffect effect;
+          for (const auto *access : group) {
+            auto [candidateIndex, accessMask] =
+                auxData.getBufferAccessState(*access, candidates);
+            Value selected = arith::CmpIOp::create(
+                b, arith::CmpIPredicate::eq, issuer,
+                arith::ConstantIntOp::create(b, access->issuer, 32));
+            if (!predicates.empty())
+              selected = arith::AndIOp::create(b, selected,
+                                               predicates[candidateIndex]);
+            if (!effect.bufferMask) {
+              effect.memType = materialized.memType;
+              effect.effectCTAs =
+                  arith::ConstantIntOp::create(b, targetMask, 32);
+            }
+            Value mask = createStateMaskConstant(b, maskType, accessMask);
+            Value active = tt::SplatOp::create(b, maskType, selected);
+            mask = arith::AndIOp::create(b, mask, active);
+            effect.bufferMask =
+                effect.bufferMask
+                    ? arith::OrIOp::create(b, effect.bufferMask, mask)
+                    : mask;
+            Value owners =
+                arith::SelectOp::create(b, selected, effect.effectCTAs,
+                                        arith::ConstantIntOp::create(b, 0, 32));
+            addBarrierOwners(effect, accessMask, owners, selectBarrierStorage);
+          }
+          effects.push_back(effect);
+        }
+        return effects;
+      }
+
       materialized.bufferIndex =
           createSingleBufferStateIndex(b, candidates, predicates);
-
       if (candidates.unknown) {
         materialized.effectCTAs = allCTAsMask(b);
         addBarrierOwners(
             materialized,
             auxData.bufferStatePlans[(int)materialized.memType].unknownMask,
             materialized.effectCTAs, selectBarrierStorage);
-        return materialized;
+        return SmallVector<MaterializedEffect>{materialized};
       }
 
       for (auto [index, candidate] : llvm::enumerate(candidates.cases)) {
@@ -1362,12 +1413,13 @@ private:
         addBarrierOwners(materialized, candidate.mask, ownerCTAs,
                          selectBarrierStorage);
       }
-      return materialized;
+      return SmallVector<MaterializedEffect>{materialized};
     };
 
     auto materializeStaticBuffer =
         [&](const MemEffectsOpInfo::Effects::StaticSharedBuffer &buffer,
-            bool selectBarrierStorage) -> FailureOr<MaterializedEffect> {
+            bool selectBarrierStorage)
+        -> FailureOr<SmallVector<MaterializedEffect>> {
       int index = static_cast<int>(MemType::SHARED_MEM);
       const auto &regions = auxData.bufferRegions[index];
       BufferRegion region = buffer.getRegion(ttg::lookupNumCTAs(op));
@@ -1393,7 +1445,7 @@ private:
       materialized.effectCTAs = currentCTAMask(b);
       addBarrierOwners(materialized, stateMask, materialized.effectCTAs,
                        selectBarrierStorage);
-      return materialized;
+      return SmallVector<MaterializedEffect>{materialized};
     };
 
     for (const auto &effect : opInfo->operandEffects) {
@@ -1413,84 +1465,78 @@ private:
                     access.sharedKind == effect.sharedKind && access.isRead;
            }));
       bool selectBarrierStorage = !isBarrierLifecycle || invalidatesBarriers;
-      FailureOr<MaterializedEffect> maybeMaterialized =
+      auto effects =
           buf ? materializeBuffer(*buf, defaultEffectCTAs, selectBarrierStorage)
               : materializeStaticBuffer(
                     std::get<MemEffectsOpInfo::Effects::StaticSharedBuffer>(
                         effect.buffer),
                     selectBarrierStorage);
-      if (failed(maybeMaterialized))
+      if (failed(effects))
         return failure();
-      MaterializedEffect materialized = *maybeMaterialized;
-      materializedEffects.push_back(materialized);
+      for (const MaterializedEffect &materialized : *effects) {
+        Value bufferMask = materialized.bufferMask;
+        Value effectCTAs = materialized.effectCTAs;
+        Value readCTAs =
+            buf ? effectCTAs : getScratchReadCTAs(b, op, effectCTAs);
+        MemType memType = materialized.memType;
+        bool invalidatedBarrier = false;
+        auto verifyWrite = [&] {
+          addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
+                         effect.operandName, readCTAs, opInfo->commitKind);
+          addReadChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
+                        effect.operandName, effectCTAs, opInfo->commitKind);
+        };
 
-      Value bufferMask = materialized.bufferMask;
-      Value effectCTAs = materialized.effectCTAs;
-      Value readCTAs = buf ? effectCTAs : getScratchReadCTAs(b, op, effectCTAs);
-      MemType memType = materialized.memType;
-      bool invalidatedBarrier = false;
-      auto verifyWrite = [&] {
-        addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
-                       effect.operandName, readCTAs, opInfo->commitKind);
-        addReadChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
-                      effect.operandName, effectCTAs, opInfo->commitKind);
-      };
-
-      if (materialized.barrierCTAs) {
-        if (invalidatesBarriers) {
-          verifyWrite();
-          invalidatedBarrier = true;
-          funcBuilder.createInvalidateBarrierStorageCall(
-              b, materialized.barrierCTAs, pred, op);
-        } else {
-          funcBuilder.createVerifyBarrierMemoryAvailableCall(
-              b, materialized.barrierCTAs, pred, op);
+        if (materialized.barrierCTAs) {
+          if (invalidatesBarriers) {
+            verifyWrite();
+            invalidatedBarrier = true;
+            funcBuilder.createInvalidateBarrierStorageCall(
+                b, materialized.barrierCTAs, pred, op);
+          } else {
+            funcBuilder.createVerifyBarrierMemoryAvailableCall(
+                b, materialized.barrierCTAs, pred, op);
+          }
         }
-      }
 
-      if (memType == MemType::SHARED_MEM) {
-        if (effect.sharedKind == ttg::SharedKind::Async) {
-          funcBuilder.createVerifyProxyAccessCall(
-              b, bufferMask, baseThread, effect.rw == RW::Write,
-              effect.operandName, pred, op, effectCTAs);
-        } else {
-          funcBuilder.createSetProxyAccessCall(
-              b, bufferMask, baseThread, effect.rw == RW::Write, pred, op,
-              readCTAs, materialized.bufferIndex);
+        if (memType == MemType::SHARED_MEM) {
+          if (effect.sharedKind == ttg::SharedKind::Async) {
+            funcBuilder.createVerifyProxyAccessCall(
+                b, bufferMask, baseThread, effect.rw == RW::Write,
+                effect.operandName, pred, op, effectCTAs);
+          } else {
+            funcBuilder.createSetProxyAccessCall(
+                b, bufferMask, baseThread, effect.rw == RW::Write, pred, op,
+                readCTAs, materialized.bufferIndex);
+          }
         }
-      }
-      if (effect.rw == RW::Read) {
-        // For op that is reading, we only need to check if anything else
-        // is writing to the same buffer.
-        addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
-                       effect.operandName, effectCTAs, opInfo->commitKind);
-        if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
-          funcBuilder.createSetReadVisibilityCall(
-              b, bufferMask, thread,
-              getThreadPeersMask(thread, auxData.threadLayout), pred, memType,
-              op, effectCTAs, materialized.bufferIndex);
+        if (effect.rw == RW::Read) {
+          // For op that is reading, we only need to check if anything else
+          // is writing to the same buffer.
+          addWriteChecks(b, funcBuilder, op, bufferMask, pred, memType, thread,
+                         effect.operandName, effectCTAs, opInfo->commitKind);
+          if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
+            funcBuilder.createSetReadVisibilityCall(
+                b, bufferMask, thread,
+                getThreadPeersMask(thread, auxData.threadLayout), pred, memType,
+                op, effectCTAs, materialized.bufferIndex);
+          }
+        } else {
+          materializedWrites.push_back(materialized);
+          // Op is writing to the buffer, we need to check if anything else
+          // is reading or writing to the same buffer.
+          if (!invalidatedBarrier)
+            verifyWrite();
+          if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
+            funcBuilder.createPublishWriteVisibilityCall(
+                b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
+                pred, memType, op, effectCTAs);
+          }
         }
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
           assert(memType == MemType::SHARED_MEM);
-          funcBuilder.createStageAccessForCommitCall(
-              b, bufferMask, baseThread, pred, memType, opInfo->commitKind, op);
-        }
-      }
-      if (effect.rw == RW::Write) {
-        // Op is writing to the buffer, we need to check if anything else
-        // is reading or writing to the same buffer.
-        if (!invalidatedBarrier)
-          verifyWrite();
-        if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier) {
-          funcBuilder.createPublishWriteVisibilityCall(
-              b, bufferMask, getThreadPeersMask(thread, auxData.threadLayout),
-              pred, memType, op, effectCTAs);
-        }
-        if (opInfo->trackingKind ==
-            MemEffectsOpInfo::TrackingKind::CommitCount) {
-          assert(memType == MemType::SHARED_MEM);
-          if (auxData.hasAsyncCopyMbarriers &&
+          if (effect.rw == RW::Write && auxData.hasAsyncCopyMbarriers &&
               opInfo->commitKind == CommitKind::AsyncCp)
             funcBuilder.createPublishWriteVisibilityCall(
                 b, bufferMask, 0, pred, memType, op, effectCTAs);
@@ -1505,16 +1551,17 @@ private:
       Value recipientCTAs =
           isa<ttng::AsyncSharedStoreOp>(op)
               ? getAsyncSharedStoreBarrierRecipientCTAs(
-                    b, barrier, materializedEffects.front().effectCTAs)
+                    b, barrier, materializedWrites.front().effectCTAs)
               : getBarrierRecipientCTAs(b, op);
       Value completionBufferMask;
       if (thread != baseThread) {
-        FailureOr<MaterializedEffect> completion =
-            materializeBuffer(barrier, recipientCTAs,
-                              /*selectBarrierStorage=*/false);
-        if (failed(completion))
+        auto completions = materializeBuffer(barrier, recipientCTAs,
+                                             /*selectBarrierStorage=*/false);
+        if (failed(completions))
           return failure();
-        completionBufferMask = completion->bufferMask;
+        assert(completions->size() == 1);
+        const MaterializedEffect &completion = completions->front();
+        completionBufferMask = completion.bufferMask;
         // A deferred completion may still touch the barrier after the issuing
         // thread advances. Model that future touch as a reader owned by the
         // synthetic engine. Waiting publishes the reader through the existing
@@ -1523,7 +1570,7 @@ private:
         funcBuilder.createSetReadVisibilityCall(
             b, completionBufferMask, thread,
             getThreadPeersMask(thread, auxData.threadLayout), combinedPred,
-            MemType::SHARED_MEM, op, recipientCTAs, completion->bufferIndex);
+            MemType::SHARED_MEM, op, recipientCTAs, completion.bufferIndex);
       }
       if (barrierInfo.count == 0 && barrierInfo.txCount == 0)
         funcBuilder.createVerifyBarrierInitializedCall(b, barrier, combinedPred,
@@ -1540,10 +1587,7 @@ private:
             b, barrier, baseThread, combinedPred, op, recipientCTAs);
       } else if (barrierInfo.trackingMode ==
                  MemEffectsOpInfo::BarrierTrackingMode::EffectWrites) {
-        for (auto [effect, materialized] :
-             llvm::zip(opInfo->operandEffects, materializedEffects)) {
-          if (effect.rw != RW::Write)
-            continue;
+        for (const auto &materialized : materializedWrites) {
           funcBuilder.createTrackBarrierWriteForBufferCall(
               b, barrier, materialized.bufferMask, combinedPred,
               materialized.memType, op, recipientCTAs, materialized.effectCTAs);

@@ -103,6 +103,8 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   RankedTensorType tensorType,
                                                   bool isSigned = false);
 uint32_t getMemDescLength(Value buf);
+// Permute a CTA bitset by XORing each CTA ID with the translation.
+uint32_t translateXorMask(uint32_t mask, uint32_t translation, int numCTAs);
 FuncOp getEntryPoint(ModuleOp module);
 
 inline Value maybeAnd(ImplicitLocOpBuilder &b, Value lhs, Value rhs) {
@@ -132,6 +134,18 @@ struct BufferStateCandidate {
 struct BufferStateCandidates {
   SmallVector<BufferStateCandidate, 2> cases;
   bool unknown = false;
+};
+
+struct BufferAccessRegion {
+  uint32_t candidateCTAs;
+  unsigned issuer;
+  triton::BufferRegion region;
+
+  bool operator<(const BufferAccessRegion &other) const {
+    return std::tie(region.baseOffset, candidateCTAs, issuer, region) <
+           std::tie(other.region.baseOffset, other.candidateCTAs, other.issuer,
+                    other.region);
+  }
 };
 
 // Map from IR region to ConSan auxiliary data.
@@ -255,6 +269,10 @@ struct AuxDataMap {
   triton::BufferStatePlan bufferStatePlans[numMemTypes];
   SmallVector<triton::BufferRegion> bufferRegions[numMemTypes];
   DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
+  // Operation-specific footprints retain the correlation between an issuing
+  // CTA, each physical target, and the selected descriptor candidate.
+  DenseMap<std::pair<Operation *, Value>, SmallVector<BufferAccessRegion>>
+      bufferAccessRegions;
 
   // Shared-memory state lanes occupied by each physical mbarrier. Virtual
   // cluster barriers have no storage and therefore do not appear here.
@@ -297,6 +315,11 @@ struct AuxDataMap {
                                                 const ConSanTargetHooks &hooks);
 
   int getClusterBarrierSlot(Operation *op) const;
+
+  // Resolve a registered access to its candidate index and shared state mask.
+  std::pair<unsigned, const llvm::SmallBitVector &>
+  getBufferAccessState(const BufferAccessRegion &access,
+                       const BufferStateCandidates &candidates) const;
 
 private:
   LogicalResult

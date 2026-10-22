@@ -291,7 +291,6 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-NEXT: %[[EXPECT_ZERO:.*]] = arith.constant 0 : i32
     // CHECK-NEXT: %[[EXPECT_ISSUER:.*]] = arith.cmpi eq, %[[EXPECT_NON_ISSUER]], %[[EXPECT_ZERO]] : i32
     // CHECK-NEXT: %[[EXPECT_PRED:.*]] = arith.andi %true, %[[EXPECT_ISSUER]] : i1
-    // CHECK: arith.shli
     // CHECK: %[[EXPECT_RECIPIENT_CTA:.*]] = tti.experimental_cluster_cta_id : i32
     // CHECK: %[[EXPECT_FIXED:.*]] = arith.constant 5 : i32
     // CHECK: %[[EXPECT_BASE:.*]] = arith.andi %[[EXPECT_RECIPIENT_CTA]], %[[EXPECT_FIXED]] : i32
@@ -3256,7 +3255,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CTA zero's pending async write targets CTA one. Conversion must check
     // that remote owner but publish its own CTA-local scratch write only.
     // CHECK: tti.experimental_lock_acquire
-    // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
+    // CHECK: arith.constant dense<[true, true, false, false]> : tensor<4xi1
     // CHECK: %[[TMA_OWNER_CTA:.*]] = tti.experimental_cluster_cta_id
     // CHECK: %[[TMA_OWNER_ONE:.*]] = arith.constant 1 : i32
     // CHECK: %[[TMA_OWNER:.*]] = arith.shli %[[TMA_OWNER_ONE]], %[[TMA_OWNER_CTA]] : i32
@@ -3277,6 +3276,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #subslice_tma_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
 #subslice_tma_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #subslice_tma_smem = #ttg.shared_memory
+#subslice_tma_blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 16392 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32} {
   // CHECK-LABEL: @tma_subslice_recipients
@@ -3290,12 +3290,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable>
     // CHECK: ttng.barrier_expect
     ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable>
-    // Both issuers write into CTA zero's half of the allocation.
+    // Both issuers write into CTA zero, using disjoint halves of its storage.
+    // CHECK: %[[SPLIT_CTA:.*]] = tti.experimental_cluster_cta_id
+    // CHECK: %[[SPLIT_ZERO:.*]] = arith.constant 0 : i32
+    // CHECK: %[[SPLIT_IS0:.*]] = arith.cmpi eq, %[[SPLIT_CTA]], %[[SPLIT_ZERO]]
     // CHECK: %[[TMA_LOWER_CTAS:.*]] = arith.constant 1 : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[TMA_LOWER_CTAS]])
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[TMA_LOWER_CTAS]])
-    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[TMA_LOWER_CTAS]]
-    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[TMA_LOWER_CTAS]])
+    // CHECK: %[[SPLIT_LO:.*]] = arith.constant dense<[true, false, false, false]> : tensor<4xi1,
+    // CHECK: %[[SPLIT_ACTIVE0:.*]] = tt.splat %[[SPLIT_IS0]]
+    // CHECK: %[[SPLIT_MASK0:.*]] = arith.andi %[[SPLIT_LO]], %[[SPLIT_ACTIVE0]]
+    // CHECK: %[[SPLIT_ONE:.*]] = arith.constant 1 : i32
+    // CHECK: %[[SPLIT_IS1:.*]] = arith.cmpi eq, %[[SPLIT_CTA]], %[[SPLIT_ONE]]
+    // CHECK: %[[SPLIT_HI:.*]] = arith.constant dense<[false, true, false, false]> : tensor<4xi1,
+    // CHECK: %[[SPLIT_ACTIVE1:.*]] = tt.splat %[[SPLIT_IS1]]
+    // CHECK: %[[SPLIT_MASK1:.*]] = arith.andi %[[SPLIT_HI]], %[[SPLIT_ACTIVE1]]
+    // CHECK: %[[SPLIT_MASK:.*]] = arith.ori %[[SPLIT_MASK0]], %[[SPLIT_MASK1]]
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[SPLIT_MASK]],{{.*}}%[[TMA_LOWER_CTAS]])
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}(%[[SPLIT_MASK]],{{.*}}%[[TMA_LOWER_CTAS]])
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}(%[[SPLIT_MASK]],{{.*}}%[[TMA_LOWER_CTAS]],
+    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[SPLIT_MASK]],{{.*}}%[[TMA_LOWER_CTAS]])
     // CHECK: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %lower, %bar, %true : !tt.tensordesc<128x64xf16, #subslice_tma_shared>, !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable> -> !ttg.memdesc<128x64xf16, #subslice_tma_shared, #subslice_tma_smem, mutable, 256x64>
     // The affine subslice offset moves both issuers' writes to CTA one.
@@ -3307,6 +3319,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %upper, %bar, %true : !tt.tensordesc<128x64xf16, #subslice_tma_shared>, !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable> -> !ttg.memdesc<128x64xf16, #subslice_tma_shared, #subslice_tma_smem, mutable, 256x64>
     ttng.wait_barrier %bar, %zero : !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable>
+    // A full consumer checks both atoms introduced by the producers.
+    // CHECK: %[[SPLIT_FULL:.*]] = arith.constant dense<[true, true, false, false]> : tensor<4xi1,
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[SPLIT_FULL]],
+    // CHECK: ttg.local_load
+    %value = ttg.local_load %parent : !ttg.memdesc<256x64xf16, #subslice_tma_shared, #subslice_tma_smem, mutable> -> tensor<256x64xf16, #subslice_tma_blocked>
     tt.return
   }
 }
@@ -3338,6 +3355,72 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[GATHER_SUBSLICE_CTAS]])
     // CHECK: ttng.async_tma_gather
     ttng.async_tma_gather %desc[%offsets, %zero] %upper, %bar, %true : !tt.tensordesc<1x64xf16, #subslice_tma_shared>, tensor<128xi32, #subslice_gather_offsets>, i32, !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable>, !ttg.memdesc<128x64xf16, #subslice_tma_shared, #subslice_tma_smem, mutable, 256x64>, i1
+    ttng.wait_barrier %bar, %zero : !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable>
+    tt.return
+  }
+
+}
+
+// -----
+
+#subslice_tma_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#subslice_tma_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#subslice_tma_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 32776 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32} {
+  // CHECK-LABEL: @tma_dynamic_subslice_footprints
+  tt.func public @tma_dynamic_subslice_footprints(%desc: !tt.tensordesc<128x64xf16, #subslice_tma_shared>, %idx: i32) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %true = arith.constant true
+    %slot = arith.andi %idx, %one : i32
+    %ring = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x256x64xf16, #subslice_tma_shared, #subslice_tma_smem, mutable>
+    %parent = ttg.memdesc_index %ring[%slot] : !ttg.memdesc<2x256x64xf16, #subslice_tma_shared, #subslice_tma_smem, mutable> -> !ttg.memdesc<256x64xf16, #subslice_tma_shared, #subslice_tma_smem, mutable>
+    %lower = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<256x64xf16, #subslice_tma_shared, #subslice_tma_smem, mutable> -> !ttg.memdesc<128x64xf16, #subslice_tma_shared, #subslice_tma_smem, mutable, 256x64>
+    %bar = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable>
+    ttng.barrier_expect %bar, 8192, %true : !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable>
+    // Resolve the ring slot before combining its footprint with the issuer.
+    // CHECK: ttng.barrier_expect
+    // CHECK: %[[DYNAMIC_BASE:.*]] = tti.experimental_memdesc_to_i32
+    // CHECK: %[[DYNAMIC_ADDR0:.*]] = tti.experimental_memory_offset_to_i32 0, shared_mem
+    // CHECK: %[[DYNAMIC_SLOT0:.*]] = arith.cmpi eq, %[[DYNAMIC_BASE]], %[[DYNAMIC_ADDR0]]
+    // CHECK: %[[DYNAMIC_ADDR1:.*]] = tti.experimental_memory_offset_to_i32 16384, shared_mem
+    // CHECK: %[[DYNAMIC_SLOT1:.*]] = arith.cmpi eq, %[[DYNAMIC_BASE]], %[[DYNAMIC_ADDR1]]
+    // CHECK: internal ConSan error: active memdesc resolved to no buffer state
+    // CHECK: %[[DYNAMIC_ISSUER:.*]] = tti.experimental_cluster_cta_id
+    // CHECK-DAG: %[[DYN_CTA0:.*]] = arith.cmpi eq, %[[DYNAMIC_ISSUER]], %[[DYN_C0:.*]] : i32
+    // CHECK-DAG: %[[DYN_C0]] = arith.constant 0 : i32
+    // CHECK: %[[DYN_SELECT0:.*]] = arith.andi %[[DYN_CTA0]], %[[DYNAMIC_SLOT0]]
+    // CHECK: %[[DYN_TARGET:.*]] = arith.constant 1 : i32
+    // CHECK: %[[DYN_MASK0:.*]] = arith.constant dense<[true, false, false, false, false, false, false, false]>
+    // CHECK: %[[DYN_ACTIVE0:.*]] = tt.splat %[[DYN_SELECT0]]
+    // CHECK: %[[DYN_TERM0:.*]] = arith.andi %[[DYN_MASK0]], %[[DYN_ACTIVE0]]
+    // CHECK-DAG: %[[DYN_CTA1:.*]] = arith.cmpi eq, %[[DYNAMIC_ISSUER]], %[[DYN_C1:.*]] : i32
+    // CHECK-DAG: %[[DYN_C1]] = arith.constant 1 : i32
+    // CHECK: %[[DYN_SELECT1:.*]] = arith.andi %[[DYN_CTA1]], %[[DYNAMIC_SLOT0]]
+    // CHECK: %[[DYN_MASK1:.*]] = arith.constant dense<[false, true, false, false, false, false, false, false]>
+    // CHECK: %[[DYN_ACTIVE1:.*]] = tt.splat %[[DYN_SELECT1]]
+    // CHECK: %[[DYN_TERM1:.*]] = arith.andi %[[DYN_MASK1]], %[[DYN_ACTIVE1]]
+    // CHECK: %[[DYN_SUM1:.*]] = arith.ori %[[DYN_TERM0]], %[[DYN_TERM1]]
+    // CHECK-DAG: %[[DYN_CTA2:.*]] = arith.cmpi eq, %[[DYNAMIC_ISSUER]], %[[DYN_C2:.*]] : i32
+    // CHECK-DAG: %[[DYN_C2]] = arith.constant 0 : i32
+    // CHECK: %[[DYN_SELECT2:.*]] = arith.andi %[[DYN_CTA2]], %[[DYNAMIC_SLOT1]]
+    // CHECK: %[[DYN_MASK2:.*]] = arith.constant dense<[false, false, true, false, false, false, false, false]>
+    // CHECK: %[[DYN_ACTIVE2:.*]] = tt.splat %[[DYN_SELECT2]]
+    // CHECK: %[[DYN_TERM2:.*]] = arith.andi %[[DYN_MASK2]], %[[DYN_ACTIVE2]]
+    // CHECK: %[[DYN_SUM2:.*]] = arith.ori %[[DYN_SUM1]], %[[DYN_TERM2]]
+    // CHECK-DAG: %[[DYN_CTA3:.*]] = arith.cmpi eq, %[[DYNAMIC_ISSUER]], %[[DYN_C3:.*]] : i32
+    // CHECK-DAG: %[[DYN_C3]] = arith.constant 1 : i32
+    // CHECK: %[[DYN_SELECT3:.*]] = arith.andi %[[DYN_CTA3]], %[[DYNAMIC_SLOT1]]
+    // CHECK: %[[DYN_MASK3:.*]] = arith.constant dense<[false, false, false, true, false, false, false, false]>
+    // CHECK: %[[DYN_ACTIVE3:.*]] = tt.splat %[[DYN_SELECT3]]
+    // CHECK: %[[DYN_TERM3:.*]] = arith.andi %[[DYN_MASK3]], %[[DYN_ACTIVE3]]
+    // CHECK: %[[DYN_SUM3:.*]] = arith.ori %[[DYN_SUM2]], %[[DYN_TERM3]]
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}(%[[DYN_SUM3]],{{.*}}%[[DYN_TARGET]],
+    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[DYN_SUM3]],{{.*}}%[[DYN_TARGET]])
+    // CHECK: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %lower, %bar, %true : !tt.tensordesc<128x64xf16, #subslice_tma_shared>, !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable> -> !ttg.memdesc<128x64xf16, #subslice_tma_shared, #subslice_tma_smem, mutable, 256x64>
     ttng.wait_barrier %bar, %zero : !ttg.memdesc<2xi64, #subslice_tma_barrier, #subslice_tma_smem, mutable>
     tt.return
   }
@@ -3373,6 +3456,22 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %upper, %bar, %true {multicast} : !tt.tensordesc<128x64xf16, #subslice_multicast_shared>, !ttg.memdesc<4xi64, #subslice_multicast_barrier, #subslice_multicast_smem, mutable> -> !ttg.memdesc<128x64xf16, #subslice_multicast_shared, #subslice_multicast_smem, mutable, 256x64>
     ttng.wait_barrier %bar, %zero : !ttg.memdesc<4xi64, #subslice_multicast_barrier, #subslice_multicast_smem, mutable>
+    // Unicast targets have different issuer predicates and must stay separate.
+    %one = arith.constant 1 : i32
+    // CHECK: ttng.barrier_expect
+    ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<4xi64, #subslice_multicast_barrier, #subslice_multicast_smem, mutable>
+    // CHECK: %[[UNICAST_LOWER0:.*]] = arith.constant 1 : i32
+    // CHECK: %[[UNICAST_LOWER2:.*]] = arith.constant 4 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[UNICAST_LOWER0_MASK:[^,]+]], {{.*}}, %[[UNICAST_LOWER0]])
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}(%[[UNICAST_LOWER0_MASK]],{{.*}}, %[[UNICAST_LOWER0]],
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[UNICAST_LOWER2_MASK:[^,]+]], {{.*}}, %[[UNICAST_LOWER2]])
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}(%[[UNICAST_LOWER2_MASK]],{{.*}}, %[[UNICAST_LOWER2]],
+    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[UNICAST_LOWER0_MASK]],{{.*}}%[[UNICAST_LOWER0]])
+    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[UNICAST_LOWER2_MASK]],{{.*}}%[[UNICAST_LOWER2]])
+    // CHECK: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %lower, %bar, %true : !tt.tensordesc<128x64xf16, #subslice_multicast_shared>, !ttg.memdesc<4xi64, #subslice_multicast_barrier, #subslice_multicast_smem, mutable> -> !ttg.memdesc<128x64xf16, #subslice_multicast_shared, #subslice_multicast_smem, mutable, 256x64>
+    ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %upper, %bar, %true : !tt.tensordesc<128x64xf16, #subslice_multicast_shared>, !ttg.memdesc<4xi64, #subslice_multicast_barrier, #subslice_multicast_smem, mutable> -> !ttg.memdesc<128x64xf16, #subslice_multicast_shared, #subslice_multicast_smem, mutable, 256x64>
+    ttng.wait_barrier %bar, %one : !ttg.memdesc<4xi64, #subslice_multicast_barrier, #subslice_multicast_smem, mutable>
     tt.return
   }
 }

@@ -1458,11 +1458,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func public @amd_scalar_atomic_scratch_stays_cta_local(
       %ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
     %one = arith.constant 1 : i32
-    // Skip cluster-state initialization and the unrelated default effect mask.
+    // Skip cluster-state initialization.
     // CHECK: tti.experimental_lock_acquire
     // CHECK-NOT: arith.cmpi eq
-    // CHECK: tti.experimental_cluster_cta_id
-    // CHECK: arith.shli
     // CHECK: %[[AMD_SCALAR_CTA:.*]] = tti.experimental_cluster_cta_id
     // CHECK: %[[AMD_SCALAR_RECIPIENT:.*]] = arith.shli {{.*}}, %[[AMD_SCALAR_CTA]] : i32
     // CHECK-NOT: arith.cmpi eq
