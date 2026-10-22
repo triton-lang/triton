@@ -1635,8 +1635,7 @@ class TritonSemantic(Generic[TensorTy]):
                 f"expected accumulator dtype {out_dtype}, got {acc.type.element_ty}; " \
                 f"pass out_dtype={acc.type.element_ty} to use this accumulator dtype"
 
-        # max_num_imprecise_acc controls FP8 -> FP32 accumulation and whether
-        # separate FP32 adds may be folded into the dot.
+        # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
         if max_num_imprecise_acc is None:
             if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
                 max_num_imprecise_acc = self.builder.options.max_num_imprecise_acc_default
