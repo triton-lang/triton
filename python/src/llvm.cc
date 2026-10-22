@@ -6,7 +6,6 @@
 #include "triton/Tools/LLVMOptions.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "triton/Version.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
@@ -400,7 +399,7 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   options.enableFlagsFromDisableLLVMOptEnv();
   options.enablePrintAfterAllIfRequested();
   // Stop right after the scheduling-DAG pass, which substitutes itself for the
-  // machine scheduler (see armLivePipelineDAGEmission). This truncates the
+  // machine scheduler (see LivePipelineDAGEmission). This truncates the
   // pipeline at exactly the same point -stop-before=machine-scheduler did, so
   // the MIR dumped below is unchanged.
   options.set("stop-after", llvm::mir_dag::livePipelineDAGPassName());
@@ -431,9 +430,7 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   std::string result;
   std::string dagText;
   {
-    llvm::mir_dag::armLivePipelineDAGEmission(&dagText);
-    llvm::scope_exit disarm(
-        [] { llvm::mir_dag::disarmLivePipelineDAGEmission(); });
+    llvm::mir_dag::LivePipelineDAGEmission dagEmission(&dagText);
     llvm::raw_string_ostream stream(result);
     llvm::buffer_ostream pstream(stream);
     llvm::legacy::PassManager pass;
