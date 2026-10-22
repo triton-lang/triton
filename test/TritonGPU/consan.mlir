@@ -2569,6 +2569,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 264 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @initialize_pointer_alloc
+  tt.func public @initialize_pointer_alloc() {
+    // CHECK: %[[SMEM:.*]] = ttg.local_alloc
+    // CHECK: %[[BITS:.*]] = arith.constant dense<9221120237041090560> : tensor<32xi64,
+    // CHECK: %[[POISON:.*]] = tt.int_to_ptr %[[BITS]] : tensor<32xi64, {{.*}}> -> tensor<32x!tt.ptr<i32>,
+    // CHECK: ttg.local_store %[[POISON]], %[[SMEM]]
+    %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x!tt.ptr<i32>, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.shared = 0 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
