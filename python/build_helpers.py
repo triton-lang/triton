@@ -304,8 +304,10 @@ def _download_and_extract(url, download_dir, label, archives_path, expected_sha2
 
 
 def update_symlink(link_path, source_path):
-    source_path = Path(source_path)
+    source_path = Path(source_path).resolve()
     link_path = Path(link_path)
+    if link_path.resolve() == source_path:
+        return
 
     if link_path.is_symlink():
         link_path.unlink()
