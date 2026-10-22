@@ -14,6 +14,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TMAUtils.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/Sys/GetEnv.h"
 
@@ -466,17 +467,6 @@ Value createCTABitset(ImplicitLocOpBuilder &b, uint32_t pattern,
                                base);
 }
 
-Value getMulticastRecipientCTAs(ImplicitLocOpBuilder &b, Value alloc) {
-  // Return the CTA rows touched by an alloc: current CTA for
-  // non-broadcast allocs, or all CTAs in the current multicast group.
-  uint16_t broadcastMask = getBlockBroadcastMask(alloc);
-  if (!broadcastMask)
-    return currentCTAMask(b);
-  int numCTAs = ttg::lookupNumCTAs(b);
-  auto encoding = ttng::getTMAMulticastMaskEncoding(numCTAs, broadcastMask);
-  return createCTABitset(b, encoding.pattern, encoding.fixedBits);
-}
-
 Value getLeaderCTA(ImplicitLocOpBuilder &b, Value barrier) {
   uint16_t broadcastMask = getBlockBroadcastMask(barrier);
   if (!broadcastMask)
@@ -562,18 +552,6 @@ SmallVector<uint16_t> getTensorCoreBarrierBroadcastMasks(Operation *op) {
   return ttng::getCTABroadcastMasks(twoCTAs, commitDescs);
 }
 
-void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
-  uint32_t oldSpan = span;
-  for (int value = 0; value < numCTAs; ++value) {
-    if (!(oldSpan & (1u << value)))
-      continue;
-    uint32_t extended = value ^ basis;
-    assert(extended < static_cast<uint32_t>(numCTAs) &&
-           "CTA basis exceeds the cluster size");
-    span |= 1u << extended;
-  }
-}
-
 LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
                                          RankedTensorType regTy) {
   auto kBlock = StringAttr::get(memDescTy.getContext(), "block");
@@ -602,16 +580,6 @@ LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
   return invertAndComposeLocal(sharedLayout, indexedLayout, {kBlock});
 }
 
-uint32_t getXorImageMask(const LinearLayout &layout, StringAttr outDim,
-                         int numCTAs) {
-  uint32_t image = 1;
-  for (StringAttr inDim : layout.getInDimNames()) {
-    for (int bit = 0; bit < layout.getInDimSizeLog2(inDim); ++bit)
-      extendXorSpan(image, layout.getBasis(inDim, bit, outDim), numCTAs);
-  }
-  return image;
-}
-
 uint32_t translateXorMask(uint32_t mask, uint32_t translation, int numCTAs) {
   uint32_t translated = 0;
   for (int value = 0; value < numCTAs; ++value) {
@@ -625,8 +593,13 @@ uint32_t translateXorMask(uint32_t mask, uint32_t translation, int numCTAs) {
   return translated;
 }
 
+void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
+  span |= translateXorMask(span, basis, numCTAs);
+}
+
 Value getLocalMemoryRecipientCTAs(ImplicitLocOpBuilder &b,
-                                  const LinearLayout &conversion) {
+                                  const LinearLayout &conversion,
+                                  uint32_t broadcastMask = 0) {
   MLIRContext *ctx = b.getContext();
 
   StringAttr kBlock = StringAttr::get(ctx, "block");
@@ -640,12 +613,18 @@ Value getLocalMemoryRecipientCTAs(ImplicitLocOpBuilder &b,
   // output. For gather/scatter this includes the independent runtime-index
   // input, whose value is unavailable to this pass. The resulting image is a
   // conservative recipient set for the full BufferRegion effect.
-  SmallVector<StringAttr> varyingInputs =
-      llvm::to_vector(conversion.getInDimNames());
-  llvm::erase(varyingInputs, kBlock);
-  LinearLayout varyingInputsToTarget =
-      conversion.sublayout(varyingInputs, {kBlock});
-  uint32_t targetSpan = getXorImageMask(varyingInputsToTarget, kBlock, numCTAs);
+  uint32_t targetSpan = 1;
+  for (StringAttr dim : conversion.getInDimNames()) {
+    if (dim == kBlock)
+      continue;
+    for (int bit = 0; bit < conversion.getInDimSizeLog2(dim); ++bit)
+      extendXorSpan(targetSpan, conversion.getBasis(dim, bit, kBlock), numCTAs);
+  }
+  // Multicast expands the mapped destination's group, which may differ from
+  // the issuing CTA's group for a subview.
+  for (uint32_t bit = 1; bit < static_cast<uint32_t>(numCTAs); bit <<= 1)
+    if (broadcastMask & bit)
+      extendXorSpan(targetSpan, bit, numCTAs);
 
   LinearLayout issuerToTarget = conversion.sublayout({kBlock}, {kBlock});
 
@@ -757,9 +736,23 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
                                            atomic.getAxis()));
   }
   if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
-    if (tmaLoad.getMulticast())
-      return getMulticastRecipientCTAs(b, tmaLoad.getResult());
-    return currentCTAMask(b);
+    if (ttg::lookupNumCTAs(op) == 1)
+      return currentCTAMask(b);
+    auto dstTy = cast<ttg::MemDescType>(tmaLoad.getResult().getType());
+    uint32_t broadcastMask =
+        tmaLoad.getMulticast() ? getBlockBroadcastMask(tmaLoad.getResult()) : 0;
+    LinearLayout messageToShared;
+    if (auto gather = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
+      messageToShared = ttng::getTMAGatherScatterLayouts(
+                            gather.getXOffsets().getType(), dstTy)
+                            .messageToShared;
+    } else {
+      auto mode = isa<ttng::TensorDescIm2ColType>(tmaLoad.getDesc().getType())
+                      ? ttg::TMAMode::Im2Col
+                      : ttg::TMAMode::Tiled;
+      messageToShared = ttng::getTMAMessageLayouts(dstTy, mode).messageToShared;
+    }
+    return getLocalMemoryRecipientCTAs(b, messageToShared, broadcastMask);
   }
   if (isa<ttng::CLCTryCancelOp>(op))
     return allCTAsMask(b);
