@@ -96,8 +96,9 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
 
   BlockedEncodingAttr dLayout =
       cast<BlockedEncodingAttr>(dTensorTy.getEncoding());
-  // TODO process A and B operand separately
-  auto inRepOrder = expandMatrixOrderWithBatch(dLayout.getOrder());
+  auto aInRepOrder = expandMatrixOrderWithBatch(getOrder(aTensorTy));
+  auto bInRepOrder = expandMatrixOrderWithBatch(getOrder(bTensorTy));
+  auto dInRepOrder = expandMatrixOrderWithBatch(dLayout.getOrder());
   auto repOrder = expandMatrixOrderWithBatch(dLayout.getRepOrder());
   auto cc = unpackTensorElements(loc, adaptor.getC(), rewriter, dTensorTy);
 
@@ -126,11 +127,11 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
   auto has = getValueTableFromStructFMA(
       llA, aTensorTy, {sizePerThread[0], sizePerThread[1], K},
       {repetitions[0], repetitions[1], 1},
-      /*kDim*/ 2, /*nonKDim*/ 1, rewriter, loc, inRepOrder, repOrder);
+      /*kDim*/ 2, /*nonKDim*/ 1, rewriter, loc, aInRepOrder, repOrder);
   auto hbs = getValueTableFromStructFMA(
       llB, bTensorTy, {sizePerThread[0], K, sizePerThread[2]},
       {repetitions[0], 1, repetitions[2]},
-      /*kDim*/ 1, /*nonKDim*/ 2, rewriter, loc, inRepOrder, repOrder);
+      /*kDim*/ 1, /*nonKDim*/ 2, rewriter, loc, bInRepOrder, repOrder);
 
   SmallVector<Value> acc = cc;
 
@@ -142,7 +143,7 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
             for (unsigned n = 0; n < sizePerThread[2]; ++n) {
               SmallVector<unsigned> multiDimAccumIdx = {b, m, n};
               unsigned linearInRepIdx =
-                  LLVM::linearize(multiDimAccumIdx, sizePerThread, inRepOrder);
+                  LLVM::linearize(multiDimAccumIdx, sizePerThread, dInRepOrder);
               SmallVector<unsigned> multiDimRepIdx = {bRep, mRep, nRep};
               unsigned linearRepIdx =
                   LLVM::linearize(multiDimRepIdx, repetitions, repOrder);
