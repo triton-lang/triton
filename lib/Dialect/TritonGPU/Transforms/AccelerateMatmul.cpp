@@ -244,7 +244,8 @@ static auto getDefiningOpSkippingConvertLayout(Value value) {
 
 static Value
 tryCreateTmemCopyCompatibleScaleOperand(Value scale,
-                                        mlir::PatternRewriter &rewriter) {
+                                        mlir::PatternRewriter &rewriter,
+                                        CGAEncodingAttr targetCGALayout = {}) {
   OpBuilder::InsertionGuard g(rewriter);
   // The final reshape to conform to the logical shape requirement of
   // dot_scaled.
@@ -304,19 +305,32 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
   if (!isTmemCopyCompatibleScale(packedScaleType, usesTMAload))
     return Value();
 
+  // Two-CTA MMAs read each scale operand with its own CTA distribution; convert
+  // the logical scale tensor to it before staging.
+  Value source = reshape2D.getResult();
+  CGAEncodingAttr cgaLayout = getCGALayout(scaleType.getEncoding());
+  if (targetCGALayout && targetCGALayout != cgaLayout) {
+    auto encoding = cloneWithCGALayout(scaleType, targetCGALayout);
+    if (failed(encoding))
+      return Value();
+    rewriter.setInsertionPointAfterValue(source);
+    source =
+        ConvertLayoutOp::create(rewriter, reshape2D.getLoc(),
+                                scaleType.cloneWithEncoding(*encoding), source);
+    cgaLayout = targetCGALayout;
+  }
+
   auto sharedMemory = SharedMemorySpaceAttr::get(scaleType.getContext());
   auto sinkLayout = getScaleSmemLayoutForTMEMCopy(
-      scaleType.getContext(), scaleType.getShape(),
-      getCGALayout(scaleType.getEncoding()));
+      scaleType.getContext(), scaleType.getShape(), cgaLayout);
   auto layout = SharedLinearEncodingAttr::get(scaleType.getContext(),
                                               std::move(sinkLayout),
                                               /*alignment=*/128);
   auto sinkType =
       MemDescType::get(scaleType.getShape(), scaleType.getElementType(), layout,
                        sharedMemory, /*mutableMemory=*/false);
-  rewriter.setInsertionPointAfterValue(reshape2D.getResult());
-  return LocalAllocOp::create(rewriter, reshape2D.getLoc(), sinkType,
-                              reshape2D.getResult());
+  rewriter.setInsertionPointAfterValue(source);
+  return LocalAllocOp::create(rewriter, reshape2D.getLoc(), sinkType, source);
 }
 
 static Value createTmemScaleOperand(Value tensor, Attribute tmemEncoding,
@@ -670,7 +684,7 @@ static LogicalResult inferTwoCTAOperandLayouts(
   return success();
 }
 
-static bool canUseTwoCTAs(DotOp dotOp) {
+template <typename DotLikeOp> static bool canUseTwoCTAs(DotLikeOp dotOp) {
   if (lookupNumCTAs(dotOp) < 2)
     return false;
 
@@ -699,6 +713,28 @@ static bool canUseTwoCTAs(DotOp dotOp) {
       dotOp.getB(), getTwoCTARHSCGALayout(retType), layouts));
 }
 
+static bool canUseTwoCTAs(DotScaledOp dotOp, int computeCapability) {
+  if (computeCapability < 100 || computeCapability >= 120)
+    return false;
+  // One pair per cluster: clusters of several pairs need the scaled dot's CGA
+  // layouts (and its scales' split across pairs) planned like a dot's, which
+  // is not done yet.
+  if (lookupNumCTAs(dotOp) != 2)
+    return false;
+  if (!dotOp.getAScale() || !dotOp.getBScale())
+    return false;
+  int numWarps = lookupNumWarps(dotOp);
+  if (numWarps != 4 && numWarps != 8)
+    return false;
+  // MN-major fp4 falls back off the native scaled MMA.
+  if (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())
+    return false;
+  if (!canUseTwoCTAs<DotScaledOp>(dotOp))
+    return false;
+  // The scaled MMA is M=128 per CTA.
+  return getShapePerCTA(dotOp.getType())[0] == 128;
+}
+
 static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
   bool sawMMAv5Dot = false;
   WalkResult result = module.walk([&](Operation *op) -> WalkResult {
@@ -718,10 +754,18 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
                                   : WalkResult::interrupt();
     }
 
-    // Scaled MMAv5 does not set two_ctas in this pass yet. Keep the whole
-    // module in 1CTA mode if such an op may form a tcgen05 instruction.
-    if (isa<DotScaledOp>(op))
-      return WalkResult::interrupt();
+    if (auto scaledOp = dyn_cast<DotScaledOp>(op)) {
+      RankedTensorType retType = scaledOp.getType();
+      if (!retType.getEncoding() ||
+          mlir::isa<NvidiaMmaEncodingAttr>(retType.getEncoding()))
+        return WalkResult::advance();
+      if (computeCapability < 100 || computeCapability >= 120)
+        return WalkResult::advance();
+      sawMMAv5Dot = true;
+      return canUseTwoCTAs(scaledOp, computeCapability)
+                 ? WalkResult::advance()
+                 : WalkResult::interrupt();
+    }
     return WalkResult::advance();
   });
   return sawMMAv5Dot && !result.wasInterrupted();
@@ -745,6 +789,10 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
     Operation *view = value.getDefiningOp();
     IRMapping mapping;
     mapping.map(view->getOperand(0), newB);
+    // Clone each view where the original is, not right after the load: a use
+    // between this load and the next ones would split their shared pipeliner
+    // barrier (e.g. the scale loads of a scaled dot).
+    rewriter.setInsertionPoint(view);
     Operation *clone = rewriter.clone(*view, mapping);
     for (Value result : clone->getResults())
       result.setType(
@@ -956,12 +1004,13 @@ static CGAEncodingAttr getScaleCGALayout(CGAEncodingAttr retCGALayout,
 class ScaledBlockedToMMAv5
     : public mlir::OpRewritePattern<triton::DotScaledOp> {
   int computeCapability;
+  bool enableTwoCTAs;
 
 public:
   ScaledBlockedToMMAv5(mlir::MLIRContext *context, int computeCapability,
-                       int benefit)
+                       bool enableTwoCTAs, int benefit)
       : mlir::OpRewritePattern<triton::DotScaledOp>(context, benefit),
-        computeCapability(computeCapability) {}
+        computeCapability(computeCapability), enableTwoCTAs(enableTwoCTAs) {}
 
   mlir::LogicalResult
   matchAndRewrite(triton::DotScaledOp dotOp,
@@ -1046,6 +1095,10 @@ public:
         (IsBMixedPrecFp4 &&
          (requiresFp4Padding || blockK == 32 || !dotOp.getRhsKPack()));
 
+    bool useTwoCTAs = enableTwoCTAs;
+    if (useTwoCTAs)
+      b = splitBOperand(b, rewriter, getTwoCTARHSCGALayout(oldRetType));
+
     // For mixed-precision fp4 operands, set allowTranspose = false, to force
     // the packed axis, K, to be contiguous in SMEM
     a = getSharedMemoryMMAOperand(a, rewriter, 0,
@@ -1066,7 +1119,7 @@ public:
     auto bitwidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
-        context, m, n, colStride, cgaLayout);
+        context, m, n, colStride, cgaLayout, useTwoCTAs);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     MemDescType accMemDescType =
@@ -1094,24 +1147,27 @@ public:
             dotOp, /*isA=*/false, dotOp.getAElemType(), dotOp.getBElemType(),
             oldScaleAType.getElementType(), oldScaleBType.getElementType());
     // The scales of A follow the result's rows and the scales of B its
-    // columns: B scales are [N, K / vec].
+    // columns: B scales are [N, K / vec]. In a two-CTA MMA, B is split along N
+    // within the pair but the MMA reads the scales of the whole N tile in both
+    // CTAs: the pair basis of the result is along M, so the B scales are
+    // broadcast within the pair.
+    CGAEncodingAttr scaleACGALayout = getScaleCGALayout(cgaLayout, /*dim=*/0);
+    CGAEncodingAttr scaleBCGALayout = getScaleCGALayout(cgaLayout, /*dim=*/1);
     Attribute scaleAEncoding =
         triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(
-            context, getScaleCGALayout(cgaLayout, /*dim=*/0),
-            aScaleBlockRepOrder);
+            context, scaleACGALayout, aScaleBlockRepOrder);
     Attribute scaleBEncoding =
         triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(
-            context, getScaleCGALayout(cgaLayout, /*dim=*/1),
-            bScaleBlockRepOrder);
-    Value scaleA =
-        tryCreateTmemCopyCompatibleScaleOperand(dotOp.getAScale(), rewriter);
+            context, scaleBCGALayout, bScaleBlockRepOrder);
+    Value scaleA = tryCreateTmemCopyCompatibleScaleOperand(
+        dotOp.getAScale(), rewriter, scaleACGALayout);
     if (!scaleA) {
       scaleA =
           createTmemScaleOperand(dotOp.getAScale(), scaleAEncoding,
                                  tensorMemorySpace, numWarps, loc, rewriter);
     }
-    Value scaleB =
-        tryCreateTmemCopyCompatibleScaleOperand(dotOp.getBScale(), rewriter);
+    Value scaleB = tryCreateTmemCopyCompatibleScaleOperand(
+        dotOp.getBScale(), rewriter, scaleBCGALayout);
     if (!scaleB) {
       scaleB =
           createTmemScaleOperand(dotOp.getBScale(), scaleBEncoding,
@@ -1123,6 +1179,7 @@ public:
         rewriter, loc, tokType, a, b, acc.getResult(), acc.getToken(), scaleA,
         scaleB, dotOp.getAElemType(), dotOp.getBElemType(),
         /*useD=*/vTrue, /*pred=*/vTrue);
+    mmaOp.setTwoCtas(useTwoCTAs);
 
     auto ld = triton::nvidia_gpu::TMEMLoadOp::create(
         rewriter, loc, newAccType, tokType, acc, mmaOp.getToken());
@@ -1258,7 +1315,7 @@ public:
     patterns.add<BlockedToMMAv5>(context, computeCapability, enableTwoCTAs,
                                  benefitMMAv5);
     patterns.add<ScaledBlockedToMMAv5>(context, computeCapability,
-                                       benefitMMAv5);
+                                       enableTwoCTAs, benefitMMAv5);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       return signalPassFailure();
