@@ -257,7 +257,7 @@ class CUDABackend(BaseBackend):
 
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
 
-        args["max_num_imprecise_acc_default"] = 2**30 if capability == 90 else 0
+        args["max_num_imprecise_acc_default"] = 2**30 if capability in (89, 90) else 0
 
         return CUDAOptions(**args)
 
