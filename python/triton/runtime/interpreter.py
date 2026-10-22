@@ -1669,7 +1669,13 @@ class InterpretedFunction(KernelInterface[T]):
         if warmup:
             return
         fn = self.rewrite()
-        return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kwargs)
+        options = interpreter_builder.options
+        debug = kwargs.get("debug", self.kwargs.get("debug")) or triton.knobs.runtime.debug
+        interpreter_builder.options = dataclasses.replace(options, debug=debug)
+        try:
+            return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kwargs)
+        finally:
+            interpreter_builder.options = options
 
     def add_pre_run_hook(self, hook):
         assert callable(hook)

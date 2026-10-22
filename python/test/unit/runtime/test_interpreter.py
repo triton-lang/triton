@@ -1,4 +1,5 @@
 import numpy as np
+import triton
 import pytest
 import itertools
 
@@ -6,6 +7,25 @@ from triton._C.libtriton import interpreter as _interpreter
 from triton._C.libtriton import ir
 import triton.language as tl
 from triton.runtime import interpreter
+
+
+@pytest.mark.parametrize("env_debug, jit_debug, launch_debug", [(True, False, False), (False, True, None),
+                                                                (False, False, True)])
+def test_debug_options_restored(env_debug, jit_debug, launch_debug, monkeypatch):
+    monkeypatch.setattr(triton.knobs.runtime, "debug", env_debug)
+
+    def kernel():
+        tl.device_assert(False, "debug enabled")
+
+    kernel = interpreter.InterpretedFunction(kernel, debug=jit_debug)
+    options = interpreter.interpreter_builder.options
+    kwargs = {} if launch_debug is None else {"debug": launch_debug}
+    with pytest.raises(interpreter.InterpreterError, match="debug enabled"):
+        kernel[(1, )](**kwargs)
+    assert interpreter.interpreter_builder.options is options
+    monkeypatch.setattr(triton.knobs.runtime, "debug", False)
+    kernel[(1, )](debug=False)
+    assert interpreter.interpreter_builder.options is options
 
 
 def _element_ptrs(array: np.ndarray) -> np.ndarray:
