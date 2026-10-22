@@ -282,7 +282,9 @@ def tma_skip_msg(byval_only=False):
         return "Requires advanced TMA support (NVIDIA Hopper or higher, CUDA 12.3 or higher)"
 
 
-requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
+# Evaluate hardware requirements when pytest runs the test, so importing the
+# process helpers does not initialize CUDA before a worker's startup code.
+requires_tma = pytest.mark.skipif("not __import__('triton')._internal_testing.supports_tma()", reason=tma_skip_msg())
 
 
 def default_alloc_fn(size: int, align: int, _):
@@ -305,9 +307,9 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
     if env is not None:
         os.environ.update(env)
 
-    # By defaul AMD runtime calls abort on device assert.
-    # Following forces hip rutime to skip abort call.
-    if is_hip():
+    # Avoid initializing the GPU driver before the callback's startup code.
+    # The HIP build of PyTorch needs abort-on-device-assert disabled.
+    if not is_interpreter() and torch.version.hip is not None:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         os.environ["HIP_SKIP_ABORT_ON_GPU_ERROR"] = "1"
 

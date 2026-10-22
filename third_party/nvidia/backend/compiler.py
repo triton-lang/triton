@@ -158,8 +158,11 @@ class CUDAOptions:
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = knobs.nvidia.libdevice_path or str(default_libdir / 'libdevice.10.bc')
-        if is_enabled(self, "gsan"):
-            gsan_lib = default_libdir / "gsan.ll"
+        profiling = is_enabled(self, "gsan-profile")
+        if profiling and self.instrumentation_mode.strip() != "gsan-profile":
+            raise ValueError("gsan-profile must run separately from other instrumentation")
+        if is_enabled(self, "gsan") or profiling:
+            gsan_lib = default_libdir / ("gsan-profile.ll" if profiling else "gsan.ll")
             if not gsan_lib.exists():
                 raise FileNotFoundError(f"GSan runtime is missing at {gsan_lib}. "
                                         "Rebuild Triton to generate it.")
@@ -423,7 +426,7 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        if is_enabled(options, "gsan"):
+        if is_enabled(options, "gsan") or is_enabled(options, "gsan-profile"):
             # GSan introduces layout conversions, so it must run before shared-memory allocation.
             passes.ttgpuir.add_global_sanitizer(pm)
 
