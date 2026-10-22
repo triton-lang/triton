@@ -1541,7 +1541,23 @@ class _InterpreterComparison:
         return result
 
 
+def _interpreter_not(value):
+    if isinstance(value, (tl.tensor, tl.constexpr)):
+        return value.__not__()
+    return not value
+
+
 class ASTTransformer(ast.NodeTransformer):
+
+    def __init__(self, not_fn_name):
+        self.not_fn_name = not_fn_name
+
+    def visit_UnaryOp(self, node):
+        node = self.generic_visit(node)
+        if not isinstance(node.op, ast.Not):
+            return node
+        return ast.copy_location(
+            ast.Call(func=ast.Name(id=self.not_fn_name, ctx=ast.Load()), args=[node.operand], keywords=[]), node)
 
     def visit_Compare(self, node):
         node = self.generic_visit(node)
@@ -1583,7 +1599,6 @@ class ASTTransformer(ast.NodeTransformer):
 
 
 class FunctionRewriter:
-    ast_transformer = ASTTransformer()
 
     def __init__(self, fn, **kwargs):
         self.fn = fn
@@ -1635,7 +1650,19 @@ class FunctionRewriter:
         # 1: def foo(...):
         # 2:  ...
         parsed_ast = ast.parse(src)
-        transformed_ast = self.ast_transformer.visit(parsed_ast)
+        # The injected helper must not shadow a kernel parameter, local, or global.
+        names = set(self.fn.__globals__)
+        for node in ast.walk(parsed_ast):
+            if isinstance(node, ast.Name):
+                names.add(node.id)
+            elif isinstance(node, ast.arg):
+                names.add(node.arg)
+        self.not_fn_name = "_interpreter_not"
+        suffix = 0
+        while self.not_fn_name in names:
+            suffix += 1
+            self.not_fn_name = f"_interpreter_not_{suffix}"
+        transformed_ast = ASTTransformer(self.not_fn_name).visit(parsed_ast)
         ast.fix_missing_locations(transformed_ast)
         inc_lineno = self.def_file_lineno - 1
         ast.increment_lineno(transformed_ast, inc_lineno)
@@ -1645,6 +1672,7 @@ class FunctionRewriter:
         compiled_code = compile(transformed_ast, filename=self.filename, mode='exec')
         local_namespace = {**self.kwargs}
         fn_globals = self.fn.__globals__
+        fn_globals[self.not_fn_name] = _interpreter_not
         for key, value in globals().items():
             if key not in fn_globals:
                 fn_globals[key] = value
