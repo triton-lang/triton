@@ -13,7 +13,6 @@ from triton.experimental.gluon.language.nvidia import rubin
 from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
 from triton._internal_testing import is_compile_warmup, is_cuda, is_rubin, run_in_process
 
-
 pytestmark = [pytest.mark.enable_warmup(min_capability=9), pytest.mark.usefixtures("process_pool")]
 
 
