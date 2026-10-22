@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from functools import reduce
+import warnings
+from functools import lru_cache, reduce
 from typing import Any, Callable, TYPE_CHECKING, Union, List, Dict
 
 if TYPE_CHECKING:
@@ -156,3 +157,40 @@ def _tuple_create(arg, contents):
     # between them, but only NamedTuple has "_fields" and apparently this is how
     # everyone does the check.
     return type(arg)(*contents) if hasattr(arg, "_fields") else type(arg)(contents)
+
+
+# 3.9 release-branch deprecation warnings. Each message is emitted at most once
+# per process via warn_once() below.
+FP_FUSION_DEFAULT_WARNING = ("TRITON_DEFAULT_FP_FUSION is unset: defaulting to FP fusion ENABLED for "
+                             "backward compatibility in Triton 3.9. The default will change to DISABLED "
+                             "in Triton 3.10; set TRITON_DEFAULT_FP_FUSION=1 to keep fusion enabled or "
+                             "=0 to adopt the new default early and silence this warning.")
+CAT_CAN_REORDER_WARNING = ("tl.cat(can_reorder=True) is deprecated and will be removed in Triton 3.10, "
+                           "when concatenation will always be deterministic. Pass can_reorder=False "
+                           "(the default) to adopt the new behavior.")
+RESHAPE_CAN_REORDER_WARNING = ("tl.reshape(can_reorder=True) is deprecated and will be removed in Triton 3.10. "
+                               "Pass can_reorder=False (the default) to adopt the new behavior.")
+
+
+@lru_cache(maxsize=None)
+def warn_once(message: str) -> None:
+    """Emit `message` as a UserWarning at most once per process.
+
+    The cache is keyed on the message text, so each distinct warning fires
+    exactly once no matter how often it is requested.
+    """
+    warnings.warn(message, UserWarning, stacklevel=2)
+
+
+def prewarm_deprecation_warnings() -> None:
+    """Fire-and-silence the 3.9 deprecation warnings as a pre-run step.
+
+    Populates the warn_once() cache so subsequent requests for these warnings
+    are no-ops. Test setup calls this (in the main process and in test
+    subprocesses) so no test observes these warnings.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        warn_once(FP_FUSION_DEFAULT_WARNING)
+        warn_once(CAT_CAN_REORDER_WARNING)
+        warn_once(RESHAPE_CAN_REORDER_WARNING)

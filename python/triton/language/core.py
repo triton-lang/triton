@@ -16,6 +16,7 @@ import inspect
 
 from .._C.libtriton import ir
 from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth, _tuple_create
+from .._utils import CAT_CAN_REORDER_WARNING, RESHAPE_CAN_REORDER_WARNING, warn_once
 
 T = TypeVar('T', bound=Callable)
 
@@ -2021,9 +2022,7 @@ def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     :type dim: int
     """
     if can_reorder:
-        warn("tl.cat(can_reorder=True) is deprecated and will be removed in Triton 3.10, "
-             "when concatenation will always be deterministic. Pass can_reorder=False "
-             "(the default) to adopt the new behavior.")
+        warn_once(CAT_CAN_REORDER_WARNING)
         return _semantic.cat(input, other, can_reorder)
 
     rank = len(input.shape)
@@ -2170,8 +2169,7 @@ def reshape(input, *shape, can_reorder=False, _semantic=None, _generator=None):
     shape = _shape_check_impl(_unwrap_iterable(shape))
     can_reorder = _unwrap_if_constexpr(can_reorder)
     if can_reorder:
-        warn("tl.reshape(can_reorder=True) is deprecated and will be removed in Triton 3.10. "
-             "Pass can_reorder=False (the default) to adopt the new behavior.")
+        warn_once(RESHAPE_CAN_REORDER_WARNING)
     if len(shape) == 0:
         return _unsplat(input, _semantic=_semantic, _generator=_generator)
     return _semantic.reshape(input, shape, can_reorder)

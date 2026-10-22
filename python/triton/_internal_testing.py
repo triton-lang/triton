@@ -304,6 +304,12 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
     if env is not None:
         os.environ.update(env)
 
+    # Pre-fire the 3.9 deprecation warnings with output silenced so compilation
+    # inside the child populates the warn-once cache without polluting the
+    # captured stderr that tests assert on.
+    from triton._utils import prewarm_deprecation_warnings
+    prewarm_deprecation_warnings()
+
     # Capture driver/runtime writes to stderr that bypass Python's file objects.
     with open(stderr_file, "w+b") as tmp_stderr:
         saved_stderr_fd = os.dup(2)
