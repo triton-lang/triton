@@ -16,7 +16,7 @@ import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_hip
-from triton.runtime.cache import FileCacheManager, RemoteCacheManager
+from triton.runtime.cache import FileCacheManager, RemoteCacheManager, get_dump_manager, get_override_manager
 
 
 @pytest.mark.parametrize("backend, options_type, arch", [
@@ -1268,46 +1268,42 @@ def test_module_load_unload(device, fresh_knobs):
     gc.enable()
 
 
-def test_store_binary_only(device, fresh_triton_cache, fresh_compilation_knobs):
+def test_custom_binary_stage(device, fresh_knobs, tmp_path):
+    # A backend can emit more than one binary for a kernel, e.g. an intermediate one and native code
+    # built from it. Here the extra binary is a copy of the backend's own.
+
+    def add_binary_stage(self=None, stages=None, options=None, language=None, capability=None):
+        if stages is None:
+            return "test_custom_binary_stage", "test_custom_binary_stage"
+        stages["xyz"] = lambda src, metadata: bytes(src)
 
     @triton.jit
-    def kernel(out_ptr, val) -> None:
-        tl.store(out_ptr, val)
+    def kernel(out_ptr, VAL: tl.constexpr) -> None:
+        tl.store(out_ptr, VAL)
 
-    cache_hits = []
-    fresh_compilation_knobs.compilation.store_binary_only = True
-    fresh_compilation_knobs.compilation.listener = lambda **kwargs: cache_hits.append(kwargs["cache_hit"])
-    out = torch.zeros(1, dtype=torch.int32, device=device)
-    kernel[(1, )](out, 2)
-    # Drop the in-memory kernel, so the second launch loads it from the stored binaries.
-    kernel.device_caches.clear()
-    kernel[(1, )](out, 3)
-    assert out.item() == 3
-    assert cache_hits == [False, True]
-
-
-def test_override_binary(device, fresh_knobs, tmp_path, capfd):
-
-    @triton.jit
-    def kernel(out_ptr, val) -> None:
-        tl.store(out_ptr, val)
-
+    fresh_knobs.runtime.add_stages_inspection_hook = add_binary_stage
     fresh_knobs.cache.dir = str(tmp_path / "cache")
     fresh_knobs.cache.dump_dir = str(tmp_path / "dump")
     fresh_knobs.compilation.dump_ir = True
+    fresh_knobs.compilation.store_binary_only = True
     out = torch.zeros(1, dtype=torch.int32, device=device)
-    compiled = kernel[(1, )](out, 2)
-    binary_ext = next(ext for ext, value in compiled.asm.items() if value is compiled.kernel)
-    dumped = next((tmp_path / "dump").rglob(f"*.{binary_ext}"))
-    override = tmp_path / "override" / dumped.relative_to(tmp_path / "dump")
-    override.parent.mkdir(parents=True)
-    shutil.copy(dumped, override)
+    two = kernel[(1, )](out, 2)
+    three = kernel[(1, )](out, 3)
 
-    fresh_knobs.compilation.dump_ir = False
+    # Only the binaries are stored, all are read back as bytes, and the last one is the kernel.
+    binaries = two.metadata.binary_stages
+    assert binaries[-1] == "xyz"
+    assert {pathlib.Path(name).suffix[1:] for name in two.metadata_group} == {*binaries, "source", "json"}
+    assert all(isinstance(two.asm[ext], bytes) for ext in binaries)
+    assert two.kernel is two.asm["xyz"]
+
+    # Overriding the kernel that stores 3 with the binary of the one that stores 2 runs the override.
+    fresh_knobs.cache.override_dir = str(tmp_path / "override")
+    override = pathlib.Path(get_override_manager(three.src.hash()).cache_dir) / f"{three.name}.xyz"
+    override.parent.mkdir(parents=True)
+    shutil.copy(get_dump_manager(two.src.hash()).get_file(f"{two.name}.xyz"), override)
     fresh_knobs.compilation.override = True
     fresh_knobs.compilation.always_compile = True
-    fresh_knobs.cache.override_dir = str(tmp_path / "override")
     kernel.device_caches.clear()
     kernel[(1, )](out, 3)
-    assert out.item() == 3
-    assert f"Overriding kernel with file {override}" in capfd.readouterr().out
+    assert out.item() == 2

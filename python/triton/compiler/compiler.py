@@ -142,7 +142,7 @@ def parse(full_name, ext, context):
         return module
     if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
-    # Any other stage is a backend's binary, e.g. cubin or hsaco.
+    # Any other stage is a binary, e.g. cubin or hsaco.
     return Path(full_name).read_bytes()
 
 
@@ -334,8 +334,11 @@ def compile(src, target=None, options=None, _env_vars=None):
         elif full_name := fn_override_manager.get_file(ir_filename):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
-        # If TRITON_STORE_BINARY_ONLY is 1, only store the backend's binaries and json
-        if (not store_only_binary) or ext in backend.binary_exts or ext == "json":
+        is_binary = isinstance(next_module, bytes)
+        if is_binary:
+            metadata.setdefault("binary_stages", []).append(ext)
+        # If TRITON_STORE_BINARY_ONLY is 1, only store the binaries (and the metadata json)
+        if (not store_only_binary) or is_binary:
             metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
@@ -388,15 +391,11 @@ class LazyDict:
 
 
 class AsmDict(dict):
-    # The target, not the backend: `asm` gets pickled and a backend need not be picklable.
-    _target = None
 
     def __missing__(self, key):
 
         if key == "sass":
             value = get_sass(self["cubin"])
-        elif self._target is not None:
-            value = make_backend(self._target).disassemble_asm(self, key)
         else:
             raise KeyError("Unknown key: '%s'" % key)
 
@@ -426,16 +425,14 @@ class CompiledKernel:
         self.name = self.metadata.name
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
-        # A backend may emit several binaries, and which one is the kernel can vary per compilation.
-        binary_exts = backend.binary_exts
-        binary_ext = metadata.get("binary_ext", backend.binary_ext)
+        # The stages that produced bytes; the last one is the kernel. Older cache entries do not record them.
+        binary_stages = getattr(self.metadata, "binary_stages", None) or [backend.binary_ext]
         self.asm = AsmDict({
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] in binary_exts else file.read_text()
+            file.suffix[1:]: file.read_bytes() if file.suffix[1:] in binary_stages else file.read_text()
             for file in asm_files
         })
-        self.asm._target = self.metadata.target
         self.metadata_group = metadata_group
-        self.kernel = self.asm[binary_ext]
+        self.kernel = self.asm[binary_stages[-1]]
         # binaries are lazily initialized
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
