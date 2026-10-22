@@ -2959,6 +2959,69 @@ def test_store_constant(num_ctas, dtype_str, constant_field, device):
         assert torch.all(output == 0)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("op", [
+    "store", "load", "cast", "atomic_store", "atomic_add", "atomic_xchg", "atomic_min", "atomic_max", "atomic_cas",
+    "atomic_cas_compare"
+])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.int32])
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("value", [0.1, -0.1, 2.5])
+def test_scalar_memory_precision(op, dtype, scalar, value, device):
+
+    @triton.jit
+    def kernel(X, OP: tl.constexpr, SCALAR: tl.constexpr, VALUE: tl.constexpr):
+        if SCALAR:
+            offsets = 0
+        else:
+            offsets = tl.arange(0, 128)
+        ptr = X + offsets
+        if OP == "store":
+            tl.store(ptr, VALUE)
+        elif OP == "load":
+            tl.store(ptr, tl.load(ptr, mask=False, other=VALUE))
+        elif OP == "cast":
+            tl.store(ptr, tl.cast(VALUE, X.dtype.element_ty))
+        elif OP == "atomic_store":
+            tl.atomic_store(ptr, VALUE)
+        elif OP == "atomic_add":
+            tl.atomic_add(ptr, VALUE)
+        elif OP == "atomic_xchg":
+            tl.atomic_xchg(ptr, VALUE)
+        elif OP == "atomic_min":
+            tl.atomic_min(ptr, VALUE)
+        elif OP == "atomic_max":
+            tl.atomic_max(ptr, VALUE)
+        elif OP == "atomic_cas":
+            tl.atomic_cas(ptr, 0.0, VALUE)
+        elif OP == "atomic_cas_compare":
+            tl.atomic_cas(ptr, VALUE, 3.0)
+
+    initial = {"atomic_min": 10, "atomic_max": -10, "atomic_cas_compare": value}.get(op, 0)
+    x = torch.full((1 if scalar else 128, ), initial, dtype=dtype, device=device)
+    kernel[(1, )](x, op, scalar, value)
+    expected = torch.full_like(x, 3 if op == "atomic_cas_compare" else value)
+    torch.testing.assert_close(x, expected, rtol=0, atol=0)
+
+
+@pytest.mark.interpreter
+def test_fp64_scalar_cast_preserves_tensor_and_bitcast_types(device):
+
+    @triton.jit
+    def kernel(X, Bits):
+        value = tl.full((), 0.1, tl.float32)
+        tl.store(X, value)
+        tl.store(X + 1, value.to(tl.float64))
+        tl.store(Bits, tl.cast(0.1, tl.int32, bitcast=True))
+
+    x = torch.empty((2, ), dtype=torch.float64, device=device)
+    bits = torch.empty((1, ), dtype=torch.int32, device=device)
+    kernel[(1, )](x, bits)
+    value = torch.tensor([0.1], dtype=torch.float32, device=device)
+    torch.testing.assert_close(x, value.to(torch.float64).expand(2), rtol=0, atol=0)
+    torch.testing.assert_close(bits, value.view(torch.int32), rtol=0, atol=0)
+
+
 def test_load_store_same_ptr(device):
 
     @triton.jit()

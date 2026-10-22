@@ -57,6 +57,35 @@ from triton._C.libtriton.gluon_ir import make_cga_layout
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
 
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("value", [0.1, -0.1])
+def test_fp64_scalar_memory_precision(scalar, value, device):
+
+    @gluon.jit
+    def kernel(X, SCALAR: ttgl.constexpr, VALUE: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+        if SCALAR:
+            offsets = 0
+        else:
+            offsets = ttgl.arange(0, 128, layout=LAYOUT)
+        ttgl.store(X + offsets, VALUE)
+        ttgl.store(X + 128 + offsets, ttgl.load(X + offsets, mask=False, other=VALUE))
+        ttgl.store(X + 256 + offsets, ttgl.cast(VALUE, ttgl.float64))
+        ttgl.atomic_add(X + 384 + offsets, VALUE)
+        ttgl.atomic_store(X + 512 + offsets, VALUE)
+        ttgl.atomic_cas(X + 640 + offsets, 0.0, VALUE)
+        ttgl.atomic_cas(X + 768 + offsets, VALUE, 3.0)
+
+    x = torch.zeros((7, 128), dtype=torch.float64, device=device)
+    x[6] = value
+    layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+    kernel[(1, )](x, scalar, value, layout)
+    expected = torch.full_like(x, value)
+    expected[6] = 3.0
+    if scalar:
+        x, expected = x[:, :1], expected[:, :1]
+    torch.testing.assert_close(x, expected, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("elementwise", [False, True])
 def test_inline_asm_shared_amd_compilation(elementwise):
 
