@@ -6,6 +6,7 @@ import torch
 import triton
 import triton.language as tl
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, quantize_mxfp4_fn, quantize_mxfp8_fn, quantize_nvfp4_fn
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_ue8m0_scale
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics import InFlexData, OutFlexData, MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from triton_kernels import target_info
@@ -39,6 +40,8 @@ class OptFlags:
     chain_factor: int = 1
     use_rowidxs: bool = False
     subtile_heavy_blocks: bool = False
+    maxnreg: Optional[int] = None
+    sched4reg: Optional[bool] = None
 
 
 _opt_flags_constraints: ContextVar[dict | None] = ContextVar("reduce_opt_flags_constraints", default=None)
@@ -141,6 +144,7 @@ def _select_reduce_forward_config(
     opt_flags_constraints = _get_opt_flags_constraints()
     chain_factor = opt_flags_constraints.get("chain_factor")
     num_warps = opt_flags_constraints.get("num_warps")
+    launch_options = {name: opt_flags_constraints.get(name) for name in ("maxnreg", "sched4reg")}
 
     use_static_loop = K <= 8
     if K in (2, 3, 4) and S0 <= 256 and Y_S1 >= 4096 and reduction_n == 1 and not has_mx:
@@ -169,7 +173,7 @@ def _select_reduce_forward_config(
             if min_s0_programs <= S0:
                 max_occupancy_block_s0 = max(1, S0 // min_s0_programs)
                 block_s0 = min(max_block_s0, max_occupancy_block_s0)
-                return OptFlags(block_s0, block_s1, block_s1, 4, use_static_loop, 1)
+                return OptFlags(block_s0, block_s1, block_s1, 4, use_static_loop, 1, **launch_options)
             block_s1 //= 2
 
     # When `row_idxs` is used, we use 32-bit bitmap and libdevice.ffs() to
@@ -209,6 +213,7 @@ def _select_reduce_forward_config(
         chain_factor=chain_factor,
         use_rowidxs=use_rowidxs,
         subtile_heavy_blocks=use_rowidxs and use_static_loop and K >= 5,
+        **launch_options,
     )
 
 
@@ -462,7 +467,7 @@ def _reduce_forward_inner(pid_s0, pid_s1,
             if XMx is not None:
                 xmx_ptrs = XMx + offs_r * stride_xmxr + offs_s0[:, None] * stride_xmx0 + offs_x_smx1[None, :] * stride_xmx1
                 xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_in_smx1[None, :], other=0.0)
-                xmx = (xmx.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
+                xmx = upcast_ue8m0_scale(xmx, tl.float32)
                 x = (xmx[:, :, None] * x.reshape([BLOCK_S0, BLOCK_X_S1 // 32, 32])).reshape([BLOCK_S0, BLOCK_X_S1])
             x = x * x_flex_scale
             if not IS_SCALE_NONE:
@@ -849,6 +854,9 @@ def reduce_forward(
         SUBTILE_HEAVY_BLOCKS=opt_flags.subtile_heavy_blocks,
         DIM=dim,  #
         num_warps=opt_flags.num_warps,  #
+        enable_fp_fusion=True,
+        **{name: value for name in ("maxnreg", "sched4reg")
+           if (value := getattr(opt_flags, name)) is not None},
     )
     return y, y_mxscale
 
@@ -934,7 +942,7 @@ def _reduce_backward(
         if XMx is not None:
             xmx_ptrs = XMx + k * stride_xmxr + offs_s0[:, None] * stride_xmx0 + offs_x_smx1[None, :] * stride_xmx1
             xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_in_smx1[None, :], other=0)
-            xmx = (xmx.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
+            xmx = upcast_ue8m0_scale(xmx, tl.float32)
             g = (g.reshape([BLOCK_S0, BLOCK_X_S1 // 32, 32]) * xmx[:, :, None]).reshape([BLOCK_S0, BLOCK_X_S1])
         # Multiply by global input flex scale
         g = g * x_flex_scale

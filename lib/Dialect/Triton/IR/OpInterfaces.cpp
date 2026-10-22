@@ -1,5 +1,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Matchers.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
@@ -7,6 +9,16 @@
 
 namespace mlir {
 namespace triton {
+
+LogicalResult eraseIfPredicateIsFalse(PredicatedOpInterface op,
+                                      PatternRewriter &rewriter) {
+  Value pred = op.getPredicateOperand();
+  if (op->getNumResults() || !pred || !matchPattern(pred, m_Zero()))
+    return failure();
+  rewriter.eraseOp(op);
+  return success();
+}
+
 namespace impl {
 
 LogicalResult verifyTransposeOpInterface(Operation *op) {

@@ -14,6 +14,15 @@ def TTG_SharedKind : I32EnumAttr<
   let cppNamespace = "::mlir::triton::gpu";
 }
 
+def TTG_BarrierScope : I32EnumAttr<
+    "BarrierScope", "barrier synchronization scope",
+    [
+      I32EnumAttrCase<"CTA", 0, "cta">,
+      I32EnumAttrCase<"Warp", 1, "warp">
+    ]> {
+  let cppNamespace = "::mlir::triton::gpu";
+}
+
 // Bitmask enum describing which memory domains a barrier/fence orders.
 def TTG_AddrSpace : I32BitEnumAttr<
     "AddrSpace", "",

@@ -132,8 +132,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       newFuncOp.setLinkage(LLVM::Linkage::Internal);
-      if (Attribute numWarps = funcOp->getAttr(triton::gpu::AttrNumWarpsName))
-        newFuncOp->setAttr("ws_num_warps", numWarps);
+      newFuncOp->setAttr(
+          "ws_num_warps",
+          rewriter.getI32IntegerAttr(triton::gpu::lookupNumWarps(funcOp)));
     }
 
     rewriter.eraseOp(funcOp);

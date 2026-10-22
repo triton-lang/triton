@@ -17,6 +17,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/MapVector.h"
@@ -91,13 +92,14 @@ bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
   while (auto ptrTy = dyn_cast<triton::PointerType>(elemTy))
     elemTy = ptrTy.getPointeeType();
 
-  if (!elemTy || !elemTy.isIntOrFloat()) {
+  if (!elemTy ||
+      !(elemTy.isIntOrFloat() || isa<triton::PackedFloat4E2M1Type>(elemTy))) {
     LDBG("unknown element type: " << elemTy);
     return false;
   }
 
   // step 3: check of byte-offset is within 2G
-  int64_t elemBitSz = elemTy.getIntOrFloatBitWidth();
+  int64_t elemBitSz = getIntOrFloatOrPtrBitWidth(elemTy);
   int64_t elemMaxIdx = smax.getSExtValue();
   int64_t byteOfst = (elemBitSz * elemMaxIdx + elemBitSz + 7) / 8;
   int64_t szLimit2GB = (1LL << 31) - 1;
@@ -499,12 +501,9 @@ private:
   bool analyzeSmallTensorOfst;
 };
 
-// Workaround to allow static_assert(false) on older compilers as it was
-// ill-formed before defect report CWG2518
-// (https://cplusplus.github.io/CWG/issues/2518.html)
-template <typename T> struct always_false : std::false_type {};
-
 template <typename SourceOp>
+  requires llvm::is_one_of<SourceOp, triton::LoadOp,
+                           triton::gpu::AsyncCopyGlobalToLocalOp>::value
 struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   using OpRewritePattern<SourceOp>::OpRewritePattern;
 
@@ -519,6 +518,10 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   mlir::LogicalResult
   matchAndRewrite(SourceOp op, PatternRewriter &rewriter) const override {
     LDBG("Try to convert: " << op);
+    if constexpr (std::is_same_v<SourceOp, triton::LoadOp>)
+      if (op.getIsVolatile())
+        return rewriter.notifyMatchFailure(
+            op, "Unsupported volatile load in ConvertTritonLoadToBufferLoad");
     Value ptr = op.getOperand(0);
 
     if (canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst)) {
@@ -530,7 +533,7 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
       auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
       Value basePtr = splatOp.getSrc();
       Value maybeOther{};
-      if (op.getOther() && !isZeroConst(op.getOther()))
+      if (op.getOther() && !isZeroFillConst(op.getOther()))
         maybeOther = op.getOther();
       Value maybeMask{};
       if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
@@ -547,17 +550,13 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
                 contig, axisAnalysisPass.getMaskAlignment(maybeMask));
           return triton::amdgpu::BufferLoadOp::create(
               rewriter, op->getLoc(), op.getType(), basePtr, tensorOffset,
-              blockStride, op.getCache(), maybeMask, maybeOther, contig);
-        } else if constexpr (std::is_same_v<
-                                 SourceOp,
-                                 triton::gpu::AsyncCopyGlobalToLocalOp>) {
+              blockStride, op.getCachePolicyAttr(), maybeMask, maybeOther,
+              contig);
+        } else {
           return triton::amdgpu::BufferLoadToLocalOp::create(
               rewriter, op->getLoc(), op.getType(), op.getResult(), basePtr,
-              tensorOffset, maybeMask, maybeOther, blockStride, op.getCache(),
-              op.getContiguity());
-        } else {
-          static_assert(always_false<SourceOp>::value,
-                        "Unsupported type in ConvertTritonLoadToBufferLoad");
+              tensorOffset, maybeMask, maybeOther, blockStride,
+              op.getCachePolicyAttr(), op.getContiguity());
         }
       }();
 
@@ -619,8 +618,8 @@ struct ConvertTritonStoreToBufferStore
           op->getLoc(), op);
 
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
-          op, op.getValue(), basePtr, tensorOffset, blockStride, op.getCache(),
-          maybeMask, contig);
+          op, op.getValue(), basePtr, tensorOffset, blockStride,
+          op.getCachePolicyAttr(), maybeMask, contig);
       return success();
     }
     LDBG("Failed to convert: " << op);

@@ -91,7 +91,7 @@ class IRSource:
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
-        self.language = Language.TRITON
+        self.language = Language.GLUON if self.ext == "glir" else Language.TRITON
         self.src = path.read_text()
         ir.load_dialects(context)
         backend.load_dialects(context)
@@ -113,14 +113,14 @@ class IRSource:
             self.signature = {k: ty for k, ty in enumerate(func_ty)}
 
     def hash(self):
-        return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
+        return hashlib.sha256(f"{self.ext}-{self.src}".encode("utf-8")).hexdigest()
 
     def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
         self.module.context = context
         return self.module
 
     def parse_options(self):
-        if self.ext == "ttgir":
+        if self.ext in ("glir", "ttgir"):
             num_warps = self.module.get_int_attr("ttg.num-warps")
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
             options = {'num_warps': num_warps}
@@ -137,7 +137,7 @@ def max_shared_mem(device):
 
 
 def parse(full_name, ext, context):
-    if ext == "ttir" or ext == "ttgir":
+    if ext in ("ttir", "glir", "ttgir"):
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
         return module
@@ -592,10 +592,12 @@ class CompiledKernel:
         run = driver.active.launcher_cls(self.src, self.metadata)
         with state.lock:
             state.run = run
+        # Backends may reserve additional shared memory at launch time.
+        shared = getattr(run, "shared", self.metadata.shared)
         # not enough shared memory to run the kernel
         max_shared = max_shared_mem(device)
-        if self.metadata.shared > max_shared:
-            return None, OutOfResources(self.metadata.shared, max_shared, "shared memory"), True
+        if shared > max_shared:
+            return None, OutOfResources(shared, max_shared, "shared memory"), True
         if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
             # Use blackwell max tmem size for now, this should be moved in device properties
             max_tmem_size = 512  # tmem size in number of columns
@@ -607,10 +609,9 @@ class CompiledKernel:
             _run_kernel_load_hook(knobs.runtime.kernel_load_start_hook, state, self.module, self.function, self.name,
                                   self.metadata_group, self.hash)
         _ensure_same_process(pid, generation)
-        warp_size = driver.active.get_current_target().warp_size
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         module, function, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared, device)
+            self.name, self.kernel, shared, device)
         _ensure_same_process(pid, generation)
         handles = (module, function, n_regs, n_spills, n_max_threads)
         with state.lock:
@@ -625,6 +626,7 @@ class CompiledKernel:
             self.n_spills = n_spills
             self.n_max_threads = n_max_threads
             state.handles_ready = True
+        warp_size = self.metadata.warp_size
         if self.metadata.num_warps * warp_size > n_max_threads:
             error = OutOfResources(self.metadata.num_warps * warp_size, n_max_threads, "threads")
             return handles, error, True

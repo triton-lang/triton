@@ -100,6 +100,8 @@ public:
     return needed;
   }
 
+  bool needsPtxasMaskedStoreBarrierWorkaround() const override { return true; }
+
   Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                          Operation *op) const override {
     // mask = 0 means no CTA predication.
@@ -163,7 +165,7 @@ public:
         ConSanTargetHooks::getMemEffectsOpInfo(op);
     if (!info) {
       if (!isa<ttng::BarrierExpectOp, ttng::TCGen5CommitOp,
-               ttng::ArriveBarrierOp>(op))
+               ttng::ArriveBarrierOp, ttng::AsyncCopyMbarrierArriveOp>(op))
         return std::nullopt;
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
@@ -174,10 +176,12 @@ public:
       info->pred = expectOp.getPred();
       info->barriers.push_back(
           {expectOp.getBarrier(), nullptr,
-           /*count=*/1, MemEffectsOpInfo::BarrierTrackingMode::Frontier,
+           expectOp.getPerWarp() ? ttg::lookupNumWarps(expectOp) : 1,
+           MemEffectsOpInfo::BarrierTrackingMode::Frontier,
            /*txCount=*/static_cast<int>(expectOp.getSize())});
     }
     if (auto copyOp = dyn_cast<ttng::TMEMCopyOp>(op)) {
+      info->pred = copyOp.getPred();
       namedOperands = {{copyOp.getSrc(), "Src"}, {copyOp.getDst(), "Dst"}};
     }
     if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
@@ -248,6 +252,12 @@ public:
       info->pred = arriveOp.getPred();
       info->barriers.push_back(
           {arriveOp.getBarrier(), nullptr, (int)arriveOp.getCount()});
+    }
+    if (auto arriveOp = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op)) {
+      int count = arriveOp.getNoIncrement() ? ttg::lookupNumWarps(op) * 32 : 0;
+      info->barriers.push_back(
+          {arriveOp.getBarrier(), nullptr, count,
+           MemEffectsOpInfo::BarrierTrackingMode::AsyncCopies});
     }
 
     if (!namedOperands.empty()) {

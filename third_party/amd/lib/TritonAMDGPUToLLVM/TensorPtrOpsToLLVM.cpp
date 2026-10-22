@@ -14,17 +14,17 @@ using namespace mlir::triton::gpu;
 namespace {
 // Validates that the tensor descriptor's strides and shared layout are
 // compatible with TDM. Requirements:
-//  - The shared order must be [rank-1, rank-2, ..., 0].
+//  - Non-unit block dimensions must be in reverse-rank shared order.
 //  - All stride-1 dimensions must be consecutive trailing dims.
 LogicalResult validateStridesAndSharedOrder(triton::MakeTensorDescOp op,
                                             Attribute sharedEnc,
                                             ArrayRef<int64_t> shape,
                                             ValueRange strides) {
-  int rank = shape.size();
   auto sharedOrder = triton::gpu::getOrder(
       cast<triton::gpu::SharedEncodingTrait>(sharedEnc), shape);
-  SmallVector<unsigned> expectedOrder(llvm::reverse(llvm::seq<unsigned>(rank)));
-  if (sharedOrder != ArrayRef(expectedOrder)) {
+  // Unit block dimensions do not affect the physical shared layout.
+  llvm::erase_if(sharedOrder, [&](unsigned dim) { return shape[dim] == 1; });
+  if (!llvm::is_sorted(sharedOrder, std::greater<unsigned>{})) {
     return op.emitError() << "requires shared order [rank-1, rank-2, ..., 0]";
   }
 
@@ -53,7 +53,7 @@ struct MakeTensorDescOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     if (op.getPadding() != PaddingOption::PAD_ZERO) {
       return op.emitError()
-             << "Padding with non-zero in TDM is not supported on GFX1250.";
+             << "Padding with non-zero in TDM is not supported on CDNA5.";
     }
 
     auto loc = op.getLoc();

@@ -1,4 +1,5 @@
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -395,13 +396,14 @@ static int computeOrigBitWidth(Value x) {
   if (llvm::any_of(slice, [](Operation *op) { return isa<Fp4ToFpOp>(op); }))
     return 4;
 
-  int origBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
+  int origBitWidth = getIntOrFloatOrPtrBitWidth(getElementTypeOrSelf(x));
   for (auto op : slice) {
     if (isa<LoadOp, DescriptorLoadLikeOpInterface>(op)) {
       if (auto tensorTy =
               dyn_cast<RankedTensorType>(op->getResultTypes().front())) {
-        origBitWidth =
-            std::min<int>(origBitWidth, tensorTy.getElementTypeBitWidth());
+        origBitWidth = std::min<int>(
+            origBitWidth,
+            getIntOrFloatOrPtrBitWidth(tensorTy.getElementType()));
       }
     }
   }
@@ -561,6 +563,22 @@ public:
     } else {
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
+      // Let K = getShapePerCTA(oldAType).back() and computeBitwidth be the
+      // dot operand bitwidth. Since kWidth = max(32 / minBitwidth, 1),
+      // MMAv2's four K lanes require 4 * max(32 / minBitwidth, 1) <= K.
+      // We have:
+      //   (a) K >= 4;
+      //   (b) minBitwidth >= 128 / K.
+      //
+      // Native operand packing is preserved by the invariant:
+      //   (c) minBitwidth <= computeBitwidth.
+      // Raising it for (b) could violate (c) only if 128 / K > computeBitwidth,
+      // hence K < 128 / computeBitwidth. This contradicts the CUDA frontend's
+      // requirement K >= 256 / computeBitwidth, which also implies (a).
+      minBitwidth = std::max<int64_t>(minBitwidth,
+                                      4 * 32 / getShapePerCTA(oldAType).back());
+      assert(minBitwidth <= oldAType.getElementTypeBitWidth() &&
+             "minBitwidth must not exceed the dot operand bitwidth");
       a = convertDotOperandForMMA(a, 0, minBitwidth, mmaResult.newRetType,
                                   rewriter);
       b = convertDotOperandForMMA(b, 1, minBitwidth, mmaResult.newRetType,
@@ -776,8 +794,8 @@ public:
     Operation *newDot = nullptr;
 
     // ScaledBlockedToMMA logic
-    int bitwidthA = oldAType.getElementType().getIntOrFloatBitWidth();
-    int bitwidthB = oldBType.getElementType().getIntOrFloatBitWidth();
+    int bitwidthA = getIntOrFloatOrPtrBitWidth(oldAType.getElementType());
+    int bitwidthB = getIntOrFloatOrPtrBitWidth(oldBType.getElementType());
     int minBitwidth = std::min(bitwidthA, bitwidthB);
 
     Value newA = convertDotOperandForMMA(a, 0, minBitwidth,
@@ -1054,7 +1072,9 @@ static void transposeDotOp(DotScaledOp dotOp) {
   Value result = DotScaledOp::create(
       builder, dotOp.getLoc(), cTransposed.getType(), rhsTransposed,
       lhsTransposed, cTransposed, dotOp.getBScale(), dotOp.getAScale(),
-      dotOp.getBElemType(), dotOp.getAElemType(), dotOp.getFastMath());
+      dotOp.getBElemType(), dotOp.getAElemType(), dotOp.getFastMath(),
+      /*lhs_k_pack=*/dotOp.getRhsKPack(),
+      /*rhs_k_pack=*/dotOp.getLhsKPack());
   Operation *transposedResult =
       TransOp::create(builder, result.getLoc(), result, transOrder);
   dotOp.replaceAllUsesWith(transposedResult);

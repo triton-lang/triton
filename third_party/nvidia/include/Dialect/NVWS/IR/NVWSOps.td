@@ -335,16 +335,11 @@ def NVWS_DescriptorLoadOp : NVWS_Op<"descriptor_load", [NVWS_DescriptorLoadOpInt
     Variadic<I32>:$indices,
     I32Attr:$txCount,
     Arg<TTG_MemDescType, "", GenericSharedWrite>:$result,
-    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
+    OptionalAttr<AnyAttr>:$cachePolicy
   );
 
   let assemblyFormat = [{
     $desc `[` $indices `]` $txCount $result
-    oilist(
-      `cacheModifier` `=` $cache |
-      `evictionPolicy` `=` $evict
-    )
     attr-dict `:` type(operands)
   }];
 }

@@ -3,8 +3,111 @@ import triton.language as tl
 
 import torch
 import math
+import subprocess
+import sys
+import textwrap
+import pytest
 
 _BLOCK_SIZE = 16
+
+
+def test_llvm_ir_to_bitcode():
+    from triton._C.libtriton import llvm
+
+    bitcode = llvm.to_bitcode("define void @kernel() { ret void }")
+    assert isinstance(bitcode, bytes)
+    assert bitcode.startswith(b"BC\xc0\xde")
+    assert b"\x00" in bitcode
+
+
+def test_llvm_ir_to_bitcode_reports_invalid_ir():
+    from triton._C.libtriton import llvm
+
+    with pytest.raises(RuntimeError, match="failed to parse LLVM IR.*expected top-level entity"):
+        llvm.to_bitcode("invalid LLVM IR")
+
+
+@pytest.mark.parametrize("dtype", ["i8", "i16", "i32", "i64", "f16", "f32", "f64"])
+@pytest.mark.parametrize("num_elements", [2, 4])
+@pytest.mark.parametrize("enable_nvptx_tti", [False, True])
+@pytest.mark.parametrize("triple", ["", "nvptx64-nvidia-cuda", "amdgcn-amd-amdhsa"])
+@pytest.mark.parametrize("dynamic_indices", [False, True])
+def test_nvptx_tti_vector_load_scalarization(dtype, num_elements, enable_nvptx_tti, triple, dynamic_indices, tmp_path):
+    from triton._C.libtriton import ir, llvm
+
+    vector_type = f"vector<{num_elements}x{dtype}>"
+    instructions = [f"%v = llvm.load %p <alignment = 32> : !llvm.ptr<1> -> {vector_type}"]
+    # Use pointer-width indices so widening costs do not mask the TTI's
+    # extractelement cost when deciding whether to scalarize the load.
+    if dynamic_indices:
+        instructions.append(f"%mask = llvm.mlir.constant({num_elements - 1} : i64) : i64")
+    for index in range(num_elements):
+        if dynamic_indices:
+            instructions.append(f"%i{index} = llvm.and %arg{index}, %mask : i64")
+        else:
+            instructions.append(f"%i{index} = llvm.mlir.constant({index} : i64) : i64")
+        instructions.append(f"%v{index} = llvm.extractelement %v[%i{index} : i64] : {vector_type}")
+    value = "%v0"
+    opcode = "add" if dtype.startswith("i") else "fadd"
+    for index in range(1, num_elements):
+        instructions.append(f"%sum{index} = llvm.{opcode} {value}, %v{index} : {dtype}")
+        value = f"%sum{index}"
+    instructions.append(f"llvm.return {value} : {dtype}")
+    arguments = ["%p: !llvm.ptr<1>"]
+    if dynamic_indices:
+        arguments.extend(f"%arg{index}: i64" for index in range(num_elements))
+    body = "\n".join(instructions)
+    source = tmp_path / "vector_load.mlir"
+    source.write_text(f'''module attributes {{llvm.target_triple = "{triple}"}} {{
+      llvm.func @unpack({", ".join(arguments)}) -> {dtype} {{
+        {body}
+      }}
+    }}''')
+    context = ir.context()
+    ir.load_dialects(context)
+    module = ir.parse_mlir_module(str(source), context)
+    llvm_context = llvm.context()
+    llvm_module = llvm.to_module(module, llvm_context)
+    llvm.optimize_module(llvm_module, llvm.OPTIMIZE_O3, disable_slp_vectorizer=True, enable_nvptx_tti=enable_nvptx_tti)
+    result = str(llvm_module)
+    llvm_type = {"f16": "half", "f32": "float", "f64": "double"}.get(dtype, dtype)
+    # Whole-register extracts are free only in our NVIDIA TTI. Packed sub-word
+    # elements, dynamic indices, and other targets retain the generic decision.
+    preserve_vector = (enable_nvptx_tti and triple in ("", "nvptx64-nvidia-cuda") and not dynamic_indices
+                       and dtype in ("i32", "i64", "f32", "f64"))
+    if preserve_vector:
+        assert f"load <{num_elements} x {llvm_type}>" in result
+        assert f"load {llvm_type}," not in result
+    else:
+        assert f"load <{num_elements} x {llvm_type}>" not in result
+        assert result.count(f"load {llvm_type},") == num_elements
+
+
+def test_binding_classes_released_at_shutdown():
+    script = textwrap.dedent("""
+        import os
+        from triton._C.libtriton import gluon_ir, ir
+        from triton.experimental.gluon.language import BlockedLayout
+
+        class ShutdownSentinel:
+            def __init__(self, message):
+                self.message = message
+
+            def __del__(self, write=os.write):
+                write(1, self.message)
+
+        ir.builder._shutdown_sentinel = ShutdownSentinel(b"builder released\\n")
+        context = ir.context()
+        ir.load_dialects(context)
+        builder = gluon_ir.GluonOpBuilder(context)
+        layout = BlockedLayout([1], [32], [4], [0])._to_ir(builder)
+        result = builder.to_linear_layout(layout, [128])
+        type(result)._shutdown_sentinel = ShutdownSentinel(b"layout released\\n")
+        del result, layout, builder, context
+    """)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+    assert set(result.stdout.splitlines()) == {"builder released", "layout released"}, result.stderr
+    assert "nanobind: leaked" not in result.stderr
 
 
 @triton.jit
@@ -97,6 +200,9 @@ def test_module_walk(device):
 
     ttir_module = src.make_ir(target, options, codegen_fns, module_map, context)
     ttir_module.walk(walk_fn)
+
+    k = ttir_module.get_function("add_kernel")
+    k.get_arg_int_attr(0, "tt.divisibility")
 
 
 def test_python_func_in_visit_call(device):

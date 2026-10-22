@@ -1,9 +1,6 @@
-#include "TritonNVIDIAGPUToLLVM/Passes.h"
-#include "TritonNVIDIAGPUToLLVM/Utility.h"
-
-#include "Allocation.h"
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -14,26 +11,17 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
-#include "mlir/Transforms/Passes.h"
-#include "triton/Analysis/Allocation.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/Gluon/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
-#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-
-namespace ttng = mlir::triton::nvidia_gpu;
+#include "llvm/IR/Value.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
@@ -93,6 +81,28 @@ void createSharedMemoryGlobal(ModuleOp mod, LLVMTypeConverter &typeConverter) {
       /*alignment=*/16, static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
 }
 
+void propagatePointerAlignment(ModuleOp mod) {
+  Builder builder(mod.getContext());
+  mod.walk([&](LLVM::LLVMFuncOp funcOp) {
+    for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
+      // Only original Triton pointers carry this attribute, not descriptors.
+      if (!funcOp.getArgAttr(i, "tt.pointee_type"))
+        continue;
+      auto attr = funcOp.getArgAttrOfType<IntegerAttr>(i, "tt.divisibility");
+      if (!attr)
+        continue;
+      auto alignment = attr.getValue().getZExtValue();
+      // AxisInfo gives poison pointer arguments a maximal divisor.
+      if (alignment == 1 || alignment > llvm::Value::MaximumAlignment)
+        continue;
+      auto alignName = LLVM::LLVMDialect::getAlignAttrName();
+      auto existing = funcOp.getArgAttrOfType<IntegerAttr>(i, alignName);
+      if (!existing || existing.getValue().ult(alignment))
+        funcOp.setArgAttr(i, alignName, builder.getI64IntegerAttr(alignment));
+    }
+  });
+}
+
 struct ConvertTritonGPUToLLVM
     : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
   using ConvertTritonGPUToLLVMBase::ConvertTritonGPUToLLVMBase;
@@ -101,15 +111,9 @@ struct ConvertTritonGPUToLLVM
       : ConvertTritonGPUToLLVMBase({computeCapability}) {}
   ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
       : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
-  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion,
-                         bool enableConcurrencySanitizer)
-      : ConvertTritonGPUToLLVMBase(
-            {computeCapability, ptxVersion, enableConcurrencySanitizer}) {}
-
   void runOnOperation() override;
 
 private:
-  LogicalResult prepareModule(ModuleOp mod, TargetInfo &targetInfo);
   LogicalResult lowerFunctions(ModuleOp mod, LLVMTypeConverter &typeConverter,
                                TargetInfo &targetInfo);
   void populateConversionPatterns(LLVMTypeConverter &typeConverter,
@@ -128,13 +132,6 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   MLIRContext *context = &getContext();
   ModuleOp mod = getOperation();
   TargetInfo targetInfo(computeCapability, ptxVersion);
-
-  // These analyses and transformations require high-level shared-memory ops,
-  // so they must all run before dialect conversion starts.
-  if (failed(prepareModule(mod, targetInfo))) {
-    signalPassFailure();
-    return;
-  }
 
   mlir::LowerToLLVMOptions option(context);
   option.overrideIndexBitwidth(32);
@@ -158,50 +155,14 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   }
 
   finalizeModule(mod);
-}
 
-LogicalResult ConvertTritonGPUToLLVM::prepareModule(ModuleOp mod,
-                                                    TargetInfo &targetInfo) {
-  ModuleAllocation allocation(
-      mod, mlir::triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(
-               targetInfo));
-  mlir::triton::nvidia_gpu::runClusterBarrierInsertion(allocation,
-                                                       computeCapability);
-  if (failed(mlir::triton::nvidia_gpu::runCrossCTAMBarrierInitSyncInsertion(
-          allocation, computeCapability)))
-    return failure();
-
-  ModuleMembarAnalysis membarPass(allocation, canSkipBarSync);
-  membarPass.run();
-  mlir::PassManager waitPm(mod.getContext());
-  waitPm.addPass(ttng::createTritonNvidiaGPUTMemWaitInsertionPass());
-  if (failed(waitPm.run(mod)))
-    return failure();
-
-  if (enableConcurrencySanitizer) {
-    auto hooks = mlir::triton::instrument::createConSanHooks("nvidia");
-    if (!hooks) {
-      mod.emitError("no ConSan hooks registered for nvidia");
-      return failure();
-    }
-    if (failed(mlir::triton::instrument::runConcurrencySanitizer(mod, *hooks)))
-      return failure();
-
-    // Normalize instrumentation-generated IR before allocation and lowering.
-    mlir::PassManager cleanupPm(mod.getContext());
-    cleanupPm.addPass(mlir::triton::gluon::createGluonCanonicalize());
-    cleanupPm.addPass(mlir::createCSEPass());
-    if (failed(cleanupPm.run(mod)))
-      return failure();
-  }
-
-  mlir::triton::nvidia_gpu::runClusterBarrierMbarAllocator(mod);
-  mod.walk([&](triton::gpu::GlobalScratchAllocOp) -> WalkResult {
-    mlir::triton::gpu::runGlobalScratchMemoryAllocation(mod);
-    return WalkResult::interrupt();
-  });
-
-  return success();
+  // Fold temporary aggregate packing before the pass-boundary verifier walks
+  // these large struct types. The normal verifier still checks the cleaned IR.
+  RewritePatternSet patterns(mod.getContext());
+  LLVM::InsertValueOp::getCanonicalizationPatterns(patterns, mod.getContext());
+  (void)applyPatternsGreedily(
+      mod, std::move(patterns),
+      GreedyRewriteConfig().setUseTopDownTraversal(true));
 }
 
 LogicalResult ConvertTritonGPUToLLVM::lowerFunctions(
@@ -265,7 +226,7 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
   mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
                                               targetInfo, benefit);
   mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
-      typeConverter, targetInfo, patterns, benefit);
+      typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
   mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(typeConverter,
                                                             patterns, benefit);
   mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
@@ -273,7 +234,7 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
   mlir::triton::NVIDIA::populateTCGen5MMAOpToLLVMPattern(
       typeConverter, patterns, benefit, targetInfo);
   mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
-                                                      benefit);
+                                                      targetInfo, benefit);
   mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter, patterns,
                                                       targetInfo);
   mlir::triton::populateFpSanToLLVMPatterns(typeConverter, patterns);
@@ -284,6 +245,8 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
 LogicalResult ConvertTritonGPUToLLVM::lowerTritonGPUOps(
     ModuleOp mod, LLVMTypeConverter &typeConverter, TargetInfo &targetInfo) {
   ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+  // Infer all call sites before turning divisibility into an LLVM contract.
+  propagatePointerAlignment(mod);
   RewritePatternSet patterns(mod.getContext());
   populateConversionPatterns(typeConverter, patterns, axisInfoAnalysis,
                              targetInfo);
@@ -334,39 +297,6 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability,
                                  int32_t ptxVersion) {
   return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability,
                                                   ptxVersion);
-}
-
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion,
-                                 bool enableConcurrencySanitizer) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, ptxVersion,
-                                                  enableConcurrencySanitizer);
-}
-
-bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
-                            bool /*beforeIsRead*/, bool /*afterIsRead*/,
-                            Allocation * /*allocation*/) {
-  // These mbarrier ops are single threaded, so are always synchronized wrt.
-  // each other.
-  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
-          before) &&
-      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
-          after))
-    return true;
-
-  // wait_barrier will never run ahead of the load it's waiting on
-  if (isa<ttng::TMALoadLikeOpInterface>(before) &&
-      isa<ttng::WaitBarrierOp>(after))
-    return true;
-
-  // Identical same-width commutative atomics can be freely reordered.
-  auto beforeAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(before);
-  auto afterAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(after);
-  return beforeAtomic && afterAtomic && beforeAtomic.isCommutative() &&
-         afterAtomic.isCommutative() &&
-         beforeAtomic.getAtomicRmwOp() == afterAtomic.getAtomicRmwOp() &&
-         beforeAtomic.getDst().getType().getElementType() ==
-             afterAtomic.getDst().getType().getElementType();
 }
 
 } // namespace mlir::triton

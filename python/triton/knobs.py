@@ -197,7 +197,6 @@ class env_nvidia_tool(env_base[str, NvidiaTool]):
         binary += sysconfig.get_config_var("EXE")
         self.binary = binary
         self.default_path = os.path.join(os.path.dirname(__file__), "backends", "nvidia", "bin", binary)
-        # Convert ptxas-blackwell to PTXAS_BLACKWELL, not PTXAS-BLACKWELL
         super().__init__(f"TRITON_{binary.upper().replace('-', '_')}_PATH")
 
     def get(self) -> NvidiaTool:
@@ -495,16 +494,20 @@ class runtime_knobs(base_knobs):
 
 class language_knobs(base_knobs):
     fp32_default: env_opt_str = env_opt_str("TRITON_F32_DEFAULT")
-    default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", True)
+    default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", False)
+    force_disable_fp_fusion: env_bool = env_bool("TRITON_FORCE_DISABLE_FP_FUSION")
+
+    def fp_fusion_enabled(self, requested: Optional[bool]) -> bool:
+        return not self.force_disable_fp_fusion and (self.default_fp_fusion if requested is None else requested)
 
 
 class nvidia_knobs(base_knobs):
     cuobjdump: env_nvidia_tool = env_nvidia_tool("cuobjdump")
     nvdisasm: env_nvidia_tool = env_nvidia_tool("nvdisasm")
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
-    ptxas_blackwell: env_nvidia_tool = env_nvidia_tool("ptxas-blackwell")
 
     dump_nvptx: env_bool = env_bool("NVPTX_ENABLE_DUMP")
+    use_slp_vectorizer: env_bool = env_bool("TRITON_USE_SLP_VECTORIZER", False)
     disable_ptxas_opt: env_bool = env_bool("DISABLE_PTXAS_OPT")
     ptxas_options: env_opt_str = env_opt_str("PTXAS_OPTIONS")
     mock_ptx_version: env_opt_str = env_opt_str("TRITON_MOCK_PTX_VERSION")
@@ -515,6 +518,8 @@ class nvidia_knobs(base_knobs):
 
 
 class amd_knobs(base_knobs):
+    codegen_path: env_opt_str = env_opt_str("TRITON_AMD_CODEGEN_PATH")
+    bitcode_path: env_opt_str = env_opt_str("TRITON_AMD_BITCODE_PATH")
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
@@ -529,8 +534,6 @@ class amd_knobs(base_knobs):
     use_async_copy: env_opt_bool = env_opt_bool("TRITON_HIP_USE_ASYNC_COPY")
     use_coexec_scheduler: env_opt_bool = env_opt_bool("TRITON_HIP_USE_COEXEC_SCHEDULER")
     use_expert_scheduling: env_opt_bool = env_opt_bool("TRITON_HIP_USE_EXPERT_SCHEDULING")
-
-    scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
     # Path to dump MIR files for debugging/analysis
     dump_mir: env_opt_str = env_opt_str("TRITON_DUMP_MIR")

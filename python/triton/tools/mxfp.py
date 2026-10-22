@@ -214,6 +214,13 @@ class MXFP4Tensor:
         return data.type(torch.uint8)
 
 
+def fp8e8m0_to_float32(scale):
+    """Decode raw E8M0 scale bytes as float32."""
+    scale = scale.view(torch.uint8)
+    bits = (scale.to(torch.int32) << 23).clamp_min(0x00400000)
+    return bits.masked_fill(scale == 255, 0x7FC00000).view(torch.float32)
+
+
 class MXScaleTensor:
 
     def __init__(self, data=None, size=None, device=None):
@@ -252,14 +259,7 @@ class MXScaleTensor:
 
     def to(self, dtype):
         assert dtype == torch.float32, "Currently only float32 is supported for f8e8m0 to float conversion"
-        data = self.data.type(dtype)
-        is_nan = (data == 255)
-        e_biased = data.clone()
-        e_biased[is_nan] = 0
-        e = e_biased - 127
-        value = torch.pow(2.0, e)
-        value[is_nan] = torch.nan
-        return value.type(dtype)
+        return fp8e8m0_to_float32(self.data)
 
     def _from_float(self, values):
         """

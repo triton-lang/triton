@@ -1,4 +1,5 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -15,6 +16,26 @@ namespace mlir::triton::gpu {
 } // namespace mlir::triton::gpu
 
 namespace {
+class FoldAbsIntoReduxPattern : public OpRewritePattern<NVVM::ReduxOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(NVVM::ReduxOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getKind() != NVVM::ReductionKind::FMAX &&
+        op.getKind() != NVVM::ReductionKind::FMIN)
+      return failure();
+    auto abs = op.getVal().getDefiningOp<LLVM::FAbsOp>();
+    if (!abs)
+      return failure();
+
+    rewriter.modifyOpInPlace(op, [&] {
+      op.getValMutable().assign(abs.getOperand());
+      op.setAbs(true);
+    });
+    return success();
+  }
+};
+
 class SelectConstantConditionPattern : public OpRewritePattern<LLVM::SelectOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -62,9 +83,9 @@ struct CanonicalizeLLVMIR
   void runOnOperation() override {
     LLVM::LLVMFuncOp func = getOperation();
     RewritePatternSet patterns(&getContext());
-    patterns
-        .add<SelectConstantConditionPattern, ElideFullClusterRankMaskPattern>(
-            &getContext());
+    patterns.add<SelectConstantConditionPattern,
+                 ElideFullClusterRankMaskPattern, FoldAbsIntoReduxPattern>(
+        &getContext());
 
     getContext()
         .getLoadedDialect<LLVM::LLVMDialect>()

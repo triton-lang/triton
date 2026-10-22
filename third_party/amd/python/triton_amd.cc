@@ -3,12 +3,15 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/include/hipblas_instance.h"
 #include "amd/include/hipblas_types.h"
+#include "amd/lib/Target/MFMASchedule/MFMASchedule.h"
+#include "dylib_utils.h"
 #include "lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
+#include "triton/Tools/LLVMOptions.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -31,6 +34,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
+#include "llvm/TargetParser/Triple.h"
 #include <array>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -44,14 +48,24 @@
 namespace py = nanobind;
 
 namespace {
-const char *const amdTargetTriple = "amdgcn-amd-amdhsa";
+llvm::Triple getAMDTargetTriple(const std::string &arch) {
+  llvm::AMDGPU::GPUKind gpuKind = llvm::AMDGPU::parseArchAMDGCN(arch);
+  llvm::Triple::SubArchType subArch = llvm::AMDGPU::getSubArch(gpuKind);
+  if (subArch == llvm::Triple::NoSubArch)
+    throw std::invalid_argument("invalid AMD GPU architecture: " + arch);
+
+  return llvm::Triple(llvm::Triple::amdgpu, subArch, llvm::Triple::AMD,
+                      llvm::Triple::AMDHSA);
+}
 
 void init_triton_amd_passes_ttgpuir(py::module_ &m) {
   using namespace mlir::triton;
-  m.def("add_to_llvmir",
-        [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
-          pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch, ftz));
-        });
+  m.def("add_to_llvmir", [](mlir::PassManager &pm, const std::string &arch,
+                            bool ftz, bool cuMode) {
+    pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch, ftz, cuMode));
+  });
+  ADD_PASS_OPTION_WRAPPER_1("add_membar", createTritonAMDGPUMembar,
+                            const std::string &);
   m.def("add_builtin_func_to_llvmir",
         [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
           pm.addPass(createConvertBuiltinFuncToLLVMPass(arch, ftz));
@@ -76,10 +90,9 @@ void init_triton_amd_passes_ttgpuir(py::module_ &m) {
   ADD_PASS_OPTION_WRAPPER_1("add_warp_pipeline_conversion",
                             mlir::triton::AMD::createConvertWarpPipelinePass,
                             const std::string &);
-  ADD_PASS_OPTION_WRAPPER_1(
-      "add_optimize_dot_operands",
-      mlir::triton::amdgpu::createTritonAMDGPUOptimizeDotOperands,
-      const std::string &);
+  ADD_PASS_OPTION_WRAPPER_1("add_optimize_dot_operands",
+                            mlir::createTritonAMDGPUOptimizeDotOperands,
+                            const std::string &);
   m.def("add_hoist_layout_conversions", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUHoistLayoutConversions());
@@ -324,6 +337,10 @@ static HipBlasInit initialize_hipblas_op(py::object &A, py::object &B,
 
 static std::optional<std::string> lldInvoke(const char *inPath,
                                             const char *outPath) {
+  // LLD resets every LLVM command line option while parsing its arguments, so
+  // it must not run while a compilation that depends on those options is in
+  // flight.
+  mlir::triton::tools::ExclusiveLLVMOptionAccess exclusiveOptions;
   // Workaround: Disable parallelism to avoid hangs caused by LLVM's thread pool
   // when the following code is executed in a forked child process.
   // Context: lld::elf::LinkerDriver::link uses parallelFor which uses the
@@ -343,15 +360,19 @@ static std::optional<std::string> lldInvoke(const char *inPath,
 }
 
 void init_triton_amd(py::module_ &m) {
+  mlir::triton::AMD::registerTargetInfo();
   m.doc() = "Python bindings to the AMD Triton backend";
+  init_triton_amd_loader(m);
 
   auto passes = m.def_submodule("passes");
   auto ttgpuir_m = passes.def_submodule("ttgpuir");
   init_triton_amd_passes_ttgpuir(ttgpuir_m);
 
-  m.attr("TARGET_TRIPLE") = amdTargetTriple;
   m.attr("CALLING_CONV_AMDGPU_KERNEL") =
       (unsigned)llvm::CallingConv::AMDGPU_KERNEL;
+
+  m.def("get_target_triple",
+        [](const std::string &arch) { return getAMDTargetTriple(arch).str(); });
 
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
@@ -362,9 +383,10 @@ void init_triton_amd(py::module_ &m) {
     context.loadAllAvailableDialects();
   });
 
-  m.def("attach_target_triple", [](llvm::Module *module) {
-    module->setTargetTriple(llvm::Triple(amdTargetTriple));
-  });
+  m.def("attach_target_triple",
+        [](llvm::Module *module, const std::string &arch) {
+          module->setTargetTriple(getAMDTargetTriple(arch));
+        });
 
   // Set target architecture ISA version
   m.def("set_isa_version", [](llvm::Module *module, const std::string &arch) {
@@ -434,7 +456,7 @@ void init_triton_amd(py::module_ &m) {
                               const std::string &features) {
     std::string error;
 
-    llvm::Triple triple(amdTargetTriple);
+    llvm::Triple triple = getAMDTargetTriple(arch);
     const llvm::Target *target =
         llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target)
@@ -490,7 +512,7 @@ void init_triton_amd(py::module_ &m) {
 
   m.def("has_architected_sgprs", [](const std::string &arch) {
     std::string error;
-    llvm::Triple triple(amdTargetTriple);
+    llvm::Triple triple = getAMDTargetTriple(arch);
     const llvm::Target *target =
         llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target)
@@ -540,17 +562,22 @@ void init_triton_amd(py::module_ &m) {
     }
   });
 
-  m.def("link_hsaco",
-        [](const std::string &inPath, const std::string &outPath) {
-          if (auto errString = lldInvoke(inPath.c_str(), outPath.c_str()))
-            throw std::runtime_error("LLD failed to link hsaco source " +
-                                     inPath + " into object file " + outPath +
-                                     " because " + errString.value());
-        });
+  m.def(
+      "link_hsaco",
+      [](const std::string &inPath, const std::string &outPath) {
+        if (auto errString = lldInvoke(inPath.c_str(), outPath.c_str()))
+          throw std::runtime_error("LLD failed to link hsaco source " + inPath +
+                                   " into object file " + outPath +
+                                   " because " + errString.value());
+      },
+      // Linking may wait for in-flight compilations on other threads; do not
+      // hold the GIL meanwhile.
+      py::call_guard<py::gil_scoped_release>());
 
-  m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
-    mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
-  });
+  m.def("add_mfma_schedule_pass",
+        [](llvm::Function *fn, const std::string &arch) -> bool {
+          return mlir::triton::AMD::runMFMASchedulePass(*fn, arch);
+        });
 
   auto hipBlas = m.def_submodule("hipblas");
   py::class_<HipblasLtInstance>(hipBlas, "HipblasLt")
@@ -567,7 +594,9 @@ void init_triton_amd(py::module_ &m) {
                                .attr("find_libraries")("hipblaslt");
           auto path = libraries.attr("__getitem__")(0);
           auto pathString = path.attr("__str__")();
-          const char *pathChars = PyUnicode_AsUTF8(pathString.ptr());
+          Py_ssize_t name_size;
+          const char *pathChars =
+              PyUnicode_AsUTF8AndSize(pathString.ptr(), &name_size);
           if (pathChars == nullptr)
             throw py::python_error();
           hipblasLtPath = pathChars;

@@ -1,4 +1,5 @@
 import importlib
+import functools
 import multiprocessing
 import os
 import re
@@ -12,8 +13,10 @@ from triton import knobs
 from typing import Optional, Set, Union
 from dataclasses import dataclass
 from contextlib import contextmanager
-from contextvars import ContextVar
 import pytest
+import resource
+
+from triton._compile_warmup_state import is_compile_warmup
 
 from numpy.random import RandomState
 from triton.backends import backends
@@ -29,16 +32,11 @@ dtypes_with_bfloat16 = dtypes + ['bfloat16']
 torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
-_COMPILE_WARMUP_ACTIVE = ContextVar("triton_compile_warmup_active", default=False)
 _PROCESS_POOL = None
 
 
 def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
-
-
-def is_compile_warmup():
-    return _COMPILE_WARMUP_ACTIVE.get()
 
 
 def random_int(low, high, *, warmup_value=None, **kwargs):
@@ -72,6 +70,28 @@ def is_ampere_or_newer():
 
 def is_blackwell():
     return is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]
+
+
+@triton.jit
+def _cluster_size_probe(out):
+    tl.store(out, 0)
+
+
+@functools.lru_cache(None)
+def _supports_cluster_size(device, num_ctas):
+    if torch.cuda.get_device_capability(device)[0] < 9:
+        return False
+    # A minimal kernel rejects cluster sizes that the device cannot launch at all.
+    out = torch.empty((), device=f"cuda:{device}")
+    kernel = _cluster_size_probe.warmup(out, grid=(1, ), num_warps=4, num_ctas=num_ctas)
+    kernel._init_handles()
+    return triton.runtime.driver.active.utils.cuOccupancyMaxActiveClusters(kernel.function, kernel.metadata.shared,
+                                                                           num_ctas) > 0
+
+
+def skip_if_unsupported_cluster_size(num_ctas):
+    if is_cuda() and num_ctas > 1 and not _supports_cluster_size(torch.cuda.current_device(), num_ctas):
+        pytest.skip(f"Device does not support {num_ctas} CTAs per cluster")
 
 
 def is_blackwell_ultra():
@@ -130,7 +150,7 @@ def is_hip_rdna4():
     return target is not None and target.backend == 'hip' and 'gfx120' in target.arch
 
 
-def is_hip_gfx1250():
+def is_hip_cdna5():
     target = get_current_target()
     return target is not None and target.backend == 'hip' and 'gfx1250' in target.arch
 
@@ -262,7 +282,9 @@ def tma_skip_msg(byval_only=False):
         return "Requires advanced TMA support (NVIDIA Hopper or higher, CUDA 12.3 or higher)"
 
 
-requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
+# Evaluate hardware requirements when pytest runs the test, so importing the
+# process helpers does not initialize CUDA before a worker's startup code.
+requires_tma = pytest.mark.skipif("not __import__('triton')._internal_testing.supports_tma()", reason=tma_skip_msg())
 
 
 def default_alloc_fn(size: int, align: int, _):
@@ -284,6 +306,12 @@ class ProcessResult:
 def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener):
     if env is not None:
         os.environ.update(env)
+
+    # Avoid initializing the GPU driver before the callback's startup code.
+    # The HIP build of PyTorch needs abort-on-device-assert disabled.
+    if not is_interpreter() and torch.version.hip is not None:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        os.environ["HIP_SKIP_ABORT_ON_GPU_ERROR"] = "1"
 
     # Capture driver/runtime writes to stderr that bypass Python's file objects.
     with open(stderr_file, "w+b") as tmp_stderr:

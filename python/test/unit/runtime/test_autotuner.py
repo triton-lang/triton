@@ -309,6 +309,66 @@ def test_prune_configs_fractional_top_k_after_early_prune():
     assert benchmarked == [1, 2, 3]
 
 
+def test_unknown_key_name_is_rejected():
+    # `key` is documented as a list of argument names. An unknown name used to be
+    # dropped from the tuning key by run(), so the kernel tuned once and then reused
+    # that config no matter how the real argument changed.
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            pass
+
+    for param in ("key", "reset_to_zero", "restore_value"):
+        with pytest.raises(ValueError, match="not kernel arguments"):
+            triton.runtime.Autotuner(
+                Kernel(),
+                arg_names=["n"],
+                configs=[triton.Config(kwargs={"BLOCK_SIZE": 32})],
+                key=["N"] if param == "key" else [],
+                reset_to_zero=["N"] if param == "reset_to_zero" else None,
+                restore_value=["N"] if param == "restore_value" else None,
+            )
+
+
+def test_restore_value_with_user_pre_hook():
+    # A user-supplied pre_hook replaces the default one that populates restore_copies,
+    # but the default post_hook that reads it stays installed, so running the autotuner
+    # used to raise AttributeError instead of benchmarking.
+    launched = []
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            launched.append(kwargs["BLOCK_SIZE"])
+
+    def do_bench(kernel_call, quantiles):
+        kernel_call()
+        return [1.0, 1.0, 1.0]
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(),
+        arg_names=["x"],
+        configs=[triton.Config(kwargs={"BLOCK_SIZE": 32}),
+                 triton.Config(kwargs={"BLOCK_SIZE": 64})],
+        key=[],
+        reset_to_zero=None,
+        restore_value=["x"],
+        pre_hook=lambda kwargs, reset_only=False: None,
+        do_bench=do_bench,
+    )
+
+    tuner.run(x=None)
+
+    # Both configs get benchmarked, then the winner is launched for real.
+    assert launched[:2] == [32, 64]
+
+
 def test_config_ir_override_changes_disk_cache_key():
     # Autotuner derives persisted result-cache keys from Config.__str__().
     first = triton.Config(kwargs={"BLOCK_SIZE": 32}, ir_override="first.ttir")
@@ -572,7 +632,7 @@ def test_exceed_tmem(device):
         if exception is not None:
             exception_out_of_resource = exception
 
-    @triton.autotune(configs=configs, key=['N'], do_bench=do_bench, pre_hook=None, post_hook=_post_hook)
+    @triton.autotune(configs=configs, key=[], do_bench=do_bench, pre_hook=None, post_hook=_post_hook)
     @triton.jit
     def dot_kernel(dst, BLOCK_SIZE: tl.constexpr):
         a = tl.full((BLOCK_SIZE, BLOCK_SIZE), 0.0, tl.float16)

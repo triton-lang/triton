@@ -11,6 +11,8 @@
 // Include shared C-compatible TDM utilities
 #include "../../backend/include/TDMCommon.h"
 
+using mlir::triton::gpu::PartitionedSharedEncodingAttr;
+
 namespace mlir::LLVM::AMD {
 
 namespace {
@@ -36,7 +38,7 @@ Value sequenceGroup0(RewriterBase &rewriter, Location loc, Value group0) {
              rewriter, loc, group0.getType(), ValueRange{group0},
              /*asm_string=*/"", /*constraints=*/"=s,0",
              /*has_side_effects=*/true, /*is_align_stack=*/false,
-             LLVM::TailCallKind::None,
+             LLVM::TailCallKind::None, /*convergent=*/false,
              LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
              /*operand_attrs=*/ArrayAttr::get(ctx, {}))
       .getRes();
@@ -149,7 +151,7 @@ std::pair<SmallVector<unsigned>, unsigned> distributeTDMWarpsAlignToPartition(
 }
 
 // Shared layout analysis for TDM gather/scatter, used by both
-// getTDMGatherScatterInstrinsicCount (wait-count pass) and
+// getTDMGatherScatterIntrinsicCount (wait-count pass) and
 // emitTDMGatherScatter (lowering) so the instruction-count logic
 // cannot get out of sync.
 //
@@ -1057,9 +1059,9 @@ static void prepareGatherScatterDescriptorBase(
   Value cgaColOffset = b.mul(b.zext(i64_ty, cgaColOffsetElem), tensorStride[1]);
   globalPtr = b.gep(globalPtrTy, elementType, globalPtr, cgaColOffset);
 
-  // tensorShape[1] is the OOB extent carried by the descriptor (set once via
-  // update_tensor_descriptor set_bounds / clamp_bounds, like the contiguous
-  // copy).  No per-call column clamp here.
+  // The descriptor has the OOB extent relative to its base. We need to clamp
+  // based on the CTA's column offset.
+  tensorShape[1] = clampTensorDimByOffset(b, tensorShape[1], cgaColOffsetElem);
 
   // For scatter with padding (store-from-LDS): clamp tensor_dim0 to the
   // original column width so OOB checking drops padding elements before they
@@ -1383,7 +1385,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
   }
 }
 
-size_t getTDMGatherScatterInstrinsicCount(RankedTensorType indicesType) {
+size_t getTDMGatherScatterIntrinsicCount(RankedTensorType indicesType) {
   return analyzeGatherScatterLayout(indicesType).numInstructions;
 }
 
@@ -1565,7 +1567,7 @@ SmallVector<Value> emitTDMPrefetch(RewriterBase &rewriter, Location loc,
   // need bounds checks. We currently only guard based on the whole tensor
   // extent, so some prefetched chunks might never be used if masking trims
   // inner dimensions. To add inner-dimension bounds checks we would need to
-  // expose the CTA offsets from the tensor descriptor, which is currenlty
+  // expose the CTA offsets from the tensor descriptor, which is currently
   // directly applied to the base pointer.
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   int numDims = blockShape.size();

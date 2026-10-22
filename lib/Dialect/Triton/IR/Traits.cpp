@@ -79,6 +79,18 @@ OpTrait::impl::verifySameOperandsAndResultEncoding(Operation *op) {
   return verifySameOperandsEncoding(op);
 }
 
+LogicalResult OpTrait::impl::verifySameResultsType(Operation *op) {
+  if (failed(verifyAtLeastNResults(op, 1)))
+    return failure();
+
+  auto type = op->getResult(0).getType();
+  for (auto resultType : llvm::drop_begin(op->getResultTypes()))
+    if (resultType != type)
+      return op->emitOpError() << "requires the same type for all results";
+
+  return success();
+}
+
 LogicalResult OpTrait::impl::verifyTensorSize(Operation *op) {
   for (auto opType : op->getOperandTypes()) {
     if (auto tensorType = dyn_cast<RankedTensorType>(opType)) {

@@ -31,6 +31,7 @@ struct MemEffectsOpInfo {
   enum class BarrierTrackingMode {
     Frontier,
     EffectWrites,
+    AsyncCopies,
   };
   struct Effects {
     struct StaticSharedBuffer {
@@ -146,6 +147,8 @@ public:
     return false;
   }
 
+  virtual bool needsPtxasMaskedStoreBarrierWorkaround() const { return false; }
+
   virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                                  Operation *op) const = 0;
 
@@ -239,9 +242,6 @@ getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
       name.str());
   return info;
 }
-
-LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                      const ConSanTargetHooks &hooks);
 
 using ConSanHooksFactory = std::function<std::unique_ptr<ConSanTargetHooks>()>;
 void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory);

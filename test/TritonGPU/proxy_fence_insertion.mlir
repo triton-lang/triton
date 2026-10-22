@@ -34,6 +34,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
+  // CHECK-LABEL: inline_asm_no_proxy_effects
+  tt.func @inline_asm_no_proxy_effects(%desc: !tt.tensordesc<64x64xf32, #shared>, %buffer: !ttg.memdesc<64x64xf32, #shared, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    // CHECK: ttg.inline_asm
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+    ttg.inline_asm "// opaque descriptor" {constraints = "r", pure = false} %buffer : (!ttg.memdesc<64x64xf32, #shared, #smem, mutable>) -> ()
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buffer, %bar, %true : !tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
+    tt.return
+  }
+
   // CHECK-LABEL: no_fence_for_disjoint_allocations
   tt.func @no_fence_for_disjoint_allocations(%desc: !tt.tensordesc<64x64xf32, #shared>, %bar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) {
     %c0 = arith.constant 0 : i32
@@ -1465,49 +1476,41 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 #inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func private @callee_proxy_write_to_second_partition(
-      %bar: !ttg.memdesc<1xi64, #inner, #smem, mutable>) {
+  tt.func private @callee_generic_read_from_second_partition() -> tensor<2xi64, #blocked> {
     %parent = ttg.local_alloc {allocation.offset = [0 : i32, 1024 : i32]} : () -> !ttg.memdesc<4xi64, #partitioned, #smem, mutable>
     %second = ttg.memdesc_subslice %parent [2] : !ttg.memdesc<4xi64, #partitioned, #smem, mutable> -> !ttg.memdesc<2xi64, #partitioned, #smem, mutable, 4>
-    ttng.clc_try_cancel %second, %bar : !ttg.memdesc<2xi64, #partitioned, #smem, mutable, 4>, !ttg.memdesc<1xi64, #inner, #smem, mutable>
-    tt.return
+    %result = ttg.local_load %second : !ttg.memdesc<2xi64, #partitioned, #smem, mutable, 4> -> tensor<2xi64, #blocked>
+    tt.return %result : tensor<2xi64, #blocked>
   }
 
   // CHECK-LABEL: callee_partition_frame_does_not_alias_caller_buffer
-  tt.func public @callee_partition_frame_does_not_alias_caller_buffer() {
+  tt.func public @callee_partition_frame_does_not_alias_caller_buffer() -> tensor<2xi64, #blocked> {
+    // CHECK-NOT: ttng.fence_async_shared
+    %result = tt.call @callee_generic_read_from_second_partition() {allocation.offset = 3072 : i32} : () -> tensor<2xi64, #blocked>
     %buffer = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<2xi64, #inner, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 16384 : i32} : () -> !ttg.memdesc<1xi64, #inner, #smem, mutable>
-    // CHECK: ttng.clc_load_result
-    %result = ttng.clc_load_result %buffer : !ttg.memdesc<2xi64, #inner, #smem, mutable> -> i128
-    "test.keep"(%result) : (i128) -> ()
-    // CHECK-NOT: ttng.fence_async_shared
-    // CHECK: tt.call @callee_proxy_write_to_second_partition
-    tt.call @callee_proxy_write_to_second_partition(%bar) {allocation.offset = 3072 : i32} : (!ttg.memdesc<1xi64, #inner, #smem, mutable>) -> ()
-    tt.return
-  }
-
-  tt.func private @callee_generic_read_from_second_partition() {
-    %parent = ttg.local_alloc {allocation.offset = [0 : i32, 1024 : i32]} : () -> !ttg.memdesc<4xi64, #partitioned, #smem, mutable>
-    %second = ttg.memdesc_subslice %parent [2] : !ttg.memdesc<4xi64, #partitioned, #smem, mutable> -> !ttg.memdesc<2xi64, #partitioned, #smem, mutable, 4>
-    %result = ttng.clc_load_result %second : !ttg.memdesc<2xi64, #partitioned, #smem, mutable, 4> -> i128
-    "test.keep"(%result) : (i128) -> ()
-    tt.return
+    // CHECK: ttng.clc_try_cancel
+    // CHECK-NEXT: tt.return
+    ttng.clc_try_cancel %buffer, %bar : !ttg.memdesc<2xi64, #inner, #smem, mutable>, !ttg.memdesc<1xi64, #inner, #smem, mutable>
+    tt.return %result : tensor<2xi64, #blocked>
   }
 
   // CHECK-LABEL: callee_partition_summary_translates_selected_base
-  tt.func public @callee_partition_summary_translates_selected_base() {
+  tt.func public @callee_partition_summary_translates_selected_base() -> tensor<2xi64, #blocked> {
     // CHECK: tt.call @callee_generic_read_from_second_partition
-    tt.call @callee_generic_read_from_second_partition() {allocation.offset = 3072 : i32} : () -> ()
+    %result = tt.call @callee_generic_read_from_second_partition() {allocation.offset = 3072 : i32} : () -> tensor<2xi64, #blocked>
+    // The second partition starts at 3072 + 1024 = 4096 in the caller.
     %buffer = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<2xi64, #inner, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #inner, #smem, mutable>
     // CHECK: ttng.fence_async_shared {bCluster = false}
-    // CHECK: ttng.clc_try_cancel
+    // CHECK-NEXT: ttng.clc_try_cancel
     ttng.clc_try_cancel %buffer, %bar : !ttg.memdesc<2xi64, #inner, #smem, mutable>, !ttg.memdesc<1xi64, #inner, #smem, mutable>
-    tt.return
+    tt.return %result : tensor<2xi64, #blocked>
   }
 }
 
