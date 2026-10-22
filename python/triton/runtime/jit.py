@@ -197,9 +197,11 @@ class DependenciesFinder(ast.NodeVisitor):
         self.local_names = {arg.arg for arg in node.args.args}
         for child in ast.iter_child_nodes(node):
             self.visit(child)
-            # Keyword-only parameters shadow globals in the body, but not in defaults.
-            if child is node.args and node.args.kwonlyargs:
+            # These parameters shadow globals in the body, but not in defaults.
+            if child is node.args:
                 self.local_names.update(arg.arg for arg in node.args.kwonlyargs)
+                if node.args.vararg is not None:
+                    self.local_names.add(node.args.vararg.arg)
 
     def visit_arguments(self, node):
         # The purpose of this function is to visit everything in `arguments`
@@ -264,6 +266,19 @@ class DependenciesFinder(ast.NodeVisitor):
 
         # This will re-visit the target, but that's OK.
         self.generic_visit(node)
+
+    def visit_NamedExpr(self, node):
+        self.visit(node.value)
+        self.visitAssnTarget(node.target)
+
+    def visit_ListComp(self, node):
+        # Comprehension targets remain bound in the compiler's local scope.
+        for generator in node.generators:
+            self.visit(generator.iter)
+            self.visitAssnTarget(generator.target)
+            for condition in generator.ifs:
+                self.visit(condition)
+        self.visit(node.elt)
 
     def visit_For(self, node):
         self.visitAssnTarget(node.target)

@@ -511,6 +511,60 @@ def test_local_shadows_global():
     kernel[(1, )]()
 
 
+@pytest.mark.parametrize("binding", ["vararg", "named_expression", "comprehension", "comprehension_named_expression"])
+def test_local_binding_shadows_global(binding, monkeypatch):
+    monkeypatch.setitem(globals(), "GLOBAL", lambda: None)
+
+    @triton.jit
+    def vararg(first, *GLOBAL):
+        return first + GLOBAL[0]
+
+    @triton.jit
+    def named_expression():
+        (GLOBAL := 1)
+        return GLOBAL
+
+    @triton.jit
+    def comprehension():
+        return [GLOBAL for GLOBAL in (1, 2)]
+
+    @triton.jit
+    def comprehension_named_expression():
+        [(GLOBAL := value) for value in (1, 2)]
+        return GLOBAL
+
+    kernel = {
+        "vararg": vararg, "named_expression": named_expression, "comprehension": comprehension,
+        "comprehension_named_expression": comprehension_named_expression
+    }[binding]
+    assert kernel.cache_key
+    assert not kernel.used_global_vals
+
+
+@pytest.mark.parametrize("reference", ["iterable", "following", "named_expression"])
+def test_local_binding_tracks_enclosing_reads(reference, monkeypatch):
+    monkeypatch.setitem(globals(), "GLOBAL", tl.constexpr((1, 2)))
+
+    @triton.jit
+    def iterable():
+        return [GLOBAL for GLOBAL in GLOBAL]
+
+    @triton.jit
+    def following():
+        [GLOBAL for GLOBAL in (1, 2)]
+        return GLOBAL
+
+    @triton.jit
+    def named_expression():
+        return (GLOBAL := GLOBAL[0]) + GLOBAL  # noqa: F823
+
+    kernel = {"iterable": iterable, "following": following, "named_expression": named_expression}[reference]
+    original = kernel.cache_key
+    monkeypatch.setitem(globals(), "GLOBAL", tl.constexpr((3, 4)))
+    kernel.hash = None
+    assert (kernel.cache_key != original) == (reference != "following")
+
+
 def test_keyword_only_shadows_global(monkeypatch):
     monkeypatch.setitem(globals(), "GLOBAL", 42)
 
