@@ -5,7 +5,7 @@ import pytest
 import triton
 from triton._utils import is_power_of_two, validate_block_shape
 from triton.runtime import driver
-from triton.testing import get_dram_gbps
+from triton.testing import Benchmark, get_dram_gbps, perf_report
 
 
 @pytest.mark.parametrize("y", [1, 32])
@@ -83,3 +83,18 @@ def test_get_dram_gbps_memory_data_rate(monkeypatch, backend, arch, properties, 
     active = SimpleNamespace(utils=utils, get_current_target=lambda: target)
     monkeypatch.setattr(driver, "_active", active)
     assert get_dram_gbps(0) == expected
+
+
+def test_perf_report_creates_save_path(tmp_path):
+    save_path = tmp_path / "new" / "results"
+    config = Benchmark(x_names=["size"], x_vals=[1], line_arg="provider", line_vals=["test"], line_names=["test"],
+                       ylabel="value", plot_name="report", args={})
+
+    @perf_report(config)
+    def benchmark(size, provider):
+        return 1.0
+
+    benchmark.run(save_path=str(save_path))
+    assert (save_path / "report.png").exists()
+    assert (save_path / "report.csv").exists()
+    assert (save_path / "results.html").exists()

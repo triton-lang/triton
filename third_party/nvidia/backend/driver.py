@@ -264,6 +264,7 @@ class CudaLauncher(object):
         tensordesc_abi = TensorDescABI.CUDA_TMA if tensordesc_meta else TensorDescABI.DECOMPOSED
 
         self.gsan_enabled = is_enabled(metadata, "gsan")
+        self.gsan_profile_enabled = is_enabled(metadata, "gsan-profile")
         self.shared = metadata.shared
         max_occupancy = getattr(metadata, "max_occupancy", None)
         if max_occupancy is not None:
@@ -278,7 +279,7 @@ class CudaLauncher(object):
             shared_per_cta = properties["max_shared_mem_per_multiprocessor"] // max_occupancy
             min_shared = shared_per_cta // 128 * 128 - properties["reserved_shared_mem_per_block"]
             self.shared = max(self.shared, min_shared)
-        if self.gsan_enabled:
+        if self.gsan_enabled or self.gsan_profile_enabled:
             signature["_gsan_globals_ptr"] = "*i8"
             signature["_gsan_launch_table_ptr"] = "*i8"
             signature["_gsan_launch_index"] = "i64"
@@ -324,7 +325,10 @@ class CudaLauncher(object):
             profile_scratch = allocate_default_profile_scratch(self.profile_scratch_size, self.profile_scratch_align)
 
         kernel_args = args
-        if self.gsan_enabled:
+        if self.gsan_profile_enabled:
+            from triton.experimental.gsan.profile import _launch_state
+            kernel_args = (*args, _launch_state(), 0, 0)
+        elif self.gsan_enabled:
             if active_driver.utils.is_stream_capturing(stream):
                 raise RuntimeError("GSan does not support CUDA graph capture")
 

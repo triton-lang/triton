@@ -1003,6 +1003,9 @@ def conv2d_im2col_kernel(
         #   offsets = [r, s]
         # TMA applies offsets to the spatial coords, so start is:
         #   [batch_id, out_y*stride_h-pad_h+r, out_x*stride_w-pad_w+s, ci_block*BLOCK_K]
+        # The input tiles are single-buffered. Wait for the previous MMA to
+        # finish reading them before overwriting them with the next TMA loads.
+        mma = mma.wait_num_outstanding(0)
         mbarrier.expect(tma_bar, in_desc.block_type.nbytes + weight_desc.block_type.nbytes)
         tma.async_load_im2col(
             in_desc,
@@ -1021,7 +1024,6 @@ def conv2d_im2col_kernel(
         mbarrier.wait(tma_bar, phase=phase)
 
         # acc += A @ B^T
-        mma = mma.wait_num_outstanding(0)
         mma = mma.issue_async_mma(a_smem, b_smem.permute((1, 0)))
 
         phase ^= 1

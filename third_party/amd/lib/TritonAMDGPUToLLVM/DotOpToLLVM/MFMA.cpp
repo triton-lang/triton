@@ -152,6 +152,7 @@ struct DotOpMFMAConversionHelper {
                rewriter, loc, acc.getType(), ValueRange{acc},
                /*asm_string=*/"", constraints, /*has_side_effects=*/false,
                /*is_align_stack=*/false, LLVM::TailCallKind::None,
+               /*convergent=*/false,
                LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
                /*operand_attrs=*/ArrayAttr())
         ->getResult(0);
