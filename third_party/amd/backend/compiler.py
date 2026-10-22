@@ -607,6 +607,8 @@ class HIPBackend(BaseBackend):
         use_async_copy = is_async_copy_enabled(options.base_arch)
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
         amd.passes.ttgpuir.add_optimize_descriptor_encoding(pm)
+        if amd.supports_tdm(options.arch):
+            amd.passes.ttgpuir.add_expand_tdm_reduce(pm)
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
         amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
         if use_async_copy:
@@ -696,6 +698,7 @@ class HIPBackend(BaseBackend):
             passes.gluon.add_canonicalizer(pm)
             passes.common.add_cse(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        amd.passes.ttgpuir.add_lower_global_reduce(pm)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
         ##    of the value of kernel arg `allow_flush_denorm`.

@@ -1971,6 +1971,26 @@ LogicalResult AsyncTDMGatherOp::verify() {
   return success();
 }
 
+LogicalResult ExtractTensorDescriptorFieldsOp::verify() {
+  auto descTy = getDesc().getType();
+  unsigned rank = descTy.getShape().size();
+  if (rank < 1 || rank > 5 || getNumResults() != 2 * rank + 2)
+    return emitOpError(
+        "expected base, rank bounds, rank strides, and predicate for rank 1-5");
+  auto ptrTy = dyn_cast<triton::PointerType>(getResult(0).getType());
+  if (!ptrTy || ptrTy.getAddressSpace() != triton::PtrAddrSpace::Global ||
+      ptrTy.getPointeeType() != descTy.getSignlessBlockType().getElementType())
+    return emitOpError(
+        "expected a global pointer to the descriptor element type");
+  for (unsigned i = 1; i <= rank; ++i)
+    if (!getResult(i).getType().isInteger(32) ||
+        !getResult(rank + i).getType().isInteger(64))
+      return emitOpError("expected i32 bounds and i64 element strides");
+  if (!getResult(2 * rank + 1).getType().isInteger(32))
+    return emitOpError("expected an i32 predicate");
+  return success();
+}
+
 // -- UpdateTensorDescriptorOp --
 LogicalResult UpdateTensorDescriptorOp::verify() {
   auto descTy = getDesc().getType();
@@ -2118,6 +2138,14 @@ LogicalResult ClusterBarrierWaitOp::verify() {
 }
 
 // -- PredicatedOpInterface implementations --
+
+Value GlobalReduceOp::getPredicateOperand() { return getMask(); }
+void GlobalReduceOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+Type GlobalReduceOp::getPredicateOperandTypeLike() {
+  return getVal().getType();
+}
 
 Value BufferLoadOp::getPredicateOperand() { return getMask(); }
 void BufferLoadOp::setPredicateOperand(Value pred) {

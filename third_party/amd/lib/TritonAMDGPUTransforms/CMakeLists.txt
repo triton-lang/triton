@@ -6,6 +6,7 @@ add_triton_library(TritonAMDGPUTransforms
   ConSanAMD.cpp
   ConvertToBufferOps.cpp
   ConvertToTensorOps.cpp
+  ExpandTDMReduce.cpp
   OptimizeBufferOpPtr.cpp
   OptimizeDescriptorEncoding.cpp
   OptimizeEpilogue.cpp

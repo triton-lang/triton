@@ -634,3 +634,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: ttg.local_load
 // CHECK: ttg.local_load
 // CHECK: tt.dot_scaled
+
+// -----
+
+// The reduction remains visible during software pipelining. Dynamic
+// iteration predicates must mask both an unmasked reduction and one with an
+// existing per-element mask in the peeled epilogue. The steady-state loop
+// retains the original masks.
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @global_reduce_pipeline_predication(%desc: !tt.tensordesc<32x16xbf16>, %rhs: tensor<16x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %ptrs: tensor<32x64x!tt.ptr<f32>, #blocked>, %mask: tensor<32x64xi1, #blocked>, %ub: i32) {
+    %zero = arith.constant 0 : i32
+    %step = arith.constant 16 : i32
+    %acc = arith.constant dense<0.0> : tensor<32x64xf32, #blocked>
+    scf.for %iv = %zero to %ub step %step : i32 {
+      %tile = tt.descriptor_load %desc[%zero, %iv] : !tt.tensordesc<32x16xbf16> -> tensor<32x16xbf16, #blocked>
+      %lhs = ttg.convert_layout %tile : tensor<32x16xbf16, #blocked> -> tensor<32x16xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+      %dot = tt.dot %lhs, %rhs, %acc : tensor<32x16xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<16x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<32x64xf32, #blocked>
+      amdg.global_reduce fadd, %ptrs, %dot : tensor<32x64x!tt.ptr<f32>, #blocked>, tensor<32x64xf32, #blocked>
+      amdg.global_reduce fadd, %ptrs, %dot, %mask : tensor<32x64x!tt.ptr<f32>, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xi1, #blocked>
+    }
+    tt.return
+  }
+}
+
+// CHECK-LABEL: tt.func @global_reduce_pipeline_predication
+// CHECK: scf.for
+// CHECK: amdg.global_reduce fadd, %[[PTRS:[^, ]+]], %[[DOT:[^ ]+]] : tensor<32x64x!tt.ptr<f32>
+// CHECK-NEXT: amdg.global_reduce fadd, %[[PTRS]], %[[DOT]], %[[MASK:[^ ]+]] :
+// CHECK: scf.yield
+// CHECK: %[[PRED:.+]] = tt.splat %[[ITER_PRED:[^ ]+]] : i1 -> tensor<32x64xi1
+// CHECK: amdg.global_reduce fadd, {{.*}}, %[[PRED]] :
+// CHECK: %[[PRED2:.+]] = tt.splat %[[ITER_PRED]] : i1 -> tensor<32x64xi1
+// CHECK: %[[COMBINED:.+]] = arith.andi %[[PRED2]], %[[MASK]] : tensor<32x64xi1
+// CHECK: amdg.global_reduce fadd, {{.*}}, %[[COMBINED]] :
+// LDS_PREFETCH-LABEL: tt.func @global_reduce_pipeline_predication
+// LDS_PREFETCH: amdg.global_reduce fadd, {{.*}}, %{{[^ ]+}} :
+// LDS_PREFETCH: amdg.global_reduce fadd, {{.*}}, %{{[^ ]+}} :

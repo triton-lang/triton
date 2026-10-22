@@ -135,6 +135,33 @@ struct MakeTensorDescOpConversion
   }
 };
 
+struct ExtractTensorDescriptorFieldsOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::amdgpu::ExtractTensorDescriptorFieldsOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::ExtractTensorDescriptorFieldsOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    unsigned rank = op.getDesc().getType().getShape().size();
+    Value descriptor = adaptor.getDesc();
+    auto groups = LLVM::AMD::unpackTDMDescriptor(rewriter, loc, descriptor);
+    auto [base, bounds, strides] =
+        LLVM::AMD::decodeTDMDescriptorFull(rewriter, loc, groups, rank);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    // The predicate is the first i32 in the packed descriptor.
+    Value predicate = b.extract_val(rewriter.getI32Type(), descriptor, 0);
+
+    SmallVector<Value> fields{base};
+    llvm::append_range(fields, bounds);
+    llvm::append_range(fields, strides);
+    fields.push_back(predicate);
+    rewriter.replaceOp(op, fields);
+    return success();
+  }
+};
+
 struct UpdateTensorDescriptorOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::UpdateTensorDescriptorOp> {
   using ConvertOpToLLVMPattern<
@@ -180,5 +207,7 @@ void mlir::triton::AMD::populateTensorPtrOpsToLLVMPatterns(
     PatternBenefit benefit) {
   patterns.add<MakeTensorDescOpConversion>(typeConverter, benefit);
   patterns.add<UpdateTensorDescriptorOpConversion>(typeConverter, benefit);
+  patterns.add<ExtractTensorDescriptorFieldsOpConversion>(typeConverter,
+                                                          benefit);
   return;
 }
