@@ -29,8 +29,8 @@ using namespace mlir::triton;
 
 namespace {
 
-void printBasis(const llvm::SmallVector<int32_t> &basis,
-                const std::string &name) {
+[[maybe_unused]] void printBasis(const llvm::SmallVector<int32_t> &basis,
+                                 const std::string &name) {
   llvm::errs() << name << ": ";
   for (int32_t b : basis)
     llvm::errs() << b << " ";
