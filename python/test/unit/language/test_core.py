@@ -647,6 +647,32 @@ def test_shift_op(dtype_x, dtype_y, op, num_ctas, device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("bits", [8, 16, 32, 64])
+def test_ashr_unsigned_result(device, bits):
+
+    @triton.jit
+    def kernel(X, Y, Positive, SHIFT_TYPE: tl.constexpr):
+        offsets = tl.arange(0, 4)
+        x = tl.load(X + offsets)
+        shifts = tl.full((4, ), 1, SHIFT_TYPE)
+        result = x >> shifts
+        tl.static_assert(result.dtype == SHIFT_TYPE)
+        tl.store(Y + offsets, result.to(tl.uint64))
+        tl.store(Positive + offsets, result > 0)
+
+    signed_dtype = getattr(np, f"int{bits}")
+    unsigned_dtype = getattr(np, f"uint{bits}")
+    values = np.array([-4, -8, 0, 8], dtype=signed_dtype)
+    expected = (values >> 1).view(unsigned_dtype)
+    x = to_triton(values, device=device)
+    y = to_triton(np.zeros(4, dtype=np.uint64), device=device)
+    positive = torch.empty((4, ), dtype=torch.bool, device=device)
+    kernel[(1, )](x, y, positive, getattr(tl, f"uint{bits}"))
+    np.testing.assert_array_equal(to_numpy(y), expected.astype(np.uint64))
+    np.testing.assert_array_equal(to_numpy(positive), expected > 0)
+
+
+@pytest.mark.interpreter
 def test_interpreter_ashr_does_not_mutate_uint64_rhs(device):
 
     @triton.jit
