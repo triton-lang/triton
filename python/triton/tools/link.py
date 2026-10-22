@@ -53,7 +53,7 @@ class HeaderParser:
                 if _exists(m):
                     ker_name, c_sig, algo_info = m.group(1), m.group(2), m.group(3)
                     name, sig_hash, suffix = self._match_name(ker_name)
-                    algo_hash = hashlib.sha256(algo_info.encode()).hexdigest()[:8]
+                    algo_hash = hashlib.sha256(algo_info.encode()).hexdigest()
                     c_types, arg_names = self._match_c_sig(c_sig)
                     num_specs, sizes = self._match_suffix(suffix, c_sig)
                     self._add_kernel(

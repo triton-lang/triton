@@ -42,8 +42,9 @@ def test_link_extern_libs(use_libdevice, kernel, monkeypatch):
     assert (link_called == use_libdevice)
 
 
-@pytest.mark.parametrize("constant", ["-1", "0.5", "-0.0", "1e+20", "inf", "nan"])
-def test_aot_linker_constexpr_symbols(tmp_path, constant):
+@pytest.mark.parametrize("constant, other_constant", [("-1", "2"), ("0.5", "2"), ("-0.0", "2"), ("1e+20", "2"),
+                                                      ("inf", "2"), ("nan", "2"), ("101605", "145791")])
+def test_aot_linker_constexpr_symbols(tmp_path, constant, other_constant):
     from triton.tools.link import (
         HeaderParser,
         make_func_pointers,
@@ -52,7 +53,8 @@ def test_aot_linker_constexpr_symbols(tmp_path, constant):
     )
 
     parser = HeaderParser()
-    for signature_hash, suffix, value in [("aaaa", "0d", constant), ("bbbb", "", constant), ("cccc", "", "2")]:
+    for signature_hash, suffix, value in [("aaaa", "0d", constant), ("bbbb", "", constant),
+                                          ("cccc", "", other_constant)]:
         parser.extract_linker_meta(f"// tt-linker: kernel_{signature_hash}_{suffix}:int32_t x:{value}_warps1xstages3")
     assert len(parser.kernels) == 2
     assert sorted(len(metas) for metas in parser.kernels.values()) == [1, 2]
