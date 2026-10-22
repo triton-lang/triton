@@ -65,12 +65,19 @@ bool mustLoadToRegisters(Operation *op) {
     return true;
 
   Attribute loadEncoding;
+  auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
   if (auto descLoad = dyn_cast<DescriptorLoadLikeOpInterface>(op)) {
-    auto tensorType = cast<RankedTensorType>(op->getResult(0).getType());
     loadEncoding = nvidia_gpu::getEncodingFromDescriptor(op, tensorType,
                                                          descLoad.getDesc());
   }
-  return loadEncoding && (loadEncoding != alloc.getType().getEncoding());
+  // A TMA buffer feeds the alloc in place when the two encodings describe the
+  // same layout, even if spelled differently (e.g. an unswizzled nvmma
+  // descriptor behind a shared_linear TMEM-copy scale sink).
+  auto allocEncoding = alloc.getType().getEncoding();
+  return loadEncoding && loadEncoding != allocEncoding &&
+         !ttg::areLayoutsEquivalent(
+             tensorType.getShape(), cast<ttg::LayoutEncodingTrait>(loadEncoding),
+             cast<ttg::LayoutEncodingTrait>(allocEncoding));
 }
 
 int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
@@ -281,7 +288,10 @@ static bool hasNonMMAUsers(Operation *op) {
   return llvm::any_of(op->getUsers(), [](Operation *user) {
     if (user->hasTrait<OpTrait::MemDescViewTrait>())
       return hasNonMMAUsers(user);
-    return !isa<ttng::MMAv5OpInterface, ttng::WaitBarrierOp>(user);
+    // tcgen05.cp feeding a scaled MMA is issued by the lead CTA like the MMA
+    // itself, so the two-CTA load barrier covers it as well.
+    return !isa<ttng::MMAv5OpInterface, ttng::WaitBarrierOp, ttng::TMEMCopyOp>(
+        user);
   });
 }
 
@@ -389,7 +399,14 @@ void createTMABarrierAndWait(
     bool needsClusterBarrier = false;
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
-      int loadSize = product(getShapePerCTA(tensorTy));
+      // Count the bytes each CTA receives: the shared buffer's CTA layout, not
+      // the register tensor's, decides it (a buffer broadcast across a CTA pair,
+      // e.g. two-CTA MMA scales for B, lands whole in every CTA).
+      Attribute bufferEncoding = asyncLoads[op].sharedEncoding;
+      int loadSize =
+          bufferEncoding
+              ? product(getShapePerCTA(bufferEncoding, tensorTy.getShape()))
+              : product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
       needsClusterBarrier |=
           twoCTAs &&

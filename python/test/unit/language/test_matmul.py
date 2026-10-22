@@ -397,6 +397,89 @@ def test_tma_matmul_two_ctas_layout(num_ctas, BM, BN, warp_specialize, persisten
     assert all(".multicast" not in line for line in compiled.asm["ptx"].splitlines() if "cp.async.bulk.tensor" in line)
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("fmt", ["nvfp4", "mxfp8", "mxfp8_mxfp4"])
+@pytest.mark.parametrize("persistent", [False, True])
+def test_tma_scaled_matmul_two_ctas(fmt, persistent, device):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, A_SCALE, B_SCALE, C, M, N, K, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+               VEC: tl.constexpr, A_FP4: tl.constexpr, B_FP4: tl.constexpr, PERSISTENT: tl.constexpr):
+        REP_K: tl.constexpr = BK // VEC // 4
+        A_ELEM_PER_BYTE: tl.constexpr = 2 if A_FP4 else 1
+        B_ELEM_PER_BYTE: tl.constexpr = 2 if B_FP4 else 1
+        A_FMT: tl.constexpr = "e2m1" if A_FP4 else "e4m3"
+        B_FMT: tl.constexpr = "e2m1" if B_FP4 else "e4m3"
+        for tile in tl.range(tl.program_id(0),
+                             tl.cdiv(M, BM) * tl.cdiv(N, BN), tl.num_programs(0), warp_specialize=PERSISTENT,
+                             disallow_acc_multi_buffer=True):
+            m = tile // tl.cdiv(N, BN) * BM
+            n = tile % tl.cdiv(N, BN) * BN
+            acc = tl.zeros((BM, BN), tl.float32)
+            for k in range(tl.cdiv(K, BK)):
+                a = A.load([m, k * (BK // A_ELEM_PER_BYTE)])
+                b = B.load([n, k * (BK // B_ELEM_PER_BYTE)])
+                a_scale = A_SCALE.load([0, m // 128, k * REP_K, 0, 0])
+                b_scale = B_SCALE.load([0, n // 128, k * REP_K, 0, 0])
+                a_scale = a_scale.reshape(BM // 128, REP_K, 32, 4, 4).trans(0, 3, 2, 1, 4).reshape(BM, BK // VEC)
+                b_scale = b_scale.reshape(BN // 128, REP_K, 32, 4, 4).trans(0, 3, 2, 1, 4).reshape(BN, BK // VEC)
+                acc = tl.dot_scaled(a, a_scale, A_FMT, b.T, b_scale, B_FMT, acc)
+            C.store([m, n], acc.to(tl.float16))
+
+    a_fp4 = fmt == "nvfp4"
+    b_fp4 = fmt in ("nvfp4", "mxfp8_mxfp4")
+    VEC = 16 if fmt == "nvfp4" else 32
+    BM, BN = 256, 256
+    BK = 256 if a_fp4 and b_fp4 else 128
+    M, N, K = 2 * BM, 2 * BN, 4 * BK
+    torch.manual_seed(0)
+
+    def operand(rows, fp4):
+        ref = MXFP4Tensor(size=(rows, K), device=device).random()
+        return (ref.to_packed_tensor(dim=1) if fp4 else ref.to(torch.float32).to(torch.float8_e4m3fn)), ref.to(torch.float32)
+
+    def scales(rows):
+        # the packed 128x4 scale blocks the 5D descriptor reads: [rows // 128, K // VEC // 4, 32, 16]
+        raw = torch.rand((rows // 128, K // VEC // 4, 32, 16), device=device) + 1e-8
+        if fmt == "nvfp4":
+            packed = raw.to(torch.float8_e4m3fn)
+            values = packed.to(torch.float32)
+        else:
+            mx_scale = MXScaleTensor(raw)
+            packed, values = mx_scale.data, mx_scale.to(torch.float32)
+        values = values.reshape(rows // 128, K // VEC // 4, 32, 4, 4).permute(0, 3, 2, 1, 4).reshape(rows, K // VEC)
+        return packed.reshape(1, rows // 128, K // VEC // 4, 2, 256), values.repeat_interleave(VEC, dim=1)
+
+    a, a_ref = operand(M, a_fp4)
+    b, b_ref = operand(N, b_fp4)
+    a_scale, a_scale_ref = scales(M)
+    b_scale, b_scale_ref = scales(N)
+    c = torch.empty((M, N), device=device, dtype=torch.float16)
+    descs = [
+        TensorDescriptor.from_tensor(a, [BM, BK // (2 if a_fp4 else 1)]),
+        TensorDescriptor.from_tensor(b, [BN, BK // (2 if b_fp4 else 1)]),
+        TensorDescriptor.from_tensor(a_scale, [1, BM // 128, BK // VEC // 4, 2, 256]),
+        TensorDescriptor.from_tensor(b_scale, [1, BN // 128, BK // VEC // 4, 2, 256]),
+        TensorDescriptor.from_tensor(c, [BM, BN]),
+    ]
+    num_tiles = (M // BM) * (N // BN)
+    compiled = kernel[(2 if persistent else num_tiles, )](*descs, M, N, K, BM, BN, BK, VEC, a_fp4, b_fp4, persistent,
+                                                           num_ctas=2, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    ref = (a_ref * a_scale_ref) @ (b_ref * b_scale_ref).T
+    torch.testing.assert_close(c.float(), ref, atol=1e-3, rtol=1e-3)
+    assert any("tcgen05.mma.cta_group::2" in line and "block_scale" in line
+               for line in compiled.asm["ptx"].splitlines())
+    # A scales split along M and B scales broadcast within the pair both stay on the TMA -> tcgen05.cp path: no
+    # register round trip, and (the warp-specialized kernel aside, which syncs the cluster once at teardown) no
+    # cluster barrier in the pipelined K loop.
+    assert "ttg.local_load" not in compiled.asm["ttgir"]
+    if not persistent:
+        assert "ttng.cluster_barrier" not in compiled.asm["ttgir"]
+
+
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
         pytest.skip("i4 M-minor join regression is CUDA-specific")
