@@ -1,11 +1,14 @@
 import numpy as np
 import pytest
 import itertools
+import torch
 
+import triton
 from triton._C.libtriton import interpreter as _interpreter
 from triton._C.libtriton import ir
 import triton.language as tl
 from triton.runtime import interpreter
+from triton.runtime.errors import InterpreterError
 
 
 def _element_ptrs(array: np.ndarray) -> np.ndarray:
@@ -191,3 +194,48 @@ def test_dot_scaled_e8m0_boundaries(compute_type, signed_scale, rhs_scale):
     expected = np.repeat(np.array([minimum, 32.0, 64.0, np.nan], dtype=np.float32), 8)[:, None]
     expected = np.broadcast_to(expected, (32, 32))
     np.testing.assert_array_equal(result.data, expected.T if rhs_scale else expected)
+
+
+def _device_assert_kernel(COND: tl.constexpr):
+    tl.device_assert(COND, "interpreter debug assert")
+
+
+def _int32_add_kernel(x_ptr, y_ptr):
+    offs = tl.arange(0, 4)
+    tl.store(y_ptr + offs, tl.load(x_ptr + offs) + 1)
+
+
+@pytest.mark.parametrize("env_flag", [False, True])
+@pytest.mark.parametrize("launch_flag", [None, False, True])
+@pytest.mark.parametrize("jit_flag", [None, False, True])
+def test_debug_mode_enables_device_assert(jit_flag, launch_flag, env_flag, monkeypatch):
+    monkeypatch.setattr(triton.knobs.runtime, "debug", env_flag)
+    kernel = interpreter.InterpretedFunction(_device_assert_kernel, debug=jit_flag)
+    kwargs = {} if launch_flag is None else {"debug": launch_flag}
+    # Same precedence as JITFunction.run: launch flag, then jit flag, or TRITON_DEBUG.
+    is_debug = env_flag or (launch_flag if launch_flag is not None else bool(jit_flag))
+
+    if is_debug:
+        with pytest.raises(InterpreterError, match="interpreter debug assert"):
+            kernel[(1, )](False, **kwargs)
+    else:
+        kernel[(1, )](False, **kwargs)
+    kernel[(1, )](True, **kwargs)
+    # Debug mode is scoped to the launch.
+    assert not interpreter.interpreter_builder.options.debug
+
+
+@pytest.mark.parametrize("debug", [False, True])
+def test_debug_mode_enables_overflow_check(debug, monkeypatch):
+    monkeypatch.setattr(triton.knobs.runtime, "debug", False)
+    kernel = interpreter.InterpretedFunction(_int32_add_kernel)
+    x = torch.full((4, ), 2**31 - 1, dtype=torch.int32)
+    y = torch.empty_like(x)
+
+    if debug:
+        with pytest.raises(InterpreterError, match="int32 overflow detected for operation add"):
+            kernel[(1, )](x, y, debug=debug)
+    else:
+        with np.errstate(over="ignore"):
+            kernel[(1, )](x, y, debug=debug)
+    assert not interpreter.interpreter_builder.options.debug
