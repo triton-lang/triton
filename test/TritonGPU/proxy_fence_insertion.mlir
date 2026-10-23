@@ -1149,25 +1149,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %dst, %bar, %true : !tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
     tt.return
   }
-}
 
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
-#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: disjoint_scratch_does_not_require_proxy_fence
-  tt.func @disjoint_scratch_does_not_require_proxy_fence(%desc: !tt.tensordesc<64x64xf32, #shared>, %ptr: !tt.ptr<i8>) {
+  tt.func @disjoint_scratch_does_not_require_proxy_fence(%source: tensor<128x32xf16, #blocked_src>, %desc: !tt.tensordesc<64x64xf32, #shared>) {
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
     %dst = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 20480 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    // CHECK: ttng.tensormap_create
+    // CHECK: ttg.convert_layout
     // CHECK-NOT: ttng.fence_async_shared
     // CHECK: ttng.async_tma_copy_global_to_local
-    ttng.tensormap_create %ptr, %ptr, [%c0], [%c0], [], [%c0] {allocation.offset = 0 : i32, allocation.size = 128 : i32, elem_type = 3 : i32, fill_mode = 1 : i32, interleave_layout = 0 : i32, swizzle_mode = 2 : i32} : (!tt.ptr<i8>, !tt.ptr<i8>, i32, i32, i32) -> ()
+    %converted = ttg.convert_layout %source {allocation.offset = 0 : i32, allocation.size = 2048 : i32} : tensor<128x32xf16, #blocked_src> -> tensor<128x32xf16, #dot>
+    "test.keep"(%converted) : (tensor<128x32xf16, #dot>) -> ()
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %dst, %bar, %true : !tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
     tt.return
   }

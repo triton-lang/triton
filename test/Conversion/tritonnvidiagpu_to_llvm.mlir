@@ -623,20 +623,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c256_i32 = arith.constant 256 : i32
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
-    // CHECK: st.shared::cta.b32
+    // CHECK-NOT: st.shared
+    // CHECK: st.global.b32
     // CHECK: bar.warp.sync
     // CHECK: llvm.cond_br
-    // CHECK: nvvm.tensormap.replace field = global_address{{.*}} : !llvm.ptr<3>, i64
+    // CHECK: nvvm.tensormap.replace field = global_address{{.*}} : !llvm.ptr<1>, i64
     // CHECK-NOT: nvvm.tensormap.replace field = rank
-    // CHECK: nvvm.tensormap.replace field = box_dim[0]
-    // CHECK: nvvm.tensormap.replace field = global_dim[0]
-    // CHECK: nvvm.tensormap.replace field = element_stride[0]
     // CHECK: nvvm.tensormap.replace field = elemtype
     // CHECK-NOT: nvvm.tensormap.replace field = interleave_layout
     // CHECK: nvvm.tensormap.replace field = swizzle_mode
     // CHECK-NOT: nvvm.tensormap.replace field = fill_mode
-    // CHECK: tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [ $0 + 0 ], [ $1 + 0 ], 0x80;
-    ttng.tensormap_create %arg1, %arg0, [%c256_i32], [%arg2], [], [%c1_i32] {elem_type = 3 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 2 : i32, allocation.offset = 0 : i32} : (!tt.ptr<i8>, !tt.ptr<i16>, i32, i32, i32) -> ()
+    // CHECK: nvvm.tensormap.replace field = element_stride[0]
+    // CHECK: nvvm.tensormap.replace field = box_dim[0]
+    // CHECK: nvvm.tensormap.replace field = global_dim[0]
+    // CHECK: nvvm.fence.proxy.release gpu
+    // CHECK: bar.warp.sync
+    // CHECK-NOT: tensormap.cp_fenceproxy
+    // CHECK: llvm.return
+    ttng.tensormap_create %arg1, %arg0, [%c256_i32], [%arg2], [], [%c1_i32] {elem_type = 3 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 2 : i32} : (!tt.ptr<i8>, !tt.ptr<i16>, i32, i32, i32) -> ()
     tt.return
   }
 }
@@ -650,26 +654,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %c1024_i64 = arith.constant 1024 : i64
-    // CHECK: st.shared::cta.b32
+    // CHECK-NOT: st.shared
+    // CHECK: st.global.b32
     // CHECK: bar.warp.sync
-    // CHECK: llvm.cond_br {{.*}}, ^{{bb[0-9]+}}, ^[[COPY:bb[0-9]+]]
-    // CHECK: nvvm.tensormap.replace field = global_address{{.*}} : !llvm.ptr<3>, i64
+    // CHECK: llvm.cond_br {{.*}}, ^{{bb[0-9]+}}, ^[[DONE:bb[0-9]+]]
+    // CHECK: nvvm.tensormap.replace field = global_address{{.*}} : !llvm.ptr<1>, i64
     // CHECK: nvvm.tensormap.replace field = rank
-    // CHECK: nvvm.tensormap.replace field = box_dim[0]
-    // CHECK: nvvm.tensormap.replace field = box_dim[1]
-    // CHECK: nvvm.tensormap.replace field = global_dim[0]
-    // CHECK: nvvm.tensormap.replace field = global_dim[1]
-    // CHECK: nvvm.tensormap.replace field = global_stride[0]{{.*}} : !llvm.ptr<3>, i64
-    // CHECK: nvvm.tensormap.replace field = element_stride[0]
-    // CHECK: nvvm.tensormap.replace field = element_stride[1]
-    // CHECK: nvvm.tensormap.replace field = elemtype
-    // CHECK: nvvm.tensormap.replace field = interleave_layout
-    // CHECK: nvvm.tensormap.replace field = swizzle_mode
-    // CHECK: nvvm.tensormap.replace field = fill_mode
-    // CHECK: ^[[COPY]]:
+    // CHECK-NEXT: nvvm.tensormap.replace field = elemtype
+    // CHECK-NEXT: nvvm.tensormap.replace field = interleave_layout
+    // CHECK-NEXT: nvvm.tensormap.replace field = swizzle_mode
+    // CHECK-NEXT: nvvm.tensormap.replace field = fill_mode
+    // CHECK-NEXT: nvvm.tensormap.replace field = element_stride[0]
+    // CHECK-NEXT: nvvm.tensormap.replace field = element_stride[1]
+    // CHECK-NEXT: nvvm.tensormap.replace field = box_dim[0]
+    // CHECK-NEXT: nvvm.tensormap.replace field = box_dim[1]
+    // CHECK-NEXT: nvvm.tensormap.replace field = global_dim[0]
+    // CHECK-NEXT: nvvm.tensormap.replace field = global_dim[1]
+    // CHECK: nvvm.tensormap.replace field = global_stride[0]{{.*}} : !llvm.ptr<1>, i64
+    // CHECK: nvvm.fence.proxy.release gpu
+    // CHECK: ^[[DONE]]:
     // CHECK: bar.warp.sync
-    // CHECK: tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [ $0 + 0 ], [ $1 + 0 ], 0x80;
-    ttng.tensormap_create %arg1, %arg0, [%c256_i32, %c256_i32], [%arg2, %arg2], [%c1024_i64], [%c1_i32, %c1_i32] {elem_type = 3 : i32, fill_mode = 1 : i32, interleave_layout = 1 : i32, swizzle_mode = 2 : i32, allocation.offset = 0 : i32} : (!tt.ptr<i8>, !tt.ptr<i16>, i32, i32, i32, i32, i64, i32, i32) -> ()
+    // CHECK-NOT: tensormap.cp_fenceproxy
+    // CHECK: llvm.return
+    ttng.tensormap_create %arg1, %arg0, [%c256_i32, %c256_i32], [%arg2, %arg2], [%c1024_i64], [%c1_i32, %c1_i32] {elem_type = 3 : i32, fill_mode = 1 : i32, interleave_layout = 1 : i32, swizzle_mode = 2 : i32} : (!tt.ptr<i8>, !tt.ptr<i16>, i32, i32, i32, i32, i64, i32, i32) -> ()
     tt.return
   }
 }

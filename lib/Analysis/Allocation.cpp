@@ -142,10 +142,6 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
       return 0;
     return getAtomicResultScratchSize(op->getResult(0));
   }
-  if (isa<ttng::TensormapCreateOp>(op)) {
-    constexpr int32_t kTMASize = 128;
-    return kTMASize;
-  }
   if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
     return ws.getCaptureSize();
   }

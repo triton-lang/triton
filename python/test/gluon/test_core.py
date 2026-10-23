@@ -1850,8 +1850,9 @@ def test_device_tma_load():
 
     triton.set_allocator(alloc_fn)
 
-    tma_device_load_kernel[(1, )](input, output, XBLOCK, smem_layout)
+    kernel = tma_device_load_kernel[(1, )](input, output, XBLOCK, smem_layout)
     torch.testing.assert_close(input, output)
+    assert "fence.proxy.async.shared" not in kernel.asm["ptx"]
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")

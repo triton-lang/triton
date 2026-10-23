@@ -20,30 +20,6 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace {
 
-void tensormap_cp_fenceproxy(Location loc, MLIRContext *ctx,
-                             ConversionPatternRewriter &rewriter, Value outPtr,
-                             Value inPtr) {
-  PTXBuilder ptxBuilder;
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  // prepare asm operands
-  auto *outAddrOpr = ptxBuilder.newAddrOperand(outPtr, "l");
-  auto *inAddrOpr = ptxBuilder.newAddrOperand(inPtr, "l");
-  auto *sizeOpr = ptxBuilder.newConstantOperand(TMA_SIZE_BYTES);
-
-  // Define the instruction opcode
-  auto &cp = *ptxBuilder.create("tensormap.cp_fenceproxy.global.shared::cta."
-                                "tensormap::generic.release.gpu.sync.aligned");
-
-  // Execute collectively on first warp in block
-  constexpr int kWarpSize = 32;
-  Value threadId = getThreadId(rewriter, loc);
-  Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
-  cp(outAddrOpr, inAddrOpr, sizeOpr).predicate(pred);
-
-  ptxBuilder.launch(rewriter, loc, void_ty(ctx));
-};
-
 void tensormap_replace_generic(Location loc, MLIRContext *ctx,
                                ConversionPatternRewriter &rewriter,
                                NVVM::TensormapField field, Value descPtr,
@@ -58,16 +34,16 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
 }
 
 template <typename Attr>
-void tensormap_replace_attr(Location loc, MLIRContext *ctx,
-                            ConversionPatternRewriter &rewriter,
+void tensormap_replace_attr(Location loc, ConversionPatternRewriter &rewriter,
                             NVVM::TensormapField field, Value descPtr,
                             Attr newVal) {
   // The descriptor is zero-initialized before its fields are populated.
   if (static_cast<int32_t>(newVal.getValue()) == 0)
     return;
-  NVVM::TensormapReplaceOp::create(rewriter, loc,
-                                   NVVM::TensormapFieldAttr::get(ctx, field),
-                                   descPtr, Value(), IntegerAttr(), newVal);
+  NVVM::TensormapReplaceOp::create(
+      rewriter, loc,
+      NVVM::TensormapFieldAttr::get(rewriter.getContext(), field), descPtr,
+      Value(), IntegerAttr(), newVal);
 }
 
 struct TensormapFenceproxyAcquireOpConversion
@@ -108,11 +84,9 @@ struct TensormapFenceproxyAcquireOpConversion
   }
 };
 
-void zero_fill_tma(Location loc, MLIRContext *ctx,
-                   ConversionPatternRewriter &rewriter,
+void zero_fill_tma(Location loc, ConversionPatternRewriter &rewriter,
                    const NVIDIA::TargetInfo &targetInfo, Value descPtr) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // Write out zeros
   constexpr int kWarpSize = 32;
   Value threadId = getThreadId(rewriter, loc);
   Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
@@ -120,8 +94,13 @@ void zero_fill_tma(Location loc, MLIRContext *ctx,
   auto fillVal = b.i32_val(0);
   auto writeAddr =
       b.gep(descPtr.getType(), fillVal.getType(), descPtr, threadId);
-  targetInfo.storeShared(rewriter, loc, writeAddr, fillVal, pred);
-  LLVM::NVIDIA::createSyncWarp(loc, rewriter);
+  PTXBuilder ptxBuilder;
+  auto &store = *ptxBuilder.create("st.global.b32");
+  store(ptxBuilder.newAddrOperand(writeAddr, "l"),
+        ptxBuilder.newOperand(fillVal, "r"))
+      .predicate(pred);
+  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+  targetInfo.warpSync(loc, rewriter);
 }
 
 struct TensormapCreateOpConversion
@@ -141,28 +120,51 @@ struct TensormapCreateOpConversion
     auto ctx = getContext();
 
     bool needsStrideWorkaround = targetInfo.getPtxVersion() <= 85;
-    auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+    Value descPtr = adaptor.getDescPtr();
 
-    zero_fill_tma(loc, ctx, rewriter, targetInfo, smemBase);
+    zero_fill_tma(loc, rewriter, targetInfo, descPtr);
     Value isLeader = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
     auto [previousBlock, updateBlock, continuationBlock] =
         createIfBlock(rewriter, loc, isLeader);
     (void)previousBlock;
     rewriter.setInsertionPointToStart(updateBlock);
     tensormap_replace_generic(loc, ctx, rewriter,
-                              NVVM::TensormapField::GLOBAL_ADDRESS, smemBase,
+                              NVVM::TensormapField::GLOBAL_ADDRESS, descPtr,
                               adaptor.getGlobalAddress());
+    // Keep related fields adjacent so ptxas can combine their updates.
     if (op.getRank() > 1)
       tensormap_replace_generic(loc, ctx, rewriter, NVVM::TensormapField::RANK,
-                                smemBase, b.i32_val(op.getRank() - 1));
+                                descPtr, b.i32_val(op.getRank() - 1));
+    tensormap_replace_attr(
+        loc, rewriter, NVVM::TensormapField::ELEMTYPE, descPtr,
+        NVVM::TensormapElemtypeAttr::get(
+            ctx, static_cast<NVVM::TensormapElemtype>(op.getElemType())));
+    tensormap_replace_attr(
+        loc, rewriter, NVVM::TensormapField::INTERLEAVE_LAYOUT, descPtr,
+        NVVM::TensormapInterleaveLayoutAttr::get(
+            ctx, static_cast<NVVM::TensormapInterleaveLayout>(
+                     op.getInterleaveLayout())));
+    tensormap_replace_attr(
+        loc, rewriter, NVVM::TensormapField::SWIZZLE_MODE, descPtr,
+        NVVM::TensormapSwizzleModeAttr::get(
+            ctx, static_cast<NVVM::TensormapSwizzleMode>(op.getSwizzleMode())));
+    tensormap_replace_attr(
+        loc, rewriter, NVVM::TensormapField::FILL_MODE, descPtr,
+        NVVM::TensormapFillModeAttr::get(
+            ctx, static_cast<NVVM::TensormapFillMode>(op.getFillMode())));
     for (int i = 0; i < op.getRank(); ++i) {
       tensormap_replace_generic(loc, ctx, rewriter,
-                                NVVM::TensormapField::BOX_DIM, smemBase,
+                                NVVM::TensormapField::ELEMENT_STRIDE, descPtr,
+                                op.getElementStride()[i], i);
+    }
+    for (int i = 0; i < op.getRank(); ++i) {
+      tensormap_replace_generic(loc, ctx, rewriter,
+                                NVVM::TensormapField::BOX_DIM, descPtr,
                                 op.getBoxDim()[i], i);
     }
     for (int i = 0; i < op.getRank(); ++i) {
       tensormap_replace_generic(loc, ctx, rewriter,
-                                NVVM::TensormapField::GLOBAL_DIM, smemBase,
+                                NVVM::TensormapField::GLOBAL_DIM, descPtr,
                                 op.getGlobalDim()[i], i);
     }
     for (int i = 0; i + 1 < op.getRank(); ++i) {
@@ -172,35 +174,13 @@ struct TensormapCreateOpConversion
         strideVal = b.ashr(strideVal, b.i64_val(4));
       }
       tensormap_replace_generic(loc, ctx, rewriter,
-                                NVVM::TensormapField::GLOBAL_STRIDE, smemBase,
+                                NVVM::TensormapField::GLOBAL_STRIDE, descPtr,
                                 strideVal, i);
     }
-    for (int i = 0; i < op.getRank(); ++i) {
-      tensormap_replace_generic(loc, ctx, rewriter,
-                                NVVM::TensormapField::ELEMENT_STRIDE, smemBase,
-                                op.getElementStride()[i], i);
-    }
-    tensormap_replace_attr(
-        loc, ctx, rewriter, NVVM::TensormapField::ELEMTYPE, smemBase,
-        NVVM::TensormapElemtypeAttr::get(
-            ctx, static_cast<NVVM::TensormapElemtype>(op.getElemType())));
-    tensormap_replace_attr(
-        loc, ctx, rewriter, NVVM::TensormapField::INTERLEAVE_LAYOUT, smemBase,
-        NVVM::TensormapInterleaveLayoutAttr::get(
-            ctx, static_cast<NVVM::TensormapInterleaveLayout>(
-                     op.getInterleaveLayout())));
-    tensormap_replace_attr(
-        loc, ctx, rewriter, NVVM::TensormapField::SWIZZLE_MODE, smemBase,
-        NVVM::TensormapSwizzleModeAttr::get(
-            ctx, static_cast<NVVM::TensormapSwizzleMode>(op.getSwizzleMode())));
-    tensormap_replace_attr(
-        loc, ctx, rewriter, NVVM::TensormapField::FILL_MODE, smemBase,
-        NVVM::TensormapFillModeAttr::get(
-            ctx, static_cast<NVVM::TensormapFillMode>(op.getFillMode())));
+    NVVM::FenceProxyReleaseOp::create(rewriter, loc, NVVM::MemScopeKind::GPU);
     rewriter.setInsertionPointToStart(continuationBlock);
-    // Make thread zero's field updates visible to the collective copy.
-    LLVM::NVIDIA::createSyncWarp(loc, rewriter);
-    tensormap_cp_fenceproxy(loc, ctx, rewriter, adaptor.getDescPtr(), smemBase);
+    // Publish thread zero's updates before the warp acquires the descriptor.
+    targetInfo.warpSync(loc, rewriter);
     rewriter.eraseOp(op);
     return success();
   }

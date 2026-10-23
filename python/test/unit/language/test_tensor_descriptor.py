@@ -669,8 +669,7 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         return
 
     if torch.cuda.get_device_capability(0)[0] >= 9:
-        assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm[
-            "ptx"]
+        assert "fence.proxy.tensormap::generic.release.gpu" in kernel.asm["ptx"]
     if BLOCK_M >= 64 * num_ctas and BLOCK_N >= 64 and is_hopper():
         # TODO: The use of stmatrix for Blackwell is currently not supported.
         # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
@@ -750,8 +749,7 @@ def test_make_tensor_descriptor_loop_carried(device):
     )
     torch.testing.assert_close(ref_out, A)
     if is_cuda() and torch.cuda.get_device_capability(0)[0] in (9, 10):
-        assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm[
-            "ptx"]
+        assert "fence.proxy.tensormap::generic.release.gpu" in kernel.asm["ptx"]
 
 
 @triton.jit

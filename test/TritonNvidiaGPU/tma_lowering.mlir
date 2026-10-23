@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --allocate-shared-memory | FileCheck %s --check-prefix=ALLOC
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -37,6 +38,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: make_tensor_descriptor
+  // ALLOC: module attributes {{.*}}ttg.shared = 0 : i32
+  // ALLOC-LABEL: make_tensor_descriptor
   // CHECK: %0 = arith.extsi %arg2 : i32 to i64
   // CHECK: %1 = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 128 : i32} : !tt.ptr<i8>
   // CHECK: ttng.tensormap_create %1, %arg0, [%c32_i32, %c8_i32], [%arg2, %arg1], [%0], [%c1_i32, %c1_i32] {elem_type = 0 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 1 : i32} : (!tt.ptr<i8>, !tt.ptr<i8>, i32, i32, i32, i32, i64, i32, i32) -> ()
