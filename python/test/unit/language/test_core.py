@@ -149,6 +149,36 @@ def get_src_element_ty_size(dtype_str):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("metadata", ["shape", "numel", "scalar"])
+@pytest.mark.parametrize("keyword", [False, True])
+def test_callable_grid_argument_metadata(device, metadata, keyword):
+
+    @triton.jit
+    def kernel(X, N, VALUE: tl.constexpr = 7):
+        tl.store(X + tl.program_id(0), VALUE)
+
+    x = torch.zeros(8, dtype=torch.int32, device=device)
+
+    def grid(args):
+        if metadata == "shape":
+            size = args["X"].shape[0]
+        elif metadata == "numel":
+            size = args["X"].numel()
+        else:
+            assert isinstance(args["N"], int)
+            size = args["N"]
+        assert args["X"] is x
+        assert args["VALUE"] == 7
+        return (size, )
+
+    if keyword:
+        kernel[grid](X=x, N=x.numel())
+    else:
+        kernel[grid](x, x.numel())
+    torch.testing.assert_close(x, torch.full_like(x, 7))
+
+
+@pytest.mark.interpreter
 def test_scalar_overflow(device):
 
     @triton.jit
