@@ -1699,3 +1699,81 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %hist, %next : tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>
   }
 }
+
+// -----
+
+#sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#pairBarrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // A pair barrier is waited on (a buffer's initial "empty" wait) before a
+  // later barrier is initialized, so no point follows every init and precedes
+  // every use. The later init is hoisted above that first use, where one fence
+  // and cluster barrier then publish both.
+  // CHECK-LABEL: @cross_cta_init_after_first_use
+  // CHECK: ttng.init_barrier {{.*}}!ttg.memdesc<1xi64, #{{.*}}
+  // CHECK: ttng.init_barrier {{.*}}!ttg.memdesc<2xi64, #{{.*}}
+  // CHECK: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64, #{{.*}}
+  // CHECK: ttng.tc_gen5_mma
+  tt.func @cross_cta_init_after_first_use(%a: !ttg.memdesc<256x32xf16, #sharedA, #smem, mutable>,
+                                          %b: !ttg.memdesc<32x128xf16, #sharedB, #smem, mutable>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %true = arith.constant true
+    %acc = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %empty = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #pairBarrierEnc, #smem, mutable>
+    ttng.init_barrier %empty, 1 : !ttg.memdesc<1xi64, #pairBarrierEnc, #smem, mutable>
+    ttng.wait_barrier %empty, %c1 : !ttg.memdesc<1xi64, #pairBarrierEnc, #smem, mutable>
+    %done = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.init_barrier %done, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.tc_gen5_mma %a, %b, %acc, %true, %true, %done[%true] {is_async, two_ctas} :
+       !ttg.memdesc<256x32xf16, #sharedA, #smem, mutable>,
+       !ttg.memdesc<32x128xf16, #sharedB, #smem, mutable>,
+       !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.wait_barrier %done, %c0 deps %a, %b :
+      !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>,
+      !ttg.memdesc<256x32xf16, #sharedA, #smem, mutable>,
+      !ttg.memdesc<32x128xf16, #sharedB, #smem, mutable>
+    ttng.arrive_barrier %empty, 1 : !ttg.memdesc<1xi64, #pairBarrierEnc, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#pairBarrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // A persistent loop re-initializes its pair barrier for every tile: the
+  // fence and cluster barrier go inside the loop, between the init and the
+  // peer's first arrive, so no CTA arrives on the leader's barrier before the
+  // leader has initialized it for this tile.
+  // CHECK-LABEL: @cross_cta_init_in_loop_body
+  // CHECK: scf.for
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.barrier_expect
+  tt.func @cross_cta_init_in_loop_body(%n: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %true = arith.constant true
+    scf.for %i = %c0 to %n step %c1 : i32 {
+      %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #pairBarrierEnc, #smem, mutable>
+      ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #pairBarrierEnc, #smem, mutable>
+      ttng.barrier_expect %bar, 512, %true : !ttg.memdesc<1xi64, #pairBarrierEnc, #smem, mutable>
+      ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #pairBarrierEnc, #smem, mutable>
+      ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #pairBarrierEnc, #smem, mutable>
+      ttg.local_dealloc %bar : !ttg.memdesc<1xi64, #pairBarrierEnc, #smem, mutable>
+    }
+    tt.return
+  }
+}

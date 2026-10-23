@@ -854,3 +854,31 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %dot : tensor<2x256x256xf32, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+
+  // CHECK-DAG: #[[$SCAN:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = {{\[\[0\]\]}}}>
+  // PIPELINE-DAG: #[[$PSCAN:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = {{\[\[0\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // A scan has no cross-CTA lowering, so its axis must not be split across the
+  // CTAs: a 1-D scan runs on a layout that replicates it in every CTA, and layout
+  // propagation must not split it again.
+  // CHECK-LABEL: tt.func @scan_1d_split_ctas
+  // CHECK: %[[X:.*]] = tt.load {{.*}} : tensor<64x!tt.ptr<i32>, #[[$SCAN]]>
+  // CHECK-NEXT: "tt.scan"(%[[X]])
+  // PIPELINE-LABEL: tt.func @scan_1d_split_ctas
+  // PIPELINE: %[[X:.*]] = tt.load {{.*}} : tensor<64x!tt.ptr<i32>, #[[$PSCAN]]>
+  // PIPELINE-NEXT: "tt.scan"(%[[X]])
+  tt.func @scan_1d_split_ctas(%in: tensor<64x!tt.ptr<i32>, #blocked>, %out: tensor<64x!tt.ptr<i32>, #blocked>) {
+    %x = tt.load %in : tensor<64x!tt.ptr<i32>, #blocked>
+    %s = "tt.scan"(%x) <{axis = 0 : i32, reverse = false}> ({
+    ^bb0(%lhs: i32, %rhs: i32):
+      %v = arith.addi %lhs, %rhs : i32
+      tt.scan.return %v : i32
+    }) : (tensor<64xi32, #blocked>) -> tensor<64xi32, #blocked>
+    tt.store %out, %s : tensor<64x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}

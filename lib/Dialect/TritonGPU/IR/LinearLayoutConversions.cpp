@@ -199,11 +199,16 @@ LinearLayout getScaleSmemLayoutForTMEMCopy(MLIRContext *ctx,
                                            ArrayRef<int64_t> shape,
                                            CGAEncodingAttr cgaLayout) {
   assert(shape.size() == 2 && "scale layout expects rank-2");
-  assert(shape[0] % 128 == 0 && "scale rows must be a multiple of 128");
-  assert(shape[1] % 4 == 0 && "scale columns must be a multiple of 4");
+  // The chunked view below is per CTA; combineCtaCgaWithShape adds the CTA
+  // bases. Building it over the whole tensor would leave the bits a row split
+  // (e.g. two-CTA MMA A scales) moves to the block dimension as dead offsets.
+  auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
+  assert(shapePerCTA[0] % 128 == 0 &&
+         "scale rows per CTA must be a multiple of 128");
+  assert(shapePerCTA[1] % 4 == 0 && "scale columns must be a multiple of 4");
 
-  auto rows = shape[0];
-  auto cols = shape[1];
+  auto rows = shapePerCTA[0];
+  auto cols = shapePerCTA[1];
   auto kOffset = S("offset");
   auto kFlat = S("flat");
   auto kColLo = S("colLo");

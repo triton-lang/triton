@@ -178,7 +178,13 @@ SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
 
 DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(ArefGetEnterOp getEnter) {
   DenseSet<MMAv5OpInterface> mmav5Ops;
-  for (Value buffer : getEnter.getBuffers()) {
+  // Consumers read the buffers either from the enter op or through an
+  // aref.buffer op on its token (e.g. a tensor-memory scale operand).
+  SmallVector<Value> buffers(getEnter.getBuffers());
+  for (Operation *user : getEnter.getToken().getUsers())
+    if (auto bufferOp = dyn_cast<ArefBufferOp>(user))
+      llvm::append_range(buffers, bufferOp.getBuffers());
+  for (Value buffer : buffers) {
     for (auto consumer : buffer.getUsers()) {
       if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
         mmav5Ops.insert(mmav5);
