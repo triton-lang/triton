@@ -16,6 +16,16 @@ from .cache import get_cache_manager, triton_key
 from triton._C.libtriton import get_cache_invalidating_env_vars
 
 
+def _get_default_args(fn):
+    while not inspect.isfunction(fn):
+        fn = fn.fn
+    return {
+        name: param.default
+        for name, param in inspect.signature(fn).parameters.items()
+        if param.default is not inspect.Parameter.empty
+    }
+
+
 class Autotuner(KernelInterface):
 
     def __init__(self, fn, arg_names, configs, key, reset_to_zero, restore_value, pre_hook=None, post_hook=None,
@@ -108,6 +118,7 @@ class Autotuner(KernelInterface):
         self.base_fn = fn
         while not inspect.isfunction(self.base_fn):
             self.base_fn = self.base_fn.fn
+        self.default_args = _get_default_args(self.base_fn)
 
         self._do_bench = do_bench
         self.num_warmups = warmup
@@ -160,7 +171,7 @@ class Autotuner(KernelInterface):
                              " Make sure that you don't re-define auto-tuned symbols.")
         # augment meta-parameters with tunable ones
         current = dict(meta, **config.all_kwargs())
-        full_nargs = {**self.nargs, **current}
+        full_nargs = {**self.default_args, **self.nargs, **current}
 
         def kernel_call():
             if config.pre_hook:
@@ -233,7 +244,7 @@ class Autotuner(KernelInterface):
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         if len(self.configs) > 1:
-            all_args = {**self.nargs, **kwargs}
+            all_args = {**self.default_args, **self.nargs, **kwargs}
             _args = {k: v for (k, v) in all_args.items() if k in self.arg_names}
             key = [_args[key] for key in self.keys if key in _args]
             for _, arg in _args.items():
@@ -256,7 +267,7 @@ class Autotuner(KernelInterface):
                         bench_end = time.time()
                         self.bench_time = bench_end - bench_start
                         self.cache[key] = builtins.min(timings, key=timings.get)
-                        full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
+                        full_nargs = {**self.default_args, **self.nargs, **kwargs, **self.cache[key].all_kwargs()}
                         self.pre_hook(full_nargs, reset_only=True)
                         self.configs_timings = timings
 
@@ -286,7 +297,7 @@ class Autotuner(KernelInterface):
             print(f"Triton autotuning for function {self.base_fn.__name__},\nwith key as {key},\n"
                   f"finished after {self.bench_time:.2f}s,\nbest config selected: {self.best_config};")
         if config.pre_hook is not None:
-            full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
+            full_nargs = {**self.default_args, **self.nargs, **kwargs, **config.all_kwargs()}
             config.pre_hook(full_nargs)
         ret = self.fn.run(
             *args,
@@ -496,10 +507,11 @@ class Heuristics(KernelInterface):
         self.fn = fn
         self.values = values
         self.arg_names = arg_names
+        self.default_args = _get_default_args(fn)
 
     def run(self, *args, **kwargs):
         for v, heur in self.values.items():
-            kwargs[v] = heur({**dict(zip(self.arg_names, args)), **kwargs})
+            kwargs[v] = heur({**self.default_args, **dict(zip(self.arg_names, args)), **kwargs})
         return self.fn.run(*args, **kwargs)
 
 
