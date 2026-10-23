@@ -726,7 +726,8 @@ class pointer_type(dtype):
         return self
 
     def mangle(self) -> str:
-        return f"P{self.element_ty.mangle()}"
+        const = "K" if self.const else ""
+        return f"P{const}{self.element_ty.mangle()}"
 
 
 class block_type(dtype):
@@ -819,7 +820,13 @@ class tuple_type(base_type):
         return tuple(values, self), cursor
 
     def mangle(self):
-        return 'T' + '_'.join(ty.mangle() for ty in self.types) + 'T'
+        elems = '_'.join(ty.mangle() for ty in self.types)
+        if self.fields is None:
+            return 'T' + elems + 'T'
+        # Length-prefix the field names so that a name which looks like a type
+        # code (e.g. a field called `fp32`) cannot alias another tuple's mangling.
+        names = ''.join(f"{len(name)}{name}" for name in self.fields)
+        return 'TN' + names + '_' + elems + 'T'
 
 
 class slice_type(dtype):

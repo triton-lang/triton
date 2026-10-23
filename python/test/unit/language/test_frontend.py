@@ -2126,6 +2126,24 @@ def test_const_ptr_is_constant_addrspace():
     run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 8, 128))
 
 
+@triton.jit
+def _load_scalar(ptr):
+    return tl.load(ptr)
+
+
+def test_const_and_plain_ptr_get_distinct_helpers():
+
+    @triton.jit
+    def kernel(In: tl.const, Out):
+        # A helper called with a const pointer and with a plain pointer to the
+        # same element type must be compiled twice, not share one function.
+        # CHECK: tt.call @{{.*}}_load_scalar__PKfp32{{.*}} : (!tt.ptr<f32, "constant">) -> f32
+        # CHECK: tt.call @{{.*}}_load_scalar__Pfp32{{.*}} : (!tt.ptr<f32>) -> f32
+        tl.store(Out, _load_scalar(In) + _load_scalar(Out))
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32)))
+
+
 def test_cache_policy_ir_attrs():
 
     @triton.jit

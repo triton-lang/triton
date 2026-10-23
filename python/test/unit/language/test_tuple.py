@@ -467,3 +467,61 @@ def test_constexpr_tuple_arg_subscript(device):
     out = torch.zeros(1, dtype=torch.int32, device=device)
     kernel[(1, )](out, shape=(8, 4, 2))
     assert out.item() == 842
+
+
+class _FieldsAB(NamedTuple):
+    a: any
+    b: any
+
+
+class _FieldsBA(NamedTuple):
+    b: any
+    a: any
+
+
+@triton.jit
+def _fields_a_minus_b(t):
+    return tl.load(t.a) - tl.load(t.b)
+
+
+@pytest.mark.interpreter
+def test_namedtuple_classes_with_same_types_get_distinct_helpers(device):
+    # Two namedtuple classes whose fields have the same types in the same order
+    # must not share one compiled helper: field names decide what `t.a` reads.
+
+    @triton.jit
+    def kernel(p, q, out):
+        tl.store(out + 0, _fields_a_minus_b(p))
+        tl.store(out + 1, _fields_a_minus_b(q))
+
+    one = torch.tensor([1.0], device=device)
+    ten = torch.tensor([10.0], device=device)
+    out = torch.zeros(2, device=device)
+    kernel[(1, )](_FieldsAB(a=one, b=ten), _FieldsBA(b=ten, a=one), out)
+    assert out.tolist() == [-9.0, -9.0]
+
+
+class _FieldNamedLikeType(NamedTuple):
+    fp32: any
+
+
+@triton.jit
+def _first_element(t):
+    return t[0]
+
+
+@pytest.mark.interpreter
+def test_namedtuple_field_named_like_type_gets_distinct_helper(device):
+    # A namedtuple whose field name looks like a type code must not share a
+    # compiled helper with a plain tuple of the same element types.
+
+    @triton.jit
+    def kernel(named, plain, out_i, out_f):
+        tl.store(out_i, _first_element(named))
+        tl.store(out_f, _first_element(plain))
+
+    out_i = torch.zeros(1, dtype=torch.int32, device=device)
+    out_f = torch.zeros(1, dtype=torch.float32, device=device)
+    kernel[(1, )](_FieldNamedLikeType(fp32=7), (1.5, 7), out_i, out_f)
+    assert out_i.item() == 7
+    assert out_f.item() == 1.5
