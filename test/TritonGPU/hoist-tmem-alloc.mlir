@@ -260,98 +260,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// The tmem_store predicate is a scalar i1: a splatted select condition folds
+// into it as its scalar source, and a per-element condition must not fold.
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+!acc = !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // A splatted select condition is uniform, so it can become the scalar
-  // tmem_store predicate. Folding the tensor condition itself into the
-  // predicate used to produce an invalid tmem_store and crash the pass.
-  // CHECK-LABEL: @select_after_mma_splat_cond
-  // CHECK: %[[CND:.*]] = "cnd"() : () -> i1
-  // CHECK: scf.for
-  // CHECK-NOT: arith.select
-  // CHECK: %[[CND_NEG:.*]] = arith.xori %[[CND]]
-  // CHECK: ttng.tmem_store {{.*}}, %[[CND_NEG]] :
-  tt.func public @select_after_mma_splat_cond(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %arg3: i32) -> tensor<128x128xf16, #blocked> {
+  // CHECK-LABEL: @select_splat_cond(
+  // CHECK: %[[NEG:.*]] = arith.xori %arg2, %true
+  // CHECK-NEXT: ttng.tmem_store %arg3, %arg0[%arg1], %[[NEG]] :
+  tt.func @select_splat_cond(%tm: !acc, %tok: !ttg.async.token, %cnd: i1, %x: tensor<128x128xf32, #blocked>) -> !ttg.async.token {
     %true = arith.constant true
-    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
-    %cst2 = arith.constant dense<2.000000e+00> : tensor<128x128xf32, #blocked>
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %cnd = "cnd"() : () -> i1
-    %cnd_t = tt.splat %cnd : i1 -> tensor<128x128xi1, #blocked>
-    %res = scf.for %i = %c0_i32 to %arg3 step %c1_i32 iter_args(%acc = %cst) -> (tensor<128x128xf32, #blocked>)  : i32 {
-      %A = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
-      %A_sh = ttg.local_alloc %A : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
-      %B = tt.load %B_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
-      %B_sh = ttg.local_alloc %B : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
-      %acc_tm, %acc_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #blocked>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-      %mma_tok = ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm[%acc_tok], %true, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      %acc_res, %load_tok = ttng.tmem_load %acc_tm[%mma_tok] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
-      %acc_if = arith.select %cnd_t, %acc_res, %cst2 : tensor<128x128xi1, #blocked>, tensor<128x128xf32, #blocked>
-      scf.yield %acc_if : tensor<128x128xf32, #blocked>
-    } {tt.scheduled_max_stage = 3 : i32}
-    %res_f16 = arith.truncf %res : tensor<128x128xf32, #blocked> to tensor<128x128xf16, #blocked>
-    tt.return %res_f16 : tensor<128x128xf16, #blocked>
+    %v, %load_tok = ttng.tmem_load %tm[%tok] : !acc -> tensor<128x128xf32, #blocked>
+    %c = tt.splat %cnd : i1 -> tensor<128x128xi1, #blocked>
+    %s = arith.select %c, %v, %x : tensor<128x128xi1, #blocked>, tensor<128x128xf32, #blocked>
+    %store_tok = ttng.tmem_store %s, %tm[%load_tok], %true : tensor<128x128xf32, #blocked> -> !acc
+    tt.return %store_tok : !ttg.async.token
   }
 
-  // CHECK-LABEL: @select_after_mma_splat_cond_inverted
-  // CHECK: %[[CND:.*]] = "cnd"() : () -> i1
-  // CHECK: scf.for
+  // CHECK-LABEL: @select_splat_cond_inverted(
   // CHECK-NOT: arith.select
-  // CHECK-NOT: arith.xori
-  // CHECK: ttng.tmem_store {{.*}}, %[[CND]] :
-  tt.func public @select_after_mma_splat_cond_inverted(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %arg3: i32) -> tensor<128x128xf16, #blocked> {
+  // CHECK: ttng.tmem_store %arg3, %arg0[%arg1], %arg2 :
+  tt.func @select_splat_cond_inverted(%tm: !acc, %tok: !ttg.async.token, %cnd: i1, %x: tensor<128x128xf32, #blocked>) -> !ttg.async.token {
     %true = arith.constant true
-    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
-    %cst2 = arith.constant dense<2.000000e+00> : tensor<128x128xf32, #blocked>
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %cnd = "cnd"() : () -> i1
-    %cnd_t = tt.splat %cnd : i1 -> tensor<128x128xi1, #blocked>
-    %res = scf.for %i = %c0_i32 to %arg3 step %c1_i32 iter_args(%acc = %cst) -> (tensor<128x128xf32, #blocked>)  : i32 {
-      %A = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
-      %A_sh = ttg.local_alloc %A : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
-      %B = tt.load %B_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
-      %B_sh = ttg.local_alloc %B : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
-      %acc_tm, %acc_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #blocked>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-      %mma_tok = ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm[%acc_tok], %true, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      %acc_res, %load_tok = ttng.tmem_load %acc_tm[%mma_tok] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
-      %acc_if = arith.select %cnd_t, %cst2, %acc_res : tensor<128x128xi1, #blocked>, tensor<128x128xf32, #blocked>
-      scf.yield %acc_if : tensor<128x128xf32, #blocked>
-    } {tt.scheduled_max_stage = 3 : i32}
-    %res_f16 = arith.truncf %res : tensor<128x128xf32, #blocked> to tensor<128x128xf16, #blocked>
-    tt.return %res_f16 : tensor<128x128xf16, #blocked>
+    %v, %load_tok = ttng.tmem_load %tm[%tok] : !acc -> tensor<128x128xf32, #blocked>
+    %c = tt.splat %cnd : i1 -> tensor<128x128xi1, #blocked>
+    %s = arith.select %c, %x, %v : tensor<128x128xi1, #blocked>, tensor<128x128xf32, #blocked>
+    %store_tok = ttng.tmem_store %s, %tm[%load_tok], %true : tensor<128x128xf32, #blocked> -> !acc
+    tt.return %store_tok : !ttg.async.token
   }
 
-  // A per-element condition cannot become a scalar predicate; the select stays.
-  // CHECK-LABEL: @select_after_mma_tensor_cond
-  // CHECK: %[[CND:.*]] = "cnd_tensor"()
-  // CHECK: scf.for
-  // CHECK: %[[SEL:.*]] = arith.select %[[CND]]
+  // CHECK-LABEL: @select_tensor_cond(
+  // CHECK: %[[SEL:.*]] = arith.select %arg2
   // CHECK: ttng.tmem_store %[[SEL]], {{.*}}, %true :
-  tt.func public @select_after_mma_tensor_cond(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %arg3: i32) -> tensor<128x128xf16, #blocked> {
+  tt.func @select_tensor_cond(%tm: !acc, %tok: !ttg.async.token, %c: tensor<128x128xi1, #blocked>, %x: tensor<128x128xf32, #blocked>) -> !ttg.async.token {
     %true = arith.constant true
-    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
-    %cst2 = arith.constant dense<2.000000e+00> : tensor<128x128xf32, #blocked>
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %cnd_t = "cnd_tensor"() : () -> tensor<128x128xi1, #blocked>
-    %res = scf.for %i = %c0_i32 to %arg3 step %c1_i32 iter_args(%acc = %cst) -> (tensor<128x128xf32, #blocked>)  : i32 {
-      %A = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
-      %A_sh = ttg.local_alloc %A : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
-      %B = tt.load %B_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
-      %B_sh = ttg.local_alloc %B : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
-      %acc_tm, %acc_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #blocked>) -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-      %mma_tok = ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm[%acc_tok], %true, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      %acc_res, %load_tok = ttng.tmem_load %acc_tm[%mma_tok] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
-      %acc_if = arith.select %cnd_t, %acc_res, %cst2 : tensor<128x128xi1, #blocked>, tensor<128x128xf32, #blocked>
-      scf.yield %acc_if : tensor<128x128xf32, #blocked>
-    } {tt.scheduled_max_stage = 3 : i32}
-    %res_f16 = arith.truncf %res : tensor<128x128xf32, #blocked> to tensor<128x128xf16, #blocked>
-    tt.return %res_f16 : tensor<128x128xf16, #blocked>
+    %v, %load_tok = ttng.tmem_load %tm[%tok] : !acc -> tensor<128x128xf32, #blocked>
+    %s = arith.select %c, %v, %x : tensor<128x128xi1, #blocked>, tensor<128x128xf32, #blocked>
+    %store_tok = ttng.tmem_store %s, %tm[%load_tok], %true : tensor<128x128xf32, #blocked> -> !acc
+    tt.return %store_tok : !ttg.async.token
   }
 }
 
