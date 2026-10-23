@@ -142,8 +142,8 @@ def parse(full_name, ext, context):
         return module
     if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
-    if ext == "cubin" or ext == "hsaco":
-        return Path(full_name).read_bytes()
+    # Any other stage is a binary, e.g. cubin or hsaco.
+    return Path(full_name).read_bytes()
 
 
 def filter_traceback(e: BaseException):
@@ -334,8 +334,11 @@ def compile(src, target=None, options=None, _env_vars=None):
         elif full_name := fn_override_manager.get_file(ir_filename):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
-        # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
-        if (not store_only_binary) or (ext in ("cubin", "hsaco", "json")):
+        is_binary = isinstance(next_module, bytes)
+        if is_binary:
+            metadata.setdefault("binary_stages", []).append(ext)
+        # If TRITON_STORE_BINARY_ONLY is 1, only store the binaries (and the metadata json)
+        if (not store_only_binary) or is_binary:
             metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
@@ -422,13 +425,14 @@ class CompiledKernel:
         self.name = self.metadata.name
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
-        binary_ext = backend.binary_ext
+        # The stages that produced bytes; the last one is the kernel. Older cache entries do not record them.
+        binary_stages = getattr(self.metadata, "binary_stages", None) or [backend.binary_ext]
         self.asm = AsmDict({
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
+            file.suffix[1:]: file.read_bytes() if file.suffix[1:] in binary_stages else file.read_text()
             for file in asm_files
         })
         self.metadata_group = metadata_group
-        self.kernel = self.asm[binary_ext]
+        self.kernel = self.asm[binary_stages[-1]]
         # binaries are lazily initialized
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
