@@ -145,10 +145,10 @@ tt.func @hoist_above_ext(%arg0: tensor<1024xf16, #layout0>, %arg1: f32) -> tenso
 
 // CHECK-LABEL: hoist_above_ext2
 tt.func @hoist_above_ext2(%arg0: tensor<1024xf16, #layout0>, %arg1: f16) -> tensor<1024xf32, #layout1> {
-// CHECK: %[[CVT:.+]] = ttg.convert_layout
-// CHECK: arith.extf %[[CVT]]
 // CHECK-NOT: ttg.convert_layout
-// CHECK: tt.return
+// CHECK: %[[SUM:.+]] = arith.addf
+// CHECK-NEXT: %[[CVT:.+]] = ttg.convert_layout %[[SUM]]
+// CHECK-NEXT: tt.return %[[CVT]]
   %0 = arith.extf %arg0 : tensor<1024xf16, #layout0> to tensor<1024xf32, #layout0>
   %1 = tt.splat %arg1 : f16 -> tensor<1024xf16, #layout0>
   %2 = arith.extf %1 : tensor<1024xf16, #layout0> to tensor<1024xf32, #layout0>
@@ -2846,8 +2846,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // Check that backward rematerialization bails out when the same tensor requires two different layouts
 
 // CHECK-LABEL: double_remat
-// CHECK: %[[res:.*]] = ttg.convert_layout
-// CHECK: tt.broadcast %[[res]]
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.broadcast
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.broadcast
 // CHECK-NOT: ttg.convert_layout
 // CHECK: tt.return
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 2], order = [1, 0]}>
@@ -4252,7 +4254,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-NEXT: scf.if
     // CHECK-NOT: ttg.convert_layout
     // CHECK: } else {
-    // CHECK: ttg.convert_layout
     // CHECK-NOT: ttg.convert_layout
     // CHECK: tt.return
     %9 = scf.for %arg3 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg4 = %cst) -> (tensor<4x2xi64, #blocked>)  : i32 {
@@ -5017,5 +5018,45 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
       scf.yield %next_x, %next_y : tensor<2x2xf32, #d>, tensor<2x2xf32, #d>
     }
     tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#dst = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @hoist_nested_extensions
+  // CHECK: %[[CVT:.*]] = ttg.convert_layout %arg0 : tensor<1024xi8,
+  // CHECK-NEXT: %[[X:.*]] = arith.extsi %[[CVT]]
+  // CHECK-NEXT: %[[SUM:.*]] = arith.addi %[[X]], %[[X]]
+  // CHECK-NEXT: %[[Y:.*]] = arith.extsi %[[SUM]]
+  // CHECK-NEXT: tt.return %[[Y]]
+  tt.func @hoist_nested_extensions(%a: tensor<1024xi8, #src>) -> tensor<1024xi64, #dst> {
+    %x = arith.extsi %a : tensor<1024xi8, #src> to tensor<1024xi16, #src>
+    %sum = arith.addi %x, %x : tensor<1024xi16, #src>
+    %y = arith.extsi %sum : tensor<1024xi16, #src> to tensor<1024xi64, #src>
+    %out = ttg.convert_layout %y : tensor<1024xi64, #src> -> tensor<1024xi64, #dst>
+    tt.return %out : tensor<1024xi64, #dst>
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 4, 8], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#dst = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [4, 8, 1], warpsPerCTA = [1, 1, 4], order = [0, 1, 2]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @hoist_nested_broadcasts
+  // CHECK: %[[CVT:.*]] = ttg.convert_layout %arg0 : tensor<32x1x1xf32,
+  // CHECK-NEXT: %[[X:.*]] = tt.broadcast %[[CVT]]
+  // CHECK-NEXT: %[[SUM:.*]] = arith.addf %[[X]], %[[X]]
+  // CHECK-NEXT: %[[Y:.*]] = tt.broadcast %[[SUM]]
+  // CHECK-NEXT: tt.return %[[Y]]
+  tt.func @hoist_nested_broadcasts(%a: tensor<32x1x1xf32, #src>) -> tensor<32x32x32xf32, #dst> {
+    %x = tt.broadcast %a : tensor<32x1x1xf32, #src> -> tensor<32x1x32xf32, #src>
+    %sum = arith.addf %x, %x : tensor<32x1x32xf32, #src>
+    %y = tt.broadcast %sum : tensor<32x1x32xf32, #src> -> tensor<32x32x32xf32, #src>
+    %out = ttg.convert_layout %y : tensor<32x32x32xf32, #src> -> tensor<32x32x32xf32, #dst>
+    tt.return %out : tensor<32x32x32xf32, #dst>
   }
 }
