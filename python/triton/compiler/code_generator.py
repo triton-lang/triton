@@ -486,12 +486,30 @@ class CodeGenerator(ast.NodeVisitor):
         # create loop body block
         block = self.builder.create_block()
         self.builder.set_insertion_point_to_start(block)
+        # Discover dependencies on loop inputs, not on their initial values.
+        # Distinct bindings need distinct symbolic inputs even when they are
+        # initialized with the same SSA value (e.g. `prev = cur`).
+        discovery_liveins = liveins.copy()
+        next_arg = 0
+        for name, live_val in liveins.items():
+            if name in ignore or not _is_triton_value(live_val):
+                continue
+            handles = flatten_values_to_ir([live_val])
+            if not handles:
+                continue
+            args = []
+            for handle in handles:
+                block.add_argument(handle.get_type())
+                args.append(block.arg(next_arg))
+                next_arg += 1
+            discovery_liveins[name] = next(unflatten_ir_values(args, [live_val.type]))
+        self.lscope = discovery_liveins.copy()
+
         # dry visit loop body
         self.scf_stack.append(node)
         with self._discovering_loop_carries():
             self.visit_compound_statement(node.body)
         self.scf_stack.pop()
-        block.erase()
 
         # If a variable (name) has changed value within the loop, then it's
         # a loop-carried variable. (The new and old value must be of the
@@ -510,13 +528,15 @@ class CodeGenerator(ast.NodeVisitor):
 
                 live_handles = flatten_values_to_ir([live_val])
                 loop_handles = flatten_values_to_ir([loop_val])
-                if live_handles != loop_handles:
+                input_handles = flatten_values_to_ir([discovery_liveins[name]])
+                if input_handles != loop_handles:
                     names.append(name)
                     init_tys.append(live_val.type)
                     init_handles.extend(live_handles)
             else:
                 assert name not in self.local_defs, f'Loop carried variable {name} is not a triton value'
 
+        block.erase()
         # reset local scope to not pick up local defs from the dry run.
         self.lscope = liveins.copy()
         self.local_defs = {}
