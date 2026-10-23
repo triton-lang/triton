@@ -52,10 +52,31 @@ class _AMDGPUCodegenOptions(ctypes.Structure):
     ]
 
 
-@functools.lru_cache()
+def _amd_codegen_signature(st):
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
 def _load_amd_codegen(path: str):
+    # Resolve aliases before consulting records of libraries already mapped.
+    return _load_amd_codegen_resolved(str(Path(path).resolve()))
+
+
+@functools.cache
+def _load_amd_codegen_resolved(path: str):
     mode = getattr(os, "RTLD_LOCAL", 0) | getattr(os, "RTLD_NOW", 0)
-    library = ctypes.CDLL(path, mode=mode)
+    resolved = Path(path).resolve()
+    try:
+        original = resolved.stat()
+        digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        library = ctypes.CDLL(str(resolved), mode=mode)
+    except OSError as error:
+        raise RuntimeError(f"Cannot load standalone AMD codegen at {resolved}. "
+                           "Build Triton or set TRITON_AMD_CODEGEN_PATH to a compatible library.") from error
+    if _amd_codegen_signature(original) != _amd_codegen_signature(resolved.stat()):
+        raise RuntimeError("AMD codegen changed while loading; restart Python before compiling again")
+    library._triton_path = str(resolved)
+    library._triton_digest = digest
+    library._triton_stat = original
     library.triton_amdgpu_compile.argtypes = [
         ctypes.c_char_p,
         ctypes.c_size_t,
@@ -83,6 +104,20 @@ def _load_amd_codegen(path: str):
     return library
 
 
+def get_amd_codegen_identity() -> dict:
+    """Report the loaded AMD backend and detect replacement requiring a restart."""
+    library = _load_amd_codegen(get_amd_codegen_path())
+    current = Path(get_amd_codegen_path()).resolve()
+    state = current.stat()
+    original = library._triton_stat
+    if str(current) != library._triton_path or _amd_codegen_signature(state) != _amd_codegen_signature(original):
+        raise RuntimeError("AMD codegen changed after loading; restart Python before compiling again")
+    return {
+        "path": library._triton_path, "sha256": library._triton_digest, "revision":
+        library.triton_amdgpu_revision().decode("utf-8")
+    }
+
+
 def get_amd_codegen_revision() -> str:
     return _load_amd_codegen(get_amd_codegen_path()).triton_amdgpu_revision().decode("utf-8")
 
@@ -90,6 +125,7 @@ def get_amd_codegen_revision() -> str:
 def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
                    disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
                    enable_timing: bool) -> str:
+    get_amd_codegen_identity()
     library = _load_amd_codegen(get_amd_codegen_path())
     # Serialize with Triton's LLVM, adapting alias-scope domains to the format
     # supported by the independently pinned AMD code generator.
@@ -128,6 +164,7 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
 
 
 def assemble_amdgcn(assembly: str, processor: str, features: str) -> bytes:
+    get_amd_codegen_identity()
     library = _load_amd_codegen(get_amd_codegen_path())
     source = assembly.encode("utf-8")
     object_file = ctypes.c_void_p()
@@ -815,6 +852,6 @@ class HIPBackend(BaseBackend):
         if knobs.runtime.add_stages_inspection_hook is not None:
             knobs.runtime.add_stages_inspection_hook(self, stages, options, language, None)
 
-    @functools.lru_cache()
     def hash(self):
-        return f'{self.target}-{get_amd_codegen_revision()}'
+        identity = get_amd_codegen_identity()
+        return f'{self.target}-{identity["revision"]}-{identity["sha256"]}'

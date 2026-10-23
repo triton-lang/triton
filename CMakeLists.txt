@@ -34,6 +34,7 @@ set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
 set(TRITON_LLVM_SYSTEM_SUFFIX "" CACHE STRING "Path to LLVM system suffix")
 set(LLVM_SYSPATH "" CACHE PATH "Path to system LLVM installation")
 set(JSON_SYSPATH "" CACHE PATH "Path to system nlohmann/json headers")
+set(TRITON_AMD_CODEGEN_LLVM_PATH "" CACHE PATH "Local LLVM build or SDK for standalone AMD codegen")
 set(TRITON_AMD_CODEGEN_PATH "" CACHE FILEPATH "Path override for AMD code-generation library")
 set(TRITON_PTXAS_PATH "" CACHE FILEPATH "Path override for ptxas")
 set(TRITON_CUOBJDUMP_PATH "" CACHE FILEPATH "Path override for cuobjdump")
@@ -60,6 +61,9 @@ if(NOT "${LLVM_SYSPATH}" STREQUAL "")
 endif()
 if(NOT "${JSON_SYSPATH}" STREQUAL "")
   list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --json-syspath "${JSON_SYSPATH}")
+endif()
+if(NOT "${TRITON_AMD_CODEGEN_LLVM_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-amd-codegen-llvm-path "${TRITON_AMD_CODEGEN_LLVM_PATH}")
 endif()
 if(NOT "${TRITON_AMD_CODEGEN_PATH}" STREQUAL "")
   list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-amd-codegen-path "${TRITON_AMD_CODEGEN_PATH}")
@@ -144,10 +148,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     PROPERTY CMAKE_CONFIGURE_DEPENDS
       "${CMAKE_CURRENT_SOURCE_DIR}/python/build_helpers.py"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/amd-llvm-info.json"
-      "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amd/backend/codegen/CMakeLists.txt"
-      "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amd/backend/codegen/amdgpu_codegen.cc"
-      "${CMAKE_CURRENT_SOURCE_DIR}/include/triton/Tools/LLVMOptions.h"
-      "${CMAKE_CURRENT_SOURCE_DIR}/lib/Tools/LLVMOptions.cpp"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/nvidia-toolchain-version.json"
   )
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -438,6 +438,24 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(triton PRIVATE -Wno-array-bounds)
+  endif()
+
+  if("amd" IN_LIST TRITON_CODEGEN_BACKENDS AND NOT TRITON_AMD_CODEGEN_PATH)
+    set(TRITON_AMD_CODEGEN_JOB_POOL_ARGS "")
+    if(TRITON_PARALLEL_LINK_JOBS)
+      # Reserve a link slot for the nested build, including its compilation.
+      set(TRITON_AMD_CODEGEN_JOB_POOL_ARGS JOB_POOL link_job_pool)
+    endif()
+    # Inner Ninja tracks external LLVM headers and archives on every build.
+    add_custom_target(triton-amd-codegen
+      COMMAND ${Python3_EXECUTABLE}
+              "${CMAKE_CURRENT_SOURCE_DIR}/python/amd_codegen_build.py"
+              prepare_amd_codegen ${TRITON_BUILD_HELPER_COMMON_ARGS}
+      ${TRITON_AMD_CODEGEN_JOB_POOL_ARGS}
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      VERBATIM
+    )
+    add_dependencies(triton triton-amd-codegen)
   endif()
 
   # Link triton with its dependencies
