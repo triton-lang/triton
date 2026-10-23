@@ -154,3 +154,36 @@ def test_amd_codegen_download_mirror(artifact, mirror, monkeypatch, tmp_path):
         "https://oaitriton.blob.core.windows.net/public/llvm-builds")
     assert downloads == [f"{base}/{name}.tar.gz"]
     assert result.read_bytes() == contents
+
+
+@pytest.mark.parametrize("alias_type", ["symlink", "directory", "indirect_symlink"])
+def test_llvm_syspath_preserves_cached_alias(alias_type, monkeypatch, tmp_path):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+    import build_helpers
+
+    cache_path = tmp_path / "cache"
+    alias = cache_path / "llvm" / "llvm-ubuntu-x64"
+    configured_path = tmp_path / "custom-llvm" if alias_type == "indirect_symlink" else alias
+    parser = argparse.ArgumentParser()
+    build_helpers.add_common_args(parser)
+    args = build_helpers.normalize_parsed_args(
+        parser.parse_args([
+            "--triton-cache-path",
+            str(cache_path), "--triton-offline-build", "--llvm-syspath",
+            str(configured_path), "--triton-llvm-system-suffix", "ubuntu-x64"
+        ]))
+    package = build_helpers.get_llvm_package_info(args)
+    source = alias if alias_type == "directory" else cache_path / "llvm" / package.name
+    marker = Path("include/llvm/marker.h")
+    (source / marker).parent.mkdir(parents=True)
+    (source / marker).write_text("LLVM headers")
+    if alias_type != "directory":
+        alias.symlink_to(source, target_is_directory=True)
+    if alias_type == "indirect_symlink":
+        configured_path.symlink_to(alias, target_is_directory=True)
+
+    variables = build_helpers._get_thirdparty_package_cmake_vars(package, args)
+
+    assert (alias / marker).read_text() == "LLVM headers"
+    assert (source / marker).read_text() == "LLVM headers"
+    assert Path(variables["LLVM_INCLUDE_DIRS"]) / "llvm/marker.h" == configured_path / marker
