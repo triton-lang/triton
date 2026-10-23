@@ -1316,7 +1316,9 @@ def test_fdiv_approx(approx, reciprocal, enable_fp_fusion, device):
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
     z_tri = to_triton(np.empty_like(x), device=device)
-    compiled = kernel[(1, )](x_tri, y_tri, z_tri, approx, reciprocal, x.size, enable_fp_fusion=enable_fp_fusion)
+    with triton.knobs.language.scope():
+        triton.knobs.language.allow_fp_fusion = True
+        compiled = kernel[(1, )](x_tri, y_tri, z_tri, approx, reciprocal, x.size, enable_fp_fusion=enable_fp_fusion)
     expected = (np.float32(1.0) if reciprocal else x) / y
     # AMD's 2.5 ULP bound allows 3 ULP against a rounded reference.
     maxulp = 3 if approx and is_hip() else 2
@@ -1496,7 +1498,9 @@ def test_sqrt_rn_special_values(enable_fp_fusion, device):
     ], dtype=np.float32)
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(np.empty_like(x), device=device)
-    kernel[(1, )](x_tri, y_tri, x.size, enable_fp_fusion=enable_fp_fusion)
+    with triton.knobs.language.scope():
+        triton.knobs.language.allow_fp_fusion = True
+        kernel[(1, )](x_tri, y_tri, x.size, enable_fp_fusion=enable_fp_fusion)
     with np.errstate(invalid="ignore"):
         expected = np.sqrt(x.astype(np.float64)).astype(np.float32)
     actual = to_numpy(y_tri)
@@ -7382,8 +7386,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 @pytest.mark.parametrize("default_override", [False, True])
-@pytest.mark.parametrize("force_disable", [False, True])
-def test_enable_fp_fusion(enable_fp_fusion, default_override, force_disable, device, fresh_knobs):
+@pytest.mark.parametrize("allow_fusion", [False, True])
+def test_enable_fp_fusion(enable_fp_fusion, default_override, allow_fusion, device, fresh_knobs):
     # Sequential multiply add can be fused by backend
     @triton.jit
     def mul_add(data):
@@ -7391,7 +7395,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, force_disable, dev
         tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
-    fresh_knobs.language.force_disable_fp_fusion = force_disable
+    fresh_knobs.language.allow_fp_fusion = allow_fusion
     if default_override:
         fresh_knobs.language.default_fp_fusion = enable_fp_fusion
         h = mul_add.warmup(data, grid=(1, ))
@@ -7401,12 +7405,12 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, force_disable, dev
     if not is_cuda():
         return
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
-    assert found_fma == (enable_fp_fusion and not force_disable)
+    assert found_fma == (enable_fp_fusion and allow_fusion)
 
 
 @pytest.mark.parametrize("explicit_fma", [False, True])
-@pytest.mark.parametrize("force_disable", [False, True])
-def test_force_disable_fp_fusion(explicit_fma, force_disable, device, fresh_knobs):
+@pytest.mark.parametrize("allow_fusion", [False, True])
+def test_allow_fp_fusion(explicit_fma, allow_fusion, device, fresh_knobs):
 
     @triton.jit
     def mul_add(x, y, z, out, EXPLICIT_FMA: tl.constexpr):
@@ -7418,10 +7422,10 @@ def test_force_disable_fp_fusion(explicit_fma, force_disable, device, fresh_knob
     y = torch.tensor([1 - 2**-23], device=device, dtype=torch.float32)
     z = torch.tensor([-1], device=device, dtype=torch.float32)
     out = torch.empty_like(x)
-    fresh_knobs.language.force_disable_fp_fusion = force_disable
+    fresh_knobs.language.allow_fp_fusion = allow_fusion
     kernel = mul_add[(1, )](x, y, z, out, explicit_fma, enable_fp_fusion=True)
-    assert kernel.metadata.enable_fp_fusion == (not force_disable)
-    assert out.item() == (-2**-46 if explicit_fma or not force_disable else 0)
+    assert kernel.metadata.enable_fp_fusion == allow_fusion
+    assert out.item() == (-2**-46 if explicit_fma or allow_fusion else 0)
 
 
 # -----------------------
