@@ -651,7 +651,10 @@ template <typename DotLikeOp> static bool canUseTwoCTAs(DotLikeOp dotOp) {
   RankedTensorType retType = dotOp.getType();
   // The TMA pipeline synchronizes both CTAs. Ordinary loads only provide
   // CTA-local async waits and fences, so neither operand may use that path.
-  if (!getTwoCTADescriptorLoad(dotOp.getA()) ||
+  // A may also be a TMA gather: A is split by rows, so each CTA gathers its
+  // own rows (e.g. MoE activations routed to the tile's expert).
+  if ((!getTwoCTADescriptorLoad(dotOp.getA()) &&
+       !getDefiningOpSkippingConvertLayout<DescriptorGatherOp>(dotOp.getA())) ||
       !getTwoCTADescriptorLoad(dotOp.getB()))
     return false;
 
