@@ -1,3 +1,4 @@
+#include "triton/Dialect/TritonInstrument/Transforms/FpSanitizer.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
@@ -669,26 +670,31 @@ Value castSignedIntValueToType(PatternRewriter &rewriter, Location loc, Value v,
   return v;
 }
 
+} // namespace
+
 // Widening a floating-point payload is signed extension. When narrowing, the
 // xor with the sign extension of the retained low bits vanishes for widened
 // payloads. A repeated odd multiplier folds every discarded residual bit into
 // the high word; a final xor shift diffuses it into the retained low bits.
+// Unsigned payloads use zero extension instead.
 Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
-                             Type targetTy) {
+                             Type targetTy, bool homomorphicCasts,
+                             bool isUnsigned) {
   if (v.getType() == targetTy)
     return v;
 
+  auto extend = [&](Type ty, Value value) -> Value {
+    if (isUnsigned)
+      return arith::ExtUIOp::create(rewriter, loc, ty, value);
+    return arith::ExtSIOp::create(rewriter, loc, ty, value);
+  };
   unsigned srcWidth = getIntBitwidth(v.getType());
   unsigned dstWidth = getIntBitwidth(targetTy);
   if (dstWidth > srcWidth)
-    return arith::ExtSIOp::create(rewriter, loc, targetTy, v);
+    return extend(targetTy, v);
 
   assert(srcWidth > dstWidth && "expected a narrowing payload cast");
-  auto moduleOp =
-      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  auto homomorphicCasts =
-      moduleOp->getAttrOfType<BoolAttr>(kHomomorphicCastsAttr);
-  if (homomorphicCasts && homomorphicCasts.getValue())
+  if (homomorphicCasts)
     return arith::TruncIOp::create(rewriter, loc, targetTy, v);
 
   assert(srcWidth <= 64 && "expected at most a 64-bit floating-point payload");
@@ -697,7 +703,7 @@ Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
       (uint64_t{3511} & dstMask) * (~uint64_t{0} / dstMask);
 
   Value low = arith::TruncIOp::create(rewriter, loc, targetTy, v);
-  Value canonical = arith::ExtSIOp::create(rewriter, loc, v.getType(), low);
+  Value canonical = extend(v.getType(), low);
   Value residual = arith::XOrIOp::create(rewriter, loc, v, canonical);
   Value multiplier =
       getUIntConstantLike(rewriter, loc, v.getType(), repeatedMultiplier);
@@ -711,6 +717,19 @@ Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
   Value diffusion = arith::ShRUIOp::create(rewriter, loc, high, diffusionShift);
   Value mixed = arith::XOrIOp::create(rewriter, loc, high, diffusion);
   return arith::XOrIOp::create(rewriter, loc, low, mixed);
+}
+
+namespace {
+
+// Uses the cast mode that the FpSan pass records on the module.
+Value castFloatPayloadToType(PatternRewriter &rewriter, Location loc, Value v,
+                             Type targetTy) {
+  auto moduleOp =
+      rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
+  auto attr = moduleOp->getAttrOfType<BoolAttr>(kHomomorphicCastsAttr);
+  bool homomorphicCasts = attr && attr.getValue();
+  return instrument::castFloatPayloadToType(rewriter, loc, v, targetTy,
+                                            homomorphicCasts);
 }
 
 Value castScalarIntToIntLike(PatternRewriter &rewriter, Location loc,
