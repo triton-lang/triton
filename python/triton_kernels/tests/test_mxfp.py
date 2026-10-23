@@ -1,4 +1,5 @@
 import itertools
+import math
 from functools import partial
 
 import pytest
@@ -687,3 +688,21 @@ if __name__ == "__main__":
     print()
     print("MXFP4 (e2m1):")
     print(tabulate(mxfp4_rows, headers=headers))
+
+
+@pytest.mark.parametrize("shape", [(19, 160), (2, 17, 32), (0, 32)])
+def test_upcast_mxfp4_to_fp8_out(shape, device):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+    from triton_kernels.numerics_details.mxfp import upcast_mxfp4_to_fp8
+
+    codes = (torch.arange(math.prod(shape), device=device) % 16).to(torch.uint8).reshape(shape)
+    values = codes[..., ::2] | (codes[..., 1::2] << 4)
+    scales = (torch.arange(math.prod(shape) // 32, device=device) % 12 + 122).to(torch.uint8)
+    scales = scales.reshape(*shape[:-1], shape[-1] // 32)
+    buffer = torch.zeros(math.prod(shape) + 64, device=device, dtype=torch.float8_e4m3fn)
+    out = buffer[32:-32].view(shape)
+    assert upcast_mxfp4_to_fp8(values, scales, out=out) is out
+    expected = upcast_from_mxfp_torch(values, scales, torch.float32, axis=-1).to(torch.float8_e4m3fn)
+    torch.testing.assert_close(out.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
+    assert not buffer[:32].float().any() and not buffer[-32:].float().any()

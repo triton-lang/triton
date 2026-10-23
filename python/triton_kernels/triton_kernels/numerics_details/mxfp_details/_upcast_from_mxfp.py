@@ -108,6 +108,17 @@ def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
 
 
 @triton.jit
+def _upcast_mxfp4_to_fp8(Values, Scales, Out, n_elements, BLOCK: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    scale_offsets = tl.program_id(0) * (BLOCK // 16) + tl.arange(0, BLOCK // 16)
+    values = tl.load(Values + offsets, offsets < n_elements, 0)
+    scales = tl.load(Scales + scale_offsets, scale_offsets < n_elements // 16, 127)
+    decoded = upcast_mxfp4_tile(values[None, :], scales[None, :], tl.bfloat16)
+    out_offsets = tl.program_id(0) * (2 * BLOCK) + tl.arange(0, 2 * BLOCK)
+    tl.store(Out + out_offsets, decoded.reshape((2 * BLOCK, )), out_offsets < 2 * n_elements)
+
+
+@triton.jit
 def upcast_nvfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
     tl.static_assert(len(tensor.shape) == 2)
     tl.static_assert(len(scale.shape) == 2)

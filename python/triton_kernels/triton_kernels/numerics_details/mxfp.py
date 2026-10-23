@@ -5,7 +5,7 @@ import math
 import triton
 import torch
 import torch.nn.functional as F
-from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
+from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp, _upcast_mxfp4_to_fp8
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, _quantize_mxfp8_fn, _quantize_mxfp4_fn, _quantize_nvfp4_fn
 from triton.tools.mxfp import fp8e8m0_to_float32
 from triton.tools.tensor_descriptor import TensorDescriptor
@@ -92,6 +92,23 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
         )
     # TODO: return tensor object instead of its storage
     return y_value.storage.data, y_scale.storage.data
+
+def upcast_mxfp4_to_fp8(tensor: torch.Tensor, scale: torch.Tensor, *, out: torch.Tensor):
+    """Decode K-contiguous MXFP4 into caller-owned E4M3 storage.
+
+    The caller must ensure E8M0 scale bytes are in [122, 133] for exact conversion.
+    """
+    assert tensor.dtype == scale.dtype == torch.uint8
+    assert out.dtype == torch.float8_e4m3fn
+    assert tensor.device == scale.device == out.device
+    assert tensor.is_contiguous() and scale.is_contiguous() and out.is_contiguous()
+    assert tensor.shape[-1] % 16 == 0
+    assert scale.shape == tensor.shape[:-1] + (tensor.shape[-1] // 16,)
+    assert out.shape == tensor.shape[:-1] + (tensor.shape[-1] * 2,)
+    if tensor.numel():
+        _upcast_mxfp4_to_fp8[(triton.cdiv(tensor.numel(), 512),)](tensor, scale, out, tensor.numel(), BLOCK=512)
+    return out
+
 
 def upcast_from_mxfp(
     tensor: torch.Tensor,
