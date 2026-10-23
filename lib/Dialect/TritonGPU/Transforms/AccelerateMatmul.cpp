@@ -315,9 +315,9 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
     if (failed(encoding))
       return Value();
     rewriter.setInsertionPointAfterValue(source);
-    source = ConvertLayoutOp::create(rewriter, reshape2D.getLoc(),
-                                     scaleType.cloneWithEncoding(*encoding),
-                                     source);
+    source =
+        ConvertLayoutOp::create(rewriter, reshape2D.getLoc(),
+                                scaleType.cloneWithEncoding(*encoding), source);
     cgaLayout = targetCGALayout;
   }
 
@@ -1148,7 +1148,8 @@ public:
             context, CGALayout, aScaleBlockRepOrder);
     // Two CTAs: A scales are split with A's rows, B scales are broadcast
     // within the pair.
-    CGAEncodingAttr scaleACGALayout = useTwoCTAs ? CGALayout : CGAEncodingAttr();
+    CGAEncodingAttr scaleACGALayout =
+        useTwoCTAs ? CGALayout : CGAEncodingAttr();
     CGAEncodingAttr scaleBCGALayout =
         useTwoCTAs ? getTwoCTAScaleBCGALayout(oldRetType) : CGAEncodingAttr();
     Attribute scaleBEncoding =

@@ -76,7 +76,8 @@ bool mustLoadToRegisters(Operation *op) {
   auto allocEncoding = alloc.getType().getEncoding();
   return loadEncoding && loadEncoding != allocEncoding &&
          !ttg::areLayoutsEquivalent(
-             tensorType.getShape(), cast<ttg::LayoutEncodingTrait>(loadEncoding),
+             tensorType.getShape(),
+             cast<ttg::LayoutEncodingTrait>(loadEncoding),
              cast<ttg::LayoutEncodingTrait>(allocEncoding));
 }
 
