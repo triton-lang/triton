@@ -284,6 +284,39 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
+// Whether the shared-memory buffer of `value` is read by an MMAv5 op: as an
+// operand, through views, selects and scf.if/scf.for yields, or copied to
+// tensor memory (block scales). A value consumed through registers is read by
+// each CTA from its own buffer.
+static bool reachesMMAv5(Value value) {
+  SmallVector<Value> worklist = {value};
+  DenseSet<Value> seen;
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!seen.insert(v).second)
+      continue;
+    for (OpOperand &use : v.getUses()) {
+      Operation *user = use.getOwner();
+      if (isa<ttng::MMAv5OpInterface, ttng::TMEMCopyOp>(user))
+        return true;
+      if (isa<ttg::LocalAllocOp, arith::SelectOp>(user) ||
+          user->hasTrait<OpTrait::MemDescViewTrait>()) {
+        llvm::append_range(worklist, user->getResults());
+      } else if (auto yield = dyn_cast<scf::YieldOp>(user)) {
+        Operation *parent = yield->getParentOp();
+        unsigned idx = use.getOperandNumber();
+        if (auto ifOp = dyn_cast<scf::IfOp>(parent)) {
+          worklist.push_back(ifOp.getResult(idx));
+        } else if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+          worklist.push_back(loop.getRegionIterArgs()[idx]);
+          worklist.push_back(loop.getResult(idx));
+        }
+      }
+    }
+  }
+  return false;
+}
+
 static bool hasNonMMAUsers(Operation *op) {
   return llvm::any_of(op->getUsers(), [](Operation *user) {
     if (user->hasTrait<OpTrait::MemDescViewTrait>())
@@ -396,25 +429,35 @@ void createTMABarrierAndWait(
     int sizeInBytes = 0;
     int numBuffers = asyncLoads[group[0]].stageDiff;
     const LoadGroupInfo loadGroup = loadGroups.find(numBuffers)->second;
-    bool needsClusterBarrier = false;
+    // A two-CTA MMA reads both CTAs' halves of its operands, so a group that
+    // feeds one needs the pair barrier (in the leader, which issues the MMA)
+    // to cover the peer's bytes; if its data is also read outside the MMA,
+    // both CTAs must then observe the completion (cluster barrier). A group
+    // that never reaches a two-CTA MMA keeps per-CTA barriers: each CTA waits
+    // for its own bytes and no cluster-wide synchronization is needed.
+    bool feedsMMA = false, readOutsideMMA = false;
+    for (Operation *op : group) {
+      feedsMMA |= reachesMMAv5(op->getResult(0));
+      readOutsideMMA |=
+          mustLoadToRegisters(op) || hasNonMMAUsers(*op->getUsers().begin());
+    }
+    bool usePairBarrier = twoCTAs && feedsMMA;
+    bool needsClusterBarrier = usePairBarrier && readOutsideMMA;
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       // Count the bytes each CTA receives: the shared buffer's CTA layout, not
-      // the register tensor's, decides it (a buffer broadcast across a CTA pair,
-      // e.g. two-CTA MMA scales for B, lands whole in every CTA).
+      // the register tensor's, decides it (a buffer broadcast across a CTA
+      // pair, e.g. two-CTA MMA scales for B, lands whole in every CTA).
       Attribute bufferEncoding = asyncLoads[op].sharedEncoding;
       int loadSize =
           bufferEncoding
               ? product(getShapePerCTA(bufferEncoding, tensorTy.getShape()))
               : product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
-      needsClusterBarrier |=
-          twoCTAs &&
-          (mustLoadToRegisters(op) || hasNonMMAUsers(*op->getUsers().begin()));
     }
 
-    Value barrierAlloc = triton::createBarrierAlloc(forOp, numBuffers,
-                                                    /*arriveCount=*/1, twoCTAs);
+    Value barrierAlloc = triton::createBarrierAlloc(
+        forOp, numBuffers, /*arriveCount=*/1, usePairBarrier);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
