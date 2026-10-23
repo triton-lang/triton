@@ -158,7 +158,8 @@ void emitSchedulingDAGForMF(raw_ostream &os, MachineFunction &MF,
 /// block number the MIR printer puts in the `bb.N` labels, which re-parsing the
 /// dumped text cannot guarantee (see DAGBuilder.cpp).
 ///
-/// Not thread-safe: arming is process-global (see DAGBuilder.cpp).
+/// Arming is per-thread, so concurrent callers do not clobber each other's
+/// sink. It still does not nest on one thread.
 void armLivePipelineDAGEmission(std::string *Sink);
 void disarmLivePipelineDAGEmission();
 
