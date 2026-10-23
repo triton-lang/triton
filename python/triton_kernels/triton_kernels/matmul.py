@@ -249,7 +249,7 @@ def matmul_set_idle_sms(num_idle_sms):
     set_idle_sms(num_idle_sms)
 
 def _prepare_hopper_fp8_mxfp4(a, b, precision_config):
-    """Return canonical, K-contiguous MXFP4 inputs for conversion into FP8 scratchpads."""
+    """Validate MXFP4 inputs for conversion into FP8 scratchpads, preserving their storage."""
     if not (is_cuda() and target_info.cuda_capability_geq(9, 0)
             and not target_info.cuda_capability_geq(10, 0)):
         return {}
@@ -259,6 +259,7 @@ def _prepare_hopper_fp8_mxfp4(a, b, precision_config):
             or not (a.dtype in fp4_types or b.dtype in fp4_types)):
         return {}
     from .tensor_details.layout_details.hopper_fp8 import HopperFP8MXValueLayout
+    from .numerics_details.mxfp import _check_mxfp4_to_fp8_layouts, _mxfp4_scales_in_fp8_range
 
     operands = ((a, precision_config.a_mx_scale, precision_config.a_microblock_size,
                  precision_config.a_mx_tensor_scale),
@@ -280,14 +281,13 @@ def _prepare_hopper_fp8_mxfp4(a, b, precision_config):
             values = wrap_torch_tensor(values, dtype=FP4)
         if not isinstance(scales, Tensor):
             scales = wrap_torch_tensor(scales)
-        canonical = StridedLayout(axis)
-        values = convert_layout(values, canonical).data.movedim(axis, -1).contiguous()
-        scales = convert_layout(scales, canonical).data.movedim(axis, -1).contiguous()
-        if not bool(((scales >= 122) & (scales <= 133)).all()):
+        _check_mxfp4_to_fp8_layouts(values, scales, axis)
+        prepared[name] = (values, scales)
+    for _, scales in prepared.values():
+        if not _mxfp4_scales_in_fp8_range(scales):
             if any(isinstance(x, Tensor) and isinstance(x.storage.layout, HopperFP8MXValueLayout) for x in (a, b)):
                 raise ValueError("Hopper FP8 decoding requires E8M0 scale bytes in [122, 133]")
             return {}
-        prepared[name] = (values, scales)
     return prepared
 
 
@@ -328,7 +328,7 @@ def matmul(a, b, bias,
     On Hopper, MXFP4/FP8 and MXFP4/MXFP4 inputs with E8M0 scale bytes
     122 through 133 have a reference lowering through materialized FP8
     operands. It accepts strided storage and HopperFP8MX value/scale layouts.
-    Output defaults to BF16; layout conversion and decoding are not fused.
+    Both storage paths decode directly into FP8 buffers. Output defaults to BF16.
 
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
@@ -360,12 +360,13 @@ def matmul(a, b, bias,
 
         # Input conversion precedes kernel selection, which needs the FP8 dtype and strides.
         input_allocation = MatmulAllocation(a.device, None, {
-            name: (values.shape[:-1] + (values.shape[-1] * 2,), torch.float8_e4m3fn)
+            name: (tuple(values.shape) if name == "a_fp8" else
+                   (*values.shape[:-2], values.shape[-1], values.shape[-2]), torch.float8_e4m3fn)
             for name, (values, _) in prepared_inputs.items()
         })
         input_memory = apply_allocation(input_allocation, None)["scratchpad"]
         for name, (values, scales) in prepared_inputs.items():
-            upcast_mxfp4_to_fp8(values, scales, out=input_memory[name])
+            upcast_mxfp4_to_fp8(values, scales, out=input_memory[name], axis=-1 if name == "a_fp8" else -2)
         a = input_memory.get("a_fp8", a)
         if "b_fp8" in input_memory:
             b = input_memory["b_fp8"].movedim(-1, -2)
@@ -913,10 +914,15 @@ def apply_precision(x_tri, w_tri, precision_config):
     prepared_inputs = _prepare_hopper_fp8_mxfp4(x_tri, w_tri, precision_config)
     if prepared_inputs:
         # Supported values are exactly representable in FP8; the reference can decode directly to FP32.
-        if "a_fp8" in prepared_inputs:
-            x_tri = upcast_from_mxfp(*prepared_inputs["a_fp8"], torch.float32, axis=-1)
-        if "b_fp8" in prepared_inputs:
-            w_tri = upcast_from_mxfp(*prepared_inputs["b_fp8"], torch.float32, axis=-1).movedim(-1, -2)
+        decoded = {}
+        for name, (values, scales) in prepared_inputs.items():
+            axis = -1 if name == "a_fp8" else -2
+            canonical = StridedLayout(axis)
+            values = convert_layout(values, canonical).data
+            scales = convert_layout(scales, canonical).data
+            decoded[name] = upcast_from_mxfp(values, scales, torch.float32, axis=axis)
+        x_tri = decoded.get("a_fp8", x_tri)
+        w_tri = decoded.get("b_fp8", w_tri)
         return apply(x_tri, flex_ctx.lhs_data.scale), apply(w_tri, flex_ctx.rhs_data.scale)
 
     if precision_config.a_mx_scale is not None:

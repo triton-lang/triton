@@ -108,11 +108,32 @@ def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
 
 
 @triton.jit
-def _upcast_mxfp4_to_fp8(Values, Scales, Out, n_elements, BLOCK: tl.constexpr):
+def _upcast_mxfp4_to_fp8(Values, Scales, Out, n_elements, ROWS: tl.constexpr, K: tl.constexpr, VALUE_ROWS: tl.constexpr,
+                         VALUE_K: tl.constexpr, SCALE_ROWS: tl.constexpr, SCALE_K: tl.constexpr, BLOCK: tl.constexpr):
     offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     scale_offsets = tl.program_id(0) * (BLOCK // 16) + tl.arange(0, BLOCK // 16)
-    values = tl.load(Values + offsets, offsets < n_elements, 0)
-    scales = tl.load(Scales + scale_offsets, scale_offsets < n_elements // 16, 127)
+    value_addresses = offsets
+    scale_addresses = scale_offsets
+    if VALUE_ROWS:
+        row = offsets // (K // 2) % ROWS
+        col = offsets % (K // 2)
+        batch = offsets // (ROWS * (K // 2))
+        k_tiles: tl.constexpr = triton.cdiv(K, VALUE_K)
+        tile = (batch * triton.cdiv(ROWS, VALUE_ROWS) + row // VALUE_ROWS) * k_tiles
+        tile += col // (VALUE_K // 2)
+        # Each word holds eight K values, and word planes store consecutive rows.
+        value_addresses = tile * (VALUE_ROWS * VALUE_K // 2)
+        value_addresses += (col % (VALUE_K // 2) // 4 * VALUE_ROWS + row % VALUE_ROWS) * 4 + col % 4
+        row = scale_offsets // (K // 32) % ROWS
+        col = scale_offsets % (K // 32)
+        batch = scale_offsets // (ROWS * (K // 32))
+        scale_k_tiles: tl.constexpr = triton.cdiv(K, SCALE_K)
+        tile = (batch * triton.cdiv(ROWS, SCALE_ROWS) + row // SCALE_ROWS) * scale_k_tiles
+        tile += col // (SCALE_K // 32)
+        scale_addresses = tile * (SCALE_ROWS * SCALE_K // 32)
+        scale_addresses += col % (SCALE_K // 32) * SCALE_ROWS + row % SCALE_ROWS
+    values = tl.load(Values + value_addresses, offsets < n_elements, 0)
+    scales = tl.load(Scales + scale_addresses, scale_offsets < n_elements // 16, 127)
     decoded = upcast_mxfp4_tile(values[None, :], scales[None, :], tl.bfloat16)
     out_offsets = tl.program_id(0) * (2 * BLOCK) + tl.arange(0, 2 * BLOCK)
     tl.store(Out + out_offsets, decoded.reshape((2 * BLOCK, )), out_offsets < 2 * n_elements)
