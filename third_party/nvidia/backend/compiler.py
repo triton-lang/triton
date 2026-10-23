@@ -506,6 +506,12 @@ class CUDABackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
 
+        # PTX jump tables introduce a dependent constant-memory load before the
+        # indirect branch. Prefer conditional branches in kernels and helpers.
+        for func in llvm_mod.get_functions():
+            if not func.is_declaration():
+                func.add_fn_attr("no-jump-tables", "true")
+
         # Opt in to LLVM SLP instead of the target-aware NVPTX vectorizer.
         use_slp_vectorizer = knobs.nvidia.use_slp_vectorizer
         llvm.optimize_module(

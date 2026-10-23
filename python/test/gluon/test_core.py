@@ -1344,6 +1344,28 @@ def test_warp_specialize_noinline_ids():
     torch.testing.assert_close(scan_out, expected + 1, rtol=0, atol=0)
 
 
+def test_warp_specialize_conditional_dispatch():
+
+    @gluon.jit
+    def worker(output, iteration, slot: ttgl.constexpr):
+        ttgl.store(output + slot, iteration + slot)
+
+    @gluon.jit
+    def kernel(output, iterations):
+        for i in range(iterations):
+            # Three workers and the exit state are enough to form a jump table.
+            ttgl.warp_specialize([
+                (worker, (output, i, 0)),
+                (worker, (output, i, 1)),
+                (worker, (output, i, 2)),
+                (worker, (output, i, 3)),
+            ], [1, 1, 1])
+
+    source = gluon.GluonASTSource(kernel, signature={"output": "*i32", "iterations": "i32"})
+    compiled = triton.compile(source, target=GPUTarget("cuda", 90, 32), options={"num_warps": 4})
+    assert "brx.idx" not in compiled.asm["ptx"]
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_mbarrier_tma_progress(device):
 

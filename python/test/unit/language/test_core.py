@@ -1785,7 +1785,7 @@ def test_noinline(mode, device):
         z = torch.ones((16, 16), device=device, dtype=torch.float32)
     else:
         z = torch.tensor([0.0], device=device, dtype=torch.float32)
-    kernel[(1, )](x, y, z, num_warps=1)
+    compiled = kernel[(1, )](x, y, z, num_warps=1)
     if mode == "simple":
         assert torch.equal(z, x + y)
     elif mode == "call_graph" or mode == "dynamic" or mode == "multi_values":
@@ -1793,6 +1793,14 @@ def test_noinline(mode, device):
     elif mode == "shared":
         ref = torch.full((16, 16), 16, device=device, dtype=torch.float32)
         assert torch.equal(z, ref + x + y)
+
+    if is_cuda() and not is_interpreter():
+        llir = compiled.asm["llir"]
+        definitions = re.findall(r"^define\b.* #(\d+)\b", llir, re.MULTILINE)
+        attributes = dict(re.findall(r"^attributes #(\d+) = \{ (.*) \}$", llir, re.MULTILINE))
+        assert len(definitions) >= 2
+        for group in definitions:
+            assert '"no-jump-tables"="true"' in attributes[group]
 
 
 @triton.jit(noinline=True)
