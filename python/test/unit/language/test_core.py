@@ -8430,6 +8430,24 @@ def test_chained_comparison_short_circuit(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.filterwarnings("ignore:Logical operators 'and' and 'or' are deprecated")
+def test_logical_operators_values(device):
+
+    @triton.jit
+    def kernel(X, Y):
+        offsets = tl.arange(0, 16)
+        x = tl.load(X + offsets)
+        tl.store(Y + offsets, (x >= 0) and (x <= 8))
+        tl.store(Y + 16 + offsets, (x < 0) or (x > 8))
+
+    x = torch.arange(-4, 12, device=device, dtype=torch.int32)
+    y = torch.empty((32, ), device=device, dtype=torch.bool)
+    kernel[(1, )](x, y)
+    torch.testing.assert_close(y[:16], (x >= 0) & (x <= 8))
+    torch.testing.assert_close(y[16:], (x < 0) | (x > 8))
+
+
+@pytest.mark.interpreter
 def test_short_circuiting(device):
 
     @triton.jit
