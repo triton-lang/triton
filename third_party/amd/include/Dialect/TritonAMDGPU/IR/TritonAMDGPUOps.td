@@ -1191,7 +1191,7 @@ def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather", [
 
 def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait", [MemWaitOpTrait]> {
   let summary = "Wait until there are less than or equal to the given number of outstanding TDM operations";
-  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
+  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, ConfinedAttr<I32Attr, [IntNonNegative]>:$num);
   let description = [{
     This operation waits until there are less than or equal to the given number
     of outstanding async TDM operations.
@@ -1208,7 +1208,7 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait", [MemWaitOpTrait]> {
 
 def AsyncTDMIntrinsicWait : TT_AMDGPU_Op<"async_tdm_intrinsic_wait", [MemWaitOpTrait]> {
   let summary = "Wait until there are less than or equal to the given number of outstanding TDM intrinsics";
-  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$count);
+  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, ConfinedAttr<I32Attr, [IntNonNegative]>:$count);
   let description = [{
     This operation waits until there are less than or equal to the given number
     of outstanding TDM intrinsics (assembly instructions). This is necessary to
@@ -1233,6 +1233,8 @@ def TDMPrefetchOp : TT_AMDGPU_Op<"tdm_prefetch", [
     DeclareOpInterfaceMethods<InferTypeOpInterface>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>
   ]> {
+  let hasVerifier = 1;
+
   let summary = "Prefetch data based on a TDM descriptor from global memory to L2.";
 
   let description = [{
