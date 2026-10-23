@@ -23,7 +23,7 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna5
+from triton_kernels.target_info import cuda_capability_geq, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna5
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
@@ -1314,3 +1314,69 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     matmul(a, b, None, c=actual, c_acc_in=actual if accumulate else None,
            precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_matmul_ragged_k_unpadded_slices(device, opt_flags_scope, monkeypatch):
+    # The persistent ragged-K kernel does not mask the last K tile of a slice, so
+    # unpadded ragged-K must never reach it (issue #12368).
+    if not is_cuda() or not cuda_capability_geq(9):
+        pytest.skip("requires CUDA capability >= 9")
+
+    import triton_kernels.matmul as tk_matmul
+    picked = {}
+    real_make_opt_flags = tk_matmul.make_opt_flags
+
+    def spy(*args, **kwargs):
+        picked["flags"] = real_make_opt_flags(*args, **kwargs)
+        return picked["flags"]
+
+    monkeypatch.setattr(tk_matmul, "make_opt_flags", spy)
+
+    slice_sizes = [100, 100, 100]
+    k = sum(slice_sizes)
+    metadata = make_ragged_tensor_metadata(torch.tensor(slice_sizes, dtype=torch.int32, device=device), k)
+    assert metadata.slice_sizes_divisibility is None
+    a = torch.ones((k, 1024), device=device, dtype=torch.bfloat16).T
+    b = torch.ones((k, 4096), device=device, dtype=torch.bfloat16)
+
+    # default flags: the non-persistent kernel is chosen and the result is exact
+    y = matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+    default_flags = picked["flags"]
+    assert not default_flags.is_persistent
+    torch.testing.assert_close(y, torch.full_like(y, 100), rtol=0, atol=0)
+
+    # constraint: forcing the persistent kernel is rejected
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True}):
+        with pytest.raises(opt_flags.InapplicableConstraint, match="is_persistent"):
+            matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+
+    # manual flags bypass the constraint check and must still be rejected; use the flags the
+    # heuristics pick for the persistent kernel on a padded call of the same M and N
+    padded_sizes = [128, 128, 128]
+    padded = replace(make_ragged_tensor_metadata(torch.tensor(padded_sizes, dtype=torch.int32, device=device),
+                                                 sum(padded_sizes)), slice_sizes_divisibility=128)
+    a_p = torch.ones((sum(padded_sizes), 1024), device=device, dtype=torch.bfloat16).T
+    b_p = torch.ones((sum(padded_sizes), 4096), device=device, dtype=torch.bfloat16)
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True}):
+        matmul(a_p, b_p, None, a_ragged_metadata=padded, b_ragged_metadata=padded)
+    persistent_flags = picked["flags"]
+    assert persistent_flags.is_persistent
+    with opt_flags.scoped_opt_flags(persistent_flags):
+        with pytest.raises(opt_flags.InapplicableConstraint, match="padded"):
+            matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+
+
+def test_matmul_ragged_k_padded_slices_still_persistent(device, opt_flags_scope):
+    # Padded ragged-K must stay eligible for the persistent kernel.
+    if not is_cuda() or not cuda_capability_geq(9):
+        pytest.skip("requires CUDA capability >= 9")
+
+    slice_sizes = [128, 128, 128]
+    k = sum(slice_sizes)
+    metadata = make_ragged_tensor_metadata(torch.tensor(slice_sizes, dtype=torch.int32, device=device), k)
+    metadata = replace(metadata, slice_sizes_divisibility=128)
+    a = torch.ones((k, 1024), device=device, dtype=torch.bfloat16).T
+    b = torch.ones((k, 4096), device=device, dtype=torch.bfloat16)
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True}):
+        y = matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+    torch.testing.assert_close(y, torch.full_like(y, 128), rtol=0, atol=0)
