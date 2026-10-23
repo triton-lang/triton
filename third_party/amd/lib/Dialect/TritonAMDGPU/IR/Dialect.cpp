@@ -51,10 +51,34 @@ using namespace mlir;
 using namespace mlir::triton::amdgpu;
 using mlir::triton::gpu::PartitionedSharedEncodingAttr;
 
+namespace {
+// Lets the AMD-specific cache policy attributes sit in the `cachePolicy` slot
+// of memory ops.
+class TritonAMDGPUCachePolicyInterface
+    : public triton::DialectCachePolicyInterface {
+public:
+  using DialectCachePolicyInterface::DialectCachePolicyInterface;
+
+  LogicalResult verifyCachePolicy(
+      Attribute cachePolicy, triton::CachePolicyOperation operation,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+    if (isa<CachePolicyGfx9Attr>(cachePolicy))
+      return success();
+    return emitError() << "unsupported AMDGPU cache policy attribute "
+                       << cachePolicy;
+  }
+};
+} // namespace
+
 void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST
 #include "Dialect/TritonAMDGPU/IR/TritonAMDGPUAttrDefs.cpp.inc"
+      >();
+
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "Dialect/TritonAMDGPU/IR/TritonAMDGPUTypes.cpp.inc"
       >();
 
   addOperations<
@@ -63,12 +87,30 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
       >();
 
   addInterfaces<TritonInlinerInterface>();
+  addInterfaces<TritonAMDGPUCachePolicyInterface>();
 }
 
 #include "Dialect/TritonAMDGPU/IR/TritonAMDGPUEnums.cpp.inc"
 
 #define GET_ATTRDEF_CLASSES
 #include "Dialect/TritonAMDGPU/IR/TritonAMDGPUAttrDefs.cpp.inc"
+
+#define GET_TYPEDEF_CLASSES
+#include "Dialect/TritonAMDGPU/IR/TritonAMDGPUTypes.cpp.inc"
+
+namespace mlir::triton::amdgpu {
+Type getBufferElementType(Type base) {
+  if (auto desc = dyn_cast<BufferDescType>(base))
+    return desc.getElementType();
+  return triton::getPointeeType(base);
+}
+
+bool elementTypeMatchesBufferBase(Type value, Type base) {
+  if (auto desc = dyn_cast<BufferDescType>(base))
+    return getElementTypeOrSelf(value) == desc.getElementType();
+  return triton::elementTypeMatchesPointee(value, base);
+}
+} // namespace mlir::triton::amdgpu
 
 #define GET_OP_CLASSES
 #include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"
@@ -1166,7 +1208,38 @@ LogicalResult ConcatOp::verify() {
   return success();
 }
 
+// The legacy cache modifiers imply an architecture-specific scope, so they
+// can't be combined with an explicit `scope`.
+static LogicalResult
+verifyBufferAccessPolicy(Operation *op, Attribute cachePolicy,
+                         std::optional<triton::MemSyncScope> scope,
+                         triton::CachePolicyOperation operation) {
+  if (failed(triton::verifyCachePolicy(op, cachePolicy, operation)))
+    return failure();
+  if (scope && isa_and_nonnull<triton::CachePolicyAttr>(cachePolicy))
+    return op->emitOpError("a cache modifier can't be combined with scope");
+  return success();
+}
+
+LogicalResult MakeBufferDescOp::verify() {
+  if (triton::getAddressSpace(getBase().getType()) !=
+      triton::PtrAddrSpace::Global)
+    return emitOpError("requires a global address space base");
+  return success();
+}
+
+LogicalResult BufferLoadOp::verify() {
+  return verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
+                                  getScope(),
+                                  triton::CachePolicyOperation::Load);
+}
+
 LogicalResult BufferLoadToLocalOp::verify() {
+  if (failed(verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
+                                      getScope(),
+                                      triton::CachePolicyOperation::Load)))
+    return failure();
+
   auto mod = getOperation()->getParentOfType<ModuleOp>();
   if (!mod)
     return success();
@@ -1178,13 +1251,20 @@ LogicalResult BufferLoadToLocalOp::verify() {
 }
 
 // A buffer write's scalar base must be global memory (address space 1).
+// A descriptor's base is checked when the descriptor is made.
 static LogicalResult verifyBufferWriteBase(Operation *op, Value ptr) {
+  if (isa<BufferDescType>(ptr.getType()))
+    return success();
   if (triton::getAddressSpace(ptr.getType()) != triton::PtrAddrSpace::Global)
     return op->emitOpError("buffer writes require a global address space base");
   return success();
 }
 
 LogicalResult BufferStoreOp::verify() {
+  if (failed(verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
+                                      getScope(),
+                                      triton::CachePolicyOperation::Store)))
+    return failure();
   return verifyBufferWriteBase(getOperation(), getPtr());
 }
 
