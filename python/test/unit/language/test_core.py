@@ -3926,6 +3926,104 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
         np.testing.assert_equal(z_ref, z_tri)
 
 
+@triton.jit
+def add_combine(a, b):
+    return a + b
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("axis, positive_axis", [(-1, 1), (-2, 0)])
+def test_reduce_negative_axis_custom_combine(axis, positive_axis, device):
+    # A custom combine_fn takes the generic_reduce path in the interpreter,
+    # which used to keep a negative axis and return a result of the wrong rank.
+    @triton.jit
+    def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_OUT: tl.constexpr, AXIS: tl.constexpr):
+        range_m = tl.arange(0, BLOCK_M)
+        range_n = tl.arange(0, BLOCK_N)
+        x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
+        z = tl.reduce(x, AXIS, add_combine)
+        tl.store(Z + tl.arange(0, BLOCK_OUT), z)
+
+    shape = (4, 8)
+    x = np.arange(32, dtype=np.int32).reshape(shape)
+    z_ref = np.sum(x, axis=positive_axis)
+    z_tri = to_triton(np.empty_like(z_ref), device=device)
+    kernel[(1, )](to_triton(x, device=device), z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_OUT=z_ref.size,
+                  AXIS=axis)
+    np.testing.assert_equal(to_numpy(z_tri), z_ref)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("op, numpy_op", [("xor_sum", np.bitwise_xor.reduce), ("reduce_or", np.bitwise_or.reduce)])
+@pytest.mark.parametrize("axis, positive_axis", [(-1, 1), (-2, 0)])
+def test_reduce_negative_axis_generic_builtin(op, numpy_op, axis, positive_axis, device):
+    # xor_sum and reduce_or also go through generic_reduce in the interpreter.
+    @triton.jit
+    def kernel_xor(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_OUT: tl.constexpr, AXIS: tl.constexpr):
+        range_m = tl.arange(0, BLOCK_M)
+        range_n = tl.arange(0, BLOCK_N)
+        x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
+        z = tl.xor_sum(x, axis=AXIS)
+        tl.store(Z + tl.arange(0, BLOCK_OUT), z)
+
+    @triton.jit
+    def kernel_or(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_OUT: tl.constexpr, AXIS: tl.constexpr):
+        range_m = tl.arange(0, BLOCK_M)
+        range_n = tl.arange(0, BLOCK_N)
+        x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
+        z = tl.reduce_or(x, axis=AXIS)
+        tl.store(Z + tl.arange(0, BLOCK_OUT), z)
+
+    kernel = kernel_xor if op == "xor_sum" else kernel_or
+    shape = (4, 8)
+    x = np.arange(1, 33, dtype=np.int32).reshape(shape)
+    z_ref = numpy_op(x, axis=positive_axis)
+    z_tri = to_triton(np.empty_like(z_ref), device=device)
+    kernel[(1, )](to_triton(x, device=device), z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_OUT=z_ref.size,
+                  AXIS=axis)
+    np.testing.assert_equal(to_numpy(z_tri), z_ref)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("axis, positive_axis", [(-1, 1), (-2, 0)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_scan_negative_axis_custom_combine(axis, positive_axis, reverse, device):
+    # A custom combine_fn takes the generic_scan path in the interpreter,
+    # which used to never advance along a negative axis.
+    @triton.jit
+    def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr, REVERSE: tl.constexpr):
+        range_m = tl.arange(0, BLOCK_M)
+        range_n = tl.arange(0, BLOCK_N)
+        x = tl.load(X + range_m[:, None] * BLOCK_N + range_n[None, :])
+        z = tl.associative_scan(x, AXIS, add_combine, reverse=REVERSE)
+        tl.store(Z + range_m[:, None] * BLOCK_N + range_n[None, :], z)
+
+    shape = (4, 8)
+    x = np.arange(32, dtype=np.int32).reshape(shape)
+    x_ref = np.flip(x, positive_axis) if reverse else x
+    z_ref = np.cumsum(x_ref, axis=positive_axis)
+    if reverse:
+        z_ref = np.flip(z_ref, positive_axis)
+    z_tri = to_triton(np.empty_like(z_ref), device=device)
+    kernel[(1, )](to_triton(x, device=device), z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, REVERSE=reverse)
+    np.testing.assert_equal(to_numpy(z_tri), z_ref)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("axis", [0, -1])
+def test_scan_negative_axis_1d(axis, device):
+    # Minimal case from the bug report: a 1-D scan where -1 names axis 0.
+    @triton.jit
+    def kernel(X, Y, AXIS: tl.constexpr):
+        offs = tl.arange(0, 4)
+        tl.store(Y + offs, tl.associative_scan(tl.load(X + offs), AXIS, add_combine))
+
+    x = np.ones(4, dtype=np.int32)
+    z_tri = to_triton(np.empty_like(x), device=device)
+    kernel[(1, )](to_triton(x, device=device), z_tri, AXIS=axis)
+    np.testing.assert_equal(to_numpy(z_tri), np.array([1, 2, 3, 4], dtype=np.int32))
+
+
 @pytest.mark.parametrize("op", ["cumsum", "cumprod"])
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("reverse", [False, True])
