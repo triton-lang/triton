@@ -9,7 +9,9 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -183,6 +185,89 @@ LogicalResult hoistInitsBefore(Operation *firstUse,
   return success(moved);
 }
 
+// Whether `block` can run more than once: it is nested in a loop op, or it is
+// on a cycle of its function's control-flow graph.
+bool isInLoop(Block *block) {
+  if (block->getParentOp()->getParentOfType<LoopLikeOpInterface>() ||
+      isa<LoopLikeOpInterface>(block->getParentOp()))
+    return true;
+  SmallVector<Block *> worklist(block->getSuccessors());
+  llvm::SmallPtrSet<Block *, 8> seen;
+  while (!worklist.empty()) {
+    Block *next = worklist.pop_back_val();
+    if (next == block)
+      return true;
+    if (seen.insert(next).second)
+      llvm::append_range(worklist, next->getSuccessors());
+  }
+  return false;
+}
+
+// Barriers initialized and then used in the same block of a loop, e.g. a
+// persistent kernel's pipeline barriers re-initialized for every tile, get
+// their sync in that block: it then runs after every re-initialization,
+// whereas a function-level sync point runs once. Returns the inits it
+// synchronized.
+DenseSet<Operation *>
+insertCrossCTAMBarrierInitSyncInBlocks(ArrayRef<ttng::InitBarrierOp> inits,
+                                       Allocation *allocation,
+                                       OpBuilder &builder) {
+  llvm::MapVector<Block *, SmallVector<ttng::InitBarrierOp>> initsByBlock;
+  for (ttng::InitBarrierOp init : inits)
+    if (isInLoop(init->getBlock()))
+      initsByBlock[init->getBlock()].push_back(init);
+
+  DenseSet<Operation *> synced;
+  for (auto &[block, blockInits] : initsByBlock) {
+    Allocation::BufferIdSetT tracked;
+    for (ttng::InitBarrierOp init : blockInits)
+      for (auto bufferId :
+           allocation->getAllBufferIdsWithAliases(init.getBarrier()))
+        tracked.insert(bufferId);
+    auto findFirstUse = [&]() -> Operation * {
+      for (Operation &op : *block)
+        if (opUsesTrackedMBarrier(&op, tracked, allocation))
+          return &op;
+      return nullptr;
+    };
+    Operation *firstUse = findFirstUse();
+    if (!firstUse)
+      continue;
+    auto lastInit = [&]() {
+      Operation *last = nullptr;
+      for (ttng::InitBarrierOp init : blockInits)
+        if (!last || last->isBeforeInBlock(init))
+          last = init;
+      return last;
+    };
+    if (firstUse->isBeforeInBlock(lastInit()) &&
+        failed(hoistInitsBefore(firstUse, blockInits)))
+      continue;
+
+    // Reuse a sync already between the last init and the first use.
+    ttng::ClusterBarrierOp clusterBarrier;
+    bool fenced = false;
+    for (Operation *op = lastInit()->getNextNode(); op != firstUse;
+         op = op->getNextNode()) {
+      fenced |= isa<ttng::FenceMBarrierInitReleaseClusterOp>(op);
+      if (auto barrier = dyn_cast<ttng::ClusterBarrierOp>(op))
+        clusterBarrier = barrier;
+    }
+    if (!fenced || !clusterBarrier) {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPoint(firstUse);
+      Location loc = lastInit()->getLoc();
+      if (!fenced)
+        ttng::FenceMBarrierInitReleaseClusterOp::create(builder, loc);
+      if (!clusterBarrier)
+        ttng::ClusterBarrierOp::create(builder, loc, /*relaxed=*/true);
+    }
+    for (ttng::InitBarrierOp init : blockInits)
+      synced.insert(init);
+  }
+  return synced;
+}
+
 LogicalResult
 insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
                                           Allocation *allocation, int numCTAs,
@@ -217,6 +302,26 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
   // Nothing to do
   if (crossCTAInitAnchors.empty())
     return success();
+
+  // Inits synchronized in their own block leave the function-level search.
+  DenseSet<Operation *> syncedInBlock =
+      insertCrossCTAMBarrierInitSyncInBlocks(crossCTAInitOps, allocation,
+                                             builder);
+  if (!syncedInBlock.empty()) {
+    crossCTAInitAnchors.clear();
+    trackedBarrierBuffers.clear();
+    llvm::erase_if(crossCTAInitOps, [&](ttng::InitBarrierOp init) {
+      return syncedInBlock.contains(init);
+    });
+    for (ttng::InitBarrierOp init : crossCTAInitOps) {
+      crossCTAInitAnchors.insert(topLevelRegion.findAncestorOpInRegion(*init));
+      for (auto bufferId :
+           allocation->getAllBufferIdsWithAliases(init.getBarrier()))
+        trackedBarrierBuffers.insert(bufferId);
+    }
+    if (crossCTAInitAnchors.empty())
+      return success();
+  }
 
   llvm::SetVector<Operation *> trackedUseAnchors;
   for (Block &block : topLevelRegion) {
