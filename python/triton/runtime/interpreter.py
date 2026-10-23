@@ -251,6 +251,20 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
             significand_output[overflow] = (1 << output_dtype.fp_mantissa_width) - 1
         exponent_output[nonfinite] = max_exponent
         significand_output[nonfinite & ~input_nan] = 0
+    elif input_dtype.is_fp8() and not output_dtype.is_fp8():
+        input_nan = np.zeros_like(input_bin, dtype=bool)
+        input_inf = np.zeros_like(input_bin, dtype=bool)
+        if input_dtype == tl.float8e5:
+            nonfinite = input_exponent == (1 << input_exponent_width) - 1
+            input_nan = nonfinite & (significand != 0)
+            input_inf = nonfinite & ~input_nan
+        elif input_dtype == tl.float8e4nv:
+            input_nan = (input_bin & 0x7F) == 0x7F
+        elif input_dtype in (tl.float8e4b8, tl.float8e5b16):
+            input_nan = input_bin == 0x80
+        exponent_output[input_nan | input_inf] = max_exponent
+        significand_output[input_nan] = 1 << (output_dtype.fp_mantissa_width - 1)
+        significand_output[input_inf] = 0
     if output_dtype in (tl.float8e4b8, tl.float8e5b16):
         # FNUZ formats have only unsigned zero; the sign bit alone encodes NaN.
         zero_output = (exponent_output == 0) & (significand_output == 0)

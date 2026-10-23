@@ -8,7 +8,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_cdna5
+from triton._internal_testing import is_cuda, is_hip, is_interpreter, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_cdna5
 
 FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
@@ -326,6 +326,42 @@ def test_typeconvert_e5m2_bf16_all_encodings(BLOCK_SIZE, device):
     torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
     mask = ~torch.isnan(expected)
     torch.testing.assert_close(actual.view(torch.int16)[mask], expected.view(torch.int16)[mask], rtol=0, atol=0)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("src_dtype, src_type", [
+    (torch.float8_e5m2, tl.float8e5),
+    (torch.float8_e4m3fn, tl.float8e4nv),
+    (torch.float8_e4m3fnuz, tl.float8e4b8),
+    (torch.float8_e5m2fnuz, tl.float8e5b16),
+])
+@pytest.mark.parametrize("dst_dtype, dst_type", [
+    (torch.float16, tl.float16),
+    (torch.float32, tl.float32),
+])
+def test_typeconvert_fp8_upcast_all_encodings(src_dtype, src_type, dst_dtype, dst_type, device):
+    if not is_interpreter():
+        if is_cuda():
+            if src_type in (tl.float8e4b8, tl.float8e5b16):
+                pytest.skip("FNUZ FP8 formats require AMDGPU")
+            if src_type == tl.float8e4nv and torch.cuda.get_device_capability() < (8, 9):
+                pytest.skip("E4M3 conversion requires SM89")
+        elif is_hip():
+            if is_hip_rdna3():
+                pytest.skip("FP8 is not supported on AMDGPU RDNA3")
+            if src_type in (tl.float8e4b8, tl.float8e5b16) and is_hip_cdna2():
+                pytest.skip("FNUZ FP8 formats require AMDGPU CDNA3 or newer")
+            if src_type == tl.float8e4nv and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna4m() or is_hip_rdna4()):
+                pytest.skip("E4M3 conversion is not supported on this AMDGPU")
+
+    bits = torch.arange(256, dtype=torch.int32).to(torch.uint8)
+    expected = bits.view(src_dtype).to(dst_dtype)
+    actual = launch_type_convert_triton(bits.to(device), src_type, dst_type, device,
+                                       BLOCK_SIZE=256).cpu().view(dst_dtype)
+    torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
+    mask = ~torch.isnan(expected)
+    int_dtype = matching_int(dst_type)
+    torch.testing.assert_close(actual.view(int_dtype)[mask], expected.view(int_dtype)[mask], rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("src_dtype, src_type", [
