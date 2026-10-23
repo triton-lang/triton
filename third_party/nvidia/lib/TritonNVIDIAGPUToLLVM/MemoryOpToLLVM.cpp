@@ -349,7 +349,6 @@ public:
   matchAndRewrite(triton::gpu::LocalAtomicScatterRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto lowering = prepareLocalAtomicScatterRMW(
         op, adaptor.getDst(), adaptor.getIndices(), adaptor.getValues(),
         op.getMask() ? adaptor.getMask() : Value(), rewriter, targetInfo,
@@ -396,8 +395,8 @@ public:
       return success();
     }
 
-    finalizeAtomicResults(op, rewriter, results, info.llvmElemTy, b,
-                          info.threadPred, targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, results, info.threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 
