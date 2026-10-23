@@ -1669,7 +1669,16 @@ class InterpretedFunction(KernelInterface[T]):
         if warmup:
             return
         fn = self.rewrite()
-        return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kwargs)
+        # Resolve debug mode the same way JITFunction.run does, so debug-only
+        # checks (device_assert, integer overflow sanitization, expect_zero)
+        # behave as they do on the device.
+        debug = kwargs.get("debug", self.kwargs.get("debug")) or triton.knobs.runtime.debug
+        options = interpreter_builder.options
+        interpreter_builder.options = dataclasses.replace(options, debug=bool(debug))
+        try:
+            return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kwargs)
+        finally:
+            interpreter_builder.options = options
 
     def add_pre_run_hook(self, hook):
         assert callable(hook)
