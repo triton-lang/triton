@@ -13,6 +13,7 @@ using namespace mlir::triton;
 namespace {
 
 namespace tti = mlir::triton::instrument;
+namespace ttg = mlir::triton::gpu;
 
 uint64_t invOddU64(uint64_t a) {
   assert((a & 1) == 1);
@@ -216,10 +217,112 @@ struct ExperimentalFPSanUnembedOpConversion
   }
 };
 
+struct FpSanAtomicRMWOpConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicRMWOp> {
+  FpSanAtomicRMWOpConversion(LLVMTypeConverter &converter,
+                             const TargetInfoBase &targetInfo,
+                             PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!op->hasAttr("tti.fpsan"))
+      return failure();
+    auto loc = op.getLoc();
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 !atomicResultHasOrderingBarrier(op), rewriter,
+                                 targetInfo);
+    SmallVector<Value> ptrs =
+        unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+    SmallVector<Value> values =
+        unpackUniqueTensorElements(loc, adaptor.getVal(), rewriter);
+    SmallVector<Value> masks;
+    if (adaptor.getMask())
+      masks = unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
+    Value threadPred = ttg::emitRedundantThreadPredicate(
+        getFreeVariableMasks(op.getPtr().getType()), rewriter, loc, targetInfo);
+    auto floatTy = cast<FloatType>(getElementTypeOrSelf(op.getType()));
+    StringRef scope = targetInfo.getAtomicSyncScope(op.getScope());
+    SmallVector<Value> results;
+    for (auto [i, ptr] : llvm::enumerate(ptrs)) {
+      Value pred = ttg::maybeAnd(rewriter, loc, threadPred,
+                                 masks.empty() ? Value() : masks[i]);
+      results.push_back(emitFpSanAtomicRMW(rewriter, loc, ptr, values[i], pred,
+                                           floatTy, op.getAtomicRmwOp(),
+                                           op.getSem(), scope));
+    }
+    TritonLLVMOpBuilder b(loc, rewriter);
+    finalizeAtomicResults(op, rewriter, results,
+                          getTypeConverter()->convertType(floatTy), b,
+                          threadPred, targetInfo, getTypeConverter());
+    return success();
+  }
+
+  const TargetInfoBase &targetInfo;
+};
+
 } // namespace
 
+// Commits a payload update to floating carrier storage with a compare-and-swap
+// loop. The first attempt guesses zero carrier bits; failed attempts retry with
+// the observed bits. Comparing bits also handles NaN carriers and signed zeros.
+Value mlir::emitFpSanAtomicRMW(ConversionPatternRewriter &rewriter,
+                               Location loc, Value ptr, Value value, Value pred,
+                               FloatType floatTy, RMWOp rmwOp, MemSemantic sem,
+                               StringRef scope) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Type intTy = rewriter.getIntegerType(floatTy.getWidth());
+  Value rhs = mixFloatToInt(
+      rewriter, loc, bitcastIfNeeded(rewriter, loc, value, intTy), floatTy);
+  Value zero = createUIntConstant(rewriter, loc, intTy, 0);
+
+  Block *entry = rewriter.getInsertionBlock();
+  Block *done = rewriter.splitBlock(entry, rewriter.getInsertionPoint());
+  Block *loop = rewriter.createBlock(done, TypeRange{intTy}, {loc});
+  Value old = done->addArgument(intTy, loc);
+  rewriter.setInsertionPointToEnd(entry);
+  if (pred)
+    LLVM::CondBrOp::create(rewriter, loc, pred, loop, ValueRange{zero}, done,
+                           ValueRange{b.undef(intTy)});
+  else
+    LLVM::BrOp::create(rewriter, loc, ValueRange{zero}, loop);
+
+  rewriter.setInsertionPointToStart(loop);
+  Value expected = loop->getArgument(0);
+  Value lhs = mixFloatToInt(rewriter, loc, expected, floatTy);
+  Value payload;
+  switch (rmwOp) {
+  case RMWOp::FADD:
+    payload = b.add(lhs, rhs);
+    break;
+  case RMWOp::MIN:
+    payload = b.smin(lhs, rhs);
+    break;
+  case RMWOp::MAX:
+    payload = b.smax(lhs, rhs);
+    break;
+  default:
+    llvm_unreachable("unsupported FpSan atomic operation");
+  }
+  Value desired = unmixIntToFloat(rewriter, loc, payload, floatTy);
+  Value cas = LLVM::AtomicCmpXchgOp::create(
+      rewriter, loc, ptr, expected, desired, *getMemoryOrdering(sem),
+      LLVM::AtomicOrdering::monotonic, scope);
+  Value observed = b.extract_val(intTy, cas, 0);
+  Value success = b.extract_val(rewriter.getI1Type(), cas, 1);
+  LLVM::CondBrOp::create(rewriter, loc, success, done, ValueRange{observed},
+                         loop, ValueRange{observed});
+
+  rewriter.setInsertionPointToStart(done);
+  return bitcastIfNeeded(rewriter, loc, old, value.getType());
+}
+
 void mlir::triton::populateFpSanToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                               RewritePatternSet &patterns) {
+                                               RewritePatternSet &patterns,
+                                               const TargetInfoBase &targetInfo,
+                                               PatternBenefit benefit) {
   patterns.add<ExperimentalFPSanEmbedOpConversion,
                ExperimentalFPSanUnembedOpConversion>(typeConverter);
+  patterns.add<FpSanAtomicRMWOpConversion>(typeConverter, targetInfo, benefit);
 }

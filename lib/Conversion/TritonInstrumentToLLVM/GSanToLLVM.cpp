@@ -892,16 +892,28 @@ public:
                               /*doesRead=*/true, static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 
-      SmallVector<Value> rmwVals{rmwVal};
-      auto old = NVIDIA::emitPtxAtomicRMW(rewriter, loc, valueElemTy, rmwPtr,
-                                          rmwVals, rmwOp, sem, scope, pred);
-      if (failed(old))
-        return failure();
+      Value old;
+      // FpSan runs before GSan, which preserves the tag when replacing the
+      // atomic. Keep its payload update inside GSan's begin/end hooks.
+      if (op->hasAttr("tti.fpsan")) {
+        auto floatTy = cast<FloatType>(getElementTypeOrSelf(op.getType()));
+        old = emitFpSanAtomicRMW(rewriter, loc, rmwPtr, rmwVal, pred, floatTy,
+                                 rmwOp, sem,
+                                 targetInfo->getAtomicSyncScope(scope));
+      } else {
+        SmallVector<Value> rmwVals{rmwVal};
+        auto result =
+            NVIDIA::emitPtxAtomicRMW(rewriter, loc, valueElemTy, rmwPtr,
+                                     rmwVals, rmwOp, sem, scope, pred);
+        if (failed(result))
+          return failure();
+        old = *result;
+      }
 
       emitGSanAtomicEndCall(rewriter, loc, eventState, pred, pred,
                             /*isRmw=*/true, static_cast<int32_t>(sem),
                             static_cast<int32_t>(scope), sourceLoc);
-      resultVals[i] = *old;
+      resultVals[i] = old;
     }
 
     finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
