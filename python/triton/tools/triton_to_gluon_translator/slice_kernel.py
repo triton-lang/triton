@@ -65,8 +65,7 @@ class GlobalValue:
                                         decorator.func if isinstance(decorator, ast.Call) else decorator)
                     if ref is not None and ref[0] in (functools.cache, functools.lru_cache):
                         return GlobalValue(function, value)
-                if function.__globals__.get(function.__name__) is value:
-                    raise ValueError("cannot extract cache wrapper rebinding; use decorator syntax or a separate name")
+            raise ValueError("cache wrappers require @functools.cache or @functools.lru_cache decorator syntax")
         if isinstance(value, FunctionType) and hasattr(value, "__triton_builtin__"):
             return GlobalValue(value, value)
         if isinstance(value, FunctionType) and hasattr(value, "cls"):
