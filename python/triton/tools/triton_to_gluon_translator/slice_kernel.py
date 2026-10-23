@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import importlib
 import importlib.util
 import inspect
@@ -50,6 +51,10 @@ class GlobalValue:
         resolve_definition: Callable[[], tuple[str, ModuleType]],
     ) -> "GlobalValue":
         assert not isinstance(value, GlobalValue), "value is already a GlobalValue"
+        if isinstance(value, functools._lru_cache_wrapper):
+            function = inspect.unwrap(value)
+            if isinstance(function, FunctionType):
+                return GlobalValue(function, value)
         if isinstance(value, FunctionType) and hasattr(value, "__triton_builtin__"):
             return GlobalValue(value, value)
         if isinstance(value, FunctionType) and hasattr(value, "cls"):

@@ -42,6 +42,41 @@ def assert_code_equal(actual: str, expected: str) -> None:
     assert lhs == rhs
 
 
+@pytest.mark.parametrize("decorator", ["lru_cache", "lru_cache()", "lru_cache(maxsize=2, typed=True)", "cache"])
+@pytest.mark.parametrize("entrypoint", ["cached", "kernel"])
+def test_slice_kernel_cached_function(tmp_path, decorator, entrypoint):
+    _, mod = _make_package(
+        tmp_path, {
+            "helpers.py":
+            """
+            def payload(value):
+                return [value + 1]
+        """,
+            "kernel_mod.py":
+            f"""
+            from functools import cache, lru_cache
+            from .helpers import payload
+
+            @{decorator}
+            def cached(value):
+                return payload(value)
+
+            def kernel(value):
+                return cached(value)
+        """,
+        })
+    source = slice_kernel([f"{mod('kernel_mod')}:{entrypoint}"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    namespace = {}
+    exec(source, namespace)
+    function = namespace[entrypoint]
+    first = function(4)
+    assert first == [5]
+    assert function(4) is first
+    assert function(5) == [6]
+    assert namespace["cached"].cache_info().hits == 1
+    assert namespace["cached"].cache_info().misses == 2
+
+
 def test_slice_kernel_basic_module_slicing(tmp_path):
     pkg, mod = _make_package(
         tmp_path,
