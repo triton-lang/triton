@@ -1,10 +1,6 @@
-<<<<<<< HEAD
-from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
-=======
 import warnings
 
-from ..._core import ir, builtin, _unwrap_if_constexpr
->>>>>>> e6cfa4b181 (add deprecate warning)
+from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
 from ..._semantic import _check
 from ..._layouts import DistributedLayout
 from ..cdna3 import _verify_buffer_ops
