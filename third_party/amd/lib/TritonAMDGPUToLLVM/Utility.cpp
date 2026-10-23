@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Tools/Sys/GetEnv.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::amdgpu::ISAFamily;
@@ -986,9 +987,29 @@ static Value resolveLoopBackedge(BlockArgument bbArg) {
   return yieldOp.getOperand(iterArgIdx);
 }
 
+// isChainDotHead/isChainDotTail normally require the two dots to sit in the
+// same MLIR region, so they can't see a chain-dot pattern where one dot is
+// nested inside an scf.if within the other dot's region (e.g. a P@V dot
+// wrapped in `if all_skip: ...`). When
+// TRITON_HIP_FORCE_CHAIN_DOT_ACROSS_IF is set, also accept regions related by
+// exactly one level of scf.if nesting, in either direction.
+static bool isSameOrAcrossOneIfLevel(Region *a, Region *b) {
+  if (a == b)
+    return true;
+  if (!mlir::triton::tools::getBoolEnv("TRITON_HIP_FORCE_CHAIN_DOT_ACROSS_IF"))
+    return false;
+  auto nestedViaIf = [](Region *inner, Region *outer) {
+    Operation *parentOp = inner->getParentOp();
+    return isa_and_nonnull<scf::IfOp>(parentOp) &&
+           parentOp->getParentRegion() == outer;
+  };
+  return nestedViaIf(a, b) || nestedViaIf(b, a);
+}
+
 bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
+    return isSameOrAcrossOneIfLevel(op->getParentRegion(),
+                                    dotOp->getParentRegion());
   };
   ForwardSliceOptions fwdOpt;
   fwdOpt.filter = isInSameRegion;
@@ -1040,7 +1061,8 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
 
 bool isChainDotTail(tt::DotOpInterface dotOp) {
   auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
+    return isSameOrAcrossOneIfLevel(op->getParentRegion(),
+                                    dotOp->getParentRegion());
   };
   BackwardSliceOptions bwdOpt;
   bwdOpt.omitBlockArguments = true;
