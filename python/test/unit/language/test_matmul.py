@@ -544,7 +544,8 @@ def test_tma_matmul_two_ctas_layout(num_ctas, BM, BN, warp_specialize, persisten
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("fmt", ["nvfp4", "mxfp8", "mxfp8_mxfp4"])
 @pytest.mark.parametrize("persistent", [False, True])
-def test_tma_scaled_matmul_two_ctas(fmt, persistent, device):
+@pytest.mark.parametrize("BN", [256, 128])
+def test_tma_scaled_matmul_two_ctas(fmt, persistent, BN, device):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
@@ -574,7 +575,7 @@ def test_tma_scaled_matmul_two_ctas(fmt, persistent, device):
     a_fp4 = fmt == "nvfp4"
     b_fp4 = fmt in ("nvfp4", "mxfp8_mxfp4")
     VEC = 16 if fmt == "nvfp4" else 32
-    BM, BN = 256, 256
+    BM = 256
     BK = 256 if a_fp4 and b_fp4 else 128
     M, N, K = 2 * BM, 2 * BN, 4 * BK
     torch.manual_seed(0)
@@ -616,6 +617,11 @@ def test_tma_scaled_matmul_two_ctas(fmt, persistent, device):
     torch.testing.assert_close(c.float(), ref, atol=1e-3, rtol=1e-3)
     assert any("tcgen05.mma.cta_group::2" in line and "block_scale" in line
                for line in compiled.asm["ptx"].splitlines())
+    if BN == 128:
+        # B scales of a 128-wide tile reach the MMA through registers. Each CTA loads the whole scale tile: reading the
+        # peer's half from distributed shared memory is not synchronized with the peer's load in a warp-specialized loop.
+        assert "ld.shared::cluster" not in compiled.asm["ptx"]
+        return
     # A scales split along M and B scales broadcast within the pair both stay on the TMA -> tcgen05.cp path: no
     # register round trip, and (the warp-specialized kernel aside, which syncs the cluster once at teardown) no
     # cluster barrier in the pipelined K loop.

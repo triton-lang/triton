@@ -334,6 +334,44 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
   return LocalAllocOp::create(rewriter, reshape2D.getLoc(), sinkType, source);
 }
 
+// A CGA layout in which every CTA holds the whole tensor.
+static CGAEncodingAttr getBroadcastCGALayout(MLIRContext *ctx, unsigned rank,
+                                             int numCTAs) {
+  LinearLayout::BasesT bases;
+  bases[StringAttr::get(ctx, "block")] = std::vector<std::vector<int32_t>>(
+      llvm::Log2_32(numCTAs), std::vector<int32_t>(rank, 0));
+  return CGAEncodingAttr::get(
+      ctx, LinearLayout(std::move(bases), standardOutDimNames(ctx, rank)));
+}
+
+// A two-CTA scale staged through registers is converted to the layout the
+// tensor-memory store needs, which the default CTA split of its load need not
+// match. Load the whole scale tile in each CTA so that conversion only drops
+// replicated data, instead of reading the peer's half from distributed shared
+// memory: a warp-specialized loop does not synchronize such reads with the
+// peer's load.
+static void loadScaleInEachCTA(Value scale, PatternRewriter &rewriter) {
+  while (isa_and_nonnull<ReshapeOp, TransOp, ConvertLayoutOp>(
+      scale.getDefiningOp()))
+    scale = scale.getDefiningOp()->getOperand(0);
+  auto loadOp = scale.getDefiningOp<DescriptorLoadLikeOpInterface>();
+  if (!loadOp)
+    return;
+  auto type = cast<RankedTensorType>(scale.getType());
+  auto cgaLayout = getBroadcastCGALayout(
+      scale.getContext(), type.getRank(), lookupNumCTAs(loadOp));
+  if (getCGALayout(type.getEncoding()) == cgaLayout)
+    return;
+  auto encoding = cloneWithCGALayout(type, cgaLayout);
+  if (failed(encoding))
+    return;
+  OpBuilder::InsertionGuard guard(rewriter);
+  scale.setType(type.cloneWithEncoding(*encoding));
+  rewriter.setInsertionPointAfter(loadOp);
+  auto cvt = ConvertLayoutOp::create(rewriter, scale.getLoc(), type, scale);
+  rewriter.replaceAllUsesExcept(scale, cvt.getResult(), cvt);
+}
+
 static Value createTmemScaleOperand(Value tensor, Attribute tmemEncoding,
                                     Attribute tensorMemorySpace, int numWarps,
                                     Location loc, PatternRewriter &rewriter) {
@@ -1120,6 +1158,8 @@ public:
     Value scaleA = tryCreateTmemCopyCompatibleScaleOperand(
         dotOp.getAScale(), rewriter, scaleACGALayout);
     if (!scaleA) {
+      if (useTwoCTAs)
+        loadScaleInEachCTA(dotOp.getAScale(), rewriter);
       scaleA =
           createTmemScaleOperand(dotOp.getAScale(), scaleAEncoding,
                                  tensorMemorySpace, numWarps, loc, rewriter);
@@ -1127,6 +1167,8 @@ public:
     Value scaleB = tryCreateTmemCopyCompatibleScaleOperand(
         dotOp.getBScale(), rewriter, scaleBCGALayout);
     if (!scaleB) {
+      if (useTwoCTAs)
+        loadScaleInEachCTA(dotOp.getBScale(), rewriter);
       scaleB =
           createTmemScaleOperand(dotOp.getBScale(), scaleBEncoding,
                                  tensorMemorySpace, numWarps, loc, rewriter);
