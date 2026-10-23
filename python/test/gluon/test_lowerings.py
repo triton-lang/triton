@@ -265,6 +265,12 @@ def _scan_tuple_combine(a1, b1, a2, b2):
             [[1, 0], [4, 0], [16, 0], [0, 1], [0, 2]], [[2, 0], [8, 0], [0, 4], [0, 8], [0, 16]] + [[0, 0]] *
             (THREADS_PER_WARP.bit_length() - 6), [[32, 0], [64, 0]], [], [128, 32]), 256, 32, 0, torch.int32,
         id="converted_thread_totals"),
+    # Multi-element thread prefixes need inter-warp boundary carries in their
+    # original owners, including high axis register bits and independent scans.
+    pytest.param(ttgl.BlockedLayout([4, 1], [THREADS_PER_WARP, 1], [4, 1], [0, 1]), 32 * THREADS_PER_WARP, 1, 0,
+                 torch.int32, id="boundary_carry_axis_registers"),
+    pytest.param(ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [1, 4], [1, 0]), 4, 64 * THREADS_PER_WARP, 1,
+                 torch.int32, id="boundary_carry_independent_scans"),
     pytest.param(
         ttgl.DistributedLinearLayout([[1, 0], [4, 0], [16, 0], [64, 0], [0, 0], [0, 1], [0, 2]],
                                      [[2, 0], [8, 0], [0, 4], [0, 8], [0, 0]] + [[0, 0]] *
@@ -332,8 +338,8 @@ def test_scan_distributed_layouts(layout, M, N, axis, dtype, reverse, device):
     a, b = a.to(device), b.to(device)
     out_a, out_b = torch.empty_like(a), torch.empty_like(b)
     kernel[(1, )](a, b, out_a, out_b, M, N, layout, axis, reverse, num_warps=4)
-    torch.testing.assert_close(out_a, expected_a, rtol=0, atol=0)
-    torch.testing.assert_close(out_b, expected_b, rtol=0, atol=0)
+    torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
+    torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("op", ["cumsum", "cumprod"])
