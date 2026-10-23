@@ -380,8 +380,6 @@ LinearLayout ScanLoweringHelper::buildIntraWarpTotalsLayout() const {
 LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
   // Put the segment's axis bits in registers before lanes. Exchange register
   // bases for other segments or independent scans with available lane bits.
-  // R=[128,256,512], L=[1,2,4,8,16], W=[32,64] becomes
-  // R=[1,2,4], L=[8,16,128,256,512], W=[32,64]. Warp ownership is preserved.
   auto *ctx = intraWarpTotalsLayout->getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -390,15 +388,27 @@ LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
   auto inSegment = [&](const auto &basis) {
     return basis[axis] && basis[axis] < numSegments;
   };
+  // Scanned totals are converted from intraWarpScanLayout back to
+  // intraWarpTotalsLayout, but the separate inter-warp carries are not.
+  // Only exchange when there are no partial thread prefixes to complete,
+  // or when the scan does not cross warps.
+  auto axisDim = StringAttr::get(ctx, "dim" + std::to_string(axis));
+  bool allowExchange = threadSegmentSize == 1 ||
+                       warpSegmentSize == originalLayout.getOutDimSize(axisDim);
   bool exchanged = false;
-  for (auto &reg : bases[kReg]) {
-    if (inSegment(reg))
-      continue;
-    auto lane = llvm::find_if(bases[kLane], inSegment);
-    if (lane == bases[kLane].end())
-      break;
-    std::swap(reg, *lane);
-    exchanged = true;
+  if (allowExchange) {
+    // With numSegments=16, R=[1,16], L=[2,4,8] becomes
+    // R=[1,2], L=[16,4,8] before sorting and reindexing.
+    for (auto &lane : bases[kLane]) {
+      if (!inSegment(lane))
+        continue;
+      auto reg = llvm::find_if(
+          bases[kReg], [&](const auto &basis) { return !inSegment(basis); });
+      if (reg == bases[kReg].end())
+        break;
+      std::swap(lane, *reg);
+      exchanged = true;
+    }
   }
   llvm::stable_sort(bases[kReg], [&](const auto &a, const auto &b) {
     return inSegment(a) && !inSegment(b);
@@ -408,6 +418,8 @@ LinearLayout ScanLoweringHelper::buildIntraWarpScanLayout() const {
       return inSegment(a) && !inSegment(b);
     });
   // Reindex bases from minor to major
+  // R=[2,4,8], L=[1,16], W=[32,64] becomes
+  // R=[1,2,4], L=[8,16], W=[32,64].
   unsigned next = 1;
   for (auto dim : {kReg, kLane})
     for (auto &basis : bases[dim])
