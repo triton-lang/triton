@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
 
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/STLExtras.h"
@@ -141,6 +142,47 @@ bool opUsesTrackedMBarrier(Operation *op,
       .wasInterrupted();
 }
 
+// Moves the cross-CTA mbarrier.init ops that come after `firstUse` (and the
+// allocation and constant-index views that define their barriers) right before
+// it, so one sync point can follow every init and precede every use. A barrier
+// whose definition is not that trivially movable chain in `firstUse`'s block
+// fails the move, as does having nothing to move.
+LogicalResult hoistInitsBefore(Operation *firstUse,
+                               ArrayRef<ttng::InitBarrierOp> inits) {
+  Block *block = firstUse->getBlock();
+  bool moved = false;
+  for (ttng::InitBarrierOp init : inits) {
+    if (init->getBlock() != block || init->isBeforeInBlock(firstUse))
+      continue;
+    // The defining chain, innermost first: views with constant indices down
+    // to an operand-less allocation.
+    SmallVector<Operation *> chain = {init.getOperation()};
+    Value barrier = init.getBarrier();
+    while (Operation *def = barrier.getDefiningOp()) {
+      if (def->getBlock() != block || def->isBeforeInBlock(firstUse))
+        break;
+      if (auto alloc = dyn_cast<ttg::LocalAllocOp>(def)) {
+        if (alloc.getSrc())
+          return failure();
+        chain.push_back(def);
+        break;
+      }
+      auto index = dyn_cast<ttg::MemDescIndexOp>(def);
+      if (!index || !matchPattern(index.getIndex(), m_Constant()))
+        return failure();
+      Operation *indexDef = index.getIndex().getDefiningOp();
+      if (indexDef->getBlock() == block && !indexDef->isBeforeInBlock(firstUse))
+        indexDef->moveBefore(firstUse);
+      chain.push_back(def);
+      barrier = index.getSrc();
+    }
+    for (Operation *op : llvm::reverse(chain))
+      op->moveBefore(firstUse);
+    moved = true;
+  }
+  return success(moved);
+}
+
 LogicalResult
 insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
                                           Allocation *allocation, int numCTAs,
@@ -152,6 +194,7 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
   }
   Region &topLevelRegion = funcOp->getRegion(0);
   llvm::SetVector<Operation *> crossCTAInitAnchors;
+  SmallVector<ttng::InitBarrierOp> crossCTAInitOps;
   Allocation::BufferIdSetT trackedBarrierBuffers;
 
   // Find all cross-CTA mbarrier.init ops and map each
@@ -164,6 +207,7 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
         topLevelRegion.findAncestorOpInRegion(*initBarrierOp.getOperation());
     assert(topLevelAnchor && "init op must be inside the function region");
     crossCTAInitAnchors.insert(topLevelAnchor);
+    crossCTAInitOps.push_back(initBarrierOp);
     for (auto bufferId :
          allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
       assert(bufferId != Allocation::InvalidBufferId);
@@ -238,6 +282,14 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
                                        : lastInsertionBlock->getTerminator();
 
   if (!domInfo.dominates(firstInsertionAnchor, lastInsertionAnchor)) {
+    // No single point follows every init and precedes every use, e.g. a
+    // barrier is already waited on (a warp-specialized buffer's initial
+    // "empty" wait) before later barriers are initialized. When the late
+    // barriers are plain allocations, initialize them before that use.
+    if (succeeded(hoistInitsBefore(lastInsertionAnchor, crossCTAInitOps)) &&
+        lastInsertionAnchor->getBlock() == firstInsertionBlock)
+      return insertCrossCTAMBarrierInitSyncForFunction(funcOp, allocation,
+                                                       numCTAs, builder);
     return funcOp.emitOpError(
         "could not find an insertion point between cross-CTA mbarrier.init "
         "ops and tracked mbarrier uses");
