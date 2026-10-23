@@ -55,25 +55,18 @@ class GlobalValue:
     ) -> "GlobalValue":
         assert not isinstance(value, GlobalValue), "value is already a GlobalValue"
         if isinstance(value, functools._lru_cache_wrapper):
-            function = inspect.unwrap(value)
-            if isinstance(function, FunctionType):
-                module = inspect.getmodule(function)
-                if module is not None and vars(module).get(function.__name__) is value:
-                    statements = ast.parse(inspect.getsource(module)).body
-                    definitions = [
-                        stmt for stmt in statements
-                        if isinstance(stmt, ast.FunctionDef) and stmt.name == function.__name__
-                    ]
-                    assignments = [
-                        get_assign_target(stmt) for stmt in statements if isinstance(stmt, ast.Assign | ast.AnnAssign)
-                    ]
-                    if any(target is not None and target.id == function.__name__ for target in assignments):
-                        raise ValueError(
-                            f"cannot extract cache wrapper rebinding {module.__name__}.{function.__name__}; "
-                            "use decorator syntax or a separate name for the cached function")
-                    # Only the decorator form carries the cache in the function source.
-                    if len(definitions) == 1 and definitions[0].decorator_list:
+            function = value.__wrapped__
+            if isinstance(function, FunctionType) and function.__qualname__ == function.__name__:
+                definition = ast.parse(inspect.getsource(function)).body[0]
+                assert isinstance(definition, ast.FunctionDef)
+                # Only unwrap when the source itself recreates the outer cache.
+                for decorator in definition.decorator_list[:1]:
+                    ref = get_reference(scoped_dict(function.__globals__), sys.modules[function.__module__],
+                                        decorator.func if isinstance(decorator, ast.Call) else decorator)
+                    if ref is not None and ref[0] in (functools.cache, functools.lru_cache):
                         return GlobalValue(function, value)
+                if function.__globals__.get(function.__name__) is value:
+                    raise ValueError("cannot extract cache wrapper rebinding; use decorator syntax or a separate name")
         if isinstance(value, FunctionType) and hasattr(value, "__triton_builtin__"):
             return GlobalValue(value, value)
         if isinstance(value, FunctionType) and hasattr(value, "cls"):

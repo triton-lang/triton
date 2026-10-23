@@ -1038,7 +1038,7 @@ def test_slice_kernel_global_alias_leaf(tmp_path):
     assert namespace["kernel"]() == (64, 32)
 
 
-@pytest.mark.parametrize("construction", ["assignment", "factory", "reassignment"])
+@pytest.mark.parametrize("construction", ["assignment", "factory", "reassignment", "other_decorator"])
 @pytest.mark.parametrize("entrypoint", ["cached", "kernel"])
 def test_slice_kernel_assigned_cache(tmp_path, construction, entrypoint):
     definitions = {
@@ -1057,6 +1057,15 @@ def test_slice_kernel_assigned_cache(tmp_path, construction, entrypoint):
                 return nested
             cached = make_cached(1)
         """,
+        "other_decorator":
+        """
+            def identity(function):
+                return function
+            @identity
+            def cached(value):
+                return [value + 1]
+            cached = functools.cache(cached)
+        """,
         "reassignment":
         """
             def cached(value):
@@ -1067,7 +1076,7 @@ def test_slice_kernel_assigned_cache(tmp_path, construction, entrypoint):
     source = "import functools\n" + textwrap.dedent(definitions[construction])
     source += "\ndef kernel(value):\n    return cached(value)\n"
     _, mod = _make_package(tmp_path, {"kernel_mod.py": source})
-    if construction == "reassignment":
+    if construction in ("reassignment", "other_decorator"):
         with pytest.raises(ValueError, match="cannot extract cache wrapper rebinding"):
             slice_kernel([f"{mod('kernel_mod')}:{entrypoint}"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
         return
