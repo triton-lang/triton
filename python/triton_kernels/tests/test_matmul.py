@@ -64,6 +64,20 @@ def opt_flags_scope():
     opt_flags.reset_opt_flags_constraints()
 
 
+def test_matmul_ragged_k_unpadded(device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires TMA")
+    sizes = torch.full((3,), 100, device=device, dtype=torch.int32)
+    metadata = make_ragged_tensor_metadata(sizes, 300)
+    a = torch.ones((300, 1024), device=device, dtype=torch.bfloat16).T
+    b = torch.ones((300, 4096), device=device, dtype=torch.bfloat16)
+    y = matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+    torch.testing.assert_close(y, torch.full_like(y, 100), rtol=0, atol=0)
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": True}):
+        with pytest.raises(opt_flags.InapplicableConstraint):
+            matmul(a, b, None, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
+
+
 def make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swizzling, weight_dtype_str, num_warps):
     constraints = {
         "block_m": block_m,
