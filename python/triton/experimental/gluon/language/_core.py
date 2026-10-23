@@ -212,8 +212,6 @@ def load(pointer, mask=None, other=None, *, cache_modifier=None, eviction_policy
     other = _unwrap_if_constexpr(other)
     if mask is not None:
         mask = _semantic.to_tensor(mask)
-    if other is not None:
-        other = _semantic.to_tensor(other)
     volatile = _unwrap_if_constexpr(volatile)
     cache_policy = _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy)
     return _semantic.load(pointer, mask, other, cache_policy, volatile)
@@ -222,7 +220,7 @@ def load(pointer, mask=None, other=None, *, cache_modifier=None, eviction_policy
 @builtin
 def store(pointer, value, mask=None, *, cache_modifier=None, eviction_policy=None, cache_policy=None, _semantic=None):
     """Store to memory, optionally using a cache policy."""
-    value = _semantic.to_tensor(value)
+    value = _unwrap_if_constexpr(value)
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         mask = _semantic.to_tensor(mask)

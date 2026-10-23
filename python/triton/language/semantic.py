@@ -120,12 +120,16 @@ class TritonSemantic(Generic[TensorTy]):
                             "this is unlikely to result in a useful answer. Cast them to the same signedness.")
         return self.integer_promote_impl(a_ty, b_ty)
 
-    def to_tensor(self, x, check_type=True):
+    def to_tensor(self, x, check_type=True, *, dst_ty=None):
         if isinstance(x, self.tensor):
             return x
         x = x.value if isinstance(x, tl.constexpr) else x
         if isinstance(x, (int, float, bool)):
             dtype = self.to_tensor_type(x)
+            # Preserve Python float precision when the destination is fp64.
+            # Keep the usual conversion rules for other types (e.g. float to int).
+            if isinstance(x, float) and dst_ty == tl.float64:
+                dtype = tl.float64
             return self.scalar_constant(x, dtype=dtype)
         elif check_type:
             raise TypeError(f"cannot convert {x} of type {type(x)} to tensor")
@@ -1044,7 +1048,7 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"Memory semantic {scope_option} not supported")
         return scope
 
-    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], cache_policy,
+    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy | numbers.Number], cache_policy,
              is_volatile: bool) -> TensorTy:
         cache_policy = cache_policy._to_ir(self.builder)
         if not ptr.type.scalar.is_ptr():
@@ -1053,6 +1057,8 @@ class TritonSemantic(Generic[TensorTy]):
         # Check `mask` and `other` arguments
         if mask is None and other is not None:
             raise ValueError("`other` cannot be provided without `mask`")
+        if other is not None:
+            other = self.to_tensor(other, dst_ty=ptr.type.scalar.element_ty)
 
         # For a pointer of scalar, check the type of `mask` and `other`
         if not ptr.type.is_block():
@@ -1245,7 +1251,7 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
         return ptr, val, mask
 
-    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], cache_policy) -> TensorTy:
+    def store(self, ptr: TensorTy, val: TensorTy | numbers.Number, mask: Optional[TensorTy], cache_policy) -> TensorTy:
         cache_policy = cache_policy._to_ir(self.builder)
         if ptr.type.is_const() or ptr.type.scalar.is_const():
             raise ValueError("Cannot store to a constant pointer")
@@ -1253,6 +1259,7 @@ class TritonSemantic(Generic[TensorTy]):
         # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.store`")
+        val = self.to_tensor(val, dst_ty=ptr.type.scalar.element_ty)
 
         # For a pointer of scalar, check the type of `val` and `mask`
         if not ptr.type.is_block():
@@ -1302,9 +1309,12 @@ class TritonSemantic(Generic[TensorTy]):
         if element_ty in [tl.int16, tl.uint16] or element_ty.primitive_bitwidth < 16:
             raise ValueError("atomic_" + op + " does not support " + str(element_ty))
 
-    def _atomic_typechecking_impl(self, ptr: TensorTy, val: Optional[TensorTy], mask: Optional[TensorTy], op: str):
+    def _atomic_typechecking_impl(self, ptr: TensorTy, val: Optional[TensorTy | numbers.Number],
+                                  mask: Optional[TensorTy], op: str):
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.atomic_{op}`")
+        if val is not None:
+            val = self.to_tensor(val, dst_ty=ptr.type.scalar.element_ty)
         if val is not None and (ptr.type.is_const() or ptr.type.scalar.is_const()):
             raise ValueError("Cannot store to a constant pointer")
 
@@ -1352,7 +1362,8 @@ class TritonSemantic(Generic[TensorTy]):
             result = self.cast(result, tl.int1)
         return result
 
-    def atomic_store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], sem: str, scope: str) -> TensorTy:
+    def atomic_store(self, ptr: TensorTy, val: TensorTy | numbers.Number, mask: Optional[TensorTy], sem: str,
+                     scope: str) -> TensorTy:
         ptr, val, mask = self._atomic_typechecking_impl(ptr, val, mask, "store")
         self._validate_atomic_load_store_element_type(ptr.type.scalar.element_ty, "store")
         sem = self._str_to_sem(sem, default=ir.MEM_SEMANTIC.RELEASE)
@@ -1394,7 +1405,8 @@ class TritonSemantic(Generic[TensorTy]):
         )
         return self.make_tensor(handle, expected.type.with_element_ty(tl.int1))
 
-    def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, sem: str, scope: str) -> TensorTy:
+    def atomic_cas(self, ptr: TensorTy, cmp: TensorTy | numbers.Number, val: TensorTy | numbers.Number, sem: str,
+                   scope: str) -> TensorTy:
         ptr, cmp, _ = self._atomic_typechecking_impl(ptr, cmp, None, "cas")
         ptr, val, _ = self._atomic_typechecking_impl(ptr, val, None, "cas")
         sem = self._str_to_sem(sem)
@@ -1405,7 +1417,7 @@ class TritonSemantic(Generic[TensorTy]):
         return self.make_tensor(self.builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, sem, scope),
                                 val.type)
 
-    def atom_red_typechecking_impl(self, ptr: TensorTy, val: TensorTy, mask: TensorTy,
+    def atom_red_typechecking_impl(self, ptr: TensorTy, val: TensorTy | numbers.Number, mask: TensorTy,
                                    op: str) -> Tuple[TensorTy, TensorTy, TensorTy]:
         ptr, val, mask = self._atomic_typechecking_impl(ptr, val, mask, op)
         self._validate_atomic_rmw_element_type(ptr.type.scalar.element_ty, op)
@@ -1418,7 +1430,8 @@ class TritonSemantic(Generic[TensorTy]):
         signbit = self.lshr(ix, bitwidth - 1)
         return self.cast(signbit, tl.int1)
 
-    def atomic_max(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
+    def atomic_max(self, ptr: TensorTy, val: TensorTy | numbers.Number, mask: TensorTy, sem: str,
+                   scope: str) -> TensorTy:
         ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'max')
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
@@ -1456,7 +1469,8 @@ class TritonSemantic(Generic[TensorTy]):
         ret = self.where(pos, pos_ret, neg_ret)
         return self.bitcast(ret, sca_ty)
 
-    def atomic_min(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
+    def atomic_min(self, ptr: TensorTy, val: TensorTy | numbers.Number, mask: TensorTy, sem: str,
+                   scope: str) -> TensorTy:
         ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'min')
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
@@ -1494,7 +1508,8 @@ class TritonSemantic(Generic[TensorTy]):
         ret = self.where(pos, pos_ret, neg_ret)
         return self.bitcast(ret, sca_ty)
 
-    def atomic_add(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
+    def atomic_add(self, ptr: TensorTy, val: TensorTy | numbers.Number, mask: TensorTy, sem: str,
+                   scope: str) -> TensorTy:
         ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'add')
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
@@ -1524,7 +1539,8 @@ class TritonSemantic(Generic[TensorTy]):
         return self.make_tensor(
             self.builder.create_atomic_rmw(ir.ATOMIC_OP.XOR, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
 
-    def atomic_xchg(self, ptr: TensorTy, val: TensorTy, mask: TensorTy, sem: str, scope: str) -> TensorTy:
+    def atomic_xchg(self, ptr: TensorTy, val: TensorTy | numbers.Number, mask: TensorTy, sem: str,
+                    scope: str) -> TensorTy:
         ptr, val, mask = self.atom_red_typechecking_impl(ptr, val, mask, 'xchg')
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
