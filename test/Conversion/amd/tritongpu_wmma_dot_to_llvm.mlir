@@ -445,6 +445,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#mma3_f32 = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 4]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // kWidth = 8 spans four wmma instructions, which take 2 registers of each
+  // lane: registers 0-1, 2-3, 4-5, then 6-7.
+  // GFX1250-LABEL: wmma3_dot_f32_kwidth8
+  tt.func @wmma3_dot_f32_kwidth8(%arg0: tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma3_f32, kWidth = 8}>>, %arg1: tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma3_f32, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma3_f32>) {
+    // GFX1250: llvm.extractvalue %arg0[0] :
+    // GFX1250: llvm.extractvalue %arg0[1] :
+    // GFX1250: llvm.extractvalue %arg1[0] :
+    // GFX1250: llvm.extractvalue %arg1[1] :
+    // GFX1250: wmma.f32.16x16x4.f32
+    // GFX1250: llvm.extractvalue %arg0[2] :
+    // GFX1250: llvm.extractvalue %arg0[3] :
+    // GFX1250: llvm.extractvalue %arg1[2] :
+    // GFX1250: llvm.extractvalue %arg1[3] :
+    // GFX1250: wmma.f32.16x16x4.f32
+    // GFX1250: llvm.extractvalue %arg0[4] :
+    // GFX1250: llvm.extractvalue %arg0[5] :
+    // GFX1250: llvm.extractvalue %arg1[4] :
+    // GFX1250: llvm.extractvalue %arg1[5] :
+    // GFX1250: wmma.f32.16x16x4.f32
+    // GFX1250: llvm.extractvalue %arg0[6] :
+    // GFX1250: llvm.extractvalue %arg0[7] :
+    // GFX1250: llvm.extractvalue %arg1[6] :
+    // GFX1250: llvm.extractvalue %arg1[7] :
+    // GFX1250: wmma.f32.16x16x4.f32
+    // GFX1250-NOT: wmma.f32.16x16x4.f32
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma3_f32, kWidth = 8}>> * tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma3_f32, kWidth = 8}>> -> tensor<16x16xf32, #mma3_f32>
+    tt.return
+  }
+}
+
+// -----
+
 #mma3_transposed = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, isTranspose = true, instrShape = [16, 16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // GFX1250-NATIVE-LABEL: wmma3_transposed_dot_bf16
