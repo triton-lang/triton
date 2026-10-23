@@ -726,7 +726,8 @@ class pointer_type(dtype):
         return self
 
     def mangle(self) -> str:
-        return f"P{self.element_ty.mangle()}"
+        const = "K" if self.const else ""
+        return f"P{const}{self.element_ty.mangle()}"
 
 
 class block_type(dtype):
@@ -819,7 +820,9 @@ class tuple_type(base_type):
         return tuple(values, self), cursor
 
     def mangle(self):
-        return 'T' + '_'.join(ty.mangle() for ty in self.types) + 'T'
+        fields = self.fields if self.fields is not None else [""] * len(self.types)
+        return 'T' + '_'.join(f"{name}_{ty.mangle()}" if name else ty.mangle()
+                              for name, ty in zip(fields, self.types)) + 'T'
 
 
 class slice_type(dtype):

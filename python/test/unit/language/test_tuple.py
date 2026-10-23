@@ -467,3 +467,35 @@ def test_constexpr_tuple_arg_subscript(device):
     out = torch.zeros(1, dtype=torch.int32, device=device)
     kernel[(1, )](out, shape=(8, 4, 2))
     assert out.item() == 842
+
+
+class _FieldsAB(NamedTuple):
+    a: any
+    b: any
+
+
+class _FieldsBA(NamedTuple):
+    b: any
+    a: any
+
+
+@triton.jit
+def _fields_a_minus_b(t):
+    return tl.load(t.a) - tl.load(t.b)
+
+
+@pytest.mark.interpreter
+def test_namedtuple_classes_with_same_types_get_distinct_helpers(device):
+    # Two namedtuple classes whose fields have the same types in the same order
+    # must not share one compiled helper: field names decide what `t.a` reads.
+
+    @triton.jit
+    def kernel(p, q, out):
+        tl.store(out + 0, _fields_a_minus_b(p))
+        tl.store(out + 1, _fields_a_minus_b(q))
+
+    one = torch.tensor([1.0], device=device)
+    ten = torch.tensor([10.0], device=device)
+    out = torch.zeros(2, device=device)
+    kernel[(1, )](_FieldsAB(a=one, b=ten), _FieldsBA(b=ten, a=one), out)
+    assert out.tolist() == [-9.0, -9.0]
