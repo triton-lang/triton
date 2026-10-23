@@ -236,9 +236,10 @@ class Autotuner(KernelInterface):
             all_args = {**self.nargs, **kwargs}
             _args = {k: v for (k, v) in all_args.items() if k in self.arg_names}
             key = [_args[key] for key in self.keys if key in _args]
-            for _, arg in _args.items():
+            for name in self.arg_names:
+                arg = _args.get(name)
                 if hasattr(arg, "dtype"):
-                    key.append(str(arg.dtype))
+                    key.append((name, str(arg.dtype)))
             key = tuple(key)
             if key not in self.cache:
                 used_cached_result = False
