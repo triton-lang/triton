@@ -424,6 +424,38 @@ def test_tma_matmul_conditional_accumulator_read_before_wait(num_ctas, device):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2])
+def test_tma_matmul_pipelined_if_else_side_effects(num_ctas, device):
+    # Predicating a pipelined scf.if by masking its condition runs its else branch in inactive stages, which must
+    # not happen when that branch has side effects: with zero iterations nothing may be written.
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit(do_not_specialize=["N"])
+    def kernel(A, B, C, marker, N):
+        rows = tl.arange(0, 256)
+        cols = tl.arange(0, 16)
+        for k in range(N):
+            acc = tl.dot(A.load([0, k * 16]), B.load([k * 16, 0]))
+            if k % 2 == 0:
+                tl.store(marker, 7)
+            else:
+                tl.store(C + (k * 256 + rows)[:, None] * 16 + cols[None, :], acc)
+                tl.store(marker + 1, 9)
+
+    a = torch.ones((256, 32), device=device, dtype=torch.float16)
+    b = torch.ones((32, 16), device=device, dtype=torch.float16)
+    c = torch.full((512, 16), -1.0, device=device)
+    marker = torch.full((2, ), -1, device=device, dtype=torch.int32)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [256, 16])
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), [16, 16])
+    kernel[(1, )](a_desc, b_desc, c, marker, 0, num_ctas=num_ctas, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert marker.tolist() == [-1, -1]
+    assert torch.all(c == -1)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("num_ctas", [2, 4, 8])
 @pytest.mark.parametrize("persistent, K, split_epilogue", [(False, 512, False), (True, 64, False), (True, 512, True)])
 def test_tma_matmul_two_ctas_specialization(num_ctas, persistent, K, split_epilogue, device):
