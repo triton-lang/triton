@@ -267,19 +267,6 @@ class DependenciesFinder(ast.NodeVisitor):
         # This will re-visit the target, but that's OK.
         self.generic_visit(node)
 
-    def visit_NamedExpr(self, node):
-        self.visit(node.value)
-        self.visitAssnTarget(node.target)
-
-    def visit_ListComp(self, node):
-        # Comprehension targets remain bound in the compiler's local scope.
-        for generator in node.generators:
-            self.visit(generator.iter)
-            self.visitAssnTarget(generator.target)
-            for condition in generator.ifs:
-                self.visit(condition)
-        self.visit(node.elt)
-
     def visit_For(self, node):
         self.visitAssnTarget(node.target)
 
