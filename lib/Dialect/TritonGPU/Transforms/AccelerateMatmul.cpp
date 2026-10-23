@@ -358,8 +358,8 @@ static void loadScaleInEachCTA(Value scale, PatternRewriter &rewriter) {
   if (!loadOp)
     return;
   auto type = cast<RankedTensorType>(scale.getType());
-  auto cgaLayout = getBroadcastCGALayout(
-      scale.getContext(), type.getRank(), lookupNumCTAs(loadOp));
+  auto cgaLayout = getBroadcastCGALayout(scale.getContext(), type.getRank(),
+                                         lookupNumCTAs(loadOp));
   if (getCGALayout(type.getEncoding()) == cgaLayout)
     return;
   auto encoding = cloneWithCGALayout(type, cgaLayout);
@@ -730,6 +730,11 @@ static CGAEncodingAttr getTwoCTAScaleBCGALayout(RankedTensorType retType) {
 
 static bool canUseTwoCTAs(DotScaledOp dotOp, int computeCapability) {
   if (computeCapability < 100 || computeCapability >= 120)
+    return false;
+  // One pair per cluster: clusters of several pairs need the scaled dot's CGA
+  // layouts (and its scales' split across pairs) planned like a dot's, which
+  // is not done yet.
+  if (lookupNumCTAs(dotOp) != 2)
     return false;
   if (!dotOp.getAScale() || !dotOp.getBScale())
     return false;

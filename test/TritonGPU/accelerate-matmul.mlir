@@ -428,6 +428,26 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [0, 1]]}>
+#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1], [1, 0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // A scaled MMAv5 pairs only as a single two-CTA cluster: with four CTAs it
+  // stays in one-CTA mode even though each CTA has 128 rows.
+  // CHECK-LABEL: @mmav5_scaled_four_ctas_no_pairing
+  // CHECK-NOT: two_ctas
+  // CHECK: tt.return
+  tt.func public @mmav5_scaled_four_ctas_no_pairing(%a_desc: !tt.tensordesc<256x64xi8>, %b_desc: !tt.tensordesc<256x64xi8>, %sa: tensor<256x8xf8E4M3FN, #blocked>, %sb: tensor<256x8xf8E4M3FN, #blocked>, %c: tensor<256x256xf32, #blocked>) -> tensor<256x256xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<256x64xi8> -> tensor<256x64xi8, #blocked>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<256x64xi8> -> tensor<256x64xi8, #rhs>
+    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xi8, #rhs> -> tensor<64x256xi8, #blocked>
+    %d = tt.dot_scaled %a scale %sa, %bt scale %sb, %c lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<256x64xi8, #blocked>, tensor<256x8xf8E4M3FN, #blocked> * tensor<64x256xi8, #blocked>, tensor<256x8xf8E4M3FN, #blocked> -> tensor<256x256xf32, #blocked>
+    tt.return %d : tensor<256x256xf32, #blocked>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
 #rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
