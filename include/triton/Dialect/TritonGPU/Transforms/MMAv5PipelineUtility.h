@@ -28,6 +28,12 @@ bool requiresAccMultiBuffering(MMAv5OpInterface mma, scf::ForOp forOp);
 // Returns true if there are loads from tmem after the MMA operation.
 bool hasLoadsAfterMMA(MMAv5OpInterface mma, scf::ForOp forOp);
 
+// Return true if the accumulator of the MMA is read inside a region nested in
+// the loop body (e.g. a conditional snapshot) without the same condition also
+// turning the accumulation off for the next MMA, which would then start a new
+// accumulator buffer (the persistent-matmul epilogue).
+bool hasUnalignedNestedAccLoads(MMAv5OpInterface mma, scf::ForOp forOp);
+
 // Helper class to determine if the operands of an MMA operation are
 // pipelineable.
 class MMAv5PipelineableOperandsHelper {
