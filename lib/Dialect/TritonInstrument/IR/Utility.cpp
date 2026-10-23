@@ -682,6 +682,16 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     if (commits[kind].empty())
       createCommitTensor(kind);
 
+  if (hooks.needsAsyncCopyIssueAges(module) &&
+      bufferStatePlans[(int)MemType::SHARED_MEM].numLanes != 0) {
+    asyncCopyIssueAges.insert(
+        entryRegion,
+        createZeroInitStateTensor(
+            b, {numCTAs, 2, threadLayout.numBaseThreadSlots}, 8, fb));
+    passValueToWarpSpecialize(asyncCopyIssueAges.at(entryRegion),
+                              asyncCopyIssueAges);
+  }
+
   // Verify the actual capture count matches the expected one.
   if (captureCounter > 0) {
     int numActiveMemTypes = 0;
@@ -692,7 +702,8 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
       numCommitKinds += !commits[i].empty();
     int expected = estimateConSanCaptureCount(
         numActiveMemTypes, numMBarriers > 0, !clusterBarrierSlots.empty(),
-        numCommitKinds, hasAsyncProxyFenceTracking);
+        numCommitKinds, hasAsyncProxyFenceTracking,
+        !asyncCopyIssueAges.empty());
     assert(captureCounter == expected &&
            "capture count changed -- update estimateConSanCaptureCount if this "
            "is expected!");

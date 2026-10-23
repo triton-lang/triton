@@ -139,6 +139,14 @@ public:
 
   virtual SmallVector<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
 
+  virtual Value createWaitCompletionPredicate(ImplicitLocOpBuilder &b,
+                                              FunctionBuilder &funcBuilder,
+                                              Operation *op,
+                                              const WaitOpInfo &info,
+                                              int thread) const {
+    return {};
+  }
+
   virtual std::optional<AsyncProxyFenceInfo>
   getAsyncProxyFenceInfo(Operation *op) const {
     return std::nullopt;
@@ -147,6 +155,8 @@ public:
   virtual bool needsAsyncProxyFenceTracking(ModuleOp module) const {
     return false;
   }
+
+  virtual bool needsAsyncCopyIssueAges(ModuleOp module) const { return false; }
 
   virtual bool needsPtxasMaskedStoreBarrierWorkaround() const { return false; }
 

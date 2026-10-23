@@ -1079,6 +1079,7 @@ private:
         for (CommitKind::Kind kind :
              {CommitKind::AsyncCp, CommitKind::AsyncCpRead})
           funcBuilder.createCommitAccessesCall(b, thread, nullptr, kind, op);
+        funcBuilder.createAdvanceAsyncCopyIssueAgesCall(b, thread, op);
       }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
         funcBuilder.createClearOutstandingCommitsTransferReadsCall(
@@ -1088,21 +1089,23 @@ private:
       }
       SmallVector<WaitOpInfo> waitInfos = hooks.getWaitOpInfo(op);
       for (const WaitOpInfo &info : waitInfos) {
+        Value pred = hooks.createWaitCompletionPredicate(b, funcBuilder, op,
+                                                         info, baseThread);
         if (info.transferWrites && info.transferReads) {
           funcBuilder.createClearOutstandingCommitsTransferBothCall(
               b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
-              info.pendingCount, nullptr, info.commitKind, MemType::SHARED_MEM,
-              op, info.includeStaged);
+              info.pendingCount, pred, info.commitKind, MemType::SHARED_MEM, op,
+              info.includeStaged);
         } else if (info.transferWrites) {
           funcBuilder.createClearOutstandingCommitsTransferWritesCall(
               b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
-              info.pendingCount, nullptr, info.commitKind, MemType::SHARED_MEM,
-              op, info.includeStaged);
+              info.pendingCount, pred, info.commitKind, MemType::SHARED_MEM, op,
+              info.includeStaged);
         } else if (info.transferReads) {
           funcBuilder.createClearOutstandingCommitsTransferReadsCall(
               b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
-              info.pendingCount, nullptr, info.commitKind, MemType::SHARED_MEM,
-              op, info.includeStaged);
+              info.pendingCount, pred, info.commitKind, MemType::SHARED_MEM, op,
+              info.includeStaged);
         }
       }
       auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op);
@@ -1617,6 +1620,9 @@ private:
             barrierInfo.txCount);
       }
     }
+    if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount)
+      funcBuilder.createRecordAsyncCopyIssueCall(b, baseThread, pred,
+                                                 opInfo->commitKind, op);
     if (opInfo->implicitCommit) {
       assert(opInfo->trackingKind ==
              MemEffectsOpInfo::TrackingKind::CommitCount);
