@@ -7,18 +7,28 @@ from .strided import StridedLayoutTransformation
 from .torch_utils import repack
 
 
+def _resolve_tile_shape(mx_axis, tile_shape):
+    assert mx_axis in (-1, -2)
+    if tile_shape is None:
+        tile_shape = (16, 64) if mx_axis == -1 else (16, 128)
+    rows, k = tile_shape
+    assert rows in (8, 16, 32, 64) and k in (32, 64, 128, 256)
+    return rows, k
+
+
 @dataclass(frozen=True)
 class HopperFP8MXValueLayout(Layout):
-    """FP4 byte storage: 16x64 word-transposed LHS or 64x128 swizzled RHS.
+    """Word-transposed FP4 storage with tiles specified as (outer rows, K).
 
-    mx_axis=-1 selects LHS storage: eight consecutive K values per 32-bit
-    word, with consecutive rows in each word plane. mx_axis=-2 selects
-    RHS storage. Tiles are stored in outer-row, then K order.
+    Each word packs eight consecutive K values; rows are contiguous within
+    each word plane. Tiles are stored in outer-row, then K order. Defaults
+    are (16, 64) for mx_axis=-1 and (16, 128) for mx_axis=-2.
     """
     mx_axis: int
+    tile_shape: tuple[int, int] | None = None
 
     def __post_init__(self):
-        assert self.mx_axis in (-1, -2)
+        object.__setattr__(self, "tile_shape", _resolve_tile_shape(self.mx_axis, self.tile_shape))
 
     @property
     def name(self):
@@ -26,7 +36,7 @@ class HopperFP8MXValueLayout(Layout):
 
     def make_transformation(self, shape, is_fp4):
         assert is_fp4
-        return _HopperFP8MXTransformation(shape, is_fp4, self.mx_axis, False)
+        return _HopperFP8MXTransformation(shape, is_fp4, self.mx_axis, False, self.tile_shape)
 
     def swizzle_block_shape(self, block_shape):
         raise NotImplementedError("Use layout conversion before the reference matmul")
@@ -36,12 +46,14 @@ class HopperFP8MXValueLayout(Layout):
 class HopperFP8MXScaleLayout(Layout):
     """E8M0 bytes matching HopperFP8MXValueLayout, one scale per 32 K values.
 
-    LHS tiles store [K / 32, rows]; RHS tiles store [rows, K / 32].
+    tile_shape uses logical value dimensions, with the same axis-dependent
+    defaults as the value layout. Each tile stores scales in [K / 32, rows] order.
     """
     mx_axis: int
+    tile_shape: tuple[int, int] | None = None
 
     def __post_init__(self):
-        assert self.mx_axis in (-1, -2)
+        object.__setattr__(self, "tile_shape", _resolve_tile_shape(self.mx_axis, self.tile_shape))
 
     @property
     def name(self):
@@ -49,7 +61,7 @@ class HopperFP8MXScaleLayout(Layout):
 
     def make_transformation(self, shape, is_fp4):
         assert not is_fp4
-        return _HopperFP8MXTransformation(shape, is_fp4, self.mx_axis, True)
+        return _HopperFP8MXTransformation(shape, is_fp4, self.mx_axis, True, self.tile_shape)
 
     def swizzle_block_shape(self, block_shape):
         raise NotImplementedError("Use layout conversion before the reference matmul")
@@ -59,10 +71,11 @@ class HopperFP8MXScaleLayout(Layout):
 class _HopperFP8MXTransformation(LayoutTransformation):
     mx_axis: int
     is_scale: bool
+    tile_shape: tuple[int, int]
 
     @property
-    def tile_shape(self):
-        rows, k = (16, 64) if self.mx_axis == -1 else (64, 128)
+    def packed_tile_shape(self):
+        rows, k = self.tile_shape
         return rows, k // (32 if self.is_scale else 2)
 
     @property
@@ -78,7 +91,7 @@ class _HopperFP8MXTransformation(LayoutTransformation):
     @property
     def storage_shape(self):
         rows, k = self.matrix_shape
-        tm, tk = self.tile_shape
+        tm, tk = self.packed_tile_shape
         return [*self.shape[:-2], triton.cdiv(rows, tm) * triton.cdiv(k, tk), tm * tk]
 
     def _encode(self, data, major_dim):
@@ -87,38 +100,25 @@ class _HopperFP8MXTransformation(LayoutTransformation):
         if self.mx_axis == -2:
             data = data.mT
         rows, k = self.matrix_shape
-        tm, tk = self.tile_shape
+        tm, tk = self.packed_tile_shape
         mt, kt = triton.cdiv(rows, tm), triton.cdiv(k, tk)
         data = torch.nn.functional.pad(data, (0, kt * tk - k, 0, mt * tm - rows)).contiguous()
         if self.is_scale:
-            data = data.reshape(-1, mt, tm, kt, tk).permute(0, 1, 3, 2, 4)
-            if self.mx_axis == -1:
-                data = data.transpose(-1, -2)
-        elif self.mx_axis == -1:
-            data = data.view(torch.int32).reshape(-1, mt, tm, kt, tk // 4).permute(0, 1, 3, 4, 2)
+            data = data.reshape(-1, mt, tm, kt, tk).permute(0, 1, 3, 4, 2)
         else:
-            data = data.view(torch.int16).reshape(-1, mt, 4, 2, 8, kt, 4, 2, 4)
-            data = data.permute(0, 1, 5, 2, 4, 8, 6, 7, 3).contiguous()
-            data = data.reshape(-1, mt, kt, 128, 2, 8).permute(0, 1, 2, 4, 3, 5)
+            data = data.view(torch.int32).reshape(-1, mt, tm, kt, tk // 4).permute(0, 1, 3, 4, 2)
         return data.contiguous().view(torch.uint8).reshape(self.storage_shape)
 
     def _decode(self, data, major_dim):
         assert data.dtype == torch.uint8
         rows, k = self.matrix_shape
-        tm, tk = self.tile_shape
+        tm, tk = self.packed_tile_shape
         mt, kt = triton.cdiv(rows, tm), triton.cdiv(k, tk)
         data = data.contiguous()
         if self.is_scale:
-            if self.mx_axis == -1:
-                data = data.reshape(-1, mt, kt, tk, tm).transpose(-1, -2)
-            else:
-                data = data.reshape(-1, mt, kt, tm, tk)
-            data = data.permute(0, 1, 3, 2, 4)
-        elif self.mx_axis == -1:
-            data = data.view(torch.int32).reshape(-1, mt, kt, tk // 4, tm).permute(0, 1, 4, 2, 3)
+            data = data.reshape(-1, mt, kt, tk, tm).permute(0, 1, 4, 2, 3)
         else:
-            data = data.view(torch.int16).reshape(-1, mt, kt, 2, 128, 8).permute(0, 1, 2, 4, 3, 5)
-            data = data.reshape(-1, mt, kt, 4, 8, 4, 4, 2, 2).permute(0, 1, 3, 8, 4, 2, 6, 7, 5)
+            data = data.view(torch.int32).reshape(-1, mt, kt, tk // 4, tm).permute(0, 1, 4, 2, 3)
         data = data.contiguous().view(torch.uint8).reshape(*self.shape[:-2], mt * tm, kt * tk)
         data = data[..., :rows, :k]
         if self.mx_axis == -2:

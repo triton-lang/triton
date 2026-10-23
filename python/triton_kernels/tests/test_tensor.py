@@ -840,7 +840,8 @@ def test_tiled_layout_roundtrip(shape, major_dim, dtype, with_out):
 
 @pytest.mark.parametrize("mx_axis", [-1, -2])
 @pytest.mark.parametrize("shape", [(19, 160), (2, 65, 32)])
-def test_hopper_fp8_mx_layout_roundtrip(mx_axis, shape, device):
+@pytest.mark.parametrize("tile_shape", [None, (8, 32), (64, 128)])
+def test_hopper_fp8_mx_layout_roundtrip(mx_axis, shape, tile_shape, device):
     from triton_kernels.tensor_details.layout import HopperFP8MXValueLayout, HopperFP8MXScaleLayout
 
     torch.manual_seed(0)
@@ -848,8 +849,8 @@ def test_hopper_fp8_mx_layout_roundtrip(mx_axis, shape, device):
     scales = torch.randint(0, 256, (*shape[:-1], shape[-1] // 32), dtype=torch.uint8, device=device)
     if mx_axis == -2:
         values, scales = values.mT, scales.mT
-    for data, dtype, layout in ((values, FP4, HopperFP8MXValueLayout(mx_axis)), (scales, UINT8,
-                                                                                 HopperFP8MXScaleLayout(mx_axis))):
+    for data, dtype, layout in ((values, FP4, HopperFP8MXValueLayout(mx_axis, tile_shape)),
+                                (scales, UINT8, HopperFP8MXScaleLayout(mx_axis, tile_shape))):
         tensor = wrap_torch_tensor(data, dtype=dtype)
         encoded = convert_layout(tensor, layout)
         assert list(encoded.data.shape) == layout.storage_shape(tensor.shape, dtype == FP4)
@@ -858,3 +859,17 @@ def test_hopper_fp8_mx_layout_roundtrip(mx_axis, shape, device):
         out = wrap_torch_tensor(torch.empty_like(encoded.data), dtype=tensor.dtype, shape=tensor.shape, layout=layout)
         assert convert_layout(tensor, layout, out=out) is out
         torch.testing.assert_close(out.data, encoded.data, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("tile_shape", [(8, 32), (16, 128), (64, 128)])
+def test_hopper_fp8_mx_layout_operand_symmetry(tile_shape, device):
+    from triton_kernels.tensor_details.layout import HopperFP8MXValueLayout, HopperFP8MXScaleLayout
+
+    values = torch.arange(19 * 80, device=device).to(torch.uint8).reshape(19, 80)
+    scales = torch.arange(19 * 5, device=device).to(torch.uint8).reshape(19, 5)
+    for data, dtype, layout_type in ((values, FP4, HopperFP8MXValueLayout), (scales, UINT8, HopperFP8MXScaleLayout)):
+        lhs = convert_layout(wrap_torch_tensor(data, dtype=dtype), layout_type(-1, tile_shape))
+        rhs = convert_layout(wrap_torch_tensor(data.mT, dtype=dtype), layout_type(-2, tile_shape))
+        torch.testing.assert_close(lhs.data, rhs.data, rtol=0, atol=0)
+        for axis, default in ((-1, (16, 64)), (-2, (16, 128))):
+            assert layout_type(axis) == layout_type(axis, default)

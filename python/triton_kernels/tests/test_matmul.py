@@ -1320,7 +1320,8 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
 @pytest.mark.parametrize("lhs_storage", ["fp8", "strided", "swizzled"])
 @pytest.mark.parametrize("rhs_storage", ["fp8", "strided", "swizzled"])
 @pytest.mark.parametrize("gather_scatter", [False, True])
-def test_hopper_fp8_mxfp4_reference(shape, lhs_storage, rhs_storage, gather_scatter, device):
+@pytest.mark.parametrize("tile_shapes", [(None, None), ((8, 32), (64, 128))])
+def test_hopper_fp8_mxfp4_reference(shape, lhs_storage, rhs_storage, gather_scatter, tile_shapes, device):
     if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
         pytest.skip("requires Hopper")
     from triton_kernels.tensor import FP4, convert_layout, wrap_torch_tensor
@@ -1343,8 +1344,9 @@ def test_hopper_fp8_mxfp4_reference(shape, lhs_storage, rhs_storage, gather_scat
         values = wrap_torch_tensor(values, dtype=FP4)
         scales = wrap_torch_tensor(scales)
         if storage == "swizzled":
-            encoded_values = convert_layout(values, HopperFP8MXValueLayout(axis))
-            encoded_scales = convert_layout(scales, HopperFP8MXScaleLayout(axis))
+            tile_shape = tile_shapes[0 if axis == -1 else 1]
+            encoded_values = convert_layout(values, HopperFP8MXValueLayout(axis, tile_shape))
+            encoded_scales = convert_layout(scales, HopperFP8MXScaleLayout(axis, tile_shape))
             torch.testing.assert_close(convert_layout(encoded_values, StridedLayout(axis)).data, values.data)
             torch.testing.assert_close(convert_layout(encoded_scales, StridedLayout(axis)).data, scales.data)
             values, scales = encoded_values, encoded_scales
