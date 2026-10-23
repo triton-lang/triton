@@ -988,3 +988,51 @@ def test_slice_kernel_public_imports():
     assert callable(translate_paths)
     assert callable(convert_triton_to_gluon)
     assert callable(convert_host_descriptor)
+
+
+@pytest.mark.parametrize("value", ["32", "None", "True", "'shared'"])
+@pytest.mark.parametrize("imported", [False, True])
+def test_slice_kernel_global_aliases(tmp_path, value, imported):
+    _, mod = _make_package(
+        tmp_path, {
+            "constants.py":
+            f"BASE = {value}",
+            "kernel_mod.py":
+            f"""
+            {"from .constants import BASE as SOURCE" if imported else f"SOURCE = {value}"}
+            ALIAS: object = SOURCE
+            FINAL = ALIAS
+
+            def kernel(value=FINAL):
+                return value, SOURCE, ALIAS, FINAL
+        """,
+        })
+    original = importlib.import_module(mod("kernel_mod"))
+    source = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    namespace = {}
+    exec(source, namespace)
+    assert namespace["kernel"]() == original.kernel()
+    assert namespace["kernel"]("override") == original.kernel("override")
+
+
+def test_slice_kernel_global_alias_leaf(tmp_path):
+    _, mod = _make_package(
+        tmp_path, {
+            "constants.py":
+            "VALUE = 32",
+            "kernel_mod.py":
+            """
+            from .constants import VALUE
+            COPIED = VALUE
+
+            def kernel():
+                return VALUE, COPIED
+        """,
+        })
+    source = slice_kernel([f"{mod('kernel_mod')}:kernel"], ["triton", "torch"],
+                          leaf_paths=[f"{mod('constants')}:VALUE"], target=TranslatorTarget.GENERIC)
+    namespace = {}
+    exec(source, namespace)
+    assert namespace["kernel"]() == (32, 32)
+    importlib.import_module(mod("constants")).VALUE = 64
+    assert namespace["kernel"]() == (64, 32)
