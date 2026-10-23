@@ -2697,7 +2697,10 @@ def test_amd_direct_load_to_shared(use_buffer_load):
 @pytest.mark.skipif(not (is_hip_rdna3() or is_hip_rdna4()), reason="Requires RDNA3 or RDNA4")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 64)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
-def test_amd_wmma(M, N, K, in_dtype):
+@pytest.mark.parametrize("wide_k_width", [False, True])
+def test_amd_wmma(M, N, K, in_dtype, wide_k_width):
+    if wide_k_width and not is_hip_rdna4():
+        pytest.skip("kWidth spanning two wmma instructions needs WMMA v2")
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr,  #
@@ -2745,7 +2748,7 @@ def test_amd_wmma(M, N, K, in_dtype):
 
     blocked = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
     wmma_version = 1 if is_hip_rdna3() else 2
-    k_width = 16 if is_hip_rdna3() else 8
+    k_width = 16 if is_hip_rdna3() or wide_k_width else 8
     wmma = ttgl.amd.AMDWMMALayout(wmma_version, True, [[0, 1], [1, 0]])
     kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
                  BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, BLOCKED_LAYOUT=blocked, WMMA_LAYOUT=wmma, K_WIDTH=k_width, num_warps=4)
