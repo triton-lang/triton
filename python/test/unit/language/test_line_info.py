@@ -296,10 +296,10 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
         # CHECK:          %x_plus_1 = arith.constant dense<1.000000e+00> : tensor<16xf32> loc(#loc11)
         # CHECK:          %offset = arith.constant 16 : i32 loc(#loc12)
         # CHECK:          %pid = tt.get_program_id x : i32 loc(#loc13)
-        # CHECK:          %offset_0 = arith.muli %pid, %offset : i32 loc(#loc12)
+        # CHECK:          %offset_0 = arith.muli %pid, %offset overflow<nsw> : i32 loc(#loc12)
         # CHECK:          %offsets = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32> loc(#loc14)
         # CHECK:          %offsets_1 = tt.splat %offset_0 : i32 -> tensor<16xi32> loc(#loc15)
-        # CHECK:          %offsets_2 = arith.addi %offsets_1, %offsets : tensor<16xi32> loc(#loc15)
+        # CHECK:          %offsets_2 = arith.addi %offsets_1, %offsets overflow<nsw> : tensor<16xi32> loc(#loc15)
         # CHECK:          %load_src_store_dst = tt.splat %src : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>> loc(#loc16)
         # CHECK:          %load_src_store_dst_3 = tt.addptr %load_src_store_dst, %offsets_2 : tensor<16x!tt.ptr<f32>>, tensor<16xi32> loc(#loc16)
         # CHECK:          %mask = tt.splat %N : i32 -> tensor<16xi32> loc(#loc17)
@@ -403,7 +403,7 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
         arange = tl.arange(0, 16)
         # CHECK: %arange_0 = scf.for %ivar = %c0_i32 to %N step %c1_i32 iter_args(%arange_1 = %arange) -> (tensor<16xi32>)
         for ivar in range(N):
-            # CHECK: %arange_2 = arith.addi %arange_1, %arange_1 : tensor<16xi32>
+            # CHECK: %arange_2 = arith.addi %arange_1, %arange_1 overflow<nsw> : tensor<16xi32>
             arange += arange
             # scf.yield %arange_2 : tensor<16xi32>
 
@@ -426,11 +426,11 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
         arange = tl.arange(0, 16)
 
         if N > 2:
-            # CHECK: %arange_1 = arith.muli %arange, %cst_0 : tensor<16xi32>
+            # CHECK: %arange_1 = arith.muli %arange, %cst_0 overflow<nsw> : tensor<16xi32>
             arange *= 2
             # CHECK: scf.yield %arange_1 : tensor<16xi32>
         else:
-            # CHECK: %arange_1 = arith.muli %arange, %cst : tensor<16xi32>
+            # CHECK: %arange_1 = arith.muli %arange, %cst overflow<nsw> : tensor<16xi32>
             arange *= 4
             # CHECK: scf.yield %arange_1 : tensor<16xi32>
 
@@ -448,14 +448,14 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
         # CHECK: %arange = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
         arange = tl.arange(0, 16)
         if N == 0:
-            # CHECK: %arange_0 = arith.addi %arange, %arange : tensor<16xi32>
+            # CHECK: %arange_0 = arith.addi %arange, %arange overflow<nsw> : tensor<16xi32>
             arange += tl.arange(0, 16)
             tl.device_print("", arange)
             return
         else:
             # CHECK: %new_arange = tt.make_range {end = 32 : i32, start = 16 : i32} : tensor<16xi32>
             new_arange = tl.arange(16, 32)
-            # CHECK: %arange_1 = arith.addi %arange, %new_arange : tensor<16xi32>
+            # CHECK: %arange_1 = arith.addi %arange, %new_arange overflow<nsw> : tensor<16xi32>
             arange += new_arange
             tl.device_print("", arange)
             return
@@ -478,10 +478,10 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
         while ivar < N:
             # CHECK: ^bb0(%arange_[[AR0]]: tensor<16xi32> loc("arange"(#{{.*}})), %ivar_[[IV1]]: i32
 
-            # CHECK: %ivar_[[IV2:.+]] = arith.addi %ivar_[[IV1]], %c1_i32 : i32
+            # CHECK: %ivar_[[IV2:.+]] = arith.addi %ivar_[[IV1]], %c1_i32 overflow<nsw> : i32
             ivar += 1
             # CHECK: %arange_[[AR1:.+]] = tt.splat %ivar_[[IV2]] : i32 -> tensor<16xi32>
-            # CHECK: %arange_[[AR2:.+]] = arith.muli %arange_[[AR0]], %arange_[[AR1]] : tensor<16xi32>
+            # CHECK: %arange_[[AR2:.+]] = arith.muli %arange_[[AR0]], %arange_[[AR1]] overflow<nsw> : tensor<16xi32>
             # CHECK: scf.yield %arange_[[AR2]], %ivar_[[IV2]] : tensor<16xi32>, i32
             arange *= ivar
 
@@ -526,10 +526,10 @@ def test_line_and_column_numbers(fresh_triton_cache):
         # CHECK:          %x_plus_1 = arith.constant dense<1.000000e+00> : tensor<16xf32> loc(#loc11)
         # CHECK:          %offset = arith.constant 16 : i32 loc(#loc12)
         # CHECK:          %pid = tt.get_program_id x : i32 loc(#loc13)
-        # CHECK:          %offset_0 = arith.muli %pid, %offset : i32 loc(#loc12)
+        # CHECK:          %offset_0 = arith.muli %pid, %offset overflow<nsw> : i32 loc(#loc12)
         # CHECK:          %offsets = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32> loc(#loc14)
         # CHECK:          %offsets_1 = tt.splat %offset_0 : i32 -> tensor<16xi32> loc(#loc15)
-        # CHECK:          %offsets_2 = arith.addi %offsets_1, %offsets : tensor<16xi32> loc(#loc15)
+        # CHECK:          %offsets_2 = arith.addi %offsets_1, %offsets overflow<nsw> : tensor<16xi32> loc(#loc15)
         # CHECK:          %load_src_store_dst = tt.splat %src : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>> loc(#loc16)
         # CHECK:          %load_src_store_dst_3 = tt.addptr %load_src_store_dst, %offsets_2 : tensor<16x!tt.ptr<f32>>, tensor<16xi32> loc(#loc16)
         # CHECK:          %mask = tt.splat %N : i32 -> tensor<16xi32> loc(#loc17)
