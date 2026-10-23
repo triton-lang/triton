@@ -837,6 +837,26 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   Value barrierSlice =
       triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
+  // A two-CTA MMA's completion arrives on the barrier copy of both CTAs, but
+  // each CTA's wait only proves that its own copy completed. Without
+  // back-pressure the leader can reuse a slot while the peer has not yet
+  // observed its previous phase: two completions flip the peer's copy back to
+  // the parity it waits for, and it waits forever. Both CTAs of the pair
+  // acknowledge a completion they observed on `ackSlice`, a pair barrier in
+  // the leader's shared memory, and the leader waits for the acknowledgments
+  // of the slot's previous use before it issues an MMA into the slot again
+  // (waits on a pair barrier are leader-only, like the MMA). A fresh barrier
+  // passes the wait on the previous parity, so the first round does not block.
+  Value ackSlice;
+  if (mma.getTwoCtas()) {
+    // One arrival per CTA: the lowering scales a pair barrier's count by the
+    // CTAs that arrive on it.
+    Value ackAlloc = createBarrierAlloc(forOp, numStages, /*arriveCount=*/1,
+                                        /*twoCTAs=*/true);
+    ackSlice = triton::createSingleBufferView(builder, ackAlloc, barrierIdx);
+    Value previousPhase = arith::XOrIOp::create(builder, phase, one);
+    ttng::WaitBarrierOp::create(builder, ackSlice, previousPhase);
+  }
   mma.addCompletionBarrier(barrierSlice, vTrue);
   mma.setIsAsync(true);
 
@@ -854,6 +874,8 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
   ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
+  if (ackSlice)
+    ttng::ArriveBarrierOp::create(builder, ackSlice, 1);
 
   // Add waits before loads in conditional blocks
   for (auto user : alloc.getUsers()) {
