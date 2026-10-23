@@ -1036,3 +1036,45 @@ def test_slice_kernel_global_alias_leaf(tmp_path):
     assert namespace["kernel"]() == (32, 32)
     importlib.import_module(mod("constants")).VALUE = 64
     assert namespace["kernel"]() == (64, 32)
+
+
+@pytest.mark.parametrize("construction", ["assignment", "factory", "reassignment"])
+@pytest.mark.parametrize("entrypoint", ["cached", "kernel"])
+def test_slice_kernel_assigned_cache(tmp_path, construction, entrypoint):
+    definitions = {
+        "assignment":
+        """
+            def raw(value):
+                return [value + 1]
+            cached = functools.cache(raw)
+        """,
+        "factory":
+        """
+            def make_cached(offset):
+                @functools.cache
+                def nested(value):
+                    return [value + offset]
+                return nested
+            cached = make_cached(1)
+        """,
+        "reassignment":
+        """
+            def cached(value):
+                return [value + 1]
+            cached = functools.cache(cached)
+        """,
+    }
+    source = "import functools\n" + textwrap.dedent(definitions[construction])
+    source += "\ndef kernel(value):\n    return cached(value)\n"
+    _, mod = _make_package(tmp_path, {"kernel_mod.py": source})
+    if construction == "reassignment":
+        with pytest.raises(ValueError, match="cannot extract cache wrapper rebinding"):
+            slice_kernel([f"{mod('kernel_mod')}:{entrypoint}"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+        return
+    sliced = slice_kernel([f"{mod('kernel_mod')}:{entrypoint}"], ["triton", "torch"], target=TranslatorTarget.GENERIC)
+    namespace = {}
+    exec(sliced, namespace)
+    result = namespace[entrypoint](4)
+    assert result == [5]
+    assert namespace[entrypoint](4) is result
+    assert namespace["cached"].cache_info().hits == 1
