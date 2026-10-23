@@ -151,6 +151,7 @@ def _p_matmul(
              all_writes_issued=None,
              reduce_rank=0,
              n_reduce_shards: tl.constexpr = 1,
+             MAXABS_PERMUTE_SEQUENCE: tl.constexpr = None,
              ):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
@@ -789,7 +790,15 @@ def _p_matmul(
             else:
                 # Flexpoint
                 if USE_LOCAL_ABSMAX:
-                    out_view = tl.reshape(out, [out.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK], can_reorder=True)
+                    out_view = out
+                    if MAXABS_PERMUTE_SEQUENCE is not None:
+                        NDIMS: tl.constexpr = len(MAXABS_PERMUTE_SEQUENCE)
+                        tl.static_assert(NDIMS > 0)
+                        NBITS: tl.constexpr = out.numel.value.bit_length() - 1
+                        tl.static_assert(NBITS % NDIMS == 0, "Permutation requires equally sized dimensions")
+                        CHUNK_SIZE: tl.constexpr = 1 << (NBITS // NDIMS)
+                        out_view = out_view.reshape((CHUNK_SIZE,) * NDIMS).permute(MAXABS_PERMUTE_SEQUENCE)
+                    out_view = tl.reshape(out_view, [out.numel // THREADS_PER_BLOCK, THREADS_PER_BLOCK])
                     local_absmax = tl.maximum(local_absmax, nan_propagating_absmax_reduce(out_view, axis=0))
 
                 if PER_BATCH_OUT_SCALE:

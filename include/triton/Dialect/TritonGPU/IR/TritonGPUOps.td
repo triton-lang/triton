@@ -123,6 +123,13 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
                  "src", "mask", "getI1SameShape($_self)">,
   OptionalTypesMatchWith<"infer other type from src type",
                  "src", "other", "getPointeeType($_self)">,
+  PredOpTrait<"source pointee type must match the result element type",
+              CPred<"::mlir::cast<::mlir::triton::PointerType>("
+                    "::mlir::cast<::mlir::RankedTensorType>("
+                    "$_op.getOperand(0).getType()).getElementType())"
+                    ".getPointeeType() == "
+                    "::mlir::cast<::mlir::triton::gpu::MemDescType>("
+                    "$_op.getOperand(1).getType()).getElementType()">>,
 ]> {
   let summary = "Copy data from global memory to local memory asynchronously";
 

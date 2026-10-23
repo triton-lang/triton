@@ -259,6 +259,7 @@ def matmul(a, b, bias,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
     c_acc_in: torch.Tensor | None = None,
+    maxabs_permute_sequence: tuple[int, ...] | None = None,
 ):
     """
     Y[:, :] = 0.
@@ -270,6 +271,9 @@ def matmul(a, b, bias,
     the values. For ragged-M matmul, the Blackwell scale layout must use the same
     RaggedTensorMetadata instance as a_ragged_metadata. This ensures matching row
     segmentation and padding without comparing metadata tensors on the device.
+
+    maxabs_permute_sequence optionally permutes equally sized dimensions of each
+    output tile before the persistent kernel computes its local absolute maximum.
 
     On Blackwell, NVFP4 activation tiles are requantized to MXFP8 inside the
     matmul kernel for MXFP4 weights. This can add rounding error.
@@ -703,6 +707,8 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    if opt_flags.is_persistent:
+        extra_kernel_kwargs["MAXABS_PERMUTE_SEQUENCE"] = maxabs_permute_sequence
     if opt_flags.clc:
         extra_kernel_kwargs.update(CLC=True, clc=True)
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
@@ -756,8 +762,6 @@ def matmul(a, b, bias,
                    EVEN_K=even_K,
                    W_CACHE_MODIFIER=opt_flags.w_cache_modifier,
                    TOKENS_PER_EXPT_FOR_ANNOTATION=None if a_ragged_metadata is None else a_ragged_metadata.expected_slice_size,
-                   # Persistent kernels express their contractions explicitly.
-                   enable_fp_fusion=not opt_flags.is_persistent,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
