@@ -1257,3 +1257,70 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// A conditional snapshot of the accumulator that does not also restart the
+// accumulation: the next MMA would write the buffer before the snapshot reads
+// it, so the MMA is not overlapped with itself.
+// CHECK-LABEL: @tc_gen5_mma_unaligned_nested_acc_read
+tt.func @tc_gen5_mma_unaligned_nested_acc_read(%lb : index, %ub : index, %step : index,
+                  %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %acc_init : tensor<128x128xf32, #blocked1>) -> () {
+  %true = arith.constant true
+  %false = arith.constant false
+  %acc_tm = ttng.tmem_alloc %acc_init : (tensor<128x128xf32, #blocked1>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  scf.for %iv = %lb to %ub step %step iter_args(%acc_use = %false) -> (i1) {
+    %A = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
+    %B = tt.load %B_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
+    %A_sh = ttg.local_alloc %A : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+    %B_sh = ttg.local_alloc %B : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+    // CHECK: ttng.tc_gen5_mma
+    // CHECK-NOT: tt.self_latency
+    // CHECK: scf.yield
+    ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %acc_use, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %snapshot = "cond"() : () -> i1
+    scf.if %snapshot {
+      %acc_res = ttng.tmem_load %acc_tm : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
+      "use"(%acc_res) : (tensor<128x128xf32, #blocked1>) -> ()
+    }
+    scf.yield %true : i1
+  }
+  tt.return
+}
+
+// The persistent-matmul epilogue: the condition that reads the accumulator
+// also turns the accumulation off for the next MMA, which starts a new buffer,
+// so the MMA still overlaps with itself.
+// CHECK-LABEL: @tc_gen5_mma_aligned_nested_acc_read
+tt.func @tc_gen5_mma_aligned_nested_acc_read(%lb : index, %ub : index, %step : index,
+                  %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %acc_init : tensor<128x128xf32, #blocked1>) -> () {
+  %true = arith.constant true
+  %false = arith.constant false
+  %acc_tm = ttng.tmem_alloc %acc_init : (tensor<128x128xf32, #blocked1>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  scf.for %iv = %lb to %ub step %step iter_args(%acc_use = %false) -> (i1) {
+    %A = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
+    %B = tt.load %B_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
+    %A_sh = ttg.local_alloc %A : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+    %B_sh = ttg.local_alloc %B : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+    // CHECK: ttng.tc_gen5_mma {{.*}}tt.self_latency = 1 : i32
+    ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %acc_use, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %tile_done = "cond"() : () -> i1
+    scf.if %tile_done {
+      %acc_res = ttng.tmem_load %acc_tm : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
+      "use"(%acc_res) : (tensor<128x128xf32, #blocked1>) -> ()
+    }
+    %acc_use_next = arith.select %tile_done, %false, %true : i1
+    scf.yield %acc_use_next : i1
+  }
+  tt.return
+}
+}

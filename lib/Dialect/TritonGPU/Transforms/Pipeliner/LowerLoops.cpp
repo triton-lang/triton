@@ -888,7 +888,11 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
         continue;
       }
       auto [loadStage, loadCluster] = schedule[topLevelUser];
-      if (loadStage < mainWaitStage) {
+      // A read in the main wait's stage but an earlier cluster also runs
+      // before that wait.
+      if (loadStage < mainWaitStage ||
+          (loadStage == mainWaitStage &&
+           schedule.clusters.isBefore(loadCluster, mainWaitCluster))) {
         builder.setStageCluster({loadStage, loadCluster});
         builder.setInsertionPoint(load);
         ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);

@@ -231,6 +231,16 @@ public:
         }
         auto pipeHelper = ttng::MMAv5PipelineableOperandsHelper(
             mma, forOp, isLoadToBePipelined);
+        // An accumulator read nested in the loop body (a conditional
+        // snapshot) is not a sync point for the MMA's completion wait, so an
+        // MMA overlapped with itself would be issued into the same buffer
+        // before the read. Keep such MMAs in order unless the read's condition
+        // also starts the next accumulation afresh (the persistent-matmul
+        // epilogue) or the loop is warp specialized (the MMA runs in its own
+        // partition).
+        if (ttng::hasUnalignedNestedAccLoads(mma, forOp) &&
+            !isWarpSpecialized(forOp))
+          continue;
         if (pipeHelper.isPipelineable ||
             (pipeHelper.isOperandsStateDetermined &&
              !ttng::hasLoadsAfterMMA(mma, forOp))) {

@@ -278,6 +278,45 @@ bool ttng::requiresAccMultiBuffering(ttng::MMAv5OpInterface mma,
   return false;
 }
 
+// Whether `next` is the negation of `cond`: `select cond, false, true` or
+// `cond xor true`.
+static bool isNegationOf(Value next, Value cond) {
+  if (auto select = next.getDefiningOp<arith::SelectOp>())
+    return select.getCondition() == cond &&
+           matchPattern(select.getTrueValue(), m_Zero()) &&
+           matchPattern(select.getFalseValue(), m_One());
+  if (auto xorOp = next.getDefiningOp<arith::XOrIOp>())
+    return (xorOp.getLhs() == cond && matchPattern(xorOp.getRhs(), m_One())) ||
+           (xorOp.getRhs() == cond && matchPattern(xorOp.getLhs(), m_One()));
+  return false;
+}
+
+bool ttng::hasUnalignedNestedAccLoads(ttng::MMAv5OpInterface mma,
+                                      scf::ForOp forOp) {
+  auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+  if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc))
+    return false;
+  // The next iteration's use flag, when it is a loop-carried value.
+  Value nextUseFlag;
+  if (auto arg = dyn_cast<BlockArgument>(mma.useAccumulator());
+      arg && arg.getOwner() == forOp.getBody() && arg.getArgNumber() > 0)
+    nextUseFlag =
+        forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
+  return llvm::any_of(tmemAlloc->getUsers(), [&](Operation *user) {
+    if (!isa<ttng::TMEMLoadOp>(user) || user->getBlock() == forOp.getBody() ||
+        !forOp->isProperAncestor(user))
+      return false;
+    // A read in the then-branch of `if cond` is aligned when `cond` also turns
+    // the accumulation off for the next MMA, which then starts a new buffer.
+    auto ifOp = dyn_cast_or_null<scf::IfOp>(
+        forOp.getBody()->findAncestorOpInBlock(*user));
+    bool aligned = ifOp && nextUseFlag &&
+                   ifOp.getThenRegion().isAncestor(user->getParentRegion()) &&
+                   isNegationOf(nextUseFlag, ifOp.getCondition());
+    return !aligned;
+  });
+}
+
 bool ttng::hasLoadsAfterMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
   auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
   if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
