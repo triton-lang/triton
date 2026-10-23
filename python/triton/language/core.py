@@ -820,9 +820,13 @@ class tuple_type(base_type):
         return tuple(values, self), cursor
 
     def mangle(self):
-        fields = self.fields if self.fields is not None else [""] * len(self.types)
-        return 'T' + '_'.join(f"{name}_{ty.mangle()}" if name else ty.mangle()
-                              for name, ty in zip(fields, self.types)) + 'T'
+        elems = '_'.join(ty.mangle() for ty in self.types)
+        if self.fields is None:
+            return 'T' + elems + 'T'
+        # Length-prefix the field names so that a name which looks like a type
+        # code (e.g. a field called `fp32`) cannot alias another tuple's mangling.
+        names = ''.join(f"{len(name)}{name}" for name in self.fields)
+        return 'TN' + names + '_' + elems + 'T'
 
 
 class slice_type(dtype):

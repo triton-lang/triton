@@ -499,3 +499,29 @@ def test_namedtuple_classes_with_same_types_get_distinct_helpers(device):
     out = torch.zeros(2, device=device)
     kernel[(1, )](_FieldsAB(a=one, b=ten), _FieldsBA(b=ten, a=one), out)
     assert out.tolist() == [-9.0, -9.0]
+
+
+class _FieldNamedLikeType(NamedTuple):
+    fp32: any
+
+
+@triton.jit
+def _first_element(t):
+    return t[0]
+
+
+@pytest.mark.interpreter
+def test_namedtuple_field_named_like_type_gets_distinct_helper(device):
+    # A namedtuple whose field name looks like a type code must not share a
+    # compiled helper with a plain tuple of the same element types.
+
+    @triton.jit
+    def kernel(named, plain, out_i, out_f):
+        tl.store(out_i, _first_element(named))
+        tl.store(out_f, _first_element(plain))
+
+    out_i = torch.zeros(1, dtype=torch.int32, device=device)
+    out_f = torch.zeros(1, dtype=torch.float32, device=device)
+    kernel[(1, )](_FieldNamedLikeType(fp32=7), (1.5, 7), out_i, out_f)
+    assert out_i.item() == 7
+    assert out_f.item() == 1.5
