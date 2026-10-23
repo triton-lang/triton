@@ -14,6 +14,7 @@
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-INTERWARP-GROUPS
 // RUN: triton-opt %t/register-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=REGISTER-TOTALS
+// RUN: triton-opt %t/boundary-carry-owners.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=BOUNDARY-OWNERS
 // RUN: triton-opt %t/gfx90a.mlir --allocate-amdgpu-shared-memory=arch=gfx90a --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a --canonicalize | FileCheck %s --check-prefix=GFX90A
 
 //--- scan.mlir
@@ -548,6 +549,43 @@ tt.func private @test_scan_existing_register_totals(%arg: tensor<16x256xi32, #pa
   tt.return %result : tensor<16x256xi32, #parallel_rows>
 }
 
+}
+
+//--- boundary-carry-owners.mlir
+
+#boundary_prefixes = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Four register groups each need five lane-scan rounds. Moving a high axis
+// register bit into lanes loses the boundary-carry ownership needed by the
+// three nonterminal prefixes in each thread-local segment.
+// BOUNDARY-OWNERS-LABEL: llvm.func {{.*}}@test_scan_boundary_carry_forward(
+// BOUNDARY-OWNERS-COUNT-20: nvvm.shfl.sync up
+// BOUNDARY-OWNERS-NOT: nvvm.shfl.sync
+// BOUNDARY-OWNERS: nvvm.barrier
+// BOUNDARY-OWNERS: llvm.return
+tt.func private @test_scan_boundary_carry_forward(%arg: tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %max = arith.maxsi %lhs, %rhs : i32
+    tt.scan.return %max : i32
+  }) : (tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes>
+  tt.return %result : tensor<2048xi32, #boundary_prefixes>
+}
+
+// Reverse traversal must preserve the same owners, using index shuffles.
+// BOUNDARY-OWNERS-LABEL: llvm.func {{.*}}@test_scan_boundary_carry_reverse(
+// BOUNDARY-OWNERS-COUNT-20: nvvm.shfl.sync idx
+// BOUNDARY-OWNERS-NOT: nvvm.shfl.sync
+// BOUNDARY-OWNERS: nvvm.barrier
+// BOUNDARY-OWNERS: llvm.return
+tt.func private @test_scan_boundary_carry_reverse(%arg: tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes> {
+  %result = "tt.scan"(%arg) <{axis = 0 : i32, reverse = true}> ({
+  ^bb0(%lhs: i32, %rhs: i32):
+    %min = arith.minsi %lhs, %rhs : i32
+    tt.scan.return %min : i32
+  }) : (tensor<2048xi32, #boundary_prefixes>) -> tensor<2048xi32, #boundary_prefixes>
+  tt.return %result : tensor<2048xi32, #boundary_prefixes>
+}
 }
 
 //--- gfx90a.mlir
