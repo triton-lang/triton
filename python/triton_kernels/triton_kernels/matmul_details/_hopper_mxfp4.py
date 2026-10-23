@@ -333,7 +333,7 @@ def make_lhs_packer(packed, scales, tile=(16, 64)):
 
 def make_runner(a, sa, w, sw, shape, config=KernelConfig(), *, lhs_format=LhsFormat.WORD, rhs_format=RhsFormat.SWIZZLED,
                 lhs_tile=(16, 64)):
-    """Build a reusable operation; allocations and packing remain outside timing.
+    """Build a reusable matmul operation with preallocated output and scratch space.
 
     Shape is logical (M, N, K), with inputs stored as (M, K) and (N, K).
     Raw packed inputs must satisfy the packing helpers' scale contract.
