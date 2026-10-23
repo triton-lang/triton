@@ -3692,6 +3692,23 @@ def test_scan_1d(M, N, device):
     torch.testing.assert_close(ref.to(torch.int32), output, atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires thread block clusters")
+@pytest.mark.parametrize("N", [32, 64, 128, 512])
+@pytest.mark.parametrize("num_warps", [1, 4])
+def test_scan_num_ctas(N, num_warps, device):
+    # A scan has no cross-CTA lowering: with two CTAs, its axis must stay within each CTA.
+
+    @triton.jit
+    def scan_kernel(out_ptr, in_ptr, N: tl.constexpr):
+        offs = tl.arange(0, N)
+        tl.store(out_ptr + offs, tl.cumsum(tl.load(in_ptr + offs), 0))
+
+    x = torch.randint(-100, 100, (N, ), dtype=torch.int32, device=device)
+    output = torch.empty(N, dtype=torch.int32, device=device)
+    scan_kernel[(1, )](output, x, N, num_ctas=2, num_warps=num_warps)
+    torch.testing.assert_close(torch.cumsum(x, dim=0).to(torch.int32), output, atol=0, rtol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("op", ['sum', 'max', 'min'])
 @pytest.mark.parametrize("BLOCK_N", [32, 64, 128])

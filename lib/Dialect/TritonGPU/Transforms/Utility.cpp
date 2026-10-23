@@ -570,10 +570,16 @@ static bool isSingleValue(Value value) {
   return true;
 }
 
+// Scan only supports blocked encodings, and no cross-CTA lowering: its axis
+// must stay within each CTA.
+static bool isSupportedScanEncoding(triton::ScanOp scan, Attribute encoding) {
+  return isa<triton::gpu::BlockedEncodingAttr>(encoding) &&
+         triton::gpu::getCTASplitNum(encoding)[scan.getAxis()] == 1;
+}
+
 Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
-  if (isa<triton::ScanOp>(op)) {
-    // Scan only supports blocked encoding at the moment.
-    if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
+  if (auto scan = dyn_cast<triton::ScanOp>(op)) {
+    if (!isSupportedScanEncoding(scan, encoding))
       return {};
   }
 
@@ -609,8 +615,8 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
 }
 
 Attribute inferDstEncoding(Operation *op, Attribute encoding) {
-  if (isa<triton::ScanOp>(op)) {
-    if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
+  if (auto scan = dyn_cast<triton::ScanOp>(op)) {
+    if (!isSupportedScanEncoding(scan, encoding))
       return {};
   }
   if (isa<triton::gpu::CastFpOpInterface>(op))
