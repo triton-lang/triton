@@ -79,7 +79,8 @@ static void expandLoops(ModuleOp moduleOp) {
       }
       return triton::emitPredicateForStage(
                  rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
-                 predOp.getMaxStage(), predOp.getStage())
+                 predOp.getMaxStage(), predOp.getStage(),
+                 predOp.getUnsignedCmp())
           .getDefiningOp();
     }
     if (auto maskOp = dyn_cast<triton::gpu::MaskOp>(op)) {
@@ -125,10 +126,10 @@ static void expandLoops(ModuleOp moduleOp) {
     if (keepPredicateStage || customEpiloguePeeling) {
       options.emitPredicateStageFn =
           [](RewriterBase &rewriter, Value inductionVar, Value upperBound,
-             Value step, uint64_t maxStage, uint64_t stage) {
+             Value step, uint64_t maxStage, uint64_t stage, bool unsignedCmp) {
             return triton::gpu::PredicateStageOp::create(
                 rewriter, inductionVar.getLoc(), inductionVar, upperBound, step,
-                maxStage, stage);
+                maxStage, stage, unsignedCmp);
           };
     }
     IRRewriter rewriter(forOp);

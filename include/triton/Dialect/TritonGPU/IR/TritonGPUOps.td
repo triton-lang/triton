@@ -540,7 +540,8 @@ def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
                        AnySignlessIntegerOrIndex:$ub,
                        AnySignlessIntegerOrIndex:$step,
                        I32Attr:$maxStage,
-                       I32Attr:$stage);
+                       I32Attr:$stage,
+                       UnitAttr:$unsignedCmp);
   let results = (outs I1:$result);
   let assemblyFormat = "$iv `,` $ub `,` $step `maxStage` $maxStage `stage` $stage attr-dict `:` type($iv) `->` type($result)";
 }

@@ -195,6 +195,11 @@ Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
 // Get the value of the induction variable at the end of the loop.
 Value getLastInductionValue(OpBuilder &b, scf::ForOp loop);
 
+// Return max(0, upperBound - numIterations * step) in unsigned arithmetic,
+// without overflowing the multiplication or underflowing the subtraction.
+Value getUnsignedBoundAfterPeeling(OpBuilder &b, Location loc, Value upperBound,
+                                   Value step, uint64_t numIterations);
+
 bool isHostSideDescriptor(Value v);
 
 bool isKernel(FunctionOpInterface funcOp);
