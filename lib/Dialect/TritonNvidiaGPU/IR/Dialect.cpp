@@ -58,6 +58,34 @@ namespace triton {
 namespace nvidia_gpu {
 
 LogicalResult
+RequestLayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                          int32_t stride, int32_t readyOffset,
+                          int32_t typeOffset, int32_t handleOffset,
+                          int32_t srcOffset, int32_t dstOffset,
+                          int32_t lengthOffset, int32_t bypassArOffset) {
+  if (stride <= 0 || stride % 8)
+    return emitError() << "request stride must be a positive multiple of 8";
+  struct Field {
+    int64_t offset;
+    int64_t width;
+  };
+  const Field fields[] = {
+      {readyOffset, 8}, {typeOffset, 4},   {handleOffset, 4},  {srcOffset, 8},
+      {dstOffset, 8},   {lengthOffset, 8}, {bypassArOffset, 4}};
+  for (auto [i, field] : llvm::enumerate(fields)) {
+    auto [offset, width] = field;
+    if (offset < 0 || offset % width || offset + width > stride)
+      return emitError()
+             << "request field must be aligned and fit within stride";
+    for (unsigned j = 0; j < i; ++j)
+      if (offset < fields[j].offset + fields[j].width &&
+          fields[j].offset < offset + width)
+        return emitError() << "request fields must not overlap";
+  }
+  return success();
+}
+
+LogicalResult
 CachePolicyAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                         triton::CacheModifier cacheModifier,
                         CacheEvictionPriority l1, CacheEvictionPriority primary,

@@ -1250,3 +1250,194 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %r : f32
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @comm_abort_reduction_no_scratch(
+  // CHECK-NOT: nvvm.barrier{{$}}
+  // CHECK: nvvm.barrier.reduction
+  // CHECK-NOT: nvvm.barrier{{$}}
+  // CHECK: nvvm.barrier.reduction
+  // CHECK-NOT: nvvm.barrier{{$}}
+  // CHECK: llvm.return
+  tt.func @comm_abort_reduction_no_scratch(%aborted: !tt.ptr<i64>, %out: !tt.ptr<i1>) {
+    %a = ttng.comm_is_aborted %aborted {aborted_value = 33 : i64} : (!tt.ptr<i64>) -> i1
+    %b = ttng.comm_is_aborted %aborted {aborted_value = 33 : i64} : (!tt.ptr<i64>) -> i1
+    %result = arith.ori %a, %b : i1
+    tt.store %out, %result : !tt.ptr<i1>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.total-num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @comm_abort_single_warp_vote(
+  // CHECK-SAME: [[ABORTED:%[^:]+]]: !llvm.ptr<1>
+  // CHECK-NOT: !llvm.ptr<3>
+  // CHECK: llvm.load [[ABORTED]] atomic acquire
+  // CHECK-NOT: !llvm.ptr<3>
+  // CHECK: nvvm.barrier{{$}}
+  // CHECK-NEXT: {{%.*}} = nvvm.vote.sync any
+  // CHECK-NOT: !llvm.ptr<3>
+  // CHECK: llvm.return
+  tt.func @comm_abort_single_warp_vote(%aborted: !tt.ptr<i64>, %out: !tt.ptr<i1>) {
+    %result = ttng.comm_is_aborted %aborted {aborted_value = 33 : i64} : (!tt.ptr<i64>) -> i1
+    tt.store %out, %result : !tt.ptr<i1>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Unsuccessful polls and detected aborts must not acquire the payload counter.
+  // CHECK-LABEL: @comm_wait_acquire_on_success(
+  // CHECK-SAME: [[COUNTER:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[CURSOR:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[ABORTED:%[^:]+]]: !llvm.ptr<1>
+  // CHECK-NOT: llvm.load [[COUNTER]] atomic acquire
+  // CHECK: ^{{bb[0-9]+}}({{%[^:]+}}: i32, [[READY:%[^:]+]]: i1):
+  // CHECK-NEXT: [[STATE:%.*]] = llvm.load [[ABORTED]] atomic acquire
+  // CHECK-NOT: llvm.load [[COUNTER]] atomic acquire
+  // CHECK: [[IS_ABORTED:%.*]] = llvm.icmp "eq" [[STATE]],
+  // CHECK-NOT: llvm.load [[COUNTER]] atomic acquire
+  // CHECK: llvm.cond_br [[IS_ABORTED]], ^{{bb[0-9]+}}, ^[[CHECK_READY:bb[0-9]+]]
+  // CHECK: ^[[CHECK_READY]]:
+  // CHECK-NEXT: llvm.cond_br [[READY]], ^[[SUCCESS:bb[0-9]+]], ^{{bb[0-9]+}}(
+  // CHECK: ^[[SUCCESS]]:
+  // CHECK-NEXT: {{%.*}} = llvm.load [[COUNTER]] atomic acquire
+  // CHECK-NEXT: llvm.store {{%.*}}, [[CURSOR]] atomic syncscope("device") release
+  // CHECK-NOT: llvm.load [[COUNTER]] atomic acquire
+  // CHECK: llvm.return
+  tt.func @comm_wait_acquire_on_success(%counter: !tt.ptr<i64>, %cursor: !tt.ptr<i64>, %aborted: !tt.ptr<i64>, %monitor: !tt.ptr<i64>, %count: i64) {
+    %result = ttng.comm_wait recv %counter, %cursor, %aborted, %monitor, %count {consume = true, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    tt.return
+  }
+
+  // CHECK-LABEL: @comm_store_wait_cursor_ordering(
+  // CHECK-SAME: [[COUNTER:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[CURSOR:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[ABORTED:%[^:]+]]: !llvm.ptr<1>
+  // CHECK: llvm.load [[ABORTED]] atomic acquire
+  // CHECK: llvm.load [[CURSOR]] atomic syncscope("device") monotonic
+  // CHECK: llvm.load [[COUNTER]] atomic monotonic
+  // CHECK: llvm.load [[ABORTED]] atomic acquire
+  // CHECK: llvm.return
+  tt.func @comm_store_wait_cursor_ordering(%counter: !tt.ptr<i64>, %cursor: !tt.ptr<i64>, %aborted: !tt.ptr<i64>, %monitor: !tt.ptr<i64>) {
+    %zero = arith.constant 0 : i64
+    %result = ttng.comm_wait send %counter, %cursor, %aborted, %monitor, %zero {consume = false, blocking = false, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    tt.return
+  }
+
+  // An early-published target needs only readiness and periodic abort checks.
+  // CHECK-LABEL: @comm_wait_monitored(
+  // CHECK-SAME: [[COUNTER:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, {{%[^:]+}}: !llvm.ptr<1>{{[^,]*}}, [[ABORTED:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[MONITOR:%[^:]+]]: !llvm.ptr<1>
+  // CHECK: [[MASK:%.*]] = llvm.mlir.constant(2047 : i32)
+  // CHECK-NOT: llvm.load [[ABORTED]]
+  // CHECK: llvm.store {{%.*}}, [[MONITOR]] atomic release
+  // CHECK-NOT: llvm.store {{.*}}, [[MONITOR]]
+  // CHECK: ^{{bb[0-9]+}}({{%[^:]+}}: i32):
+  // CHECK: [[CURRENT:%.*]] = llvm.load [[COUNTER]] atomic monotonic
+  // CHECK-NEXT: [[MATCHED:%.*]] = llvm.icmp "sge" [[CURRENT]],
+  // CHECK: [[TICK:%.*]] = llvm.and {{%.*}}, [[MASK]]
+  // CHECK: [[DUE:%.*]] = llvm.icmp "eq" [[TICK]],
+  // CHECK: [[SLOW:%.*]] = llvm.or [[MATCHED]], [[DUE]]
+  // CHECK: llvm.cond_br [[SLOW]], ^[[CHECK_ABORT:bb[0-9]+]]({{.*}}[[MATCHED]]
+  // CHECK-NOT: llvm.store {{.*}}, [[MONITOR]]
+  // CHECK: ^[[CHECK_ABORT]](
+  // CHECK-NEXT: {{%.*}} = llvm.load [[ABORTED]] atomic acquire
+  // CHECK-NOT: llvm.store {{.*}}, [[MONITOR]]
+  // CHECK: llvm.return
+  tt.func @comm_wait_monitored(%counter: !tt.ptr<i64>, %cursor: !tt.ptr<i64>, %aborted: !tt.ptr<i64>, %monitor: !tt.ptr<i64>, %count: i64) {
+    %result = ttng.comm_wait recv %counter, %cursor, %aborted, %monitor, %count {consume = false, monitor = true, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    tt.return
+  }
+
+  // A failed readiness attempt exits directly; only success acquires and consumes.
+  // CHECK-LABEL: @comm_wait_nonblocking(
+  // CHECK-SAME: [[COUNTER:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[CURSOR:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[ABORTED:%[^:]+]]: !llvm.ptr<1>
+  // CHECK: [[STATE:%.*]] = llvm.load [[ABORTED]] atomic acquire
+  // CHECK: [[IS_ABORTED:%.*]] = llvm.icmp "eq" [[STATE]],
+  // CHECK: llvm.cond_br [[IS_ABORTED]], ^[[DONE:bb[0-9]+]], ^[[SETUP:bb[0-9]+]]
+  // CHECK: ^[[SETUP]]:
+  // CHECK: llvm.cond_br {{%.*}}, ^[[DONE]], ^[[NONZERO:bb[0-9]+]]
+  // CHECK: ^[[RECHECK:bb[0-9]+]]:
+  // CHECK-NEXT: [[STATE:%.*]] = llvm.load [[ABORTED]] atomic acquire
+  // CHECK: [[IS_ABORTED:%.*]] = llvm.icmp "eq" [[STATE]],
+  // CHECK: llvm.cond_br [[IS_ABORTED]], ^[[DONE]], ^[[SUCCESS:bb[0-9]+]]
+  // CHECK: ^[[SUCCESS]]:
+  // CHECK-NEXT: {{%.*}} = llvm.load [[COUNTER]] atomic acquire
+  // CHECK-NEXT: llvm.store {{%.*}}, [[CURSOR]] atomic syncscope("device") release
+  // CHECK: llvm.br ^[[DONE]]
+  // CHECK: ^[[NONZERO]]:
+  // CHECK-NEXT: [[CURSOR_VALUE:%.*]] = llvm.load [[CURSOR]] atomic syncscope("device") acquire
+  // CHECK-NEXT: [[TARGET:%.*]] = llvm.add [[CURSOR_VALUE]], {{%[^ ]+}} : i64
+  // CHECK-NEXT: [[CURRENT:%.*]] = llvm.load [[COUNTER]] atomic monotonic
+  // CHECK-NEXT: [[READY:%.*]] = llvm.icmp "sge" [[CURRENT]], [[TARGET]]
+  // CHECK: llvm.cond_br [[READY]], ^[[RECHECK]], ^[[DONE]]
+  // CHECK: ^[[DONE]]:
+  // CHECK-NEXT: llvm.br ^[[JOIN:bb[0-9]+]]
+  // CHECK: ^[[JOIN]]:
+  // CHECK: llvm.return
+  // CANONICALIZE-SM100-LABEL: @comm_wait_nonblocking(
+  // CANONICALIZE-SM100-SAME: {{.*}}, [[MONITOR:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, {{%[^:]+}}: i64
+  // CANONICALIZE-SM100-NOT: llvm.store {{.*}}, [[MONITOR]]
+  // CANONICALIZE-SM100: llvm.return
+  tt.func @comm_wait_nonblocking(%counter: !tt.ptr<i64>, %cursor: !tt.ptr<i64>, %aborted: !tt.ptr<i64>, %monitor: !tt.ptr<i64>, %count: i64) {
+    %result = ttng.comm_wait recv %counter, %cursor, %aborted, %monitor, %count {consume = true, blocking = false, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    tt.return
+  }
+
+  // CHECK-LABEL: @comm_wait_nonblocking_observer(
+  // CHECK: [[TARGET:%.*]] = llvm.add {{.*}} overflow<nsw, nuw> : i64
+  // CHECK: llvm.icmp "sge" {{%.*}}, [[TARGET]]
+  // CHECK: llvm.return
+  tt.func @comm_wait_nonblocking_observer(%counter: !tt.ptr<i64>, %cursor: !tt.ptr<i64>, %aborted: !tt.ptr<i64>, %monitor: !tt.ptr<i64>, %count: i64) {
+    %result = ttng.comm_wait recv %counter, %cursor, %aborted, %monitor, %count {consume = false, blocking = false, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    tt.return
+  }
+
+  // A zero count checks abort without accessing the counter or cursor.
+  // CANONICALIZE-SM100-LABEL: @comm_wait_nonblocking_zero_count(
+  // CANONICALIZE-SM100-SAME: [[COUNTER:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[CURSOR:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[ABORTED:%[^:]+]]: !llvm.ptr<1>
+  // CANONICALIZE-SM100-NOT: llvm.load [[COUNTER]]
+  // CANONICALIZE-SM100-NOT: llvm.load [[CURSOR]]
+  // CANONICALIZE-SM100: [[TRUE:%.*]] = llvm.mlir.constant(true) : i1
+  // CANONICALIZE-SM100-NOT: llvm.load [[COUNTER]]
+  // CANONICALIZE-SM100-NOT: llvm.load [[CURSOR]]
+  // CANONICALIZE-SM100: [[STATE:%.*]] = llvm.load [[ABORTED]] atomic acquire
+  // CANONICALIZE-SM100-NEXT: [[IS_ABORTED:%.*]] = llvm.icmp "eq" [[STATE]],
+  // CANONICALIZE-SM100-NEXT: llvm.cond_br [[IS_ABORTED]], ^[[DONE:bb[0-9]+]], ^[[SETUP:bb[0-9]+]]
+  // CANONICALIZE-SM100: ^[[SETUP]]:
+  // CANONICALIZE-SM100-NEXT: llvm.cond_br [[TRUE]], ^[[DONE]], ^{{bb[0-9]+}}
+  // CANONICALIZE-SM100: ^[[DONE]]:
+  // CANONICALIZE-SM100-NEXT: llvm.br ^[[JOIN:bb[0-9]+]]
+  // CANONICALIZE-SM100: ^[[JOIN]]:
+  // CANONICALIZE-SM100-NEXT: nvvm.barrier
+  // CANONICALIZE-SM100-NEXT: llvm.return
+  tt.func @comm_wait_nonblocking_zero_count(%counter: !tt.ptr<i64>, %cursor: !tt.ptr<i64>, %aborted: !tt.ptr<i64>, %monitor: !tt.ptr<i64>) {
+    %zero = arith.constant 0 : i64
+    %result = ttng.comm_wait recv %counter, %cursor, %aborted, %monitor, %zero {consume = true, blocking = false, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @comm_submit_cached_head_release(
+  // CHECK-SAME: [[HEAD:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[TAIL:%[^:]+]]: !llvm.ptr<1>{{[^,]*}}, [[CACHED:%[^:]+]]: !llvm.ptr<1>
+  // CHECK: [[CACHED_VALUE:%.*]] = llvm.load [[CACHED]] atomic syncscope("device") acquire
+  // CHECK: [[VALUE:%.*]] = llvm.load [[HEAD]] atomic acquire
+  // CHECK-NEXT: [[ADVANCED:%.*]] = llvm.icmp "ugt" [[VALUE]], [[CACHED_VALUE]]
+  // CHECK-NEXT: llvm.cond_br [[ADVANCED]], ^[[UPDATE:bb[0-9]+]], ^[[RETRY:bb[0-9]+]]
+  // CHECK: ^[[UPDATE]]:
+  // CHECK-NEXT: llvm.atomicrmw umax [[CACHED]], [[VALUE]] syncscope("device") release
+  // CHECK-NEXT: llvm.br ^[[RETRY]]
+  tt.func @comm_submit_cached_head_release(%head: !tt.ptr<i64>, %tail: !tt.ptr<i64>, %cached: !tt.ptr<i64>, %buffer: !tt.ptr<i8>, %state: !tt.ptr<i64>, %handle: i32) {
+    %zero = arith.constant 0 : i64
+    %result = ttng.comm_submit %head, %tail, %cached, %buffer, %handle, %zero, %zero, %zero, %state, %state
+        {capacity = 7 : i64, is_send = false, request_layout = #ttng.request_layout<stride = 56, ready_offset = 48, type_offset = 0, handle_offset = 8, src_offset = 16, dst_offset = 24, length_offset = 32, bypass_ar_offset = 40>, request_type = 6 : i32,
+         bypass_value = 0 : i32, ready_value = -9223372036854775808 : i64, aborted_value = 33 : i64}
+        : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i8>, i32, i64, i64, i64, !tt.ptr<i64>, !tt.ptr<i64>) -> i1
+    tt.return
+  }
+}

@@ -1,8 +1,11 @@
 import expecttest
 import math
+import pickle
 import pytest
 import re
-from dataclasses import replace
+import sys
+from dataclasses import asdict, replace
+from types import SimpleNamespace
 
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
@@ -11,10 +14,12 @@ from triton.experimental.gluon.language._core import _unwrap_if_constexpr, built
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import rubin
+from triton.experimental.gluon.language.nvidia import fabric
 from triton.experimental.gluon.language.nvidia.ampere import mbarrier as ampere_mbarrier
 from triton.experimental.gluon.language.nvidia.hopper import cluster
 from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+from triton.experimental.gluon.nvidia.fabric import Protocol, RequestLayout, SynchronizedBuffer
 from triton.experimental.gluon.language.amd import _layouts as amd_layouts
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
 from triton.experimental.gluon.language.amd.cdna5 import async_copy as cdna5_async_copy
@@ -86,6 +91,184 @@ def anonymize_ir(ir):
 
 def make_args(*args, **kwargs):
     return args, kwargs
+
+
+@pytest.fixture
+def fabric_descriptor_fields():
+    layout = RequestLayout(stride=56, ready_offset=48, type_offset=0, handle_offset=8, src_offset=16, dst_offset=24,
+                           length_offset=32, bypass_ar_offset=40)
+    return dict(
+        address=0x1000,
+        dtype=ttgl.float32,
+        state=dict(recv_lock=0x2000, ack_lock=0x2008, sends_completed=0x2010, aborted=0x2018, wait_count=0x2020,
+                   ack_count=0x2028, send_count=0x2030, periscope_recv_lock=0x2038, periscope_ack_lock=0x2040,
+                   periscope_sends_completed=0x2048),
+        queue=dict(head=0x3000, tail=0x3008, cached_head=0x3010, buffer=0x4000),
+        handle=0,
+        capacity=8,
+        protocol=Protocol(layout, 1, 6, 0, 1, 1 << 63, 33),
+    )
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("handle", -1, "nonnegative int32"),
+    ("handle", 2**31, "nonnegative int32"),
+    ("handle", True, "nonnegative int32"),
+    ("handle", ttgl.constexpr(1), "nonnegative int32"),
+    ("capacity", 1, "capacity must satisfy"),
+    ("capacity", 2**63, "capacity must satisfy"),
+    ("address", 0x1001, "aligned for dtype"),
+    ("dtype", ttgl.int1, "whole bytes"),
+])
+def test_fabric_descriptor_invalid(fabric_descriptor_fields, field, value, message):
+    fabric_descriptor_fields[field] = value
+    with pytest.raises(ValueError, match=message):
+        SynchronizedBuffer(**fabric_descriptor_fields)
+
+
+def test_fabric_descriptor_roundtrip(fabric_descriptor_fields):
+    buffer = SynchronizedBuffer(**fabric_descriptor_fields)
+    restored = pickle.loads(pickle.dumps(buffer))
+    assert type(restored) is SynchronizedBuffer
+    assert restored == buffer
+
+
+def test_fabric_descriptor_from_tw(fabric_descriptor_fields, monkeypatch):
+    fields = fabric_descriptor_fields
+    protocol = fields["protocol"]
+    monkeypatch.setitem(
+        sys.modules, "synchronized_buffer",
+        SimpleNamespace(
+            BypassAr=SimpleNamespace(TRUE=protocol.bypass_ar_true),
+            SynchronizedBuffer=SimpleNamespace(ABORTED=protocol.aborted_value),
+        ))
+    native = SimpleNamespace(
+        gpu_fields=lambda: dict(fields["state"], local_addr=fields["address"], size=128, handle=fields["handle"]))
+    queue = SimpleNamespace(
+        gpu_fields=lambda: dict(fields["queue"], capacity=fields["capacity"]),
+        request_layout=lambda: {**asdict(protocol), **asdict(protocol.request_layout)},
+    )
+    group = SimpleNamespace(
+        synchronized_buffer_store=SimpleNamespace(
+            get=lambda handle: SimpleNamespace(gpu_synchronized_buffer=lambda: native)),
+        gpu_cpu_queue=SimpleNamespace(queue=queue),
+    )
+    handle = SimpleNamespace(tensor=SimpleNamespace(device=SimpleNamespace(type="cuda"), dtype=fields["dtype"]))
+    buffer = SynchronizedBuffer.from_tw(group, handle)
+    assert type(buffer) is SynchronizedBuffer
+    assert buffer == SynchronizedBuffer(**fields)
+    assert buffer._owners == (group, handle, native, queue)
+
+
+@pytest.mark.parametrize("case,message", [
+    ("wait_peer", "wait requires a local receive or acknowledgement barrier"),
+    ("arrive_local", "arrive requires a peer acknowledgement barrier"),
+    ("negative_count", "count must be nonnegative"),
+    ("float_count", "count must be a scalar integer"),
+    ("vector_count", "count must be a scalar integer"),
+    ("negative_numel", "numel must be nonnegative"),
+    ("float_numel", "numel must be a scalar integer"),
+    ("float_offset", "offset must be a scalar integer"),
+    ("vector_offset", "offset must be a scalar integer"),
+    ("vector_src", "src must be a scalar pointer with the buffer's element type"),
+    ("wrong_src_dtype", "src must be a scalar pointer with the buffer's element type"),
+    ("runtime_consume", "consume must be a constexpr bool"),
+    ("runtime_wait_blocking", "blocking must be a constexpr bool"),
+    ("integer_wait_blocking", "blocking must be a constexpr bool"),
+    ("positional_wait_blocking", "positional argument"),
+    ("positional_store_wait_blocking", "positional argument"),
+    ("runtime_wait_monitor", "monitor must be a constexpr bool"),
+    ("integer_wait_monitor", "monitor must be a constexpr bool"),
+    ("runtime_bypass_ar", "bypass_ar must be a constexpr bool"),
+    ("integer_bypass_ar", "bypass_ar must be a constexpr bool"),
+    ("runtime_capacity", "capacity must be a constexpr integer"),
+    ("float_capacity", "capacity must be a constexpr integer"),
+    ("small_capacity", r"capacity must satisfy 2 <= capacity < 2\*\*63"),
+])
+def test_fabric_frontend_invalid(case, message, fabric_descriptor_fields):
+    buffer = SynchronizedBuffer(**fabric_descriptor_fields)
+    capacities = {"runtime_capacity": 8, "float_capacity": ttgl.constexpr(7.5), "small_capacity": ttgl.constexpr(1)}
+    if case in capacities:
+        buffer = buffer._replace(capacity=capacities[case])
+
+    @gluon.jit
+    def kernel(buf, CASE: ttgl.constexpr):
+        offsets = ttgl.arange(0, 32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        if CASE == "wait_peer":
+            fabric.barrier.wait(buf.peer.ack_barrier)
+        elif CASE == "arrive_local":
+            fabric.barrier.arrive(buf.ack_barrier)
+        elif CASE == "negative_count":
+            fabric.barrier.wait(buf.recv_barrier, count=-1)
+        elif CASE == "float_count":
+            fabric.barrier.wait(buf.recv_barrier, count=1.5)
+        elif CASE == "vector_count":
+            fabric.barrier.wait(buf.recv_barrier, count=offsets)
+        elif CASE == "negative_numel":
+            buf.async_store(buf.ptr, -1)
+        elif CASE == "float_numel":
+            buf.async_store(buf.ptr, 1.5)
+        elif CASE == "float_offset":
+            buf = buf + 1.5
+        elif CASE == "vector_offset":
+            buf = buf + offsets
+        elif CASE == "vector_src":
+            buf.async_store(buf.ptr + offsets, 1)
+        elif CASE == "wrong_src_dtype":
+            buf.async_store(buf.ptr.to(ttgl.pointer_type(ttgl.int32)), 1)
+        elif CASE == "runtime_consume":
+            fabric.barrier.wait(buf.recv_barrier, consume=ttgl.program_id(0) == 0)
+        elif CASE == "runtime_wait_blocking":
+            fabric.barrier.wait(buf.recv_barrier, blocking=ttgl.program_id(0) == 0)
+        elif CASE == "integer_wait_blocking":
+            fabric.barrier.wait(buf.recv_barrier, blocking=1)
+        elif CASE == "positional_wait_blocking":
+            fabric.barrier.wait(buf.recv_barrier, False)
+        elif CASE == "positional_store_wait_blocking":
+            buf.store_wait(False)
+        elif CASE == "runtime_wait_monitor":
+            fabric.barrier.wait(buf.recv_barrier, monitor=ttgl.program_id(0) == 0)
+        elif CASE == "integer_wait_monitor":
+            fabric.barrier.wait(buf.recv_barrier, monitor=1)
+        elif CASE == "runtime_bypass_ar":
+            buf.async_store(buf.ptr, 1, bypass_ar=ttgl.program_id(0) == 0)
+        elif CASE == "integer_bypass_ar":
+            buf.async_store(buf.ptr, 1, bypass_ar=1)
+        else:
+            buf.async_store(buf.ptr, 1)
+
+    with pytest.raises(CompilationError, match=message):
+        run_parser(kernel, *make_args(buffer, case), target=AMPERE_TARGET)
+
+
+@pytest.mark.parametrize("aligned", [False, True])
+@pytest.mark.parametrize("handle,runtime_handle", [(1, True), (9, True), (ttgl.constexpr(9), False)],
+                         ids=["one", "nine", "explicit-constexpr"])
+def test_fabric_nested_argument_alignment(aligned, handle, runtime_handle, fabric_descriptor_fields):
+    fabric_descriptor_fields.update(address=0x1000 if aligned else 0x1004,
+                                    handle=handle if runtime_handle else handle.value)
+    buffer = SynchronizedBuffer(**fabric_descriptor_fields)
+    if not runtime_handle:
+        # Explicit constexpr arguments retain their meaning in Triton's tuple specialization.
+        buffer = buffer._replace(handle=handle)
+
+    @gluon.jit
+    def kernel(nested, out, RUNTIME_HANDLE: ttgl.constexpr):
+        view = nested[1] + nested[0]
+        if RUNTIME_HANDLE:
+            ttgl.static_assert(view._handle.type == ttgl.int32)
+        else:
+            ttgl.static_assert(view._handle.type == tl.constexpr_type(9))
+        ttgl.static_assert(view._capacity.type == tl.constexpr_type(8))
+        ttgl.static_assert(isinstance(view._protocol.type, tl.constexpr_type))
+        ttgl.store(out, ttgl.load(view.ptr))
+
+    module = run_parser(kernel, args=((ttgl.constexpr(7), buffer), MockTensor(ttgl.float32), runtime_handle))
+    signature = next(line for line in module.str_nodebug().splitlines() if "tt.func public @" in line)
+    assert len(re.findall(r"%arg\d+: i32\b", signature)) == int(runtime_handle)
+    pointers = re.findall(r"%arg\d+: !tt.ptr<f32>(?: \{[^}]*\})?", signature)
+    assert len(pointers) == 2
+    assert ["tt.divisibility = 16" in arg for arg in pointers] == [aligned, True]
 
 
 @gluon.constexpr_function
