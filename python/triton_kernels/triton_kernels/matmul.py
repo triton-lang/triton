@@ -245,6 +245,62 @@ def matmul_set_idle_sms(num_idle_sms):
     """
     set_idle_sms(num_idle_sms)
 
+def _prepare_hopper_fp8_mxfp4(a, b, precision_config):
+    """Reference lowering: materialize MXFP4 operands, then use the FP8 path."""
+    if not (is_cuda() and target_info.cuda_capability_geq(9, 0)
+            and not target_info.cuda_capability_geq(10, 0)):
+        return a, b, precision_config
+    fp4_types = (FP4, torch.uint8)
+    fp8_types = (FP8_E4M3FN, torch.float8_e4m3fn)
+    if (a.dtype not in fp4_types + fp8_types or b.dtype not in fp4_types + fp8_types
+            or not (a.dtype in fp4_types or b.dtype in fp4_types)):
+        return a, b, precision_config
+    from .numerics_details.mxfp import upcast_from_mxfp
+    from .tensor_details.layout_details.hopper_fp8 import HopperFP8MXValueLayout
+
+    operands = ((a, precision_config.a_mx_scale, precision_config.a_microblock_size,
+                 precision_config.a_mx_tensor_scale),
+                (b, precision_config.b_mx_scale, precision_config.b_microblock_size,
+                 precision_config.b_mx_tensor_scale))
+    for values, scales, block_size, tensor_scale in operands:
+        scale_data = scales.data if isinstance(scales, Tensor) else scales
+        if (tensor_scale is not None
+                or values.dtype in fp8_types and scales is not None
+                or values.dtype in fp4_types and (scale_data is None or block_size != 32
+                                                   or scale_data.dtype != torch.uint8)):
+            return a, b, precision_config
+
+    def expand(values, scales, axis):
+        if values.dtype in fp8_types:
+            return values
+        if not isinstance(values, Tensor):
+            values = wrap_torch_tensor(values, dtype=FP4)
+        if not isinstance(scales, Tensor):
+            scales = wrap_torch_tensor(scales)
+        canonical = StridedLayout(axis)
+        values = convert_layout(values, canonical).data
+        scales = convert_layout(scales, canonical).data
+        assert scales.dtype == torch.uint8
+        if not bool(((scales >= 122) & (scales <= 133)).all()):
+            return None
+        decoded = upcast_from_mxfp(values, scales, torch.bfloat16, axis=axis)
+        # Preserve column-major RHS storage for the existing Hopper FP8 path.
+        decoded = decoded.movedim(axis, -1).contiguous().to(torch.float8_e4m3fn).movedim(-1, axis)
+        return decoded
+
+    expanded_a = expand(a, precision_config.a_mx_scale, -1)
+    expanded_b = expand(b, precision_config.b_mx_scale, -2)
+    if expanded_a is None or expanded_b is None:
+        if any(isinstance(x, Tensor) and isinstance(x.storage.layout, HopperFP8MXValueLayout) for x in (a, b)):
+            raise ValueError("Hopper FP8 decoding requires E8M0 scale bytes in [122, 133]")
+        return a, b, precision_config
+    a, b = expanded_a, expanded_b
+    precision_config = replace(precision_config, a_mx_scale=None, b_mx_scale=None,
+                               a_microblock_size=None, b_microblock_size=None,
+                               out_dtype=precision_config.out_dtype or torch.bfloat16)
+    return a, b, precision_config
+
+
 def matmul(a, b, bias,
     a_ragged_metadata: RaggedTensorMetadata | None = None,
     b_ragged_metadata: RaggedTensorMetadata | None = None,
@@ -279,6 +335,11 @@ def matmul(a, b, bias,
     matmul kernel for MXFP4 weights. This can add rounding error.
     That path defaults to BF16 output unless out_dtype or c is supplied.
 
+    On Hopper, MXFP4/FP8 and MXFP4/MXFP4 inputs with E8M0 scale bytes
+    122 through 133 have a reference lowering through materialized FP8
+    operands. It accepts strided storage and HopperFP8MX value/scale layouts.
+    Output defaults to BF16; layout conversion and decoding are not fused.
+
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
     When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
@@ -303,6 +364,7 @@ def matmul(a, b, bias,
     # canonicalize inputs
     if precision_config is None:
         precision_config = PrecisionConfig()
+    a, b, precision_config = _prepare_hopper_fp8_mxfp4(a, b, precision_config)
     if fused_activation is None:
         fused_activation = FusedActivation(FnSpecs.default(), tuple())
     if epilogue is None:
@@ -830,9 +892,14 @@ def apply_precision(x_tri, w_tri, precision_config):
     from .tensor_details import layout
     from .numerics_details.mxfp import upcast_from_mxfp
 
+    x_tri, w_tri, precision_config = _prepare_hopper_fp8_mxfp4(x_tri, w_tri, precision_config)
     flex_ctx = precision_config.flex_ctx
 
     def apply(x, scale):
+        if isinstance(x, Tensor):
+            x = convert_layout(x, StridedLayout(-1)).data
+        if x.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+            x = x.float()
         if scale is None:
             return x.clone()
         return x.float() * scale

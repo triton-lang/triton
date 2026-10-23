@@ -836,3 +836,25 @@ def test_tiled_layout_roundtrip(shape, major_dim, dtype, with_out):
     restored = convert_layout(tiled, StridedLayout(-1))
     torch.testing.assert_close(restored.data, values, rtol=0, atol=0)
     assert tiled.data.numel() == source.data.numel()
+
+
+@pytest.mark.parametrize("mx_axis", [-1, -2])
+@pytest.mark.parametrize("shape", [(19, 160), (2, 65, 32)])
+def test_hopper_fp8_mx_layout_roundtrip(mx_axis, shape, device):
+    from triton_kernels.tensor_details.layout import HopperFP8MXValueLayout, HopperFP8MXScaleLayout
+
+    torch.manual_seed(0)
+    values = torch.randint(0, 256, (*shape[:-1], shape[-1] // 2), dtype=torch.uint8, device=device)
+    scales = torch.randint(0, 256, (*shape[:-1], shape[-1] // 32), dtype=torch.uint8, device=device)
+    if mx_axis == -2:
+        values, scales = values.mT, scales.mT
+    for data, dtype, layout in ((values, FP4, HopperFP8MXValueLayout(mx_axis)), (scales, UINT8,
+                                                                                 HopperFP8MXScaleLayout(mx_axis))):
+        tensor = wrap_torch_tensor(data, dtype=dtype)
+        encoded = convert_layout(tensor, layout)
+        assert list(encoded.data.shape) == layout.storage_shape(tensor.shape, dtype == FP4)
+        decoded = convert_layout(encoded, StridedLayout(mx_axis))
+        torch.testing.assert_close(decoded.data, data, rtol=0, atol=0)
+        out = wrap_torch_tensor(torch.empty_like(encoded.data), dtype=tensor.dtype, shape=tensor.shape, layout=layout)
+        assert convert_layout(tensor, layout, out=out) is out
+        torch.testing.assert_close(out.data, encoded.data, rtol=0, atol=0)
