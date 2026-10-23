@@ -780,6 +780,14 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
 
+// Use storePred is supplied to skip selected producer lanes.
+SmallVector<Value> convertLayoutViaSharedMemory(
+    Location loc, ConversionPatternRewriter &rewriter,
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
+    Operation *sourceOp, const TargetInfoBase &targetInfo,
+    Value storePred = {});
+
 void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
                                const TargetInfoBase &targetInfo,
                                const LLVMTypeConverter *typeConverter,
