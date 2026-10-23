@@ -1319,6 +1319,19 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Type elementType) -> Type {
              return ttag::BufferDescType::get(self.getContext(), elementType);
            })
+      .def("create_cooperative_atomic_load",
+           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
+              Value mask, Value other, tt::MemSemantic sem,
+              tt::MemSyncScope scope) -> Value {
+             return self.create<ttag::CooperativeAtomicLoadOp>(
+                 resultType, ptr, offsets, mask, other, sem, scope);
+           })
+      .def("create_cooperative_atomic_store",
+           [](GluonOpBuilder &self, Value value, Value ptr, Value offsets,
+              Value mask, tt::MemSemantic sem, tt::MemSyncScope scope) {
+             self.create<ttag::CooperativeAtomicStoreOp>(value, ptr, offsets,
+                                                         mask, sem, scope);
+           })
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
               Value mask, Value other,

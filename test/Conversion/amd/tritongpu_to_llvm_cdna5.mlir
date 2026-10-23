@@ -258,3 +258,114 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // COMMON-LABEL: llvm.func @cooperative_atomic_i32
+  tt.func @cooperative_atomic_i32(%src: !tt.ptr<i32>, %dst: !tt.ptr<i32>, %offsets: tensor<32xi32, #blocked>) {
+    // One element per lane is a 32x4B line. Accesses are relaxed;
+    // acquire/release order the operation as for tt.atomic_load/store. The
+    // address is the scalar base plus a zero-extended 32-bit byte offset.
+    // COMMON: %[[SCOPE:.*]] = llvm.mlir.metadata_as_value #llvm.md_node<#llvm.md_string<"agent">>
+    // COMMON: %[[ORDER:.*]] = llvm.mlir.constant(0 : i32)
+    // COMMON: %[[BYTES:.*]] = llvm.mul {{.*}} overflow<nuw> : i32
+    // COMMON: %[[WIDE:.*]] = llvm.zext %[[BYTES]] : i32 to i64
+    // COMMON: %[[ADDR:.*]] = llvm.getelementptr inbounds %{{.*}}[%[[WIDE]]] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, i8
+    // COMMON: llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.load.32x4B"(%[[ADDR]], %[[ORDER]], %[[SCOPE]]) : (!llvm.ptr<1>, i32, !llvm.metadata) -> i32
+    // COMMON: llvm.fence syncscope("agent") acquire
+    %value = amdg.cooperative_atomic_load acquire, gpu, %src[%offsets] : !tt.ptr<i32> -> tensor<32xi32, #blocked>
+    // COMMON: llvm.fence syncscope("agent") release
+    // COMMON: llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.store.32x4B"({{.*}}) : (!llvm.ptr<1>, i32, i32, !llvm.metadata) -> ()
+    amdg.cooperative_atomic_store release, gpu, %value, %dst[%offsets] : !tt.ptr<i32> -> tensor<32xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // COMMON-LABEL: llvm.func @cooperative_atomic_i64
+  tt.func @cooperative_atomic_i64(%src: !tt.ptr<i64>, %dst: !tt.ptr<i64>, %offsets: tensor<32xi32, #blocked>) {
+    // One 8-byte element per lane is a 16x8B line.
+    // COMMON: %[[VALUE:.*]] = llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.load.16x8B"({{.*}}) : (!llvm.ptr<1>, i32, !llvm.metadata) -> vector<2xi32>
+    // COMMON: llvm.bitcast %[[VALUE]] : vector<2xi32> to i64
+    %value = amdg.cooperative_atomic_load relaxed, cta, %src[%offsets] : !tt.ptr<i64> -> tensor<32xi64, #blocked>
+    // COMMON: llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.store.16x8B"({{.*}}) : (!llvm.ptr<1>, vector<2xi32>, i32, !llvm.metadata) -> ()
+    amdg.cooperative_atomic_store relaxed, cta, %value, %dst[%offsets] : !tt.ptr<i64> -> tensor<32xi64, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // COMMON-LABEL: llvm.func @cooperative_atomic_bf16_lines
+  tt.func @cooperative_atomic_bf16_lines(%src: !tt.ptr<bf16>, %dst: !tt.ptr<bf16>, %offsets: tensor<4x64xi32, #blocked>) {
+    // Eight BF16 per lane are 16 bytes: four 8x16B lines per instruction.
+    // COMMON: llvm.mlir.metadata_as_value #llvm.md_node<#llvm.md_string<"">>
+    // COMMON: %[[VALUE:.*]] = llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.load.8x16B"({{.*}}) : (!llvm.ptr<1>, i32, !llvm.metadata) -> vector<4xi32>
+    // COMMON: llvm.bitcast %[[VALUE]] : vector<4xi32> to vector<8xbf16>
+    %value = amdg.cooperative_atomic_load acquire, sys, %src[%offsets] : !tt.ptr<bf16> -> tensor<4x64xbf16, #blocked>
+    // COMMON: llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.store.8x16B"({{.*}}) : (!llvm.ptr<1>, vector<4xi32>, i32, !llvm.metadata) -> ()
+    amdg.cooperative_atomic_store release, sys, %value, %dst[%offsets] : !tt.ptr<bf16> -> tensor<4x64xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // COMMON-LABEL: llvm.func @cooperative_atomic_mask_across_axes
+  tt.func @cooperative_atomic_mask_across_axes(
+      %src: !tt.ptr<i32>,
+      %dst: !tt.ptr<i32>,
+      %offsets: tensor<16x8xi32, #blocked>,
+      %active: i32,
+      %other: tensor<16x8xi32, #blocked>) {
+    %four = arith.constant dense<4> : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %rows = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %line = arith.divsi %rows, %four : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %limit = tt.splat %active : i32 -> tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %enabled = arith.cmpi slt, %line, %limit : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %expanded = tt.expand_dims %enabled {axis = 1 : i32} : tensor<16xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16x1xi1, #blocked>
+    %mask = tt.broadcast %expanded : tensor<16x1xi1, #blocked> -> tensor<16x8xi1, #blocked>
+    // The mask is constant over a line spanning four logical rows.
+    // COMMON: llvm.cond_br {{.*}}, ^[[LOAD:bb[0-9]+]], ^[[MERGE:bb[0-9]+]]({{.*}} : vector<4xi32>)
+    // COMMON: ^[[LOAD]]:
+    // COMMON: %[[VALUE:.*]] = llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.load.8x16B"
+    // COMMON: llvm.br ^[[MERGE]](%[[VALUE]] : vector<4xi32>)
+    // COMMON: ^[[MERGE]](%{{.*}}: vector<4xi32>):
+    %value = amdg.cooperative_atomic_load relaxed, sys, %src[%offsets], %mask, %other : !tt.ptr<i32> -> tensor<16x8xi32, #blocked>
+    // COMMON: llvm.cond_br {{.*}}, ^[[STORE:bb[0-9]+]], ^[[END:bb[0-9]+]]
+    // COMMON: ^[[STORE]]:
+    // COMMON: llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.store.8x16B"
+    // COMMON: llvm.br ^[[END]]
+    amdg.cooperative_atomic_store relaxed, sys, %value, %dst[%offsets], %mask : !tt.ptr<i32> -> tensor<16x8xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 4], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 1, 1], order = [2, 1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // COMMON-LABEL: llvm.func @cooperative_atomic_uniform_mask
+  tt.func @cooperative_atomic_uniform_mask(%src: !tt.ptr<i32>, %offsets: tensor<4x32x4xi32, #blocked>, %active: i1) {
+    // A mask uniform over the whole tensor guards every instruction with one
+    // branch.
+    %mask = tt.splat %active : i1 -> tensor<4x32x4xi1, #blocked>
+    // COMMON: llvm.cond_br {{.*}}, ^[[LOAD:bb[0-9]+]], ^[[MERGE:bb[0-9]+]]
+    // COMMON: ^[[LOAD]]:
+    // COMMON-COUNT-4: llvm.call_intrinsic "llvm.amdgcn.cooperative.atomic.load.8x16B"
+    // COMMON-NEXT: llvm.br ^[[MERGE]]
+    // COMMON-NOT: llvm.cond_br
+    // COMMON: llvm.return
+    %value = amdg.cooperative_atomic_load relaxed, sys, %src[%offsets], %mask : !tt.ptr<i32> -> tensor<4x32x4xi32, #blocked>
+    tt.return
+  }
+}

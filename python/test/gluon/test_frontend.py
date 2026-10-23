@@ -3966,6 +3966,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def cooperative_load_store_kernel(x, y):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [1, 1], [1, 0])
+    line = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, layout))
+    word = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+    offsets = line[:, None] * 32 + word[None, :]
+    active = line[:, None] < 3
+    value = ttgl.amd.cdna5.cooperative.load(x, offsets, active, sem="relaxed", scope="sys")
+    ttgl.amd.cdna5.cooperative.store(value, y, offsets, active)
+
+
+def test_cooperative_load_store():
+    x = MockTensor(ttgl.int32)
+    y = MockTensor(ttgl.int32)
+    module = run_parser(cooperative_load_store_kernel, *make_args(x, y, num_warps=1), target=HIP_TARGET_CDNA5)
+
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @cooperative_load_store_kernel(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #blocked>
+    %c32_i32 = arith.constant 32 : i32
+    %cst = arith.constant dense<32> : tensor<4x1xi32, #blocked>
+    %3 = arith.muli %2, %cst : tensor<4x1xi32, #blocked>
+    %4 = tt.expand_dims %1 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
+    %5 = tt.broadcast %3 : tensor<4x1xi32, #blocked> -> tensor<4x32xi32, #blocked>
+    %6 = tt.broadcast %4 : tensor<1x32xi32, #blocked> -> tensor<4x32xi32, #blocked>
+    %7 = arith.addi %5, %6 : tensor<4x32xi32, #blocked>
+    %8 = tt.expand_dims %0 {axis = 1 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #blocked>
+    %c3_i32 = arith.constant 3 : i32
+    %cst_0 = arith.constant dense<3> : tensor<4x1xi32, #blocked>
+    %9 = arith.cmpi slt, %8, %cst_0 : tensor<4x1xi32, #blocked>
+    %10 = tt.broadcast %9 : tensor<4x1xi1, #blocked> -> tensor<4x32xi1, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %cst_1 = arith.constant dense<0> : tensor<4x32xi32, #blocked>
+    %11 = amdg.cooperative_atomic_load relaxed, sys, %arg0[%7], %10, %cst_1 : !tt.ptr<i32> -> tensor<4x32xi32, #blocked>
+    %12 = tt.broadcast %9 : tensor<4x1xi1, #blocked> -> tensor<4x32xi1, #blocked>
+    amdg.cooperative_atomic_store release, gpu, %11, %arg1[%7], %12 : !tt.ptr<i32> -> tensor<4x32xi32, #blocked>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
 def buffer_load_store_with_broadcast_kernel(x, y):
     layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 64], warps_per_cta=[4, 1],
                                                 order=[1, 0])
