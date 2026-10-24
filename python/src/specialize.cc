@@ -68,6 +68,8 @@ static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
 static PyObject *has_native_tensor_spec_attr = nullptr;
 static PyObject *get_tensor_spec_attr = nullptr;
+static PyObject *get_tensordesc_spec_attr = nullptr;
+static PyObject *has_native_tensordesc_spec_attr = nullptr;
 static PyObject *align_kwarg = nullptr;
 
 static DtypePtr2Str dtype_ptr2str;
@@ -140,6 +142,10 @@ void init_interned_strings() {
   has_native_tensor_spec_attr =
       intern_from_string("supports_native_tensor_specialization");
   get_tensor_spec_attr = intern_from_string("get_tensor_specialization");
+  get_tensordesc_spec_attr =
+      intern_from_string("get_tensordesc_specialization");
+  has_native_tensordesc_spec_attr =
+      intern_from_string("supports_native_tensordesc_specialization");
 
   align_kwarg = py::make_tuple("align").release().ptr();
 }
@@ -184,8 +190,9 @@ bool init_globals() noexcept try {
   return false;
 }
 
-std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
-                                                        bool has_layout) {
+std::pair<py::object, py::object>
+specialize_tensordesc(PyObject *backend, PyObject *arg, bool has_layout,
+                      bool specialize_value, bool align) {
   auto base = from_new_ref(PyObject_GetAttr(arg, base_attr));
   if (!base)
     return {};
@@ -280,7 +287,37 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   if (!type_str_result)
     return {};
 
-  return {std::move(type_str_result), py::none()};
+  // handle key specialization of a tensor descriptor
+  if (!specialize_value) {
+    return {std::move(type_str_result), py::none()};
+  }
+
+  // The flag is an opt-out: a backend that defines neither it nor the method
+  // keeps the native path, i.e. no key. Anything other than a missing attribute
+  // is a real error and is propagated.
+  auto native_spec_obj =
+      from_new_ref(PyObject_GetAttr(backend, has_native_tensordesc_spec_attr));
+  if (!native_spec_obj) {
+    if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+      return {};
+    PyErr_Clear();
+    return {std::move(type_str_result), py::none()};
+  }
+  int native_impl_available = PyObject_IsTrue(native_spec_obj.ptr());
+  if (native_impl_available < 0)
+    return {};
+  if (native_impl_available) {
+    return {std::move(type_str_result), py::none()};
+  }
+
+  PyObject *args[3] = {backend, arg, align ? Py_True : Py_False};
+  PyObject *kwnames = align_kwarg;
+  auto key = from_new_ref(
+      PyObject_VectorcallMethod(get_tensordesc_spec_attr, args, 2, kwnames));
+  if (!key)
+    return {};
+
+  return {std::move(type_str_result), std::move(key)};
 }
 
 std::pair<py::object, py::object> handle_long_type(PyObject *backend,
@@ -412,13 +449,13 @@ handle_float_type(PyObject *backend, PyObject *arg, bool is_const,
 std::pair<py::object, py::object>
 handle_tensor_descriptor(PyObject *backend, PyObject *arg, bool is_const,
                          bool specialize_value, bool align) {
-  return specialize_tensordesc(arg, false);
+  return specialize_tensordesc(backend, arg, false, specialize_value, align);
 }
 
 std::pair<py::object, py::object>
 handle_gluon_tensor_descriptor(PyObject *backend, PyObject *arg, bool is_const,
                                bool specialize_value, bool align) {
-  return specialize_tensordesc(arg, true);
+  return specialize_tensordesc(backend, arg, true, specialize_value, align);
 }
 
 std::pair<py::object, py::object>
