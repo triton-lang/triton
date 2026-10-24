@@ -235,6 +235,24 @@ tt.func public @fn(%v: tensor<4x128xf32>) {
 
 // -----
 
+tt.func public @fn(%v: tensor<128xi32>) {
+    // expected-error @+2 {{axis out of bounds for expand_dims}}
+    // expected-error @+1 {{op failed to infer returned types}}
+    %a = tt.expand_dims %v {axis = 3 : i32} : tensor<128xi32> -> tensor<128x1xi32>
+    tt.return
+}
+
+// -----
+
+tt.func public @fn(%v: tensor<128xi32>) {
+    // expected-error @+2 {{axis out of bounds for expand_dims}}
+    // expected-error @+1 {{op failed to infer returned types}}
+    %a = tt.expand_dims %v {axis = -1 : i32} : tensor<128xi32> -> tensor<1x128xi32>
+    tt.return
+}
+
+// -----
+
 tt.func @reduce_different_input_shapes(%arg0: tensor<32x32x64xf32>, %arg1: tensor<16x32x64xf32>) -> (tensor<32x64xf32>, tensor<16x64xf32>) {
     // expected-error @below {{op requires the same shape for all operands}}
     %0:2 = "tt.reduce" (%arg0, %arg1) <{axis = 1 : i32}> ({
