@@ -747,3 +747,69 @@ def test_opt_bool(fresh_knobs_including_libraries, monkeypatch):
     assert fresh_knobs.amd.use_block_pingpong
     monkeypatch.delenv("TRITON_HIP_USE_BLOCK_PINGPONG")
     assert fresh_knobs.amd.use_block_pingpong is None
+
+
+@pytest.mark.parametrize("binary_ext", ["cubin", "npubin"])
+def test_knobs_store_binary_only(binary_ext, monkeypatch, fresh_knobs, tmp_path):
+    import triton.compiler.compiler as compiler
+    from triton.backends.compiler import GPUTarget
+
+    payload = b"binary"
+
+    class _Options:
+
+        def hash(self):
+            return "options"
+
+    class _Backend:
+
+        def __init__(self, target):
+            self.target = target
+            self.binary_ext = binary_ext
+
+        def hash(self):
+            return binary_ext
+
+        def parse_options(self, options):
+            return _Options()
+
+        def add_stages(self, stages, options, language):
+
+            def emit(module, metadata):
+                metadata["name"] = "kernel"
+                return payload
+
+            stages["ttir"] = lambda module, metadata: "ttir"
+            stages["ttgir"] = lambda module, metadata: "ttgir"
+            stages[binary_ext] = emit
+
+        def load_dialects(self, context):
+            return None
+
+        def get_codegen_implementation(self, options):
+            return {}
+
+        def get_module_map(self):
+            return {}
+
+        def pack_metadata(self, metadata):
+            return ()
+
+    def kernel():
+        return None
+
+    kernel.cache_key = "store-binary-only"
+    kernel.arg_names = []
+    src = compiler.ASTSource(kernel, {})
+    src.make_ir = lambda *args, **kwargs: "module"
+    monkeypatch.setattr(compiler, "make_backend", _Backend)
+
+    fresh_knobs.cache.dir = str(tmp_path)
+    fresh_knobs.compilation.store_binary_only = True
+    compiled = compiler.compile(src, target=GPUTarget("fake", 0, 32), _env_vars={})
+
+    stored = {path.suffix for path in tmp_path.rglob("*") if path.is_file()}
+    assert f".{binary_ext}" in stored
+    assert ".ttir" not in stored
+    assert ".ttgir" not in stored
+    assert compiled.asm[binary_ext] == payload
