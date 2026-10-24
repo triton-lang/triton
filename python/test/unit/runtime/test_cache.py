@@ -1408,3 +1408,42 @@ def test_module_load_unload(device, fresh_knobs):
     assert pre_compile.module is None
     # turn on garbage collector
     gc.enable()
+
+
+class _ConstexprKeyOptions:
+    def __str__(self):
+        return "opts"
+
+
+def test_compute_cache_key_distinguishes_constexpr_scalar_types():
+    # 1 == 1.0 == True under tuple equality, so the in-memory launch-key
+    # shortcut conflated those constexprs and reused whichever binary the
+    # first launch compiled (the on-disk string key keeps them apart).
+    from triton.runtime.jit import compute_cache_key
+
+    cache = {}
+    int_key = compute_cache_key(cache, [("constexpr", 1)], _ConstexprKeyOptions())
+    float_key = compute_cache_key(cache, [("constexpr", 1.0)], _ConstexprKeyOptions())
+    bool_key = compute_cache_key(cache, [("constexpr", True)], _ConstexprKeyOptions())
+    assert len(cache) == 3
+    assert int_key == "[('constexpr', 1)]opts"
+    assert float_key == "[('constexpr', 1.0)]opts"
+    assert bool_key == "[('constexpr', True)]opts"
+    # Identical relaunches still hit the same entry.
+    assert compute_cache_key(cache, [("constexpr", 1)], _ConstexprKeyOptions()) == int_key
+    assert compute_cache_key(cache, [("constexpr", 1.0)], _ConstexprKeyOptions()) == float_key
+    assert len(cache) == 3
+
+
+def test_compute_cache_key_distinguishes_signed_zero_floats():
+    # 0.0 == -0.0 but the two launch different kernels; key floats on their
+    # bit pattern instead of the value.
+    from triton.runtime.jit import compute_cache_key
+
+    cache = {}
+    pos_key = compute_cache_key(cache, [("constexpr", 0.0)], _ConstexprKeyOptions())
+    neg_key = compute_cache_key(cache, [("constexpr", -0.0)], _ConstexprKeyOptions())
+    assert len(cache) == 2
+    assert pos_key == "[('constexpr', 0.0)]opts"
+    assert neg_key == "[('constexpr', -0.0)]opts"
+    assert compute_cache_key(cache, [("constexpr", -0.0)], _ConstexprKeyOptions()) == neg_key
