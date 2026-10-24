@@ -125,13 +125,14 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
     """
     use_acc = _semantic.to_tensor(use_acc)
 
+    precision = _core._unwrap_if_constexpr(precision)
     if precision is None:
         precision = _semantic.builder.options.default_dot_input_precision
-    precision = _core._unwrap_if_constexpr(precision)
 
     precision = _semantic._str_to_dot_input_precision(precision)
 
     K = a.type.shape[-1]
+    max_num_imprecise_acc = _core._unwrap_if_constexpr(max_num_imprecise_acc)
     if max_num_imprecise_acc is None:
         if a.dtype.is_fp8() and b.dtype.is_fp8():
             max_num_imprecise_acc = _semantic.builder.options.max_num_imprecise_acc_default
@@ -141,7 +142,6 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
         if a.dtype.is_fp8() and b.dtype.is_fp8() and max_num_imprecise_acc > K:
             raise ValueError(f"max_num_imprecise_acc ({max_num_imprecise_acc}) must be <= K ({K})")
 
-    max_num_imprecise_acc = _core._unwrap_if_constexpr(max_num_imprecise_acc)
     is_async = _core._unwrap_if_constexpr(is_async)
 
     handle = _semantic.builder.create_warpgroup_mma(a.handle, b.handle, acc.handle, use_acc.handle, precision,
