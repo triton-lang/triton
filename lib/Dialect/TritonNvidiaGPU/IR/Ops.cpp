@@ -692,6 +692,15 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");
+  auto splits = getCTASplitNum(nvmma);
+  // Gather/scatter get row positions from the x-offsets layout.
+  unsigned firstDim = isa<AsyncTMAGatherOp, AsyncTMAScatterOp>(op) ? 1 : 0;
+  for (unsigned dim = firstDim; dim < memDesc.getRank(); ++dim)
+    if (memDesc.getDimSize(dim) < splits[dim])
+      return op->emitOpError(
+                 "TMA shared-memory shape must cover every CTA split")
+             << ": dimension " << dim << " has size " << memDesc.getDimSize(dim)
+             << " but " << splits[dim] << " CTA splits";
   return success();
 }
 
@@ -1798,6 +1807,16 @@ void TMEMAllocOp::getEffects(
 }
 
 // -- TMEMCopyOp --
+Value TMEMCopyOp::getPredicateOperand() { return getPred(); }
+
+void TMEMCopyOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type TMEMCopyOp::getPredicateOperandTypeLike() {
+  return IntegerType::get(getContext(), 1);
+}
+
 LogicalResult TMEMCopyOp::verify() {
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();

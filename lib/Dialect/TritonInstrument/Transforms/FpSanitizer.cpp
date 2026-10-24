@@ -2698,14 +2698,21 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
       // Make shared operands visible before the CTAs emulate the TMEM copy.
       ttng::ClusterBarrierOp::create(rewriter, loc);
     }
-    Value srcReg =
-        ttg::LocalLoadOp::create(rewriter, loc, srcRegTy, op.getSrc(), Value())
-            .getResult();
-    if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
-                               /*stride0=*/1,
-                               info->tensorType.getShape().front(),
-                               /*ignoreCTA=*/true))
-      return emitFpSanCodegenError(op.getOperation());
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      if (Value pred = op.getPred(); pred && !matchPattern(pred, m_One())) {
+        auto ifOp = scf::IfOp::create(rewriter, loc, pred, false);
+        rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+      }
+      Value srcReg = ttg::LocalLoadOp::create(rewriter, loc, srcRegTy,
+                                              op.getSrc(), Value())
+                         .getResult();
+      if (!storeScratchStrided2D(rewriter, loc, info->ptr, srcReg, srcRegTy,
+                                 /*stride0=*/1,
+                                 info->tensorType.getShape().front(),
+                                 /*ignoreCTA=*/true))
+        return emitFpSanCodegenError(op.getOperation());
+    }
 
     createGlobalScratchBarrier(rewriter, loc,
                                scratch->usesSharedClusterState());

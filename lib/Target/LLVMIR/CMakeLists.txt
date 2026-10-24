@@ -3,6 +3,7 @@ add_triton_library(TritonLLVMIR
         LLVMDILocalVariable.cpp
         LLVMIRBreakPhiStruct.cpp
         LLVMIRNVPTXVectorizer.cpp
+        LLVMIRNVPTXTargetInfo.cpp
         LLVMDIUtils.cpp
 
         DEPENDS

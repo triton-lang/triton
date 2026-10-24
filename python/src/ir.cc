@@ -433,9 +433,18 @@ void init_triton_ir(py::module_ &m) {
       .def(py::init<>())
       .def("set_attr",
            [](Value &self, std::string &name, Attribute &attr) -> void {
-             if (Operation *definingOp = self.getDefiningOp())
+             if (Operation *definingOp = self.getDefiningOp()) {
+               if (definingOp->getNumResults() != 1) {
+                 OpBuilder builder(definingOp);
+                 builder.setInsertionPointAfter(definingOp);
+                 auto annotate =
+                     AnnotateOp::create(builder, self.getLoc(), self);
+                 self.replaceAllUsesExcept(annotate.getResult(), annotate);
+                 self = annotate.getResult();
+                 definingOp = annotate;
+               }
                definingOp->setAttr(name, attr);
-             else {
+             } else {
                auto arg = mlir::cast<BlockArgument>(self);
                int id = arg.getArgNumber();
                std::string attrName = name + "_arg" + std::to_string(id);

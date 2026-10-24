@@ -76,13 +76,12 @@ public:
     return std::nullopt;
   }
 
-  std::optional<WaitOpInfo>
-  getWaitOpInfo(Operation *op, const tti::AuxDataMap &) const override {
+  SmallVector<WaitOpInfo> getWaitOpInfo(Operation *op) const override {
     if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op))
-      return WaitOpInfo{tti::CommitKind::TmaStore,
-                        static_cast<int>(tmaStoreWaitOp.getPendings()),
-                        /*transferWrites=*/false, /*transferReads=*/true};
-    return std::nullopt;
+      return {WaitOpInfo{tti::CommitKind::TmaStore,
+                         static_cast<int>(tmaStoreWaitOp.getPendings()),
+                         /*transferWrites=*/false, /*transferReads=*/true}};
+    return {};
   }
 
   std::optional<AsyncProxyFenceInfo>
@@ -181,6 +180,7 @@ public:
            /*txCount=*/static_cast<int>(expectOp.getSize())});
     }
     if (auto copyOp = dyn_cast<ttng::TMEMCopyOp>(op)) {
+      info->pred = copyOp.getPred();
       namedOperands = {{copyOp.getSrc(), "Src"}, {copyOp.getDst(), "Dst"}};
     }
     if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
@@ -274,8 +274,7 @@ public:
     return info;
   }
 
-  SmallVector<CommitKindDesc>
-  getOutstandingReadCommitKinds(const tti::AuxDataMap &) const override {
+  SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const override {
     return {{tti::CommitKind::Wgmma, "warpgroup_mma operand read"},
             {tti::CommitKind::TmaStore, "async_copy_shared_to_global"}};
   }

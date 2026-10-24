@@ -35,6 +35,32 @@ def test_cuda_round_f32_to_tf32(rounding):
     assert torch.equal(out.view(torch.int32), expected.view(torch.int32))
 
 
+def test_cuda_f32_to_e2m1x2_satfinite():
+    if not is_cuda() or torch.cuda.get_device_capability() < (10, 0):
+        pytest.skip("requires Blackwell")
+
+    @triton.jit
+    def kernel(Hi, Lo, Out):
+        offsets = tl.arange(0, 32)
+        hi = tl.load(Hi + offsets)
+        lo = tl.load(Lo + offsets)
+        tl.store(Out + offsets, tl.extra.cuda.f32_to_e2m1x2_satfinite(hi, lo))
+
+    # Exact values, ties to even, saturation, and both signs of zero.
+    values = torch.tensor([0., .25, .5, .75, 1., 1.25, 1.5, 1.75,
+                           2., 2.5, 3., 3.5, 4., 5., 6., float("inf")], device="cuda")
+    codes = torch.tensor([0, 0, 1, 2, 2, 2, 3, 4, 4, 4, 5, 6, 6, 6, 7, 7], device="cuda")
+    hi = torch.cat((values, -values))
+    codes = torch.cat((codes, codes | 8))
+    lo = hi.flip(0)
+    out = torch.empty(32, dtype=torch.uint16, device="cuda")
+    h = kernel[(1,)](hi, lo, out)
+    expected = (codes << 4) | codes.flip(0)
+    assert torch.equal(out.to(torch.int64), expected)
+    assert "cvt.rn.satfinite.e2m1x2.f32" in h.asm["ptx"]
+    assert ".pzo" not in h.asm["ptx"]
+
+
 @pytest.mark.parametrize("op", ["min", "max"])
 @pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
 def test_cuda_minmax_xorsign_abs(op, propagate_nan):

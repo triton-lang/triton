@@ -558,17 +558,19 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
 
 
 @builtin
-def tcgen05_copy(src, dst, _semantic=None):
+def tcgen05_copy(src, dst, pred=True, _semantic=None):
     """
     Start an asynchronous copy from shared memory to tensor memory.
 
     Args:
         src (shared_memory_descriptor): Shared memory to copy from.
         dst (tensor_memory_descriptor): Tensor memory to copy to.
+        pred (bool): Scalar predicate. The copy is skipped if False. Defaults to True.
     """
     assert isinstance(src, ttgl.shared_memory_descriptor), "source must be a shared memory descriptor"
     assert isinstance(dst, tensor_memory_descriptor), "destination must be a tensor memory descriptor"
-    _semantic.builder.create_tmem_copy(src.handle, dst.handle)
+    pred = _semantic.to_tensor(pred)
+    _semantic.builder.create_tmem_copy(src.handle, dst.handle, pred.handle)
 
 
 @builtin

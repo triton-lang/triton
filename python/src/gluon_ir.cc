@@ -1025,8 +1025,8 @@ void init_gluon_ir(py::module_ &m) {
           (py::arg("redOp").none() = py::none()), py::arg("useAbs") = false,
           py::arg("propagateNan") = tt::PropagateNan::NONE)
       .def("create_tmem_copy",
-           [](GluonOpBuilder &self, Value src, Value dst) {
-             self.create<ttng::TMEMCopyOp>(src, dst);
+           [](GluonOpBuilder &self, Value src, Value dst, Value pred) {
+             self.create<ttng::TMEMCopyOp>(src, dst, pred);
            })
       .def("create_tmem_subslice",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc, int offset,

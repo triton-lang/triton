@@ -533,6 +533,22 @@ def test_addptr(dtype, order, device):
 
 
 @pytest.mark.interpreter
+def test_ptr_sub_unsigned_offset(device):
+
+    @triton.jit
+    def kernel(X, Y):
+        i = tl.arange(0, 64)
+        tl.store(Y + i, tl.load(X + 300 - i.to(tl.uint8)))
+
+    x = to_triton(np.arange(1024, dtype=np.float32), device=device)
+    y = to_triton(np.empty(64, dtype=np.float32), device=device)
+    kernel[(1, )](x, y)
+
+    expected = np.array([300., 299., 298., 297., 296.], dtype=np.float32)
+    np.testing.assert_array_equal(to_numpy(y)[:5], expected)
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, dtype_y", [  #
     (dtype_x, dtype_y) for dtype_x in int_dtypes for dtype_y in int_dtypes
 ] + [(dtype_x, dtype_y) for dtype_x in uint_dtypes for dtype_y in uint_dtypes])
@@ -1300,7 +1316,9 @@ def test_fdiv_approx(approx, reciprocal, enable_fp_fusion, device):
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(y, device=device)
     z_tri = to_triton(np.empty_like(x), device=device)
-    compiled = kernel[(1, )](x_tri, y_tri, z_tri, approx, reciprocal, x.size, enable_fp_fusion=enable_fp_fusion)
+    with triton.knobs.language.scope():
+        triton.knobs.language.allow_fp_fusion = True
+        compiled = kernel[(1, )](x_tri, y_tri, z_tri, approx, reciprocal, x.size, enable_fp_fusion=enable_fp_fusion)
     expected = (np.float32(1.0) if reciprocal else x) / y
     # AMD's 2.5 ULP bound allows 3 ULP against a rounded reference.
     maxulp = 3 if approx and is_hip() else 2
@@ -1480,7 +1498,9 @@ def test_sqrt_rn_special_values(enable_fp_fusion, device):
     ], dtype=np.float32)
     x_tri = to_triton(x, device=device)
     y_tri = to_triton(np.empty_like(x), device=device)
-    kernel[(1, )](x_tri, y_tri, x.size, enable_fp_fusion=enable_fp_fusion)
+    with triton.knobs.language.scope():
+        triton.knobs.language.allow_fp_fusion = True
+        kernel[(1, )](x_tri, y_tri, x.size, enable_fp_fusion=enable_fp_fusion)
     with np.errstate(invalid="ignore"):
         expected = np.sqrt(x.astype(np.float64)).astype(np.float32)
     actual = to_numpy(y_tri)
@@ -2791,6 +2811,7 @@ def test_cast_bf16_rounding(dtype_x, rounding, device):
     z = torch.empty_like(x, dtype=torch.bfloat16)
     kernel[(1, )](x, z, SIZE=x.numel(), ROUNDING=rounding)
     torch.testing.assert_close(z, expected, rtol=0, atol=0, equal_nan=True)
+    assert torch.equal(torch.signbit(z[~torch.isnan(z)]), torch.signbit(expected[~torch.isnan(expected)]))
     if dtype_x == "float64":
         y = torch.empty_like(x)
         kernel[(1, )](z, y, SIZE=z.numel(), ROUNDING=None)
@@ -5254,8 +5275,6 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
             pytest.skip("float64 not supported on HIP yet")
     else:
         input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
-        if not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
-            pytest.skip("small dots are supported only on HIP at the moment")
 
     shared_mem_accum = B * (BLOCK_M * K + K * BLOCK_N) * get_src_element_ty_size(in_dtype_str)
     if not is_interpreter() and triton.runtime.driver.active.utils.get_device_properties(
@@ -6732,6 +6751,50 @@ def test_for_iv(lo, hi, iv, device):
     assert out[0] == sum(range(lo, hi, iv))
 
 
+@pytest.mark.parametrize("use_tl_range", [False, True], ids=["range", "tl_range"])
+@pytest.mark.parametrize("lower, upper, step", [
+    pytest.param(("int32", 0), ("uint8", 127), ("int32", 1), id="uint8_upper_control"),
+    pytest.param(("int32", 0), ("uint8", 128), ("int32", 1), id="uint8_upper_boundary"),
+    pytest.param(("int32", 0), ("uint8", 255), ("int32", 1), id="uint8_upper"),
+    pytest.param(("int32", 0), ("uint16", 40000), ("int32", 1), id="uint16_upper"),
+    pytest.param(("int32", 0), ("bool", True), ("int32", 1), id="bool_upper"),
+    pytest.param(("uint8", 200), ("int32", 205), ("int32", 1), id="uint8_lower"),
+    pytest.param(("uint16", 40000), ("int32", 40005), ("int32", 1), id="uint16_lower"),
+    pytest.param(("bool", True), ("int32", 4), ("int32", 1), id="bool_lower"),
+    pytest.param(("uint8", 133), ("uint8", 138), ("int32", 1), id="uint8_both"),
+    pytest.param(("int32", 0), ("int32", 256), ("uint8", 128), id="uint8_step"),
+    pytest.param(("int32", 0), ("int32", 65536), ("uint16", 32768), id="uint16_step"),
+    pytest.param(("int32", 0), ("int32", 5), ("bool", True), id="bool_step"),
+    pytest.param(("int8", -5), ("int32", 5), ("int32", 1), id="signed_control"),
+    pytest.param(("uint32", 0), ("uint8", 200), ("int32", 1), id="unsigned_control"),
+])
+def test_for_loop_operand_signedness(lower, upper, step, use_tl_range, device):
+
+    @triton.jit
+    def kernel(Lower, Upper, Step, Out, USE_TL_RANGE: tl.constexpr):
+        lower = tl.load(Lower)
+        upper = tl.load(Upper)
+        step = tl.load(Step)
+        count = tl.full((), 0, tl.int64)
+        total = tl.full((), 0, tl.int64)
+        if USE_TL_RANGE:
+            for i in tl.range(lower, upper, step, num_stages=3):
+                count += 1
+                total += i.to(tl.int64)
+        else:
+            for i in range(lower, upper, step):
+                count += 1
+                total += i.to(tl.int64)
+        tl.store(Out, count)
+        tl.store(Out + 1, total)
+
+    operands = [to_triton(np.array([value], dtype=dtype), device=device) for dtype, value in (lower, upper, step)]
+    out = torch.empty(2, dtype=torch.int64, device=device)
+    kernel[(1, )](*operands, out, use_tl_range)
+    expected = range(lower[1], upper[1], step[1])
+    assert out.tolist() == [len(expected), sum(expected)]
+
+
 @pytest.mark.interpreter
 def test_if_else(device):
 
@@ -7323,8 +7386,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
 
 @pytest.mark.parametrize("enable_fp_fusion", [False, True])
 @pytest.mark.parametrize("default_override", [False, True])
-@pytest.mark.parametrize("force_disable", [False, True])
-def test_enable_fp_fusion(enable_fp_fusion, default_override, force_disable, device, fresh_knobs):
+@pytest.mark.parametrize("allow_fusion", [False, True])
+def test_enable_fp_fusion(enable_fp_fusion, default_override, allow_fusion, device, fresh_knobs):
     # Sequential multiply add can be fused by backend
     @triton.jit
     def mul_add(data):
@@ -7332,7 +7395,7 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, force_disable, dev
         tl.store(ptrs, tl.load(ptrs) * 1.5 + 1.0)
 
     data = torch.randn((128, ), device=device, dtype=torch.float32)
-    fresh_knobs.language.force_disable_fp_fusion = force_disable
+    fresh_knobs.language.allow_fp_fusion = allow_fusion
     if default_override:
         fresh_knobs.language.default_fp_fusion = enable_fp_fusion
         h = mul_add.warmup(data, grid=(1, ))
@@ -7342,12 +7405,12 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, force_disable, dev
     if not is_cuda():
         return
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
-    assert found_fma == (enable_fp_fusion and not force_disable)
+    assert found_fma == (enable_fp_fusion and allow_fusion)
 
 
 @pytest.mark.parametrize("explicit_fma", [False, True])
-@pytest.mark.parametrize("force_disable", [False, True])
-def test_force_disable_fp_fusion(explicit_fma, force_disable, device, fresh_knobs):
+@pytest.mark.parametrize("allow_fusion", [False, True])
+def test_allow_fp_fusion(explicit_fma, allow_fusion, device, fresh_knobs):
 
     @triton.jit
     def mul_add(x, y, z, out, EXPLICIT_FMA: tl.constexpr):
@@ -7359,10 +7422,10 @@ def test_force_disable_fp_fusion(explicit_fma, force_disable, device, fresh_knob
     y = torch.tensor([1 - 2**-23], device=device, dtype=torch.float32)
     z = torch.tensor([-1], device=device, dtype=torch.float32)
     out = torch.empty_like(x)
-    fresh_knobs.language.force_disable_fp_fusion = force_disable
+    fresh_knobs.language.allow_fp_fusion = allow_fusion
     kernel = mul_add[(1, )](x, y, z, out, explicit_fma, enable_fp_fusion=True)
-    assert kernel.metadata.enable_fp_fusion == (not force_disable)
-    assert out.item() == (-2**-46 if explicit_fma or not force_disable else 0)
+    assert kernel.metadata.enable_fp_fusion == allow_fusion
+    assert out.item() == (-2**-46 if explicit_fma or allow_fusion else 0)
 
 
 # -----------------------

@@ -1,14 +1,18 @@
 import expecttest
 import importlib.util
 import itertools
+import json
 import multiprocessing
 import os
 import re
 import gc
 import shutil
 import pathlib
+import subprocess
+import sys
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from contextlib import ExitStack
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -775,6 +779,144 @@ def test_jit_noinline(device) -> None:
     bins = list(kernel_add_device.device_caches[device][0].values())
     noinline_ttir = bins[0].asm['ttir']
     assert inline_ttir != noinline_ttir
+
+
+class _PreloadClass:
+
+    def __init__(self, offset):
+        self.offset = offset
+
+    class Nested:
+
+        def __init__(self, offset):
+            self.offset = offset
+
+
+@triton.aggregate
+class _PreloadAggregate:
+    offset: tl.constexpr
+
+
+@triton.jit
+def _preload_function():
+    return 17
+
+
+def _serialize_constants(constants):
+    from triton.runtime.jit import serialize_specialization_data
+    return serialize_specialization_data("reference_kernel", {}, constants, {}, SimpleNamespace(), "reference-key",
+                                         SimpleNamespace(backend="cuda", arch=90, warp_size=32))
+
+
+def _preload_constants(specialization_data, monkeypatch):
+    jit = importlib.import_module("triton.runtime.jit")
+    target = SimpleNamespace(backend="cuda", arch=90, warp_size=32)
+    backend = SimpleNamespace(parse_options=lambda options: options)
+    kernel = SimpleNamespace(
+        _fn_name="reference_kernel",
+        device_caches={0: (None, None, target, backend, None)},
+        _do_compile=lambda key, signature, device, constexprs, options, attrs, warmup: constexprs,
+    )
+    monkeypatch.setattr(jit, "driver", SimpleNamespace(active=SimpleNamespace(get_current_device=lambda: 0)))
+    return jit.JITFunction.preload(kernel, specialization_data)
+
+
+@pytest.mark.parametrize("constant", [int, _PreloadClass, _PreloadClass.Nested, _PreloadAggregate, _preload_function])
+def test_preload_reference_constants(constant, monkeypatch):
+    specialization_data = _serialize_constants({(0, ): constant})
+    constants = _preload_constants(specialization_data, monkeypatch)
+    assert constants[(0, )] is constant
+
+
+def test_preload_dtype_constant(monkeypatch):
+    specialization_data = _serialize_constants({(0, ): tl.float32})
+    assert _preload_constants(specialization_data, monkeypatch)[(0, )] == tl.float32
+
+
+def test_preload_registered_local_function(monkeypatch):
+
+    @triton.jit
+    def local_function():
+        return 17
+
+    specialization_data = _serialize_constants({(0, ): local_function})
+    assert _preload_constants(specialization_data, monkeypatch)[(0, )] is local_function
+
+
+def test_preload_class_import_in_fresh_process(tmp_path, monkeypatch):
+    module_name = "preload_class_module"
+    (tmp_path / f"{module_name}.py").write_text("class Outer:\n    class Inner:\n        pass\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    module = importlib.import_module(module_name)
+    try:
+        specialization_data = _serialize_constants({(0, ): module.Outer.Inner})
+        code = """
+import sys
+import pytest
+from test_cache import _preload_constants
+
+assert 'preload_class_module' not in sys.modules
+with pytest.MonkeyPatch.context() as patch:
+    constants = _preload_constants(sys.stdin.read(), patch)
+import preload_class_module
+assert constants[(0,)] is preload_class_module.Outer.Inner
+"""
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(pathlib.Path(__file__).parent), *sys.path]))
+        subprocess.run([sys.executable, "-c", code], input=specialization_data, text=True, env=env, check=True,
+                       timeout=60)
+    finally:
+        sys.modules.pop(module_name, None)
+
+
+@pytest.mark.parametrize("class_key, message", [
+    ("builtins:MissingClass", "Unable to resolve class"),
+    ("builtins:len", "Expected class"),
+])
+def test_preload_invalid_class_reference(class_key, message, monkeypatch):
+    specialization_data = json.loads(_serialize_constants({(0, ): int}))
+    specialization_data["constant_vals"][0]["class"] = class_key
+    with pytest.raises(RuntimeError, match=message):
+        _preload_constants(json.dumps(specialization_data), monkeypatch)
+
+
+def test_preload_local_class_reference(monkeypatch):
+
+    class Local:
+        pass
+
+    specialization_data = _serialize_constants({(0, ): Local})
+    with pytest.raises(RuntimeError, match="Unable to resolve class.*<locals>.Local"):
+        _preload_constants(specialization_data, monkeypatch)
+
+
+@pytest.mark.parametrize("cls", [_PreloadClass, _PreloadClass.Nested, _PreloadAggregate])
+def test_preload_class_kernel(cls, device, fresh_triton_cache, fresh_knobs):
+
+    @triton.jit
+    def kernel(out, cls: tl.constexpr):
+        tl.store(out, cls(17).offset)
+
+    specializations = []
+
+    def cache_hook(**kwargs):
+        specializations.append(kwargs["compile"]["specialization_data"])
+
+    fresh_knobs.runtime.jit_cache_hook = cache_hook
+    fresh_knobs.runtime.jit_post_compile_hook = cache_hook
+    output = torch.empty((), device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](output, cls)
+    assert output.item() == 17
+    assert len(specializations) == 2
+    assert specializations[0] == specializations[1]
+
+    shutil.rmtree(fresh_triton_cache)
+    kernel.device_caches.clear()
+    preloaded = kernel.preload(specializations[0])
+    assert preloaded.hash == compiled.hash
+    output.zero_()
+    assert kernel[(1, )](output, cls) is preloaded
+    assert output.item() == 17
+    assert len(specializations) == 4
 
 
 def test_preload(device, fresh_triton_cache) -> None:

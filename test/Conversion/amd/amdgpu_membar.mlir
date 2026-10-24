@@ -742,3 +742,247 @@ tt.func @no_barrier_tdm_mbarrier_in_loop(
   tt.return
 }
 }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // A TDM wait before the use stops the search for an insertion point.
+  // CHECK-LABEL: @schedule_mixed_waits
+  tt.func @schedule_mixed_waits(%ptr: !tt.ptr<i32>) -> i32 {
+    ttg.async_wait {num = 0 : i32}
+    %loaded = tt.load %ptr : !tt.ptr<i32>
+    // CHECK: tt.load
+    // CHECK-NEXT: amdg.async_tdm_intrinsic_wait
+    amdg.async_tdm_intrinsic_wait {count = 0 : i32}
+    %sum = arith.addi %loaded, %loaded : i32
+    // CHECK: arith.addi
+    // CHECK-NEXT: ttg.barrier local
+    ttg.barrier local
+    tt.return %sum : i32
+  }
+
+  // Forwarded global-load results do not stop deferral at loop branches.
+  // CHECK-LABEL: @schedule_loop_paths
+  tt.func @schedule_loop_paths(%ptr: !tt.ptr<i32>, %condition: i1) -> i32 {
+    %first = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 2 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: cf.br
+    cf.br ^header(%first : i32)
+  ^header(%value: i32):
+    cf.cond_br %condition, ^body, ^exit
+  ^body:
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = tt.load
+    ttg.barrier local
+    %next = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 2 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: cf.br
+    cf.br ^header(%next : i32)
+  ^exit:
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: tt.return
+    ttg.barrier local
+    tt.return %value : i32
+  }
+
+  // A join barrier also serves the path without a wait and must remain in place.
+  // CHECK-LABEL: @schedule_uncovered_join
+  tt.func @schedule_uncovered_join(%ptr: !tt.ptr<i32>, %condition: i1) -> i32 {
+    cf.cond_br %condition, ^waiting, ^other
+  ^waiting:
+    ttg.async_wait {num = 0 : i32}
+    %loaded = tt.load %ptr : !tt.ptr<i32>
+    // CHECK: tt.load
+    // CHECK-NEXT: cf.br
+    cf.br ^join(%loaded : i32)
+  ^other:
+    %zero = arith.constant 0 : i32
+    cf.br ^join(%zero : i32)
+  ^join(%value: i32):
+    // CHECK: arith.addi
+    // CHECK-NEXT: ttg.barrier local
+    %sum = arith.addi %value, %value : i32
+    ttg.barrier local
+    tt.return %sum : i32
+  }
+
+  // A loaded branch condition is still a use, even when also forwarded.
+  // CHECK-LABEL: @schedule_branch_condition
+  tt.func @schedule_branch_condition(%ptr: !tt.ptr<i1>) -> i1 {
+    %condition = tt.load %ptr : !tt.ptr<i1>
+    ttg.async_wait {num = 0 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: cf.cond_br
+    cf.cond_br %condition, ^left(%condition : i1), ^right(%condition : i1)
+  ^left(%lhs: i1):
+    // CHECK-NOT: ttg.barrier local
+    ttg.barrier local
+    tt.return %lhs : i1
+  ^right(%rhs: i1):
+    // CHECK-NOT: ttg.barrier local
+    ttg.barrier local
+    tt.return %rhs : i1
+  }
+
+  // Do not replace barriers when paths have different first uses.
+  // CHECK-LABEL: @schedule_different_successor_uses
+  tt.func @schedule_different_successor_uses(%ptr: !tt.ptr<i32>, %condition: i1) -> i32 {
+    %loaded = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 0 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: cf.cond_br
+    cf.cond_br %condition, ^left(%loaded : i32), ^right(%loaded : i32)
+  ^left(%lhs: i32):
+    // CHECK: arith.addi
+    // CHECK-NEXT: ttg.barrier local
+    %sum = arith.addi %lhs, %lhs : i32
+    ttg.barrier local
+    tt.return %sum : i32
+  ^right(%rhs: i32):
+    // CHECK: arith.subi
+    // CHECK-NEXT: ttg.barrier local
+    %difference = arith.subi %rhs, %rhs : i32
+    ttg.barrier local
+    tt.return %difference : i32
+  }
+
+  // Preserve an older scale while advancing a new load into its loop argument.
+  // Both entry and latch rendezvous must precede the possible register copies.
+  // CHECK-LABEL: @schedule_scale_rotation
+  tt.func @schedule_scale_rotation(%ptr: !tt.ptr<i32>, %condition: i1) -> i32 {
+    %first = tt.load %ptr : !tt.ptr<i32>
+    %second = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 2 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: cf.br
+    cf.br ^header(%first, %second : i32, i32)
+  ^header(%older: i32, %newer: i32):
+    cf.cond_br %condition, ^body, ^exit
+  ^body:
+    // CHECK-NOT: ttg.barrier local
+    ttg.barrier local
+    %next = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 2 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: cf.br
+    cf.br ^header(%newer, %next : i32, i32)
+  ^exit:
+    // CHECK-NOT: ttg.barrier local
+    ttg.barrier local
+    tt.return %older : i32
+  }
+
+  // Both paths forward a load to the same block-argument use without crossing
+  // shared-memory effects. Keep deferring through the branches to that use.
+  // CHECK-LABEL: @schedule_common_successor_use
+  tt.func @schedule_common_successor_use(%ptr: !tt.ptr<i32>, %condition: i1) -> i32 {
+    %loaded = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 0 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: cf.cond_br
+    cf.cond_br %condition, ^left, ^right
+  ^left:
+    cf.br ^join(%loaded : i32)
+  ^right:
+    cf.br ^join(%loaded : i32)
+  ^join(%value: i32):
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = arith.addi
+    %sum = arith.addi %value, %value : i32
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: tt.return
+    ttg.barrier local
+    tt.return %sum : i32
+  }
+
+  // A path may loop without reaching the use, so keep the original barrier.
+  // CHECK-LABEL: @schedule_cycle_before_use
+  tt.func @schedule_cycle_before_use(%ptr: !tt.ptr<i32>, %condition: i1) -> i32 {
+    %loaded = tt.load %ptr : !tt.ptr<i32>
+    ttg.async_wait {num = 0 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: cf.br
+    cf.br ^loop
+  ^loop:
+    cf.cond_br %condition, ^loop, ^exit
+  ^exit:
+    // CHECK: arith.addi
+    // CHECK-NEXT: ttg.barrier local
+    %sum = arith.addi %loaded, %loaded : i32
+    ttg.barrier local
+    tt.return %sum : i32
+  }
+
+  // Finding a use is insufficient when another completion precedes the barrier.
+  // CHECK-LABEL: @schedule_completion_after_use
+  tt.func @schedule_completion_after_use(%ptr: !tt.ptr<i32>) -> i32 {
+    ttg.async_wait {num = 0 : i32}
+    %loaded = tt.load %ptr : !tt.ptr<i32>
+    // CHECK: tt.load
+    // CHECK-NEXT: {{.*}} = arith.addi
+    %sum = arith.addi %loaded, %loaded : i32
+    // CHECK-NEXT: amdg.async_tdm_intrinsic_wait
+    amdg.async_tdm_intrinsic_wait {count = 0 : i32}
+    // CHECK-NEXT: ttg.barrier local
+    ttg.barrier local
+    tt.return %sum : i32
+  }
+}
+
+// -----
+
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+
+// The scheduler also moves a barrier inserted by Membar for a local load.
+// CHECK-LABEL: @schedule_inserted_barrier
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  tt.func @schedule_inserted_barrier(%ptr: !tt.ptr<f16>) -> f16 {
+    %ptrs = tt.splat %ptr : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>, #AL>
+    %buffer = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    %copy = ttg.async_copy_global_to_local %ptrs, %buffer : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    %wait = ttg.async_wait %copy {num = 0 : i32}
+    %loaded = tt.load %ptr : !tt.ptr<f16>
+    // CHECK: ttg.async_wait
+    // CHECK: tt.load
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = arith.addf
+    %sum = arith.addf %loaded, %loaded : f16
+    %tile = ttg.local_load %buffer token %wait : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: tt.return
+    tt.return %sum : f16
+  }
+}
+
+// -----
+
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+#A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+
+// Move the wait/store barrier before the arithmetic use, while retaining the
+// store/load barrier needed by the subsequent load.
+// CHECK-LABEL: @schedule_shared_effect_use
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  tt.func @schedule_shared_effect_use(%ptr: !tt.ptr<f16>) -> tensor<16x16xf16, #AL> {
+    %ptrs = tt.splat %ptr : !tt.ptr<f16> -> tensor<16x16x!tt.ptr<f16>, #AL>
+    %buffer = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    %loaded = tt.load %ptrs : tensor<16x16x!tt.ptr<f16>, #AL>
+    ttg.async_wait {num = 0 : i32}
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = arith.addf
+    %sum = arith.addf %loaded, %loaded : tensor<16x16xf16, #AL>
+    // CHECK-NEXT: ttg.local_store
+    ttg.local_store %sum, %buffer : tensor<16x16xf16, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+    // CHECK-NEXT: ttg.barrier local
+    ttg.barrier local
+    %result = ttg.local_load %buffer : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
+    tt.return %result : tensor<16x16xf16, #AL>
+  }
+}

@@ -81,7 +81,7 @@ def _register_pressure_scheduler_kernel():
     for lane in range(32):
         arithmetic.extend([
             f"  %seed{lane} = add i32 %seed, {lane + 1}",
-            f"  %high{lane} = call i32 @llvm.nvvm.mulhi.ui(i32 %seed{lane}, i32 -766435501)",
+            f"  %high{lane} = call i32 @llvm.umulh.i32(i32 %seed{lane}, i32 -766435501)",
             f"  %low{lane} = mul i32 %seed{lane}, -845247145",
             f"  %value{lane} = xor i32 %high{lane}, %low{lane}",
         ])
@@ -91,7 +91,7 @@ def _register_pressure_scheduler_kernel():
         ])
 
     source = ('target triple = "nvptx64-nvidia-cuda"\n'
-              'declare i32 @llvm.nvvm.mulhi.ui(i32, i32)\n'
+              'declare i32 @llvm.umulh.i32(i32, i32)\n'
               'define ptx_kernel void @scheduler_kernel(ptr addrspace(1) %out, i32 %seed) {\n' +
               "\n".join(arithmetic + stores) + "\n  ret void\n}\n")
     return backend, source
@@ -151,7 +151,7 @@ define ptx_kernel void @short_pointer_kernel(ptr addrspace(1) %out, i64 %offset)
 
 @pytest.mark.skipif(is_hip(), reason="NVPTX code generation is unavailable on AMD")
 @pytest.mark.parametrize("link_hip_first", [False, True])
-def test_nvidia_short_pointer_option(link_hip_first, fresh_triton_cache):
+def test_nvidia_short_pointer_abi(link_hip_first, fresh_triton_cache):
     from triton.backends.compiler import GPUTarget
 
     if link_hip_first:
@@ -165,6 +165,7 @@ def test_nvidia_short_pointer_option(link_hip_first, fresh_triton_cache):
     compiled = triton.compile(triton.compiler.ASTSource(empty_kernel, {}), target=GPUTarget("cuda", 90, 32))
     data_layout = next(line for line in compiled.asm["llir"].splitlines() if line.startswith("target datalayout"))
     assert "p3:32:32" in data_layout
+    assert "p5:32:32" in data_layout
 
     backend, source = _nvidia_short_pointer_kernel()
     options = backend.parse_options({"ptx_version": 80})
@@ -276,6 +277,23 @@ def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags
     assert arguments["disabled_passes"] == ("disable-lsr" if disable_opt == "disable-lsr" else "")
     assert metadata["name"] == "test_kernel"
     assert "s_endpgm" in assembly
+
+
+def test_amd_bitcode_path_override(fresh_knobs, monkeypatch, tmp_path):
+    from triton.backends.amd import compiler
+
+    monkeypatch.delenv("TRITON_AMD_BITCODE_PATH", raising=False)
+    options = compiler.HIPOptions(arch="gfx942")
+    default_dir = Path(compiler.__file__).parent / "lib"
+    libs = dict(options.extern_libs)
+    assert Path(libs["ockl"]) == default_dir / "ockl.bc"
+    assert Path(libs["ocml"]) == default_dir / "ocml.bc"
+
+    monkeypatch.setenv("TRITON_AMD_BITCODE_PATH", str(tmp_path))
+    options = compiler.HIPOptions(arch="gfx942")
+    libs = dict(options.extern_libs)
+    assert Path(libs["ockl"]) == tmp_path / "ockl.bc"
+    assert Path(libs["ocml"]) == tmp_path / "ocml.bc"
 
 
 def test_amd_codegen_path_override(fresh_knobs, monkeypatch):
@@ -555,7 +573,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     # bool defaulting to False
     assert not fresh_knobs.runtime.debug
     assert not fresh_knobs.language.default_fp_fusion
-    assert not fresh_knobs.language.force_disable_fp_fusion
+    assert not fresh_knobs.language.allow_fp_fusion
     # str defaulting to None
     assert fresh_knobs.compilation.use_ir_loc is None
     # str defaulting to not None
@@ -566,7 +584,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     assert len(fresh_knobs.build.backend_dirs) == 0
 
     monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", falsey)
-    monkeypatch.setenv("TRITON_FORCE_DISABLE_FP_FUSION", truthy)
+    monkeypatch.setenv("TRITON_ALLOW_FP_FUSION", truthy)
     monkeypatch.setenv("TRITON_DEBUG", truthy)
     monkeypatch.setenv("USE_IR_LOC", "ttir")
     monkeypatch.setenv("TRITON_CACHE_DIR", "/tmp/triton_cache")
@@ -578,7 +596,7 @@ def test_read_env(truthy, falsey, fresh_knobs_including_libraries, monkeypatch):
     triton.knobs.refresh_knobs()
     assert fresh_knobs.runtime.debug
     assert not fresh_knobs.language.default_fp_fusion
-    assert fresh_knobs.language.force_disable_fp_fusion
+    assert fresh_knobs.language.allow_fp_fusion
     assert fresh_knobs.compilation.use_ir_loc == "ttir"
     assert fresh_knobs.cache.home_dir == "/tmp/triton_home"
     assert fresh_knobs.cache.dir == "/tmp/triton_cache"
