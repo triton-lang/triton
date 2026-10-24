@@ -542,3 +542,110 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
+
+
+def test_ir_module_lifetime(tmp_path):
+    import gc
+    from triton._C.libtriton import ir
+    from triton.compiler import make_backend
+
+    @triton.jit
+    def reduce_kernel(x_ptr, out_ptr, scale=1, BLOCK: tl.constexpr = 128):
+        offs = tl.arange(0, BLOCK)
+        x = tl.load(x_ptr + offs)
+        acc = tl.sum(x, axis=0) * scale
+        tl.store(out_ptr, acc)
+
+    @triton.jit
+    def invalid_kernel():
+        return unknown_symbol  # noqa: F821
+
+    target = GPUTarget("cuda", 90, 32)
+    backend = make_backend(target)
+    options = backend.parse_options({})
+    codegen_fns = backend.get_codegen_implementation(options)
+    module_map = backend.get_module_map()
+    src = ASTSource(
+        fn=reduce_kernel,
+        signature={"x_ptr": "*fp32", "out_ptr": "*fp32", "scale": "i32", "BLOCK": "constexpr"},
+        constexprs={"BLOCK": 128},
+    )
+    bad_src = ASTSource(fn=invalid_kernel, signature={}, constexprs={})
+
+    ttir_file = tmp_path / "reduce.ttir"
+
+    # 1. Verify created and parsed modules keep MLIRContext alive on their own
+    #    (even without `mod.context`) and are cleanly reclaimed across GC cycles.
+    ctx = ir.context()
+    ir.load_dialects(ctx)
+    backend.load_dialects(ctx)
+    mod = src.make_ir(target, options, codegen_fns, module_map, ctx)
+    ttir_file.write_text(str(mod))
+    del mod.context, ctx
+    gc.collect()
+    assert "reduce_kernel" in str(mod)
+    mod._self_cycle = mod
+    del mod
+
+    ctx2 = ir.context()
+    ir.load_dialects(ctx2)
+    backend.load_dialects(ctx2)
+    parsed = ir.parse_mlir_module(str(ttir_file), ctx2)
+    del ctx2
+    gc.collect()
+    assert "reduce_kernel" in str(parsed)
+    parsed._self_cycle = parsed
+    del parsed
+
+    # 2. Verify exception path in AST codegen (raises before `module.context = context`).
+    ctx3 = ir.context()
+    ir.load_dialects(ctx3)
+    backend.load_dialects(ctx3)
+    with pytest.raises(triton.CompilationError):
+        bad_src.make_ir(target, options, codegen_fns, module_map, ctx3)
+    del ctx3
+
+    gc.collect()
+
+
+def test_ir_module_released_at_shutdown(tmp_path):
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent("""
+        import triton
+        import triton.language as tl
+        from triton._C.libtriton import ir
+        from triton.backends.compiler import GPUTarget
+        from triton.compiler import ASTSource, make_backend
+
+
+        @triton.jit
+        def kernel(x_ptr, out_ptr, BLOCK: tl.constexpr):
+            tl.store(out_ptr, tl.sum(tl.load(x_ptr + tl.arange(0, BLOCK)), axis=0))
+
+
+        target = GPUTarget("cuda", 90, 32)
+        backend = make_backend(target)
+        options = backend.parse_options({})
+        context = ir.context()
+        ir.load_dialects(context)
+        backend.load_dialects(context)
+        src = ASTSource(
+            fn=kernel,
+            signature={"x_ptr": "*fp32", "out_ptr": "*fp32", "BLOCK": "constexpr"},
+            constexprs={"BLOCK": 128},
+        )
+        module = src.make_ir(
+            target,
+            options,
+            backend.get_codegen_implementation(options),
+            backend.get_module_map(),
+            context,
+        )  # alive until shutdown
+    """)
+    script = tmp_path / "keep_module.py"
+    script.write_text(code)
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=True)
+    assert "nanobind: leaked" not in result.stderr, result.stderr
