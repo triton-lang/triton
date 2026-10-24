@@ -4259,6 +4259,45 @@ def test_buffer_descriptor_soffset_bounds(soffset, num_elements):
 
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("num_elements", [4096, 3100])
+@pytest.mark.parametrize("rows_per_thread", [1, 2])
+def test_buffer_descriptor_tensor_soffset(num_elements, rows_per_thread):
+
+    @gluon.jit
+    def kernel(src, dst, row_base, num_elements, ROWS_PER_THREAD: ttgl.constexpr):
+        # Lanes stay within a row, so a per-row soffset is the same across each access's lanes. With
+        # two rows per thread, it also differs between the registers of a lane.
+        layout: ttgl.constexpr = ttgl.BlockedLayout([ROWS_PER_THREAD, 4], [1, 64], [4 // ROWS_PER_THREAD, 1], [1, 0])
+        rows = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 256, layout=ttgl.SliceLayout(0, layout))
+        soffset = ttgl.load(row_base + rows)[:, None]
+        offsets = rows[:, None] * 0 + cols[None, :]
+        src_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, num_elements * 4)
+        x = ttgl.amd.cdna3.buffer.load(src_desc, offsets, soffset=soffset)
+        dst_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(dst, num_elements * 4)
+        ttgl.amd.cdna3.buffer.store(x + 1, dst_desc, offsets, soffset=soffset)
+
+    src = torch.arange(1, 4097, dtype=torch.int32, device="cuda")
+    dst = torch.zeros(4096, dtype=torch.int32, device="cuda")
+    row_base = torch.tensor([0, 700, 1500, 3000], dtype=torch.int32, device="cuda")
+    compiled = kernel[(1, )](src, dst, row_base, num_elements, rows_per_thread, num_warps=4 // rows_per_thread)
+
+    cols = torch.arange(256, device="cuda")
+    expected = torch.zeros_like(dst)
+    for base in row_base.tolist():
+        index = base + cols
+        # The tensor soffset is counted by the bounds check like a scalar one.
+        in_bounds = index < num_elements
+        expected[index[in_bounds]] = src[index[in_bounds]] + 1
+    torch.testing.assert_close(dst, expected, atol=0, rtol=0)
+    # Each wave's soffset is in a scalar register, and accesses stay vectorized.
+    amdgcn = compiled.asm["amdgcn"]
+    assert "v_readfirstlane_b32" in amdgcn
+    assert re.search(r"buffer_load_dwordx4 v\[\d+:\d+\], v\d+, s\[\d+:\d+\], s\d+ offen", amdgcn)
+    assert re.search(r"buffer_store_dwordx4 v\[\d+:\d+\], v\d+, s\[\d+:\d+\], s\d+ offen", amdgcn)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
 @pytest.mark.parametrize("lane_bytes", ["element", 16])
 @pytest.mark.parametrize("num_records", [2**31, 2**32 - 4, 2**32 - 1])
@@ -4398,6 +4437,30 @@ def test_buffer_ops_require_descriptor():
     src = torch.zeros(64, dtype=torch.int32, device="cuda")
     with pytest.raises(CompilationError, match="expected a buffer descriptor"):
         kernel[(1, )](src, num_warps=1)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("soffset_shape, error", [
+    ([2, 64], "must broadcast to the offsets shape"),
+    ([1, 64], "same across the lanes of a wave"),
+    ([4, 1], "same across the lanes of a wave"),
+])
+def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error):
+
+    @gluon.jit
+    def kernel(src, SOFFSET_M: ttgl.constexpr, SOFFSET_N: ttgl.constexpr):
+        # Lanes span both dimensions: 4 rows of 16.
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 16], [1, 1], [1, 0])
+        rows = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))
+        offsets = rows[:, None] * 64 + cols[None, :]
+        soffset = ttgl.zeros([SOFFSET_M, SOFFSET_N], ttgl.int32, layout)
+        desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, 1024)
+        ttgl.amd.cdna3.buffer.load(desc, offsets, soffset=soffset)
+
+    src = torch.zeros(256, dtype=torch.int32, device="cuda")
+    with pytest.raises(CompilationError, match=error):
+        kernel[(1, )](src, *soffset_shape, num_warps=1)
 
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")

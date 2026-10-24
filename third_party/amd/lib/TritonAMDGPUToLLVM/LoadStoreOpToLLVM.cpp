@@ -238,6 +238,37 @@ struct LoadStoreConversionBase {
                                    ModuleAxisInfoAnalysis &axisAnalysisPass)
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
+  // Whether a tensor `soffset` has the same value in every lane of an
+  // instruction: each lane basis of its layout stays within a block of equal
+  // values (AxisInfo constancy), so the first lane's value is every lane's.
+  bool isLaneUniform(Value soffset) const {
+    auto tensorTy = cast<RankedTensorType>(soffset.getType());
+    auto *axisInfo = axisAnalysisPass.getAxisInfo(soffset);
+    if (!axisInfo)
+      return false;
+    LinearLayout layout = triton::gpu::toLinearLayout(tensorTy);
+    StringAttr kLane = StringAttr::get(tensorTy.getContext(), "lane");
+    for (const auto &basis : layout.getBases().lookup(kLane)) {
+      for (auto [dim, coord] : llvm::enumerate(basis)) {
+        uint64_t constancy =
+            llvm::bit_floor(static_cast<uint64_t>(axisInfo->getConstancy(dim)));
+        if (static_cast<uint64_t>(coord) >= constancy)
+          return false;
+      }
+    }
+    return true;
+  }
+
+  // Read one element of a lane-uniform tensor `soffset` from the first lane,
+  // as the scalar offset in bytes.
+  Value getTensorScalarOffsetBytes(RewriterBase &rewriter, Location loc,
+                                   LLVM::AMD::BufferEmitter &bufferEmitter,
+                                   Type elemTy, Value soffset) const {
+    Value uniform =
+        ROCDL::ReadfirstlaneOp::create(rewriter, loc, {i32_ty}, soffset);
+    return bufferEmitter.getScalarOffsetBytes(elemTy, uniform);
+  }
+
   // Create a LLVM vector of type `vecTy` containing all zeros
   Value createZeroVector(OpBuilder &builder, Location loc,
                          VectorType vecTy) const {
@@ -729,6 +760,26 @@ struct BufferLoadOpConversion
         unpackTensorElements(loc, llOffset, rewriter, offset.getType());
     assert(offsetElems.size() == numElems);
 
+    // Get the scalar offset. A tensor soffset needs one value per vector.
+    Value soffset = op.getSoffset();
+    bool tensorSoffset = soffset && isa<RankedTensorType>(soffset.getType());
+    SmallVector<Value> soffsetElems;
+    Value soffsetBytes;
+    if (tensorSoffset) {
+      // It goes in the scalar offset register, so it must be the same across
+      // the lanes of an access, and across the elements of a vector.
+      if (!isLaneUniform(soffset))
+        return op.emitOpError(
+            "can't prove the soffset tensor is the same across the lanes of "
+            "a wave");
+      vec = std::min<unsigned>(vec, axisAnalysisPass.getMaskAlignment(soffset));
+      soffsetElems = unpackTensorElements(loc, adaptor.getSoffset(), rewriter,
+                                          soffset.getType());
+    } else {
+      soffsetBytes =
+          bufferEmitter.getScalarOffsetBytes(valueElemTy, adaptor.getSoffset());
+    }
+
     // Get the mask
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
@@ -740,8 +791,6 @@ struct BufferLoadOpConversion
           unpackTensorElements(loc, llOther, rewriter, op.getOther().getType());
 
     // Create the resource descriptor and then emit the buffer_load intrinsic(s)
-    Value soffsetBytes =
-        bufferEmitter.getScalarOffsetBytes(valueElemTy, adaptor.getSoffset());
     Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
     SmallVector<Value> loadedVals;
     Type vecTy = LLVM::getVectorType(valueElemTy, vec);
@@ -752,9 +801,14 @@ struct BufferLoadOpConversion
         falseVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
             otherElems, vecStart);
+      Value vecSoffsetBytes =
+          tensorSoffset
+              ? getTensorScalarOffsetBytes(rewriter, loc, bufferEmitter,
+                                           valueElemTy, soffsetElems[vecStart])
+              : soffsetBytes;
       Value loadVal =
           bufferEmitter.emitLoad(vecTy, rsrcDesc, offsetElems[vecStart],
-                                 soffsetBytes, pred, falseVal, *aux);
+                                 vecSoffsetBytes, pred, falseVal, *aux);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
@@ -2098,12 +2152,30 @@ struct BufferStoreOpConversion
     SmallVector<Value> valueElems =
         unpackTensorElements(loc, llData, rewriter, data.getType());
 
+    // Get the scalar offset. A tensor soffset needs one value per vector.
+    Value soffset = op.getSoffset();
+    bool tensorSoffset = soffset && isa<RankedTensorType>(soffset.getType());
+    SmallVector<Value> soffsetElems;
+    Value soffsetBytes;
+    if (tensorSoffset) {
+      // It goes in the scalar offset register, so it must be the same across
+      // the lanes of an access, and across the elements of a vector.
+      if (!isLaneUniform(soffset))
+        return op.emitOpError(
+            "can't prove the soffset tensor is the same across the lanes of "
+            "a wave");
+      vec = std::min<unsigned>(vec, axisAnalysisPass.getMaskAlignment(soffset));
+      soffsetElems = unpackTensorElements(loc, adaptor.getSoffset(), rewriter,
+                                          soffset.getType());
+    } else {
+      soffsetBytes =
+          bufferEmitter.getScalarOffsetBytes(valueElemTy, adaptor.getSoffset());
+    }
+
     // Get the mask
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
-    Value soffsetBytes =
-        bufferEmitter.getScalarOffsetBytes(valueElemTy, adaptor.getSoffset());
     Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
     MLIRContext *ctx = rewriter.getContext();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
@@ -2124,7 +2196,12 @@ struct BufferStoreOpConversion
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           valueElems, vecStart);
-      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], soffsetBytes,
+      Value vecSoffsetBytes =
+          tensorSoffset
+              ? getTensorScalarOffsetBytes(rewriter, loc, bufferEmitter,
+                                           valueElemTy, soffsetElems[vecStart])
+              : soffsetBytes;
+      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], vecSoffsetBytes,
                               storeVal, pred, *aux);
     } // end vec
 

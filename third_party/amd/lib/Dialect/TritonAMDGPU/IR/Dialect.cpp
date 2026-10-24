@@ -1228,7 +1228,21 @@ LogicalResult MakeBufferDescOp::verify() {
   return success();
 }
 
+// A tensor scalar offset gives each element its own value, so it must match
+// the offsets element for element.
+static LogicalResult verifyBufferScalarOffset(Operation *op, Value soffset,
+                                              Value offsets) {
+  if (soffset && isa<RankedTensorType>(soffset.getType()) &&
+      soffset.getType() != offsets.getType())
+    return op->emitOpError(
+        "a tensor soffset must have the type of the offsets");
+  return success();
+}
+
 LogicalResult BufferLoadOp::verify() {
+  if (failed(
+          verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
+    return failure();
   return verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
                                   getScope(),
                                   triton::CachePolicyOperation::Load);
@@ -1261,6 +1275,9 @@ static LogicalResult verifyBufferWriteBase(Operation *op, Value ptr) {
 }
 
 LogicalResult BufferStoreOp::verify() {
+  if (failed(
+          verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
+    return failure();
   if (failed(verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
                                       getScope(),
                                       triton::CachePolicyOperation::Store)))

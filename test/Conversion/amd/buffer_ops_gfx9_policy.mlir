@@ -15,9 +15,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK: %[[C4:.*]] = llvm.mlir.constant(4 : i32) : i32
     // CHECK: %[[SOFF:.*]] = llvm.mul %[[C4]], %{{.*}} : i32
     // CHECK: rocdl.raw.ptr.buffer.load %[[RSRC]], %{{.*}}, %[[SOFF]], 0 : f32
-    %0 = amdg.buffer_load %desc[%offsets] soffset = %s : !amdg.buffer_desc<f32> -> tensor<64xf32, #blocked>
+    %0 = amdg.buffer_load %desc[%offsets] soffset = %s : i32 : !amdg.buffer_desc<f32> -> tensor<64xf32, #blocked>
     // CHECK: rocdl.raw.ptr.buffer.store %{{.*}}, %[[RSRC]], %{{.*}}, %{{.*}}, 0 : f32
-    amdg.buffer_store %0, %desc[%offsets] soffset = %s : !amdg.buffer_desc<f32> -> tensor<64xf32, #blocked>
+    amdg.buffer_store %0, %desc[%offsets] soffset = %s : i32 : !amdg.buffer_desc<f32> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// A tensor soffset that is uniform across each instruction's lanes is read from
+// the first lane into the scalar offset.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: buffer_desc_tensor_soffset_uniform
+  tt.func @buffer_desc_tensor_soffset_uniform(%arg0: !tt.ptr<f32>, %offsets: tensor<4x64xi32, #blocked>, %rows: tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, %n: i32) {
+    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32> -> !amdg.buffer_desc<f32>
+    %0 = tt.expand_dims %rows {axis = 1 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #blocked>
+    %s = tt.broadcast %0 : tensor<4x1xi32, #blocked> -> tensor<4x64xi32, #blocked>
+    // CHECK: rocdl.make.buffer.rsrc
+    // CHECK: %[[FIRST:.*]] = rocdl.readfirstlane %{{.*}} : i32
+    // CHECK: %[[SOFF:.*]] = llvm.mul %{{.*}}, %[[FIRST]] : i32
+    // CHECK-NOT: llvm.add
+    // CHECK: rocdl.raw.ptr.buffer.load %{{.*}}, %{{.*}}, %[[SOFF]], 0 : f32
+    %1 = amdg.buffer_load %desc[%offsets] soffset = %s : tensor<4x64xi32, #blocked> : !amdg.buffer_desc<f32> -> tensor<4x64xf32, #blocked>
+    // CHECK: %[[FIRST2:.*]] = rocdl.readfirstlane %{{.*}} : i32
+    // CHECK: %[[SOFF2:.*]] = llvm.mul %{{.*}}, %[[FIRST2]] : i32
+    // CHECK: rocdl.raw.ptr.buffer.store %{{.*}}, %{{.*}}, %{{.*}}, %[[SOFF2]], 0 : f32
+    amdg.buffer_store %1, %desc[%offsets] soffset = %s : tensor<4x64xi32, #blocked> : !amdg.buffer_desc<f32> -> tensor<4x64xf32, #blocked>
     tt.return
   }
 }

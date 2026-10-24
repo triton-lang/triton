@@ -72,6 +72,34 @@ def _scalar_operand(value, name, semantic):
     return semantic.cast(value, ttgl.int32).handle
 
 
+def _soffset_operand(soffset, offsets, semantic):
+    """Convert an optional scalar or per-wave `soffset` to an i32 handle.
+
+    A tensor must be broadcastable to `offsets` and hold the same value in every lane of a wave, so it
+    can go in the instruction's scalar offset register.
+    """
+    soffset = _unwrap_if_constexpr(soffset)
+    if soffset is None or not isinstance(soffset, ttgl.tensor) or not soffset.type.is_block():
+        return _scalar_operand(soffset, "soffset", semantic)
+    _check(soffset.dtype.is_int() and soffset.dtype.primitive_bitwidth <= 32,
+           lambda: f"soffset must be an integer of at most 32 bits, got {soffset.dtype}")
+    shape = offsets.shape
+    _check(
+        len(soffset.shape) == len(shape) and all(s in (1, n) for s, n in zip(soffset.shape, shape)),
+        lambda: f"soffset of shape {soffset.shape} must broadcast to the offsets shape {shape}")
+    # In soffset's own layout, all-zero lane bases mean every lane of a wave
+    # holds the same value. Registers and warps may differ: each register element
+    # is its own access, and each wave gets its own scalar offset.
+    lane_bases = _unwrap_if_constexpr(semantic.to_linear_layout(soffset.type.layout, soffset.shape)).lane_bases
+    _check(
+        all(not any(basis) for basis in lane_bases),
+        lambda: f"soffset must be the same across the lanes of a wave: give it size 1 in every dimension the "
+        f"lanes of its layout span, got shape {soffset.shape}")
+    soffset = semantic.cast(soffset, ttgl.int32)
+    _, soffset = semantic.broadcast_impl_value(offsets, soffset)
+    return soffset.handle
+
+
 def _cache_policy(cache_policy, cache_policy_type, scope, semantic):
     """Return the `cachePolicy` attribute and the optional scope of an access."""
     cache_policy = _unwrap_if_constexpr(cache_policy)
@@ -124,7 +152,7 @@ def load(desc, offsets, mask, other, soffset, scope, cache_policy, cache_policy_
     handle = builder.create_buffer_desc_load(ret_ty.to_ir(builder), desc.handle, offsets.handle,
                                              mask.handle if mask is not None else ir.value(),
                                              other.handle if other is not None else ir.value(), policy,
-                                             _scalar_operand(soffset, "soffset", semantic), scope)
+                                             _soffset_operand(soffset, offsets, semantic), scope)
     return ttgl.tensor(handle, ret_ty)
 
 
@@ -142,7 +170,7 @@ def store(value, desc, offsets, mask, soffset, scope, cache_policy, cache_policy
     policy, scope = _cache_policy(cache_policy, cache_policy_type, scope, semantic)
     semantic.builder.create_buffer_desc_store(value.handle, desc.handle, offsets.handle,
                                               mask.handle if mask is not None else ir.value(), policy,
-                                              _scalar_operand(soffset, "soffset", semantic), scope)
+                                              _soffset_operand(soffset, offsets, semantic), scope)
 
 
 def load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, cache_policy_type, semantic):

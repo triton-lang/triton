@@ -261,6 +261,10 @@ def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier"> {
 // compiler builds a default descriptor, or an explicit buffer descriptor.
 def TTAMDG_BufferBase : AnyTypeOf<[TT_Ptr, TritonAMDGPU_BufferDescType]>;
 
+// The scalar offset of a buffer load or store: one i32 for every element, or
+// an i32 tensor shaped like the offsets.
+def TTAMDG_ScalarOffset : AnyTypeOf<[I32, I32Tensor]>;
+
 //===----------------------------------------------------------------------===//
 // MakeBufferDescOp
 //===----------------------------------------------------------------------===//
@@ -348,7 +352,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other,
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
-      Optional<I32>:$soffset,
+      Optional<TTAMDG_ScalarOffset>:$soffset,
       OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
     let results = (outs TT_Tensor:$result);
@@ -357,7 +361,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
-      (`stride` `=` $stride^)? (`soffset` `=` $soffset^)?
+      (`stride` `=` $stride^)? (`soffset` `=` $soffset^ `:` type($soffset))?
       attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
@@ -552,7 +556,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       OptionalAttr<AnyAttr>:$cachePolicy,
       Optional<TT_BoolTensor>:$mask,
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
-      Optional<I32>:$soffset,
+      Optional<TTAMDG_ScalarOffset>:$soffset,
       OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
 
@@ -560,7 +564,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
 
     let assemblyFormat = [{
       $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
-      (`stride` `=` $stride^)? (`soffset` `=` $soffset^)?
+      (`stride` `=` $stride^)? (`soffset` `=` $soffset^ `:` type($soffset))?
       attr-dict `:` qualified(type($ptr)) `->` type($value)
     }];
 }

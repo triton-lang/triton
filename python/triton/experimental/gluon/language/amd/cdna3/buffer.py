@@ -48,9 +48,12 @@ def make_buffer_descriptor(base, num_records, _semantic=None) -> buffer_descript
 
 
 _ACCESS_ARGS_DOC = """
-        soffset (int32 scalar, optional): Scalar offset, in elements, added to every element's offset and
-            counted by the bounds check. It is held in the instruction's scalar offset register, so a
-            uniform advance costs no per-lane arithmetic. Defaults to None (0).
+        soffset (int32 scalar or tensor, optional): Offset, in elements, added to every element's
+            offset and counted by the bounds check. It is held in the instruction's scalar offset
+            register, so a uniform advance costs no per-lane arithmetic. A tensor gives each wave its
+            own value: it broadcasts to ``offsets`` and must have size 1 in every dimension the lanes
+            of the offsets' layout span, e.g. shape ``[M, 1]`` for ``[M, N]`` offsets whose rows each
+            sit in one wave. Defaults to None (0).
         cache_policy (CachePolicy, optional): Cache hints. Defaults to None."""
 
 
