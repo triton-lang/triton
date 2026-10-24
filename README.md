@@ -121,6 +121,11 @@ says:
 
 - Set `TRITON_BUILD_WITH_CCACHE=true` to build with ccache.
 
+- Set `TRITON_BUILD_TESTS=OFF` to omit test passes, their libraries, and lit
+  tests from the build. C++ unit tests are controlled separately by the CMake
+  option `TRITON_BUILD_UT`; use `TRITON_APPEND_CMAKE_ARGS=-DTRITON_BUILD_UT=OFF`
+  to disable those when installing with pip.
+
 - Set `TRITON_HOME=/some/path` to change the location of the `.triton`
   directory where Triton's cache is located and downloads are stored
   during the build. By default, this is the user's home directory. It
