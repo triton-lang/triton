@@ -2756,6 +2756,58 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("dtype_x, dtype_z", [("float8_e5m2", "float8_e4m3fn"), ("float8_e4m3fn", "float8_e5m2")])
+@pytest.mark.parametrize("block_size", [16, 128, 256])
+@pytest.mark.parametrize("via_fp16", [False, True])
+def test_cast_fp8_formats(dtype_x, dtype_z, block_size, via_fp16, device):
+    check_type_supported(dtype_x, device)
+    check_type_supported(dtype_z, device)
+    if not is_cuda():
+        pytest.skip("FP8 format conversion regression requires CUDA")
+
+    @triton.jit
+    def kernel(X, Z, N: tl.constexpr, BLOCK_SIZE: tl.constexpr, VIA_FP16: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        x = tl.load(X + offsets, offsets < N, other=0.0)
+        if VIA_FP16:
+            x = x.to(tl.float16)
+        tl.store(Z + offsets, x.to(Z.dtype.element_ty), offsets < N)
+
+    # Cover all finite source encodings in the shared range, including signed
+    # zeros, subnormals, and halfway cases when E4M3 loses a mantissa bit to E5M2.
+    bits = torch.arange(256, dtype=torch.uint8)
+    values = bits.view(getattr(torch, dtype_x)).float()
+    bits = bits[torch.isfinite(values) & (values.abs() <= 448)]
+    x = bits.to(device).view(getattr(torch, dtype_x))
+    z = torch.empty(x.shape, device=device, dtype=getattr(torch, dtype_z))
+    if not via_fp16:
+        with pytest.raises(triton.CompilationError, match="Direct casts between .* are not supported"):
+            kernel[(triton.cdiv(x.numel(), block_size), )](x, z, x.numel(), block_size, via_fp16, num_warps=1)
+        return
+    kernel[(triton.cdiv(x.numel(), block_size), )](x, z, x.numel(), block_size, via_fp16, num_warps=1)
+    reference = x.float().to(z.dtype)
+    torch.testing.assert_close(z.view(torch.uint8), reference.view(torch.uint8), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", ["float8_e5m2", "float8_e4m3fn"])
+def test_cast_fp8_identity(dtype, device):
+    check_type_supported(dtype, device)
+    if not is_cuda():
+        pytest.skip("FP8 format conversion regression requires CUDA")
+
+    @triton.jit
+    def kernel(X, Z):
+        offsets = tl.arange(0, 256)
+        x = tl.load(X + offsets)
+        tl.store(Z + offsets, x.to(Z.dtype.element_ty))
+
+    bits = torch.arange(256, device=device, dtype=torch.uint8)
+    x = bits.view(getattr(torch, dtype))
+    z = torch.empty_like(x)
+    kernel[(1, )](x, z, num_warps=1)
+    torch.testing.assert_close(z.view(torch.uint8), bits, rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, rounding", [("float32", None), ("float32", "rtne"), ("float32", "rtz"),
                                                ("float16", None), ("float64", None), ("int64", None), ("uint64", None)])
