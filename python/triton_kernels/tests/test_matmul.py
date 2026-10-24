@@ -1314,3 +1314,118 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     matmul(a, b, None, c=actual, c_acc_in=actual if accumulate else None,
            precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("shape", [(1, 65, 32), (19, 65, 160), (65, 17, 512)])
+@pytest.mark.parametrize("lhs_storage", ["fp8", "strided", "swizzled"])
+@pytest.mark.parametrize("rhs_storage", ["fp8", "strided", "swizzled"])
+@pytest.mark.parametrize("gather_scatter", [False, True])
+@pytest.mark.parametrize("tile_shapes", [(None, None), ((8, 32), (64, 128))])
+def test_hopper_fp8_mxfp4_reference(shape, lhs_storage, rhs_storage, gather_scatter, tile_shapes, device, monkeypatch):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+    from triton_kernels.tensor import FP4, convert_layout, wrap_torch_tensor
+    from triton_kernels.tensor_details.layout import HopperFP8MXValueLayout, HopperFP8MXScaleLayout, StridedLayout
+
+    torch.manual_seed(42)
+    m, n, k = shape
+    magnitudes = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6], device=device)
+
+    def operand(rows, storage, axis):
+        codes = torch.randint(0, 16, (rows, k), device=device, dtype=torch.uint8)
+        scales = (torch.arange(rows * k // 32, device=device) % 12 + 122).to(torch.uint8).reshape(rows, k // 32)
+        decoded = magnitudes[(codes & 7).long()] * torch.where(codes < 8, 1, -1)
+        decoded *= torch.exp2(scales.float() - 127).repeat_interleave(32, dim=1)
+        values = codes[:, ::2] | (codes[:, 1::2] << 4)
+        if axis == -2:
+            values, scales, decoded = values.mT, scales.mT, decoded.mT
+        if storage == "fp8":
+            return decoded.to(torch.float8_e4m3fn), None, decoded
+        values = wrap_torch_tensor(values, dtype=FP4)
+        scales = wrap_torch_tensor(scales)
+        if storage == "swizzled":
+            tile_shape = tile_shapes[0 if axis == -1 else 1]
+            encoded_values = convert_layout(values, HopperFP8MXValueLayout(axis, tile_shape))
+            encoded_scales = convert_layout(scales, HopperFP8MXScaleLayout(axis, tile_shape))
+            torch.testing.assert_close(convert_layout(encoded_values, StridedLayout(axis)).data, values.data)
+            torch.testing.assert_close(convert_layout(encoded_scales, StridedLayout(axis)).data, scales.data)
+            values, scales = encoded_values, encoded_scales
+        return values, scales, decoded
+
+    a, sa, da = operand(m, lhs_storage, -1)
+    b, sb, db = operand(n, rhs_storage, -2)
+    config = PrecisionConfig(a_mx_scale=sa, a_microblock_size=32 if sa is not None else None,
+                             b_mx_scale=sb, b_microblock_size=32 if sb is not None else None,
+                             out_dtype=torch.bfloat16)
+    gather = torch.arange(m - 1, -1, -1, device=device, dtype=torch.int32) if gather_scatter else None
+    scatter = torch.roll(torch.arange(m, device=device, dtype=torch.int32), 1) if gather_scatter else None
+    bias = torch.randn(n, device=device)
+    from triton_kernels.tensor_details.layout_details.hopper_fp8 import _HopperFP8MXTransformation
+
+    def forbid_unswizzle(*args, **kwargs):
+        raise AssertionError("matmul must decode swizzled storage directly")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(_HopperFP8MXTransformation, "_decode", forbid_unswizzle)
+        actual = matmul(a, b, bias, gather_indx=gather, scatter_indx=scatter, precision_config=config)
+    expected = matmul_torch(da, db, bias, gather_indx=gather, scatter_indx=scatter,
+                            precision_config=PrecisionConfig())
+    reference = matmul_torch(a, b, bias, gather_indx=gather, scatter_indx=scatter, precision_config=config)
+    torch.testing.assert_close(reference, expected)
+    error = actual.float() - expected
+    assert error.norm() / expected.norm() < 0.005
+    assert error.abs().max() / expected.abs().max() < 0.005
+    assert actual.shape == (m, n) and actual.dtype == torch.bfloat16
+
+
+@pytest.mark.parametrize("scale", [121, 134])
+@pytest.mark.parametrize("swizzled", [False, True])
+def test_hopper_fp8_mxfp4_scale_range(scale, swizzled, device):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+    from triton_kernels.tensor import FP4, convert_layout, wrap_torch_tensor
+    from triton_kernels.tensor_details.layout import HopperFP8MXValueLayout, HopperFP8MXScaleLayout
+
+    a = torch.ones((4, 32), dtype=torch.float8_e4m3fn, device=device)
+    b = wrap_torch_tensor(torch.full((8, 16), 0x22, dtype=torch.uint8, device=device).mT, dtype=FP4)
+    scales = wrap_torch_tensor(torch.full((8, 1), scale, dtype=torch.uint8, device=device).mT)
+    if swizzled:
+        b = convert_layout(b, HopperFP8MXValueLayout(-2))
+        scales = convert_layout(scales, HopperFP8MXScaleLayout(-2))
+    config = PrecisionConfig(b_mx_scale=scales, b_microblock_size=32, out_dtype=torch.bfloat16)
+    if swizzled:
+        with pytest.raises(ValueError, match="scale bytes"):
+            matmul(a, b, None, precision_config=config)
+    else:
+        result = matmul(a, b, None, precision_config=config)
+        torch.testing.assert_close(result, torch.full_like(result, 32 * 2.0**(scale - 127)))
+
+
+@pytest.mark.parametrize("axis", [-1, -2])
+@pytest.mark.parametrize("storage", ["mixed_values", "mixed_scales", "other", "wrong_axis"])
+def test_hopper_fp8_mxfp4_unsupported_layout(axis, storage, device):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+    from triton_kernels.tensor import FP4, convert_layout, wrap_torch_tensor
+    from triton_kernels.tensor_details.layout import HopperFP8MXValueLayout, HopperFP8MXScaleLayout, TiledLayout
+
+    values = torch.full((32, 32), 0x22, dtype=torch.uint8, device=device)
+    scales = torch.full((32, 2), 127, dtype=torch.uint8, device=device)
+    if axis == -2:
+        values, scales = values.mT, scales.mT
+    values, scales = wrap_torch_tensor(values, dtype=FP4), wrap_torch_tensor(scales)
+    if storage in ("mixed_values", "wrong_axis"):
+        values = convert_layout(values, HopperFP8MXValueLayout(-3 - axis if storage == "wrong_axis" else axis))
+    if storage in ("mixed_scales", "wrong_axis"):
+        scales = convert_layout(scales, HopperFP8MXScaleLayout(-3 - axis if storage == "wrong_axis" else axis))
+    if storage == "other":
+        values = convert_layout(values, TiledLayout(axis))
+    other = torch.ones((64, 64), dtype=torch.float8_e4m3fn, device=device)
+    if axis == -1:
+        a, b = values, other
+        config = PrecisionConfig(a_mx_scale=scales, a_microblock_size=32)
+    else:
+        a, b = other, values
+        config = PrecisionConfig(b_mx_scale=scales, b_microblock_size=32)
+    with pytest.raises(NotImplementedError, match="strided value/scale pairs"):
+        matmul(a, b, None, precision_config=config)
