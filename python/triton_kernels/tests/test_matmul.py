@@ -64,6 +64,23 @@ def opt_flags_scope():
     opt_flags.reset_opt_flags_constraints()
 
 
+def test_matmul_swiglu_mxfp8_scale_bounds(device):
+    if not is_cuda() or torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("requires FP8")
+    a = torch.ones((16, 64), device=device, dtype=torch.bfloat16)
+    b = torch.ones((64, 576), device=device, dtype=torch.bfloat16)
+    scales = torch.full((16, 12), 0xA5, device=device, dtype=torch.uint8)
+    config = PrecisionConfig(out_dtype=torch.float8_e4m3fn, c_mx_scale=scales[:, :9])
+    activation = FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2), (1.0, 1.0))
+    epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ()), (), ())
+    with opt_flags.scoped_opt_flags_constraints({"is_persistent": False, "block_n": 256, "split_k": 1}):
+        y = matmul(a, b, None, precision_config=config, fused_activation=activation, epilogue=epilogue)
+    torch.testing.assert_close(scales[:, 9:], torch.full_like(scales[:, 9:], 0xA5), rtol=0, atol=0)
+    actual = upcast_from_mxfp(y, scales[:, :9], torch.float32, axis=-1)
+    expected = torch.full_like(actual, 2 * torch.sigmoid(torch.tensor(1.0)).item())
+    torch.testing.assert_close(actual, expected, rtol=0.04, atol=0)
+
+
 def make_constraints(block_m, split_k, is_persistent, epilogue_subtile, hbm_swizzling, weight_dtype_str, num_warps):
     constraints = {
         "block_m": block_m,
