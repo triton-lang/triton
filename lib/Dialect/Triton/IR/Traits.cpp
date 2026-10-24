@@ -92,6 +92,9 @@ LogicalResult OpTrait::impl::verifySameResultsType(Operation *op) {
 }
 
 LogicalResult OpTrait::impl::verifyTensorSize(Operation *op) {
+  if (auto *iface = dyn_cast<mlir::triton::DialectVerifyTensorSizeInterface>(
+          op->getDialect()))
+    return iface->verifyTensorSize(op);
   for (auto opType : op->getOperandTypes()) {
     if (auto tensorType = dyn_cast<RankedTensorType>(opType)) {
       int64_t numElements = 1;

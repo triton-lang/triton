@@ -165,6 +165,14 @@ public:
                       function_ref<InFlightDiagnostic()> emitError) const = 0;
 };
 
+class DialectVerifyTensorSizeInterface
+    : public DialectInterface::Base<DialectVerifyTensorSizeInterface> {
+public:
+  DialectVerifyTensorSizeInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual LogicalResult verifyTensorSize(Operation *op) const = 0;
+};
+
 // Descriptor gather and scatter have restrictions on the tile sizes.
 LogicalResult verifyGatherScatterResultType(Operation *op,
                                             ShapedType resultType,
