@@ -269,9 +269,8 @@ struct LoadStoreConversionBase {
     return bufferEmitter.getScalarOffsetBytes(elemTy, uniform);
   }
 
-  // The scalar offset in bytes of each unique element of an atomic load or
-  // store, which accesses one element at a time. A tensor `soffset` must be
-  // the same across the lanes of a wave, as for buffer loads and stores.
+  // Get the scalar offset in bytes of each unique element of an atomic
+  // load/store.
   FailureOr<SmallVector<Value>> getAtomicScalarOffsetBytes(
       Operation *op, RewriterBase &rewriter, Location loc,
       LLVM::AMD::BufferEmitter &bufferEmitter, Type elemTy, Value soffset,

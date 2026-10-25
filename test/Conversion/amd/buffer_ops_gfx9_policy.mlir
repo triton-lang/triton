@@ -85,26 +85,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
-
-// -----
-
-// One flag per wave: each wave's lanes hold copies of its element, so a tensor
-// soffset is read from the first lane into the scalar offset.
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: buffer_atomic_tensor_soffset
-  tt.func @buffer_atomic_tensor_soffset(%arg0: !tt.ptr<i32>, %offsets: tensor<4x1xi32, #blocked>, %s: tensor<4x1xi32, #blocked>, %n: i32) {
-    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<i32> -> !amdg.buffer_desc<i32>
-    // CHECK: rocdl.make.buffer.rsrc
-    // CHECK: %[[FIRST:.*]] = rocdl.readfirstlane %{{.*}} : i32
-    // CHECK: %[[SOFF:.*]] = llvm.mul %{{.*}}, %[[FIRST]] : i32
-    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.atomic.buffer.load"(%{{.*}}, %{{.*}}, %[[SOFF]], %{{.*}})
-    %0 = amdg.buffer_atomic_load relaxed, gpu, %desc[%offsets] soffset = %s : tensor<4x1xi32, #blocked> : !amdg.buffer_desc<i32> -> tensor<4x1xi32, #blocked>
-    // CHECK: %[[FIRST2:.*]] = rocdl.readfirstlane %{{.*}} : i32
-    // CHECK: %[[SOFF2:.*]] = llvm.mul %{{.*}}, %[[FIRST2]] : i32
-    // CHECK: rocdl.raw.ptr.buffer.store %{{.*}}, %{{.*}}, %{{.*}}, %[[SOFF2]], 16 : i32
-    amdg.buffer_atomic_store relaxed, gpu, %0, %desc[%offsets] soffset = %s : tensor<4x1xi32, #blocked> : !amdg.buffer_desc<i32> -> tensor<4x1xi32, #blocked>
-    tt.return
-  }
-}

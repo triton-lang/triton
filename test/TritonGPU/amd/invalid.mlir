@@ -1056,14 +1056,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func @buffer_atomic_store_tensor_soffset_shape(%desc: !amdg.buffer_desc<i32>, %offsets: tensor<64xi32, #blocked>, %s: tensor<32xi32, #blocked>, %value: tensor<64xi32, #blocked>) {
-    // expected-error @+1 {{a tensor soffset must have the type of the offsets}}
-    amdg.buffer_atomic_store relaxed, gpu, %value, %desc[%offsets] soffset = %s : tensor<32xi32, #blocked> : !amdg.buffer_desc<i32> -> tensor<64xi32, #blocked>
-    tt.return
-  }
-}

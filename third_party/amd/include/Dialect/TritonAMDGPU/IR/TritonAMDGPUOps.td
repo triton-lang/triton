@@ -261,8 +261,8 @@ def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier"> {
 // compiler builds a default descriptor, or an explicit buffer descriptor.
 def TTAMDG_BufferBase : AnyTypeOf<[TT_Ptr, TritonAMDGPU_BufferDescType]>;
 
-// The scalar offset of a buffer load or store, atomic or not: one i32 for
-// every element, or an i32 tensor shaped like the offsets.
+// The scalar offset of a buffer load or store: one i32 for every element, or
+// an i32 tensor shaped like the offsets.
 def TTAMDG_ScalarOffset : AnyTypeOf<[I32, I32Tensor]>;
 
 //===----------------------------------------------------------------------===//
