@@ -50,17 +50,22 @@ def make_buffer_descriptor(base, num_records, _semantic=None) -> buffer_descript
     return _buffer.make_buffer_descriptor(base, num_records, _semantic)
 
 
-_ACCESS_ARGS_DOC = """
-        soffset (int32 scalar or tensor, optional): Offset, in elements, added to every element's
+_SOFFSET_ARG_DOC = """soffset (int32 scalar or tensor, optional): Offset, in elements, added to every element's
             offset and counted by the bounds check. It is held in the instruction's scalar offset
             register, so a uniform advance costs no per-lane arithmetic. A tensor gives each wave its
             own value: it broadcasts to ``offsets`` and must have size 1 in every dimension the lanes
             of the offsets' layout span, e.g. shape ``[M, 1]`` for ``[M, N]`` offsets whose rows each
-            sit in one wave. Defaults to None (0).
-        cache_policy (CachePolicy, optional): Cache hints. Defaults to None."""
+            sit in one wave. Defaults to None (0)."""
+
+
+def _format_doc(fn):
+    """Fill the shared argument descriptions into `fn`'s docstring."""
+    fn.__doc__ = fn.__doc__.format(soffset_arg=_SOFFSET_ARG_DOC)
+    return fn
 
 
 @builtin
+@_format_doc
 def load(desc, offsets, mask=None, other=None, *, soffset=None, scope=None, cache_policy=None, _semantic=None):
     """
     Load from global memory through a buffer descriptor into registers.
@@ -76,9 +81,10 @@ def load(desc, offsets, mask=None, other=None, *, soffset=None, scope=None, cach
         other (tensor or scalar, optional): Values for masked-off elements. Defaults to None.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that
             scope. It is not atomic and orders no other memory operation; pair it with an acquire to
-            consume a payload. To poll a flag, use :func:`~triton.experimental.gluon.language.atomic_load`
-            instead, which the compiler never hoists. Defaults to None (no coherence beyond the
-            wave).""" + _ACCESS_ARGS_DOC + """
+            consume a payload. To poll a flag, use :func:`atomic_load` instead, which the compiler
+            never hoists. Defaults to None (no coherence beyond the wave).
+        {soffset_arg}
+        cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
 
     Returns:
         tensor: The loaded values, with the shape and layout of ``offsets``.
@@ -87,6 +93,7 @@ def load(desc, offsets, mask=None, other=None, *, soffset=None, scope=None, cach
 
 
 @builtin
+@_format_doc
 def store(value, desc, offsets, mask=None, *, soffset=None, scope=None, cache_policy=None, _semantic=None):
     """
     Store a tensor to global memory through a buffer descriptor.
@@ -101,7 +108,9 @@ def store(value, desc, offsets, mask=None, *, soffset=None, scope=None, cache_po
         mask (tensor, optional): Mask tensor for predicated stores. Defaults to None.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The store makes its data available at
             that scope. It is not atomic and orders no other memory operation; follow it with a release
-            to publish. Defaults to None.""" + _ACCESS_ARGS_DOC + """
+            to publish. Defaults to None.
+        {soffset_arg}
+        cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
     """
     _buffer.store(value, desc, offsets, mask, soffset, scope, cache_policy, CachePolicy, _semantic)
 
