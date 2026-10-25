@@ -216,6 +216,25 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         exponent[zero_significand_index & subnormal_index] = bias_input - bias_output
         significand[subnormal_index] = (significand[subnormal_index] << bit_pos[subnormal_index]) & (
             (1 << input_dtype.fp_mantissa_width) - 1)
+    # Detect infinities and NaNs in the source encoding. The FP8 formats
+    # encode them differently: float8e5 uses the reserved exponent like a
+    # standard float, float8e4nv has a single NaN code (all-ones exponent and
+    # mantissa), the FNUZ formats (float8e4b8, float8e5b16) use the sign bit
+    # alone, and float8e4b15 has neither.
+    if input_dtype == tl.float8e4nv:
+        magnitude = input_bin & ((1 << (input_dtype.primitive_bitwidth - 1)) - 1)
+        input_nan = magnitude == (1 << (input_dtype.primitive_bitwidth - 1)) - 1
+        input_inf = np.zeros(input.shape, dtype=bool)
+    elif input_dtype in (tl.float8e4b8, tl.float8e5b16):
+        input_nan = input_bin == (1 << (input_dtype.primitive_bitwidth - 1))
+        input_inf = np.zeros(input.shape, dtype=bool)
+    elif input_dtype == tl.float8e4b15:
+        input_nan = np.zeros(input.shape, dtype=bool)
+        input_inf = np.zeros(input.shape, dtype=bool)
+    else:
+        nonfinite_input = input_exponent == (1 << input_exponent_width) - 1
+        input_nan = nonfinite_input & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) != 0)
+        input_inf = nonfinite_input & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) == 0)
     sign_output = sign
     # Include the leading bit and align subnormal results before rounding.
     full_significand = significand | (1 << input_dtype.fp_mantissa_width)
@@ -237,10 +256,9 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
     exponent_output = np.minimum(output_exponent, max_exponent)
     exponent_output[retained < (1 << output_dtype.fp_mantissa_width)] = 0
     significand_output = retained & ((1 << output_dtype.fp_mantissa_width) - 1)
-    if not input_dtype.is_fp8() and not output_dtype.is_fp8():
+    if not output_dtype.is_fp8():
         # Reserved source exponents represent infinities/NaNs, not finite exponents.
-        nonfinite = input_exponent == (1 << input_exponent_width) - 1
-        input_nan = nonfinite & ((input_bin & ((1 << input_dtype.fp_mantissa_width) - 1)) != 0)
+        nonfinite = input_nan | input_inf
         overflow = (output_exponent >= max_exponent) & ~nonfinite
         if rounding_mode == _ir.ROUNDING_MODE.RTNE:
             exponent_output[overflow] = max_exponent
@@ -251,12 +269,54 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
             significand_output[overflow] = (1 << output_dtype.fp_mantissa_width) - 1
         exponent_output[nonfinite] = max_exponent
         significand_output[nonfinite & ~input_nan] = 0
+        if input_dtype in (tl.float8e4b8, tl.float8e5b16):
+            # The FNUZ NaN is the sign bit alone, so the generic path above
+            # gives it a zero significand, which would decode as an infinity.
+            significand_output[input_nan] = 1 << (output_dtype.fp_mantissa_width - 1)
     if output_dtype in (tl.float8e4b8, tl.float8e5b16):
         # FNUZ formats have only unsigned zero; the sign bit alone encodes NaN.
         zero_output = (exponent_output == 0) & (significand_output == 0)
         if input_dtype in (tl.float8e4b8, tl.float8e5b16):
             zero_output &= input_bin != 0x80
         sign_output[zero_output] = 0
+    if output_dtype.is_fp8():
+        # FP8 conversions saturate: NVIDIA lowers them to cvt with .satfinite
+        # and AMD sets the FP8 clamping mode, so a finite result past the
+        # format's range becomes the largest finite code instead of wrapping
+        # into an unrelated value, infinities become the largest finite code,
+        # and NaNs stay NaNs. The formats differ in which codes are finite:
+        # float8e5 reserves the all-ones exponent for Inf/NaN, float8e4nv and
+        # float8e4b15 reserve only the top code, and the FNUZ formats reserve
+        # no exponent at all.
+        max_mantissa = (1 << output_dtype.fp_mantissa_width) - 1
+        if output_dtype == tl.float8e5:
+            max_exponent_field, max_significand = max_exponent - 1, max_mantissa
+            overflow = output_exponent >= max_exponent
+        elif output_dtype in (tl.float8e4nv, tl.float8e4b15):
+            max_exponent_field, max_significand = max_exponent, max_mantissa - 1
+            overflow = (output_exponent > max_exponent) | ((output_exponent == max_exponent)
+                                                           & (significand_output > max_significand))
+        else:
+            max_exponent_field, max_significand = max_exponent, max_mantissa
+            overflow = output_exponent > max_exponent
+        # An infinity from a wider or equal format saturates the same way;
+        # only a same-type cast keeps it (the cast is then a no-op).
+        overflow |= input_inf & (input_dtype != output_dtype)
+        exponent_output[overflow] = max_exponent_field
+        significand_output[overflow] = max_significand
+        if output_dtype in (tl.float8e4b8, tl.float8e5b16):
+            # The sign bit alone is the only NaN code.
+            sign_output[input_nan] = 1
+            exponent_output[input_nan] = 0
+            significand_output[input_nan] = 0
+        elif output_dtype == tl.float8e4b15:
+            # There is no NaN code; NaNs saturate like infinities do.
+            exponent_output[input_nan] = max_exponent_field
+            significand_output[input_nan] = max_significand
+        else:
+            exponent_output[input_nan] = max_exponent
+            significand_output[input_nan] = max_mantissa if output_dtype == tl.float8e4nv else 1 << (
+                output_dtype.fp_mantissa_width - 1)
     output = (sign_output << (output_dtype.primitive_bitwidth - 1)) | (
         exponent_output << output_dtype.fp_mantissa_width) | significand_output
     return output.astype(output_unint_dtype).reshape(input.shape)

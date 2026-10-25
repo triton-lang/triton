@@ -8,7 +8,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_cdna5
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_cdna5, is_interpreter
 
 FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
@@ -484,6 +484,56 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device):
         assert(torch.all(torch.isnan(dst)))
     else:
         torch.testing.assert_close(dst, torch.full_like(dst, expected_result))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("rounding", ['rtne', 'rtz'])
+@pytest.mark.parametrize("dst_dtype, max_value", [
+    ('float8e4nv', 448.0),
+    ('float8e5', 57344.0),
+    ('float8e4b15', 1.75),
+    ('float8e4b8', 240.0),
+    ('float8e5b16', 57344.0),
+])
+def test_typeconvert_downcast_fp8_saturates(dst_dtype, max_value, rounding, device):
+    # FP8 downcasts saturate in the compiled paths: a finite value past the
+    # format's range and the infinities become the largest finite value, and
+    # NaN stays NaN. The interpreter must agree for every FP8 format.
+    if not is_interpreter():
+        pytest.skip("interpreter only")
+    values = torch.zeros(128, dtype=torch.float32, device=device)
+    values[:5] = torch.tensor([1e5, -1e5, float('inf'), float('-inf'), float('nan')])
+    codes = launch_type_convert_triton(values, tl.float32, getattr(tl, dst_dtype), device, rounding=rounding,
+                                       BLOCK_SIZE=128)
+    result = launch_type_convert_triton(codes, getattr(tl, dst_dtype), tl.float32, device,
+                                        BLOCK_SIZE=128).view(torch.float32)
+    expected = torch.tensor([max_value, -max_value, max_value, -max_value], dtype=torch.float32, device=device)
+    torch.testing.assert_close(result[:4], expected)
+    if dst_dtype == 'float8e4b15':
+        # float8e4b15 has no NaN encoding; NaN saturates like an infinity.
+        assert result[4] == max_value
+    else:
+        assert torch.isnan(result[4])
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("src_dtype, codes, expected", [
+    ('float8e4nv', [0x7F, 0xFF, 0x7E], [float('nan'), float('nan'), 448.0]),
+    ('float8e5', [0x7C, 0xFC, 0x7D], [float('inf'), float('-inf'), float('nan')]),
+    ('float8e4b8', [0x80, 0x7F], [float('nan'), 240.0]),
+    ('float8e5b16', [0x80, 0x7F], [float('nan'), 57344.0]),
+    ('float8e4b15', [0x7F], [1.875]),
+])
+def test_typeconvert_upcast_fp8_special_codes(src_dtype, codes, expected, device):
+    # The FP8 Inf/NaN encodings must decode as such, not as finite numbers.
+    if not is_interpreter():
+        pytest.skip("interpreter only")
+    values = torch.zeros(128, dtype=torch.uint8, device=device)
+    values[:len(codes)] = torch.tensor(codes, dtype=torch.uint8)
+    result = launch_type_convert_triton(values, getattr(tl, src_dtype), tl.float32, device,
+                                        BLOCK_SIZE=128).view(torch.float32)
+    for got, want in zip(result.tolist(), expected):
+        assert (math.isnan(got) and math.isnan(want)) or got == want
 
 
 @pytest.mark.parametrize("src_dtype", ['float8e4b8', 'float8e5b16'])
