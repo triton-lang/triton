@@ -261,8 +261,8 @@ def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier"> {
 // compiler builds a default descriptor, or an explicit buffer descriptor.
 def TTAMDG_BufferBase : AnyTypeOf<[TT_Ptr, TritonAMDGPU_BufferDescType]>;
 
-// The scalar offset of a buffer load or store: one i32 for every element, or
-// an i32 tensor shaped like the offsets.
+// The scalar offset of a buffer load or store, atomic or not: one i32 for
+// every element, or an i32 tensor shaped like the offsets.
 def TTAMDG_ScalarOffset : AnyTypeOf<[I32, I32Tensor]>;
 
 //===----------------------------------------------------------------------===//
@@ -598,7 +598,7 @@ def BufferAtomicLoadOp : TT_AMDGPU_Op<"buffer_atomic_load", [
           [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<TT_BoolTensor>:$mask,
-      Optional<I32>:$soffset,
+      Optional<TTAMDG_ScalarOffset>:$soffset,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
     );
@@ -607,7 +607,7 @@ def BufferAtomicLoadOp : TT_AMDGPU_Op<"buffer_atomic_load", [
     let hasVerifier = 1;
 
     let assemblyFormat = [{
-      $sem `,` $scope `,` $ptr `[` $offsets `]` (`,` $mask^)? (`soffset` `=` $soffset^)?
+      $sem `,` $scope `,` $ptr `[` $offsets `]` (`,` $mask^)? (`soffset` `=` $soffset^ `:` type($soffset))?
       attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
@@ -638,7 +638,7 @@ def BufferAtomicStoreOp : TT_AMDGPU_Op<"buffer_atomic_store", [
           [MemWrite<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<TT_BoolTensor>:$mask,
-      Optional<I32>:$soffset,
+      Optional<TTAMDG_ScalarOffset>:$soffset,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
     );
@@ -646,7 +646,7 @@ def BufferAtomicStoreOp : TT_AMDGPU_Op<"buffer_atomic_store", [
     let hasVerifier = 1;
 
     let assemblyFormat = [{
-      $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)? (`soffset` `=` $soffset^)?
+      $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)? (`soffset` `=` $soffset^ `:` type($soffset))?
       attr-dict `:` qualified(type($ptr)) `->` type($value)
     }];
 }

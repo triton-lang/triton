@@ -116,6 +116,7 @@ def store(value, desc, offsets, mask=None, *, soffset=None, scope=None, cache_po
 
 
 @builtin
+@_format_doc
 def atomic_load(desc, offsets, mask=None, sem=None, scope=None, *, soffset=None, _semantic=None):
     """
     Atomically load from global memory through a buffer descriptor.
@@ -131,8 +132,7 @@ def atomic_load(desc, offsets, mask=None, sem=None, scope=None, *, soffset=None,
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         sem (str, optional): ``"acquire"`` or ``"relaxed"``. Defaults to ``"acquire"``.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. Defaults to ``"gpu"``.
-        soffset (int32 scalar, optional): Scalar offset, in elements, added to every element's offset and
-            counted by the bounds check. Defaults to None (0).
+        {soffset_arg}
 
     Returns:
         tensor: The loaded values, with the shape and layout of ``offsets``.
@@ -141,6 +141,7 @@ def atomic_load(desc, offsets, mask=None, sem=None, scope=None, *, soffset=None,
 
 
 @builtin
+@_format_doc
 def atomic_store(value, desc, offsets, mask=None, sem=None, scope=None, *, soffset=None, _semantic=None):
     """
     Atomically store to global memory through a buffer descriptor.
@@ -156,7 +157,6 @@ def atomic_store(value, desc, offsets, mask=None, sem=None, scope=None, *, soffs
         mask (tensor, optional): Mask tensor for predicated stores. Defaults to None.
         sem (str, optional): ``"release"`` or ``"relaxed"``. Defaults to ``"release"``.
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. Defaults to ``"gpu"``.
-        soffset (int32 scalar, optional): Scalar offset, in elements, added to every element's offset and
-            counted by the bounds check. Defaults to None (0).
+        {soffset_arg}
     """
     _buffer.atomic_store(value, desc, offsets, mask, sem, scope, soffset, _semantic)

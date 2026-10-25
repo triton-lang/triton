@@ -1299,6 +1299,9 @@ LogicalResult BufferAtomicLoadOp::verify() {
   if (getSem() != triton::MemSemantic::ACQUIRE &&
       getSem() != triton::MemSemantic::RELAXED)
     return emitOpError("only supports acquire and relaxed semantics");
+  if (failed(
+          verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
+    return failure();
   return verifyBufferAtomicLoadStoreType(getOperation(), getPtr().getType());
 }
 
@@ -1306,6 +1309,9 @@ LogicalResult BufferAtomicStoreOp::verify() {
   if (getSem() != triton::MemSemantic::RELEASE &&
       getSem() != triton::MemSemantic::RELAXED)
     return emitOpError("only supports release and relaxed semantics");
+  if (failed(
+          verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
+    return failure();
   if (failed(verifyBufferWriteBase(getOperation(), getPtr())))
     return failure();
   return verifyBufferAtomicLoadStoreType(getOperation(), getPtr().getType());

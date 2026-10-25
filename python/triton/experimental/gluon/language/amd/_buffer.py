@@ -209,7 +209,7 @@ def atomic_load(desc, offsets, mask, sem, scope, soffset, semantic):
     builder = semantic.builder
     handle = builder.create_buffer_atomic_load(ret_ty.to_ir(builder), desc.handle, offsets.handle,
                                                mask.handle if mask is not None else ir.value(),
-                                               _scalar_operand(soffset, "soffset", semantic), sem,
+                                               _soffset_operand(soffset, offsets, semantic), sem,
                                                _atomic_scope(scope, semantic))
     return ttgl.tensor(handle, ret_ty)
 
@@ -228,5 +228,5 @@ def atomic_store(value, desc, offsets, mask, sem, scope, soffset, semantic):
     sem = _atomic_semantic(sem, ir.MEM_SEMANTIC.RELEASE, ("release", "relaxed"), "atomic_store", semantic)
     semantic.builder.create_buffer_atomic_store(value.handle, desc.handle, offsets.handle,
                                                 mask.handle if mask is not None else ir.value(),
-                                                _scalar_operand(soffset, "soffset", semantic), sem,
+                                                _soffset_operand(soffset, offsets, semantic), sem,
                                                 _atomic_scope(scope, semantic))

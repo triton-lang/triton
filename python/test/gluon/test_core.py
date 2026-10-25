@@ -4446,10 +4446,11 @@ def test_buffer_ops_require_descriptor():
     ([1, 64], "same across the lanes of a wave"),
     ([4, 1], "same across the lanes of a wave"),
 ])
-def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error):
+@pytest.mark.parametrize("op", ["load", "store", "atomic_load", "atomic_store"])
+def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error, op):
 
     @gluon.jit
-    def kernel(src, SOFFSET_M: ttgl.constexpr, SOFFSET_N: ttgl.constexpr):
+    def kernel(src, SOFFSET_M: ttgl.constexpr, SOFFSET_N: ttgl.constexpr, OP: ttgl.constexpr):
         # Lanes span both dimensions: 4 rows of 16.
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 16], [1, 1], [1, 0])
         rows = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, layout))
@@ -4457,11 +4458,18 @@ def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error):
         offsets = rows[:, None] * 64 + cols[None, :]
         soffset = ttgl.zeros([SOFFSET_M, SOFFSET_N], ttgl.int32, layout)
         desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, 1024)
-        ttgl.amd.cdna3.buffer.load(desc, offsets, soffset=soffset)
+        if OP == "load":
+            ttgl.amd.cdna3.buffer.load(desc, offsets, soffset=soffset)
+        elif OP == "store":
+            ttgl.amd.cdna3.buffer.store(offsets, desc, offsets, soffset=soffset)
+        elif OP == "atomic_load":
+            ttgl.amd.cdna3.buffer.atomic_load(desc, offsets, soffset=soffset)
+        else:
+            ttgl.amd.cdna3.buffer.atomic_store(offsets, desc, offsets, soffset=soffset)
 
     src = torch.zeros(256, dtype=torch.int32, device="cuda")
     with pytest.raises(CompilationError, match=error):
-        kernel[(1, )](src, *soffset_shape, num_warps=1)
+        kernel[(1, )](src, *soffset_shape, op, num_warps=1)
 
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
@@ -4540,6 +4548,51 @@ def test_buffer_atomic_load_store_bounds_mask(num_records):
     expected = torch.full((69, ), -1, dtype=torch.int32, device="cuda")
     expected[soffset:] = torch.where(active, index + 1, -1).int()
     torch.testing.assert_close(dst, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+def test_buffer_atomic_load_store_per_wave_flags():
+
+    @gluon.jit
+    def kernel(payload, flags, out, out_flags):
+        # One flag per wave: each row is one wave, whose lanes hold copies of its flag.
+        flag_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
+        wave = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, flag_layout))[:, None]
+        flag_offsets = ttgl.zeros([4, 1], ttgl.int32, flag_layout)
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
+        offsets = ttgl.arange(0, 256, layout=layout)
+        payload_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(payload, 256 * 4)
+        flag_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(flags, 4 * 4)
+        if ttgl.program_id(0) == 1:
+            # Producer: publish the payload, then release each wave's flag at its own slot.
+            ttgl.amd.cdna3.buffer.store(offsets * 3 + 7, payload_desc, offsets)
+            ttgl.amd.cdna3.buffer.atomic_store(wave + 1, flag_desc, flag_offsets, sem="release", soffset=wave)
+        else:
+            # Consumer: poll until every wave's flag is set, then acquire them.
+            value = ttgl.amd.cdna3.buffer.atomic_load(flag_desc, flag_offsets, sem="relaxed", soffset=wave)
+            while ttgl.min(ttgl.min(value, axis=1), axis=0) == 0:
+                value = ttgl.amd.cdna3.buffer.atomic_load(flag_desc, flag_offsets, sem="relaxed", soffset=wave)
+            value = ttgl.amd.cdna3.buffer.atomic_load(flag_desc, flag_offsets, sem="acquire", soffset=wave)
+            ttgl.store(out_flags + wave, value)
+            ttgl.store(out + offsets, ttgl.amd.cdna3.buffer.load(payload_desc, offsets))
+
+    for _ in range(20):
+        payload = torch.zeros(256, dtype=torch.int32, device="cuda")
+        flags = torch.zeros(4, dtype=torch.int32, device="cuda")
+        out = torch.zeros(256, dtype=torch.int32, device="cuda")
+        out_flags = torch.zeros(4, dtype=torch.int32, device="cuda")
+        compiled = kernel[(2, )](payload, flags, out, out_flags, num_warps=4)
+        torch.cuda.synchronize()
+        expected_flags = torch.arange(1, 5, dtype=torch.int32, device="cuda")
+        torch.testing.assert_close(flags, expected_flags, atol=0, rtol=0)
+        torch.testing.assert_close(out_flags, expected_flags, atol=0, rtol=0)
+        torch.testing.assert_close(out, torch.arange(256, device="cuda", dtype=torch.int32) * 3 + 7, atol=0, rtol=0)
+
+    # Each wave's flag offset is in a scalar register.
+    amdgcn = compiled.asm["amdgcn"]
+    assert "v_readfirstlane_b32" in amdgcn
+    assert re.search(r"buffer_load_dword v\d+, v\d+, s\[\d+:\d+\], s\d+ offen sc1$", amdgcn, re.MULTILINE)
+    assert re.search(r"buffer_store_dword v\d+, v\d+, s\[\d+:\d+\], s\d+ offen sc1$", amdgcn, re.MULTILINE)
 
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")

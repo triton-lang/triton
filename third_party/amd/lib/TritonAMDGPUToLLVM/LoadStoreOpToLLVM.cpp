@@ -269,6 +269,27 @@ struct LoadStoreConversionBase {
     return bufferEmitter.getScalarOffsetBytes(elemTy, uniform);
   }
 
+  // The scalar offset in bytes of each unique element of an atomic load or
+  // store, which accesses one element at a time. A tensor `soffset` must be
+  // the same across the lanes of a wave, as for buffer loads and stores.
+  FailureOr<SmallVector<Value>> getAtomicScalarOffsetBytes(
+      Operation *op, RewriterBase &rewriter, Location loc,
+      LLVM::AMD::BufferEmitter &bufferEmitter, Type elemTy, Value soffset,
+      Value llSoffset, size_t numElems) const {
+    if (!soffset || !isa<RankedTensorType>(soffset.getType()))
+      return SmallVector<Value>(
+          numElems, bufferEmitter.getScalarOffsetBytes(elemTy, llSoffset));
+    if (!isLaneUniform(soffset))
+      return op->emitOpError(
+          "can't prove the soffset tensor is the same across the lanes of a "
+          "wave");
+    SmallVector<Value> soffsetBytes;
+    for (Value elem : unpackUniqueTensorElements(loc, llSoffset, rewriter))
+      soffsetBytes.push_back(getTensorScalarOffsetBytes(
+          rewriter, loc, bufferEmitter, elemTy, elem));
+    return soffsetBytes;
+  }
+
   // Create a LLVM vector of type `vecTy` containing all zeros
   Value createZeroVector(OpBuilder &builder, Location loc,
                          VectorType vecTy) const {
@@ -2137,8 +2158,11 @@ struct BufferAtomicLoadOpConversion
     SmallVector<Value> maskElems;
     if (adaptor.getMask())
       maskElems = unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
-    Value soffsetBytes =
-        bufferEmitter.getScalarOffsetBytes(valueElemTy, adaptor.getSoffset());
+    auto soffsetBytes = getAtomicScalarOffsetBytes(
+        op, rewriter, loc, bufferEmitter, valueElemTy, op.getSoffset(),
+        adaptor.getSoffset(), offsetElems.size());
+    if (failed(soffsetBytes))
+      return failure();
     Value rsrcDesc =
         getResourceDescriptor(bufferEmitter, op.getPtr(), adaptor.getPtr());
 
@@ -2152,7 +2176,7 @@ struct BufferAtomicLoadOpConversion
       Value pred =
           maskElems.empty() ? threadPred : b.and_(threadPred, maskElems[i]);
       Value loaded = bufferEmitter.emitAtomicLoad(
-          vecTy, rsrcDesc, offsetElems[i], soffsetBytes, pred, *aux);
+          vecTy, rsrcDesc, offsetElems[i], (*soffsetBytes)[i], pred, *aux);
       loadedVals.push_back(
           b.extract_element(valueElemTy, loaded, b.i32_val(0)));
     }
@@ -2203,8 +2227,11 @@ struct BufferAtomicStoreOpConversion
     SmallVector<Value> maskElems;
     if (adaptor.getMask())
       maskElems = unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
-    Value soffsetBytes =
-        bufferEmitter.getScalarOffsetBytes(valueElemTy, adaptor.getSoffset());
+    auto soffsetBytes = getAtomicScalarOffsetBytes(
+        op, rewriter, loc, bufferEmitter, valueElemTy, op.getSoffset(),
+        adaptor.getSoffset(), offsetElems.size());
+    if (failed(soffsetBytes))
+      return failure();
     Value rsrcDesc =
         getResourceDescriptor(bufferEmitter, op.getPtr(), adaptor.getPtr());
 
@@ -2221,8 +2248,8 @@ struct BufferAtomicStoreOpConversion
           maskElems.empty() ? threadPred : b.and_(threadPred, maskElems[i]);
       Value value = packElementRangeIntoVector(rewriter, getTypeConverter(),
                                                loc, vecTy, valueElems, i);
-      bufferEmitter.emitStore(rsrcDesc, offsetElems[i], soffsetBytes, value,
-                              pred, *aux);
+      bufferEmitter.emitStore(rsrcDesc, offsetElems[i], (*soffsetBytes)[i],
+                              value, pred, *aux);
     }
     rewriter.eraseOp(op);
     return success();
