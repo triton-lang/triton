@@ -1007,12 +1007,13 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                                    ttng::MMAv5OpInterface mma, Value alloc,
                                    int numBuffers) {
-  // Only matching a single load and the tmem is not used by other ops.
+  // Accept one load after the MMA, directly in the loop or directly in scf.if.
   ttng::TMEMLoadOp load;
   for (Operation *user : alloc.getUsers()) {
     if (!forOp->isAncestor(user) || user == mma.getOperation())
       continue;
     auto read = dyn_cast<ttng::TMEMLoadOp>(user);
+    // Case 1: reject non-load accumulator users or multiple loads.
     if (!read || load)
       return forOp;
     load = read;
@@ -1020,9 +1021,10 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   if (!load)
     return forOp;
 
-  // Check if the load op is conditional in if/else branches.
   Block *readBlock = load->getBlock();
   Operation *loadOrParent = forOp.getBody()->findAncestorOpInBlock(*load);
+  // Case 2: reject nesting other than a direct scf.if branch.
+  // Case 3: reject readers not scheduled after the MMA.
   if ((readBlock != forOp.getBody() && (!isa<scf::IfOp>(loadOrParent) ||
                                         load->getParentOp() != loadOrParent)) ||
       !schedule.isOpBefore(mma, loadOrParent))
@@ -1049,7 +1051,6 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 
   builder.setInsertionPoint(readBlock->getTerminator());
   ttng::ArriveBarrierOp::create(builder, barrier, 1);
-  // Advance the ring only in iterations that read the accumulator.
   Value wrap;
   Value nextIndex = createIncrementModulo(builder, load.getLoc(), index,
                                           ringSize, zero, one, &wrap);
