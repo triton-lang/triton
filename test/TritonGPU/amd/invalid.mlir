@@ -1067,3 +1067,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_load_to_local_tensor_soffset_shape(%desc: !amdg.buffer_desc<f32>, %offsets: tensor<64xi32, #blocked>, %s: tensor<32xi32, #blocked>, %dst: !ttg.memdesc<64xf32, #shared, #smem, mutable>) {
+    // expected-error @+1 {{a tensor soffset must have the type of the offsets}}
+    %0 = amdg.buffer_load_to_local %desc[%offsets] soffset = %s : tensor<32xi32, #blocked> into %dst : !amdg.buffer_desc<f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}

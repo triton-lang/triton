@@ -4371,6 +4371,44 @@ def test_buffer_load_to_shared_bounds_mask(vec, bound, soffset):
     torch.testing.assert_close(dst, torch.where(loaded, src[soffset:], 0).int(), atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("vec", [1, 4])
+@pytest.mark.parametrize("num_elements", [4096, 3100])
+def test_buffer_load_to_shared_tensor_soffset(vec, num_elements):
+
+    @gluon.jit
+    def kernel(src, dst, row_base, num_elements, VEC: ttgl.constexpr):
+        # One row per wave, so a per-row soffset is the same across each access's lanes.
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, VEC], [1, 64], [4, 1], [1, 0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+        rows = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 64 * VEC, layout=ttgl.SliceLayout(0, layout))
+        soffset = ttgl.load(row_base + rows)[:, None]
+        offsets = rows[:, None] * 0 + cols[None, :]
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [4, 64 * VEC], shared)
+        desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, num_elements * 4)
+        ttgl.amd.cdna4.buffer.load_to_shared(smem, desc, offsets, soffset=soffset)
+        cdna4_async_copy.commit_group()
+        cdna4_async_copy.wait_group(0)
+        ttgl.barrier()
+        ttgl.store(dst + rows[:, None] * (64 * VEC) + cols[None, :], smem.load(layout))
+
+    src = torch.arange(1, 4097, dtype=torch.int32, device="cuda")
+    dst = torch.full((4, 64 * vec), -1, dtype=torch.int32, device="cuda")
+    row_base = torch.tensor([0, 700, 1500, 3000], dtype=torch.int32, device="cuda")
+    compiled = kernel[(1, )](src, dst, row_base, num_elements, vec, num_warps=4)
+
+    # The tensor soffset is counted by the bounds check: out-of-bounds elements read zero.
+    index = row_base[:, None] + torch.arange(64 * vec, device="cuda")[None, :]
+    expected = torch.where(index < num_elements, src[index.clamp(max=4095)], 0).int()
+    torch.testing.assert_close(dst, expected, atol=0, rtol=0)
+    # Each wave's soffset is in a scalar register.
+    amdgcn = compiled.asm["amdgcn"]
+    assert "v_readfirstlane_b32" in amdgcn
+    width = "dword" if vec == 1 else "dwordx4"
+    assert re.search(rf"buffer_load_{width} v\d+, s\[\d+:\d+\], s\d+ offen lds", amdgcn)
+
+
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 def test_buffer_descriptor_in_loop():
 
@@ -4446,7 +4484,7 @@ def test_buffer_ops_require_descriptor():
     ([1, 64], "same across the lanes of a wave"),
     ([4, 1], "same across the lanes of a wave"),
 ])
-@pytest.mark.parametrize("op", ["load", "store", "atomic_load", "atomic_store"])
+@pytest.mark.parametrize("op", ["load", "store", "atomic_load", "atomic_store", "load_to_shared"])
 def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error, op):
 
     @gluon.jit
@@ -4464,8 +4502,11 @@ def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error, op):
             ttgl.amd.cdna3.buffer.store(offsets, desc, offsets, soffset=soffset)
         elif OP == "atomic_load":
             ttgl.amd.cdna3.buffer.atomic_load(desc, offsets, soffset=soffset)
-        else:
+        elif OP == "atomic_store":
             ttgl.amd.cdna3.buffer.atomic_store(offsets, desc, offsets, soffset=soffset)
+        else:
+            smem = ttgl.allocate_shared_memory(ttgl.int32, [4, 64], ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]))
+            ttgl.amd.cdna4.buffer.load_to_shared(smem, desc, offsets, soffset=soffset)
 
     src = torch.zeros(256, dtype=torch.int32, device="cuda")
     with pytest.raises(CompilationError, match=error):

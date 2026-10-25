@@ -22,6 +22,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+// A per-row tensor soffset, with each row in one wave, is read from the first
+// lane into the scalar offset of each load.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: buffer_load_to_local_tensor_soffset
+  tt.func public @buffer_load_to_local_tensor_soffset(%arg1: !tt.ptr<f32>,
+                                %arg2: tensor<32x64xi32, #blocked>,
+                                %rows: tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>>,
+                                %arg3: !ttg.memdesc<32x64xf32, #shared, #smem, mutable>) {
+    %0 = tt.expand_dims %rows {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32x1xi32, #blocked>
+    %s = tt.broadcast %0 : tensor<32x1xi32, #blocked> -> tensor<32x64xi32, #blocked>
+    // COMMON: rocdl.make.buffer.rsrc
+    // COMMON: %[[FIRST:.*]] = rocdl.readfirstlane %{{.*}} : i32
+    // COMMON: %[[SOFF:.*]] = llvm.mul %{{.*}}, %[[FIRST]] : i32
+    // COMMON: rocdl.raw.ptr.buffer.load.async.lds %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SOFF]], %{{.*}}, 0
+    // COMMON-COUNT-7: rocdl.readfirstlane
+    // COMMON-NOT: rocdl.readfirstlane
+    %1 = amdg.buffer_load_to_local %arg1[%arg2] soffset = %s : tensor<32x64xi32, #blocked> into %arg3 : !tt.ptr<f32>[tensor<32x64xi32, #blocked>] -> <32x64xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [32, 2], warpsPerCTA = [1, 32], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 1, order = [0, 1]}>
 #smem = #ttg.shared_memory

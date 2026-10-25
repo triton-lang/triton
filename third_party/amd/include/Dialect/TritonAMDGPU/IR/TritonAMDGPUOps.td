@@ -261,8 +261,8 @@ def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier"> {
 // compiler builds a default descriptor, or an explicit buffer descriptor.
 def TTAMDG_BufferBase : AnyTypeOf<[TT_Ptr, TritonAMDGPU_BufferDescType]>;
 
-// The scalar offset of a buffer load or store, atomic or not: one i32 for
-// every element, or an i32 tensor shaped like the offsets.
+// The scalar offset of a buffer load or store, atomic or to shared memory: one
+// i32 for every element, or an i32 tensor shaped like the offsets.
 def TTAMDG_ScalarOffset : AnyTypeOf<[I32, I32Tensor]>;
 
 //===----------------------------------------------------------------------===//
@@ -403,7 +403,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       Optional<I32>:$stride,
       OptionalAttr<AnyAttr>:$cachePolicy,
       DefaultValuedAttr<I32Attr, "1">:$contiguity,
-      Optional<I32>:$soffset,
+      Optional<TTAMDG_ScalarOffset>:$soffset,
       OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
     let results = (outs TTG_AsyncToken:$token);
@@ -412,7 +412,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
-      (`soffset` `=` $soffset^)?
+      (`soffset` `=` $soffset^ `:` type($soffset))?
       oilist(`cachePolicy` `=` $cachePolicy) `into` $dest
       attr-dict `:` qualified(type($ptr)) `[` type($offsets) `]` type($other) `->` type($dest)
     }];
