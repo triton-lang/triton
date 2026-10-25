@@ -1,15 +1,21 @@
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
+set(triton_test_libs)
+if(TRITON_BUILD_TESTS)
+  set(triton_test_libs
+    TritonTestAnalysis
+    TritonTestDialect
+    TritonAMDGPUTestAnalysis
+    TritonTestProton
+  )
+endif()
+
 add_executable(triton-opt triton-opt.cpp)
 
 target_compile_options(triton-opt PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-opt PRIVATE
   ${triton_libs}
-  # tests
-  TritonTestAnalysis
-  TritonTestDialect
-  TritonAMDGPUTestAnalysis
-  TritonTestProton
+  ${triton_test_libs}
   # MLIR core
   MLIROptLib
   MLIRPass
@@ -26,11 +32,7 @@ target_compile_options(triton-reduce PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 
 target_link_libraries(triton-reduce PRIVATE
   ${triton_libs}
-  # tests
-  TritonTestAnalysis
-  TritonTestDialect
-  TritonAMDGPUTestAnalysis
-  TritonTestProton
+  ${triton_test_libs}
   # MLIR core
   MLIRReduceLib
   MLIRPass
@@ -46,11 +48,7 @@ add_executable(triton-lsp triton-lsp.cpp)
 target_compile_options(triton-lsp PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-lsp PRIVATE
   ${triton_libs}
-  # tests
-  TritonTestAnalysis
-  TritonTestDialect
-  TritonAMDGPUTestAnalysis
-  TritonTestProton
+  ${triton_test_libs}
   # MLIR core
   MLIRLspServerLib
   MLIRPass
@@ -81,11 +79,14 @@ add_executable(triton-tensor-layout triton-tensor-layout.cpp)
 target_compile_options(triton-tensor-layout PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})
 target_link_libraries(triton-tensor-layout PRIVATE
   ${triton_libs}
-  TritonTestAnalysis
-  TritonTestDialect
-  TritonTestProton
-  TritonAMDGPUTestAnalysis
+  ${triton_test_libs}
   MLIRRegisterAllDialects
   MLIRRegisterAllPasses
   MLIRTransforms
 )
+
+if(TRITON_BUILD_TESTS)
+  foreach(tool triton-opt triton-reduce triton-lsp triton-tensor-layout)
+    target_compile_definitions(${tool} PRIVATE TRITON_BUILD_TESTS)
+  endforeach()
+endif()
