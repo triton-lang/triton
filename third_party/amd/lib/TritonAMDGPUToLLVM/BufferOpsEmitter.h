@@ -104,7 +104,7 @@ private:
   // arguments, masking off lanes where `pred` is false through the hardware
   // range check.
   void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems,
-                      Value soffsetBytes, Value pred, bool isAtomic,
+                      Value soffsetBytes, Value pred, bool isAtomicRMW,
                       SmallVector<Value> &args);
 
   // Given a type, the buffer type can be either the same type
