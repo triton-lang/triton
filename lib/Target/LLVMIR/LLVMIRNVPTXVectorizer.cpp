@@ -179,7 +179,8 @@ public:
 
   bool run() {
     collectFusedConversionChains();
-    bool changed = vectorizeLoopAccumulators();
+    bool changed = packByteLoopCarries();
+    changed |= vectorizeLoopAccumulators();
     for (BasicBlock &block : function) {
       changed |= vectorizeInterleavedAccumulators(block);
       changed |= vectorizeArithmetic(block);
@@ -189,6 +190,97 @@ public:
   }
 
 private:
+  bool packByteLoopCarries() const {
+    SmallVector<WeakTrackingVH, 16> candidates;
+    for (BasicBlock &block : function)
+      for (Instruction &instruction : block)
+        if (auto *cast = dyn_cast<BitCastInst>(&instruction)) {
+          auto *type = dyn_cast<FixedVectorType>(cast->getSrcTy());
+          if (cast->getDestTy()->isIntegerTy(32) && type &&
+              type->getNumElements() == 4 &&
+              type->getElementType()->isIntegerTy(8))
+            candidates.push_back(cast);
+        }
+
+    bool changed = false;
+    for (WeakTrackingVH &candidate : candidates) {
+      auto *cast = dyn_cast_or_null<BitCastInst>(candidate);
+      if (!cast)
+        continue;
+      SmallVector<PHINode *, 4> phis(4);
+      Value *vector = cast->getOperand(0);
+      bool valid = true;
+      for (unsigned lane = 4; lane-- > 0;) {
+        auto *insert = dyn_cast<InsertElementInst>(vector);
+        auto *index =
+            insert ? dyn_cast<ConstantInt>(insert->getOperand(2)) : nullptr;
+        auto *phi = insert ? dyn_cast<PHINode>(insert->getOperand(1)) : nullptr;
+        if (!insert || !insert->hasOneUse() || !index ||
+            !index->equalsInt(lane) || !phi || !phi->hasOneUse()) {
+          valid = false;
+          break;
+        }
+        phis[lane] = phi;
+        vector = insert->getOperand(0);
+      }
+      if (!valid || !isa<UndefValue>(vector))
+        continue;
+      PHINode *first = phis.front();
+      if (llvm::any_of(phis, [&](PHINode *phi) {
+            return phi->getParent() != first->getParent() ||
+                   phi->getNumIncomingValues() != first->getNumIncomingValues();
+          }))
+        continue;
+
+      // Prefetching can split a packed load into byte-valued loop carries.
+      // Reuse the original words only when every incoming edge reconstructs
+      // that same word, without extra packing or changing any byte's uses.
+      auto getPackedIncoming = [&](BasicBlock *block) -> Value * {
+        Value *word = nullptr;
+        for (unsigned lane = 0; lane < 4; ++lane) {
+          int index = phis[lane]->getBasicBlockIndex(block);
+          if (index < 0)
+            return nullptr;
+          auto *extract =
+              dyn_cast<ExtractElementInst>(phis[lane]->getIncomingValue(index));
+          auto *element =
+              extract ? dyn_cast<ConstantInt>(extract->getIndexOperand())
+                      : nullptr;
+          auto *bits = extract
+                           ? dyn_cast<BitCastInst>(extract->getVectorOperand())
+                           : nullptr;
+          if (!element || !element->equalsInt(lane) || !bits ||
+              !bits->getSrcTy()->isIntegerTy(32) ||
+              (word && word != bits->getOperand(0)))
+            return nullptr;
+          word = bits->getOperand(0);
+        }
+        return word;
+      };
+      SmallVector<Value *, 2> incoming;
+      for (BasicBlock *block : first->blocks()) {
+        Value *word = getPackedIncoming(block);
+        if (!word) {
+          valid = false;
+          break;
+        }
+        incoming.push_back(word);
+      }
+      if (!valid)
+        continue;
+
+      IRBuilder<> builder(first);
+      PHINode *packed = builder.CreatePHI(cast->getType(), incoming.size(),
+                                          "nvptx.packed.carry");
+      for (unsigned index = 0; index < incoming.size(); ++index)
+        packed->addIncoming(incoming[index], first->getIncomingBlock(index));
+      cast->replaceAllUsesWith(packed);
+      RecursivelyDeleteTriviallyDeadInstructions(cast);
+      changed = true;
+    }
+    return changed;
+  }
+
   static IntrinsicInst *getUnsignedMax(Value *value, BasicBlock &block) {
     auto *intrinsic = dyn_cast<IntrinsicInst>(value);
     if (!intrinsic || intrinsic->getParent() != &block ||

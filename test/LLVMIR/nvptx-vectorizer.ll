@@ -8,6 +8,127 @@
 target datalayout = "e-p:64:64-p1:64:64-p3:32:32-p5:64:64"
 target triple = "nvptx64-nvidia-cuda"
 
+; A prefetched word is unpacked into four byte PHIs and then repacked for MMA.
+; Incoming blocks can appear in a different order in each scalar PHI.
+; CHECK-LABEL: define void @packed_byte_loop_carry(
+; CHECK: loop:
+; CHECK-NEXT: [[WORD:%.*]] = phi i32 [ %initial, %entry ], [ %next, %latch ]
+; CHECK-NOT: phi i8
+; CHECK: call void asm sideeffect "", "r"(i32 [[WORD]])
+; CHECK: latch:
+; CHECK-NOT: extractelement
+; CHECK: br i1 %continue
+; OTHER-LABEL: define void @packed_byte_loop_carry(
+; OTHER-COUNT-4: phi i8
+define void @packed_byte_loop_carry(i32 %initial, ptr %src, i1 %continue) {
+entry:
+  %initial.bytes = bitcast i32 %initial to <4 x i8>
+  %a0 = extractelement <4 x i8> %initial.bytes, i64 0
+  %a1 = extractelement <4 x i8> %initial.bytes, i64 1
+  %a2 = extractelement <4 x i8> %initial.bytes, i64 2
+  %a3 = extractelement <4 x i8> %initial.bytes, i64 3
+  br label %loop
+
+loop:
+  %p0 = phi i8 [ %a0, %entry ], [ %b0, %latch ]
+  %p1 = phi i8 [ %b1, %latch ], [ %a1, %entry ]
+  %p2 = phi i8 [ %a2, %entry ], [ %b2, %latch ]
+  %p3 = phi i8 [ %a3, %entry ], [ %b3, %latch ]
+  %v0 = insertelement <4 x i8> poison, i8 %p0, i64 0
+  %v1 = insertelement <4 x i8> %v0, i8 %p1, i64 1
+  %v2 = insertelement <4 x i8> %v1, i8 %p2, i64 2
+  %v3 = insertelement <4 x i8> %v2, i8 %p3, i64 3
+  %packed = bitcast <4 x i8> %v3 to i32
+  call void asm sideeffect "", "r"(i32 %packed)
+  br label %latch
+
+latch:
+  %next = load i32, ptr %src, align 4
+  %next.bytes = bitcast i32 %next to <4 x i8>
+  %b0 = extractelement <4 x i8> %next.bytes, i64 0
+  %b1 = extractelement <4 x i8> %next.bytes, i64 1
+  %b2 = extractelement <4 x i8> %next.bytes, i64 2
+  %b3 = extractelement <4 x i8> %next.bytes, i64 3
+  br i1 %continue, label %loop, label %exit
+
+exit:
+  ret void
+}
+
+; A byte used outside the repack must retain its scalar representation.
+; CHECK-LABEL: define void @byte_loop_carry_scalar_use(
+; CHECK-COUNT-4: phi i8
+; CHECK: zext i8 %p0 to i32
+define void @byte_loop_carry_scalar_use(i32 %initial, ptr %src, i1 %continue) {
+entry:
+  %initial.bytes = bitcast i32 %initial to <4 x i8>
+  %a0 = extractelement <4 x i8> %initial.bytes, i64 0
+  %a1 = extractelement <4 x i8> %initial.bytes, i64 1
+  %a2 = extractelement <4 x i8> %initial.bytes, i64 2
+  %a3 = extractelement <4 x i8> %initial.bytes, i64 3
+  br label %loop
+
+loop:
+  %p0 = phi i8 [ %a0, %entry ], [ %b0, %loop ]
+  %p1 = phi i8 [ %a1, %entry ], [ %b1, %loop ]
+  %p2 = phi i8 [ %a2, %entry ], [ %b2, %loop ]
+  %p3 = phi i8 [ %a3, %entry ], [ %b3, %loop ]
+  %v0 = insertelement <4 x i8> poison, i8 %p0, i64 0
+  %v1 = insertelement <4 x i8> %v0, i8 %p1, i64 1
+  %v2 = insertelement <4 x i8> %v1, i8 %p2, i64 2
+  %v3 = insertelement <4 x i8> %v2, i8 %p3, i64 3
+  %packed = bitcast <4 x i8> %v3 to i32
+  call void asm sideeffect "", "r"(i32 %packed)
+  %scalar = zext i8 %p0 to i32
+  call void asm sideeffect "", "r"(i32 %scalar)
+  %next = load i32, ptr %src, align 4
+  %next.bytes = bitcast i32 %next to <4 x i8>
+  %b0 = extractelement <4 x i8> %next.bytes, i64 0
+  %b1 = extractelement <4 x i8> %next.bytes, i64 1
+  %b2 = extractelement <4 x i8> %next.bytes, i64 2
+  %b3 = extractelement <4 x i8> %next.bytes, i64 3
+  br i1 %continue, label %loop, label %exit
+
+exit:
+  ret void
+}
+
+; Swapping bytes on one incoming edge is not an identity repack.
+; CHECK-LABEL: define void @byte_loop_carry_permuted(
+; CHECK-COUNT-4: phi i8
+; CHECK: bitcast <4 x i8> %v3 to i32
+define void @byte_loop_carry_permuted(i32 %initial, ptr %src, i1 %continue) {
+entry:
+  %initial.bytes = bitcast i32 %initial to <4 x i8>
+  %a0 = extractelement <4 x i8> %initial.bytes, i64 0
+  %a1 = extractelement <4 x i8> %initial.bytes, i64 1
+  %a2 = extractelement <4 x i8> %initial.bytes, i64 2
+  %a3 = extractelement <4 x i8> %initial.bytes, i64 3
+  br label %loop
+
+loop:
+  %p0 = phi i8 [ %a0, %entry ], [ %b1, %loop ]
+  %p1 = phi i8 [ %a1, %entry ], [ %b0, %loop ]
+  %p2 = phi i8 [ %a2, %entry ], [ %b2, %loop ]
+  %p3 = phi i8 [ %a3, %entry ], [ %b3, %loop ]
+  %v0 = insertelement <4 x i8> poison, i8 %p0, i64 0
+  %v1 = insertelement <4 x i8> %v0, i8 %p1, i64 1
+  %v2 = insertelement <4 x i8> %v1, i8 %p2, i64 2
+  %v3 = insertelement <4 x i8> %v2, i8 %p3, i64 3
+  %packed = bitcast <4 x i8> %v3 to i32
+  call void asm sideeffect "", "r"(i32 %packed)
+  %next = load i32, ptr %src, align 4
+  %next.bytes = bitcast i32 %next to <4 x i8>
+  %b0 = extractelement <4 x i8> %next.bytes, i64 0
+  %b1 = extractelement <4 x i8> %next.bytes, i64 1
+  %b2 = extractelement <4 x i8> %next.bytes, i64 2
+  %b3 = extractelement <4 x i8> %next.bytes, i64 3
+  br i1 %continue, label %loop, label %exit
+
+exit:
+  ret void
+}
+
 ; Adding zero can still canonicalize signed zero, but the scalar form does not
 ; need to materialize a packed zero operand.
 ; CHECK-LABEL: define void @scalar_float_add_zero(
