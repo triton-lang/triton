@@ -249,6 +249,9 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         else:
             exponent_output[overflow] = max_exponent - 1
             significand_output[overflow] = (1 << output_dtype.fp_mantissa_width) - 1
+            # A NaN whose payload falls entirely in the discarded bits would
+            # otherwise keep a zero significand and encode as an infinity.
+            significand_output[input_nan & (significand_output == 0)] = 1 << (output_dtype.fp_mantissa_width - 1)
         exponent_output[nonfinite] = max_exponent
         significand_output[nonfinite & ~input_nan] = 0
     if output_dtype in (tl.float8e4b8, tl.float8e5b16):

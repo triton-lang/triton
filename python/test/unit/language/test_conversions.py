@@ -579,6 +579,31 @@ def test_typeconvert_rounding_edges(src_dtype, dst_dtype, rounding, device):
         assert "llvm.fptrunc.round" in kernel.asm["llir"]
 
 
+@pytest.mark.parametrize("src_dtype, dst_dtype, patterns", [
+    # NaN bit patterns whose payloads fall entirely in the bits that a
+    # downcast discards. They must stay NaN under both rounding modes;
+    # dropping the payload must not turn them into infinities.
+    ("float32", "float16", [0x7F800001, 0x7F801FFF, 0xFF800001]),
+    ("float32", "bfloat16", [0x7F800001, 0x7F80FFFF, 0xFF800001]),
+    ("float64", "float32", [0x7FF0000000000001, 0x7FF0000000FFFFFF]),
+    ("float64", "float16", [0x7FF0000000000001]),
+    ("float64", "bfloat16", [0x7FF0000000000001]),
+])
+@pytest.mark.parametrize("rounding", ["rtne", "rtz"])
+def test_typeconvert_downcast_small_payload_nan(src_dtype, dst_dtype, patterns, rounding, device):
+    src_ty = getattr(tl, src_dtype)
+    dst_ty = getattr(tl, dst_dtype)
+    width = src_ty.primitive_bitwidth
+    np_uint = {16: np.uint16, 32: np.uint32, 64: np.uint64}[width]
+    np_int = {16: np.int16, 32: np.int32, 64: np.int64}[width]
+    src = torch.from_numpy(np.array(patterns, dtype=np_uint).view(np_int).copy())
+    src = src.repeat((4096 + len(patterns) - 1) // len(patterns))[:4096].to(device)
+    dst = launch_type_convert_triton(src, src_ty, dst_ty, device, rounding=rounding)
+    torch_dst = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[dst_dtype]
+    assert torch.all(torch.isnan(dst.view(torch_dst))), \
+        f"{src_dtype} -> {dst_dtype} ({rounding}) turned a small-payload NaN into {dst[0].item():#x}"
+
+
 @pytest.mark.parametrize("src_dtype, dst_dtype", [
     ("float16", "bfloat16"), ("bfloat16", "float16"),
 ])
