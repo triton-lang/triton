@@ -1285,7 +1285,6 @@ LogicalResult BufferStoreOp::verify() {
   return verifyBufferWriteBase(getOperation(), getPtr());
 }
 
-// Atomic buffer loads and stores access whole elements of 8 to 64 bits.
 static LogicalResult verifyBufferAtomicLoadStoreType(Operation *op, Type ptr) {
   Type elementTy = getBufferElementType(ptr);
   if (!elementTy.isIntOrFloat())

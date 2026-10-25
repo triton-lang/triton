@@ -122,7 +122,6 @@ Value BufferEmitter::emitAtomicLoad(Type type, Value rsrcDesc, Value offset,
                  /*isAtomic=*/false, args);
   args.push_back(b.i32_val(aux));
   Type bufferType = getBufferOpType(type, false);
-  // ROCDL has no op for the atomic buffer load; call the intrinsic directly.
   Value data = LLVM::createLLVMIntrinsicCallOp(
                    rewriter, loc, "llvm.amdgcn.raw.ptr.atomic.buffer.load",
                    bufferType, args)

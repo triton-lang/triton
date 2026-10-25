@@ -70,10 +70,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// Atomic buffer loads use the atomic buffer-load intrinsic, coherent at their
-// scope, with an acquire fence after them; atomic stores are scoped stores
-// after a release fence.
-
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: buffer_atomic_load_store
