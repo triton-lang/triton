@@ -9,7 +9,7 @@ from __future__ import annotations
 from ..._core import builtin
 from .. import _buffer
 from ..cdna3.buffer import (CachePolicy, buffer_descriptor, buffer_descriptor_type, make_buffer_descriptor, load, store,
-                            atomic_load, atomic_store, _format_doc)
+                            atomic_load, atomic_store)
 
 __all__ = [
     "CachePolicy", "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store",
@@ -18,7 +18,6 @@ __all__ = [
 
 
 @builtin
-@_format_doc
 def load_to_shared(dest, desc, offsets, mask=None, *, soffset=None, scope=None, cache_policy=None, _semantic=None):
     """
     Load from global memory through a buffer descriptor directly into shared memory.
@@ -37,7 +36,8 @@ def load_to_shared(dest, desc, offsets, mask=None, *, soffset=None, scope=None, 
         desc (buffer_descriptor): Descriptor of the global memory to load from.
         offsets (tensor): Offsets of the elements to load, in elements.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        {soffset_arg}
+        soffset (int32 scalar, optional): Scalar offset, in elements, added to every element's offset and
+            counted by the bounds check. Defaults to None (0).
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that
             scope. It is not atomic and orders nothing. Defaults to None.
         cache_policy (CachePolicy, optional): Cache hints. Defaults to None.

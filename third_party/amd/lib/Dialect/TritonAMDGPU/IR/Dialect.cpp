@@ -1249,9 +1249,6 @@ LogicalResult BufferLoadOp::verify() {
 }
 
 LogicalResult BufferLoadToLocalOp::verify() {
-  if (failed(
-          verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
-    return failure();
   if (failed(verifyBufferAccessPolicy(getOperation(), getCachePolicyAttr(),
                                       getScope(),
                                       triton::CachePolicyOperation::Load)))

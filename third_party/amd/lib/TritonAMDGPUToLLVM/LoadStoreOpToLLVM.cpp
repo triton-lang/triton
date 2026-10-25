@@ -451,18 +451,15 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     return b.trunc(i1_ty, bitMask);
   }
 
-  SmallVector<Value> zipAsyncCopyValues(RewriterBase &rewriter, Location loc,
-                                        unsigned vec, ArrayRef<Value> srcElems,
-                                        Type srcTy, ArrayRef<Value> maskElems,
-                                        ArrayRef<Value> otherElems,
-                                        Type otherTy,
-                                        ArrayRef<Value> swizzledLaneOffsets,
-                                        ArrayRef<Value> soffsetElems) const {
+  SmallVector<Value>
+  zipAsyncCopyValues(RewriterBase &rewriter, Location loc, unsigned vec,
+                     ArrayRef<Value> srcElems, Type srcTy,
+                     ArrayRef<Value> maskElems, ArrayRef<Value> otherElems,
+                     Type otherTy, ArrayRef<Value> swizzledLaneOffsets) const {
     TritonLLVMOpBuilder b(loc, rewriter);
     SmallVector<Value> loadVals;
     auto structTy = LLVM::LLVMStructType::getLiteral(
-        rewriter.getContext(),
-        ArrayRef<Type>{srcTy, i1_ty, otherTy, i32_ty, i32_ty});
+        rewriter.getContext(), ArrayRef<Type>{srcTy, i1_ty, otherTy, i32_ty});
     for (int i = 0; i < srcElems.size(); i++) {
       Value packedArr = LLVM::UndefOp::create(rewriter, loc, structTy);
       // src
@@ -478,9 +475,6 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                ? b.i32_val(0)
                                : swizzledLaneOffsets[i / vec];
       packedArr = b.insert_val(packedArr, swizzleOffset, 3);
-      // A tensor soffset, one value per element
-      if (!soffsetElems.empty())
-        packedArr = b.insert_val(packedArr, soffsetElems[i], 4);
 
       loadVals.push_back(packedArr);
     }
@@ -503,10 +497,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     }
 
     Value swizzleLaneOffset = b.extract_val(i32_ty, structElem, 3);
-    Value soffsetElem = b.extract_val(i32_ty, structElem, 4);
 
     return std::make_tuple(offsetElem, maskElem, std::move(otherElems),
-                           swizzleLaneOffset, soffsetElem);
+                           swizzleLaneOffset);
   }
 
   void applySwizzling(RewriterBase &rewriter, Location loc, Value &srcOrOffset,
@@ -866,14 +859,6 @@ struct BufferLoadToLocalOpConversion
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferLoadToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // A tensor soffset goes in the scalar offset register, so it must be the
-    // same across the lanes of an access.
-    Value soffset = op.getSoffset();
-    bool tensorSoffset = soffset && isa<RankedTensorType>(soffset.getType());
-    if (tensorSoffset && !isLaneUniform(soffset))
-      return op.emitOpError(
-          "can't prove the soffset tensor is the same across the lanes of a "
-          "wave");
     auto aux = LLVM::AMD::getBufferLoadStoreCtrlBits(
         op, op.getCachePolicyAttr(), op.getScope(), /*isLoad=*/true,
         targetInfo);
@@ -923,19 +908,6 @@ struct BufferLoadToLocalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    // A tensor soffset goes in the scalar offset register, so it must also be
-    // the same across the elements of a vector.
-    SmallVector<Value> soffsetElems;
-    Value soffsetBytes;
-    if (tensorSoffset) {
-      vec = std::min<unsigned>(vec, axisAnalysisPass.getMaskAlignment(soffset));
-      soffsetElems = unpackTensorElements(loc, adaptor.getSoffset(), rewriter,
-                                          soffset.getType());
-    } else {
-      soffsetBytes =
-          bufferEmitter.getScalarOffsetBytes(resElemTy, adaptor.getSoffset());
-    }
-
     if (failed(checkCanLoadDirectToLDS(op, ptrType, dstEnc,
                                        dstTy.getAllocShape(), vec, vecInfo)))
       return failure();
@@ -966,12 +938,14 @@ struct BufferLoadToLocalOpConversion
     bool hasOther = !otherElems.empty();
     auto otherTy = hasOther ? otherElems[0].getType() : i1_ty;
     // Zip buffer_offset, mask, other, swizzleOffsets for lowerLdSt
-    auto loadVals = zipAsyncCopyValues(rewriter, loc, vec, offsetElems,
-                                       offsetTy, maskElems, otherElems, otherTy,
-                                       swizzledLaneOffsets, soffsetElems);
+    auto loadVals =
+        zipAsyncCopyValues(rewriter, loc, vec, offsetElems, offsetTy, maskElems,
+                           otherElems, otherTy, swizzledLaneOffsets);
 
     // Create the resource descriptor and then emit the buffer_loads to lds
     // based on the collected shared addresses and vector size
+    Value soffsetBytes =
+        bufferEmitter.getScalarOffsetBytes(resElemTy, adaptor.getSoffset());
     Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
 
     auto freeVarMasks = getFreeVariableMasks(ptrType);
@@ -985,14 +959,9 @@ struct BufferLoadToLocalOpConversion
                                  ArrayRef<Value> loadVals, Value shmemAddr,
                                  int startIdx, VectorType vecTy,
                                  Value multicastMask) -> SmallVector<Value> {
-      auto [offsetElem, maskElem, otherElems, swizzleLaneOffset, soffsetElem] =
+      auto [offsetElem, maskElem, otherElems, swizzleLaneOffset] =
           unzipAsyncCopyValues(rewriter, loc, startIdx, loadVals, offsetTy,
                                otherTy, hasOther, vecTy.getNumElements());
-      Value vecSoffsetBytes =
-          tensorSoffset
-              ? getTensorScalarOffsetBytes(rewriter, loc, bufferEmitter,
-                                           resElemTy, soffsetElem)
-              : soffsetBytes;
       int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
       assert(targetInfo.supportsDirectToLdsLoadBitWidth(vecBits));
       Value vecBytesVal = b.i32_val(vecBits / 8);
@@ -1015,7 +984,7 @@ struct BufferLoadToLocalOpConversion
         Value predicatedAddress =
             selectLdsAddressForPredicate(b, threadPred, shmemAddr);
         auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
-            vecTy, vecBytesVal, rsrcDesc, offsetElem, vecSoffsetBytes,
+            vecTy, vecBytesVal, rsrcDesc, offsetElem, soffsetBytes,
             predicatedAddress, maybeSwizzledMaskElem, *aux);
         if (targetInfo.requiresAliasInfoForAsyncOps())
           AMD::addAsyncCopyAliasScope(bufferLoadToLds);
@@ -1025,8 +994,8 @@ struct BufferLoadToLocalOpConversion
         auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, pred);
 
         auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
-            vecTy, vecBytesVal, rsrcDesc, offsetElem, vecSoffsetBytes,
-            shmemAddr, hasOther ? b.true_val() : maybeSwizzledMaskElem, *aux);
+            vecTy, vecBytesVal, rsrcDesc, offsetElem, soffsetBytes, shmemAddr,
+            hasOther ? b.true_val() : maybeSwizzledMaskElem, *aux);
         if (targetInfo.requiresAliasInfoForAsyncOps())
           AMD::addAsyncCopyAliasScope(bufferLoadToLds);
 
@@ -1135,8 +1104,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     // Zip buffer_offset, mask, other, swizzleOffsets for lowerLdSt
     SmallVector<Value> loadVals =
         zipAsyncCopyValues(rewriter, loc, vec, srcElems, srcPtrTy, maskElements,
-                           otherElems, otherTy, swizzledLaneOffsets,
-                           /*soffsetElems=*/{});
+                           otherElems, otherTy, swizzledLaneOffsets);
 
     auto freeVarMasks = getFreeVariableMasks(srcTy);
     // We load redundant data on different CTAs so each CTA has a copy in its
@@ -1154,7 +1122,7 @@ struct AsyncCopyGlobalToLocalOpConversion
                                  ArrayRef<Value> loadValues, Value shmemAddr,
                                  int startIdx, VectorType vecTy,
                                  Value multicastMask) -> SmallVector<Value> {
-      auto [srcElem, maskElem, otherElems, swizzleLaneOffset, unusedSoffset] =
+      auto [srcElem, maskElem, otherElems, swizzleLaneOffset] =
           unzipAsyncCopyValues(rewriter, loc, startIdx, loadValues, srcPtrTy,
                                otherTy, hasOther, vecTy.getNumElements());
       int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
@@ -1327,8 +1295,7 @@ struct AsyncCopyLocalToGlobalOpConversion
     Type dstPtrTy = dstElems[0].getType();
     // Zip dst_ptr, mask for lowerLdSt
     SmallVector<Value> storeVals = zipAsyncCopyValues(
-        rewriter, loc, vec, dstElems, dstPtrTy, maskElements, {}, i1_ty, {},
-        /*soffsetElems=*/{});
+        rewriter, loc, vec, dstElems, dstPtrTy, maskElements, {}, i1_ty, {});
 
     auto freeVarMasks = getFreeVariableMasks(dstTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
@@ -1339,7 +1306,7 @@ struct AsyncCopyLocalToGlobalOpConversion
             RewriterBase &rewriter, Location loc, ArrayRef<Value> storeValues,
             Value shmemAddr, int startIdx, VectorType vecTy,
             Value /*multicastMask*/) -> SmallVector<Value> {
-      auto [dstElem, maskElem, unused1, unused2, unused3] =
+      auto [dstElem, maskElem, unused1, unused2] =
           unzipAsyncCopyValues(rewriter, loc, startIdx, storeValues, dstPtrTy,
                                i1_ty, false, vecTy.getNumElements());
       int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
