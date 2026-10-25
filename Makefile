@@ -103,6 +103,16 @@ dev-install-torch:
 dev-install-triton:
 	$(PYTHON) -m pip install -e . --no-build-isolation -v
 
+.PHONY: dev-install-triton-non-verbose
+dev-install-triton-non-verbose:
+	$(PYTHON) -m pip install -e . --no-build-isolation
+
+.PHONY: dev-install-torch-url
+dev-install-torch-url:
+	# install torch from url (for nightly) but ensure pytorch-triton isn't installed
+	$(PYTHON) -m pip install --no-cache-dir --pre torch --index-url $(TORCH_URL)
+	$(PYTHON) -m pip uninstall pytorch-triton pytorch-triton-rocm -y
+
 .PHONY: dev-install
 .NOPARALLEL: dev-install
 dev-install: dev-install-requires dev-install-triton
