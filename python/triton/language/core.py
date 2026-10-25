@@ -2235,12 +2235,12 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
         :code:`dtype`, instead of being numerically casted.
     :type bitcast: bool, optional
     """
-    input = _semantic.to_tensor(input)
     dtype = _unwrap_if_constexpr(dtype)
     fp_downcast_rounding = _unwrap_if_constexpr(fp_downcast_rounding)
     bitcast = _unwrap_if_constexpr(bitcast)
     if bitcast:
-        return _semantic.bitcast(input, dtype)
+        return _semantic.bitcast(_semantic.to_tensor(input), dtype)
+    input = _semantic.to_tensor(input, dst_ty=dtype)
     return _semantic.cast(input, dtype, fp_downcast_rounding)
 
 
@@ -2459,8 +2459,6 @@ def load(pointer, mask=None, other=None, *, cache_modifier="", eviction_policy="
     other = _unwrap_if_constexpr(other)
     if mask is not None:
         mask = _semantic.to_tensor(mask)
-    if other is not None:
-        other = _semantic.to_tensor(other)
     volatile = _unwrap_if_constexpr(volatile)
     cache_policy = _normalize_cache_policy(None, cache_modifier, eviction_policy)
     return _semantic.load(pointer, mask, other, cache_policy, volatile)
@@ -2512,7 +2510,7 @@ def store(pointer, value, mask=None, *, cache_modifier="", eviction_policy="", _
     :type eviction_policy: str, optional, should be one of {"", "evict_first", "evict_last"}
     """
     # `value` can be constexpr
-    value = _semantic.to_tensor(value)
+    value = _unwrap_if_constexpr(value)
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         mask = _semantic.to_tensor(mask)
@@ -2654,7 +2652,7 @@ def atomic_store(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
         effect. Acceptable values are "gpu" (default), "cta", and "sys".
     :type scope: str, optional
     """
-    val = _semantic.to_tensor(val)
+    val = _unwrap_if_constexpr(val)
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     mask = _unwrap_if_constexpr(mask)
@@ -2696,8 +2694,8 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
 @builtin
 @_add_atomic_docstr("compare-and-swap", has_cmp=True)
 def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None):
-    cmp = _semantic.to_tensor(cmp)
-    val = _semantic.to_tensor(val)
+    cmp = _unwrap_if_constexpr(cmp)
+    val = _unwrap_if_constexpr(val)
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     return _semantic.atomic_cas(pointer, cmp, val, sem, scope)
@@ -2744,7 +2742,7 @@ def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, 
 @builtin
 @_add_atomic_docstr("exchange")
 def atomic_xchg(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
-    val = _semantic.to_tensor(val)
+    val = _unwrap_if_constexpr(val)
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     mask = _unwrap_if_constexpr(mask)
@@ -2755,7 +2753,7 @@ def atomic_xchg(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
 @builtin
 @_add_atomic_docstr("add")
 def atomic_add(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
-    val = _semantic.to_tensor(val)
+    val = _unwrap_if_constexpr(val)
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     mask = _unwrap_if_constexpr(mask)
@@ -2766,7 +2764,7 @@ def atomic_add(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
 @builtin
 @_add_atomic_docstr("max")
 def atomic_max(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
-    val = _semantic.to_tensor(val)
+    val = _unwrap_if_constexpr(val)
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     mask = _unwrap_if_constexpr(mask)
@@ -2777,7 +2775,7 @@ def atomic_max(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
 @builtin
 @_add_atomic_docstr("min")
 def atomic_min(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
-    val = _semantic.to_tensor(val)
+    val = _unwrap_if_constexpr(val)
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     mask = _unwrap_if_constexpr(mask)
