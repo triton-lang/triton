@@ -66,6 +66,18 @@ FailureOr<triton::LinearLayout> inferScaledUpcastFp4ScaleLayout(
 #define GET_ATTRDEF_CLASSES
 #include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUAttrDefs.h.inc"
 
+#define GET_TYPEDEF_CLASSES
+#include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUTypes.h.inc"
+
+namespace mlir::triton::amdgpu {
+/// The element type accessed through the base of a buffer op: the pointee of
+/// a scalar pointer or the element type of a buffer descriptor.
+Type getBufferElementType(Type base);
+/// Whether `value`'s element type matches the element type of buffer base
+/// `base` (a scalar pointer or a buffer descriptor).
+bool elementTypeMatchesBufferBase(Type value, Type base);
+} // namespace mlir::triton::amdgpu
+
 #include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUOpInterfaces.h.inc"
 #define GET_OP_CLASSES
 #include "amd/include/Dialect/TritonAMDGPU/IR/Ops.h.inc"

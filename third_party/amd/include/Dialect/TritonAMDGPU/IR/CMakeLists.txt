@@ -16,6 +16,10 @@ mlir_tablegen(TritonAMDGPUEnums.cpp.inc -gen-enum-defs)
 mlir_tablegen(TritonAMDGPUAttrDefs.h.inc -gen-attrdef-decls)
 mlir_tablegen(TritonAMDGPUAttrDefs.cpp.inc -gen-attrdef-defs)
 
+set(LLVM_TARGET_DEFINITIONS TritonAMDGPUTypes.td)
+mlir_tablegen(TritonAMDGPUTypes.h.inc -gen-typedef-decls)
+mlir_tablegen(TritonAMDGPUTypes.cpp.inc -gen-typedef-defs)
+
 set(LLVM_TARGET_DEFINITIONS TritonAMDGPUOpInterfaces.td)
 mlir_tablegen(TritonAMDGPUOpInterfaces.h.inc -gen-op-interface-decls)
 mlir_tablegen(TritonAMDGPUOpInterfaces.cpp.inc -gen-op-interface-defs)
