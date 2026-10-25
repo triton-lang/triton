@@ -3988,7 +3988,7 @@ def ws_noinline_barrier_kernel():
 def test_compile_warp_specialize_noinline_barrier():
     k = triton.compile(src=gluon._runtime.GluonASTSource(ws_noinline_barrier_kernel, {}, {}),
                        target=GPUTarget("hip", 'gfx1250', 32))
-    assert re.search(r"call .*@\S+_ws\(.*ptr addrspace\(3\) @nbar", k.asm["llir"])
+    assert re.search(r"call .*@\S+_ws\(.*ptr addrspace\(15\) @nbar", k.asm["llir"])
     amdgcn = k.asm["amdgcn"]
     assert "s_barrier_join m0" in amdgcn
     assert "s_barrier_signal m0" in amdgcn
@@ -4045,6 +4045,42 @@ def tdm_scatter_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stri
     ttgl.amd.cdna5.tdm.async_wait(0)
 
 
+@gluon.jit
+def tdm_scatter_multi_cta_kernel(inp_ptr, out_ptr, dst_row_indices_ptr, M_out, N_out, stride_m, BLOCK_M: ttgl.constexpr,
+                                 BLOCK_N: ttgl.constexpr, SHARED_LAYOUT: ttgl.constexpr, IDX_LAYOUT: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(inp_ptr.type.element_ty, (BLOCK_M, BLOCK_N), SHARED_LAYOUT)
+
+    inp_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=inp_ptr, shape=(BLOCK_M, BLOCK_N), strides=(BLOCK_N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_load(inp_desc, [0, 0], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(M_out, N_out), strides=(stride_m, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    idx_offs = ttgl.arange(0, BLOCK_M, layout=IDX_LAYOUT)
+    dst_row_indices = ttgl.load(dst_row_indices_ptr + idx_offs)
+    ttgl.amd.cdna5.tdm.async_scatter(out_desc, dst_row_indices, smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
+
+
+def _tdm_scatter_multi_cta_layouts(block_n, cga_layout):
+    block_m = 256
+    num_warps = 8 if block_n == 512 else 4
+    cta_split_m = 2**sum(basis[0] != 0 for basis in cga_layout)
+    cta_split_n = 2**sum(basis[1] != 0 for basis in cga_layout)
+    rows_per_cta = block_m // cta_split_m
+    cols_per_cta = block_n // cta_split_n
+    if block_n == 512:
+        shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout)
+    else:
+        shared_layout = ttgl.PaddedSharedLayout.with_identity_for([[cols_per_cta, 16]], [block_m, block_n], [1, 0],
+                                                                  cga_layout)
+    idx_cga_layout = [[0, basis[0]] for basis in cga_layout]
+    idx_parent_layout = ttgl.BlockedLayout([1, rows_per_cta // num_warps], [32, 1], [1, num_warps], [0, 1],
+                                           idx_cga_layout)
+    return block_m, num_warps, 2**len(cga_layout), shared_layout, ttgl.SliceLayout(0, idx_parent_layout)
+
+
 @pytest.mark.parametrize("NUM_INDICES", [1, 2, 4, 8, 16])
 @pytest.mark.parametrize("BLOCK_M", [16, 32])
 @pytest.mark.parametrize("BLOCK_N", [64, 128])
@@ -4098,6 +4134,45 @@ def _create_scatter_test_data(shape, dtype):
     else:
         # float16, bfloat16, float32, etc.
         return torch.randn(shape, dtype=dtype)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("CGA_LAYOUT", [[[1, 0]], [[0, 1]], [[1, 0], [0, 1]]], ids=["2x1", "1x2", "2x2"])
+@pytest.mark.parametrize("index_dtype", [torch.int16, torch.int32])
+@pytest.mark.parametrize("BLOCK_N", [128, 512])
+def test_runtime_tdm_scatter_multi_cta(BLOCK_N, index_dtype, CGA_LAYOUT):
+    torch.manual_seed(42)
+    BLOCK_M, NUM_WARPS, NUM_CTAS, SHARED_LAYOUT, IDX_LAYOUT = _tdm_scatter_multi_cta_layouts(BLOCK_N, CGA_LAYOUT)
+    M_out = 512
+    N_out = BLOCK_N * 3 // 4
+    inp = _create_scatter_test_data((BLOCK_M, BLOCK_N), torch.float8_e4m3fn)
+    out = torch.zeros((M_out, BLOCK_N), dtype=inp.dtype)
+    dst_row_indices = torch.randperm(M_out, dtype=torch.int32)[:BLOCK_M].to(index_dtype)
+
+    inp_d = inp.cuda()
+    out_d = out.cuda()
+    indices_d = dst_row_indices.cuda()
+    tdm_scatter_multi_cta_kernel[(1, )](
+        inp_d,
+        out_d,
+        indices_d,
+        M_out=M_out,
+        N_out=N_out,
+        stride_m=out_d.stride(0),
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        SHARED_LAYOUT=SHARED_LAYOUT,
+        IDX_LAYOUT=IDX_LAYOUT,
+        num_warps=NUM_WARPS,
+        num_ctas=NUM_CTAS,
+    )
+
+    ref = torch.zeros_like(out)
+    elem_size = ref.element_size()
+    ref_bytes = ref.view(torch.uint8).reshape(M_out, -1)
+    inp_bytes = inp.view(torch.uint8).reshape(BLOCK_M, -1)
+    ref_bytes[dst_row_indices.long(), :N_out * elem_size] = inp_bytes[:, :N_out * elem_size]
+    torch.testing.assert_close(out_d.cpu().view(torch.uint8), ref.view(torch.uint8))
 
 
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")

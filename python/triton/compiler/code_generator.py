@@ -365,7 +365,7 @@ class CodeGenerator(ast.NodeVisitor):
 
     builtin_namespace: Dict[str, Any] = {
         _.__name__: _
-        for _ in (len, list, range, float, int, isinstance, getattr, hasattr)
+        for _ in (len, list, range, float, int, bool, isinstance, getattr, hasattr)
     }
     builtin_namespace.update((
         ('print', language.core.device_print),
@@ -593,7 +593,7 @@ class CodeGenerator(ast.NodeVisitor):
         def common_type(a, b):
             if isinstance(a, tl.tuple_type):
                 _check(isinstance(b, tl.tuple_type), lambda: error_msg(a, b))
-                _check(a.fields == b.fields, lambda: error_msg(a, b))
+                _check(len(a.types) == len(b.types) and a.fields == b.fields, lambda: error_msg(a, b))
                 return tl.tuple_type([common_type(ai, bi) for ai, bi in zip(a, b)], fields=a.fields)
             if isinstance(a, tl.constexpr_type):
                 if a == b:
@@ -1349,15 +1349,10 @@ class CodeGenerator(ast.NodeVisitor):
         iv_type = self.semantic.integer_promote_impl(lb.dtype, ub.dtype)
         iv_type = self.semantic.integer_promote_impl(iv_type, step.dtype)
         iv_ir_type = iv_type.to_ir(self.builder)
-        iv_is_signed = iv_type.int_signedness == language.core.dtype.SIGNEDNESS.SIGNED
-        # lb/ub/step might be constexpr, we need to cast them to tensor
-        lb = lb.handle
-        ub = ub.handle
-        step = step.handle
-        # ForOp can only accept IndexType as lb/ub/step. Cast integer to Index
-        lb = self.builder.create_int_cast(lb, iv_ir_type, iv_is_signed)
-        ub = self.builder.create_int_cast(ub, iv_ir_type, iv_is_signed)
-        step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
+        # Preserve each operand's signedness when widening to the induction type.
+        lb = self.builder.create_int_cast(lb.handle, iv_ir_type, lb.dtype.is_int_signed())
+        ub = self.builder.create_int_cast(ub.handle, iv_ir_type, ub.dtype.is_int_signed())
+        step = self.builder.create_int_cast(step.handle, iv_ir_type, step.dtype.is_int_signed())
         # Create placeholder for the loop induction variable
         iv_placeholder = self.builder.create_poison(iv_ir_type)
         self.set_value(node.target.id, language.core.tensor(iv_placeholder, iv_type))
@@ -1528,6 +1523,9 @@ class CodeGenerator(ast.NodeVisitor):
                 # preserve the traceback of the original error, which may e.g.
                 # be in core.py.
                 raise CompilationError(self.jit_fn.src, node, str(e)) from e
+
+        if fn is bool and any(isinstance(_unwrap_if_constexpr(arg), tensor) for arg in args):
+            raise TypeError("bool() is not supported for tensors")
 
         if fn in self.builtin_namespace.values() or (hasattr(fn, '__self__') and not _is_triton_value(fn.__self__)):
             args = map(_unwrap_if_constexpr, args)

@@ -615,6 +615,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             b_microblock_size=b_dtype.microblock_size,
         ) if c_dtype.is_nvfp4 else precision_opt
     )
+    if c_dtype.is_nvfp4:
+        # Decode first: apply_precision returns BF16 for microscaled operands,
+        # and matmul_torch uses the decoded lhs dtype for its output buffer.
+        reference_a, reference_b = apply_precision(reference_a, reference_b, reference_precision)
+        reference_a, reference_b = reference_a.float(), reference_b.float()
+        reference_precision = PrecisionConfig()
     if is_compile_warmup():
         apply_precision(reference_a, reference_b, reference_precision)
         reference_dtype = (torch.float32 if c_dtype.is_nvfp4 or inner_expt_opt is not None
@@ -632,6 +638,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             reference_precision,
             gammas=gammas,
         )
+    if c_dtype.is_nvfp4:
+        assert ref_y.dtype == torch.float32
     if swiglu_opts is not None:
         ref_y = swiglu(ref_y, alpha=swiglu_opts[0], precision_config=SwiGLUPrecisionConfig(swiglu_opts[1]))
     if c_dtype.has_global_scale:

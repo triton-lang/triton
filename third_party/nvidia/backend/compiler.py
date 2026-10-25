@@ -86,14 +86,14 @@ def get_ptx_version_from_options(options, arch: int):
 
 def get_llvm_flags():
     """LLVM command line flags used throughout NVIDIA LLVM lowering."""
-    return ["nvptx-mad-wide-opt", "nvptx-short-ptr"]
+    return ["nvptx-mad-wide-opt"]
 
 
 @functools.lru_cache()
 def get_features(options, arch: int):
     ptx_version = get_ptx_version_from_options(options, arch)
 
-    # PTX 9.4 is the max version supported by LLVM b010a18d.
+    # PTX 9.4 is the max version supported by LLVM 18f9e623.
     #
     # To check if a newer PTX version is supported, increase this value
     # and run a test.  If it's not supported, LLVM will print a warning
@@ -158,8 +158,11 @@ class CUDAOptions:
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = knobs.nvidia.libdevice_path or str(default_libdir / 'libdevice.10.bc')
-        if is_enabled(self, "gsan"):
-            gsan_lib = default_libdir / "gsan.ll"
+        profiling = is_enabled(self, "gsan-profile")
+        if profiling and self.instrumentation_mode.strip() != "gsan-profile":
+            raise ValueError("gsan-profile must run separately from other instrumentation")
+        if is_enabled(self, "gsan") or profiling:
+            gsan_lib = default_libdir / ("gsan-profile.ll" if profiling else "gsan.ll")
             if not gsan_lib.exists():
                 raise FileNotFoundError(f"GSan runtime is missing at {gsan_lib}. "
                                         "Rebuild Triton to generate it.")
@@ -254,7 +257,7 @@ class CUDABackend(BaseBackend):
 
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
 
-        args["max_num_imprecise_acc_default"] = 2**30 if capability == 90 else 0
+        args["max_num_imprecise_acc_default"] = 2**30 if capability in (89, 90) else 0
 
         return CUDAOptions(**args)
 
@@ -423,7 +426,7 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        if is_enabled(options, "gsan"):
+        if is_enabled(options, "gsan") or is_enabled(options, "gsan-profile"):
             # GSan introduces layout conversions, so it must run before shared-memory allocation.
             passes.ttgpuir.add_global_sanitizer(pm)
 
@@ -495,7 +498,7 @@ class CUDABackend(BaseBackend):
         features = get_features(options, capability)
         triple = 'nvptx64-nvidia-cuda'
         flags = get_llvm_flags()
-        llvm.attach_datalayout(llvm_mod, triple, proc, features, flags)
+        llvm.attach_datalayout(llvm_mod, triple, proc, features, flags, abi="shortptr")
         if options.enable_reflect_ftz:
             nvidia.set_nvvm_reflect_ftz(llvm_mod)
 
@@ -514,6 +517,7 @@ class CUDABackend(BaseBackend):
             disable_slp_vectorizer=not use_slp_vectorizer,
             expand_masked_div_rem=True,
             nvptx_compute_capability=0 if use_slp_vectorizer else capability,
+            enable_nvptx_tti=True,
         )
 
         # Get some metadata
@@ -546,7 +550,8 @@ class CUDABackend(BaseBackend):
         flags = get_llvm_flags()
         enable_fpsan = is_enabled(opt, "fpsan")
         ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, enable_fpsan,
-                                    sched4reg=opt.sched4reg, enable_fpsan=enable_fpsan, disable_lsr=opt.disable_lsr)
+                                    sched4reg=opt.sched4reg, enable_fpsan=enable_fpsan, disable_lsr=opt.disable_lsr,
+                                    abi="shortptr")
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1

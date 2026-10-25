@@ -3,7 +3,7 @@
 ; RUN: sed '/^target triple =/d' %s | triton-llvm-opt -nvptx-vectorize -nvptx-compute-capability=90 | FileCheck %s --check-prefixes=CHECK,HOPPER,HOPPER-ONLY
 ; RUN: triton-llvm-opt -nvptx-vectorize -nvptx-compute-capability=80 %s | FileCheck %s --check-prefixes=CHECK,AMPERE
 ; RUN: triton-llvm-opt -nvptx-vectorize -mtriple=amdgcn-amd-amdhsa %s | FileCheck %s --check-prefix=OTHER
-; RUN: triton-llvm-opt -nvptx-vectorize -nvptx-compute-capability=100 %s | llc -mtriple=nvptx64 -mcpu=sm_100 -fp-contract=off | FileCheck %s --check-prefix=PTX
+; RUN: triton-llvm-opt -nvptx-vectorize -nvptx-compute-capability=100 %s | llc -mtriple=nvptx64 -mcpu=sm_100 | FileCheck %s --check-prefix=PTX
 
 target datalayout = "e-p:64:64-p1:64:64-p3:32:32-p5:64:64"
 target triple = "nvptx64-nvidia-cuda"
@@ -747,6 +747,45 @@ define void @scalar_short_mixed_precision_reduction(ptr addrspace(1) %dst,
   ret void
 }
 
+; BLACKWELL-LABEL: define void @scalar_short_bf16_mixed_precision_reduction(
+; BLACKWELL-NOT: fadd <2 x float>
+; BLACKWELL-COUNT-6: fadd float
+; BLACKWELL-NOT: fadd <2 x float>
+; BLACKWELL: fmul <2 x float>
+; PTX-LABEL: .visible .func scalar_short_bf16_mixed_precision_reduction(
+; PTX-NOT: add.rn.f32x2
+; PTX-COUNT-4: add.rn.f32.bf16
+; PTX-NOT: add.rn.f32x2
+; PTX: ret;
+define void @scalar_short_bf16_mixed_precision_reduction(
+    ptr addrspace(1) %dst, <2 x bfloat> %first, <2 x bfloat> %second,
+    <2 x bfloat> %third) {
+  %first0 = extractelement <2 x bfloat> %first, i64 0
+  %first1 = extractelement <2 x bfloat> %first, i64 1
+  %first.ext0 = fpext bfloat %first0 to float
+  %first.ext1 = fpext bfloat %first1 to float
+  %first.sum0 = fadd float %first.ext0, 0.0
+  %first.sum1 = fadd float %first.ext1, 0.0
+  %second0 = extractelement <2 x bfloat> %second, i64 0
+  %second1 = extractelement <2 x bfloat> %second, i64 1
+  %second.ext0 = fpext bfloat %second0 to float
+  %second.ext1 = fpext bfloat %second1 to float
+  %second.sum0 = fadd float %first.sum0, %second.ext0
+  %second.sum1 = fadd float %first.sum1, %second.ext1
+  %third0 = extractelement <2 x bfloat> %third, i64 0
+  %third1 = extractelement <2 x bfloat> %third, i64 1
+  %third.ext0 = fpext bfloat %third0 to float
+  %third.ext1 = fpext bfloat %third1 to float
+  %result0 = fadd float %second.sum0, %third.ext0
+  %result1 = fadd float %second.sum1, %third.ext1
+  %scaled0 = fmul float %result0, 3.0
+  %scaled1 = fmul float %result1, 3.0
+  %packed0 = insertelement <2 x float> poison, float %scaled0, i64 0
+  %packed1 = insertelement <2 x float> %packed0, float %scaled1, i64 1
+  store <2 x float> %packed1, ptr addrspace(1) %dst, align 8
+  ret void
+}
+
 ; BLACKWELL-LABEL: define void @packed_single_mixed_precision_add(
 ; BLACKWELL: fadd <2 x float>
 define void @packed_single_mixed_precision_add(ptr addrspace(1) %dst,
@@ -1129,6 +1168,70 @@ define void @packed_f32_late_operands(<2 x float> %lhs, <2 x float> %rhs) {
 declare float @llvm.fma.f32(float, float, float)
 declare half @llvm.fma.f16(half, half, half)
 declare float @llvm.nvvm.div.full(float, float)
+
+; CHECK-LABEL: define void @scalar_f16_bf16_fma(
+; CHECK: %lhs.ext = fpext half %lhs to float
+; CHECK: %rhs.ext = fpext bfloat %rhs to float
+; CHECK: %result = call float @llvm.fma.f32(float %lhs.ext, float %rhs.ext, float %addend)
+; PTX-LABEL: .visible .func scalar_f16_bf16_fma(
+; PTX-DAG: cvt.f32.f16
+; PTX-DAG: cvt.f32.bf16
+; PTX-NOT: fma.rn.f32.{{(f16|bf16)}}
+; PTX: fma.rn.f32{{[ \t]}}
+; PTX-NOT: fma.rn.f32.{{(f16|bf16)}}
+; PTX: ret;
+define void @scalar_f16_bf16_fma(ptr addrspace(1) %dst, half %lhs,
+                                bfloat %rhs, float %addend) {
+  %lhs.ext = fpext half %lhs to float
+  %rhs.ext = fpext bfloat %rhs to float
+  %result = call float @llvm.fma.f32(float %lhs.ext, float %rhs.ext, float %addend)
+  store float %result, ptr addrspace(1) %dst, align 4
+  ret void
+}
+
+; CHECK-LABEL: define void @scalar_bf16_f16_fma(
+; CHECK: %lhs.ext = fpext bfloat %lhs to float
+; CHECK: %rhs.ext = fpext half %rhs to float
+; CHECK: %result = call float @llvm.fma.f32(float %lhs.ext, float %rhs.ext, float %addend)
+; PTX-LABEL: .visible .func scalar_bf16_f16_fma(
+; PTX-DAG: cvt.f32.bf16
+; PTX-DAG: cvt.f32.f16
+; PTX-NOT: fma.rn.f32.{{(f16|bf16)}}
+; PTX: fma.rn.f32{{[ \t]}}
+; PTX-NOT: fma.rn.f32.{{(f16|bf16)}}
+; PTX: ret;
+define void @scalar_bf16_f16_fma(ptr addrspace(1) %dst, bfloat %lhs,
+                                half %rhs, float %addend) {
+  %lhs.ext = fpext bfloat %lhs to float
+  %rhs.ext = fpext half %rhs to float
+  %result = call float @llvm.fma.f32(float %lhs.ext, float %rhs.ext, float %addend)
+  store float %result, ptr addrspace(1) %dst, align 4
+  ret void
+}
+
+; PTX-LABEL: .visible .func scalar_f16_f16_fma(
+; PTX: fma.rn.f32.f16{{[ \t]}}
+; PTX: ret;
+define void @scalar_f16_f16_fma(ptr addrspace(1) %dst, half %lhs,
+                               half %rhs, float %addend) {
+  %lhs.ext = fpext half %lhs to float
+  %rhs.ext = fpext half %rhs to float
+  %result = call float @llvm.fma.f32(float %lhs.ext, float %rhs.ext, float %addend)
+  store float %result, ptr addrspace(1) %dst, align 4
+  ret void
+}
+
+; PTX-LABEL: .visible .func scalar_bf16_bf16_fma(
+; PTX: fma.rn.f32.bf16{{[ \t]}}
+; PTX: ret;
+define void @scalar_bf16_bf16_fma(ptr addrspace(1) %dst, bfloat %lhs,
+                                bfloat %rhs, float %addend) {
+  %lhs.ext = fpext bfloat %lhs to float
+  %rhs.ext = fpext bfloat %rhs to float
+  %result = call float @llvm.fma.f32(float %lhs.ext, float %rhs.ext, float %addend)
+  store float %result, ptr addrspace(1) %dst, align 4
+  ret void
+}
 
 ; HOPPER-ONLY-LABEL: define void @packed_f32_fma(
 ; HOPPER-ONLY-COUNT-2: call float @llvm.fma.f32

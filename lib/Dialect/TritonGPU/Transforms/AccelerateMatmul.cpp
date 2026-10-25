@@ -396,13 +396,14 @@ static int computeOrigBitWidth(Value x) {
   if (llvm::any_of(slice, [](Operation *op) { return isa<Fp4ToFpOp>(op); }))
     return 4;
 
-  int origBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
+  int origBitWidth = getIntOrFloatOrPtrBitWidth(getElementTypeOrSelf(x));
   for (auto op : slice) {
     if (isa<LoadOp, DescriptorLoadLikeOpInterface>(op)) {
       if (auto tensorTy =
               dyn_cast<RankedTensorType>(op->getResultTypes().front())) {
-        origBitWidth =
-            std::min<int>(origBitWidth, tensorTy.getElementTypeBitWidth());
+        origBitWidth = std::min<int>(
+            origBitWidth,
+            getIntOrFloatOrPtrBitWidth(tensorTy.getElementType()));
       }
     }
   }
@@ -793,8 +794,8 @@ public:
     Operation *newDot = nullptr;
 
     // ScaledBlockedToMMA logic
-    int bitwidthA = oldAType.getElementType().getIntOrFloatBitWidth();
-    int bitwidthB = oldBType.getElementType().getIntOrFloatBitWidth();
+    int bitwidthA = getIntOrFloatOrPtrBitWidth(oldAType.getElementType());
+    int bitwidthB = getIntOrFloatOrPtrBitWidth(oldBType.getElementType());
     int minBitwidth = std::min(bitwidthA, bitwidthB);
 
     Value newA = convertDotOperandForMMA(a, 0, minBitwidth,

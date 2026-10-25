@@ -215,6 +215,13 @@ Value generateOther(OpBuilder &builder, Location loc, Type scalarTy,
                     ArrayRef<int64_t> blockShape,
                     Value paddingOption = nullptr) {
   auto blockTy = RankedTensorType::get(blockShape, scalarTy);
+  if (isa<PackedFloat4E2M1Type, Float8E8M0FNUType>(scalarTy)) {
+    // Descriptor zero padding fills the encoded bytes with zero bits.
+    auto bitsTy = blockTy.clone(builder.getI8Type());
+    auto zero =
+        arith::ConstantOp::create(builder, loc, builder.getZeroAttr(bitsTy));
+    return BitcastOp::create(builder, loc, blockTy, zero);
+  }
   if (paddingOption && mlir::isa<FloatType>(scalarTy)) {
     auto floatTy = mlir::cast<FloatType>(scalarTy);
     auto nan = llvm::APFloat::getNaN(floatTy.getFloatSemantics());

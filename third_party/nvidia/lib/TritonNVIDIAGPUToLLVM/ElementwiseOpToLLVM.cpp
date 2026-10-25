@@ -293,6 +293,31 @@ static ConverterT makeNativeFp8Converter(Type srcTy, Type dstTy, bool useFp32) {
   };
 }
 
+static StringRef stringifyLLVMRoundingMode(triton::RoundingMode rounding) {
+  // clang-format off
+  switch (rounding) {
+  case triton::RoundingMode::RTNE: return "round.tonearest";
+  case triton::RoundingMode::RTZ: return "round.towardzero";
+  }
+  // clang-format on
+  llvm_unreachable("unknown rounding mode");
+}
+
+// Keep the rounding mode visible to LLVM so it can select native conversions
+// and fold an f32 intermediate in f16 <-> bf16 conversions.
+static Value convertFpTrunc(Location loc, ConversionPatternRewriter &rewriter,
+                            Type dstType, Value value,
+                            triton::RoundingMode rounding) {
+  StringRef mode = stringifyLLVMRoundingMode(rounding);
+  Value metadata = LLVM::MetadataAsValueOp::create(
+      rewriter, loc,
+      LLVM::MDStringAttr::get(rewriter.getContext(),
+                              rewriter.getStringAttr(mode)));
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.fptrunc.round",
+                                         dstType, {value, metadata})
+      .getResult(0);
+}
+
 // Use packed conversions where the target supports them.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<FpToFpOp, FpToFpOpConversion> {
@@ -310,33 +335,6 @@ struct FpToFpOpConversion
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
     return LLVM::FPExtOp::create(rewriter, loc, f32_ty, v);
-  }
-
-  static Value convertFp32To16BitFloat(Location loc,
-                                       ConversionPatternRewriter &rewriter,
-                                       Value v, Type dstTy,
-                                       RoundingMode rounding) {
-    assert((dstTy.isF16() || dstTy.isBF16()) && "expected a 16-bit float");
-    StringRef dstName = dstTy.isBF16() ? "bf16" : "f16";
-    StringRef suffix;
-    switch (rounding) {
-    case RoundingMode::RTNE:
-      suffix = "rn";
-      break;
-    case RoundingMode::RTZ:
-      suffix = "rz";
-      break;
-    default:
-      emitError(loc) << "unsupported rounding mode for f32->" << dstName
-                     << " conversion: " << stringifyRoundingMode(rounding)
-                     << "\n";
-      llvm::report_fatal_error(
-          "unsupported rounding mode for f32->" + dstName +
-          " conversion: " + stringifyRoundingMode(rounding) + "\n");
-    }
-    auto name = ("llvm.nvvm.f2" + dstName + "." + suffix).str();
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, dstTy, {v})
-        .getResult(0);
   }
 
   std::pair<ConverterT, size_t>
@@ -434,41 +432,23 @@ struct FpToFpOpConversion
       }
     }
 
-    if (srcElementType.isF16() && dstElementType.isF32()) {
-      return llvm::to_vector(llvm::map_range(operands[0], [&](Value v) {
-        return convertFp16ToFp32(loc, rewriter, v);
-      }));
-    }
-
-    if ((srcElementType.isBF16() && dstElementType.isF16()) ||
-        (srcElementType.isF16() && dstElementType.isBF16())) {
-      Value v = operands[0][0];
-      if (computeCapability < 90) {
-        v = LLVM::FPExtOp::create(rewriter, loc, f32_ty, v);
-        auto rounding = roundingMode.value_or(RoundingMode::RTNE);
-        return {convertFp32To16BitFloat(loc, rewriter, v, dstElementType,
-                                        rounding)};
-      }
-      PTXBuilder builder;
-      auto *result = builder.newOperand("=h");
-      auto *input = builder.newOperand(v, "h");
-      auto &cvt = *builder.create("cvt");
-      cvt.o(roundingMode == RoundingMode::RTZ ? "rz" : "rn")
-          .o(dstElementType.isBF16() ? "bf16" : "f16")
-          .o(srcElementType.isBF16() ? "bf16" : "f16")(result, input);
-      return {builder.launch(rewriter, loc, dstElementType, false)};
-    }
-
-    if (srcElementType.isF32() &&
-        (dstElementType.isF16() || dstElementType.isBF16())) {
-      assert(roundingMode.has_value() &&
-             "rounding mode must be specified for fp32->fp16/bf16 conversion");
-      SmallVector<Value> outVals;
-      for (Value v : operands[0]) {
-        outVals.push_back(convertFp32To16BitFloat(
-            loc, rewriter, v, dstElementType, roundingMode.value()));
-      }
-      return outVals;
+    if (isa<Float16Type, BFloat16Type, Float32Type, Float64Type>(
+            srcElementType) &&
+        isa<Float16Type, BFloat16Type, Float32Type, Float64Type>(
+            dstElementType)) {
+      Value value = operands[0][0];
+      if (srcElementType == dstElementType)
+        return {value};
+      unsigned srcWidth = srcElementType.getIntOrFloatBitWidth();
+      unsigned dstWidth = dstElementType.getIntOrFloatBitWidth();
+      if (srcWidth < dstWidth)
+        return {LLVM::FPExtOp::create(rewriter, loc, elemTy, value)};
+      // LLVM casts require different bit widths. Expose the intermediate so
+      // NVPTX can select a direct f16 <-> bf16 conversion when supported.
+      if (srcWidth == dstWidth)
+        value = LLVM::FPExtOp::create(rewriter, loc, f32_ty, value);
+      return {convertFpTrunc(loc, rewriter, elemTy, value,
+                             roundingMode.value_or(RoundingMode::RTNE))};
     }
 
     bool useSoftwareFp8 = computeCapability < 89 &&
@@ -494,11 +474,10 @@ struct FpToFpOpConversion
       for (Value &v : inVals) {
         if (srcElementType.isBF16()) {
           // BF16 is exact in FP16 throughout E5M2's nonzero rounding range.
-          v = convertFp32To16BitFloat(loc, rewriter, b.fpext(f32_ty, v), f16_ty,
-                                      RoundingMode::RTNE);
+          v = convertFpTrunc(loc, rewriter, f16_ty, b.fpext(f32_ty, v),
+                             RoundingMode::RTNE);
         } else {
-          v = convertFp32To16BitFloat(loc, rewriter, v, f16_ty,
-                                      RoundingMode::RTZ);
+          v = convertFpTrunc(loc, rewriter, f16_ty, v, RoundingMode::RTZ);
         }
       }
     }
@@ -857,27 +836,6 @@ private:
   StringRef funcName;
 };
 
-struct MulhiUIOpConversion
-    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
-  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
-    assert(bitWidth == 32 || bitWidth == 64);
-    StringRef intrinsic =
-        bitWidth == 32 ? "llvm.nvvm.mulhi.ui" : "llvm.nvvm.mulhi.ull";
-    // A widened multiply/shift relies on LLVM recognizing explicit extensions.
-    // InstCombine can replace those extensions with masks, losing mul.hi.
-    return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, elemTy,
-                                            operands[0])
-                .getResult(0)};
-  }
-};
 } // namespace
 } // namespace gpu
 
@@ -892,8 +850,10 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
 
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis,
-                                    benefit.getBenefit() + 1);
+  // Preserve mul.hi selection when InstCombine turns input extensions into
+  // masks.
+  patterns.add<ElementwiseOpConversion<MulhiUIOp, LLVM::UMulHOp>>(
+      typeConverter, axisInfoAnalysis, benefit.getBenefit() + 1);
 
 #define POPULATE_OP(SRC_OP, DST_OP, ...)                                       \
   patterns.add<                                                                \

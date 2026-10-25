@@ -13,6 +13,7 @@
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
@@ -324,6 +325,12 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   static std::optional<BufferOpInfo>
   analyzeBufferOp(amdttg::BufferOpInterface op, scf::ForOp targetFor,
                   DataFlowSolver *solver) {
+    // A buffer descriptor's bounds are relative to its base, so only plain
+    // pointer bases can move.
+    if (!isa<triton::PointerType>(op.getPtr().getType())) {
+      LDBG("Rejected: op uses a buffer descriptor");
+      return {};
+    }
     auto offsetValue = op.getOffsets();
 
     // Try to match components of two following patterns:
@@ -395,7 +402,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     }
 
     auto ptrType = cast<PointerType>(op.getPtr().getType());
-    auto elemBitwidth = ptrType.getPointeeType().getIntOrFloatBitWidth();
+    auto elemBitwidth = getIntOrFloatOrPtrBitWidth(ptrType.getPointeeType());
     auto dtypeByteWidth = elemBitwidth / 8;
     assert(dtypeByteWidth > 0);
     if (!isTransformationEquivalent(dtypeByteWidth, offsetLoopArgument,

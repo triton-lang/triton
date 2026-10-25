@@ -241,17 +241,13 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
   return applySharedPadding(index * elems * elementSize, ty);
 }
 
-struct MemDescSubsliceOffsets {
-  uint32_t storageOffset = 0;
-  uint32_t byteOffset = 0;
-  uint32_t partitionOffset = 0;
-  uint32_t ctaOffset = 0;
-};
+} // namespace
+
+namespace mlir::triton {
 
 MemDescSubsliceOffsets
-getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
-  auto srcTy = op.getSrc().getType();
-  auto offsets = op.getOffsets();
+getMemDescSubsliceUnpaddedOffsets(ttg::MemDescType srcTy,
+                                  ArrayRef<int64_t> offsets) {
   if (offsets.empty())
     return MemDescSubsliceOffsets{};
 
@@ -260,7 +256,7 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
   auto layoutRank = layoutOffsets.size();
   mlir::triton::LinearLayout layout = ttg::toLinearLayoutIgnoringPadding(srcTy);
 
-  MLIRContext *ctx = op->getContext();
+  MLIRContext *ctx = srcTy.getContext();
   SmallVector<StringAttr> dimNames =
       mlir::triton::standardOutDimNames(ctx, layoutRank);
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
@@ -304,10 +300,6 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
                                 elementOffset * elementSizeBytes,
                                 partitionOffset, blockOffset};
 }
-
-} // namespace
-
-namespace mlir::triton {
 
 AddressSet AddressSet::fromRange(uint32_t begin, uint32_t length) {
   AddressSet result;
@@ -750,8 +742,9 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     const RegionInfo &in = operands[0]->getValue();
     if (in.isUnknown())
       return propagateRegions(in);
-    MemDescSubsliceOffsets relativeOffset =
-        getMemDescSubsliceUnpaddedOffsets(memdescSubsliceOp);
+    MemDescSubsliceOffsets relativeOffset = getMemDescSubsliceUnpaddedOffsets(
+        memdescSubsliceOp.getSrc().getType(),
+        llvm::to_vector_of<int64_t>(memdescSubsliceOp.getOffsets()));
     for (const BufferRegionView &view : in.views)
       regionInfo.views.insert(
           getSubView(memdescSubsliceOp.getType(), view,

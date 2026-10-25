@@ -7,5 +7,5 @@ add_triton_ut(
 add_triton_ut(
 	NAME LLVMOptions
 	SRCS LLVMOptionsTest.cpp
-	LIBS TritonTools
+	LIBS TritonTools LLVMCodeGen
 )

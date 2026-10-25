@@ -123,6 +123,13 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
                  "src", "mask", "getI1SameShape($_self)">,
   OptionalTypesMatchWith<"infer other type from src type",
                  "src", "other", "getPointeeType($_self)">,
+  PredOpTrait<"source pointee type must match the result element type",
+              CPred<"::mlir::cast<::mlir::triton::PointerType>("
+                    "::mlir::cast<::mlir::RankedTensorType>("
+                    "$_op.getOperand(0).getType()).getElementType())"
+                    ".getPointeeType() == "
+                    "::mlir::cast<::mlir::triton::gpu::MemDescType>("
+                    "$_op.getOperand(1).getType()).getElementType()">>,
 ]> {
   let summary = "Copy data from global memory to local memory asynchronously";
 
@@ -571,7 +578,7 @@ def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
       OpBuilder<(ins "TypedValue<RankedTensorType>":$src, "Type":$elemType, "int32_t":$axis)>
     ];
 
-  let arguments = (ins RankedTensorOf<[I8]>:$src, I32Attr:$axis);
+  let arguments = (ins RankedTensorOf<[I8, TT_FP4E2M1x2]>:$src, I32Attr:$axis);
   let results = (outs TT_FloatTensor:$result);
 
   let extraClassDeclaration = [{

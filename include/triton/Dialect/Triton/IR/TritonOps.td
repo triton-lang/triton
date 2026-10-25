@@ -30,6 +30,28 @@ class TT_Op<string mnemonic, list<Trait> traits = []> :
 }
 
 //
+// Value annotations
+//
+def TT_AnnotateOp : TT_Op<"annotate", [Pure, Elementwise,
+                                      SameOperandsAndResultType]> {
+    let summary = "Attach compiler hints to a single value";
+    let description = [{
+        Returns its operand unchanged. Attributes on this operation describe
+        only its result, allowing compiler hints to be attached independently
+        to each result of a multi-result operation, such as a function call.
+        When the operand has a single-result defining operation, the hints can
+        be folded into that operation. Otherwise, the annotation is preserved
+        until lowering to LLVM.
+    }];
+
+    let arguments = (ins TT_Type:$src);
+    let results = (outs TT_Type:$result);
+    let assemblyFormat = "$src attr-dict `:` type($result)";
+    let hasFolder = 1;
+    let hasCanonicalizer = 1;
+}
+
+//
 // Cast Ops
 //
 // Use cast ops in arith:
@@ -797,10 +819,9 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let arguments = (
       ins
-      // inputs are floats if we have a type for them, otherwise (fp4),
-      // they are packed in pairs in an I8Tensor
-      RankedTensorOf<[TT_Float,I8]>:$a,
-      RankedTensorOf<[TT_Float,I8]>:$b,
+      // FP4 inputs are packed pairs, with I8Tensor retained for compatibility.
+      RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$a,
+      RankedTensorOf<[TT_Float, I8, TT_FP4E2M1x2]>:$b,
       TT_FloatTensor:$c,
       Optional<RankedTensorOf<[TT_Float, I8]>>:$a_scale,
       Optional<RankedTensorOf<[TT_Float, I8]>>:$b_scale,
@@ -1214,8 +1235,8 @@ def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpI
 
 def FuncOp : TT_Op<"func", [
     AffineScope, AutomaticAllocationScope, CallableOpInterface,
-    FunctionOpInterface, IsolatedFromAbove, OpAsmOpInterface,
-    HasParent<"ModuleOp">
+    SymbolName, SymbolVisibility, FunctionOpInterface, IsolatedFromAbove,
+    OpAsmOpInterface, HasParent<"ModuleOp">
 ]> {
   let summary = "An operation with a name containing a single `SSACFG` region";
   let description = [{

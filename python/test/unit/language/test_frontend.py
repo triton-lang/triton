@@ -5,6 +5,7 @@ import re
 import triton
 import triton.language as tl
 from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
@@ -94,6 +95,29 @@ def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
     run_filecheck_test(kernel, args=(MockTensor(src_dtype), scalar, dst_dtype))
 
 
+@pytest.mark.parametrize("dtype, ir_type", [(tl.float4e2m1x2, "!tt.fp4e2m1x2"), (tl.float8e8m0fnu, "f8E8M0FNU")])
+def test_native_float_types(dtype, ir_type):
+    assert dtype.primitive_bitwidth == 8 and dtype.itemsize == 1 and dtype != tl.uint8
+    assert dtype.is_floating() and dtype.kind() == tl.dtype.KIND.FLOATING
+
+    @triton.jit
+    def kernel(source, output, DTYPE: tl.constexpr, MIXED: tl.constexpr = False):
+        offsets = tl.arange(0, 32)
+        value = tl.load(source + offsets)
+        value = value.to(tl.uint8, bitcast=True).to(DTYPE, bitcast=True)
+        value = tl.where(offsets < 16, value, 1.0 if MIXED else value)
+        tl.static_assert(value.dtype == DTYPE)
+        tl.store(output + offsets, value)
+
+    args = (MockTensor(dtype), MockTensor(dtype), dtype)
+    module = run_parser(kernel, args=args)
+    assert module.verify()
+    text = module.str_nodebug()
+    assert ir_type in text and all(op in text for op in ("tt.bitcast", "tt.load", "tt.store"))
+    with pytest.raises(CompilationError, match="Implicit promotion"):
+        run_parser(kernel, args=(*args, True))
+
+
 def test_store_int_to_bool():
 
     @triton.jit
@@ -102,6 +126,18 @@ def test_store_int_to_bool():
         tl.store(output_ptr, value)
 
     run_filecheck_test(kernel, args=(MockTensor(tl.int1), 256))
+
+
+@pytest.mark.parametrize("flag", [False, True])
+def test_bool_parameter_annotation(flag):
+
+    @triton.jit
+    def kernel(out, flag: bool):
+        # CHECK: arith.select %arg1,
+        tl.store(out, tl.where(flag, 7.0, 9.0))
+        tl.static_assert(flag.dtype == tl.int1)
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), flag))
 
 
 @pytest.mark.parametrize("dtype",
@@ -1323,6 +1359,36 @@ def test_for_loop_iv_modification():
         i += 1
         # CHECK: anchor{{.*}}%[[I2]]
         anchor(i)
+
+
+@pytest.mark.parametrize("jit", [triton.jit, gluon.jit])
+@pytest.mark.parametrize("operand", ["lower", "upper", "step"])
+@pytest.mark.parametrize("src_dtype", [tl.int1, tl.int8, tl.uint8, tl.int16, tl.uint16], ids=str)
+@pytest.mark.parametrize("iv_dtype", [tl.int32, tl.uint32, tl.int64, tl.uint64], ids=str)
+def test_for_loop_operand_extension(jit, operand, src_dtype, iv_dtype):
+    language = tl if jit is triton.jit else gl
+
+    @jit
+    def kernel(X, IV_DTYPE: tl.constexpr, OPERAND: tl.constexpr):
+        value = language.load(X)
+        lower = language.full((), 0, IV_DTYPE)
+        upper = language.full((), 10, IV_DTYPE)
+        step = language.full((), 1, IV_DTYPE)
+        if OPERAND == "lower":
+            lower = value
+        elif OPERAND == "upper":
+            upper = value
+        else:
+            step = value
+        for i in range(lower, upper, step):
+            language.store(X, i)
+
+    module = run_parser(kernel, args=(MockTensor(src_dtype), iv_dtype, operand))
+    widths = f"i{src_dtype.int_bitwidth} to i{iv_dtype.int_bitwidth}"
+    extensions = [line for line in module.str_nodebug().splitlines() if "arith.ext" in line and widths in line]
+    assert len(extensions) == 1
+    expected_op = "arith.extsi" if src_dtype in (tl.int8, tl.int16) else "arith.extui"
+    assert expected_op in extensions[0]
 
 
 @pytest.mark.interpreter

@@ -641,7 +641,8 @@ private:
 
     return llvm::any_of(instruction.operands(), [](Value *operand) {
       auto *extension = dyn_cast<FPExtInst>(operand);
-      return extension && extension->getSrcTy()->isHalfTy();
+      return extension && (extension->getSrcTy()->isHalfTy() ||
+                           extension->getSrcTy()->isBFloatTy());
     });
   }
 

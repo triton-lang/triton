@@ -44,6 +44,27 @@ void LoadOp::getEffects(
 namespace mlir {
 namespace triton {
 
+OpFoldResult AnnotateOp::fold(FoldAdaptor adaptor) {
+  if ((*this)->getAttrs().empty())
+    return getSrc();
+  return {};
+}
+
+void AnnotateOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                             MLIRContext *context) {
+  patterns.add(+[](AnnotateOp op, PatternRewriter &rewriter) -> LogicalResult {
+    Operation *definingOp = op.getSrc().getDefiningOp();
+    if (!definingOp || definingOp->getNumResults() != 1)
+      return failure();
+    rewriter.modifyOpInPlace(definingOp, [&] {
+      for (NamedAttribute attr : op->getAttrs())
+        definingOp->setDiscardableAttr(attr.getName(), attr.getValue());
+    });
+    rewriter.replaceOp(op, op.getSrc());
+    return success();
+  });
+}
+
 LogicalResult
 verifyCacheModifier(CacheModifier modifier, CachePolicyOperation operation,
                     function_ref<InFlightDiagnostic()> emitError) {
@@ -1250,8 +1271,8 @@ LogicalResult BitcastOp::verify() {
     }
     return emitError("Cannot bitcast pointer to non-pointer type");
   }
-  unsigned dstBits = dstType.getIntOrFloatBitWidth();
-  unsigned srcBits = srcType.getIntOrFloatBitWidth();
+  unsigned dstBits = getIntOrFloatOrPtrBitWidth(dstType);
+  unsigned srcBits = getIntOrFloatOrPtrBitWidth(srcType);
   if (dstBits != srcBits) {
     return emitError("Cannot bitcast data-type of size ")
            << srcBits << " to data-type of size " << dstBits;
@@ -1816,10 +1837,11 @@ LogicalResult verifyGatherScatterResultType(Operation *op,
   }
 
   Type dtype = resultType.getElementType();
-  if (dtype.getIntOrFloatBitWidth() > 32)
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(dtype);
+  if (bitWidth > 32)
     return op->emitOpError("TMA dtype cannot be greater than 32 bits");
 
-  unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
+  unsigned minCols = 32 / bitWidth * 8;
   if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
     return op->emitOpError("must have at least ")
            << minCols << " columns for " << dtype << ", but got " << cols;

@@ -7,6 +7,7 @@
 #include "triton/Tools/Sys/GetEnv.h"
 #include "triton/Version.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -19,6 +20,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
@@ -77,6 +79,53 @@ void enableFPContraction(llvm::Module &module) {
           instruction.getOpcode() == llvm::Instruction::FSub ||
           instruction.getOpcode() == llvm::Instruction::FMul)
         instruction.setHasAllowContract(true);
+}
+
+// The independently pinned AMD code generator predates disjoint alias scopes.
+// Keep explicit alias/noalias relationships, but drop the additional disjoint
+// guarantee when serializing for that backend. Do this after optimization so
+// Triton's LLVM always sees its own metadata format.
+void downgradeAliasScopeDomains(llvm::Module &module) {
+  SmallPtrSet<MDNode *, 16> seen;
+  SmallVector<TrackingMDNodeRef> scopes;
+  auto collect = [&](MDNode *list) {
+    if (list)
+      for (const MDOperand &operand : list->operands()) {
+        auto *scope = cast<MDNode>(operand);
+        if (seen.insert(scope).second)
+          scopes.emplace_back(scope);
+      }
+  };
+  for (Function &function : module)
+    for (Instruction &instruction : instructions(function)) {
+      collect(instruction.getMetadata(LLVMContext::MD_alias_scope));
+      collect(instruction.getMetadata(LLVMContext::MD_noalias));
+      if (auto *decl = dyn_cast<NoAliasScopeDeclInst>(&instruction))
+        collect(decl->getScopeList());
+    }
+
+  DenseMap<MDNode *, MDNode *> domains;
+  for (const TrackingMDNodeRef &scope : scopes) {
+    auto *domain = cast<MDNode>(scope->getOperand(1));
+    if (domains.contains(domain))
+      continue;
+    SmallVector<Metadata *> operands{domain->getOperand(0)};
+    if (domain->getNumOperands() == 3)
+      operands.push_back(domain->getOperand(2));
+    bool selfReference = operands[0] == domain;
+    if (selfReference)
+      operands[0] = nullptr;
+    // Do not merge domains that only differ in the removed flag.
+    MDNode *replacement = MDNode::getDistinct(module.getContext(), operands);
+    if (selfReference)
+      replacement->replaceOperandWith(0, replacement);
+    domains[domain] = replacement;
+  }
+  SmallVector<MDNode *> replacements;
+  for (const TrackingMDNodeRef &scope : scopes)
+    replacements.push_back(domains.lookup(cast<MDNode>(scope->getOperand(1))));
+  for (auto [scope, replacement] : llvm::zip(scopes, replacements))
+    scope->replaceOperandWith(1, replacement);
 }
 
 struct ExpandMaskedDivRemPass : RequiredPassInfoMixin<ExpandMaskedDivRemPass> {
@@ -142,8 +191,13 @@ struct LLVMOptionSettings {
   }
 
   void enable(const std::vector<std::string> &flags) {
-    for (const std::string &flag : flags)
-      setFlag(flag, true);
+    for (const std::string &flag : flags) {
+      auto [name, value] = StringRef(flag).split('=');
+      if (name.size() == flag.size())
+        setFlag(flag, true);
+      else
+        set(name.str(), value.str());
+    }
   }
 
   // DISABLE_LLVM_OPT may hold a comma separated list of LLVM flags to turn on,
@@ -217,17 +271,19 @@ public:
 
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
-                    bool enable_fp_fusion, const std::string &features) {
+                    bool enable_fp_fusion, const std::string &features,
+                    const std::string &abi = "") {
   std::string error;
   auto target =
       llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
   llvm::TargetOptions opt;
   bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (enable_fp_fusion)
-    opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+    enableFPContraction(*module);
   opt.TrapUnreachable = true;
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;
+  opt.MCOptions.ABIName = abi;
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
       std::nullopt,
@@ -262,6 +318,63 @@ void lowerNVPTXFAbs(llvm::Module &module) {
     Value *bits = builder.CreateBitCast(call->getArgOperand(0), bitsType);
     Value *magnitude = builder.CreateAnd(bits, 0x7fffffff);
     call->replaceAllUsesWith(builder.CreateBitCast(magnitude, call->getType()));
+    call->eraseFromParent();
+  }
+}
+
+void lowerNVPTXFCopySign(llvm::Module &module) {
+  if (!module.getTargetTriple().isNVPTX())
+    return;
+
+  SmallVector<IntrinsicInst *> calls;
+  for (Function &function : module) {
+    Type *scalarType = function.getReturnType()->getScalarType();
+    if (function.getIntrinsicID() != Intrinsic::copysign ||
+        !(scalarType->isHalfTy() || scalarType->isBFloatTy()))
+      continue;
+    for (User *user : function.users())
+      if (auto *call = dyn_cast<IntrinsicInst>(user))
+        if (!call->hasNoNaNs())
+          calls.push_back(call);
+  }
+
+  // NVPTX can implement 16-bit copysign with neg.f16/neg.bf16, which
+  // canonicalize NaNs. FPSan stores integer payloads in floating-point values,
+  // so preserve every magnitude bit. Inline assembly prevents SelectionDAG
+  // from recognizing the integer sign-bit operations as copysign again.
+  Type *bitsType = Type::getInt16Ty(module.getContext());
+  auto *asmType = FunctionType::get(bitsType, {bitsType, bitsType}, false);
+  // Mag ^ ((Mag ^ Sign) & SignMask) has only three inputs, allowing ptxas
+  // to fuse it into one LOP3 instruction.
+  auto *mergeSign = InlineAsm::get(asmType,
+                                   "{ .reg .b16 diff; "
+                                   "xor.b16 diff, $1, $2; "
+                                   "and.b16 diff, diff, 0x8000; "
+                                   "xor.b16 $0, $1, diff; }",
+                                   "=h,h,h", false);
+  for (IntrinsicInst *call : calls) {
+    IRBuilder<> builder(call);
+    auto lowerScalar = [&](Value *magnitude, Value *sign) {
+      Value *bits = builder.CreateCall(
+          mergeSign, {builder.CreateBitCast(magnitude, bitsType),
+                      builder.CreateBitCast(sign, bitsType)});
+      return builder.CreateBitCast(bits, magnitude->getType());
+    };
+    Value *magnitude = call->getArgOperand(0);
+    Value *sign = call->getArgOperand(1);
+    Value *result;
+    if (auto *vectorType = dyn_cast<FixedVectorType>(call->getType())) {
+      result = PoisonValue::get(vectorType);
+      for (unsigned i = 0; i < vectorType->getNumElements(); ++i)
+        result = builder.CreateInsertElement(
+            result,
+            lowerScalar(builder.CreateExtractElement(magnitude, i),
+                        builder.CreateExtractElement(sign, i)),
+            i);
+    } else {
+      result = lowerScalar(magnitude, sign);
+    }
+    call->replaceAllUsesWith(result);
     call->eraseFromParent();
   }
 }
@@ -348,13 +461,12 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   return result;
 }
 
-std::string translateLLVMIRToASM(llvm::Module &module,
-                                 const std::string &triple,
-                                 const std::string &proc,
-                                 const std::string &features,
-                                 const std::vector<std::string> &flags,
-                                 bool enable_fp_fusion, bool isObject,
-                                 bool canonicalizeGEP, bool enableFpSan) {
+std::string
+translateLLVMIRToASM(llvm::Module &module, const std::string &triple,
+                     const std::string &proc, const std::string &features,
+                     const std::vector<std::string> &flags,
+                     bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
+                     bool enableFpSan, const std::string &abi) {
   using namespace mlir;
 
   LLVMOptionSettings options;
@@ -368,7 +480,8 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   // Set up target information before inlining so target-specific inline
   // compatibility checks use the backend's TTI.
   module.setTargetTriple(Triple(triple));
-  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
+  auto machine =
+      createTargetMachine(&module, proc, enable_fp_fusion, features, abi);
   module.setDataLayout(machine->createDataLayout());
 
   // inline everything
@@ -409,8 +522,10 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     cleanup.add(llvm::createEarlyCSEPass());
     cleanup.run(module);
   }
-  if (enableFpSan)
+  if (enableFpSan) {
     lowerNVPTXFAbs(module);
+    lowerNVPTXFCopySign(module);
+  }
   // emit machine code
   std::string result;
   {
@@ -651,7 +766,8 @@ void init_triton_llvm(py::module_ &m) {
 
   m.def(
       "to_bitcode",
-      [](const std::string &llvmIR, bool enable_fp_fusion) {
+      [](const std::string &llvmIR, bool enable_fp_fusion,
+         bool legacy_alias_scopes) {
         std::string bitcode;
         {
           py::gil_scoped_release release;
@@ -667,12 +783,15 @@ void init_triton_llvm(py::module_ &m) {
                 " at line " + std::to_string(error.getLineNo()));
           if (enable_fp_fusion)
             enableFPContraction(*module);
+          if (legacy_alias_scopes)
+            downgradeAliasScopeDomains(*module);
           llvm::raw_string_ostream stream(bitcode);
           llvm::WriteBitcodeToFile(*module, stream);
         }
         return py::bytes(bitcode.data(), bitcode.size());
       },
-      py::arg("llvm_ir"), py::arg("enable_fp_fusion") = false);
+      py::arg("llvm_ir"), py::arg("enable_fp_fusion") = false,
+      py::arg("legacy_alias_scopes") = false);
 
   // Add Triton and LLVM versions to the module.
   m.def("add_version_info", [](llvm::Module *mod) {
@@ -693,7 +812,8 @@ void init_triton_llvm(py::module_ &m) {
   m.def(
       "attach_datalayout",
       [](llvm::Module *mod, const std::string triple, const std::string proc,
-         const std::string features, const std::vector<std::string> &flags) {
+         const std::string features, const std::vector<std::string> &flags,
+         const std::string &abi) {
         LLVMOptionSettings options;
         options.enable(flags);
         options.enableFlagsFromDisableLLVMOptEnv();
@@ -707,6 +827,7 @@ void init_triton_llvm(py::module_ &m) {
           throw std::runtime_error("target lookup error: " + error);
         }
         llvm::TargetOptions opt;
+        opt.MCOptions.ABIName = abi;
         // Target machine is only used to create the data layout.
         std::unique_ptr<llvm::TargetMachine> machine{
             target->createTargetMachine(targetTriple, proc, features, opt,
@@ -715,7 +836,7 @@ void init_triton_llvm(py::module_ &m) {
         mod->setDataLayout(machine->createDataLayout());
       },
       py::arg("mod"), py::arg("triple"), py::arg("proc"), py::arg("features"),
-      py::arg("flags") = std::vector<std::string>{},
+      py::arg("flags") = std::vector<std::string>{}, py::arg("abi") = "",
       py::call_guard<py::gil_scoped_release>());
 
   m.def(
@@ -724,7 +845,7 @@ void init_triton_llvm(py::module_ &m) {
          std::string arch, std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool disable_slp_vectorizer,
          bool disable_vector_combine, bool expand_masked_div_rem,
-         unsigned nvptx_compute_capability) {
+         unsigned nvptx_compute_capability, bool enable_nvptx_tti) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Declare the same flags as codegen even though IR optimization does
@@ -759,7 +880,7 @@ void init_triton_llvm(py::module_ &m) {
           // registry name "vector-combine".
           const StringRef kVectorCombinePassName = "VectorCombinePass";
           passInstrCb.registerShouldRunOptionalPassCallback(
-              [kVectorCombinePassName](StringRef passName, Any) {
+              [kVectorCombinePassName](StringRef passName, IRUnitRef) {
                 return passName != kVectorCombinePassName;
               });
           enablePassInstrumentation = true;
@@ -793,7 +914,7 @@ void init_triton_llvm(py::module_ &m) {
         if (!pluginFile.empty()) {
           // TODO: Add some logging here that we inserted a pass into the LLVM
           // pass pipeline
-          auto passPlugin = llvm::PassPlugin::Load(pluginFile);
+          auto passPlugin = llvm::PassPlugin::load(pluginFile);
           if (!passPlugin) {
             llvm::Error Err = passPlugin.takeError();
             std::string ErrMsg =
@@ -805,6 +926,16 @@ void init_triton_llvm(py::module_ &m) {
 
         pb.registerModuleAnalyses(mam);
         pb.registerCGSCCAnalyses(cgam);
+        // Register before PassBuilder installs its default TargetIRAnalysis:
+        // the first registration wins. Keep the target-machine pipeline and
+        // non-NVIDIA backends unchanged. The switch preserves the generic TTI
+        // baseline for differential testing of future overrides.
+        // NVIDIA normally leaves the module triple unset during optimization.
+        if (enable_nvptx_tti && !targetMachine &&
+            (mod->getTargetTriple().str().empty() ||
+             mod->getTargetTriple().isNVPTX())) {
+          fam.registerPass([] { return createTritonNVPTXTargetIRAnalysis(); });
+        }
         pb.registerFunctionAnalyses(fam);
         pb.registerLoopAnalyses(lam);
         pb.crossRegisterProxies(lam, fam, cgam, mam);
@@ -842,6 +973,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("disable_vector_combine") = false,
       py::arg("expand_masked_div_rem") = false,
       py::arg("nvptx_compute_capability") = 0,
+      py::arg("enable_nvptx_tti") = false,
       py::call_guard<py::gil_scoped_release>());
 
   m.def(
@@ -849,7 +981,8 @@ void init_triton_llvm(py::module_ &m) {
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
-         bool sched4reg, bool enableFpSan, bool disableLSR) -> py::object {
+         bool sched4reg, bool enableFpSan, bool disableLSR,
+         const std::string &abi) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -871,7 +1004,7 @@ void init_triton_llvm(py::module_ &m) {
           }
           obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
                                      enable_fp_fusion, isObject,
-                                     canonicalizeGEP, enableFpSan);
+                                     canonicalizeGEP, enableFpSan, abi);
         }
         if (isObject)
           return py::object(py::bytes(obj.c_str(), obj.size()));
@@ -882,7 +1015,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
       py::arg("is_object"), py::arg("canonicalize_gep"),
       py::arg("sched4reg") = false, py::arg("enable_fpsan") = false,
-      py::arg("disable_lsr") = false);
+      py::arg("disable_lsr") = false, py::arg("abi") = "");
 
   m.def("translate_to_mir",
         [](std::string llvmIR, std::string triple, std::string proc,

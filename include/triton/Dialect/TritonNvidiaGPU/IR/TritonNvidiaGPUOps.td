@@ -1140,13 +1140,16 @@ def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure,
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
+def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [
+    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Initiate an asynchronous copy operation from shared memory to tensor memory.";
 
   let description = [{
     2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
     This op lowers to the PTX instruction tcgen05.cp. This supports writing to
     the scales TMEM layout as well as the default TMEM layout.
+    The copy is skipped when the optional predicate is false. An omitted
+    predicate is equivalent to true.
     For the default layout, each contiguous TMEM row segment must contain at
     least 128 bits, the minimum width supported by tcgen05.cp.
     Currently, the semantics are different when writing to the TMEM scale layout.
@@ -1191,10 +1194,14 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", AsyncSharedRead>:$src,
-    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst
+    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
+    Optional<I1>:$pred
   );
 
-  let assemblyFormat = [{$src `,` $dst attr-dict `:` qualified(type(operands))}];
+  let assemblyFormat = [{
+    $src `,` $dst (`,` $pred^)? attr-dict `:`
+    qualified(type($src)) `,` qualified(type($dst))
+  }];
   let hasVerifier = 1;
 }
 

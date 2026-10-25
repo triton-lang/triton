@@ -12,6 +12,10 @@ from ..._semantic import _check
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
+# `buffer` stays out of __all__: cdna4 star-imports this module and defines
+# its own `buffer` submodule.
+from . import buffer
+
 __all__ = [
     "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or",
     "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast",

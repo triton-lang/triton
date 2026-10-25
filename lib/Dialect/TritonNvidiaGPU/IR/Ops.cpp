@@ -692,6 +692,15 @@ static LogicalResult verifyTMAEncoding(Operation *op, TensorDescInterface desc,
   }
   if (nvmma.getTransposed())
     return op->emitOpError("TMA descriptor layout must not be transposed");
+  auto splits = getCTASplitNum(nvmma);
+  // Gather/scatter get row positions from the x-offsets layout.
+  unsigned firstDim = isa<AsyncTMAGatherOp, AsyncTMAScatterOp>(op) ? 1 : 0;
+  for (unsigned dim = firstDim; dim < memDesc.getRank(); ++dim)
+    if (memDesc.getDimSize(dim) < splits[dim])
+      return op->emitOpError(
+                 "TMA shared-memory shape must cover every CTA split")
+             << ": dimension " << dim << " has size " << memDesc.getDimSize(dim)
+             << " but " << splits[dim] << " CTA splits";
   return success();
 }
 
@@ -1369,7 +1378,7 @@ static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
                                             ScaleDotElemType aType,
                                             ScaleDotElemType bType) {
   if (aType == ScaleDotElemType::E2M1) {
-    if (!elementType.isInteger(8))
+    if (!elementType.isInteger(8) && !isa<PackedFloat4E2M1Type>(elementType))
       return op->emitOpError("expected e2m1 LHS operand to have i8 storage");
     if (encoding.getFp4Padded() &&
         !llvm::is_contained({ScaleDotElemType::E4M3, ScaleDotElemType::E5M2},
@@ -1798,6 +1807,16 @@ void TMEMAllocOp::getEffects(
 }
 
 // -- TMEMCopyOp --
+Value TMEMCopyOp::getPredicateOperand() { return getPred(); }
+
+void TMEMCopyOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type TMEMCopyOp::getPredicateOperandTypeLike() {
+  return IntegerType::get(getContext(), 1);
+}
+
 LogicalResult TMEMCopyOp::verify() {
   if (failed(verifyTcgen05Target(getOperation())))
     return failure();
@@ -1858,7 +1877,7 @@ LogicalResult TMEMCopyOp::verify() {
       return emitOpError("Source layout should be swizzled.");
     }
     // When we lift this, we should make sure we handle unpacked cleanly
-    if (srcTy.getElementType().getIntOrFloatBitWidth() != 32) {
+    if (getIntOrFloatOrPtrBitWidth(srcTy.getElementType()) != 32) {
       return emitOpError("Source element type should be 32-bit.");
     }
     auto kCol = StringAttr::get(getContext(), "col");

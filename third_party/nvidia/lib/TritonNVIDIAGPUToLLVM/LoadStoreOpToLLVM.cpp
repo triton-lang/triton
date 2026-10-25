@@ -20,7 +20,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TMAUtils.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
@@ -341,6 +341,21 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       assert(movWidth <= 64 && "load words must be at most 64 bits");
       assert(wordNElems * nWords * numVecs == numElems);
 
+      Type unpackedTy = wordNElems == 1
+                            ? valueElemTy
+                            : LLVM::getVectorType(valueElemTy, wordNElems);
+      // Preserve floating-point types across the inline assembly boundary,
+      // including packed FP16/BF16 pairs. Returning integer bits introduces
+      // bitcasts that can turn floating-point zero comparisons into integer
+      // masks and comparisons in InstCombine.
+      // B32 also supports v2i16 and v4i8 (including lowered FP8). B16 does not
+      // support v2i8, so keep using a scalar i16 for two-byte words.
+      bool nativePackedInteger = width == 32 && (valueElemTy.isInteger(16) ||
+                                                 valueElemTy.isInteger(8));
+      Type wordTy = isa<FloatType>(valueElemTy) || nativePackedInteger
+                        ? unpackedTy
+                        : IntegerType::get(getContext(), width);
+
       PTXBuilder ptxBuilder;
 
       Value pred = mask ? maskElems[vecStart] : Value{};
@@ -372,8 +387,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           } else {
             auto elems = ArrayRef<Value>(otherElems)
                              .slice(vecStart + ii * wordNElems, wordNElems);
-            Value v = b.bitcast(packLLVector(loc, elems, rewriter),
-                                IntegerType::get(getContext(), width));
+            Value v = wordNElems == 1 ? elems.front()
+                                      : packLLVector(loc, elems, rewriter);
+            if (v.getType() != wordTy)
+              v = b.bitcast(v, wordTy);
             auto tensorType = dyn_cast<RankedTensorType>(op.getType());
             if (tensorType &&
                 ((valueElemNBits == 16 && nWords > 1) ||
@@ -430,7 +447,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         ld(dstsOpr, addrOpr, evictOpr).maybePredicate(pred, "b");
 
       // Create inline ASM signature
-      SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
+      SmallVector<Type> retTys(nWords, wordTy);
       Type retTy = retTys.size() > 1
                        ? LLVM::LLVMStructType::getLiteral(getContext(), retTys)
                        : retTys[0];
@@ -438,24 +455,16 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret = ptxBuilder.launch(rewriter, loc, retTy);
 
       // Extract and store return values
-      SmallVector<Value> rets;
       for (unsigned int ii = 0; ii < nWords; ++ii) {
         Value curr;
         if (isa<LLVM::LLVMStructType>(retTy)) {
-          curr = b.extract_val(IntegerType::get(getContext(), width), ret, ii);
+          curr = b.extract_val(wordTy, ret, ii);
         } else {
           curr = ret;
         }
-        curr = b.bitcast(
-            curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
-        rets.push_back(curr);
-      }
-      int tmp = width / valueElemNBits;
-      for (size_t ii = 0; ii < vec; ++ii) {
-        Value vecIdx = createIndexAttrConstant(
-            rewriter, loc, typeConverter->getIndexType(), ii % tmp);
-        Value loaded = b.extract_element(valueElemTy, rets[ii / tmp], vecIdx);
-        loadedVals.push_back(loaded);
+        if (curr.getType() != unpackedTy)
+          curr = b.bitcast(curr, unpackedTy);
+        llvm::append_range(loadedVals, unpackLLVector(loc, curr, rewriter));
       }
     } // end vec
 
@@ -1145,41 +1154,6 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
-static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
-                                               ttg::TMAMode mode) {
-  auto ctx = ty.getContext();
-  auto kMsg = str_attr("msg");
-  auto shapePerCTA = ttg::getShapePerCTA(ty);
-  int rank = shapePerCTA.size();
-  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true, mode);
-  auto outDimNames = standardOutDimNames(ctx, rank);
-  LinearLayout msgToOffset;
-  for (int dim = 0; dim < rank; ++dim) {
-    msgToOffset *=
-        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
-                                blockShape[dim], kMsg, outDimNames[dim]);
-  }
-  msgToOffset *= getCGALayout(ty.getEncoding()).getLinearLayout();
-  return msgToOffset;
-}
-
-static LinearLayout
-getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
-                             ttg::MemDescType ty) {
-  auto isFp4Padded =
-      cast<NVMMASharedEncodingAttr>(ty.getEncoding()).getFp4Padded();
-  if (!isFp4Padded) {
-    return packedLayout;
-  }
-  auto ctx = ty.getContext();
-  auto rank = ty.getRank();
-  auto kMsg = str_attr("msg");
-  auto kLastDim = str_attr("dim" + Twine(rank - 1));
-  // Multiply to offset by 2 in the last dimension
-  auto unpackLayout = LinearLayout::zeros1D(1, kMsg, kLastDim, 2);
-  return unpackLayout * packedLayout;
-}
-
 FailureOr<Value> createTMACachePolicy(Operation *op, Attribute attr,
                                       ConversionPatternRewriter &rewriter,
                                       int computeCapability,
@@ -1258,11 +1232,10 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     auto ctx = op.getContext();
     auto kBlock = str_attr("block");
-    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
+    auto layouts = ttng::getTMAMessageLayouts(smemTy, tmaMode);
+    auto &msgToShared = layouts.messageToShared;
+    auto &msgToOffset = layouts.messageToOffset;
     auto smemLayout = ttg::toLinearLayout(smemTy);
-    auto msgToShared =
-        invertAndComposeLocal(smemLayout, msgToPackedOffset, {kBlock});
-    auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
 
     auto kMsg = str_attr("msg");
     const auto numCopies = msgToOffset.getInDimSize(kMsg);
@@ -1417,15 +1390,13 @@ convertTMAStoreLikeOp(Operation *op, const TypeConverter *typeConverter,
   int numWarps = ttg::lookupNumWarps(op);
   int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
   Value warpID = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
-  auto shapePerCTA = ttg::getShapePerCTA(srcTy);
 
   auto rank = coords.size();
 
-  auto msgToPackedOffset =
-      getMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
+  auto layouts = ttng::getTMAMessageLayouts(srcTy, ttg::TMAMode::Tiled);
   auto smemLayout = ttg::toLinearLayout(srcTy);
-  auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
-  auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
+  const auto &msgToShared = layouts.messageToShared;
+  auto &msgToOffset = layouts.messageToOffset;
 
   auto ctx = op->getContext();
   auto kMsg = str_attr("msg");
@@ -1462,12 +1433,8 @@ convertTMAStoreLikeOp(Operation *op, const TypeConverter *typeConverter,
 
     auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
                                      {{kMsg, copyIdxVal}, {kBlock, ctaId}});
-    bool fp4Padded = nvidia_gpu::isFp4Padded(srcTy.getEncoding());
     for (int i = 0; i < rank; i++) {
       Value coord = coords[rank - i - 1];
-      if (fp4Padded && i == 0) {
-        coord = b.mul(coord, b.i32_val(2));
-      }
       if (i < offsets.size())
         coord = b.add(coord, offsets[offsets.size() - i - 1].second);
       operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
@@ -1555,25 +1522,10 @@ struct AsyncTMAReduceOpConversion
   }
 };
 
-static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
-  auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(type.getEncoding());
-  if (!mmaEncoding) {
-    assert(isa<ttg::SwizzledSharedEncodingAttr>(type.getEncoding()));
-    return ttg::toLinearLayout(type);
-  }
-  // TMA gather/scatter only supports tiled mode
-  return ttg::nvmmaSharedToLinearLayout(
-      ttg::dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
-      mmaEncoding, ttg::TMAMode::Tiled, /*disableSwizzle=*/true);
-}
-
-// This function is shared between the TMA gather and scatter lowerings. It
-// handles the logic for iterating over the x offset values in groups of 4
-// consecutive indices and mapping them to the appropriate shared memory offset.
-//
-// This invokes a callback with the predicate, shared memory offset, y offset,
-// and x offsets.
-static LogicalResult iterateGatherScatterIndices(
+// Iterates groups of four consecutive x-offset entries and their column
+// messages. Calls callback(pred, shMemPtr, targetCTA, yOffset, xOffsets) for
+// each message.
+static void iterateGatherScatterIndices(
     Operation *op, ConversionPatternRewriter &rewriter,
     const TypeConverter &typeConverter,
     mlir::TypedValue<RankedTensorType> xCoords,
@@ -1591,77 +1543,20 @@ static LogicalResult iterateGatherScatterIndices(
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
 
-  // Each warp can issue a distinct `gather4` instruction that loads 4 rows into
-  // consecutive shared memory. Thus, the layout of the x offsets must be such
-  // that 4 consecutive elements are broadcasted to a warp.
-  LinearLayout xCoordsLayout = triton::gpu::toLinearLayout(xCoords.getType());
-  xCoordsLayout = xCoordsLayout.removeZeroBasesAlongDim(kRegister);
-  if (xCoordsLayout.getInDimSize(kRegister) < 4)
-    return op->emitError("must have at least 4 x offsets per warp");
-  // Check that the first two bases are [1] and [2].
-  for (unsigned i : {0, 1}) {
-    if (xCoordsLayout.getBasis(kRegister, i).front() != (1 << i))
-      return op->emitError(
-          "x offsets are not grouped by 4 contiguous elements");
-  }
+  auto layouts =
+      ttng::getTMAGatherScatterLayouts(xCoords.getType(), smem.getType());
+  auto &msgToOffset = layouts.messageToPackedOffset;
+  auto &msgToShared = layouts.messageToShared;
+  unsigned numMessagesPerRow = layouts.numMessagesPerRow;
+  unsigned msgSize = layouts.messageSize;
+  unsigned warpMask = layouts.warpBroadcastMask;
 
-  triton::gpu::MemDescType smemType = smem.getType();
-  // `NVMMASharedEncodingAttr` means the core matrix tiles are placed next to
-  // each other in shared memory, which lines up with how `gather4` loads data.
-  auto enc = dyn_cast<NVMMASharedEncodingAttr>(smemType.getEncoding());
-  if (!enc)
-    return op->emitError("requires dst encoding NVMMASharedEncodingAttr");
-  if (enc.getFp4Padded())
-    yOffsetValue = b.mul(yOffsetValue, b.i32_val(2));
+  auto smemType = smem.getType();
   Type llvmElemTy = typeConverter.convertType(smemType.getElementType());
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, smemObjValue,
                                                        llvmElemTy, rewriter);
   bool crossCTA =
       LLVM::SharedMemoryObject::getMaskSpanOffsetsAndBlocks(smemType).second;
-
-  unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
-
-  // Each gather4 instructions reads contigDimSize columns, 4 rows at a time.
-  // TMA gather/scatter only supports tiled mode
-  auto shapePerCTA = ttg::getShapePerCTA(smemType);
-  auto tmaBlockShape = ttng::getTMABlockShape(smemType, /*packedSize=*/true,
-                                              ttg::TMAMode::Tiled);
-  unsigned innerBlockSize = shapePerCTA.back();
-  unsigned contigDimSize = tmaBlockShape.back();
-  unsigned numMessagesPerRow = ceil<unsigned>(innerBlockSize, contigDimSize);
-
-  // `xCoordsLayout` maps the register ID into dim0. Tile dim1 by adding a new
-  // dimension representing the TMA message ID.
-  assert(innerBlockSize % numMessagesPerRow == 0);
-  assert(llvm::isPowerOf2_32(numMessagesPerRow));
-  unsigned msgSize = innerBlockSize / numMessagesPerRow;
-  LinearLayout msgToCol =
-      LinearLayout::strided1D(numMessagesPerRow, msgSize, kMsg, kDim1);
-  LinearLayout msgToOffset =
-      getMsgToPackedOffsetLayout(smemType, ttg::TMAMode::Tiled);
-  LinearLayout msgLayout = xCoordsLayout * msgToCol;
-  auto msgBases = msgLayout.getBases();
-  for (auto [bit, basis] : llvm::enumerate(msgBases[kBlock]))
-    basis.back() = msgToOffset.getBasis(kBlock, bit, kDim1);
-  auto msgOutDims = msgLayout.getOutDims();
-  msgOutDims[msgLayout.getOutDimIndex(kDim1)].second =
-      smemType.getShape().back();
-  msgLayout = LinearLayout(std::move(msgBases), msgOutDims,
-                           /*requireSurjective=*/false);
-
-  // `gather4` will put the segments of the 4 rows consecutively in
-  // shared memory. However, if the 4 rows are smaller than the shared memory
-  // swizzle tile size, e.g. [4, 32] vs. [8, 32], then, for example, the address
-  // of the 0th element of row 4 will not be at the start of the segment.
-  LinearLayout sharedLayout = getUnswizzledLayout(smemType);
-  LinearLayout msgToShared =
-      invertAndComposeLocal(sharedLayout, msgLayout, {kBlock});
-
-  // If there are too few rows, warps will have redundant data.
-  auto freeVars = xCoordsLayout.getFreeVariableMasks();
-  unsigned warpMask = freeVars[kWarp];
-  if (freeVars[kLane] != (threadsPerWarp - 1))
-    return op->emitError("x offsets must be broadcasted across each warp");
 
   Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
   Value blockId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
@@ -1707,8 +1602,6 @@ static LogicalResult iterateGatherScatterIndices(
                ArrayRef(xOffsets).slice(regId, 4));
     };
   }
-
-  return success();
 }
 
 struct AsyncTMAGatherOpConversion
@@ -1820,11 +1713,10 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
     ptxBuilder.launch(rewriter, loc, voidTy);
   };
 
-  if (failed(iterateGatherScatterIndices(
-          op, rewriter, *getTypeConverter(), op.getXOffsets(), op.getResult(),
-          adaptor.getResult(), adaptor.getXOffsets(), adaptor.getYOffset(),
-          pred, callback)))
-    return failure();
+  iterateGatherScatterIndices(op, rewriter, *getTypeConverter(),
+                              op.getXOffsets(), op.getResult(),
+                              adaptor.getResult(), adaptor.getXOffsets(),
+                              adaptor.getYOffset(), pred, callback);
 
   rewriter.eraseOp(op);
   return success();
@@ -1898,11 +1790,10 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
     ptxBuilder.launch(rewriter, loc, voidTy);
   };
 
-  if (failed(iterateGatherScatterIndices(
-          op, rewriter, *getTypeConverter(), op.getXOffsets(), op.getSrc(),
-          adaptor.getSrc(), adaptor.getXOffsets(), adaptor.getYOffset(), pred,
-          callback)))
-    return failure();
+  iterateGatherScatterIndices(op, rewriter, *getTypeConverter(),
+                              op.getXOffsets(), op.getSrc(), adaptor.getSrc(),
+                              adaptor.getXOffsets(), adaptor.getYOffset(), pred,
+                              callback);
 
   // TODO: Separate the syncronizations operations into separate TTGIR ops to
   // be able to schedule them at the high level.

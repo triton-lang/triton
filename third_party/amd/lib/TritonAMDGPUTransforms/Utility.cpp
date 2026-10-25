@@ -416,7 +416,7 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
   bool loadTransposed = (order[0] != (1 - opIdx));
 
   // Fallback: assume padding to match widest load width
-  unsigned typeWidthInBit = srcTy.getElementType().getIntOrFloatBitWidth();
+  unsigned typeWidthInBit = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
   unsigned padAmount = 128 / typeWidthInBit;
   if (loadTransposed) {
     // Transposed path: pad by twice the elements-per-lane of the transposed

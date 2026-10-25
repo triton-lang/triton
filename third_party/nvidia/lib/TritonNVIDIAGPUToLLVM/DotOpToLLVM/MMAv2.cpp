@@ -1,4 +1,5 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Support/LLVM.h"
@@ -507,7 +508,7 @@ LogicalResult convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB,
   auto bShapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
   auto dShapePerCTA = triton::gpu::getShapePerCTA(dTensorTy);
 
-  int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
+  int bitwidth = getIntOrFloatOrPtrBitWidth(aTensorTy.getElementType());
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   int kWidth = dotOpA.getKWidth();
   auto repA =
@@ -543,10 +544,9 @@ LogicalResult convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB,
   auto numMmaRets = bitwidthRet == 64 ? 2 : bitwidthRet / 8;
   int numCPackedElem = bitwidthRet == 64 ? 1 : 4 / numMmaRets;
 
-  auto rank = dTensorTy.getRank();
-  auto elemsPerThread = triton::gpu::getElemsPerThread(dTensorTy);
-  auto batchOffset =
-      elemsPerThread[rank - 2] * elemsPerThread[rank - 1] / numCPackedElem;
+  // Include replicated accumulator registers for small M/N dimensions and any
+  // packing performed by loadC.
+  unsigned batchOffset = fc.size() / repBatch;
   Type resultTy = getMmaRetType(mmaType, op->getContext());
   auto callMma = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
     unsigned colsPerThread = repN * 2;

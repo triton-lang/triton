@@ -73,6 +73,10 @@ class TritonSemantic(Generic[TensorTy]):
 
     def computation_type_impl(self, a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_is_scalar: bool,
                               div_or_mod: bool) -> tl.dtype:
+        if a_ty in (tl.float4e2m1x2, tl.float8e8m0fnu) or b_ty in (tl.float4e2m1x2, tl.float8e8m0fnu):
+            if a_ty != b_ty:
+                raise TypeError(f"Implicit promotion between {a_ty} and {b_ty} is not supported")
+            return a_ty
         # 0) For scalars we follow semantics similar to PyTorch, namely:
         # - If the scalar is of a lower or equal kind (bool < uint < int < fp),
         #   it doesn't participate in the promotion
@@ -287,6 +291,11 @@ class TritonSemantic(Generic[TensorTy]):
         scalar_ty = input.type.scalar
         # ptr - offset
         if scalar_ty.is_ptr():
+            # Negate unsigned offsets in a signed type to avoid unsigned wraparound.
+            if other.dtype.is_int_unsigned() and other.dtype.int_bitwidth < 64:
+                other_type = other.type.with_element_ty(tl.int64)
+                other_handle = self.builder.create_int_cast(other.handle, other_type.to_ir(self.builder), False)
+                other = self.make_tensor(other_handle, other_type)
             return self.add(input, self.minus(other), sanitize_overflow=False)
         # float - float
         if scalar_ty.is_floating():
@@ -1386,6 +1395,8 @@ class TritonSemantic(Generic[TensorTy]):
         return self.make_tensor(handle, expected.type.with_element_ty(tl.int1))
 
     def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, sem: str, scope: str) -> TensorTy:
+        ptr, cmp, _ = self._atomic_typechecking_impl(ptr, cmp, None, "cas")
+        ptr, val, _ = self._atomic_typechecking_impl(ptr, val, None, "cas")
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
         element_ty = ptr.type.scalar.element_ty
@@ -1652,7 +1663,7 @@ class TritonSemantic(Generic[TensorTy]):
                      tl.float16}.get(float_format)
         if triton_ty is None:
             assert float_format == "e2m1", f"Internal Error: Unexpected float format: {float_format}"
-            assert val.dtype == tl.uint8, f"e2m1 format must be packed as uint8. Got {val.dtype}"
+            assert val.dtype in (tl.uint8, tl.float4e2m1x2), f"e2m1 format must be packed as uint8. Got {val.dtype}"
             return val
         if val.dtype == triton_ty:
             return val
@@ -1776,7 +1787,7 @@ class TritonSemantic(Generic[TensorTy]):
 
     def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn) -> Tuple[TensorTy, ...]:
         if axis is None:
-            inputs = tuple(self.reshape(t, [t.numel.value], can_reorder=True) for t in inputs)
+            inputs = tuple(self.reshape(t, [t.numel.value], can_reorder=False) for t in inputs)
             axis = 0
         # get result shape
         shape = inputs[0].type.shape
