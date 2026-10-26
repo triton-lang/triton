@@ -1038,3 +1038,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_atomic_load_release(%desc: !amdg.buffer_desc<i32>, %offsets: tensor<64xi32, #blocked>) {
+    // expected-error @+1 {{only supports acquire and relaxed semantics}}
+    %0 = amdg.buffer_atomic_load release, gpu, %desc[%offsets] : !amdg.buffer_desc<i32> -> tensor<64xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_atomic_store_acquire(%desc: !amdg.buffer_desc<i32>, %offsets: tensor<64xi32, #blocked>, %value: tensor<64xi32, #blocked>) {
+    // expected-error @+1 {{only supports release and relaxed semantics}}
+    amdg.buffer_atomic_store acquire, gpu, %value, %desc[%offsets] : !amdg.buffer_desc<i32> -> tensor<64xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_atomic_load_i1(%desc: !amdg.buffer_desc<i1>, %offsets: tensor<64xi32, #blocked>) {
+    // expected-error @+1 {{only supports elements of 8 to 64 bits}}
+    %0 = amdg.buffer_atomic_load relaxed, gpu, %desc[%offsets] : !amdg.buffer_desc<i1> -> tensor<64xi1, #blocked>
+    tt.return
+  }
+}
