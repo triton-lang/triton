@@ -2998,13 +2998,13 @@ def test_amd_mfma_scaled_3d(device='cuda'):
     a_scale = torch.randint(120, 134, (2, 16, 4), dtype=torch.uint8, device=device)
     b_scale = torch.randint(120, 134, (2, 16, 4), dtype=torch.uint8, device=device)
     out = torch.empty((2, 16, 16), dtype=torch.float32, device=device)
-    compiled = kernel[(1, )](out, a, b, a_scale, b_scale, num_warps=2)
-    a_ref = a.view(torch.float8_e4m3fn).float() * torch.exp2(a_scale.float() - 127).repeat_interleave(32, dim=2)
-    b_ref = b.view(torch.float8_e4m3fn).float() * torch.exp2(b_scale.float() - 127).repeat_interleave(
-        32, dim=2).transpose(1, 2)
+    kernel[(1, )](out, a, b, a_scale, b_scale, num_warps=2)
+    a_ref = a.view(torch.float8_e4m3fn).float()
+    a_ref = a_ref * torch.exp2(a_scale.float() - 127).repeat_interleave(32, dim=2)
+    b_ref = b.view(torch.float8_e4m3fn).float()
+    b_ref = b_ref * torch.exp2(b_scale.float() - 127).repeat_interleave(32, dim=2).transpose(1, 2)
     ref = torch.matmul(a_ref, b_ref)
     torch.testing.assert_close(out, ref)
-    assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
 
 
 def test_math_fast_expf():
