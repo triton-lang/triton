@@ -623,7 +623,7 @@ Syntax:
 
 ```
 operation ::= `amdg.buffer_load` $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
-              (`stride` `=` $stride^)?
+              (`stride` `=` $stride^)? (`soffset` `=` $soffset^ `:` type($soffset))?
               attr-dict `:` qualified(type($ptr)) `->` type($result)
 ```
 
@@ -642,6 +642,10 @@ Contiguity is the maximum number of elements that can be loaded in a single vect
 with the given layout and mask.
 This allows to use buffer_load even if the alignment cannot be proven based on IR.
 
+`ptr` and `soffset` are described in BufferOpInterface.
+`scope` makes the loaded data visible at that scope (it is not atomic
+and orders nothing).
+
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
 
 Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
@@ -652,17 +656,19 @@ Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
 
 | Operand | Description |
 | :-----: | ----------- |
-| `ptr` | ptr |
+| `ptr` | ptr or AMD buffer resource descriptor |
 | `offsets` | tensor of 32-bit signless integer values |
 | `stride` | 32-bit signless integer |
 | `mask` | ranked tensor of 1-bit signless integer values |
 | `other` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
+| `soffset` | 32-bit signless integer or tensor of 32-bit signless integer values |
 
 #### Results:
 
@@ -680,6 +686,7 @@ Syntax:
 
 ```
 operation ::= `amdg.buffer_load_to_local` $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
+              (`soffset` `=` $soffset^)?
               oilist(`cachePolicy` `=` $cachePolicy) `into` $dest
               attr-dict `:` qualified(type($ptr)) `[` type($offsets) `]` type($other) `->` type($dest)
 ```
@@ -688,6 +695,10 @@ AMD Buffer load operation. Similar to amdg.buffer_load op but directly
 writes to shared memory instead of into registers.
 Contiguity is the maximum number of elements that can be loaded in a single vector with the given layout and mask.
 This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.
+
+`ptr` and `soffset` are described in BufferOpInterface; an
+out-of-bounds element writes zero to `dest`. `scope` makes the loaded
+data visible at that scope.
 
 Traits: `AttrSizedOperandSegments`, `GlobalToLocalCopyTrait`
 
@@ -699,6 +710,7 @@ Interfaces: `BufferOpInterface`, `InferTypeOpInterface`, `PredicatedOpInterface`
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
@@ -706,11 +718,12 @@ Interfaces: `BufferOpInterface`, `InferTypeOpInterface`, `PredicatedOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `dest` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
-| `ptr` | ptr |
+| `ptr` | ptr or AMD buffer resource descriptor |
 | `offsets` | tensor of 32-bit signless integer values |
 | `mask` | ranked tensor of 1-bit signless integer values |
 | `other` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
 | `stride` | 32-bit signless integer |
+| `soffset` | 32-bit signless integer |
 
 #### Results:
 
@@ -728,7 +741,7 @@ Syntax:
 
 ```
 operation ::= `amdg.buffer_store` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
-              (`stride` `=` $stride^)?
+              (`stride` `=` $stride^)? (`soffset` `=` $soffset^ `:` type($soffset))?
               attr-dict `:` qualified(type($ptr)) `->` type($value)
 ```
 
@@ -747,6 +760,10 @@ Contiguity is the maximum number of elements that can be loaded in a single vect
 with the given layout and mask.
 This allows to use buffer_store even if the alignment cannot be proven based on IR.
 
+`ptr` and `soffset` are described in BufferOpInterface; an
+out-of-bounds element is dropped. `scope` makes the stored data available at
+that scope (it is not atomic and orders nothing).
+
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsEncoding`
 
 Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
@@ -757,6 +774,7 @@ Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
 </table>
 
 #### Operands:
@@ -764,10 +782,11 @@ Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 | Operand | Description |
 | :-----: | ----------- |
 | `value` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
-| `ptr` | ptr |
+| `ptr` | ptr or AMD buffer resource descriptor |
 | `offsets` | tensor of 32-bit signless integer values |
 | `stride` | 32-bit signless integer |
 | `mask` | ranked tensor of 1-bit signless integer values |
+| `soffset` | 32-bit signless integer or tensor of 32-bit signless integer values |
 
 
 
@@ -1136,6 +1155,54 @@ Traits: `LocalLoadTrait`
 | Result | Description |
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr or Two E2M1 floating-point values packed in one byte values |
+
+
+
+### `amdg.make_buffer_desc` (triton::amdgpu::MakeBufferDescOp)
+
+_Build a buffer resource descriptor_
+
+Syntax:
+
+```
+operation ::= `amdg.make_buffer_desc` $base `,` $num_records attr-dict `:` qualified(type($base)) `->` qualified(type($result))
+```
+
+Builds a buffer resource descriptor (V#) from the hardware fields the
+program controls. All operands are scalars, so the descriptor is uniform
+and lives in SGPRs.
+
+- `base`: the global base address.
+- `num_records`: the number of bytes accessible from `base`, read as an
+  unsigned 32-bit value.
+
+The hardware checks each access, or each 4-byte piece of an access wider
+than 4 bytes, against `num_records`: in bytes from `base`, it is in bounds
+only if `soffset + offset + size <= num_records`.
+Out-of-bounds loads return zero and stores are dropped.
+
+The remaining descriptor bits (stride, data format, swizzling, thread-ID
+addressing, out-of-bounds mode) are set by the compiler for the target;
+the stride is zero, so accesses are raw (unstructured).
+
+Traits: `AlwaysSpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `base` | ptr |
+| `num_records` | 32-bit signless integer |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | AMD buffer resource descriptor |
 
 
 

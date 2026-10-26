@@ -141,7 +141,11 @@ implicitly converted to pointers if they have a <code class="code docutils liter
 and a <cite>.dtype</cite> attribute.</p>
 </dd>
 <dt class="field-even">Note<span class="colon">:</span></dt>
-<dd class="field-even"><p>This function will be compiled and run on the GPU. It will only have access to:</p>
+<dd class="field-even"><p>Namedtuple argument classes support <code class="docutils literal notranslate"><span class="pre">__triton_do_not_specialize__</span></code>
+as documented in <a class="reference internal" href="../../../python-api/generated/triton.jit.html#triton.jit" title="triton.jit"><code class="xref py py-func docutils literal notranslate"><span class="pre">triton.jit()</span></code></a>.</p>
+</dd>
+<dt class="field-odd">Note<span class="colon">:</span></dt>
+<dd class="field-odd"><p>This function will be compiled and run on the GPU. It will only have access to:</p>
 <ul class="simple">
 <li><p>python primitives,</p></li>
 <li><p>builtins within the triton package,</p></li>
@@ -149,8 +153,8 @@ and a <cite>.dtype</cite> attribute.</p>
 <li><p>other jit’d functions</p></li>
 </ul>
 </dd>
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>fn</strong> (<em>Callable</em>) – the function to be jit-compiled</p>
+<dt class="field-even">Parameters<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>fn</strong> (<em>Callable</em>) – the function to be jit-compiled</p>
 </dd>
 </dl>
 </dd></dl>

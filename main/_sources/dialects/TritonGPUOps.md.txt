@@ -894,6 +894,194 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `ttg.thread_handoff` (triton::gpu::ThreadHandoffOp)
+
+_Distribute a scalar at the boundary of a thread region_
+
+Syntax:
+
+```
+operation ::= `ttg.thread_handoff` $src $source `->` $destination attr-dict `:` type($src)
+```
+
+The source scalar is available in `source` and is copied to `destination`.
+Lane and warp coordinates are relative to the enclosing warp-specialized
+partition; CTA coordinates are relative to the cluster.
+The destination may only widen the source domain. Lane transfers execute
+with every lane of the destination warps participating. Cross-warp transfers
+execute with all lanes and warps in each participating CTA. Cross-CTA
+transfers broadcast from CTA zero to the full enclosing domain.
+This operation may synchronize and must not be speculated or eliminated.
+
+Traits: `SameOperandsAndResultType`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `InferTypeOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>source</code></td><td>::mlir::triton::gpu::ThreadDomainAttr</td><td><details><summary></summary>{{% markdown %}}
+TritonGPU tensors differ from usual tensors in that they contain a _layout_ attribute which determines
+how the data should be partitioned across CUDA threads. Formally speaking, we define a layout as a function
+\mathcal{L} that maps a multi-dimensional tensor index $i \in \mathbb{Z}^d$ to a set of integers T corresponding
+to the indices of the CUDA threads allowed to access some data at index $i$.
+
+For example, let us consider the layout function:
+\mathcal{L}(0, 0) = {0, 4}
+\mathcal{L}(0, 1) = {1, 5}
+\mathcal{L}(1, 0) = {2, 6}
+\mathcal{L}(1, 1) = {3, 7}
+
+Then, attaching $\mathcal{L} to a tensor $T$ would mean that:
+- T[0,0] is owned by both cuda thread 0 and 4
+- T[0,1] is owned by both cuda thread 1 and 5
+- T[1,0] is owned by both cuda thread 2 and 6
+- T[1,1] is owned by both cuda thread 3 and 7
+
+Right now, Triton implements two main classes of layouts: shared, and distributed.
+  {{% /markdown %}}</details></td></tr>
+<tr><td><code>destination</code></td><td>::mlir::triton::gpu::ThreadDomainAttr</td><td><details><summary></summary>{{% markdown %}}
+TritonGPU tensors differ from usual tensors in that they contain a _layout_ attribute which determines
+how the data should be partitioned across CUDA threads. Formally speaking, we define a layout as a function
+\mathcal{L} that maps a multi-dimensional tensor index $i \in \mathbb{Z}^d$ to a set of integers T corresponding
+to the indices of the CUDA threads allowed to access some data at index $i$.
+
+For example, let us consider the layout function:
+\mathcal{L}(0, 0) = {0, 4}
+\mathcal{L}(0, 1) = {1, 5}
+\mathcal{L}(1, 0) = {2, 6}
+\mathcal{L}(1, 1) = {3, 7}
+
+Then, attaching $\mathcal{L} to a tensor $T$ would mean that:
+- T[0,0] is owned by both cuda thread 0 and 4
+- T[0,1] is owned by both cuda thread 1 and 5
+- T[1,0] is owned by both cuda thread 2 and 6
+- T[1,1] is owned by both cuda thread 3 and 7
+
+Right now, Triton implements two main classes of layouts: shared, and distributed.
+  {{% /markdown %}}</details></td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | integer or floating-point or ptr |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | integer or floating-point or ptr |
+
+
+
+### `ttg.thread_predicate` (triton::gpu::ThreadPredicateOp)
+
+_Select the threads in a compiler-generated execution domain_
+
+Syntax:
+
+```
+operation ::= `ttg.thread_predicate` $domain attr-dict
+```
+
+This operation marks entry into a restricted thread region and executes in
+the enclosing domain before its branch. Its conservative effects let
+synchronization analysis finish pending waits before entering the region.
+It must not be speculated, merged, or eliminated before that analysis.
+
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `InferTypeOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>domain</code></td><td>::mlir::triton::gpu::ThreadDomainAttr</td><td><details><summary></summary>{{% markdown %}}
+TritonGPU tensors differ from usual tensors in that they contain a _layout_ attribute which determines
+how the data should be partitioned across CUDA threads. Formally speaking, we define a layout as a function
+\mathcal{L} that maps a multi-dimensional tensor index $i \in \mathbb{Z}^d$ to a set of integers T corresponding
+to the indices of the CUDA threads allowed to access some data at index $i$.
+
+For example, let us consider the layout function:
+\mathcal{L}(0, 0) = {0, 4}
+\mathcal{L}(0, 1) = {1, 5}
+\mathcal{L}(1, 0) = {2, 6}
+\mathcal{L}(1, 1) = {3, 7}
+
+Then, attaching $\mathcal{L} to a tensor $T$ would mean that:
+- T[0,0] is owned by both cuda thread 0 and 4
+- T[0,1] is owned by both cuda thread 1 and 5
+- T[1,0] is owned by both cuda thread 2 and 6
+- T[1,1] is owned by both cuda thread 3 and 7
+
+Right now, Triton implements two main classes of layouts: shared, and distributed.
+  {{% /markdown %}}</details></td></tr>
+</table>
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 1-bit signless integer |
+
+
+
+### `ttg.thread_scope` (triton::gpu::ThreadScopeOp)
+
+_Preserve a compiler-generated single-thread scope during lowering_
+
+Syntax:
+
+```
+operation ::= `ttg.thread_scope` (`->` `(` type($results)^ `)`)? $body attr-dict
+```
+
+The body executes unconditionally within an enclosing guard that selects
+the canonical thread of each participating CTA. Entry/exit synchronization
+remains outside the guard.
+This wrapper survives control-flow lowering so memory operations can query
+their enclosing scope, and is inlined after memory operations are lowered.
+
+Traits: `RecursiveMemoryEffects`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `RegionBranchOpInterface`
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `results` | variadic of any non-token type |
+
+
+
+### `ttg.thread_yield` (triton::gpu::ThreadYieldOp)
+
+_Yield results from a single-thread scope_
+
+Syntax:
+
+```
+operation ::= `ttg.thread_yield` ($values^)? attr-dict (`:` type($values)^)?
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<ThreadScopeOp>`, `ReturnLike`, `Terminator`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `values` | variadic of any non-token type |
+
+
+
 ### `ttg.warp_id` (triton::gpu::WarpIdOp)
 
 _Return the GPU warp ID_

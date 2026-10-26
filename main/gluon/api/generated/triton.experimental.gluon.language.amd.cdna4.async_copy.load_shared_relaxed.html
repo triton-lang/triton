@@ -133,9 +133,9 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna4.async_copy.load_shared_relaxed">
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna4.async_copy.</span></span><span class="sig-name descname"><span class="pre">load_shared_relaxed</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">smem</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">layout</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna4.async_copy.load_shared_relaxed" title="Link to this definition"></a></dt>
-<dd><p>Load a tensor from shared memory with extra hints for the underlying
-compiler to avoid emitting unnecessary waits before loading from the target
-shared memory.</p>
+<dd><p>Deprecated. Use the shared memory descriptor’s load method instead,
+for example <cite>smem.load(layout)</cite>.</p>
+<p>This compatibility wrapper emits a normal shared-memory load.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
