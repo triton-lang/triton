@@ -6,6 +6,40 @@
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:100"} {
 
+// COMMON-LABEL: @zero_count_waits
+// COMMON: %[[TRUE:.*]] = arith.constant true
+// COMMON: %[[RECV_ABORT:.*]] = ttng.comm_is_aborted %arg2 {aborted_value = 17 : i64}
+// COMMON-NEXT: %[[RECV:.*]] = arith.xori %[[RECV_ABORT]], %[[TRUE]]
+// COMMON-NEXT: %[[ACK_ABORT:.*]] = ttng.comm_is_aborted %arg2 {aborted_value = 17 : i64}
+// COMMON-NEXT: %[[ACK:.*]] = arith.xori %[[ACK_ABORT]], %[[TRUE]]
+// COMMON-NEXT: ttng.comm_is_aborted %arg2 {aborted_value = 17 : i64}
+// COMMON-NEXT: tt.return %[[RECV]], %[[ACK]]
+tt.func @zero_count_waits(%counter: !tt.ptr<i64>, %cursor: !tt.ptr<i64>, %aborted: !tt.ptr<i64>, %monitor: !tt.ptr<i64>) -> (i1, i1) {
+  %zero = arith.constant 0 : i64
+  %recv = ttng.comm_wait recv %counter, %cursor, %aborted, %monitor, %zero {consume = true, aborted_value = 17 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  %ack = ttng.comm_wait ack %counter, %cursor, %aborted, %monitor, %zero {consume = false, blocking = false, aborted_value = 17 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  %unused = ttng.comm_wait recv %counter, %cursor, %aborted, %monitor, %zero {consume = true, blocking = false, aborted_value = 17 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  tt.return %recv, %ack : i1, i1
+}
+
+// COMMON-LABEL: @retain_waits
+// COMMON: ttng.comm_wait recv {{.*}}monitor = true
+// COMMON-NEXT: ttng.comm_wait ack {{.*}}monitor = true
+// COMMON-NEXT: ttng.comm_wait send
+// COMMON-NEXT: ttng.comm_wait recv
+// COMMON-NEXT: ttng.comm_wait ack
+// COMMON-NEXT: tt.return
+tt.func @retain_waits(%p: !tt.ptr<i64>, %count: i64) {
+  %zero = arith.constant 0 : i64
+  %one = arith.constant 1 : i64
+  %recv = ttng.comm_wait recv %p, %p, %p, %p, %zero {consume = true, monitor = true, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  %ack = ttng.comm_wait ack %p, %p, %p, %p, %zero {consume = false, blocking = false, monitor = true, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  %send = ttng.comm_wait send %p, %p, %p, %p, %zero {consume = false, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  %runtime = ttng.comm_wait recv %p, %p, %p, %p, %count {consume = true, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  %nonzero = ttng.comm_wait ack %p, %p, %p, %p, %one {consume = false, blocking = false, aborted_value = 1 : i64} : (!tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, !tt.ptr<i64>, i64) -> i1
+  tt.return
+}
+
 // CHECK-LABEL: @test_dce_tmem_alloc
 tt.func @test_dce_tmem_alloc(%arg: tensor<128x4xi8, #linear>) {
   // CHECK-NOT: ttng.tmem_alloc

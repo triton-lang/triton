@@ -10,6 +10,10 @@ namespace triton {
 
 namespace NVIDIA {
 
+void populateCommunicationOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    PatternBenefit benefit, const NVIDIA::TargetInfo &targetInfo);
+
 void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
                                      PatternBenefit benefit,
