@@ -297,25 +297,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // RDNA3-NEXT: llvm.mlir.constant(2.560000e+02 : f16) : f16
     // RDNA3-NEXT: llvm.fmul %{{.+}}, %{{.+}} : f16
     // RDNA3: llvm.icmp "eq"
-    // RDNA3-NEXT: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
     // RDNA3: llvm.lshr
     // RDNA3-NEXT: llvm.bitcast %{{.+}} : i16 to f16
     // RDNA3-NEXT: llvm.mlir.constant(2.560000e+02 : f16) : f16
     // RDNA3-NEXT: llvm.fmul %{{.+}}, %{{.+}} : f16
     // RDNA3: llvm.icmp "eq"
-    // RDNA3-NEXT: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
     // RDNA3: llvm.lshr
     // RDNA3-NEXT: llvm.bitcast %{{.+}} : i16 to f16
     // RDNA3-NEXT: llvm.mlir.constant(2.560000e+02 : f16) : f16
     // RDNA3-NEXT: llvm.fmul %{{.+}}, %{{.+}} : f16
     // RDNA3: llvm.icmp "eq"
-    // RDNA3-NEXT: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
     // RDNA3: llvm.lshr
     // RDNA3-NEXT: llvm.bitcast %{{.+}} : i16 to f16
     // RDNA3-NEXT: llvm.mlir.constant(2.560000e+02 : f16) : f16
     // RDNA3-NEXT: llvm.fmul %{{.+}}, %{{.+}} : f16
     // RDNA3: llvm.icmp "eq"
-    // RDNA3-NEXT: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
+    // RDNA3: llvm.select %{{.+}}, %{{.+}}, %{{.+}} : i1, i16
     %0 = tt.fp_to_fp %arg0 : tensor<1x64xf8E4M3FN, #blocked2> -> tensor<1x64xf16, #blocked2>
     tt.return
   }

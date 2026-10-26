@@ -1052,7 +1052,9 @@ public:
     a = b.lshr(a, b.i16_val(1));
     a = b.bitcast(a, f16_ty);
 
-    // Multiplying by 2^(15-7) rebiases the exponent and normalizes subnormals
+    // Multiplying by 2^(15-7) rebiases the exponent and normalizes subnormals.
+    // fp8 subnormals are fp16 denormals before the multiply, so this requires
+    // fp16 denormals to be preserved, not flushed to zero.
     a = b.fmul(f16_ty, a, b.f16_val(0x1p+8));
     a = b.bitcast(a, i16_ty);
 
