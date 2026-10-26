@@ -4464,8 +4464,10 @@ def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error, op):
             ttgl.amd.cdna3.buffer.store(offsets, desc, offsets, soffset=soffset)
         elif OP == "atomic_load":
             ttgl.amd.cdna3.buffer.atomic_load(desc, offsets, soffset=soffset)
-        else:
+        elif OP == "atomic_store":
             ttgl.amd.cdna3.buffer.atomic_store(offsets, desc, offsets, soffset=soffset)
+        else:
+            ttgl.static_assert(False, "unhandled buffer op")
 
     src = torch.zeros(256, dtype=torch.int32, device="cuda")
     with pytest.raises(CompilationError, match=error):
