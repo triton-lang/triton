@@ -1,5 +1,25 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+// expected-error @+1 {{requires "ttg.num-warps" to be a positive power of two}}
+module attributes {"ttg.num-warps" = 0 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-warps" to be a positive power of two}}
+module attributes {"ttg.num-warps" = -1 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-ctas" to be a positive power of two}}
+module attributes {"ttg.num-ctas" = 0 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-ctas" to be a positive power of two}}
+module attributes {"ttg.num-ctas" = -1 : i32} {}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
 

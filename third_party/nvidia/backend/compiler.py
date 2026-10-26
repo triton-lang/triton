@@ -2,6 +2,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
+from triton._utils import is_power_of_two
 from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
@@ -169,8 +170,8 @@ class CUDAOptions:
             extern_libs['gsan'] = str(gsan_lib)
 
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
-        assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
-               "num_warps must be a power of 2"
+        assert is_power_of_two(self.num_warps), "num_warps must be a power of 2"
+        assert is_power_of_two(self.num_ctas), "num_ctas must be a power of 2"
 
     def hash(self):
         hash_dict = dict(self.__dict__)
