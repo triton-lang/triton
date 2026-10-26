@@ -631,10 +631,44 @@ static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
       ctx, LinearLayout(std::move(bases), standardOutDimNames(ctx, 2)));
 }
 
-static DescriptorLoadOp getTwoCTADescriptorLoad(Value value) {
-  if (auto trans = getDefiningOpSkippingConvertLayout<TransOp>(value))
-    value = trans.getSrc();
-  return getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(value);
+static DescriptorLoadOp
+getTwoCTADescriptorLoad(Value value, SmallVectorImpl<Value> *views = nullptr) {
+  while (Operation *op = value.getDefiningOp()) {
+    if (auto cvt = dyn_cast<ConvertLayoutOp>(op)) {
+      value = cvt.getSrc();
+    } else if (isView(op) && op->getNumOperands() == 1) {
+      if (views)
+        views->push_back(value);
+      value = op->getOperand(0);
+    } else {
+      return dyn_cast<DescriptorLoadOp>(op);
+    }
+  }
+  return {};
+}
+
+// Propagate the RHS split through the views, from the dot back to the load.
+static LogicalResult
+getTwoCTARHSLayouts(Value b, CGAEncodingAttr cgaLayout,
+                    SmallVectorImpl<std::pair<Value, Attribute>> &layouts) {
+  SmallVector<Value> views;
+  auto load = getTwoCTADescriptorLoad(b, &views);
+  if (!load)
+    return failure();
+  auto type = cast<RankedTensorType>(views.empty() ? load.getType()
+                                                   : views.front().getType());
+  auto layout = cloneWithCGALayout(type, cgaLayout);
+  if (failed(layout))
+    return failure();
+  Attribute encoding = *layout;
+  for (Value view : views) {
+    layouts.emplace_back(view, encoding);
+    encoding = inferSrcEncoding(view.getDefiningOp(), encoding);
+    if (!encoding)
+      return failure();
+  }
+  layouts.emplace_back(load.getResult(), encoding);
+  return success();
 }
 
 static bool canUseTwoCTAs(DotOp dotOp) {
@@ -644,8 +678,7 @@ static bool canUseTwoCTAs(DotOp dotOp) {
   RankedTensorType retType = dotOp.getType();
   // The TMA pipeline synchronizes both CTAs. Ordinary loads only provide
   // CTA-local async waits and fences, so neither operand may use that path.
-  if (!getTwoCTADescriptorLoad(dotOp.getA()) ||
-      !getTwoCTADescriptorLoad(dotOp.getB()))
+  if (!getTwoCTADescriptorLoad(dotOp.getA()))
     return false;
 
   if (!supportsTwoCTACGALayout(retType))
@@ -662,7 +695,9 @@ static bool canUseTwoCTAs(DotOp dotOp) {
   if (dotOp.getB().getType().getElementTypeBitWidth() == 8 &&
       shapePerCTA[1] < 32)
     return false;
-  return true;
+  SmallVector<std::pair<Value, Attribute>> layouts;
+  return succeeded(getTwoCTARHSLayouts(
+      dotOp.getB(), getTwoCTARHSCGALayout(retType), layouts));
 }
 
 static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
@@ -696,29 +731,27 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
                            const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
-  auto trans = getDefiningOpSkippingConvertLayout<TransOp>(b);
-  auto loadOp = getTwoCTADescriptorLoad(b);
-  assert(loadOp && "expected descriptor load, optionally transposed");
-  auto loadCGALayout = newCGALayout;
-  if (trans) {
-    // Split the descriptor load along N in its original dimension order.
-    loadCGALayout = CGAEncodingAttr::get(
-        b.getContext(),
-        transposeLinearLayout(newCGALayout.getLinearLayout(),
-                              inversePermutation(trans.getOrder())));
+  SmallVector<std::pair<Value, Attribute>> layouts;
+  LogicalResult inferred = getTwoCTARHSLayouts(b, newCGALayout, layouts);
+  assert(succeeded(inferred) && "expected a supported descriptor view chain");
+  auto [load, encoding] = layouts.pop_back_val();
+  auto loadType = cast<RankedTensorType>(load.getType());
+  load.setType(loadType.cloneWithEncoding(encoding));
+  rewriter.setInsertionPointAfterValue(load);
+  auto cvt = ConvertLayoutOp::create(rewriter, load.getLoc(), loadType, load);
+  rewriter.replaceAllUsesExcept(load, cvt.getResult(), cvt);
+
+  Value newB = load;
+  for (auto [value, encoding] : llvm::reverse(layouts)) {
+    Operation *view = value.getDefiningOp();
+    IRMapping mapping;
+    mapping.map(view->getOperand(0), newB);
+    Operation *clone = rewriter.clone(*view, mapping);
+    for (Value result : clone->getResults())
+      result.setType(
+          cast<RankedTensorType>(result.getType()).cloneWithEncoding(encoding));
+    newB = mapping.lookup(value);
   }
-  b = loadOp->getResult(0);
-  RankedTensorType bType = cast<RankedTensorType>(b.getType());
-  auto newLayout = cloneWithCGALayout(bType, loadCGALayout);
-  assert(succeeded(newLayout) && "expected a distributed RHS layout");
-  rewriter.setInsertionPoint(loadOp.getOperation());
-  loadOp->getResult(0).setType(bType.cloneWithEncoding(*newLayout));
-  Value newB = loadOp->getResult(0);
-  rewriter.setInsertionPointAfter(loadOp.getOperation());
-  auto cvt = ConvertLayoutOp::create(rewriter, b.getLoc(), bType, newB);
-  rewriter.replaceAllUsesExcept(newB, cvt.getResult(), cvt);
-  if (trans)
-    return TransOp::create(rewriter, trans.getLoc(), newB, trans.getOrder());
   return newB;
 }
 
