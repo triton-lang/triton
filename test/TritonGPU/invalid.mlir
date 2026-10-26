@@ -1,5 +1,44 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+// expected-error @+1 {{requires "ttg.num-warps" to be a positive power of two}}
+module attributes {"ttg.num-warps" = 0 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-warps" to be a positive power of two}}
+module attributes {"ttg.num-warps" = -2147483648 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-warps" to be a positive power of two}}
+module attributes {"ttg.num-warps" = 3 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-ctas" to be a positive power of two}}
+module attributes {"ttg.num-ctas" = 0 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-ctas" to be a positive power of two}}
+module attributes {"ttg.num-ctas" = -2147483648 : i32} {}
+
+// -----
+
+// expected-error @+1 {{requires "ttg.num-ctas" to be a positive power of two}}
+module attributes {"ttg.num-ctas" = 3 : i32} {}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // expected-error @+1 {{requires "ttg.num-warps" to be a positive power of two}}
+  tt.func @invalid_num_warps() attributes {"ttg.num-warps" = 3 : i32} {
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
 
