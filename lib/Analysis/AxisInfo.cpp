@@ -1221,6 +1221,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   IntegerCastOpAxisInfoVisitor<arith::TruncIOp>,
                   IdentityOpAxisInfoVisitor<triton::AnnotateOp>,
                   IdentityOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
+                  IdentityOpAxisInfoVisitor<triton::gpu::ThreadHandoffOp>,
                   BitcastOpAxisInfoVisitor,
                   IdentityOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
