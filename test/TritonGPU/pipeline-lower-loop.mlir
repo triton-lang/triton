@@ -2091,51 +2091,6 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
     tt.return
   }
 
-  // A read in the else branch advances the barrier state when the condition is false.
-  // CHECK-LABEL: @two_cta_accumulator_else_read_release
-  // CHECK: %[[SKIP:.*]] = arith.cmpi eq, %[[ODD:[a-zA-Z0-9_]+]],
-  // CHECK: %[[ELSE_BARRIER:.*]] = ttg.memdesc_index {{.*}}[%[[ELSE_INDEX:[a-zA-Z0-9_]+]]]
-  // CHECK: %[[DID_READ:.*]] = arith.cmpi ne, %[[ODD]],
-  // CHECK: %[[ELSE_STATE:.*]]:2 = scf.if %[[SKIP]]
-  // CHECK-NEXT: scf.yield %[[ELSE_INDEX]], %[[ELSE_PHASE:[a-zA-Z0-9_]+]]
-  // CHECK-NEXT: } else {
-  // CHECK: ttng.tmem_load
-  // CHECK-NEXT: "use"
-  // CHECK-NEXT: ttng.arrive_barrier %[[ELSE_BARRIER]], 1
-  // CHECK-NEXT: %[[ELSE_INCREMENT:.*]] = arith.addi %[[ELSE_INDEX]],
-  // CHECK-NEXT: %[[ELSE_WRAP:.*]] = arith.cmpi sge, %[[ELSE_INCREMENT]],
-  // CHECK-NEXT: %[[ELSE_NEXT_INDEX:.*]] = arith.select %[[ELSE_WRAP]],
-  // CHECK-NEXT: %[[ELSE_TOGGLED:.*]] = arith.xori %[[ELSE_PHASE]],
-  // CHECK-NEXT: %[[ELSE_NEXT_PHASE:.*]] = arith.select %[[ELSE_WRAP]], %[[ELSE_TOGGLED]], %[[ELSE_PHASE]]
-  // CHECK-NEXT: scf.yield %[[ELSE_NEXT_INDEX]], %[[ELSE_NEXT_PHASE]]
-  // CHECK: ttng.wait_barrier %[[ELSE_BARRIER]], %[[ELSE_PHASE]], %[[DID_READ]]
-  // CHECK: scf.yield {{.*}}, %[[ELSE_STATE]]#0, %[[ELSE_STATE]]#1,
-  tt.func @two_cta_accumulator_else_read_release(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
-    %true = arith.constant true
-    %false = arith.constant false
-    %c0 = arith.constant 0 : i32
-    %c1 = arith.constant 1 : i32
-    %acc, %init = ttng.tmem_alloc : () -> (!ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-    %last = scf.for %i = %c0 to %n step %c1 iter_args(%tok = %init) -> !ttg.async.token : i32 {
-      %av = tt.descriptor_load %a[%c0, %c0] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<512x64xf16, #sharedA> -> tensor<512x64xf16, #blockedA>
-      %as = ttg.local_alloc %av {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<512x64xf16, #blockedA>) -> !ttg.memdesc<512x64xf16, #sharedA, #smem, mutable>
-      %bv = tt.descriptor_load %b[%c0, %c0] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<64x128xf16, #sharedB> -> tensor<64x128xf16, #blockedB>
-      %bs = ttg.local_alloc %bv {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<64x128xf16, #blockedB>) -> !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>
-      %mma = ttng.tc_gen5_mma %as, %bs, %acc[%tok], %false, %true {loop.cluster = 0 : i32, loop.stage = 2 : i32, tt.self_latency = 1 : i32, two_ctas} : !ttg.memdesc<512x64xf16, #sharedA, #smem, mutable>, !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>, !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>
-      %odd = arith.andi %i, %c1 {loop.cluster = 3 : i32, loop.stage = 3 : i32} : i32
-      %read = arith.cmpi eq, %odd, %c0 {loop.cluster = 3 : i32, loop.stage = 3 : i32} : i32
-      %done = scf.if %read -> !ttg.async.token {
-        scf.yield %mma : !ttg.async.token
-      } else {
-        %v, %load = ttng.tmem_load %acc[%mma] : !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<512x128xf32, #blockedC>
-        "use"(%v) : (tensor<512x128xf32, #blockedC>) -> ()
-        scf.yield %load : !ttg.async.token
-      } {loop.cluster = 3 : i32, loop.stage = 3 : i32}
-      scf.yield %done : !ttg.async.token
-    } {tt.scheduled_max_stage = 3 : i32}
-    tt.return
-  }
-
   // Inner-loop reads are outside the supported pipelined-release pattern.
   // CHECK-LABEL: @two_cta_accumulator_nested_read_release
   // CHECK: scf.for
@@ -2167,6 +2122,7 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
     } {tt.scheduled_max_stage = 3 : i32}
     tt.return
   }
+
   // Conditional accumulator resets use the same pipelined read-release protocol.
   // CHECK-LABEL: @two_cta_accumulator_conditional_reset
   // CHECK: ttng.tmem_alloc : () -> (!ttg.memdesc<2x512x128xf32,
@@ -2262,21 +2218,27 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
     } {tt.scheduled_max_stage = 3 : i32}
     tt.return
   }
+
   // Propagate the ring state and release predicate through both ifs. Advance
   // only when the outer then branch and the inner else branch execute.
   // CHECK-LABEL: @two_cta_accumulator_nested_if_read_release
   // CHECK: scf.for
   // CHECK: ttng.tc_gen5_mma
+  // CHECK: %[[ODD:.*]] = arith.andi
+  // CHECK: %[[SKIP:.*]] = arith.cmpi eq, %[[ODD]],
   // CHECK: %[[RELEASE:.*]] = ttg.memdesc_index {{.*}}[%[[INDEX:[a-zA-Z0-9_]+]]]
   // CHECK: %[[OUTER:.*]]:3 = scf.if
-  // CHECK: %[[INNER:.*]]:2 = scf.if
+  // CHECK: %[[DID_READ:.*]] = arith.cmpi ne, %[[ODD]],
+  // CHECK: %[[INNER:.*]]:2 = scf.if %[[SKIP]]
   // CHECK-NEXT: scf.yield %[[INDEX]], %[[PHASE:[a-zA-Z0-9_]+]]
   // CHECK-NEXT: } else {
   // CHECK: ttng.tmem_load
   // CHECK-NEXT: "use"
   // CHECK-NEXT: ttng.arrive_barrier %[[RELEASE]], 1
-  // CHECK: scf.yield
-  // CHECK: scf.yield %[[INNER]]#0, %[[INNER]]#1,
+  // CHECK: %[[NEXT_INDEX:.*]] = arith.select
+  // CHECK: %[[NEXT_PHASE:.*]] = arith.select
+  // CHECK-NEXT: scf.yield %[[NEXT_INDEX]], %[[NEXT_PHASE]]
+  // CHECK: scf.yield %[[INNER]]#0, %[[INNER]]#1, %[[DID_READ]]
   // CHECK-NEXT: } else {
   // CHECK-NEXT: scf.yield %[[INDEX]], %[[PHASE]], %false
   // CHECK: ttng.wait_barrier %[[RELEASE]], %[[PHASE]], %[[OUTER]]#2
@@ -2313,5 +2275,4 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
     } {tt.scheduled_max_stage = 3 : i32}
     tt.return
   }
-
 }

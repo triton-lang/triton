@@ -648,9 +648,9 @@ getTwoCTADescriptorLoad(Value value, SmallVectorImpl<Value> *views = nullptr) {
 }
 
 // Propagate the RHS split through the views, from the dot back to the load.
-static LogicalResult
-getTwoCTARHSLayouts(Value b, CGAEncodingAttr cgaLayout,
-                    SmallVectorImpl<std::pair<Value, Attribute>> &layouts) {
+static LogicalResult inferTwoCTAOperandLayouts(
+    Value b, CGAEncodingAttr cgaLayout,
+    SmallVectorImpl<std::pair<Value, Attribute>> &layouts) {
   SmallVector<Value> views;
   auto load = getTwoCTADescriptorLoad(b, &views);
   if (!load)
@@ -696,7 +696,7 @@ static bool canUseTwoCTAs(DotOp dotOp) {
       shapePerCTA[1] < 32)
     return false;
   SmallVector<std::pair<Value, Attribute>> layouts;
-  return succeeded(getTwoCTARHSLayouts(
+  return succeeded(inferTwoCTAOperandLayouts(
       dotOp.getB(), getTwoCTARHSCGALayout(retType), layouts));
 }
 
@@ -732,7 +732,7 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
                            const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
   SmallVector<std::pair<Value, Attribute>> layouts;
-  LogicalResult inferred = getTwoCTARHSLayouts(b, newCGALayout, layouts);
+  LogicalResult inferred = inferTwoCTAOperandLayouts(b, newCGALayout, layouts);
   assert(succeeded(inferred) && "expected a supported descriptor view chain");
   auto [load, encoding] = layouts.pop_back_val();
   auto loadType = cast<RankedTensorType>(load.getType());

@@ -791,21 +791,16 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   int numStages = mainWaitStage - schedule[mma].first + 1;
   if (mma.getTwoCtas()) {
-    // With four prefetched operand tiles, two completion slots are
-    // insufficient. Schematic expanded IR (types and TMA operations omitted):
-    //   %bar0 = ttg.memdesc_index %mma_bars[%c0] : ...
-    //   %bar1 = ttg.memdesc_index %mma_bars[%c1] : ...
-    //   ttng.tc_gen5_mma %a0, %b0, %acc, %false, %true,
-    //       %bar0[%true] {is_async, two_ctas} : ...
-    //   ttng.tc_gen5_mma %a1, %b1, %acc, %true, %true,
-    //       %bar1[%true] {is_async, two_ctas} : ...
-    //   ttng.wait_barrier %bar0, %c0 deps %a0, %b0 : ...
-    //   ttng.tc_gen5_mma %a2, %b2, %acc, %true, %true,
-    //       %bar0[%true] {is_async, two_ctas} : ...
-    // The leader can issue MMA 2 while the peer has not yet observed MMA 0's
-    // completion. Both completions flip %bar0's phase, so the peer can miss
-    // MMA 0's completion and deadlock. Size the completion-barrier ring for
-    // the full pipeline depth so the leader cannot reuse a slot that early.
+    // With four prefetched operand tiles, two completion-barrier slots are
+    // insufficient:
+    //   tc_gen5_mma ... %bar0 ...  // MMA 0
+    //   tc_gen5_mma ... %bar1 ...  // MMA 1
+    //   wait_barrier %bar0, %phase0
+    //   tc_gen5_mma ... %bar0 ...  // MMA 2 reuses bar0
+    // The leader can issue MMA 2 before the peer observes MMA 0's completion.
+    // Both completions flip %bar0's phase, so the peer may miss the first
+    // completion and deadlock. Size the barrier ring for the full pipeline
+    // depth to prevent premature slot reuse.
     numStages = std::max(numStages, schedule.getNumStages());
   }
 
@@ -1029,9 +1024,10 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 // Add a pair-shared arrive after all reads and a leader wait before reuse.
 // A single reader keeps its predicate; multiple readers release
 // unconditionally.
-scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
-                                   ttng::MMAv5OpInterface mma, Value alloc,
-                                   int numBuffers) {
+scf::ForOp protectTwoCTAAccumulatorReuse(scf::ForOp forOp,
+                                         CoarseSchedule &schedule,
+                                         ttng::MMAv5OpInterface mma,
+                                         Value alloc, int numBuffers) {
   // Accept loads directly in the loop or under nested scf.if.
   ttng::TMEMLoadOp load;
   Operation *loadOrParent = nullptr;
@@ -1181,8 +1177,8 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
                           phaseArgIdx, barrierIdxArgIdx);
 
   if (mma.getTwoCtas())
-    forOp =
-        pipelineTwoCTATmemLoads(forOp, schedule, mma, alloc, tmemUseNumStages);
+    forOp = protectTwoCTAAccumulatorReuse(forOp, schedule, mma, alloc,
+                                          tmemUseNumStages);
 
   if (tmemUseNumStages > 1) {
     multibufferTensorMemory(forOp, schedule,
