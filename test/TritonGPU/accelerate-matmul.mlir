@@ -346,6 +346,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [0, 0]]}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // Adjacent CTA IDs must split M to form a cooperating pair.
+  // CHECK: #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = {{\[\[0, 1\], \[1, 0\]\]}}>
   // CHECK-LABEL: mmav5_four_ctas_nonadjacent_m_split
   // CHECK-NOT: two_ctas
   // CHECK: ttng.tc_gen5_mma

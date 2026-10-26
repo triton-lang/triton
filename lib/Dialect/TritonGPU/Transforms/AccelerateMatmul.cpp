@@ -605,15 +605,21 @@ public:
   }
 };
 
-static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
+static bool supportsTwoCTACGALayout(RankedTensorType retType) {
   if (retType.getRank() != 2)
-    return {};
+    return false;
   MLIRContext *ctx = retType.getContext();
   auto layout = getCGALayout(retType.getEncoding()).getLinearLayout();
   auto kBlock = StringAttr::get(ctx, "block");
-  if (layout.getInDimSize(kBlock) < 2 ||
-      layout.getBasis(kBlock, 0) != ArrayRef{1, 0})
-    return {};
+  return layout.getInDimSize(kBlock) >= 2 &&
+         layout.getBasis(kBlock, 0) == ArrayRef{1, 0};
+}
+
+static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
+  assert(supportsTwoCTACGALayout(retType) && "expected a two-CTA CGA layout");
+  MLIRContext *ctx = retType.getContext();
+  auto layout = getCGALayout(retType.getEncoding()).getLinearLayout();
+  auto kBlock = StringAttr::get(ctx, "block");
   // Split B along N within each pair. Pairs computing different M tiles load
   // the same B tile; pairs computing different N tiles retain their offsets.
   // For example, C: [[1, 0], [2, 0], [0, 1]] -> B: [[0, 1], [0, 0], [0, 2]].
@@ -642,7 +648,7 @@ static bool canUseTwoCTAs(DotOp dotOp) {
       !getTwoCTADescriptorLoad(dotOp.getB()))
     return false;
 
-  if (!getTwoCTARHSCGALayout(retType))
+  if (!supportsTwoCTACGALayout(retType))
     return false;
 
   // One cooperating pair covers at most 128 rows per CTA and 256 columns.
