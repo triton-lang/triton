@@ -7832,6 +7832,40 @@ def test_thread_regions_combiner_callees(kind, indirect, device, fresh_knobs):
         assert compiled.asm["ttgir"].count("noinline = true") >= 2
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires warp specialization and CTA clusters")
+def test_thread_regions_multi_cta_noinline_worker(device, fresh_knobs):
+    skip_if_unsupported_cluster_size(2)
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @gluon.jit(noinline=True)
+    def load_and_mark(Data, Out):
+        if ttgl.load(Data):
+            ttgl.atomic_store(Out, 1, sem="relaxed")
+            value = ttgl.load(Data + 1)
+        else:
+            value = 0
+        # Separate the final add from the conditional that produced its operand.
+        ttgl.store(Out + 2, ttgl.load(Data + 2))
+        return value + 3
+
+    @gluon.jit
+    def worker(Data, Out):
+        ttgl.store(Out + 1, load_and_mark(Data, Out))
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(Data, Out):
+        ttgl.warp_specialize([(idle, ()), (worker, (Data, Out))], [4])
+
+    data = torch.tensor([1, 17, 5], device=device, dtype=torch.int32)
+    out = torch.full_like(data, -1)
+    kernel[(1, )](data, out, num_warps=4, num_ctas=2)
+    assert out.tolist() == [1, 20, 5]
+
+
 @pytest.mark.parametrize("num_ctas", [2, 4])
 @pytest.mark.parametrize("tile", [32, 128])
 @pytest.mark.parametrize("replicated", [False, True])

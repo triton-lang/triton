@@ -104,7 +104,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op)) {
     if (handoff.getSource().hasSameWarpAndBlock(handoff.getDestination()))
       return 0;
-    return std::max(8, getIntOrFloatOrPtrBitWidth(handoff.getType())) / 8;
+    return gpu::getSharedMemorySize(handoff.getType());
   }
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes();

@@ -164,7 +164,6 @@ void hoistMovableArithmetic(SmallVectorImpl<Operation *> &ops) {
     else if (!retainedOps.empty())
       op->moveBefore(retainedOps.front());
   }
-  assert(!retainedOps.empty());
   ops = retainedOps.takeVector();
 }
 
@@ -395,6 +394,17 @@ void sinkRegionInputs(ModuleOp mod) {
   });
 }
 
+bool canIntroduceClusterBarrier(Operation *op) {
+  auto func = op->getParentOfType<FuncOp>();
+  if (isKernel(func))
+    return true;
+  // A device function has no cluster barrier for its caller's partition.
+  // Synchronizing here requires every warp in the CTA to participate.
+  auto mod = func->getParentOfType<ModuleOp>();
+  auto totalWarps = mod->getAttrOfType<IntegerAttr>("ttg.total-num-warps");
+  return totalWarps && totalWarps.getInt() == lookupNumWarps(func);
+}
+
 void optimizeBlock(Block *block) {
   assert(!block->empty() && "frontend and generated blocks are nonempty");
   // For num_ctas > 1 find the ops that depend on atomics
@@ -428,7 +438,20 @@ void optimizeBlock(Block *block) {
     // Keep regions with memory accesses or atomic-dependent work.
     if (!effects.hasMemory && !atomicDependent)
       continue;
+    // Heuristic: atomic/barrier sequences and executing control flow on fewer
+    // threads may avoid intermediate broadcasts and justify a full-domain
+    // handoff.
+    bool allowFullDomainHandoff = atomicDependent || effects.hasSCF ||
+                                  effects.hasAtomic ||
+                                  effects.needsBarrierBefore;
+    if (atomicDependent && !canIntroduceClusterBarrier(ops.front())) {
+      if (effects.needsBarrierBefore || effects.needsBarrierAfter)
+        continue;
+      allowFullDomainHandoff = false;
+    }
     hoistMovableArithmetic(ops);
+    if (ops.empty())
+      continue;
     Domain owner = ownerDomain(ops.front(), atomicDependent);
     // Keep CTA-0 atomic-dependent work out of a preceding per-CTA region.
     auto tail = !atomicDependent && atomicDependencies.contains(next)
@@ -442,12 +465,6 @@ void optimizeBlock(Block *block) {
       llvm::append_range(ops, tail.ops);
       tail = {};
     }
-    // Heuristic: atomic/barrier sequences and executing control flow on fewer
-    // threads may avoid intermediate broadcasts and justify a full-domain
-    // handoff.
-    bool allowFullDomainHandoff = atomicDependent || effects.hasSCF ||
-                                  effects.hasAtomic ||
-                                  effects.needsBarrierBefore;
     // Ordinary scalar loads already produce full copies without shared
     // memory. Restrict them only when all consumers stay in one warp.
     auto outputs = getEscapingValues(ops, tail, owner, allowFullDomainHandoff);

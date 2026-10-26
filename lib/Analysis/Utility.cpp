@@ -1233,11 +1233,7 @@ bool atomicResultHasCTABroadcast(Operation *op) {
   if (op->getNumResults() != 1 || op->getResult(0).use_empty() ||
       op->getParentOfType<gpu::ThreadScopeOp>())
     return false;
-  auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-  if (!tensorTy)
-    return gpu::lookupNumCTAs(op) > 1;
-  auto kBlock = StringAttr::get(op->getContext(), "block");
-  return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
+  return getResultScratchBroadcastMask(op).value_or(0) != 0;
 }
 
 } // namespace triton
