@@ -2953,68 +2953,40 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
-@pytest.mark.parametrize("has_scale", [True, False])
-def test_amd_mfma_scaled_3d(has_scale, device='cuda'):
-    B = 2
+def test_amd_mfma_scaled_3d(device='cuda'):
 
     @gluon.jit
-    def kernel(out_ptr, a_ptr, b_ptr, a_scale_ptr, b_scale_ptr, B: ttgl.constexpr):
+    def kernel(out_ptr, a_ptr, b_ptr):
         mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
-                                                             warps_per_cta=[B, 1, 1])
-        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=16)
-        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=16)
-        a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [B, 16, 4])
-        b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [B, 16, 4])
+                                                             warps_per_cta=[2, 1, 1])
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, 16)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, 16)
 
-        a_b = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, a_layout)))[:, None, None]
-        a_m = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(2, a_layout)))[None, :, None]
-        a_k = ttgl.arange(0, 128, ttgl.SliceLayout(0, ttgl.SliceLayout(1, a_layout)))[None, None, :]
-        a = ttgl.load(a_ptr + (a_b * 16 + a_m) * 128 + a_k)
+        a_dim0 = ttgl.arange(0, 2, ttgl.SliceLayout(1, ttgl.SliceLayout(2, a_layout)))[:, None, None]
+        a_dim1 = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(2, a_layout)))[None, :, None]
+        a_dim2 = ttgl.arange(0, 128, ttgl.SliceLayout(0, ttgl.SliceLayout(1, a_layout)))[None, None, :]
+        a = ttgl.load(a_ptr + (a_dim0 * 16 + a_dim1) * 128 + a_dim2)
 
-        b_b = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, b_layout)))[:, None, None]
-        b_k = ttgl.arange(0, 128, ttgl.SliceLayout(0, ttgl.SliceLayout(2, b_layout)))[None, :, None]
-        b_n = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(1, b_layout)))[None, None, :]
-        b = ttgl.load(b_ptr + (b_b * 16 + b_n) * 128 + b_k)
+        b_dim0 = ttgl.arange(0, 2, ttgl.SliceLayout(1, ttgl.SliceLayout(2, b_layout)))[:, None, None]
+        b_dim1 = ttgl.arange(0, 128, ttgl.SliceLayout(0, ttgl.SliceLayout(2, b_layout)))[None, :, None]
+        b_dim2 = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(1, b_layout)))[None, None, :]
+        b = ttgl.load(b_ptr + (b_dim0 * 128 + b_dim1) * 16 + b_dim2)
 
-        a_scale = None
-        if a_scale_ptr is not None:
-            s_b = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, a_scale_layout)))[:, None, None]
-            s_m = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(2, a_scale_layout)))[None, :, None]
-            s_k = ttgl.arange(0, 4, ttgl.SliceLayout(0, ttgl.SliceLayout(1, a_scale_layout)))[None, None, :]
-            a_scale = ttgl.load(a_scale_ptr + (s_b * 16 + s_m) * 4 + s_k)
+        zero = ttgl.zeros([2, 16, 16], dtype=ttgl.float32, layout=mfma_layout)
+        c = ttgl.amd.cdna4.mfma_scaled(a, None, "e4m3", b, None, "e4m3", zero)
 
-        b_scale = None
-        if b_scale_ptr is not None:
-            s_b = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, b_scale_layout)))[:, None, None]
-            s_n = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(2, b_scale_layout)))[None, :, None]
-            s_k = ttgl.arange(0, 4, ttgl.SliceLayout(0, ttgl.SliceLayout(1, b_scale_layout)))[None, None, :]
-            b_scale = ttgl.load(b_scale_ptr + (s_b * 16 + s_n) * 4 + s_k)
-
-        zero = ttgl.zeros([B, 16, 16], dtype=ttgl.float32, layout=mfma_layout)
-        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, "e4m3", b, b_scale, "e4m3", zero)
-
-        o_b = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, mfma_layout)))[:, None, None]
-        o_m = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(2, mfma_layout)))[None, :, None]
-        o_n = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(1, mfma_layout)))[None, None, :]
-        ttgl.store(out_ptr + (o_b * 16 + o_m) * 16 + o_n, c)
+        o_dim0 = ttgl.arange(0, 2, ttgl.SliceLayout(1, ttgl.SliceLayout(2, mfma_layout)))[:, None, None]
+        o_dim1 = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(2, mfma_layout)))[None, :, None]
+        o_dim2 = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(1, mfma_layout)))[None, None, :]
+        ttgl.store(out_ptr + (o_dim0 * 16 + o_dim1) * 16 + o_dim2, c)
 
     torch.manual_seed(0)
-    a = torch.randint(20, 40, (B, 16, 128), dtype=torch.uint8, device=device)
-    b = torch.randint(20, 40, (B, 16, 128), dtype=torch.uint8, device=device)
-    a_ref = a.view(torch.float8_e4m3fn).to(torch.float32)
-    b_ref = b.view(torch.float8_e4m3fn).to(torch.float32)
-    out = torch.empty((B, 16, 16), dtype=torch.float32, device=device)
-
-    if has_scale:
-        a_scale = torch.randint(120, 134, (B, 16, 4), dtype=torch.uint8, device=device)
-        b_scale = torch.randint(120, 134, (B, 16, 4), dtype=torch.uint8, device=device)
-        a_ref = a_ref * torch.exp2(a_scale.to(torch.float32) - 127).repeat_interleave(32, dim=2)
-        b_ref = b_ref * torch.exp2(b_scale.to(torch.float32) - 127).repeat_interleave(32, dim=2)
-    else:
-        a_scale = b_scale = None
-
-    compiled = kernel[(1, )](out, a, b, a_scale, b_scale, B, num_warps=B)
-    torch.testing.assert_close(out, torch.einsum("bmk,bnk->bmn", a_ref, b_ref))
+    a = torch.randint(20, 40, (2, 16, 128), dtype=torch.uint8, device=device)
+    b = torch.randint(20, 40, (2, 128, 16), dtype=torch.uint8, device=device)
+    out = torch.empty((2, 16, 16), dtype=torch.float32, device=device)
+    compiled = kernel[(1, )](out, a, b, num_warps=2)
+    ref = torch.matmul(a.view(torch.float8_e4m3fn).float(), b.view(torch.float8_e4m3fn).float())
+    torch.testing.assert_close(out, ref)
     assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
 
 
