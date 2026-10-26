@@ -1008,31 +1008,61 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
                             domInfo);
 }
 
+// Protect the peer CTA's TMEM read before the leader reuses its buffer.
+//   barrier_expect %tma2, ...  // arrive.expect_tx during prefetch
+//   async_tma_copy ... %tma2
+//   tc_gen5_mma ... %acc0 ...  // MMA 0
+//   tc_gen5_mma ... %acc1 ...  // MMA 1
+//   wait_barrier %done0
+//   scf.if %read0 {
+//     %v0 = tmem_load %acc0
+//   }
+//   wait_barrier %tma2
+//   tc_gen5_mma ... %acc0 ...  // MMA 2 reuses acc0
+// The leader can finish its read and issue MMA 2 while the peer is still
+// reading %acc0. createBarrierAndWaitOps creates %done0 as a per-CTA barrier,
+// which waits for MMA 0, before the TMEM read.
+// createTMABarrierAndWait creates %tma2 as a pair-shared barrier for MMA-only
+// operands, waited on only by the leader CTA. TMA completion
+// only decrements the pending transaction-byte count; it does not arrive after
+// the TMEM read. Thus %tma2 can complete before the peer reads %acc0.
+// Add a pair-shared arrive after all reads and a leader wait before reuse.
+// A single reader keeps its predicate; multiple readers release
+// unconditionally.
 scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                                    ttng::MMAv5OpInterface mma, Value alloc,
                                    int numBuffers) {
-  // Accept one load after the MMA, directly in the loop or directly in scf.if.
+  // Accept loads directly in the loop or under nested scf.if.
   ttng::TMEMLoadOp load;
+  Operation *loadOrParent = nullptr;
+  unsigned numReads = 0;
   for (Operation *user : alloc.getUsers()) {
     if (!forOp->isAncestor(user) || user == mma.getOperation())
       continue;
     auto read = dyn_cast<ttng::TMEMLoadOp>(user);
-    // Case 1: reject non-load accumulator users or multiple loads.
-    if (!read || load)
+    // Case 1: reject non-load accumulator users.
+    if (!read)
       return forOp;
-    load = read;
+    Operation *reader = read;
+    while (reader->getBlock() != forOp.getBody()) {
+      reader = reader->getParentOp();
+      // Case 2: reject nesting through regions other than scf.if.
+      if (!isa<scf::IfOp>(reader))
+        return forOp;
+    }
+    // Case 3: reject readers not scheduled after the MMA.
+    if (!schedule.isOpBefore(mma, reader))
+      return forOp;
+    ++numReads;
+    if (!loadOrParent || schedule.isOpBefore(loadOrParent, reader)) {
+      load = read;
+      loadOrParent = reader;
+    }
   }
   if (!load)
     return forOp;
-
-  Block *readBlock = load->getBlock();
-  Operation *loadOrParent = forOp.getBody()->findAncestorOpInBlock(*load);
-  // Case 2: reject nesting other than a direct scf.if branch.
-  // Case 3: reject readers not scheduled after the MMA.
-  if ((readBlock != forOp.getBody() && (!isa<scf::IfOp>(loadOrParent) ||
-                                        load->getParentOp() != loadOrParent)) ||
-      !schedule.isOpBefore(mma, loadOrParent))
-    return forOp;
+  bool singleRead = numReads == 1;
+  Block *readBlock = singleRead ? load->getBlock() : forOp.getBody();
 
   IRRewriter rewriter(forOp);
   Value zero = arith::ConstantIntOp::create(rewriter, forOp.getLoc(), 0, 32);
@@ -1053,8 +1083,12 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   Value vFalse = arith::ConstantIntOp::create(builder, 0, 1);
   Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
 
-  builder.setInsertionPoint(readBlock->getTerminator());
+  if (singleRead)
+    builder.setInsertionPoint(readBlock->getTerminator());
+  else
+    builder.setInsertionPointAfter(loadOrParent);
   ttng::ArriveBarrierOp::create(builder, barrier, 1);
+  // Multiple readers share one unconditional release after their last use.
   Value wrap;
   Value nextIndex = createIncrementModulo(builder, load.getLoc(), index,
                                           ringSize, zero, one, &wrap);
@@ -1063,13 +1097,12 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   nextIndex = sinkValueRedefinition(rewriter, index, nextIndex, readBlock);
   auto yield = forOp.getBody()->getTerminator();
   yield->setOperand(firstArg, nextIndex);
-  nextPhase =
-      sinkValueRedefinition(rewriter, phase, nextPhase, load->getBlock());
+  nextPhase = sinkValueRedefinition(rewriter, phase, nextPhase, readBlock);
   yield->setOperand(firstArg + 1, nextPhase);
-  Value didRead =
-      sinkValueRedefinition(rewriter, vFalse, vTrue, load->getBlock());
+  Value didRead = sinkValueRedefinition(rewriter, vFalse, vTrue, readBlock);
 
-  Operation *newLoadOrParent = forOp.getBody()->findAncestorOpInBlock(*load);
+  Operation *newLoadOrParent =
+      singleRead ? forOp.getBody()->findAncestorOpInBlock(*load) : loadOrParent;
   if (newLoadOrParent != loadOrParent) {
     schedule.erase(loadOrParent);
     schedule.insert(newLoadOrParent, readStage.first, readStage.second);
