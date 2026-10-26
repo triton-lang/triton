@@ -1006,6 +1006,11 @@ def jit(
         implicitly converted to pointers if they have a :code:`.data_ptr()` method
         and a `.dtype` attribute.
 
+    :note: Namedtuple argument classes can set ``__triton_do_not_specialize__``
+        to a tuple of field names. These fields and their nested tuple elements
+        skip value and alignment specialization. Explicit ``constexpr`` values
+        still specialize.
+
     :note: This function will be compiled and run on the GPU. It will only have access to:
 
            * python primitives,

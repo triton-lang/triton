@@ -63,6 +63,7 @@ static PyObject *data_ptr_attr = nullptr;
 static PyObject *dtype_attr = nullptr;
 static PyObject *cache_key_attr = nullptr;
 static PyObject *_fields_attr = nullptr;
+static PyObject *do_not_specialize_attr = nullptr;
 static PyObject *block_shape_attr = nullptr;
 static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
@@ -134,6 +135,7 @@ void init_interned_strings() {
   dtype_attr = intern_from_string("dtype");
   cache_key_attr = intern_from_string("cache_key");
   _fields_attr = intern_from_string("_fields");
+  do_not_specialize_attr = intern_from_string("__triton_do_not_specialize__");
   block_shape_attr = intern_from_string("block_shape");
   shape_attr = intern_from_string("shape");
   layout_attr = intern_from_string("layout");
@@ -436,6 +438,42 @@ handle_jit_callable(PyObject *backend, PyObject *arg, bool is_const,
   return {from_borrowed_ref(constexpr_str), std::move(cache_key)};
 }
 
+bool get_unspecialized_fields(PyObject *arg, py::object &fields,
+                              py::object &names) {
+  names = from_new_ref(
+      PyObject_GetAttr((PyObject *)Py_TYPE(arg), do_not_specialize_attr));
+  if (!names) {
+    if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+      return false;
+    PyErr_Clear();
+    return true;
+  }
+  if (!PyTuple_Check(names.ptr())) {
+    PyErr_SetString(
+        PyExc_TypeError,
+        "__triton_do_not_specialize__ must be a tuple of field names");
+    return false;
+  }
+  Py_ssize_t count = PyTuple_Size(names.ptr());
+  if (!count)
+    return true;
+  fields = from_new_ref(PyObject_GetAttr(arg, _fields_attr));
+  if (!fields)
+    return false;
+  for (Py_ssize_t i = 0; i < count; ++i) {
+    auto *name = PyTuple_GetItem(names.ptr(), i);
+    int known = PySequence_Contains(fields.ptr(), name);
+    if (known < 0)
+      return false;
+    if (!known) {
+      PyErr_Format(PyExc_ValueError,
+                   "unknown field %R in __triton_do_not_specialize__", name);
+      return false;
+    }
+  }
+  return true;
+}
+
 std::pair<py::object, py::object> handle_tuple(PyObject *backend, PyObject *arg,
                                                bool is_const,
                                                bool specialize_value,
@@ -443,13 +481,14 @@ std::pair<py::object, py::object> handle_tuple(PyObject *backend, PyObject *arg,
   Py_ssize_t size = PyTuple_Size(arg);
   if (size < 0)
     return {};
-  if (size == 0) {
-    // return tuple of empty tuples as in python reference
-    return {from_borrowed_ref(arg), from_borrowed_ref(arg)};
-  }
-
-  bool is_namedtuple = PyObject_HasAttr(arg, _fields_attr);
+  bool is_namedtuple =
+      !PyTuple_CheckExact(arg) && PyObject_HasAttr(arg, _fields_attr);
   auto tuple_type = Py_TYPE(arg);
+  py::object fields, unspecialized;
+  if (is_namedtuple && !get_unspecialized_fields(arg, fields, unspecialized))
+    return {};
+  if (size == 0)
+    return {from_borrowed_ref(arg), from_borrowed_ref(arg)};
 
   // Create tuples directly instead of lists
   auto tys_tuple = from_new_ref(PyTuple_New(size));
@@ -464,9 +503,18 @@ std::pair<py::object, py::object> handle_tuple(PyObject *backend, PyObject *arg,
     PyObject *item = PyTuple_GetItem(arg, i); // Borrowed reference
     if (!item)
       return {};
-    // python reference calls specialize recursively with default arguments set
-    // currently this is is_const=False, specialize_value=True, align=True
-    auto [type, key] = specialize_arg(backend, item, false, true, true);
+    bool specialize_field = specialize_value;
+    if (specialize_field && fields) {
+      auto field = from_new_ref(PySequence_GetItem(fields.ptr(), i));
+      if (!field)
+        return {};
+      int skip = PySequence_Contains(unspecialized.ptr(), field.ptr());
+      if (skip < 0)
+        return {};
+      specialize_field = !skip;
+    }
+    auto [type, key] =
+        specialize_arg(backend, item, false, specialize_field, true);
     if (!type || !key)
       return {};
     // Steals references on success.
@@ -624,8 +672,9 @@ PyObject *specialize_impl(PyObject *self, PyObject *const *args,
     return nullptr;
   }
 
-  auto [type, key] =
-      specialize_arg(backend, arg, is_const, specialize_value, align);
+  // Tuple fields specialize independently of the top-level parameter.
+  auto [type, key] = specialize_arg(
+      backend, arg, is_const, specialize_value || PyTuple_Check(arg), align);
 
   // check if specialization failed
   if (!type || !key) {

@@ -289,6 +289,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  // kWidth = 16 spans two wmma instructions: the first takes registers 0-7 and
+  // the second registers 8-15 of each lane.
+  // CHECK-LABEL: wmma2_dot_kwidth16
+  tt.func @wmma2_dot_kwidth16(%arg0: tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 16}>>, %arg1: tensor<32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 16}>>, %arg2: tensor<16x16xf32, #mma2>) {
+    // CHECK: llvm.extractvalue %arg0[0] :
+    // CHECK: llvm.extractvalue %arg0[7] :
+    // CHECK: llvm.extractvalue %arg1[0] :
+    // CHECK: llvm.extractvalue %arg1[7] :
+    // CHECK: wmma.f32.16x16x16.f16
+    // CHECK: llvm.extractvalue %arg0[8] :
+    // CHECK: llvm.extractvalue %arg0[15] :
+    // CHECK: llvm.extractvalue %arg1[8] :
+    // CHECK: llvm.extractvalue %arg1[15] :
+    // CHECK: wmma.f32.16x16x16.f16
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 16}>> * tensor<32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 16}>> -> tensor<16x16xf32, #mma2>
+    tt.return
+  }
+
   //  CHECK-LABEL: blocked_to_wmma1
   tt.func @blocked_to_wmma1(%arg0: tensor<128x16xi32, #blocked>) {
     // CHECK-COUNT-16: llvm.extractvalue {{.*}} : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
@@ -421,6 +439,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
     %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3>
     tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f32>, #mma3>
+    tt.return
+  }
+}
+
+// -----
+
+#mma3_f32 = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 4]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // kWidth = 8 spans four wmma instructions, which take 2 registers of each
+  // lane: registers 0-1, 2-3, 4-5, then 6-7.
+  // GFX1250-LABEL: wmma3_dot_f32_kwidth8
+  tt.func @wmma3_dot_f32_kwidth8(%arg0: tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma3_f32, kWidth = 8}>>, %arg1: tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma3_f32, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma3_f32>) {
+    // GFX1250: llvm.extractvalue %arg0[0] :
+    // GFX1250: llvm.extractvalue %arg0[1] :
+    // GFX1250: llvm.extractvalue %arg1[0] :
+    // GFX1250: llvm.extractvalue %arg1[1] :
+    // GFX1250: wmma.f32.16x16x4.f32
+    // GFX1250: llvm.extractvalue %arg0[2] :
+    // GFX1250: llvm.extractvalue %arg0[3] :
+    // GFX1250: llvm.extractvalue %arg1[2] :
+    // GFX1250: llvm.extractvalue %arg1[3] :
+    // GFX1250: wmma.f32.16x16x4.f32
+    // GFX1250: llvm.extractvalue %arg0[4] :
+    // GFX1250: llvm.extractvalue %arg0[5] :
+    // GFX1250: llvm.extractvalue %arg1[4] :
+    // GFX1250: llvm.extractvalue %arg1[5] :
+    // GFX1250: wmma.f32.16x16x4.f32
+    // GFX1250: llvm.extractvalue %arg0[6] :
+    // GFX1250: llvm.extractvalue %arg0[7] :
+    // GFX1250: llvm.extractvalue %arg1[6] :
+    // GFX1250: llvm.extractvalue %arg1[7] :
+    // GFX1250: wmma.f32.16x16x4.f32
+    // GFX1250-NOT: wmma.f32.16x16x4.f32
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma3_f32, kWidth = 8}>> * tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma3_f32, kWidth = 8}>> -> tensor<16x16xf32, #mma3_f32>
     tt.return
   }
 }
