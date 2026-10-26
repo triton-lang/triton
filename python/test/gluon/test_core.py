@@ -2956,11 +2956,13 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
 def test_amd_mfma_scaled_3d(device='cuda'):
 
     @gluon.jit
-    def kernel(out_ptr, a_ptr, b_ptr):
+    def kernel(out_ptr, a_ptr, b_ptr, a_scale_ptr, b_scale_ptr):
         mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
                                                              warps_per_cta=[2, 1, 1])
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, 16)
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, 16)
+        a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [2, 16, 4])
+        b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [2, 16, 4])
 
         a_dim0 = ttgl.arange(0, 2, ttgl.SliceLayout(1, ttgl.SliceLayout(2, a_layout)))[:, None, None]
         a_dim1 = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(2, a_layout)))[None, :, None]
@@ -2972,8 +2974,18 @@ def test_amd_mfma_scaled_3d(device='cuda'):
         b_dim2 = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(1, b_layout)))[None, None, :]
         b = ttgl.load(b_ptr + (b_dim0 * 128 + b_dim1) * 16 + b_dim2)
 
+        a_scale_dim0 = ttgl.arange(0, 2, ttgl.SliceLayout(1, ttgl.SliceLayout(2, a_scale_layout)))[:, None, None]
+        a_scale_dim1 = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(2, a_scale_layout)))[None, :, None]
+        a_scale_dim2 = ttgl.arange(0, 4, ttgl.SliceLayout(0, ttgl.SliceLayout(1, a_scale_layout)))[None, None, :]
+        a_scale = ttgl.load(a_scale_ptr + (a_scale_dim0 * 16 + a_scale_dim1) * 4 + a_scale_dim2)
+
+        b_scale_dim0 = ttgl.arange(0, 2, ttgl.SliceLayout(1, ttgl.SliceLayout(2, b_scale_layout)))[:, None, None]
+        b_scale_dim1 = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(2, b_scale_layout)))[None, :, None]
+        b_scale_dim2 = ttgl.arange(0, 4, ttgl.SliceLayout(0, ttgl.SliceLayout(1, b_scale_layout)))[None, None, :]
+        b_scale = ttgl.load(b_scale_ptr + (b_scale_dim0 * 16 + b_scale_dim1) * 4 + b_scale_dim2)
+
         zero = ttgl.zeros([2, 16, 16], dtype=ttgl.float32, layout=mfma_layout)
-        c = ttgl.amd.cdna4.mfma_scaled(a, None, "e4m3", b, None, "e4m3", zero)
+        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, "e4m3", b, b_scale, "e4m3", zero)
 
         o_dim0 = ttgl.arange(0, 2, ttgl.SliceLayout(1, ttgl.SliceLayout(2, mfma_layout)))[:, None, None]
         o_dim1 = ttgl.arange(0, 16, ttgl.SliceLayout(0, ttgl.SliceLayout(2, mfma_layout)))[None, :, None]
@@ -2983,9 +2995,14 @@ def test_amd_mfma_scaled_3d(device='cuda'):
     torch.manual_seed(0)
     a = torch.randint(20, 40, (2, 16, 128), dtype=torch.uint8, device=device)
     b = torch.randint(20, 40, (2, 128, 16), dtype=torch.uint8, device=device)
+    a_scale = torch.randint(120, 134, (2, 16, 4), dtype=torch.uint8, device=device)
+    b_scale = torch.randint(120, 134, (2, 16, 4), dtype=torch.uint8, device=device)
     out = torch.empty((2, 16, 16), dtype=torch.float32, device=device)
-    compiled = kernel[(1, )](out, a, b, num_warps=2)
-    ref = torch.matmul(a.view(torch.float8_e4m3fn).float(), b.view(torch.float8_e4m3fn).float())
+    compiled = kernel[(1, )](out, a, b, a_scale, b_scale, num_warps=2)
+    a_ref = a.view(torch.float8_e4m3fn).float() * torch.exp2(a_scale.float() - 127).repeat_interleave(32, dim=2)
+    b_ref = b.view(torch.float8_e4m3fn).float() * torch.exp2(b_scale.float() - 127).repeat_interleave(
+        32, dim=2).transpose(1, 2)
+    ref = torch.matmul(a_ref, b_ref)
     torch.testing.assert_close(out, ref)
     assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
 
