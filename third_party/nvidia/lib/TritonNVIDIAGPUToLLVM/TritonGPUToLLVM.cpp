@@ -8,6 +8,7 @@
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -21,6 +22,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Value.h"
 
 namespace mlir::triton {
@@ -66,8 +68,39 @@ public:
                triton::gpu::WarpYieldOp,
                triton::gpu::WarpSpecializePartitionsOp,
                triton::gpu::WarpReturnOp>();
+    // Preserve scope ancestry until memory lowering has finished.
+    addLegalOp<triton::gpu::ThreadScopeOp, triton::gpu::ThreadYieldOp>();
   }
 };
+
+// Memory lowering no longer needs scope ownership. Inline the CFG directly,
+// forwarding yields through continuation block arguments.
+void inlineThreadScopes(ModuleOp mod) {
+  llvm::SmallVector<triton::gpu::ThreadScopeOp> scopes;
+  mod.walk<WalkOrder::PostOrder>(
+      [&](triton::gpu::ThreadScopeOp scope) { scopes.push_back(scope); });
+
+  // Splitting blocks invalidates the walk's sibling iterators.
+  IRRewriter rewriter(mod.getContext());
+  for (auto scope : scopes) {
+    Block *before = scope->getBlock();
+    Block *after = rewriter.splitBlock(before, Block::iterator(scope));
+    for (Type type : scope.getResultTypes())
+      after->addArgument(type, scope.getLoc());
+
+    for (Block &block : scope.getBody()) {
+      if (auto yield =
+              dyn_cast<triton::gpu::ThreadYieldOp>(block.getTerminator())) {
+        rewriter.setInsertionPoint(yield);
+        rewriter.replaceOpWithNewOp<cf::BranchOp>(yield, after,
+                                                  yield.getValues());
+      }
+    }
+    rewriter.mergeBlocks(&scope.getBody().front(), before);
+    rewriter.inlineRegionBefore(scope.getBody(), after);
+    rewriter.replaceOp(scope, after->getArguments());
+  }
+}
 
 void createSharedMemoryGlobal(ModuleOp mod, LLVMTypeConverter &typeConverter) {
   OpBuilder builder(mod.getBodyRegion());
@@ -257,6 +290,7 @@ LogicalResult ConvertTritonGPUToLLVM::lowerTritonGPUOps(
 LogicalResult
 ConvertTritonGPUToLLVM::lowerControlFlow(ModuleOp mod,
                                          LLVMTypeConverter &typeConverter) {
+  inlineThreadScopes(mod);
   MLIRContext *context = mod.getContext();
   NvidiaLLVMConversionTarget target(*context);
   target.addIllegalDialect<cf::ControlFlowDialect>();
