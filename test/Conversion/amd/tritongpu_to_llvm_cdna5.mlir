@@ -170,7 +170,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // STRICT-LABEL: @bf16_mulf
   tt.func @bf16_mulf(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xf8E4M3FN, #blocked>) -> tensor<64xbf16, #blocked> {
     // GFX1250: rocdl.cvt.scale.pk8.bf16.fp8
-    // STRICT-NOT: cvt.scale.pk8
+    // STRICT: rocdl.cvt.scale.pk8.bf16.fp8
     // STRICT: llvm.fmul {{.*}} : vector<2xbf16>
     // GFX1250: llvm.fmul {{.*}} : vector<2xbf16>
     %0 = tt.fp_to_fp %arg1 : tensor<64xf8E4M3FN, #blocked> -> tensor<64xbf16, #blocked>

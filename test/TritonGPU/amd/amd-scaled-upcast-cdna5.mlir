@@ -44,10 +44,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK-NOT: rocdl.permlanex16
     // CHECK: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}} : vector<8xbf16>
     // STRICT-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4(
+    // STRICT-COUNT-4: rocdl.permlanex16 {{.*}}, true, false : i32, i32
     // STRICT-NOT: rocdl.permlanex16
-    // STRICT-NOT: cvt.scale.pk8
-    // STRICT: llvm.fmul
-    // STRICT-NOT: cvt.scale.pk8
+    // STRICT: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}} : vector<8xbf16>
+    // STRICT-NOT: llvm.fmul
     // STRICT: llvm.return
 
     %28 = amdg.scaled_upcast_fp4 %15 scale %27 {axis = 1 : i32} : tensor<16x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> -> tensor<16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
@@ -64,9 +64,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #compact = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   // STRICT-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4_compact
-  // STRICT-NOT: cvt.scale.pk8
-  // STRICT: llvm.fmul
-  // STRICT-NOT: cvt.scale.pk8
+  // STRICT: rocdl.cvt.scale.pk8.bf16.fp4
+  // STRICT-NOT: llvm.fmul
   // STRICT: llvm.return
   tt.func public @cvt_scale_pk8_bf16_fp4_compact(%output: tensor<1x1024x!tt.ptr<bf16>, #unpacked>, %x: tensor<1x512xi8, #packed>, %scale: tensor<1x32xi8, #compact>) {
     // CHECK: rocdl.cvt.scale.pk8.bf16.fp4
