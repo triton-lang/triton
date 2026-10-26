@@ -1,12 +1,12 @@
-// RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1250" --canonicalize --cse | FileCheck %s
-// RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1250-strict" --canonicalize --cse | FileCheck %s --check-prefix=STRICT
+// RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1250" --canonicalize --cse | FileCheck %s --check-prefixes=COMMON,CHECK
+// RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1250-strict" --canonicalize --cse | FileCheck %s --check-prefixes=COMMON,STRICT
 
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #mma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[0, 1], [1, 0]]}, isTranspose = true, instrShape = [16, 16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  // STRICT-LABEL: llvm.func @wmma_dot_scaled_mxfp8_bf16
+  // COMMON-LABEL: llvm.func @wmma_dot_scaled_mxfp8_bf16
   // STRICT-NOT: cvt.scale.pk8.bf16
   // STRICT: llvm.fmul
   // STRICT-NOT: cvt.scale.pk8.bf16
@@ -35,20 +35,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 4, maxPhase = 4, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 2048 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // COMMON-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4(
   tt.func public @cvt_scale_pk8_bf16_fp4(%output: tensor<16x64x!tt.ptr<bf16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>, %15: tensor<16x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %27: tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>) attributes {noinline = false} {
     // This scale layout is not broadcast across the lane^16 split, so the 4
     // scale registers used by the emitted pk8 groups are exchanged cross-lane
     // (permlanex16) to co-locate lane (j^16)'s scale into byte 1 for the upper
     // output lanes.
-    // CHECK-COUNT-4: rocdl.permlanex16 {{.*}}, true, false : i32, i32
-    // CHECK-NOT: rocdl.permlanex16
-    // CHECK: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}} : vector<8xbf16>
-    // STRICT-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4(
-    // STRICT-COUNT-4: rocdl.permlanex16 {{.*}}, true, false : i32, i32
-    // STRICT-NOT: rocdl.permlanex16
-    // STRICT: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}} : vector<8xbf16>
-    // STRICT-NOT: llvm.fmul
-    // STRICT: llvm.return
+    // COMMON-COUNT-4: rocdl.permlanex16 {{.*}}, true, false : i32, i32
+    // COMMON-NOT: rocdl.permlanex16
+    // COMMON: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}} : vector<8xbf16>
+    // COMMON-NOT: llvm.fmul
+    // COMMON: llvm.return
 
     %28 = amdg.scaled_upcast_fp4 %15 scale %27 {axis = 1 : i32} : tensor<16x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> -> tensor<16x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
     tt.store %output, %28 : tensor<16x64x!tt.ptr<bf16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
@@ -63,12 +60,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #unpacked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 #compact = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  // STRICT-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4_compact
-  // STRICT: rocdl.cvt.scale.pk8.bf16.fp4
-  // STRICT-NOT: llvm.fmul
-  // STRICT: llvm.return
+  // COMMON-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4_compact
+  // COMMON: rocdl.cvt.scale.pk8.bf16.fp4
+  // COMMON-NOT: llvm.fmul
+  // COMMON: llvm.return
   tt.func public @cvt_scale_pk8_bf16_fp4_compact(%output: tensor<1x1024x!tt.ptr<bf16>, #unpacked>, %x: tensor<1x512xi8, #packed>, %scale: tensor<1x32xi8, #compact>) {
-    // CHECK: rocdl.cvt.scale.pk8.bf16.fp4
     %up = amdg.scaled_upcast_fp4 %x scale %scale {axis = 1 : i32} : tensor<1x512xi8, #packed>, tensor<1x32xi8, #compact> -> tensor<1x1024xbf16, #unpacked>
     tt.store %output, %up : tensor<1x1024x!tt.ptr<bf16>, #unpacked>
     tt.return
@@ -81,15 +77,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #unpacked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 #scale = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4_contig8
+  // COMMON-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4_contig8
   tt.func public @cvt_scale_pk8_bf16_fp4_contig8(%output: tensor<8x64x!tt.ptr<bf16>, #unpacked>, %x: tensor<8x32xi8, #packed>, %scale: tensor<8x2xi8, #scale>) {
     // Two K blocks -> block 0 uses scale[0], block 1 uses scale[1].
-    // CHECK: %[[S0:.+]] = llvm.extractvalue %{{.+}}[0] : !llvm.struct<(i8, i8)>
-    // CHECK: %[[S1:.+]] = llvm.extractvalue %{{.+}}[1] : !llvm.struct<(i8, i8)>
-    // CHECK: llvm.insertelement %[[S0]]
-    // CHECK: rocdl.cvt.scale.pk8.bf16.fp4
-    // CHECK: llvm.insertelement %[[S1]]
-    // CHECK: rocdl.cvt.scale.pk8.bf16.fp4
+    // COMMON: %[[S0:.+]] = llvm.extractvalue %{{.+}}[0] : !llvm.struct<(i8, i8)>
+    // COMMON: %[[S1:.+]] = llvm.extractvalue %{{.+}}[1] : !llvm.struct<(i8, i8)>
+    // COMMON: llvm.insertelement %[[S0]]
+    // COMMON: rocdl.cvt.scale.pk8.bf16.fp4
+    // COMMON: llvm.insertelement %[[S1]]
+    // COMMON: rocdl.cvt.scale.pk8.bf16.fp4
     %up = amdg.scaled_upcast_fp4 %x scale %scale {axis = 1 : i32} : tensor<8x32xi8, #packed>, tensor<8x2xi8, #scale> -> tensor<8x64xbf16, #unpacked>
     tt.store %output, %up : tensor<8x64x!tt.ptr<bf16>, #unpacked>
     tt.return
@@ -102,12 +98,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #unpacked = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 16], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
 #scale = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4_interleaved
+  // COMMON-LABEL: llvm.func @cvt_scale_pk8_bf16_fp4_interleaved
   tt.func public @cvt_scale_pk8_bf16_fp4_interleaved(%output: tensor<32x32x!tt.ptr<bf16>, #unpacked>, %x: tensor<32x16xi8, #packed>, %scale: tensor<32x2xi8, #scale>) {
-    // CHECK: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}}, %[[SI0:.+]][0] : vector<8xbf16>
-    // CHECK: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}}, %[[SI1:.+]][0] : vector<8xbf16>
-    // CHECK: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}}, %[[SI0]][0] : vector<8xbf16>
-    // CHECK: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}}, %[[SI1]][0] : vector<8xbf16>
+    // COMMON: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}}, %[[SI0:.+]][0] : vector<8xbf16>
+    // COMMON: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}}, %[[SI1:.+]][0] : vector<8xbf16>
+    // COMMON: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}}, %[[SI0]][0] : vector<8xbf16>
+    // COMMON: rocdl.cvt.scale.pk8.bf16.fp4 {{.*}}, %[[SI1]][0] : vector<8xbf16>
     %up = amdg.scaled_upcast_fp4 %x scale %scale {axis = 1 : i32} : tensor<32x16xi8, #packed>, tensor<32x2xi8, #scale> -> tensor<32x32xbf16, #unpacked>
     tt.store %output, %up : tensor<32x32x!tt.ptr<bf16>, #unpacked>
     tt.return

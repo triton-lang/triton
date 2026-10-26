@@ -1055,6 +1055,9 @@ LogicalResult ScaledUpcastFp8Op::verify() {
   auto features = getScaledUpcastTarget(*this);
   if (!features)
     return success();
+  // Strict arch has no Block16 support. To use native instructions, lane
+  // pairs n and n+16 must have the same scale value. Otherwise, lowering
+  // handles it.
   if (features->supportsCvtPkScalePk8Upcast() &&
       !features->supportsCvtPkScalePk8Block16()) {
     RankedTensorType scaleTy = getScale().getType();
