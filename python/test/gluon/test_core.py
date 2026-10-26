@@ -4229,6 +4229,267 @@ def test_buffer_atomic_rmw_add_bf16():
     assert llir.count("tail call <2 x bfloat> @llvm.amdgcn.raw.ptr.buffer.atomic.fadd.v2bf16") == SIZE_PER_THREAD // 2
 
 
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("soffset, num_elements", [(0, 40), (10, 40), (30, 60), (10, 5), (5, 0)])
+def test_buffer_descriptor_soffset_bounds(soffset, num_elements):
+
+    @gluon.jit
+    def kernel(src, dst, soffset, num_elements):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        # Without a stride, num_records counts bytes and bounds soffset + offsets.
+        src_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, num_elements * 4)
+        x = ttgl.amd.cdna3.buffer.load(src_desc, offsets, soffset=soffset)
+        ttgl.amd.cdna3.buffer_store(x, dst, offsets)
+        dst_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(dst + 64, num_elements * 4)
+        ttgl.amd.cdna3.buffer.store(x + 1, dst_desc, offsets, soffset=soffset)
+
+    src = torch.arange(1000, 1128, dtype=torch.int32, device="cuda")
+    dst = torch.full((192, ), -1, dtype=torch.int32, device="cuda")
+    compiled = kernel[(1, )](src, dst, soffset, num_elements, num_warps=1)
+
+    index = torch.arange(64, device="cuda")
+    in_bounds = soffset + index < num_elements
+    torch.testing.assert_close(dst[:64], torch.where(in_bounds, src[soffset + index], 0).int(), atol=0, rtol=0)
+    stored = torch.full((128, ), -1, dtype=torch.int32, device="cuda")
+    loaded = dst[:64]
+    stored[(soffset + index)[in_bounds]] = loaded[in_bounds] + 1
+    torch.testing.assert_close(dst[64:], stored, atol=0, rtol=0)
+    # soffset stays in a scalar register.
+    assert re.search(r"buffer_load_dword v\d+, v\d+, s\[\d+:\d+\], s\d+ offen", compiled.asm["amdgcn"])
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("num_elements", [4096, 3100])
+@pytest.mark.parametrize("rows_per_thread", [1, 2])
+def test_buffer_descriptor_tensor_soffset(num_elements, rows_per_thread):
+
+    @gluon.jit
+    def kernel(src, dst, row_base, num_elements, ROWS_PER_THREAD: ttgl.constexpr):
+        # Lanes stay within a row, so a per-row soffset is the same across each access's lanes. With
+        # two rows per thread, it also differs between the registers of a lane.
+        layout: ttgl.constexpr = ttgl.BlockedLayout([ROWS_PER_THREAD, 4], [1, 64], [4 // ROWS_PER_THREAD, 1], [1, 0])
+        rows = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 256, layout=ttgl.SliceLayout(0, layout))
+        soffset = ttgl.load(row_base + rows)[:, None]
+        offsets = rows[:, None] * 0 + cols[None, :]
+        src_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, num_elements * 4)
+        x = ttgl.amd.cdna3.buffer.load(src_desc, offsets, soffset=soffset)
+        dst_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(dst, num_elements * 4)
+        ttgl.amd.cdna3.buffer.store(x + 1, dst_desc, offsets, soffset=soffset)
+
+    src = torch.arange(1, 4097, dtype=torch.int32, device="cuda")
+    dst = torch.zeros(4096, dtype=torch.int32, device="cuda")
+    row_base = torch.tensor([0, 700, 1500, 3000], dtype=torch.int32, device="cuda")
+    compiled = kernel[(1, )](src, dst, row_base, num_elements, rows_per_thread, num_warps=4 // rows_per_thread)
+
+    cols = torch.arange(256, device="cuda")
+    expected = torch.zeros_like(dst)
+    for base in row_base.tolist():
+        index = base + cols
+        # The tensor soffset is counted by the bounds check like a scalar one.
+        in_bounds = index < num_elements
+        expected[index[in_bounds]] = src[index[in_bounds]] + 1
+    torch.testing.assert_close(dst, expected, atol=0, rtol=0)
+    # Each wave's soffset is in a scalar register, and accesses stay vectorized.
+    amdgcn = compiled.asm["amdgcn"]
+    assert "v_readfirstlane_b32" in amdgcn
+    assert re.search(r"buffer_load_dwordx4 v\[\d+:\d+\], v\d+, s\[\d+:\d+\], s\d+ offen", amdgcn)
+    assert re.search(r"buffer_store_dwordx4 v\[\d+:\d+\], v\d+, s\[\d+:\d+\], s\d+ offen", amdgcn)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
+@pytest.mark.parametrize("lane_bytes", ["element", 16])
+@pytest.mark.parametrize("num_records", [2**31, 2**32 - 4, 2**32 - 1])
+@pytest.mark.parametrize("soffset", [0, 5])
+def test_buffer_descriptor_full_range_mask(dtype, lane_bytes, num_records, soffset):
+    elem_bytes = dtype.itemsize
+    vec = 1 if lane_bytes == "element" else 16 // elem_bytes
+    gl_dtype = getattr(ttgl, str(dtype).removeprefix("torch."))
+
+    @gluon.jit
+    def kernel(src, dst, out, num_records, soffset, VEC: ttgl.constexpr, DTYPE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([VEC], [64], [1], [0])
+        offsets = ttgl.arange(0, 64 * VEC, layout=layout)
+        # Every other lane is masked off as a whole, keeping its access vectorized.
+        mask = (offsets // VEC) % 2 == 0
+        # With a bound at or above 2**31, masked-off lanes must still be dropped.
+        bound = num_records.to(ttgl.uint32)
+        src_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, bound)
+        x = ttgl.amd.cdna3.buffer.load(src_desc, offsets, mask=mask, other=-5, soffset=soffset)
+        ttgl.store(out + offsets, x)
+        dst_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(dst, bound)
+        ttgl.amd.cdna3.buffer.store(offsets.to(DTYPE) + 1, dst_desc, offsets, mask=mask, soffset=soffset)
+
+    n = 64 * vec
+    src = (torch.arange(soffset + n, device="cuda") % 100 + 1).to(dtype)
+    dst = torch.full((soffset + n, ), -1, dtype=dtype, device="cuda")
+    out = torch.empty(n, dtype=dtype, device="cuda")
+    compiled = kernel[(1, )](src, dst, out, num_records, soffset, vec, gl_dtype, num_warps=1)
+
+    index = torch.arange(n, device="cuda")
+    active = (index // vec) % 2 == 0
+    torch.testing.assert_close(out, torch.where(active, src[soffset:], -5).to(dtype), atol=0, rtol=0)
+    expected_dst = torch.full((soffset + n, ), -1, dtype=dtype, device="cuda")
+    expected_dst[soffset:] = torch.where(active, index + 1, -1).to(dtype)
+    torch.testing.assert_close(dst, expected_dst, atol=0, rtol=0)
+    if lane_bytes == 16:
+        amdgcn = compiled.asm["amdgcn"]
+        assert "buffer_load_dwordx4" in amdgcn and "buffer_store_dwordx4" in amdgcn
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("vec", [1, 4])
+@pytest.mark.parametrize("bound", ["partial", "full"])
+@pytest.mark.parametrize("soffset", [0, 5])
+def test_buffer_load_to_shared_bounds_mask(vec, bound, soffset):
+
+    @gluon.jit
+    def kernel(src, dst, num_records, soffset, VEC: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([VEC], [64], [4], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        offsets = ttgl.arange(0, 256 * VEC, layout=layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256 * VEC], shared)
+        desc = ttgl.amd.cdna4.buffer.make_buffer_descriptor(src, num_records.to(ttgl.uint32))
+        # Masked-off lanes zero-fill through the out-of-bounds offset, also with
+        # a bound above 2**31; lanes past a smaller bound zero-fill too.
+        ttgl.amd.cdna4.buffer.load_to_shared(smem, desc, offsets, mask=(offsets // VEC) % 2 == 0, soffset=soffset)
+        cdna4_async_copy.commit_group()
+        cdna4_async_copy.wait_group(0)
+        ttgl.barrier()
+        ttgl.store(dst + offsets, smem.load(layout))
+
+    n = 256 * vec
+    num_records = (n // 2 + 3) * 4 if bound == "partial" else 2**32 - 1
+    src = torch.arange(1, soffset + n + 1, dtype=torch.int32, device="cuda")
+    dst = torch.empty(n, dtype=torch.int32, device="cuda")
+    kernel[(1, )](src, dst, num_records, soffset, vec, num_warps=4)
+
+    index = torch.arange(n, device="cuda")
+    loaded = ((index // vec) % 2 == 0) & ((soffset + index + 1) * 4 <= num_records)
+    torch.testing.assert_close(dst, torch.where(loaded, src[soffset:], 0).int(), atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+def test_buffer_descriptor_in_loop():
+
+    @gluon.jit
+    def kernel(src, dst, num_elements, STEPS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, num_elements * 4)
+        acc = ttgl.zeros([64], ttgl.int32, layout)
+        for step in range(STEPS):
+            acc += ttgl.amd.cdna3.buffer.load(desc, offsets)
+            # A loop-carried descriptor: each step reads the next 64 elements
+            # of what remains.
+            num_elements -= 64
+            desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src + (step + 1) * 64, num_elements * 4)
+        ttgl.amd.cdna3.buffer_store(acc, dst, offsets)
+
+    src = torch.arange(1, 257, dtype=torch.int32, device="cuda")
+    dst = torch.zeros(64, dtype=torch.int32, device="cuda")
+    kernel[(1, )](src, dst, 160, 3, num_warps=1)
+    # The third step reads 32 in-bounds elements and 32 zeros.
+    expected = src[:64] + src[64:128] + torch.cat([src[128:160], torch.zeros(32, dtype=torch.int32, device="cuda")])
+    torch.testing.assert_close(dst, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("scope, scope_bits", [(None, ""), ("cta", " sc0"), ("gpu", " sc1"), ("sys", " sc0 sc1")])
+@pytest.mark.parametrize("nontemporal", [False, True])
+def test_buffer_load_store_scope_cache_policy(scope, scope_bits, nontemporal):
+
+    @gluon.jit
+    def kernel(src, dst, scope: ttgl.constexpr, nontemporal: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        policy: ttgl.constexpr = ttgl.amd.cdna3.buffer.CachePolicy(nontemporal=nontemporal)
+        src_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, 64 * 4)
+        dst_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(dst, 64 * 4)
+        x = ttgl.amd.cdna3.buffer.load(src_desc, offsets, scope=scope, cache_policy=policy)
+        ttgl.amd.cdna3.buffer.store(x, dst_desc, offsets, scope=scope, cache_policy=policy)
+
+    src = torch.arange(64, dtype=torch.int32, device="cuda")
+    dst = torch.empty_like(src)
+    compiled = kernel[(1, )](src, dst, scope, nontemporal, num_warps=1)
+    torch.testing.assert_close(dst, src, atol=0, rtol=0)
+
+    def bits(instruction):
+        match = re.search(rf"^\s*{instruction} v\d+, v\d+, s\[\d+:\d+\], 0 offen(.*)$", compiled.asm["amdgcn"],
+                          re.MULTILINE)
+        assert match, instruction
+        return set(match.group(1).split())
+
+    expected = set(scope_bits.split()) | ({"nt"} if nontemporal else set())
+    assert bits("buffer_load_dword") == expected
+    assert bits("buffer_store_dword") == expected
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+def test_buffer_ops_require_descriptor():
+
+    @gluon.jit
+    def kernel(src):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        ttgl.amd.cdna3.buffer.load(src, ttgl.arange(0, 64, layout=layout))
+
+    src = torch.zeros(64, dtype=torch.int32, device="cuda")
+    with pytest.raises(CompilationError, match="expected a buffer descriptor"):
+        kernel[(1, )](src, num_warps=1)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("soffset_shape, error", [
+    ([2, 64], "must broadcast to the offsets shape"),
+    ([1, 64], "same across the lanes of a wave"),
+    ([4, 1], "same across the lanes of a wave"),
+])
+def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error):
+
+    @gluon.jit
+    def kernel(src, SOFFSET_M: ttgl.constexpr, SOFFSET_N: ttgl.constexpr):
+        # Lanes span both dimensions: 4 rows of 16.
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 16], [1, 1], [1, 0])
+        rows = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))
+        offsets = rows[:, None] * 64 + cols[None, :]
+        soffset = ttgl.zeros([SOFFSET_M, SOFFSET_N], ttgl.int32, layout)
+        desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, 1024)
+        ttgl.amd.cdna3.buffer.load(desc, offsets, soffset=soffset)
+
+    src = torch.zeros(256, dtype=torch.int32, device="cuda")
+    with pytest.raises(CompilationError, match=error):
+        kernel[(1, )](src, *soffset_shape, num_warps=1)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("hint", [False, True])
+def test_buffer_descriptor_alignment_hint(hint):
+
+    @gluon.jit
+    def kernel(src, dst, base_ptr, hint: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([4], [64], [1], [0])
+        offsets = ttgl.arange(0, 256, layout=layout)
+        # A base loaded from memory has no provable alignment.
+        base = ttgl.load(base_ptr)
+        if hint:
+            base = ttgl.multiple_of(base, 4)
+        # The descriptor is as aligned as its base pointer.
+        desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src + base, 2**31 - 1)
+        x = ttgl.amd.cdna3.buffer.load(desc, offsets)
+        ttgl.amd.cdna3.buffer_store(x, dst + base, offsets)
+
+    src = torch.arange(512, dtype=torch.int32, device="cuda")
+    dst = torch.zeros_like(src)
+    base = torch.tensor([4], dtype=torch.int32, device="cuda")
+    compiled = kernel[(1, )](src, dst, base, hint, num_warps=1)
+    torch.testing.assert_close(dst[4:260], src[4:260], atol=0, rtol=0)
+    load = "v4i32" if hint else "i32"
+    assert f"@llvm.amdgcn.raw.ptr.buffer.load.{load}(" in compiled.asm["llir"]
+
+
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_mma_v2(dtype):
