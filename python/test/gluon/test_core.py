@@ -2955,6 +2955,65 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
     _check_cd_regclass_pins(compiled.asm['llir'], cd_regclass)
 
 
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+def test_amd_mfma_scaled_3d(device='cuda'):
+
+    @gluon.jit
+    def kernel(out_ptr, a_ptr, b_ptr, a_scale_ptr, b_scale_ptr,  #
+               B: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr):
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(  #
+            version=4, instr_shape=[16, 16, 128], transposed=True,  #
+            warps_per_cta=[2, 1, 1])
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, 16)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, 16)
+        a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [B, M, K // 32])
+        b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [B, N, K // 32])
+
+        a_dim0 = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, a_layout)))[:, None, None]
+        a_dim1 = ttgl.arange(0, M, ttgl.SliceLayout(0, ttgl.SliceLayout(2, a_layout)))[None, :, None]
+        a_dim2 = ttgl.arange(0, K, ttgl.SliceLayout(0, ttgl.SliceLayout(1, a_layout)))[None, None, :]
+        a = ttgl.load(a_ptr + (a_dim0 * M + a_dim1) * K + a_dim2)
+
+        b_dim0 = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, b_layout)))[:, None, None]
+        b_dim1 = ttgl.arange(0, K, ttgl.SliceLayout(0, ttgl.SliceLayout(2, b_layout)))[None, :, None]
+        b_dim2 = ttgl.arange(0, N, ttgl.SliceLayout(0, ttgl.SliceLayout(1, b_layout)))[None, None, :]
+        b = ttgl.load(b_ptr + (b_dim0 * K + b_dim1) * N + b_dim2)
+
+        a_scale_dim0 = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, a_scale_layout)))[:, None, None]
+        a_scale_dim1 = ttgl.arange(0, M, ttgl.SliceLayout(0, ttgl.SliceLayout(2, a_scale_layout)))[None, :, None]
+        a_scale_dim2 = ttgl.arange(0, K // 32, ttgl.SliceLayout(0, ttgl.SliceLayout(1, a_scale_layout)))[None, None, :]
+        a_scale = ttgl.load(a_scale_ptr + (a_scale_dim0 * M + a_scale_dim1) * (K // 32) + a_scale_dim2)
+
+        b_scale_dim0 = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, b_scale_layout)))[:, None, None]
+        b_scale_dim1 = ttgl.arange(0, N, ttgl.SliceLayout(0, ttgl.SliceLayout(2, b_scale_layout)))[None, :, None]
+        b_scale_dim2 = ttgl.arange(0, K // 32, ttgl.SliceLayout(0, ttgl.SliceLayout(1, b_scale_layout)))[None, None, :]
+        b_scale = ttgl.load(b_scale_ptr + (b_scale_dim0 * N + b_scale_dim1) * (K // 32) + b_scale_dim2)
+
+        zero = ttgl.zeros([B, M, N], dtype=ttgl.float32, layout=mfma_layout)
+        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, "e4m3", b, b_scale, "e4m3", zero)
+
+        o_dim0 = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, mfma_layout)))[:, None, None]
+        o_dim1 = ttgl.arange(0, M, ttgl.SliceLayout(0, ttgl.SliceLayout(2, mfma_layout)))[None, :, None]
+        o_dim2 = ttgl.arange(0, N, ttgl.SliceLayout(0, ttgl.SliceLayout(1, mfma_layout)))[None, None, :]
+        ttgl.store(out_ptr + (o_dim0 * M + o_dim1) * N + o_dim2, c)
+
+    B, M, N, K = 2, 16, 16, 128
+    torch.manual_seed(0)
+    a = torch.randint(20, 40, (B, M, K), dtype=torch.uint8, device=device)
+    b = torch.randint(20, 40, (B, K, N), dtype=torch.uint8, device=device)
+    a_scale = torch.randint(120, 134, (B, M, K // 32), dtype=torch.uint8, device=device)
+    b_scale = torch.randint(120, 134, (B, N, K // 32), dtype=torch.uint8, device=device)
+    out = torch.empty((B, M, N), dtype=torch.float32, device=device)
+    kernel[(1, )](out, a, b, a_scale, b_scale, B, M, N, K, num_warps=2)
+
+    a_ref = a.view(torch.float8_e4m3fn).float()
+    a_ref = a_ref * torch.exp2(a_scale.float() - 127).repeat_interleave(32, dim=2)
+    b_ref = b.view(torch.float8_e4m3fn).float()
+    b_ref = b_ref * torch.exp2(b_scale.float() - 127).repeat_interleave(32, dim=2).transpose(1, 2)
+    ref = torch.matmul(a_ref, b_ref)
+    torch.testing.assert_close(out, ref)
+
+
 def test_math_fast_expf():
 
     @gluon.jit
