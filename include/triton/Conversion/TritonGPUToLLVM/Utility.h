@@ -361,6 +361,15 @@ Value emitRedundantThreadPredicate(
     ConversionPatternRewriter &rewriter, Location loc,
     const TargetInfoBase &targetInfo);
 
+Value emitThreadPredicate(ThreadDomainAttr domain,
+                          ConversionPatternRewriter &rewriter, Location loc,
+                          const TargetInfoBase &targetInfo);
+
+// Thread-local memory operations already execute in their owner's branch.
+Value emitMemoryThreadPredicate(
+    Operation *op, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo);
+
 // Takes two values that may be boolean, or null to represent constant True.
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b);
 
@@ -749,21 +758,20 @@ emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
                llvm::function_ref<SmallVector<Value>()> bodyBuilder);
 
 /// Insert CTA or cluster barriers around an atomic operation according to its
-/// acquire/release semantics. `emitBarrierAfter` may be false when result
-/// staging already emits the required barrier after the atomic instruction.
+/// acquire/release semantics and any ordering already provided by result
+/// staging.
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
-                                  bool emitBarrierAfter, RewriterBase &rewriter,
+                                  RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo);
 
-/// Whether atomic result broadcast barrier is sufficient for acquire ordering.
-/// Must run after scratch allocation.
-bool atomicResultHasOrderingBarrier(Operation *op);
+void shuffleFromCanonicalLane(Location loc, MutableArrayRef<Value> values,
+                              uint32_t laneMask,
+                              ConversionPatternRewriter &rewriter,
+                              const TargetInfoBase &targetInfo);
 
-Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
-                                  Value resultVal,
-                                  ConversionPatternRewriter &rewriter,
-                                  TritonLLVMOpBuilder &b, Value threadPred,
-                                  const TargetInfoBase &targetInfo);
+Value broadcastScalarResult(Operation *op, Value resultVal,
+                            ConversionPatternRewriter &rewriter,
+                            Value threadPred, const TargetInfoBase &targetInfo);
 
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx);
 
@@ -807,17 +815,15 @@ createIfBlock(RewriterBase &b, Location loc, Value cnd);
 
 // Broadcast canonical owners' results to redundant threads and CTAs. Both the
 // input and returned values contain only unique registers.
-SmallVector<Value>
-broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
-                      ConversionPatternRewriter &rewriter,
-                      ArrayRef<Value> uniqueResultVals, Type valueElemTy,
-                      TritonLLVMOpBuilder &b, Value threadPred,
-                      const TargetInfoBase &targetInfo);
+SmallVector<Value> broadcastTensorResult(Operation *op,
+                                         ConversionPatternRewriter &rewriter,
+                                         ArrayRef<Value> uniqueResultVals,
+                                         Value threadPred,
+                                         const TargetInfoBase &targetInfo);
 
 /// Synchronize an atomic result, then replace the op.
 void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,
-                           SmallVector<Value> &resultVals, Type valueElemTy,
-                           TritonLLVMOpBuilder &b, Value threadPred,
+                           SmallVector<Value> &resultVals, Value threadPred,
                            const TargetInfoBase &targetInfo,
                            const LLVMTypeConverter *typeConverter);
 

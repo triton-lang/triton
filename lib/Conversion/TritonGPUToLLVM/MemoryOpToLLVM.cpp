@@ -253,6 +253,77 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct ThreadPredicateOpConversion
+    : public ConvertOpToLLVMPattern<ThreadPredicateOp> {
+  ThreadPredicateOpConversion(LLVMTypeConverter &converter,
+                              const TargetInfoBase &targetInfo,
+                              PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(ThreadPredicateOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value predicate =
+        emitThreadPredicate(op.getDomain(), rewriter, op.getLoc(), targetInfo);
+    rewriter.replaceOp(op, predicate);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
+struct ThreadHandoffOpConversion
+    : public ConvertOpToLLVMPattern<ThreadHandoffOp> {
+  ThreadHandoffOpConversion(LLVMTypeConverter &converter,
+                            const TargetInfoBase &targetInfo,
+                            PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(ThreadHandoffOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value result = adaptor.getSrc();
+    auto source = op.getSource();
+    auto destination = op.getDestination();
+    if (source == destination) {
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    auto loc = op.getLoc();
+    // Work around https://github.com/llvm/llvm-project/issues/224146:
+    // peeling can split convergent handoffs into owner/non-owner loops.
+    // noduplicate also blocks valid unrolling. Revisit this workaround once
+    // LLVM preserves convergence through peeling.
+    auto boundary = appendOrGetExternFuncOp(
+        rewriter, op, "llvm.sideeffect",
+        LLVM::LLVMFunctionType::get(LLVM::LLVMVoidType::get(op.getContext()),
+                                    {}));
+    auto call = LLVM::CallOp::create(rewriter, loc, boundary, ValueRange{});
+    call.setNoduplicate(true);
+    call.setConvergent(true);
+    if (source.hasSameWarpAndBlock(destination)) {
+      shuffleFromCanonicalLane(loc, MutableArrayRef<Value>(result),
+                               source.getLane(), rewriter, targetInfo);
+    } else {
+      // Publish from lane zero of warp zero in each source CTA.
+      auto publisher = ThreadDomainAttr::get(
+          op.getContext(), lookupThreadsPerWarp(rewriter) - 1,
+          lookupNumWarps(op) - 1, source.getBlock());
+      Value predicate =
+          emitThreadPredicate(publisher, rewriter, loc, targetInfo);
+      result =
+          broadcastScalarResult(op, result, rewriter, predicate, targetInfo);
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
 class BarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::BarrierOp> {
 public:
@@ -422,27 +493,18 @@ struct AtomicPollOpConversion
       results.assign(ptrs.size(), b.true_val());
     } else if (op->hasAttr("allocation.offset")) {
       // Reuse the existing atomic result transport for physical replicas.
-      if (auto tensorTy = dyn_cast<RankedTensorType>(op.getType())) {
-        SmallVector<Value> bytes;
-        for (Value result : results)
-          bytes.push_back(b.zext(i8_ty, result));
-        bytes = broadcastTensorResult(op, tensorTy, rewriter, bytes, i8_ty, b,
-                                      threadPred, targetInfo);
-        for (auto [result, byte] : llvm::zip_equal(results, bytes))
-          result = b.trunc(i1_ty, byte, LLVM::IntegerOverflowFlags::nuw);
+      if (isa<RankedTensorType>(op.getType())) {
+        for (Value &result : results)
+          result = b.zext(i8_ty, result);
+        results = broadcastTensorResult(op, rewriter, results, threadPred,
+                                        targetInfo);
+        for (Value &result : results)
+          result = b.trunc(i1_ty, result, LLVM::IntegerOverflowFlags::nuw);
         if (numCTAs != 1 && !atomicResultHasCTABroadcast(op))
           rendezvous();
       } else {
-        Value scratch =
-            LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-        targetInfo.storeShared(rewriter, loc, scratch, results.front(),
-                               threadPred);
-        rendezvous();
-        results.front() =
-            numCTAs == 1
-                ? b.load(i1_ty, scratch)
-                : targetInfo.loadDShared(rewriter, loc, scratch, b.i32_val(0),
-                                         i1_ty, b.true_val());
+        results.front() = broadcastScalarResult(op, results.front(), rewriter,
+                                                threadPred, targetInfo);
       }
     } else {
       rendezvous();
@@ -526,10 +588,8 @@ struct AtomicLoadOpConversion
   matchAndRewrite(triton::AtomicLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto sem = op.getSem();
-    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
-                                 rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, sem, rewriter, targetInfo);
 
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
     auto ptrElements =
@@ -542,8 +602,8 @@ struct AtomicLoadOpConversion
     Type valueElemTy =
         getTypeConverter()->convertType(getElementTypeOrSelf(resultTy));
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
-    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
-                                                         loc, targetInfo);
+    Value threadPred =
+        ttg::emitMemoryThreadPredicate(op, freeVarMasks, rewriter, targetInfo);
     SmallVector<Value> resultVals;
     resultVals.reserve(ptrElements.size());
 
@@ -564,8 +624,8 @@ struct AtomicLoadOpConversion
     if (sem == MemSemantic::ACQUIRE)
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
                             syncScope);
-    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
-                          targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 
@@ -587,9 +647,7 @@ struct AtomicStoreOpConversion
   matchAndRewrite(triton::AtomicStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(),
-                                 /*emitBarrierAfter=*/true, rewriter,
-                                 targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
     auto ptrElements =
         unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
@@ -600,8 +658,8 @@ struct AtomicStoreOpConversion
       maskElements =
           unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
-    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
-                                                         loc, targetInfo);
+    Value threadPred =
+        ttg::emitMemoryThreadPredicate(op, freeVarMasks, rewriter, targetInfo);
     if (op.getSem() == MemSemantic::RELEASE)
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
                             syncScope);
@@ -644,6 +702,8 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BarrierOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<ThreadPredicateOpConversion, ThreadHandoffOpConversion>(
+      typeConverter, targetInfo, benefit);
   patterns.add<AtomicLoadOpConversion>(typeConverter, targetInfo,
                                        axisInfoAnalysis, benefit);
   patterns.add<AtomicPollOpConversion>(typeConverter, targetInfo, benefit);

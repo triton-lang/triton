@@ -739,8 +739,62 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
   }
 }
 
+FailureOr<int32_t>
+getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
+                           std::optional<triton::MemSyncScope> scope,
+                           bool isLoad,
+                           const mlir::triton::AMD::TargetInfo &targetInfo) {
+  int32_t aux = 0;
+  if (auto gfx9Policy =
+          dyn_cast_if_present<triton::amdgpu::CachePolicyGfx9Attr>(
+              cachePolicy)) {
+    if (!llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                            targetInfo.getISAFamily()))
+      return op->emitOpError(
+          "the gfx9 cache policy is only supported on CDNA3 and CDNA4");
+    const int ntBit = 0b10;
+    if (gfx9Policy.getNontemporal())
+      aux |= ntBit;
+  } else {
+    auto cm = getCacheModifier(cachePolicy);
+    if (failed(cm))
+      return op->emitOpError(
+          "target cache policy is not supported on AMD targets");
+    aux = getCtrlBitsForCacheModifierOnTarget(*cm, isLoad, targetInfo);
+  }
+  if (scope) {
+    // gfx9 encodes the scope of a non-atomic access in SC[1:0]: none = wave,
+    // SC0 = workgroup, SC1 = agent, SC0|SC1 = system.
+    if (!llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                            targetInfo.getISAFamily()))
+      return op->emitOpError(
+          "scope on buffer loads and stores is only supported on CDNA3 and "
+          "CDNA4");
+    const int sc0Bit = 0b1, sc1Bit = 0b10000;
+    switch (*scope) {
+    case triton::MemSyncScope::CTA:
+      aux |= sc0Bit;
+      break;
+    case triton::MemSyncScope::GPU:
+      aux |= sc1Bit;
+      break;
+    case triton::MemSyncScope::SYSTEM:
+      aux |= sc0Bit | sc1Bit;
+      break;
+    default:
+      return op->emitOpError("unsupported scope on a buffer load or store");
+    }
+  }
+  return aux;
+}
+
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
   Type basePtrType = basePtr.getType();
+  // Accesses through a buffer descriptor behave like ones through a global
+  // pointer to its element type.
+  if (auto desc = dyn_cast<triton::amdgpu::BufferDescType>(basePtrType))
+    basePtrType = triton::PointerType::get(desc.getElementType(),
+                                           triton::PtrAddrSpace::Global);
   auto offsetType = cast<RankedTensorType>(offset.getType());
   return offsetType.cloneWith(std::nullopt, basePtrType);
 }
@@ -794,7 +848,8 @@ unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
 unsigned getVectorSize(Value ptr, Value offset,
                        ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
-  auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
+  auto pointeeBitWidth =
+      triton::getPointeeBitWidth(getPointerTypeWithShape(ptr, offset));
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
 }
 
