@@ -2141,8 +2141,7 @@ struct BufferAtomicLoadOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto sem = op.getSem();
-    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
-                                 rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, sem, rewriter, targetInfo);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
     Type resultTy = op.getType();
@@ -2179,8 +2178,8 @@ struct BufferAtomicLoadOpConversion
     if (sem == triton::MemSemantic::ACQUIRE)
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
                             targetInfo.getAtomicSyncScope(op.getScope()));
-    finalizeAtomicResults(op, rewriter, loadedVals, valueElemTy, b, threadPred,
-                          targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, loadedVals, threadPred, targetInfo,
+                          getTypeConverter());
     return success();
   }
 };
@@ -2208,8 +2207,7 @@ struct BufferAtomicStoreOpConversion
       return failure();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    insertAtomicOrderingBarriers(op, op.getSem(), /*emitBarrierAfter=*/true,
-                                 rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, op.getSem(), rewriter, targetInfo);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
     Type valueTy = op.getValue().getType();
