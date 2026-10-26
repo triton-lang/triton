@@ -1,10 +1,10 @@
 """Fabric argument construction and TW's paired-buffer host adapter."""
 
 from collections import namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
+import triton.language as tl
 from triton._utils import canonicalize_dtype
-from triton.language import constexpr, int64, int8, str_to_ty
 
 __all__ = ["SynchronizedBuffer", "RequestLayout", "Protocol"]
 
@@ -17,7 +17,13 @@ _Queue = namedtuple("_Queue", "head tail cached_head buffer")
 @dataclass(frozen=True)
 class _Pointer:
     address: int
-    dtype: object
+    dtype: tl.dtype
+
+    def __post_init__(self):
+        if not self.dtype.itemsize:
+            raise ValueError("the buffer element type must occupy whole bytes")
+        if self.address % self.dtype.itemsize:
+            raise ValueError(f"the address must be aligned for dtype {self.dtype}")
 
     def data_ptr(self):
         return self.address
@@ -64,11 +70,7 @@ class Protocol:
     aborted_value: int
 
 
-class _SynchronizedBufferArgs(namedtuple("_SynchronizedBufferArgsBase", "ptr state queue handle capacity protocol")):
-    __triton_do_not_specialize__ = ("handle", )
-
-
-class SynchronizedBuffer(_SynchronizedBufferArgs):
+class SynchronizedBuffer(namedtuple("_SynchronizedBufferArgs", "ptr state queue handle capacity protocol")):
     """A host argument constructed from device addresses and transport metadata.
 
     Call ``fabric.bind(argument)`` inside a Gluon kernel to construct its native
@@ -79,9 +81,10 @@ class SynchronizedBuffer(_SynchronizedBufferArgs):
     ``recv_lock``, ``ack_lock``, ``sends_completed``, ``aborted``, ``wait_count``,
     ``ack_count``, ``send_count``, ``periscope_recv_lock``, ``periscope_ack_lock``
     and ``periscope_sends_completed``. Queue requires ``head``, ``tail``,
-    ``cached_head`` and ``buffer``. Additional mapping entries are ignored.
+    ``cached_head`` and ``buffer``. State and queue addresses must be 8-byte
+    aligned. Additional mapping entries are ignored.
 
-    The handle is a runtime int32; capacity and protocol are constexprs. Pointer
+    The handle is a runtime int32. Capacity and protocol are constexprs. Pointer
     alignment is specialized. Offline compilation can use placeholder addresses
     with alignment guaranteed by the runtime allocations.
 
@@ -89,6 +92,8 @@ class SynchronizedBuffer(_SynchronizedBufferArgs):
     retain the payload, state, queue and transport resources until GPU work and
     communication have completed.
     """
+
+    __triton_do_not_specialize__ = ("handle", )
 
     def __new__(cls, *fields, **kwargs):
         # Triton reconstructs namedtuples with type strings and specialization keys.
@@ -98,19 +103,18 @@ class SynchronizedBuffer(_SynchronizedBufferArgs):
 
     @classmethod
     def _from_addresses(cls, *, address, dtype, state, queue, handle, capacity, protocol: Protocol):
-        dtype = str_to_ty(canonicalize_dtype(dtype), None)
-        if dtype.primitive_bitwidth < 8:
-            raise ValueError("the buffer element type must occupy whole bytes")
-        if address % (dtype.primitive_bitwidth // 8):
-            raise ValueError("the buffer address must be aligned for dtype")
+        dtype = tl.str_to_ty(canonicalize_dtype(dtype), None)
         if type(handle) is not int or not 0 <= handle < 2**31:
             raise ValueError("the fabric handle must be a nonnegative int32")
         if type(capacity) is not int or not 2 <= capacity < 2**63:
             raise ValueError("capacity must satisfy 2 <= capacity < 2**63")
+        # Each byte-addressed queue slot contains a 64-bit ready word.
+        if queue["buffer"] % tl.int64.itemsize:
+            raise ValueError("the queue buffer must be 8-byte aligned")
         return super().__new__(
-            cls, _Pointer(address, dtype), _State(*(_Pointer(state[name], int64) for name in _State._fields)),
-            _Queue(*(_Pointer(queue[name], int8 if name == "buffer" else int64) for name in _Queue._fields)), handle,
-            constexpr(capacity), constexpr(protocol))
+            cls, _Pointer(address, dtype), _State(*(_Pointer(state[name], tl.int64) for name in _State._fields)),
+            _Queue(*(_Pointer(queue[name], tl.int8 if name == "buffer" else tl.int64) for name in _Queue._fields)),
+            handle, tl.constexpr(capacity), tl.constexpr(protocol))
 
     @classmethod
     def from_tw(cls, group, handle, *, dtype=None):
@@ -126,19 +130,16 @@ class SynchronizedBuffer(_SynchronizedBufferArgs):
         if tensor.device.type != "cuda":
             raise ValueError("SynchronizedBuffer requires a GPU buffer")
         native = group.synchronized_buffer_store.get(handle).gpu_synchronized_buffer()
-        fields = native.gpu_fields()
+        buffer_fields = native.gpu_fields()
         queue = group.gpu_cpu_queue.queue
         queue_fields, layout = queue.gpu_fields(), queue.request_layout()
-        request_layout = RequestLayout(stride=layout["stride"], ready_offset=layout["ready_offset"],
-                                       type_offset=layout["type_offset"], handle_offset=layout["handle_offset"],
-                                       src_offset=layout["src_offset"], dst_offset=layout["dst_offset"],
-                                       length_offset=layout["length_offset"],
-                                       bypass_ar_offset=layout["bypass_ar_offset"])
+        request_layout = RequestLayout(**{field.name: layout[field.name] for field in fields(RequestLayout)})
         protocol = Protocol(request_layout, layout["send_type"], layout["recv_ack_type"], layout["bypass_ar_false"],
                             int(BypassAr.TRUE), layout["ready_value"], TWSynchronizedBuffer.ABORTED)
-        result = cls(address=fields["local_addr"], dtype=tensor.dtype if dtype is None else dtype, state=fields,
-                     queue=queue_fields, handle=fields["handle"], capacity=queue_fields["capacity"], protocol=protocol)
-        if fields["size"] % (result.ptr.dtype.primitive_bitwidth // 8):
+        result = cls(address=buffer_fields["local_addr"], dtype=tensor.dtype if dtype is None else dtype,
+                     state=buffer_fields, queue=queue_fields, handle=buffer_fields["handle"],
+                     capacity=queue_fields["capacity"], protocol=protocol)
+        if buffer_fields["size"] % result.ptr.dtype.itemsize:
             raise ValueError("the registered buffer must be sized for dtype")
         result._owners = (group, handle, native, queue)
         return result

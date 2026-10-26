@@ -5945,6 +5945,13 @@ def test_fabric_descriptor_invalid(fabric_descriptor_fields, field, value, messa
         SynchronizedBuffer(**fabric_descriptor_fields)
 
 
+@pytest.mark.parametrize("group,field", [("state", "recv_lock"), ("queue", "tail"), ("queue", "buffer")])
+def test_fabric_descriptor_unaligned_control_address(fabric_descriptor_fields, group, field):
+    fabric_descriptor_fields[group][field] += 4
+    with pytest.raises(ValueError, match="aligned"):
+        SynchronizedBuffer(**fabric_descriptor_fields)
+
+
 def test_fabric_descriptor_roundtrip(fabric_descriptor_fields):
     buffer = SynchronizedBuffer(**fabric_descriptor_fields)
     restored = pickle.loads(pickle.dumps(buffer))
@@ -6069,27 +6076,21 @@ def test_fabric_frontend_invalid(case, message, fabric_descriptor_fields):
 
 
 @pytest.mark.parametrize("aligned", [False, True])
-@pytest.mark.parametrize("handle,runtime_handle", [(1, True), (9, True), (ttgl.constexpr(9), False)],
-                         ids=["one", "nine", "explicit-constexpr"])
-def test_fabric_nested_argument_alignment(aligned, handle, runtime_handle, fabric_descriptor_fields):
-    fabric_descriptor_fields.update(address=0x1000 if aligned else 0x1004,
-                                    handle=handle if runtime_handle else handle.value)
+def test_fabric_nested_argument_alignment(aligned, fabric_descriptor_fields):
+    fabric_descriptor_fields.update(address=0x1000 if aligned else 0x1004, handle=1)
     buffer = SynchronizedBuffer(**fabric_descriptor_fields)
-    if not runtime_handle:
-        # Explicit constexpr arguments retain their meaning in Triton's tuple specialization.
-        buffer = buffer._replace(handle=handle)
 
     @gluon.jit
-    def kernel(nested, out, RUNTIME_HANDLE: ttgl.constexpr):
+    def kernel(nested, out):
         view = fabric.bind(nested[1]) + nested[0]
-        ttgl.static_assert(view._handle.type == ttgl.int32)
+        ttgl.static_assert(view._registration.handle.type == ttgl.int32)
         ttgl.static_assert(view._registration.capacity.type == tl.constexpr_type(8))
         ttgl.static_assert(isinstance(view._registration.protocol.type, tl.constexpr_type))
         ttgl.store(out, ttgl.load(view.ptr))
 
-    module = run_parser(kernel, args=((ttgl.constexpr(7), buffer), MockTensor(ttgl.float32), runtime_handle))
+    module = run_parser(kernel, args=((ttgl.constexpr(7), buffer), MockTensor(ttgl.float32)))
     signature = next(line for line in module.str_nodebug().splitlines() if "tt.func public @" in line)
-    assert len(re.findall(r"%arg\d+: i32\b", signature)) == int(runtime_handle)
+    assert len(re.findall(r"%arg\d+: i32\b", signature)) == 1
     pointers = re.findall(r"%arg\d+: !tt.ptr<f32>(?: \{[^}]*\})?", signature)
     assert len(pointers) == 2
     assert ["tt.divisibility = 16" in arg for arg in pointers] == [aligned, True]

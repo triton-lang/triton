@@ -1,5 +1,4 @@
 from ._core import (
-    aggregate,
     aggregate_replace,
     CachePolicy,
     base_value,

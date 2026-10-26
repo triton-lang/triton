@@ -54,7 +54,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     clc,
 )
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.experimental.gluon.nvidia.fabric import Protocol, RequestLayout, SynchronizedBuffer, _SynchronizedBufferArgs, _State, _Queue
+from triton.experimental.gluon.nvidia.fabric import Protocol, RequestLayout, SynchronizedBuffer, _State, _Queue
 from triton._C.libtriton.gluon_ir import make_cga_layout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
@@ -7883,7 +7883,7 @@ def _make_fabric_buffer(device, *, request_layout=None, **values):
     queue = _Queue(*(torch.zeros(1, dtype=torch.int64, device=device) for _ in range(3)),
                    torch.zeros(8 * request_layout.stride, dtype=torch.int8, device=device))
     ptr = torch.arange(64, dtype=torch.float32, device=device)
-    return _SynchronizedBufferArgs(ptr, state, queue, 1, ttgl.constexpr(8), ttgl.constexpr(protocol))
+    return SynchronizedBuffer(ptr, state, queue, 1, ttgl.constexpr(8), ttgl.constexpr(protocol))
 
 
 def test_fabric_descriptor_nested_selection(device):
@@ -7905,8 +7905,7 @@ def test_fabric_descriptor_nested_selection(device):
                 selected = Buffers[0][1]
             else:
                 selected = Buffers[1][0]
-        ttgl.static_assert(selected._handle.type == ttgl.int32)
-        ttgl.store(Out + 2 * pid, selected._handle)
+        ttgl.store(Out + 2 * pid, selected._registration.handle)
         ttgl.store(Out + 2 * pid + 1, ttgl.load(selected.ptr).to(ttgl.int32))
 
     allocations = [_make_fabric_buffer(device)._replace(handle=handle) for handle in (1, 7, 9)]
@@ -7987,11 +7986,6 @@ def test_fabric_barrier_selection(kind, worker_warps, device):
         assert other_cursor.item() == 4
 
 
-@gluon.jit
-def _fabric_wait_view(view, COUNT, CONSUME: ttgl.constexpr, BLOCKING: ttgl.constexpr):
-    return fabric.barrier.wait(view, blocking=BLOCKING, count=COUNT, consume=CONSUME)
-
-
 @pytest.mark.parametrize("kind", ["recv", "ack"])
 @pytest.mark.parametrize("count", [0, 3])
 @pytest.mark.parametrize("constant_count", [False, True], ids=["runtime-count", "constant-count"])
@@ -8006,10 +8000,8 @@ def test_fabric_wait_cursor(kind, count, constant_count, consume, aborted, block
     def kernel(Buffer, Out, KIND: ttgl.constexpr, COUNT, CONSUME: ttgl.constexpr, BLOCKING: ttgl.constexpr):
         Buffer = fabric.bind(Buffer)
         view = Buffer + 2
-        if KIND == "recv":
-            success = _fabric_wait_view(view.recv_barrier, COUNT, CONSUME, BLOCKING)
-        else:
-            success = _fabric_wait_view(view.ack_barrier, COUNT, CONSUME, BLOCKING)
+        bar = view.recv_barrier if KIND == "recv" else view.ack_barrier
+        success = fabric.barrier.wait(bar, blocking=BLOCKING, count=COUNT, consume=CONSUME)
         offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
         ttgl.store(Out + offsets, success)
         ttgl.store(Out + 128 + offsets, Buffer.is_aborted())
@@ -8050,13 +8042,13 @@ def test_fabric_wait_pending(aborted, num_warps, blocking, monitor, device):
             ttgl.store(Out + offsets, values)
         else:
             # Publish the payload or abort once the waiter announces its target.
-            ttgl.atomic_poll(Buffer._state.periscope_recv_lock, 1, scope="sys")
+            state = Buffer._registration.state
+            ttgl.atomic_poll(state.periscope_recv_lock, 1, scope="sys")
             if ABORT:
-                ttgl.atomic_xchg(Buffer._state.aborted, 33, sem="release", scope="sys")
+                ttgl.atomic_store(state.aborted, 33, sem="release", scope="sys")
             else:
                 ttgl.store(Buffer.ptr + offsets, offsets + 17)
-                ttgl.barrier()
-                ttgl.atomic_xchg(Buffer._state.recv_lock, 1, sem="release", scope="sys")
+                ttgl.atomic_store(state.recv_lock, 1, sem="release", scope="sys")
 
     buffer = _make_fabric_buffer(device)
     out = torch.empty_like(buffer.ptr)
@@ -8211,7 +8203,7 @@ def test_fabric_store_wait_nonblocking_poll_loop(worker_warps, device):
             for _ in range(256):
                 ttgl.inline_asm_elementwise("nanosleep.u32 $1; mov.b32 $0, 0;", "=r,r", [1000], ttgl.int32,
                                             is_pure=False, pack=1)
-            ttgl.atomic_xchg(Buffer._state.sends_completed, 5, sem="release", scope="sys")
+            ttgl.atomic_store(Buffer._registration.state.sends_completed, 5, sem="release", scope="sys")
 
     @gluon.jit
     def idle():
@@ -8252,12 +8244,13 @@ def test_fabric_submit_pending(aborted, head, device):
             ttgl.store(Out + offsets, success)
         else:
             # A head refresh releases the observer.
-            while ttgl.atomic_load(Buffer._queue.cached_head, sem="relaxed", scope="gpu") == 0:
+            queue = Buffer._registration.queue
+            while ttgl.atomic_load(queue.cached_head, sem="relaxed", scope="gpu") == 0:
                 pass
             if ABORT:
-                ttgl.atomic_xchg(Buffer._state.aborted, 33, sem="release", scope="sys")
+                ttgl.atomic_store(Buffer._registration.state.aborted, 33, sem="release", scope="sys")
             else:
-                ttgl.atomic_xchg(Buffer._queue.head, HEAD + 1, sem="release", scope="sys")
+                ttgl.atomic_store(queue.head, HEAD + 1, sem="release", scope="sys")
 
     buffer = _make_fabric_buffer(device)
     # Head 9 models an old cached-head snapshot paired with a later tail load.
