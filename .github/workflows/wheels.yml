@@ -1,6 +1,12 @@
 name: Wheels
 on:
   workflow_dispatch:
+    inputs:
+      publish_to_pypi:
+        description: 'Upload the built wheels to PyPI'
+        required: false
+        type: boolean
+        default: false
   pull_request:
     paths:
       - .github/workflows/wheels.yml
@@ -118,6 +124,7 @@ jobs:
           path: ./wheelhouse/*.whl
 
       - name: Upload wheels to PyPI
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_to_pypi }}
         run: |
           python3 -m pip install twine --upgrade --user
           python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
