@@ -314,6 +314,15 @@ def test_max_occupancy_invalid(max_occupancy):
         backend.parse_options({"max_occupancy": max_occupancy})
 
 
+@pytest.mark.parametrize("num_ctas", [0, -2, 3])
+def test_num_ctas_invalid(num_ctas):
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    backend = CUDABackend(GPUTarget("cuda", 90, 32))
+    with pytest.raises(AssertionError, match="num_ctas must be a power of 2"):
+        backend.parse_options({"num_ctas": num_ctas})
+
+
 def test_compile_only_expect_zero() -> None:
 
     @triton.jit

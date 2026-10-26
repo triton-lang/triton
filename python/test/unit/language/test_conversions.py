@@ -277,7 +277,7 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 ])
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
-    # On HIP, fp8e4nv upcasting is only supported on CDNA3, CDNA4, RDNA4m, and RDNA4.
+    # On HIP, fp8e4nv upcasting is only supported on CDNA3, CDNA4, RDNA3, RDNA4m, and RDNA4.
     if is_cuda():
         if ((src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9))
             or src_dtype in ('float8e4b8', 'float8e5b16')):
@@ -286,9 +286,10 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
     elif is_hip():
-        if src_dtype in FP8_DTYPES and is_hip_rdna3():
+        if src_dtype in FP8_DTYPES and src_dtype != 'float8e4nv' and is_hip_rdna3():
             pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
-        if src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna4m() or is_hip_rdna4()):
+        if src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4m()
+                                               or is_hip_rdna4()):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
         if  src_dtype == 'float8e4b15':
             # If the dtype should error out in the given device, we assert that and return
@@ -326,6 +327,30 @@ def test_typeconvert_e5m2_bf16_all_encodings(BLOCK_SIZE, device):
     torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
     mask = ~torch.isnan(expected)
     torch.testing.assert_close(actual.view(torch.int16)[mask], expected.view(torch.int16)[mask], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dst_dtype, dst_type", [
+    (torch.float16, tl.float16),
+    (torch.float32, tl.float32),
+])
+@pytest.mark.parametrize("BLOCK_SIZE", [128, 1024])
+def test_typeconvert_e4m3_upcast_all_encodings(dst_dtype, dst_type, BLOCK_SIZE, device):
+    if is_cuda() and torch.cuda.get_device_capability(0) < (8, 9):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
+    if is_hip() and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_rdna3() or is_hip_rdna4m() or is_hip_rdna4()):
+        pytest.skip("E4M3 upcasting is not supported in this architecture")
+
+    # Cover every encoding, including NaN, and mix signs and magnitudes in
+    # packed conversions.
+    bits = (torch.arange(1024) * 73 + 19).to(torch.uint8)
+    expected = bits.view(torch.float8_e4m3fn).to(dst_dtype)
+    actual = launch_type_convert_triton(bits.to(device), tl.float8e4nv, dst_type, device,
+                                       BLOCK_SIZE=BLOCK_SIZE).cpu().view(dst_dtype)
+
+    torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
+    mask = ~torch.isnan(expected)
+    int_dtype = matching_int(dst_type)
+    torch.testing.assert_close(actual.view(int_dtype)[mask], expected.view(int_dtype)[mask], rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("src_dtype, src_type", [

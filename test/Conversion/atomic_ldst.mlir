@@ -1,5 +1,7 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=90 --convert-triton-gpu-to-llvm=compute-capability=90 2>&1 | FileCheck %s --check-prefixes=CHECK-TTG2NVGPU,CHECK-COMMON
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=90 --convert-triton-gpu-to-llvm=compute-capability=90 --convert-nv-gpu-to-llvm 2>&1 | FileCheck %s --check-prefixes=CHECK-NVGPU2LLVM,CHECK-COMMON
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=90 --convert-triton-gpu-to-llvm=compute-capability=90 2>&1 | FileCheck %s --check-prefixes=CHECK-TTG2NVGPU,CHECK-COMMON
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=90 --convert-triton-gpu-to-llvm=compute-capability=90 --convert-nv-gpu-to-llvm 2>&1 | FileCheck %s --check-prefixes=CHECK-NVGPU2LLVM,CHECK-COMMON
+// RUN: triton-opt %s -split-input-file --tritongpu-optimize-thread-regions | FileCheck %s --check-prefix=THREAD-REGIONS
+// RUN: triton-opt %s -split-input-file --tritongpu-optimize-thread-regions --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=90 --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' | FileCheck %s --check-prefix=THREAD-MEMBAR
 #blocked4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel_r(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
@@ -195,7 +197,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-COMMON: llvm.insertelement %[[RESULT]],
   // CHECK-COMMON: llvm.inline_asm has_side_effects
   // CHECK-COMMON: nvvm.barrier
-  // CHECK-COMMON: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> i1
+  // CHECK-COMMON: llvm.load %{{.*}} {{.*}} : !llvm.ptr<3> -> i8
+  // CHECK-COMMON: llvm.trunc %{{.*}} : i8 to i1
   // CHECK-COMMON-NOT: nvvm.barrier
   // CHECK-COMMON: llvm.return
   tt.func public @atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32, %timeout: i64, %out: !tt.ptr<i32>) {
@@ -462,6 +465,300 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %mask: tensor<2048xi1, #packed> {tt.constancy = 2 : i32}) {
     %loaded = tt.atomic_load relaxed, gpu, %ptrs, %mask : (tensor<2048x!tt.ptr<i8>, #packed>, tensor<2048xi1, #packed>) -> tensor<2048xi8, #packed>
     tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<2048x!tt.ptr<i8>, #packed>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // THREAD-REGIONS-LABEL: @thread_regions_scalar_chain(
+  // THREAD-REGIONS: %[[LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // THREAD-REGIONS-NEXT: scf.if %[[LEADER]]
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.atomic_load relaxed, gpu,
+  // THREAD-REGIONS: arith.subi
+  // THREAD-REGIONS: arith.shli
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS-NOT: ttg.thread_handoff
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_scalar_chain(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+    %one = arith.constant 1 : i32
+    %value = tt.atomic_load relaxed, gpu, %ptr : (!tt.ptr<i32>) -> i32
+    %amount = arith.subi %value, %one : i32
+    %shifted = arith.shli %one, %amount : i32
+    tt.store %out, %shifted : !tt.ptr<i32>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_warp_tail(
+  // THREAD-REGIONS: %[[W_LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // THREAD-REGIONS-NEXT: %[[W_RESULT:.*]] = scf.if %[[W_LEADER]] -> (i32)
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.atomic_load relaxed, gpu,
+  // THREAD-REGIONS: arith.addi
+  // THREAD-REGIONS: %[[W_WARP:.*]] = ttg.thread_predicate <0, 3>
+  // THREAD-REGIONS-NEXT: scf.if %[[W_WARP]]
+  // THREAD-REGIONS-NEXT: %[[W_BROADCAST:.*]] = ttg.thread_handoff %[[W_RESULT]] <31, 3> -> <0, 3> : i32
+  // THREAD-REGIONS: tt.splat %[[W_BROADCAST]]
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_warp_tail(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+    %one = arith.constant 1 : i32
+    %value = tt.atomic_load relaxed, gpu, %ptr : (!tt.ptr<i32>) -> i32
+    %result = arith.addi %value, %one : i32
+    %values = tt.splat %result : i32 -> tensor<32xi32, #blocked>
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #blocked>
+    %base = tt.splat %out : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #blocked>
+    %ptrs = tt.addptr %base, %offsets : tensor<32x!tt.ptr<i32>, #blocked>, tensor<32xi32, #blocked>
+    tt.store %ptrs, %values : tensor<32x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_cta_tail(
+  // THREAD-REGIONS: %[[C_LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // THREAD-REGIONS-NEXT: %[[C_RESULT:.*]] = scf.if %[[C_LEADER]] -> (i32)
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.atomic_load relaxed, gpu,
+  // THREAD-REGIONS: } else {
+  // THREAD-REGIONS: scf.yield
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NEXT: %[[C_BROADCAST:.*]] = ttg.thread_handoff %[[C_RESULT]] <31, 3> -> <0, 0> : i32
+  // THREAD-REGIONS: tt.splat %[[C_BROADCAST]]
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_cta_tail(%ptr: !tt.ptr<i32>, %out: tensor<128x!tt.ptr<i32>, #blocked>) {
+    %value = tt.atomic_load relaxed, gpu, %ptr : (!tt.ptr<i32>) -> i32
+    %values = tt.splat %value : i32 -> tensor<128xi32, #blocked>
+    tt.store %out, %values : tensor<128x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_acquire_without_value(
+  // THREAD-REGIONS: %[[A_LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // THREAD-REGIONS-NEXT: scf.if %[[A_LEADER]]
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.atomic_load acquire, gpu,
+  // THREAD-REGIONS-NEXT: ttg.thread_yield
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NEXT: tt.return
+  tt.func @thread_regions_acquire_without_value(%ptr: !tt.ptr<i32>) {
+    %value = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i32>) -> i32
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_plain_load_cta_tail(
+  // THREAD-REGIONS-NOT: ttg.thread_predicate
+  // THREAD-REGIONS: %[[PLAIN:.*]] = tt.load
+  // THREAD-REGIONS-NOT: ttg.thread_handoff
+  // THREAD-REGIONS: tt.splat %[[PLAIN]]
+  // THREAD-REGIONS-NOT: ttg.thread_predicate
+  // THREAD-REGIONS-NOT: ttg.thread_handoff
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_plain_load_cta_tail(%ptr: !tt.ptr<i32>, %out: tensor<128x!tt.ptr<i32>, #blocked>) {
+    %value = tt.load %ptr : !tt.ptr<i32>
+    %values = tt.splat %value : i32 -> tensor<128xi32, #blocked>
+    tt.store %out, %values : tensor<128x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+
+  // THREAD-MEMBAR-LABEL: @thread_regions_async_atomic_store(
+  // THREAD-MEMBAR: ttg.async_wait
+  // THREAD-MEMBAR-NEXT: ttg.barrier local
+  // THREAD-MEMBAR-NEXT: %[[ATOMIC_LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // THREAD-MEMBAR-NEXT: cf.cond_br %[[ATOMIC_LEADER]]
+  // THREAD-MEMBAR-NOT: ttg.barrier
+  // THREAD-MEMBAR: tt.atomic_store relaxed, gpu
+  // THREAD-MEMBAR-NOT: ttg.barrier
+  // THREAD-MEMBAR: tt.return
+  tt.func @thread_regions_async_atomic_store(%out: !tt.ptr<i32>) {
+    %one = arith.constant 1 : i32
+    ttg.async_wait {num = 0 : i32}
+    tt.atomic_store relaxed, gpu, %out, %one : !tt.ptr<i32>
+    tt.return
+  }
+
+  // THREAD-MEMBAR-LABEL: @thread_regions_async_store(
+  // THREAD-MEMBAR: ttg.async_wait
+  // THREAD-MEMBAR-NEXT: ttg.barrier local
+  // THREAD-MEMBAR-NEXT: %[[STORE_LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // THREAD-MEMBAR-NEXT: cf.cond_br %[[STORE_LEADER]]
+  // THREAD-MEMBAR-NOT: ttg.barrier
+  // THREAD-MEMBAR: tt.store
+  // THREAD-MEMBAR-NOT: ttg.barrier
+  // THREAD-MEMBAR: tt.return
+  tt.func @thread_regions_async_store(%out: !tt.ptr<i32>) {
+    %one = arith.constant 1 : i32
+    ttg.async_wait {num = 0 : i32}
+    tt.store %out, %one : !tt.ptr<i32>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_success_only_offset(
+  // THREAD-REGIONS: scf.if
+  // THREAD-REGIONS: %[[LOADED:.*]] = tt.atomic_load relaxed, gpu
+  // THREAD-REGIONS: %[[READY:.*]] = arith.cmpi
+  // THREAD-REGIONS-NOT: arith.muli
+  // THREAD-REGIONS-NOT: tt.addptr
+  // THREAD-REGIONS: scf.if %[[READY]]
+  // THREAD-REGIONS: %[[OFFSET:.*]] = arith.muli %[[LOADED]]
+  // THREAD-REGIONS: %[[DEST:.*]] = tt.addptr %{{.*}}, %[[OFFSET]]
+  // THREAD-REGIONS: tt.store %[[DEST]], %[[LOADED]]
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_success_only_offset(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %stride: i32) {
+    %zero = arith.constant 0 : i32
+    %loaded = tt.atomic_load relaxed, gpu, %ptr : (!tt.ptr<i32>) -> i32
+    %ready = arith.cmpi ne, %loaded, %zero : i32
+    %offset = arith.muli %loaded, %stride : i32
+    %dest = tt.addptr %out, %offset : !tt.ptr<i32>, i32
+    scf.if %ready {
+      tt.store %dest, %loaded : !tt.ptr<i32>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+#sharded = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_loop(
+  // THREAD-REGIONS: %[[LEADER:.*]] = ttg.thread_predicate <31, 3>
+  // THREAD-REGIONS: %[[VALUE:.*]] = scf.if %[[LEADER]] -> (i32)
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: scf.for
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS: ttg.barrier all
+  // THREAD-REGIONS: ttg.thread_handoff %[[VALUE]] <31, 3> -> <0, 0> : i32
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_multi_cta_loop(%ptr: !tt.ptr<i32>, %out: tensor<256x!tt.ptr<i32>, #sharded>, %iterations: i32) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %value = scf.for %i = %zero to %iterations step %one iter_args(%sum = %zero) -> (i32) : i32 {
+      %source = tt.addptr %ptr, %i : !tt.ptr<i32>, i32
+      %element = tt.load %source : !tt.ptr<i32>
+      %next = arith.addi %sum, %element : i32
+      scf.yield %next : i32
+    }
+    %values = tt.splat %value : i32 -> tensor<256xi32, #sharded>
+    tt.store %out, %values : tensor<256x!tt.ptr<i32>, #sharded>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_atomic_loop(
+  // THREAD-REGIONS: ttng.cluster_barrier
+  // THREAD-REGIONS: %[[LEADER:.*]] = ttg.thread_predicate <31, 3, 1>
+  // THREAD-REGIONS: %[[VALUE:.*]] = scf.if %[[LEADER]] -> (i32)
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: scf.for
+  // THREAD-REGIONS: tt.atomic_rmw add, acq_rel, gpu
+  // THREAD-REGIONS-NOT: ttng.cluster_barrier
+  // THREAD-REGIONS: ttg.thread_yield
+  // THREAD-REGIONS: } else {
+  // THREAD-REGIONS: scf.yield
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NEXT: ttng.cluster_barrier
+  // THREAD-REGIONS-NEXT: ttg.thread_handoff %[[VALUE]] <31, 3, 1> -> <0, 0> : i32
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_multi_cta_atomic_loop(%ptr: !tt.ptr<i32>, %out: tensor<256x!tt.ptr<i32>, #sharded>, %iterations: i32) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %value = scf.for %i = %zero to %iterations step %one iter_args(%sum = %zero) -> (i32) : i32 {
+      %element = tt.atomic_rmw add, acq_rel, gpu, %ptr, %one : (!tt.ptr<i32>, i32) -> i32
+      %next = arith.addi %sum, %element : i32
+      scf.yield %next : i32
+    }
+    %values = tt.splat %value : i32 -> tensor<256xi32, #sharded>
+    tt.store %out, %values : tensor<256x!tt.ptr<i32>, #sharded>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_unrelated_loads(
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS: ttg.thread_predicate <31, 3, 1>
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS-NEXT: {{.*}}tt.atomic_rmw add, relaxed, gpu
+  // THREAD-REGIONS-NEXT: ttg.thread_yield
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NOT: ttg.thread_handoff
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS-NOT: ttg.thread_predicate
+  // THREAD-REGIONS-NOT: ttg.thread_handoff
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_multi_cta_unrelated_loads(%counter: !tt.ptr<i32>, %ptr: !tt.ptr<i32>, %out: tensor<256x!tt.ptr<i32>, #sharded>) {
+    %one = arith.constant 1 : i32
+    %before = tt.load %ptr : !tt.ptr<i32>
+    %old = tt.atomic_rmw add, relaxed, gpu, %counter, %one : (!tt.ptr<i32>, i32) -> i32
+    %after = tt.load %ptr : !tt.ptr<i32>
+    %sum = arith.addi %before, %after : i32
+    %values = tt.splat %sum : i32 -> tensor<256xi32, #sharded>
+    tt.store %out, %values : tensor<256x!tt.ptr<i32>, #sharded>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_atomic_capture(
+  // THREAD-REGIONS: ttg.thread_predicate <31, 3, 1>
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.atomic_load relaxed, gpu
+  // THREAD-REGIONS: arith.addi
+  // THREAD-REGIONS: tt.addptr
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS: scf.if
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS: scf.yield
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS-NEXT: ttg.thread_yield
+  // THREAD-REGIONS-NOT: ttg.thread_handoff
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_multi_cta_atomic_capture(%index: !tt.ptr<i32>, %ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %condition: i1) {
+    %one = arith.constant 1 : i32
+    %old = tt.atomic_load relaxed, gpu, %index : (!tt.ptr<i32>) -> i32
+    %offset = arith.addi %old, %one : i32
+    %source = tt.addptr %ptr, %offset : !tt.ptr<i32>, i32
+    %value = tt.load %source : !tt.ptr<i32>
+    %result = scf.if %condition -> (i32) {
+      tt.store %out, %value : !tt.ptr<i32>
+      scf.yield %value : i32
+    } else {
+      scf.yield %one : i32
+    }
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_separated_dependents(
+  // THREAD-REGIONS: ttg.thread_predicate <31, 3, 1>
+  // THREAD-REGIONS: %[[RESULT:.*]] = scf.if
+  // THREAD-REGIONS: tt.atomic_load relaxed, gpu
+  // THREAD-REGIONS: ttg.thread_yield
+  // THREAD-REGIONS: } else {
+  // THREAD-REGIONS: scf.yield
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NOT: ttg.thread_predicate
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS-NEXT: tt.store
+  // THREAD-REGIONS: ttg.thread_predicate <31, 3, 1>
+  // THREAD-REGIONS: ttg.thread_handoff %[[RESULT]] <31, 3, 1> -> <31, 3, 1> : i32
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS: ttg.thread_yield
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS-NEXT: }
+  // THREAD-REGIONS: tt.splat
+  // THREAD-REGIONS-NEXT: tt.store
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_multi_cta_separated_dependents(%index: !tt.ptr<i32>, %ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %out_atomic: !tt.ptr<i32>, %out_tensor: tensor<256x!tt.ptr<i32>, #sharded>) {
+    %old = tt.atomic_load relaxed, gpu, %index : (!tt.ptr<i32>) -> i32
+    %value = tt.load %ptr : !tt.ptr<i32>
+    tt.store %out, %value : !tt.ptr<i32>
+    tt.store %out_atomic, %old : !tt.ptr<i32>
+    %values = tt.splat %value : i32 -> tensor<256xi32, #sharded>
+    tt.store %out_tensor, %values : tensor<256x!tt.ptr<i32>, #sharded>
     tt.return
   }
 }

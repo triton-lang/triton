@@ -1581,7 +1581,7 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   // For mxfp4, these 32 elements are consecutive, so only 1 scale element
   // is required. But for mxfp6/mxfp8, there are 2 16-consecutive elements
   // blocks, so 2 scale elements are required.
-  int32_t kSize = dotOperandShape[1];
+  int32_t kSize = dotOperandShape[rank - 1];
 
   std::vector<std::vector<int32_t>> registerBase;
   std::vector<std::vector<int32_t>> laneBase;
@@ -1613,22 +1613,22 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
   LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
                           {outDimNames[order[0]], outDimNames[order[1]]});
+  for (unsigned dim = 0; dim < rank - 2; ++dim)
+    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[dim]);
 
-  SmallVector<unsigned> warpsPerCTANew =
-      (dotOperandIdx == 1)
-          ? SmallVector<unsigned>{warpsPerCTA[1], warpsPerCTA[0]}
-          : SmallVector<unsigned>{warpsPerCTA[0], warpsPerCTA[1]};
-
-  SmallVector<unsigned> warpOrder = (dotOperandIdx == 1)
-                                        ? SmallVector<unsigned>{0, 1}
-                                        : SmallVector<unsigned>{1, 0};
+  SmallVector<unsigned> warpsPerCTANew(warpsPerCTA);
+  SmallVector<unsigned> warpOrder = order;
+  if (dotOperandIdx == 1) {
+    std::swap(warpsPerCTANew[rank - 2], warpsPerCTANew[rank - 1]);
+    std::swap(warpOrder[0], warpOrder[1]);
+  }
 
   LinearLayout warpLayout =
       identityStandardND(kWarp, warpsPerCTANew, warpOrder);
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
 
-  auto cgaLayout = CGAEncodingAttr::get1CTALayout(ctx, 2);
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(ctx, rank);
   auto finalLay = combineCtaCgaWithShape(ctaLayout, cgaLayout, dotOperandShape);
   return finalLay;
 }

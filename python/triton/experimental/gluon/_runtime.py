@@ -96,6 +96,9 @@ def jit(
         implicitly converted to pointers if they have a :code:`.data_ptr()` method
         and a `.dtype` attribute.
 
+    :note: Namedtuple argument classes support ``__triton_do_not_specialize__``
+        as documented in :func:`triton.jit`.
+
     :note: This function will be compiled and run on the GPU. It will only have access to:
 
            * python primitives,

@@ -3,6 +3,24 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.td"
 
+// Set bits select lane, warp, and CTA coordinates that must be zero.
+def ThreadDomainAttr : TritonGPU_Attr<"ThreadDomain", "thread_domain"> {
+  let mnemonic = "thread_domain";
+  let parameters = (ins "uint32_t":$lane, "uint32_t":$warp,
+                        DefaultValuedParameter<"uint32_t", "0">:$block);
+  let assemblyFormat = "`<` $lane `,` $warp (`,` $block^)? `>`";
+  let extraClassDeclaration = [{
+    bool isFull() const { return !(getLane() | getWarp() | getBlock()); }
+    bool hasSameWarpAndBlock(ThreadDomainAttr other) const {
+      return getWarp() == other.getWarp() && getBlock() == other.getBlock();
+    }
+    bool hasMasksWithin(uint32_t lane, uint32_t warp, uint32_t block) const {
+      return !(getLane() & ~lane) && !(getWarp() & ~warp) &&
+             !(getBlock() & ~block);
+    }
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
