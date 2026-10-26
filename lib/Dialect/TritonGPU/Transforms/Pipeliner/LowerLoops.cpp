@@ -279,11 +279,12 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
-static bool hasNonMMAUsers(Operation *op) {
-  return llvm::any_of(op->getUsers(), [](Operation *user) {
+static bool allUsersAreMMAv5(Operation *op) {
+  return llvm::all_of(op->getUsers(), [](Operation *user) {
     if (user->hasTrait<OpTrait::MemDescViewTrait>())
-      return hasNonMMAUsers(user);
-    return !isa<ttng::MMAv5OpInterface, ttng::WaitBarrierOp>(user);
+      return allUsersAreMMAv5(user);
+    // MMA completion waits only track operand lifetimes.
+    return isa<ttng::MMAv5OpInterface, ttng::WaitBarrierOp>(user);
   });
 }
 
@@ -388,19 +389,22 @@ void createTMABarrierAndWait(
     int sizeInBytes = 0;
     int numBuffers = asyncLoads[group[0]].stageDiff;
     const LoadGroupInfo loadGroup = loadGroups.find(numBuffers)->second;
-    bool needsClusterBarrier = false;
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes +=
           loadSize * getIntOrFloatOrPtrBitWidth(tensorTy.getElementType()) / 8;
-      needsClusterBarrier |=
-          twoCTAs &&
-          (mustLoadToRegisters(op) || hasNonMMAUsers(*op->getUsers().begin()));
     }
 
-    Value barrierAlloc = triton::createBarrierAlloc(forOp, numBuffers,
-                                                    /*arriveCount=*/1, twoCTAs);
+    bool mmaOnly = llvm::all_of(group, [](Operation *load) {
+      if (mustLoadToRegisters(load))
+        return false;
+      // mustLoadToRegisters established a single LocalAllocOp user.
+      return allUsersAreMMAv5(*load->getUsers().begin());
+    });
+    bool usePairBarrier = twoCTAs && mmaOnly;
+    Value barrierAlloc = triton::createBarrierAlloc(
+        forOp, numBuffers, /*arriveCount=*/1, usePairBarrier);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
@@ -414,7 +418,7 @@ void createTMABarrierAndWait(
         builder, barrierAlloc, loadGroup.extractIdx);
     Operation *waitOp =
         ttng::WaitBarrierOp::create(builder, barrierViewWait, loadGroup.phase);
-    if (needsClusterBarrier) {
+    if (twoCTAs && !mmaOnly) {
       waitOp = ttng::ClusterBarrierOp::create(builder);
     }
 

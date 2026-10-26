@@ -1891,15 +1891,16 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
 module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // Descriptor forwarding conservatively synchronizes both CTAs after the pair wait.
+  // Descriptor forwarding conservatively uses per-CTA TMA barriers.
   // CHECK-DAG: #[[$MMA_BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[1\]\]}}{{.*}}>
   // CHECK-DAG: #[[$TMA_BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[0\]\]}}{{.*}}>
   // CHECK-LABEL: @two_cta_wait_forwarded_descriptor
   // Three stages need three completion slots, even when the wait adds stage 3.
   // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x2xi64, #[[$MMA_BAR_LAYOUT]]
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<2x2xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1xi64, #[[$TMA_BAR_LAYOUT]]
-  // CHECK: ttng.async_tma_copy_global_to_local {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
-  // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
+  // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, {{.*}}two_ctas} : {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK: ttng.wait_barrier {{.*}} deps
@@ -1933,14 +1934,13 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 2 : i32, "ttg.num-wa
     tt.return %3 : tensor<256x128xf16, #blockedC>
   }
 
-  // Descriptor views feeding only MMA do not need a cluster barrier.
-  // An unrelated register load in a separate wait group still needs both CTAs
-  // to observe completion when the module uses pair-shared TMA barriers.
+  // MMA-only descriptor views use a pair barrier; the register load uses per-CTA barriers.
   // CHECK-LABEL: @two_cta_wait_unrelated_load_group
-  // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64,
+  // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK-NOT: ttng.cluster_barrier
   // CHECK: ttng.tc_gen5_mma {{.*}}two_ctas
-  // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64,
+  // CHECK: ttng.async_tma_copy_global_to_local {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
+  // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK: ttg.local_load
   // CHECK: "test.consume"
@@ -1969,9 +1969,9 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 2 : i32, "ttg.num-wa
   }
 
 
-  // Synchronize both CTAs before an ordinary read of a descriptor also used by two-CTA MMA.
+  // A group with both ordinary reads and MMA users needs per-CTA TMA barriers.
   // CHECK-LABEL: @two_cta_wait_forwarded_descriptor_read
-  // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64,
+  // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK: ttg.local_load
   // CHECK: ttng.tc_gen5_mma {{.*}}two_ctas
