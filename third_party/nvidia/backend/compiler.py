@@ -171,8 +171,7 @@ class CUDAOptions:
 
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert is_power_of_two(self.num_warps), "num_warps must be a power of 2"
-        if not is_power_of_two(self.num_ctas):
-            raise ValueError("num_ctas must be a power of 2")
+        assert is_power_of_two(self.num_ctas), "num_ctas must be a power of 2"
 
     def hash(self):
         hash_dict = dict(self.__dict__)

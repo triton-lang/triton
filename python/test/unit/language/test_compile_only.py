@@ -319,7 +319,7 @@ def test_num_ctas_invalid(num_ctas):
     from triton.backends.nvidia.compiler import CUDABackend
 
     backend = CUDABackend(GPUTarget("cuda", 90, 32))
-    with pytest.raises(ValueError, match="num_ctas must be a power of 2"):
+    with pytest.raises(AssertionError, match="num_ctas must be a power of 2"):
         backend.parse_options({"num_ctas": num_ctas})
 
 
