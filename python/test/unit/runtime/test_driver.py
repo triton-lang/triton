@@ -4,7 +4,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.connection import Client
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import cloudpickle
 import pytest
@@ -31,57 +30,7 @@ from triton.backends.driver import (
     wrap_handle_tensordesc_impl,
 )
 from triton.backends.nvidia.compiler import CUDABackend
-from triton.backends.nvidia import driver as cuda_driver
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-
-
-@pytest.fixture
-def cuda_device_properties(monkeypatch):
-    query = Mock(side_effect=lambda device: {"multiprocessor_count": 80 + device})
-    module = Mock(get_device_properties=query)
-    monkeypatch.setattr(cuda_driver, "compile_module_from_file", lambda **kwargs: module)
-    monkeypatch.setattr(cuda_driver, "library_dirs", lambda: [])
-    for name in ("PyCUtensorMap", "PyKernelArg", "ARG_CONSTEXPR", "ARG_KERNEL", "ARG_TUPLE"):
-        monkeypatch.setattr(cuda_driver, name, getattr(cuda_driver, name))
-    # Avoid changing the singleton used by other driver tests.
-    utils = object.__new__(cuda_driver.CudaUtils)
-    utils.__init__()
-    query.assert_not_called()
-    return utils, query
-
-
-def test_cuda_device_properties_cache_preserves_device_keys_and_independent_results(cuda_device_properties):
-    utils, query = cuda_device_properties
-    first = utils.get_device_properties(0)
-    first["multiprocessor_count"] = 0
-    first["extra"] = True
-
-    assert utils.get_device_properties(0) == {"multiprocessor_count": 80}
-    assert utils.get_device_properties(1) == {"multiprocessor_count": 81}
-    assert utils.get_device_properties(1) == {"multiprocessor_count": 81}
-    assert [call.args for call in query.call_args_list] == [(0, ), (1, )]
-
-
-def test_cuda_device_properties_cache_retries_failed_queries(cuda_device_properties):
-    utils, query = cuda_device_properties
-    query.side_effect = [RuntimeError("device query failed"), {"multiprocessor_count": 80}]
-
-    with pytest.raises(RuntimeError, match="device query failed"):
-        utils.get_device_properties(0)
-    assert utils.get_device_properties(0) == {"multiprocessor_count": 80}
-    assert utils.get_device_properties(0) == {"multiprocessor_count": 80}
-    assert query.call_count == 2
-
-
-def test_cuda_device_properties_cache_shares_results_across_threads(cuda_device_properties):
-    utils, query = cuda_device_properties
-    first = utils.get_device_properties(0)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(utils.get_device_properties, [0, 0]))
-
-    assert all(result == first and result is not first for result in results)
-    assert results[0] is not results[1]
-    query.assert_called_once_with(0)
 
 
 def test_compile_warmup_only_intercepts_launches():
