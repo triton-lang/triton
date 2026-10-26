@@ -42,6 +42,8 @@ jobs:
           # docker container.  Eventually these consume all the disk space on
           # this machine.
           docker container prune -f
+          # Pulling a fresh manylinux image leaves the previous one untagged.
+          docker image prune -f
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -96,10 +98,14 @@ jobs:
           # uses the same flag for the same reason.
           export CIBW_REPAIR_WHEEL_COMMAND_LINUX="auditwheel repair --exclude libtriton.so -w {dest_dir} {wheel}"
 
+          # Always pull the manylinux image: the self-hosted runner keeps a cached
+          # copy of "latest", and a stale one has no cp315-cp315t interpreter.
           if [[ ${{ matrix.config.arch }} == 'x86_64' ]]; then
             export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_${{ matrix.config.arch }}:latest"
+            docker pull "${CIBW_MANYLINUX_X86_64_IMAGE}"
           else
             export CIBW_MANYLINUX_AARCH64_IMAGE="quay.io/pypa/manylinux_2_28_${{ matrix.config.arch }}:latest"
+            docker pull "${CIBW_MANYLINUX_AARCH64_IMAGE}"
           fi
 
           # Version-specific wheels for Python 3.11 and for the free-threaded
