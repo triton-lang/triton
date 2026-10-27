@@ -48,10 +48,6 @@ namespace mlir::LLVM::AMD {
 //     masked_offset = (pred ? offset : oob_offset)
 //     buffer_op(mem_desc, masked_offset)
 // ```
-// This only works while num_records is at most 2^32. On gfx1250, a buffer
-// descriptor can hold a 45-bit num_records, so accesses through one are masked
-// by branching around them instead (see `setMaskingFor`).
-//
 // To use buffer operations three main requirements need to be met:
 //
 // 1. The buffer pointer needs to be a scalar, it cannot be non-uniform across
@@ -65,16 +61,9 @@ struct BufferEmitter {
   BufferEmitter(RewriterBase &rw, Location loc,
                 mlir::triton::AMD::TargetInfo ti);
 
-  // Create a resource descriptor (V#) for `basePtr`. `numRecords` is the byte
-  // bound: an i32 read as unsigned, an i64 (gfx1250 only) read as unsigned and
-  // clamped to 2^45 - 1, or null for the default 2^31 - 2 bytes.
+  // Create a resource descriptor (V#) for `basePtr`. `numRecords` is the i32
+  // byte bound; null means the default 2^31 - 2 bytes.
   Value createResourceDescriptor(Value basePtr, Value numRecords);
-
-  // Choose how the accesses through `base` (a pointer or a buffer descriptor)
-  // mask off lanes. An out-of-bounds offset only fails the range check while
-  // num_records is at most 2^32, so on targets whose descriptors can hold more,
-  // accesses through a descriptor branch around masked-off lanes instead.
-  void setMaskingFor(Value base);
 
   // Convert the op's optional `soffset`, which counts elements of `elemTy`,
   // to the i32 byte value the instruction takes. Null stays null.
@@ -111,14 +100,6 @@ struct BufferEmitter {
                  Value pred, int32_t aux);
 
 private:
-  // Emit the access built by `emitAccess` for the lanes where `pred` is true,
-  // returning its result, or `falseVal` for the other lanes. `emitAccess` gets
-  // the predicate to mask the access with: `pred` itself, or true when it
-  // runs under a branch on `pred`. `falseVal` is null for accesses with no
-  // result.
-  Value emitPredicated(Value pred, Value falseVal,
-                       function_ref<Value(Value pred)> emitAccess);
-
   // Fill the descriptor, the per-lane byte offset and the scalar byte offset
   // arguments, masking off lanes where `pred` is false through the hardware
   // range check.
@@ -135,8 +116,6 @@ private:
   RewriterBase &rewriter;
   Location loc;
   mlir::triton::AMD::TargetInfo targetInfo;
-  // Whether to mask lanes by branching rather than by the range check.
-  bool maskByBranch = false;
 };
 
 } // namespace mlir::LLVM::AMD

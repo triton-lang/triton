@@ -283,8 +283,7 @@ def MakeBufferDescOp : TT_AMDGPU_Op<"make_buffer_desc", [
 
     - `base`: the global base address.
     - `num_records`: the number of bytes accessible from `base`, read as an
-      unsigned value. An i64 is only supported on gfx1250, whose descriptor
-      holds 45 bits; larger values clamp to 2^45 - 1.
+      unsigned 32-bit value.
 
     The hardware checks each access, or each 4-byte piece of an access wider
     than 4 bytes, against `num_records`: in bytes from `base`, it is in bounds
@@ -293,25 +292,20 @@ def MakeBufferDescOp : TT_AMDGPU_Op<"make_buffer_desc", [
     is in bounds only if it ends at least 4 bytes before `num_records`.
     Out-of-bounds loads return zero and stores are dropped.
 
-    Masked-off lanes of an access are usually given an out-of-bounds offset,
-    which only works while `num_records` is at most 2^32. On gfx1250, accesses
-    through a descriptor therefore branch around masked-off lanes instead.
-
     The remaining descriptor bits (stride, data format, swizzling, thread-ID
     addressing, out-of-bounds mode) are set by the compiler for the target;
     the stride is zero, so accesses are raw (unstructured).
   }];
   let arguments = (ins
     TT_Ptr:$base,
-    AnyTypeOf<[I32, I64]>:$num_records
+    I32:$num_records
   );
   let results = (outs TritonAMDGPU_BufferDescType:$result);
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    $base `,` $num_records attr-dict `:` qualified(type($base)) `,` type($num_records)
-    `->` qualified(type($result))
+    $base `,` $num_records attr-dict `:` qualified(type($base)) `->` qualified(type($result))
   }];
 }
 

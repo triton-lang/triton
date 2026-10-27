@@ -812,7 +812,6 @@ struct BufferLoadOpConversion
 
     // Create the resource descriptor and then emit the buffer_load intrinsic(s)
     Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
-    bufferEmitter.setMaskingFor(ptr);
     SmallVector<Value> loadedVals;
     Type vecTy = LLVM::getVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
@@ -2160,7 +2159,6 @@ struct BufferAtomicLoadOpConversion
       return failure();
     Value rsrcDesc =
         getResourceDescriptor(bufferEmitter, op.getPtr(), adaptor.getPtr());
-    bufferEmitter.setMaskingFor(op.getPtr());
 
     // Only one thread loads each element; finalizeAtomicResults broadcasts
     // its value so that every copy of the element agrees.
@@ -2229,7 +2227,6 @@ struct BufferAtomicStoreOpConversion
       return failure();
     Value rsrcDesc =
         getResourceDescriptor(bufferEmitter, op.getPtr(), adaptor.getPtr());
-    bufferEmitter.setMaskingFor(op.getPtr());
 
     if (op.getSem() == triton::MemSemantic::RELEASE)
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
@@ -2327,7 +2324,6 @@ struct BufferStoreOpConversion
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
     Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
-    bufferEmitter.setMaskingFor(ptr);
     MLIRContext *ctx = rewriter.getContext();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
@@ -2833,13 +2829,6 @@ struct MakeBufferDescOpConversion
   LogicalResult
   matchAndRewrite(triton::amdgpu::MakeBufferDescOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Only gfx1250 descriptors hold more than 32 bits of num_records, and
-    // only its lowering masks accesses through them without relying on the
-    // bound being at most 2^32.
-    if (op.getNumRecords().getType().isInteger(64) &&
-        targetInfo.getISAFamily() != ISAFamily::CDNA5)
-      return op.emitOpError("a 64-bit num_records is only supported on "
-                            "gfx1250");
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, op.getLoc(), targetInfo);
     rewriter.replaceOp(op, bufferEmitter.createResourceDescriptor(
                                adaptor.getBase(), adaptor.getNumRecords()));

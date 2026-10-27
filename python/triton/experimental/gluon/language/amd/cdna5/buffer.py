@@ -34,25 +34,19 @@ def make_buffer_descriptor(base, num_records, _semantic=None) -> buffer_descript
     even when they fit. So the check is exact per element when no access crosses ``num_records``, such
     as with accesses of one element, or with a ``num_records`` that is a multiple of the access size.
 
-    ``num_records`` can exceed 4 GiB. In bytes, ``soffset`` and each offset must stay below 2**32, but
-    their sum doesn't wrap, so together they reach up to 8 GiB from ``base``; move ``base`` to go
-    further. Since no per-lane offset is out of bounds for every such bound, masked-off lanes of accesses
-    through the descriptor are skipped with a branch, as for global loads and stores, rather than with
-    an out-of-bounds offset.
-
     The descriptor is as aligned as ``base``: use :func:`~triton.experimental.gluon.language.multiple_of`
     on ``base`` to let accesses through it vectorize when the compiler can't prove the alignment.
 
     Args:
         base (pointer to scalar): Global memory base pointer. Its pointee type is the element type of
             the descriptor; offsets count these elements.
-        num_records (int scalar of at most 64 bits): Bytes accessible from ``base``, read as an unsigned
-            value of its width. The descriptor holds 45 bits, so 64-bit values above 2**45 - 1 clamp to it.
+        num_records (int32 or uint32 scalar): Bytes accessible from ``base``, read as an unsigned 32-bit
+            value: up to 2**32 - 1.
 
     Returns:
         buffer_descriptor: the descriptor.
     """
-    return _buffer.make_buffer_descriptor(base, num_records, _semantic, num_records_bits=64)
+    return _buffer.make_buffer_descriptor(base, num_records, _semantic)
 
 
 @builtin

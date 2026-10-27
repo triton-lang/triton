@@ -61,18 +61,15 @@ class buffer_descriptor(ttgl.base_value):
         return self.type.element_ty
 
 
-def _scalar_operand(value, name, semantic, max_bits=32):
-    """Convert an optional scalar integer operand to an i32 handle, or to an i64 one for a 64-bit value when
-    `max_bits` allows it."""
+def _scalar_operand(value, name, semantic):
+    """Convert an optional scalar integer operand to an i32 handle."""
     value = _unwrap_if_constexpr(value)
     if value is None:
         return ir.value()
     value = semantic.to_tensor(value)
     _check(not value.type.is_block(), lambda: f"{name} must be a scalar, got {value.type}")
-    _check(value.dtype.is_int() and value.dtype.primitive_bitwidth <= max_bits,
-           lambda: f"{name} must be an integer of at most {max_bits} bits, got {value.dtype}")
-    if value.dtype.primitive_bitwidth > 32:
-        return semantic.cast(value, ttgl.int64).handle
+    _check(value.dtype.is_int() and value.dtype.primitive_bitwidth <= 32,
+           lambda: f"{name} must be an integer of at most 32 bits, got {value.dtype}")
     return semantic.cast(value, ttgl.int32).handle
 
 
@@ -140,9 +137,9 @@ def _broadcast_mask_other(offsets, mask, other, elem_ty, semantic):
     return offsets, mask, other
 
 
-def make_buffer_descriptor(base, num_records, semantic, num_records_bits=32):
+def make_buffer_descriptor(base, num_records, semantic):
     _check(base.type.is_ptr() and not base.type.is_block(), lambda: f"base must be a scalar pointer, got {base.type}")
-    num_records = _scalar_operand(num_records, "num_records", semantic, max_bits=num_records_bits)
+    num_records = _scalar_operand(num_records, "num_records", semantic)
     handle = semantic.builder.create_make_buffer_desc(base.handle, num_records)
     return buffer_descriptor(handle, buffer_descriptor_type(base.type.element_ty))
 

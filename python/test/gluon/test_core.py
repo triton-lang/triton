@@ -4774,45 +4774,6 @@ def test_buffer_load_last_use_gfx1250():
     assert re.search(r"buffer_load_b32 .* th:TH_LOAD_LU scope:SCOPE_DEV$", compiled.asm["amdgcn"], re.MULTILINE)
 
 
-@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires gfx1250")
-@pytest.mark.parametrize("num_records", [2**32 + 64, 2**40, 2**50])
-def test_buffer_descriptor_wide_num_records_gfx1250(num_records):
-
-    @gluon.jit
-    def kernel(src, out, num_records, soffset, first):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
-        index = ttgl.arange(0, 32, layout=layout)
-        # A 64-bit num_records bounds accesses past 4 GiB, which soffset and
-        # offsets reach together.
-        desc = ttgl.amd.gfx1250.buffer.make_buffer_descriptor(src, num_records)
-        offsets = index + first
-        mask = index % 4 != 3
-        x = ttgl.amd.gfx1250.buffer.load(desc, offsets, mask=mask, other=-5, soffset=soffset)
-        ttgl.store(out + index, x)
-        ttgl.amd.gfx1250.buffer.store(x + 1, desc, offsets, mask=mask, soffset=soffset)
-
-    # The 32 elements straddle byte 2**32.
-    soffset, first = 2**29, 2**29 - 8
-    start = soffset + first
-    src = torch.empty(start + 32, dtype=torch.int32, device="cuda")
-    src[start:] = torch.arange(1, 33, dtype=torch.int32, device="cuda")
-    out = torch.empty(32, dtype=torch.int32, device="cuda")
-    compiled = kernel[(1, )](src, out, num_records, soffset, first, num_warps=1)
-
-    index = torch.arange(32, device="cuda")
-    active = index % 4 != 3
-    in_bounds = (start + index + 1) * 4 <= min(num_records, 2**45 - 1)
-    values = index.int() + 1
-    torch.testing.assert_close(out, torch.where(active, torch.where(in_bounds, values, 0), -5).int(), atol=0, rtol=0)
-    stored = torch.where(active & in_bounds, values + 1, values).int()
-    torch.testing.assert_close(src[start:], stored, atol=0, rtol=0)
-    # Masked-off lanes are branched around rather than given an
-    # out-of-bounds offset, which a bound past 2**32 doesn't drop.
-    amdgcn = compiled.asm["amdgcn"]
-    assert "s_cbranch_execz" in amdgcn
-    assert re.search(r"buffer_load_b32 v\d+, v\d+, s\[\d+:\d+\], s\d+ offen", amdgcn)
-
-
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 def test_mma_v2(dtype):

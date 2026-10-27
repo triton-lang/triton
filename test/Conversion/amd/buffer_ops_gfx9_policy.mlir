@@ -11,7 +11,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK: %[[STRIDE:.*]] = llvm.mlir.constant(0 : i16) : i16
     // CHECK: %[[NUM:.*]] = llvm.zext %{{.*}} : i32 to i64
     // CHECK: %[[RSRC:.*]] = rocdl.make.buffer.rsrc %{{.*}}, %[[STRIDE]], %[[NUM]], %{{.*}}
-    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32>, i32 -> !amdg.buffer_desc<f32>
+    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32> -> !amdg.buffer_desc<f32>
     // CHECK: %[[C4:.*]] = llvm.mlir.constant(4 : i32) : i32
     // CHECK: %[[SOFF:.*]] = llvm.mul %[[C4]], %{{.*}} : i32
     // CHECK: rocdl.raw.ptr.buffer.load %[[RSRC]], %{{.*}}, %[[SOFF]], 0 : f32
@@ -31,7 +31,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: buffer_desc_tensor_soffset_uniform
   tt.func @buffer_desc_tensor_soffset_uniform(%arg0: !tt.ptr<f32>, %offsets: tensor<4x64xi32, #blocked>, %rows: tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>>, %n: i32) {
-    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32>, i32 -> !amdg.buffer_desc<f32>
+    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32> -> !amdg.buffer_desc<f32>
     %0 = tt.expand_dims %rows {axis = 1 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #blocked>
     %s = tt.broadcast %0 : tensor<4x1xi32, #blocked> -> tensor<4x64xi32, #blocked>
     // CHECK: rocdl.make.buffer.rsrc
@@ -74,7 +74,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: buffer_atomic_load_store
   tt.func @buffer_atomic_load_store(%arg0: !tt.ptr<i32>, %offsets: tensor<64xi32, #blocked>, %mask: tensor<64xi1, #blocked>, %s: i32, %n: i32) {
-    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<i32>, i32 -> !amdg.buffer_desc<i32>
+    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<i32> -> !amdg.buffer_desc<i32>
     // CHECK: %[[AUX:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.atomic.buffer.load"(%{{.*}}, %{{.*}}, %{{.*}}, %[[AUX]]) : (!llvm.ptr<8>, i32, i32, i32) -> i32
     // CHECK: llvm.fence syncscope("agent") acquire
