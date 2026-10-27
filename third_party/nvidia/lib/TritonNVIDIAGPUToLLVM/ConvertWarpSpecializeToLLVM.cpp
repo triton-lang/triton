@@ -107,6 +107,12 @@ static void rewriteWarpSpecializeWarpIdsOnce(ModuleOp mod) {
     auto loc = op.getLoc();
     TritonLLVMIRRewriter b(loc, op);
 
+    // If the partition has only one warp, the relative warp ID is always 0.
+    if (lookupNumWarps(op) == 1) {
+      b.replaceOp(op, b.i32_val(0));
+      continue;
+    }
+
     // Keep `ttg.warp_id` for NVGPUToLLVM and only make it relative here.
     Value absWarpId =
         mlir::triton::gpu::WarpIdOp::create(b, loc, op.getOmitUniformHint());
