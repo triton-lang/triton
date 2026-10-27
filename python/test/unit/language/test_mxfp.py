@@ -48,9 +48,9 @@ class TestMXFP4Tensor(MXBaseTest):
         torch.testing.assert_close(tensor.to(torch.float32), test_values)
 
     def test_out_of_range_values(self, device):
-        test_values = torch.tensor([7.0, -7.0, float('inf'), float('-inf')], device=device)
+        test_values = torch.tensor([7.0, -7.0, float('inf'), float('-inf'), float('nan'), -float('nan')], device=device)
         tensor = MXFP4Tensor(test_values)
-        expected_values = torch.tensor([6.0, -6.0, 6.0, -6.0], device=device)
+        expected_values = torch.tensor([6.0, -6.0, 6.0, -6.0, 6.0, -6.0], device=device)
         torch.testing.assert_close(tensor.to(torch.float32), expected_values)
 
     def test_subnormal_numbers(self, device):
@@ -64,6 +64,35 @@ class TestMXFP4Tensor(MXBaseTest):
         expected_values = torch.tensor([1.0, 1.0, 2.0, 2.0, 4.0, 4.0], device=device)
         tensor = MXFP4Tensor(test_values)
         torch.testing.assert_close(tensor.to(torch.float32), expected_values)
+
+    def test_rounding_batch_invariance(self, device):
+        value = torch.tensor(1.250000238418579, dtype=torch.float32, device=device)
+        singleton = MXFP4Tensor(value.reshape(1)).data
+        batched = MXFP4Tensor(torch.stack((value, value.new_tensor(4.0)))).data
+        assert singleton.item() == 3
+        assert batched[0].item() == singleton.item()
+
+    @pytest.mark.parametrize("sign", [1, -1])
+    def test_rounding_midpoint_neighbors(self, sign, device):
+        # E2M1 magnitudes in encoding order, independent of the converter.
+        levels = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
+        midpoints = torch.tensor([(a + b) / 2 for a, b in zip(levels, levels[1:])], device=device)
+        values = sign * torch.stack((
+            torch.nextafter(midpoints, torch.full_like(midpoints, -float("inf"))),
+            midpoints,
+            torch.nextafter(midpoints, torch.full_like(midpoints, float("inf"))),
+        ))
+        # Python floats preserve each float32 input exactly. Minimize distance
+        # first, then prefer the encoding with an even least significant bit.
+        expected = torch.tensor([
+            min(range(8), key=lambda code: (abs(abs(float(value)) - levels[code]), code % 2)) | (8 if sign < 0 else 0)
+            for value in values.flatten()
+        ], dtype=torch.uint8, device=device)
+        torch.testing.assert_close(MXFP4Tensor(values).data.flatten(), expected)
+        torch.testing.assert_close(MXFP4Tensor(values.flatten()).data, expected)
+        torch.testing.assert_close(MXFP4Tensor(values.flatten().flip(0)).data, expected.flip(0))
+        for value, encoding in zip(values.flatten(), expected):
+            assert MXFP4Tensor(value.reshape(1)).data.item() == encoding.item()
 
     def test_negative_values(self, device):
         test_values = torch.tensor([-0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0], device=device)
