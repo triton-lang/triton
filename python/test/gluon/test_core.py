@@ -4641,21 +4641,21 @@ def test_buffer_descriptor_alignment_hint(hint):
     assert f"@llvm.amdgcn.raw.ptr.buffer.load.{load}(" in compiled.asm["llir"]
 
 
-@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires gfx1250")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("vec", [1, 4])
 @pytest.mark.parametrize("soffset, num_elements", [(0, 40), (10, 40), (30, 60), (10, 5), (5, 0), (0, 41)])
-def test_buffer_descriptor_soffset_bounds_gfx1250(vec, soffset, num_elements):
+def test_buffer_descriptor_soffset_bounds_cdna5(vec, soffset, num_elements):
 
     @gluon.jit
     def kernel(src, dst, soffset, num_elements, VEC: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([VEC], [32], [1], [0])
         offsets = ttgl.arange(0, 32 * VEC, layout=layout)
         # Without a stride, num_records counts bytes and bounds soffset + offsets.
-        src_desc = ttgl.amd.gfx1250.buffer.make_buffer_descriptor(src, num_elements * 4)
-        x = ttgl.amd.gfx1250.buffer.load(src_desc, offsets, soffset=soffset)
+        src_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(src, num_elements * 4)
+        x = ttgl.amd.cdna5.buffer.load(src_desc, offsets, soffset=soffset)
         ttgl.store(dst + offsets, x)
-        dst_desc = ttgl.amd.gfx1250.buffer.make_buffer_descriptor(dst + 32 * VEC, num_elements * 4)
-        ttgl.amd.gfx1250.buffer.store(x + 1, dst_desc, offsets, soffset=soffset)
+        dst_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(dst + 32 * VEC, num_elements * 4)
+        ttgl.amd.cdna5.buffer.store(x + 1, dst_desc, offsets, soffset=soffset)
 
     n = 32 * vec
     src = torch.arange(1000, 1000 + 2 * n, dtype=torch.int32, device="cuda")
@@ -4679,12 +4679,12 @@ def test_buffer_descriptor_soffset_bounds_gfx1250(vec, soffset, num_elements):
     assert re.search(rf"{load} v(\d+|\[\d+:\d+\]), v\d+, s\[\d+:\d+\], s\d+ offen", compiled.asm["amdgcn"])
 
 
-@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires gfx1250")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
 @pytest.mark.parametrize("lane_bytes", ["element", 16])
 @pytest.mark.parametrize("num_records", [2**31, 2**32 - 4, 2**32 - 1])
 @pytest.mark.parametrize("soffset", [0, 5])
-def test_buffer_descriptor_full_range_mask_gfx1250(dtype, lane_bytes, num_records, soffset):
+def test_buffer_descriptor_full_range_mask_cdna5(dtype, lane_bytes, num_records, soffset):
     elem_bytes = dtype.itemsize
     vec = 1 if lane_bytes == "element" else 16 // elem_bytes
     gl_dtype = getattr(ttgl, str(dtype).removeprefix("torch."))
@@ -4697,11 +4697,11 @@ def test_buffer_descriptor_full_range_mask_gfx1250(dtype, lane_bytes, num_record
         mask = (offsets // VEC) % 2 == 0
         # With a bound at or above 2**31, masked-off lanes must still be dropped.
         bound = num_records.to(ttgl.uint32)
-        src_desc = ttgl.amd.gfx1250.buffer.make_buffer_descriptor(src, bound)
-        x = ttgl.amd.gfx1250.buffer.load(src_desc, offsets, mask=mask, other=-5, soffset=soffset)
+        src_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(src, bound)
+        x = ttgl.amd.cdna5.buffer.load(src_desc, offsets, mask=mask, other=-5, soffset=soffset)
         ttgl.store(out + offsets, x)
-        dst_desc = ttgl.amd.gfx1250.buffer.make_buffer_descriptor(dst, bound)
-        ttgl.amd.gfx1250.buffer.store(offsets.to(DTYPE) + 1, dst_desc, offsets, mask=mask, soffset=soffset)
+        dst_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(dst, bound)
+        ttgl.amd.cdna5.buffer.store(offsets.to(DTYPE) + 1, dst_desc, offsets, mask=mask, soffset=soffset)
 
     n = 32 * vec
     src = (torch.arange(soffset + n, device="cuda") % 100 + 1).to(dtype)
@@ -4720,28 +4720,28 @@ def test_buffer_descriptor_full_range_mask_gfx1250(dtype, lane_bytes, num_record
         assert "buffer_load_b128" in amdgcn and "buffer_store_b128" in amdgcn
 
 
-@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires gfx1250")
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("scope, scope_bits", [(None, ""), ("cta", ""), ("gpu", " scope:SCOPE_DEV"),
                                                ("sys", " scope:SCOPE_SYS")])
-@pytest.mark.parametrize("temporal_hint", [None, "nontemporal", "high_temporal"])
-def test_buffer_load_store_scope_cache_policy_gfx1250(scope, scope_bits, temporal_hint):
+@pytest.mark.parametrize("temporal", [None, "none", "high"])
+def test_buffer_load_store_scope_cache_policy_cdna5(scope, scope_bits, temporal):
 
     @gluon.jit
-    def kernel(src, dst, scope: ttgl.constexpr, temporal_hint: ttgl.constexpr):
+    def kernel(src, dst, scope: ttgl.constexpr, temporal: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
         offsets = ttgl.arange(0, 32, layout=layout)
-        if temporal_hint is None:
+        if temporal is None:
             policy: ttgl.constexpr = None
         else:
-            policy: ttgl.constexpr = ttgl.amd.gfx1250.buffer.CachePolicy(temporal_hint=temporal_hint)
-        src_desc = ttgl.amd.gfx1250.buffer.make_buffer_descriptor(src, 32 * 4)
-        dst_desc = ttgl.amd.gfx1250.buffer.make_buffer_descriptor(dst, 32 * 4)
-        x = ttgl.amd.gfx1250.buffer.load(src_desc, offsets, scope=scope, cache_policy=policy)
-        ttgl.amd.gfx1250.buffer.store(x, dst_desc, offsets, scope=scope, cache_policy=policy)
+            policy: ttgl.constexpr = ttgl.amd.cdna5.buffer.CachePolicy(temporal=temporal)
+        src_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(src, 32 * 4)
+        dst_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(dst, 32 * 4)
+        x = ttgl.amd.cdna5.buffer.load(src_desc, offsets, scope=scope, cache_policy=policy)
+        ttgl.amd.cdna5.buffer.store(x, dst_desc, offsets, scope=scope, cache_policy=policy)
 
     src = torch.arange(32, dtype=torch.int32, device="cuda")
     dst = torch.empty_like(src)
-    compiled = kernel[(1, )](src, dst, scope, temporal_hint, num_warps=1)
+    compiled = kernel[(1, )](src, dst, scope, temporal, num_warps=1)
     torch.testing.assert_close(dst, src, atol=0, rtol=0)
 
     def bits(instruction):
@@ -4750,21 +4750,21 @@ def test_buffer_load_store_scope_cache_policy_gfx1250(scope, scope_bits, tempora
         assert match, instruction
         return set(match.group(1).split())
 
-    th = {None: set(), "nontemporal": {"th:TH_{}_NT"}, "high_temporal": {"th:TH_{}_HT"}}[temporal_hint]
+    th = {None: set(), "none": {"th:TH_{}_NT"}, "high": {"th:TH_{}_HT"}}[temporal]
     assert bits("buffer_load_b32") == set(scope_bits.split()) | {t.format("LOAD") for t in th}
     assert bits("buffer_store_b32") == set(scope_bits.split()) | {t.format("STORE") for t in th}
 
 
-@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires gfx1250")
-def test_buffer_load_last_use_gfx1250():
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+def test_buffer_load_last_use_cdna5():
 
     @gluon.jit
     def kernel(src, dst):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
         offsets = ttgl.arange(0, 32, layout=layout)
-        policy: ttgl.constexpr = ttgl.amd.gfx1250.buffer.CachePolicy(temporal_hint="last_use")
-        src_desc = ttgl.amd.gfx1250.buffer.make_buffer_descriptor(src, 32 * 4)
-        x = ttgl.amd.gfx1250.buffer.load(src_desc, offsets, scope="gpu", cache_policy=policy)
+        policy: ttgl.constexpr = ttgl.amd.cdna5.buffer.CachePolicy(temporal="last_use")
+        src_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(src, 32 * 4)
+        x = ttgl.amd.cdna5.buffer.load(src_desc, offsets, scope="gpu", cache_policy=policy)
         ttgl.store(dst + offsets, x)
 
     src = torch.arange(32, dtype=torch.int32, device="cuda")

@@ -1329,14 +1329,12 @@ void init_gluon_ir(py::module_ &m) {
              return ttag::CachePolicyGfx9Attr::get(self.getContext(),
                                                    nontemporal);
            })
-      .def("get_amd_cache_policy_gfx1250",
-           [](GluonOpBuilder &self,
-              const std::string &temporalHint) -> Attribute {
-             auto hint = ttag::symbolizeTemporalHintGfx1250(temporalHint);
+      .def("get_amd_cache_policy_gfx12",
+           [](GluonOpBuilder &self, const std::string &temporal) -> Attribute {
+             auto hint = ttag::symbolizeTemporalHintGfx12(temporal);
              if (!hint)
-               throw std::invalid_argument("unknown temporal hint " +
-                                           temporalHint);
-             return ttag::CachePolicyGfx1250Attr::get(self.getContext(), *hint);
+               throw std::invalid_argument("unknown temporal hint " + temporal);
+             return ttag::CachePolicyGfx12Attr::get(self.getContext(), *hint);
            })
       .def("create_local_load_packed_transposed",
            [](GluonOpBuilder &self, Type resultType, Value memDesc) -> Value {

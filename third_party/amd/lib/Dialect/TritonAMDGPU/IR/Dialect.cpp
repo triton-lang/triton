@@ -64,9 +64,9 @@ public:
       function_ref<InFlightDiagnostic()> emitError) const override {
     if (isa<CachePolicyGfx9Attr>(cachePolicy))
       return success();
-    if (auto gfx1250Policy = dyn_cast<CachePolicyGfx1250Attr>(cachePolicy)) {
+    if (auto gfx12Policy = dyn_cast<CachePolicyGfx12Attr>(cachePolicy)) {
       // TH 3 means last use for loads but write-back for stores.
-      if (gfx1250Policy.getTemporalHint() == TemporalHintGfx1250::LastUse &&
+      if (gfx12Policy.getTemporal() == TemporalHintGfx12::LastUse &&
           operation != triton::CachePolicyOperation::Load)
         return emitError() << "the last_use temporal hint is only valid for "
                               "loads";
@@ -1226,11 +1226,9 @@ verifyBufferAccessPolicy(Operation *op, Attribute cachePolicy,
     return failure();
   if (scope && isa_and_nonnull<triton::CachePolicyAttr>(cachePolicy))
     return op->emitOpError("a cache modifier can't be combined with scope");
-  // On gfx1250, TH 3 at system scope encodes a cache bypass, not last use.
-  if (auto gfx1250Policy =
-          dyn_cast_if_present<CachePolicyGfx1250Attr>(cachePolicy);
-      gfx1250Policy &&
-      gfx1250Policy.getTemporalHint() == TemporalHintGfx1250::LastUse &&
+  // On gfx12, TH 3 at system scope encodes a cache bypass, not last use.
+  if (auto gfx12Policy = dyn_cast_if_present<CachePolicyGfx12Attr>(cachePolicy);
+      gfx12Policy && gfx12Policy.getTemporal() == TemporalHintGfx12::LastUse &&
       scope == triton::MemSyncScope::SYSTEM)
     return op->emitOpError(
         "the last_use temporal hint can't be combined with the sys scope");

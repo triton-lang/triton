@@ -746,7 +746,9 @@ getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
                            const mlir::triton::AMD::TargetInfo &targetInfo) {
   const bool isGfx9 = llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
                                          targetInfo.getISAFamily());
-  const bool isGfx1250 = targetInfo.getISAFamily() == ISAFamily::CDNA5;
+  const bool isGfx12 = llvm::is_contained({ISAFamily::RDNA4, ISAFamily::CDNA5},
+                                          targetInfo.getISAFamily());
+  const bool isCDNA5 = targetInfo.getISAFamily() == ISAFamily::CDNA5;
   int32_t aux = 0;
   if (auto gfx9Policy =
           dyn_cast_if_present<triton::amdgpu::CachePolicyGfx9Attr>(
@@ -757,14 +759,14 @@ getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
     const int ntBit = 0b10;
     if (gfx9Policy.getNontemporal())
       aux |= ntBit;
-  } else if (auto gfx1250Policy =
-                 dyn_cast_if_present<triton::amdgpu::CachePolicyGfx1250Attr>(
+  } else if (auto gfx12Policy =
+                 dyn_cast_if_present<triton::amdgpu::CachePolicyGfx12Attr>(
                      cachePolicy)) {
-    if (!isGfx1250)
+    if (!isGfx12)
       return op->emitOpError(
-          "the gfx1250 cache policy is only supported on gfx1250");
+          "the gfx12 cache policy is only supported on RDNA4 and CDNA5");
     // TH[2:0] holds the temporal hint, whose values match the enum's.
-    aux |= static_cast<int32_t>(gfx1250Policy.getTemporalHint());
+    aux |= static_cast<int32_t>(gfx12Policy.getTemporal());
   } else {
     auto cm = getCacheModifier(cachePolicy);
     if (failed(cm))
@@ -786,8 +788,8 @@ getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
     case triton::MemSyncScope::SYSTEM:
       return aux | sc0Bit | sc1Bit;
     }
-  } else if (isGfx1250) {
-    // gfx1250 encodes it in SCOPE[4:3]: CU, SE, device or system. A workgroup
+  } else if (isCDNA5) {
+    // CDNA5 encodes it in SCOPE[4:3]: CU, SE, device or system. A workgroup
     // runs on one WGP, so the CU scope, the default, already covers it.
     const int scopeShift = 3;
     const int scopeDev = 2 << scopeShift, scopeSys = 3 << scopeShift;
@@ -801,7 +803,7 @@ getBufferLoadStoreCtrlBits(Operation *op, Attribute cachePolicy,
     }
   } else {
     return op->emitOpError("scope on buffer loads and stores is only "
-                           "supported on CDNA3, CDNA4 and gfx1250");
+                           "supported on CDNA3, CDNA4 and CDNA5");
   }
   return op->emitOpError("unsupported scope on a buffer load or store");
 }

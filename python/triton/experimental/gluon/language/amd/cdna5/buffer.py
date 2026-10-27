@@ -1,5 +1,5 @@
 """
-Descriptor-based buffer memory ops for gfx1250 (CDNA5).
+Descriptor-based buffer memory ops for CDNA5.
 
 These access global memory through an explicit buffer resource descriptor (:func:`make_buffer_descriptor`)
 instead of a base pointer, with explicit bounds, a scalar offset and per-access coherence scope. The

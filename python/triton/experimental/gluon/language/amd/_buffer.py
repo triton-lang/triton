@@ -1,7 +1,7 @@
 """Shared implementation of the descriptor-based AMD buffer ops.
 
 Architecture modules (``amd.cdna3.buffer``, ``amd.cdna4.buffer``,
-``amd.gfx1250.buffer``) expose these as builtins with their own cache policy
+``amd.cdna5.buffer``) expose these as builtins with their own cache policy
 types.
 """
 
