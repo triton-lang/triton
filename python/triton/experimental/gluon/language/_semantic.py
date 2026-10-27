@@ -275,9 +275,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         ret_ty = ttgl.distributed_type(ttgl.int32, shape, layout)
         return super().arange(start, end, ret_ty=ret_ty)
 
-    def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool):
-        _check(not can_reorder, lambda: "can_reorder is not supported in gluon")
-        value = super().reshape(input, dst_shape, can_reorder)
+    def reshape(self, input: TensorTy, dst_shape: List[int]):
+        value = super().reshape(input, dst_shape)
         return self._wrap_tensor_infer_layout(value)
 
     def splat(self, value, shape, layout):
@@ -578,7 +577,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn) -> Tuple[TensorTy, ...]:
         if axis is None:
-            inputs = tuple(self.reshape(t, [t.numel.value], can_reorder=False) for t in inputs)
+            inputs = tuple(self.reshape(t, [t.numel.value]) for t in inputs)
             axis = 0
         # get result shape
         shape = inputs[0].type.shape

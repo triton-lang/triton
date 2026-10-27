@@ -2697,7 +2697,10 @@ def test_amd_direct_load_to_shared(use_buffer_load):
 @pytest.mark.skipif(not (is_hip_rdna3() or is_hip_rdna4()), reason="Requires RDNA3 or RDNA4")
 @pytest.mark.parametrize("M, N, K", [(64, 64, 64)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
-def test_amd_wmma(M, N, K, in_dtype):
+@pytest.mark.parametrize("wide_k_width", [False, True])
+def test_amd_wmma(M, N, K, in_dtype, wide_k_width):
+    if wide_k_width and not is_hip_rdna4():
+        pytest.skip("kWidth spanning two wmma instructions needs WMMA v2")
 
     @gluon.jit
     def kernel(a_ptr, b_ptr, c_ptr,  #
@@ -2745,7 +2748,7 @@ def test_amd_wmma(M, N, K, in_dtype):
 
     blocked = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
     wmma_version = 1 if is_hip_rdna3() else 2
-    k_width = 16 if is_hip_rdna3() else 8
+    k_width = 16 if is_hip_rdna3() or wide_k_width else 8
     wmma = ttgl.amd.AMDWMMALayout(wmma_version, True, [[0, 1], [1, 0]])
     kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
                  BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, BLOCKED_LAYOUT=blocked, WMMA_LAYOUT=wmma, K_WIDTH=k_width, num_warps=4)
@@ -2950,6 +2953,65 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
 
     assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
     _check_cd_regclass_pins(compiled.asm['llir'], cd_regclass)
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+def test_amd_mfma_scaled_3d(device='cuda'):
+
+    @gluon.jit
+    def kernel(out_ptr, a_ptr, b_ptr, a_scale_ptr, b_scale_ptr,  #
+               B: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr):
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(  #
+            version=4, instr_shape=[16, 16, 128], transposed=True,  #
+            warps_per_cta=[2, 1, 1])
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, mfma_layout, 16)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, mfma_layout, 16)
+        a_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(a_layout, [B, M, K // 32])
+        b_scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_mfma_scale_layout(b_layout, [B, N, K // 32])
+
+        a_dim0 = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, a_layout)))[:, None, None]
+        a_dim1 = ttgl.arange(0, M, ttgl.SliceLayout(0, ttgl.SliceLayout(2, a_layout)))[None, :, None]
+        a_dim2 = ttgl.arange(0, K, ttgl.SliceLayout(0, ttgl.SliceLayout(1, a_layout)))[None, None, :]
+        a = ttgl.load(a_ptr + (a_dim0 * M + a_dim1) * K + a_dim2)
+
+        b_dim0 = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, b_layout)))[:, None, None]
+        b_dim1 = ttgl.arange(0, K, ttgl.SliceLayout(0, ttgl.SliceLayout(2, b_layout)))[None, :, None]
+        b_dim2 = ttgl.arange(0, N, ttgl.SliceLayout(0, ttgl.SliceLayout(1, b_layout)))[None, None, :]
+        b = ttgl.load(b_ptr + (b_dim0 * K + b_dim1) * N + b_dim2)
+
+        a_scale_dim0 = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, a_scale_layout)))[:, None, None]
+        a_scale_dim1 = ttgl.arange(0, M, ttgl.SliceLayout(0, ttgl.SliceLayout(2, a_scale_layout)))[None, :, None]
+        a_scale_dim2 = ttgl.arange(0, K // 32, ttgl.SliceLayout(0, ttgl.SliceLayout(1, a_scale_layout)))[None, None, :]
+        a_scale = ttgl.load(a_scale_ptr + (a_scale_dim0 * M + a_scale_dim1) * (K // 32) + a_scale_dim2)
+
+        b_scale_dim0 = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, b_scale_layout)))[:, None, None]
+        b_scale_dim1 = ttgl.arange(0, N, ttgl.SliceLayout(0, ttgl.SliceLayout(2, b_scale_layout)))[None, :, None]
+        b_scale_dim2 = ttgl.arange(0, K // 32, ttgl.SliceLayout(0, ttgl.SliceLayout(1, b_scale_layout)))[None, None, :]
+        b_scale = ttgl.load(b_scale_ptr + (b_scale_dim0 * N + b_scale_dim1) * (K // 32) + b_scale_dim2)
+
+        zero = ttgl.zeros([B, M, N], dtype=ttgl.float32, layout=mfma_layout)
+        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, "e4m3", b, b_scale, "e4m3", zero)
+
+        o_dim0 = ttgl.arange(0, B, ttgl.SliceLayout(1, ttgl.SliceLayout(2, mfma_layout)))[:, None, None]
+        o_dim1 = ttgl.arange(0, M, ttgl.SliceLayout(0, ttgl.SliceLayout(2, mfma_layout)))[None, :, None]
+        o_dim2 = ttgl.arange(0, N, ttgl.SliceLayout(0, ttgl.SliceLayout(1, mfma_layout)))[None, None, :]
+        ttgl.store(out_ptr + (o_dim0 * M + o_dim1) * N + o_dim2, c)
+
+    B, M, N, K = 2, 16, 16, 128
+    torch.manual_seed(0)
+    a = torch.randint(20, 40, (B, M, K), dtype=torch.uint8, device=device)
+    b = torch.randint(20, 40, (B, K, N), dtype=torch.uint8, device=device)
+    a_scale = torch.randint(120, 134, (B, M, K // 32), dtype=torch.uint8, device=device)
+    b_scale = torch.randint(120, 134, (B, N, K // 32), dtype=torch.uint8, device=device)
+    out = torch.empty((B, M, N), dtype=torch.float32, device=device)
+    kernel[(1, )](out, a, b, a_scale, b_scale, B, M, N, K, num_warps=2)
+
+    a_ref = a.view(torch.float8_e4m3fn).float()
+    a_ref = a_ref * torch.exp2(a_scale.float() - 127).repeat_interleave(32, dim=2)
+    b_ref = b.view(torch.float8_e4m3fn).float()
+    b_ref = b_ref * torch.exp2(b_scale.float() - 127).repeat_interleave(32, dim=2).transpose(1, 2)
+    ref = torch.matmul(a_ref, b_ref)
+    torch.testing.assert_close(out, ref)
 
 
 def test_math_fast_expf():
@@ -4446,10 +4508,11 @@ def test_buffer_ops_require_descriptor():
     ([1, 64], "same across the lanes of a wave"),
     ([4, 1], "same across the lanes of a wave"),
 ])
-def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error):
+@pytest.mark.parametrize("op", ["load", "store", "atomic_load", "atomic_store"])
+def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error, op):
 
     @gluon.jit
-    def kernel(src, SOFFSET_M: ttgl.constexpr, SOFFSET_N: ttgl.constexpr):
+    def kernel(src, SOFFSET_M: ttgl.constexpr, SOFFSET_N: ttgl.constexpr, OP: ttgl.constexpr):
         # Lanes span both dimensions: 4 rows of 16.
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 16], [1, 1], [1, 0])
         rows = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, layout))
@@ -4457,11 +4520,98 @@ def test_buffer_tensor_soffset_must_be_wave_uniform(soffset_shape, error):
         offsets = rows[:, None] * 64 + cols[None, :]
         soffset = ttgl.zeros([SOFFSET_M, SOFFSET_N], ttgl.int32, layout)
         desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, 1024)
-        ttgl.amd.cdna3.buffer.load(desc, offsets, soffset=soffset)
+        if OP == "load":
+            ttgl.amd.cdna3.buffer.load(desc, offsets, soffset=soffset)
+        elif OP == "store":
+            ttgl.amd.cdna3.buffer.store(offsets, desc, offsets, soffset=soffset)
+        elif OP == "atomic_load":
+            ttgl.amd.cdna3.buffer.atomic_load(desc, offsets, soffset=soffset)
+        elif OP == "atomic_store":
+            ttgl.amd.cdna3.buffer.atomic_store(offsets, desc, offsets, soffset=soffset)
+        else:
+            ttgl.static_assert(False, "unhandled buffer op")
 
     src = torch.zeros(256, dtype=torch.int32, device="cuda")
     with pytest.raises(CompilationError, match=error):
-        kernel[(1, )](src, *soffset_shape, num_warps=1)
+        kernel[(1, )](src, *soffset_shape, op, num_warps=1)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("scope", ["gpu", "sys"])
+def test_buffer_atomic_load_store_handoff(scope):
+
+    @gluon.jit
+    def kernel(payload, flag, out, N: ttgl.constexpr, scope: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
+        offsets = ttgl.arange(0, N, layout=layout)
+        flag_offsets = ttgl.zeros([1], ttgl.int32, layout)
+        payload_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(payload, N * 4)
+        flag_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(flag, 4)
+        if ttgl.program_id(0) == 1:
+            # Producer: publish the payload with a release store of the flag.
+            ttgl.amd.cdna3.buffer.store(offsets * 3 + 7, payload_desc, offsets)
+            ttgl.amd.cdna3.buffer.atomic_store(flag_offsets + 1, flag_desc, flag_offsets, sem="release", scope=scope)
+        else:
+            # Consumer: poll the flag with relaxed loads, then acquire it.
+            value = ttgl.amd.cdna3.buffer.atomic_load(flag_desc, flag_offsets, sem="relaxed", scope=scope)
+            while ttgl.max(value, axis=0) == 0:
+                value = ttgl.amd.cdna3.buffer.atomic_load(flag_desc, flag_offsets, sem="relaxed", scope=scope)
+            ttgl.amd.cdna3.buffer.atomic_load(flag_desc, flag_offsets, sem="acquire", scope=scope)
+            ttgl.store(out + offsets, ttgl.amd.cdna3.buffer.load(payload_desc, offsets))
+
+    N = 256
+    for _ in range(20):
+        payload = torch.zeros(N, dtype=torch.int32, device="cuda")
+        flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+        out = torch.zeros(N, dtype=torch.int32, device="cuda")
+        compiled = kernel[(2, )](payload, flag, out, N, scope, num_warps=4)
+        torch.cuda.synchronize()
+        torch.testing.assert_close(out, torch.arange(N, device="cuda", dtype=torch.int32) * 3 + 7, atol=0, rtol=0)
+
+    # The flag accesses are coherent at the scope, with the matching fences.
+    bits = "sc1" if scope == "gpu" else "sc0 sc1"
+    amdgcn = compiled.asm["amdgcn"]
+    assert re.search(rf"buffer_load_dword v\d+, v\d+, s\[\d+:\d+\], 0 offen {bits}$", amdgcn, re.MULTILINE)
+    assert re.search(rf"buffer_store_dword v\d+, v\d+, s\[\d+:\d+\], 0 offen {bits}$", amdgcn, re.MULTILINE)
+    assert f"buffer_wbl2 {bits}" in amdgcn
+    assert f"buffer_inv {bits}" in amdgcn
+    # The polling load stays in the loop: some block defined before it is
+    # branched back to after it.
+    llir = compiled.asm["llir"]
+    load = llir.index("@llvm.amdgcn.raw.ptr.atomic.buffer.load")
+    labels_before = re.findall(r"^(\d+):", llir[:load], re.MULTILINE)
+    assert any(re.search(rf"label %{label}\b", llir[load:]) for label in labels_before)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("num_records", [48 * 4, 2**32 - 1])
+def test_buffer_atomic_load_store_bounds_mask(num_records):
+
+    @gluon.jit
+    def kernel(src, dst, out, num_records, soffset):
+        # 64 elements over 256 threads: every element has several copies.
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        mask = offsets % 3 != 0
+        bound = num_records.to(ttgl.uint32)
+        src_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, bound)
+        x = ttgl.amd.cdna3.buffer.atomic_load(src_desc, offsets, mask=mask, sem="relaxed", soffset=soffset)
+        ttgl.store(out + offsets, x)
+        dst_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(dst, bound)
+        ttgl.amd.cdna3.buffer.atomic_store(offsets + 1, dst_desc, offsets, mask=mask, sem="relaxed", soffset=soffset)
+
+    soffset = 5
+    src = torch.arange(1, 70, dtype=torch.int32, device="cuda")
+    dst = torch.full((69, ), -1, dtype=torch.int32, device="cuda")
+    out = torch.full((64, ), -1, dtype=torch.int32, device="cuda")
+    kernel[(1, )](src, dst, out, num_records, soffset, num_warps=4)
+
+    index = torch.arange(64, device="cuda")
+    active = (index % 3 != 0) & ((soffset + index + 1) * 4 <= num_records)
+    torch.testing.assert_close(out, torch.where(active, src[soffset:], 0).int(), atol=0, rtol=0)
+    expected = torch.full((69, ), -1, dtype=torch.int32, device="cuda")
+    expected[soffset:] = torch.where(active, index + 1, -1).int()
+    torch.testing.assert_close(dst, expected, atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
@@ -7899,7 +8049,8 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
     torch.testing.assert_close(out, torch.full_like(out, 31))
     assert values[0].item() == (10 if atomic else 7)
     assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
-    if tile == 128:
+    if tile == 128 and atomic:
         assert compiled.metadata.shared > 0
     if not atomic:
+        assert compiled.metadata.shared == 0
         assert "mapa.shared::cluster" not in compiled.asm["ptx"]

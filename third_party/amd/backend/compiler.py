@@ -49,6 +49,8 @@ class _AMDGPUCodegenOptions(ctypes.Structure):
         ("canonicalize_gep", ctypes.c_uint8),
         ("dump_ir", ctypes.c_uint8),
         ("enable_timing", ctypes.c_uint8),
+        ("enable_misched", ctypes.c_uint8),
+        ("emit_object", ctypes.c_uint8),
     ]
 
 
@@ -97,7 +99,7 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
     # longer honor TargetOptions::AllowFPOpFusion during code generation.
     llvm_ir = llvm.to_bitcode(src, enable_fp_fusion, legacy_alias_scopes=True)
     options = _AMDGPUCodegenOptions(
-        1,
+        2,
         triple.encode("utf-8"),
         processor.encode("utf-8"),
         features.encode("utf-8"),

@@ -1,6 +1,11 @@
 AMD CDNA 4
 ==========
 
+The ``buffer`` module re-exports the descriptor-based buffer ops of
+:mod:`CDNA 3 <triton.experimental.gluon.language.amd.cdna3.buffer>` and adds
+:func:`buffer.load_to_shared
+<triton.experimental.gluon.language.amd.cdna4.buffer.load_to_shared>`.
+
 .. currentmodule:: triton.experimental.gluon.language.amd.cdna4
 
 .. autosummary::
@@ -15,6 +20,7 @@ AMD CDNA 4
     :toctree: generated
     :nosignatures:
 
+    buffer.load_to_shared
     buffer_load
     buffer_store
     buffer_atomic_add
