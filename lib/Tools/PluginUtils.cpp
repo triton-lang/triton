@@ -2,7 +2,6 @@
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
-#include <dlfcn.h>
 
 #define DEBUG_TYPE "triton-plugins"
 
@@ -30,12 +29,13 @@ static bool isTritonAndPluginsVersionsMatch(const std::string &pluginVersion) {
 }
 
 llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
-  void *handle = ::dlopen(filename.c_str(), RTLD_NOW | RTLD_LOCAL);
-  if (!handle)
+  std::string error;
+  auto library =
+      llvm::sys::DynamicLibrary::getPermanentLibrary(filename.c_str(), &error);
+  if (!library.isValid())
     return llvm::make_error<llvm::StringError>(
-        Twine("Could not load library '") + filename + "': " + ::dlerror(),
+        Twine("Could not load library '") + filename + "': " + error,
         llvm::inconvertibleErrorCode());
-  llvm::sys::DynamicLibrary library(handle);
 
   TritonPlugin plugin{filename, library};
 

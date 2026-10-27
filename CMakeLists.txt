@@ -452,9 +452,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE z)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
-  if(TRITON_EXT_ENABLED AND UNIX AND NOT APPLE)
-    target_link_options(triton PRIVATE "LINKER:-Bsymbolic")
-  endif()
 
   if(NOT TRITON_EXT_ENABLED)
     # When extensions are disabled, only export the Python entrypoint.
@@ -471,6 +468,17 @@ if(TRITON_BUILD_PYTHON_MODULE)
     endif()
     file(GENERATE OUTPUT "${TRITON_EXPORT_SYMBOLS_FILE}"
       CONTENT "${TRITON_EXPORT_SYMBOLS_FILE_CONTENT}")
+  elseif(UNIX AND NOT APPLE)
+    # Extensions use the Triton and LLVM symbols libtriton exports. Put them all
+    # under a TRITON symbol version, so that neither libtriton nor an extension
+    # linked against it binds to another LLVM in the process, such as a
+    # libLLVM.so loaded RTLD_GLOBAL (ROCm's, which torch preloads, versions its
+    # symbols LLVM_<major>). Not available on macOS or Windows.
+    set(TRITON_EXPORT_SYMBOLS_FILE "${CMAKE_CURRENT_BINARY_DIR}/triton.exports")
+    file(GENERATE OUTPUT "${TRITON_EXPORT_SYMBOLS_FILE}"
+      CONTENT "TRITON {\n  global:\n    *;\n};\n")
+    target_link_options(triton PRIVATE
+      "LINKER:--version-script,${TRITON_EXPORT_SYMBOLS_FILE}")
   endif()
 
   if (NOT DEFINED LLVM_SYSPATH)
