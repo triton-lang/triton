@@ -69,6 +69,9 @@ SmallVector<Value> createTDMDescriptor(RewriterBase &rewriter, Location loc,
 // `warpUsedHint`: see TritonAMDGPUOps.td for the axis-aligned hint rule.
 // `isPureForm`: inherit `pred` from the descriptor (group0[0]) instead of the
 // `pred` arg, and leave the barrier-enable bit untouched.
+// Warps the layout leaves idle get a NULL descriptor (pred = 0). When
+// `barrierPtr` is set they get a NOP instead (tile_dim0 = 0, workgroup mask
+// cleared, pred kept), so every warp sends exactly one barrier arrive.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> blockShape, int numWarps,
@@ -85,6 +88,7 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
 // PartitionedSharedEncoding aligns warps to LDS partitions; without a hint
 // the op auto-splits into multiple instructions when warps don't cover all
 // pieces, while a hint guarantees single-instruction emission (verifier).
+// Only the last instruction carries `barrierPtr`, so each warp arrives once.
 // `warpUsedHint`: see TritonAMDGPUOps.td.
 void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       const LLVMTypeConverter *typeConverter,
@@ -153,6 +157,8 @@ size_t getTDMGatherScatterIntrinsicCount(RankedTensorType indicesType);
 //   whether indices are 32-bit or 16-bit, detect redundant warps (via
 //   getFreeVariableMasks), and compute per-warp LDS offsets.
 // Multiple TDM instructions are issued automatically if more rows are needed.
+// Only the last one carries `barrierPtr`; with a barrier, redundant warps get
+// a NOP on it rather than a NULL descriptor, so each warp arrives once.
 LogicalResult
 emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                      const LLVMTypeConverter *typeConverter,
