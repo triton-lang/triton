@@ -125,10 +125,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %t0 = tt.trans %ld {async_task_id = array<i32: 0>, order = array<i32: 1, 0>} : tensor<64x128xf16, #blockedT> -> tensor<128x64xf16, #blocked>
     // CHECK: tt.reshape {{.*}} : tensor<64x64xf16,
     // CHECK: tt.reshape {{.*}} : tensor<64x64xf16,
-    %r0 = tt.reshape %t0 allow_reorder {async_task_id = array<i32: 0>} : tensor<128x64xf16, #blocked> -> tensor<128x64x1xf16, #blocked2>
+    %r0 = tt.reshape %t0 {async_task_id = array<i32: 0>} : tensor<128x64xf16, #blocked> -> tensor<128x64x1xf16, #blocked2>
     // CHECK: tt.reshape {{.*}} : tensor<64x64x1xf16,
     // CHECK: tt.reshape {{.*}} : tensor<64x64x1xf16,
-    %r1 = tt.reshape %r0 allow_reorder {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64x1xf16, #blocked2> -> tensor<128x64xf16, #blocked>
+    %r1 = tt.reshape %r0 {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64x1xf16, #blocked2> -> tensor<128x64xf16, #blocked>
     // CHECK: tt.join {{.*}} : tensor<64x64xf16,
     // CHECK: tt.join {{.*}} : tensor<64x64xf16,
     %0 = tt.join %r1, %r1 {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64xf16, #blocked> -> tensor<128x64x2xf16, #blocked2>

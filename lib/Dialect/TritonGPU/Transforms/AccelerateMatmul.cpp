@@ -26,6 +26,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 
+#include <type_traits>
+
 namespace mlir {
 namespace triton {
 namespace gpu {
@@ -231,17 +233,14 @@ static bool isTmemCopyCompatibleScale(RankedTensorType argType,
   return innermostBits % (32 * 128) == 0;
 }
 
-template <typename OpTy>
-static OpTy getDefiningOpSkippingConvertLayout(Value value) {
+template <typename OpTy = void>
+static auto getDefiningOpSkippingConvertLayout(Value value) {
   while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
     value = cvtOp.getSrc();
-  return value.getDefiningOp<OpTy>();
-}
-
-static Value stripConvertLayout(Value value) {
-  while (auto cvtOp = value.getDefiningOp<ConvertLayoutOp>())
-    value = cvtOp.getSrc();
-  return value;
+  if constexpr (std::is_void_v<OpTy>)
+    return value;
+  else
+    return value.getDefiningOp<OpTy>();
 }
 
 static Value
@@ -287,13 +286,13 @@ tryCreateTmemCopyCompatibleScaleOperand(Value scale,
   auto kCopyTiles = numScales / 4;
   SmallVector<int64_t> tiledScaleShape = {mnCopyTiles, kCopyTiles, 32, 4, 4};
 
-  Value tiledScale = stripConvertLayout(transOp.getSrc());
-  auto reshapeTiled = tiledScale.getDefiningOp<ReshapeOp>();
+  auto reshapeTiled =
+      getDefiningOpSkippingConvertLayout<ReshapeOp>(transOp.getSrc());
   if (!reshapeTiled ||
       reshapeTiled.getType().getShape() != ArrayRef<int64_t>(tiledScaleShape))
     return Value();
 
-  Value packedScale = stripConvertLayout(reshapeTiled.getSrc());
+  Value packedScale = getDefiningOpSkippingConvertLayout(reshapeTiled.getSrc());
   auto packedScaleType = dyn_cast<RankedTensorType>(packedScale.getType());
   if (!packedScaleType)
     return Value();
@@ -427,6 +426,18 @@ static int computeOrigBitWidth(Value x) {
     origBitWidth /= 2;
 
   return origBitWidth;
+}
+
+static LogicalResult checkMMAv5InputPrecision(DotOp dotOp) {
+  Value a = dotOp.getA();
+  Value b = dotOp.getB();
+  // For 32-bit-or-wider inputs, this pass only lowers the direct TF32 MMAv5
+  // path. Other input-precision modes, such as TF32x3/BF16xN/IEEE, are handled
+  // by decomposition or fallback paths outside BlockedToMMAv5.
+  if (std::min(computeOrigBitWidth(a), computeOrigBitWidth(b)) >= 32 &&
+      dotOp.getInputPrecision() != InputPrecision::TF32)
+    return failure();
+  return success();
 }
 
 namespace {
@@ -594,64 +605,165 @@ public:
   }
 };
 
-static DistributedEncodingTrait
-replaceCGALayout(DistributedEncodingTrait layout,
-                 const triton::gpu::CGAEncodingAttr &newCGALayout) {
-  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(layout)) {
-    return BlockedEncodingAttr::get(
-        layout.getContext(), blockedLayout.getSizePerThread(),
-        blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getOrder(), newCGALayout);
-  } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    return SliceEncodingAttr::get(
-        layout.getContext(), sliceLayout.getDim(),
-        replaceCGALayout(sliceLayout.getParent(), newCGALayout));
-  } else {
-    llvm::report_fatal_error("not implemented");
-    return layout;
-  }
+static bool supportsTwoCTACGALayout(RankedTensorType retType) {
+  if (retType.getRank() != 2)
+    return false;
+  MLIRContext *ctx = retType.getContext();
+  auto layout = getCGALayout(retType.getEncoding()).getLinearLayout();
+  auto kBlock = StringAttr::get(ctx, "block");
+  return layout.getInDimSize(kBlock) >= 2 &&
+         layout.getBasis(kBlock, 0) == ArrayRef{1, 0};
 }
 
-static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
-  OpBuilder::InsertionGuard g(rewriter);
-  MLIRContext *ctx = b.getContext();
-  while (auto cvtOp = b.getDefiningOp<ConvertLayoutOp>())
-    b = cvtOp.getSrc();
-  auto loadOp = b.getDefiningOp();
-  assert((isa<triton::LoadOp, triton::DescriptorLoadLikeOpInterface>(loadOp)) &&
-         "expected LoadOp");
-  RankedTensorType bType = cast<RankedTensorType>(b.getType());
-  auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
+static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
+  assert(supportsTwoCTACGALayout(retType) && "expected a two-CTA CGA layout");
+  MLIRContext *ctx = retType.getContext();
+  auto layout = getCGALayout(retType.getEncoding()).getLinearLayout();
   auto kBlock = StringAttr::get(ctx, "block");
-  auto dims = standardOutDimNames(ctx, 2);
-  auto newCGALayout =
-      CGAEncodingAttr::get(ctx, LinearLayout({{kBlock, {{0, 1}}}}, dims));
-  Attribute newLayout = replaceCGALayout(currentLayout, newCGALayout);
-  rewriter.setInsertionPoint(loadOp);
-  for (OpOperand &operand : loadOp->getOpOperands()) {
-    auto tensorType = dyn_cast<RankedTensorType>(operand.get().getType());
-    if (!tensorType)
-      continue;
-    Value newOperand = ConvertLayoutOp::create(
-        rewriter, operand.get().getLoc(),
-        tensorType.cloneWithEncoding(newLayout), operand.get());
-    loadOp->setOperand(operand.getOperandNumber(), newOperand);
+  // Split B along N within each pair. Pairs computing different M tiles load
+  // the same B tile; pairs computing different N tiles retain their offsets.
+  // For example, C: [[1, 0], [2, 0], [0, 1]] -> B: [[0, 1], [0, 0], [0, 2]].
+  auto bases = layout.getBases();
+  for (auto &basis : bases[kBlock])
+    basis = {0, 2 * basis[1]};
+  bases[kBlock][0] = {0, 1};
+  return CGAEncodingAttr::get(
+      ctx, LinearLayout(std::move(bases), standardOutDimNames(ctx, 2)));
+}
+
+static DescriptorLoadOp
+getTwoCTADescriptorLoad(Value value, SmallVectorImpl<Value> *views = nullptr) {
+  while (Operation *op = value.getDefiningOp()) {
+    if (auto cvt = dyn_cast<ConvertLayoutOp>(op)) {
+      value = cvt.getSrc();
+    } else if (isView(op) && op->getNumOperands() == 1) {
+      if (views)
+        views->push_back(value);
+      value = op->getOperand(0);
+    } else {
+      return dyn_cast<DescriptorLoadOp>(op);
+    }
   }
-  loadOp->getResult(0).setType(bType.cloneWithEncoding(newLayout));
-  Value newB = loadOp->getResult(0);
-  rewriter.setInsertionPointAfter(loadOp);
-  auto cvt = ConvertLayoutOp::create(rewriter, b.getLoc(), bType, newB);
-  rewriter.replaceAllUsesExcept(newB, cvt.getResult(), cvt);
+  return {};
+}
+
+// Propagate the RHS split through the views, from the dot back to the load.
+static LogicalResult inferTwoCTAOperandLayouts(
+    Value b, CGAEncodingAttr cgaLayout,
+    SmallVectorImpl<std::pair<Value, Attribute>> &layouts) {
+  SmallVector<Value> views;
+  auto load = getTwoCTADescriptorLoad(b, &views);
+  if (!load)
+    return failure();
+  auto type = cast<RankedTensorType>(views.empty() ? load.getType()
+                                                   : views.front().getType());
+  auto layout = cloneWithCGALayout(type, cgaLayout);
+  if (failed(layout))
+    return failure();
+  Attribute encoding = *layout;
+  for (Value view : views) {
+    layouts.emplace_back(view, encoding);
+    encoding = inferSrcEncoding(view.getDefiningOp(), encoding);
+    if (!encoding)
+      return failure();
+  }
+  layouts.emplace_back(load.getResult(), encoding);
+  return success();
+}
+
+static bool canUseTwoCTAs(DotOp dotOp) {
+  if (lookupNumCTAs(dotOp) < 2)
+    return false;
+
+  RankedTensorType retType = dotOp.getType();
+  // The TMA pipeline synchronizes both CTAs. Ordinary loads only provide
+  // CTA-local async waits and fences, so neither operand may use that path.
+  if (!getTwoCTADescriptorLoad(dotOp.getA()))
+    return false;
+
+  if (!supportsTwoCTACGALayout(retType))
+    return false;
+
+  // One cooperating pair covers at most 128 rows per CTA and 256 columns.
+  auto shapePerCTA = getShapePerCTA(retType);
+  if (shapePerCTA[0] > 128 || shapePerCTA[1] > 256)
+    return false;
+
+  // Require enough columns after splitting B across the two CTAs.
+  if (shapePerCTA[1] < 16)
+    return false;
+  if (dotOp.getB().getType().getElementTypeBitWidth() == 8 &&
+      shapePerCTA[1] < 32)
+    return false;
+  SmallVector<std::pair<Value, Attribute>> layouts;
+  return succeeded(inferTwoCTAOperandLayouts(
+      dotOp.getB(), getTwoCTARHSCGALayout(retType), layouts));
+}
+
+static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
+  bool sawMMAv5Dot = false;
+  WalkResult result = module.walk([&](Operation *op) -> WalkResult {
+    if (auto dotOp = dyn_cast<DotOp>(op)) {
+      RankedTensorType retType = dotOp.getType();
+      if (!retType.getEncoding() ||
+          mlir::isa<NvidiaMmaEncodingAttr>(retType.getEncoding()))
+        return WalkResult::advance();
+      if (getMMAVersionSafe(computeCapability, dotOp) != 5)
+        return WalkResult::advance();
+
+      if (failed(checkMMAv5InputPrecision(dotOp)))
+        return WalkResult::advance();
+
+      sawMMAv5Dot = true;
+      return canUseTwoCTAs(dotOp) ? WalkResult::advance()
+                                  : WalkResult::interrupt();
+    }
+
+    // Scaled MMAv5 does not set two_ctas in this pass yet. Keep the whole
+    // module in 1CTA mode if such an op may form a tcgen05 instruction.
+    if (isa<DotScaledOp>(op))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return sawMMAv5Dot && !result.wasInterrupted();
+}
+
+static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
+                           const CGAEncodingAttr &newCGALayout) {
+  OpBuilder::InsertionGuard g(rewriter);
+  SmallVector<std::pair<Value, Attribute>> layouts;
+  LogicalResult inferred = inferTwoCTAOperandLayouts(b, newCGALayout, layouts);
+  assert(succeeded(inferred) && "expected a supported descriptor view chain");
+  auto [load, encoding] = layouts.pop_back_val();
+  auto loadType = cast<RankedTensorType>(load.getType());
+  load.setType(loadType.cloneWithEncoding(encoding));
+  rewriter.setInsertionPointAfterValue(load);
+  auto cvt = ConvertLayoutOp::create(rewriter, load.getLoc(), loadType, load);
+  rewriter.replaceAllUsesExcept(load, cvt.getResult(), cvt);
+
+  Value newB = load;
+  for (auto [value, encoding] : llvm::reverse(layouts)) {
+    Operation *view = value.getDefiningOp();
+    IRMapping mapping;
+    mapping.map(view->getOperand(0), newB);
+    Operation *clone = rewriter.clone(*view, mapping);
+    for (Value result : clone->getResults())
+      result.setType(
+          cast<RankedTensorType>(result.getType()).cloneWithEncoding(encoding));
+    newB = mapping.lookup(value);
+  }
   return newB;
 }
 
 class BlockedToMMAv5 : public mlir::OpRewritePattern<DotOp> {
   int computeCapability;
+  bool enableTwoCTAs;
 
 public:
-  BlockedToMMAv5(mlir::MLIRContext *context, int computeCapability, int benefit)
+  BlockedToMMAv5(mlir::MLIRContext *context, int computeCapability,
+                 bool enableTwoCTAs, int benefit)
       : OpRewritePattern<DotOp>(context, benefit),
-        computeCapability(computeCapability) {}
+        computeCapability(computeCapability), enableTwoCTAs(enableTwoCTAs) {}
 
   mlir::LogicalResult
   matchAndRewrite(triton::DotOp dotOp,
@@ -670,19 +782,15 @@ public:
     if (versionMajor != 5)
       return failure();
     Location loc = dotOp.getLoc();
+    if (failed(checkMMAv5InputPrecision(dotOp)))
+      return failure();
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
-    if (std::min(computeOrigBitWidth(a), computeOrigBitWidth(b)) >= 32 &&
-        dotOp.getInputPrecision() != InputPrecision::TF32)
-      return failure();
     auto oldAType = dotOp.getA().getType();
-    // NYI: PTX 13+ requires all tcgen instructions in a kernel to have a
-    // consistent CTA mode, disabling 2CTA mode for now. To re-enable,
-    // change the line below to: bool useTwoCTAs = canUseTwoCTAs(dotOp);
-    bool useTwoCTAs = false;
+    bool useTwoCTAs = enableTwoCTAs;
     if (useTwoCTAs) {
-      b = splitBOperand(b, rewriter);
+      b = splitBOperand(b, rewriter, getTwoCTARHSCGALayout(oldRetType));
     }
     // TF32 transpose is only supported with 128 swizzle mode with 32B
     // atomicity. As we currently don't support this layout we disallow
@@ -1122,8 +1230,14 @@ public:
     patterns.add<BlockedToMMA>(context, computeCapability, benefitDefault);
     patterns.add<ScaledBlockedToMMA>(context, computeCapability, benefitSM120);
     populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
-    patterns.add<BlockedToMMAv5, ScaledBlockedToMMAv5>(
-        context, computeCapability, benefitMMAv5);
+    // PTX 13+ requires all tcgen instructions in a kernel to have a consistent
+    // CTA mode. TritonGPU modules map to one kernel here, so decide two_ctas
+    // once before rewriting any dot.
+    bool enableTwoCTAs = canUseTwoCTAsInModule(m, computeCapability);
+    patterns.add<BlockedToMMAv5>(context, computeCapability, enableTwoCTAs,
+                                 benefitMMAv5);
+    patterns.add<ScaledBlockedToMMAv5>(context, computeCapability,
+                                       benefitMMAv5);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       return signalPassFailure();

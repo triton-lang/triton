@@ -8,11 +8,12 @@ from __future__ import annotations
 
 from ..._core import builtin
 from .. import _buffer
-from ..cdna3.buffer import (CachePolicy, buffer_descriptor, buffer_descriptor_type, make_buffer_descriptor, load, store)
+from ..cdna3.buffer import (CachePolicy, buffer_descriptor, buffer_descriptor_type, make_buffer_descriptor, load, store,
+                            atomic_load, atomic_store)
 
 __all__ = [
     "CachePolicy", "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store",
-    "load_to_shared"
+    "atomic_load", "atomic_store", "load_to_shared"
 ]
 
 

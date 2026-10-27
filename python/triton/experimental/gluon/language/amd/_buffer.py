@@ -185,3 +185,48 @@ def load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, cach
                                                       offsets.handle, mask.handle if mask is not None else ir.value(),
                                                       ir.value(), ir.value(), policy,
                                                       _scalar_operand(soffset, "soffset", semantic), scope)
+
+
+def _atomic_semantic(sem, default, allowed, op_name, semantic):
+    sem = _unwrap_if_constexpr(sem)
+    _check(sem is None or sem in allowed,
+           lambda: f"{op_name} only supports {' and '.join(allowed)} semantics, got {sem!r}")
+    return semantic._str_to_sem(sem, default=default)
+
+
+def _atomic_scope(scope, semantic):
+    scope = _unwrap_if_constexpr(scope)
+    _check(scope is None or scope in ("cta", "gpu", "sys"),
+           lambda: f"scope must be 'cta', 'gpu' or 'sys', got {scope!r}")
+    return semantic._str_to_scope(scope)
+
+
+def atomic_load(desc, offsets, mask, sem, scope, soffset, semantic):
+    _verify(desc, offsets)
+    offsets, mask, _ = _broadcast_mask_other(offsets, mask, None, desc.dtype, semantic)
+    sem = _atomic_semantic(sem, ir.MEM_SEMANTIC.ACQUIRE, ("acquire", "relaxed"), "atomic_load", semantic)
+    ret_ty = offsets.type.with_element_ty(desc.dtype)
+    builder = semantic.builder
+    handle = builder.create_buffer_atomic_load(ret_ty.to_ir(builder), desc.handle, offsets.handle,
+                                               mask.handle if mask is not None else ir.value(),
+                                               _soffset_operand(soffset, offsets, semantic), sem,
+                                               _atomic_scope(scope, semantic))
+    return ttgl.tensor(handle, ret_ty)
+
+
+def atomic_store(value, desc, offsets, mask, sem, scope, soffset, semantic):
+    _verify(desc, offsets)
+    offsets_shape = offsets.shape
+    mask = _unwrap_if_constexpr(mask)
+    if mask is None:
+        offsets, value = semantic.broadcast_tensors(offsets, value)
+    else:
+        offsets, value, mask = semantic.broadcast_tensors(offsets, value, mask)
+    _check(offsets_shape == offsets.shape,
+           lambda: f"Expected `offsets` argument to have shape {offsets.shape} but got {offsets_shape}")
+    value = semantic.cast(value, desc.dtype)
+    sem = _atomic_semantic(sem, ir.MEM_SEMANTIC.RELEASE, ("release", "relaxed"), "atomic_store", semantic)
+    semantic.builder.create_buffer_atomic_store(value.handle, desc.handle, offsets.handle,
+                                                mask.handle if mask is not None else ir.value(),
+                                                _soffset_operand(soffset, offsets, semantic), sem,
+                                                _atomic_scope(scope, semantic))

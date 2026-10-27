@@ -93,6 +93,22 @@ static int computeKPadding(int kBase, int64_t tensorK,
   return kBase - kBase * tensorK / kInstrSize;
 }
 
+// Returns the number of consecutive wmma instructions that consume one chunk
+// of kWidth K registers in a lane. This is 1 unless kWidth exceeds the K
+// registers one instruction takes per lane and nonK subtile. E.g. for wmma v2
+// 16x16x16 f16 (kBase = 8) with kWidth = 16, lanes 0-15 hold k[0-15] and lanes
+// 16-31 hold k[16-31]; the first instruction takes regs 0-7 and the second
+// regs 8-15. This permutes K the same way for both operands, so the sum over
+// K is unchanged.
+static int getInstrsPerKChunk(DotOperandEncodingAttr dotEnc, int kBase) {
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(dotEnc.getParent());
+  constexpr int wmmaTileDim = 16;
+  int nonKRepeat =
+      wmmaLayout.getOperandNonKDim(dotEnc.getOpIdx()) / wmmaTileDim;
+  int kPerSubtile = kBase / nonKRepeat;
+  return std::max<int>(dotEnc.getKWidth() / kPerSubtile, 1);
+}
+
 // Returns a bitmask of the lane bits that will move in K direction. For WMMA
 // v2+ operand layouts the first nonKDim(=16) lanes (log2(nonKDim) bits) walk
 // the non-K dimension and then wrap around moving in K dimension.
@@ -149,8 +165,23 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
 
   Value rawElems = tb.undef(vecTy);
 
-  // kIdx is expressed in "instructions"; convert to element indexing.
-  const int kElemIdx = kIdx * kInstrSize;
+  // The register layout splits kBase into nonKRepeat subtiles of kPerSubtile
+  // registers:
+  //   regs [0, kPerSubtile)             -> M=0..15
+  //   regs [kPerSubtile, 2*kPerSubtile) -> M=16..31
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(dotEnc.getParent());
+  int nonKDim = wmmaLayout.getOperandNonKDim(dotEnc.getOpIdx());
+  const int nonKTileDim = 16;
+  int nonKRepeat = nonKDim / nonKTileDim;
+  int kPerSubtile = kBase / nonKRepeat;
+
+  // kIdx is expressed in "instructions"; convert to element indexing. When a
+  // kWidth chunk spans several instructions, locate the start of the chunk;
+  // the instruction's registers are at an offset within it.
+  const int instrsPerChunk = isScale ? 1 : getInstrsPerKChunk(dotEnc, kBase);
+  assert((instrsPerChunk == 1 || kDimTensor >= instrsPerChunk * kInstrSize) &&
+         "the dot verifier requires K to cover whole kWidth chunks");
+  const int kElemIdx = (kIdx / instrsPerChunk) * instrsPerChunk * kInstrSize;
 
   // Choose which output dimension gets nonK vs K depending on opIdx.
   const int mCoord = (opIdx == 0) ? nonK : kElemIdx;
@@ -171,8 +202,10 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
 
   auto inDims = dotLayout.pseudoinvert().apply(outCoords);
 
-  const int startReg = inDims[0].second; // "register"
-  const int lane = inDims[1].second;     // "lane"
+  // inDims are ("register", "lane") of the chunk start; offset the register to
+  // this instruction's part of the chunk.
+  const int startReg = inDims[0].second + (kIdx % instrsPerChunk) * kPerSubtile;
+  const int lane = inDims[1].second;
 
   if (isScale && lane != 0) {
     assert(opSel && "opSel must be provided when isScale is true");
@@ -190,22 +223,18 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
                                     rewriter.getZeroAttr(elemTy));
   }
 
-  // The register layout splits kBase into nonKRepeat subtiles of kPerSubtile
-  // registers:
-  //   regs [0, kPerSubtile)             -> M=0..15
-  //   regs [kPerSubtile, 2*kPerSubtile) -> M=16..31
   // Padding must be applied per-subtile so each nonK half is padded
-  // independently.
-  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(dotEnc.getParent());
-  int nonKDim = wmmaLayout.getOperandNonKDim(dotEnc.getOpIdx());
-  const int nonKTileDim = 16;
-  int nonKRepeat = nonKDim / nonKTileDim;
-  int kPerSubtile = kBase / nonKRepeat;
+  // independently. Subtiles are a whole kWidth chunk apart when the chunk
+  // spans several instructions.
   int validKPerSubTile = validK / nonKRepeat;
+  int subTileStride = kPerSubtile * instrsPerChunk;
 
   for (int k = 0; k < kBase; ++k) {
+    int subTile = k / kPerSubtile;
     int subTilePos = k % kPerSubtile;
-    Value elem = (subTilePos < validKPerSubTile) ? elems[startReg + k] : zero;
+    Value elem = (subTilePos < validKPerSubTile)
+                     ? elems[startReg + subTile * subTileStride + subTilePos]
+                     : zero;
     rawElems = tb.insert_element(vecTy, rawElems, elem, tb.i32_val(k));
   }
 

@@ -101,7 +101,7 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> args;
   fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred,
-                 /*isAtomic=*/false, args);
+                 /*isAtomicRMW=*/false, args);
   Type bufferType = getBufferOpType(type, false);
   Value data = ROCDL::RawPtrBufferLoadOp::create(
       rewriter, loc, bufferType, args[0], args[1], args[2],
@@ -113,6 +113,22 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   return data;
 }
 
+Value BufferEmitter::emitAtomicLoad(Type type, Value rsrcDesc, Value offset,
+                                    Value soffsetBytes, Value pred,
+                                    int32_t aux) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value> args;
+  fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred,
+                 /*isAtomicRMW=*/false, args);
+  args.push_back(b.i32_val(aux));
+  Type bufferType = getBufferOpType(type, false);
+  Value data = LLVM::createLLVMIntrinsicCallOp(
+                   rewriter, loc, "llvm.amdgcn.raw.ptr.atomic.buffer.load",
+                   bufferType, args)
+                   .getResult(0);
+  return b.bitcast(data, type);
+}
+
 ROCDL::RawPtrBufferLoadAsyncLdsOp
 BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
                              Value offset, Value soffsetBytes, Value dst,
@@ -120,7 +136,7 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
   fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred,
-                 /*isAtomic=*/false, commonArgs);
+                 /*isAtomicRMW=*/false, commonArgs);
 
   // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
   // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
@@ -154,7 +170,7 @@ Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
   // and amdg.buffer_atomic_cas
   SmallVector<Value, 6> args{casStoreVal, casCmpVal};
   fillCommonArgs(type, rsrcDesc, offset, /*soffsetBytes=*/Value(), pred,
-                 /*isAtomic=*/true, args);
+                 /*isAtomicRMW=*/true, args);
   int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
 
   Value data = ROCDL::RawPtrBufferAtomicCmpSwap::create(
@@ -182,7 +198,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
 
   SmallVector<Value, 6> args{data};
   fillCommonArgs(type, rsrcDesc, offset, /*soffsetBytes=*/Value(), pred,
-                 /*isAtomic=*/true, args);
+                 /*isAtomicRMW=*/true, args);
   int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
 
   // TODO:
@@ -221,7 +237,7 @@ void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value soffsetBytes,
     data = b.bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
   fillCommonArgs(vecTy, rsrcDesc, offset, soffsetBytes, pred,
-                 /*isAtomic=*/false, args);
+                 /*isAtomicRMW=*/false, args);
   ROCDL::RawPtrBufferStoreOp::create(
       rewriter, loc, TypeRange{}, args[0], args[1], args[2], args[3],
       rewriter.getI32IntegerAttr(aux), /*alias_scopes=*/nullptr,
@@ -276,7 +292,7 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
 
 void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
                                    Value vOffsetElems, Value soffsetBytes,
-                                   Value pred, bool isAtomic,
+                                   Value pred, bool isAtomicRMW,
                                    SmallVector<Value> &args) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // 1. Create the (masked) offset
@@ -285,13 +301,14 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   const int elementByteWidth = valueElemNBits / 8;
   // The range check adds `soffset + voffset + size` without wrapping, so an
   // access at voffset 0xFFFFFFFF ends past 2^32 and is out of bounds for any
-  // 32-bit num_records. Atomics fault on a misaligned address even out of
-  // bounds, so they use the offset aligned to their size that ends at 2^32.
+  // 32-bit num_records. Read-modify-write atomics fault on a misaligned
+  // address even out of bounds, so they use the offset aligned to their size
+  // that ends at 2^32.
   int64_t accessBytes = elementByteWidth;
   if (auto vecTy = dyn_cast<VectorType>(type))
     accessBytes *= vecTy.getNumElements();
   Value vOffsetOutOfBounds =
-      b.int_val(32, isAtomic ? static_cast<int32_t>(-accessBytes) : -1);
+      b.int_val(32, isAtomicRMW ? static_cast<int32_t>(-accessBytes) : -1);
   // Please note: the index passed is not in bytes, but in number of elements
   // In order to pass the index to the buffer operation, we need to convert in
   // bytes (i.e., we need to multiply by `elementByteWidth`)
