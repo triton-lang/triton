@@ -945,6 +945,8 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 #undef POPULATE_OP
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
+                                   computeCapability, benefit);
 
   // One above the default so we take frem from the generic LLVM::FRemOp
   // mapping registered by the shared populate.
