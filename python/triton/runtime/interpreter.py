@@ -1482,6 +1482,11 @@ class GridExecutor:
         # run pre-run hooks
         for hook in self.pre_run_hooks:
             hook(*args_hst, **kwargs_hst)
+        # Callable grids inspect the original launch arguments and tensor metadata.
+        if callable(self.grid):
+            grid = self.grid(inspect.getcallargs(self.fn, *args_dev, **kwargs))
+        else:
+            grid = self.grid
         # remaps core language functions to interpreted ones
         patch_scope = _patch_lang(self.fn)
         try:
@@ -1490,7 +1495,6 @@ class GridExecutor:
             args = inspect.getcallargs(self.fn, *args_hst, **kwargs_hst)
             args = {name: arg if name in self.constexprs else _implicit_cvt(arg) for name, arg in args.items()}
             # iterate through grid
-            grid = self.grid(args) if callable(self.grid) else self.grid
             assert len(grid) <= 3, "grid must have at most 3 dimensions"
             grid = grid + (1, ) * (3 - len(grid))
             interpreter_builder.set_grid_dim(*grid)
@@ -1669,7 +1673,14 @@ class InterpretedFunction(KernelInterface[T]):
         if warmup:
             return
         fn = self.rewrite()
-        return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kwargs)
+        # Match JITFunction.run's precedence and scope debug checks to this launch.
+        debug = kwargs.get("debug", self.kwargs.get("debug")) or triton.knobs.runtime.debug
+        options = interpreter_builder.options
+        interpreter_builder.options = dataclasses.replace(options, debug=bool(debug))
+        try:
+            return GridExecutor(fn, self.arg_names, grid, self.pre_run_hooks)(*args, **kwargs)
+        finally:
+            interpreter_builder.options = options
 
     def add_pre_run_hook(self, hook):
         assert callable(hook)
