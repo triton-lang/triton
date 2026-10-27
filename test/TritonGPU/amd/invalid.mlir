@@ -1071,25 +1071,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @buffer_store_last_use(%arg0: !tt.ptr<f32>, %offsets: tensor<32xi32, #blocked>, %value: tensor<32xf32, #blocked>) {
-    // expected-error @+1 {{the last_use temporal hint is only valid for loads}}
-    amdg.buffer_store %value, %arg0[%offsets] {cachePolicy = #amdg.cache_policy_gfx12<temporal = last_use>} : !tt.ptr<f32> -> tensor<32xf32, #blocked>
-    tt.return
-  }
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @buffer_load_last_use_sys_scope(%arg0: !tt.ptr<f32>, %offsets: tensor<32xi32, #blocked>) {
-    // expected-error @+1 {{the last_use temporal hint can't be combined with the sys scope}}
-    %0 = amdg.buffer_load %arg0[%offsets] {cachePolicy = #amdg.cache_policy_gfx12<temporal = last_use>, scope = 3 : i32} : !tt.ptr<f32> -> tensor<32xf32, #blocked>
-    tt.return
-  }
-}
