@@ -82,6 +82,9 @@ matchSubtileLoadGroup(SmallVector<tt::DescriptorLoadOp> loads) {
     for (auto [i, position] : llvm::enumerate(positions))
       if (position != static_cast<int64_t>(i) * childShape[d])
         return std::nullopt;
+    // Tensor shapes are powers of two, so the slice count must be one too.
+    if (!llvm::isPowerOf2_64(positions.size()))
+      return std::nullopt;
     parentShape.push_back(positions.size() * childShape[d]);
     numCells *= positions.size();
   }
@@ -106,18 +109,16 @@ matchSubtileLoadGroup(SmallVector<tt::DescriptorLoadOp> loads) {
 ttg::PaddedSharedEncodingAttr
 getWholeTileEncoding(ttg::PaddedSharedEncodingAttr childEnc,
                      ArrayRef<int64_t> parentShape, unsigned elemBitWidth) {
+  unsigned interval = childEnc.getIntervals().front();
+  unsigned padding = childEnc.getPaddings().front();
   unsigned parentRow = parentShape[childEnc.getOrder()[0]];
   unsigned maxInterval = 256u * 32u / elemBitWidth;
-  SmallVector<std::pair<unsigned, unsigned>> intervalPads;
-  for (auto [interval, padding] :
-       llvm::zip(childEnc.getIntervals(), childEnc.getPaddings())) {
-    unsigned widened = std::max(interval, parentRow);
-    intervalPads.emplace_back(widened <= maxInterval ? widened : interval,
-                              padding);
-  }
-  return ttg::PaddedSharedEncodingAttr::get(childEnc.getContext(), intervalPads,
-                                            childEnc.getOrder(), parentShape,
-                                            ttg::getCGALayout(childEnc));
+  unsigned widened = std::max(interval, parentRow);
+  if (widened <= maxInterval)
+    interval = widened;
+  return ttg::PaddedSharedEncodingAttr::get(
+      childEnc.getContext(), {{interval, padding}}, childEnc.getOrder(),
+      parentShape, ttg::getCGALayout(childEnc));
 }
 
 } // namespace
@@ -126,11 +127,15 @@ getWholeTileEncoding(ttg::PaddedSharedEncodingAttr childEnc,
 // copy. A SubtileLoadGroup is created only when all of the following hold:
 // - At least two loads share a descriptor, a result type, and a block.
 // - Each load's descriptor comes from make_tensor_descriptor, and its shared
-//   encoding is a padded layout.
+//   encoding is a padded layout with a single interval, not split across
+//   CTAs.
+// - Each load returns a tensor of the descriptor's rank (no rank-reducing
+//   loads).
 // - The loads use the same shared encoding and the same pipeline distance.
 // - Their indices differ by compile-time constants and form a complete grid:
 //   along each dimension they sit at 0, childSize, 2 * childSize, ... with
-//   one load per cell and no gaps or overlap.
+//   one load per cell and no gaps or overlap, and each dimension holds a
+//   power-of-two number of them.
 // - The indices of the cell at offset zero are available before the first
 //   load, so the fused copy can be built there.
 SmallVector<SubtileLoadGroup>
@@ -140,13 +145,26 @@ findSubtileLoadGroups(const LoadToInfoMap &loadToInfo) {
       candidates;
   for (auto &[op, info] : loadToInfo) {
     auto load = dyn_cast<tt::DescriptorLoadOp>(op);
+    auto sharedEnc =
+        dyn_cast_or_null<ttg::PaddedSharedEncodingAttr>(info.sharedEncoding);
     // The parent's encoding is the child's resized to the parent shape, which
     // is defined for padded layouts, and the parent descriptor is a copy of
     // the child's with a larger block, so it must come from a visible
-    // make_tensor_descriptor.
-    if (!load ||
-        !isa_and_nonnull<ttg::PaddedSharedEncodingAttr>(info.sharedEncoding) ||
-        !load.getDesc().getDefiningOp<tt::MakeTensorDescOp>())
+    // make_tensor_descriptor. The indices of a rank-reducing load address
+    // the descriptor's dimensions rather than the result's, so they cannot
+    // be compared with the result shape.
+    if (!load || !sharedEnc ||
+        !load.getDesc().getDefiningOp<tt::MakeTensorDescOp>() ||
+        load.getDesc().getType().getBlockType().getRank() !=
+            cast<RankedTensorType>(load.getType()).getRank())
+      continue;
+    // TDM takes a single padding interval, so any other layout is left for
+    // the TDM verifier to reject instead of being resized into a valid one.
+    // The resize keeps the CGA layout, which would split the parent rather
+    // than each child across CTAs.
+    if (sharedEnc.getIntervals().size() != 1 ||
+        llvm::any_of(ttg::getCGALayout(sharedEnc).getCTASplitNum(),
+                     [](unsigned split) { return split != 1; }))
       continue;
     candidates[{load.getDesc(), load.getType(), load->getBlock()}].push_back(
         load);
