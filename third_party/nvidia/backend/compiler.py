@@ -2,6 +2,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
+from triton._utils import is_power_of_two
 from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
@@ -169,8 +170,8 @@ class CUDAOptions:
             extern_libs['gsan'] = str(gsan_lib)
 
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
-        assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
-               "num_warps must be a power of 2"
+        assert is_power_of_two(self.num_warps), "num_warps must be a power of 2"
+        assert is_power_of_two(self.num_ctas), "num_ctas must be a power of 2"
 
     def hash(self):
         hash_dict = dict(self.__dict__)
@@ -432,6 +433,8 @@ class CUDABackend(BaseBackend):
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm, is_enabled(options, "consan"))
+        if not any(is_enabled(options, mode) for mode in ("gsan", "consan")):
+            passes.ttgpuir.add_optimize_thread_regions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         if is_enabled(options, "consan"):

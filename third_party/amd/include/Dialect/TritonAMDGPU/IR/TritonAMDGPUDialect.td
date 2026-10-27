@@ -40,6 +40,7 @@ def TritonAMDGPU_Dialect : Dialect {
   let dependentDialects = ["triton::TritonDialect"];
 
   let useDefaultAttributePrinterParser = 1;
+  let useDefaultTypePrinterParser = 1;
 }
 
 #endif

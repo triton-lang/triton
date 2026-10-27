@@ -398,8 +398,10 @@ namespace {
 // LiveIntervalsWrapperPass so buildSchedGraph can use lane-mask (subregister)
 // precise dependencies, matching LLVM's machine scheduler. The emitted text is
 // appended to *Sink (set before the pass runs; a registered legacy pass must be
-// default-constructible, so the output buffer is threaded through a static).
-std::string *DAGTextSink = nullptr;
+// default-constructible, so the output buffer is threaded through a global).
+// Thread-local: the pipeline runs on the thread that armed it, and concurrent
+// callers must not clobber each other's sink.
+thread_local std::string *DAGTextSink = nullptr;
 
 class EmitSchedulingDAGPass : public MachineFunctionPass {
 public:
@@ -481,7 +483,9 @@ INITIALIZE_PASS_END(EmitSchedulingDAGPass, "mir-dag-emit-scheduling-dag",
 // addPassesToEmitFile is byte-identical to what -stop-before=machine-scheduler
 // produced.
 
-static std::string *LivePipelineSink = nullptr;
+// Thread-local for the same reason as DAGTextSink: the callback below fires on
+// whichever thread builds the pipeline, and that is the thread that armed it.
+static thread_local std::string *LivePipelineSink = nullptr;
 
 // Register the TargetPassConfig callback LAZILY, on first arm().
 //
