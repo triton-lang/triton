@@ -438,7 +438,10 @@ def matmul(a, b, bias,
         (c is None or c.stride(-1) == 1) and
         (c_acc_in is None or c_acc_is_c) and
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
-        (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None)
+        (ragged_dimension != "K" or b.stride(-1) == 1 or b_ragged_metadata.slice_sizes_divisibility is not None) and
+        # if ragged dimension is K, the last K tile of a slice is not masked at the slice end, so x or w must be padded
+        (ragged_dimension != "K" or a_ragged_metadata.slice_sizes_divisibility is not None
+         or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
     if b_scale is not None and isinstance(b_scale.storage.layout, StridedLayout) and b_scale.storage.data.stride()[-1] != 1:
         # In this case, we need to transpose b_scale. Then the reduction dim
@@ -469,6 +472,12 @@ def matmul(a, b, bias,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
+    # Manually set flags (set_opt_flags / scoped_opt_flags) skip the constraint checks in make_opt_flags.
+    # The persistent ragged-K kernel does not mask the last K tile of a slice, so x or w must be padded.
+    if (ragged_dimension == "K" and opt_flags.is_persistent and batch_size * M * N > 0
+            and a_ragged_metadata.slice_sizes_divisibility is None
+            and b_ragged_metadata.slice_sizes_divisibility is None):
+        raise InapplicableConstraint("persistent ragged-K matmul requires x or w to be padded")
     if any(isinstance(t.storage.layout, TiledLayout) for t in (a, b)):
         if not opt_flags.is_persistent or not can_use_tma or ragged_dimension != "K":
             raise InapplicableConstraint("Tiled operands require a persistent ragged-K TMA matmul")
