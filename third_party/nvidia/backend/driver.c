@@ -1005,7 +1005,9 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
     // attributes.
     CUlaunchAttribute launchAttr[6];
     static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
+    static int driver_version = 0;
     if (cuLaunchKernelExHandle == NULL) {
+      CUDA_CHECK(cuDriverGetVersion(&driver_version));
       cuLaunchKernelExHandle = getLaunchKernelExHandle();
     }
     CUlaunchConfig config;
@@ -1048,13 +1050,17 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
       ++num_attrs;
     }
 
-    CUlaunchAttribute domainAttr = {};
-    domainAttr.id = CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN;
-    domainAttr.value.memSyncDomain = remote_domain
-                                         ? CU_LAUNCH_MEM_SYNC_DOMAIN_REMOTE
-                                         : CU_LAUNCH_MEM_SYNC_DOMAIN_DEFAULT;
-    launchAttr[num_attrs] = domainAttr;
-    ++num_attrs;
+    // CUDA 11 drivers do not recognize the memory synchronization domain
+    // attribute.
+    if (remote_domain || driver_version >= 12000) {
+      CUlaunchAttribute domainAttr = {};
+      domainAttr.id = CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN;
+      domainAttr.value.memSyncDomain = remote_domain
+                                           ? CU_LAUNCH_MEM_SYNC_DOMAIN_REMOTE
+                                           : CU_LAUNCH_MEM_SYNC_DOMAIN_DEFAULT;
+      launchAttr[num_attrs] = domainAttr;
+      ++num_attrs;
+    }
 
     if (num_ctas != 1) {
       CUlaunchAttribute clusterAttr = {};
