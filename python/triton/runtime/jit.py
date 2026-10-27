@@ -385,7 +385,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
             return str(value)
         if value.__class__.__name__ == "constexpr":
             return {"constexpr": value.value}
-        if value.__class__.__name__ == "JITFunction":
+        if isinstance(value, JITFunction):
             return {"jit_function": f"{value.module}:{value.fn.__qualname__}"}
         if isinstance(value, type):
             return {"class": f"{value.__module__}:{value.__qualname__}"}
