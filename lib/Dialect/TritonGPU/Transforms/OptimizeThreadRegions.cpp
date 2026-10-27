@@ -68,14 +68,12 @@ bool isMovableArithmetic(Operation *op) {
 struct RegionEffects {
   bool hasMemory = false; // contains loads/stores/atomics
   bool hasAtomic = false; // contains an atomic
-  bool hasSCF = false;    // contains ifs/loops
   bool needsBarrierBefore = false;
   bool needsBarrierAfter = false;
 
   void merge(const RegionEffects &other) {
     hasMemory |= other.hasMemory;
     hasAtomic |= other.hasAtomic;
-    hasSCF |= other.hasSCF;
     needsBarrierBefore |= other.needsBarrierBefore;
     needsBarrierAfter |= other.needsBarrierAfter;
   }
@@ -103,7 +101,6 @@ std::optional<RegionEffects> getScalarRegionEffects(Operation *root) {
       return WalkResult::interrupt();
 
     effects.hasMemory |= memory;
-    effects.hasSCF |= controlFlow;
     // Other threads must observe completion even if no value leaves a loop.
     effects.needsBarrierAfter |= loop || barrier;
     effects.needsBarrierBefore |= barrier;
@@ -438,12 +435,11 @@ void optimizeBlock(Block *block) {
     // Keep regions with memory accesses or atomic-dependent work.
     if (!effects.hasMemory && !atomicDependent)
       continue;
-    // Heuristic: atomic/barrier sequences and executing control flow on fewer
-    // threads may avoid intermediate broadcasts and justify a full-domain
-    // handoff.
-    bool allowFullDomainHandoff = atomicDependent || effects.hasSCF ||
-                                  effects.hasAtomic ||
-                                  effects.needsBarrierBefore;
+    // Only atomic/barrier sequences can eliminate existing synchronization
+    // to offset a full-domain handoff. Ordinary loads already have full copies,
+    // including inside loops and conditionals.
+    bool allowFullDomainHandoff =
+        atomicDependent || effects.hasAtomic || effects.needsBarrierBefore;
     if (atomicDependent && !canIntroduceClusterBarrier(ops.front())) {
       if (effects.needsBarrierBefore || effects.needsBarrierAfter)
         continue;

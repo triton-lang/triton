@@ -8049,7 +8049,8 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
     torch.testing.assert_close(out, torch.full_like(out, 31))
     assert values[0].item() == (10 if atomic else 7)
     assert_no_collectives_in_ptx_loop(compiled.asm["ptx"])
-    if tile == 128:
+    if tile == 128 and atomic:
         assert compiled.metadata.shared > 0
     if not atomic:
+        assert compiled.metadata.shared == 0
         assert "mapa.shared::cluster" not in compiled.asm["ptx"]

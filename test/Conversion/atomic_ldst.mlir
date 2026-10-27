@@ -564,6 +564,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  // A conditional load inside a tensor loop must not add cross-warp handoffs.
+  // THREAD-REGIONS-LABEL: @thread_regions_plain_if_cta_loop(
+  // THREAD-REGIONS-NOT: ttg.thread_
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_plain_if_cta_loop(%ptr: !tt.ptr<i32>, %out: tensor<128x!tt.ptr<i32>, #blocked>, %condition: i1, %iterations: i32) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %false = arith.constant false
+    scf.for %i = %zero to %iterations step %one : i32 {
+      %values:3 = scf.if %condition -> (i32, i32, i1) {
+        %value = tt.load %ptr : !tt.ptr<i32>
+        %next = arith.addi %value, %one : i32
+        %positive = arith.cmpi sgt, %value, %zero : i32
+        scf.yield %value, %next, %positive : i32, i32, i1
+      } else {
+        scf.yield %zero, %one, %false : i32, i32, i1
+      }
+      %sum = arith.addi %values#0, %values#1 : i32
+      %selected = arith.select %values#2, %sum, %zero : i32
+      %result = tt.splat %selected : i32 -> tensor<128xi32, #blocked>
+      tt.store %out, %result : tensor<128x!tt.ptr<i32>, #blocked>
+    }
+    tt.return
+  }
+
+  // A one-warp consumer can still use the cheaper warp-local handoff.
+  // THREAD-REGIONS-LABEL: @thread_regions_plain_if_warp_tail(
+  // THREAD-REGIONS: ttg.thread_predicate <31, 3>
+  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS: scf.if
+  // THREAD-REGIONS: tt.load
+  // THREAD-REGIONS: ttg.thread_predicate <0, 3>
+  // THREAD-REGIONS: ttg.thread_handoff {{.*}} <31, 3> -> <0, 3> : i32
+  // THREAD-REGIONS: tt.return
+  tt.func @thread_regions_plain_if_warp_tail(%ptr: !tt.ptr<i32>, %out: tensor<32x!tt.ptr<i32>, #blocked>, %condition: i1) {
+    %zero = arith.constant 0 : i32
+    %value = scf.if %condition -> (i32) {
+      %loaded = tt.load %ptr : !tt.ptr<i32>
+      scf.yield %loaded : i32
+    } else {
+      scf.yield %zero : i32
+    }
+    %values = tt.splat %value : i32 -> tensor<32xi32, #blocked>
+    tt.store %out, %values : tensor<32x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+
   // THREAD-MEMBAR-LABEL: @thread_regions_async_atomic_store(
   // THREAD-MEMBAR: ttg.async_wait
   // THREAD-MEMBAR-NEXT: ttg.barrier local
@@ -625,14 +672,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #sharded = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // THREAD-REGIONS-LABEL: @thread_regions_multi_cta_loop(
-  // THREAD-REGIONS: %[[LEADER:.*]] = ttg.thread_predicate <31, 3>
-  // THREAD-REGIONS: %[[VALUE:.*]] = scf.if %[[LEADER]] -> (i32)
-  // THREAD-REGIONS: ttg.thread_scope
+  // THREAD-REGIONS-NOT: ttg.thread_
   // THREAD-REGIONS: scf.for
   // THREAD-REGIONS: tt.load
-  // THREAD-REGIONS: ttg.barrier all
-  // THREAD-REGIONS: ttg.thread_handoff %[[VALUE]] <31, 3> -> <0, 0> : i32
+  // THREAD-REGIONS-NOT: ttg.thread_
+  // THREAD-REGIONS-NOT: ttg.barrier
   // THREAD-REGIONS: tt.store
+  // THREAD-REGIONS-NOT: ttg.thread_
   // THREAD-REGIONS: tt.return
   tt.func @thread_regions_multi_cta_loop(%ptr: !tt.ptr<i32>, %out: tensor<256x!tt.ptr<i32>, #sharded>, %iterations: i32) {
     %zero = arith.constant 0 : i32
