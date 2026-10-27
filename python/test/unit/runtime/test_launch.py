@@ -92,7 +92,7 @@ def test_max_occupancy_launch(max_occupancy, num_warps, num_ctas, device, monkey
     original_launch = launcher.launch
 
     def launch(*args):
-        shared_sizes.append(args[7][2])
+        shared_sizes.append(args[8][2])
         return original_launch(*args)
 
     monkeypatch.setattr(launcher, "launch", launch)
@@ -104,6 +104,60 @@ def test_max_occupancy_launch(max_occupancy, num_warps, num_ctas, device, monkey
     graph.replay()
     torch.testing.assert_close(out, torch.full_like(out, 3))
     assert shared_sizes == [launcher.shared, launcher.shared]
+
+
+@pytest.mark.skipif(not is_cuda(), reason="memory synchronization domains require CUDA")
+@pytest.mark.parametrize("gluon", [False, True])
+@pytest.mark.parametrize("remote_domain", [False, True])
+def test_remote_domain_capture(remote_domain, gluon, device):
+    import ctypes
+    from triton.experimental import gluon as gluon_api
+    from triton.experimental.gluon import language as gl
+
+    if torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("distinct memory synchronization domains require Hopper or newer")
+
+    @triton.jit
+    def triton_kernel(out):
+        tl.store(out, 1)
+
+    @gluon_api.jit
+    def gluon_kernel(out):
+        gl.store(out, 1)
+
+    kernel = gluon_kernel if gluon else triton_kernel
+    out = torch.zeros(1, device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](out, remote_domain=remote_domain)
+    assert compiled.metadata.remote_domain == remote_domain
+    out.zero_()
+    torch.cuda.synchronize()
+
+    class AttributeValue(ctypes.Union):
+        # CUlaunchAttributeValue has 64 bytes of storage and 8-byte alignment.
+        _fields_ = [("memSyncDomain", ctypes.c_int), ("reserved", ctypes.c_uint64 * 8)]
+
+    cuda = ctypes.CDLL("libcuda.so.1")
+    cuda.cuStreamSetAttribute.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(AttributeValue)]
+    cuda.cuGraphGetNodes.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t)]
+    cuda.cuGraphKernelNodeGetAttribute.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(AttributeValue)]
+    domain_attribute = 10  # CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN
+    stream = torch.cuda.Stream()
+    value = AttributeValue(memSyncDomain=1)
+    assert cuda.cuStreamSetAttribute(stream.cuda_stream, domain_attribute, ctypes.byref(value)) == 0
+
+    graph = torch.cuda.CUDAGraph(keep_graph=True)
+    with triton.testing.cuda_graph_without_gc(graph, stream=stream):
+        kernel[(1, )](out, remote_domain=remote_domain)
+    count = ctypes.c_size_t()
+    assert cuda.cuGraphGetNodes(graph.raw_cuda_graph(), None, ctypes.byref(count)) == 0
+    assert count.value == 1
+    nodes = (ctypes.c_void_p * count.value)()
+    assert cuda.cuGraphGetNodes(graph.raw_cuda_graph(), nodes, ctypes.byref(count)) == 0
+    assert cuda.cuGraphKernelNodeGetAttribute(nodes[0], domain_attribute, ctypes.byref(value)) == 0
+    assert value.memSyncDomain == int(remote_domain)
+
+    graph.replay()
+    assert out.item() == 1
 
 
 @pytest.mark.skipif(not is_cuda(), reason="max_occupancy requires CUDA")
