@@ -514,7 +514,9 @@ struct ReadPlacement {
 // chain wraps to the tail, i.e. the previous iteration, and that wrap is the
 // prefetch across the backedge. Collisions take the nearest free group below;
 // a chain in the last group has no later group to be read in and is
-// prefetched as well.
+// prefetched as well. Any other group from the consumer on would read the tile
+// after the dot that needs it, so when none of the allowed groups is free the
+// read shares the group before its consumer.
 SmallVector<ReadPlacement>
 assignReadPlacements(const LoadToStreamOpMap &loadToStreamOp,
                      ArrayRef<Operation *> dots, int numGroups) {
@@ -527,12 +529,22 @@ assignReadPlacements(const LoadToStreamOpMap &loadToStreamOp,
     if (ttg::LocalLoadOp localLoad = getChainLocalLoad(streamOps))
       consumer = firstConsumerDot(localLoad, dots);
 
-    int group = (consumer.value_or(0) - 1 + numGroups) % numGroups;
-    for (int tries = 0; tries < numGroups && taken[group]; ++tries)
+    // Probing down from the preferred group visits the groups below the
+    // consumer and then wraps to the last group. The leading dot's chains are
+    // prefetched wherever they land, so they may take any group.
+    int first = consumer.value_or(0);
+    int preferred = (first - 1 + numGroups) % numGroups;
+    int numAllowed = first == 0 ? numGroups : first + 1;
+    int group = preferred;
+    for (int tries = 1; tries < numAllowed && taken[group]; ++tries)
       group = (group - 1 + numGroups) % numGroups;
+    if (taken[group])
+      group = preferred;
     taken[group] = true;
 
-    bool prefetched = consumer.value_or(0) == 0 || group + 1 == numGroups;
+    bool prefetched = first == 0 || group + 1 == numGroups;
+    assert((prefetched || group < first) &&
+           "a read must precede the dot that consumes it");
     reads.push_back({group, prefetched});
   }
   return reads;
@@ -649,15 +661,24 @@ FillPlacement placeFill(const StreamBuffer &buffer, const Stages &stages,
 //   copy A, copy B                          // after d1
 //   %a0 = ttg.local_load %sliceA0
 //   %b0 = ttg.local_load %sliceB0
+//
+// Only buffers with a next-K slice take part. A buffer read only at the
+// current K waits in the compute stage ahead of its first read, which can
+// come before the cut, so it keeps the fill placeFill gave it.
 void gatherSharedFills(ArrayRef<StreamBuffer> buffers,
                        MutableArrayRef<FillPlacement> fills,
                        tt::CoarseSchedule &schedule,
                        ArrayRef<Clusters> groupClusters) {
+  auto isGathered = [](const StreamBuffer &buffer) {
+    return buffer.reads.size() >= 2 &&
+           llvm::any_of(buffer.reads,
+                        [](ReadPlacement read) { return read.prefetched; });
+  };
   int numGroups = groupClusters.size();
   int lastCurrentRead = -1;
   int firstNextRead = numGroups;
   for (const StreamBuffer &buffer : buffers) {
-    if (buffer.reads.size() < 2)
+    if (!isGathered(buffer))
       continue;
     for (ReadPlacement read : buffer.reads) {
       if (read.prefetched)
@@ -676,8 +697,10 @@ void gatherSharedFills(ArrayRef<StreamBuffer> buffers,
     if (schedule.clusters.isBefore(waitCluster, cluster))
       waitCluster = cluster;
   for (auto [buffer, fill] : llvm::zip(buffers, fills)) {
-    if (buffer.reads.size() < 2)
+    if (!isGathered(buffer))
       continue;
+    assert(fill.stages[SCHED_ASYNC_WAIT] != fill.stages[SCHED_COMPUTE] &&
+           "a gathered wait must run a stage ahead of the current-K reads");
     fill.clusters[SCHED_ASYNC_WAIT] = waitCluster;
     fill.clusters[SCHED_GLOBAL_LOAD] =
         groupClusters[firstNextRead][SCHED_GLOBAL_LOAD];
