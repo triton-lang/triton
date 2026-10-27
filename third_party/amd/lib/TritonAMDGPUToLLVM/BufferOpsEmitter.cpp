@@ -1,7 +1,9 @@
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -78,13 +80,51 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr, Value numRecords) {
   Value stride = b.int_val(16, 0);
   Value flagsConst = b.int_val(32, flags);
   Type rsrcType = LLVM::LLVMPointerType::get(rewriter.getContext(), 8);
-  Value numRecords64 = numRecords
-                           ? b.zext(i64_ty, numRecords)
-                           : b.int_val(64, std::numeric_limits<int>::max() - 1);
+  Value numRecords64;
+  if (!numRecords) {
+    numRecords64 = b.int_val(64, std::numeric_limits<int>::max() - 1);
+  } else if (numRecords.getType().isInteger(64)) {
+    // The descriptor keeps the low 45 bits; clamp larger bounds rather than
+    // let them wrap.
+    numRecords64 = b.umin(numRecords, b.int_val(64, (int64_t(1) << 45) - 1));
+  } else {
+    numRecords64 = b.zext(i64_ty, numRecords);
+  }
 
   Value resource = rewriter.createOrFold<ROCDL::MakeBufferRsrcOp>(
       loc, rsrcType, basePtr, stride, numRecords64, flagsConst);
   return resource;
+}
+
+void BufferEmitter::setMaskingFor(Value base) {
+  maskByBranch = isa<triton::amdgpu::BufferDescType>(base.getType()) &&
+                 targetInfo.getISAFamily() == ISAFamily::CDNA5;
+}
+
+Value BufferEmitter::emitPredicated(
+    Value pred, Value falseVal, function_ref<Value(Value pred)> emitAccess) {
+  if (!maskByBranch || matchPattern(pred, m_One()))
+    return emitAccess(pred);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Block *currentBlock = rewriter.getInsertionBlock();
+  Block *afterBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
+  if (falseVal)
+    afterBlock->addArgument(falseVal.getType(), loc);
+  Block *accessBlock = rewriter.createBlock(afterBlock);
+  rewriter.setInsertionPointToEnd(currentBlock);
+  SmallVector<Value> falseArgs;
+  if (falseVal)
+    falseArgs.push_back(falseVal);
+  LLVM::CondBrOp::create(rewriter, loc, pred, accessBlock, ValueRange{},
+                         afterBlock, falseArgs);
+  rewriter.setInsertionPointToStart(accessBlock);
+  Value result = emitAccess(b.true_val());
+  SmallVector<Value> trueArgs;
+  if (falseVal)
+    trueArgs.push_back(result);
+  LLVM::BrOp::create(rewriter, loc, trueArgs, afterBlock);
+  rewriter.setInsertionPointToStart(afterBlock);
+  return falseVal ? afterBlock->getArgument(0) : Value();
 }
 
 Value BufferEmitter::getScalarOffsetBytes(Type elemTy, Value soffset) {
@@ -99,34 +139,42 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
                               Value soffsetBytes, Value pred, Value falseVal,
                               int32_t aux) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value, 6> args;
-  fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred,
-                 /*isAtomicRMW=*/false, args);
-  Type bufferType = getBufferOpType(type, false);
-  Value data = ROCDL::RawPtrBufferLoadOp::create(
-      rewriter, loc, bufferType, args[0], args[1], args[2],
-      rewriter.getI32IntegerAttr(aux), /*alias_scopes=*/nullptr,
-      /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
-  data = b.bitcast(data, type);
-  if (!isZero(falseVal))
-    data = b.select(pred, data, falseVal);
-  return data;
+  return emitPredicated(pred, falseVal, [&](Value accessPred) {
+    SmallVector<Value, 6> args;
+    fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, accessPred,
+                   /*isAtomicRMW=*/false, args);
+    Type bufferType = getBufferOpType(type, false);
+    Value data = ROCDL::RawPtrBufferLoadOp::create(
+        rewriter, loc, bufferType, args[0], args[1], args[2],
+        rewriter.getI32IntegerAttr(aux), /*alias_scopes=*/nullptr,
+        /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
+    data = b.bitcast(data, type);
+    if (!isZero(falseVal) && !matchPattern(accessPred, m_One()))
+      data = b.select(accessPred, data, falseVal);
+    return data;
+  });
 }
 
 Value BufferEmitter::emitAtomicLoad(Type type, Value rsrcDesc, Value offset,
                                     Value soffsetBytes, Value pred,
                                     int32_t aux) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> args;
-  fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred,
-                 /*isAtomicRMW=*/false, args);
-  args.push_back(b.i32_val(aux));
-  Type bufferType = getBufferOpType(type, false);
-  Value data = LLVM::createLLVMIntrinsicCallOp(
-                   rewriter, loc, "llvm.amdgcn.raw.ptr.atomic.buffer.load",
-                   bufferType, args)
-                   .getResult(0);
-  return b.bitcast(data, type);
+  // Masked-off lanes read zero, as through the range check.
+  Value falseVal =
+      maskByBranch ? LLVM::ZeroOp::create(rewriter, loc, type) : Value();
+  auto emitAccess = [&](Value accessPred) {
+    SmallVector<Value> args;
+    fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, accessPred,
+                   /*isAtomicRMW=*/false, args);
+    args.push_back(b.i32_val(aux));
+    Type bufferType = getBufferOpType(type, false);
+    Value data = LLVM::createLLVMIntrinsicCallOp(
+                     rewriter, loc, "llvm.amdgcn.raw.ptr.atomic.buffer.load",
+                     bufferType, args)
+                     .getResult(0);
+    return b.bitcast(data, type);
+  };
+  return emitPredicated(pred, falseVal, emitAccess);
 }
 
 ROCDL::RawPtrBufferLoadAsyncLdsOp
@@ -235,13 +283,16 @@ void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value soffsetBytes,
   Type bufferType = getBufferOpType(vecTy, false);
   if (vecTy != bufferType)
     data = b.bitcast(data, bufferType);
-  SmallVector<Value, 6> args{data};
-  fillCommonArgs(vecTy, rsrcDesc, offset, soffsetBytes, pred,
-                 /*isAtomicRMW=*/false, args);
-  ROCDL::RawPtrBufferStoreOp::create(
-      rewriter, loc, TypeRange{}, args[0], args[1], args[2], args[3],
-      rewriter.getI32IntegerAttr(aux), /*alias_scopes=*/nullptr,
-      /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
+  emitPredicated(pred, /*falseVal=*/Value(), [&](Value accessPred) {
+    SmallVector<Value, 6> args{data};
+    fillCommonArgs(vecTy, rsrcDesc, offset, soffsetBytes, accessPred,
+                   /*isAtomicRMW=*/false, args);
+    ROCDL::RawPtrBufferStoreOp::create(
+        rewriter, loc, TypeRange{}, args[0], args[1], args[2], args[3],
+        rewriter.getI32IntegerAttr(aux), /*alias_scopes=*/nullptr,
+        /*noalias_scopes=*/nullptr, /*tbaa=*/nullptr);
+    return Value();
+  });
 }
 
 Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {

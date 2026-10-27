@@ -1022,7 +1022,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @make_buffer_desc_non_global_base(%arg0: !tt.ptr<f32, "descriptor">, %n: i32) {
     // expected-error @+1 {{requires a global address space base}}
-    %0 = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32, "descriptor"> -> !amdg.buffer_desc<f32>
+    %0 = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32, "descriptor">, i32 -> !amdg.buffer_desc<f32>
     tt.return
   }
 }
@@ -1032,7 +1032,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @buffer_load_tensor_soffset_shape(%arg0: !tt.ptr<f32>, %offsets: tensor<64xi32, #blocked>, %s: tensor<32xi32, #blocked>, %n: i32) {
-    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32> -> !amdg.buffer_desc<f32>
+    %desc = amdg.make_buffer_desc %arg0, %n : !tt.ptr<f32>, i32 -> !amdg.buffer_desc<f32>
     // expected-error @+1 {{a tensor soffset must have the type of the offsets}}
     %0 = amdg.buffer_load %desc[%offsets] soffset = %s : tensor<32xi32, #blocked> : !amdg.buffer_desc<f32> -> tensor<64xf32, #blocked>
     tt.return
