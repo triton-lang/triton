@@ -1,0 +1,6 @@
+triton.experimental.gluon.language.amd.cdna3.buffer.make\_buffer\_descriptor
+============================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna3.buffer
+
+.. autofunction:: make_buffer_descriptor

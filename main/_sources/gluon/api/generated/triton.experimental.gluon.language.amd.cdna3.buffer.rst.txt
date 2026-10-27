@@ -1,0 +1,35 @@
+﻿triton.experimental.gluon.language.amd.cdna3.buffer
+===================================================
+
+.. automodule:: triton.experimental.gluon.language.amd.cdna3.buffer
+
+
+
+
+.. rubric:: Functions
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   make_buffer_descriptor
+   load
+   store
+   atomic_load
+   atomic_store
+
+
+
+.. rubric:: Classes
+
+.. autosummary::
+   :toctree:
+   :nosignatures:
+
+   CachePolicy
+   buffer_descriptor
+   buffer_descriptor_type
+
+
+
+

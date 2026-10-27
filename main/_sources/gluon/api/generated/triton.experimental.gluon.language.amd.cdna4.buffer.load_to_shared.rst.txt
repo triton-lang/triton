@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.amd.cdna4.buffer.load\_to\_shared
+====================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna4.buffer
+
+.. autofunction:: load_to_shared

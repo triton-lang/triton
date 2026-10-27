@@ -1,0 +1,30 @@
+triton.experimental.gluon.language.amd.cdna3.buffer.buffer\_descriptor
+======================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna3.buffer
+
+.. autoclass:: buffer_descriptor
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~buffer_descriptor.__init__
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~buffer_descriptor.dtype
+      ~buffer_descriptor.handle
+      ~buffer_descriptor.type
+   
+   
