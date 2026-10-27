@@ -1,3 +1,4 @@
+#include <array>
 #include <sstream>
 
 #include "mlir/IR/Builders.h"
@@ -7,10 +8,13 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -39,6 +43,27 @@ void LoadOp::getEffects(
 
 namespace mlir {
 namespace triton {
+
+OpFoldResult AnnotateOp::fold(FoldAdaptor adaptor) {
+  if ((*this)->getAttrs().empty())
+    return getSrc();
+  return {};
+}
+
+void AnnotateOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                             MLIRContext *context) {
+  patterns.add(+[](AnnotateOp op, PatternRewriter &rewriter) -> LogicalResult {
+    Operation *definingOp = op.getSrc().getDefiningOp();
+    if (!definingOp || definingOp->getNumResults() != 1)
+      return failure();
+    rewriter.modifyOpInPlace(definingOp, [&] {
+      for (NamedAttribute attr : op->getAttrs())
+        definingOp->setDiscardableAttr(attr.getName(), attr.getValue());
+    });
+    rewriter.replaceOp(op, op.getSrc());
+    return success();
+  });
+}
 
 LogicalResult
 verifyCacheModifier(CacheModifier modifier, CachePolicyOperation operation,
@@ -770,6 +795,79 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   return reduceOp;
 }
 
+bool ReduceOp::isCommutative() {
+  Block &block = getCombineOp().front();
+  // Restrict the proof to a pure, straight-line expression DAG.
+  for (Operation &op : block.without_terminator())
+    if (op.getNumRegions() || !isMemoryEffectFree(&op))
+      return false;
+
+  // Number each value twice: with the original arguments and with the two
+  // input tuples exchanged. Captures are opaque leaves shared by both views.
+  DenseMap<Value, std::array<unsigned, 2>> numbers;
+  unsigned nextNumber = 0;
+  unsigned numOperands = getNumOperands();
+  for (unsigned i = 0; i < numOperands; ++i) {
+    numbers[block.getArgument(i)] = {nextNumber, nextNumber + 1};
+    numbers[block.getArgument(i + numOperands)] = {nextNumber + 1, nextNumber};
+    nextNumber += 2;
+  }
+  auto getNumber = [&](Value value, unsigned view) {
+    auto [it, inserted] =
+        numbers.try_emplace(value, std::array{nextNumber, nextNumber});
+    if (inserted)
+      ++nextNumber;
+    return it->second[view];
+  };
+
+  struct Expression {
+    Operation *op;
+    SmallVector<unsigned> operands;
+    SmallVector<unsigned> results;
+  };
+  DenseMap<size_t, SmallVector<Expression, 1>> expressions;
+  for (Operation &op : block.without_terminator()) {
+    for (unsigned view = 0; view < 2; ++view) {
+      SmallVector<unsigned> operands;
+      for (Value operand : op.getOperands())
+        operands.push_back(getNumber(operand, view));
+      if (op.hasTrait<OpTrait::IsCommutative>())
+        llvm::sort(operands);
+
+      size_t hash = OperationEquivalence::computeHash(
+          &op,
+          [&](Value operand) {
+            return llvm::hash_value(getNumber(operand, view));
+          },
+          OperationEquivalence::ignoreHashValue,
+          OperationEquivalence::IgnoreLocations);
+      auto &bucket = expressions[hash];
+      // A hash match alone is not a proof. Compare the full operation,
+      // including its types, attributes and properties, and numbered operands.
+      auto it = llvm::find_if(bucket, [&](const Expression &expr) {
+        return expr.operands == operands &&
+               OperationEquivalence::isEquivalentTo(
+                   expr.op, &op, OperationEquivalence::ignoreValueEquivalence,
+                   /*markEquivalent=*/nullptr,
+                   OperationEquivalence::IgnoreLocations);
+      });
+      if (it == bucket.end()) {
+        SmallVector<unsigned> results;
+        for (unsigned i = 0; i < op.getNumResults(); ++i)
+          results.push_back(nextNumber++);
+        bucket.push_back({&op, std::move(operands), std::move(results)});
+        it = std::prev(bucket.end());
+      }
+      for (auto [result, number] : llvm::zip(op.getResults(), it->results))
+        numbers[result][view] = number;
+    }
+  }
+
+  return llvm::all_of(block.getTerminator()->getOperands(), [&](Value value) {
+    return getNumber(value, 0) == getNumber(value, 1);
+  });
+}
+
 //-- ScanOp --
 void ScanOp::build(OpBuilder &builder, OperationState &state,
                    ValueRange operands, int axis, bool reverse) {
@@ -1173,8 +1271,8 @@ LogicalResult BitcastOp::verify() {
     }
     return emitError("Cannot bitcast pointer to non-pointer type");
   }
-  unsigned dstBits = dstType.getIntOrFloatBitWidth();
-  unsigned srcBits = srcType.getIntOrFloatBitWidth();
+  unsigned dstBits = getIntOrFloatOrPtrBitWidth(dstType);
+  unsigned srcBits = getIntOrFloatOrPtrBitWidth(srcType);
   if (dstBits != srcBits) {
     return emitError("Cannot bitcast data-type of size ")
            << srcBits << " to data-type of size " << dstBits;
@@ -1739,10 +1837,11 @@ LogicalResult verifyGatherScatterResultType(Operation *op,
   }
 
   Type dtype = resultType.getElementType();
-  if (dtype.getIntOrFloatBitWidth() > 32)
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(dtype);
+  if (bitWidth > 32)
     return op->emitOpError("TMA dtype cannot be greater than 32 bits");
 
-  unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
+  unsigned minCols = 32 / bitWidth * 8;
   if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
     return op->emitOpError("must have at least ")
            << minCols << " columns for " << dtype << ", but got " << cols;

@@ -66,10 +66,14 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
         tl.static_assert(mx_scale_dtype == tl.float8e4nv, f"Unsupported {mx_scale_dtype=}")
         tl.static_assert(DEQUANT_SCALE_ROUNDING_MODE == 0 or DEQUANT_SCALE_ROUNDING_MODE == 2,
                          "Direct float8 scales only support ROUND_UP or ROUND_NEAREST")
-        # Direct fp8 scales keep the existing plain cast semantics here: the
-        # stored scale is rounded by the fp8 conversion rather than forced
-        # upward despite the ROUND_UP mode name.
-        scale_tensor = (max_val / _get_max_quant_val(mx_tensor_dtype)).to(tl.float8e4nv)
+        dequant_scale = max_val / _get_max_quant_val(mx_tensor_dtype)
+        scale_tensor = dequant_scale.to(tl.float8e4nv)
+        if DEQUANT_SCALE_ROUNDING_MODE == 0:
+            # Positive E4M3 encodings are ordered. Advance an undershooting
+            # nearest-even cast by one representable value, saturating at 448.
+            scale_bits = scale_tensor.to(tl.uint8, bitcast=True)
+            round_up = (scale_tensor.to(tl.float32) < dequant_scale) & (scale_bits < 0x7E)
+            scale_tensor = (scale_bits + round_up.to(tl.uint8)).to(tl.float8e4nv, bitcast=True)
         dequant_scale_rounded = scale_tensor.to(tl.float32)
         scale_tensor = scale_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE])
     quant_scale = tl.where(dequant_scale_rounded == 0, 0, 1.0 / dequant_scale_rounded)
@@ -91,21 +95,7 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
         lo_f32 = lo_f.to(tl.float32)
         hi_f32 = hi_f.to(tl.float32)
 
-        # Inline PTX: cvt.rn.satfinite.e2m1x2.f32 takes two f32 sources and produces one .b8 packed e2m1x2.
-        out_tensor = tl.inline_asm_elementwise(
-            """
-            {
-                .reg .b8 r;
-                cvt.rn.satfinite.e2m1x2.f32 r, $1, $2;
-                mov.b32 $0, {r, r, r, r};
-            }
-            """,
-            constraints="=r,f,f",
-            args=[hi_f32, lo_f32],
-            dtype=tl.uint8,
-            is_pure=True,
-            pack=1,
-        )
+        out_tensor = tl.extra.cuda.f32_to_e2m1x2_satfinite(hi_f32, lo_f32).to(tl.uint8)
     else:
         quant_tensor = quant_tensor.to(tl.uint32, bitcast=True)
         signs = quant_tensor & 0x80000000

@@ -66,6 +66,61 @@ LogicalResult InlineAsmOp::verify() {
   return verifyInlineAsmOperands(*this, getPure());
 }
 
+static LogicalResult verifyThreadDomain(Operation *op,
+                                        ThreadDomainAttr domain) {
+  auto module = op->getParentOfType<ModuleOp>();
+  uint32_t laneMask = TritonGPUDialect::getThreadsPerWarp(module) - 1;
+  uint32_t warpMask = lookupNumWarps(op) - 1;
+  uint32_t blockMask = lookupNumCTAs(op) - 1;
+  if (!domain.hasMasksWithin(laneMask, warpMask, blockMask))
+    return op->emitOpError(
+        "thread domain exceeds the enclosing execution domain");
+  return success();
+}
+
+LogicalResult ThreadPredicateOp::verify() {
+  return verifyThreadDomain(*this, getDomain());
+}
+
+void ThreadScopeOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  if (src.isParent())
+    successors.emplace_back(&getBody());
+  else
+    successors.emplace_back(getOperation());
+}
+
+ValueRange ThreadScopeOp::getSuccessorInputs(RegionSuccessor successor) {
+  return successor.isOperation() ? ValueRange(getResults())
+                                 : ValueRange(getBody().getArguments());
+}
+
+LogicalResult ThreadHandoffOp::verify() {
+  auto source = getSource();
+  auto destination = getDestination();
+  if (failed(verifyThreadDomain(*this, source)) ||
+      failed(verifyThreadDomain(*this, destination)))
+    return failure();
+  if (!destination.hasMasksWithin(source.getLane(), source.getWarp(),
+                                  source.getBlock()))
+    return emitOpError("destination must widen the source thread domain");
+  if (source != destination && source.hasSameWarpAndBlock(destination) &&
+      destination.getLane())
+    return emitOpError("lane handoff requires every destination warp lane");
+  if (source.getWarp() != destination.getWarp() &&
+      (destination.getLane() || destination.getWarp()))
+    return emitOpError(
+        "cross-warp handoff requires the full destination domain");
+  if (source.getBlock() != destination.getBlock()) {
+    if (!destination.isFull())
+      return emitOpError(
+          "cross-CTA handoff requires the full destination domain");
+    if (source.getBlock() != lookupNumCTAs(*this) - 1)
+      return emitOpError("cross-CTA handoff requires CTA zero as its source");
+  }
+  return success();
+}
+
 namespace {
 
 template <typename T> bool hasEncoding(Value value) {
@@ -707,7 +762,7 @@ LogicalResult MemDescReinterpretOp::verify() {
 
     auto getPadPattern = [](MemDescType ty) {
       auto enc = getPaddedEncoding(ty.getEncoding());
-      auto elmtSize = ty.getElementType().getIntOrFloatBitWidth() / 8;
+      auto elmtSize = ty.getElementTypeBitWidth() / 8;
       llvm::MapVector<int32_t, int32_t> pattern;
 
       for (auto [interval, padding] :
@@ -1623,8 +1678,8 @@ LogicalResult WarpYieldOp::verify() {
 // Get the size of a scalar type when stored in shared memory.
 // TODO: Generalize this as needed.
 size_t getSharedMemorySize(Type type) {
-  if (isa<IntegerType, FloatType>(type))
-    return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
+  if (isa<IntegerType, FloatType, PackedFloat4E2M1Type>(type))
+    return llvm::divideCeil(getIntOrFloatOrPtrBitWidth(type), 8);
   if (isa<PointerType, TensorDescInterface>(type))
     return 8;
   if (auto desc = dyn_cast<MemDescType>(type)) {
@@ -1661,6 +1716,8 @@ unsigned WarpSpecializeOp::getTotalPartitionWarps() {
 //===----------------------------------------------------------------------===//
 
 void BarrierOp::print(OpAsmPrinter &p) {
+  if (isWarp())
+    p << " warp";
   // print "all" instead of  "local|global_read|global_write|tensor|all"
   if (getAddrSpace() == AddrSpace::All) {
     p << " all";
@@ -1670,6 +1727,9 @@ void BarrierOp::print(OpAsmPrinter &p) {
 }
 
 ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
+  auto scope = succeeded(parser.parseOptionalKeyword("warp"))
+                   ? BarrierScope::Warp
+                   : BarrierScope::CTA;
   auto parseAddrSpace = [&]() -> FailureOr<AddrSpace> {
     std::string keyword;
     if (parser.parseKeywordOrString(&keyword))
@@ -1699,7 +1759,15 @@ ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
 
   result.addAttribute("addrSpace",
                       AddrSpaceAttr::get(parser.getContext(), addrSpaceRet));
+  result.addAttribute("scope",
+                      BarrierScopeAttr::get(parser.getContext(), scope));
 
+  return success();
+}
+
+LogicalResult BarrierOp::verify() {
+  if (isWarp() && getAddrSpace() != AddrSpace::Local)
+    return emitOpError("warp scope supports only the local address space");
   return success();
 }
 

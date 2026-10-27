@@ -56,6 +56,25 @@ module {
 // -----
 
 module {
+  tt.func public @dynamic_shape(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32) -> tensor<16xf32> {
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%arg1], [%c1_i64] : <f32>, <16xf32>
+    %1 = tt.descriptor_load %0[%c0_i32] : !tt.tensordesc<16xf32> -> tensor<16xf32>
+    tt.return %1 : tensor<16xf32>
+  }
+}
+
+// CHECK-LABEL: @dynamic_shape
+// CHECK-SAME: %[[BASE:[^:]*]]
+// CHECK-SAME: %[[SHAPE:[^:]*]]
+// CHECK: %[[EXTENDED_SHAPE:.*]] = arith.extui %[[SHAPE]] : i32 to i64
+// CHECK: %[[SPLAT_SHAPE:.*]] = tt.splat %[[EXTENDED_SHAPE]] : i64 -> tensor<16xi64>
+// CHECK: %{{.*}} = arith.cmpi slt, %{{.*}}, %[[SPLAT_SHAPE]] : tensor<16xi64>
+
+// -----
+
+module {
   tt.func public @store(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: tensor<128x128xf32>) {
     %c1_i64 = arith.constant 1 : i64
     %c256_i64 = arith.constant 256 : i64

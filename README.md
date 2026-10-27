@@ -72,7 +72,9 @@ arbitrary LLVM version.
 For convenience, use the following command to build LLVM and install Triton with the custom LLVM:
 
 ```shell
-make dev-install-llvm
+make dev-install-llvm                 # Core LLVM (default)
+make dev-install-llvm LLVM_BUILD=amd  # AMD LLVM only
+make dev-install-llvm LLVM_BUILD=all
 ```
 
 <details>
@@ -226,7 +228,10 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
-- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
+- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of disabling fp fusion (mul+add->fma).
+- `TRITON_ALLOW_FP_FUSION=1` allows kernels to control implicit fp fusion through
+  `enable_fp_fusion`. Without this opt-in, implicit fusion is disabled. Explicit
+  fused operations such as `tl.fma` are unchanged.
 - `MLIR_ENABLE_DIAGNOSTICS=<comma-separated>` controls diagnostic emission in MLIR.
   Options are: `warnings`, `remarks`, `stacktraces`, `operations`.
   Use comma-separated values to customize output. For example,

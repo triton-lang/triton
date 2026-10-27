@@ -355,6 +355,11 @@ The common hook implementation covers these TritonGPU operations:
   same destination. Equal-value duplicates and atomic scatter collisions remain
   valid.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
+- Any operation with allocator-provided operation-local shared scratch: a
+  synchronous generic-proxy write over its allocated byte interval in its owning
+  CTA. Cross-CTA scratch reads follow intrinsic synchronization, and atomic
+  writes are issued only by producer CTAs. Forced warp-shuffle conversions
+  publish no scratch metadata because allocation reserves no scratch for them.
 - Function calls with allocator-provided virtual shared-memory frames: a
   synchronous generic-proxy write over the whole callee frame in the current
   CTA. This includes nested callees because each virtual frame is sized from
@@ -363,11 +368,6 @@ The common hook implementation covers these TritonGPU operations:
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering
 model.
-
-Operation-local compiler scratch is not instrumented. Races involving that
-scratch, including reuse while asynchronous accesses are pending, may therefore
-go undetected. Call-frame summaries and explicit shared-memory accesses remain
-instrumented.
 
 NVIDIA hooks additionally cover:
 
@@ -402,8 +402,13 @@ AMD hooks additionally cover:
 - Async TDM global-to-local and local-to-global copies. With a barrier, these
   are modeled through barrier arrivals; without a barrier, they use `TmaStore`
   commit counts and implicit commits.
-- AMD async wait variants for `AsyncCp`, and TDM wait variants for `TmaStore`
-  commit counts.
+- `amdg.async_copy_local_to_global` reads shared memory; ConSan tracks these
+  reads using `AsyncCpRead` commit counts, which `ttg.async_commit_group`
+  commits together with `AsyncCp`.
+- AMD async waits clear `AsyncCp` and `AsyncCpRead` entries beyond the same
+  pending-count threshold, transferring write visibility for loads and read
+  visibility for stores.
+- TDM wait variants for `TmaStore` commit counts.
 - Ordered TDM commit kinds, using the self-column exclusion described above.
 
 ## Implementation Notes

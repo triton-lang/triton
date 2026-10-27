@@ -5,7 +5,7 @@ import torch
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_gfx1250
+from triton._internal_testing import is_cuda, is_hopper_or_newer, is_hip_cdna, is_hip_cdna2, is_hip, is_hip_cdna5
 
 
 def check_capabilities():
@@ -544,11 +544,11 @@ def matmul_kernel_persistent_scatter(a_ptr, b_ptr, c_ptr,  #
 def _supports_descriptor_scatter():
     if is_cuda():
         return torch.cuda.get_device_capability()[0] == 10
-    return is_hip_gfx1250()
+    return is_hip_cdna5()
 
 
 @pytest.mark.skipif(not _supports_descriptor_scatter(),
-                    reason="TMA/TDM Scatter only works on cloud Blackwell Chips or AMD gfx1250")
+                    reason="TMA/TDM Scatter only works on cloud Blackwell Chips or AMD CDNA5")
 def test_scatter_pipeline(device):
 
     def alloc_fn(size, alignment, stream):

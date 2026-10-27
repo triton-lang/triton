@@ -346,6 +346,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [0, 0]]}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // Adjacent CTA IDs must split M to form a cooperating pair.
+  // CHECK: #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = {{\[\[0, 1\], \[1, 0\]\]}}>
   // CHECK-LABEL: mmav5_four_ctas_nonadjacent_m_split
   // CHECK-NOT: two_ctas
   // CHECK: ttng.tc_gen5_mma
@@ -443,34 +444,6 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xi8, #rhs> -> tensor<64x256xi8, #blocked>
     %d = tt.dot_scaled %a scale %sa, %bt scale %sb, %c lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<256x64xi8, #blocked>, tensor<256x8xf8E4M3FN, #blocked> * tensor<64x256xi8, #blocked>, tensor<256x8xf8E4M3FN, #blocked> -> tensor<256x256xf32, #blocked>
     tt.return %d : tensor<256x256xf32, #blocked>
-  }
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
-#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // Split the [N, K] descriptor load along N, preserve its other users, and
-  // transpose back to [K, N] for MMA.
-  // CHECK-DAG: #[[$RHS_SPLIT:.+]] = #ttg.blocked<{{.*}}threadsPerWarp = [32, 1],{{.*}}CGALayout = {{\[\[1, 0\]\]}}}>
-  // CHECK-DAG: #[[$RHS_ORIG:.+]] = #ttg.blocked<{{.*}}threadsPerWarp = [32, 1],{{.*}}CGALayout = {{\[\[0, 1\]\]}}}>
-  // CHECK-LABEL: @mmav5_two_cta_transposed_rhs
-  // CHECK: %[[LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<256x64xf16, #[[$RHS_SPLIT]]>
-  // CHECK-DAG: %[[TRANS:.+]] = tt.trans %[[LOAD]] {{.*}} -> tensor<64x256xf16, #{{.*}}>
-  // CHECK-DAG: %[[ORIGINAL:.+]] = ttg.convert_layout %[[LOAD]] {{.*}} -> tensor<256x64xf16, #[[$RHS_ORIG]]>
-  // CHECK-DAG: %[[ALLOC:.+]] = ttg.local_alloc %[[TRANS]]
-  // CHECK: ttng.tc_gen5_mma {{.*}}%[[ALLOC]]{{.*}} {two_ctas}
-  // CHECK: tt.return {{.*}}, %[[ORIGINAL]]
-  tt.func public @mmav5_two_cta_transposed_rhs(%a_desc: !tt.tensordesc<128x64xf16>, %b_desc: !tt.tensordesc<256x64xf16>, %c: tensor<128x256xf32, #blocked>) -> (tensor<128x256xf32, #blocked>, tensor<256x64xf16, #rhs>) {
-    %zero = arith.constant 0 : i32
-    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
-    %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
-    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<256x64xf16> -> tensor<256x64xf16, #rhs>
-    %bt = tt.trans %b {order = array<i32: 1, 0>} : tensor<256x64xf16, #rhs> -> tensor<64x256xf16, #blocked>
-    %bd = ttg.convert_layout %bt : tensor<64x256xf16, #blocked> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
-    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
-    tt.return %d, %b : tensor<128x256xf32, #blocked>, tensor<256x64xf16, #rhs>
   }
 }
 
@@ -1557,5 +1530,59 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %bd = ttg.convert_layout %b : tensor<64x32xf8E4M3FN, #rhs> -> tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
     %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x32xf32, #blocked>
     tt.return %d : tensor<128x32xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+#rhs3 = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 2, 1], CGALayout = [[0, 1, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Propagate the N split through reshape and transpose, preserving other users.
+  // CHECK-DAG: #[[$RESHAPED_SPLIT:.+]] = #ttg.linear<{{.*}}block = {{\[\[128, 0, 0\]\]}}}>
+  // CHECK-LABEL: @mmav5_two_cta_reshaped_transposed_rhs
+  // CHECK: %[[LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<256x8x8xf16, #[[$RESHAPED_SPLIT]]>
+  // CHECK-DAG: %[[ORIGINAL:.+]] = ttg.convert_layout %[[LOAD]]
+  // CHECK-DAG: %[[RESHAPE:.+]] = tt.reshape %[[LOAD]]
+  // CHECK: %[[TRANS:.+]] = tt.trans %[[RESHAPE]]
+  // CHECK: %[[ALLOC:.+]] = ttg.local_alloc %[[TRANS]]
+  // CHECK: ttng.tc_gen5_mma {{.*}}%[[ALLOC]]{{.*}} {two_ctas}
+  // CHECK: tt.return {{.*}}, %[[ORIGINAL]]
+  tt.func public @mmav5_two_cta_reshaped_transposed_rhs(%a_desc: !tt.tensordesc<128x64xf16>, %b_desc: !tt.tensordesc<256x8x8xf16>, %c: tensor<128x256xf32, #blocked>) -> (tensor<128x256xf32, #blocked>, tensor<256x8x8xf16, #rhs3>) {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16, #blocked>
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero, %zero] : !tt.tensordesc<256x8x8xf16> -> tensor<256x8x8xf16, #rhs3>
+    %br = tt.reshape %b : tensor<256x8x8xf16, #rhs3> -> tensor<256x64xf16, #rhs>
+    %bt = tt.trans %br {order = array<i32: 1, 0>} : tensor<256x64xf16, #rhs> -> tensor<64x256xf16, #blocked>
+    %bd = ttg.convert_layout %bt : tensor<64x256xf16, #blocked> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %d, %b : tensor<128x256xf32, #blocked>, tensor<256x8x8xf16, #rhs3>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#packed = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 4, 1], order = [2, 1, 0], CGALayout = [[1, 0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Follow a one-input, two-result view on both operands and keep RHS result 1.
+  // CHECK-DAG: #[[$PACKED_SPLIT:.+]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[0, 1, 0\]\]}}}>
+  // CHECK-LABEL: @mmav5_two_cta_split_operands
+  // CHECK: %[[LOAD:.+]] = tt.descriptor_load {{.*}} -> tensor<64x256x2xf16, #[[$PACKED_SPLIT]]>
+  // CHECK: %{{.*}}, %[[RHS:.+]] = tt.split %[[LOAD]]
+  // CHECK: %[[ALLOC:.+]] = ttg.local_alloc %[[RHS]]
+  // CHECK: ttng.tc_gen5_mma {{.*}}%[[ALLOC]]{{.*}} {two_ctas}
+  tt.func public @mmav5_two_cta_split_operands(%a_desc: !tt.tensordesc<128x64x2xf16>, %b_desc: !tt.tensordesc<64x256x2xf16>, %c: tensor<128x256xf32, #blocked>) -> tensor<128x256xf32, #blocked> {
+    %zero = arith.constant 0 : i32
+    %a = tt.descriptor_load %a_desc[%zero, %zero, %zero] : !tt.tensordesc<128x64x2xf16> -> tensor<128x64x2xf16, #packed>
+    %a0, %a1 = tt.split %a : tensor<128x64x2xf16, #packed> -> tensor<128x64xf16, #blocked>
+    %ad = ttg.convert_layout %a0 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero, %zero] : !tt.tensordesc<64x256x2xf16> -> tensor<64x256x2xf16, #packed>
+    %b0, %b1 = tt.split %b : tensor<64x256x2xf16, #packed> -> tensor<64x256xf16, #blocked>
+    %bd = ttg.convert_layout %b1 : tensor<64x256xf16, #blocked> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %d : tensor<128x256xf32, #blocked>
   }
 }

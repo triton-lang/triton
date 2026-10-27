@@ -49,7 +49,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   InitBarrierOp::create(rewriter, loc, barrierAlloc, 1);
   auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
   int sizeInBytes = product(shapePerCTA) *
-                    tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+                    getIntOrFloatOrPtrBitWidth(tensorType.getElementType()) / 8;
   Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
   triton::nvidia_gpu::BarrierExpectOp::create(rewriter, loc, barrierAlloc,
                                               sizeInBytes, pred);
@@ -75,7 +75,7 @@ public:
                           Value pred) {
       triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp::create(
           rewriter, op.getLoc(), desc, op.getIndices(), barrierAlloc, alloc,
-          pred);
+          pred, /*multicast=*/false, op.getCachePolicyAttr());
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();

@@ -1,3 +1,5 @@
+import warnings
+
 from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
 from ..._semantic import _check
 from ..._layouts import DistributedLayout
@@ -41,6 +43,11 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
       To get ideal performance, it is recommended to use 128 bits per element.
     * Writes to ``dest`` must be coalesced.
     * If ``dest`` is swizzled, it can only be swizzled within a warp boundary.
+    * If a ``mask`` is present it must be aligned to the load's vector width: each
+      group of (size per thread) consecutive mask values must be identical. The
+      copy transfers each lane's whole vector in a single transaction, so a mask
+      whose true/false boundary cannot be proven vector-aligned forces
+      per-element vectorization and fails to lower.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
@@ -102,6 +109,11 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
       To get ideal performance, it is recommended to use 128 bits per element.
     * Writes to ``dest`` must be coalesced.
     * If ``dest`` is swizzled, it can only be swizzled within a warp boundary.
+    * If a ``mask`` is present it must be aligned to the load's vector width: each
+      group of (size per thread) consecutive mask values must be identical. The
+      copy transfers each lane's whole vector in a single transaction, so a mask
+      whose true/false boundary cannot be proven vector-aligned forces
+      per-element vectorization and fails to lower.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
@@ -136,7 +148,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 @builtin
 def commit_group(_semantic=None):
     """
-    Commit oustanding async operations.
+    Commit outstanding async operations.
 
     This finalizes a set of async copy operations which can be waited upon via :func:`wait_group`.
     """
@@ -149,7 +161,7 @@ def wait_group(num_outstanding=0, _semantic=None):
     Wait for outstanding commit groups.
 
     It will block until the number of outstanding commit groups is less than or equal to
-    ``num_outstanding``. Note that uncommited async operations will be waited upon even if
+    ``num_outstanding``. Note that uncommitted async operations will be waited upon even if
     ``num_outstanding`` is 0.
 
     Args:
@@ -162,9 +174,10 @@ def wait_group(num_outstanding=0, _semantic=None):
 @builtin
 def load_shared_relaxed(smem, layout, _semantic=None):
     """
-    Load a tensor from shared memory with extra hints for the underlying
-    compiler to avoid emitting unnecessary waits before loading from the target
-    shared memory.
+    Deprecated. Use the shared memory descriptor's load method instead,
+    for example `smem.load(layout)`.
+
+    This compatibility wrapper emits a normal shared-memory load.
 
     Args:
         smem (shared_memory_descriptor): Shared memory descriptor to load from.
@@ -173,9 +186,14 @@ def load_shared_relaxed(smem, layout, _semantic=None):
     Returns:
         tensor: A Gluon tensor containing the loaded data.
     """
-    SYNCED_VIA_WAIT_ATTR_NAME = "ttg.amdg.syncedViaAsyncWait"
+    warnings.warn(
+        "cdna4.async_copy.load_shared_relaxed is deprecated,"
+        " and will be removed in a future release."
+        " Please use the shared memory descriptor's load method instead,"
+        " for example smem.load(layout).",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
     layout = _unwrap_if_constexpr(layout)
-    ret = _semantic.shared_load(smem, layout)
-    ret.handle.set_attr(SYNCED_VIA_WAIT_ATTR_NAME, _semantic.builder.get_bool_attr(True))
-    return ret
+    return _semantic.shared_load(smem, layout)

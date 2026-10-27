@@ -562,6 +562,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // The mask maps INT_MIN (negative zero) to zero after integer abs.
+  // CHECK-LABEL: @absf
+  tt.func public @absf(%x: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: %[[MASK:.*]] = arith.constant dense<2147483647> : tensor<4xi32>
+    // CHECK: %[[X:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
+    // CHECK: %[[ABS:.*]] = math.absi %[[X]] : tensor<4xi32>
+    // CHECK: %[[PAYLOAD:.*]] = arith.andi %[[ABS]], %[[MASK]] : tensor<4xi32>
+    // CHECK: %[[OUT:.*]] = tti.experimental_fpsan_unembed %[[PAYLOAD]] : (tensor<4xi32>) -> tensor<4xf32>
+    // CHECK-NOT: math.absf
+    // CHECK: tt.return %[[OUT]] : tensor<4xf32>
+    %out = math.absf %x : tensor<4xf32>
+    tt.return %out : tensor<4xf32>
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @chained_ops
   tt.func public @chained_ops(%a: tensor<4xf32>, %b: tensor<4xf32>, %c: tensor<4xf32>) -> tensor<4xf32> {
     // CHECK: %[[A:.*]] = tti.experimental_fpsan_embed %arg0 : (tensor<4xf32>) -> tensor<4xi32>
@@ -590,6 +608,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %rem = arith.remf %a, %b : tensor<4xf32>
     %out = arith.addf %div, %rem : tensor<4xf32>
     tt.return %out : tensor<4xf32>
+  }
+}
+
+// -----
+
+module {
+  // CHECK-LABEL: @approx_div
+  tt.func public @approx_div(%a: tensor<4xf32>, %b: tensor<4xf32>) -> tensor<4xf32> {
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.muli
+    // CHECK: tti.experimental_fpsan_unembed
+    // CHECK-NOT: tt.approx_divf
+    // CHECK: tt.return
+    %result = tt.approx_divf %a, %b : tensor<4xf32>
+    tt.return %result : tensor<4xf32>
   }
 }
 
@@ -825,6 +858,20 @@ tt.func public @extern_mixed(%a: tensor<4xf32>, %b: tensor<4xi32>) -> tensor<4xf
   // CHECK-NOT: tt.extern_elementwise
   %0 = tt.extern_elementwise %a, %b {libname = "", libpath = "", pure = true, symbol = "__nv_ldexpf"} : (tensor<4xf32>, tensor<4xi32>) -> tensor<4xf32>
   tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @extern_tf32_rna
+tt.func public @extern_tf32_rna(%a: tensor<4xf32>) -> tensor<4xf32> {
+  // CHECK-NOT: tt.extern_elementwise
+  // CHECK: tti.experimental_fpsan_embed
+  // CHECK: arith.xori
+  // CHECK: tti.experimental_fpsan_unembed
+  // CHECK-NOT: tt.extern_elementwise
+  // CHECK: tt.return
+  %result = tt.extern_elementwise %a {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.f2tf32.rna"} : (tensor<4xf32>) -> tensor<4xf32>
+  tt.return %result : tensor<4xf32>
 }
 
 // -----

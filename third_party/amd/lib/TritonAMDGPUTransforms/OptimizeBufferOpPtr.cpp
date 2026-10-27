@@ -13,6 +13,7 @@
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
@@ -21,10 +22,6 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using ::mlir::LLVM::AMD::getVectorSize;
-
-namespace ttg = mlir::triton::gpu;
-namespace tt = mlir::triton;
 namespace amdttg = mlir::triton::amdgpu;
 
 namespace mlir {
@@ -54,7 +51,7 @@ namespace {
 //
 // Goal of this transformation is to decrease amount of work done by vector
 // instructions(decrease number of v_add). This could save cycles in a loop, and
-// give more parallelism on architectures where MFMA and vector instrcutions
+// give more parallelism on architectures where MFMA and vector instructions
 // executed on the same hardware module.
 struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
 
@@ -64,7 +61,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
 
   // Check if same value is stored in every element of tensor val
   // Return true if all elelemts are equal, false if not or it was not able for
-  // proove it.
+  // prove it.
   static bool isScalarizableValue(mlir::Value val) {
     if (isa<IntegerType>(val.getType()))
       return true;
@@ -122,7 +119,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     const auto *stepRange =
         solver->lookupState<dataflow::IntegerValueRangeLattice>(value);
     if (stepRange->getValue().isUninitialized()) {
-      LDBG("Rejected: value range is unintialized");
+      LDBG("Rejected: value range is uninitialized");
       return {};
     }
     return stepRange->getValue().getValue();
@@ -158,14 +155,14 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     const auto *blockArgRange =
         solver->lookupState<dataflow::IntegerValueRangeLattice>(blockArg);
     if (blockArgRange->getValue().isUninitialized()) {
-      LDBG("Rejected: blockArg range is unintialized");
+      LDBG("Rejected: blockArg range is uninitialized");
       return {};
     }
 
     const auto *stepRange =
         solver->lookupState<dataflow::IntegerValueRangeLattice>(advanceStep);
     if (stepRange->getValue().isUninitialized()) {
-      LDBG("Rejected: step range is unintialized");
+      LDBG("Rejected: step range is uninitialized");
       return {};
     }
 
@@ -175,7 +172,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     // Use limit to crop MSB from negative indexing
     constexpr uint64_t maxOffsetValue = 0xff'ff'ff'ff;
 
-    // Range analysys for block argument and step should not return values
+    // Range analysis for block argument and step should not return values
     // larger than maximum uint32_t
     assert(blockArgRangeValue.umax().getLimitedValue() <= maxOffsetValue &&
            "expect block argument to be a 32 bit value");
@@ -328,6 +325,12 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   static std::optional<BufferOpInfo>
   analyzeBufferOp(amdttg::BufferOpInterface op, scf::ForOp targetFor,
                   DataFlowSolver *solver) {
+    // A buffer descriptor's bounds are relative to its base, so only plain
+    // pointer bases can move.
+    if (!isa<triton::PointerType>(op.getPtr().getType())) {
+      LDBG("Rejected: op uses a buffer descriptor");
+      return {};
+    }
     auto offsetValue = op.getOffsets();
 
     // Try to match components of two following patterns:
@@ -399,7 +402,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     }
 
     auto ptrType = cast<PointerType>(op.getPtr().getType());
-    auto elemBitwidth = ptrType.getPointeeType().getIntOrFloatBitWidth();
+    auto elemBitwidth = getIntOrFloatOrPtrBitWidth(ptrType.getPointeeType());
     auto dtypeByteWidth = elemBitwidth / 8;
     assert(dtypeByteWidth > 0);
     if (!isTransformationEquivalent(dtypeByteWidth, offsetLoopArgument,

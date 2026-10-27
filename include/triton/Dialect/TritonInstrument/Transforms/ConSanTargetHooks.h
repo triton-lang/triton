@@ -107,6 +107,8 @@ struct WaitOpInfo {
   int pendingCount;
   bool transferWrites;
   bool transferReads;
+  // If true, the wait also completes accesses not yet committed to a group.
+  bool includeStaged = false;
 };
 
 struct AsyncProxyFenceInfo {
@@ -135,8 +137,7 @@ public:
   virtual std::optional<BarrierInvalidateInfo>
   getBarrierInvalidateInfo(Operation *op) const = 0;
 
-  virtual std::optional<WaitOpInfo>
-  getWaitOpInfo(Operation *op, const AuxDataMap &auxData) const = 0;
+  virtual SmallVector<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
 
   virtual std::optional<AsyncProxyFenceInfo>
   getAsyncProxyFenceInfo(Operation *op) const {
@@ -146,6 +147,8 @@ public:
   virtual bool needsAsyncProxyFenceTracking(ModuleOp module) const {
     return false;
   }
+
+  virtual bool needsPtxasMaskedStoreBarrierWorkaround() const { return false; }
 
   virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                                  Operation *op) const = 0;
@@ -190,8 +193,7 @@ public:
 
   // Returns commit kinds used by addReadChecks to detect outstanding
   // read accesses to shared memory.
-  virtual SmallVector<CommitKindDesc>
-  getOutstandingReadCommitKinds(const AuxDataMap &auxData) const {
+  virtual SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const {
     return {};
   }
 
@@ -217,9 +219,7 @@ inline std::optional<MemEffectsOpInfo>
 getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
   std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
   auto sizeAttr = op->getAttrOfType<IntegerAttr>("allocation.size");
-  // Keep frame summaries for retained callees, whose bodies are not
-  // instrumented, but omit operation-local compiler scratch.
-  if (!sizeAttr || !isa<CallOpInterface>(op))
+  if (!sizeAttr)
     return info;
 
   uint32_t offset =
@@ -236,9 +236,10 @@ getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
          "effect tracking");
   // A ConSan write performs both read- and write-conflict checks, so it is the
   // conservative read/write summary for compiler-owned scratch.
+  StringRef name = isa<CallOpInterface>(op) ? "Callee scratch" : "Scratch";
   info->operandEffects.emplace_back(
       RW::Write, MemEffectsOpInfo::Effects::StaticSharedBuffer{offset, size},
-      "Callee scratch");
+      name.str());
   return info;
 }
 

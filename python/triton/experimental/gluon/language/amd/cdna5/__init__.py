@@ -1,7 +1,7 @@
 from triton.runtime.jit import constexpr_function
 from triton._C.libtriton.gluon_ir import get_amd_wmma_scale_layout as _get_wmma_scale_layout
 
-from ..._core import builtin, int8, uint8, int32, float8e4nv, tensor, _unwrap_if_constexpr
+from ..._core import builtin, int8, uint8, int32, float8e4nv, float8e8m0fnu, tensor, _unwrap_if_constexpr
 from .._ops import (_load_shared_fp4_repacked, _wmma, _verify_wmma, _mma_scaled, _scaled_upcast, scaled_downcast,
                     get_scaled_upcast_fp4_scale_layout)
 from .._layouts import AMDWMMALayout
@@ -96,7 +96,7 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     scale_dtype_to_format = {float8e4nv: "e4m3"}
 
     # E8M0 scale has various representation in frontend.
-    scale_dtype_to_format.update({x: "e8m0" for x in (int8, uint8)})
+    scale_dtype_to_format.update({x: "e8m0" for x in (int8, uint8, float8e8m0fnu)})
 
     if isinstance(a_scale, tensor) and isinstance(b_scale, tensor):
         assert a_scale.dtype in scale_dtype_to_format, f"Unsupported a_scale dtype: {a_scale.dtype}"

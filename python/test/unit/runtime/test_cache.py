@@ -1,13 +1,18 @@
 import expecttest
 import importlib.util
 import itertools
+import json
 import multiprocessing
 import os
 import re
 import gc
 import shutil
 import pathlib
+import subprocess
+import sys
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
+from contextlib import ExitStack
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -55,6 +60,27 @@ def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_pat
 
     os.remove(artifact_path)
     assert manager.get_group("kernel.json") is None
+
+
+def test_file_cache_manager_get_group_relocated_dir(fresh_knobs, tmp_path):
+    original, copy = tmp_path / "original", tmp_path / "copy"
+    fresh_knobs.cache.dir = str(original)
+    manager = FileCacheManager("key")
+    metadata_path = manager.put("{}", "kernel.json", binary=False)
+    artifact_path = manager.put("binary", "kernel.cubin", binary=False)
+    manager.put_group("kernel.json", {
+        "kernel.json": metadata_path,
+        "kernel.cubin": artifact_path,
+    })
+
+    shutil.copytree(original, copy)
+    shutil.rmtree(original)
+    fresh_knobs.cache.dir = str(copy)
+    manager = FileCacheManager("key")
+    assert manager.get_group("kernel.json") == {
+        "kernel.json": os.path.join(manager.cache_dir, "kernel.json"),
+        "kernel.cubin": os.path.join(manager.cache_dir, "kernel.cubin"),
+    }
 
 
 def test_remote_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
@@ -147,14 +173,14 @@ def kernel_with_combine_fn(X, BLOCK: tl.constexpr):
 
 
 def apply_src_change(target, old, new, to_modify):
-    kernel.hash = None
-    function_0.hash = None
-    function_1.hash = None
-    function_2.hash = None
-    to_modify._unsafe_update_src(to_modify.src.replace(old, new))
-    ret = target.cache_key
-    to_modify._unsafe_update_src(to_modify.src.replace(new, old))
-    return ret
+    with ExitStack() as cleanup:
+        # Restoring a dependency's source also invalidates its callers' hashes.
+        for function in (kernel, function_0, function_1, function_2, target):
+            function.hash = None
+            cleanup.callback(setattr, function, "hash", None)
+        cleanup.callback(to_modify._unsafe_update_src, to_modify.src)
+        to_modify._unsafe_update_src(to_modify.src.replace(old, new))
+        return target.cache_key
 
 
 def test_nochange():
@@ -167,6 +193,7 @@ def test_toplevel_change():
     baseline = kernel.cache_key
     updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_1)
     assert baseline != updated
+    assert kernel.cache_key == baseline
 
 
 def test_keyword_only_default_dependency_change():
@@ -176,21 +203,23 @@ def test_keyword_only_default_dependency_change():
         return function_1(i)
 
     baseline = with_default.cache_key
-    with_default.hash = None
     updated = apply_src_change(with_default, 'i + 1', 'i + 2', function_1)
     assert baseline != updated
+    assert with_default.cache_key == baseline
 
 
 def test_nested1_change():
     baseline = kernel.cache_key
     updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_2)
     assert baseline != updated
+    assert kernel.cache_key == baseline
 
 
 def test_nested2_change():
     baseline = kernel.cache_key
     updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_0)
     assert baseline != updated
+    assert kernel.cache_key == baseline
 
 
 ORDER_DEPENDENT_CONSTEXPR = tl.constexpr(42)
@@ -316,6 +345,7 @@ def test_invalid_constexpr_fn():
 
 
 def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
+    temp_file.parent.mkdir(parents=True, exist_ok=True)
     temp_file.write_text(('# extra line\n' * num_extra_lines) + code)
     spec = importlib.util.spec_from_file_location("module.name", str(temp_file))
     module = importlib.util.module_from_spec(spec)
@@ -323,22 +353,51 @@ def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     return module
 
 
-def test_changed_line_numbers_invalidate_cache(tmp_path: pathlib.Path):
-    from textwrap import dedent
-    code = dedent("""
-        import triton
-        @triton.jit
-        def test_kernel(i):
-            i = i + 1
-    """)
-    temp_file0 = tmp_path / "test_changed_line_numbers_invalidate_cache0.py"
-    orig_mod = write_and_load_module(temp_file0, code, 0)
-    orig_cache_key = orig_mod.test_kernel.cache_key
+@pytest.mark.parametrize("change_line_info", [False, True])
+@pytest.mark.parametrize("filename, extra_lines, decorators, indentation", [
+    ("kernel.py", 0, 1, 4),
+    ("other.py", 0, 1, 4),
+    ("kernel.py", 1, 1, 4),
+    ("kernel.py", 0, 2, 4),
+    ("kernel.py", 0, 1, 8),
+], ids=["unchanged", "file", "line", "decorator", "column"])
+def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, fresh_triton_cache, change_line_info,
+                                           filename, extra_lines, decorators, indentation):
+    from textwrap import dedent, indent
 
-    temp_file1 = tmp_path / "test_changed_line_numbers_invalidate_cache1.py"
-    updated_mod = write_and_load_module(temp_file1, code, 1)
-    updated_cache_key = updated_mod.test_kernel.cache_key
-    assert orig_cache_key != updated_cache_key
+    fresh_knobs.compilation.disable_line_info = False
+
+    def load_kernel(filename="kernel.py", extra_lines=0, decorators=1, indentation=4):
+        code = dedent("""\
+            import triton
+            import triton.language as tl
+            def identity(fn):
+                return fn
+            def make_kernel():
+        """)
+        body = "@identity\n" * decorators + dedent("""\
+            @triton.jit
+            def test_kernel(X):
+                tl.store(X, 1)
+            return test_kernel
+        """)
+        code += indent(body, " " * indentation) + "test_kernel = make_kernel()\n"
+        return write_and_load_module(tmp_path / filename, code, extra_lines).test_kernel
+
+    original = load_kernel()
+    original_key = original.cache_key
+    original_compiled = triton.compile(triton.compiler.ASTSource(original, {"X": "*i32"}))
+
+    fresh_knobs.compilation.disable_line_info = change_line_info
+    updated = load_kernel(filename, extra_lines, decorators, indentation)
+    updated_compiled = triton.compile(triton.compiler.ASTSource(updated, {"X": "*i32"}))
+    source_changed = (filename, extra_lines, decorators, indentation) != ("kernel.py", 0, 1, 4)
+    assert original.src == updated.src
+    assert (original_key != updated.cache_key) == source_changed
+    # Column-only changes may produce identical binary bytes.
+    assert (original_compiled.hash != updated_compiled.hash) == (source_changed or change_line_info)
+    if change_line_info:
+        assert original_compiled.kernel != updated_compiled.kernel
 
 
 def test_reuse(device, fresh_triton_cache):
@@ -720,6 +779,144 @@ def test_jit_noinline(device) -> None:
     bins = list(kernel_add_device.device_caches[device][0].values())
     noinline_ttir = bins[0].asm['ttir']
     assert inline_ttir != noinline_ttir
+
+
+class _PreloadClass:
+
+    def __init__(self, offset):
+        self.offset = offset
+
+    class Nested:
+
+        def __init__(self, offset):
+            self.offset = offset
+
+
+@triton.aggregate
+class _PreloadAggregate:
+    offset: tl.constexpr
+
+
+@triton.jit
+def _preload_function():
+    return 17
+
+
+def _serialize_constants(constants):
+    from triton.runtime.jit import serialize_specialization_data
+    return serialize_specialization_data("reference_kernel", {}, constants, {}, SimpleNamespace(), "reference-key",
+                                         SimpleNamespace(backend="cuda", arch=90, warp_size=32))
+
+
+def _preload_constants(specialization_data, monkeypatch):
+    jit = importlib.import_module("triton.runtime.jit")
+    target = SimpleNamespace(backend="cuda", arch=90, warp_size=32)
+    backend = SimpleNamespace(parse_options=lambda options: options)
+    kernel = SimpleNamespace(
+        _fn_name="reference_kernel",
+        device_caches={0: (None, None, target, backend, None)},
+        _do_compile=lambda key, signature, device, constexprs, options, attrs, warmup: constexprs,
+    )
+    monkeypatch.setattr(jit, "driver", SimpleNamespace(active=SimpleNamespace(get_current_device=lambda: 0)))
+    return jit.JITFunction.preload(kernel, specialization_data)
+
+
+@pytest.mark.parametrize("constant", [int, _PreloadClass, _PreloadClass.Nested, _PreloadAggregate, _preload_function])
+def test_preload_reference_constants(constant, monkeypatch):
+    specialization_data = _serialize_constants({(0, ): constant})
+    constants = _preload_constants(specialization_data, monkeypatch)
+    assert constants[(0, )] is constant
+
+
+def test_preload_dtype_constant(monkeypatch):
+    specialization_data = _serialize_constants({(0, ): tl.float32})
+    assert _preload_constants(specialization_data, monkeypatch)[(0, )] == tl.float32
+
+
+def test_preload_registered_local_function(monkeypatch):
+
+    @triton.jit
+    def local_function():
+        return 17
+
+    specialization_data = _serialize_constants({(0, ): local_function})
+    assert _preload_constants(specialization_data, monkeypatch)[(0, )] is local_function
+
+
+def test_preload_class_import_in_fresh_process(tmp_path, monkeypatch):
+    module_name = "preload_class_module"
+    (tmp_path / f"{module_name}.py").write_text("class Outer:\n    class Inner:\n        pass\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    module = importlib.import_module(module_name)
+    try:
+        specialization_data = _serialize_constants({(0, ): module.Outer.Inner})
+        code = """
+import sys
+import pytest
+from test_cache import _preload_constants
+
+assert 'preload_class_module' not in sys.modules
+with pytest.MonkeyPatch.context() as patch:
+    constants = _preload_constants(sys.stdin.read(), patch)
+import preload_class_module
+assert constants[(0,)] is preload_class_module.Outer.Inner
+"""
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(pathlib.Path(__file__).parent), *sys.path]))
+        subprocess.run([sys.executable, "-c", code], input=specialization_data, text=True, env=env, check=True,
+                       timeout=60)
+    finally:
+        sys.modules.pop(module_name, None)
+
+
+@pytest.mark.parametrize("class_key, message", [
+    ("builtins:MissingClass", "Unable to resolve class"),
+    ("builtins:len", "Expected class"),
+])
+def test_preload_invalid_class_reference(class_key, message, monkeypatch):
+    specialization_data = json.loads(_serialize_constants({(0, ): int}))
+    specialization_data["constant_vals"][0]["class"] = class_key
+    with pytest.raises(RuntimeError, match=message):
+        _preload_constants(json.dumps(specialization_data), monkeypatch)
+
+
+def test_preload_local_class_reference(monkeypatch):
+
+    class Local:
+        pass
+
+    specialization_data = _serialize_constants({(0, ): Local})
+    with pytest.raises(RuntimeError, match="Unable to resolve class.*<locals>.Local"):
+        _preload_constants(specialization_data, monkeypatch)
+
+
+@pytest.mark.parametrize("cls", [_PreloadClass, _PreloadClass.Nested, _PreloadAggregate])
+def test_preload_class_kernel(cls, device, fresh_triton_cache, fresh_knobs):
+
+    @triton.jit
+    def kernel(out, cls: tl.constexpr):
+        tl.store(out, cls(17).offset)
+
+    specializations = []
+
+    def cache_hook(**kwargs):
+        specializations.append(kwargs["compile"]["specialization_data"])
+
+    fresh_knobs.runtime.jit_cache_hook = cache_hook
+    fresh_knobs.runtime.jit_post_compile_hook = cache_hook
+    output = torch.empty((), device=device, dtype=torch.int32)
+    compiled = kernel[(1, )](output, cls)
+    assert output.item() == 17
+    assert len(specializations) == 2
+    assert specializations[0] == specializations[1]
+
+    shutil.rmtree(fresh_triton_cache)
+    kernel.device_caches.clear()
+    preloaded = kernel.preload(specializations[0])
+    assert preloaded.hash == compiled.hash
+    output.zero_()
+    assert kernel[(1, )](output, cls) is preloaded
+    assert output.item() == 17
+    assert len(specializations) == 4
 
 
 def test_preload(device, fresh_triton_cache) -> None:

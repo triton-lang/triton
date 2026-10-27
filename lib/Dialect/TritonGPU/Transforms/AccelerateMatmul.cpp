@@ -447,13 +447,14 @@ static int computeOrigBitWidth(Value x) {
   if (llvm::any_of(slice, [](Operation *op) { return isa<Fp4ToFpOp>(op); }))
     return 4;
 
-  int origBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
+  int origBitWidth = getIntOrFloatOrPtrBitWidth(getElementTypeOrSelf(x));
   for (auto op : slice) {
     if (isa<LoadOp, DescriptorLoadLikeOpInterface>(op)) {
       if (auto tensorTy =
               dyn_cast<RankedTensorType>(op->getResultTypes().front())) {
-        origBitWidth =
-            std::min<int>(origBitWidth, tensorTy.getElementTypeBitWidth());
+        origBitWidth = std::min<int>(
+            origBitWidth,
+            getIntOrFloatOrPtrBitWidth(tensorTy.getElementType()));
       }
     }
   }
@@ -656,15 +657,21 @@ public:
   }
 };
 
-static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
+static bool supportsTwoCTACGALayout(RankedTensorType retType) {
   if (retType.getRank() != 2)
-    return {};
+    return false;
   MLIRContext *ctx = retType.getContext();
   auto layout = getCGALayout(retType.getEncoding()).getLinearLayout();
   auto kBlock = StringAttr::get(ctx, "block");
-  if (layout.getInDimSize(kBlock) < 2 ||
-      layout.getBasis(kBlock, 0) != ArrayRef{1, 0})
-    return {};
+  return layout.getInDimSize(kBlock) >= 2 &&
+         layout.getBasis(kBlock, 0) == ArrayRef{1, 0};
+}
+
+static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
+  assert(supportsTwoCTACGALayout(retType) && "expected a two-CTA CGA layout");
+  MLIRContext *ctx = retType.getContext();
+  auto layout = getCGALayout(retType.getEncoding()).getLinearLayout();
+  auto kBlock = StringAttr::get(ctx, "block");
   // Split B along N within each pair. Pairs computing different M tiles load
   // the same B tile; pairs computing different N tiles retain their offsets.
   // For example, C: [[1, 0], [2, 0], [0, 1]] -> B: [[0, 1], [0, 0], [0, 2]].
@@ -676,10 +683,44 @@ static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
       ctx, LinearLayout(std::move(bases), standardOutDimNames(ctx, 2)));
 }
 
-static DescriptorLoadOp getTwoCTADescriptorLoad(Value value) {
-  if (auto trans = getDefiningOpSkippingConvertLayout<TransOp>(value))
-    value = trans.getSrc();
-  return getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(value);
+static DescriptorLoadOp
+getTwoCTADescriptorLoad(Value value, SmallVectorImpl<Value> *views = nullptr) {
+  while (Operation *op = value.getDefiningOp()) {
+    if (auto cvt = dyn_cast<ConvertLayoutOp>(op)) {
+      value = cvt.getSrc();
+    } else if (isView(op) && op->getNumOperands() == 1) {
+      if (views)
+        views->push_back(value);
+      value = op->getOperand(0);
+    } else {
+      return dyn_cast<DescriptorLoadOp>(op);
+    }
+  }
+  return {};
+}
+
+// Propagate the RHS split through the views, from the dot back to the load.
+static LogicalResult inferTwoCTAOperandLayouts(
+    Value b, CGAEncodingAttr cgaLayout,
+    SmallVectorImpl<std::pair<Value, Attribute>> &layouts) {
+  SmallVector<Value> views;
+  auto load = getTwoCTADescriptorLoad(b, &views);
+  if (!load)
+    return failure();
+  auto type = cast<RankedTensorType>(views.empty() ? load.getType()
+                                                   : views.front().getType());
+  auto layout = cloneWithCGALayout(type, cgaLayout);
+  if (failed(layout))
+    return failure();
+  Attribute encoding = *layout;
+  for (Value view : views) {
+    layouts.emplace_back(view, encoding);
+    encoding = inferSrcEncoding(view.getDefiningOp(), encoding);
+    if (!encoding)
+      return failure();
+  }
+  layouts.emplace_back(load.getResult(), encoding);
+  return success();
 }
 
 template <typename DotLikeOp> static bool canUseTwoCTAs(DotLikeOp dotOp) {
@@ -691,12 +732,11 @@ template <typename DotLikeOp> static bool canUseTwoCTAs(DotLikeOp dotOp) {
   // CTA-local async waits and fences, so neither operand may use that path.
   // A may also be a TMA gather: A is split by rows, so each CTA gathers its
   // own rows (e.g. MoE activations routed to the tile's expert).
-  if ((!getTwoCTADescriptorLoad(dotOp.getA()) &&
-       !getDefiningOpSkippingConvertLayout<DescriptorGatherOp>(dotOp.getA())) ||
-      !getTwoCTADescriptorLoad(dotOp.getB()))
+  if (!getTwoCTADescriptorLoad(dotOp.getA()) &&
+      !getDefiningOpSkippingConvertLayout<DescriptorGatherOp>(dotOp.getA()))
     return false;
 
-  if (!getTwoCTARHSCGALayout(retType))
+  if (!supportsTwoCTACGALayout(retType))
     return false;
 
   // One cooperating pair covers at most 128 rows per CTA and 256 columns.
@@ -710,7 +750,9 @@ template <typename DotLikeOp> static bool canUseTwoCTAs(DotLikeOp dotOp) {
   if (dotOp.getB().getType().getElementTypeBitWidth() == 8 &&
       shapePerCTA[1] < 32)
     return false;
-  return true;
+  SmallVector<std::pair<Value, Attribute>> layouts;
+  return succeeded(inferTwoCTAOperandLayouts(
+      dotOp.getB(), getTwoCTARHSCGALayout(retType), layouts));
 }
 
 // B scales are [N, K / vec]. A two-CTA scaled MMA reads the scales of the whole
@@ -789,33 +831,30 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
                            const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
-  auto trans = getDefiningOpSkippingConvertLayout<TransOp>(b);
-  auto loadOp = getTwoCTADescriptorLoad(b);
-  assert(loadOp && "expected descriptor load, optionally transposed");
-  auto loadCGALayout = newCGALayout;
-  if (trans) {
-    // Split the descriptor load along N in its original dimension order.
-    loadCGALayout = CGAEncodingAttr::get(
-        b.getContext(),
-        transposeLinearLayout(newCGALayout.getLinearLayout(),
-                              inversePermutation(trans.getOrder())));
-  }
-  b = loadOp->getResult(0);
-  RankedTensorType bType = cast<RankedTensorType>(b.getType());
-  auto newLayout = cloneWithCGALayout(bType, loadCGALayout);
-  assert(succeeded(newLayout) && "expected a distributed RHS layout");
-  rewriter.setInsertionPoint(loadOp.getOperation());
-  loadOp->getResult(0).setType(bType.cloneWithEncoding(*newLayout));
-  Value newB = loadOp->getResult(0);
-  rewriter.setInsertionPointAfter(loadOp.getOperation());
-  auto cvt = ConvertLayoutOp::create(rewriter, b.getLoc(), bType, newB);
-  rewriter.replaceAllUsesExcept(newB, cvt.getResult(), cvt);
-  if (trans) {
-    // Rebuild the transpose where the original was, not right after the load:
-    // a use between this load and the next ones would split their shared
+  SmallVector<std::pair<Value, Attribute>> layouts;
+  LogicalResult inferred = inferTwoCTAOperandLayouts(b, newCGALayout, layouts);
+  assert(succeeded(inferred) && "expected a supported descriptor view chain");
+  auto [load, encoding] = layouts.pop_back_val();
+  auto loadType = cast<RankedTensorType>(load.getType());
+  load.setType(loadType.cloneWithEncoding(encoding));
+  rewriter.setInsertionPointAfterValue(load);
+  auto cvt = ConvertLayoutOp::create(rewriter, load.getLoc(), loadType, load);
+  rewriter.replaceAllUsesExcept(load, cvt.getResult(), cvt);
+
+  Value newB = load;
+  for (auto [value, encoding] : llvm::reverse(layouts)) {
+    Operation *view = value.getDefiningOp();
+    // Rebuild each view where the original was, not right after the load: a
+    // use between this load and the next ones would split their shared
     // pipeliner barrier (e.g. the scale loads of a scaled dot).
-    rewriter.setInsertionPoint(trans);
-    return TransOp::create(rewriter, trans.getLoc(), newB, trans.getOrder());
+    rewriter.setInsertionPoint(view);
+    IRMapping mapping;
+    mapping.map(view->getOperand(0), newB);
+    Operation *clone = rewriter.clone(*view, mapping);
+    for (Value result : clone->getResults())
+      result.setType(
+          cast<RankedTensorType>(result.getType()).cloneWithEncoding(encoding));
+    newB = mapping.lookup(value);
   }
   return newB;
 }
@@ -967,8 +1006,8 @@ public:
     Operation *newDot = nullptr;
 
     // ScaledBlockedToMMA logic
-    int bitwidthA = oldAType.getElementType().getIntOrFloatBitWidth();
-    int bitwidthB = oldBType.getElementType().getIntOrFloatBitWidth();
+    int bitwidthA = getIntOrFloatOrPtrBitWidth(oldAType.getElementType());
+    int bitwidthB = getIntOrFloatOrPtrBitWidth(oldBType.getElementType());
     int minBitwidth = std::min(bitwidthA, bitwidthB);
 
     Value newA = convertDotOperandForMMA(a, 0, minBitwidth,

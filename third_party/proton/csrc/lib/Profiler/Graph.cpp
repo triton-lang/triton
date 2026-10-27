@@ -4,7 +4,7 @@
 #include "Runtime/Runtime.h"
 #include "Utility/Errors.h"
 
-#include <cstring>
+#include <bit>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -69,7 +69,7 @@ void GraphState::recordNode(uint64_t nodeId, const std::string &name,
 void GraphState::buildLaunchEntries(const DataToEntryMap &dataToEntry,
                                     DataToEntryMap &dataToGraphEntry) const {
   for (const auto &[data, entry] : dataToEntry) {
-    if (capturedData.find(data) == capturedData.end())
+    if (!capturedData.contains(data))
       // This data object was not enabled during graph capture.
       continue;
     dataToGraphEntry.insert({data, entry});
@@ -149,24 +149,15 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
     MetricValueType metricValueVariant{};
     switch (metricTypeIndex) {
     case variant_index_v<uint64_t, MetricValueType>: {
-      const uint64_t bits = readWord(wordOffset);
-      uint64_t typedValue{};
-      std::memcpy(&typedValue, &bits, sizeof(typedValue));
-      metricValueVariant = typedValue;
+      metricValueVariant = readWord(wordOffset);
       break;
     }
     case variant_index_v<int64_t, MetricValueType>: {
-      const uint64_t bits = readWord(wordOffset);
-      int64_t typedValue{};
-      std::memcpy(&typedValue, &bits, sizeof(typedValue));
-      metricValueVariant = typedValue;
+      metricValueVariant = std::bit_cast<int64_t>(readWord(wordOffset));
       break;
     }
     case variant_index_v<double, MetricValueType>: {
-      const uint64_t bits = readWord(wordOffset);
-      double typedValue{};
-      std::memcpy(&typedValue, &bits, sizeof(typedValue));
-      metricValueVariant = typedValue;
+      metricValueVariant = std::bit_cast<double>(readWord(wordOffset));
       break;
     }
     case variant_index_v<std::vector<uint64_t>, MetricValueType>: {
@@ -180,8 +171,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
     case variant_index_v<std::vector<int64_t>, MetricValueType>: {
       std::vector<int64_t> values(metricDesc.size);
       for (size_t j = 0; j < metricDesc.size; ++j) {
-        const uint64_t bits = readWord(wordOffset + j);
-        std::memcpy(&values[j], &bits, sizeof(bits));
+        values[j] = std::bit_cast<int64_t>(readWord(wordOffset + j));
       }
       metricValueVariant = std::move(values);
       break;
@@ -189,8 +179,7 @@ void emitMetricRecords(MetricBuffer &metricBuffer, uint64_t *hostBasePtr,
     case variant_index_v<std::vector<double>, MetricValueType>: {
       std::vector<double> values(metricDesc.size);
       for (size_t j = 0; j < metricDesc.size; ++j) {
-        const uint64_t bits = readWord(wordOffset + j);
-        std::memcpy(&values[j], &bits, sizeof(bits));
+        values[j] = std::bit_cast<double>(readWord(wordOffset + j));
       }
       metricValueVariant = std::move(values);
       break;

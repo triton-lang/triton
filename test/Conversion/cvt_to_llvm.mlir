@@ -6,6 +6,7 @@
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [16, 64, 16]}>
+#dot = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
@@ -141,9 +142,16 @@ tt.func private @convert_layout_blocked_blocked_forced(%arg0: tensor<16x16xi32, 
   tt.return %0 : tensor<16x16xi32, #blocked1>
 }
 
-tt.func private @cvt_mma_to_dot_fp8(%a: tensor<128x64xi32, #mma>) -> tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> {
-  %opA = ttg.convert_layout %a : tensor<128x64xi32, #mma> -> tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
-  tt.return %opA : tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+// CHECK-LABEL: @cvt_mma_to_dot_fp8(
+tt.func @cvt_mma_to_dot_fp8(%a: tensor<128x64xi32, #mma>, %out: tensor<128x64x!tt.ptr<i32>, #dot>) {
+  // CHECK: select i1
+  // CHECK-COUNT-4: call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: select i1
+  // CHECK: asm sideeffect {{.*}}st.global.b32
+  // CHECK: ret void
+  %opA = ttg.convert_layout %a : tensor<128x64xi32, #mma> -> tensor<128x64xi32, #dot>
+  tt.store %out, %opA : tensor<128x64x!tt.ptr<i32>, #dot>
+  tt.return
 }
 
 tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<16x16xi32, #blocked0>, %arg1: tensor<128x64xi32, #mma>) {

@@ -333,6 +333,45 @@ void cloneReduceOp(triton::ReduceOp reduceOp,
   }
 }
 
+void cloneScanOp(triton::ScanOp scanOp, SmallVector<WarpGroupBuilder> &builders,
+                 const PartitionSet &partitions) {
+  auto partitionIndices = getPartitionIds(scanOp);
+
+  SmallVector<ScanOp> newScanOps;
+  for (size_t idx : partitionIndices) {
+    auto &b = builders[idx];
+
+    SmallVector<Value> srcs;
+    for (auto src : scanOp.getSrcs()) {
+      srcs.push_back(b.mapping.lookupOrDefault(src));
+    }
+    auto newScanOp = triton::ScanOp::create(
+        b, scanOp.getLoc(), srcs, scanOp.getAxis(), scanOp.getReverse());
+    newScanOp->setAttrs(scanOp->getAttrs());
+    if (scanOp->hasAttr(kPartitionOutputsAttrName)) {
+      newScanOp->removeAttr(kPartitionOutputsAttrName);
+    }
+    newScanOps.push_back(newScanOp);
+
+    mapRange(scanOp.getResults(), newScanOp.getResults(), b.mapping);
+
+    auto &region = newScanOp.getRegion();
+    Block *block = &region.emplaceBlock();
+    for (auto arg : scanOp.getRegion().getBlocks().front().getArguments()) {
+      auto newArg = block->addArgument(arg.getType(), arg.getLoc());
+      b.mapping.map(arg, newArg);
+    }
+
+    b.setInsertionPointToStart(block);
+  }
+
+  cloneOpsInBlock(&scanOp.getRegion().front(), builders, partitions);
+
+  for (auto [idx, newScanOp] : llvm::zip(partitionIndices, newScanOps)) {
+    builders[idx].setInsertionPointAfter(newScanOp);
+  }
+}
+
 void cloneOp(Operation *op, SmallVector<WarpGroupBuilder> &builders,
              const SetVector<int> &partitionIndices) {
   if (op->getNumRegions() != 0) {
@@ -385,6 +424,8 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
       cloneIfOp(ifOp, builders, partitions);
     } else if (auto reduceOp = dyn_cast<triton::ReduceOp>(op)) {
       cloneReduceOp(reduceOp, builders, partitions);
+    } else if (auto scanOp = dyn_cast<triton::ScanOp>(op)) {
+      cloneScanOp(scanOp, builders, partitions);
     } else if (auto conditionOp = dyn_cast<scf::ConditionOp>(op)) {
       for (int idx : getPartitionIds(conditionOp)) {
         auto &builder = builders[idx];

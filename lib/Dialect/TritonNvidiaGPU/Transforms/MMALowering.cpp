@@ -67,7 +67,8 @@ struct TCGen5MMAScaleSharedToTmemConversion
   // Create a tmem_copy of scales from shared memory to tmem. `rows` is the M or
   // N of the MMA operation (for LHS or RHS respectively).
   bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter, int rows,
-                        TensorMemoryScalesBlockRepOrder blockRepOrder) const {
+                        TensorMemoryScalesBlockRepOrder blockRepOrder,
+                        Value pred) const {
     Location loc = operand.getOwner()->getLoc();
     MLIRContext *context = operand.getOwner()->getContext();
     Attribute tensorMemorySpace = TensorMemorySpaceAttr::get(context);
@@ -83,7 +84,7 @@ struct TCGen5MMAScaleSharedToTmemConversion
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
     auto tmemAlloc = TMEMAllocOp::create(rewriter, loc, scaleAType, Value());
-    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc);
+    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc, pred);
     operand.set(tmemAlloc);
     return true;
   }
@@ -108,12 +109,12 @@ struct TCGen5MMAScaleSharedToTmemConversion
     bool anyChanged = false;
     if (isa<ttg::SharedMemorySpaceAttr>(aScaleType.getMemorySpace())) {
       anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM,
-                                    aScaleBlockRepOrder) ||
+                                    aScaleBlockRepOrder, op.getPred()) ||
                    anyChanged;
     }
     if (isa<ttg::SharedMemorySpaceAttr>(bScaleType.getMemorySpace())) {
       anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter, blockN,
-                                    bScaleBlockRepOrder) ||
+                                    bScaleBlockRepOrder, op.getPred()) ||
                    anyChanged;
     }
     return LogicalResult::success(anyChanged);
