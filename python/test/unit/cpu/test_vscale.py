@@ -33,6 +33,39 @@ def has_sve():
     return "sve" in cpu_features
 
 
+@triton.jit
+def transpose_2d_kernel(x_ptr, y_ptr, M: tl.constexpr, REVERSE: tl.constexpr):
+    offsets = tl.arange(0, 2 * M)
+    x = tl.load(x_ptr + offsets)
+    if REVERSE:
+        x = tl.reshape(x, (2, M))
+    else:
+        x = tl.reshape(x, (M, 2))
+    y = tl.trans(x)
+    tl.store(y_ptr + offsets, tl.reshape(y, (2 * M, )))
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_sve_transpose_correctness(reverse, device):
+    """A two-column transpose uses scalable SVE chunks and remains correct."""
+    if not has_sve():
+        pytest.skip("This test requires an SVE CPU")
+
+    # Triton block dimensions are powers of two. The MLIR test separately
+    # covers a non-multiple tail.
+    M = 64
+    x = torch.arange(2 * M, dtype=torch.float32, device=device)
+    y = torch.empty_like(x)
+    meta = transpose_2d_kernel[(1, )](x, y, M=M, REVERSE=reverse)
+    shape = (2, M) if reverse else (M, 2)
+    expected = x.reshape(shape).T.contiguous().reshape(-1)
+
+    torch.testing.assert_close(y, expected)
+    assert "llvm.vscale" in meta.asm["llir"]
+    intrinsic = "llvm.vector.interleave2" if reverse else "llvm.vector.deinterleave2"
+    assert intrinsic in meta.asm["llir"]
+
+
 @pytest.mark.parametrize("vec_lib", ["libsleef", None])
 def test_vscale_range_attribute(vec_lib, device):
     """Verify that vscale_range is set on kernel functions when SVE is available.

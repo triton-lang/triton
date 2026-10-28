@@ -267,6 +267,8 @@ class CPUBackend(BaseBackend):
             cpu.passes.ttcpuir.add_ukernels_to_onednn_llvmir(pm)
         if options.get_ukernels() == Ukernels.XSMM:
             cpu.passes.ttcpuir.add_ukernels_to_xsmm_llvmir(pm)
+        if {"sve", "sve2"} & self.cpu_features:
+            cpu.passes.ttcpuir.add_lower_sve(pm)
         cpu.passes.ttcpuir.add_lower_vector_multi_dim(pm)
         cpu.passes.ttcpuir.add_expand_strided_metadata(pm)
         cpu.passes.ttcpuir.add_vector_to_scf(pm, True, 1, False)

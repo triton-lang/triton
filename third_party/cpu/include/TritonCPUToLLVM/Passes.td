@@ -47,6 +47,22 @@ def LowerMultiReduction : Pass<"triton-cpu-lower-multi-reduction", "mlir::triton
                              "mlir::triton::TritonDialect"];
 }
 
+def LowerSVE : Pass<"triton-cpu-lower-sve", "mlir::triton::FuncOp"> {
+    let summary = "Lower fixed-size operations to runtime-sized SVE loops.";
+    let description = [{
+      Rewrites operations that otherwise scalarize into loops over scalable
+      vectors. The vector length is computed with vector.vscale at runtime.
+    }];
+    let constructor = "mlir::triton::cpu::createLowerSVEPass()";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::LLVM::LLVMDialect",
+                             "mlir::memref::MemRefDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::vector::VectorDialect",
+                             "mlir::triton::TritonDialect"];
+}
+
 def AtomicOpsToLLVM : Pass<"triton-cpu-atomic-ops-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert Triton atomic operations to LLVM.";
     let description = [{}];
