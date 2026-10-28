@@ -1,3 +1,13 @@
+"""
+Tensor Data Mover (TDM) operations for CDNA5.
+
+TDM copies blocks of a tensor between global and shared memory asynchronously, described by a
+:class:`tensor_descriptor` (:func:`make_tensor_descriptor`) that holds the tensor's shape, strides, block shape and
+shared memory layout. Position the descriptor with :func:`update_tensor_descriptor`, then issue :func:`async_load`,
+:func:`async_store`, :func:`async_gather`, :func:`async_scatter` or :func:`prefetch`. Wait for completion with
+:func:`async_wait` or an mbarrier.
+"""
+
 from __future__ import annotations
 from typing import List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass

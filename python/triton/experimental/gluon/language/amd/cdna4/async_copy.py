@@ -1,3 +1,13 @@
+"""
+Asynchronous global-to-shared memory copies for CDNA4.
+
+These load data from global memory directly into shared memory without going through registers, either through a
+tensor of pointers (:func:`global_load_to_shared`) or a scalar base pointer and a tensor of offsets
+(:func:`buffer_load_to_shared`, deprecated in favor of
+:func:`buffer.load_to_shared <triton.experimental.gluon.language.amd.cdna4.buffer.load_to_shared>`). Group issued
+copies with :func:`commit_group` and wait for them with :func:`wait_group` before reading the destination.
+"""
+
 import warnings
 
 from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
@@ -82,6 +92,9 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
 @builtin
 def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", _semantic=None):
     """
+    Deprecated. Use :func:`buffer.load_to_shared <triton.experimental.gluon.language.amd.cdna4.buffer.load_to_shared>`
+    with a descriptor from :func:`buffer.make_buffer_descriptor <triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor>` instead.
+
     AMD buffer load to shared operation.
 
     Buffer load is similar to :func:`global_load_to_shared`, but it accesses
