@@ -2,9 +2,8 @@
 Descriptor-based buffer memory ops for CDNA3.
 
 These access global memory through an explicit buffer resource descriptor (:func:`make_buffer_descriptor`)
-instead of a base pointer, with explicit bounds, a scalar offset and per-access coherence scope. The
-pointer-based ``buffer_load`` / ``buffer_store`` in the parent module are unchanged but will be deprecated and
-migrated to these ops soon.
+instead of a base pointer, with explicit bounds, a scalar offset and per-access coherence scope. They
+replace the deprecated pointer-based ``buffer_load`` / ``buffer_store`` in the parent module.
 """
 
 from __future__ import annotations

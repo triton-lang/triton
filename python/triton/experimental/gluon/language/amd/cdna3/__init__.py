@@ -104,6 +104,9 @@ def _buffer_atomic_rmw_impl(op, ptr, offsets, value, arch, mask, sem, scope, _se
 @builtin
 def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None):
     """
+    Deprecated. Use :func:`buffer.load <triton.experimental.gluon.language.amd.cdna3.buffer.load>` with a descriptor from
+    :func:`buffer.make_buffer_descriptor <triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor>` instead.
+
     AMD buffer load from global memory via a scalar base pointer and a tensor of
     offsets instead of a tensor of pointers. This operation will load data
     directly into registers.
@@ -141,6 +144,9 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
 @builtin
 def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: GluonSemantic = None):
     """
+    Deprecated. Use :func:`buffer.store <triton.experimental.gluon.language.amd.cdna3.buffer.store>` with a descriptor from
+    :func:`buffer.make_buffer_descriptor <triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor>` instead.
+
     AMD buffer store a tensor directly to global memory via a scalar base pointer and a tensor of
     offsets instead of a tensor of pointers.
 
