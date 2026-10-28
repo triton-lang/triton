@@ -466,6 +466,28 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
     if get_current_target().arch == "gfx1250-strict" and not (a_dtype == "float32" and k_dim == 4):
         pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
 
+    k_width = 2 if a_dtype == "float32" else 8
+    run_gemm(a_dtype, b_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
+
+
+# kWidth spanning several wmma instructions: 4 for f32 16x16x4 with kWidth 8,
+# and 2 for f16/bf16 16x16x32 with kWidth 32.
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("a_dtype,k_dim,k_width", [
+    ("float32", 4, 8),
+    ("float16", 32, 32),
+    ("bfloat16", 32, 32),
+])
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 64), (64, 64, 128)])
+@pytest.mark.parametrize("M,N,K", get_test_gemm_shapes())
+def test_runtime_gemm_wide_k_width(a_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
+    if get_current_target().arch == "gfx1250-strict" and a_dtype != "float32":
+        pytest.skip("gfx1250-strict only supports v_wmma_f32_16x16x4_f32")
+
+    run_gemm(a_dtype, a_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K)
+
+
+def run_gemm(a_dtype, b_dtype, k_dim, k_width, BLOCK_M, BLOCK_N, BLOCK_K, M, N, K):
     torch.manual_seed(42)
 
     def create_operand(shape, dtype):
@@ -496,7 +518,7 @@ def test_runtime_gemm(a_dtype, b_dtype, k_dim, BLOCK_M, BLOCK_N, BLOCK_K, M, N, 
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-        INSTR_SHAPE_K=k_dim, K_WIDTH=2 if a_dtype == torch.float32 else 8)
+        INSTR_SHAPE_K=k_dim, K_WIDTH=k_width)
 
     c_triton = c_device.cpu()
     c_torch = a.to(torch.float32) @ b.to(torch.float32)

@@ -100,7 +100,7 @@ public:
     // a subregister def that loses `undef` makes the MIR printed alongside the
     // DAG unparseable ("Use not jointly dominated by defs"). That is harmless
     // when the MF is a throwaway re-parse, but not when we run on the live
-    // codegen pipeline's MF (see armLivePipelineDAGEmission), so snapshot the
+    // codegen pipeline's MF (see LivePipelineDAGEmission), so snapshot the
     // flags and put them back ourselves.
     //
     // (Kill flags are safe: we pass RemoveKillFlags=false, and fixupKills only
@@ -398,8 +398,10 @@ namespace {
 // LiveIntervalsWrapperPass so buildSchedGraph can use lane-mask (subregister)
 // precise dependencies, matching LLVM's machine scheduler. The emitted text is
 // appended to *Sink (set before the pass runs; a registered legacy pass must be
-// default-constructible, so the output buffer is threaded through a static).
-std::string *DAGTextSink = nullptr;
+// default-constructible, so the output buffer is threaded through a global).
+// Thread-local: the pipeline runs on the thread that armed it, and concurrent
+// callers must not clobber each other's sink.
+thread_local std::string *DAGTextSink = nullptr;
 
 class EmitSchedulingDAGPass : public MachineFunctionPass {
 public:
@@ -481,7 +483,9 @@ INITIALIZE_PASS_END(EmitSchedulingDAGPass, "mir-dag-emit-scheduling-dag",
 // addPassesToEmitFile is byte-identical to what -stop-before=machine-scheduler
 // produced.
 
-static std::string *LivePipelineSink = nullptr;
+// Thread-local for the same reason as DAGTextSink: the callback below fires on
+// whichever thread builds the pipeline, and that is the thread that armed it.
+static thread_local std::string *LivePipelineSink = nullptr;
 
 // Register the TargetPassConfig callback LAZILY, on first arm().
 //
@@ -510,7 +514,10 @@ const char *llvm::mir_dag::livePipelineDAGPassName() {
   return "mir-dag-emit-scheduling-dag";
 }
 
-void llvm::mir_dag::armLivePipelineDAGEmission(std::string *Sink) {
+// Both sinks are always set together, so saving one covers the restore.
+llvm::mir_dag::LivePipelineDAGEmission::LivePipelineDAGEmission(
+    std::string *Sink)
+    : Previous(DAGTextSink) {
   PassRegistry &Registry = *PassRegistry::getPassRegistry();
   initializeEmitSchedulingDAGPassPass(Registry);
   initializeLiveIntervalsWrapperPassPass(Registry);
@@ -519,7 +526,7 @@ void llvm::mir_dag::armLivePipelineDAGEmission(std::string *Sink) {
   DAGTextSink = Sink;
 }
 
-void llvm::mir_dag::disarmLivePipelineDAGEmission() {
-  LivePipelineSink = nullptr;
-  DAGTextSink = nullptr;
+llvm::mir_dag::LivePipelineDAGEmission::~LivePipelineDAGEmission() {
+  LivePipelineSink = Previous;
+  DAGTextSink = Previous;
 }

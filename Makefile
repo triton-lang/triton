@@ -8,6 +8,9 @@ BUILD_DIR := $(shell PYTHONPATH="$(ROOT_DIR)/python" $(PYTHON) -c 'from build_he
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
+LLVM_BUILD ?= core
+AMD_LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project-amd/build"
+AMD_CODEGEN_LIBRARY = $(shell PYTHONPATH="$(ROOT_DIR)/python" $(PYTHON) -c 'from build_helpers import amd_codegen_library_name; print(amd_codegen_library_name())')
 NUM_PROCS ?= 8
 NUM_GPUS ?= 1
 WARMUP_PROCS ?= $(NUM_PROCS)
@@ -64,7 +67,7 @@ test-microbenchmark: all
 test-interpret: all
 	cd python/test/unit && TRITON_CI_CACHE_PHASE=interpreter TRITON_INTERPRET=1 $(PYTEST) -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
 		language/test_random.py language/test_subprocess.py language/test_line_info.py \
-		language/test_tuple.py runtime/test_launch.py runtime/test_autotuner.py::test_kwargs[False] \
+		language/test_tuple.py test_debug.py runtime/test_launch.py runtime/test_autotuner.py::test_kwargs[False] \
 		../../tutorials/06-fused-attention.py::test_op --device=cpu
 
 .PHONY: test-proton
@@ -107,14 +110,40 @@ dev-install-triton:
 .NOPARALLEL: dev-install
 dev-install: dev-install-requires dev-install-triton
 
+.PHONY: build-llvm
+build-llvm:
+	LLVM_BUILD_PATH=$(LLVM_BUILD_PATH) scripts/build-llvm-project.sh
+
+.PHONY: build-amd-llvm
+build-amd-llvm:
+	AMD_LLVM_BUILD_PATH=$(AMD_LLVM_BUILD_PATH) scripts/build-amd-llvm.sh
+
+LLVM_BUILD_TARGETS_core := build-llvm
+LLVM_BUILD_TARGETS_amd := build-amd-llvm
+LLVM_BUILD_TARGETS_all := build-llvm build-amd-llvm
+
 .PHONY: dev-install-llvm
 .NOPARALLEL: dev-install-llvm
-dev-install-llvm:
-	LLVM_BUILD_PATH=$(LLVM_BUILD_PATH) scripts/build-llvm-project.sh
+dev-install-llvm: $(LLVM_BUILD_TARGETS_$(LLVM_BUILD))
+	$(if $(filter $(LLVM_BUILD),core amd all),,$(error LLVM_BUILD must be core, amd, or all))
+ifneq ($(filter $(LLVM_BUILD),core all),)
 	LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
 		LLVM_LIBRARY_DIR=$(LLVM_BUILD_PATH)/lib \
 		LLVM_SYSPATH=$(LLVM_BUILD_PATH) \
+	$(if $(filter all,$(LLVM_BUILD)),TRITON_AMD_CODEGEN_PATH="$(ROOT_DIR)/third_party/amd/backend/lib/$(AMD_CODEGEN_LIBRARY)") $(MAKE) dev-install
+else
+	# Reset cached core LLVM paths so installation uses the prebuilt core llvm.
+	LLVM_SYSPATH= \
+		LLVM_INCLUDE_DIRS= \
+		LLVM_LIBRARY_DIR= \
+		TRITON_AMD_CODEGEN_PATH="$(ROOT_DIR)/third_party/amd/backend/lib/$(AMD_CODEGEN_LIBRARY)" \
+		TRITON_APPEND_CMAKE_ARGS="$(TRITON_APPEND_CMAKE_ARGS) -U LLVM_DIR -U MLIR_DIR -U LLD_DIR -U LLVM_INCLUDE_DIRS -U LLVM_LIBRARY_DIR" \
 	$(MAKE) dev-install
+endif
+
+.PHONY: dev-install-amd-llvm
+dev-install-amd-llvm:
+	$(MAKE) dev-install-llvm LLVM_BUILD=amd
 
 # Updating lit tests
 

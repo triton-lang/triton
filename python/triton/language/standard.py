@@ -98,8 +98,9 @@ def ravel(x, can_reorder=False):
 
     :param x: the input tensor
     :type x: Block
+    :param can_reorder: Ignored. Retained for backward compatibility.
     """
-    return core.reshape(x, [x.numel], can_reorder=can_reorder)
+    return core.reshape(x, [x.numel])
 
 
 @jit
