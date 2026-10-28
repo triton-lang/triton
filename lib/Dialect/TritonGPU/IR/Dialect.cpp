@@ -2412,8 +2412,7 @@ LogicalResult PaddedSharedEncodingAttr::verify(
 
   const auto &bases = ll.getBases();
 
-  // Check that the offset input dimension produces no broadcasts or has
-  // repeated rows. Broadcasts introduced by the block dimension are allowed.
+  // Padded layouts express holes with interval padding.
   auto kOffset = StringAttr::get(ctx, "offset");
   auto ctaLayout = ll.sublayout(kOffset, to_vector(ll.getOutDimNames()));
   if (!ctaLayout.isInjective()) {
@@ -2439,6 +2438,10 @@ LogicalResult PaddedSharedEncodingAttr::verify(
       return emitError() << "Each offset basis must be 0 or a power of two.";
     }
   }
+
+  auto kBlock = StringAttr::get(ctx, "block");
+  if (!ll.removeZeroBasesAlongDim(kBlock).isInjective())
+    return emitError() << "Broadcasting across CTAs requires zero block bases.";
 
   return success();
 }

@@ -552,13 +552,6 @@ SmallVector<uint16_t> getTensorCoreBarrierBroadcastMasks(Operation *op) {
   return ttng::getCTABroadcastMasks(twoCTAs, commitDescs);
 }
 
-LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
-                                         RankedTensorType regTy) {
-  auto kBlock = StringAttr::get(memDescTy.getContext(), "block");
-  return invertAndComposeLocal(ttg::toLinearLayoutIgnoringPadding(memDescTy),
-                               ttg::toLinearLayout(regTy), {kBlock});
-}
-
 LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
                                              RankedTensorType regTy,
                                              unsigned axis) {
@@ -653,13 +646,17 @@ Value getLocalMemoryRecipientCTAs(ImplicitLocOpBuilder &b,
 
 Value getLocalLoadStoreRecipientCTAs(ImplicitLocOpBuilder &b,
                                      ttg::MemDescType memDescTy,
-                                     RankedTensorType regTy) {
-  // Layout-less tensors can appear in intermediate/test IR but cannot encode a
-  // cross-CTA ownership mapping. Preserve the existing current-CTA behavior.
+                                     RankedTensorType regTy,
+                                     bool isStore = false) {
+  // A layout-less tensor has no cross-CTA ownership mapping.
   if (!regTy.getEncoding())
     return currentCTAMask(b);
-  return getLocalMemoryRecipientCTAs(
-      b, getLocalLoadStoreConversion(memDescTy, regTy));
+  auto sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
+  auto regLayout = ttg::toLinearLayout(regTy);
+  auto conversion = isStore ? invertAndComposeStore(sharedLayout, regLayout)
+                            : invertAndComposeLocal(sharedLayout, regLayout,
+                                                    {b.getStringAttr("block")});
+  return getLocalMemoryRecipientCTAs(b, conversion);
 }
 
 Value getScratchReadCTAs(ImplicitLocOpBuilder &b, Operation *op,
@@ -695,15 +692,16 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   }
   if (auto store = dyn_cast<ttg::LocalStoreOp>(op)) {
     return getLocalLoadStoreRecipientCTAs(b, store.getDst().getType(),
-                                          store.getSrc().getType());
+                                          store.getSrc().getType(),
+                                          /*isStore=*/true);
   }
   if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
     return getLocalLoadStoreRecipientCTAs(b, store.getDst().getType(),
                                           store.getSrc().getType());
   }
   if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op); alloc && alloc.getSrc()) {
-    return getLocalLoadStoreRecipientCTAs(b, alloc.getType(),
-                                          alloc.getSrc().getType());
+    return getLocalLoadStoreRecipientCTAs(
+        b, alloc.getType(), alloc.getSrc().getType(), /*isStore=*/true);
   }
   if (auto gather = dyn_cast<ttg::LocalGatherOp>(op)) {
     return getLocalMemoryRecipientCTAs(
