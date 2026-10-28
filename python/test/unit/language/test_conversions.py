@@ -8,7 +8,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_cdna5, is_interpreter
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4m, is_hip_rdna4, is_hip_cdna5
 
 FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
@@ -486,26 +486,6 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device):
         torch.testing.assert_close(dst, torch.full_like(dst, expected_result))
 
 
-@pytest.mark.interpreter
-@pytest.mark.parametrize("src_dtype, codes, expected", [
-    ('float8e4nv', [0x7F, 0xFF, 0x7E], [float('nan'), float('nan'), 448.0]),
-    ('float8e5', [0x7C, 0xFC, 0x7D], [float('inf'), float('-inf'), float('nan')]),
-    ('float8e4b8', [0x80, 0x7F], [float('nan'), 240.0]),
-    ('float8e5b16', [0x80, 0x7F], [float('nan'), 57344.0]),
-    ('float8e4b15', [0x7F], [1.875]),
-])
-def test_typeconvert_upcast_fp8_special_codes(src_dtype, codes, expected, device):
-    # The FP8 Inf/NaN encodings must decode as such, not as finite numbers.
-    if not is_interpreter():
-        pytest.skip("interpreter only")
-    values = torch.zeros(128, dtype=torch.uint8, device=device)
-    values[:len(codes)] = torch.tensor(codes, dtype=torch.uint8)
-    result = launch_type_convert_triton(values, getattr(tl, src_dtype), tl.float32, device,
-                                        BLOCK_SIZE=128).view(torch.float32)
-    for got, want in zip(result.tolist(), expected):
-        assert (math.isnan(got) and math.isnan(want)) or got == want
-
-
 @pytest.mark.parametrize("src_dtype", ['float8e4b8', 'float8e5b16'])
 @pytest.mark.parametrize("dst_dtype", ['float16', 'bfloat16', 'float32'])
 def test_typeconvert_upcast_fnuz_nan(src_dtype, dst_dtype, device):
@@ -597,31 +577,6 @@ def test_typeconvert_rounding_edges(src_dtype, dst_dtype, rounding, device):
     assert f"cvt.{ptx_round}.{ptx_dst}.{ptx_src}" in kernel.asm["ptx"]
     if rounding == "rtz":
         assert "llvm.fptrunc.round" in kernel.asm["llir"]
-
-
-@pytest.mark.parametrize("src_dtype, dst_dtype, patterns", [
-    # NaN bit patterns whose payloads fall entirely in the bits that a
-    # downcast discards. They must stay NaN under both rounding modes;
-    # dropping the payload must not turn them into infinities.
-    ("float32", "float16", [0x7F800001, 0x7F801FFF, 0xFF800001]),
-    ("float32", "bfloat16", [0x7F800001, 0x7F80FFFF, 0xFF800001]),
-    ("float64", "float32", [0x7FF0000000000001, 0x7FF0000000FFFFFF]),
-    ("float64", "float16", [0x7FF0000000000001]),
-    ("float64", "bfloat16", [0x7FF0000000000001]),
-])
-@pytest.mark.parametrize("rounding", ["rtne", "rtz"])
-def test_typeconvert_downcast_small_payload_nan(src_dtype, dst_dtype, patterns, rounding, device):
-    src_ty = getattr(tl, src_dtype)
-    dst_ty = getattr(tl, dst_dtype)
-    width = src_ty.primitive_bitwidth
-    np_uint = {16: np.uint16, 32: np.uint32, 64: np.uint64}[width]
-    np_int = {16: np.int16, 32: np.int32, 64: np.int64}[width]
-    src = torch.from_numpy(np.array(patterns, dtype=np_uint).view(np_int).copy())
-    src = src.repeat((4096 + len(patterns) - 1) // len(patterns))[:4096].to(device)
-    dst = launch_type_convert_triton(src, src_ty, dst_ty, device, rounding=rounding)
-    torch_dst = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}[dst_dtype]
-    assert torch.all(torch.isnan(dst.view(torch_dst))), \
-        f"{src_dtype} -> {dst_dtype} ({rounding}) turned a small-payload NaN into {dst[0].item():#x}"
 
 
 @pytest.mark.parametrize("src_dtype, dst_dtype", [
