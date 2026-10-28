@@ -192,7 +192,8 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
 
   Attribute SharedMemorySpace =
       SharedMemorySpaceAttr::get(argType.getContext());
-  auto CGALayout = getCGALayout(argType.getEncoding());
+  auto CGALayout =
+      getCGALayout(cast<RankedTensorType>(v.getType()).getEncoding());
   auto newLayout = NVMMASharedEncodingAttr::get(
       argType.getContext(), argType.getShape(), newOrder, CGALayout,
       argType.getElementType(), isMMAv5Fp4Padded);

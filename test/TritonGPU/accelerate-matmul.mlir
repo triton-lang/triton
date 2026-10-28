@@ -341,6 +341,21 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+#dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @mmav5_operand_cta_redistribution
+  // CHECK: ttng.tc_gen5_mma
+  tt.func public @mmav5_operand_cta_redistribution(%a: tensor<128x64xf16, #src>, %b: tensor<64x128xf16, #src>, %c: tensor<128x128xf32, #dst>) -> tensor<128x128xf32, #dst> {
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #src> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #dst}>>
+    %bd = ttg.convert_layout %b : tensor<64x128xf16, #src> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #dst}>>
+    %d = tt.dot %ad, %bd, %c : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #dst}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #dst}>> -> tensor<128x128xf32, #dst>
+    tt.return %d : tensor<128x128xf32, #dst>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
 #lhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0], [1, 0]]}>
 #rhs = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [0, 0]]}>
