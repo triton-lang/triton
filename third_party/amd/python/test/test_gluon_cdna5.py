@@ -5377,7 +5377,7 @@ def test_buffer_load_store_scope_cache_policy_cdna5(scope, scope_bits, temporal)
         if temporal is None:
             policy: ttgl.constexpr = None
         else:
-            policy: ttgl.constexpr = ttgl.amd.cdna5.buffer.CachePolicy(temporal=temporal)
+            policy: ttgl.constexpr = ttgl.amd.cdna5.CachePolicy(temporal=temporal)
         src_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(src, 32 * 4)
         dst_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(dst, 32 * 4)
         x = ttgl.amd.cdna5.buffer.load(src_desc, offsets, scope=scope, cache_policy=policy)
@@ -5406,7 +5406,7 @@ def test_buffer_load_last_use_cdna5():
     def kernel(src, dst):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
         offsets = ttgl.arange(0, 32, layout=layout)
-        policy: ttgl.constexpr = ttgl.amd.cdna5.buffer.CachePolicy(temporal="last_use")
+        policy: ttgl.constexpr = ttgl.amd.cdna5.CachePolicy(temporal="last_use")
         src_desc = ttgl.amd.cdna5.buffer.make_buffer_descriptor(src, 32 * 4)
         x = ttgl.amd.cdna5.buffer.load(src_desc, offsets, scope="gpu", cache_policy=policy)
         ttgl.store(dst + offsets, x)

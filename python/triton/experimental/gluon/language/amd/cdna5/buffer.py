@@ -13,9 +13,9 @@ from ..._core import builtin
 from .. import _buffer
 from .._buffer import buffer_descriptor, buffer_descriptor_type
 from ..cdna3.buffer import _format_doc
-from ._cache_policy import CachePolicy
+from ._cache_policy import CachePolicy as _CachePolicy
 
-__all__ = ["CachePolicy", "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store"]
+__all__ = ["buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store"]
 
 
 @builtin
@@ -70,12 +70,13 @@ def load(desc, offsets, mask=None, other=None, *, soffset=None, scope=None, cach
             instead, which the compiler never hoists. Defaults to None (coherent within the
             workgroup).
         {soffset_arg}
-        cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
+        cache_policy (:class:`~triton.experimental.gluon.language.amd.cdna5.CachePolicy`, optional): Cache
+            hints. Defaults to None.
 
     Returns:
         tensor: The loaded values, with the shape and layout of ``offsets``.
     """
-    return _buffer.load(desc, offsets, mask, other, soffset, scope, cache_policy, CachePolicy, _semantic)
+    return _buffer.load(desc, offsets, mask, other, soffset, scope, cache_policy, _CachePolicy, _semantic)
 
 
 @builtin
@@ -96,6 +97,7 @@ def store(value, desc, offsets, mask=None, *, soffset=None, scope=None, cache_po
             that scope. It is not atomic and orders no other memory operation; follow it with a release
             to publish. Defaults to None.
         {soffset_arg}
-        cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
+        cache_policy (:class:`~triton.experimental.gluon.language.amd.cdna5.CachePolicy`, optional): Cache
+            hints. Defaults to None.
     """
-    _buffer.store(value, desc, offsets, mask, soffset, scope, cache_policy, CachePolicy, _semantic)
+    _buffer.store(value, desc, offsets, mask, soffset, scope, cache_policy, _CachePolicy, _semantic)

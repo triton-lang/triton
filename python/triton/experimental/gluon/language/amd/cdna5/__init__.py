@@ -6,6 +6,7 @@ from .._ops import (_load_shared_fp4_repacked, _wmma, _verify_wmma, _mma_scaled,
                     get_scaled_upcast_fp4_scale_layout)
 from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
+from ._cache_policy import CachePolicy
 from ._layouts import PartitionedSharedLayout, make_partitioned_dot_layouts
 from . import tdm
 from . import async_copy
@@ -14,9 +15,9 @@ from . import cluster
 from . import buffer
 
 __all__ = [
-    "async_copy", "buffer", "tdm", "mbarrier", "cluster", "wmma", "wmma_scaled", "scaled_upcast", "scaled_downcast",
-    "buffer_load", "buffer_store", "get_wmma_scale_layout", "PartitionedSharedLayout", "make_partitioned_dot_layouts",
-    "load_shared_fp4_repacked", "get_scaled_upcast_fp4_scale_layout"
+    "async_copy", "buffer", "tdm", "mbarrier", "cluster", "CachePolicy", "wmma", "wmma_scaled", "scaled_upcast",
+    "scaled_downcast", "buffer_load", "buffer_store", "get_wmma_scale_layout", "PartitionedSharedLayout",
+    "make_partitioned_dot_layouts", "load_shared_fp4_repacked", "get_scaled_upcast_fp4_scale_layout"
 ]
 
 

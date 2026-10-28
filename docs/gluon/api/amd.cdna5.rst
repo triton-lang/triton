@@ -29,4 +29,5 @@ AMD CDNA 5
     scaled_upcast
     wmma
     wmma_scaled
+    CachePolicy
     PartitionedSharedLayout
