@@ -544,13 +544,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     globalLayout = removeBroadcast.apply(globalLayout);
     vals = removeBroadcast.apply(vals);
 
-    LinearLayout sharedLayout;
-    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-            sharedTy.getEncoding())) {
-      sharedLayout = paddedEnc.getLinearComponent();
-    } else {
-      sharedLayout = triton::gpu::toLinearLayout(sharedTy);
-    }
+    LinearLayout sharedLayout =
+        triton::gpu::toLinearLayoutIgnoringPadding(sharedTy);
     auto cvt = globalLayout.invertAndCompose(sharedLayout);
     if (!cvt.isTrivialOver({str_attr("block")})) {
       return emitError(loc, isLoad ? "direct to lds loads do not support "
@@ -592,7 +587,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       laneId = b.i32_val(0);
     }
 
-    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(), paddingShifts,
+    SmallVector<Value> smemBases(smemObj.getBases().begin(),
+                                 smemObj.getBases().end());
+    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemBases, paddingShifts,
               affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
               /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
               vec, lowerInstForwardMulticastMask);
@@ -1282,10 +1279,11 @@ struct AsyncCopyLocalToGlobalOpConversion
     // If the op has a contiguity hint use it to increase the vector size.
     vec = std::max(vec, op.getContiguity());
 
-    // For padded encodings restrict vec by the min interval
+    // For padded encodings (standalone or inside a partitioned layout)
+    // restrict vec by the min interval
     auto srcEnc = srcTy.getEncoding();
-    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
-      vec = std::min(vec, padEnc.getMinInterval());
+    if (triton::gpu::isPaddedEncoding(srcEnc)) {
+      vec = std::min(vec, triton::gpu::getMinInterval(srcEnc));
     }
 
     Type dstPtrTy = dstElems[0].getType();
