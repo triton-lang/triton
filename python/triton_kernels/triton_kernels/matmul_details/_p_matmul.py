@@ -343,7 +343,7 @@ def _p_matmul(
         if X_TMA_MODE is None:
             offs_m = off_m + tl.arange(0, BLOCK_M)
             offs_m = tl.max_contiguous(tl.multiple_of(offs_m % shape_m, BLOCK_M), BLOCK_M)
-            # no needs to bounds-check here because `offs_m` wraps around M dim
+            # Wrapping bounds the gather-array position, not the gathered row index.
             if GatherIndx is not None:
                 tl.static_assert(HAS_GATHER)
                 offs_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m)
@@ -422,13 +422,16 @@ def _p_matmul(
                 # Keep the aligned base pointer outside the flattened loop's conditional prologue.
                 XPtrs = X + (off_x_z.to(index_type) * stride_x_z + offs_x_m + offs_x_k)
                 mask_k = tl.arange(0, BLOCK_K // block_div) * block_div < K - off_k_x
+                # Negative gather indices (including -1) mark inactive input rows.
+                # Do not dereference them: zero-fill X before matmul. This does not
+                # suppress output stores or epilogue operations such as bias.
                 if EVEN_K:
                     if SPLIT_K > 1:
-                        x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
+                        x = tl.load(XPtrs, mask=(offs_m[:, None] >= 0) & mask_k[None, :], other=0.0)
                     else:
-                        x = tl.load(XPtrs)
+                        x = tl.load(XPtrs, mask=offs_m[:, None] >= 0, other=0.0)
                 else:
-                    x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
+                    x = tl.load(XPtrs, mask=(offs_m[:, None] >= 0) & mask_k[None, :], other=0.0)
                 if x.dtype == tl.float32 and ALLOW_TF32:
                     # since data are not loaded from TMA we need to explicitly round to tf32.
                     x = round_f32_to_tf32(x)

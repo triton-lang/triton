@@ -288,7 +288,7 @@ def _matmul(
         X += start_m * stride_x_m
     else:
         GatherIndx += start_m
-        # no needs to bounds-check here because `offs_x_m` wraps around M dim
+        # Wrapping bounds the gather-array position, not the gathered row index.
         offs_x_m = tl.load(GatherIndx + offs_x_m)
     if is_x_fp4:
         offs_k_x = off_k_x // 2 + tl.arange(0, BLOCK_K // 2)
@@ -417,7 +417,10 @@ def _matmul(
             if is_x_microscaled:
                 mask_x_k_scale = offs_x_k_scale * X_MX_BLOCK_SIZE < x_k_limit
 
-        x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
+        # Negative gather indices (including -1) mark inactive input rows.
+        # Do not dereference them: zero-fill X before matmul. This does not
+        # suppress output stores or epilogue operations such as bias.
+        x = tl.load(XPtrs, mask=(offs_x_m[:, None] >= 0) & mask_k_x[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
         if cuda_capability_geq(8, 0):
             if x.dtype == tl.float32 and ALLOW_TF32:

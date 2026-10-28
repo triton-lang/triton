@@ -10,7 +10,7 @@ import torch
 from typing import Union
 import triton
 import triton.language as tl
-from triton._internal_testing import is_compile_warmup, is_hopper
+from triton._internal_testing import is_compile_warmup, is_hopper, is_hopper_or_newer
 # matmul utilities
 import triton_kernels.matmul_details.opt_flags as opt_flags
 from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FusedComm, FnSpecs, FnName, Epilogue
@@ -675,6 +675,36 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if c_dtype.has_global_scale and not is_compile_warmup():
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+
+
+@pytest.mark.parametrize("is_persistent", [False, True])
+@pytest.mark.parametrize("split_k", [1, 2])
+@pytest.mark.parametrize("k", [64, 80])
+@pytest.mark.parametrize("all_inactive", [False, True])
+def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, device):
+    if not is_hopper_or_newer():
+        pytest.skip("Requires Hopper or newer for persistent matmul")
+    m, n = 33, 64
+    # Keep the negative-row address inside our allocation and make any read visible.
+    storage = torch.full((m + 1, k), float("nan"), dtype=torch.bfloat16, device=device)
+    a = storage[1:]
+    a[:] = (torch.arange(m, device=device) % 4 + 1)[:, None]
+    b = torch.ones((k, n), dtype=a.dtype, device=device)
+    gather = torch.arange(m - 1, -1, -1, dtype=torch.int32, device=device)
+    if all_inactive:
+        gather.fill_(-1)
+    else:
+        gather[::2] = -1
+    expected = torch.zeros((m, n), dtype=a.dtype, device=device)
+    active = gather >= 0
+    expected[active] = a[gather[active].long(), :1] * k
+
+    with opt_flags.scoped_opt_flags_constraints({
+        "is_persistent": is_persistent, "split_k": split_k,
+        "block_m": 32, "block_n": 64, "block_k": 64,
+    }):
+        actual = matmul(a, b, None, gather_indx=gather)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("swizzled", [False, True])
