@@ -429,6 +429,40 @@ def _indicator(n_dims: core.constexpr, j: core.constexpr):
 
 
 @jit
+def _float_to_order_key(x):
+    """Map a float to the integer that has the same order as the float's bits.
+
+    IEEE comparison leaves some pairs of floats unordered: NaN against anything,
+    and -0.0 against +0.0 (they compare equal although they are distinct
+    values). The two elements of a compare-and-swap must agree on whether to
+    swap, which needs a total order. Flipping the sign bit of negative values
+    turns the bit pattern into an integer key with the same order, so that
+    -0.0 < +0.0 and NaNs sort by their bit pattern: above +inf when the sign bit
+    is clear, which is what hardware and the torch/numpy sorts produce, below
+    -inf when it is set. The map is a bijection, so the values themselves come
+    back unchanged after sorting the keys.
+    """
+    idtype: core.constexpr = _get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    i = x.to(idtype, bitcast=True)
+    if core.constexpr(idtype.primitive_bitwidth < 32):
+        # a 16-bit compare-and-swap is about twice as slow as a 32-bit one
+        i = i.to(core.int32)
+    shift: core.constexpr = x.dtype.primitive_bitwidth - 1
+    mask: core.constexpr = (1 << shift) - 1
+    return i ^ ((i >> shift) & mask)
+
+
+@jit
+def _order_key_to_float(k, dtype: core.constexpr):
+    # the map of _float_to_order_key is its own inverse
+    idtype: core.constexpr = _get_int_dtype(bitwidth=dtype.primitive_bitwidth, signed=True)
+    shift: core.constexpr = dtype.primitive_bitwidth - 1
+    mask: core.constexpr = (1 << shift) - 1
+    k = k ^ ((k >> shift) & mask)
+    return k.to(idtype).to(dtype, bitcast=True)
+
+
+@jit
 def _compare_and_swap(x, flip, i: core.constexpr):
     # compare-and-swap on the ith *innermost* dimension
     n_dims: core.constexpr = _log2(x.numel)
@@ -503,6 +537,13 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     log_n: core.constexpr = _log2(x.shape[_dim])
     log_k: core.constexpr = log_n if k is None else _log2(k)
 
+    is_float: core.constexpr = x.dtype.is_floating()
+    float_dtype: core.constexpr = x.dtype
+    if is_float:
+        # sort integer keys so that the two elements of a compare-and-swap
+        # always agree (see _float_to_order_key):
+        x = _float_to_order_key(x)
+
     if log_k == 0:
         # k == 1 (or a length-1 dim): the general path below would reduce the
         # hypercube to a 0-d scalar, so emit a plain reduce instead.
@@ -525,11 +566,36 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
 
         # reshape back:
         x = core.reshape(h, x.shape[:-1] + [2**log_k])
+
+    if is_float:
+        x = _order_key_to_float(x, float_dtype)
+        # tl.topk used to select through tl.max/tl.min, which widen sub-32-bit
+        # inputs; keep the element type that produced when a selection runs.
+        selects: core.constexpr = k is not None and (log_k == 0 or log_k < log_n)
+        if core.constexpr(selects and float_dtype.primitive_bitwidth < 32):
+            x = x.to(core.float32)
     return x
 
 
 @jit
 def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+    """
+    Sorts a tensor along the specified dimension.
+
+    Floating-point elements are ordered totally, by their bit patterns:
+    :code:`-0.0` sorts below :code:`+0.0`, and NaNs sort at one end of the row
+    instead of being dropped or duplicated. A NaN whose sign bit is clear, which
+    is what CUDA, :code:`torch` and :code:`numpy` produce, sorts above
+    :code:`+inf`: last when ascending and first when descending, as with
+    :code:`torch.sort`. The result is a permutation of the input.
+
+    :param x: The input tensor to be sorted.
+    :type x: Tensor
+    :param dim: The dimension along which to sort the tensor. If None, the tensor is sorted along the last dimension. Currently, only sorting along the last dimension is supported.
+    :type dim: int, optional
+    :param descending: If set to True, the tensor is sorted in descending order. If set to False, the tensor is sorted in ascending order.
+    :type descending: bool, optional
+    """
     return sort_impl(x, dim=dim, descending=descending)
 
 
@@ -538,7 +604,9 @@ def topk(x, k: core.constexpr, dim: core.constexpr = None, descending: core.cons
     """
     Returns the k largest (or smallest) elements of the input tensor along the specified dimension.
 
-    The elements are returned in sorted order (largest first).
+    The elements are returned in sorted order (largest first). Floating-point
+    elements are ordered as by :code:`tl.sort` and :code:`torch.topk`, so a NaN
+    with its sign bit clear is among the k largest.
 
     :param x: The input tensor.
     :type x: Tensor
@@ -563,11 +631,31 @@ def topk(x, k: core.constexpr, dim: core.constexpr = None, descending: core.cons
 
 @jit
 def bitonic_merge(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+    """
+    Merges a bitonic sequence (ascending, then descending) along the specified
+    dimension into a sorted one. Floating-point elements are ordered as by
+    :code:`tl.sort`.
+
+    :param x: The input tensor, bitonic along the selected dimension.
+    :type x: Tensor
+    :param dim: The dimension to merge along. If None, the last dimension is
+                used. Currently, only the last dimension is supported.
+    :type dim: int, optional
+    :param descending: If set to True, the result is sorted in descending order.
+    :type descending: bool, optional
+    """
     # handle default dimension or check that it is the most minor dim
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
     n_dims: core.constexpr = _log2(x.shape[-1])
-    return _bitonic_merge(x, n_dims, descending, n_dims)
+    is_float: core.constexpr = x.dtype.is_floating()
+    float_dtype: core.constexpr = x.dtype
+    if is_float:
+        x = _float_to_order_key(x)
+    x = _bitonic_merge(x, n_dims, descending, n_dims)
+    if is_float:
+        x = _order_key_to_float(x, float_dtype)
+    return x
 
 
 @constexpr_function

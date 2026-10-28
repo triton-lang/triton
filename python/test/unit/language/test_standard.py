@@ -1,3 +1,5 @@
+import functools
+import math
 import warnings
 
 import triton
@@ -119,6 +121,75 @@ def test_sort(M, N, k, descending, dtype_str, device):
         y = torch.topk(x, k=k, largest=descending).values
     sort_kernel[(1, )](x, x.stride(0), z, z.stride(0), M, N, k, descending, num_warps=8)
     assert (y == z).all(), (y, z)
+
+
+# Rows holding values that IEEE comparison leaves unordered: a NaN, or both
+# -0.0 and +0.0. Each element must still come out exactly once (issue #12397).
+_special_float_rows = [
+    [1.0, float("nan"), 3.0, -0.0, 0.0, -2.0, 5.0, 4.0],
+    [0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0],
+    [float("nan"), 0.0, float("nan"), 0.0, float("nan"), 0.0,
+     float("nan"), 0.0],
+    [float("inf"), float("-inf"), float("nan"), -0.0, 0.0, 1.0, -1.0, 2.0],
+]
+
+
+def _total_order(a, b):
+    """the order tl.sort documents: NaN above every value (these NaNs all have
+    the sign bit clear), and -0.0 below +0.0"""
+    a_nan, b_nan = math.isnan(a), math.isnan(b)
+    if a_nan or b_nan:
+        return (a_nan > b_nan) - (a_nan < b_nan)
+    if a == b:
+        a_sign, b_sign = math.copysign(1.0, a), math.copysign(1.0, b)
+        return (a_sign > b_sign) - (a_sign < b_sign)
+    return (a > b) - (a < b)
+
+
+def _bit_patterns(x):
+    """compare bit patterns: NaN == NaN, and -0.0 != 0.0, unlike the values"""
+    int_type = {2: torch.int16, 4: torch.int32, 8: torch.int64}[x.element_size()]
+    if x.is_floating_point():
+        x = torch.where(x.isnan(), torch.full_like(x, float("nan")), x)
+    return x.view(int_type)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("op", ["sort", "topk", "bitonic_merge"])
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("dtype_str", ["float16", "bfloat16", "float32", "float64"])
+def test_sort_special_floats(op, descending, dtype_str, device):
+    check_type_supported(dtype_str, device)
+    # `topk` keeps half of the row; `bitonic_merge` needs a bitonic row, built
+    # here from an ascending and a descending half of the same elements.
+    k = 4
+
+    @triton.jit
+    def sort_kernel(X, Z, OP: tl.constexpr, DESC: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 8))
+        if OP == 1:
+            z = tl.sort(x, descending=DESC)
+        elif OP == 2:
+            z = tl.topk(x, 4, descending=DESC)
+        else:
+            z = tl.bitonic_merge(x, descending=DESC)
+        tl.store(Z + tl.arange(0, z.numel), z)
+
+    op_code = {"sort": 1, "topk": 2, "bitonic_merge": 3}[op]
+    dtype = getattr(torch, dtype_str)
+    for row in _special_float_rows:
+        if op == "bitonic_merge":
+            row = sorted(row[:k], key=functools.cmp_to_key(_total_order)) + \
+                sorted(row[k:], key=functools.cmp_to_key(_total_order), reverse=True)
+        expected = sorted(row, key=functools.cmp_to_key(_total_order), reverse=descending)
+        if op == "topk":
+            expected = expected[:k]
+        x = torch.tensor(row, dtype=dtype, device=device)
+        z = torch.empty(len(expected), dtype=dtype, device=device)
+        sort_kernel[(1, )](x, z, op_code, descending)
+        assert torch.equal(_bit_patterns(z),
+                           _bit_patterns(torch.tensor(expected, dtype=dtype,
+                                                      device=device))), (op, descending, dtype_str, row, z)
 
 
 # ---------------
