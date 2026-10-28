@@ -1,7 +1,6 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/DenseSet.h"
-#include <algorithm>
 
 namespace mlir::triton {
 

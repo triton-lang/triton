@@ -552,6 +552,15 @@ SmallVector<uint16_t> getTensorCoreBarrierBroadcastMasks(Operation *op) {
   return ttng::getCTABroadcastMasks(twoCTAs, commitDescs);
 }
 
+LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
+                                         RankedTensorType regTy, bool isStore) {
+  auto kBlock = StringAttr::get(memDescTy.getContext(), "block");
+  auto sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
+  auto regLayout = ttg::toLinearLayout(regTy);
+  return isStore ? invertAndComposeStore(sharedLayout, regLayout)
+                 : invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
+}
+
 LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
                                              RankedTensorType regTy,
                                              unsigned axis) {
@@ -648,15 +657,12 @@ Value getLocalLoadStoreRecipientCTAs(ImplicitLocOpBuilder &b,
                                      ttg::MemDescType memDescTy,
                                      RankedTensorType regTy,
                                      bool isStore = false) {
-  // A layout-less tensor has no cross-CTA ownership mapping.
+  // Layout-less tensors can appear in intermediate/test IR but cannot encode a
+  // cross-CTA ownership mapping. Preserve the existing current-CTA behavior.
   if (!regTy.getEncoding())
     return currentCTAMask(b);
-  auto sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
-  auto regLayout = ttg::toLinearLayout(regTy);
-  auto conversion = isStore ? invertAndComposeStore(sharedLayout, regLayout)
-                            : invertAndComposeLocal(sharedLayout, regLayout,
-                                                    {b.getStringAttr("block")});
-  return getLocalMemoryRecipientCTAs(b, conversion);
+  return getLocalMemoryRecipientCTAs(
+      b, getLocalLoadStoreConversion(memDescTy, regTy, isStore));
 }
 
 Value getScratchReadCTAs(ImplicitLocOpBuilder &b, Operation *op,

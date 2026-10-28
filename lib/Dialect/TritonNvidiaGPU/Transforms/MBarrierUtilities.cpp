@@ -19,7 +19,7 @@ bool isCrossCTALoadStore(ttg::MemDescType memDescTy, RankedTensorType regTy,
   LinearLayout regLayout =
       ttg::toLinearLayout(regTy).removeZeroBasesAlongDim(kRegister);
   LinearLayout sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
-  auto conversion =
+  LinearLayout conversion =
       isStore ? invertAndComposeStore(sharedLayout, regLayout)
               : invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
   return !conversion.isIdentityOnOutDim(kBlock);

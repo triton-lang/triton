@@ -2412,7 +2412,8 @@ LogicalResult PaddedSharedEncodingAttr::verify(
 
   const auto &bases = ll.getBases();
 
-  // Padded layouts express holes with interval padding.
+  // Check that the offset input dimension produces no broadcasts or has
+  // repeated rows. Broadcasts introduced by the block dimension are allowed.
   auto kOffset = StringAttr::get(ctx, "offset");
   auto ctaLayout = ll.sublayout(kOffset, to_vector(ll.getOutDimNames()));
   if (!ctaLayout.isInjective()) {
