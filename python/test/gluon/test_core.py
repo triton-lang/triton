@@ -4467,7 +4467,7 @@ def test_buffer_load_store_scope_cache_policy(scope, scope_bits, nontemporal):
     def kernel(src, dst, scope: ttgl.constexpr, nontemporal: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
         offsets = ttgl.arange(0, 64, layout=layout)
-        policy: ttgl.constexpr = ttgl.amd.cdna3.buffer.CachePolicy(nontemporal=nontemporal)
+        policy: ttgl.constexpr = ttgl.amd.cdna3.CachePolicy(nontemporal=nontemporal)
         src_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(src, 64 * 4)
         dst_desc = ttgl.amd.cdna3.buffer.make_buffer_descriptor(dst, 64 * 4)
         x = ttgl.amd.cdna3.buffer.load(src_desc, offsets, scope=scope, cache_policy=policy)
@@ -4487,6 +4487,33 @@ def test_buffer_load_store_scope_cache_policy(scope, scope_bits, nontemporal):
     expected = set(scope_bits.split()) | ({"nt"} if nontemporal else set())
     assert bits("buffer_load_dword") == expected
     assert bits("buffer_store_dword") == expected
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("nontemporal", [False, True])
+def test_cache_policy_global_load_to_shared(nontemporal):
+
+    @gluon.jit
+    def kernel(src, dst, nontemporal: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [1], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+        policy: ttgl.constexpr = ttgl.amd.cdna4.CachePolicy(nontemporal=nontemporal)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [64], shared)
+        cdna4_async_copy.global_load_to_shared(smem, src + offsets, cache_policy=policy)
+        cdna4_async_copy.commit_group()
+        cdna4_async_copy.wait_group(0)
+        ttgl.barrier()
+        ttgl.store(dst + offsets, smem.load(layout))
+
+    src = torch.arange(64, dtype=torch.int32, device="cuda")
+    dst = torch.empty_like(src)
+    compiled = kernel[(1, )](src, dst, nontemporal, num_warps=1)
+    torch.testing.assert_close(dst, src, atol=0, rtol=0)
+
+    lines = re.findall(r"^\s*global_load_lds_dword .*$", compiled.asm["amdgcn"], re.MULTILINE)
+    assert lines
+    assert all(("nt" in line.split()) == nontemporal for line in lines), lines
 
 
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
