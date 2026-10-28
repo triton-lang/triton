@@ -529,6 +529,39 @@ def test_local_store_transposed_cga_to_non_transposed_alloc():
 
 
 @gluon.jit
+def local_store_sharded_to_replicated_kernel(out, src_cga: ttgl.constexpr, shared_cga: ttgl.constexpr,
+                                             num_replicas: ttgl.constexpr):
+    size: ttgl.constexpr = 32 * ttgl.num_ctas()
+    src_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=src_cga)
+    seed_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0], cga_layout=shared_cga)
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=shared_cga)
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [size], shared_layout, value=ttgl.full((size, ), -1, ttgl.int32,
+                                                                                          layout=seed_layout))
+    ttgl.barrier(cluster=True)
+    offsets = ttgl.arange(0, size, layout=src_layout)
+    smem.store(offsets)
+    ttgl.barrier(cluster=True)
+    # Each CTA reads every 32-element shard from its local replica.
+    for shard in ttgl.static_range(num_replicas):
+        ttgl.store(out + shard * size + offsets, smem.gather(offsets ^ (32 * shard), axis=0))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("shared_cga", [((0, ), ), ((0, ), (0, )), ((0, ), (1, ))])
+def test_local_store_sharded_to_replicated(shared_cga):
+    src_cga = tuple((1 << bit, ) for bit in range(len(shared_cga)))
+    num_ctas = 1 << len(shared_cga)
+    num_replicas = 1 << shared_cga.count((0, ))
+    skip_if_unsupported_cluster_size(num_ctas)
+    expected = torch.arange(32 * num_ctas, dtype=torch.int32, device="cuda")
+    out = expected.new_empty((num_replicas, expected.numel()))
+    local_store_sharded_to_replicated_kernel[(1, )](out, src_cga, shared_cga, num_replicas, num_warps=1,
+                                                    num_ctas=num_ctas)
+    for shard, values in enumerate(out):
+        torch.testing.assert_close(values, expected ^ (32 * shard))
+
+
+@gluon.jit
 def async_shared_store_kernel(out, BLOCK: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
     shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])

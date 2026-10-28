@@ -2440,6 +2440,10 @@ LogicalResult PaddedSharedEncodingAttr::verify(
     }
   }
 
+  auto kBlock = StringAttr::get(ctx, "block");
+  if (!ll.removeZeroBasesAlongDim(kBlock).isInjective())
+    return emitError() << "Broadcasting across CTAs requires zero block bases.";
+
   return success();
 }
 

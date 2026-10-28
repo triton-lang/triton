@@ -3138,11 +3138,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #shared = #ttg.shared_linear<{offset = [[1]], block = [[0]]}, alignment = 4>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: local_store_uses_local_cta
+  // CHECK-LABEL: local_store_populates_both_ctas
   // CHECK: nvg.cluster_id
-  // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.store
-  tt.func public @local_store_uses_local_cta(%arg0: tensor<2xf32, #reg>, %arg1: !ttg.memdesc<2xf32, #shared, #smem, mutable>) {
+  // CHECK: %[[PEER:.*]] = nvvm.mapa
+  // CHECK: llvm.store {{.*}}, %[[PEER]]{{.*}} : vector<1xi32>, !llvm.ptr<7>
+  tt.func public @local_store_populates_both_ctas(%arg0: tensor<2xf32, #reg>, %arg1: !ttg.memdesc<2xf32, #shared, #smem, mutable>) {
     ttg.local_store %arg0, %arg1 : tensor<2xf32, #reg> -> !ttg.memdesc<2xf32, #shared, #smem, mutable>
     tt.return
   }
