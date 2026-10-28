@@ -44,3 +44,39 @@ tt.func @add_kernel_nounroll(%arg0: tensor<256x!tt.ptr<f32>>, %arg1: i32) {
   }
   tt.return
 }
+
+// -----
+
+tt.func @empty_static_unroll() {
+  %c_1 = arith.constant -1 : i32
+  %c_3 = arith.constant -3 : i32
+  %c2 = arith.constant 2 : i32
+  %c0 = arith.constant 0 : i32
+  // Statically empty loops must not be unrolled.
+  // CHECK-LABEL: empty_static_unroll
+  // CHECK: scf.for
+  // CHECK-NOT: scf.for
+  %x = scf.for %arg3 = %c_1 to %c_3 step %c2 iter_args(%acc = %c0) -> (i32)  : i32 {
+    %y = arith.addi %acc, %c0 : i32
+    scf.yield %y : i32
+  } {tt.loop_unroll_factor = 2 : i32}
+  tt.return
+}
+
+// -----
+
+tt.func @empty_dynamic_unroll(%lo: i32, %hi: i32, %step: i32) {
+  %c0 = arith.constant 0 : i32
+  // Dynamic loops use a signed trip count so empty loops stay empty.
+  // CHECK-LABEL: empty_dynamic_unroll
+  // CHECK: arith.maxsi
+  // CHECK: arith.divsi
+  // CHECK-NOT: arith.divui
+  // CHECK: scf.for
+  // CHECK: scf.for
+  %x = scf.for %arg3 = %lo to %hi step %step iter_args(%acc = %c0) -> (i32)  : i32 {
+    %y = arith.addi %arg3, %acc : i32
+    scf.yield %y : i32
+  } {tt.loop_unroll_factor = 2 : i32}
+  tt.return
+}
