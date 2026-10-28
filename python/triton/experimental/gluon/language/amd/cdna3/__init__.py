@@ -8,6 +8,7 @@ from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from .._layouts import AMDMFMALayout
 from .._ops import _scaled_upcast, get_scaled_upcast_fp4_scale_layout
 from ..._semantic import _check
+from ._cache_policy import CachePolicy
 
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
@@ -17,9 +18,9 @@ if TYPE_CHECKING:
 from . import buffer
 
 __all__ = [
-    "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or",
-    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast",
-    "get_scaled_upcast_fp4_scale_layout"
+    "CachePolicy", "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max",
+    "buffer_atomic_or", "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma",
+    "scaled_upcast", "get_scaled_upcast_fp4_scale_layout"
 ]
 
 _atomic_op_str_to_op = {

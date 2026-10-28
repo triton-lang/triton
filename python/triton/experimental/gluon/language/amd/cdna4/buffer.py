@@ -8,12 +8,13 @@ from __future__ import annotations
 
 from ..._core import builtin
 from .. import _buffer
-from ..cdna3.buffer import (CachePolicy, buffer_descriptor, buffer_descriptor_type, make_buffer_descriptor, load, store,
-                            atomic_load, atomic_store)
+from ..cdna3._cache_policy import CachePolicy as _CachePolicy
+from ..cdna3.buffer import (buffer_descriptor, buffer_descriptor_type, make_buffer_descriptor, load, store, atomic_load,
+                            atomic_store)
 
 __all__ = [
-    "CachePolicy", "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store",
-    "atomic_load", "atomic_store", "load_to_shared"
+    "buffer_descriptor", "buffer_descriptor_type", "make_buffer_descriptor", "load", "store", "atomic_load",
+    "atomic_store", "load_to_shared"
 ]
 
 
@@ -42,4 +43,4 @@ def load_to_shared(dest, desc, offsets, mask=None, *, soffset=None, scope=None, 
             scope. It is not atomic and orders nothing. Defaults to None.
         cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
     """
-    _buffer.load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, CachePolicy, _semantic)
+    _buffer.load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, _CachePolicy, _semantic)
