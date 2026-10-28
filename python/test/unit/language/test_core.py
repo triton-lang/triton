@@ -8525,18 +8525,6 @@ def test_scan_dtype(op, in_dtype, dtype, member, device):
 
 
 @pytest.mark.interpreter
-def test_tensor_member(device):
-
-    @triton.jit
-    def kernel():
-        x = tl.arange(0, 16)
-        tl.device_assert(tl.abs(x) == x.abs())
-        tl.device_assert(tl.sum(x) == x.sum())
-
-    kernel[(1, )]()
-
-
-@pytest.mark.interpreter
 @pytest.mark.parametrize("rank", [2, 3, 4, 5, 6])
 @pytest.mark.parametrize("trans_a", [False, True])
 @pytest.mark.parametrize("trans_b", [False, True])

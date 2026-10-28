@@ -2,7 +2,8 @@ import pytest
 import torch
 import triton.language as tl
 import triton
-from triton._internal_testing import run_in_process
+from triton._internal_testing import is_interpreter, run_in_process
+from triton.runtime.errors import InterpreterError
 
 pytestmark = pytest.mark.usefixtures("process_pool")
 
@@ -53,11 +54,14 @@ def _run_expect_zero_device_assert(device):
     getattr(torch, device).synchronize()
 
 
+@pytest.mark.interpreter
 def test_expect_zero_device_assert(device):
     result = run_in_process(_run_expect_zero_device_assert, (device, ), env={"TRITON_DEBUG": "1"})
-    assert isinstance(result.exc, RuntimeError)
+    expected_error = InterpreterError if is_interpreter() else RuntimeError
+    assert isinstance(result.exc, expected_error)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize('cond', [True, False])
 @pytest.mark.parametrize('mask', [True, False, None])
 @pytest.mark.parametrize('opt_flag', [True, False, None])
@@ -69,12 +73,14 @@ def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
                             env={"TRITON_DEBUG": str(int(env_var))})
 
     if not cond and is_debug and mask is not False:
-        assert isinstance(result.exc, RuntimeError)
+        expected_error = InterpreterError if is_interpreter() else RuntimeError
+        assert isinstance(result.exc, expected_error)
         return
 
     assert result.exc is None, result.exc
 
 
+@pytest.mark.interpreter
 def test_device_assert_barrier(device):
     result = run_in_process(_run_device_assert_barrier, (device, ), env={"TRITON_DEBUG": "1"})
     assert result.exc is None, result.exc
