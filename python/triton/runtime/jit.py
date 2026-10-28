@@ -18,7 +18,7 @@ from types import ModuleType
 from .. import knobs
 from .driver import driver
 from . import _async_compile
-from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
+from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple, _tuple_create
 from .cache import get_cache_key
 from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl, ir
 
@@ -306,12 +306,13 @@ def _normalize_ty(ty) -> str:
 class KernelParam:
     """Represents a parameter (name plus metadata) to a @jit'ed function."""
 
-    def __init__(self, num: int, param: inspect.Parameter, do_not_specialize: bool,
-                 do_not_specialize_on_alignment: bool):
+    def __init__(self, num: int, param: inspect.Parameter, do_not_specialize_paths,
+                 do_not_specialize_on_alignment_paths):
         self.num = num
         self._param = param
-        self.do_not_specialize = do_not_specialize
-        self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
+        # Paths are relative to the parameter. The empty path selects the parameter itself.
+        self.do_not_specialize_paths = tuple(do_not_specialize_paths)
+        self.do_not_specialize_on_alignment_paths = tuple(do_not_specialize_on_alignment_paths)
 
     @cached_property
     def name(self):
@@ -403,6 +404,57 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     return serialized_obj
 
 
+def _specialization_paths(selectors, option):
+    for selector in selectors:
+        path = tuple(selector.split(".")) if isinstance(selector, str) else selector
+        path = path if isinstance(path, tuple) else (path, )
+        if not path or not all(isinstance(field, (str, int)) for field in path):
+            raise ValueError(f"Invalid {option} path {path!r}")
+        yield path
+
+
+def _group_member_paths(paths, field_indices):
+    children = defaultdict(list)
+    for path in paths:
+        if path:
+            index = field_indices.get(path[0], path[0])
+            children[index].append(path[1:])
+    return children
+
+
+def _specialize_tuple_members(backend, arg, value_paths, alignment_paths, is_const=False, *, specialize=True):
+    if not isinstance(arg, tuple):
+        return native_specialize_impl(backend, arg, is_const, specialize and () not in value_paths, ()
+                                      not in alignment_paths)
+
+    fields = getattr(arg, "_fields", ())
+    field_indices = {name: i for i, name in enumerate(fields)}
+    value_children = _group_member_paths(value_paths, field_indices)
+    alignment_children = _group_member_paths(alignment_paths, field_indices)
+    skipped_indices = set()
+    if is_namedtuple(type(arg)):
+        skipped = getattr(type(arg), "__triton_do_not_specialize__", ())
+        if not isinstance(skipped, tuple):
+            raise TypeError("__triton_do_not_specialize__ must be a tuple of field names")
+        for field in skipped:
+            if field not in fields:
+                raise ValueError(f"unknown field {field!r} in __triton_do_not_specialize__")
+            skipped_indices.add(field_indices[field])
+    specs = []
+    for i, value in enumerate(arg):
+        child_value_paths = value_children.get(i, ())
+        child_alignment_paths = alignment_children.get(i, ())
+        # Namedtuple class declarations apply recursively to their fields.
+        specialize_child = specialize and i not in skipped_indices
+        if child_value_paths or child_alignment_paths or not specialize_child:
+            specs.append(
+                _specialize_tuple_members(backend, value, child_value_paths, child_alignment_paths,
+                                          specialize=specialize_child))
+        else:
+            specs.append(native_specialize_impl(backend, value, False, True, True))
+    return _tuple_create(arg, (ty for ty, _ in specs)), _tuple_create(arg, (key for _, key in specs))
+
+
 def create_function_from_signature(sig, kparams, backend):
     """
     Equivalent to sig.bind followed by apply_defaults. This generates a
@@ -419,9 +471,14 @@ def create_function_from_signature(sig, kparams, backend):
             specialization.append(f'("constexpr", {name})')
         else:
             is_const = 'True' if kp.is_const else 'False'
-            specialize = 'False' if kp.do_not_specialize else 'True'
-            align = 'False' if kp.do_not_specialize_on_alignment else 'True'
-            ret = f"specialize_impl(backend, {name}, {is_const}, {specialize}, {align})"
+            value_paths = kp.do_not_specialize_paths
+            alignment_paths = kp.do_not_specialize_on_alignment_paths
+            specialize = 'False' if () in value_paths else 'True'
+            align = 'False' if () in alignment_paths else 'True'
+            if any(value_paths) or any(alignment_paths):
+                ret = f"specialize_tuple_members(backend, {name}, {value_paths!r}, {alignment_paths!r}, {is_const})"
+            else:
+                ret = f"specialize_impl(backend, {name}, {is_const}, {specialize}, {align})"
             if kp.annotation_type:
                 if isinstance(kp.annotation_type, str):
                     if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
@@ -450,9 +507,11 @@ def create_function_from_signature(sig, kparams, backend):
 
     func_body = f"""
 def dynamic_func({", ".join(arg_list + ["**options"])}):
-    params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
-    specialization = [{','.join(specialization)}]
-    return params, specialization, options
+    return (
+        {{{', '.join(f"'{name}': {name}" for name in sig.parameters)}}},
+        [{','.join(specialization)}],
+        options,
+    )
 """
 
     # Prepare defaults to be inserted into function namespace
@@ -464,6 +523,7 @@ def dynamic_func({", ".join(arg_list + ["**options"])}):
 
     specialize_impl = native_specialize_impl
     func_namespace["specialize_impl"] = specialize_impl
+    func_namespace["specialize_tuple_members"] = _specialize_tuple_members
     func_namespace["backend"] = backend
     func_namespace["JITCallable"] = JITCallable
 
@@ -803,8 +863,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
     def __init__(self, fn, version=None, do_not_specialize=None, do_not_specialize_on_alignment=None, debug=None,
                  noinline=None, repr=None, launch_metadata=None):
-        do_not_specialize = do_not_specialize if do_not_specialize else []
-        do_not_specialize_on_alignment = do_not_specialize_on_alignment if do_not_specialize_on_alignment else []
+        do_not_specialize = tuple(do_not_specialize or ())
+        do_not_specialize_on_alignment = tuple(do_not_specialize_on_alignment or ())
 
         super().__init__(fn)
         self.module = fn.__module__
@@ -814,13 +874,17 @@ class JITFunction(JITCallable, KernelInterface[T]):
         self._repr = repr
         self.launch_metadata = launch_metadata
 
+        param_indices = {name: i for i, name in enumerate(self.signature.parameters)}
+        value_selectors = _specialization_paths(do_not_specialize, "do_not_specialize")
+        alignment_selectors = _specialization_paths(do_not_specialize_on_alignment, "do_not_specialize_on_alignment")
+        value_paths = _group_member_paths(value_selectors, param_indices)
+        alignment_paths = _group_member_paths(alignment_selectors, param_indices)
+
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
             if param.kind == inspect.Parameter.VAR_KEYWORD:
                 raise TypeError(f"JIT functions do not support **{param.name} parameters")
-            dns = i in do_not_specialize or param.name in do_not_specialize
-            dns_oa = i in do_not_specialize_on_alignment or param.name in do_not_specialize_on_alignment
-            self.params.append(KernelParam(i, param, dns, dns_oa))
+            self.params.append(KernelParam(i, param, value_paths.get(i, ()), alignment_paths.get(i, ())))
 
         # Register for simple deserialization of JITFunction constants
         _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
@@ -980,8 +1044,8 @@ def jit(
     version=None,
     repr: Optional[Callable] = None,
     launch_metadata: Optional[Callable] = None,
-    do_not_specialize: Optional[Iterable[int | str]] = None,
-    do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
+    do_not_specialize: Optional[Iterable[int | str | tuple[int | str, ...]]] = None,
+    do_not_specialize_on_alignment: Optional[Iterable[int | str | tuple[int | str, ...]]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
 ) -> Callable[[T], JITFunction[T]]:
@@ -994,8 +1058,8 @@ def jit(
     version=None,
     repr: Optional[Callable] = None,
     launch_metadata: Optional[Callable] = None,
-    do_not_specialize: Optional[Iterable[int | str]] = None,
-    do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
+    do_not_specialize: Optional[Iterable[int | str | tuple[int | str, ...]]] = None,
+    do_not_specialize_on_alignment: Optional[Iterable[int | str | tuple[int | str, ...]]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
 ) -> KernelInterface[T]:
@@ -1018,6 +1082,11 @@ def jit(
            * arguments to this function,
            * other jit'd functions
 
+    :param do_not_specialize: Parameter names or indices to keep dynamic. Select a nested
+        tuple member with a path such as ``("args", 0, "size")`` or ``"args.request.size"``.
+        Selecting a tuple at any depth leaves its members independently specialized.
+    :param do_not_specialize_on_alignment: Accepts the same selectors as ``do_not_specialize``
+        and disables only alignment specialization for the selected arguments or members.
     :param fn: the function to be jit-compiled
     :type fn: Callable
     """

@@ -557,17 +557,21 @@ def test_bound_unused_result():
     assert "The result of a.power is not being used" in str(e.value)
 
 
-def test_err_constexpr_and_do_not_specialize():
+@pytest.mark.parametrize("options,value", [
+    ({"do_not_specialize": ["N"]}, 5),
+    ({"do_not_specialize_on_alignment": [("N", 0)]}, (5, 16)),
+])
+def test_err_constexpr_and_do_not_specialize(options, value):
 
-    @triton.jit(do_not_specialize=["N"])
+    @triton.jit(**options)
     def kernel(N: tl.constexpr):
         pass
 
     with pytest.raises(CompilationError, match="N marked as constexpr and listed in do_not_specialize"):
-        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={"N": 5}))
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={"N": value}))
 
     with pytest.raises(CompilationError, match="N marked as constexpr and listed in do_not_specialize"):
-        kernel[(1, )](5)
+        kernel[(1, )](value)
 
 
 def test_dot_scaled_shape_verification(fresh_triton_cache):

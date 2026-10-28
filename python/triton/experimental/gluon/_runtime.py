@@ -70,8 +70,8 @@ def jit(
     version=None,
     repr: Optional[Callable] = None,
     launch_metadata: Optional[Callable] = None,
-    do_not_specialize: Optional[Iterable[int | str]] = None,
-    do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
+    do_not_specialize: Optional[Iterable[int | str | tuple[int | str, ...]]] = None,
+    do_not_specialize_on_alignment: Optional[Iterable[int | str | tuple[int | str, ...]]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
 ) -> Callable[[T], GluonJITFunction[T]]:
@@ -84,8 +84,8 @@ def jit(
     version=None,
     repr: Optional[Callable] = None,
     launch_metadata: Optional[Callable] = None,
-    do_not_specialize: Optional[Iterable[int | str]] = None,
-    do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
+    do_not_specialize: Optional[Iterable[int | str | tuple[int | str, ...]]] = None,
+    do_not_specialize_on_alignment: Optional[Iterable[int | str | tuple[int | str, ...]]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
 ) -> Union[GluonJITFunction[T], Callable[[T], JITFunction[T]]]:
@@ -106,6 +106,11 @@ def jit(
            * arguments to this function,
            * other jit'd functions
 
+    :param do_not_specialize: Parameter names or indices to keep dynamic. Select a nested
+        tuple member with a path such as ``("args", 0, "size")`` or ``"args.request.size"``.
+        Selecting a tuple at any depth leaves its members independently specialized.
+    :param do_not_specialize_on_alignment: Accepts the same selectors as ``do_not_specialize``
+        and disables only alignment specialization for the selected arguments or members.
     :param fn: the function to be jit-compiled
     :type fn: Callable
     """

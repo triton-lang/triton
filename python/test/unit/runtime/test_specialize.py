@@ -4,7 +4,7 @@ import torch
 import triton.language as tl
 from collections import namedtuple
 from triton._C.libtriton import native_specialize_impl
-from triton.runtime.jit import MockTensor, JITCallable
+from triton.runtime.jit import MockTensor, JITCallable, create_function_from_signature, jit
 from triton._utils import canonicalize_dtype
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.amd.compiler import HIPBackend
@@ -239,3 +239,26 @@ def test_native_dtype_torch_contract(torch_name, dtype, canonical):
         for value, name in ((storage, "u8"), (native, canonical), (storage, "u8"), (native, canonical)):
             signature, _ = native_specialize_impl(backend, value, False, True, True)
             assert signature == "*" + name
+
+
+def test_do_not_specialize_tuple_member():
+
+    class Params(namedtuple("Params", ["inner", "handles", "stride"])):
+        __triton_do_not_specialize__ = ("handles", )
+
+    Inner = namedtuple("Inner", ["count", "stride", "width"])
+
+    @jit(do_not_specialize=["args", "args.inner", "args.inner.count"],
+         do_not_specialize_on_alignment=[0, (0, 0), (0, 0, 1)])
+    def kernel(args):
+        pass
+
+    bind = create_function_from_signature(kernel.signature, kernel.params, CUDABackend)
+    _, specs, _ = bind(Params(Inner(1, 16, 16), (1, 16), 16))
+    types, keys = specs[0]
+    assert types == Params(Inner("i32", "i32", "i32"), ("i32", "i32"), "i32")
+    assert keys == Params(Inner(None, "", "D"), (None, None), "D")
+    _, specs, _ = bind(Params(Inner(constexpr(0), 1, 1), (1, 16), 16))
+    types, keys = specs[0]
+    assert types.inner == Inner("constexpr", "constexpr", "constexpr")
+    assert keys.inner == Inner(0, 1, 1)
