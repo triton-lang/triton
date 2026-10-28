@@ -724,8 +724,10 @@ def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, tensor_sc
 @pytest.mark.parametrize("all_inactive", [False, True])
 @pytest.mark.parametrize("requantize", [False, True])
 def test_gather_inactive_scales(is_persistent, all_inactive, requantize, device):
-    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
-        pytest.skip("Requires Blackwell")
+    if not is_hopper_or_newer():
+        pytest.skip("Requires Hopper or newer")
+    if requantize and torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("NVFP4 requantization requires Blackwell")
     m, n, k = 33, 64, 128
     # Guard both scale arrays: masking values alone must not hide scale reads.
     scale_dtype = torch.float8_e4m3fn if requantize else torch.uint8
