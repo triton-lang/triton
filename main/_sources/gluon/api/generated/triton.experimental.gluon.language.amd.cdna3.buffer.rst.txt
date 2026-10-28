@@ -26,7 +26,6 @@
    :toctree:
    :nosignatures:
 
-   CachePolicy
    buffer_descriptor
    buffer_descriptor_type
 

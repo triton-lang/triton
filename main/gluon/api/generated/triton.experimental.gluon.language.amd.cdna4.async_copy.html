@@ -129,6 +129,12 @@
              
   <section id="module-triton.experimental.gluon.language.amd.cdna4.async_copy">
 <span id="triton-experimental-gluon-language-amd-cdna4-async-copy"></span><h1>triton.experimental.gluon.language.amd.cdna4.async_copy<a class="headerlink" href="#module-triton.experimental.gluon.language.amd.cdna4.async_copy" title="Link to this heading"></a></h1>
+<p>Asynchronous global-to-shared memory copies for CDNA4.</p>
+<p>These load data from global memory directly into shared memory without going through registers, either through a
+tensor of pointers (<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna4.async_copy.global_load_to_shared.html#triton.experimental.gluon.language.amd.cdna4.async_copy.global_load_to_shared" title="triton.experimental.gluon.language.amd.cdna4.async_copy.global_load_to_shared"><code class="xref py py-func docutils literal notranslate"><span class="pre">global_load_to_shared()</span></code></a>) or a scalar base pointer and a tensor of offsets
+(<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna4.async_copy.buffer_load_to_shared.html#triton.experimental.gluon.language.amd.cdna4.async_copy.buffer_load_to_shared" title="triton.experimental.gluon.language.amd.cdna4.async_copy.buffer_load_to_shared"><code class="xref py py-func docutils literal notranslate"><span class="pre">buffer_load_to_shared()</span></code></a>, deprecated in favor of
+<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna4.buffer.load_to_shared.html#triton.experimental.gluon.language.amd.cdna4.buffer.load_to_shared" title="triton.experimental.gluon.language.amd.cdna4.buffer.load_to_shared"><code class="xref py py-func docutils literal notranslate"><span class="pre">buffer.load_to_shared</span></code></a>). Group issued
+copies with <a class="reference internal" href="triton.experimental.gluon.language.amd.cdna4.async_copy.commit_group.html#triton.experimental.gluon.language.amd.cdna4.async_copy.commit_group" title="triton.experimental.gluon.language.amd.cdna4.async_copy.commit_group"><code class="xref py py-func docutils literal notranslate"><span class="pre">commit_group()</span></code></a> and wait for them with <a class="reference internal" href="triton.experimental.gluon.language.amd.cdna4.async_copy.wait_group.html#triton.experimental.gluon.language.amd.cdna4.async_copy.wait_group" title="triton.experimental.gluon.language.amd.cdna4.async_copy.wait_group"><code class="xref py py-func docutils literal notranslate"><span class="pre">wait_group()</span></code></a> before reading the destination.</p>
 <p class="rubric">Functions</p>
 <table class="autosummary longtable docutils align-default">
 <tbody>
@@ -136,7 +142,7 @@
 <td><p>AMD global load to shared operation.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna4.async_copy.buffer_load_to_shared.html#triton.experimental.gluon.language.amd.cdna4.async_copy.buffer_load_to_shared" title="triton.experimental.gluon.language.amd.cdna4.async_copy.buffer_load_to_shared"><code class="xref py py-obj docutils literal notranslate"><span class="pre">buffer_load_to_shared</span></code></a></p></td>
-<td><p>AMD buffer load to shared operation.</p></td>
+<td><p>Deprecated.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="triton.experimental.gluon.language.amd.cdna4.async_copy.commit_group.html#triton.experimental.gluon.language.amd.cdna4.async_copy.commit_group" title="triton.experimental.gluon.language.amd.cdna4.async_copy.commit_group"><code class="xref py py-obj docutils literal notranslate"><span class="pre">commit_group</span></code></a></p></td>
 <td><p>Commit outstanding async operations.</p></td>

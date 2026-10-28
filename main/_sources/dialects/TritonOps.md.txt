@@ -1635,18 +1635,15 @@ Effects: `MemoryEffects::Effect{}`
 
 ### `tt.reshape` (triton::ReshapeOp)
 
-_Reinterpret a tensor to a different shape. It may change elements order if the attribute is set._
+_Reinterpret a tensor to a different shape._
 
 Syntax:
 
 ```
-operation ::= `tt.reshape` $src (`allow_reorder` $allow_reorder^)? (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)
+operation ::= `tt.reshape` $src (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)
 ```
 
 reinterpret a tensor to a different shape.
-
-If allow_reorder is set the compiler is free to change the order of
-elements to generate more efficient code.
 
 If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
 The compiler is still free to change it for better performance.
@@ -1661,7 +1658,6 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>allow_reorder</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 <tr><td><code>efficient_layout</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 

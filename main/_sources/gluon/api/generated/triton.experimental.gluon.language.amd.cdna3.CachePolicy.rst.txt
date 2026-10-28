@@ -1,0 +1,30 @@
+﻿triton.experimental.gluon.language.amd.cdna3.CachePolicy
+========================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna3
+
+.. autoclass:: CachePolicy
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~CachePolicy.__init__
+      ~CachePolicy.mangle
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~CachePolicy.nontemporal
+      ~CachePolicy.type
+   
+   

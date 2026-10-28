@@ -29,7 +29,7 @@
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="triton.experimental.gluon.language.amd.cdna3.buffer_store" href="triton.experimental.gluon.language.amd.cdna3.buffer_store.html" />
-    <link rel="prev" title="triton.experimental.gluon.language.amd.cdna3.buffer.buffer_descriptor_type" href="triton.experimental.gluon.language.amd.cdna3.buffer.buffer_descriptor_type.html" /> 
+    <link rel="prev" title="triton.experimental.gluon.language.amd.cdna3.CachePolicy" href="triton.experimental.gluon.language.amd.cdna3.CachePolicy.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -132,7 +132,9 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna3.buffer_load">
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna3.</span></span><span class="sig-name descname"><span class="pre">buffer_load</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ptr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offsets</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna3.buffer_load" title="Link to this definition"></a></dt>
-<dd><p>AMD buffer load from global memory via a scalar base pointer and a tensor of
+<dd><p>Deprecated. Use <a class="reference internal" href="triton.experimental.gluon.language.amd.cdna3.buffer.load.html#triton.experimental.gluon.language.amd.cdna3.buffer.load" title="triton.experimental.gluon.language.amd.cdna3.buffer.load"><code class="xref py py-func docutils literal notranslate"><span class="pre">buffer.load</span></code></a> with a descriptor from
+<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor.html#triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor" title="triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor"><code class="xref py py-func docutils literal notranslate"><span class="pre">buffer.make_buffer_descriptor</span></code></a> instead.</p>
+<p>AMD buffer load from global memory via a scalar base pointer and a tensor of
 offsets instead of a tensor of pointers. This operation will load data
 directly into registers.</p>
 <dl class="field-list simple">
@@ -154,7 +156,7 @@ directly into registers.</p>
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.experimental.gluon.language.amd.cdna3.buffer.buffer_descriptor_type.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.amd.cdna3.buffer.buffer_descriptor_type" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.experimental.gluon.language.amd.cdna3.CachePolicy.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.amd.cdna3.CachePolicy" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="triton.experimental.gluon.language.amd.cdna3.buffer_store.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.amd.cdna3.buffer_store" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

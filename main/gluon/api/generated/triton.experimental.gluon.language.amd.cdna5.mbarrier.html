@@ -129,6 +129,10 @@
              
   <section id="module-triton.experimental.gluon.language.amd.cdna5.mbarrier">
 <span id="triton-experimental-gluon-language-amd-cdna5-mbarrier"></span><h1>triton.experimental.gluon.language.amd.cdna5.mbarrier<a class="headerlink" href="#module-triton.experimental.gluon.language.amd.cdna5.mbarrier" title="Link to this heading"></a></h1>
+<p>Shared-memory barriers (mbarriers) for CDNA5.</p>
+<p>An mbarrier lives in shared memory allocated with <a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout.html#triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout" title="triton.experimental.gluon.language.amd.cdna5.mbarrier.MBarrierLayout"><code class="xref py py-class docutils literal notranslate"><span class="pre">MBarrierLayout</span></code></a> and tracks a pending arrival count and a
+phase. Set it up with <a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.mbarrier.init.html#triton.experimental.gluon.language.amd.cdna5.mbarrier.init" title="triton.experimental.gluon.language.amd.cdna5.mbarrier.init"><code class="xref py py-func docutils literal notranslate"><span class="pre">init()</span></code></a>, signal it with <a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.mbarrier.arrive.html#triton.experimental.gluon.language.amd.cdna5.mbarrier.arrive" title="triton.experimental.gluon.language.amd.cdna5.mbarrier.arrive"><code class="xref py py-func docutils literal notranslate"><span class="pre">arrive()</span></code></a> and block on phase completion with <a class="reference internal" href="triton.experimental.gluon.language.amd.cdna5.mbarrier.wait.html#triton.experimental.gluon.language.amd.cdna5.mbarrier.wait" title="triton.experimental.gluon.language.amd.cdna5.mbarrier.wait"><code class="xref py py-func docutils literal notranslate"><span class="pre">wait()</span></code></a>.
+Asynchronous copies and TDM operations can also arrive on an mbarrier when they complete.</p>
 <p class="rubric">Functions</p>
 <table class="autosummary longtable docutils align-default">
 <tbody>

@@ -1,7 +1,7 @@
-triton.experimental.gluon.language.amd.cdna3.buffer.CachePolicy
-===============================================================
+﻿triton.experimental.gluon.language.amd.cdna4.CachePolicy
+========================================================
 
-.. currentmodule:: triton.experimental.gluon.language.amd.cdna3.buffer
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna4
 
 .. autoclass:: CachePolicy
 

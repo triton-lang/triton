@@ -154,7 +154,7 @@ register, so a uniform advance costs no per-lane arithmetic. A tensor gives each
 own value: it broadcasts to <code class="docutils literal notranslate"><span class="pre">offsets</span></code> and must have size 1 in every dimension the lanes
 of the offsets’ layout span, e.g. shape <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">1]</span></code> for <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">N]</span></code> offsets whose rows each
 sit in one wave. Defaults to None (0).</p></li>
-<li><p><strong>cache_policy</strong> (<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna3.buffer.CachePolicy.html#triton.experimental.gluon.language.amd.cdna3.buffer.CachePolicy" title="triton.experimental.gluon.language.amd.cdna3.buffer.CachePolicy"><em>CachePolicy</em></a><em>, </em><em>optional</em>) – Cache hints. Defaults to None.</p></li>
+<li><p><strong>cache_policy</strong> (<a class="reference internal" href="triton.experimental.gluon.language.amd.cdna3.CachePolicy.html#triton.experimental.gluon.language.amd.cdna3.CachePolicy" title="triton.experimental.gluon.language.amd.cdna3.CachePolicy"><em>CachePolicy</em></a><em>, </em><em>optional</em>) – Cache hints. Defaults to None.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
