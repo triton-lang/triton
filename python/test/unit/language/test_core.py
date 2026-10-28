@@ -8436,6 +8436,83 @@ def test_chained_comparison_short_circuit(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("size", [1, 16])
+def test_logical_not_tensor(device, size):
+
+    @triton.jit
+    def kernel(X, Y, SIZE: tl.constexpr):
+        if SIZE == 1:
+            offsets = 0
+        else:
+            offsets = tl.arange(0, SIZE)
+        x = tl.load(X + offsets)
+        tl.store(Y + offsets, not x)
+        tl.store(Y + SIZE + offsets, not not x)
+
+    x = to_triton(np.resize(np.array([False, True]), size), device=device)
+    y = torch.empty((2 * size, ), dtype=torch.bool, device=device)
+    kernel[(1, )](x, y, SIZE=size)
+    torch.testing.assert_close(y[:size], ~x)
+    torch.testing.assert_close(y[size:], x)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("value", [None, False, True, 0, 1])
+def test_logical_not_constexpr(device, value):
+
+    @triton.jit
+    def kernel(Y, VALUE: tl.constexpr):
+        tl.store(Y, not VALUE)
+
+    y = torch.empty((), dtype=torch.bool, device=device)
+    kernel[(1, )](y, value)
+    assert y.item() == (not value)
+
+
+@pytest.mark.interpreter
+def test_logical_not_helper_parameter_collision(device):
+
+    @triton.jit
+    def kernel(Y, _interpreter_not, _interpreter_not_1):
+        tl.store(Y, not _interpreter_not)
+        tl.store(Y + 1, not _interpreter_not_1)
+
+    y = torch.empty((2, ), dtype=torch.bool, device=device)
+    kernel[(1, )](y, False, True)
+    torch.testing.assert_close(y, torch.tensor([True, False], device=device))
+
+
+@pytest.mark.interpreter
+def test_logical_not_helper_local_collision(device):
+
+    @triton.jit
+    def kernel(Y):
+        _interpreter_not = tl.program_id(0) == 0
+        _interpreter_not_1 = not _interpreter_not
+        tl.store(Y, _interpreter_not_1)
+        tl.store(Y + 1, not _interpreter_not_1)
+
+    y = torch.empty((2, ), dtype=torch.bool, device=device)
+    kernel[(1, )](y)
+    torch.testing.assert_close(y, torch.tensor([False, True], device=device))
+
+
+@pytest.mark.interpreter
+def test_logical_not_helper_global_collision(device, monkeypatch):
+    monkeypatch.setitem(globals(), "_interpreter_not", True)
+    monkeypatch.setitem(globals(), "_interpreter_not_1", False)
+
+    @triton.jit
+    def kernel(Y):
+        tl.store(Y, not _interpreter_not)
+        tl.store(Y + 1, not _interpreter_not_1)
+
+    y = torch.empty((2, ), dtype=torch.bool, device=device)
+    kernel[(1, )](y)
+    torch.testing.assert_close(y, torch.tensor([False, True], device=device))
+
+
+@pytest.mark.interpreter
 def test_short_circuiting(device):
 
     @triton.jit
