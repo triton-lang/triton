@@ -367,8 +367,9 @@ def _matmul(
     else:
         XTensorScalePtrs = None
 
+    # Inactive rows have no source scales; neutral scales preserve their zero values.
     if REQUANTIZE_X and has_x_tensor_scale:
-        x_conversion_scale = tl.load(XTensorScalePtrs)
+        x_conversion_scale = tl.load(XTensorScalePtrs, mask=offs_x_m >= 0, other=1.0)
     else:
         x_conversion_scale: tl.constexpr = None
 
@@ -432,7 +433,10 @@ def _matmul(
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
 
             if is_x_microscaled:
-                x_scales = tl.load(XMxScalePtrs, mask=mask_x_k_scale[None, :], other=0.0)
+                # Inactive rows must not read scales either. Use a neutral scale
+                # (127 encodes 1 in E8M0) for the zero-filled activation.
+                neutral_scale: tl.constexpr = 127 if XMxScale.dtype.element_ty == tl.uint8 else 1.0
+                x_scales = tl.load(XMxScalePtrs, mask=(offs_x_m[:, None] >= 0) & mask_x_k_scale[None, :], other=neutral_scale)
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
             else:
@@ -515,7 +519,7 @@ def _matmul(
         x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
         w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
         if has_x_epilogue_scale:
-            x_tensor_scales = tl.load(XTensorScalePtrs)
+            x_tensor_scales = tl.load(XTensorScalePtrs, mask=offs_x_m >= 0, other=1.0)
         if has_w_tensor_scale:
             w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0)
         if SWAP_XW:

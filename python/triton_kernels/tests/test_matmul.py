@@ -28,7 +28,7 @@ from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor import Tensor, convert_layout, make_ragged_tensor_metadata, wrap_torch_tensor
-from triton_kernels.tensor_details.dtype import FP32
+from triton_kernels.tensor_details.dtype import FP32, FP4
 
 # ---------------
 # numerics stuff
@@ -681,7 +681,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 @pytest.mark.parametrize("split_k", [1, 2])
 @pytest.mark.parametrize("k", [64, 80])
 @pytest.mark.parametrize("all_inactive", [False, True])
-def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, device):
+@pytest.mark.parametrize("tensor_scale", [False, True])
+def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, tensor_scale, device):
     if not is_hopper_or_newer():
         pytest.skip("Requires Hopper or newer for persistent matmul")
     m, n = 33, 64
@@ -699,11 +700,54 @@ def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, device):
     active = gather >= 0
     expected[active] = a[gather[active].long(), :1] * k
 
+    scale_storage = torch.full((m + 1,), float("nan"), device=device)
+    scale_storage[1:] = 2.0
+    config = PrecisionConfig(a_mx_tensor_scale=scale_storage[1:] if tensor_scale else None)
+    if tensor_scale:
+        expected *= 2.0
     with opt_flags.scoped_opt_flags_constraints({
         "is_persistent": is_persistent, "split_k": split_k,
         "block_m": 32, "block_n": 64, "block_k": 64,
     }):
-        actual = matmul(a, b, None, gather_indx=gather)
+        actual = matmul(a, b, None, gather_indx=gather, precision_config=config)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("is_persistent", [False, True])
+@pytest.mark.parametrize("all_inactive", [False, True])
+@pytest.mark.parametrize("requantize", [False, True])
+def test_gather_inactive_scales(is_persistent, all_inactive, requantize, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("Requires Blackwell")
+    m, n, k = 33, 64, 128
+    # Guard both scale arrays: masking values alone must not hide scale reads.
+    scale_dtype = torch.float8_e4m3fn if requantize else torch.uint8
+    scale_storage = torch.full((m + 1, k // (16 if requantize else 32)),
+                               float("nan") if requantize else 255, dtype=scale_dtype, device=device)
+    scale_storage[1:] = 1.0 if requantize else 127
+    outer_storage = torch.full((m + 1,), float("nan"), device=device)
+    outer_storage[1:] = 2.0
+    if requantize:
+        a = wrap_torch_tensor(torch.full((m, k // 2), 0x22, dtype=torch.uint8, device=device), dtype=FP4)
+        b = wrap_torch_tensor(torch.full((n, k // 2), 0x22, dtype=torch.uint8, device=device).T, dtype=FP4)
+        b_scale = torch.full((k // 32, n), 127, dtype=torch.uint8, device=device)
+    else:
+        a = torch.ones((m, k), dtype=torch.float8_e4m3fn, device=device)
+        b = torch.ones((k, n), dtype=torch.bfloat16, device=device)
+        b_scale = None
+    config = PrecisionConfig(a_mx_scale=scale_storage[1:], a_microblock_size=16 if requantize else 32,
+                             a_mx_tensor_scale=outer_storage[1:] if requantize else None,
+                             b_mx_scale=b_scale, b_microblock_size=32 if requantize else None,
+                             out_dtype=torch.float32)
+    gather = torch.arange(m - 1, -1, -1, dtype=torch.int32, device=device)
+    gather[::1 if all_inactive else 2] = -1
+    expected = torch.zeros((m, n), device=device)
+    expected[gather >= 0] = k * (2 if requantize else 1)
+    with opt_flags.scoped_opt_flags_constraints({
+        "is_persistent": is_persistent, "split_k": 1,
+        "block_m": 32, "block_n": 64, "block_k": 128,
+    }):
+        actual = matmul(a, b, None, gather_indx=gather, precision_config=config)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 

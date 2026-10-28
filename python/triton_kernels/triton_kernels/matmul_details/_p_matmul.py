@@ -357,7 +357,8 @@ def _p_matmul(
             if GatherIndx is None:
                 XMxScalePtrs += slice_off_m * stride_x_mx_m
             offs_k_scale = off_k_x0 // X_MX_BLOCK_SIZE + tl.arange(0, X_SCALE_BLOCK_K)
-            XMxScalePtrs += (offs_x_m if USE_GATHER_TMA else offs_m).to(index_type)[:, None] * stride_x_mx_m
+            mx_scale_offs_m = offs_x_m if USE_GATHER_TMA else offs_m
+            XMxScalePtrs += mx_scale_offs_m.to(index_type)[:, None] * stride_x_mx_m
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
         XTensorScalePtrs = None
         if XTensorScale is not None:
@@ -372,8 +373,9 @@ def _p_matmul(
                 XTensorScalePtrs += slice_off_m * stride_x_tensor_scale_m
             XTensorScalePtrs += scale_offs_m.to(index_type) * stride_x_tensor_scale_m
 
+        # Inactive rows have no source scales; neutral scales preserve their zero values.
         if REQUANTIZE_X and XTensorScale is not None:
-            x_conversion_scale = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0)
+            x_conversion_scale = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0), other=1.0)
         else:
             x_conversion_scale: tl.constexpr = None
 
@@ -445,7 +447,10 @@ def _p_matmul(
                     else:
                         mask_k_scale = off_k_mx + tl.arange(0, X_SCALE_BLOCK_K) < tl.cdiv(K, X_MX_BLOCK_SIZE)
                     mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
-                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
+                    # TMA may mask activation gathers, but pointer-based scales
+                    # still need their own source-row check and neutral fallback.
+                    neutral_scale: tl.constexpr = 127 if XMxScale.dtype.element_ty == tl.uint8 else 1.0
+                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & (mask_m & (mx_scale_offs_m >= 0))[:, None], other=neutral_scale)
                 else: # use TMA for x scale load
                     # Gathered values can use a dense descriptor while their
                     # scales are already padded and ordered by ragged slice.
@@ -554,7 +559,7 @@ def _p_matmul(
             x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
             w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
             if HAS_X_EPILOGUE_SCALE:
-                x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0)
+                x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m & (scale_offs_m >= 0), other=1.0)
             if WTensorScale is not None:
                 offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
                 w_tensor_scales = tl.load(
