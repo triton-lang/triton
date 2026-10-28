@@ -1,14 +1,5 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx1250" | FileCheck %s --check-prefixes=CHECK,GFX1250
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="gfx-arch=gfx1250-strict" | FileCheck %s --check-prefixes=STRICT
-// STRICT-NOT: instrShape = [16, 16, 32]
-// STRICT-NOT: instrShape = [16, 16, 64]
-// STRICT-NOT: instrShape = [16, 16, 128]
-// STRICT-NOT: instrShape = [32, 16,
-// STRICT: instrShape = [16, 16, 4]
-// STRICT-NOT: instrShape = [16, 16, 32]
-// STRICT-NOT: instrShape = [16, 16, 64]
-// STRICT-NOT: instrShape = [16, 16, 128]
-// STRICT-NOT: instrShape = [32, 16,
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -18,6 +9,7 @@
 // CHECK{LITERAL}: #linear1 = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[16, 0], [0, 0]], block = []}>
 // CHECK{LITERAL}: #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 128]}>
 // CHECK{LITERAL}: #mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 64]}>
+// STRICT{LITERAL}: #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 128]}>
 // CHECK-LABEL: wmma_dot_scaled_mxfp4_mxfp4
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_scaled_mxfp4_mxfp4(
@@ -503,6 +495,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 // GFX1250{LITERAL}: #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 128]}>
+// STRICT{LITERAL}: #mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 64]}>
 // CHECK-LABEL: wmma_dot_fp8_k128
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_fp8_k128(
@@ -524,6 +517,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #op1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
 
 // CHECK: instrShape = [16, 16, 4]
+// STRICT: instrShape = [16, 16, 4]
 // CHECK-LABEL: wmma_dot_f32_16x16x4
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_f32_16x16x4(

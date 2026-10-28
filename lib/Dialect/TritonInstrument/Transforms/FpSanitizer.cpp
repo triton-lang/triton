@@ -66,7 +66,9 @@ bool supportsI8DotDecomposition(PatternRewriter &rewriter,
                                 IntegerType accElem) {
   auto moduleOp =
       rewriter.getInsertionBlock()->getParentOp()->getParentOfType<ModuleOp>();
-  if (getAMDArch(moduleOp))
+  // The decomposition emits NVIDIA MMA layouts.
+  auto target = moduleOp->getAttrOfType<StringAttr>(ttg::AttrTargetName);
+  if (target && target.getValue().split(':').first != "cuda")
     return false;
   return llvm::is_contained({16, 32, 64}, accElem.getWidth());
 }

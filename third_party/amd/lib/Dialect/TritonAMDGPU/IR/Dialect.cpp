@@ -1055,6 +1055,23 @@ LogicalResult ScaledUpcastFp8Op::verify() {
   auto features = getScaledUpcastTarget(*this);
   if (!features)
     return success();
+  // Strict arch has no Block16 support. To use native instructions, lane
+  // pairs n and n+16 must have the same scale value. Otherwise, lowering
+  // handles it.
+  if (features->supportsCvtPkScalePk8Upcast() &&
+      !features->supportsCvtPkScalePk8Block16()) {
+    RankedTensorType scaleTy = getScale().getType();
+    LinearLayout scaleLL = triton::gpu::toLinearLayout(scaleTy);
+    auto kLane = StringAttr::get(scaleTy.getContext(), "lane");
+    constexpr int kLane16Pos = 4;
+    bool broadcast = scaleLL.getInDimSizeLog2(kLane) <= kLane16Pos;
+    if (!broadcast) {
+      ArrayRef<int32_t> basis16 = scaleLL.getBasis(kLane, kLane16Pos);
+      broadcast = llvm::all_of(basis16, [](int32_t v) { return v == 0; });
+    }
+    if (!broadcast)
+      return success();
+  }
   if (failed(
           verifyScaledUpcastScaleType(*this, getScale().getType(), *features)))
     return failure();

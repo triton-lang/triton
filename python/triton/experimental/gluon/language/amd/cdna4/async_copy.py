@@ -1,9 +1,20 @@
+"""
+Asynchronous global-to-shared memory copies for CDNA4.
+
+These load data from global memory directly into shared memory without going through registers, either through a
+tensor of pointers (:func:`global_load_to_shared`) or a scalar base pointer and a tensor of offsets
+(:func:`buffer_load_to_shared`, deprecated in favor of
+:func:`buffer.load_to_shared <triton.experimental.gluon.language.amd.cdna4.buffer.load_to_shared>`). Group issued
+copies with :func:`commit_group` and wait for them with :func:`wait_group` before reading the destination.
+"""
+
 import warnings
 
-from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
+from triton.experimental.gluon.language import _core as ttgl
+from ..._core import ir, builtin, _unwrap_if_constexpr
 from ..._semantic import _check
 from ..._layouts import DistributedLayout
-from ..cdna3 import _verify_buffer_ops
+from ..cdna3 import CachePolicy, _verify_buffer_ops
 
 __all__ = [
     "global_load_to_shared",
@@ -14,8 +25,20 @@ __all__ = [
 ]
 
 
+def _cache_policy_attr(cache_policy, cache_modifier, semantic):
+    """Return the `cachePolicy` attribute of a copy from a gfx9 `cache_policy` or a `cache_modifier` string."""
+    cache_policy = _unwrap_if_constexpr(cache_policy)
+    cache_modifier = _unwrap_if_constexpr(cache_modifier)
+    if cache_policy is None:
+        return ttgl.CachePolicy(cache_modifier or "none")._to_ir(semantic.builder)
+    _check(not cache_modifier, lambda: "cache_policy and cache_modifier are mutually exclusive")
+    _check(isinstance(cache_policy, CachePolicy),
+           lambda: f"cache_policy must be a {CachePolicy.__qualname__}, got {cache_policy!r}")
+    return cache_policy._to_ir(semantic.builder)
+
+
 @builtin
-def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _semantic=None):
+def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", *, cache_policy=None, _semantic=None):
     """
     AMD global load to shared operation.
 
@@ -55,6 +78,8 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
+        cache_policy (CachePolicy, optional): gfx9 cache hints. Cannot be combined with ``cache_modifier``.
+            Defaults to None.
     """
     _check(ptr.type.is_block(), lambda: "expected ptr to be a tensor")
     _check(isinstance(ptr.type.layout, DistributedLayout), lambda: "expected ptr type layout to be a DistributedLayout")
@@ -73,8 +98,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
 
     mask_handle = mask.handle if mask is not None else ir.value()
     other_handle = other.handle if other is not None else ir.value()
-    cache_policy = _normalize_cache_policy(None, cache_modifier, None)
-    cache_policy = cache_policy._to_ir(_semantic.builder)
+    cache_policy = _cache_policy_attr(cache_policy, cache_modifier, _semantic)
     _semantic.builder.create_async_copy_global_to_local(dest.handle, ptr.handle, mask_handle, other_handle,
                                                         cache_policy, False)
 
@@ -82,6 +106,9 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
 @builtin
 def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modifier="", _semantic=None):
     """
+    Deprecated. Use :func:`buffer.load_to_shared <triton.experimental.gluon.language.amd.cdna4.buffer.load_to_shared>`
+    with a descriptor from :func:`buffer.make_buffer_descriptor <triton.experimental.gluon.language.amd.cdna3.buffer.make_buffer_descriptor>` instead.
+
     AMD buffer load to shared operation.
 
     Buffer load is similar to :func:`global_load_to_shared`, but it accesses
