@@ -50,7 +50,7 @@ def _matmul(
              OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
              OutAccScale, Y_ACC_IS_Y: tl.constexpr,
              B, stride_b_e, # Bias
-             M, N, K, K_W, X_M, # output/reduction shapes and source rows
+             M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,
@@ -288,9 +288,8 @@ def _matmul(
         X += start_m * stride_x_m
     else:
         GatherIndx += start_m
-        # Gather positions wrap within the output; negative source indices count from X_M.
+        # Wrapping bounds the gather-array position, not the gathered row index.
         offs_x_m = tl.load(GatherIndx + offs_x_m)
-        offs_x_m = tl.where(offs_x_m < 0, offs_x_m + X_M, offs_x_m)
     if is_x_fp4:
         offs_k_x = off_k_x // 2 + tl.arange(0, BLOCK_K // 2)
     else:
@@ -368,8 +367,9 @@ def _matmul(
     else:
         XTensorScalePtrs = None
 
+    # Inactive rows have no source scales; neutral scales preserve their zero values.
     if REQUANTIZE_X and has_x_tensor_scale:
-        x_conversion_scale = tl.load(XTensorScalePtrs)
+        x_conversion_scale = tl.load(XTensorScalePtrs, mask=offs_x_m >= 0, other=1.0)
     else:
         x_conversion_scale: tl.constexpr = None
 
@@ -418,7 +418,10 @@ def _matmul(
             if is_x_microscaled:
                 mask_x_k_scale = offs_x_k_scale * X_MX_BLOCK_SIZE < x_k_limit
 
-        x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
+        # Negative gather indices (including -1) mark inactive input rows.
+        # Do not dereference them: zero-fill X before matmul. This does not
+        # suppress output stores or epilogue operations such as bias.
+        x = tl.load(XPtrs, mask=(offs_x_m[:, None] >= 0) & mask_k_x[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
         if cuda_capability_geq(8, 0):
             if x.dtype == tl.float32 and ALLOW_TF32:
@@ -430,7 +433,10 @@ def _matmul(
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
 
             if is_x_microscaled:
-                x_scales = tl.load(XMxScalePtrs, mask=mask_x_k_scale[None, :], other=0.0)
+                # Inactive rows must not read scales either. Use a neutral scale
+                # (127 encodes 1 in E8M0) for the zero-filled activation.
+                neutral_scale: tl.constexpr = 127 if XMxScale.dtype.element_ty == tl.uint8 else 1.0
+                x_scales = tl.load(XMxScalePtrs, mask=(offs_x_m[:, None] >= 0) & mask_x_k_scale[None, :], other=neutral_scale)
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
             else:
@@ -513,7 +519,7 @@ def _matmul(
         x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
         w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
         if has_x_epilogue_scale:
-            x_tensor_scales = tl.load(XTensorScalePtrs)
+            x_tensor_scales = tl.load(XTensorScalePtrs, mask=offs_x_m >= 0, other=1.0)
         if has_w_tensor_scale:
             w_tensor_scales = tl.load(WTensorScalePtrs, mask=offs_w_tensor_scale_n < N, other=0.0)
         if SWAP_XW:

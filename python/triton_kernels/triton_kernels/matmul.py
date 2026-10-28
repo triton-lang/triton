@@ -266,9 +266,9 @@ def matmul(a, b, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
-    Gather indices follow Python indexing over the source rows of a: -1 selects
-    the last row, and valid indices lie in [-a.shape[-2], a.shape[-2]). Negative
-    indices are not inactive-row sentinels.
+    A gather index of -1 denotes an inactive input row: its values contribute
+    zero to the matmul without reading source values or scales. Bias and other
+    epilogue operations still apply. Active indices must be in [0, a.shape[-2]).
 
     With gather_indx, BlackwellActMXScaleLayout activation scales must already
     follow the gathered row order; strided activation scales are gathered with
@@ -732,7 +732,7 @@ def matmul(a, b, bias,
                    flex.acc_data.scale, c_acc_is_c,
                    bias, bias_stride,
                    None if ragged_dimension == "M" else M,
-                   N, K, K_W, a.shape[-2],
+                   N, K, K_W,
                    betas, gammas,
                    None if K == 0 else gather_indx,
                    scatter_indx,
@@ -960,7 +960,7 @@ def matmul_torch(a, b, bias,
         off[1:] = torch.cumsum(sizes, 0)
         offs = list(itertools.pairwise(off))
     else:
-        offs = [[0, a.shape[1]] for _ in range(b.shape[0])]
+        offs = [[0, a.shape[1] if gather_indx is None else gather_indx.shape[0]] for _ in range(b.shape[0])]
     # compute
     compute_dtype = torch.float64 if a.dtype == b.dtype == torch.float64 else torch.float32
     n_rows = a.shape[1] if gather_indx is None else gather_indx.shape[0]
@@ -971,7 +971,14 @@ def matmul_torch(a, b, bias,
         else:
             idx = gather_indx[lo:hi]
         batch = i if is_input_batched else 0
-        out = torch.matmul(round_x(a[batch, idx, :], torch.arange(lo, hi, device="cuda")).to(compute_dtype),
+        if gather_indx is None:
+            x = a[batch, idx, :]
+        else:
+            # Inactive routing slots contribute zero, not Python's last row.
+            x = a.new_zeros((idx.numel(), a.shape[-1]))
+            active = idx >= 0
+            x[active] = a[batch, idx[active], :]
+        out = torch.matmul(round_x(x, torch.arange(lo, hi, device=a.device)).to(compute_dtype),
                            b[i].to(compute_dtype))
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]
