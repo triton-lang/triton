@@ -953,9 +953,6 @@ def matmul_torch(a, b, bias,
         b = b.view(1, *b.shape)
     if a.ndim == 2:
         a = a.view(1, *a.shape)
-    n_rows = a.shape[1]
-    if gather_indx is not None:
-        n_rows = gather_indx.shape[0]
     # memory offsets
     if a_ragged_metadata is not None and not is_input_batched:
         sizes = a_ragged_metadata.slice_sizes
@@ -963,9 +960,10 @@ def matmul_torch(a, b, bias,
         off[1:] = torch.cumsum(sizes, 0)
         offs = list(itertools.pairwise(off))
     else:
-        offs = [[0, n_rows] for _ in range(b.shape[0])]
+        offs = [[0, a.shape[1]] for _ in range(b.shape[0])]
     # compute
     compute_dtype = torch.float64 if a.dtype == b.dtype == torch.float64 else torch.float32
+    n_rows = a.shape[1] if gather_indx is None else gather_indx.shape[0]
     y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=a.dtype)
     for i, (lo, hi) in enumerate(offs):
         if gather_indx is None:

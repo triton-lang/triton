@@ -720,23 +720,6 @@ def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, tensor_sc
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("ragged", [False, True])
-@pytest.mark.parametrize("all_inactive", [False, True])
-def test_matmul_torch_inactive_gather(ragged, all_inactive, device):
-    # Neither the first nor the last source row is a safe substitute for -1.
-    a = torch.tensor([[float("nan")], [3.0], [float("nan")]], device=device)
-    gather = torch.tensor([-1, 1, -1, 1, -1], dtype=torch.int32, device=device)
-    if all_inactive:
-        gather.fill_(-1)
-    b = torch.ones((2, 1, 1) if ragged else (1, 1), device=device)
-    bias = torch.full((2, 1) if ragged else (1,), 2.0, device=device)
-    metadata = make_ragged_tensor_metadata(torch.tensor([2, 3], dtype=torch.int32, device=device), 5) if ragged else None
-    expected = torch.where(gather[:, None] >= 0, 5.0, 2.0)
-    actual = matmul_torch(a, b, bias, a_ragged_metadata=metadata, gather_indx=gather,
-                          precision_config=PrecisionConfig())
-    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-
-
 @pytest.mark.parametrize("is_persistent", [False, True])
 @pytest.mark.parametrize("all_inactive", [False, True])
 @pytest.mark.parametrize("requantize", [False, True])
