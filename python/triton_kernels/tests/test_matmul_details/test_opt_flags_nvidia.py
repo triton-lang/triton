@@ -14,7 +14,7 @@ from triton_kernels.matmul_details.opt_flags_details import opt_flags_nvidia
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, downcast_to_mxfp, quantize_nvfp4_fn
 from triton_kernels.specialize import FnSpecs
 from triton_kernels.swiglu import swiglu_fn
-from triton_kernels.tensor import BF16, FP4, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
+from triton_kernels.tensor import BF16, FP4, FP8_E4M3FN, UINT8, Storage, Tensor, convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
@@ -234,6 +234,39 @@ def test_compute_num_warps_uses_two_warp_floor():
     precision_config = PrecisionConfig()
     assert opt_flags_nvidia.compute_num_warps(16, 256, False, precision_config, {}) == 2
     assert opt_flags_nvidia.compute_num_warps(16, 256, False, precision_config, {"num_warps": 1}) == 1
+
+
+@pytest.mark.parametrize("block_m,block_n,is_persistent,epilogue_subtile,expected_stages", [
+    (128, 256, True, 1, 3),
+    (128, 256, True, 4, 4),
+    (64, 256, True, 1, 4),
+    (128, 256, False, 1, 4),
+    (128, 128, True, 1, 4),
+])
+def test_blackwell_mxfp4_lhs_stage_budget(monkeypatch, block_m, block_n, is_persistent, epilogue_subtile,
+                                          expected_stages):
+    monkeypatch.setattr(torch.cuda, "get_device_properties",
+                        lambda _: SimpleNamespace(shared_memory_per_block_optin=232448))
+    monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
+    scale = torch.empty((1, ), dtype=torch.uint8)
+    precision = PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale, a_microblock_size=32, b_microblock_size=32)
+    # The padded FP4 tile has block_m rows, independent of block_n.
+    assert opt_flags_nvidia.compute_num_stages(
+        precision_config=precision,
+        is_persistent=is_persistent,
+        block_m=block_m,
+        block_n=block_n,
+        block_k=128,
+        out_dtype=BF16,
+        lhs_dtype=FP4,
+        rhs_dtype=FP8_E4M3FN,
+        x_transpose=False,
+        epilogue_effective_itemsize=None,
+        has_y_acc_in=False,
+        epilogue_subtile=epilogue_subtile,
+        num_warps=8,
+        occupancy_target=1,
+    ) == expected_stages
 
 
 @pytest.mark.parametrize("block_m,num_warps,epilogue_subtile,expected_stages", [
