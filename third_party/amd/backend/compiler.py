@@ -49,6 +49,9 @@ class _AMDGPUCodegenOptions(ctypes.Structure):
         ("canonicalize_gep", ctypes.c_uint8),
         ("dump_ir", ctypes.c_uint8),
         ("enable_timing", ctypes.c_uint8),
+        # Read only by triton_amdgpu_translate_mir_to_asm.
+        ("enable_misched", ctypes.c_uint8),
+        ("emit_object", ctypes.c_uint8),
     ]
 
 
@@ -76,6 +79,26 @@ def _load_amd_codegen(path: str):
         ctypes.POINTER(ctypes.c_void_p),
     ]
     library.triton_amdgpu_assemble.restype = ctypes.c_int
+    library.triton_amdgpu_translate_to_mir.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(_AMDGPUCodegenOptions),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_translate_to_mir.restype = ctypes.c_int
+    library.triton_amdgpu_translate_mir_to_asm.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(_AMDGPUCodegenOptions),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_translate_mir_to_asm.restype = ctypes.c_int
     library.triton_amdgpu_free.argtypes = [ctypes.c_void_p]
     library.triton_amdgpu_free.restype = None
     library.triton_amdgpu_revision.argtypes = []
@@ -87,17 +110,22 @@ def get_amd_codegen_revision() -> str:
     return _load_amd_codegen(get_amd_codegen_path()).triton_amdgpu_revision().decode("utf-8")
 
 
-def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
-                   disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
-                   enable_timing: bool) -> str:
-    library = _load_amd_codegen(get_amd_codegen_path())
+def _serialize_for_amd_codegen(src: str, enable_fp_fusion: bool) -> bytes:
     # Serialize with Triton's LLVM, adapting alias-scope domains to the format
     # supported by the independently pinned AMD code generator.
     # Express fusion permission in the IR because newer LLVM versions no
     # longer honor TargetOptions::AllowFPOpFusion during code generation.
-    llvm_ir = llvm.to_bitcode(src, enable_fp_fusion, legacy_alias_scopes=True)
-    options = _AMDGPUCodegenOptions(
-        1,
+    return llvm.to_bitcode(src, enable_fp_fusion, legacy_alias_scopes=True)
+
+
+def _codegen_options(triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
+                     disable_optimization: bool = False, canonicalize_gep: bool = False, disabled_passes: str = "",
+                     dump_ir: bool = False, enable_timing: bool = False, enable_misched: bool = False,
+                     emit_object: bool = False) -> _AMDGPUCodegenOptions:
+    return _AMDGPUCodegenOptions(
+        # Must match codegenABIVersion in
+        # third_party/amd/backend/codegen/amdgpu_codegen.cc.
+        2,
         triple.encode("utf-8"),
         processor.encode("utf-8"),
         features.encode("utf-8"),
@@ -109,6 +137,35 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
         canonicalize_gep,
         dump_ir,
         enable_timing,
+        enable_misched,
+        emit_object,
+    )
+
+
+def _raise_codegen_error(library, error: ctypes.c_void_p, fallback: str):
+    message = ctypes.string_at(error).decode("utf-8") if error.value else fallback
+    if error.value:
+        library.triton_amdgpu_free(error)
+    revision = library.triton_amdgpu_revision().decode("utf-8")
+    raise RuntimeError(f"AMD LLVM {revision}: {message}")
+
+
+def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
+                   disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
+                   enable_timing: bool) -> str:
+    library = _load_amd_codegen(get_amd_codegen_path())
+    llvm_ir = _serialize_for_amd_codegen(src, enable_fp_fusion)
+    options = _codegen_options(
+        triple,
+        processor,
+        features,
+        flags=flags,
+        enable_fp_fusion=enable_fp_fusion,
+        disable_optimization=disable_optimization,
+        canonicalize_gep=canonicalize_gep,
+        disabled_passes=disabled_passes,
+        dump_ir=dump_ir,
+        enable_timing=enable_timing,
     )
     assembly = ctypes.c_void_p()
     assembly_size = ctypes.c_size_t()
@@ -116,15 +173,94 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
     status = library.triton_amdgpu_compile(llvm_ir, len(llvm_ir), ctypes.byref(options), ctypes.byref(assembly),
                                            ctypes.byref(assembly_size), ctypes.byref(error))
     if status:
-        message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown AMD code-generation failure"
-        if error.value:
-            library.triton_amdgpu_free(error)
-        revision = library.triton_amdgpu_revision().decode("utf-8")
-        raise RuntimeError(f"AMD LLVM {revision}: {message}")
+        _raise_codegen_error(library, error, "unknown AMD code-generation failure")
     try:
         return ctypes.string_at(assembly, assembly_size.value).decode("utf-8")
     finally:
         library.triton_amdgpu_free(assembly)
+
+
+# Separates the MIR body from the scheduling DAG in a dumped MIR file. The
+# marker is preceded by a bare `---`, which opens the YAML document the DAG text
+# occupies; neither belongs to the MIR.
+MIR_DAG_MARKER = "\n========== SCHEDULING DAG ==========\n"
+
+
+def _strip_dag_section(text: str) -> str:
+    """Return just the MIR body of a dumped MIR file."""
+    body = text.split(MIR_DAG_MARKER, 1)[0]
+    return body[:-len("---")] if body.endswith("---") else body
+
+
+def translate_to_mir(src: str, triple: str, processor: str, features: str, flags: list[str], enable_fp_fusion: bool,
+                     dump_file_id: str, dump_dir: str, disabled_passes: str, dump_ir: bool) -> str:
+    """Dump the pre-machine-scheduler MIR and its scheduling DAG.
+
+    Runs on the AMD code generator's LLVM, the same one that produces the
+    shipped AMDGCN, so the dumped MIR describes what actually gets compiled.
+    """
+    library = _load_amd_codegen(get_amd_codegen_path())
+    llvm_ir = _serialize_for_amd_codegen(src, enable_fp_fusion)
+    options = _codegen_options(triple, processor, features, flags=flags, enable_fp_fusion=enable_fp_fusion,
+                               disabled_passes=disabled_passes, dump_ir=dump_ir)
+    mir = ctypes.c_void_p()
+    mir_size = ctypes.c_size_t()
+    dag = ctypes.c_void_p()
+    dag_size = ctypes.c_size_t()
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_translate_to_mir(llvm_ir, len(llvm_ir), ctypes.byref(options), ctypes.byref(mir),
+                                                    ctypes.byref(mir_size), ctypes.byref(dag), ctypes.byref(dag_size),
+                                                    ctypes.byref(error))
+    if status:
+        _raise_codegen_error(library, error, "unknown AMD MIR translation failure")
+    try:
+        mir_text = ctypes.string_at(mir, mir_size.value).decode("utf-8")
+        dag_text = ctypes.string_at(dag, dag_size.value).decode("utf-8")
+    finally:
+        library.triton_amdgpu_free(mir)
+        library.triton_amdgpu_free(dag)
+
+    dump_filename = os.path.join(dump_dir, dump_file_id + ".txt")
+    with open(dump_filename, "w") as dump_file:
+        dump_file.write(mir_text)
+        dump_file.write("---")
+        dump_file.write(MIR_DAG_MARKER)
+        dump_file.write(dag_text)
+    print(f"MIR dumped to: {dump_filename}", file=sys.stderr)
+    return mir_text
+
+
+def translate_mir_to_asm(mir_path: str, triple: str, processor: str, features: str, flags: list[str],
+                         enable_fp_fusion: bool, is_object: bool, enable_misched: bool, dump_ir: bool) -> str:
+    """Resume code generation from a dumped (and possibly rescheduled) MIR file."""
+    library = _load_amd_codegen(get_amd_codegen_path())
+    with open(mir_path, "r") as mir_file:
+        mir_text = mir_file.read()
+    # Drop the scheduling DAG section translate_to_mir appended; it is our own
+    # annotation, not MIR.
+    source = _strip_dag_section(mir_text).encode("utf-8")
+    options = _codegen_options(
+        triple,
+        processor,
+        features,
+        flags=flags,
+        enable_fp_fusion=enable_fp_fusion,
+        enable_misched=enable_misched,
+        emit_object=is_object,
+        dump_ir=dump_ir,
+    )
+    output = ctypes.c_void_p()
+    output_size = ctypes.c_size_t()
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_translate_mir_to_asm(source, len(source), ctypes.byref(options),
+                                                        ctypes.byref(output), ctypes.byref(output_size),
+                                                        ctypes.byref(error))
+    if status:
+        _raise_codegen_error(library, error, "unknown AMD MIR code-generation failure")
+    try:
+        return ctypes.string_at(output, output_size.value).decode("utf-8")
+    finally:
+        library.triton_amdgpu_free(output)
 
 
 def assemble_amdgcn(assembly: str, processor: str, features: str) -> bytes:
@@ -749,26 +885,28 @@ class HIPBackend(BaseBackend):
         target_triple = amd.get_target_triple(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
+
+        disable_llvm_opt = knobs.getenv_bool("DISABLE_LLVM_OPT", False)
+        disabled_passes = ""
+        if not disable_llvm_opt:
+            requested_passes = os.environ.get("DISABLE_LLVM_OPT", "")
+            if requested_passes.lower() not in {"0", "false", "off"}:
+                disabled_passes = requested_passes
+        dump_llvm_ir = knobs.getenv_bool("LLVM_IR_ENABLE_DUMP", False)
+
         if knobs.amd.dump_mir:
             # translate_to_mir dumps both the pre-machine-scheduler MIR and, built
             # from that same MachineFunction, the scheduling DAG (a (bb, position)
             # edge list appended after the SCHEDULING DAG marker).
-            _ = llvm.translate_to_mir(src, target_triple, options.arch, features, flags, options.enable_fp_fusion,
-                                      dump_file_id)
+            _ = translate_to_mir(src, target_triple, options.arch, features, flags, options.enable_fp_fusion,
+                                 dump_file_id, knobs.amd.dump_mir, disabled_passes, dump_llvm_ir)
         if knobs.amd.swap_mir_enable_misched and not knobs.amd.swap_mir:
             raise ValueError("TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR to be set")
         if knobs.amd.swap_mir:
-            amdgcn = llvm.translate_mir_to_asm(os.path.join(knobs.amd.swap_mir, dump_file_id + '.txt'), target_triple,
-                                               options.arch, features, flags, options.enable_fp_fusion, False,
-                                               knobs.amd.swap_mir_enable_misched)
+            amdgcn = translate_mir_to_asm(os.path.join(knobs.amd.swap_mir, dump_file_id + '.txt'), target_triple,
+                                          options.arch, features, flags, options.enable_fp_fusion, False,
+                                          knobs.amd.swap_mir_enable_misched, dump_llvm_ir)
         else:
-            disable_llvm_opt = knobs.getenv_bool("DISABLE_LLVM_OPT", False)
-            disabled_passes = ""
-            if not disable_llvm_opt:
-                requested_passes = os.environ.get("DISABLE_LLVM_OPT", "")
-                if requested_passes.lower() not in {"0", "false", "off"}:
-                    disabled_passes = requested_passes
-
             amdgcn = compile_amdgpu(
                 src,
                 target_triple,
@@ -779,7 +917,7 @@ class HIPBackend(BaseBackend):
                 disable_optimization=disable_llvm_opt,
                 canonicalize_gep=False,
                 disabled_passes=disabled_passes,
-                dump_ir=knobs.getenv_bool("LLVM_IR_ENABLE_DUMP", False),
+                dump_ir=dump_llvm_ir,
                 enable_timing=knobs.getenv_bool("LLVM_ENABLE_TIMING", False),
             )
         if knobs.amd.dump_amdgcn:

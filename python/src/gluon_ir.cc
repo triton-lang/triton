@@ -1246,6 +1246,20 @@ void init_gluon_ir(py::module_ &m) {
           py::arg("storedValue"), py::arg("ptr"), py::arg("offsets"),
           py::arg("mask"), py::arg("cachePolicy"), py::arg("soffset"),
           py::arg("scope").none())
+      .def("create_buffer_atomic_load",
+           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
+              Value mask, Value soffset, tt::MemSemantic sem,
+              tt::MemSyncScope scope) -> Value {
+             return self.create<ttag::BufferAtomicLoadOp>(
+                 resultType, ptr, offsets, mask, soffset, sem, scope);
+           })
+      .def("create_buffer_atomic_store",
+           [](GluonOpBuilder &self, Value value, Value ptr, Value offsets,
+              Value mask, Value soffset, tt::MemSemantic sem,
+              tt::MemSyncScope scope) {
+             self.create<ttag::BufferAtomicStoreOp>(value, ptr, offsets, mask,
+                                                    soffset, sem, scope);
+           })
       .def("create_make_buffer_desc",
            [](GluonOpBuilder &self, Value base, Value numRecords) -> Value {
              auto ptrType = cast<tt::PointerType>(base.getType());
