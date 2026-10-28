@@ -166,6 +166,39 @@ jobs:
             warmup_targets+=(python/triton_kernels/tests)
           fi
           python3 -m triton._test_runner warmup --warmup-procs "$warmup_procs" "${warmup_targets[@]}"
+      - name: Fetch llc for the MIR scheduling-DAG cross-check
+        shell: bash
+        run: |
+          # test_dag_matches_llvm compares the DAG we emit against LLVM's own,
+          # so it needs an llc from the revision that produced the MIR -- the
+          # code generator's, not Triton's core LLVM. _find_llc globs
+          # ~/.triton/amd/llvm/*/bin/llc, so unpacking there is all it takes.
+          read -r suffix dest <<<"$(python3 - <<'PY'
+          import argparse, os, sys
+          sys.path.insert(0, "python")
+          import build_helpers as bh
+          parser = argparse.ArgumentParser()
+          bh.add_common_args(parser)
+          args = bh.normalize_parsed_args(parser.parse_args(["--triton-cache-path", "/tmp/llc-fetch"]))
+          home = os.environ.get("TRITON_HOME", os.path.expanduser("~/"))
+          print(bh.get_llvm_system_suffix(args), os.path.join(home, ".triton", "amd", "llvm"))
+          PY
+          )"
+          read -r hash build <<<"$(python3 -c "
+          import json
+          info = json.load(open('cmake/amd-llvm-info.json'))
+          print(info['llvm_hash'][:8], info['build_number'])")"
+
+          name="amd-llc-${hash}-${suffix}-${build}"
+          url="https://oaitriton.blob.core.windows.net/public/llvm-builds/${name}.tar.gz"
+          mkdir -p "${dest}"
+          if curl -fsSL -o "${RUNNER_TEMP}/${name}.tar.gz" "${url}"; then
+            tar xzf "${RUNNER_TEMP}/${name}.tar.gz" -C "${dest}"
+            "${dest}/${name}/bin/llc" --version | head -3
+          else
+            echo "No ${name}.tar.gz published; the DAG cross-check will skip."
+          fi
+
       - name: Run Python tests on AMD
         run: |
           INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
