@@ -266,6 +266,10 @@ def matmul(a, b, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
+    Gather indices follow Python indexing over the source rows of a: -1 selects
+    the last row, and valid indices lie in [-a.shape[-2], a.shape[-2]). Negative
+    indices are not inactive-row sentinels.
+
     With gather_indx, BlackwellActMXScaleLayout activation scales must already
     follow the gathered row order; strided activation scales are gathered with
     the values. For ragged-M matmul, the Blackwell scale layout must use the same
@@ -728,7 +732,7 @@ def matmul(a, b, bias,
                    flex.acc_data.scale, c_acc_is_c,
                    bias, bias_stride,
                    None if ragged_dimension == "M" else M,
-                   N, K, K_W,
+                   N, K, K_W, a.shape[-2],
                    betas, gammas,
                    None if K == 0 else gather_indx,
                    scatter_indx,

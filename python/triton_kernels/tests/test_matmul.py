@@ -680,69 +680,74 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 @pytest.mark.parametrize("is_persistent", [False, True])
 @pytest.mark.parametrize("split_k", [1, 2])
 @pytest.mark.parametrize("k", [64, 80])
-@pytest.mark.parametrize("all_inactive", [False, True])
-@pytest.mark.parametrize("tensor_scale", [False, True])
-def test_gather_inactive_rows(is_persistent, split_k, k, all_inactive, tensor_scale, device):
+@pytest.mark.parametrize("all_last", [False, True])
+@pytest.mark.parametrize("ragged", [False, True])
+def test_gather_negative_indices(is_persistent, split_k, k, all_last, ragged, device):
     if not is_hopper_or_newer():
         pytest.skip("Requires Hopper or newer for persistent matmul")
-    m, n = 33, 64
-    # Keep the negative-row address inside our allocation and make any read visible.
-    storage = torch.full((m + 1, k), float("nan"), dtype=torch.bfloat16, device=device)
-    a = storage[1:]
-    a[:] = (torch.arange(m, device=device) % 4 + 1)[:, None]
-    b = torch.ones((k, n), dtype=a.dtype, device=device)
-    gather = torch.arange(m - 1, -1, -1, dtype=torch.int32, device=device)
-    if all_inactive:
+    source_m, m, n = 65, 33, 64
+    # Keep unnormalized negative addresses in our allocation and expose reads as NaNs.
+    storage = torch.full((2 * source_m, k), float("nan"), dtype=torch.bfloat16, device=device)
+    a = storage[source_m:]
+    a[:] = (torch.arange(source_m, device=device) % 4 + 1)[:, None]
+    b = torch.ones((2, k, n) if ragged else (k, n), dtype=a.dtype, device=device)
+    bias = torch.ones((2, n) if ragged else (n,), dtype=torch.float32, device=device)
+    indices = torch.tensor([-1, -source_m, -2, 0, source_m - 1], dtype=torch.int32, device=device)
+    gather = indices[torch.arange(m, device=device) % indices.numel()]
+    if all_last:
         gather.fill_(-1)
-    else:
-        gather[::2] = -1
-    expected = torch.zeros((m, n), dtype=a.dtype, device=device)
-    active = gather >= 0
-    expected[active] = a[gather[active].long(), :1] * k
-
-    scale_storage = torch.full((m + 1,), float("nan"), device=device)
-    scale_storage[1:] = 2.0
-    config = PrecisionConfig(a_mx_tensor_scale=scale_storage[1:] if tensor_scale else None)
-    if tensor_scale:
-        expected *= 2.0
+    metadata = make_ragged_tensor_metadata(torch.tensor([17, 16], dtype=torch.int32, device=device), m) if ragged else None
+    expected = matmul_torch(a, b, bias, a_ragged_metadata=metadata, gather_indx=gather,
+                            precision_config=PrecisionConfig())
     with opt_flags.scoped_opt_flags_constraints({
         "is_persistent": is_persistent, "split_k": split_k,
         "block_m": 32, "block_n": 64, "block_k": 64,
     }):
-        actual = matmul(a, b, None, gather_indx=gather, precision_config=config)
+        actual = matmul(a, b, bias, a_ragged_metadata=metadata, gather_indx=gather)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("is_persistent", [False, True])
-@pytest.mark.parametrize("all_inactive", [False, True])
+@pytest.mark.parametrize("all_last", [False, True])
 @pytest.mark.parametrize("requantize", [False, True])
-def test_gather_inactive_scales(is_persistent, all_inactive, requantize, device):
+def test_gather_negative_indices_scales(is_persistent, all_last, requantize, device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires Blackwell")
-    m, n, k = 33, 64, 128
-    # Guard both scale arrays: masking values alone must not hide scale reads.
+    source_m, m, n, k = 65, 33, 64, 128
+    # Values and scales must all use the normalized source index, not the output row count.
     scale_dtype = torch.float8_e4m3fn if requantize else torch.uint8
-    scale_storage = torch.full((m + 1, k // (16 if requantize else 32)),
+    scale_storage = torch.full((2 * source_m, k // (16 if requantize else 32)),
                                float("nan") if requantize else 255, dtype=scale_dtype, device=device)
-    scale_storage[1:] = 1.0 if requantize else 127
-    outer_storage = torch.full((m + 1,), float("nan"), device=device)
-    outer_storage[1:] = 2.0
+    scale_storage[source_m:] = 1.0 if requantize else 127
+    outer_storage = torch.full((2 * source_m,), float("nan"), device=device)
+    outer_storage[source_m:] = (torch.arange(source_m, device=device) % 4 + 1).float()
+    a_scale = scale_storage[source_m:]
+    outer_scale = outer_storage[source_m:]
     if requantize:
-        a = wrap_torch_tensor(torch.full((m, k // 2), 0x22, dtype=torch.uint8, device=device), dtype=FP4)
+        storage = torch.zeros((2 * source_m, k // 2), dtype=torch.uint8, device=device)
+        storage[source_m:] = 0x22
+        a = wrap_torch_tensor(storage[source_m:], dtype=FP4)
         b = wrap_torch_tensor(torch.full((n, k // 2), 0x22, dtype=torch.uint8, device=device).T, dtype=FP4)
         b_scale = torch.full((k // 32, n), 127, dtype=torch.uint8, device=device)
     else:
-        a = torch.ones((m, k), dtype=torch.float8_e4m3fn, device=device)
+        storage = torch.full((2 * source_m, k), float("nan"), dtype=torch.float8_e4m3fn, device=device)
+        storage[source_m:] = 1.0
+        a = storage[source_m:]
         b = torch.ones((k, n), dtype=torch.bfloat16, device=device)
         b_scale = None
-    config = PrecisionConfig(a_mx_scale=scale_storage[1:], a_microblock_size=16 if requantize else 32,
-                             a_mx_tensor_scale=outer_storage[1:] if requantize else None,
+    config = PrecisionConfig(a_mx_scale=a_scale, a_microblock_size=16 if requantize else 32,
+                             a_mx_tensor_scale=outer_scale,
                              b_mx_scale=b_scale, b_microblock_size=32 if requantize else None,
                              out_dtype=torch.float32)
-    gather = torch.arange(m - 1, -1, -1, dtype=torch.int32, device=device)
-    gather[::1 if all_inactive else 2] = -1
-    expected = torch.zeros((m, n), device=device)
-    expected[gather >= 0] = k * (2 if requantize else 1)
+    indices = torch.tensor([-1, -source_m, -2, 0, source_m - 1], dtype=torch.int32, device=device)
+    gather = indices[torch.arange(m, device=device) % indices.numel()]
+    if all_last:
+        gather.fill_(-1)
+    # All packed values and microscales are one, so decoding leaves just the row scale.
+    reference_a = outer_scale[:, None].expand(source_m, k)
+    reference_b = torch.ones((k, n), device=device)
+    expected = matmul_torch(reference_a, reference_b, None, gather_indx=gather,
+                            precision_config=PrecisionConfig())
     with opt_flags.scoped_opt_flags_constraints({
         "is_persistent": is_persistent, "split_k": 1,
         "block_m": 32, "block_n": 64, "block_k": 128,
