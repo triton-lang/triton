@@ -3590,8 +3590,8 @@ reduce_configs3 = [(op, 'float32', shape, axis, False)
                    for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                    for shape in reduce3d_shapes
                    for axis in [0, 1, 2]]
-invalid_config = [('sum', 'float32', (32, 32), axis, False) for axis in [2, 3]]
-negative_config = [('sum', 'float32', (32, 32), -1, False)]
+invalid_config = [('sum', 'float32', (32, 32), axis, False) for axis in [2, 3, -3]]
+negative_config = [('xor_sum', 'int32', (4, 8), axis, keep_dims) for axis in [-1, -2] for keep_dims in [False, True]]
 keep_dims_2d_configs = [(op, 'float32', (32, 32), axis, True)
                         for op in ['min', 'max', 'sum', 'argmin', 'argmax']
                         for axis in [0, 1]] + [(op, 'float32', (32, 32), None, True) for op in ['min', 'max', 'sum']]
@@ -3638,7 +3638,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
             elif AXIS == 2 or AXIS == -1:
                 z_ptr = Z + range_m[:, None] * BLOCK_N + range_n[None, :]
         else:
-            if AXIS == 0:
+            if AXIS == 0 or AXIS == -2:
                 z_ptr = Z + range_n
             elif AXIS == 1 or AXIS == -1:
                 z_ptr = Z + range_m
@@ -3661,7 +3661,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
 
     # numpy result
     # Silence numpy error on axis out of bounds, to give triton a chance to fail
-    np_axis = axis if axis is not None and axis < len(shape) else None
+    np_axis = axis if axis is not None and -len(shape) <= axis < len(shape) else None
     if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
         z_dtype_str = 'float32'
         z_tri_dtype_str = 'bfloat16'
@@ -3677,7 +3677,7 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     BLOCK_K = 1 if len(shape) == 2 else shape[2]
     IS_3D = bool(len(shape) == 3)
     USE_I1 = dtype_str == 'bool'
-    if axis is not None and axis >= len(shape):
+    if axis is not None and not -len(shape) <= axis < len(shape):
         with pytest.raises(triton.TritonError):
             kernel[(1, )](x_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], BLOCK_K=BLOCK_K, IS_3D=IS_3D, AXIS=axis,
                           KEEP_DIMS=keep_dims, USE_I1=USE_I1, num_ctas=num_ctas)
