@@ -914,6 +914,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+#col = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: hopper_fp8_non_transposed_b
   tt.func public @hopper_fp8_non_transposed_b(
@@ -926,6 +927,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %64 = tt.dot %operand0, %operand1, %cst, inputPrecision = tf32 {maxNumImpreciseAcc = 1073741824 : i32} : tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x256xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
     tt.store %out_ptrs, %64 : tensor<128x256x!tt.ptr<f32>, #blocked>
     tt.return
+  }
+
+  // The dot operand order matches MMA's required B order, but the source order
+  // does not. The warning must use the source order before convert_layout.
+  // CHECK-LABEL: hopper_fp8_source_order_requires_transpose_b
+  // CHECK: ttg.local_alloc %arg1
+  // CHECK: ttng.warp_group_dot
+  tt.func public @hopper_fp8_source_order_requires_transpose_b(
+   %operand0: tensor<128x128xf8E5M2, #blocked>,
+   %operand1: tensor<128x256xf8E5M2, #blocked>,
+   %acc: tensor<128x256xf32, #col>) -> tensor<128x256xf32, #col> {
+    %a = ttg.convert_layout %operand0 : tensor<128x128xf8E5M2, #blocked> -> tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #col}>>
+    %b = ttg.convert_layout %operand1 : tensor<128x256xf8E5M2, #blocked> -> tensor<128x256xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #col}>>
+    // expected-warning @below {{Forcing a different order [0, 1] on SMEM than the register order for the operand 1}}
+    %d = tt.dot %a, %b, %acc, inputPrecision = tf32 {maxNumImpreciseAcc = 1073741824 : i32} : tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #col}>> * tensor<128x256xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #col}>> -> tensor<128x256xf32, #col>
+    tt.return %d : tensor<128x256xf32, #col>
   }
 }
 

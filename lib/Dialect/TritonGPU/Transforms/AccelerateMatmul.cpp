@@ -159,12 +159,12 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
                           bool forceTranspose = false,
                           Operation *op = nullptr /*only for diagnostic*/) {
   OpBuilder::InsertionGuard g(rewriter);
+  auto vType = cast<RankedTensorType>(v.getType());
   Value arg = v;
   while (auto cvtOp = arg.getDefiningOp<ConvertLayoutOp>())
     arg = cvtOp.getSrc();
-  auto argType = cast<RankedTensorType>(arg.getType());
-  assert(argType.getEncoding() && "unexpected tensor type");
-  auto order = getOrderForMemory(argType);
+  // Preserve the source memory order, but use the MMA operand's CTA layout.
+  auto order = getOrderForMemory(cast<RankedTensorType>(arg.getType()));
 
   // If the MMA op doesn't support transpose pick the layout expected by the MMA
   // op.
@@ -191,14 +191,13 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   }
 
   Attribute SharedMemorySpace =
-      SharedMemorySpaceAttr::get(argType.getContext());
-  auto cgaLayout =
-      getCGALayout(cast<RankedTensorType>(v.getType()).getEncoding());
+      SharedMemorySpaceAttr::get(vType.getContext());
+  auto cgaLayout = getCGALayout(vType.getEncoding());
   auto newLayout = NVMMASharedEncodingAttr::get(
-      argType.getContext(), argType.getShape(), newOrder, cgaLayout,
-      argType.getElementType(), isMMAv5Fp4Padded);
-  auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
-                                  newLayout, SharedMemorySpace);
+      vType.getContext(), vType.getShape(), newOrder, cgaLayout,
+      vType.getElementType(), isMMAv5Fp4Padded);
+  auto newType = MemDescType::get(vType.getShape(), vType.getElementType(),
+                                 newLayout, SharedMemorySpace);
   rewriter.setInsertionPointAfterValue(arg);
   return LocalAllocOp::create(rewriter, arg.getLoc(), newType, arg);
 }
