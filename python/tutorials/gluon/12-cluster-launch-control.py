@@ -84,7 +84,9 @@ class ClcTileScheduler:
         mbarrier.wait(self.barrier, self.phase)
         clc_res = clc.load_result(self.clc_result_buf)
         has_work = clc_res.is_canceled()
-        next_tile_id = clc_res.program_id(0)
+        next_tile_id = self.tile_id
+        if has_work:
+            next_tile_id = clc_res.program_id(0)
         return ClcTileScheduler(has_work, next_tile_id, self.clc_result_buf, self.barrier, self.phase ^ 1)
 
 
