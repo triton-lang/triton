@@ -48,7 +48,7 @@ if __name__ == "__main__" and not is_hopper():
 # warpgroup_mma itself is composed of many smaller `wgmma.mma_async` PTX
 # instructions, which supports a limited set of instruction shapes.
 #
-# The instruction shape is specified as [m, n, k], where
+# The hardware instruction shapes are [m, n, k], where
 #
 # - `k` is always 256 / A.dtype.primitive_bitwidth
 # - `m` is always 16
@@ -59,17 +59,19 @@ if __name__ == "__main__" and not is_hopper():
 #
 #   224, 208, 192, 176, 160, 144, 128, 112, 96, 80, 64, 48, 32, 24, 16, 8
 #
-# For power-of-two widths, `n` must evenly divide `BLOCK_N`, the inner
-# dimension of the MMA tile, and it must be less than or equal to `maxN`, where
-# `maxN` is computed as:
+# The accumulator's NVMMADistributedLayout uses a power-of-two `n`. Unless
+# `instruction_n` is supplied, this also selects the hardware instruction width.
+# The layout's `n` must evenly divide `BLOCK_N`, the inner dimension of the MMA
+# tile, and must be less than or equal to `maxN`, where `maxN` is computed as:
 #
 #     mReps = ceildiv(M, m)
 #     nReps = ceildiv(num_warps, mReps)
 #     maxN = max(N // nReps, 8)
 #
 # Non-power-of-two floating-point widths use one native instruction tile along
-# N with a power-of-two logical container. For example, choose `n=80`,
-# `BLOCK_N=128`, and `warps_per_cta=[4, 1]` for a native m64n80 instruction.
+# N with a power-of-two logical container. For example, choose `n=128`,
+# `BLOCK_N=128`, and `warps_per_cta=[4, 1]`, then pass `instruction_n=80`
+# to warpgroup_mma for a native m64n80 instruction.
 # Both operands must be in shared memory and the accumulator must be FP32.
 # Columns [0, 80) are updated; columns [80, 128) retain their input accumulator
 # values even with `use_acc=False`. Mask loads and stores to the active width.

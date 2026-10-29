@@ -59,6 +59,13 @@ bool dotSupportsAccInitFlag(Operation *op) {
          "Expected an op which implements a DotOpInterface");
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
+    // useC=false does not clear the padding of a partial-width instruction.
+    if (auto instructionN = wgDotOp.getInstructionN()) {
+      auto layout =
+          cast<NvidiaMmaEncodingAttr>(wgDotOp.getType().getEncoding());
+      if (*instructionN != layout.getInstrShape()[1])
+        return false;
+    }
     // Partial accumulation would require a select op to handle the
     // initialization that would degrade the performance.
     return !wgDotOp.needsPartialAccumulator();

@@ -365,7 +365,8 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
 
     auto dot = ttng::WarpGroupDotOp::create(
         builder, loc, dotOp.getType(), lhss[i], rhss[i], C, useC,
-        dotOp.getInputPrecision(), numImpreciseAcc, dotOp.getIsAsync());
+        dotOp.getInputPrecision(), numImpreciseAcc, dotOp.getIsAsync(),
+        dotOp.getInstructionNAttr());
     dots.push_back(dot);
     C = dot.getResult();
     useC = {};

@@ -2049,7 +2049,7 @@ def native_width_mma_kernel(A, B, C, Out, N: ttgl.constexpr, K: ttgl.constexpr, 
     BLOCK_N: ttgl.constexpr = triton.next_power_of_2(INSTR_N)
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
     mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(
-        [3, 0], [4, 1], [16, INSTR_N, 256 // A.dtype.element_ty.primitive_bitwidth])
+        [3, 0], [4, 1], [16, BLOCK_N, 256 // A.dtype.element_ty.primitive_bitwidth])
     m = ttgl.arange(0, 64, layout=ttgl.SliceLayout(1, layout))
     n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, layout))
     k_a = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
@@ -2066,7 +2066,7 @@ def native_width_mma_kernel(A, B, C, Out, N: ttgl.constexpr, K: ttgl.constexpr, 
             ttgl.NVMMASharedLayout(32, B.dtype.element_ty.primitive_bitwidth, transposed=True), b)
         fence_async_shared()
         acc = hopper.warpgroup_mma(sa, sb, acc, use_acc=USE_ACC or start > 0, precision="tf32",
-                                   max_num_imprecise_acc=32, is_async=ASYNC)
+                                   max_num_imprecise_acc=32, is_async=ASYNC, instruction_n=INSTR_N)
         if ASYNC:
             acc = hopper.warpgroup_mma_wait(deps=[acc])
     acc = ttgl.convert_layout(acc, layout)
@@ -2108,6 +2108,36 @@ def test_warpgroup_mma_native_width(dtype, instr_n, k, use_acc, is_async):
     instr_k = 256 // a.element_size() // 8
     widths = set(re.findall(rf"wgmma\.mma_async\.sync\.aligned\.m64n(\d+)k{instr_k}\.f32", compiled.asm["ptx"]))
     assert widths == {str(instr_n)}
+
+
+@gluon.jit
+def native_width_reset_kernel(A, B, C, Out, Steps):
+    layout: ttgl.constexpr = ttgl.NVMMADistributedLayout([3, 0], [4, 1], [16, 128, 32])
+    m = ttgl.arange(0, 64, layout=ttgl.SliceLayout(1, layout))
+    n = ttgl.arange(0, 128, layout=ttgl.SliceLayout(0, layout))
+    k_a = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+    k_b = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))
+    a = ttgl.load(A + m[:, None] * 32 + k_a[None, :])
+    b = ttgl.load(B + k_b[:, None] * 128 + n[None, :])
+    sa = ttgl.allocate_shared_memory(ttgl.float8e4nv, [64, 32], ttgl.NVMMASharedLayout(32, 8), a)
+    sb = ttgl.allocate_shared_memory(ttgl.float8e4nv, [32, 128], ttgl.NVMMASharedLayout(32, 8, transposed=True), b)
+    fence_async_shared()
+    acc = ttgl.load(C + m[:, None] * 128 + n[None, :])
+    for i in range(Steps):
+        acc = ttgl.where(i % 2 == 1, 0.0, acc)
+        acc = hopper.warpgroup_mma(sa, sb, acc, instruction_n=80, max_num_imprecise_acc=32)
+    ttgl.store(Out + m[:, None] * 128 + n[None, :], acc)
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+def test_warpgroup_mma_native_width_reset():
+    a = torch.ones((64, 32), dtype=torch.float8_e4m3fn, device="cuda")
+    b = torch.ones((32, 128), dtype=torch.float8_e4m3fn, device="cuda")
+    c = torch.full((64, 128), 3.0, device="cuda")
+    out = torch.empty_like(c)
+    native_width_reset_kernel[(1, )](a, b, c, out, 2)
+    torch.testing.assert_close(out[:, :80], torch.full_like(out[:, :80], 32.0), atol=0, rtol=0)
+    torch.testing.assert_close(out[:, 80:], torch.zeros_like(out[:, 80:]), atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")

@@ -562,10 +562,11 @@ TEST_F(LinearLayoutConversionsTest, MMAv3_64x16) {
   }
 }
 
-TEST_F(LinearLayoutConversionsTest, MMAv3_NativeWidths) {
+TEST_F(LinearLayoutConversionsTest, MMAv3_ActiveRegisterPrefix) {
   for (unsigned n = 8; n <= 256; n += 8) {
     unsigned paddedN = llvm::PowerOf2Ceil(n);
-    auto layout = toLinearLayout({64, paddedN}, mma(3, 0, {16, n, 32}, {4, 1}));
+    auto layout =
+        toLinearLayout({64, paddedN}, mma(3, 0, {16, paddedN, 32}, {4, 1}));
     for (unsigned reg = 0; reg < paddedN / 2; ++reg) {
       for (unsigned lane = 0; lane < 32; ++lane) {
         for (unsigned warp = 0; warp < 4; ++warp) {

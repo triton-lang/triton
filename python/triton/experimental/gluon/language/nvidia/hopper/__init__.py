@@ -106,15 +106,16 @@ def warpgroup_mma_init(value, _semantic=None):
 
 @_core.builtin
 def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_acc=None, is_async=False,
-                  _semantic=None):
+                  instruction_n=None, _semantic=None):
     """
     Perform warpgroup MMA (Tensor Core) operations.
     acc = a * b + (acc if use_acc else 0)
 
-    For a non-power-of-two instruction N, the logical N dimension must be
-    the next power of two and ``warps_per_cta[1]`` must be 1. Only the first
-    instruction-N columns are updated; padding columns retain their input
-    accumulator values, including when ``use_acc=False``. This mode requires
+    When ``instruction_n`` is supplied, the layout instruction N and logical
+    N dimension must equal its next power of two, and ``warps_per_cta[1]`` must
+    be 1. Only the first ``instruction_n`` columns are updated; padding columns
+    retain their input accumulator values, including when ``use_acc=False``.
+    This mode requires
     shared-memory floating-point operands and FP32 accumulation.
 
     Args:
@@ -125,6 +126,7 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
         precision (str, optional): Dot input precision. Defaults to builder default.
         max_num_imprecise_acc (int): Max imprecise accumulations. Used for fp8 -> fp32 dot. Determines how many accumulation are done in limited precision. Defaults to None, which means no upcasting is done.
         is_async (bool): Whether operation is asynchronous. Defaults to False.
+        instruction_n (int, optional): Native instruction width, a multiple of 8 in [8, 256]. Defaults to the accumulator layout instruction N.
 
     Returns:
         tensor or warpgroup_mma_accumulator: Returns the result if synchronous, or a token to load the value once computed if asynchronous.
@@ -149,9 +151,10 @@ def warpgroup_mma(a, b, acc, *, use_acc=True, precision=None, max_num_imprecise_
 
     max_num_imprecise_acc = _core._unwrap_if_constexpr(max_num_imprecise_acc)
     is_async = _core._unwrap_if_constexpr(is_async)
+    instruction_n = _core._unwrap_if_constexpr(instruction_n)
 
     handle = _semantic.builder.create_warpgroup_mma(a.handle, b.handle, acc.handle, use_acc.handle, precision,
-                                                    max_num_imprecise_acc, is_async)
+                                                    max_num_imprecise_acc, is_async, instruction_n)
     tensor_ty = acc.type.tensor_type if isinstance(acc, warpgroup_mma_accumulator) else acc.type
     if is_async:
         return warpgroup_mma_accumulator(handle, tensor_ty)

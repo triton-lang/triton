@@ -235,9 +235,12 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
 
   let description = [{
     $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
-    For a non-power-of-two instruction N, the logical N dimension is rounded
-    up to a power of two. Only the first instruction-N columns participate in
-    the MMA; the remaining columns preserve $c, irrespective of $useC.
+    The optional instructionN selects a native instruction width independently
+    of the power-of-two accumulator layout. The layout instruction N and the
+    result N dimension must equal the next power of two of instructionN. Only
+    the first instructionN columns participate in the MMA; the remaining
+    columns preserve $c, irrespective of $useC. This mode requires shared
+    floating-point operands, FP32 accumulation, and warpsPerCTA[1] = 1.
   }];
 
   let arguments = (ins
@@ -247,7 +250,8 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [
     Optional<I1>:$useC,
     DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
     DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
-    DefaultValuedAttr<BoolAttr, "false">:$isAsync
+    DefaultValuedAttr<BoolAttr, "false">:$isAsync,
+    OptionalAttr<I32Attr>:$instructionN
   );
 
   let results = (outs TT_FpIntTensor:$d);

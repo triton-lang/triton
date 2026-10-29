@@ -1579,6 +1579,10 @@ LogicalResult NvidiaMmaEncodingAttr::verify(
     return emitError() << "versionMajor must be 2 (Ampere) or 3 (Hopper), got "
                        << versionMajor;
   }
+  if (versionMajor == 3 && instrShape.size() == 3 &&
+      !llvm::isPowerOf2_32(instrShape[1]))
+    return emitError()
+           << "Hopper MMA layout instruction N must be a power of two";
   return success();
 }
 

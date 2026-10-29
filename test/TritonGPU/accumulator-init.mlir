@@ -471,3 +471,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %result : tensor<128x128xf32, #blocked>
   }
 }
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // useC=false only clears active columns; keep the select that clears padding.
+  // CHECK-LABEL: @native_width_preserves_reset
+  tt.func @native_width_preserves_reset(%a: !ttg.memdesc<64x16xf16, #shared, #ttg.shared_memory>, %b: !ttg.memdesc<16x128xf16, #shared_b, #ttg.shared_memory>, %c: tensor<64x128xf32, #mma>, %limit: i32, %reset: i1) -> tensor<64x128xf32, #mma> {
+    %zero = arith.constant dense<0.0> : tensor<64x128xf32, #mma>
+    %lb = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %i = %lb to %limit step %step iter_args(%acc = %c) -> tensor<64x128xf32, #mma> : i32 {
+      // CHECK: %[[RESET:.*]] = arith.select
+      %cleared = arith.select %reset, %zero, %acc : tensor<64x128xf32, #mma>
+      // CHECK: ttng.warp_group_dot {{.*}}, {{.*}}, %[[RESET]] {{.*}}instructionN = 80 : i32
+      %next = ttng.warp_group_dot %a, %b, %cleared {instructionN = 80 : i32} : !ttg.memdesc<64x16xf16, #shared, #ttg.shared_memory> * !ttg.memdesc<16x128xf16, #shared_b, #ttg.shared_memory> -> tensor<64x128xf32, #mma>
+      scf.yield %next : tensor<64x128xf32, #mma>
+    }
+    tt.return %result : tensor<64x128xf32, #mma>
+  }
+}

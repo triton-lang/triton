@@ -25,7 +25,6 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Support/LLVM.h"
-#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -189,7 +188,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value useCOperand, Value loadedA, Value loadedB,
                          Value loadedC, bool allowTF32,
                          bool needsPartialAccumulator,
-                         uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
+                         uint32_t maxNumImpreciseAcc, unsigned instructionN,
+                         bool sync, Value thread) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto bTensorTy = cast<triton::gpu::MemDescType>(b.getType());
@@ -206,11 +206,11 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                                typeConverter, rewriter, loc);
   auto dShapePerCTA = getShapePerCTA(dTensorTy);
   auto instrMNK = mmaEncoding.getInstrShape();
-  auto accSize = 2 * (instrMNK[1] / 4);
-  unsigned paddedN = llvm::PowerOf2Ceil(instrMNK[1]);
+  auto accSize = 2 * (instructionN / 4);
+  unsigned paddedN = instrMNK[1];
   auto accStride = paddedN / 2;
   unsigned M = 4 * instrMNK[0];
-  unsigned N = instrMNK[1];
+  unsigned N = instructionN;
   unsigned K = instrMNK[2];
   bool zeroAcc = isZeroFillConst(c);
   auto warpSize = mmaEncoding.getWarpsPerCTA();
@@ -395,10 +395,13 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            triton::nvidia_gpu::WarpGroupDotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread) {
+  auto mmaEncoding = cast<NvidiaMmaEncodingAttr>(op.getType().getEncoding());
+  unsigned instructionN =
+      op.getInstructionN().value_or(mmaEncoding.getInstrShape()[1]);
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(),  //
                     op.getA(), op.getB(), op.getC(), op.getD(), op.getUseC(), //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),           //
                     op.getInputPrecision() == InputPrecision::TF32,
                     op.needsPartialAccumulator(), op.getMaxNumImpreciseAcc(),
-                    !op.getIsAsync(), thread);
+                    instructionN, !op.getIsAsync(), thread);
 }

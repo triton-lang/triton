@@ -973,10 +973,7 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   } else {
     assert(isHopper());
     auto instrShapeMNK = getInstrShape();
-    // A native WGMMA width need not be a power of two. Its accumulator
-    // registers occupy the prefix of the next power-of-two layout tile.
-    tileShape = SmallVector<unsigned>(
-        {instrShapeMNK[0], unsigned(llvm::PowerOf2Ceil(instrShapeMNK[1]))});
+    tileShape = SmallVector<unsigned>({instrShapeMNK[0], instrShapeMNK[1]});
   }
   // nvidiamma layout always assumes kWidth = 2
   constexpr auto kWidth = 2;
