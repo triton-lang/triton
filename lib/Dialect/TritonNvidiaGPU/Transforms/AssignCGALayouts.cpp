@@ -16,6 +16,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
 
 namespace ttg = mlir::triton::gpu;
 
@@ -71,31 +72,68 @@ Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
   return ttg::ConvertLayoutOp::create(builder, loc, newTy, value);
 }
 
+SmallVector<Attribute> getDotOperandLayouts(triton::DotOp dot);
+
 // Rematerialize a dot/reduce operand's producer slice in the requested CGA
 // layout. First, trace the slice back to its load leaves, rejecting block
 // arguments, multi-result operations, and operations with regions. Then verify
 // that no value in the slice is used outside the slice, except by the consumer
-// operand being rewritten. The slice can then be cloned with the new layout;
+// operands being rewritten. Include other connected dot operand slices when
+// their layout requirements agree. The slice is cloned once in the new layout;
 // tensor operands of each new load are converted to that layout. Finally,
-// replace the consumer operand and erase the original slice. Thus loads are
+// replace all consumer operands and erase the original slice. Thus loads are
 // replaced, never duplicated.
 class CGARematerialization {
 public:
   CGARematerialization(OpOperand &root, Attribute desiredEncoding)
-      : root(root), desiredEncoding(desiredEncoding) {}
+      : root(root), desiredEncoding(desiredEncoding) {
+    roots.insert(&root);
+  }
 
   LogicalResult run() {
-    if (failed(plan(root.get(), desiredEncoding)) ||
-        !foundLoadWithDifferentCGALayout || !hasExclusiveUses())
+    for (unsigned i = 0; i < roots.size(); ++i) {
+      OpOperand *operand = roots[i];
+      Attribute encoding = desiredEncoding;
+      if (operand != &root) {
+        auto dot = cast<triton::DotOp>(operand->getOwner());
+        encoding = getDotOperandLayouts(dot)[operand->getOperandNumber()];
+      }
+      if (failed(plan(operand->get(), encoding)))
+        return failure();
+      for (auto &entry : layouts)
+        if (failed(collectRoots(entry.first)))
+          return failure();
+    }
+    if (!foundLoadWithDifferentCGALayout || !hasExclusiveUses())
       return failure();
 
-    root.set(rewrite(root.get()));
+    for (OpOperand *operand : roots)
+      operand->set(rewrite(operand->get()));
     for (Operation *op : llvm::reverse(originalOps))
       op->erase();
     return success();
   }
 
 private:
+  LogicalResult collectRoots(Value value) {
+    if (!visited.insert(value).second)
+      return success();
+    for (OpOperand &use : value.getUses()) {
+      if (roots.contains(&use))
+        continue;
+      Operation *user = use.getOwner();
+      if (isa<triton::DotOp>(user)) {
+        roots.insert(&use);
+        continue;
+      }
+      if (user->getNumResults() != 1 || !user->getRegions().empty() ||
+          !isMemoryEffectFree(user) || !canBeRematerialized(user) ||
+          failed(collectRoots(user->getResult(0))))
+        return failure();
+    }
+    return success();
+  }
+
   LogicalResult plan(Value rootValue, Attribute rootEncoding) {
     std::deque<std::pair<Value, Attribute>> queue;
     queue.emplace_back(rootValue, rootEncoding);
@@ -176,7 +214,7 @@ private:
     for (auto &entry : layouts) {
       for (OpOperand &use : entry.first.getUses()) {
         Operation *user = use.getOwner();
-        if (&use != &root && !sliceOps.contains(user))
+        if (!roots.contains(&use) && !sliceOps.contains(user))
           return false;
       }
     }
@@ -234,6 +272,8 @@ private:
 
   OpOperand &root;
   Attribute desiredEncoding;
+  llvm::SetVector<OpOperand *> roots;
+  DenseSet<Value> visited;
   DenseMap<Value, Attribute> layouts;
   DenseMap<Value, Value> rewritten;
   SmallVector<Operation *> originalOps;
@@ -312,7 +352,7 @@ SmallVector<unsigned> getDotCGASplit(ArrayRef<int64_t> shape,
   return ctaSplit;
 }
 
-void assignDotCGALayout(triton::DotOp dot) {
+SmallVector<Attribute> getDotOperandLayouts(triton::DotOp dot) {
   MLIRContext *ctx = dot.getContext();
 
   auto aTy = cast<RankedTensorType>(dot.getA().getType());
@@ -342,9 +382,13 @@ void assignDotCGALayout(triton::DotOp dot) {
   auto newBLayout = ttg::DotOperandEncodingAttr::get(
       ctx, bLayout.getOpIdx(), newDLayout, bLayout.getKWidth());
 
-  convertOpOperandsToLayouts(dot.getOperation(),
-                             {newALayout, newBLayout, newDLayout});
-  convertOpResultsFromLayouts(dot.getOperation(), {newDLayout});
+  return {newALayout, newBLayout, newDLayout};
+}
+
+void assignDotCGALayout(triton::DotOp dot) {
+  auto layouts = getDotOperandLayouts(dot);
+  convertOpOperandsToLayouts(dot.getOperation(), layouts);
+  convertOpResultsFromLayouts(dot.getOperation(), {layouts.back()});
 }
 
 ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
@@ -430,12 +474,18 @@ struct AssignCGALayoutsPass
     if (numCTAs == 1)
       return;
 
+    // Rewriting shared producers may erase operations ahead of the walk.
+    SmallVector<Operation *> consumers;
     mod.walk([&](Operation *op) {
+      if (isa<triton::DotOp, triton::ReduceOp>(op))
+        consumers.push_back(op);
+    });
+    for (Operation *op : consumers) {
       if (auto dot = dyn_cast<triton::DotOp>(op))
         assignDotCGALayout(dot);
       if (auto reduce = dyn_cast<triton::ReduceOp>(op))
         assignReduceCGALayout(reduce);
-    });
+    }
   }
 };
 

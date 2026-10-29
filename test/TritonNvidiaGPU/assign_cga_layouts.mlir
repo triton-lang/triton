@@ -275,6 +275,86 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#shared_src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#shared_default = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#shared_a = #ttg.dot_op<{opIdx = 0, parent = #shared_default}>
+#shared_b = #ttg.dot_op<{opIdx = 1, parent = #shared_default}>
+
+// CHECK-DAG: #[[$SHARED_ORIG:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 4]{{.*}}CGALayout = {{\[\[1, 0\]\]}}}>
+// CHECK-DAG: #[[$SHARED_LOAD:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 4]{{.*}}CGALayout = {{\[\[0, 1\]\]}}}>
+// CHECK-DAG: #[[$SHARED_DOT:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\]\]}}}>
+// E2E-DAG: #[[$SHARED_LOAD:.*]] = #ttg.blocked<{{.*}}sizePerThread = [1, 4]{{.*}}CGALayout = {{\[\[0, 1\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Both branches must use one load in the requested CGA layout.
+  // CHECK-LABEL: tt.func @dot_rematerializes_shared_load
+  // CHECK-NOT: tt.load
+  // CHECK: %[[B:.*]] = tt.load %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[$SHARED_LOAD]]>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[B0:.*]] = ttg.convert_layout %[[B]] : tensor<32x128xf16, #[[$SHARED_LOAD]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$SHARED_DOT]]}>>
+  // CHECK: tt.dot %{{.*}}, %[[B0]],
+  // CHECK-NOT: tt.load
+  // CHECK: %[[SUM:.*]] = arith.addf %[[B]], %[[B]] : tensor<32x128xf16, #[[$SHARED_LOAD]]>
+  // CHECK: %[[B1:.*]] = ttg.convert_layout %[[SUM]] : tensor<32x128xf16, #[[$SHARED_LOAD]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$SHARED_DOT]]}>>
+  // CHECK: tt.dot %{{.*}}, %[[B1]],
+  // CHECK-NOT: tt.load
+  // CHECK: tt.return
+  // E2E-LABEL: tt.func @dot_rematerializes_shared_load
+  // E2E: tt.load %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[$SHARED_LOAD]]>
+  // E2E-NOT: tt.load
+  // E2E: tt.dot
+  // E2E: tt.dot
+  // E2E-NOT: tt.load
+  // E2E: tt.return
+  tt.func @dot_rematerializes_shared_load(%ptrs: tensor<32x128x!tt.ptr<f16>, #shared_src>, %a: tensor<128x32xf16, #shared_a>, %c: tensor<128x128xf32, #shared_default>) -> tensor<128x128xf32, #shared_default> {
+    %b = tt.load %ptrs : tensor<32x128x!tt.ptr<f16>, #shared_src>
+    %b0 = ttg.convert_layout %b : tensor<32x128xf16, #shared_src> -> tensor<32x128xf16, #shared_b>
+    %d0 = tt.dot %a, %b0, %c : tensor<128x32xf16, #shared_a> * tensor<32x128xf16, #shared_b> -> tensor<128x128xf32, #shared_default>
+    %sum = arith.addf %b, %b : tensor<32x128xf16, #shared_src>
+    %b1 = ttg.convert_layout %sum : tensor<32x128xf16, #shared_src> -> tensor<32x128xf16, #shared_b>
+    %d1 = tt.dot %a, %b1, %d0 : tensor<128x32xf16, #shared_a> * tensor<32x128xf16, #shared_b> -> tensor<128x128xf32, #shared_default>
+    tt.return %d1 : tensor<128x128xf32, #shared_default>
+  }
+
+  // CHECK-LABEL: tt.func @dot_rematerializes_shared_conversion
+  // CHECK-NOT: tt.load
+  // CHECK: %[[B:.*]] = tt.load %{{.*}} : tensor<32x128x!tt.ptr<f16>, #[[$SHARED_LOAD]]>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[BD:.*]] = ttg.convert_layout %[[B]] : tensor<32x128xf16, #[[$SHARED_LOAD]]> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$SHARED_DOT]]}>>
+  // CHECK: tt.dot %{{.*}}, %[[BD]],
+  // CHECK: tt.dot %{{.*}}, %[[BD]],
+  // CHECK-NOT: tt.load
+  // CHECK: tt.return
+  tt.func @dot_rematerializes_shared_conversion(%ptrs: tensor<32x128x!tt.ptr<f16>, #shared_src>, %a: tensor<128x32xf16, #shared_a>, %c: tensor<128x128xf32, #shared_default>) -> tensor<128x128xf32, #shared_default> {
+    %b = tt.load %ptrs : tensor<32x128x!tt.ptr<f16>, #shared_src>
+    %bd = ttg.convert_layout %b : tensor<32x128xf16, #shared_src> -> tensor<32x128xf16, #shared_b>
+    %d0 = tt.dot %a, %bd, %c : tensor<128x32xf16, #shared_a> * tensor<32x128xf16, #shared_b> -> tensor<128x128xf32, #shared_default>
+    %d1 = tt.dot %a, %bd, %d0 : tensor<128x32xf16, #shared_a> * tensor<32x128xf16, #shared_b> -> tensor<128x128xf32, #shared_default>
+    tt.return %d1 : tensor<128x128xf32, #shared_default>
+  }
+
+  // The larger M requires a different CGA layout for the same B operand.
+  // CHECK-LABEL: tt.func @dot_does_not_rematerialize_conflicting_consumers
+  // CHECK-NOT: tt.load
+  // CHECK: %[[B:.*]] = tt.load %arg0 : tensor<32x128x!tt.ptr<f16>, #[[$SHARED_ORIG]]>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[BD:.*]] = ttg.convert_layout %[[B]] : tensor<32x128xf16, #[[$SHARED_ORIG]]> -> tensor<32x128xf16, #ttg.dot_op<{{.*}}>>
+  // CHECK: ttg.convert_layout %[[BD]]
+  // CHECK: tt.dot
+  // CHECK: ttg.convert_layout %[[BD]]
+  // CHECK: tt.dot
+  // CHECK-NOT: tt.load
+  // CHECK: tt.return
+  tt.func @dot_does_not_rematerialize_conflicting_consumers(%ptrs: tensor<32x128x!tt.ptr<f16>, #shared_src>, %a0: tensor<128x32xf16, #shared_a>, %a1: tensor<256x32xf16, #shared_a>, %c0: tensor<128x128xf32, #shared_default>, %c1: tensor<256x128xf32, #shared_default>) -> (tensor<128x128xf32, #shared_default>, tensor<256x128xf32, #shared_default>) {
+    %b = tt.load %ptrs : tensor<32x128x!tt.ptr<f16>, #shared_src>
+    %bd = ttg.convert_layout %b : tensor<32x128xf16, #shared_src> -> tensor<32x128xf16, #shared_b>
+    %d0 = tt.dot %a0, %bd, %c0 : tensor<128x32xf16, #shared_a> * tensor<32x128xf16, #shared_b> -> tensor<128x128xf32, #shared_default>
+    %d1 = tt.dot %a1, %bd, %c1 : tensor<256x32xf16, #shared_a> * tensor<32x128xf16, #shared_b> -> tensor<256x128xf32, #shared_default>
+    tt.return %d0, %d1 : tensor<128x128xf32, #shared_default>, tensor<256x128xf32, #shared_default>
+  }
+}
+
+// -----
+
 #volatile_src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
 #volatile_default = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
 #volatile_a = #ttg.dot_op<{opIdx = 0, parent = #volatile_default}>
