@@ -82,7 +82,8 @@ LogicalResult lowerLdStMatrix(
   auto *ctx = loc.getContext();
   assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
          "expected register broadcasting to be removed by the caller");
-  if (isa<PaddedSharedEncodingAttr>(memDescType.getEncoding())) {
+  if (isa<PaddedSharedEncodingAttr>(memDescType.getEncoding()) ||
+      NVMMASharedEncodingAttr::getFp6Type(memDescType.getEncoding())) {
     return failure();
   }
   if (SharedMemoryObject::getMaskSpanOffsetsAndBlocks(memDescType).second !=
@@ -221,37 +222,10 @@ struct LocalAllocOpConversion
         toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
     auto values =
         unpackUniqueTensorElements(op.getLoc(), adaptor.getSrc(), rewriter);
-    if (NVMMASharedEncodingAttr::getFp6Type(memDescType.getEncoding())) {
-      // The TMA lowering assigns 16 contiguous codes to each thread. Pack
-      // four codes into three bytes, with four padding bytes after each atom.
-      auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
-      auto reg = str_attr("register");
-      auto dims = standardOutDimNames(ctx, memDescType.getRank());
-      auto order = applyPermutation(dims, getOrder(memDescType));
-      if (regLayout.transposeOuts(order).getNumConsecutiveInOut() < 16)
-        return op.emitError(
-            "FP6 packing requires 16 contiguous register values");
-      SmallVector<Value> packed;
-      for (unsigned i = 0; i < values.size(); i += 16) {
-        for (unsigned j = 0; j < 16; j += 4) {
-          Value word = b.i32_val(0);
-          for (unsigned k = 0; k < 4; ++k)
-            word = b.or_(word, b.shl(b.zext(i32_ty, values[i + j + k]),
-                                     b.i32_val(6 * k)));
-          for (unsigned k = 0; k < 3; ++k)
-            packed.push_back(b.trunc(i8_ty, b.lshr(word, b.i32_val(8 * k))));
-        }
-        packed.append(4, b.i8_val(0));
-      }
-      auto cvt = invertAndComposeStore(toLinearLayout(memDescType), regLayout);
-      packed = broadcastAs(packed,
-                           regLayout.resizeInDim(reg, cvt.getInDimSize(reg)));
-      lowerLocalLdSt(op.getLoc(), ctx, cvt, packed, i8_ty, memDescType, smemObj,
-                     rewriter, targetInfo,
-                     makeSharedStoreEmitter(targetInfo, b.true_val()));
-    } else if (failed(lowerLdStMatrix(op.getLoc(), regLayout, memDescType,
-                                      values, smemObj, rewriter, targetInfo,
-                                      getTypeConverter()))) {
+    auto result =
+        lowerLdStMatrix(op.getLoc(), regLayout, memDescType, values, smemObj,
+                        rewriter, targetInfo, getTypeConverter());
+    if (failed(result)) {
       return failure();
     }
 

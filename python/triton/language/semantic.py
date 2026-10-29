@@ -6,6 +6,7 @@ from typing import List, Optional, Sequence, Tuple, TypeVar, Generic, Type
 import numbers
 
 from triton.runtime import driver
+from triton._utils import validate_fp6_box
 
 from .._C.libtriton import ir
 from . import core as tl
@@ -870,18 +871,13 @@ class TritonSemantic(Generic[TensorTy]):
                                  "Source scalar type is " + str(src_sca_ty) + " and destination type is " +
                                  str(dst_sca_ty))
 
-        if src_sca_ty.is_fp6():
-            half_type = src_ty.with_element_ty(tl.float16) if src_ty.is_block() else tl.float16
-            half = self.make_tensor(self.builder.create_fp_to_fp(input.handle, half_type.to_ir(self.builder), None),
-                                    half_type)
-            return self.cast(half, dst_sca_ty)
+        if src_sca_ty.is_fp6() and not dst_sca_ty.is_fp16():
+            return self.cast(self.cast(input, tl.float16), dst_sca_ty)
         if dst_sca_ty.is_fp6():
             if use_custom_rounding:
                 raise ValueError("FP6 conversion supports round-to-nearest-even")
-            value = self.cast(input, tl.float32)
-            return self.make_tensor(
-                self.builder.create_fp_to_fp(value.handle, dst_ty.to_ir(self.builder), ir.ROUNDING_MODE.RTNE), dst_ty)
-
+            if not src_sca_ty.is_fp32():
+                return self.cast(self.cast(input, tl.float32), dst_sca_ty)
         # Keep FP16 <-> BF16 intact so backends can select a native conversion.
         if (src_sca_ty.is_bf16() and dst_sca_ty.is_fp16()) or (src_sca_ty.is_fp16() and dst_sca_ty.is_bf16()):
             return self.make_tensor(
@@ -895,7 +891,7 @@ class TritonSemantic(Generic[TensorTy]):
         # and non-default rounding modes for downcasting
         if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
            (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()) or \
-           use_custom_rounding:
+           src_sca_ty.is_fp6() or dst_sca_ty.is_fp6() or use_custom_rounding:
             return self.make_tensor(
                 self.builder.create_fp_to_fp(input.handle, dst_ty.to_ir(self.builder), fp_downcast_rounding), dst_ty)
 
@@ -1677,19 +1673,18 @@ class TritonSemantic(Generic[TensorTy]):
         If float_format is subbyte, make sure it's packed as uint8 and return it.
         Otherwise, return a tensor (perhaps bitcasting) of the specified float format.
         """
-        if float_format in ("e2m3", "e3m2"):
-            expected = tl.float6e2m3 if float_format == "e2m3" else tl.float6e3m2
-            if val.dtype != expected:
-                raise ValueError(f"{float_format} requires {expected} operands")
-            return val
-        triton_ty = {"e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16": tl.bfloat16, "fp16":
-                     tl.float16}.get(float_format)
+        triton_ty = {
+            "e2m3": tl.float6e2m3, "e3m2": tl.float6e3m2, "e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16":
+            tl.bfloat16, "fp16": tl.float16
+        }.get(float_format)
         if triton_ty is None:
             assert float_format == "e2m1", f"Internal Error: Unexpected float format: {float_format}"
             assert val.dtype in (tl.uint8, tl.float4e2m1x2), f"e2m1 format must be packed as uint8. Got {val.dtype}"
             return val
         if val.dtype == triton_ty:
             return val
+        if triton_ty.is_fp6():
+            raise ValueError(f"{float_format} requires {triton_ty} operands")
         else:
             unsigned_ty = {"e5m2": tl.uint8, "e4m3": tl.uint8, "bf16": tl.uint16, "fp16": tl.uint16}[float_format]
             assert val.dtype == unsigned_ty, f"Unexpected dtype for {float_format}. Got {val.dtype}"
@@ -2054,14 +2049,8 @@ class TritonSemantic(Generic[TensorTy]):
         elem_size = base.dtype.element_ty.itemsize
         contig_dim_size = tl._unwrap_if_constexpr(block_shape[-1])
         if base.dtype.element_ty.is_fp6():
-            if contig_dim_size not in (64, 128) or padding_option != "zero":
-                raise ValueError("FP6 tensor maps require a 64/128-value box and zero padding")
-            alignment = 16 if contig_dim_size == 64 else 32
-            if any(isinstance(s := tl._unwrap_if_constexpr(stride), int) and s % alignment for stride in strides[:-1]):
-                raise ValueError(f"FP6 outer byte strides must be multiples of {alignment}")
-            inner = tl._unwrap_if_constexpr(shape[-1])
-            if isinstance(inner, int) and inner % contig_dim_size:
-                raise ValueError("FP6 inner extent must be a multiple of the box width")
+            validate_fp6_box(contig_dim_size, tl._unwrap_if_constexpr(shape[-1]),
+                             map(tl._unwrap_if_constexpr, strides[:-1]), padding_option)
         if contig_dim_size * elem_size < 16:
             raise ValueError(
                 f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"

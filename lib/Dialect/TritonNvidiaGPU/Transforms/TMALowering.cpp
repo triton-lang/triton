@@ -210,7 +210,7 @@ public:
     // originate in registers, put a full packing atom in each thread.
     m.walk([](gpu::LocalAllocOp alloc) {
       auto mem = alloc.getType();
-      if (!alloc.getSrc() || !isFP6(mem.getElementType()) ||
+      if (!alloc.getSrc() ||
           !gpu::NVMMASharedEncodingAttr::getFp6Type(mem.getEncoding()))
         return;
       OpBuilder b(alloc);
@@ -223,9 +223,7 @@ public:
           gpu::lookupNumWarps(alloc), gpu::lookupThreadsPerWarp(b),
           gpu::getCGALayout(mem.getEncoding()));
       auto cvt = gpu::ConvertLayoutOp::create(
-          b, alloc.getLoc(),
-          RankedTensorType::get(ty.getShape(), ty.getElementType(), layout),
-          alloc.getSrc());
+          b, alloc.getLoc(), ty.cloneWithEncoding(layout), alloc.getSrc());
       alloc.getSrcMutable().assign(cvt.getResult());
     });
   }
