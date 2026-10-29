@@ -1060,7 +1060,7 @@ class ReduceScanOpInterface:
         self.combine_fn = combine_fn
 
     def check_axis(self, shape, axis):
-        if axis is not None and axis >= len(shape):
+        if axis is not None and (axis >= len(shape) or axis < -len(shape)):
             raise ValueError(f"axis {axis} out of bounds for shape {shape}")
 
     def check_tensor(self, input):
@@ -1100,6 +1100,8 @@ class ReduceOps(ReduceScanOpInterface):
 
     def unravel(self, input, axis):
         if axis is not None:
+            if axis < 0:
+                axis += len(input[0].handle.data.shape)
             return input, axis
         return tuple(self.to_tensor(data.handle.data.flatten(), data.dtype) for data in input), 0
 
@@ -1185,6 +1187,7 @@ class ScanOps(ReduceScanOpInterface):
         input_data = []
         output_data = []
         shape = input[0].handle.data.shape
+        axis = self.axis if self.axis >= 0 else self.axis + len(shape)
         for arg in input:
             input_data.append(arg.handle.data)
             output_data.append(np.zeros(shape, dtype=arg.handle.data.dtype))
@@ -1193,12 +1196,12 @@ class ScanOps(ReduceScanOpInterface):
             # Recover index from i using shape
             index = np.unravel_index(i, shape)
             data = tuple(self.to_tensor(d[index], input[ii].dtype) for ii, d in enumerate(input_data))
-            if index[self.axis] == 0:
+            if index[axis] == 0:
                 # First element
                 for j in range(len(output_data)):
                     output_data[j][index] = data[j].handle.data.item()
             else:
-                prev_index = tuple(index[i] - 1 if i == self.axis else index[i] for i in range(len(index)))
+                prev_index = tuple(index[i] - 1 if i == axis else index[i] for i in range(len(index)))
                 acc_tuple = tuple(self.to_tensor(o[prev_index], input[oi].dtype) for oi, o in enumerate(output_data))
                 combine_fn_ret = self.combine_fn.fn(*acc_tuple, *data)
                 acc_tuple = (combine_fn_ret, ) if not isinstance(combine_fn_ret, tuple) else combine_fn_ret

@@ -191,3 +191,49 @@ def test_dot_scaled_e8m0_boundaries(compute_type, signed_scale, rhs_scale):
     expected = np.repeat(np.array([minimum, 32.0, 64.0, np.nan], dtype=np.float32), 8)[:, None]
     expected = np.broadcast_to(expected, (32, 32))
     np.testing.assert_array_equal(result.data, expected.T if rhs_scale else expected)
+
+
+def test_reduce_scan_negative_axis():
+    def dummy_combine(a, b):
+        return a + b
+
+    def kernel():
+        pass
+
+    scope = interpreter._patch_lang(kernel)
+    try:
+        data = np.arange(16, dtype=np.int32).reshape(4, 4)
+        tensor_handle = interpreter.TensorHandle(data, tl.int32)
+        tensor = tl.core.tensor(tensor_handle, tl.block_type(tl.int32, [4, 4]))
+
+        mock_combine = type("MockCombine", (), {"fn": staticmethod(dummy_combine)})()
+
+        # Reduce negative axis matches positive axis
+        reduce_neg = interpreter.ReduceOps(axis=-1, combine_fn=mock_combine, keep_dims=False)
+        reduce_pos = interpreter.ReduceOps(axis=1, combine_fn=mock_combine, keep_dims=False)
+        res_neg = reduce_neg.apply((tensor,))[0].handle.data
+        res_pos = reduce_pos.apply((tensor,))[0].handle.data
+        np.testing.assert_array_equal(res_neg, res_pos)
+        np.testing.assert_array_equal(res_neg, [6, 22, 38, 54])
+
+        # Reduce negative axis with keep_dims
+        reduce_neg_kd = interpreter.ReduceOps(axis=-1, combine_fn=mock_combine, keep_dims=True)
+        res_neg_kd = reduce_neg_kd.apply((tensor,))[0].handle.data
+        assert res_neg_kd.shape == (4, 1)
+        np.testing.assert_array_equal(res_neg_kd, [[6], [22], [38], [54]])
+
+        # Scan negative axis matches positive axis
+        scan_neg = interpreter.ScanOps(axis=-1, combine_fn=mock_combine, reverse=False)
+        scan_pos = interpreter.ScanOps(axis=1, combine_fn=mock_combine, reverse=False)
+        s_neg = scan_neg.apply((tensor,))[0].handle.data
+        s_pos = scan_pos.apply((tensor,))[0].handle.data
+        np.testing.assert_array_equal(s_neg, s_pos)
+        expected_scan = np.array([[0, 1, 3, 6], [4, 9, 15, 22], [8, 17, 27, 38], [12, 25, 39, 54]], dtype=np.int32)
+        np.testing.assert_array_equal(s_neg, expected_scan)
+
+        # Out-of-bounds negative axis
+        reduce_oob = interpreter.ReduceOps(axis=-3, combine_fn=mock_combine, keep_dims=False)
+        with pytest.raises(ValueError, match="out of bounds"):
+            reduce_oob.apply((tensor,))
+    finally:
+        scope.restore()
