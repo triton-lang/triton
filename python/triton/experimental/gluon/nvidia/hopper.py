@@ -14,7 +14,9 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
     assert tensor.data_ptr() % 16 == 0, "base must be 16-byte aligned"
 
     dtype_str = canonicalize_dtype(tensor.dtype)
-    elem_bytes = get_primitive_bitwidth(dtype_str) // 8
+    elem_bytes = 1 if dtype_str.startswith("fp6") else get_primitive_bitwidth(dtype_str) // 8
+    if dtype_str.startswith("fp6") and dtype_str[3:] != layout.fp6_format:
+        raise ValueError("FP6 descriptor dtype must match the layout format")
     for stride in strides[:-1]:
         assert (stride * elem_bytes) % 16 == 0, "strides must be 16-byte aligned"
     for shape_dim in shape:
@@ -35,7 +37,8 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
     if layout.fp6_format is not None:
         width = block_shape[-1]
         validate_fp6_box(width, shape[-1], strides[:-1], padding, host=True)
-        if dtype_str != "u8" or layout.swizzle_byte_width not in (0, width) or tensor.data_ptr() % (width // 4):
+        if (dtype_str not in ("u8", f"fp6{layout.fp6_format}") or layout.swizzle_byte_width not in (0, width)
+                or tensor.data_ptr() % (width // 4)):
             raise ValueError(f"FP6 requires {width // 4}-byte aligned uint8 storage and 0/{width}-byte swizzling")
     if layout.fp4_padded:
         assert tensor.data_ptr() % 32 == 0, "For fp4_padded, base must 32-byte aligned"

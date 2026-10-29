@@ -20,6 +20,8 @@ from ._core import (
     uint32,
     uint64,
     float4e2m1x2,
+    float6e2m3,
+    float6e3m2,
     float8e8m0fnu,
     float8e5,
     float8e5b16,

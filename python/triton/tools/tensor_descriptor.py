@@ -27,9 +27,10 @@ class TensorDescriptor:
                 raise ValueError("a descriptor dtype override requires FP6 on a uint8 base")
             self.base = reinterpret(self.base, self.dtype)
         if self.base.dtype in (tl.float6e2m3, tl.float6e3m2):
-            if self.round_f32_to_tf32 or (check_address and self.base.data_ptr() % 32):
-                raise ValueError("FP6 tensor maps require a 32-byte aligned base and no TF32 rounding")
-            validate_fp6_box(self.block_shape[-1], self.shape[-1], self.strides[:-1], self.padding, host=True)
+            width = self.block_shape[-1]
+            validate_fp6_box(width, self.shape[-1], self.strides[:-1], self.padding, host=True)
+            if self.round_f32_to_tf32 or (check_address and self.base.data_ptr() % (width // 4)):
+                raise ValueError(f"FP6 tensor maps require a {width // 4}-byte aligned base and no TF32 rounding")
         if check_address:
             assert self.base.data_ptr() % 16 == 0, "base must be 16-byte aligned"
         validate_block_shape(self.block_shape)

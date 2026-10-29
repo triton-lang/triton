@@ -786,7 +786,7 @@ class block_type(dtype):
 
     @property
     def nbytes(self):
-        return self.numel * (self.element_ty.primitive_bitwidth // 8)
+        return self.numel * self.element_ty.itemsize
 
     def mangle(self) -> str:
         elt = self.scalar.mangle()
@@ -2580,7 +2580,7 @@ def make_tensor_descriptor(
     :param dtype: For packed FP6 storage, pass float6e2m3 or float6e3m2 on a uint8 base.
         The inner extent and coordinates count values. Outer strides count bytes.
         Use 128 contiguous values (96 bytes) for loads and stores on SM100/SM103.
-        SM103 also supports stores of 64 values (48 bytes) with a device-built descriptor.
+        SM103 also supports stores of 64 values (48 bytes) with a host or device descriptor.
         The inner extent and starting column must be multiples of the box width.
         Align the base and outer strides to 32 bytes for 128 values, or 16 bytes for 64.
 

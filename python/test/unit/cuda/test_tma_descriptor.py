@@ -127,6 +127,20 @@ def _fp6_desc_store(src, dst, desc, DTYPE: tl.constexpr, WIDTH: tl.constexpr, HO
     desc.store([1, ROW - WIDTH], x[None, :])
 
 
+def test_fp6_tma_host_store_64_rejects_sm100(capfd):
+    from triton.backends.compiler import GPUTarget
+    from triton.compiler import ASTSource
+
+    sig = {
+        "src": "*fp32", "dst": "*u8", "desc": "tensordesc<fp6e2m3[1,64]>", "DTYPE": "constexpr", "WIDTH": "constexpr",
+        "HOST": "constexpr", "ROW": "constexpr"
+    }
+    source = ASTSource(_fp6_desc_store, sig, {"DTYPE": tl.float6e2m3, "WIDTH": 64, "HOST": True, "ROW": 64})
+    with pytest.raises(RuntimeError):
+        triton.compile(source, target=GPUTarget("cuda", 100, 32))
+    assert "64-value FP6 TMA stores require SM103" in capfd.readouterr().err
+
+
 @triton.jit
 def _fp6_desc_load(src, desc, dst, DTYPE: tl.constexpr, HOST: tl.constexpr):
     if not HOST:
@@ -140,7 +154,8 @@ def _fp6_desc_load(src, desc, dst, DTYPE: tl.constexpr, HOST: tl.constexpr):
 
 @pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
 @requires_fp6
-@pytest.mark.parametrize("width,host,row", [(64, False, 64), (64, False, 128), (128, False, 128), (128, True, 128)])
+@pytest.mark.parametrize("width,row", [(64, 64), (64, 128), (128, 128)])
+@pytest.mark.parametrize("host", [False, True])
 def test_fp6_tma_roundtrip(fmt, width, host, row, with_allocator):
     if width == 64 and not is_blackwell_ultra():
         pytest.skip("64-value stores require SM103")
@@ -155,13 +170,17 @@ def test_fp6_tma_roundtrip(fmt, width, host, row, with_allocator):
     initial = torch.randint(0, 64, (3, row), device="cuda", dtype=torch.int32)
     buf = pack_fp6(initial)
     initial[1, row - width:] = codes
-    desc = TensorDescriptor.from_tensor(buf, [1, 128], dtype=dtype) if host else None
+    if host and row == 64:
+        # Exercise the SM103 16-byte base alignment with a 48-byte row stride.
+        buf = torch.empty(buf.numel() + 16, dtype=buf.dtype, device=buf.device)[16:].view_as(buf).copy_(buf)
+    desc = TensorDescriptor.from_tensor(buf, [1, width], dtype=dtype) if host else None
     store = _fp6_desc_store[(1, )](x, buf, desc, dtype, width, host, row)
     assert "cp.async.bulk.tensor.2d.global.shared" in store.asm["ptx"]
     torch.testing.assert_close(buf, pack_fp6(initial))
     if row == 64:
         return  # TMA loads require a full 128-value row.
     out = torch.empty(128, dtype=torch.float32, device="cuda")
+    desc = TensorDescriptor.from_tensor(buf, [1, 128], dtype=dtype) if host else None
     load = _fp6_desc_load[(1, )](buf, desc, out, dtype, host)
     expected = fp6_values(fmt, initial[1])
     torch.testing.assert_close(out, expected, atol=0, rtol=0)
